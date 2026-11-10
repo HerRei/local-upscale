@@ -51,6 +51,7 @@ process_ram
 processed_megapixels_per_second
 processing_stage
 restart_required
+disk_full
 scratch_directory
 shared_memory
 source_url

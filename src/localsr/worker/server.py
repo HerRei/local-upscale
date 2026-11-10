@@ -26,12 +26,14 @@ from localsr.core.benchmark import (
     WORKLOAD_VERSION,
     run_benchmark,
 )
+from localsr.core.disk_space import failure_fields, require_video_room
 from localsr.core.eta import RemainingTime
 from localsr.core.hardware import get_capability_report
 from localsr.core.image_formats import is_video_input
 from localsr.core.image_io import ImageManager
 from localsr.core.inference import InferenceEngine
 from localsr.core.live_preview import LatestPreviewEncoder, PreviewPacket
+from localsr.core.media_codecs import EXTERNAL_OUTPUT_CODECS
 from localsr.core.model_adapter import ModelAdapter
 from localsr.core.model_catalog import (
     CATALOG_BY_ID,
@@ -536,7 +538,11 @@ class WorkerServer:
                         send_message(JobCancelled(job_id=job_id))
                     except Exception as error:  # Process boundary keeps the queue alive.
                         traceback.print_exc(file=sys.stderr)
-                        send_message(JobFailed(job_id=job_id, error_message=str(error)))
+                        send_message(
+                            JobFailed(
+                                job_id=job_id, **failure_fields(error, data.get("output_path"))
+                            )
+                        )
                     finally:
                         self._deactivate_job(job_id)
 
@@ -572,8 +578,8 @@ class WorkerServer:
                         send_message(
                             JobFailed(
                                 job_id=job_id,
-                                error_message=str(e),
                                 restart_required=self.restart_after_job,
+                                **failure_fields(e, data.get("output_video_path")),
                             )
                         )
                         self._restart_if_required()
@@ -844,8 +850,8 @@ class WorkerServer:
             send_message(
                 JobFailed(
                     job_id=job_id,
-                    error_message=str(e),
                     restart_required=self.restart_after_job,
+                    **failure_fields(e, data.get("output_path")),
                 )
             )
             self._restart_if_required()
@@ -914,13 +920,14 @@ class WorkerServer:
         except Exception as error:  # noqa: BLE001 - the process boundary, as for one job
             traceback.print_exc(file=sys.stderr)
             self.restart_after_job = _device_lost(error)
-            for job_id in ids:
+            for job in jobs:
+                job_id = str(job["job_id"])
                 if job_id in started and job_id not in terminal:
                     send_message(
                         JobFailed(
                             job_id=job_id,
-                            error_message=str(error),
                             restart_required=self.restart_after_job,
+                            **failure_fields(error, job.get("output_path")),
                         )
                     )
             # A photo that never started runs on its own, as it would have in the
@@ -1059,6 +1066,15 @@ class WorkerServer:
         if resolution <= 0:
             resolution = min(probe.width, probe.height)
         bundle_dir = data.get("bundle_dir") or ""
+        # The engine's output side is the target resolution, in the source's proportions.
+        grown = resolution / max(1, min(probe.width, probe.height))
+        require_video_room(
+            data,
+            round(probe.width * grown),
+            round(probe.height * grown),
+            total_frames,
+            master=data.get("video_codec") in EXTERNAL_OUTPUT_CODECS,
+        )
 
         started_at = _time.monotonic()
         state = {"done": 0, "remaining": 0.0}

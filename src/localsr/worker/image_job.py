@@ -10,6 +10,7 @@ from typing import Any
 
 import numpy as np
 
+from localsr.core.disk_space import require_image_room
 from localsr.core.image_io import ImageManager, require_output_format
 from localsr.core.inference import InferenceEngine, UnstableRestorationError
 from localsr.core.live_preview import LatestPreviewEncoder, PreviewPacket
@@ -247,6 +248,9 @@ class ImageJobRunner:
                 primary,
                 f"Output scale must be between 1 and the model's native {info.scale}× scale.",
             )
+        # Before any memmap exists: a photo that cannot be written must not start.
+        height, width = image["tensor"].shape[-2:]
+        require_image_room(data, width, height, info.scale, image.get("alpha_image") is not None)
         face_path = data.get("face_model_path")
         face_info = self._inspect(face_path, face or primary) if face_path else None
         if face_info is not None:

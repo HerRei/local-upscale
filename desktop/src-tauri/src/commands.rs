@@ -676,6 +676,7 @@ pub fn start_jobs(
             ));
         }
     }
+    refuse_when_disk_is_short(&input, &selection, &media[0], &output_directory)?;
     let ui_json = ui_json(input.ui.as_ref())?;
     let media_ids: Vec<&str> = media.iter().map(|item| item.id.as_str()).collect();
     lock(&state.database)?.admit_jobs(&media_ids, |reserved| {
@@ -738,6 +739,36 @@ pub fn cancel_jobs(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult
     }
     emit_state_changed(&app);
     Ok(())
+}
+
+/// Tell the user before anything is queued when even the first job cannot be written to
+/// the output folder's volume. The queue checks each job again before it is sent.
+fn refuse_when_disk_is_short(
+    input: &StartBatchInput,
+    selection: &ModelSelection,
+    first: &crate::types::MediaItem,
+    output_directory: &Path,
+) -> AppResult<()> {
+    let ModelSelection::Image { native_scale, .. } = selection else {
+        return Ok(());
+    };
+    let native = u64::from(*native_scale);
+    let saved = if input.task == "denoise" {
+        1
+    } else {
+        u64::from(input.output_scale).min(native).max(1)
+    };
+    let (width, height) = (u64::from(first.width), u64::from(first.height));
+    let need = if input.task == "video" {
+        crate::disk_room::video_bytes(width * saved, height * saved, first.frame_count, false)
+    } else {
+        crate::disk_room::image_need(width, height, native, saved, &input.output_format, false)
+            .total()
+    };
+    match crate::disk_room::check(output_directory, need) {
+        Some(reason) => Err(AppError::Validation(reason)),
+        None => Ok(()),
+    }
 }
 
 /// "Cancel runs for this image": its queued jobs are cancelled and its active
@@ -944,6 +975,12 @@ fn admit_model_trials(
             "Choose an available image with a ready preview.".into(),
         ));
     }
+    refuse_when_disk_is_short(
+        &candidates[0].input,
+        &candidates[0].selection,
+        &media,
+        &directory,
+    )?;
     let mut ids = Vec::with_capacity(candidates.len());
     database.admit_jobs(&[media_id], |reserved| {
         candidates

@@ -15,6 +15,9 @@ Compatibility rules:
   field, before any file is opened. A line that is not a JSON object, or a request whose
   `data` is not an object or that has no text `job_id`, is answered with a `log` message
   beginning "Protocol error" and ignored; the worker keeps serving.
+- A job the disk cannot hold ends with `job_failed` carrying `disk_full: true` (an optional
+  field, absent from older engines) and a sentence naming the folder and the sizes; the host
+  then stops the rest of the queue.
 - Arbitrary worker stdout is never interpreted as a shell command.
 - Model paths and media bytes stay on the local machine.
 - Catalog-pinned checkpoints are verified by size and SHA-256. A custom

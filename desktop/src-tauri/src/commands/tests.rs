@@ -2092,3 +2092,55 @@ fn start_requests_from_an_older_window_default_to_no_interpolation() {
     let parsed: StartBatchInput = serde_json::from_value(request).unwrap();
     assert_eq!(parsed.video_interpolation, "fps120");
 }
+
+#[test]
+fn a_start_that_cannot_be_written_is_refused_before_anything_is_queued() {
+    let selection = ModelSelection::Image {
+        model_id: "model".into(),
+        path: "/models/m.pth".into(),
+        preprocess: Vec::new(),
+        face_path: None,
+        face_model_id: String::new(),
+        native_scale: 4,
+        interpolation: None,
+    };
+    let photo = crate::types::MediaItem {
+        id: "media".into(),
+        path: "/in/phone.jpg".into(),
+        name: "phone.jpg".into(),
+        kind: "image".into(),
+        width: 3024,
+        height: 4032,
+        frame_count: 1,
+        fps: 0.0,
+        duration_seconds: 0.0,
+        preview_data_url: String::new(),
+        probe_status: "ready".into(),
+        hdr_format: String::new(),
+        audio_warning: String::new(),
+        error: String::new(),
+        selected: true,
+    };
+    let folder = Path::new("/Users/a/Desktop");
+    crate::disk_room::set_test_volume(Some(crate::disk_room::Volume {
+        free: 4_700_000_000,
+        total: 500_000_000_000,
+        system: true,
+    }));
+    let refused = refuse_when_disk_is_short(&input("upscale"), &selection, &photo, folder);
+    // 8 GB must stay free on this volume; one photo at 4x needs 1.2 GB more.
+    match refused {
+        Err(AppError::Validation(text)) => assert_eq!(
+            text,
+            "Not enough free disk space in \"/Users/a/Desktop\": about 1.2 GB is needed, but only 4.7 GB is free, and 8.0 GB must stay free so the computer keeps working."
+        ),
+        other => panic!("not refused: {other:?}"),
+    }
+    crate::disk_room::set_test_volume(Some(crate::disk_room::Volume {
+        free: 1_173_856_576 + 8_000_000_000,
+        total: 500_000_000_000,
+        system: true,
+    }));
+    assert!(refuse_when_disk_is_short(&input("upscale"), &selection, &photo, folder).is_ok());
+    crate::disk_room::set_test_volume(None);
+}

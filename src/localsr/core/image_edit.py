@@ -19,6 +19,7 @@ from pathlib import Path
 from PIL import Image, ImageOps
 
 from localsr.core.child_processes import native_environment, stop_process
+from localsr.core.disk_space import edit_bytes, require_room
 from localsr.core.edit_memory import GIB, plan_edit, read_edit_memory
 from localsr.core.image_io import open_photo
 from localsr.core.output_publish import publish_output, require_output_name
@@ -352,6 +353,7 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
         raise FileExistsError("The edit result already exists; choose a new output filename.")
     output.parent.mkdir(parents=True, exist_ok=True)
     scratch = data.get("output_temporary_directory") or data.get("scratch_directory")
+    require_room([(scratch or output.parent, edit_bytes(plan.max_dimension))])
     with tempfile.TemporaryDirectory(prefix="localsr-edit-", dir=scratch or output.parent) as work:
         work = Path(work)
         reference, result = work / "reference.png", work / "result.png"

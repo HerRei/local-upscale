@@ -923,9 +923,15 @@
     };
   });
 
+  // Changes within 80 ms share one refresh. The timer is not moved by later changes: a fast
+  // batch reports one every few milliseconds, and a refresh that waited for quiet would not
+  // show a finished photo until the whole batch ended.
   function scheduleRefresh(): void {
-    if (stateRefresh) clearTimeout(stateRefresh);
-    stateRefresh = setTimeout(() => void refresh(), 80);
+    if (stateRefresh) return;
+    stateRefresh = setTimeout(() => {
+      stateRefresh = undefined;
+      void refresh();
+    }, 80);
   }
 
   // Refreshes can overlap; an answer to an older request than the one already shown is

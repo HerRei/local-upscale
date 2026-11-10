@@ -24,9 +24,17 @@ from typing import Any
 
 import psutil
 import torch
+from PIL import Image
 
 from localsr.core.batch_scheduler import PhotoFallback, run_photo_batch
 from localsr.core.coreml_runtime import CORE_ML_GPU
+from localsr.core.disk_space import (
+    DiskFullError,
+    failure_fields,
+    image_claims,
+    image_need,
+    require_room,
+)
 from localsr.core.image_io import ImageManager
 from localsr.core.inference import InferenceEngine, _fixed_window, _span_output_is_unstable
 from localsr.core.live_preview import LatestPreviewEncoder, PreviewPacket
@@ -315,6 +323,9 @@ class ImageBatchRunner:
         info = self._plan(jobs)
         if info is None:
             return list(jobs)
+        encoders = self._encoders_that_fit(jobs, info)
+        if encoders is None:
+            return list(jobs)
         shape = (BATCH_SIDES[info.architecture],) * 2
         data = jobs[0]
         self.announce(data)
@@ -355,7 +366,7 @@ class ImageBatchRunner:
             return remaining
         if not runners:
             return remaining
-        return self._run_lanes(remaining, handed, model, runners, info, shape)
+        return self._run_lanes(remaining, handed, model, runners, info, shape, encoders)
 
     def _plan(self, jobs: list[dict[str, Any]]) -> NormalizedModelInfo | None:
         if len(jobs) < 2:
@@ -371,6 +382,43 @@ class ImageBatchRunner:
         if side is None or info.in_channels != 3 or info.out_channels != 3:
             return None
         return info if side > 2 * int(jobs[0]["halo"]) else None
+
+    def _encoders_that_fit(
+        self, jobs: list[dict[str, Any]], info: NormalizedModelInfo
+    ) -> int | None:
+        """The encoder count whose open photos fit on the disk, fewer than usual when needed.
+
+        None when not even one encoder fits: the photos then go one at a time through the
+        normal runner, which refuses each that cannot be written, with the reason.
+        """
+        usual = ENCODERS.get(info.architecture, DEFAULT_ENCODERS)
+        largest = None
+        for data in jobs:
+            try:
+                with Image.open(data["image_path"]) as header:
+                    size, alpha = header.size, "A" in header.mode
+            except Exception:  # noqa: BLE001 - that photo fails on its own when it is decoded
+                continue
+            if largest is None or size[0] * size[1] > largest[0][0] * largest[0][1]:
+                largest = (size, alpha)
+        if largest is None:
+            return usual
+        (width, height), alpha = largest
+        data = jobs[0]
+        need = image_need(
+            width, height, info.scale, data.get("output_scale"), str(data["output_format"]), alpha
+        )
+        for encoders in range(usual, 0, -1):
+            try:
+                require_room(image_claims(data, need, encoders))
+            except DiskFullError as error:
+                refusal = error
+                continue
+            if encoders < usual:
+                self._log(f"Photo batch lanes run with {encoders} encoders: the disk is short.")
+            return encoders
+        self._log(f"Photo batch lanes are off; the photos run one at a time. {refusal}")
+        return None
 
     def _decode_first(self, remaining: list[dict[str, Any]]) -> dict[str, tuple]:
         """Decode the first photo that opens; it supplies the gate's sample tile.
@@ -399,7 +447,9 @@ class ImageBatchRunner:
             raise ValueError("The batch overlap does not fit the lane shape.")
         return window[0][None].contiguous()
 
-    def _run_lanes(self, remaining, handed, model, runners, info, shape) -> list[dict[str, Any]]:
+    def _run_lanes(
+        self, remaining, handed, model, runners, info, shape, encoders
+    ) -> list[dict[str, Any]]:
         data = remaining[0]
         preview = self.preview_factory(
             self.emit_preview,
@@ -448,11 +498,14 @@ class ImageBatchRunner:
                 cancel=self.cancel_event,
                 finished=finished,
                 failed=lambda item, error: self.emit(
-                    JobFailed(job_id=str(item["job_id"]), error_message=str(error))
+                    JobFailed(
+                        job_id=str(item["job_id"]),
+                        **failure_fields(error, item.get("output_path")),
+                    )
                 ),
                 cancelled=lambda item: self.emit(JobCancelled(job_id=str(item["job_id"]))),
                 lane_failed=lambda lane, error: self._lane_failed(model, lane, error),
-                encoders=ENCODERS.get(info.architecture, DEFAULT_ENCODERS),
+                encoders=encoders,
                 memory_budget=self.memory_budget,
             )
         finally:
