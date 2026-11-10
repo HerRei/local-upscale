@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { detectPlatform } from './lib/platform';
+
   import { onMount } from 'svelte';
 
   import {
@@ -9,13 +11,13 @@
     openFfmpegDownloadPage,
     openTerminalWithInstallCommand,
   } from './lib/api';
-  import { INSTALL_COMMANDS, detectPlatform, type FfmpegPlatform } from './lib/ffmpeg';
+  import { INSTALL_COMMANDS } from './lib/ffmpeg';
   import { modal } from './lib/modal';
 
   /** Why the notice opened: a video LocalSR cannot decode, or an H.264/HEVC export. */
   export let context: 'open' | 'export' = 'open';
   export let mediaNames: string[] = [];
-  export let platform: FfmpegPlatform = detectPlatform();
+  const platform = detectPlatform();
   /** The label of this platform's own codecs ("macOS"), or empty when it has none. */
   export let systemCodecs = '';
   /** The container of the export that needs FFmpeg. */

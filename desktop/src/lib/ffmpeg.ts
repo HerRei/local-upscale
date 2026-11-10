@@ -9,7 +9,7 @@ import type { CapabilityInfo, UiSettings } from './types';
 /** `reason` value the worker sends with a probe failure a user's FFmpeg would fix. */
 export const EXTERNAL_FFMPEG_REQUIRED = 'external_ffmpeg_required';
 
-export type FfmpegPlatform = 'macos' | 'windows' | 'linux';
+import type { FfmpegPlatform } from './platform';
 
 /** One example install command per platform; the host refines it per distribution. */
 export const INSTALL_COMMANDS: Record<FfmpegPlatform, string> = {
@@ -17,12 +17,6 @@ export const INSTALL_COMMANDS: Record<FfmpegPlatform, string> = {
   windows: 'winget install Gyan.FFmpeg',
   linux: 'sudo apt install ffmpeg',
 };
-
-export function detectPlatform(userAgent = navigator.userAgent): FfmpegPlatform {
-  if (/windows/i.test(userAgent)) return 'windows';
-  if (/mac os|macintosh/i.test(userAgent)) return 'macos';
-  return 'linux';
-}
 
 /** The system codecs the worker reported, if this platform has any. */
 export function systemCodecs(capabilities?: CapabilityInfo | null) {
@@ -47,7 +41,7 @@ export function externalCodecsAvailable(
 /** A failed media probe that a user-installed FFmpeg would turn into a preview. */
 export function probeNeedsExternalFFmpeg(data: Record<string, unknown>): boolean {
   if (String(data.reason ?? '') === EXTERNAL_FFMPEG_REQUIRED) return true;
-  // Older workers send only the message text.
+  // The message text can also identify the failure.
   return /patent-licensed format/i.test(String(data.error_message ?? ''));
 }
 

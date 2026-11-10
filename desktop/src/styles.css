@@ -165,12 +165,6 @@ input:focus-visible {
     padding-left: 8px;
   }
 }
-
-.pane-heading-meta {
-  margin-left: 8px;
-  margin-right: auto;
-  color: var(--tertiary);
-}
 .installed-row {
   grid-template-columns: minmax(0, 1fr) 96px auto;
   padding-right: 12px;
@@ -861,87 +855,11 @@ input:focus-visible {
   margin: 14px 0 8px;
   font-size: calc(16px * var(--ui-scale));
 }
-.canvas-hint {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  margin: 22px 0 0;
-  color: var(--secondary);
-  font-size: calc(12px * var(--ui-scale));
-}
-.canvas-hint svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: #bdbdbd;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.canvas-capabilities {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 10px;
-  margin: 22px 0 0;
-  padding: 0;
-  list-style: none;
-}
-.canvas-capabilities li {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  min-width: 132px;
-  padding: 14px 16px;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.025);
-}
-.canvas-capabilities svg {
-  width: 22px;
-  height: 22px;
-  margin-bottom: 4px;
-  fill: none;
-  stroke: #bdbdbd;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.canvas-capabilities b {
-  font-size: calc(12px * var(--ui-scale));
-  font-weight: 600;
-}
-.canvas-capabilities span {
-  color: var(--tertiary);
-  font-size: calc(11px * var(--ui-scale));
-}
 .canvas-empty p {
   margin: 0 0 18px;
   color: var(--tertiary);
   font-size: calc(12px * var(--ui-scale));
   line-height: 1.55;
-}
-.preview-loading .canvas-icon {
-  animation: preview-pulse 1.25s ease-in-out infinite;
-}
-.canvas-icon {
-  width: 72px;
-  height: 60px;
-  margin: auto;
-}
-.canvas-icon svg {
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-}
-.canvas-icon rect {
-  fill: #19191b;
-  stroke: #69717e;
-  stroke-width: 1.5;
-}
-.canvas-icon circle:not(.video-disc) {
-  fill: #9a9a9a;
 }
 .canvas-icon path:not(.play-mark) {
   fill: none;
@@ -949,11 +867,6 @@ input:focus-visible {
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-.canvas-icon .video-disc {
-  fill: #696969;
-  stroke: #bdbdbd;
-  stroke-width: 1.2;
 }
 .canvas-icon .play-mark {
   fill: white;
@@ -1054,17 +967,6 @@ input[type='number'],
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
   line-height: 1.45;
-}
-.license-line {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 9px;
-  color: var(--secondary);
-  font-size: calc(11px * var(--ui-scale));
-}
-.license-line span:last-child {
-  text-align: right;
 }
 .terms,
 .check-row {
@@ -1308,33 +1210,6 @@ input[type='number'],
   border-radius: var(--radius);
   background: var(--accent);
   font-size: calc(11px * var(--ui-scale));
-}
-.about-block {
-  padding: 17px 0;
-  color: var(--secondary);
-}
-.about-heading {
-  display: flex;
-  justify-content: space-between;
-}
-.about-heading b {
-  color: var(--text);
-  font-size: calc(12px * var(--ui-scale));
-}
-.about-heading span {
-  font-size: calc(11px * var(--ui-scale));
-}
-.about-link {
-  margin: 9px 10px 0 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  font-size: calc(11px * var(--ui-scale));
-}
-.about-block > p {
-  font-size: calc(11px * var(--ui-scale));
-  line-height: 1.5;
 }
 
 .button {

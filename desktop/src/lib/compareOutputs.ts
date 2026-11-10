@@ -48,13 +48,6 @@ export function sliderBlock(picks: readonly ComparePick[]): string {
     return 'The slider needs two versions of the same image; boxes can hold different images';
   return '';
 }
-export function tabFromKey(key: string, index: number, count: number): number | null {
-  if (key === 'Home') return 0;
-  if (key === 'End') return count - 1;
-  if (key === 'ArrowRight') return (index + 1) % count;
-  if (key === 'ArrowLeft') return (index + count - 1) % count;
-  return null;
-}
 export function boxColumns(count: number, stageWidth: number, stageHeight: number): number {
   if (count <= 2) return Math.max(1, count);
   return stageWidth / Math.max(1, stageHeight) >= 2.6 ? count : 2;

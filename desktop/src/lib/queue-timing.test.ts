@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { demoSnapshot } from './demo';
 import type { JobRecord } from './types';
-import { queueTiming } from './queue-timing';
+import { queueTiming, queueModelState } from './queue-timing';
 
 function job(
   id: string,
@@ -86,5 +86,37 @@ describe('whole queue timing', () => {
     expect(queueTiming(s)?.nextName).toBe('photo.png · HAT');
     s.jobs = [job('other', 'queued', 4), trial('first', 'running', 'SwinIR')];
     expect(queueTiming(s)?.nextName).toBe('other.png');
+  });
+});
+
+describe('the queue and Try others', () => {
+  function job(id: string, status: string, model: string): JobRecord {
+    return {
+      id,
+      media_id: 'photo',
+      media_name: 'photo.png',
+      media_kind: 'image',
+      status,
+      progress: 0,
+      output_path: '',
+      error: '',
+      created_at: 0,
+      model_label: model,
+    } as JobRecord;
+  }
+
+  it('names the running model first, then the image runs still queued', () => {
+    const jobs = [
+      job('c', 'queued', 'DAT2'),
+      job('b', 'queued', 'HAT'),
+      job('a', 'running', 'SwinIR'),
+      job('done', 'completed', 'Old'),
+    ];
+    expect(queueModelState(jobs, 'photo', 'a')).toBe('Running SwinIR · 2 queued');
+    expect(queueModelState(jobs.slice(0, 2), 'photo', '')).toBe('2 queued');
+    expect(queueModelState([job('x', 'queued', 'HAT')], 'photo', '')).toBe('queued');
+    expect(queueModelState([job('a', 'cancelling', 'SwinIR')], 'photo', 'a')).toBe(
+      'Cancelling SwinIR',
+    );
   });
 });

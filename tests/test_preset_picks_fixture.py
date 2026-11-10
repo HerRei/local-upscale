@@ -1,5 +1,5 @@
 """Quick and Best pick the same model in Python (presets.py) and in the desktop
-(`choosePresetModel` in state.ts). Both sides assert the picks in
+(`choosePresetModel` in plan.ts). Both sides assert the picks in
 tests/fixtures/preset-picks.json, so a ranking change has to update both."""
 
 import json
