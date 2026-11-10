@@ -849,6 +849,32 @@ final class AudioFeeder {
     }
 }
 
+/// The one place that builds the video output settings, so `canencode` asks the encoder
+/// exactly what an export will ask.
+func videoOutputSettings(
+    codecName: String, width: Int, height: Int, fps: Double, colors: [String: Any]?, hdr: String,
+    quality: Double, bitrate: Int
+) -> [String: Any] {
+    let codec: AVVideoCodecType = ["h264": .h264, "hevc": .hevc, "prores": .proRes422][codecName]!
+    var compression: [String: Any] = [:]
+    // ProRes sets its own data rate: it takes neither a quality nor a bitrate.
+    if codecName != "prores" {
+        if bitrate > 0 {
+            compression[AVVideoAverageBitRateKey] = bitrate
+        } else {
+            compression[AVVideoQualityKey] = max(0.0, min(1.0, quality))
+        }
+    }
+    if fps > 0 { compression[AVVideoExpectedSourceFrameRateKey] = fps }
+    if !hdr.isEmpty { compression[AVVideoProfileLevelKey] = kVTProfileLevel_HEVC_Main10_AutoLevel as String }
+    var settings: [String: Any] = [
+        AVVideoCodecKey: codec, AVVideoWidthKey: width, AVVideoHeightKey: height,
+        AVVideoCompressionPropertiesKey: compression,
+    ]
+    if let colors { settings[AVVideoColorPropertiesKey] = colors }
+    return settings
+}
+
 func encode(_ arguments: Arguments) throws {
     guard let outputPath = arguments.options["output"] else { throw HelperError("encode needs --output") }
     guard let codecName = arguments.options["codec"], ["h264", "hevc", "prores"].contains(codecName) else {
@@ -880,31 +906,18 @@ func encode(_ arguments: Arguments) throws {
     let writer = try AVAssetWriter(outputURL: url, fileType: fileType)
     writer.shouldOptimizeForNetworkUse = true
 
-    let codec: AVVideoCodecType = ["h264": .h264, "hevc": .hevc, "prores": .proRes422][codecName]!
     let colors = colorProperties(header.color, hdr: hdr)
-    var compression: [String: Any] = [:]
-    // ProRes sets its own data rate: it takes neither a quality nor a bitrate.
-    if codecName != "prores" {
-        if bitrate > 0 {
-            compression[AVVideoAverageBitRateKey] = bitrate
-        } else {
-            compression[AVVideoQualityKey] = max(0.0, min(1.0, quality))
-        }
-    }
-    if header.fps > 0 { compression[AVVideoExpectedSourceFrameRateKey] = header.fps }
-    if !hdr.isEmpty { compression[AVVideoProfileLevelKey] = kVTProfileLevel_HEVC_Main10_AutoLevel as String }
-    var settings: [String: Any] = [
-        AVVideoCodecKey: codec, AVVideoWidthKey: header.width, AVVideoHeightKey: header.height,
-        AVVideoCompressionPropertiesKey: compression,
-    ]
-    if let colors { settings[AVVideoColorPropertiesKey] = colors }
+    var settings = videoOutputSettings(
+        codecName: codecName, width: header.width, height: header.height, fps: header.fps,
+        colors: colors, hdr: hdr, quality: quality, bitrate: bitrate)
     if !writer.canApply(outputSettings: settings, forMediaType: .video) && bitrate == 0 && codecName != "prores" {
         // Constant-quality encoding is not available on every encoder; fall back to
         // a bitrate of about 0.12 bits per pixel per frame, like the FFmpeg route.
-        compression.removeValue(forKey: AVVideoQualityKey)
         let fps = header.fps > 0 ? header.fps : 30
-        compression[AVVideoAverageBitRateKey] = max(500_000, Int(Double(header.width * header.height) * fps * 0.12))
-        settings[AVVideoCompressionPropertiesKey] = compression
+        settings = videoOutputSettings(
+            codecName: codecName, width: header.width, height: header.height, fps: header.fps,
+            colors: colors, hdr: hdr, quality: quality,
+            bitrate: max(500_000, Int(Double(header.width * header.height) * fps * 0.12)))
     }
     guard writer.canApply(outputSettings: settings, forMediaType: .video) else {
         throw HelperError("macOS cannot encode \(codecName.uppercased())\(hdr.isEmpty ? "" : " \(hdr)") at \(header.width)x\(header.height)")
@@ -968,7 +981,15 @@ func canEncode(_ arguments: Arguments) throws {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("localsr-probe-\(UUID().uuidString).mov")
     defer { try? FileManager.default.removeItem(at: url) }
     let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
-    let settings: [String: Any] = [AVVideoCodecKey: AVVideoCodecType.proRes422, AVVideoWidthKey: width, AVVideoHeightKey: height]
+    let fps = Double(arguments.options["fps"] ?? "") ?? 0
+    // "primaries,transfer,matrix" in FFmpeg's names; the default is the BT.709 SDR
+    // tagging the app writes when the source has none.
+    let names = (arguments.options["color"] ?? "bt709,bt709,bt709").split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+    var tags = ColorTags()
+    if names.count == 3 { (tags.primaries, tags.transfer, tags.matrix) = (names[0], names[1], names[2]) }
+    let settings = videoOutputSettings(
+        codecName: "prores", width: width, height: height, fps: fps,
+        colors: colorProperties(tags, hdr: ""), hdr: "", quality: 0.7, bitrate: 0)
     try printJSON(["prores": writer.canApply(outputSettings: settings, forMediaType: .video)])
 }
 

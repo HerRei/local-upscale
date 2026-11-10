@@ -327,6 +327,7 @@ def _run_video_job(
         config.video_codec,
         config.container,
         size=(output_width, output_height),
+        fps=float(fps),
     )
 
     # Load the model once and reuse it for every frame.
