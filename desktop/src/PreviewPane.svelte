@@ -47,6 +47,8 @@
   export let showingError = '';
   export let referenceError = '';
   /** Showing alone in its own framing (an Edit result that does not match the source). */
+  /** The result a pair is still waiting for: the picture stays as it was, no divider or view options. */
+  export let loadingLabel = '';
   export let singleFrame: { width: number; height: number } | null = null;
   /** Live tiles of a running job; off once a saved result was chosen for this image. */
   export let showLiveTiles = true;
@@ -126,22 +128,25 @@
   let comparisonView: ComparisonView = 'split';
   let holdingOriginal = false;
   // Two saved sides compare even while one of them is still decoding.
-  $: pairShown = referenceIsResult && !singleFrame && selectedMedia?.kind === 'image';
-  $: canCompare = Boolean(
-    (resultPreview && !singleFrame) || pairShown || videoComparison?.enhanced_url,
-  );
+  $: loading = loadingLabel !== '';
+  $: pairShown = referenceIsResult && !singleFrame && selectedMedia?.kind === 'image' && !loading;
+  $: canCompare =
+    !loading &&
+    Boolean((resultPreview && !singleFrame) || pairShown || videoComparison?.enhanced_url);
   $: canPeek = canCompare || Boolean(singleFrame && resultPreview);
   $: if (!canPeek) holdingOriginal = false;
   $: shownView = holdingOriginal ? 'original' : comparisonView;
-  $: resultClip = singleFrame
-    ? holdingOriginal
-      ? 100
-      : 0
-    : shownView === 'original'
-      ? 100
-      : shownView === 'enhanced'
-        ? 0
-        : comparison.imagePercent;
+  $: resultClip = loading
+    ? 0
+    : singleFrame
+      ? holdingOriginal
+        ? 100
+        : 0
+      : shownView === 'original'
+        ? 100
+        : shownView === 'enhanced'
+          ? 0
+          : comparison.imagePercent;
   $: splitActive = canCompare && !videoComparison;
   let showingSide: ComparisonSide;
   $: showingSide = {
@@ -962,6 +967,9 @@
             ></div>
           {/if}
         </SplitComparison>
+        {#if loading}<div class="pair-loading">
+            <PreviewActivity media={selectedMedia} loading={loadingLabel} />
+          </div>{/if}
         {#if selectedMedia?.kind === 'video'}<span class="labs-chip">Video · local upscaling</span
           >{/if}
         {#if selectedMedia?.kind !== 'video'}<div
@@ -1045,6 +1053,13 @@
 </section>
 
 <style>
+  .pair-loading {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    pointer-events: none;
+  }
   .playback-preparation {
     position: absolute;
     left: 16px;

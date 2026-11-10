@@ -32,6 +32,8 @@ export interface Scenario {
   >;
   /** The host reports pair slots, as the real one does: results are compared by job id. */
   pairs?: boolean;
+  /** The host takes this long to prepare the preview of a saved result for a pair. */
+  pairDelayMs?: number;
   welcome?: boolean;
   /** An update the feed offers; without it the feed is not configured. */
   update?: string;
@@ -333,6 +335,8 @@ function hostScript(scenario: Scenario): void {
         );
       case 'request_image_comparison': {
         if (!args.showing) return null;
+        if (scenario.pairDelayMs && args.showing !== 'original')
+          await new Promise((resolve) => setTimeout(resolve, scenario.pairDelayMs));
         snapshot.runtime.comparison_pair = {
           media_id: args.mediaId,
           generation: ++compareGeneration,

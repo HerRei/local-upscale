@@ -4657,6 +4657,96 @@ describe('Comparing saved results', () => {
     });
   });
 
+  describe('a click on an Outputs row', () => {
+    const open = async (answer?: (target: string) => Promise<void>) => {
+      const snapshot = pairHost(readySnapshot([image('photo', true)]));
+      snapshot.jobs = [completedJob('a1'), completedJob('a2')];
+      const history = historyOf('photo', [row('a2'), row('a1')]);
+      api.listMediaResults.mockResolvedValue(history);
+      api.listAllMediaResults.mockResolvedValue([history]);
+      const user = await mountWith(snapshot);
+      if (answer) {
+        const immediate = api.requestImageComparison.getMockImplementation()!;
+        api.requestImageComparison.mockImplementation(async (mediaId, pair) => {
+          if (pair) await answer(pair.showing);
+          await immediate(mediaId, pair);
+        });
+      }
+      await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+      return user;
+    };
+    const views = () =>
+      within(screen.getByRole('radiogroup', { name: 'Comparison view' }))
+        .getAllByRole('radio')
+        .map((view) => view.textContent?.trim());
+
+    it('on Original shows the original alone, without a divider or view options', async () => {
+      const user = await open();
+      await user.click(await screen.findByRole('button', { name: /^Show the original/ }));
+      await waitFor(() => expect(document.querySelector('.source-image')).toBeTruthy());
+      expect(screen.queryByRole('slider', { name: 'Before and after comparison' })).toBeNull();
+      expect(screen.queryByRole('radiogroup', { name: 'Comparison view' })).toBeNull();
+      expect(document.querySelector('.result-image')).toBeNull();
+    });
+
+    it('on a result shows the original left and that result right, then another result', async () => {
+      const user = await open();
+      await user.click(await screen.findByRole('button', { name: /^Show a1/ }));
+      await waitFor(() =>
+        expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('a1'),
+      );
+      expect(views()).toEqual(['Original', 'Split', 'Enhanced']);
+      await user.click(screen.getByRole('button', { name: /^Show a2/ }));
+      await waitFor(() =>
+        expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('a2'),
+      );
+      expect(views()).toEqual(['Original', 'Split', 'Enhanced']);
+    });
+
+    it('keeps the previous picture with a loading note until the pair is ready, then splits', async () => {
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      const user = await open(async (target) => {
+        if (target === 'a2') await gate;
+      });
+      await user.click(await screen.findByRole('button', { name: /^Show a1/ }));
+      await waitFor(() =>
+        expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('a1'),
+      );
+      await user.click(screen.getByRole('button', { name: /^Show a2/ }));
+      expect(await screen.findByText('Loading a2…')).toBeTruthy();
+      expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('a1');
+      expect(screen.queryByRole('radiogroup', { name: 'Comparison view' })).toBeNull();
+      expect(document.querySelector('.divider-labels')).toBeNull();
+      release();
+      await waitFor(() => expect(screen.queryByText('Loading a2…')).toBeNull());
+      expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('a2');
+      expect(views()).toEqual(['Original', 'Split', 'Enhanced']);
+    });
+
+    it('shows the indicator over the original when only that was shown, and ignores a late answer', async () => {
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      const user = await open(async (target) => {
+        if (target === 'a1') await gate;
+      });
+      await user.click(await screen.findByRole('button', { name: /^Show the original/ }));
+      await user.click(screen.getByRole('button', { name: /^Show a1/ }));
+      expect(await screen.findByText('Loading a1…')).toBeTruthy();
+      expect(document.querySelector('.source-image')).toBeTruthy();
+      expect(document.querySelector('.result-image')).toBeNull();
+      expect(screen.queryByRole('radiogroup', { name: 'Comparison view' })).toBeNull();
+      await user.click(screen.getByRole('button', { name: /^Show a2/ }));
+      await waitFor(() =>
+        expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('a2'),
+      );
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('a2');
+      expect(screen.queryByText('Loading a1…')).toBeNull();
+    });
+  });
+
   describe('Clear in the Outputs tab', () => {
     const open = async (rows: ResultSummary[]) => {
       const snapshot = pairHost(readySnapshot([image('photo', true)]));
