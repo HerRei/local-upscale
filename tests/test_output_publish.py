@@ -361,6 +361,7 @@ def test_a_missing_native_rename_symbol_falls_through(tmp_path, monkeypatch):
             raise AttributeError(name)
 
     monkeypatch.setattr(output_publish.ctypes, "CDLL", lambda *_args, **_kwargs: Library())
+    monkeypatch.setattr(output_publish.sys, "platform", "linux")
     temporary = tmp_path / ".x.tmp"
     temporary.write_bytes(b"payload")
     assert output_publish._native_rename_noreplace(temporary, tmp_path / "x.bin") is False
@@ -396,6 +397,26 @@ def test_windows_uses_a_plain_rename_that_refuses_an_existing_name(tmp_path, mon
     with pytest.raises(OutputExistsError):
         publish_output(temporary, tmp_path / "x.bin")
     assert calls == [(temporary, tmp_path / "x.bin")]
+
+
+def test_windows_native_rename_seam_succeeds_and_refuses_replacement(tmp_path, monkeypatch):
+    monkeypatch.setattr(output_publish.sys, "platform", "win32")
+    source, target = tmp_path / "source", tmp_path / "target"
+    source.write_bytes(b"first")
+
+    def windows_rename(old, new):
+        if new.exists():
+            raise FileExistsError(errno.EEXIST, "exists")
+        old.replace(new)
+
+    monkeypatch.setattr(output_publish.os, "rename", windows_rename)
+    monkeypatch.setattr(output_publish.ctypes, "CDLL", lambda *_a, **_k: pytest.fail("POSIX call"))
+    assert output_publish._native_rename_noreplace(source, target)
+    source.write_bytes(b"second")
+    with pytest.raises(FileExistsError):
+        output_publish._native_rename_noreplace(source, target)
+    assert target.read_bytes() == b"first"
+    assert source.read_bytes() == b"second"
 
 
 def _complete_empty_or_absent(destination: Path, payload: bytes) -> bool:

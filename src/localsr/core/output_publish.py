@@ -76,9 +76,6 @@ _UNSUPPORTED = {
 def _rename_without_replacing(temporary: Path, destination: Path) -> bool:
     """Step 2. False when this system or file system cannot do it."""
     try:
-        if sys.platform == "win32":
-            os.rename(temporary, destination)  # fails when the destination exists
-            return True
         return _native_rename_noreplace(temporary, destination)
     except FileExistsError:
         raise OutputExistsError(destination) from None
@@ -89,7 +86,12 @@ def _rename_without_replacing(temporary: Path, destination: Path) -> bool:
 
 
 def _native_rename_noreplace(temporary: Path, destination: Path) -> bool:
-    """``renameat2(RENAME_NOREPLACE)`` or ``renamex_np(RENAME_EXCL)``; False when missing."""
+    """Rename without replacement; return False when the native call is unavailable."""
+    if sys.platform == "win32":
+        os.rename(temporary, destination)  # Windows refuses an existing destination.
+        return True
+    if sys.platform != "darwin" and not sys.platform.startswith("linux"):
+        return False
     try:
         library = ctypes.CDLL(None, use_errno=True)
         old, new = os.fsencode(temporary), os.fsencode(destination)
