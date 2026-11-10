@@ -1057,13 +1057,13 @@ fn apply_background_photo(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> A
     let id = string(data, "job_id");
     match envelope.message_type.as_str() {
         "progress" => {
-            lock(&state.database)?.update_job_progress(&id, number(data, "percentage"))?;
+            lock(&state.database)?.update_job_progress(&id, percentage(data, "percentage"))?;
         }
         "job_completed" => {
             let output = string(data, "output_path");
             let database = lock(&state.database)?;
             database.finish_job(&id, "completed", &output, &string(data, "notes"))?;
-            database.record_job_duration(&id, number(data, "elapsed_seconds"))?;
+            database.record_job_duration(&id, seconds(data, "elapsed_seconds"))?;
             drop(database);
             let mut runtime = lock(&state.runtime)?;
             // The result shown after the batch belongs to last_output_path.
@@ -1174,8 +1174,8 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             lock(&state.database)?.update_media_probe(
                 &path,
                 &string(data, "media_kind"),
-                integer(data, "width") as u32,
-                integer(data, "height") as u32,
+                count32(data, "width"),
+                count32(data, "height"),
                 integer(data, "frame_count"),
                 number(data, "fps"),
                 number(data, "duration_seconds"),
@@ -1269,7 +1269,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
         }
         "stage_started" => {
             let stage = stage_label(&string(data, "stage_kind"));
-            let index = integer(data, "stage_index") + 1;
+            let index = integer(data, "stage_index").saturating_add(1);
             let count = integer(data, "stage_count");
             let mut runtime = lock(&state.runtime)?;
             runtime.status_title = format!("{stage} · stage {index}/{count}");
@@ -1283,7 +1283,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
         "stage_progress" => {}
         "progress" => {
             let id = string(data, "job_id");
-            let progress = number(data, "percentage");
+            let progress = percentage(data, "percentage");
             lock(&state.database)?.update_job_progress(&id, progress)?;
             let mut runtime = lock(&state.runtime)?;
             runtime.progress = progress;
@@ -1297,7 +1297,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             } else if !staged {
                 runtime.status_title = "Enhancing".into();
             }
-            let remaining = number(data, "estimated_remaining_seconds");
+            let remaining = seconds(data, "estimated_remaining_seconds");
             // Editing spends most of its time outside the sampling steps; the
             // worker then names the phase it is in.
             let detail = string(data, "detail");
@@ -1312,8 +1312,8 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             } else {
                 detail
             };
-            runtime.elapsed_seconds = number(data, "elapsed_seconds");
-            runtime.estimated_remaining_seconds = number(data, "estimated_remaining_seconds");
+            runtime.elapsed_seconds = seconds(data, "elapsed_seconds");
+            runtime.estimated_remaining_seconds = seconds(data, "estimated_remaining_seconds");
             let completed = integer(data, "completed_tiles") as f64;
             runtime.throughput = if runtime.elapsed_seconds > 0.0 {
                 completed / runtime.elapsed_seconds
@@ -1321,7 +1321,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 0.0
             };
             runtime.throughput_unit = if editing { "steps/s" } else { "tiles/s" }.into();
-            runtime.active_tile_size = integer(data, "active_tile_size") as u32;
+            runtime.active_tile_size = count32(data, "active_tile_size");
             runtime.device_free_memory = integer(data, "device_free_memory");
             runtime.device_allocated_memory = integer(data, "device_allocated_memory");
             runtime.live_system_ram_available = integer(data, "system_ram_available");
@@ -1352,9 +1352,9 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 let frames_done = number(data, "frames_processed");
                 let frames_total = number(data, "total_frames");
                 if frames_total > 0.0 {
-                    runtime.progress = frames_done / frames_total * 100.0;
+                    runtime.progress = (frames_done / frames_total * 100.0).clamp(0.0, 100.0);
                 }
-                runtime.estimated_remaining_seconds = number(data, "estimated_remaining_seconds");
+                runtime.estimated_remaining_seconds = seconds(data, "estimated_remaining_seconds");
                 let steps = if integer(data, "total") > 0 {
                     format!(
                         "{} / {} · ",
@@ -1367,7 +1367,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 let frames = if integer(data, "total_frames") > 0 {
                     format!(
                         "From frame {} of {} · ",
-                        integer(data, "frame_index") + 1,
+                        integer(data, "frame_index").saturating_add(1),
                         integer(data, "total_frames")
                     )
                 } else {
@@ -1384,7 +1384,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 if string(data, "stage") == "saving" {
                     runtime.status_detail = "Finalizing video timing and audio…".into();
                 }
-                runtime.elapsed_seconds = number(data, "elapsed_seconds");
+                runtime.elapsed_seconds = seconds(data, "elapsed_seconds");
                 runtime.throughput_unit = "frames/s".into();
             }
         }
@@ -1393,7 +1393,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             runtime.status_title = "Enhancing video · Labs".into();
             runtime.status_detail = format!(
                 "Frame {} of {}{}",
-                integer(data, "frame_index") + 1,
+                integer(data, "frame_index").saturating_add(1),
                 integer(data, "total_frames"),
                 if runtime.estimated_remaining_seconds > 0.0 {
                     eta_suffix(runtime.estimated_remaining_seconds)
@@ -1410,17 +1410,17 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             let fraction = frame + if count > 0.0 { done / count } else { 0.0 };
             let mut runtime = lock(&state.runtime)?;
             runtime.progress = if total > 0.0 {
-                fraction / total * 100.0
+                (fraction / total * 100.0).clamp(0.0, 100.0)
             } else {
                 0.0
             };
             runtime.status_title = "Enhancing video".into();
-            runtime.elapsed_seconds = number(data, "elapsed_seconds");
-            runtime.estimated_remaining_seconds = number(data, "estimated_remaining_seconds");
-            runtime.active_tile_size = integer(data, "active_tile_size") as u32;
+            runtime.elapsed_seconds = seconds(data, "elapsed_seconds");
+            runtime.estimated_remaining_seconds = seconds(data, "estimated_remaining_seconds");
+            runtime.active_tile_size = count32(data, "active_tile_size");
             runtime.status_detail = format!(
                 "Frame {} of {} · Tile {} / {}{}",
-                frame as u64 + 1,
+                (frame as u64).saturating_add(1),
                 total as u64,
                 done as u64,
                 count as u64,
@@ -1438,15 +1438,15 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             let completed = integer(data, "frames_processed") as f64;
             let total = integer(data, "total_frames") as f64;
             let progress = if total > 0.0 {
-                completed / total * 100.0
+                (completed / total * 100.0).clamp(0.0, 100.0)
             } else {
                 0.0
             };
             lock(&state.database)?.update_job_progress(&id, progress)?;
             let mut runtime = lock(&state.runtime)?;
             runtime.progress = progress;
-            let elapsed = number(data, "elapsed_seconds");
-            let remaining = number(data, "estimated_remaining_seconds");
+            let elapsed = seconds(data, "elapsed_seconds");
+            let remaining = seconds(data, "estimated_remaining_seconds");
             runtime.status_title = "Enhancing video · Labs".into();
             runtime.status_detail = format!(
                 "Frame {} of {}{}",
@@ -1502,7 +1502,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
         "benchmark_progress" => {
             let stage = string(data, "stage");
             let mut runtime = lock(&state.runtime)?;
-            runtime.progress = number(data, "percentage");
+            runtime.progress = percentage(data, "percentage");
             runtime.status_title = "Benchmark running".into();
             runtime.status_detail = if stage.is_empty() {
                 format!(
@@ -1524,7 +1524,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             let completed_units = integer(data, "completed_units");
             let total_units = integer(data, "total_units");
             let mut runtime = lock(&state.runtime)?;
-            runtime.progress = number(data, "percentage");
+            runtime.progress = percentage(data, "percentage");
             runtime.status_title = "Benchmark running".into();
             runtime.status_detail = if event == "progress" && completed_units > 0 {
                 if total_units > 0 {
@@ -1613,7 +1613,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             // kept with the job and on the status line.
             let notes = string(data, "notes");
             lock(&state.database)?.finish_job(&id, "completed", &output, &notes)?;
-            lock(&state.database)?.record_job_duration(&id, number(data, "elapsed_seconds"))?;
+            lock(&state.database)?.record_job_duration(&id, seconds(data, "elapsed_seconds"))?;
             let mut runtime = lock(&state.runtime)?;
             runtime.take_active_job();
             // A video frame thumbnail is a live preview, not a completed
@@ -1629,7 +1629,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 notes
             };
             runtime.elapsed_seconds =
-                number(data, "inference_seconds").max(number(data, "elapsed_seconds"));
+                seconds(data, "inference_seconds").max(seconds(data, "elapsed_seconds"));
             runtime.estimated_remaining_seconds = 0.0;
         }
         "job_cancelled" => {
@@ -1885,6 +1885,22 @@ fn integer(value: &Value, key: &str) -> u64 {
 
 fn number(value: &Value, key: &str) -> f64 {
     value.get(key).and_then(Value::as_f64).unwrap_or_default()
+}
+
+/// A percentage the engine reported, kept within 0 to 100 for the progress bar.
+fn percentage(value: &Value, key: &str) -> f64 {
+    number(value, key).clamp(0.0, 100.0)
+}
+
+/// A time span the engine reported; a negative one counts as none.
+fn seconds(value: &Value, key: &str) -> f64 {
+    number(value, key).max(0.0)
+}
+
+/// A count that has to fit 32 bits, such as an image side; a larger one saturates
+/// instead of wrapping around to a small number.
+fn count32(value: &Value, key: &str) -> u32 {
+    u32::try_from(integer(value, key)).unwrap_or(u32::MAX)
 }
 
 fn eta_suffix(seconds: f64) -> String {
@@ -2699,6 +2715,85 @@ mod tests {
             assert!(engine_crashed(&Ok(status)), "{status:?}");
         }
         assert!(!engine_crashed(&Err(std::io::Error::other("no status"))));
+    }
+
+    #[test]
+    fn counters_at_the_largest_value_do_not_overflow() {
+        for (kind, data) in [
+            (
+                "video_tile_progress",
+                json!({"frame_index": u64::MAX, "total_frames": u64::MAX, "total_tiles": 1}),
+            ),
+            (
+                "video_frame_started",
+                json!({"frame_index": u64::MAX, "total_frames": 1}),
+            ),
+            (
+                "video_stage_progress",
+                json!({"job_id": "", "stage": "x", "frame_index": u64::MAX, "total_frames": 5}),
+            ),
+            (
+                "stage_started",
+                json!({"stage_index": u64::MAX, "stage_count": 1}),
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let state = Arc::new(
+                AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap(),
+            );
+            apply_worker_envelope(&state, &envelope(kind, data)).unwrap();
+            assert!(
+                state.runtime.lock().is_ok(),
+                "{kind} poisoned the runtime lock"
+            );
+        }
+    }
+
+    #[test]
+    fn percentages_and_times_from_the_engine_stay_in_range() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = batch_state(directory.path());
+        {
+            let mut runtime = lock(&state.runtime).unwrap();
+            runtime.active_job_id = "a".into();
+        }
+        for data in [
+            json!({"job_id": "a", "percentage": 1.0e9, "elapsed_seconds": -50.0,
+                   "estimated_remaining_seconds": -1.0e12}),
+            json!({"job_id": "a", "percentage": -5.0}),
+        ] {
+            apply_worker_envelope(&state, &envelope("progress", data)).unwrap();
+            let runtime = lock(&state.runtime).unwrap();
+            assert!(
+                (0.0..=100.0).contains(&runtime.progress),
+                "{}",
+                runtime.progress
+            );
+            assert!(runtime.elapsed_seconds >= 0.0);
+            assert!(runtime.estimated_remaining_seconds >= 0.0);
+        }
+        apply_worker_envelope(
+            &state,
+            &envelope(
+                "video_tile_progress",
+                json!({"job_id": "a", "frame_index": 90, "total_frames": 10,
+                       "estimated_remaining_seconds": -3.0}),
+            ),
+        )
+        .unwrap();
+        let runtime = lock(&state.runtime).unwrap();
+        assert_eq!(runtime.progress, 100.0);
+        assert_eq!(runtime.estimated_remaining_seconds, 0.0);
+    }
+
+    #[test]
+    fn an_image_side_larger_than_32_bits_saturates() {
+        assert_eq!(
+            count32(&json!({"width": 5_000_000_000_u64}), "width"),
+            u32::MAX
+        );
+        assert_eq!(count32(&json!({"width": 4096}), "width"), 4096);
+        assert_eq!(count32(&json!({}), "width"), 0);
     }
 
     #[test]
