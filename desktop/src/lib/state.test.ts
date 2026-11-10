@@ -399,6 +399,35 @@ describe('desktop state', () => {
     expect(formatBytes(1e-9)).not.toMatch(/undefined|NaN/);
   });
 
+  it('keeps every progress value between 0 and 100 percent, whatever the engine reports', () => {
+    const running = () => {
+      const snapshot = demoSnapshot();
+      snapshot.runtime.active_job_id = 'job-1';
+      return snapshot;
+    };
+    for (const [type, data] of [
+      ['progress', { job_id: 'job-1', percentage: 150 }],
+      ['benchmark_progress', { job_id: 'job-1', percentage: 150 }],
+      ['benchmark_stage_progress', { job_id: 'job-1', percentage: 150 }],
+      ['video_frame_completed', { job_id: 'job-1', frames_processed: 15, total_frames: 10 }],
+    ] as const) {
+      expect(applyWorkerEnvelope(running(), { type, data }).runtime.progress, type).toBe(100);
+    }
+    expect(
+      applyWorkerEnvelope(running(), {
+        type: 'progress',
+        data: { job_id: 'job-1', percentage: -5 },
+      }).runtime.progress,
+    ).toBe(0);
+    const download = (progress: number) =>
+      applyWorkerEnvelope(demoSnapshot(), {
+        type: 'download-progress',
+        data: { model_id: 'span_photo_x4', progress },
+      }).runtime.download_progress;
+    expect(download(140)).toBe(100);
+    expect(download(-3)).toBe(0);
+  });
+
   it('finishes a slow benchmark with unmeasured consistency and unlocks the queue', () => {
     const before = demoSnapshot();
     before.runtime.active_job_id = 'benchmark-slow';

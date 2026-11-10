@@ -983,7 +983,14 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       next.runtime.download_model_id = '';
       break;
   }
+  // A bar is drawn from these as a percentage of its track.
+  next.runtime.progress = clampPercent(next.runtime.progress);
+  next.runtime.download_progress = clampPercent(next.runtime.download_progress);
   return next;
+}
+
+function clampPercent(value: number): number {
+  return Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0;
 }
 
 export function formatBytes(bytes: number): string {
