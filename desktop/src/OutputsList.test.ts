@@ -208,6 +208,8 @@ it('shows video rows but prevents picking them for image Compare', async () => {
     kind: 'video',
     model_label: 'Frame by frame',
     size_bytes: 5,
+    output_duration_seconds: 16.4,
+    output_fps: 60,
     ui: null,
   });
   const showResult = vi.fn();
@@ -219,7 +221,8 @@ it('shows video rows but prevents picking them for image Compare', async () => {
     togglePick,
   });
   const row = screen.getByRole('button', { name: 'Show Frame by frame, clip.mp4' });
-  expect(row.textContent).toContain('4× · 5 B · 31s');
+  expect(row.textContent).toContain('4× · 0:16 · 60 fps · 5 B');
+  expect(row.title).toContain('Took 31s');
   await fireEvent.click(row);
   expect(showResult).toHaveBeenCalledWith({ kind: 'output', media_id: 'v', job_id: 'v1' });
   await fireEvent.keyDown(row, { key: ' ' });
@@ -227,4 +230,22 @@ it('shows video rows but prevents picking them for image Compare', async () => {
   const box = screen.getByRole('checkbox', { name: 'Frame by frame, clip.mp4' });
   expect(box.matches(':disabled')).toBe(true);
   expect(box.title).toBe('Compare works with images');
+});
+
+it('shows timing for video without interpolation and omits missing timing', () => {
+  const clip = { ...media, kind: 'video' } as MediaItem;
+  const outputs = [
+    result('plain', { kind: 'video', output_duration_seconds: 16.4, output_fps: 15 }),
+    result('unknown', { kind: 'video' }),
+  ];
+  render(OutputsList, {
+    ...props([]),
+    groups: outputGroups([clip], [{ media_id: 'a', results: outputs }] as MediaResults[]),
+  });
+  expect(screen.getByRole('button', { name: 'Show plain, Lake.jpg' }).textContent).toContain(
+    '0:16 · 15 fps',
+  );
+  expect(screen.getByRole('button', { name: 'Show unknown, Lake.jpg' }).textContent).not.toContain(
+    '31s',
+  );
 });

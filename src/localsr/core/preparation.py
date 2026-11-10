@@ -124,32 +124,40 @@ def bounded_preparation(
                         del _abandoned[slot]
 
     thread = threading.Thread(target=run, name=f"localsr-prepare-{slot}", daemon=True)
-    thread.start()
     next_status = started
-    while True:
-        now = clock()
-        if status is not None and now >= next_status:
-            next_status = now + STATUS_INTERVAL_SECONDS
-            left = max(0, round(end - now))
+    try:
+        while True:
+            now = clock()
+            if status is not None and now >= next_status:
+                next_status = now + STATUS_INTERVAL_SECONDS
+                left = max(0, round(end - now))
+                try:
+                    status(
+                        f"{name}. {max(0, round(now - shown_from))} s so far; "
+                        f"{fallback} in {left} s if it is not ready."
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.debug("Preparation status callback failed", exc_info=True)
+            if not thread.is_alive() and box.outcome is None:
+                thread.start()
+            if box.done.wait(min(WAIT_SLICE_SECONDS, max(0.0, end - now))):
+                break
+            interrupted = cancel_event is not None and cancel_event.is_set()
+            if interrupted or clock() >= end:
+                with _lock:
+                    if not box.done.is_set():
+                        box.abandoned = True
+                        _abandoned[slot] = thread
+                        if interrupted:
+                            raise InterruptedError("Cancelled")
+                        raise PreparationTimeout(name, limit)
+                break
+    finally:
+        if status is not None:
             try:
-                status(
-                    f"{name}. {max(0, round(now - shown_from))} s so far; "
-                    f"{fallback} in {left} s if it is not ready."
-                )
+                status("")
             except Exception:  # noqa: BLE001
                 logger.debug("Preparation status callback failed", exc_info=True)
-        if box.done.wait(min(WAIT_SLICE_SECONDS, max(0.0, end - now))):
-            break
-        interrupted = cancel_event is not None and cancel_event.is_set()
-        if interrupted or clock() >= end:
-            with _lock:
-                if not box.done.is_set():
-                    box.abandoned = True
-                    _abandoned[slot] = thread
-                    if interrupted:
-                        raise InterruptedError("Cancelled")
-                    raise PreparationTimeout(name, limit)
-            break
     kind, value = box.outcome  # type: ignore[misc]
     if kind == "error":
         raise value

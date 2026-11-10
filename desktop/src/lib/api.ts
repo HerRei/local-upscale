@@ -222,6 +222,7 @@ export const prepareVideoComparison = async (
   requestId: string,
   forceCompatible = false,
   resultId?: string,
+  deferConversion = false,
 ): Promise<VideoComparisonSources> => {
   const paths = await invoke<{
     playback_note: string;
@@ -229,7 +230,13 @@ export const prepareVideoComparison = async (
     enhanced_path: string;
     original_url?: string | null;
     enhanced_url?: string | null;
-  }>('prepare_video_comparison', { mediaId, requestId, forceCompatible, resultId });
+  }>('prepare_video_comparison', {
+    mediaId,
+    requestId,
+    forceCompatible,
+    resultId,
+    deferConversion,
+  });
   return {
     playback_note: paths.playback_note,
     original_url: paths.original_url ?? convertFileSrc(paths.original_path),

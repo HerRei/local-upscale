@@ -96,7 +96,8 @@ def test_status_is_repeated_with_elapsed_time_and_the_way_out():
     call(release.wait, limit=5.0, status=messages.append)
     assert len(messages) >= 4
     assert messages[0] == "Preparing X. 0 s so far; going on in 5 s if it is not ready."
-    assert all("going on in" in message for message in messages)
+    assert messages[-1] == ""
+    assert all("going on in" in message for message in messages[:-1])
 
 
 # The guard: nothing in the engine may wait without a bound ----------------------

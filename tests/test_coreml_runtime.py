@@ -1178,6 +1178,7 @@ def test_elapsed_time_counts_from_the_start_of_the_whole_preparation(fake_coreml
     converted.model.prepare(16, 4)
     converted.model._bounded(CORE_ML_GPU, lambda: now.__setitem__(0, 140.0))
     converted.model._bounded(CORE_ML_GPU, lambda: None)
+    seen = [message for message in seen if message]
     assert "Preparing the faster path (once per model and tile size)" in seen[0]
     assert "0 s so far" in seen[0] and "40 s so far" in seen[1]
     assert "starts on the standard path in 80 s" in seen[1]

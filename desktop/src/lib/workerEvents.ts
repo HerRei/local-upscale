@@ -97,6 +97,17 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
     ? { ...snapshot, runtime: { ...snapshot.runtime } }
     : structuredClone(snapshot);
   const data = envelope.data;
+  if (
+    [
+      'progress',
+      'video_tile_progress',
+      'video_frame_started',
+      'video_frame_completed',
+      'video_stage_progress',
+    ].includes(envelope.type) &&
+    next.runtime.hardware_note.includes(' s so far;')
+  )
+    next.runtime.hardware_note = '';
   switch (envelope.type) {
     case 'worker_ready':
       next.runtime.worker = 'negotiating';
@@ -217,7 +228,7 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       const remaining = Number(data.estimated_remaining_seconds ?? 0);
       next.runtime.progress = total > 0 ? (fraction / total) * 100 : 0;
       next.runtime.status_title = 'Enhancing video';
-      next.runtime.status_detail = `Frame ${frame + 1} of ${total || '?'} · Tile ${done} / ${count || '?'} · ${remaining > 0 ? `ETA ≈ ${formatDuration(remaining)}` : fraction > 0 ? 'Finishing frame' : 'ETA: measuring first tile…'}`;
+      next.runtime.status_detail = `Frame ${frame + 1} of ${total || '?'}${count > 1 && done > 0 ? ` · Tile ${Math.min(done, count)} / ${count}` : ''} · ${remaining > 0 ? `ETA ≈ ${formatDuration(remaining)}` : fraction > 0 ? 'Finishing frame' : 'ETA: measuring first tile…'}`;
       next.runtime.elapsed_seconds = Number(data.elapsed_seconds ?? 0);
       next.runtime.estimated_remaining_seconds = remaining;
       next.runtime.active_tile_size = Number(data.active_tile_size ?? 0);

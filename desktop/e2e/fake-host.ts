@@ -41,6 +41,8 @@ export interface Scenario {
   finished?: boolean;
   /** A queue is running: the first photo is processing and the rest wait. */
   running?: boolean;
+  /** A video is running while photos and their saved outputs remain browsable. */
+  runningVideo?: boolean;
   /** With `running`: the state of each photo (1-based) instead of "first runs, rest wait". */
   rows?: Record<number, { status: string; progress?: number; elapsed_seconds?: number }>;
   /** With `running`: only the first n photos have jobs; the others are new input. */
@@ -220,6 +222,23 @@ function hostScript(scenario: Scenario): void {
           created_at: 1794160000 + index,
         })),
       );
+    }
+    if (scenario.runningVideo) {
+      for (const media of s.media) media.selected = media.id === 'video-1';
+      s.runtime.active_job_id = 'job-video-1';
+      s.runtime.status_title = 'Enhancing video';
+      s.runtime.progress = 40;
+      s.jobs.push({
+        id: 'job-video-1',
+        media_id: 'video-1',
+        media_name: 'Alpine lake.mp4',
+        media_kind: 'video',
+        status: 'running',
+        progress: 40,
+        output_path: '',
+        error: '',
+        created_at: 1794160100,
+      });
     }
     if (scenario.pairs) {
       const empty = { target_id: '', preview_data_url: '' };

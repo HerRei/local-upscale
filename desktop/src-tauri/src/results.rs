@@ -26,7 +26,7 @@ pub fn ensure_not_linked(path: &Path) -> crate::error::AppResult<()> {
 
 /// The columns `summary_from_row` reads, in its order.
 pub const SUMMARY_COLUMNS: &str =
-    "id, updated_at, status, output_path, error, elapsed_seconds, request_json, ui_json";
+    "id, updated_at, status, output_path, error, elapsed_seconds, request_json, ui_json, (SELECT fps FROM media WHERE media.id=jobs.media_id), (SELECT duration_seconds FROM media WHERE media.id=jobs.media_id)";
 
 /// Host-only labels recorded when a job is queued. They never enter the worker
 /// request, so the protocol and the timing profile stay as they were.
@@ -66,6 +66,10 @@ pub struct ResultSummary {
     pub available: bool,
     pub model_id: String,
     pub model_label: String,
+    #[serde(skip)]
+    pub checkpoint_filename: String,
+    pub output_duration_seconds: f64,
+    pub output_fps: f64,
     /// The recorded output scale; 0 when the request has none (Edit).
     pub scale: u64,
     /// The written instruction of an Edit; empty for other kinds.
@@ -182,8 +186,36 @@ pub fn catalog_label(catalog: &CatalogManifest, model_id: &str) -> Option<String
     )
 }
 
+fn video_checkpoint_id<'a>(catalog: &'a CatalogManifest, filename: &str) -> Option<&'a str> {
+    catalog.models.iter().find(|model| model.filename == filename).map(|model| model.model_id.as_str())
+}
+
+fn video_timing(request: &Value, source_fps: f64, source_duration: f64) -> (f64, f64) {
+    if request_kind(request) != "video" { return (0.0, 0.0); }
+    let data = &request["data"];
+    let fps = data["fps"].as_f64().filter(|n| *n > 0.0).unwrap_or(source_fps);
+    let duration = if data["start_frame"].is_number() || data["end_frame"].is_number() {
+        if source_fps <= 0.0 { 0.0 } else {
+            let start = data["start_frame"].as_u64().unwrap_or(0) as f64 / source_fps;
+            let end = data["end_frame"].as_u64().map(|n| (n + 1) as f64 / source_fps).unwrap_or(source_duration);
+            if source_duration > 0.0 { (end.min(source_duration) - start).max(0.0) } else if data["end_frame"].is_number() { (end - start).max(0.0) } else { 0.0 }
+        }
+    } else { source_duration };
+    let output_fps = match data["interpolation"].as_str().unwrap_or("off") {
+        "x2" => fps * 2.0, "x4" => fps * 4.0,
+        "fps60" if fps > 0.0 && fps < 59.4 => 60.0, "fps120" if fps > 0.0 && fps < 118.8 => 120.0,
+        _ => fps,
+    };
+    (duration.max(0.0), output_fps.max(0.0))
+}
+
 /// Replace model ids with catalog names where the catalog knows them.
 pub fn label_summary(catalog: &CatalogManifest, summary: &mut ResultSummary) {
+    if summary.kind == "video" && summary.model_id.is_empty() {
+        if let Some(id) = video_checkpoint_id(catalog, &summary.checkpoint_filename) {
+            summary.model_id = id.to_owned();
+        }
+    }
     let primary = if summary.kind == "edit" {
         crate::editing::model_name(&summary.model_id)
     } else {
@@ -214,6 +246,7 @@ pub fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ResultSumma
     let output_path: String = row.get(3)?;
     let (model_id, model_label) = request_model(&request);
     let ui_json: String = row.get(7)?;
+    let (output_duration_seconds, output_fps) = video_timing(&request, row.get::<_, Option<f64>>(8)?.unwrap_or(0.0), row.get::<_, Option<f64>>(9)?.unwrap_or(0.0));
     Ok(ResultSummary {
         job_id: row.get(0)?,
         completed_at: row.get(1)?,
@@ -233,6 +266,9 @@ pub fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ResultSumma
         output_path,
         model_id,
         model_label,
+        checkpoint_filename: Path::new(data["model_path"].as_str().unwrap_or_default()).file_name().and_then(|n| n.to_str()).unwrap_or_default().to_owned(),
+        output_duration_seconds,
+        output_fps,
         scale: data["output_scale"].as_u64().unwrap_or(0),
         prompt: edit_field(&request, "prompt", |value| {
             value.as_str().map(str::to_owned)
@@ -306,6 +342,26 @@ mod tests {
             super::request_model(&serde_json::Value::Null),
             (String::new(), "Unknown model".into())
         );
+    }
+
+    #[test]
+    fn video_timing_uses_source_and_interpolation() {
+        let request = json!({"type":"video_job_request","data":{"interpolation":"fps60"}});
+        assert_eq!(super::video_timing(&request, 15.0, 16.4), (16.4, 60.0));
+        assert_eq!(super::video_timing(&request, 59.94, 16.4), (16.4, 59.94));
+        let plain = json!({"type":"video_job_request","data":{}});
+        assert_eq!(super::video_timing(&plain, 15.0, 16.4), (16.4, 15.0));
+        let trimmed = json!({"type":"video_job_request","data":{"start_frame":15,"end_frame":75}});
+        assert!((super::video_timing(&trimmed, 15.0, 16.4).0 - 61.0 / 15.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn video_checkpoint_matches_catalog_filename() {
+        let directory = tempfile::tempdir().unwrap();
+        let catalog = crate::catalog::load_catalog(&crate::paths::AppPaths::under(directory.path())).unwrap();
+        let model = &catalog.models[0];
+        assert_eq!(super::video_checkpoint_id(&catalog, &model.filename), Some(model.model_id.as_str()));
+        assert_eq!(super::video_checkpoint_id(&catalog, "custom.pth"), None);
     }
 
     #[test]

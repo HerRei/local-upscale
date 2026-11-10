@@ -11,6 +11,41 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it('defers an unprepared input during a video run and retries when the engine is free', async () => {
+  const api = await import('./lib/api');
+  vi.spyOn(api, 'isTauri').mockReturnValue(true);
+  const probe = vi.spyOn(api, 'probePath').mockResolvedValue();
+  const media: MediaItem = {
+    id: 'waiting',
+    path: '/waiting.png',
+    name: 'waiting.png',
+    kind: 'image',
+    width: 0,
+    height: 0,
+    frame_count: 1,
+    fps: 0,
+    duration_seconds: 0,
+    preview_data_url: '',
+    probe_status: 'ready',
+    error: '',
+    selected: true,
+  };
+  const pane = render(PreviewPane, {
+    selectedMedia: media,
+    resultPreview: '',
+    completedVideoOutput: '',
+    videoEngineBusy: true,
+  });
+  expect(
+    await screen.findByText(
+      'This preview needs the engine, which is busy with the video. It will load when the video is done.',
+    ),
+  ).toBeTruthy();
+  expect(probe).not.toHaveBeenCalled();
+  await pane.rerender({ videoEngineBusy: false });
+  await waitFor(() => expect(probe).toHaveBeenCalledWith('/waiting.png'));
+});
+
 it('rejects denoise tiles arriving after the upscale stage established its raster', async () => {
   const drawImage = vi.fn();
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({

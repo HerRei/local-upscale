@@ -62,6 +62,7 @@
   $: liveFrame = progressiveFrame;
   export let editing = false;
   export let processing = false;
+  export let videoEngineBusy = false;
   export let activeTileSize = 0;
   export let addFiles: () => void = () => {};
   export let dropping = false;
@@ -198,7 +199,14 @@
   let disposed = false;
 
   $: sourcePreview = selectedMedia?.preview_data_url ?? '';
-  $: displayedSourcePreview = videoSourcePreview || sourcePreview;
+  $: displayedSourcePreview = (processing && videoSourcePreview) || sourcePreview;
+  $: deferredPreview = Boolean(
+    videoEngineBusy &&
+    selectedMedia &&
+    !sourcePreview &&
+    (selectedMedia.probe_status === 'pending' ||
+      (selectedMedia.probe_status === 'ready' && selectedMedia.kind === 'image')),
+  );
   $: waitingForVideoFrame =
     processing &&
     selectedMedia?.kind === 'video' &&
@@ -217,6 +225,17 @@
   $: if (desiredVideoComparisonKey !== videoComparisonKey) {
     void loadVideoComparison(desiredVideoComparisonKey);
   }
+  let videoWasBusy = false;
+  $: if (videoWasBusy !== videoEngineBusy) {
+    videoWasBusy = videoEngineBusy;
+    if (videoEngineBusy) previewRetryMediaId = '';
+    if (
+      !videoEngineBusy &&
+      videoComparisonKey &&
+      videoComparisonError.includes('current video is done')
+    )
+      void loadVideoComparison(videoComparisonKey, playbackFallbackUsed);
+  }
 
   $: if ((selectedMedia?.id ?? '') !== viewedMediaId) {
     viewedMediaId = selectedMedia?.id ?? '';
@@ -234,7 +253,12 @@
     scheduleViewportReset();
   }
 
-  $: if (selectedMedia && selectedMedia.probe_status === 'ready' && !sourcePreview) {
+  $: if (
+    selectedMedia &&
+    selectedMedia.probe_status === 'ready' &&
+    !sourcePreview &&
+    !videoEngineBusy
+  ) {
     void repairSelectedPreview();
   }
 
@@ -294,7 +318,7 @@
 
   function onSourcePreviewError(): void {
     previewRetryMediaId = '';
-    void repairSelectedPreview();
+    if (!videoEngineBusy) void repairSelectedPreview();
   }
 
   export function resetProgressivePreview(jobId = '', frame = -1): void {
@@ -735,6 +759,7 @@
         requestId,
         forceCompatible,
         videoResultId,
+        ...(videoEngineBusy ? ([true] as const) : []),
       );
       if (disposed || requestId !== videoRequestId || mediaId !== selectedMedia?.id) return;
       videoComparison = sources;
@@ -953,7 +978,7 @@
             class:contained={Boolean(singleFrame)}
             class:covered={Boolean(singleFrame) && !holdingOriginal}
             src={displayedSourcePreview}
-            alt={videoSourcePreview
+            alt={processing && videoSourcePreview
               ? `Source frame ${videoSourceFrame + 1} of ${selectedMedia.name}`
               : `Preview of ${selectedMedia.name}`}
             draggable="false"
@@ -1008,7 +1033,16 @@
             >
           </div>{/if}
       {:else}
-        {#if selectedMedia.probe_status === 'pending'}
+        {#if deferredPreview}
+          <div class="canvas-empty preview-error">
+            <MediaIllustration still />
+            <h2>Preview unavailable</h2>
+            <p role="status">
+              This preview needs the engine, which is busy with the video. It will load when the
+              video is done.
+            </p>
+          </div>
+        {:else if selectedMedia.probe_status === 'pending'}
           {#key selectedMedia.id}<PreviewActivity media={selectedMedia} />{/key}
         {:else}
           <div class="canvas-empty preview-error">

@@ -478,6 +478,9 @@
   );
   $: activeJobMediaId =
     snapshot.jobs.find((job) => job.id === snapshot.runtime.active_job_id)?.media_id ?? '';
+  $: videoEngineBusy = Boolean(
+    snapshot.jobs.find((job) => job.id === snapshot.runtime.active_job_id)?.media_kind === 'video',
+  );
   $: runnableMedia = settings.task
     ? snapshot.media.filter((media) => (settings.task === 'video') === (media.kind === 'video'))
     : [];
@@ -504,7 +507,6 @@
         ? [
             activityModel,
             runningStatusDetail,
-            liveFrame >= 0 ? `Frame ${liveFrame + 1}` : '',
             selectedMedia?.hdr_format && selectedMedia.id === activeJobMediaId
               ? 'SDR display preview'
               : '',
@@ -740,7 +742,9 @@
   );
   $: selectedOutputPath =
     selectedMedia?.kind === 'video'
-      ? (videoResult?.output_path ?? '')
+      ? selectedMedia.id === activeJobMediaId && !videoChoice.pinned
+        ? ''
+        : (videoResult?.output_path ?? '')
       : pairShown
         ? (resultRows.find((row) => row.job_id === choice.showing && row.available)?.output_path ??
           '')
@@ -791,7 +795,7 @@
         ? (snapshot.runtime.comparison_error ?? '')
         : '');
   $: completedVideoOutput =
-    selectedMedia?.kind === 'video' && selectedMedia.id !== activeJobMediaId
+    selectedMedia?.kind === 'video' && (selectedMedia.id !== activeJobMediaId || videoChoice.pinned)
       ? (videoResult?.output_path ?? '')
       : '';
   $: videoResultId = completedVideoOutput ? videoChoice.showing : '';
@@ -1179,11 +1183,13 @@
     // invalidate the full Svelte snapshot for it; only update the live canvas.
     if (message.type === 'tile_update') {
       if (activeJobMediaId && selectedMedia?.id !== activeJobMediaId) return;
+      if (selectedMedia?.kind === 'video' && videoChoice.pinned) return;
       queueProgressiveTile(message);
       return;
     }
     if (message.type === 'live_preview_frame') {
       const jobId = String(message.data.job_id ?? '');
+      if (selectedMedia?.kind === 'video' && videoChoice.pinned) return;
       if (message.data.preview_kind === 'source_video') {
         if (
           jobId === snapshot.runtime.active_job_id &&
@@ -1769,7 +1775,9 @@
     }
   }
 
-  async function selectQueueMedia(id: string): Promise<void> {
+  async function selectQueueMedia(id: string, restoreLive = true): Promise<void> {
+    if (restoreLive && id === activeJobMediaId && pairChoices[id]?.pinned)
+      pairChoices = without(pairChoices, id);
     if (settings.task === 'upscale' || settings.task === 'denoise') lastImageTask = settings.task;
     try {
       await api.selectMedia(id);
@@ -1828,7 +1836,11 @@
   // The Outputs row that matches what the centre pane shows.
   $: shownPick = ((): ComparePick | null => {
     if (mainTab !== 'preview') return null;
-    if (selectedMedia?.kind === 'video' && videoHistory && selectedMedia.id !== activeJobMediaId)
+    if (
+      selectedMedia?.kind === 'video' &&
+      videoHistory &&
+      (selectedMedia.id !== activeJobMediaId || videoChoice.pinned)
+    )
       return videoChoice.showing === ORIGINAL
         ? { kind: 'original', media_id: selectedMedia.id }
         : { kind: 'output', media_id: selectedMedia.id, job_id: videoChoice.showing };
@@ -1851,7 +1863,7 @@
     rememberedResults = remembered;
     pairChoices = { ...pairChoices, [pick.media_id]: { showing, against, pinned: true } };
     mainTab = 'preview';
-    await selectQueueMedia(pick.media_id);
+    await selectQueueMedia(pick.media_id, false);
   }
 
   /** A manual choice pins the pair of this image until a new run starts. */
@@ -2990,7 +3002,12 @@
           bind:this={previewPane}
           bind:liveFrame
           editing={settings.task === 'edit'}
-          processing={Boolean(activeJobMediaId && selectedMedia?.id === activeJobMediaId)}
+          processing={Boolean(
+            activeJobMediaId &&
+            selectedMedia?.id === activeJobMediaId &&
+            !(selectedMedia.kind === 'video' && videoChoice.pinned),
+          )}
+          {videoEngineBusy}
           activeTileSize={snapshot.runtime.active_tile_size}
           {selectedMedia}
           resultPreview={shownView.resultPreview}
@@ -3005,7 +3022,7 @@
           singleFrame={shownView.singleFrame}
           loadingLabel={pairLoadingLabel}
           {comparisonNote}
-          showLiveTiles={!choice.pinned}
+          showLiveTiles={selectedMedia?.kind === 'video' ? !videoChoice.pinned : !choice.pinned}
           comparisonError={selectedComparisonError}
           {completedVideoOutput}
           {videoResultId}

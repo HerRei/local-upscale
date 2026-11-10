@@ -64,8 +64,16 @@
       capitalize(result.ui?.quality ?? ''),
       result.scale ? `${result.scale}×` : '',
       width ? `${width} × ${height}` : '',
+      result.kind === 'video' && result.output_duration_seconds
+        ? `${Math.floor(Math.round(result.output_duration_seconds) / 60)}:${String(Math.round(result.output_duration_seconds) % 60).padStart(2, '0')}`
+        : '',
+      result.kind === 'video' && result.output_fps
+        ? `${Number(result.output_fps.toFixed(2))} fps`
+        : '',
       result.kind === 'video' && result.size_bytes ? formatBytes(result.size_bytes) : '',
-      result.elapsed_seconds ? formatDuration(result.elapsed_seconds) : '',
+      result.kind !== 'video' && result.elapsed_seconds
+        ? formatDuration(result.elapsed_seconds)
+        : '',
       result.available ? '' : 'File missing',
     ]
       .filter(Boolean)
@@ -80,7 +88,13 @@
       : '';
   /** What a click on a row does: it shows the result (or the original) in the centre. */
   const rowTip = (result: ResultSummary | null) =>
-    [result ? 'Show this result' : 'Show the original', promptTip(result)]
+    [
+      result ? 'Show this result' : 'Show the original',
+      promptTip(result),
+      result?.kind === 'video' && result.elapsed_seconds
+        ? `Took ${formatDuration(result.elapsed_seconds)}`
+        : '',
+    ]
       .filter(Boolean)
       .join('\n');
   const pickTip = (n: number) => (n > 0 ? `Picked for Compare, slot ${n}` : 'Pick for Compare');

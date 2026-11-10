@@ -651,3 +651,27 @@ describe('photo batches', () => {
     expect(resultPreviewForSelectedMedia(snapshot)).toBe('');
   });
 });
+
+it('clears preparation notices on progress and hides whole-frame tiles', () => {
+  let snapshot = demoSnapshot();
+  snapshot.runtime.active_job_id = 'j';
+  snapshot = applyWorkerEnvelope(snapshot, {
+    type: 'engine_status',
+    data: {
+      job_id: 'j',
+      message: 'Reading model. 0 s so far; the job stops in 180 s if it is not ready.',
+    },
+  });
+  snapshot = applyWorkerEnvelope(snapshot, {
+    type: 'video_tile_progress',
+    data: { job_id: 'j', frame_index: 11, total_frames: 246, completed_tiles: 0, total_tiles: 1 },
+  });
+  expect(snapshot.runtime.hardware_note).toBe('');
+  expect(snapshot.runtime.status_detail).toContain('Frame 12 of 246');
+  expect(snapshot.runtime.status_detail).not.toContain('Tile');
+  snapshot = applyWorkerEnvelope(snapshot, {
+    type: 'video_tile_progress',
+    data: { job_id: 'j', frame_index: 11, total_frames: 246, completed_tiles: 2, total_tiles: 8 },
+  });
+  expect(snapshot.runtime.status_detail).toContain('Tile 2 / 8');
+});

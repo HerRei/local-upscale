@@ -4753,6 +4753,75 @@ describe('Comparing saved results', () => {
   });
 
   describe('a click on an Outputs row', () => {
+    it('shows another photo result during a video run and returns to the running input', async () => {
+      const snapshot = pairHost(readySnapshot([video('clip', true), image('photo')]));
+      snapshot.settings.task = 'video';
+      snapshot.runtime.active_job_id = 'running';
+      snapshot.jobs = [
+        {
+          ...completedJob('running', 'clip'),
+          media_kind: 'video',
+          status: 'running',
+          output_path: '',
+        },
+        completedJob('saved'),
+      ];
+      const history = historyOf('photo', [row('saved')]);
+      api.listMediaResults.mockResolvedValue(history);
+      api.listAllMediaResults.mockResolvedValue([history]);
+      api.selectMedia.mockImplementation(async (id) => {
+        for (const media of snapshot.media) media.selected = media.id === id;
+        api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+      });
+      const user = await mountWith(snapshot);
+      await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+      await user.click(await screen.findByRole('button', { name: 'Show saved, photo.png' }));
+      await waitFor(() =>
+        expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('saved'),
+      );
+      await user.click(screen.getByRole('tab', { name: /Inputs/ }));
+      await user.click(document.querySelector<HTMLButtonElement>('.media-list .media-select')!);
+      await waitFor(() =>
+        expect(document.querySelector('.preview-header')?.textContent).toContain('clip.mp4'),
+      );
+      expect(document.querySelector('.result-image')).toBeNull();
+    });
+    it('browses a saved video of the running input and returns to live preview from Inputs', async () => {
+      const snapshot = pairHost(readySnapshot([video('clip', true)]));
+      snapshot.settings.task = 'video';
+      snapshot.runtime.active_job_id = 'running';
+      snapshot.jobs = [
+        {
+          ...completedJob('running', 'clip'),
+          media_kind: 'video',
+          status: 'running',
+          output_path: '',
+        },
+      ];
+      const history = historyOf('clip', [
+        row('old', { kind: 'video', output_path: '/out/old.mp4' }),
+      ]);
+      api.listAllMediaResults.mockResolvedValue([history]);
+      const user = await mountWith(snapshot);
+      await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+      await user.click(await screen.findByRole('button', { name: 'Show old, clip.mp4' }));
+      await waitFor(() =>
+        expect(api.prepareVideoComparison).toHaveBeenCalledWith(
+          'clip',
+          expect.any(String),
+          false,
+          'old',
+          true,
+        ),
+      );
+      expect(await screen.findByRole('group', { name: 'Video playback controls' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Open' })).toBeTruthy();
+      await user.click(screen.getByRole('tab', { name: /Inputs/ }));
+      await user.click(document.querySelector<HTMLButtonElement>('.media-list .media-select')!);
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Open' })).toBeNull());
+      expect(screen.queryByRole('group', { name: 'Video playback controls' })).toBeNull();
+      expect(document.querySelector('.source-image')).toBeTruthy();
+    });
     const open = async (answer?: (target: string) => Promise<void>) => {
       const snapshot = pairHost(readySnapshot([image('photo', true)]));
       snapshot.jobs = [completedJob('a1'), completedJob('a2')];

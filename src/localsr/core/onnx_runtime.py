@@ -530,14 +530,17 @@ class _OnnxImage(torch.nn.Module):
             f"Testing {self._label()} in a separate process before its first use (once per "
             "graphics driver)."
         )
-        outcome = gpu_guard.run(
-            self.route.device,
-            self.cancel_event,
-            lambda elapsed, left: self._status(
-                f"Testing {self._label()} in a separate process before its first use (once per "
-                f"graphics driver). {elapsed} s so far; the job stops in {left} s if the test is not finished."
-            ),
-        )
+        try:
+            outcome = gpu_guard.run(
+                self.route.device,
+                self.cancel_event,
+                lambda elapsed, left: self._status(
+                    f"Testing {self._label()} in a separate process before its first use (once per "
+                    f"graphics driver). {elapsed} s so far; the job stops in {left} s if the test is not finished."
+                ),
+            )
+        finally:
+            self._status("")
         gpu_guard._PREFLIGHT_TRIED.add(key)
         if outcome == "timeout":
             gpu_guard._PREFLIGHT_TIMEOUTS.add(key)

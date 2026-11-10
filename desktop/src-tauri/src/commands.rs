@@ -1592,6 +1592,7 @@ pub async fn prepare_video_comparison(
     request_id: String,
     force_compatible: bool,
     result_id: Option<String>,
+    defer_conversion: Option<bool>,
 ) -> AppResult<VideoComparisonSources> {
     let cancel = state.video_preview.begin(&request_id)?;
     let state = Arc::clone(state.inner());
@@ -1603,6 +1604,7 @@ pub async fn prepare_video_comparison(
             &request_id,
             force_compatible,
             result_id.as_deref(),
+            defer_conversion.unwrap_or(false),
             cancel,
         )
     })
@@ -1635,6 +1637,7 @@ fn video_comparison_sources(
     request_id: &str,
     force_compatible: bool,
     result_id: Option<&str>,
+    defer_conversion: bool,
     cancel: Arc<std::sync::atomic::AtomicBool>,
 ) -> AppResult<VideoComparisonSources> {
     let (original, enhanced) = {
@@ -1660,6 +1663,11 @@ fn video_comparison_sources(
     let mut converted = false;
     let mut playback = |path: PathBuf| -> AppResult<PathBuf> {
         if force_compatible || crate::video_preview::needs_conversion(&path) {
+            if defer_conversion {
+                return Err(AppError::Validation(
+                    "This video needs a playback conversion. It will load when the current video is done.".into(),
+                ));
+            }
             converted = true;
             let reporter = app.clone();
             let request = request_id.to_owned();

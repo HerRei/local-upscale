@@ -572,6 +572,8 @@ export interface ResultSummary {
   output_name: string;
   /** Current file size in bytes, or 0 when unavailable. */
   size_bytes?: number;
+  output_duration_seconds?: number;
+  output_fps?: number;
   /** Completed and its file exists. */
   available: boolean;
   model_id: string;

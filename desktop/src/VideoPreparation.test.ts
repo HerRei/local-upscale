@@ -59,6 +59,28 @@ function show(id = 'a') {
   });
 }
 
+it('defers playback conversion during a video run and starts it after the run', async () => {
+  vi.mocked(api.prepareVideoComparison)
+    .mockRejectedValueOnce(
+      'This video needs a playback conversion. It will load when the current video is done.',
+    )
+    .mockResolvedValueOnce({ original_url: 'converted', enhanced_url: 'result' });
+  const view = render(PreviewPane, {
+    selectedMedia: video('a'),
+    resultPreview: '',
+    completedVideoOutput: '/result.mp4',
+    videoEngineBusy: true,
+  });
+  await waitFor(() =>
+    expect(screen.getByRole('alert').textContent).toContain('current video is done'),
+  );
+  expect(vi.mocked(api.prepareVideoComparison).mock.calls[0][4]).toBe(true);
+  await view.rerender({ videoEngineBusy: false });
+  await waitFor(() =>
+    expect(view.container.querySelector('video')?.getAttribute('src')).toBe('converted'),
+  );
+});
+
 it('shows real conversion progress and ignores the previous selection when switching back', async () => {
   const first = pending<VideoComparisonSources>();
   const second = pending<VideoComparisonSources>();

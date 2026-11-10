@@ -594,7 +594,7 @@ impl Database {
             crate::results::SUMMARY_COLUMNS
         ))?;
         let rows = statement.query_map([], |row| {
-            Ok((row.get::<_, String>(8)?, summary_from_row(row)?))
+            Ok((row.get::<_, String>(10)?, summary_from_row(row)?))
         })?;
         for row in rows {
             let (id, result) = row?;
