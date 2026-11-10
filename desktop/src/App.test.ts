@@ -93,6 +93,10 @@ const api = vi.hoisted(() => ({
   ),
   listMediaResults: vi.fn(async (mediaId: string): Promise<MediaResults> => historyOf(mediaId, [])),
   listAllMediaResults: vi.fn(async (): Promise<MediaResults[]> => []),
+  prepareCompareVideo: vi.fn(async () => ({
+    original_url: 'asset://localhost/compare.mp4',
+    enhanced_url: '',
+  })),
   requestCompare: vi.fn(async (): Promise<void> => undefined),
   startModelTrials: vi.fn(
     async (_mediaId: string, _modelIds: string[], _base: StartBatchInput): Promise<string[]> => [],
@@ -4963,6 +4967,36 @@ describe('Comparing saved results', () => {
       await screen.findByText('Results appear here as they finish.');
       expect(screen.queryByText(/of 4 chosen/)).toBeNull();
     });
+  });
+
+  it('opens video Compare only from its button, shows two players and one transport, then three boxes, and releases on closing', async () => {
+    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    const load = vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
+    const snapshot = readySnapshot([image('photo', true), video('clip')]);
+    api.listAllMediaResults.mockResolvedValue([
+      historyOf('clip', [
+        { ...row('slow'), kind: 'video', output_fps: 15 },
+        { ...row('fast'), kind: 'video', output_fps: 60 },
+      ]),
+    ]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+    await user.click(await screen.findByRole('checkbox', { name: 'slow, clip.mp4' }));
+    await user.click(screen.getByRole('checkbox', { name: 'fast, clip.mp4' }));
+    expect(document.querySelector('.compare-pane')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
+    expect(document.querySelectorAll('.compare-pane video')).toHaveLength(2);
+    expect(screen.getByRole('slider', { name: 'Divider between slot 1 and slot 2' })).toBeTruthy();
+    expect(screen.getAllByRole('group', { name: 'Video playback controls' })).toHaveLength(1);
+    await waitFor(() =>
+      expect(document.activeElement?.getAttribute('aria-label')).toBe('Compare canvas'),
+    );
+    await user.click(screen.getByRole('checkbox', { name: 'Original, clip.mp4' }));
+    expect(document.querySelectorAll('.compare-pane .boxes video')).toHaveLength(3);
+    await user.click(screen.getByRole('tab', { name: 'Preview' }));
+    expect(document.querySelectorAll('video')).toHaveLength(0);
+    expect(pause).toHaveBeenCalled();
+    expect(load).toHaveBeenCalled();
   });
 
   it('ticks grouped originals and outputs into Compare in order and keeps them across tabs', async () => {

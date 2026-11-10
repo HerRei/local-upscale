@@ -88,3 +88,18 @@ describe('visible compare regions', () => {
     });
   });
 });
+
+import { pickKindBlock } from './compareOutputs';
+it('keeps video and image slots homogeneous, resets after clearing and names video slider restrictions', () => {
+  const media = [
+    { id: 'v', kind: 'video' },
+    { id: 'a', kind: 'image' },
+  ];
+  const v: ComparePick = { kind: 'original', media_id: 'v' };
+  const a: ComparePick = { kind: 'original', media_id: 'a' };
+  expect(pickKindBlock([v], a, media)).toBe('Compare videos with videos');
+  expect(pickKindBlock([a], v, media)).toBe('Compare images with images');
+  expect(toggleSlot([v], a, media)).toEqual([v]);
+  expect(toggleSlot([], a, media)).toEqual([a]);
+  expect(sliderBlock([v, a], 'video')).toContain('same video');
+});

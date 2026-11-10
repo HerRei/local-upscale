@@ -1593,7 +1593,23 @@ pub async fn prepare_video_comparison(
     force_compatible: bool,
     result_id: Option<String>,
     defer_conversion: Option<bool>,
+    compare_generation: Option<u64>,
+    compare_slot: Option<usize>,
 ) -> AppResult<VideoComparisonSources> {
+    let compare_path = match (compare_generation, compare_slot) {
+        (Some(generation), Some(index)) => {
+            let database = lock(&state.database)?;
+            let mut runtime = lock(&state.runtime)?;
+            Some(crate::compare::video_path(
+                &database,
+                &mut runtime.compare,
+                generation,
+                index,
+            )?)
+        }
+        (None, None) => None,
+        _ => return Err(AppError::Validation("Invalid Compare slot".into())),
+    };
     let cancel = state.video_preview.begin(&request_id)?;
     let state = Arc::clone(state.inner());
     tauri::async_runtime::spawn_blocking(move || {
@@ -1606,6 +1622,7 @@ pub async fn prepare_video_comparison(
             result_id.as_deref(),
             defer_conversion.unwrap_or(false),
             cancel,
+            compare_path,
         )
     })
     .await
@@ -1640,8 +1657,19 @@ fn video_comparison_sources(
     result_id: Option<&str>,
     defer_conversion: bool,
     cancel: Arc<std::sync::atomic::AtomicBool>,
+    compare_path: Option<(String, bool)>,
 ) -> AppResult<VideoComparisonSources> {
-    let (original, enhanced) = {
+    let (original, enhanced) = if let Some((path, is_result)) = compare_path {
+        let path = PathBuf::from(path);
+        (
+            if is_result {
+                canonical_result_video(path)?
+            } else {
+                canonical_video(path)?
+            },
+            None,
+        )
+    } else {
         let database = lock(&state.database)?;
         let media = database
             .get_media(media_id)?
@@ -1715,20 +1743,13 @@ fn video_comparison_sources(
     };
     #[cfg(not(target_os = "linux"))]
     let (original_url, enhanced_url) = (None, None);
-    Ok(VideoComparisonSources {
-        original_path: original.to_string_lossy().into_owned(),
-        enhanced_path: enhanced
-            .map(|path| path.to_string_lossy().into_owned())
-            .unwrap_or_default(),
+    Ok(crate::video_preview::sources(
+        original,
+        enhanced,
         original_url,
         enhanced_url,
-        playback_note: if converted {
-            "Compatible SDR playback copy · up to 1280 px. Source and saved export are unchanged."
-                .into()
-        } else {
-            String::new()
-        },
-    })
+        converted,
+    ))
 }
 
 #[tauri::command]

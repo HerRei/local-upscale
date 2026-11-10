@@ -1,11 +1,13 @@
-# Comparing image results
+# Comparing results
 
-Every run of an image saves its own file. To compare finished results, open
+Every run of an image or video saves its own file. To compare finished results, open
 **Outputs** in the left pane and tick two to four items. Results are grouped by
-input image, with its **Original** first. A picked row shows its slot number,
-in the order picked. Choose **Compare these** (it names how many are picked) or
-open the **Compare** tab above the main area. Switch back to **Preview** to work
-there; the picks stay in Compare for the session.
+input, with its **Original** first. A picked row shows its slot number,
+in the order picked. Choose **Compare these N** to open Compare. The
+**Preview | Compare** tabs appear
+while it is open; switching to Preview closes it and keeps the picks for the
+session. Fewer than two picks closes Compare automatically. The first pick sets
+the kind: choose all images or all videos. **Unpick all** resets that choice.
 
 The list shows finished outputs, their model and, when recorded, quality,
 scale and run time. A result whose file was moved or deleted is marked **File
@@ -21,17 +23,38 @@ slot 2 on the right. Drag the divider to compare them. Use the swap button
 between the first two slots to exchange sides. With three or four picks,
 **Boxes** shows every slot, normally in a two-column grid; on a very wide
 canvas they can appear in one row. The layout switches to boxes when a third
-item is added. You can still select Slider to compare the first two, and use a
+item is added. For images, you can still select Slider to compare the first two,
+and use a
 slot's arrow to move slot 3 or 4 into slot 2. Items from different inputs can
 be compared in boxes; the slider requires its first two slots to belong to the
 same input.
 
 Remove a pick with its **×** button or untick it in Outputs; **Clear** removes
-all picks. Zoom and pan are linked across boxes. Use the zoom controls or the
-mouse wheel, drag to pan, and choose **Fit** to reset zoom. At fit size Compare
+the output history after confirmation; **Unpick all** removes all picks. Zoom
+and pan are linked across boxes. Use the zoom controls or the mouse wheel, drag
+to pan, and choose **Fit** to reset zoom. For images, at fit size Compare
 uses previews; when zoom exceeds a preview's available detail, LocalSR loads
 the visible region from the saved file at full resolution. Loading and file
 errors are shown on the affected item.
+
+## Video playback
+
+Two versions of the same video use the slider; three or four videos, or videos
+from different inputs, use boxes. Each player has the same displayed rectangle,
+with letterboxing when aspects differ, and zoom and pan stay linked.
+
+One transport below the players controls every ready side: **Space** plays or
+pauses, the timeline seeks by time, and the speed button cycles playback rates.
+Audio comes only from slot 1; **Mute** silences it. Left/Right steps by one frame
+of the highest frame rate among the picks (the divider keeps its arrow keys).
+The timeline spans the longest video; shorter videos hold their last frame.
+If a player buffers, every player waits and resumes together.
+
+Formats that need a compatible playback copy use the same preparation as Preview.
+Each side shows loading or an unavailable message independently. Conversion waits
+until a running video job finishes, then retries. A compatible copy may be SDR and at
+most 1280 pixels; source and saved output are unchanged. Closing Compare or
+changing picks releases the players.
 
 ## Preview and result history
 

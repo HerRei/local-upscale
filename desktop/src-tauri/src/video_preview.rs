@@ -137,6 +137,30 @@ impl VideoPreviewControl {
     }
 }
 
+/// Shared descriptor for single preview and each authorised Compare slot.
+pub fn sources(
+    original: PathBuf,
+    enhanced: Option<PathBuf>,
+    original_url: Option<String>,
+    enhanced_url: Option<String>,
+    converted: bool,
+) -> crate::types::VideoComparisonSources {
+    crate::types::VideoComparisonSources {
+        original_path: original.to_string_lossy().into_owned(),
+        enhanced_path: enhanced
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        original_url,
+        enhanced_url,
+        playback_note: if converted {
+            "Compatible SDR playback copy · up to 1280 px. Source and saved export are unchanged."
+                .into()
+        } else {
+            String::new()
+        },
+    }
+}
+
 pub fn needs_conversion(path: &Path) -> bool {
     !matches!(
         path.extension()

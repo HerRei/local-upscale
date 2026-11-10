@@ -50,3 +50,25 @@ it('asks the host to choose and grant the editing runtime', async () => {
   invoke.mockResolvedValueOnce(null);
   expect(await chooseEditRuntime()).toBeNull();
 });
+
+import { prepareCompareVideo } from './api';
+it('resolves a Compare slot through the single-video descriptor route using only its generation and index', async () => {
+  invoke.mockResolvedValueOnce({
+    original_path: '/host/only.webm',
+    original_url: 'http://127.0.0.1/authorised',
+    playback_note: 'Compatible SDR playback copy',
+  });
+  expect(await prepareCompareVideo(7, 2, 'request', true, true)).toEqual({
+    original_url: 'http://127.0.0.1/authorised',
+    enhanced_url: '',
+    playback_note: 'Compatible SDR playback copy',
+  });
+  expect(invoke).toHaveBeenCalledWith('prepare_video_comparison', {
+    mediaId: '',
+    requestId: 'request',
+    forceCompatible: true,
+    deferConversion: true,
+    compareGeneration: 7,
+    compareSlot: 2,
+  });
+});

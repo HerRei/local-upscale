@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import FileName from './FileName.svelte';
-  import { MAX_SLOTS, pickKey, type OutputGroup } from './lib/compareOutputs';
+  import { MAX_SLOTS, pickKey, pickKindBlock, type OutputGroup } from './lib/compareOutputs';
   import { editDimensions } from './lib/editing';
   import { followAllowed } from './lib/rowRun';
   import { formatBytes, formatDuration } from './lib/format';
@@ -98,11 +98,14 @@
       .filter(Boolean)
       .join('\n');
   const pickTip = (n: number) => (n > 0 ? `Picked for Compare, slot ${n}` : 'Pick for Compare');
+  $: media = groups.map((group) => group.media);
+  $: kindBlock = (pick: ComparePick) => pickKindBlock(picks, pick, media);
   /** Space on a focused row picks it; Enter and a click show it. */
-  function rowKey(event: KeyboardEvent, pick: ComparePick, isVideo: boolean): void {
-    if (event.key !== ' ' || isVideo) return;
+  function rowKey(event: KeyboardEvent, pick: ComparePick, unavailable: boolean): void {
+    if (event.key !== ' ') return;
     event.preventDefault();
-    togglePick(pick);
+    if (!unavailable && !kindBlock(pick) && (slot(pick) || picks.length < MAX_SLOTS))
+      togglePick(pick);
   }
 </script>
 
@@ -148,7 +151,8 @@
               title={rowTip(entry.result)}
               aria-label={`Show ${entry.result?.model_label ?? 'the original'}, ${group.media.name}`}
               on:click={() => showResult(entry.pick)}
-              on:keydown={(event) => rowKey(event, entry.pick, group.media.kind === 'video')}
+              on:keydown={(event) =>
+                rowKey(event, entry.pick, !n && entry.result?.available === false)}
               on:keyup={(event) => event.key === ' ' && event.preventDefault()}
             >
               <div class="thumb">
@@ -173,8 +177,8 @@
               role="checkbox"
               aria-checked={n > 0}
               aria-label={`${entry.result?.model_label ?? 'Original'}, ${group.media.name}`}
-              title={group.media.kind === 'video' ? 'Compare works with images' : pickTip(n)}
-              disabled={group.media.kind === 'video' ||
+              title={kindBlock(entry.pick) || pickTip(n)}
+              disabled={Boolean(kindBlock(entry.pick)) ||
                 (!n && (picks.length >= MAX_SLOTS || entry.result?.available === false))}
               on:click={() => togglePick(entry.pick)}
               >{#if n}<b class="slot-number">{n}</b>{/if}</button

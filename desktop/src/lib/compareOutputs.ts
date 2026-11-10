@@ -29,11 +29,29 @@ export function pickKey(pick: ComparePick): string {
     pick.kind === 'original' ? [pick.kind, pick.media_id] : [pick.kind, pick.media_id, pick.job_id],
   );
 }
-export function toggleSlot(picks: ComparePick[], pick: ComparePick): ComparePick[] {
+/** The first slot fixes the media kind until every slot is unpicked. */
+export function pickKindBlock(
+  picks: ComparePick[],
+  pick: ComparePick,
+  media: { id: string; kind: string }[],
+): string {
+  const kind = media.find((item) => item.id === picks[0]?.media_id)?.kind;
+  const next = media.find((item) => item.id === pick.media_id)?.kind;
+  return kind && next && kind !== next
+    ? `Compare ${kind === 'video' ? 'videos with videos' : 'images with images'}`
+    : '';
+}
+export function toggleSlot(
+  picks: ComparePick[],
+  pick: ComparePick,
+  media?: { id: string; kind: string }[],
+): ComparePick[] {
   const key = pickKey(pick);
   if (picks.some((entry) => pickKey(entry) === key))
     return picks.filter((entry) => pickKey(entry) !== key);
-  return picks.length < MAX_SLOTS ? [...picks, pick] : picks;
+  return picks.length < MAX_SLOTS && !(media && pickKindBlock(picks, pick, media))
+    ? [...picks, pick]
+    : picks;
 }
 export function swapSlots(picks: ComparePick[], first: number, second: number): ComparePick[] {
   if (first < 0 || second < 0 || first >= picks.length || second >= picks.length) return picks;
@@ -41,10 +59,10 @@ export function swapSlots(picks: ComparePick[], first: number, second: number): 
   [next[first], next[second]] = [next[second], next[first]];
   return next;
 }
-export function sliderBlock(picks: readonly ComparePick[]): string {
+export function sliderBlock(picks: readonly ComparePick[], kind = 'image'): string {
   if (picks.length < 2) return 'Pick two to use the slider';
   if (picks[0].media_id !== picks[1].media_id)
-    return 'The slider needs two versions of the same image; boxes can hold different images';
+    return `The slider needs two versions of the same ${kind}; boxes can hold different ${kind}s`;
   return '';
 }
 export function boxColumns(count: number, stageWidth: number, stageHeight: number): number {
@@ -53,6 +71,8 @@ export function boxColumns(count: number, stageWidth: number, stageHeight: numbe
 }
 export interface CompareItem {
   key: string;
+  media_kind?: string;
+  fps?: number;
   pick: ComparePick;
   media_name: string;
   label: string;
