@@ -54,6 +54,24 @@ impl ProcessTree {
         }
     }
 
+    /// The tree of a child that stays in the caller's own group (`lead_own_group` was not
+    /// called): there is no group of its own to signal, so `terminate` ends nothing on
+    /// Unix and the caller ends the child itself.
+    pub fn without_group(child: &Child) -> Self {
+        #[cfg(unix)]
+        {
+            let _ = child;
+            Self {
+                group: -1,
+                spent: std::sync::atomic::AtomicBool::new(false),
+            }
+        }
+        #[cfg(windows)]
+        {
+            Self::new(child)
+        }
+    }
+
     /// End every process of the tree at once. Safe to call again. On Unix it works
     /// only while the leader is unreaped (a zombie still holds the group's number); once
     /// the child was reaped through `wait` or `try_wait` it does nothing.

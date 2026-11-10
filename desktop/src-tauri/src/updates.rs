@@ -1215,7 +1215,7 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
         prepare_update_engine(config, contract, &directory, &state.paths.next_root, || {
             worker::installed_worker_path(state, app)
         })?;
-    crate::headless_smoke::run_worker_handshake(&engine_exe, Duration::from_secs(60))
+    crate::headless_smoke::run_worker_handshake(&engine_exe, Duration::from_secs(60), true)
         .map_err(AppError::Worker)?;
     let active_file = state.paths.next_root.join("active-engine.txt");
     let previous_engine = fs::read(&active_file).ok();
