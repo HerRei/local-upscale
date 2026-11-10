@@ -1561,7 +1561,17 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             };
         }
         "benchmark_completed" => {
-            let mut result: BenchmarkResult = serde_json::from_value(data["result"].clone())?;
+            let Ok(mut result) = serde_json::from_value::<BenchmarkResult>(data["result"].clone())
+            else {
+                // The engine is alive; only this answer is unusable.
+                let mut runtime = lock(&state.runtime)?;
+                runtime.take_active_job();
+                runtime.progress = 0.0;
+                runtime.status_title = "Benchmark failed".into();
+                runtime.status_detail =
+                    "The engine's benchmark result could not be read. Nothing was saved.".into();
+                return Ok(());
+            };
             result.retain_device_scores(
                 lock(&state.latest_benchmark)?.as_ref(),
                 std::time::SystemTime::now()
@@ -3218,6 +3228,33 @@ mod tests {
             .contains("No such file"));
         assert_eq!(lock(&state.runtime).unwrap().active_job_id, "good");
         lock(&state.worker.cancellation).unwrap().finish().unwrap();
+    }
+
+    #[test]
+    fn a_benchmark_result_that_cannot_be_read_fails_the_benchmark_and_not_the_engine() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = Arc::new(
+            AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap(),
+        );
+        lock(&state.runtime)
+            .unwrap()
+            .begin_active_job("benchmark-1".into());
+        for result in [json!({"invalid": true}), json!(null)] {
+            let message = envelope(
+                "benchmark_completed",
+                json!({"job_id": "benchmark-1", "result": result}),
+            );
+            apply_worker_envelope(&state, &message).unwrap();
+            let runtime = lock(&state.runtime).unwrap();
+            assert!(runtime.active_job_id.is_empty());
+            assert_eq!(runtime.status_title, "Benchmark failed");
+            assert_ne!(runtime.worker, "failed");
+            assert!(lock(&state.latest_benchmark).unwrap().is_none());
+            drop(runtime);
+            lock(&state.runtime)
+                .unwrap()
+                .begin_active_job("benchmark-1".into());
+        }
     }
 
     fn ready_for_batches(state: &AppState) {
