@@ -537,7 +537,7 @@ describe('Job activity', () => {
     api.bootstrap.mockResolvedValue(structuredClone(snapshot));
     api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
     render(App);
-    await screen.findByRole('button', { name: 'Cancel queue' });
+    await screen.findByRole('button', { name: 'Cancel' });
     await waitFor(() =>
       expect(document.querySelector('.status-copy strong')?.textContent).toMatch(/^Editing/),
     );
@@ -584,6 +584,68 @@ describe('Job activity', () => {
   it('offers no Add to queue button while the running picture is the selected one', async () => {
     await mountRunning(running());
     expect(screen.queryByRole('button', { name: /to queue$/ })).toBeNull();
+  });
+});
+
+describe('Cancel buttons while work runs', () => {
+  const job = (n: number, status: JobRecord['status']): JobRecord => ({
+    id: `job-${n}`,
+    media_id: `p${n}`,
+    media_name: `p${n}.png`,
+    media_kind: 'image',
+    status,
+    progress: 0,
+    output_path: '',
+    error: '',
+    created_at: 1_000,
+  });
+  const mount = async (jobs: JobRecord[], lanes: string[] = []) => {
+    const snapshot = readySnapshot([1, 2, 3, 4].map((n) => image(`p${n}`, n === 1)));
+    snapshot.settings.task = 'upscale';
+    snapshot.runtime.active_job_id = 'job-1';
+    snapshot.runtime.active_batch_job_ids = lanes;
+    snapshot.jobs = jobs;
+    api.bootstrap.mockResolvedValue(structuredClone(snapshot));
+    api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    render(App);
+    await screen.findAllByRole('button', { name: /^Cancel/ });
+  };
+  const cancels = () =>
+    [...document.querySelectorAll('.status-actions .button')]
+      .map((button) => button.textContent)
+      .filter((text) => /^Cancel/.test(text ?? ''));
+
+  it('says Cancel for the one job, with no queue and no per-image button', async () => {
+    await mount([job(1, 'running')]);
+    expect(cancels()).toEqual(['Cancel']);
+  });
+
+  it('says Cancel queue when jobs wait behind the running one', async () => {
+    await mount([job(1, 'running'), job(2, 'queued'), job(3, 'queued'), job(4, 'queued')]);
+    expect(screen.getByRole('button', { name: 'Cancel queue' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+  });
+
+  it('says Cancel queue for two lanes with nothing queued', async () => {
+    await mount([job(1, 'running'), job(2, 'running')], ['job-1', 'job-2']);
+    expect(screen.getByRole('button', { name: 'Cancel queue' })).toBeTruthy();
+  });
+
+  it('changes to Cancel when the queue drains to its last job', async () => {
+    const current = readySnapshot([image('p1', true), image('p2')]);
+    current.settings.task = 'upscale';
+    current.runtime.active_job_id = 'job-2';
+    current.jobs = [job(2, 'running'), job(1, 'completed')];
+    current.jobs.push(job(3, 'queued'));
+    api.bootstrap.mockResolvedValue(structuredClone(current));
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+    render(App);
+    await screen.findByRole('button', { name: 'Cancel queue' });
+    current.jobs = current.jobs.filter((entry) => entry.id !== 'job-3');
+    await waitFor(() => expect(api.listenForStateChange).toHaveBeenCalled());
+    (api.listenForStateChange.mock.calls[0][0] as () => void)();
+    await screen.findByRole('button', { name: 'Cancel' });
+    expect(screen.queryByRole('button', { name: 'Cancel queue' })).toBeNull();
   });
 });
 
@@ -2468,7 +2530,7 @@ describe('LocalSR desktop interface', () => {
     });
     render(App);
     const user = userEvent.setup();
-    const cancel = await screen.findByRole('button', { name: 'Cancel queue' });
+    const cancel = await screen.findByRole('button', { name: 'Cancel' });
     await user.click(cancel);
     expect(screen.getByRole('button', { name: 'Cancelling…' }).matches(':disabled')).toBe(true);
     expect(screen.getByLabelText('Video engine').matches(':disabled')).toBe(true);

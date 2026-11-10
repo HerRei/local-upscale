@@ -43,7 +43,7 @@ test('a running row keeps its height and carries a line as wide as the row, fill
   await expect(running.locator('.queue-state')).toHaveText('Running · 38 %');
   await expect(rows(page).nth(0).locator('.queue-state')).toHaveText('Done · 31 s');
   await expect(idle.locator('.queue-state')).toHaveText('Queued');
-  await expect(page.getByRole('progressbar')).toHaveCount(1);
+  await expect(page.locator('.media-list').getByRole('progressbar')).toHaveCount(1);
   await look(page, 'selected-running-first-other');
 });
 
@@ -62,8 +62,11 @@ test('two rows can run at once, each with its own line', async ({ page }) => {
     running: true,
     rows: { 1: { status: 'running', progress: 38 }, 2: { status: 'running', progress: 71 } },
   });
-  await expect(page.getByRole('progressbar')).toHaveCount(2);
-  await expect(page.getByRole('progressbar').nth(1)).toHaveAttribute('aria-valuenow', '71');
+  await expect(page.locator('.media-list').getByRole('progressbar')).toHaveCount(2);
+  await expect(page.locator('.media-list').getByRole('progressbar').nth(1)).toHaveAttribute(
+    'aria-valuenow',
+    '71',
+  );
   await look(page, 'two-lanes');
 });
 
@@ -91,4 +94,11 @@ test.describe('adding to a running queue', () => {
     await openApp(page, { ...queue, photos: 9, jobPhotos: 7 });
     await expect(add(page)).toHaveText('Add 2 to queue');
   });
+});
+
+test('one running job is cancelled with Cancel, a queue with Cancel queue', async ({ page }) => {
+  await openApp(page, { ...ready, photos: 1, running: true });
+  const bar = page.locator('.status-bar');
+  await expect(bar.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible();
+  await expect(bar.getByRole('button', { name: 'Cancel queue' })).toHaveCount(0);
 });

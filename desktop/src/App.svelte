@@ -2018,6 +2018,13 @@
     : 0;
   $: canCancelSelectedImage =
     selectedInflight > 0 && (selectedInflight > 1 || inflightMediaIds.size > 1);
+  // One job is just cancelled; "queue" is for several running or waiting.
+  $: inflightJobCount = Math.max(
+    snapshot.jobs.filter((job) =>
+      ['queued', 'starting', 'running', 'cancelling'].includes(job.status),
+    ).length,
+    snapshot.runtime.active_batch_job_ids?.length ?? 0,
+  );
   let cancellingImage = false;
   let retryingEngine = false;
 
@@ -3643,7 +3650,7 @@
           >
         {/if}
         <button class="button danger" disabled={cancelling} on:click={cancelWork}
-          >{cancelling ? 'Cancelling…' : 'Cancel queue'}</button
+          >{cancelling ? 'Cancelling…' : inflightJobCount > 1 ? 'Cancel queue' : 'Cancel'}</button
         >
       {:else if preparing}
         <button class="button danger start" on:click={() => void cancelPreparation()}
