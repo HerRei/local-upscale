@@ -123,11 +123,11 @@ class Store:
         return self.db.execute("SELECT salt FROM salts WHERE day = ?", (day,)).fetchone()[0]
 
     def _prune(self, today: str) -> str:
+        """Delete expired hashes and salts; the caller records the day once it commits."""
         cutoff = shift(today, 1 - SEEN_DAYS)
         if self.pruned_for != today:
             self.db.execute("DELETE FROM seen WHERE day < ?", (cutoff,))
             self.db.execute("DELETE FROM salts WHERE day < ?", (cutoff,))
-            self.pruned_for = today
         return cutoff
 
     def record(self, entry: dict, now: float | None = None) -> bool:
@@ -146,6 +146,7 @@ class Store:
             try:
                 if day < self._prune(today):
                     self.db.execute("COMMIT")
+                    self.pruned_for = today
                     return False
                 visitor = hashlib.sha256(
                     self._salt(day) + ip.encode() + b"\0" + agent.encode()
@@ -164,6 +165,7 @@ class Store:
                     "INSERT OR REPLACE INTO meta VALUES ('last_event', ?)", (str(int(now)),)
                 )
                 self.db.execute("COMMIT")
+                self.pruned_for = today
             except BaseException:
                 self.db.execute("ROLLBACK")
                 raise
