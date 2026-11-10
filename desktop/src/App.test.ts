@@ -2116,6 +2116,38 @@ describe('LocalSR desktop interface', () => {
     expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ task: 'upscale' }));
   });
 
+  it('hides a status bar button whose count would be 0 and keeps no room for it', async () => {
+    const queued = (id: string, status: JobRecord['status']): JobRecord => ({
+      id: `job-${id}`,
+      media_id: id,
+      media_name: `${id}.png`,
+      media_kind: 'image',
+      status,
+      progress: 0,
+      output_path: '',
+      error: '',
+      created_at: 1,
+    });
+    const snapshot = readySnapshot([image('first', true), image('second')]);
+    snapshot.settings.batch_mode = true;
+    snapshot.settings.task = 'upscale';
+    snapshot.runtime.active_job_id = 'job-first';
+    snapshot.jobs = [queued('first', 'running'), queued('second', 'queued')];
+    await mountWith(snapshot);
+    expect(screen.queryByRole('button', { name: /^Add \d+ to queue$/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Cancel queue' })).toBeTruthy();
+    expect(
+      [...document.querySelectorAll('.status-actions .button')].map((b) => b.textContent),
+    ).toEqual(['Cancel runs for this image', 'Cancel queue']);
+    cleanup();
+
+    // Between two jobs of a queue every item is queued: there is nothing to start.
+    snapshot.runtime.active_job_id = '';
+    snapshot.jobs = [queued('first', 'queued'), queued('second', 'queued')];
+    await mountWith(snapshot);
+    expect(screen.queryByRole('button', { name: /^Start \d+ items?$/ })).toBeNull();
+  });
+
   it('locks the single/batch scope for an active queue', async () => {
     const snapshot = readySnapshot([image('first', true), image('second')]);
     snapshot.settings.task = 'upscale';

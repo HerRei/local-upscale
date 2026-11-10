@@ -3646,9 +3646,15 @@
           >Open</button
         >{/if}
       {#if snapshot.runtime.active_job_id}
-        <button class="button queue-more" disabled={!canAppendToQueue} on:click={() => start()}
-          >{batchLabel ? `Add ${queueSelection.length} to queue` : 'Add selected to queue'}</button
-        >
+        <!-- A count of 0 means there is nothing to add or start: no button, and no room kept. -->
+        {#if !batchLabel || queueSelection.length}<button
+            class="button queue-more"
+            disabled={!canAppendToQueue}
+            on:click={() => start()}
+            >{batchLabel
+              ? `Add ${queueSelection.length} to queue`
+              : 'Add selected to queue'}</button
+          >{/if}
         {#if canCancelSelectedImage}
           <button
             class="button"
@@ -3668,7 +3674,7 @@
         <button class="button primary start" on:click={() => void prepareAndStart()}
           >{`Download ${formatBytes(downloads.bytes)}, then ${startVerb}`}</button
         >
-      {:else}
+      {:else if !batchLabel || queueSelection.length}
         <button class="button primary start" disabled={!canStart} on:click={() => start()}
           >{batchLabel
             ? `Start ${queueSelection.length} item${queueSelection.length === 1 ? '' : 's'}`
