@@ -962,7 +962,7 @@ def test_a_gpu_whose_preflight_process_crashed_is_refused(monkeypatch, tmp_path)
     image = torch.rand(1, 3, 8, 8)
     outcomes = []
 
-    def preflight(device, cancel_event=None):
+    def preflight(device, cancel_event=None, status=None):
         outcomes.append(device)
         return "crashed" if device == "gpu:bad" else "passed"
 
@@ -1190,7 +1190,7 @@ def test_a_stored_preflight_pass_needs_a_gpu_that_can_be_told_apart(monkeypatch,
 
     outcomes = []
 
-    def preflight(device, cancel_event=None):
+    def preflight(device, cancel_event=None, status=None):
         outcomes.append(device)
         return "passed"
 
@@ -1455,3 +1455,78 @@ def test_the_npu_cache_is_trimmed_again_after_a_compile_adds_to_it(monkeypatch, 
     session, trace = converted.model._create(b"graph", ("npu-fp16", {}, "all"))
     trace.cleanup()
     assert sorted(path.name for path in cache.iterdir()) == ["new.blob"]
+
+
+def test_a_session_that_never_opens_stops_the_job_with_a_sentence_and_stores_nothing(
+    monkeypatch, tmp_path
+):
+    import threading
+    import time
+
+    from localsr.core import onnx_runtime, preparation
+    from localsr.core.onnx_runtime import GpuRouteRejected
+
+    monkeypatch.setattr(onnx_runtime, "ONNX_PREPARE_SECONDS", 0.3)
+    monkeypatch.setattr(preparation, "WAIT_SLICE_SECONDS", 0.02)
+    monkeypatch.setattr(preparation, "STATUS_INTERVAL_SECONDS", 0.1)
+    preparation._abandoned.clear()
+    converted, _ = gated(monkeypatch, tmp_path, ("a", "b"))
+    release = threading.Event()
+    monkeypatch.setattr(
+        onnx_runtime._OnnxImage, "_create", lambda self, graph, config: release.wait()
+    )
+    statuses = []
+    converted.set_status_callback(statuses.append)
+    started = time.monotonic()
+    with pytest.raises(GpuRouteRejected, match="did not finish preparing"):
+        converted(torch.rand(1, 3, 8, 8))
+    assert time.monotonic() - started < 2.0
+    # The second configuration is not tried, and no rejection is stored.
+    assert not (tmp_path / "verdicts.json").exists()
+    assert any("Stopping the job in" in status for status in statuses)
+    release.set()
+    deadline = time.monotonic() + 2
+    while preparation.busy_slot("onnx") and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+
+def test_cancelling_while_a_session_opens_returns_at_once(monkeypatch, tmp_path):
+    import threading
+    import time
+
+    from localsr.core import onnx_runtime, preparation
+
+    monkeypatch.setattr(preparation, "WAIT_SLICE_SECONDS", 0.02)
+    preparation._abandoned.clear()
+    converted, _ = gated(monkeypatch, tmp_path, ("a",))
+    release, cancel = threading.Event(), threading.Event()
+    converted.set_cancel_event(cancel)
+    monkeypatch.setattr(
+        onnx_runtime._OnnxImage, "_create", lambda self, graph, config: release.wait()
+    )
+    threading.Timer(0.2, cancel.set).start()
+    started = time.monotonic()
+    with pytest.raises(InterruptedError):
+        converted(torch.rand(1, 3, 8, 8))
+    assert time.monotonic() - started < 2.0
+    assert not (tmp_path / "verdicts.json").exists()
+    release.set()
+    deadline = time.monotonic() + 2
+    while preparation.busy_slot("onnx") and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+
+def test_the_preflight_reports_how_long_it_has_run_and_when_it_gives_up(monkeypatch):
+    from localsr.core import gpu_guard, preparation
+
+    monkeypatch.setattr(
+        gpu_guard, "_command", lambda device: [sys.executable, "-c", "import time; time.sleep(30)"]
+    )
+    monkeypatch.setattr(gpu_guard, "TIMEOUT_SECONDS", 0.6)
+    monkeypatch.setattr(preparation, "STATUS_INTERVAL_SECONDS", 0.2)
+    reports = []
+    assert gpu_guard.run("gpu:0", status=lambda elapsed, left: reports.append((elapsed, left))) == (
+        "timeout"
+    )
+    assert len(reports) >= 2
+    assert reports[0][0] == 0 and all(left >= 0 for _, left in reports)

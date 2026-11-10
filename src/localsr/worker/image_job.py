@@ -91,6 +91,8 @@ class ImageJobRunner:
         self.engine.status_callback = lambda message: self.emit(
             EngineStatus(job_id=job_id, message=message)
         )
+        self.model_adapter.status_callback = self.engine.status_callback
+        self.model_adapter.cancel_event = self.cancel_event
         self._take_engine_notes()
         pipeline = resolve_image_pipeline(
             raw_stages=data.get("stages"),

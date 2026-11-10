@@ -2,6 +2,7 @@ import ast
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -150,3 +151,43 @@ def test_the_engine_has_no_unbounded_wait_outside_the_helper():
     found = unbounded_waits()
     assert found - set(ALLOWED_WAITS) == set()
     assert set(ALLOWED_WAITS) - found == set(), "an allowed wait is gone: drop it from the list"
+
+
+def test_a_checkpoint_that_cannot_be_read_stops_the_job_with_a_sentence(monkeypatch, tmp_path):
+    from localsr.core import model_adapter
+
+    monkeypatch.setattr(model_adapter, "MODEL_READ_SECONDS", 0.2)
+    release = threading.Event()
+    path = tmp_path / "model.pth"
+    path.write_bytes(b"x")
+    adapter = model_adapter.ModelAdapter(allow_unverified_checkpoints=True)
+    adapter.loader = SimpleNamespace(load_from_file=lambda _path: release.wait())
+    messages = []
+    adapter.status_callback = messages.append
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match=r"Reading the model file model\.pth did not finish"):
+        adapter.inspect(str(path))
+    assert time.monotonic() - started < 2.0
+    assert messages and "Stopping the job in" in messages[0]
+    release.set()
+    deadline = time.monotonic() + 2
+    while preparation.busy_slot("model-read") and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+
+def test_the_face_detector_download_before_a_job_has_a_short_limit(monkeypatch, tmp_path):
+    from localsr.core import face_detection
+
+    seen = {}
+
+    def download(model, path, **options):
+        seen.update(options)
+        raise RuntimeError("offline")
+
+    monkeypatch.setattr(face_detection, "download_model", download)
+    store = SimpleNamespace(
+        path_for=lambda model: tmp_path / "yunet.onnx", is_installed=lambda model: False
+    )
+    with pytest.raises(face_detection.FaceDetectionUnavailable, match="offline"):
+        face_detection._detector_model_path(store=store, cancel_event=None, allow_download=True)
+    assert seen["max_seconds"] == face_detection.DOWNLOAD_SECONDS <= 120

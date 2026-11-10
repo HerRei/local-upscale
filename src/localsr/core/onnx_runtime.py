@@ -28,6 +28,7 @@ import torch.nn.functional as F
 
 from . import gpu_guard
 from .gpu_guard import GATE_CACHE_ENV, gate_cache_directory  # noqa: F401
+from .preparation import PreparationTimeout, bounded_preparation
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,11 @@ NPU_ARCHITECTURES = frozenset({"SPAN", "ESRGAN", "FBCNN", "NAFNet"})
 _MAXIMUM_VERDICTS = 400
 # Above this, a model keeps two sessions instead of four (NAFNet SIDD is 465 MB).
 _LARGE_GRAPH_BYTES = 256 * 1024**2
+# The most the engine waits for the graph export, or for one session to open (which
+# includes the NPU compile), before the job stops with a sentence. It matches the
+# GPU preflight's limit.
+ONNX_PREPARE_SECONDS = 300.0
+ONNX_SLOT = "onnx"
 # DXGI device-removed, hung, reset and internal-driver errors, and their usual texts.
 _DEVICE_LOST_FRAGMENTS = (
     "887a0005",
@@ -333,6 +339,31 @@ class _OnnxImage(torch.nn.Module):
         # The device as well: two identical cards share an identity.
         return "|".join((self.route.identity, self.route.device, self.provider, _localsr_version()))
 
+    def _prepare(self, what: str, work, on_late=None):
+        """Run an export or a session build within the limit; a stop becomes a sentence."""
+        try:
+            return bounded_preparation(
+                f"{what} for {self._label()}",
+                ONNX_PREPARE_SECONDS,
+                work,
+                fallback="Stopping the job",
+                slot=ONNX_SLOT,
+                cancel_event=self.cancel_event,
+                status=self._status,
+                on_late=on_late,
+            )
+        except PreparationTimeout as error:
+            reason = (
+                "is still preparing an earlier model"
+                if error.busy
+                else f"did not finish preparing {self.architecture} within "
+                f"{ONNX_PREPARE_SECONDS / 60:.0f} minutes"
+            )
+            raise GpuRouteRejected(
+                f"{self._label()} {reason}, so the job stopped. Select the CPU for this "
+                "model, or restart LocalSR to try again."
+            ) from error
+
     def _watch(self):
         return self.crashes.watch(self._crash_key()) if self._gated else nullcontext()
 
@@ -460,7 +491,14 @@ class _OnnxImage(torch.nn.Module):
             f"Testing {self._label()} in a separate process before its first use. This "
             "happens once per graphics driver."
         )
-        outcome = gpu_guard.run(self.route.device, self.cancel_event)
+        outcome = gpu_guard.run(
+            self.route.device,
+            self.cancel_event,
+            lambda elapsed, left: self._status(
+                f"Testing {self._label()} in a separate process before its first use. "
+                f"{elapsed} s so far. The job stops in {left} s if the test is not finished."
+            ),
+        )
         gpu_guard._PREFLIGHT_TRIED.add(key)
         if outcome == "timeout":
             gpu_guard._PREFLIGHT_TIMEOUTS.add(key)
@@ -510,7 +548,7 @@ class _OnnxImage(torch.nn.Module):
         # at the retained cache size.
         if len(self.sessions) >= self.session_limit:
             self.sessions.popitem(last=False)
-        graph = self._export(image)
+        graph = self._prepare(f"Exporting {self.architecture}", lambda: self._export(image))
         if len(graph) > _LARGE_GRAPH_BYTES:
             self.session_limit = 2
             while len(self.sessions) >= self.session_limit:
@@ -537,8 +575,12 @@ class _OnnxImage(torch.nn.Module):
                 )
             try:
                 with self._watch():
-                    session, trace = self._create(state["graph"], config)
-            except InterruptedError:
+                    session, trace = self._prepare(
+                        f"Preparing {self.architecture}",
+                        lambda config=config: self._create(state["graph"], config),
+                        self._discard_late_session,
+                    )
+            except (InterruptedError, GpuRouteRejected):
                 raise
             except Exception as error:
                 if _is_device_lost(error) or _is_memory_error(error):
@@ -558,6 +600,12 @@ class _OnnxImage(torch.nn.Module):
             )
             return
         raise self._rejected()
+
+    def _discard_late_session(self, kind: str, value) -> None:
+        """A session that opened after the job stopped waiting is not used."""
+        if kind == "ok":
+            session, trace = value
+            self._release_session({"session": session, "trace": trace})
 
     @staticmethod
     def _release_session(state: dict) -> None:
