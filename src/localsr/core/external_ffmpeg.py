@@ -153,7 +153,7 @@ def _run(
         "-nostats",
         *arguments,
     ]
-    with tempfile.TemporaryFile(mode="w+t") as errors:
+    with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as errors:
         process = subprocess.Popen(
             command,
             stdin=subprocess.DEVNULL,

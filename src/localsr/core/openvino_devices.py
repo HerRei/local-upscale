@@ -107,7 +107,7 @@ def _intel_gpu_runtimes() -> set[Path]:
     runtimes = set()
     for icd in sorted(_OPENCL_VENDORS.glob("*.icd")):
         try:
-            library = icd.read_text().strip().splitlines()[0].strip()
+            library = icd.read_text(encoding="utf-8").strip().splitlines()[0].strip()
         except (OSError, IndexError):
             continue
         # libigdrcl is the GPU runtime; Intel's CPU OpenCL driver has its own ICD.

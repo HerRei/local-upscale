@@ -64,7 +64,7 @@ def _host_copy(name: str, directories, kind: tuple[int, int] | None) -> Path | N
 
 def _already_loaded(name: str) -> bool:
     try:
-        return name in Path("/proc/self/maps").read_text(errors="replace")
+        return name in Path("/proc/self/maps").read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
 

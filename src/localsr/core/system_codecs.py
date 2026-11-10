@@ -425,7 +425,7 @@ class SystemCodecs:
 
     @contextmanager
     def _process(self, arguments: list[str], *, stdin: bool = False) -> Iterator[subprocess.Popen]:
-        with tempfile.TemporaryFile(mode="w+t") as errors:
+        with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as errors:
             process = subprocess.Popen(
                 [self.path, *arguments],
                 stdin=subprocess.PIPE if stdin else subprocess.DEVNULL,
