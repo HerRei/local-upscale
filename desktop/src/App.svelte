@@ -29,7 +29,7 @@
     slotFor,
     stepShowing,
   } from './lib/results';
-  import { queueTiming } from './lib/queue-timing';
+  import { EtaDisplay, etaView, withEta } from './lib/eta-display';
   import MediaQueue from './MediaQueue.svelte';
   import { mediaInRun, queueRunSince } from './lib/queueRun';
   import AdvancedSettings from './AdvancedSettings.svelte';
@@ -447,7 +447,7 @@
   $: activityDetail = activeJobMediaId
     ? [
         activityModel,
-        snapshot.runtime.status_detail,
+        runningStatusDetail,
         liveFrame >= 0 ? `Frame ${liveFrame + 1}` : '',
         selectedMedia?.hdr_format && selectedMedia.id === activeJobMediaId
           ? 'SDR display preview'
@@ -500,7 +500,21 @@
   $: canAppendToQueue =
     Boolean(snapshot.runtime.active_job_id) && canQueue && settings.task !== 'edit';
   $: queuedCount = snapshot.jobs.filter((job) => job.status === 'queued').length;
-  $: queueEta = queueTiming(snapshot);
+  // The times shown count down by themselves: the view is worked out again every second
+  // while a job runs, not only when the engine reports.
+  const etaDisplay = new EtaDisplay();
+  let etaSecond = 0;
+  let etaTimer: ReturnType<typeof setInterval> | undefined;
+  const secondsNow = (_second: number) => performance.now() / 1000;
+  $: shownEta = etaView(snapshot, etaDisplay, secondsNow(etaSecond));
+  $: queueEta = shownEta.timing;
+  $: runningStatusDetail = withEta(snapshot.runtime.status_detail, shownEta.job);
+  $: if (snapshot.runtime.active_job_id && !etaTimer) {
+    etaTimer = setInterval(() => (etaSecond += 1), 1000);
+  } else if (!snapshot.runtime.active_job_id && etaTimer) {
+    clearInterval(etaTimer);
+    etaTimer = undefined;
+  }
   // Saved results of the selected image and the pair the preview compares. The
   // host lists the history and checks every target before it decodes one; a
   // manual choice is pinned per image for this session (a restart resets it).
@@ -967,6 +981,7 @@
       if (stateRefresh) clearTimeout(stateRefresh);
       if (runtimePulseTimer) clearTimeout(runtimePulseTimer);
       if (autoStartTimer) clearTimeout(autoStartTimer);
+      if (etaTimer) clearInterval(etaTimer);
       for (const unlisten of unlisteners) unlisten();
     };
   });
@@ -3580,12 +3595,10 @@
         ><span
           class="status-detail"
           role={activityDetail ? 'status' : undefined}
-          title={booting
-            ? undefined
-            : activityDetail || idleSummary || snapshot.runtime.status_detail}
+          title={booting ? undefined : activityDetail || idleSummary || runningStatusDetail}
           >{booting
             ? 'Opening the trusted desktop control plane.'
-            : activityDetail || idleSummary || snapshot.runtime.status_detail}</span
+            : activityDetail || idleSummary || runningStatusDetail}</span
         >
         {#if hardwareNote}<span class="status-note" title={hardwareNote}>{hardwareNote}</span>{/if}
         {#if hardwareHint}<span class="status-note" title={hardwareHint.text}
@@ -3602,16 +3615,14 @@
             class="queue-eta"
             title="Approximate timings from measured jobs with the same model and settings. Model loading and export can change the estimate."
           >
-            Current item: {queueEta.currentSeconds === null
-              ? 'measuring…'
-              : `≈ ${formatDuration(queueEta.currentSeconds)}`} · Whole queue: {queueEta.queueSeconds ===
-            null
+            Current item: {shownEta.current === null ? 'measuring…' : `≈ ${shownEta.current}`} · Whole
+            queue: {shownEta.queue === null
               ? `measuring ${queueEta.unknownItems} item${queueEta.unknownItems === 1 ? '' : 's'}…`
-              : `≈ ${formatDuration(queueEta.queueSeconds)}`}
+              : `≈ ${shownEta.queue}`}
           </span><span class="queue-next"
-            >Next: {queueEta.nextName} · {queueEta.nextSeconds === null
+            >Next: {queueEta.nextName} · {shownEta.next === null
               ? 'time not yet measured'
-              : `≈ ${formatDuration(queueEta.nextSeconds)}`}</span
+              : `≈ ${shownEta.next}`}</span
           >{/if}
       </div>
     </div>
@@ -4218,10 +4229,7 @@
             <div>
               <dt>Elapsed / ETA</dt>
               <dd>
-                {formatDuration(snapshot.runtime.elapsed_seconds)} / {snapshot.runtime
-                  .estimated_remaining_seconds
-                  ? formatDuration(snapshot.runtime.estimated_remaining_seconds)
-                  : '—'}
+                {formatDuration(snapshot.runtime.elapsed_seconds)} / {shownEta.job ?? '—'}
               </dd>
             </div>
             <div>

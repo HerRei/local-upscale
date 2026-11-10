@@ -30,6 +30,7 @@ class ImageJobProgress:
         preview: LatestPreviewEncoder,
         *,
         clock: Callable[[], float] = time.monotonic,
+        rate: RemainingTime | None = None,
     ) -> None:
         self.job_id = job_id
         self.pipeline = pipeline
@@ -48,6 +49,9 @@ class ImageJobProgress:
         self.stage_pixels_done = 0
         self.stage_pixels_total = 0
         self.remaining_time: RemainingTime | None = None
+        # A batch's photos share one measured speed (the lanes' work together), fed by the
+        # batch; alone a photo measures its own.
+        self.rate = rate
 
     def start(self, index: int, stage: PipelineStage, *, span: int = 1) -> None:
         self.active_index = index
@@ -145,11 +149,16 @@ class ImageJobProgress:
             done, work = self.stage_pixels_done, self.stage_pixels_total
         else:
             done, work = completed, max(total, 1)
-        if self.remaining_time is None:
-            self.remaining_time = RemainingTime(work)
-        self.remaining_time.update(now, done)
         last_pass = self.active_index + self.active_span >= len(self.pipeline.stages)
-        seconds = self.remaining_time.remaining()
+        seconds: float | None
+        if self.rate is not None:
+            speed = self.rate.seconds_per_unit()
+            seconds = None if speed is None else max(0, work - done) * speed
+        else:
+            if self.remaining_time is None:
+                self.remaining_time = RemainingTime(work)
+            self.remaining_time.update(now, done)
+            seconds = self.remaining_time.remaining()
         return seconds if last_pass and seconds is not None else 0.0
 
     def tile(

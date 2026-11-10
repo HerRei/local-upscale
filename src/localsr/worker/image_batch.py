@@ -35,6 +35,7 @@ from localsr.core.disk_space import (
     image_need,
     require_room,
 )
+from localsr.core.eta import RemainingTime
 from localsr.core.image_io import ImageManager
 from localsr.core.inference import InferenceEngine, _fixed_window, _span_output_is_unstable
 from localsr.core.live_preview import LatestPreviewEncoder, PreviewPacket
@@ -212,7 +213,13 @@ class _Photo:
             output_scale=data.get("output_scale"),
         )
         self.progress = ImageJobProgress(
-            data["job_id"], self.pipeline, data["device"], batch.emit, preview, clock=batch.clock
+            data["job_id"],
+            self.pipeline,
+            data["device"],
+            batch.emit,
+            preview,
+            clock=batch.clock,
+            rate=batch.rate,
         )
         self.completed = 0
         self.nbytes = save_bytes(
@@ -229,6 +236,7 @@ class _Photo:
 
     def start(self) -> None:
         self.batch.announce(self.data)
+        self.batch.photo_started(self.width * self.height)
         self.progress.start(self.pipeline.primary_index, self.pipeline.primary)
 
     def dispatch(self, tile) -> None:
@@ -251,6 +259,7 @@ class _Photo:
             raise PipelineStageError(self.pipeline.primary, str(error)) from error
         self.completed += 1
         total = len(self.tiles)
+        self.batch.tile_done(int(tile.out_w) * int(tile.out_h))
         self.progress.tile(
             "completed", tile, pixels, self.completed, total, self.width, self.height, self.core
         )
@@ -304,6 +313,13 @@ class ImageBatchRunner:
         self.save_notes: dict[str, list[str]] = {}
         self._announced: set[str] = set()
         self._focus = ""
+        # The speed of all lanes together over the whole batch: a photo's remaining time is
+        # its unfinished pixels at this speed, whichever lane reports last.
+        self.rate = RemainingTime(1.0)
+        self._pixels_done = 0
+        self._photos_started = 0
+        self._started_pixels = 0
+        self._photo_count = 0
 
     def announce(self, data: Mapping[str, Any]) -> None:
         """A photo's JobStarted, once: the desktop then shows this photo."""
@@ -462,6 +478,10 @@ class ImageBatchRunner:
             _Lane(runner, shape, info, self.power if runner.unit == CORE_ML_GPU else None)
             for runner in runners
         ]
+        # Each lane's first tile may still carry a one-off cost.
+        self.rate = RemainingTime(1.0, warmup=len(lanes))
+        self._pixels_done = self._photos_started = self._started_pixels = 0
+        self._photo_count = len(remaining)
 
         def open_photo(item):
             self._check_cancelled()
@@ -516,6 +536,16 @@ class ImageBatchRunner:
                     self.lane_tile_counts.get(lane.unit, 0) + lane.tiles
                 )
         return returned
+
+    def photo_started(self, pixels: int) -> None:
+        """A photo's tiles begin: the batch's size is that of the photos seen so far, scaled."""
+        self._photos_started += 1
+        self._started_pixels += pixels
+        self.rate.total = float(self._started_pixels / self._photos_started * self._photo_count)
+
+    def tile_done(self, pixels: int) -> None:
+        self._pixels_done += pixels
+        self.rate.update(self.clock(), float(self._pixels_done))
 
     def _lane_failed(self, model, lane: _Lane, error: BaseException) -> None:
         self._log(f"A batch lane on {lane.unit} stopped: {error}")

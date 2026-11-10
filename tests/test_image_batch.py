@@ -1,5 +1,6 @@
 """The Mac photo batch with real image files and fake Core ML runners."""
 
+import itertools
 import json
 import os
 import threading
@@ -169,6 +170,21 @@ def test_each_photo_is_written_whole_with_its_own_progress_and_completion(tmp_pa
         NEURAL_ENGINE: sum(1 for unit, _ in setup.calls if unit == NEURAL_ENGINE),
         CORE_ML_GPU: sum(1 for unit, _ in setup.calls if unit == CORE_ML_GPU),
     }
+
+
+def test_the_photos_of_a_batch_share_one_measured_speed(tmp_path):
+    setup = Setup(tmp_path)
+    ticks = itertools.count()
+    setup.runner.clock = lambda: next(ticks) * 0.5
+    jobs = [job(tmp_path, i, size=(720, 380)) for i in range(4)]
+    assert setup.run(jobs) == []
+    # The first photo measures the lanes' speed; the others start with it and do not say
+    # "measuring" again.
+    first = [m["estimated_remaining_seconds"] for m in setup.of("progress", "0")]
+    later = [m["estimated_remaining_seconds"] for m in setup.of("progress", "2")]
+    assert first[0] == 0
+    assert all(estimate > 0 for estimate in later[:-1])
+    assert later[-1] == 0 or later[-1] < later[0]
 
 
 def test_the_first_photo_is_announced_before_the_model_loads(tmp_path):

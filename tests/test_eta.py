@@ -7,6 +7,7 @@ compares every estimate it emits with the time that really remained in that simu
 from __future__ import annotations
 
 import math
+import random
 import threading
 import time
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ from unittest.mock import Mock
 from test_video_timing import make_vfr
 
 from localsr.core import video_pipeline
+from localsr.core.eta import RemainingTime
 from localsr.core.pipeline import resolve_image_pipeline
 from localsr.core.video_pipeline import VideoJobConfig, run_video_job
 from localsr.worker.job_progress import ImageJobProgress
@@ -291,3 +293,159 @@ def test_a_sleep_inside_one_tile_does_not_poison_the_estimate(monkeypatch):
     _grid(run, 100, lambda n: 3600.0 if n == 50 else 1.0)
     for _moment, estimate, _stage in run.samples[48:]:
         assert estimate < 120
+
+
+def _noisy(seed: int, count: int = 150, base: float = 0.5, warmup: float = 8.0):
+    """Tile durations with +-30 % noise, a slow tile now and then, a slow first tile."""
+    rng = random.Random(seed)
+    durations = []
+    for number in range(1, count + 1):
+        seconds = base * (1 + rng.uniform(-0.3, 0.3))
+        if rng.random() < 0.02:
+            seconds *= 3
+        durations.append(seconds + (warmup if number == 1 else 0.0))
+    return durations
+
+
+def test_estimates_from_noisy_tiles_are_within_the_accuracy_targets(monkeypatch):
+    # After 15 % of the work the number is within 25 % of what remains, after 50 % within
+    # 15 % (until the last fifth, where one slow tile left to come is a quarter of the rest).
+    for seed in range(60):
+        run = Run(monkeypatch, width=1500, height=1000)
+        run.start_stage(0)
+        count = 150
+        for number, seconds in enumerate(_noisy(seed, count), 1):
+            run.tile(number, count, 0, 0, 100, seconds)
+        finish = run.now
+        for number, (moment, estimate, _stage) in enumerate(run.samples, 1):
+            fraction, true = number / count, finish - moment
+            if fraction < 0.15 or fraction > 0.8 or estimate == 0:
+                continue
+            tolerance = 0.25 if fraction < 0.5 else 0.15
+            assert abs(estimate - true) <= tolerance * true, (
+                f"seed {seed} at {fraction:.0%}: shows {estimate:.1f}s, {true:.1f}s remain"
+            )
+
+
+def test_one_slower_tile_moves_the_estimate_by_its_share_of_the_work_so_far(monkeypatch):
+    # Steady 1 s tiles, then one that takes 2 s at tile 60 of 100. The speed is the average
+    # over the 59 steady tiles and this one, so the estimate may rise by about the extra
+    # second spread over the work done (+1.7 %), not by the share of a recent window.
+    run = Run(monkeypatch)
+    run.start_stage(0)
+    _grid(run, 59, lambda n: 1.0, total=100)
+    before = run.samples[-1][1]
+    _grid(run, 1, lambda n: 2.0, total=100, first=60)
+    after = run.samples[-1][1]
+    one_tile_less = before - 1.0
+    assert abs(after - one_tile_less) <= 0.02 * before
+
+
+def test_lanes_that_finish_tiles_a_moment_apart_do_not_slow_the_estimate(monkeypatch):
+    # Two lanes at 1 s per tile finish within 10 ms of each other: reports come as 10 ms and
+    # 990 ms intervals. The batch finishes 2 tiles per second, whatever the report spacing.
+    run = Run(monkeypatch, width=1000, height=2000)
+    run.start_stage(0)
+    count = 200
+    run.now += 5.0
+    run.tile(1, count, 0, 0, 100, 0.0)
+    for number in range(2, count + 1):
+        run.tile(number, count, 0, 0, 100, 0.99 if number % 2 else 0.01)
+    finish = run.now
+    for number, (moment, estimate, _stage) in enumerate(run.samples, 1):
+        if number > 0.1 * count and estimate:
+            assert abs(estimate - (finish - moment)) <= 0.05 * (finish - moment) + 1.0
+
+
+def test_a_lasting_speed_up_is_followed(monkeypatch):
+    # A second lane joins after 40 tiles and the tiles take a fifth of the time.
+    run = Run(monkeypatch)
+    run.start_stage(0)
+    _grid(run, 100, lambda n: 1.0 if n <= 40 else 0.2)
+    finish = run.now
+    for moment, estimate, _stage in run.samples[75:-1]:
+        assert (finish - moment) / 1.6 <= estimate <= (finish - moment) * 1.6
+
+
+class Batch:
+    """Two photos of 100 tiles each, rendered by two lanes of different speed.
+
+    The lanes take tiles from one queue in photo order, so a lane's completion belongs to
+    whichever photo the tile was from, and the reports of the two lanes interleave.
+    """
+
+    def __init__(self, monkeypatch, speeds=(0.2, 0.55), warm=(1.0, 2.0), seed=3):
+        monkeypatch.setattr("localsr.worker.job_progress.get_memory_snapshot", lambda _: {})
+        self.now = 2000.0
+        rng = random.Random(seed)
+        self.messages: list[list] = [[], []]
+        pipeline = _pipeline(1)
+        self.rate = RemainingTime(2 * 100 * 64 * 64, warmup=len(speeds))
+        self.photos = [
+            ImageJobProgress(
+                f"photo{index}",
+                pipeline,
+                "mps",
+                self.messages[index].append,
+                Mock(),
+                clock=lambda: self.now,
+                rate=self.rate,
+            )
+            for index in range(2)
+        ]
+        # (time of completion, lane) for every tile, from the lanes working side by side.
+        free = [0.0] * len(speeds)
+        events = []
+        for number in range(200):
+            lane = free.index(min(free))
+            free[lane] += speeds[lane] * (1 + rng.uniform(-0.3, 0.3))
+            if number < len(speeds):
+                free[lane] += warm[lane]
+            events.append(free[lane])
+        self.events = sorted(events)
+        self.samples: list[tuple[int, float, float]] = []  # (photo, time, estimate)
+
+    def run(self):
+        start, done = self.now, [0, 0]
+        for number, moment in enumerate(self.events, 1):
+            index = 0 if number <= 100 else 1
+            self.now = start + moment
+            if done[index] == 0:
+                self.photos[index].start(0, self.photos[index].pipeline.primary)
+            done[index] += 1
+            tile = SimpleNamespace(out_x=0, out_y=0, out_w=64, out_h=64)
+            args = (done[index], 100, 640, 640, 64)
+            self.photos[index].tile("started", tile, None, done[index] - 1, 100, 640, 640, 64)
+            self.rate.update(self.now, number * 64 * 64)
+            self.photos[index].tile("completed", tile, b"", *args)
+            self.photos[index].update(done[index], 100, 64)
+            update = [m for m in self.messages[index] if type(m).__name__ == "ProgressUpdate"][-1]
+            self.samples.append((index, self.now, update.estimated_remaining_seconds))
+        return start + self.events[-1]
+
+
+def test_a_batch_shares_one_speed_across_its_lanes_and_photos(monkeypatch):
+    batch = Batch(monkeypatch)
+    finish = batch.run()
+    first_shown = {}
+    previous = {}
+    for index, moment, estimate in batch.samples:
+        first_shown.setdefault(index, moment) if estimate else None
+        if estimate and index in previous and moment > batch.events[14] + 2000.0:
+            # The lanes' reports interleave, but the number only counts down (a tile's worth
+            # of speed noise is the most it may rise by).
+            assert estimate <= previous[index] * 1.04, "the estimate went up"
+        if estimate:
+            previous[index] = estimate
+    # The second photo starts with the speed the batch has measured: no new "measuring".
+    starts = [m for m in batch.samples if m[0] == 1][:2]
+    assert all(estimate > 0 for _i, _t, estimate in starts)
+    # Photo 1 ends when its last tile is done; what it shows is that photo's time at the
+    # speed of both lanes together.
+    ends = [moment for index, moment, _e in batch.samples if index == 0][-1]
+    for index, moment, estimate in batch.samples:
+        number = len([s for s in batch.samples if s[0] == index and s[1] <= moment])
+        if index == 0 and number >= 15 and estimate:
+            true = ends - moment
+            assert abs(estimate - true) <= 0.25 * true + 1.0
+    assert finish > ends
