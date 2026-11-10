@@ -121,3 +121,191 @@ it('names the compared pictures by their ends, with the full names on hover', ()
     expect(container.querySelector(`.compare-header .file-name[title="${name}"]`)).toBeTruthy();
   }
 });
+
+it('opens two videos in the image slider with one shared transport, then boxes for three, and releases sources', async () => {
+  const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+  const load = vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
+  const prepareVideo = vi.fn(async (_generation: number, slot: number) => ({
+    original_url: `https://fixture/${slot}.mp4`,
+    enhanced_url: '',
+  }));
+  const cancelVideo = vi.fn(async () => {});
+  const entries = [item('one', 'v'), item('two', 'v'), item('three', 'v')].map((entry) => ({
+    ...entry,
+    media_kind: 'video',
+    fps: 60,
+  }));
+  try {
+    const view = render(ComparePane, {
+      ...props,
+      items: entries.slice(0, 2),
+      generation: 1,
+      prepareVideo,
+      cancelVideo,
+    });
+    expect(screen.getByRole('slider', { name: 'Divider between slot 1 and slot 2' })).toBeTruthy();
+    expect(view.container.querySelectorAll('video')).toHaveLength(2);
+    expect(screen.getAllByRole('group', { name: 'Video playback controls' })).toHaveLength(1);
+    await vi.waitFor(() => expect(prepareVideo).toHaveBeenCalledTimes(2));
+    expect(prepareVideo).toHaveBeenCalledWith(1, 0, expect.any(String), false, false);
+    const old = [...view.container.querySelectorAll('video')];
+    await view.rerender({ items: entries, generation: 2 });
+    expect(view.container.querySelectorAll('.boxes video')).toHaveLength(3);
+    expect(screen.queryByRole('slider', { name: 'Divider between slot 1 and slot 2' })).toBeNull();
+    expect(old.every((video) => !video.hasAttribute('src'))).toBe(true);
+    const videos = [...view.container.querySelectorAll('video')];
+    view.unmount();
+    expect(videos.every((video) => !video.hasAttribute('src'))).toBe(true);
+    expect(view.container.querySelectorAll('video')).toHaveLength(0);
+    expect(pause).toHaveBeenCalled();
+    expect(load).toHaveBeenCalled();
+  } finally {
+    pause.mockRestore();
+    load.mockRestore();
+  }
+});
+
+it('leaves unavailable sides in their boxes while preparing other videos and retries deferred conversion when the job ends', async () => {
+  vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+  vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
+  const prepareVideo = vi.fn(
+    async (_generation: number, slot: number, _request: string, _force = false, busy = false) => {
+      if (slot === 0 && busy)
+        throw new Error(
+          'This video needs a playback conversion. It will load when the current video is done.',
+        );
+      return { original_url: `https://fixture/${slot}.mp4`, enhanced_url: '' };
+    },
+  );
+  const entries = [item('one', 'v'), item('two', 'v')].map((entry) => ({
+    ...entry,
+    media_kind: 'video',
+  }));
+  try {
+    const view = render(ComparePane, {
+      ...props,
+      items: entries,
+      generation: 1,
+      engineBusy: true,
+      prepareVideo,
+      cancelVideo: async () => {},
+    });
+    await vi.waitFor(() => expect(prepareVideo).toHaveBeenCalledTimes(2));
+    expect(screen.getByText(/It will load when the current video is done/)).toBeTruthy();
+    expect(view.container.querySelectorAll('video[src]')).toHaveLength(1);
+    await view.rerender({ engineBusy: false });
+    await vi.waitFor(() => expect(prepareVideo).toHaveBeenCalledTimes(4));
+    expect(view.container.querySelectorAll('video[src]')).toHaveLength(2);
+    view.unmount();
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
+
+it('releases hidden Compare sources, cancels pending preparation and ignores a late descriptor', async () => {
+  const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+  const load = vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
+  let finish!: (source: { original_url: string; enhanced_url: string }) => void;
+  const prepareVideo = vi.fn(
+    () =>
+      new Promise<{ original_url: string; enhanced_url: string }>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const cancelVideo = vi.fn(async () => {});
+  const entries = [item('one', 'v'), item('two', 'v')].map((entry) => ({
+    ...entry,
+    media_kind: 'video',
+  }));
+  try {
+    const view = render(ComparePane, {
+      ...props,
+      items: entries,
+      generation: 1,
+      prepareVideo,
+      cancelVideo,
+    });
+    await vi.waitFor(() => expect(prepareVideo).toHaveBeenCalledOnce());
+    await view.rerender({ compactHidden: true });
+    expect(cancelVideo).toHaveBeenCalledOnce();
+    finish({ original_url: 'https://fixture/late.mp4', enhanced_url: '' });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(view.container.querySelectorAll('video[src]')).toHaveLength(0);
+    expect(prepareVideo).toHaveBeenCalledOnce();
+    view.unmount();
+  } finally {
+    pause.mockRestore();
+    load.mockRestore();
+  }
+});
+
+it('drives the shared transport from video frame callbacks and cancels the clock on close', async () => {
+  const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(function (
+    this: HTMLMediaElement,
+  ) {
+    Object.defineProperty(this, 'paused', { configurable: true, value: true });
+  });
+  const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(async function (
+    this: HTMLMediaElement,
+  ) {
+    Object.defineProperty(this, 'paused', { configurable: true, value: false });
+  });
+  const load = vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
+  let frame: VideoFrameRequestCallback | undefined;
+  const request = vi.fn((callback: VideoFrameRequestCallback) => {
+    frame = callback;
+    return 1;
+  });
+  const cancel = vi.fn();
+  const entries = [item('one', 'v'), item('two', 'v')].map((entry, index) => ({
+    ...entry,
+    media_kind: 'video',
+    fps: index ? 60 : 15,
+  }));
+  try {
+    const view = render(ComparePane, {
+      ...props,
+      items: entries,
+      generation: 1,
+      prepareVideo: async (_g, index) => ({
+        original_url: `https://fixture/${index}.mp4`,
+        enhanced_url: '',
+      }),
+      cancelVideo: async () => {},
+    });
+    await vi.waitFor(() => expect(view.container.querySelectorAll('video[src]')).toHaveLength(2));
+    const videos = [...view.container.querySelectorAll('video')];
+    for (const video of videos) {
+      Object.defineProperties(video, {
+        duration: { value: 4 },
+        readyState: { value: 4 },
+        requestVideoFrameCallback: { value: request },
+        cancelVideoFrameCallback: { value: cancel },
+      });
+      await fireEvent.loadedData(video);
+    }
+    const canvas = screen.getByRole('region', { name: 'Compare canvas' });
+    await fireEvent.keyDown(canvas, { key: ' ' });
+    await vi.waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+    expect(request).toHaveBeenCalled();
+    videos[0].currentTime = 1;
+    videos[1].currentTime = 0.9;
+    frame?.(0, {} as VideoFrameCallbackMetadata);
+    expect(videos[1].currentTime).toBe(1);
+    await fireEvent.click(screen.getByRole('button', { name: 'Playback speed' }));
+    expect(videos.map((video) => video.playbackRate)).toEqual([1.5, 1.5]);
+    await fireEvent.click(screen.getByRole('button', { name: 'Mute comparison' }));
+    expect(videos.every((video) => video.muted)).toBe(true);
+    await fireEvent.keyDown(canvas, { key: 'ArrowRight' });
+    expect(videos.map((video) => video.currentTime)).toEqual([1 + 1 / 60, 1 + 1 / 60]);
+    await fireEvent.keyDown(canvas, { key: ' ' });
+    view.unmount();
+    expect(cancel).toHaveBeenCalledWith(1);
+    expect(videos.every((video) => !video.hasAttribute('src'))).toBe(true);
+  } finally {
+    pause.mockRestore();
+    play.mockRestore();
+    load.mockRestore();
+  }
+});

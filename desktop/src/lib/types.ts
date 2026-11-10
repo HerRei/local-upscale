@@ -603,6 +603,7 @@ export type ComparePick =
   { kind: 'original'; media_id: string } | { kind: 'output'; media_id: string; job_id: string };
 export interface CompareSlot {
   pick: ComparePick;
+  media_kind?: string;
   status: 'loading' | 'ready' | 'error' | 'missing';
   preview_data_url: string;
   error: string;

@@ -88,6 +88,7 @@ pub struct RegionResult {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct CompareSlot {
     pub pick: ComparePick,
+    pub media_kind: String,
     pub status: CompareStatus,
     pub preview_data_url: String,
     pub error: String,
@@ -112,13 +113,13 @@ pub struct CompareState {
     region_request_id: u64,
 }
 
-// Resolve only paths owned by an image in the database. Validation errors
+// Resolve only paths owned by media in the database. Validation errors
 // mean the selection disappeared; database failures remain real errors.
 fn resolve(db: &Database, pick: &ComparePick) -> AppResult<Option<(String, FileIdentity)>> {
     let Some(media) = db.get_media(pick.media_id())? else {
         return Ok(None);
     };
-    if media.kind != "image" {
+    if media.kind != "image" && media.kind != "video" {
         return Ok(None);
     }
     let path = match pick {
@@ -141,17 +142,40 @@ pub fn plan(
 ) -> AppResult<Vec<Value>> {
     if picks.len() > 4 {
         return Err(AppError::Validation(
-            "Choose at most four images to compare".into(),
+            "Choose at most four items to compare".into(),
+        ));
+    }
+    let kinds = picks
+        .iter()
+        .map(|pick| {
+            db.get_media(pick.media_id()).map(|media| {
+                media.map(|m| m.kind).or_else(|| {
+                    compare
+                        .slots
+                        .iter()
+                        .find(|slot| &slot.pick == pick)
+                        .map(|slot| slot.media_kind.clone())
+                })
+            })
+        })
+        .collect::<AppResult<Vec<_>>>()?;
+    if kinds
+        .iter()
+        .flatten()
+        .any(|kind| Some(kind) != kinds.iter().flatten().next())
+    {
+        return Err(AppError::Validation(
+            "Compare images with images or videos with videos".into(),
         ));
     }
     let mut slots = Vec::with_capacity(picks.len());
-    for pick in picks {
+    for (pick, kind) in picks.iter().zip(&kinds) {
         let mut resolved = resolve(db, pick)?;
         // A selection already in Compare can disappear while the user is
         // reordering picks. Keep it visible as missing, rather than failing the whole update.
         if resolved.is_none() && !compare.slots.iter().any(|slot| &slot.pick == pick) {
             return Err(AppError::Validation(
-                "Choose an available image or completed result belonging to that image".into(),
+                "Choose available media or a completed result belonging to that media".into(),
             ));
         }
         if let Some(previous) = compare.slots.iter().find(|slot| &slot.pick == pick) {
@@ -174,9 +198,11 @@ pub fn plan(
         });
         slots.push(CompareSlot {
             pick: pick.clone(),
+            media_kind: kind.clone().unwrap_or_default(),
             status: match (&file, kept) {
                 (None, _) => CompareStatus::Missing,
                 (Some(_), Some(_)) => CompareStatus::Ready,
+                (Some(_), None) if kind.as_deref() == Some("video") => CompareStatus::Ready,
                 (Some(_), None) => CompareStatus::Loading,
             },
             path,
@@ -202,6 +228,29 @@ pub fn plan(
         region_request_id: 0,
     };
     Ok(requests)
+}
+
+/// Only a current, unchanged, host-resolved slot can enter the existing playback route.
+pub fn video_path(
+    db: &Database,
+    compare: &mut CompareState,
+    generation: u64,
+    index: usize,
+) -> AppResult<(String, bool)> {
+    refresh(db, compare)?;
+    let slot = compare
+        .slots
+        .get(index)
+        .filter(|slot| {
+            compare.generation == generation
+                && slot.media_kind == "video"
+                && slot.status == CompareStatus::Ready
+        })
+        .ok_or_else(|| AppError::Validation("Choose an available video in Compare".into()))?;
+    Ok((
+        slot.path.clone(),
+        matches!(&slot.pick, ComparePick::Output { .. }),
+    ))
 }
 
 pub fn refresh(db: &Database, compare: &mut CompareState) -> AppResult<()> {
@@ -309,7 +358,8 @@ pub fn plan_regions(
     for (index, region) in regions.iter().enumerate() {
         if let Some(r) = region {
             let slot = &compare.slots[index];
-            if r.width == 0
+            if slot.media_kind != "image"
+                || r.width == 0
                 || r.height == 0
                 || r.target_width == 0
                 || r.target_height == 0
@@ -333,7 +383,7 @@ pub fn plan_regions(
             .get(index)
             .copied()
             .flatten()
-            .filter(|_| slot.status == CompareStatus::Ready);
+            .filter(|_| slot.status == CompareStatus::Ready && slot.media_kind == "image");
         if let Some(r) = slot.requested_region {
             requests.push(json!({"type":"region_request", "data": {"image_path":slot.path, "slot":format!("slot{}", index + 1), "generation":compare.generation, "target_id":slot.pick.target_id(), "request_id":compare.region_request_id, "x":r.x, "y":r.y, "width":r.width, "height":r.height, "target_width":r.target_width, "target_height":r.target_height}}));
         }
@@ -383,6 +433,147 @@ mod tests {
     use super::*;
     use crate::database::Database;
     use serde_json::json;
+
+    #[test]
+    fn video_picks_use_owned_results_and_the_shared_playback_descriptor() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("queue.db")).unwrap();
+        let original = dir.path().join("source.mp4");
+        let output = dir.path().join("result.mp4");
+        std::fs::write(&original, "source").unwrap();
+        std::fs::write(&output, "result").unwrap();
+        db.insert_media("v", original.to_str().unwrap(), "v", "video")
+            .unwrap();
+        db.insert_media("i", original.to_str().unwrap(), "i", "image")
+            .unwrap();
+        db.insert_job("done", "v", "{}").unwrap();
+        db.finish_job("done", "completed", output.to_str().unwrap(), "")
+            .unwrap();
+        let source = ComparePick::Original {
+            media_id: "v".into(),
+        };
+        let result = ComparePick::Output {
+            media_id: "v".into(),
+            job_id: "done".into(),
+        };
+        let picks = vec![
+            source.clone(),
+            result.clone(),
+            source.clone(),
+            result.clone(),
+        ];
+        let mut compare = CompareState::default();
+        assert!(plan(&db, &mut compare, &picks).unwrap().is_empty());
+        assert_eq!(compare.slots.len(), 4);
+        for (index, expected) in [&original, &output, &original, &output].iter().enumerate() {
+            assert_eq!(compare.slots[index].media_kind, "video");
+            assert_eq!(compare.slots[index].status, CompareStatus::Ready);
+            let generation = compare.generation;
+            let (path, is_result) = video_path(&db, &mut compare, generation, index).unwrap();
+            assert_eq!(is_result, index % 2 == 1);
+            let descriptor = crate::video_preview::sources(path.into(), None, None, None, false);
+            assert_eq!(descriptor.original_path, expected.to_string_lossy());
+            assert!(descriptor.enhanced_path.is_empty());
+            assert!(descriptor.playback_note.is_empty());
+        }
+        assert!(plan(&db, &mut compare, &vec![source.clone(); 5]).is_err());
+        assert!(plan(
+            &db,
+            &mut compare,
+            &[
+                source,
+                ComparePick::Original {
+                    media_id: "i".into()
+                }
+            ]
+        )
+        .is_err());
+        assert!(plan(
+            &db,
+            &mut CompareState::default(),
+            &[ComparePick::Output {
+                media_id: "v".into(),
+                job_id: "unknown".into()
+            }]
+        )
+        .is_err());
+        assert!(plan(
+            &db,
+            &mut CompareState::default(),
+            &[ComparePick::Output {
+                media_id: "i".into(),
+                job_id: "done".into()
+            }]
+        )
+        .is_err());
+        let generation = compare.generation;
+        assert!(video_path(&db, &mut compare, generation + 1, 0).is_err());
+        std::fs::remove_file(output).unwrap();
+        assert!(plan(&db, &mut CompareState::default(), &[result]).is_err());
+        assert!(video_path(&db, &mut compare, generation, 1).is_err());
+    }
+
+    #[test]
+    fn four_distinct_completed_videos_are_accepted_but_a_fifth_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("queue.db")).unwrap();
+        let mut picks = Vec::new();
+        for index in 0..5 {
+            let id = format!("video-{index}");
+            let job = format!("job-{index}");
+            let source = dir.path().join(format!("source-{index}.mp4"));
+            let output = dir.path().join(format!("result-{index}.mp4"));
+            std::fs::write(&source, "source").unwrap();
+            std::fs::write(&output, "result").unwrap();
+            db.insert_media(&id, source.to_str().unwrap(), &id, "video")
+                .unwrap();
+            db.insert_job(&job, &id, "{}").unwrap();
+            db.finish_job(&job, "completed", output.to_str().unwrap(), "")
+                .unwrap();
+            picks.push(ComparePick::Output {
+                media_id: id,
+                job_id: job,
+            });
+        }
+        let mut compare = CompareState::default();
+        assert!(plan(&db, &mut compare, &picks[..4]).unwrap().is_empty());
+        assert_eq!(compare.slots.len(), 4);
+        assert!(plan(&db, &mut compare, &picks).is_err());
+        assert_eq!(compare.slots.len(), 4);
+        assert!(plan(
+            &db,
+            &mut CompareState::default(),
+            &[ComparePick::Original {
+                media_id: "unknown".into()
+            }]
+        )
+        .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn video_result_replaced_by_a_link_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("queue.db")).unwrap();
+        let source = dir.path().join("source.mp4");
+        let output = dir.path().join("result.mp4");
+        std::fs::write(&source, "source").unwrap();
+        std::os::unix::fs::symlink(&source, &output).unwrap();
+        db.insert_media("v", source.to_str().unwrap(), "v", "video")
+            .unwrap();
+        db.insert_job("done", "v", "{}").unwrap();
+        db.finish_job("done", "completed", output.to_str().unwrap(), "")
+            .unwrap();
+        assert!(plan(
+            &db,
+            &mut CompareState::default(),
+            &[ComparePick::Output {
+                media_id: "v".into(),
+                job_id: "done".into()
+            }]
+        )
+        .is_err());
+    }
 
     #[test]
     fn requests_four_owned_images_in_order_and_rejects_unowned_or_excess_picks() {

@@ -7,6 +7,9 @@ listed under 0.3.1 to 0.3.8 below, which were never published on their own.
 
 ### Added
 
+- Compare videos in the same slider or linked boxes as photos, with one synchronised
+  transport, a shared timeline and audio from the first slot.
+
 - Two start buttons in the status bar: "Only this one" runs the selected picture and a
   second button ("Upscale all N") runs all of them. A button that would start 0 items
   is hidden.

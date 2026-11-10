@@ -202,7 +202,7 @@ describe('showing a result and picking it for Compare', () => {
   });
 });
 
-it('shows video rows but prevents picking them for image Compare', async () => {
+it('picks video rows and originals with the same slot controls', async () => {
   const clip = { ...media, id: 'v', name: 'clip.mp4', kind: 'video' } as MediaItem;
   const output = result('v1', {
     kind: 'video',
@@ -226,10 +226,13 @@ it('shows video rows but prevents picking them for image Compare', async () => {
   await fireEvent.click(row);
   expect(showResult).toHaveBeenCalledWith({ kind: 'output', media_id: 'v', job_id: 'v1' });
   await fireEvent.keyDown(row, { key: ' ' });
-  expect(togglePick).not.toHaveBeenCalled();
+  expect(togglePick).toHaveBeenCalledWith({ kind: 'output', media_id: 'v', job_id: 'v1' });
   const box = screen.getByRole('checkbox', { name: 'Frame by frame, clip.mp4' });
-  expect(box.matches(':disabled')).toBe(true);
-  expect(box.title).toBe('Compare works with images');
+  expect(box.matches(':disabled')).toBe(false);
+  expect(box.title).toBe('Pick for Compare');
+  expect(screen.getByRole('checkbox', { name: 'Original, clip.mp4' }).matches(':disabled')).toBe(
+    false,
+  );
 });
 
 it('shows timing for video without interpolation and omits missing timing', () => {
@@ -248,4 +251,30 @@ it('shows timing for video without interpolation and omits missing timing', () =
   expect(screen.getByRole('button', { name: 'Show unknown, Lake.jpg' }).textContent).not.toContain(
     '31s',
   );
+});
+
+it('disables the opposite media kind in both directions and resets after Unpick all', async () => {
+  const clip = { ...media, id: 'v', name: 'clip.mp4', kind: 'video' } as MediaItem;
+  const groups = outputGroups([media, clip], [
+    { media_id: 'a', results: [result('one')] },
+    { media_id: 'v', results: [result('v1', { kind: 'video' })] },
+  ] as MediaResults[]);
+  const options = { ...props([]), groups };
+  const view = render(OutputsList, { ...options, picks: [{ kind: 'original', media_id: 'v' }] });
+  const imageBox = () =>
+    screen.getByRole('checkbox', { name: 'one, Lake.jpg' }) as HTMLButtonElement;
+  const videoBox = () =>
+    screen.getByRole('checkbox', { name: 'v1, clip.mp4' }) as HTMLButtonElement;
+  expect(imageBox().disabled).toBe(true);
+  expect(imageBox().title).toBe('Compare videos with videos');
+  await fireEvent.keyDown(screen.getByRole('button', { name: 'Show one, Lake.jpg' }), { key: ' ' });
+  expect(options.togglePick).not.toHaveBeenCalled();
+  await view.rerender({ picks: [{ kind: 'original', media_id: 'a' }] });
+  expect(videoBox().disabled).toBe(true);
+  expect(videoBox().title).toBe('Compare images with images');
+  await fireEvent.click(screen.getByRole('button', { name: 'Unpick all' }));
+  expect(options.clearPicks).toHaveBeenCalledOnce();
+  await view.rerender({ picks: [] });
+  expect(imageBox().disabled).toBe(false);
+  expect(videoBox().disabled).toBe(false);
 });

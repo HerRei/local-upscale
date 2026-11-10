@@ -5,6 +5,10 @@
    */
   import { onDestroy, onMount, tick } from 'svelte';
   import { visibleRegion, type Region } from './lib/compareRegions';
+  import * as api from './lib/api';
+  import type { VideoComparisonSources } from './lib/types';
+  import { CompareVideoSync } from './lib/compare-video-sync';
+  import VideoTransport from './VideoTransport.svelte';
   import FileName from './FileName.svelte';
   import HelpTip from './HelpTip.svelte';
   import { comparisonFromKey, comparisonFromPointer } from './lib/comparison';
@@ -19,6 +23,11 @@
 
   export let items: CompareItem[];
   export let generation = 0;
+  export let engineBusy = false;
+  export let prepareVideo: typeof api.prepareCompareVideo = (...args) =>
+    api.prepareCompareVideo(...args);
+  export let cancelVideo = api.cancelVideoComparison;
+
   export let requestRegions: (
     generation: number,
     regions: (Region | null)[],
@@ -55,6 +64,272 @@
   let regionQueue = Promise.resolve();
   let destroyed = false;
 
+  type Source = {
+    url: string;
+    status: CompareItem['status'];
+    error: string;
+    note: string;
+    loaded: boolean;
+  };
+  let sources: Record<string, Source> = {};
+  const players = new Map<string, HTMLVideoElement>();
+  let sync: CompareVideoSync | undefined;
+  let playing = false;
+  let currentTime = 0;
+  let duration = 0;
+  let playbackRate = 1;
+  let muted = false;
+  let preparationKey = '';
+  let preparationRevision = 0;
+  let requestId = '';
+  let frameId: number | undefined;
+  let frameVideo: HTMLVideoElement | undefined;
+  let animationId: number | undefined;
+  let preparationQueue = Promise.resolve();
+
+  function updateTransport(): void {
+    playing = sync?.requestedPlayback ?? false;
+    currentTime = sync?.time ?? 0;
+    duration = sync?.duration ?? 0;
+  }
+  function stopClock(): void {
+    if (frameId !== undefined) frameVideo?.cancelVideoFrameCallback(frameId);
+    if (animationId !== undefined) cancelAnimationFrame(animationId);
+    frameId = animationId = undefined;
+    frameVideo = undefined;
+  }
+  function clock(): void {
+    stopClock();
+    if (!sync?.playing || destroyed) return;
+    const master = items
+      .map((item) => players.get(item.key))
+      .find((player) => player && !player.paused);
+    const update = () => {
+      frameId = animationId = undefined;
+      sync?.tick();
+      updateTransport();
+      clock();
+    };
+    if (master?.requestVideoFrameCallback) {
+      frameVideo = master;
+      frameId = master.requestVideoFrameCallback(update);
+    } else animationId = requestAnimationFrame(update);
+  }
+  function rebuild(): void {
+    const time = sync?.time ?? 0;
+    const resume = sync?.requestedPlayback ?? false;
+    sync?.pause();
+    stopClock();
+    sync = new CompareVideoSync(
+      items.flatMap((item, index) => {
+        const video = players.get(item.key);
+        return video && sources[item.key]?.loaded
+          ? [{ video, fps: item.fps || 30, audible: index === 0 }]
+          : [];
+      }),
+    );
+    sync.rate(playbackRate);
+    sync.mute(muted);
+    sync.seek(time);
+    updateTransport();
+    if (resume && !destroyed) void start();
+  }
+  async function start(): Promise<void> {
+    try {
+      await sync?.play();
+    } catch (error) {
+      // A failed element is removed by its error event; the remaining slots still play.
+      console.warn('Compare playback could not start', error);
+    }
+    updateTransport();
+    clock();
+  }
+  function togglePlayback(): void {
+    if (playing) {
+      sync?.pause();
+      stopClock();
+      updateTransport();
+    } else void start();
+  }
+  function seek(seconds: number): void {
+    sync?.seek(seconds);
+    updateTransport();
+    clock();
+  }
+  function nextRate(): void {
+    const rates = [0.5, 1, 1.5, 2];
+    playbackRate = rates[(rates.indexOf(playbackRate) + 1) % rates.length];
+    sync?.rate(playbackRate);
+    clock();
+  }
+  function release(video: HTMLVideoElement): void {
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+  }
+  function videoPlayer(video: HTMLVideoElement, key: string) {
+    players.set(key, video);
+    const stalled = () => {
+      if (!sources[key]?.loaded) return;
+      sync?.stall(video);
+      stopClock();
+      updateTransport();
+    };
+    const ready = () => {
+      if (!sources[key]?.loaded) return;
+      void sync
+        ?.ready(video)
+        .then(() => {
+          updateTransport();
+          clock();
+        })
+        .catch(() => {});
+    };
+    const loaded = () => {
+      if (sources[key]) {
+        sources = { ...sources, [key]: { ...sources[key], loaded: true } };
+        rebuild();
+      }
+    };
+    video.addEventListener('waiting', stalled);
+    video.addEventListener('seeking', stalled);
+    video.addEventListener('canplay', ready);
+    video.addEventListener('seeked', ready);
+    video.addEventListener('loadeddata', loaded);
+    video.addEventListener('ended', clock);
+    return {
+      destroy() {
+        video.removeEventListener('waiting', stalled);
+        video.removeEventListener('seeking', stalled);
+        video.removeEventListener('canplay', ready);
+        video.removeEventListener('seeked', ready);
+        video.removeEventListener('loadeddata', loaded);
+        video.removeEventListener('ended', clock);
+        players.delete(key);
+        release(video);
+        rebuild();
+      },
+    };
+  }
+  async function prepareSlot(
+    item: CompareItem,
+    index: number,
+    revision: number,
+    force = fallback.has(item.key),
+  ): Promise<void> {
+    if (destroyed || revision !== preparationRevision) return;
+    const id = crypto.randomUUID();
+    requestId = id;
+    try {
+      const descriptor: VideoComparisonSources = await prepareVideo(
+        generation,
+        index,
+        id,
+        force,
+        engineBusy,
+      );
+      if (destroyed || revision !== preparationRevision) return;
+      sources = {
+        ...sources,
+        [item.key]: {
+          url: descriptor.original_url,
+          status: 'ready',
+          error: '',
+          note: descriptor.playback_note || '',
+          loaded: false,
+        },
+      };
+    } catch (error) {
+      if (destroyed || revision !== preparationRevision) return;
+      sources = {
+        ...sources,
+        [item.key]: { url: '', status: 'error', error: String(error), note: '', loaded: false },
+      };
+    } finally {
+      if (requestId === id) requestId = '';
+    }
+  }
+  function prepareVideos(key: string, entries: CompareItem[]): void {
+    if (key === preparationKey) return;
+    preparationKey = key;
+    const revision = ++preparationRevision;
+    if (requestId) void cancelVideo(requestId).catch(() => {});
+    sync?.pause();
+    stopClock();
+    for (const player of players.values()) release(player);
+    sources = Object.fromEntries(
+      entries.map((item) => [
+        item.key,
+        {
+          url: '',
+          status: item.status === 'ready' ? 'loading' : item.status,
+          error: item.error,
+          note: '',
+          loaded: false,
+        },
+      ]),
+    );
+    sync = undefined;
+    updateTransport();
+    // Single-preview conversion has one cancellation gate. Prepare slots serially
+    // through that same gate, allowing each ready side to appear independently.
+    preparationQueue = preparationQueue
+      .catch(() => {})
+      .then(async () => {
+        for (const [index, item] of entries.entries()) {
+          if (item.status === 'ready') await prepareSlot(item, index, revision);
+        }
+      });
+  }
+  const fallback = new Set<string>();
+  function videoError(item: CompareItem, index: number): void {
+    if (destroyed || !sources[item.key]?.url) return;
+    const player = players.get(item.key);
+    const code = player?.error?.code;
+    if (player) release(player);
+    const compatible = !fallback.has(item.key) && (code === 3 || code === 4);
+    sources = {
+      ...sources,
+      [item.key]: {
+        url: '',
+        status: compatible ? 'loading' : 'error',
+        error: 'Preview unavailable',
+        note: '',
+        loaded: false,
+      },
+    };
+    rebuild();
+    if (compatible) {
+      fallback.add(item.key);
+      const revision = preparationRevision;
+      preparationQueue = preparationQueue
+        .catch(() => {})
+        .then(() => prepareSlot(item, index, revision, true));
+    }
+  }
+  function state(item: CompareItem, available: Record<string, Source>): Source {
+    return (
+      available[item.key] || {
+        url: '',
+        status: item.status,
+        error: item.error,
+        note: '',
+        loaded: false,
+      }
+    );
+  }
+  $: videos = items[0]?.media_kind === 'video';
+  $: prepareVideos(
+    JSON.stringify([
+      videos,
+      compactHidden,
+      generation,
+      engineBusy,
+      items.map((item) => [item.key, item.status]),
+    ]),
+    videos && !compactHidden ? items : [],
+  );
+
   function regionsFor(
     entries: CompareItem[],
     currentLayout: string,
@@ -64,6 +339,7 @@
     px: number,
     py: number,
   ): (Region | null)[] {
+    if (entries[0]?.media_kind === 'video') return entries.map(() => null);
     if (entries.length < 2) return entries.map(() => null);
     return entries.map((item, index) => {
       if ((currentLayout === 'slider' && index >= 2) || item.status !== 'ready') return null;
@@ -117,6 +393,11 @@
 
   onDestroy(() => {
     destroyed = true;
+    preparationRevision++;
+    if (requestId) void cancelVideo(requestId).catch(() => {});
+    sync?.pause();
+    stopClock();
+    for (const player of players.values()) release(player);
     clearTimeout(regionTimer);
     void regionQueue
       .catch(() => {})
@@ -124,8 +405,12 @@
       .catch(() => {});
   });
 
-  $: block = sliderBlock(items.map((item) => item.pick));
-  $: shownLayout = layout === 'slider' && block ? 'boxes' : layout;
+  $: block = sliderBlock(
+    items.map((item) => item.pick),
+    videos ? 'video' : 'image',
+  );
+  $: shownLayout =
+    (videos && items.length > 2) || (layout === 'slider' && block) ? 'boxes' : layout;
   $: inputs = [...new Set(items.map((item) => item.media_name))];
   $: boxes = shownLayout === 'boxes' ? items : items.slice(0, 2);
   $: cols = shownLayout === 'boxes' ? boxColumns(boxes.length, canvasWidth, canvasHeight) : 1;
@@ -145,7 +430,11 @@
     shownLayout === 'boxes'
       ? boxes.reduce(
           (acc, item) => {
-            const fit = fitSize(cell, { width: item.width || 1, height: item.height || 1 }, 12);
+            const fit = fitSize(
+              cell,
+              videos ? mainSize : { width: item.width || 1, height: item.height || 1 },
+              12,
+            );
             const b = panBounds(cell, fit, zoom);
             return {
               x: Math.max(acc.x, (b.x * fitted.width) / fit.width),
@@ -171,14 +460,17 @@
   );
   $: desiredRegions = regionsFor(items, shownLayout, cell, fitted, zoom, panX, panY);
   $: desiredKey = JSON.stringify([generation, desiredRegions]);
-  $: scheduleRegions(desiredKey, generation, desiredRegions);
+  $: if (!videos) scheduleRegions(desiredKey, generation, desiredRegions);
   $: (shownLayout, items.length, tick().then(measure));
 
   onMount(() => {
     const observer =
       typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(() => measure());
     if (well) observer?.observe(well);
-    void tick().then(measure);
+    void tick().then(() => {
+      measure();
+      well?.focus();
+    });
     return () => observer?.disconnect();
   });
 
@@ -191,7 +483,11 @@
 
   function boxStyle(item: CompareItem, ...deps: unknown[]): string {
     void deps;
-    const fit = fitSize(cell, { width: item.width || 1, height: item.height || 1 }, 12);
+    const fit = fitSize(
+      cell,
+      videos ? mainSize : { width: item.width || 1, height: item.height || 1 },
+      12,
+    );
     const pan = clampPan(
       { x: (panX * fit.width) / fitted.width, y: (panY * fit.height) / fitted.height },
       panBounds(cell, fit, zoom),
@@ -213,7 +509,7 @@
     const index = box ? Array.from(well!.querySelectorAll('.box-well')).indexOf(box) : -1;
     const item = boxes[index];
     const fit = item
-      ? fitSize(cell, { width: item.width || 1, height: item.height || 1 }, 12)
+      ? fitSize(cell, videos ? mainSize : { width: item.width || 1, height: item.height || 1 }, 12)
       : fitted;
     const kx = fit.width / fitted.width,
       ky = fit.height / fitted.height;
@@ -225,7 +521,11 @@
       shownLayout === 'boxes'
         ? boxes.reduce(
             (acc, entry) => {
-              const f = fitSize(cell, { width: entry.width || 1, height: entry.height || 1 }, 12);
+              const f = fitSize(
+                cell,
+                videos ? mainSize : { width: entry.width || 1, height: entry.height || 1 },
+                12,
+              );
               const b = panBounds(cell, f, bounded);
               return {
                 x: Math.max(acc.x, (b.x * fitted.width) / f.width),
@@ -322,6 +622,25 @@
   }
 
   function windowKey(event: KeyboardEvent): void {
+    if (videos && !event.defaultPrevented && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      const target = event.target instanceof Element ? event.target : null;
+      if (
+        target?.closest('.compare-pane') &&
+        !target.closest('input, textarea, select, [contenteditable]')
+      ) {
+        if (event.key === ' ' && !target.closest('button')) {
+          event.preventDefault();
+          togglePlayback();
+          return;
+        }
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+          event.preventDefault();
+          sync?.step(event.key === 'ArrowLeft' ? -1 : 1);
+          updateTransport();
+          return;
+        }
+      }
+    }
     if (event.key !== 'Escape' || event.defaultPrevented) return;
     const target = event.target instanceof Element ? event.target : null;
     if (target?.closest('[aria-modal="true"], [role="listbox"]')) return;
@@ -336,7 +655,8 @@
     <slot name="tabs" />
     <span class="compare-names"
       ><span class="names"
-        >{#if inputs.length > 2}{inputs.length} images{:else}{#each inputs as name, index (name)}{#if index}<span
+        >{#if inputs.length > 2}{inputs.length}
+          {videos ? 'videos' : 'images'}{:else}{#each inputs as name, index (name)}{#if index}<span
                 class="names-and">and</span
               >{/if}<FileName {name} />{/each}{/if}</span
       ><HelpTip
@@ -350,7 +670,7 @@
           role="radio"
           aria-checked={shownLayout === 'slider'}
           class:active={shownLayout === 'slider'}
-          disabled={Boolean(block)}
+          disabled={Boolean(block) || (videos && items.length > 2)}
           title={block || 'Slot 1 left, slot 2 right · drag the divider'}
           on:click={() => setLayout('slider')}>Slider</button
         >
@@ -385,14 +705,16 @@
               ? 'Loading…'
               : item.status === 'missing'
                 ? 'File missing'
-                : item.error || 'Preview unavailable'}</span
+                : videos
+                  ? state(item, sources).error || 'Loading…'
+                  : item.error || 'Preview unavailable'}</span
           >{/if}
         {#if shownLayout !== 'boxes'}<span class="slot-meta"
             >{item.meta}{#if inputs.length > 1}{item.meta ? ' · ' : ''}<FileName
                 name={item.media_name}
               />{/if}</span
           >{/if}
-        {#if index > 1}<button
+        {#if index > 1 && !videos}<button
             class="slot-remove"
             aria-label={`Move ${item.label} to slider slot 2`}
             title="Move to slider slot 2"
@@ -424,162 +746,244 @@
     {#if block && layout === 'slider'}<span class="compare-slots-note">{block}</span>{/if}
   </div>
 
-  <div
-    bind:this={well}
-    class="canvas-well compare-well"
-    class:panning={dragging}
-    class:comparing={draggingLine}
-    role="region"
-    aria-label="Compare canvas"
-    on:wheel={onWheel}
-    on:pointerenter={() => (hovering = true)}
-    on:pointerleave={() => (hovering = false)}
-    on:pointerdown={pointerDown}
-    on:pointermove={pointerMove}
-    on:pointerup={pointerUp}
-    on:pointercancel={pointerUp}
-  >
-    {#if items.length < 2}
-      <div class="canvas-empty">
-        <h2>Pick two outputs</h2>
-        <p>Tick them under Outputs; the first two take the slider, up to four fill the boxes.</p>
-      </div>
-    {:else if shownLayout === 'slider'}
-      <div
-        class="image-stage"
-        style={`width:${fitted.width}px;height:${fitted.height}px;left:50%;top:50%;transform:translate(calc(-50% + ${panX}px), calc(-50% + ${panY}px)) scale(${zoom})`}
-      >
-        <img
-          class="source-image"
-          src={items[0].preview_data_url}
-          alt={`1: ${items[0].label}`}
-          draggable="false"
-        />
-        {#if currentCrop(items[0], 0, desiredRegions)}
-          <img
-            class="region-image"
-            style={cropStyle(items[0])}
-            src={items[0].region?.data_url}
-            alt=""
-            draggable="false"
-          />
-        {/if}
-        <img
-          class="result-image"
-          style={`clip-path: inset(0 0 0 ${geometry.imagePercent}%)`}
-          src={items[1].preview_data_url}
-          alt={`2: ${items[1].label}`}
-          draggable="false"
-        />
-        {#if currentCrop(items[1], 1, desiredRegions)}
-          <div class="region-overlay" style={`clip-path: inset(0 0 0 ${geometry.imagePercent}%)`}>
+  <div class:video-comparison={videos}>
+    <div
+      bind:this={well}
+      class="canvas-well compare-well"
+      class:panning={dragging}
+      class:comparing={draggingLine}
+      role="region"
+      aria-label="Compare canvas"
+      tabindex="-1"
+      on:wheel={onWheel}
+      on:pointerenter={() => (hovering = true)}
+      on:pointerleave={() => (hovering = false)}
+      on:pointerdown={pointerDown}
+      on:pointermove={pointerMove}
+      on:pointerup={pointerUp}
+      on:pointercancel={pointerUp}
+    >
+      {#if items.length < 2}
+        <div class="canvas-empty">
+          <h2>Pick two outputs</h2>
+          <p>Tick them under Outputs; the first two take the slider, up to four fill the boxes.</p>
+        </div>
+      {:else if shownLayout === 'slider'}
+        <div
+          class="image-stage"
+          class:video-stage={videos}
+          style={`width:${fitted.width}px;height:${fitted.height}px;left:50%;top:50%;transform:translate(calc(-50% + ${panX}px), calc(-50% + ${panY}px)) scale(${zoom})`}
+        >
+          {#if videos}
+            {#each items.slice(0, 2) as item, index (item.key)}
+              <!-- svelte-ignore a11y_media_has_caption -->
+              <video
+                use:videoPlayer={item.key}
+                src={state(item, sources).url || undefined}
+                aria-label={`${index + 1}: ${item.label}`}
+                muted={index > 0 || muted}
+                playsinline
+                preload="auto"
+                style={index ? `clip-path: inset(0 0 0 ${geometry.imagePercent}%)` : ''}
+                on:error={() => videoError(item, index)}
+              ></video>
+            {/each}
+          {:else}
             <img
-              class="region-image"
-              style={cropStyle(items[1])}
-              src={items[1].region?.data_url}
-              alt=""
+              class="source-image"
+              src={items[0].preview_data_url}
+              alt={`1: ${items[0].label}`}
               draggable="false"
             />
-          </div>
-        {/if}
-      </div>
-      {#each items.slice(0, 2) as item, index (item.key)}
-        {#if item.status !== 'ready'}<div
-            class="slot-state"
-            class:right-state={index === 1}
-            role="status"
-          >
-            {item.label}: {item.status === 'loading'
-              ? 'Loading…'
-              : item.status === 'missing'
-                ? 'File missing'
-                : item.error || 'Preview unavailable'}
-          </div>{/if}
-      {/each}
-      <div
-        class="compare-line"
-        role="slider"
-        tabindex="0"
-        aria-label="Divider between slot 1 and slot 2"
-        aria-valuemin="0"
-        aria-valuemax="100"
-        aria-valuenow={Math.round(100 - geometry.enhancedPercent)}
-        aria-valuetext={`${Math.round(100 - geometry.enhancedPercent)}% ${items[0].label}, rest ${items[1].label}`}
-        style={`left:${geometry.x}px;top:${geometry.top}px;height:${geometry.bottom - geometry.top}px;--handle-top:${geometry.handleY - geometry.top}px`}
-        on:keydown={lineKey}
-      >
-        <span aria-hidden="true">↔</span>
-      </div>
-      <span
-        class="original-chip side"
-        style={`left:${geometry.left + 10}px;top:${geometry.top + 10}px`}
-        ><b class="slot-number">1</b>{items[0].label}</span
-      >
-      <span
-        class="original-chip side right"
-        style={`right:${canvasWidth - geometry.right + 10}px;top:${geometry.top + 10}px`}
-        ><b class="slot-number">2</b>{items[1].label}</span
-      >
-    {:else}
-      <div class="boxes" style={`grid-template-columns: repeat(${cols}, minmax(0, 1fr));`}>
-        {#each boxes as item, index (item.key)}
-          <div class="box">
-            <div class="box-bar">
-              <b class="slot-number">{index + 1}</b>
-              <strong>{item.label}</strong>
-              <span>{item.meta}{inputs.length > 1 ? ` · ${item.media_name}` : ''}</span>
-            </div>
-            <div class="box-well">
-              {#if item.status !== 'ready'}<div class="slot-state" role="status">
-                  {item.status === 'loading'
-                    ? 'Loading…'
-                    : item.status === 'missing'
-                      ? 'File missing'
-                      : item.error || 'Preview unavailable'}
-                </div>{/if}
-              <div class="image-stage" style={boxStyle(item, fitted, panX, panY, zoom, cell)}>
+            {#if currentCrop(items[0], 0, desiredRegions)}
+              <img
+                class="region-image"
+                style={cropStyle(items[0])}
+                src={items[0].region?.data_url}
+                alt=""
+                draggable="false"
+              />
+            {/if}
+            <img
+              class="result-image"
+              style={`clip-path: inset(0 0 0 ${geometry.imagePercent}%)`}
+              src={items[1].preview_data_url}
+              alt={`2: ${items[1].label}`}
+              draggable="false"
+            />
+            {#if currentCrop(items[1], 1, desiredRegions)}
+              <div
+                class="region-overlay"
+                style={`clip-path: inset(0 0 0 ${geometry.imagePercent}%)`}
+              >
                 <img
-                  src={item.preview_data_url}
-                  alt={`${index + 1}: ${item.label}`}
+                  class="region-image"
+                  style={cropStyle(items[1])}
+                  src={items[1].region?.data_url}
+                  alt=""
                   draggable="false"
                 />
-                {#if currentCrop(item, index, desiredRegions)}
-                  <img
-                    class="region-image"
-                    style={cropStyle(item)}
-                    src={item.region?.data_url}
-                    alt=""
-                    draggable="false"
-                  />
-                {/if}
+              </div>
+            {/if}
+          {/if}
+        </div>
+        {#each items.slice(0, 2) as item, index (item.key)}
+          {#if videos ? state(item, sources).status !== 'ready' || !state(item, sources).loaded : item.status !== 'ready'}<div
+              class="slot-state"
+              class:right-state={index === 1}
+              role="status"
+            >
+              {item.label}: {(videos ? state(item, sources).status : item.status) === 'loading'
+                ? 'Loading…'
+                : item.status === 'missing'
+                  ? 'File missing'
+                  : videos
+                    ? state(item, sources).error || 'Loading…'
+                    : item.error || 'Preview unavailable'}
+            </div>{/if}
+        {/each}
+        <div
+          class="compare-line"
+          role="slider"
+          tabindex="0"
+          aria-label="Divider between slot 1 and slot 2"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow={Math.round(100 - geometry.enhancedPercent)}
+          aria-valuetext={`${Math.round(100 - geometry.enhancedPercent)}% ${items[0].label}, rest ${items[1].label}`}
+          style={`left:${geometry.x}px;top:${geometry.top}px;height:${geometry.bottom - geometry.top}px;--handle-top:${geometry.handleY - geometry.top}px`}
+          on:keydown={lineKey}
+        >
+          <span aria-hidden="true">↔</span>
+        </div>
+        <span
+          class="original-chip side"
+          style={`left:${geometry.left + 10}px;${videos ? 'top:auto;bottom' : 'top'}:${videos ? canvasHeight - geometry.bottom + 10 : geometry.top + 10}px`}
+          ><b class="slot-number">1</b>{items[0].label}</span
+        >
+        <span
+          class="original-chip side right"
+          style={`right:${canvasWidth - geometry.right + 10}px;${videos ? 'top:auto;bottom' : 'top'}:${videos ? canvasHeight - geometry.bottom + 10 : geometry.top + 10}px`}
+          ><b class="slot-number">2</b>{items[1].label}</span
+        >
+      {:else}
+        <div class="boxes" style={`grid-template-columns: repeat(${cols}, minmax(0, 1fr));`}>
+          {#each boxes as item, index (item.key)}
+            <div class="box">
+              <div class="box-bar">
+                <b class="slot-number">{index + 1}</b>
+                <strong>{item.label}</strong>
+                <span>{item.meta}{inputs.length > 1 ? ` · ${item.media_name}` : ''}</span>
+              </div>
+              <div class="box-well">
+                {#if videos ? state(item, sources).status !== 'ready' || !state(item, sources).loaded : item.status !== 'ready'}<div
+                    class="slot-state"
+                    role="status"
+                  >
+                    {(videos ? state(item, sources).status : item.status) === 'loading'
+                      ? 'Loading…'
+                      : item.status === 'missing'
+                        ? 'File missing'
+                        : videos
+                          ? state(item, sources).error || 'Loading…'
+                          : item.error || 'Preview unavailable'}
+                  </div>{/if}
+                <div
+                  class="image-stage"
+                  class:video-stage={videos}
+                  style={boxStyle(item, fitted, panX, panY, zoom, cell)}
+                >
+                  {#if videos}
+                    <!-- svelte-ignore a11y_media_has_caption -->
+                    <video
+                      use:videoPlayer={item.key}
+                      src={state(item, sources).url || undefined}
+                      aria-label={`${index + 1}: ${item.label}`}
+                      muted={index > 0 || muted}
+                      playsinline
+                      preload="auto"
+                      on:error={() => videoError(item, index)}
+                    ></video>
+                  {:else}
+                    <img
+                      src={item.preview_data_url}
+                      alt={`${index + 1}: ${item.label}`}
+                      draggable="false"
+                    />
+                    {#if currentCrop(item, index, desiredRegions)}
+                      <img
+                        class="region-image"
+                        style={cropStyle(item)}
+                        src={item.region?.data_url}
+                        alt=""
+                        draggable="false"
+                      />
+                    {/if}
+                  {/if}
+                </div>
               </div>
             </div>
-          </div>
-        {/each}
-      </div>
-    {/if}
-    {#if items.length >= 2}
-      <div
-        class="zoom-hud"
-        class:shown={hovering}
-        role="group"
-        aria-label="Compare zoom"
-        on:pointerdown|stopPropagation
-        on:wheel|stopPropagation
-      >
-        <button
-          aria-label="Zoom out"
-          disabled={zoom <= minZoom}
-          on:click={() => setZoom(zoom / 1.25)}>−</button
+          {/each}
+        </div>
+      {/if}
+      {#if items.length >= 2 && !videos}
+        <div
+          class="zoom-hud"
+          class:shown={hovering}
+          role="group"
+          aria-label="Compare zoom"
+          on:pointerdown|stopPropagation
+          on:wheel|stopPropagation
         >
-        <span>{Math.round(zoom * 100)}%</span>
-        <button
-          aria-label="Zoom in"
-          disabled={zoom >= maxZoom}
-          on:click={() => setZoom(zoom * 1.25)}>+</button
-        >
-        <button class:active={Math.abs(zoom - 1) < 0.001} on:click={() => setZoom(1)}>Fit</button>
+          <button
+            aria-label="Zoom out"
+            disabled={zoom <= minZoom}
+            on:click={() => setZoom(zoom / 1.25)}>−</button
+          >
+          <span>{Math.round(zoom * 100)}%</span>
+          <button
+            aria-label="Zoom in"
+            disabled={zoom >= maxZoom}
+            on:click={() => setZoom(zoom * 1.25)}>+</button
+          >
+          <button class:active={Math.abs(zoom - 1) < 0.001} on:click={() => setZoom(1)}>Fit</button>
+        </div>
+      {/if}
+    </div>
+    {#if videos}
+      <div class="video-hud">
+        <VideoTransport
+          {playing}
+          {currentTime}
+          {duration}
+          {playbackRate}
+          toggle={togglePlayback}
+          {seek}
+          {nextRate}
+          {muted}
+          mute={() => {
+            muted = !muted;
+            sync?.mute(muted);
+          }}
+        />
+        <div class="zoom-hud" role="group" aria-label="Compare zoom">
+          <button
+            aria-label="Zoom out"
+            disabled={zoom <= minZoom}
+            on:click={() => setZoom(zoom / 1.25)}>−</button
+          >
+          <span>{Math.round(zoom * 100)}%</span>
+          <button
+            aria-label="Zoom in"
+            disabled={zoom >= maxZoom}
+            on:click={() => setZoom(zoom * 1.25)}>+</button
+          >
+          <button class:active={Math.abs(zoom - 1) < 0.001} on:click={() => setZoom(1)}>Fit</button>
+        </div>
       </div>
+      {#each items.filter((item) => state(item, sources).note) as item (item.key)}<span
+          class="compare-slots-note">{state(item, sources).note}</span
+        >{/each}
     {/if}
   </div>
 </section>
@@ -602,6 +1006,17 @@
   .box-well .slot-state {
     left: 10%;
     max-width: 80%;
+  }
+  .compare-pane > div:last-child {
+    position: relative;
+    min-height: 0;
+  }
+  .compare-pane > .video-comparison {
+    position: relative;
+    inset: auto;
+  }
+  .compare-pane > div:last-child:not(.video-comparison) > .compare-well {
+    height: 100%;
   }
   .compare-pane {
     grid-template-rows: 52px auto 1fr;

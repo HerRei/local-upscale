@@ -245,6 +245,32 @@ export const prepareVideoComparison = async (
       paths.enhanced_url ?? (paths.enhanced_path ? convertFileSrc(paths.enhanced_path) : ''),
   };
 };
+/** A slot index and generation, never a path, selects a host-authorised video. */
+export const prepareCompareVideo = async (
+  generation: number,
+  slot: number,
+  requestId: string,
+  forceCompatible = false,
+  deferConversion = false,
+): Promise<VideoComparisonSources> => {
+  const paths = await invoke<{
+    original_path: string;
+    original_url?: string | null;
+    playback_note: string;
+  }>('prepare_video_comparison', {
+    mediaId: '',
+    requestId,
+    forceCompatible,
+    deferConversion,
+    compareGeneration: generation,
+    compareSlot: slot,
+  });
+  return {
+    original_url: paths.original_url ?? convertFileSrc(paths.original_path),
+    enhanced_url: '',
+    playback_note: paths.playback_note,
+  };
+};
 export const cancelVideoComparison = (requestId: string): Promise<void> =>
   invoke('cancel_video_comparison', { requestId });
 export const listenVideoComparisonProgress = (

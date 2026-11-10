@@ -156,6 +156,8 @@
     const slot = candidate && pickKey(candidate.pick) === pickKey(pick) ? candidate : undefined;
     return {
       key: pickKey(pick),
+      media_kind: media?.kind,
+      fps: result?.output_fps || media?.fps || 30,
       pick,
       media_name: media?.name ?? 'Image',
       label: pick.kind === 'original' ? 'Original' : result?.model_label || 'Earlier result',
@@ -2918,7 +2920,7 @@
       bind:this={mediaQueue}
       groups={compareGroups}
       picks={comparePicks}
-      togglePick={(pick) => setComparePicks(toggleSlot(comparePicks, pick))}
+      togglePick={(pick) => setComparePicks(toggleSlot(comparePicks, pick, snapshot.media))}
       clearPicks={() => setComparePicks([])}
       clearOutputs={askClearOutputs}
       shown={shownPick}
@@ -2983,6 +2985,7 @@
           </div>{/if}
         <ComparePane
           items={compareItems}
+          engineBusy={videoEngineBusy}
           generation={snapshot.runtime.compare?.generation ?? 0}
           requestRegions={(generation, regions) =>
             api.isTauri() ? api.requestCompareRegions(generation, regions) : Promise.resolve()}
