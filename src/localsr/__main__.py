@@ -36,7 +36,6 @@ def _parse_cli_args(args: list[str]) -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument(
         "--uninstall-integrations", action="store_true", help="Remove OS integrations."
     )
-    parser.add_argument("--test-mps", action="store_true", help="Run MPS validation.")
     parser.add_argument("-h", "--help", action="help", help="Show this help message and exit.")
     parser.add_argument("files", nargs="*", help="Image or video files to queue on launch.")
     return parser.parse_known_args(args)
@@ -55,17 +54,6 @@ def main():
 
         raise SystemExit(run_automation_cli(filtered_args))
     parsed, _unknown = _parse_cli_args(filtered_args)
-
-    if parsed.test_mps:
-        import torch
-
-        print("torch version:", torch.__version__)
-        print("MPS is_built:", torch.backends.mps.is_built())
-        print("MPS is_available:", torch.backends.mps.is_available())
-        x = torch.randn(1024, 1024, device="mps")
-        y = x @ x
-        print("Tensor device:", y.device)
-        return
 
     from localsr.desktop_launcher import launch_desktop
 
