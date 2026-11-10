@@ -73,6 +73,7 @@ const api = vi.hoisted(() => ({
   selectMedia: vi.fn(async (_id: string): Promise<void> => undefined),
   removeMedia: vi.fn(async () => undefined),
   clearMedia: vi.fn(async () => undefined),
+  clearResults: vi.fn(async () => undefined),
   saveSettings: vi.fn(async (_settings: UiSettings): Promise<void> => undefined),
   setUpdateSwitch: vi.fn(async (_name: string, _value: boolean): Promise<void> => undefined),
   startJobs: vi.fn(async () => undefined),
@@ -2611,7 +2612,7 @@ describe('LocalSR desktop interface', () => {
   });
 
   describe('after Cancel queue, while the engine still stops', () => {
-    const lane = (id: string, media: string, status: string, created = 10) => ({
+    const lane = (id: string, media: string, status: JobRecord['status'], created = 10) => ({
       id,
       media_id: media,
       media_name: `${media}.png`,
@@ -4649,6 +4650,60 @@ describe('Comparing saved results', () => {
     });
   });
 
+  describe('Clear in the Outputs tab', () => {
+    const open = async (rows: ResultSummary[]) => {
+      const snapshot = pairHost(readySnapshot([image('photo', true)]));
+      snapshot.jobs = rows.map((entry) => completedJob(entry.job_id));
+      let history = historyOf('photo', rows);
+      api.listAllMediaResults.mockImplementation(async () => [history]);
+      api.clearResults.mockImplementation(async () => {
+        history = historyOf('photo', []);
+      });
+      const user = await mountWith(snapshot);
+      await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+      await screen.findByRole('checkbox', { name: 'Original, photo.png' });
+      return user;
+    };
+
+    it('asks with the count, keeps the list on Cancel and empties it on Clear', async () => {
+      const user = await open([row('new'), row('old')]);
+      await user.click(screen.getByRole('button', { name: 'Clear' }));
+      const dialog = screen.getByRole('dialog');
+      expect(dialog.textContent).toContain('Clear all 2 outputs from the list?');
+      expect(dialog.textContent).toContain(
+        'The files stay in their folders; only the list is emptied.',
+      );
+      expect(document.activeElement?.textContent).toBe('Cancel');
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      expect(api.clearResults).not.toHaveBeenCalled();
+      await user.click(screen.getByRole('button', { name: 'Clear' }));
+      await user.keyboard('{Escape}');
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(api.clearResults).not.toHaveBeenCalled();
+      await user.click(screen.getByRole('button', { name: 'Clear' }));
+      await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Clear' }));
+      await waitFor(() => expect(api.clearResults).toHaveBeenCalledTimes(1));
+      expect(api.clearMedia).not.toHaveBeenCalled();
+      await screen.findByText('Results appear here as they finish.');
+    });
+
+    it('Unpick all drops the picks only, and clearing the list drops them too', async () => {
+      const user = await open([row('new'), row('old')]);
+      await user.click(screen.getByRole('checkbox', { name: 'Original, photo.png' }));
+      await user.click(screen.getByRole('checkbox', { name: 'old, photo.png' }));
+      expect(screen.getByText(/^2 of 4 chosen/).textContent).toContain('Unpick all');
+      await user.click(screen.getByRole('button', { name: 'Unpick all' }));
+      expect(screen.queryByText(/of 4 chosen/)).toBeNull();
+      expect(api.clearResults).not.toHaveBeenCalled();
+      expect(screen.getByRole('checkbox', { name: 'old, photo.png' })).toBeTruthy();
+      await user.click(screen.getByRole('checkbox', { name: 'old, photo.png' }));
+      await user.click(screen.getByRole('button', { name: 'Clear' }));
+      await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Clear' }));
+      await screen.findByText('Results appear here as they finish.');
+      expect(screen.queryByText(/of 4 chosen/)).toBeNull();
+    });
+  });
+
   it('ticks grouped originals and outputs into Compare in order and keeps them across tabs', async () => {
     const snapshot = pairHost(readySnapshot([image('photo', true)]));
     snapshot.jobs = [completedJob('new'), completedJob('old')];
@@ -4657,11 +4712,11 @@ describe('Comparing saved results', () => {
     await user.click(screen.getByRole('tab', { name: /Outputs/ }));
     const original = await screen.findByRole('checkbox', { name: 'Original, photo.png' });
     const output = screen.getByRole('checkbox', { name: 'old, photo.png' });
-    // No picks, no Compare bar; one pick offers only Clear.
-    expect(document.querySelector('.compare-bar')).toBeNull();
+    // No picks: Clear alone, no count and no Compare button.
+    expect(document.querySelector('.compare-bar')?.textContent?.trim()).toBe('Clear');
     await user.click(original);
     expect(screen.queryByRole('button', { name: /^Compare these/ })).toBeNull();
-    expect(screen.getByText('1 of 4 chosen')).toBeTruthy();
+    expect(screen.getByText(/^1 of 4 chosen/)).toBeTruthy();
     await user.click(output);
     await waitFor(() =>
       expect(api.requestCompare).toHaveBeenLastCalledWith([
@@ -4680,7 +4735,7 @@ describe('Comparing saved results', () => {
     expect(screen.queryByRole('slider', { name: /Divider between slot 1 and slot 2/ })).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
     expect(screen.queryByRole('button', { name: /^Compare these|^Comparing/ })).toBeNull();
-    expect(screen.getByText('2 of 4 chosen')).toBeTruthy();
+    expect(screen.getByText(/^2 of 4 chosen/)).toBeTruthy();
     expect(screen.getByRole('slider', { name: /Divider between slot 1 and slot 2/ })).toBeTruthy();
     expect(
       within(screen.getByRole('tablist', { name: 'Main pane' }))
@@ -4690,7 +4745,7 @@ describe('Comparing saved results', () => {
     await user.click(screen.getByRole('tab', { name: 'Preview' }));
     // Back in the preview the tabs are gone, the picks stay and the button is offered again.
     expect(screen.queryByRole('tablist', { name: 'Main pane' })).toBeNull();
-    expect(screen.getByText('2 of 4 chosen')).toBeTruthy();
+    expect(screen.getByText(/^2 of 4 chosen/)).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
     expect(screen.getByRole('button', { name: 'Swap slots 1 and 2' })).toBeTruthy();
     await fireEvent.keyDown(screen.getByRole('tablist', { name: 'Main pane' }), {

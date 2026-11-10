@@ -325,13 +325,26 @@ test.describe('Clear', () => {
     await expect(page.getByText('Add media to begin')).toBeVisible();
   });
 
-  test('the Compare bar Clear only drops the picks and does not ask', async ({ page }) => {
+  test('Unpick all drops the picks without asking, Clear empties the Outputs list after asking', async ({
+    page,
+  }) => {
     await openApp(page, withOutputs);
     await showPane(page, 'media');
     await page.getByRole('tab', { name: 'Outputs' }).click();
     await page.getByRole('checkbox', { name: 'Original, Alpine lake 1.jpg' }).check();
-    await page.getByRole('button', { name: 'Clear', exact: true }).click();
+    await expect(page.getByText(/^1 of 4 chosen · Unpick all/)).toBeVisible();
+    await page.getByRole('button', { name: 'Unpick all' }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(page.getByText(/of 4 chosen/)).toHaveCount(0);
+    expect(await hostCalls(page, 'clear_results')).toHaveLength(0);
+    await page.getByRole('button', { name: 'Clear', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText('Clear all 4 outputs from the list?');
+    await expect(dialog).toContainText('The files stay in their folders');
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    expect(await hostCalls(page, 'clear_results')).toHaveLength(0);
+    await page.getByRole('button', { name: 'Clear', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Clear', exact: true }).click();
+    await expect.poll(async () => (await hostCalls(page, 'clear_results')).length).toBe(1);
   });
 });

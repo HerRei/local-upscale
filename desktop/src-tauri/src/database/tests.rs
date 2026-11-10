@@ -966,3 +966,61 @@ fn a_finished_edit_is_listed_with_the_results_of_its_image() {
     assert_eq!(group.completed_count, 1);
     assert_eq!(group.available_count, 1);
 }
+
+#[test]
+fn clearing_the_results_hides_them_for_good_and_keeps_files_and_speed_history() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("queue.db");
+    let output = directory.path().join("kept.png");
+    std::fs::write(&output, "pixels").unwrap();
+    {
+        let db = Database::open(&path).unwrap();
+        db.insert_media("m", "/tmp/m.png", "m", "image").unwrap();
+        db.insert_job("done", "m", r#"{"type":"job_request"}"#)
+            .unwrap();
+        db.finish_job("done", "completed", output.to_str().unwrap(), "")
+            .unwrap();
+        db.record_job_duration("done", 12.0).unwrap();
+        db.hide_all_results(&[]).unwrap();
+        let group = &db.list_all_media_results().unwrap()[0];
+        assert!(group.results.is_empty() && group.default_result_id.is_none());
+        let page = db.list_media_results("m", 50, None).unwrap();
+        assert!(page.results.is_empty());
+        assert_eq!((page.completed_count, page.total_count), (0, 0));
+        assert!(db.media_result_output("m", "done").is_err());
+        // The speed history reads the same job and is untouched.
+        let jobs = db.list_jobs().unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].elapsed_seconds, 12.0);
+    }
+    assert!(output.is_file());
+    // Still hidden after the list is read again from the file.
+    let db = Database::open(&path).unwrap();
+    assert!(db.list_all_media_results().unwrap()[0].results.is_empty());
+    // A later result shows up as usual.
+    db.insert_job("next", "m", "{}").unwrap();
+    db.finish_job("next", "completed", output.to_str().unwrap(), "")
+        .unwrap();
+    assert_eq!(db.list_all_media_results().unwrap()[0].results.len(), 1);
+}
+
+#[test]
+fn results_are_not_cleared_while_a_picture_is_being_worked_on() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Database::open(&directory.path().join("queue.db")).unwrap();
+    db.insert_media("m", "/tmp/m.png", "m", "image").unwrap();
+    db.insert_job("old", "m", "{}").unwrap();
+    db.finish_job("old", "completed", "/x.png", "").unwrap();
+    db.insert_job("now", "m", "{}").unwrap();
+    db.set_job_status("now", "running").unwrap();
+    let error = db.hide_all_results(&[]).unwrap_err().to_string();
+    assert!(
+        error.contains("Cannot remove while it is running"),
+        "{error}"
+    );
+    assert_eq!(db.list_all_media_results().unwrap()[0].results.len(), 1);
+    // A photo the engine still holds counts, whatever its row says.
+    db.finish_job("now", "completed", "/y.png", "").unwrap();
+    assert!(db.hide_all_results(&["now".to_owned()]).is_err());
+    db.hide_all_results(&[]).unwrap();
+}

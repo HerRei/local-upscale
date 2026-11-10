@@ -10,6 +10,7 @@
   export let picks: ComparePick[];
   export let togglePick: (pick: ComparePick) => void;
   export let clearPicks: () => void;
+  export let clearOutputs: () => void;
   export let openCompare: () => void;
   export let compareActive: boolean;
   export let error = '';
@@ -144,13 +145,15 @@
       {/if}
     {/each}
   </div>
-  {#if picks.length}<div class="media-actions compare-bar">
-      {#if picks.length >= 2 && !compareActive}<button class="button" on:click={openCompare}
-          >Compare these {picks.length}</button
-        >{/if}<button class="button" on:click={clearPicks}>Clear</button><span
-        >{picks.length} of 4 chosen</span
-      >
-    </div>{/if}
+  <div class="media-actions compare-bar">
+    {#if picks.length >= 2 && !compareActive}<button class="button" on:click={openCompare}
+        >Compare these {picks.length}</button
+      >{/if}<button class="button" on:click={clearOutputs}>Clear</button>
+    {#if picks.length}<span
+        >{picks.length} of 4 chosen ·
+        <button class="link-button" on:click={clearPicks}>Unpick all</button></span
+      >{/if}
+  </div>
 {/if}
 
 <style>

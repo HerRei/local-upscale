@@ -208,6 +208,27 @@
     setComparePicks(
       comparePicks.filter((pick) => snapshot.media.some((media) => media.id === pick.media_id)),
     );
+  // A pick whose result has left the list has nothing to show either.
+  $: if (
+    bulkHistories.length &&
+    comparePicks.some(
+      (pick) =>
+        pick.kind === 'output' &&
+        bulkHistories.some((history) => history.media_id === pick.media_id) &&
+        !compareGroups.some((group) =>
+          group.outputs.some((output) => pickKey(output.pick) === pickKey(pick)),
+        ),
+    )
+  )
+    setComparePicks(
+      comparePicks.filter(
+        (pick) =>
+          pick.kind === 'original' ||
+          compareGroups.some((group) =>
+            group.outputs.some((output) => pickKey(output.pick) === pickKey(pick)),
+          ),
+      ),
+    );
   // Compare is open only while there is something to compare.
   $: if (mainTab === 'compare' && comparePicks.length < 2) mainTab = 'preview';
   function setComparePicks(picks: ComparePick[]): void {
@@ -259,10 +280,13 @@
     run: () => Promise<void>;
     /** Words the question for the list as it is now. */
     titleFor?: (count: number) => string;
+    /** What the question counts; the Inputs by default. */
+    countOf?: () => number;
   } | null = null;
   // The Clear question counts the list as it is when answered, not as it was when asked.
   $: if (modalConfirm?.titleFor) {
-    if (snapshot.media.length) modalTitle = modalConfirm.titleFor(snapshot.media.length);
+    const left = modalConfirm.countOf ? modalConfirm.countOf() : snapshot.media.length;
+    if (left) modalTitle = modalConfirm.titleFor(left);
     else closeModal();
   }
   // The FFmpeg notice: once per batch of videos LocalSR cannot decode, and
@@ -2690,6 +2714,30 @@
     };
   }
 
+  const outputTotal = () => compareGroups.reduce((n, group) => n + group.outputs.length, 0);
+
+  /** Clear in Outputs empties the list of results only; the files stay where they are. */
+  function askClearOutputs(): void {
+    const count = outputTotal();
+    if (count === 0 || snapshot.runtime.active_job_id) return;
+    const titleFor = (n: number) =>
+      `Clear all ${n} ${n === 1 ? 'output' : 'outputs'} from the list?`;
+    showModal(titleFor(count), 'The files stay in their folders; only the list is emptied.');
+    modalConfirm = {
+      label: 'Clear',
+      titleFor,
+      countOf: outputTotal,
+      run: () =>
+        attempt('Could not clear the outputs', async () => {
+          await api.clearResults();
+          setComparePicks([]);
+          unpinResults(snapshot.media.map((media) => media.id));
+          await refresh();
+          await loadBulkHistories(bulkKey);
+        }),
+    };
+  }
+
   async function confirmModal(): Promise<void> {
     const confirm = modalConfirm;
     closeModal();
@@ -2755,6 +2803,7 @@
       picks={comparePicks}
       togglePick={(pick) => setComparePicks(toggleSlot(comparePicks, pick))}
       clearPicks={() => setComparePicks([])}
+      clearOutputs={askClearOutputs}
       openCompare={() => {
         if (comparePicks.length < 2) return;
         mainTab = 'compare';

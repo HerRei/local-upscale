@@ -364,6 +364,8 @@ function hostScript(scenario: Scenario): void {
       case 'select_media':
         for (const media of snapshot.media) media.selected = media.id === args.id;
         return null;
+      case 'clear_results':
+        return null;
       case 'clear_media':
         snapshot.media = [];
         return null;

@@ -267,6 +267,16 @@ pub fn remove_media(state: State<'_, Arc<AppState>>, app: AppHandle, id: String)
     Ok(())
 }
 
+/// Clear in the Outputs list: every result leaves the list, no file is touched.
+#[tauri::command]
+pub fn clear_results(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    let engine_jobs = lock(&state.runtime)?.active_batch_job_ids.clone();
+    lock(&state.database)?.hide_all_results(&engine_jobs)?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn clear_media(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
     crate::updates::ensure_not_installing(&state)?;

@@ -56,6 +56,7 @@ function mount(results: ResultSummary[]) {
     picks: [],
     togglePick: vi.fn(),
     clearPicks: vi.fn(),
+    clearOutputs: vi.fn(),
     openCompare: vi.fn(),
     compareActive: false,
   });
@@ -92,6 +93,7 @@ const props = (ids: string[]) => ({
   picks: [],
   togglePick: vi.fn(),
   clearPicks: vi.fn(),
+  clearOutputs: vi.fn(),
   openCompare: vi.fn(),
   compareActive: false,
 });

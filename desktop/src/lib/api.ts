@@ -144,6 +144,7 @@ export const addMedia = (paths: string[], replace: boolean): Promise<void> =>
 export const selectMedia = (id: string): Promise<void> => invoke('select_media', { id });
 export const removeMedia = (id: string): Promise<void> => invoke('remove_media', { id });
 export const clearMedia = (): Promise<void> => invoke('clear_media');
+export const clearResults = (): Promise<void> => invoke('clear_results');
 export const saveSettings = (settings: UiSettings): Promise<void> =>
   invoke('save_settings', { settings });
 
