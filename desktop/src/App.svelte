@@ -3093,7 +3093,7 @@
                     <div class="field-heading">
                       <span class="field-label" id="fix-label">Fix first</span><HelpTip
                         label="Fix first"
-                        text="Each problem you pick gets its own fix, run before the upscaler in the order listed under Model. Move earlier and Move later change that order; each fix's Change… picks its model, which LocalSR remembers for that problem."
+                        text="Each problem you pick gets its own fix, run before the upscaler in the order listed under Model. The ↑ and ↓ buttons change that order; each fix's Change… picks its model, which LocalSR remembers for that problem."
                       />
                     </div>
                   {/if}
@@ -3192,7 +3192,12 @@
                 {/if}
               {/if}
 
-              <div class="plan" role="list" aria-label="Stages">
+              <div
+                class="plan"
+                class:movable={imageFixes.length > 1}
+                role="list"
+                aria-label="Stages"
+              >
                 {#each plan as stage (`${stage.role}:${stage.fix ?? stage.kind}`)}
                   {@const target =
                     stage.model ?? stage.videoModel ?? stage.editModel ?? stage.interpolationModel}
@@ -3217,150 +3222,65 @@
                         )
                       : 0}
                   {@const tryOthers = stage.role === 'primary' && canTryOthers}
+                  {@const name = stage.model
+                    ? displayName(stage.model)
+                    : stage.videoModel
+                      ? stage.videoModel.name
+                      : stage.interpolationModel
+                        ? stage.interpolationModel.name.split(' — ')[0]
+                        : stage.editModel
+                          ? editFamilyLabel(stage.editModel.family)
+                          : stage.missing
+                            ? 'No model for this fix'
+                            : 'Your checkpoint'}
+                  <!-- Licenses live in the model library; only exceptions show here. -->
+                  {@const meta = stage.editModel
+                    ? `${editVariantName(stage.editModel)}${
+                        editFit !== 'unknown' && editFit !== 'runs'
+                          ? ` · ${EDIT_FIT_LABELS[editFit]}`
+                          : ''
+                      }`
+                    : stage.model
+                      ? [
+                          stage.remembered ? 'Your pick' : '',
+                          stage.model.support_tier === 'labs' ? 'Labs' : '',
+                          stage.model.commercial_use_allowed === false ? 'Non-commercial' : '',
+                          ['heavy', 'too_heavy'].includes(fitFor(stage.model, activeDevice))
+                            ? FIT_LABELS[fitFor(stage.model, activeDevice)]
+                            : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')
+                      : stage.videoModel
+                        ? 'Labs'
+                        : stage.interpolationModel
+                          ? [
+                              settings.video_interpolation && settings.video_interpolation !== 'off'
+                                ? frameRateChange(
+                                    settings.video_interpolation,
+                                    selectedMedia?.fps ?? 0,
+                                  )
+                                : '',
+                              'Labs',
+                            ]
+                              .filter(Boolean)
+                              .join(' · ')
+                          : ''}
+                  {@const warning =
+                    stage.model && UNSTABLE_FIX_MODELS.has(stage.model.model_id)
+                      ? stage.role === 'fix'
+                        ? 'Can add artifacts to sharp pictures and line art. Skipped if the result is unstable.'
+                        : 'Can add artifacts to sharp pictures and line art.'
+                      : ''}
+                  {@const movable = stage.fix && imageFixes.length > 1}
+                  {@const fixIndex = stage.fix
+                    ? imageFixes.findIndex((selection) => selection.fix === stage.fix)
+                    : -1}
+                  <!-- Line 1: role, name, Change… and the arrows; line 2 only when there is
+                       something to say. -->
                   <div class="plan-row" role="listitem">
                     <span class="stage">{stage.label}</span>
-                    <div class="plan-copy">
-                      <div class="name">
-                        {stage.model
-                          ? displayName(stage.model)
-                          : stage.videoModel
-                            ? stage.videoModel.name
-                            : stage.interpolationModel
-                              ? stage.interpolationModel.name.split(' — ')[0]
-                              : stage.editModel
-                                ? editFamilyLabel(stage.editModel.family)
-                                : stage.missing
-                                  ? 'No model for this fix'
-                                  : 'Your checkpoint'}
-                      </div>
-                      <div class="meta">
-                        <!-- Licenses live in the model library; only exceptions show here. -->
-                        {#if stage.editModel}
-                          {editVariantName(stage.editModel)}{editFit !== 'unknown' &&
-                          editFit !== 'runs'
-                            ? ` · ${EDIT_FIT_LABELS[editFit]}`
-                            : ''}
-                        {:else if stage.model}
-                          {[
-                            stage.remembered ? 'Your pick' : '',
-                            stage.model.support_tier === 'labs' ? 'Labs' : '',
-                            stage.model.commercial_use_allowed === false ? 'Non-commercial' : '',
-                            ['heavy', 'too_heavy'].includes(fitFor(stage.model, activeDevice))
-                              ? FIT_LABELS[fitFor(stage.model, activeDevice)]
-                              : '',
-                          ]
-                            .filter(Boolean)
-                            .join(' · ')}
-                        {:else if stage.videoModel}
-                          Labs
-                        {:else if stage.interpolationModel}
-                          {[
-                            settings.video_interpolation && settings.video_interpolation !== 'off'
-                              ? frameRateChange(
-                                  settings.video_interpolation,
-                                  selectedMedia?.fps ?? 0,
-                                )
-                              : '',
-                            'Labs',
-                          ]
-                            .filter(Boolean)
-                            .join(' · ')}
-                        {:else if stage.custom !== undefined}
-                          <span class="path-text"
-                            >{settings.custom_model_path ||
-                              'Safetensors is strongly recommended.'}</span
-                          >
-                        {/if}
-                      </div>
-                      {#if stage.model && UNSTABLE_FIX_MODELS.has(stage.model.model_id)}
-                        <div class="meta">
-                          {stage.role === 'fix'
-                            ? 'Can add artifacts to sharp pictures and line art. Skipped if the result is unstable.'
-                            : 'Can add artifacts to sharp pictures and line art.'}
-                        </div>
-                      {/if}
-                      {#if stage.custom !== undefined}
-                        <button class="button full" on:click={chooseCustomModel}
-                          >{settings.custom_model_path
-                            ? 'Choose another checkpoint…'
-                            : 'Choose checkpoint…'}</button
-                        >
-                        {#if customModelNeedsOptIn}
-                          <label class="terms"
-                            ><input
-                              type="checkbox"
-                              checked={settings.allow_unsafe_pickle_model}
-                              on:change={(event) =>
-                                updateSettings({
-                                  allow_unsafe_pickle_model: event.currentTarget.checked,
-                                })}
-                            /> Allow this pickle-based checkpoint. It may execute code inside the inference
-                            worker.</label
-                          >
-                        {/if}
-                      {:else if stage.model && licenseReviewModel?.model_id === stage.model.model_id && !stage.installed}
-                        <ModelCredit
-                          model={stage.model}
-                          openLicense={() => openAnyLicense(stage.model!.model_id)}
-                          openSource={() => openAnySource(stage.model!.model_id)}
-                        />
-                      {:else if stage.kind === 'face_restore' && stage.model && !stage.installed}
-                        <p class="model-description">
-                          Optional companion pass for faces. The exact checkpoint's redistribution
-                          and training-data rights are not verified, so LocalSR only accepts a
-                          matching user-supplied copy.
-                        </p>
-                        {#if stage.model.terms_acceptance_required}
-                          <label class="terms"
-                            ><input type="checkbox" bind:checked={faceTermsAccepted} /> I understand that
-                            the checkpoint rights are unresolved and will provide a copy I am permitted
-                            to use.</label
-                          >
-                        {/if}
-                        <button
-                          class="button full"
-                          class:primary={stage.model.automated_download_allowed}
-                          disabled={Boolean(activeDownload) &&
-                            activeDownload !== stage.model.model_id}
-                          on:click={() => runDownload(stage.model, faceTermsAccepted)}
-                        >
-                          {activeDownload === stage.model.model_id
-                            ? `Downloading ${Math.round(snapshot.runtime.download_progress)}% · Cancel`
-                            : stage.model.automated_download_allowed
-                              ? `Download companion · ${formatBytes(stage.model.size_bytes)}`
-                              : 'Choose externally downloaded face checkpoint…'}
-                        </button>
-                      {:else if target && !stage.installed}
-                        <!-- A downloadable model is fetched by the Start button; this row only
-                             asks for what Start cannot do on its own. -->
-                        {#if (stage.model ?? stage.editModel)?.terms_acceptance_required}
-                          <label class="terms"
-                            ><input
-                              type="checkbox"
-                              bind:checked={termsAccepted[target!.model_id]}
-                            /> I reviewed the model license and restrictions.</label
-                          >
-                        {/if}
-                        {#if !stage.canDownload || target.terms_acceptance_required || activeDownload === target.model_id}
-                          <button
-                            class="button full"
-                            disabled={(stage.videoModel && Boolean(temporalUnavailableReason)) ||
-                              preparing ||
-                              (Boolean(activeDownload) && activeDownload !== target.model_id)}
-                            on:click={() => runDownload(target)}
-                          >
-                            {activeDownload === target.model_id
-                              ? `Downloading ${Math.round(snapshot.runtime.download_progress)}% · Cancel`
-                              : stage.canDownload
-                                ? `Download model · ${formatBytes(stage.sizeBytes)}`
-                                : 'Choose externally downloaded checkpoint…'}
-                          </button>
-                        {/if}
-                        {#if activeDownload === target.model_id}<div class="download-track">
-                            <i style={`width:${snapshot.runtime.download_progress}%`}></i>
-                          </div>{/if}
-                      {/if}
-                    </div>
+                    <div class="name" title={name}>{name}</div>
                     <div class="plan-end">
                       <span class="state" class:warn={stage.needsFile}
                         >{activeDownload === target?.model_id
@@ -3382,26 +3302,42 @@
                           on:click={() => openLibrary(changeSlot, stage.fix)}>Change…</button
                         >
                       {/if}
-                      {#if stage.fix && imageFixes.length > 1}
-                        {@const index = imageFixes.findIndex(
-                          (selection) => selection.fix === stage.fix,
-                        )}
-                        <!-- Only the moves this fix can make; a disabled link reads as a link. -->
-                        {#if index > 0}<button
-                            class="link-button"
-                            type="button"
-                            aria-label={`Move the ${FIX_NAMES[stage.fix]} fix earlier`}
-                            on:click={() => void moveFix(stage.fix!, -1)}>Move earlier</button
-                          >{/if}
-                        {#if index >= 0 && index < imageFixes.length - 1}<button
-                            class="link-button"
-                            type="button"
-                            aria-label={`Move the ${FIX_NAMES[stage.fix]} fix later`}
-                            on:click={() => void moveFix(stage.fix!, 1)}>Move later</button
-                          >{/if}
+                      {#if movable}
+                        <!-- Only the moves this fix can make; the other leaves its place
+                             empty so the arrows line up from fix to fix. -->
+                        <span class="plan-moves">
+                          {#if fixIndex > 0}<button
+                              class="move-button"
+                              type="button"
+                              title="Move earlier"
+                              aria-label={`Move the ${FIX_NAMES[stage.fix!]} fix earlier`}
+                              on:click={() => void moveFix(stage.fix!, -1)}>↑</button
+                            >{:else}<span class="move-gap"></span>{/if}
+                          {#if fixIndex >= 0 && fixIndex < imageFixes.length - 1}<button
+                              class="move-button"
+                              type="button"
+                              title="Move later"
+                              aria-label={`Move the ${FIX_NAMES[stage.fix!]} fix later`}
+                              on:click={() => void moveFix(stage.fix!, 1)}>↓</button
+                            >{:else}<span class="move-gap"></span>{/if}
+                        </span>
                       {/if}
                     </div>
-                    {#if moreModelCount || tryOthers}<div class="plan-links">
+                    {#if meta || warning || stage.custom !== undefined || moreModelCount || tryOthers}<div
+                        class="plan-notes"
+                      >
+                        <span
+                          class="plan-note"
+                          title={(stage.custom !== undefined
+                            ? settings.custom_model_path
+                            : [meta, warning].filter(Boolean).join(' · ')) || undefined}
+                          >{#if stage.custom !== undefined}<span class="path-text"
+                              >{settings.custom_model_path ||
+                                'Safetensors is strongly recommended.'}</span
+                            >{:else}{meta}{#if meta && warning}{' · '}{/if}{#if warning}<span
+                                >{warning}</span
+                              >{/if}{/if}</span
+                        >
                         {#if moreModelCount}<button
                             class="link-button"
                             type="button"
@@ -3425,6 +3361,91 @@
                               text="Runs this image once per model you pick, with the same settings. Each result is kept as its own file, and Showing in the preview lets you flip between them."
                             /></span
                           >{/if}
+                      </div>{/if}
+                    {#if stage.custom !== undefined || (target && !stage.installed)}<div
+                        class="plan-extra"
+                      >
+                        {#if stage.custom !== undefined}
+                          <button class="button full" on:click={chooseCustomModel}
+                            >{settings.custom_model_path
+                              ? 'Choose another checkpoint…'
+                              : 'Choose checkpoint…'}</button
+                          >
+                          {#if customModelNeedsOptIn}
+                            <label class="terms"
+                              ><input
+                                type="checkbox"
+                                checked={settings.allow_unsafe_pickle_model}
+                                on:change={(event) =>
+                                  updateSettings({
+                                    allow_unsafe_pickle_model: event.currentTarget.checked,
+                                  })}
+                              /> Allow this pickle-based checkpoint. It may execute code inside the inference
+                              worker.</label
+                            >
+                          {/if}
+                        {:else if stage.model && licenseReviewModel?.model_id === stage.model.model_id && !stage.installed}
+                          <ModelCredit
+                            model={stage.model}
+                            openLicense={() => openAnyLicense(stage.model!.model_id)}
+                            openSource={() => openAnySource(stage.model!.model_id)}
+                          />
+                        {:else if stage.kind === 'face_restore' && stage.model && !stage.installed}
+                          <p class="model-description">
+                            Optional companion pass for faces. The exact checkpoint's redistribution
+                            and training-data rights are not verified, so LocalSR only accepts a
+                            matching user-supplied copy.
+                          </p>
+                          {#if stage.model.terms_acceptance_required}
+                            <label class="terms"
+                              ><input type="checkbox" bind:checked={faceTermsAccepted} /> I understand
+                              that the checkpoint rights are unresolved and will provide a copy I am permitted
+                              to use.</label
+                            >
+                          {/if}
+                          <button
+                            class="button full"
+                            class:primary={stage.model.automated_download_allowed}
+                            disabled={Boolean(activeDownload) &&
+                              activeDownload !== stage.model.model_id}
+                            on:click={() => runDownload(stage.model, faceTermsAccepted)}
+                          >
+                            {activeDownload === stage.model.model_id
+                              ? `Downloading ${Math.round(snapshot.runtime.download_progress)}% · Cancel`
+                              : stage.model.automated_download_allowed
+                                ? `Download companion · ${formatBytes(stage.model.size_bytes)}`
+                                : 'Choose externally downloaded face checkpoint…'}
+                          </button>
+                        {:else if target && !stage.installed}
+                          <!-- A downloadable model is fetched by the Start button; this row only
+                             asks for what Start cannot do on its own. -->
+                          {#if (stage.model ?? stage.editModel)?.terms_acceptance_required}
+                            <label class="terms"
+                              ><input
+                                type="checkbox"
+                                bind:checked={termsAccepted[target!.model_id]}
+                              /> I reviewed the model license and restrictions.</label
+                            >
+                          {/if}
+                          {#if !stage.canDownload || target.terms_acceptance_required || activeDownload === target.model_id}
+                            <button
+                              class="button full"
+                              disabled={(stage.videoModel && Boolean(temporalUnavailableReason)) ||
+                                preparing ||
+                                (Boolean(activeDownload) && activeDownload !== target.model_id)}
+                              on:click={() => runDownload(target)}
+                            >
+                              {activeDownload === target.model_id
+                                ? `Downloading ${Math.round(snapshot.runtime.download_progress)}% · Cancel`
+                                : stage.canDownload
+                                  ? `Download model · ${formatBytes(stage.sizeBytes)}`
+                                  : 'Choose externally downloaded checkpoint…'}
+                            </button>
+                          {/if}
+                          {#if activeDownload === target.model_id}<div class="download-track">
+                              <i style={`width:${snapshot.runtime.download_progress}%`}></i>
+                            </div>{/if}
+                        {/if}
                       </div>{/if}
                   </div>
                 {/each}

@@ -3261,6 +3261,19 @@ describe('Several fixes in one pass', () => {
     expect(screen.queryByRole('button', { name: 'Move the noise fix later' })).toBeNull();
     expect(move('Move the JPEG fix earlier')).toBeTruthy();
     expect(move('Move the JPEG fix later')).toBeTruthy();
+    // One line per model: role, name, Change… and the arrows; notes and links below it.
+    const jpegRow = rows()[1];
+    const end = jpegRow.querySelector('.plan-end')!;
+    expect([...end.querySelectorAll('button')].map((button) => button.textContent)).toEqual([
+      'Change…',
+      '↑',
+      '↓',
+    ]);
+    expect(move('Move the JPEG fix earlier').getAttribute('title')).toBe('Move earlier');
+    expect(move('Move the JPEG fix later').getAttribute('title')).toBe('Move later');
+    expect(jpegRow.querySelector('.name')?.getAttribute('title')).toBe('FBCNN Color');
+    expect(rows()[0].querySelector('.plan-notes')?.textContent).toMatch(/^Can add artifacts/);
+    expect(screen.queryByText('Move earlier')).toBeNull();
 
     await user.click(move('Move the noise fix earlier'));
     expect(labels()).toEqual(['Fix blur', 'Fix noise', 'Fix JPEG', 'Upscale ×4']);

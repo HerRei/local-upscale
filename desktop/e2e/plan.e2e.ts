@@ -61,6 +61,27 @@ test.describe('plan card', () => {
     expect(await savedFixes(page)).toEqual(['jpeg', 'blur', 'noise']);
   });
 
+  test('each model row keeps its name, Change… and arrows on one line', async ({ page }) => {
+    for (const name of ['Noise', 'JPEG artifacts', 'Blur']) await chip(page, name).click();
+    await expect(rows(page)).toHaveCount(4);
+    const row = rows(page).nth(1);
+    const centre = async (selector: string) => {
+      const box = (await row.locator(selector).first().boundingBox())!;
+      return box.y + box.height / 2;
+    };
+    const line = await centre('.stage');
+    for (const part of ['.name', '.plan-end'])
+      expect(Math.abs((await centre(part)) - line)).toBeLessThan(4);
+    for (const label of ['Move the JPEG fix earlier', 'Move the JPEG fix later']) {
+      const arrow = (await page.getByRole('button', { name: label }).boundingBox())!;
+      expect(arrow.width).toBeGreaterThanOrEqual(24);
+      expect(arrow.height).toBeGreaterThanOrEqual(24);
+    }
+    // The blur fix's warning stays within two lines under its name.
+    const notes = (await rows(page).first().locator('.plan-notes').boundingBox())!;
+    expect(notes.height).toBeLessThanOrEqual(2 * 18);
+  });
+
   test('Faces is unavailable without a face model', async ({ page }) => {
     await expect(chip(page, 'Faces')).toBeDisabled();
   });
