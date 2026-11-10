@@ -135,11 +135,13 @@ pub fn smoke(executable: &Path, timeout: Duration) -> AppResult<()> {
 /// Copy `source` into a new file that only this call created: an existing file or link at
 /// `destination` is refused, never followed or truncated.
 pub fn copy_new(source: &Path, destination: &Path) -> AppResult<()> {
+    // The source is opened first: a missing one must not leave an empty new file behind.
+    let mut input = fs::File::open(source)?;
     let mut output = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(destination)?;
-    let result = std::io::copy(&mut fs::File::open(source)?, &mut output)
+    let result = std::io::copy(&mut input, &mut output)
         .and_then(|_| output.set_permissions(fs::metadata(source)?.permissions()))
         .and_then(|_| output.sync_all());
     if let Err(error) = result {
@@ -1509,6 +1511,14 @@ mod tests {
             thread::sleep(Duration::from_millis(20));
         }
         assert!(!alive(), "the helper of the hung check is still running");
+    }
+
+    #[test]
+    fn a_missing_source_leaves_no_new_file_behind() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("copy");
+        assert!(copy_new(&root.path().join("missing"), &destination).is_err());
+        assert!(!destination.exists());
     }
 
     /// A journal as an unfinished swap writes it, with the names given.
