@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { openApp, showPane } from './app';
-import { emit, type Scenario } from './fake-host';
+import { emit, hostCalls, type Scenario } from './fake-host';
 import { ready, upscale, video, windows, withOutputs } from './fixtures';
 
 // Geometry the pixel baselines only show indirectly: the pane headers form one line, and the
@@ -431,7 +431,7 @@ test.describe('overflow and alignment', () => {
           ];
           const full = [
             ...document.querySelectorAll(
-              '.processing-settings :is(.eyebrow, .disclosure, .help-tip), .pane-heading',
+              '.processing-settings :is(.eyebrow, .disclosure, .help-tip, .memory-refresh), .pane-heading',
             ),
           ];
           return {
@@ -446,6 +446,25 @@ test.describe('overflow and alignment', () => {
         for (const [what, opacity] of found.full) expect(opacity, what).toBe(1);
       });
     }
+
+    test('Refresh stays active, asks the host, says Refreshed and keeps its width', async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 1380, height: 900 });
+      await lockedPane(page, scenarios.image);
+      const refresh = page.locator('.memory-refresh');
+      await refresh.scrollIntoViewIfNeeded();
+      const before = await box(refresh);
+      await refresh.click();
+      await expect(refresh).toHaveText(/Refreshed/);
+      expect((await hostCalls(page, 'refresh_capabilities')).length).toBe(1);
+      expect((await box(refresh)).width).toBe(before.width);
+      await expect(
+        page.getByRole('status').filter({ hasText: 'Memory status refreshed' }),
+      ).toHaveCount(1);
+      await expect(page.locator('.refresh-now')).toHaveText('Refresh', { timeout: 3000 });
+      expect((await box(refresh)).width).toBe(before.width);
+    });
 
     test('help tips still open while locked', async ({ page }) => {
       await page.setViewportSize({ width: 1380, height: 900 });

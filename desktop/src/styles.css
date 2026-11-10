@@ -1171,11 +1171,29 @@ input[type='number'],
   color: var(--secondary);
   font-size: calc(11px * var(--ui-scale));
 }
-.hardware-card button {
-  border: 0;
-  background: transparent;
+.memory-refresh {
+  display: inline-grid;
+  padding: 1px 6px;
   color: var(--text);
   font-size: calc(11px * var(--ui-scale));
+  cursor: pointer;
+  user-select: none;
+}
+.memory-refresh:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+.memory-refresh[aria-disabled='true'] {
+  cursor: default;
+}
+/* Both words share one cell, so the button is as wide as the longer one. */
+.refresh-ghost,
+.refresh-now {
+  grid-area: 1 / 1;
+  text-align: right;
+}
+.refresh-ghost {
+  visibility: hidden;
 }
 /* Clips the meter to the card's rounded corners; the card itself must not clip, or its help
    tip would be cut off. */

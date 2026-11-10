@@ -28,7 +28,7 @@ from localsr.core.benchmark import (
 )
 from localsr.core.disk_space import failure_fields, require_video_room
 from localsr.core.eta import RemainingTime
-from localsr.core.hardware import get_capability_report
+from localsr.core.hardware import get_capability_report, with_current_memory
 from localsr.core.image_formats import is_video_input
 from localsr.core.image_io import ImageManager
 from localsr.core.inference import InferenceEngine
@@ -241,6 +241,25 @@ class WorkerServer:
         self.compare_regions = RegionService(send_message)
         # Set when a job lost its GPU device: only a new process gets a working one.
         self.restart_after_job = False
+        # The last device report, so a refresh during a job needs no new look at the drivers.
+        self.last_capabilities: dict | None = None
+
+    def _answer_capabilities_during_job(self) -> bool:
+        """Answer a hardware refresh while a job runs; the main loop is busy until it ends.
+
+        The reply carries the earlier device list with fresh memory readings."""
+        with self.state_lock:
+            busy = self.active_job_id is not None
+        report = self.last_capabilities
+        if not busy or report is None:
+            return False
+        # The readings can take a moment on macOS; the reader must stay free for a cancel.
+        threading.Thread(
+            target=lambda: send_message(CapabilitiesInfo(**with_current_memory(report))),
+            name="capabilities-refresh",
+            daemon=True,
+        ).start()
+        return True
 
     def _request_cancel(self, requested_job_id: str) -> None:
         """Remember cancellation even if the matching job is still queued."""
@@ -343,6 +362,8 @@ class WorkerServer:
         if request_type == "preview_request":
             self.result_previews.submit(data)
             return
+        if request_type == "capabilities_request" and self._answer_capabilities_during_job():
+            return
         self.message_queue.put(msg)
         if request_type == "shutdown_request":
             self.shutdown_event.set()
@@ -420,6 +441,7 @@ class WorkerServer:
 
                 elif req_type == "capabilities_request":
                     report = get_capability_report()
+                    self.last_capabilities = report
                     send_message(CapabilitiesInfo(**report))
 
                 elif req_type == "preview_request":

@@ -58,7 +58,7 @@ describe('setting hints', () => {
       usingTemporalVideo: false,
       updateSettings: () => undefined,
       chooseOutput: async () => undefined,
-      refreshCapabilities: async () => undefined,
+      refreshCapabilities: async () => true,
     });
     await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
     expect(screen.getByRole('button', { name: 'About Hardware' })).toBeTruthy();

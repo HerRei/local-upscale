@@ -3503,8 +3503,15 @@
                 true}
               {updateSettings}
               {chooseOutput}
-              refreshCapabilities={() =>
-                attempt('Could not refresh the hardware', () => api.refreshCapabilities())}
+              refreshCapabilities={async () => {
+                try {
+                  await api.refreshCapabilities();
+                  return true;
+                } catch (error) {
+                  showModal('Could not refresh the hardware', String(error));
+                  return false;
+                }
+              }}
             />
           {/if}
         </fieldset>

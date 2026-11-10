@@ -10,6 +10,7 @@
     imageFormatChoices,
     imageQualityName,
   } from './lib/outputFormats';
+  import { onDestroy } from 'svelte';
   import HelpTip from './HelpTip.svelte';
   import { hardwareChoices, hardwarePatch, selectedHardware } from './lib/neuralEngine';
   import { groupedHardware, optionLabel } from './lib/hardwareRoutes';
@@ -32,7 +33,8 @@
   export let interpolationSupported = false;
   export let updateSettings: (patch: Partial<UiSettings>) => void;
   export let chooseOutput: () => Promise<void>;
-  export let refreshCapabilities: () => Promise<void>;
+  /** Resolves true when the host took the request, false when it refused (and said so). */
+  export let refreshCapabilities: () => Promise<boolean>;
 
   // ONNX Runtime GPU routes always run FP32, whatever the saved precision says.
   $: onnxGpu =
@@ -64,6 +66,25 @@
     group.options.some((option) => option.label.length > 22),
   );
   let advanced = false;
+  let refreshing = false;
+  let refreshed = false;
+  let refreshedTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // The line says so for a moment once the host has taken the request; a refusal shows the
+  // host's own message instead and no confirmation.
+  async function refresh(): Promise<void> {
+    if (refreshing) return;
+    refreshing = true;
+    try {
+      if (!(await refreshCapabilities())) return;
+      refreshed = true;
+      clearTimeout(refreshedTimer);
+      refreshedTimer = setTimeout(() => (refreshed = false), 1500);
+    } finally {
+      refreshing = false;
+    }
+  }
+  onDestroy(() => clearTimeout(refreshedTimer));
   let ffmpegNote = '';
 
   $: codec = settings.video_codec ?? 'auto';
@@ -611,7 +632,26 @@
             label="Memory pressure"
             text="How much of the computer's memory is in use: low below 75%, moderate from 75%, high from 90%. The bar shows that share. Refresh reads the hardware and the memory again."
           /></span
-        ><button on:click={refreshCapabilities}>Refresh</button>
+        ><!-- Not a <button>: this stays usable while the settings above are locked. The wider
+             word is laid out hidden, so the line does not move when the label changes. -->
+        <span
+          role="button"
+          tabindex="0"
+          class="memory-refresh"
+          aria-disabled={refreshing}
+          on:click={refresh}
+          on:keydown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              void refresh();
+            }
+          }}
+          ><span class="refresh-ghost" aria-hidden="true">Refreshed</span><span class="refresh-now"
+            >{refreshed ? 'Refreshed' : 'Refresh'}</span
+          ></span
+        ><span class="visually-hidden" role="status" aria-live="polite"
+          >{refreshed ? 'Memory status refreshed' : ''}</span
+        >
         <div class="meter-clip">
           <i style={`width:${Math.max(3, capabilities.system_memory_pressure_percent)}%`}></i>
         </div>

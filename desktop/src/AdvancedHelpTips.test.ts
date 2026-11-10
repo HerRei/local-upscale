@@ -128,7 +128,7 @@ async function open(variant: Variant): Promise<HTMLElement> {
     interpolationSupported: variant.interpolation ?? false,
     updateSettings: () => undefined,
     chooseOutput: async () => undefined,
-    refreshCapabilities: async () => undefined,
+    refreshCapabilities: async () => true,
   });
   await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
   return document.querySelector('.advanced-controls') as HTMLElement;
@@ -206,7 +206,7 @@ describe('while a job runs, the whole Advanced section is locked', () => {
   // Help tips and Refresh stay usable; every other interactive thing must be disabled, so a
   // control added later that sits outside the locked fieldset fails here.
   const usable = (element: Element) =>
-    element.classList.contains('help-tip') || element.textContent?.trim() === 'Refresh';
+    element.classList.contains('help-tip') || element.classList.contains('memory-refresh');
 
   for (const variant of variants) {
     it(variant.name, async () => {
@@ -221,7 +221,7 @@ describe('while a job runs, the whole Advanced section is locked', () => {
           interpolationSupported: variant.interpolation ?? false,
           updateSettings: () => undefined,
           chooseOutput: async () => undefined,
-          refreshCapabilities: async () => undefined,
+          refreshCapabilities: async () => true,
         },
       });
       await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
