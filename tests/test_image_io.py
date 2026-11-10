@@ -605,7 +605,9 @@ def test_every_damaged_file_gives_one_plain_sentence_and_keeps_the_library_text_
 def test_a_real_input_output_failure_keeps_its_own_message(tmp_path):
     with pytest.raises(FileNotFoundError, match="missing.png"):
         ImageManager().load(str(tmp_path / "missing.png"))
-    with pytest.raises(OSError, match="Is a directory"):
+    # Windows reports a folder given to open() as a permission error.
+    reported = "Permission denied" if sys.platform == "win32" else "Is a directory"
+    with pytest.raises(OSError, match=reported):
         ImageManager().load(str(tmp_path))
 
 

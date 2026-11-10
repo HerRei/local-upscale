@@ -18,6 +18,9 @@ build = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(build)
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"), reason="an AppImage is built on Linux only"
+)
 def test_engine_library_links_are_removed_when_the_linuxdeploy_wrapper_cannot_be_set_up(
     monkeypatch, tmp_path: Path
 ) -> None:
