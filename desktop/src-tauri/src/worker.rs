@@ -794,7 +794,7 @@ fn handle_worker_envelope(
     // Generate the final full-image preview inside the native control plane.
     // The previous frontend request raced the Rust completion update and could
     // leave a successful job without a center preview until another refresh.
-    if let Some(request) = completion_preview_request(&envelope).filter(|_| !background) {
+    if let Some(request) = completion_preview_request(state, &envelope).filter(|_| !background) {
         if let Err(error) = send(state, &request) {
             if cfg!(debug_assertions) {
                 eprintln!("Could not request completed preview: {error}");
@@ -2025,7 +2025,7 @@ pub const RESULT_PREVIEW_MAX_DIMENSION: u32 = 2048;
 /// A completed comparison must come from the full output file, never from the
 /// last progressive tile or video frame. Keep this request in the native host
 /// so it cannot race the completion state applied above.
-fn completion_preview_request(envelope: &WorkerEnvelope) -> Option<Value> {
+fn completion_preview_request(state: &AppState, envelope: &WorkerEnvelope) -> Option<Value> {
     let output_path = string(&envelope.data, "output_path");
     if output_path.is_empty() {
         return None;
@@ -2035,10 +2035,8 @@ fn completion_preview_request(envelope: &WorkerEnvelope) -> Option<Value> {
             "type": "preview_request",
             "data": {"image_path": output_path, "max_dimension": RESULT_PREVIEW_MAX_DIMENSION}
         })),
-        "video_job_completed" => Some(json!({
-            "type": "media_probe_request",
-            "data": {"media_path": output_path, "max_dimension": 2048}
-        })),
+        // The probe carries the user's FFmpeg too: a video it encoded may need it to open.
+        "video_job_completed" => Some(media_probe_request(state, &output_path)),
         _ => None,
     }
 }
@@ -2487,7 +2485,7 @@ mod tests {
             data: json!({"job_id": "j", "output_path": "/output/enhanced.png"}),
         };
         assert_eq!(
-            completion_preview_request(&image).unwrap()["data"]["max_dimension"],
+            completion_preview_request(&idle_state(), &image).unwrap()["data"]["max_dimension"],
             RESULT_PREVIEW_MAX_DIMENSION
         );
     }
@@ -2639,7 +2637,7 @@ mod tests {
             data: json!({"output_path": "/output/enhanced.png"}),
         };
         assert_eq!(
-            completion_preview_request(&image),
+            completion_preview_request(&idle_state(), &image),
             Some(json!({
                 "type": "preview_request",
                 "data": {"image_path": "/output/enhanced.png", "max_dimension": 2048}
@@ -2650,19 +2648,26 @@ mod tests {
             message_type: "video_job_completed".into(),
             data: json!({"output_path": "/output/enhanced.mp4"}),
         };
+        let state = idle_state();
         assert_eq!(
-            completion_preview_request(&video),
+            completion_preview_request(&state, &video),
             Some(json!({
                 "type": "media_probe_request",
-                "data": {"media_path": "/output/enhanced.mp4", "max_dimension": 2048}
+                "data": {"media_path": "/output/enhanced.mp4", "max_dimension": 2048, "external_ffmpeg": ""}
             }))
+        );
+        // A user-chosen FFmpeg goes along: the video it encoded may need it to open.
+        lock(&state.settings).unwrap().external_ffmpeg_path = "/opt/tools/ffmpeg".into();
+        assert_eq!(
+            completion_preview_request(&state, &video).unwrap()["data"]["external_ffmpeg"],
+            "/opt/tools/ffmpeg"
         );
 
         let incomplete = WorkerEnvelope {
             message_type: "job_completed".into(),
             data: json!({}),
         };
-        assert_eq!(completion_preview_request(&incomplete), None);
+        assert_eq!(completion_preview_request(&idle_state(), &incomplete), None);
     }
 
     #[test]
@@ -3091,6 +3096,11 @@ mod tests {
     fn status(state: &AppState, id: &str) -> String {
         let jobs = lock(&state.database).unwrap().list_jobs().unwrap();
         jobs.into_iter().find(|job| job.id == id).unwrap().status
+    }
+
+    fn idle_state() -> AppState {
+        let directory = tempfile::tempdir().unwrap();
+        AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap()
     }
 
     fn envelope(kind: &str, data: Value) -> WorkerEnvelope {
@@ -3591,7 +3601,7 @@ mod tests {
             "job_completed",
             json!({"job_id": "b", "output_path": "/out/b.png"}),
         );
-        assert!(completion_preview_request(&done).is_some());
+        assert!(completion_preview_request(&state, &done).is_some());
         apply_worker_envelope(&state, &done).unwrap();
         apply(
             "preview_ready",
