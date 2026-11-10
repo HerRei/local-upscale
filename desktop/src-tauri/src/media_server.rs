@@ -23,6 +23,14 @@ use crate::{error::AppResult, state::lock};
 
 type Files = Arc<Mutex<HashMap<String, PathBuf>>>;
 
+/// What a request handler needs: the registered files, and the `Host` value the
+/// web view's own requests carry.
+#[derive(Clone)]
+struct Shared {
+    files: Files,
+    host: String,
+}
+
 pub struct MediaServer {
     origin: String,
     files: Files,
@@ -33,11 +41,13 @@ impl MediaServer {
     pub fn start() -> AppResult<Self> {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
         listener.set_nonblocking(true)?;
-        let origin = format!("http://{}", listener.local_addr()?);
+        let address = listener.local_addr()?;
+        let origin = format!("http://{address}");
         let files = Files::default();
-        let app = Router::new()
-            .fallback(stream_file)
-            .with_state(files.clone());
+        let app = Router::new().fallback(stream_file).with_state(Shared {
+            files: files.clone(),
+            host: address.to_string(),
+        });
         let (shutdown, stopped) = oneshot::channel();
         tauri::async_runtime::spawn(async move {
             if let Ok(listener) = tokio::net::TcpListener::from_std(listener) {
@@ -81,11 +91,20 @@ impl Drop for MediaServer {
     }
 }
 
-async fn stream_file(State(files): State<Files>, request: Request) -> Response {
+async fn stream_file(State(shared): State<Shared>, request: Request) -> Response {
     if request.method() != Method::GET && request.method() != Method::HEAD {
         return StatusCode::METHOD_NOT_ALLOWED.into_response();
     }
-    let path = files.lock().ok().and_then(|files| {
+    // A page on another site that makes the browser resolve its own name to this
+    // address (DNS rebinding) still sends its own name as the host.
+    let host = request
+        .headers()
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok());
+    if host != Some(shared.host.as_str()) {
+        return StatusCode::MISDIRECTED_REQUEST.into_response();
+    }
+    let path = shared.files.lock().ok().and_then(|files| {
         files
             .get(request.uri().path().trim_start_matches('/'))
             .cloned()
@@ -170,6 +189,24 @@ mod tests {
             );
             std::fs::remove_file(file).unwrap();
             assert_eq!(client.get(&url).send().await.unwrap().status(), 404);
+        });
+    }
+
+    #[test]
+    fn answers_only_requests_that_name_its_own_address() {
+        tauri::async_runtime::block_on(async {
+            let directory = tempfile::tempdir().unwrap();
+            let file = directory.path().join("film.mp4");
+            std::fs::write(&file, b"0123456789").unwrap();
+            let server = MediaServer::start().unwrap();
+            let url = server.url_for(&file).unwrap();
+            let client = reqwest::Client::new();
+            for host in ["evil.example", "evil.example:80", "127.0.0.1", ""] {
+                let response = client.get(&url).header("Host", host).send().await.unwrap();
+                assert_ne!(response.status(), 200, "{host:?}");
+                assert_ne!(response.status(), 206, "{host:?}");
+            }
+            assert_eq!(client.get(&url).send().await.unwrap().status(), 200);
         });
     }
 
