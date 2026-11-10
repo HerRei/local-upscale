@@ -738,7 +738,7 @@ class InferenceEngine:
         if float_output:
             return out_core.clamp(0, 1).numpy()
         out_core = torch.clamp(out_core, 0, 1) * 255.0
-        return out_core.byte().numpy()
+        return out_core.round().byte().numpy()
 
     def process_frame(
         self,

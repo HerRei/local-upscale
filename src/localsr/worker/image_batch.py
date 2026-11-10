@@ -186,7 +186,7 @@ class _Lane:
             if self.info.architecture == "SPAN" and _span_output_is_unstable(core):
                 raise PhotoFallback("SPAN produced extreme pixel values.")
             self.tiles += 1
-            return core.clamp(0, 1).mul_(255).byte().numpy()
+            return core.clamp(0, 1).mul_(255).round_().byte().numpy()
 
 
 class _Photo:

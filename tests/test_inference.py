@@ -400,3 +400,32 @@ def test_a_tile_size_that_cannot_be_used_leaves_no_output_file_behind(tmp_path):
             temporary_directory=str(tmp_path),
         )
     assert list(tmp_path.glob("localsr-output-*")) == []
+
+
+def test_tile_output_is_rounded_to_the_nearest_level_not_truncated(tmp_path):
+    class Fixed(nn.Module):
+        def forward(self, x):
+            return torch.full((1, 3, x.shape[2], x.shape[3]), 100.7 / 255.0)
+
+    class FixedAdapter(DummyAdapter):
+        def load(self, path, device, precision):
+            return Fixed().to(device).to(precision), None
+
+    adapter = FixedAdapter(1)
+    engine = InferenceEngine(adapter)
+    writer = engine.process_image(
+        {"tensor": torch.rand((3, 8, 8))},
+        adapter.model_info,
+        "fixed",
+        "cpu",
+        "fp32",
+        32,
+        0,
+        threading.Event(),
+        lambda *_: None,
+        temporary_directory=str(tmp_path),
+    )
+    try:
+        assert set(np.unique(writer.get_array()).tolist()) == {101}
+    finally:
+        writer.cleanup()
