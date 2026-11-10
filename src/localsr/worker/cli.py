@@ -21,6 +21,10 @@ def main():
         from localsr.core.gpu_guard import child_main
 
         raise SystemExit(child_main(sys.argv[2:]))
+    if sys.argv[1:2] == ["--npu-compile"]:
+        from localsr.core.gpu_guard import compile_main
+
+        raise SystemExit(compile_main(sys.argv[2:]))
     if sys.argv[1:2] == ["--video-playback-preview"]:
         from localsr.core.child_processes import stop_children_on_termination
         from localsr.core.video_playback import main as playback_main

@@ -28,7 +28,7 @@ import torch.nn.functional as F
 
 from . import gpu_guard
 from .gpu_guard import GATE_CACHE_ENV, gate_cache_directory  # noqa: F401
-from .preparation import PreparationTimeout, bounded_preparation
+from .preparation import PreparationTimeout, bounded_preparation, busy_slot
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +106,8 @@ _LARGE_GRAPH_BYTES = 256 * 1024**2
 # GPU preflight's limit.
 ONNX_PREPARE_SECONDS = 300.0
 ONNX_SLOT = "onnx"
+# NPU programs this process has seen compiled into the cache (by device, version, graph).
+_COMPILED: set[str] = set()
 # DXGI device-removed, hung, reset and internal-driver errors, and their usual texts.
 _DEVICE_LOST_FRAGMENTS = (
     "887a0005",
@@ -201,6 +203,33 @@ def _provider_options(route, options: dict) -> dict:
     cache = _npu_cache_directory()
     _trim_npu_cache(cache)
     return {**options, "load_config": json.dumps({"NPU": {"CACHE_DIR": str(cache)}})}
+
+
+def _session_options(architecture: str, optimization):
+    import onnxruntime as ort
+
+    options = ort.SessionOptions()
+    options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    options.enable_mem_pattern = False
+    options.intra_op_num_threads = 2
+    # Fused arithmetic changes NAFNet's sensitive channel normalization on
+    # the tested Intel adapter. Keep its operations explicit and FP32.
+    if architecture == "NAFNet":
+        options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+    elif optimization == "basic":
+        options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+    return options
+
+
+def compile_into_cache(route, graph: bytes, architecture: str = "") -> None:
+    """Build a session on an NPU only to leave its compiled program in the NPU cache; run
+    in a child process, because a compile that never ends cannot be interrupted."""
+    import onnxruntime as ort
+
+    ort.disable_telemetry_events()
+    options = _session_options(architecture, NPU_ROUTE_CONFIGS[0][2])
+    options.add_provider_for_devices([route.ep_device], _provider_options(route, {}))
+    ort.InferenceSession(graph, sess_options=options)
 
 
 class GpuRouteRejected(RuntimeError):
@@ -339,7 +368,7 @@ class _OnnxImage(torch.nn.Module):
         # The device as well: two identical cards share an identity.
         return "|".join((self.route.identity, self.route.device, self.provider, _localsr_version()))
 
-    def _prepare(self, what: str, work, on_late=None):
+    def _prepare(self, what: str, work, on_late=None, on_timeout=None):
         """Run an export or a session build within the limit; a stop becomes a sentence."""
         try:
             return bounded_preparation(
@@ -353,6 +382,8 @@ class _OnnxImage(torch.nn.Module):
                 on_late=on_late,
             )
         except PreparationTimeout as error:
+            if on_timeout is not None and not error.busy:
+                on_timeout()
             reason = (
                 "is still preparing an earlier model"
                 if error.busy
@@ -408,16 +439,7 @@ class _OnnxImage(torch.nn.Module):
         name, provider_options, optimization = config
         self._check_cancelled()
         ort.disable_telemetry_events()
-        options = ort.SessionOptions()
-        options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-        options.enable_mem_pattern = False
-        options.intra_op_num_threads = 2
-        # Fused arithmetic changes NAFNet's sensitive channel normalization on
-        # the tested Intel adapter. Keep its operations explicit and FP32.
-        if self.architecture == "NAFNet":
-            options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
-        elif optimization == "basic":
-            options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+        options = _session_options(self.architecture, optimization)
         # Which provider got which node (ONNX Runtime 1.24); read after creation.
         options.add_session_config_entry("session.record_ep_graph_assignment_info", "1")
         # Windows keeps a profile open while its session lives; a leftover file must not
@@ -464,6 +486,9 @@ class _OnnxImage(torch.nn.Module):
             self.crash_cause = self.crashes.crashed(self._crash_key()) or self._preflight()
             if self.crash_cause:
                 return []
+        if self._compile_key(graph_hash) in gpu_guard.COMPILE_TIMEOUTS:
+            self.crash_cause = "compile-timeout"
+            return []
         for config in _route_configs(self.route):
             verdict = (
                 self.verdicts.get(self._verdict_key(graph_hash, config[0])) if self._gated else None
@@ -511,7 +536,51 @@ class _OnnxImage(torch.nn.Module):
             self.preflight_passed.add(key)
         return None
 
+    def _compile_key(self, graph_hash: str) -> str:
+        return f"{self._crash_key()}|{graph_hash}"
+
+    def _compile_in_child(self, state: dict) -> None:
+        """The first NPU compile of a graph runs in a separate process that fills the NPU
+        cache, so a compiler that hangs costs this wait and not the engine. The session
+        the engine then builds finds the program in the cache."""
+        key = self._compile_key(state["hash"])
+        if (
+            self.route.kind != "NPU"
+            or not self.route.device
+            or key in _COMPILED
+            or os.environ.get(gpu_guard.CHILD_ENV)
+        ):
+            return
+        stop = threading.Event()
+        try:
+            outcome = self._prepare(
+                "Compiling the model",
+                lambda: gpu_guard.compile_npu(
+                    self.route.device, state["graph"], self.architecture, stop
+                ),
+                on_timeout=lambda: gpu_guard.COMPILE_TIMEOUTS.add(key),
+            )
+        finally:
+            stop.set()
+            # The killed child's waiting thread ends within a moment; the next job must not
+            # meet it as unfinished work.
+            for _ in range(40):
+                if not busy_slot(ONNX_SLOT):
+                    break
+                time.sleep(0.05)
+        if outcome == "crashed":
+            self.crashes.mark(self._crash_key(), "preflight")
+            self.crash_cause = "preflight"
+            raise self._rejected()
+        if outcome == "done":
+            _COMPILED.add(key)
+
     def _rejected(self) -> GpuRouteRejected:
+        if self.crash_cause == "compile-timeout":
+            return GpuRouteRejected(
+                f"{self._label()} did not finish preparing {self.architecture} earlier, so the "
+                "job stopped. Select the CPU for this model, or restart LocalSR to try again."
+            )
         if self.crash_cause == "timeout":
             return GpuRouteRejected(
                 f"{self._label()} did not finish a test run within five minutes, so LocalSR "
@@ -573,6 +642,7 @@ class _OnnxImage(torch.nn.Module):
                     f"Checking that {self._label()} gives the same result as the CPU "
                     "(once per model and tile size)."
                 )
+            self._compile_in_child(state)
             try:
                 with self._watch():
                     session, trace = self._prepare(

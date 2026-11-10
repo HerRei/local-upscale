@@ -1537,3 +1537,95 @@ def test_the_preflight_reports_how_long_it_has_run_and_when_it_gives_up(monkeypa
     )
     assert len(reports) >= 2
     assert reports[0][0] == 0 and all(left >= 0 for _, left in reports)
+
+
+SLEEPING_CHILD = [sys.executable, "-c", "import time; time.sleep(600)"]
+
+
+def npu_engine(monkeypatch, tmp_path, child):
+    """An NPU route whose compile child is the given command; returns the engine, the
+    children started and the sessions the engine itself built."""
+    from localsr.core import gpu_guard, onnx_runtime
+
+    monkeypatch.setenv("LOCALSR_ONNX_GATE_CACHE", str(tmp_path))
+    monkeypatch.delenv(gpu_guard.CHILD_ENV, raising=False)
+    monkeypatch.setattr(gpu_guard, "COMPILE_TIMEOUTS", set())
+    monkeypatch.setattr(onnx_runtime, "_COMPILED", set())
+    monkeypatch.setattr(onnx_runtime, "ONNX_PREPARE_SECONDS", 1.0)
+    monkeypatch.setattr(onnx_runtime._OnnxImage, "_preflight", lambda self: None)
+    monkeypatch.setattr(onnx_runtime, "_placement", lambda session, provider: None)
+    children, sessions = [], []
+    popen = subprocess.Popen
+
+    def start(command, **options):
+        children.append(popen(child, **options))
+        return children[-1]
+
+    monkeypatch.setattr(gpu_guard.subprocess, "Popen", start)
+    monkeypatch.setattr(
+        onnx_runtime._OnnxImage,
+        "_create",
+        lambda self, graph, config: sessions.append(config) or (object(), None),
+    )
+    monkeypatch.setattr(onnx_runtime._OnnxImage, "_release_session", staticmethod(lambda s: None))
+    route = OnnxRoute(
+        "OpenVINOExecutionProvider",
+        ep_device=object(),
+        kind="NPU",
+        device="openvino:npu",
+        identity="npu",
+    )
+    return OnnxImageDescriptor(descriptor(), route=route), children, sessions
+
+
+def test_an_npu_compile_that_never_ends_stops_the_job_and_is_remembered(monkeypatch, tmp_path):
+    from localsr.core import gpu_guard
+    from localsr.core.onnx_runtime import GpuRouteRejected
+    from localsr.core.preparation import busy_slot
+
+    npu, children, sessions = npu_engine(monkeypatch, tmp_path, SLEEPING_CHILD)
+    messages = []
+    npu.model.status_callback = messages.append
+    image = torch.rand(1, 3, 8, 8)
+    started = time.monotonic()
+    with pytest.raises(GpuRouteRejected, match="did not finish preparing"):
+        npu(image)
+    assert time.monotonic() - started < 10
+    assert any(message.startswith("Compiling the model") for message in messages)
+    assert children[0].poll() is not None  # killed, not left running
+    assert sessions == [] and not busy_slot("onnx")
+    assert len(gpu_guard.COMPILE_TIMEOUTS) == 1
+    # The next job does not wait again, and no second child starts.
+    again = OnnxImageDescriptor(descriptor(), route=npu.model.route)
+    started = time.monotonic()
+    with pytest.raises(GpuRouteRejected, match="did not finish preparing"):
+        again(image)
+    assert time.monotonic() - started < 0.9 and len(children) == 1
+    # The engine still works for another route, with the fakes gone.
+    monkeypatch.undo()
+    cpu = OnnxImageDescriptor(descriptor(), provider="CPUExecutionProvider")
+    assert cpu(image).shape == image.shape
+
+
+def test_cancelling_during_an_npu_compile_kills_the_child_at_once(monkeypatch, tmp_path):
+    import threading
+
+    npu, children, _ = npu_engine(monkeypatch, tmp_path, SLEEPING_CHILD)
+    cancel = threading.Event()
+    npu.model.cancel_event = cancel
+    threading.Timer(0.5, cancel.set).start()
+    started = time.monotonic()
+    with pytest.raises(InterruptedError):
+        npu(torch.rand(1, 3, 8, 8))
+    assert time.monotonic() - started < 2
+    assert children[0].poll() is not None
+
+
+def test_a_compiled_npu_program_is_not_compiled_again(monkeypatch, tmp_path):
+    npu, children, sessions = npu_engine(monkeypatch, tmp_path, [sys.executable, "-c", "pass"])
+    image = torch.rand(1, 3, 8, 8)
+    npu.model._session(image)
+    assert len(children) == 1 and len(sessions) == 1
+    # Another engine for the same model and tile finds it compiled: no child.
+    OnnxImageDescriptor(descriptor(), route=npu.model.route).model._session(image)
+    assert len(children) == 1 and len(sessions) == 2
