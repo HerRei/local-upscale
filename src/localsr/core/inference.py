@@ -291,6 +291,16 @@ class InferenceEngine:
         # measure PyTorch and turn it off.
         self.neural_engine_enabled = True
         self.status_callback: Callable[[str], None] | None = None
+        # Sentences a backend wants on the finished result (a route it gave up).
+        self.notes: list[str] = []
+
+    def add_note(self, message: str) -> None:
+        if message not in self.notes:
+            self.notes.append(message)
+
+    def take_notes(self) -> list[str]:
+        notes, self.notes = self.notes, []
+        return notes
 
     @property
     def active_model(self):
@@ -391,6 +401,9 @@ class InferenceEngine:
         setter = getattr(model, "set_status_callback", None)
         if callable(setter):
             setter(self.status_callback)
+        note_setter = getattr(model, "set_note_callback", None)
+        if callable(note_setter):
+            note_setter(self.add_note)
 
     def prepare_tiles(
         self,

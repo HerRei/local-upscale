@@ -22,6 +22,8 @@ import numpy as np
 from .model_catalog import FACE_DETECTOR_MODEL, ModelStore, download_model
 
 _download_lock = threading.Lock()
+# The detector is a small file; a job does not wait the download's usual half hour for it.
+DOWNLOAD_SECONDS = 120.0
 _detectors = threading.local()
 
 
@@ -82,7 +84,12 @@ def _detector_model_path(
     with _download_lock:
         if not model_store.is_installed(FACE_DETECTOR_MODEL):
             try:
-                download_model(FACE_DETECTOR_MODEL, path, cancel_event=cancel_event)
+                download_model(
+                    FACE_DETECTOR_MODEL,
+                    path,
+                    cancel_event=cancel_event,
+                    max_seconds=DOWNLOAD_SECONDS,
+                )
             except Exception as error:  # noqa: BLE001 - preserve actionable download cause
                 raise FaceDetectionUnavailable(
                     f"Could not install the verified YuNet face detector: {error}"

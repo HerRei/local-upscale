@@ -1,4 +1,6 @@
 import os
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from math import lcm
 
@@ -6,6 +8,11 @@ import spandrel
 import torch
 
 from localsr.core.model_catalog import CATALOG_BY_FILENAME, file_matches_checksum
+from localsr.core.preparation import PreparationTimeout, bounded_preparation
+
+# Reading a checkpoint is a local file read; a drive that stopped answering would
+# otherwise hold the job for ever.
+MODEL_READ_SECONDS = 180.0
 
 UNVERIFIED_CHECKPOINT_ENV = "LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS"
 RISKY_CHECKPOINT_SUFFIXES = {".ckpt", ".pt", ".pth"}
@@ -69,11 +76,33 @@ class ModelAdapter:
         self.loader = spandrel.ModelLoader()
         self.parsed = None
         self.parsed_path = None
+        self.status_callback: Callable[[str], None] | None = None
+        self.cancel_event: threading.Event | None = None
         self.allow_unverified_checkpoints = (
             unverified_checkpoints_enabled()
             if allow_unverified_checkpoints is None
             else allow_unverified_checkpoints
         )
+
+    def _read(self, path: str):
+        """The checkpoint's trust class and parsed model, within MODEL_READ_SECONDS."""
+        name = os.path.basename(path)
+        try:
+            return bounded_preparation(
+                f"Reading {name}",
+                MODEL_READ_SECONDS,
+                lambda: (self._checkpoint_trust(path), self.loader.load_from_file(path)),
+                fallback="Stopping the job",
+                slot="model-read",
+                cancel_event=self.cancel_event,
+                status=self.status_callback,
+            )
+        except PreparationTimeout as error:
+            raise RuntimeError(
+                f"Reading the model file {name} did not finish within "
+                f"{MODEL_READ_SECONDS:.0f} s. Check that the drive it is on is connected, "
+                "then try again."
+            ) from error
 
     def _checkpoint_trust(self, path: str) -> str:
         candidate = os.path.abspath(path)
@@ -103,8 +132,7 @@ class ModelAdapter:
         # Note: Spandrel uses safe load by default where possible, but .pth can be unsafe.
         normalized_path = os.path.abspath(path)
         if self.parsed is None or self.parsed_path != normalized_path:
-            checkpoint_trust = self._checkpoint_trust(normalized_path)
-            self.parsed = self.loader.load_from_file(normalized_path)
+            checkpoint_trust, self.parsed = self._read(normalized_path)
             self.parsed_path = normalized_path
         else:
             checkpoint_trust = "cached"
@@ -174,8 +202,7 @@ class ModelAdapter:
     ):
         normalized_path = os.path.abspath(path)
         if self.parsed is None or self.parsed_path != normalized_path:
-            self._checkpoint_trust(normalized_path)
-            self.parsed = self.loader.load_from_file(normalized_path)
+            _, self.parsed = self._read(normalized_path)
             self.parsed_path = normalized_path
         # Run through Spandrel's descriptor rather than reaching into its raw
         # architecture module. Most SR modules return a tensor directly, but

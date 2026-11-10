@@ -29,9 +29,12 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+
+from . import preparation
 
 logger = logging.getLogger(__name__)
 
@@ -326,8 +329,16 @@ def _command(device: str) -> list[str]:
     return [*command, PREFLIGHT_ARGUMENT, device]
 
 
-def run(device: str, cancel_event: threading.Event | None = None) -> str:
-    """ "passed", "crashed", "timeout" or "unknown"."""
+def run(
+    device: str,
+    cancel_event: threading.Event | None = None,
+    status: Callable[[int, int], None] | None = None,
+) -> str:
+    """ "passed", "crashed", "timeout" or "unknown".
+
+    ``status(elapsed, left)`` is called every few seconds with whole seconds, so the
+    window shows the test is alive and when it gives up.
+    """
 
     def check_cancelled():
         if cancel_event is not None and cancel_event.is_set():
@@ -355,8 +366,16 @@ def run(device: str, cancel_event: threading.Event | None = None) -> str:
                 return "unknown"
             job = _bind_to_this_process(process)
             try:
-                deadline = time.monotonic() + TIMEOUT_SECONDS
+                started = time.monotonic()
+                deadline = started + TIMEOUT_SECONDS
+                next_status = started
                 while process.poll() is None:
+                    if status is not None and time.monotonic() >= next_status:
+                        next_status = time.monotonic() + preparation.STATUS_INTERVAL_SECONDS
+                        status(
+                            round(time.monotonic() - started),
+                            max(0, round(deadline - time.monotonic())),
+                        )
                     if cancel_event is not None and cancel_event.is_set():
                         process.kill()
                         process.wait()

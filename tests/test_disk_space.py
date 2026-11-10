@@ -439,3 +439,15 @@ def test_saving_a_result_never_copies_it_whole_into_one_array(tmp_path, monkeypa
         assert saved.size == (900, 1200)
         assert saved.getpixel((0, 0)) == (200, 100, 50)
         assert saved.getpixel((899, 1199)) == (200, 100, 50)
+
+
+def test_a_route_the_engine_gave_up_is_a_note_on_the_finished_result(tmp_path):
+    emitted = []
+    runner = _runner(tmp_path, emitted, process_image=lambda **_: pytest.fail("not reached"))
+    note = "Continuing on the Apple GPU: Core ML was not ready in time."
+    runner.engine.take_notes = lambda: [note]
+    notes = runner._take_engine_notes()
+    assert notes == [note]
+    # An engine without notes (a fake, an older backend) adds none.
+    del runner.engine.take_notes
+    assert runner._take_engine_notes() == []

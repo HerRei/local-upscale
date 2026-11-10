@@ -4,6 +4,8 @@ import importlib.util
 import json
 import re
 import threading
+import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,7 +15,7 @@ import spandrel
 import torch
 import torch.nn.functional as F
 
-from localsr.core import coreml_runtime
+from localsr.core import coreml_runtime, preparation
 from localsr.core.coreml_runtime import (
     COMPUTE_UNITS,
     CORE_ML_GPU,
@@ -245,6 +247,11 @@ class FakeProgram:
     def store_verdict(self, unit, verdict):
         self.verdicts[unit] = verdict
 
+    def clear_timeouts(self, units):
+        for unit in units:
+            if self.verdicts.get(unit, {}).get("timed_out"):
+                del self.verdicts[unit]
+
     def ensure_compiled(self, source, input_channels):
         FakeProgram.conversions += 1
         if FakeProgram.fail_conversion:
@@ -255,11 +262,17 @@ class FakeRunner:
     def __init__(self, unit, behaviour, reference):
         self.unit, self.behaviour, self.reference, self.calls = unit, behaviour, reference, 0
 
+    release = threading.Event()
+
     def predict(self, inputs):
         self.calls += 1
+        if self.behaviour == "hang-predict":
+            FakeRunner.release.wait()
         if self.behaviour == "raise":
             raise RuntimeError("ANE error")
         output = self.reference(torch.from_numpy(inputs["image"])).numpy()
+        if self.behaviour == "hang-predict":
+            return {"restored": output}
         # "flat-only": right on a tile without detail, wrong on real content, like an
         # FP16 program that overflows only where the picture has structure.
         matches = self.behaviour == "match" or (
@@ -294,16 +307,22 @@ def fake_coreml(monkeypatch):
     FakeProgram.fail_conversion = False
     behaviours = {}
     runners = []
+    loads = []
+    hang = threading.Event()
     original = tiny_descriptor()
 
     def reference(image):
         with torch.no_grad():
             return original.model(image)
 
-    def load(path, unit, timeout):
+    def load(path, unit):
         behaviour = behaviours.get(unit, "match")
-        if behaviour == "timeout":
-            raise TimeoutError("compile timeout")
+        loads.append(unit)
+        if behaviour == "hang":
+            # A compile that does not return until the test lets it.
+            hang.wait()
+        if behaviour == "memory":
+            raise MemoryError("Core ML could not allocate memory")
         runner = FakeRunner(unit, behaviour, reference)
         runners.append(runner)
         return runner
@@ -324,7 +343,14 @@ def fake_coreml(monkeypatch):
         "_time",
         staticmethod(lambda function, synchronize=None, repeats=2: 1.0),
     )
-    return SimpleNamespace(behaviours=behaviours, runners=runners, original=original)
+    preparation._abandoned.clear()
+    yield SimpleNamespace(
+        behaviours=behaviours, runners=runners, original=original, loads=loads, hang=hang
+    )
+    hang.set()
+    deadline = time.monotonic() + 2
+    while preparation.busy_slot("coreml") and time.monotonic() < deadline:
+        time.sleep(0.01)
 
 
 def run(descriptor, side_tile=16, halo=4):
@@ -440,14 +466,13 @@ def test_conversion_failure_rules_out_every_unit_once(fake_coreml, monkeypatch):
 
 
 def test_runtime_errors_and_compile_timeouts_fall_back(fake_coreml):
-    fake_coreml.behaviours.update({NEURAL_ENGINE: "timeout", CORE_ML_GPU: "raise"})
+    fake_coreml.behaviours.update({NEURAL_ENGINE: "raise", CORE_ML_GPU: "raise"})
     converted = CoreMLImageDescriptor(
         fake_coreml.original, units=(NEURAL_ENGINE, CORE_ML_GPU), identity="no"
     )
     output = run(converted)
     torch.testing.assert_close(output, fake_coreml.original(image(20, 20)[None]))
     verdicts = FakeProgram.stores[("no", (32, 32))]
-    assert NEURAL_ENGINE not in verdicts  # a timed-out compile is not a rejection
     assert "ANE error" in verdicts[CORE_ML_GPU]["reason"]
 
 
@@ -811,3 +836,287 @@ def test_a_stored_out_of_memory_rejection_is_ignored_when_read(tmp_path, monkeyp
     program.store_verdict(CORE_ML_GPU, {"accepted": False, "reason": "did not match PyTorch"})
     assert program.verdict(NEURAL_ENGINE) is None
     assert program.verdict(CORE_ML_GPU)["accepted"] is False
+
+
+# A compile that does not finish -------------------------------------------------
+
+
+def wait_for_idle_slot():
+    deadline = time.monotonic() + 2
+    while preparation.busy_slot("coreml") and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+
+@pytest.fixture
+def short_budget(monkeypatch):
+    monkeypatch.setattr(coreml_runtime, "PREPARE_BUDGET_SECONDS", 0.4)
+    monkeypatch.setattr(preparation, "WAIT_SLICE_SECONDS", 0.02)
+    monkeypatch.setattr(preparation, "STATUS_INTERVAL_SECONDS", 0.1)
+
+
+def test_a_compile_that_never_returns_is_stored_and_the_next_job_skips_the_unit(
+    fake_coreml, short_budget
+):
+    fake_coreml.behaviours[NEURAL_ENGINE] = "hang"
+    first = CoreMLImageDescriptor(
+        fake_coreml.original, units=(NEURAL_ENGINE, CORE_ML_GPU), identity="hang"
+    )
+    started = time.monotonic()
+    output = run(first)
+    assert time.monotonic() - started < 2.0
+    torch.testing.assert_close(output, fake_coreml.original(image(20, 20)[None]))
+    verdict = FakeProgram.stores[("hang", (32, 32))][NEURAL_ENGINE]
+    assert verdict["timed_out"] and not verdict["accepted"] and verdict["retry_after"]
+    # One budget for the whole route: the GPU unit is not tried after the budget is gone.
+    assert fake_coreml.loads == [NEURAL_ENGINE]
+
+    second = CoreMLImageDescriptor(
+        fake_coreml.original, units=(NEURAL_ENGINE, CORE_ML_GPU), identity="hang"
+    )
+    fake_coreml.loads.clear()
+    started = time.monotonic()
+    run(second)
+    assert time.monotonic() - started < 0.3
+    # The stored timeout skips the Neural Engine at once. The abandoned compile still runs
+    # and is the one background compile, so the GPU unit waits for the next job.
+    assert fake_coreml.loads == []
+
+
+def test_the_budget_is_shared_by_every_unit_of_a_job(fake_coreml, short_budget):
+    fake_coreml.behaviours.update({NEURAL_ENGINE: "hang", CORE_ML_GPU: "hang"})
+    converted = CoreMLImageDescriptor(
+        fake_coreml.original, units=(NEURAL_ENGINE, CORE_ML_GPU), identity="shared"
+    )
+    started = time.monotonic()
+    run(converted)
+    assert time.monotonic() - started < 0.4 * 1.8
+    assert fake_coreml.loads == [NEURAL_ENGINE]
+    # The route is given up for the rest of this job; the next tile does not wait again.
+    started = time.monotonic()
+    converted(image(20, 20)[None])
+    assert time.monotonic() - started < 0.1
+
+
+def test_a_hung_conversion_is_bounded_and_stored_for_every_unit(
+    fake_coreml, short_budget, monkeypatch
+):
+    release = threading.Event()
+    monkeypatch.setattr(
+        FakeProgram, "ensure_compiled", lambda self, source, channels: release.wait()
+    )
+
+    class Missing:
+        def __truediv__(self, _name):
+            return SimpleNamespace(exists=lambda: False)
+
+    original_program = coreml_runtime._Program
+
+    def program(*args):
+        value = original_program(*args)
+        value.compiled = Missing()
+        return value
+
+    monkeypatch.setattr(coreml_runtime, "_Program", program)
+    converted = CoreMLImageDescriptor(
+        fake_coreml.original, units=(NEURAL_ENGINE, CORE_ML_GPU), identity="conv"
+    )
+    started = time.monotonic()
+    output = run(converted)
+    assert time.monotonic() - started < 2.0
+    torch.testing.assert_close(output, fake_coreml.original(image(20, 20)[None]))
+    verdicts = FakeProgram.stores[("conv", (32, 32))]
+    assert verdicts[NEURAL_ENGINE]["timed_out"] and verdicts[CORE_ML_GPU]["timed_out"]
+    release.set()
+
+
+def test_cancelling_while_core_ml_prepares_returns_at_once_and_the_engine_stays_usable(
+    fake_coreml,
+):
+    fake_coreml.behaviours[NEURAL_ENGINE] = "hang"
+    converted = CoreMLImageDescriptor(fake_coreml.original, units=(NEURAL_ENGINE,), identity="cx")
+    cancel = threading.Event()
+    converted.set_cancel_event(cancel)
+    threading.Timer(0.2, cancel.set).start()
+    started = time.monotonic()
+    with pytest.raises(InterruptedError):
+        run(converted)
+    assert time.monotonic() - started < 2.0
+    # Nothing is stored: the user, not the program, ended the wait.
+    assert not FakeProgram.stores.get(("cx", (32, 32)))
+    fake_coreml.hang.set()
+    deadline = time.monotonic() + 2
+    while preparation.busy_slot("coreml") and time.monotonic() < deadline:
+        time.sleep(0.01)
+    # The same engine runs the next job.
+    fake_coreml.behaviours[NEURAL_ENGINE] = "match"
+    again = CoreMLImageDescriptor(fake_coreml.original, units=(NEURAL_ENGINE,), identity="cx2")
+    run(again)
+    assert again.model.active_unit == NEURAL_ENGINE
+
+
+def test_an_out_of_memory_load_stores_nothing(fake_coreml):
+    fake_coreml.behaviours[NEURAL_ENGINE] = "memory"
+    converted = CoreMLImageDescriptor(fake_coreml.original, units=(NEURAL_ENGINE,), identity="mem")
+    output = run(converted)
+    torch.testing.assert_close(output, fake_coreml.original(image(20, 20)[None]))
+    assert not FakeProgram.stores.get(("mem", (32, 32)))
+
+
+def test_a_compile_left_running_by_an_earlier_job_is_not_joined_by_a_second(
+    fake_coreml, short_budget
+):
+    fake_coreml.behaviours[NEURAL_ENGINE] = "hang"
+    run(CoreMLImageDescriptor(fake_coreml.original, units=(NEURAL_ENGINE,), identity="a1"))
+    fake_coreml.behaviours[NEURAL_ENGINE] = "match"
+    fake_coreml.loads.clear()
+    started = time.monotonic()
+    other = CoreMLImageDescriptor(fake_coreml.original, units=(NEURAL_ENGINE,), identity="a2")
+    messages = []
+    other.set_status_callback(messages.append)
+    run(other)
+    assert time.monotonic() - started < 0.3
+    assert fake_coreml.loads == []
+    # Not the program's fault, so nothing is stored for it.
+    assert not FakeProgram.stores.get(("a2", (32, 32)))
+    assert messages[-1] == (
+        "Continuing on the CPU: Core ML is still preparing an earlier model in the background."
+    )
+
+
+def test_the_wait_says_what_happens_and_when_the_route_is_given_up(fake_coreml, short_budget):
+    fake_coreml.behaviours[NEURAL_ENGINE] = "hang"
+    converted = CoreMLImageDescriptor(fake_coreml.original, units=(NEURAL_ENGINE,), identity="msg")
+    messages, notes = [], []
+    converted.set_status_callback(messages.append)
+    converted.set_note_callback(notes.append)
+    run(converted)
+    waiting = [m for m in messages if m.startswith("Preparing SPAN")]
+    assert len(waiting) >= 3
+    assert waiting[0] == (
+        "Preparing SPAN for the Neural Engine (first run of this model and tile size). "
+        "0 s so far. Continuing on the CPU in 0 s if it is not ready."
+    )
+    assert not any("can take a minute" in message for message in messages)
+    expected = "Continuing on the CPU: Core ML was not ready in time."
+    assert messages[-1] == expected and notes == [expected]
+
+
+def test_the_fallback_is_named_after_the_device_it_runs_on(fake_coreml):
+    converted = CoreMLImageDescriptor(fake_coreml.original, units=(NEURAL_ENGINE,), identity="dev")
+    assert converted.model._fallback_label() == "the CPU"
+    converted.model.fallback_device = torch.device("mps")
+    assert converted.model._fallback_label() == "the Apple GPU"
+
+
+@pytest.fixture
+def real_program(tmp_path, monkeypatch):
+    monkeypatch.setitem(
+        __import__("sys").modules, "coremltools", SimpleNamespace(__version__="test")
+    )
+    return coreml_runtime._Program(tmp_path, "PLKSR", "abc", (400, 400))
+
+
+def test_a_stored_timeout_holds_for_a_week_and_for_this_app_version(real_program, monkeypatch):
+    now = datetime.now(UTC)
+    real_program.store_verdict(CORE_ML_GPU, coreml_runtime.timeout_verdict(120.0, now))
+    stored = real_program.verdict(CORE_ML_GPU)
+    assert stored["timed_out"] and not stored["accepted"]
+    # The wording must not be taken for a resource failure and ignored.
+    assert not coreml_runtime._is_resource_failure(stored["reason"])
+    later = coreml_runtime.TIMEOUT_RETRY_SECONDS
+    monkeypatch.setattr(coreml_runtime, "_now", lambda: now + timedelta(seconds=later - 60))
+    assert real_program.verdict(CORE_ML_GPU) is not None
+    monkeypatch.setattr(coreml_runtime, "_now", lambda: now + timedelta(seconds=later + 60))
+    assert real_program.verdict(CORE_ML_GPU) is None
+    monkeypatch.setattr(coreml_runtime, "_now", lambda: now)
+    monkeypatch.setattr(coreml_runtime, "APP_VERSION", "9.9.9")
+    assert real_program.verdict(CORE_ML_GPU) is None
+
+
+def test_a_compile_that_finishes_late_lifts_its_stored_timeout(real_program):
+    real_program.store_verdict(CORE_ML_GPU, coreml_runtime.timeout_verdict(120.0))
+    real_program.store_verdict(NEURAL_ENGINE, {"accepted": False, "reason": "did not match"})
+    real_program.clear_timeouts((CORE_ML_GPU, NEURAL_ENGINE))
+    assert real_program.verdict(CORE_ML_GPU) is None
+    # A rejection for a wrong result stays.
+    assert real_program.verdict(NEURAL_ENGINE)["accepted"] is False
+
+
+def test_conversion_does_not_load_the_program_it_has_just_made(tmp_path, monkeypatch):
+    """ct.convert loads its result on every compute unit unless told not to, which
+    compiles a second time for the Neural Engine, without a bound and for as long as
+    that compiler takes on a large 17x17 kernel."""
+    calls = {}
+
+    class Converted:
+        def save(self, path):
+            Path(path).mkdir()
+
+    def convert(traced, **options):
+        calls.update(options)
+        return Converted()
+
+    def compile_model(package):
+        target = Path(package).with_suffix(".mlmodelc")
+        target.mkdir()
+        (target / "coremldata.bin").write_bytes(b"")
+        return str(target)
+
+    fake = SimpleNamespace(
+        __version__="test",
+        convert=convert,
+        TensorType=lambda **options: options,
+        precision=SimpleNamespace(FLOAT16="fp16"),
+        target=SimpleNamespace(macOS14="macOS14"),
+        models=SimpleNamespace(utils=SimpleNamespace(compile_model=compile_model)),
+    )
+    monkeypatch.setitem(__import__("sys").modules, "coremltools", fake)
+    program = coreml_runtime._Program(tmp_path, "SPAN", "abc", (16, 16))
+    program.ensure_compiled(tiny_descriptor().model.eval(), 3)
+    assert calls["skip_model_load"] is True
+    assert (program.compiled / "coremldata.bin").exists()
+
+
+def test_a_compile_that_finishes_in_the_background_is_used_by_the_next_job(
+    fake_coreml, short_budget
+):
+    fake_coreml.behaviours[NEURAL_ENGINE] = "hang"
+    run(CoreMLImageDescriptor(fake_coreml.original, units=(NEURAL_ENGINE,), identity="late"))
+    assert FakeProgram.stores[("late", (32, 32))][NEURAL_ENGINE]["timed_out"]
+    # The compile ends; loading again is quick, so the system kept the result.
+    fake_coreml.behaviours[NEURAL_ENGINE] = "match"
+    fake_coreml.hang.set()
+    wait_for_idle_slot()
+    assert NEURAL_ENGINE not in FakeProgram.stores[("late", (32, 32))]
+    again = CoreMLImageDescriptor(fake_coreml.original, units=(NEURAL_ENGINE,), identity="late")
+    run(again)
+    assert again.model.active_unit == NEURAL_ENGINE
+
+
+def test_a_first_prediction_that_never_returns_is_bounded_like_the_load(fake_coreml, short_budget):
+    fake_coreml.behaviours[NEURAL_ENGINE] = "hang-predict"
+    FakeRunner.release.clear()
+    converted = CoreMLImageDescriptor(fake_coreml.original, units=(NEURAL_ENGINE,), identity="fp")
+    notes = []
+    converted.set_note_callback(notes.append)
+    started = time.monotonic()
+    output = run(converted)
+    assert time.monotonic() - started < 2.0
+    torch.testing.assert_close(output, fake_coreml.original(image(20, 20)[None]))
+    assert FakeProgram.stores[("fp", (32, 32))][NEURAL_ENGINE]["timed_out"]
+    assert notes == ["Continuing on the CPU: Core ML was not ready in time."]
+    FakeRunner.release.set()
+
+
+def test_elapsed_time_counts_from_the_start_of_the_whole_preparation(fake_coreml, monkeypatch):
+    seen = []
+    converted = CoreMLImageDescriptor(fake_coreml.original, units=(CORE_ML_GPU,), identity="clock")
+    converted.set_status_callback(seen.append)
+    now = [100.0]
+    converted.model.clock = lambda: now[0]
+    converted.model.prepare(16, 4)
+    converted.model._bounded(CORE_ML_GPU, lambda: now.__setitem__(0, 140.0))
+    converted.model._bounded(CORE_ML_GPU, lambda: None)
+    assert "Preparing SPAN for Core ML on the GPU" in seen[0]
+    assert "0 s so far" in seen[0] and "40 s so far" in seen[1]
+    assert "Continuing on the CPU in 80 s" in seen[1]
