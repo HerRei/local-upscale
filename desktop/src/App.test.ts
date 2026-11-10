@@ -2079,6 +2079,32 @@ describe('LocalSR desktop interface', () => {
     expect(api.cancelJobs).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the settings locked while the next queued job has not shown up yet', async () => {
+    const current = readySnapshot([image('first', true), image('second')]);
+    current.settings.task = 'upscale';
+    const queued = (id: string, media: string, status: 'running' | 'queued') => ({
+      id,
+      media_id: media,
+      media_name: `${media}.png`,
+      media_kind: 'image' as const,
+      status,
+      progress: 0,
+      output_path: '',
+      error: '',
+      created_at: 1,
+    });
+    current.runtime.active_job_id = 'job-1';
+    current.jobs = [queued('job-1', 'first', 'running'), queued('job-2', 'second', 'queued')];
+    await mountWith(current);
+    const listener = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+    // job-1 ends; the host already runs job-2, but the window learns of it with its next refresh.
+    listener({ type: 'job_completed', data: { job_id: 'job-1', output_path: '/out/first.png' } });
+    await waitFor(() =>
+      expect(document.querySelector('.status-copy strong')?.textContent ?? '').toMatch(/^Complete/),
+    );
+    expect(screen.getByRole('button', { name: /^Best/ }).matches(':disabled')).toBe(true);
+  });
+
   it('asks before Clear: Cancel keeps the list, confirming clears it', async () => {
     const snapshot = readySnapshot([image('first', true), image('second', false)]);
     const user = await mountWith(snapshot);

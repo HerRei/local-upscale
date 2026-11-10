@@ -272,7 +272,12 @@
   } = { slot: 'browse' };
   let startingJob = false;
   let requestingCancel = false;
-  $: settingsLocked = startingJob || Boolean(snapshot.runtime.active_job_id);
+  // Between two jobs of a queue the host already runs the next one while the window still
+  // shows none: its row is queued or starting until the next refresh brings it up.
+  $: settingsLocked =
+    startingJob ||
+    Boolean(snapshot.runtime.active_job_id) ||
+    snapshot.jobs.some((job) => job.status === 'queued' || job.status === 'starting');
   $: cancelling =
     requestingCancel ||
     snapshot.runtime.status_title === 'Cancelling' ||
