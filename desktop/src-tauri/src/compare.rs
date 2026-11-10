@@ -271,6 +271,10 @@ pub fn apply(
         slot.height = dimension("height");
         slot.preview_width = dimension("preview_width");
         slot.preview_height = dimension("preview_height");
+    } else {
+        // An answer without a picture is no answer: the slot must not wait for another.
+        slot.status = CompareStatus::Error;
+        slot.error = "The engine returned no preview.".into();
     }
     Ok(())
 }
@@ -622,6 +626,19 @@ mod tests {
         answer["preview_width"] = json!(50);
         answer["preview_height"] = json!(50);
         apply(db, compare, &answer, false).unwrap();
+    }
+
+    #[test]
+    fn an_answer_without_a_picture_ends_the_wait_with_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let (db, _) = one_image_db(dir.path(), &["a.png"]);
+        let mut compare = CompareState::default();
+        let requests = plan(&db, &mut compare, &[original("m0")]).unwrap();
+        let mut answer = requests[0]["data"].clone();
+        answer["jpeg_base64"] = json!("");
+        apply(&db, &mut compare, &answer, false).unwrap();
+        assert_eq!(compare.slots[0].status, CompareStatus::Error);
+        assert!(!compare.slots[0].error.is_empty());
     }
 
     #[test]
