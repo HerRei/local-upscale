@@ -32,7 +32,9 @@
   export let batchMode: boolean;
   export let compactHidden = false;
   export let scopeWarning: boolean;
-  export let singleScopeMessage: string;
+  export let scopeHint: string;
+  export let allCount: number;
+  export let allTitle = '';
   export let benchmarkRunning: boolean;
   export let inflightMediaIds: Set<string>;
   export let setBatchMode: (value: boolean) => void;
@@ -147,21 +149,30 @@
     </div>
   {:else}
     {#if items.length > 1}
-      <div class="segmented">
-        <button
-          disabled={Boolean(activeJobId)}
-          class:active={!batchMode}
-          on:click={() => setBatchMode(false)}>Single</button
-        >
-        <button
-          disabled={Boolean(activeJobId)}
-          class:active={batchMode}
-          on:click={() => setBatchMode(true)}>Batch</button
-        >
+      <!-- One quiet line: what Start takes, and only what that choice leaves unsaid. -->
+      <div class="process-scope">
+        <span>Process</span>
+        <div class="view-switch">
+          <button
+            disabled={Boolean(activeJobId)}
+            class:active={!batchMode}
+            on:click={() => setBatchMode(false)}>Selected</button
+          >
+          <button
+            disabled={Boolean(activeJobId)}
+            class:active={batchMode}
+            title={allTitle || undefined}
+            on:click={() => setBatchMode(true)}>All {allCount}</button
+          >
+        </div>
+        {#if scopeHint}<span
+            class="process-hint"
+            class:warning={!batchMode && scopeWarning}
+            title={scopeHint}>{scopeHint}</span
+          >{/if}
       </div>
-      <p class="mode-scope" class:warning={!batchMode && scopeWarning}>{singleScopeMessage}</p>
     {:else if scopeWarning}
-      <p class="mode-scope warning">{singleScopeMessage}</p>
+      <p class="mode-scope warning">{scopeHint}</p>
     {/if}
     <div class="media-list">
       {#each items as media (media.id)}

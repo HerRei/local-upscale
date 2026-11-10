@@ -776,7 +776,14 @@
     (device) => device.id === benchmarkDevice,
   );
   $: unreadyMedia = queueSelection.find((media) => media.probe_status !== 'ready');
-  $: singleScopeMessage = unreadyMedia
+  // Process: Selected | All n. All counts the inputs the chosen task can take.
+  $: allCount = settings.task ? runnableMedia.length : snapshot.media.length;
+  $: incompatibleNote =
+    settings.task && runnableMedia.length < snapshot.media.length
+      ? `${queueableMedia.length} ${settings.task === 'video' ? 'video' : 'image'} item${queueableMedia.length === 1 ? '' : 's'} can be queued with this setup; select the other media type to configure it separately.`
+      : '';
+  // What the choice alone does not say; empty when there is nothing to explain.
+  $: scopeHint = unreadyMedia
     ? unreadyMedia.probe_status === 'failed'
       ? `“${unreadyMedia.name}” cannot be processed: ${unreadyMedia.error}`
       : `Preparing preview… Wait for “${unreadyMedia.name}” before starting.`
@@ -787,14 +794,16 @@
       : settings.batch_mode
         ? queueableMedia.length === 0 && runnableMedia.length > 0
           ? `All ${runnableMedia.length} compatible item${runnableMedia.length === 1 ? ' is' : 's are'} already running or queued.`
-          : runnableMedia.length === snapshot.media.length
-            ? `${queueableMedia.length} compatible item${queueableMedia.length === 1 ? '' : 's'} can be added to the queue.`
-            : `${queueableMedia.length} ${settings.task === 'video' ? 'video' : 'image'} item${queueableMedia.length === 1 ? '' : 's'} can be queued with this setup; select the other media type to configure it separately.`
-        : !selectedMedia
-          ? 'Single processes only the selected item.'
-          : mediaMatchesTask
-            ? `Single processes only “${selectedMedia.name}”.`
-            : `“${selectedMedia.name}” does not match ${settings.task || 'the chosen task'}; select a compatible item.`;
+          : incompatibleNote
+        : selectedMedia && !mediaMatchesTask
+          ? `“${selectedMedia.name}” does not match ${settings.task || 'the chosen task'}; select a compatible item.`
+          : '';
+  // Start from the menu with nothing to explain still answers with what Start would take.
+  $: scopeSummary = settings.batch_mode
+    ? `${queueableMedia.length} compatible item${queueableMedia.length === 1 ? '' : 's'} can be added to the queue.`
+    : selectedMedia
+      ? `Only “${selectedMedia.name}” is processed.`
+      : 'Only the selected item is processed.';
 
   onMount(() => {
     const unlisteners: (() => void)[] = [];
@@ -2385,7 +2394,7 @@
         case 'file.start':
           if (canStart) await start();
           else if (canPrepare) await prepareAndStart();
-          else showModal('Cannot start yet', singleScopeMessage);
+          else showModal('Cannot start yet', scopeHint || scopeSummary);
           break;
         case 'file.cancel':
           if (preparing) await cancelPreparation();
@@ -2726,7 +2735,9 @@
       batchMode={settings.batch_mode}
       compactHidden={page !== 'media'}
       scopeWarning={Boolean(selectedMedia) && !mediaMatchesTask}
-      {singleScopeMessage}
+      {scopeHint}
+      {allCount}
+      allTitle={incompatibleNote}
       {benchmarkRunning}
       {inflightMediaIds}
       {setBatchMode}

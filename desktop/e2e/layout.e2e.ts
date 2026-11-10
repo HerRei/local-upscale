@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { openApp } from './app';
+import { openApp, showPane } from './app';
 import { ready, withOutputs } from './fixtures';
 
 // Geometry the pixel baselines only show indirectly: the pane headers form one line, and the
@@ -116,4 +116,17 @@ test('the narrow window switch is a row of words with a readable count', async (
   expect(boxed).toBe(false);
   // The Media page button only shows below 920 px; its colours apply at every width.
   expect(await contrast(nav.locator('button').first().locator('span'))).toBeGreaterThanOrEqual(4.5);
+});
+
+test('the Process choice is one line inside the Media pane', async ({ page }) => {
+  await openApp(page, { ...ready, photos: 3 });
+  await showPane(page, 'media');
+  const line = page.locator('.process-scope');
+  await expect(line.getByRole('button', { name: 'Selected' })).toBeVisible();
+  await expect(line.getByRole('button', { name: 'All 3' })).toBeVisible();
+  expect((await box(line)).height).toBeLessThanOrEqual(30);
+  const overflow = await page
+    .locator('.media-pane')
+    .evaluate((pane) => pane.scrollWidth - pane.clientWidth);
+  expect(overflow).toBe(0);
 });

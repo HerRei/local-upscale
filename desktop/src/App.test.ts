@@ -1986,7 +1986,7 @@ describe('LocalSR desktop interface', () => {
   it('submits every compatible item when batch mode is selected', async () => {
     const snapshot = readySnapshot([image('first', true), image('second')]);
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: 'Batch' }));
+    await user.click(screen.getByRole('button', { name: 'All 2' }));
     await chooseTask(user, /^Upscale$/);
 
     const start = screen.getByRole('button', { name: 'Start 2 items' });
@@ -2010,6 +2010,11 @@ describe('LocalSR desktop interface', () => {
 
     const start = screen.getByRole('button', { name: 'Start 1 item' }) as HTMLButtonElement;
     expect(start.disabled).toBe(false);
+    // The images are left out; the line under the tabs says why, and so does All on hover.
+    const why =
+      '1 video item can be queued with this setup; select the other media type to configure it separately.';
+    expect(screen.getByRole('button', { name: 'All 1' }).getAttribute('title')).toBe(why);
+    expect(document.querySelector('.process-hint')?.textContent).toBe(why);
     expect((screen.getByRole('button', { name: /^Restore$/ }) as HTMLButtonElement).disabled).toBe(
       true,
     );
@@ -2034,11 +2039,14 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.task = 'upscale';
     const user = await mountWith(snapshot);
 
-    await user.click(screen.getByRole('button', { name: 'Single' }));
+    await user.click(screen.getByRole('button', { name: 'Selected' }));
 
     expect(screen.getAllByText('first.png').length).toBeGreaterThan(0);
     expect(screen.getByText('second.png')).toBeTruthy();
-    expect(screen.getByText(/Single processes only “first.png”/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Selected' }).classList).toContain('active');
+    // Selected says it all: no sentence under it, and All needs no explanation.
+    expect(document.querySelector('.process-hint')).toBeNull();
+    expect(screen.getByRole('button', { name: 'All 2' }).hasAttribute('title')).toBe(false);
     await user.click(screen.getByRole('button', { name: 'Upscale selected' }));
 
     await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
@@ -2053,9 +2061,11 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.task = 'upscale';
     const user = await mountWith(snapshot);
 
-    await user.click(screen.getByRole('button', { name: 'Single' }));
+    await user.click(screen.getByRole('button', { name: 'Selected' }));
 
-    expect(screen.getByText(/Single processes only “selected-video.mp4”/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'All 1' }).getAttribute('title')).toMatch(
+      /select the other media type/,
+    );
     expect((screen.getByRole('button', { name: /^Restore$/ }) as HTMLButtonElement).disabled).toBe(
       true,
     );
@@ -2103,10 +2113,10 @@ describe('LocalSR desktop interface', () => {
     snapshot.runtime.active_job_id = 'running-job';
     await mountWith(snapshot);
 
-    expect((screen.getByRole('button', { name: 'Single' }) as HTMLButtonElement).disabled).toBe(
+    expect((screen.getByRole('button', { name: 'Selected' }) as HTMLButtonElement).disabled).toBe(
       true,
     );
-    expect((screen.getByRole('button', { name: 'Batch' }) as HTMLButtonElement).disabled).toBe(
+    expect((screen.getByRole('button', { name: 'All 2' }) as HTMLButtonElement).disabled).toBe(
       true,
     );
   });

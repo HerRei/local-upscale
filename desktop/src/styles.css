@@ -316,40 +316,39 @@ input:focus-visible {
   opacity: 0.4;
 }
 
-.segmented {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 2px;
-  margin: 0 16px 12px;
-  padding: 3px;
-  border-radius: var(--radius);
-  background: var(--recess);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-}
-.segmented button {
-  min-height: 30px;
-  border: 0;
-  border-radius: var(--radius);
-  background: transparent;
+/* Process Selected | All n: view-option words after a muted label, then the reason, if any,
+   cut to one line (its full text is the tooltip). The words carry 8 px of padding. */
+.process-scope {
+  display: flex;
+  align-items: baseline;
+  gap: 0 4px;
+  margin: 0 0 8px;
+  padding: 0 16px;
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
+  white-space: nowrap;
 }
-.segmented button.active {
-  background: var(--raised);
-  color: var(--text);
-  box-shadow: inset 0 1px rgba(255, 255, 255, 0.06);
+.process-scope .view-switch {
+  flex: none;
 }
-.segmented button:disabled {
+.process-scope .view-switch button:disabled {
+  color: var(--tertiary);
   cursor: default;
-  opacity: 0.55;
+}
+.process-hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .mode-scope {
-  min-height: 30px;
-  margin: -5px 16px 8px;
+  margin: 0 0 8px;
+  padding: 0 16px;
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
   line-height: 1.35;
+  overflow-wrap: anywhere;
 }
+.process-hint.warning,
 .mode-scope.warning {
   color: #e7bc72;
 }
@@ -2232,7 +2231,8 @@ input[type='text'],
     box-shadow: none;
   }
   .media-pane .pane-heading,
-  .media-pane .segmented,
+  .media-pane .process-scope,
+  .media-pane .mode-scope,
   .media-pane .empty-card,
   .media-pane .media-list,
   .media-pane .media-actions {
