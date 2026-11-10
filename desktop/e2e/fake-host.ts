@@ -185,7 +185,9 @@ function hostScript(scenario: Scenario): void {
     s.runtime.worker = scenario.worker ?? 'unavailable';
     if (scenario.running) {
       const rows = scenario.rows ?? {};
-      const running = Object.entries(rows).find(([, row]) => row.status === 'running');
+      const running = Object.entries(rows).find(
+        ([, row]) => row.status === 'running' || row.status === 'cancelling',
+      );
       s.runtime.active_job_id = `job-photo-${running ? running[0] : 1}`;
       s.runtime.status_title = 'Processing';
       s.runtime.progress = running ? (rows[Number(running[0])].progress ?? 40) : 40;

@@ -180,6 +180,8 @@ impl AppState {
                 runtime.clone(),
             )
         };
+        let mut runtime = runtime;
+        runtime.cancel_grace_seconds = crate::cancellation::CANCEL_GRACE.as_secs();
         // The queue row says which model runs ("Running SwinIR · 2 queued").
         for job in &mut jobs {
             if let Some(label) = crate::results::catalog_label(&catalog, &job.model_id) {
@@ -353,5 +355,12 @@ mod tests {
         assert!(snapshot.media.is_empty());
         assert!(snapshot.jobs.is_empty());
         assert_eq!(snapshot.app_version, APP_VERSION);
+    }
+
+    #[test]
+    fn snapshot_tells_how_long_a_cancelled_job_may_take_to_stop() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
+        assert_eq!(state.snapshot().unwrap().runtime.cancel_grace_seconds, 8);
     }
 }

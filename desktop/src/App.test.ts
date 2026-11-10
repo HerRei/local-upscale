@@ -2572,7 +2572,7 @@ describe('LocalSR desktop interface', () => {
     const user = userEvent.setup();
     const cancel = await screen.findByRole('button', { name: 'Cancel' });
     await user.click(cancel);
-    expect(screen.getByRole('button', { name: 'Cancelling…' }).matches(':disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Stopping…' }).matches(':disabled')).toBe(true);
     expect(screen.getByLabelText('Video engine').matches(':disabled')).toBe(true);
     current.runtime.active_job_id = '';
     current.runtime.status_title = 'Cancelled';
@@ -2608,6 +2608,100 @@ describe('LocalSR desktop interface', () => {
       expect(document.querySelector('.status-copy strong')?.textContent ?? '').toMatch(/^Complete/),
     );
     expect(screen.getByRole('button', { name: /^Best/ }).matches(':disabled')).toBe(true);
+  });
+
+  describe('after Cancel queue, while the engine still stops', () => {
+    const lane = (id: string, media: string, status: string, created = 10) => ({
+      id,
+      media_id: media,
+      media_name: `${media}.png`,
+      media_kind: 'image' as const,
+      status,
+      progress: 40,
+      output_path: '',
+      error: '',
+      created_at: created,
+      elapsed_seconds: status === 'completed' ? 31 : 0,
+    });
+    const stopping = () => {
+      const current = readySnapshot(['a', 'b', 'c', 'd', 'e'].map((id, i) => image(id, i === 0)));
+      current.settings.task = 'upscale';
+      current.settings.batch_mode = true;
+      current.runtime.active_job_id = 'j2';
+      current.runtime.active_batch_job_ids = ['j2', 'j3'];
+      current.runtime.status_title = 'Processing';
+      current.runtime.status_detail = 'Finishing the other photos of this batch. · ETA ≈ 9s';
+      current.runtime.progress = 40;
+      current.jobs = [
+        lane('j1', 'a', 'completed'),
+        lane('j2', 'b', 'cancelling'),
+        lane('j3', 'c', 'cancelling'),
+        lane('j4', 'd', 'cancelled'),
+        lane('j5', 'e', 'cancelled'),
+      ];
+      return current;
+    };
+    const strong = () => document.querySelector('.status-copy strong')?.textContent;
+    const mountNow = async (current: AppSnapshot) => {
+      api.bootstrap.mockResolvedValue(structuredClone(current));
+      api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+      render(App);
+    };
+    const rowTexts = () =>
+      [...document.querySelectorAll('.media-pane .media-row')].map((row) => row.textContent);
+
+    it('shows Stopping in the bar, the buttons and the rows of a 2-lane batch', async () => {
+      await mountNow(stopping());
+      await waitFor(() => expect(strong()).toBe('Stopping…'));
+      const detail = document.querySelector('.status-detail')!.textContent;
+      expect(detail).toContain('Stopping 2 photos');
+      expect(detail).toContain('up to 8 s');
+      expect(document.querySelector('.status-bar')!.textContent).not.toMatch(/ETA|≈|40%/);
+      expect(screen.queryByRole('button', { name: 'Cancel queue' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Stopping…' }).matches(':disabled')).toBe(true);
+      expect(screen.queryByRole('button', { name: /^Add \d+ to queue/ })).toBeNull();
+      expect(screen.queryByRole('button', { name: /Only this one|all \d+/i })).toBeNull();
+      const rows = rowTexts();
+      expect(rows[0]).toContain('Done · 31 s');
+      expect(rows[1]).toContain('Stopping…');
+      expect(rows[2]).toContain('Stopping…');
+      expect(rows[3]).not.toMatch(/Stopping|Queued|Running|Done/);
+      expect(rows[4]).not.toMatch(/Stopping|Queued|Running|Done/);
+    });
+
+    it('says what a single stopping job waits for', async () => {
+      const current = stopping();
+      current.runtime.active_batch_job_ids = [];
+      current.jobs = [lane('j2', 'b', 'cancelling')];
+      await mountNow(current);
+      await waitFor(() => expect(strong()).toBe('Stopping…'));
+      expect(document.querySelector('.status-detail')!.textContent).toContain(
+        'Waiting for the engine to stop (up to 8 s).',
+      );
+      expect(screen.getByRole('button', { name: 'Stopping…' }).matches(':disabled')).toBe(true);
+    });
+
+    it('returns to idle with one Stopped line and the idle buttons', async () => {
+      const current = stopping();
+      api.bootstrap.mockResolvedValue(structuredClone(current));
+      api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+      render(App);
+      await waitFor(() => expect(strong()).toBe('Stopping…'));
+      current.runtime.active_job_id = '';
+      current.runtime.active_batch_job_ids = [];
+      current.runtime.status_title = 'Cancelled';
+      current.runtime.status_detail = 'Temporary output was cleaned up.';
+      current.jobs = current.jobs.map((entry) => ({
+        ...entry,
+        status: entry.status === 'completed' ? 'completed' : 'cancelled',
+      }));
+      (api.listenForStateChange.mock.calls[0][0] as () => void)();
+      await waitFor(() => expect(strong()).toBe('Cancelled'));
+      expect(document.querySelector('.status-detail')!.textContent).toBe(
+        'Stopped. 1 of 5 finished.',
+      );
+      expect(screen.queryByRole('button', { name: 'Stopping…' })).toBeNull();
+    });
   });
 
   it('asks before Clear: Cancel keeps the list, confirming clears it', async () => {

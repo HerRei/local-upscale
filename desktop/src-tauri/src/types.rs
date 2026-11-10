@@ -504,6 +504,9 @@ pub struct RuntimeStatus {
     /// may start it again. A protocol mismatch or any other failure never sets this.
     #[serde(default)]
     pub engine_retry: bool,
+    /// How long a cancelled job may take to stop before the engine is restarted.
+    #[serde(default)]
+    pub cancel_grace_seconds: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -665,6 +668,7 @@ impl Default for RuntimeStatus {
             thermal_status: "Not exposed by this backend".into(),
             hardware_note: String::new(),
             engine_retry: false,
+            cancel_grace_seconds: 0,
         }
     }
 }

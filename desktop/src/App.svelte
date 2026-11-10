@@ -297,9 +297,32 @@
   $: cancelling =
     requestingCancel ||
     snapshot.runtime.status_title === 'Cancelling' ||
-    snapshot.jobs.some(
-      (job) => job.id === snapshot.runtime.active_job_id && job.status === 'cancelling',
-    );
+    snapshot.jobs.some((job) => job.status === 'cancelling');
+  // A cancel asked for, the engine not yet idle: what the window says until it is.
+  $: stoppingJobs = snapshot.jobs.filter((job) => job.status === 'cancelling').length;
+  $: stoppingDetail = `${
+    stoppingJobs > 1
+      ? `Stopping ${stoppingJobs} photos; waiting for the engine`
+      : 'Waiting for the engine to stop'
+  } (up to ${snapshot.runtime.cancel_grace_seconds || 8} s).`;
+  let stopWasOn = false;
+  let stopRunSince: number | null = null;
+  let stoppedNote = '';
+  $: trackStop(cancelling, runSince);
+  /** The count of finished pictures of the run, shown once when the engine is idle again. */
+  function trackStop(now: boolean, since: number | null): void {
+    if (now && !stopWasOn) {
+      stopRunSince = since;
+      stoppedNote = '';
+    } else if (!now && stopWasOn && !snapshot.runtime.active_job_id) {
+      const own = snapshot.jobs.filter(
+        (job) => stopRunSince !== null && job.created_at >= stopRunSince,
+      );
+      stoppedNote = `Stopped. ${own.filter((job) => job.status === 'completed').length} of ${own.length} finished.`;
+    }
+    stopWasOn = now;
+  }
+  $: if (snapshot.runtime.active_job_id && !cancelling) stoppedNote = '';
 
   $: settings = withListedDevice(snapshot.settings, snapshot.capabilities);
   // Editing bundle, device and capacity checks.
@@ -433,7 +456,7 @@
   // While a queue runs only new input can be added: a picture with any job in this run
   // (waiting, running, finished, failed or cancelled) is not offered again.
   let runSince: number | null = null;
-  $: runSince = queueRunSince(snapshot.jobs, runSince);
+  $: runSince = queueRunSince(snapshot.jobs, runSince, cancelling);
   $: runMedia = mediaInRun(snapshot.jobs, runSince);
   $: newMedia = runnableMedia.filter((media) => !runMedia.has(media.id));
   // What the status bar adds to the engine's phase text while a picture is processed: the model,
@@ -445,20 +468,24 @@
       : usingTemporalVideo
         ? (selectedVideoModel?.name ?? 'Video model')
         : (selectedModel?.name ?? 'Model');
-  $: activityDetail = activeJobMediaId
-    ? [
-        activityModel,
-        runningStatusDetail,
-        liveFrame >= 0 ? `Frame ${liveFrame + 1}` : '',
-        selectedMedia?.hdr_format && selectedMedia.id === activeJobMediaId
-          ? 'SDR display preview'
-          : '',
-      ]
-        .filter(Boolean)
-        .join(' · ')
-    : '';
-  $: queueSelection =
-    settings.batch_mode && settings.task !== 'edit'
+  $: activityDetail =
+    cancelling && snapshot.runtime.active_job_id
+      ? stoppingDetail
+      : activeJobMediaId
+        ? [
+            activityModel,
+            runningStatusDetail,
+            liveFrame >= 0 ? `Frame ${liveFrame + 1}` : '',
+            selectedMedia?.hdr_format && selectedMedia.id === activeJobMediaId
+              ? 'SDR display preview'
+              : '',
+          ]
+            .filter(Boolean)
+            .join(' · ')
+        : '';
+  $: queueSelection = cancelling
+    ? []
+    : settings.batch_mode && settings.task !== 'edit'
       ? snapshot.runtime.active_job_id
         ? newMedia
         : queueableMedia
@@ -490,6 +517,7 @@
       ? [selectedMedia]
       : [];
   $: scopeChoice =
+    !cancelling &&
     snapshot.media.length > 1 &&
     settings.task !== 'edit' &&
     queueableMedia.length > 1 &&
@@ -2038,7 +2066,7 @@
       ).length
     : 0;
   $: canCancelSelectedImage =
-    selectedInflight > 0 && (selectedInflight > 1 || inflightMediaIds.size > 1);
+    !cancelling && selectedInflight > 0 && (selectedInflight > 1 || inflightMediaIds.size > 1);
   // One job is just cancelled; "queue" is for several running or waiting.
   $: inflightJobCount = Math.max(
     snapshot.jobs.filter((job) =>
@@ -3573,20 +3601,25 @@
         <strong
           >{booting
             ? 'Starting'
-            : saving
-              ? 'Saving the result'
-              : snapshot.runtime.status_title}{snapshot.runtime.active_job_id &&
+            : cancelling && snapshot.runtime.active_job_id
+              ? 'Stopping…'
+              : saving
+                ? 'Saving the result'
+                : snapshot.runtime.status_title}{snapshot.runtime.active_job_id &&
           snapshot.runtime.progress > 0 &&
-          !saving
+          !saving &&
+          !cancelling
             ? ` · ${Math.round(snapshot.runtime.progress)}%`
             : ''}{queuedCount ? ` · ${queuedCount} queued` : ''}</strong
         ><span
           class="status-detail"
           role={activityDetail ? 'status' : undefined}
-          title={booting ? undefined : activityDetail || idleSummary || runningStatusDetail}
+          title={booting
+            ? undefined
+            : activityDetail || stoppedNote || idleSummary || runningStatusDetail}
           >{booting
             ? 'Opening the trusted desktop control plane.'
-            : activityDetail || idleSummary || runningStatusDetail}</span
+            : activityDetail || stoppedNote || idleSummary || runningStatusDetail}</span
         >
         {#if hardwareNote}<span class="status-note" title={hardwareNote}>{hardwareNote}</span>{/if}
         {#if hardwareHint}<span class="status-note" title={hardwareHint.text}
@@ -3599,7 +3632,7 @@
                 >Download page</button
               >{/if}</span
           >{/if}
-        {#if queueEta && !saving}<span
+        {#if queueEta && !saving && !cancelling}<span
             class="queue-eta"
             title="Approximate timings from measured jobs with the same model and settings. Model loading and export can change the estimate."
           >
@@ -3666,7 +3699,7 @@
           >
         {/if}
         <button class="button danger" disabled={cancelling} on:click={cancelWork}
-          >{cancelling ? 'Cancelling…' : inflightJobCount > 1 ? 'Cancel queue' : 'Cancel'}</button
+          >{cancelling ? 'Stopping…' : inflightJobCount > 1 ? 'Cancel queue' : 'Cancel'}</button
         >
       {:else if preparing}
         <button class="button danger start" on:click={() => void cancelPreparation()}

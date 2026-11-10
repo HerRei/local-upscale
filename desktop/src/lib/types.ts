@@ -400,6 +400,8 @@ export interface RuntimeStatus {
   /** What the engine said about the hardware route during this job; outlives progress ticks
    *  (worker.rs keeps it in the host's snapshot until the job ends). */
   hardware_note: string;
+  /** How long a cancelled job may take to stop before the engine is restarted. */
+  cancel_grace_seconds?: number;
 }
 
 export interface BenchmarkRender {

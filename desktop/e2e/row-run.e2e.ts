@@ -156,3 +156,33 @@ test('from 100 % until the file is written the row and the status bar say Saving
   await expect(bar).not.toContainText(/ETA|≈|100%/);
   await expect(rows(page).nth(0)).toContainText('Done · 31 s');
 });
+
+test('after Cancel queue the window says Stopping until the engine is idle', async ({ page }) => {
+  await page.setViewportSize({ width: 1380, height: 860 });
+  await openApp(page, {
+    ...ready,
+    photos: 5,
+    running: true,
+    rows: {
+      1: { status: 'completed', progress: 100, elapsed_seconds: 31 },
+      2: { status: 'cancelling', progress: 40 },
+      3: { status: 'cancelling', progress: 10 },
+      4: { status: 'cancelled' },
+      5: { status: 'cancelled' },
+    },
+  });
+  const bar = page.locator('.status-bar');
+  await expect(bar.locator('strong')).toHaveText('Stopping…');
+  await expect(bar.locator('.status-detail')).toHaveText(
+    'Stopping 2 photos; waiting for the engine (up to 8 s).',
+  );
+  await expect(bar).not.toContainText(/ETA|≈|%/);
+  await expect(bar.getByRole('button', { name: 'Stopping…' })).toBeDisabled();
+  await expect(
+    bar.getByRole('button', { name: /Cancel|Add \d+ to queue|Only this one/ }),
+  ).toHaveCount(0);
+  await expect(rows(page).nth(0)).toContainText('Done · 31 s');
+  await expect(rows(page).nth(1)).toContainText('Stopping…');
+  await expect(rows(page).nth(2)).toContainText('Stopping…');
+  await expect(rows(page).nth(3)).not.toContainText(/Stopping|Queued|Running/);
+});

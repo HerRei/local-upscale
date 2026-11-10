@@ -40,6 +40,16 @@ describe('rowRun', () => {
     expect(rowRun(done, 'p1', 'b')).toMatchObject({ kind: 'done', text: 'Done · 31 s' });
   });
 
+  it('reads Stopping… for a picture whose job is being cancelled', () => {
+    expect(
+      rowRun([job('a', 'p1', { status: 'cancelling', progress: 60 })], 'p1', 'a'),
+    ).toMatchObject({
+      kind: 'running',
+      progress: null,
+      text: 'Stopping…',
+    });
+  });
+
   it('gives each of two lanes its own progress', () => {
     const jobs = [
       job('a', 'p1', { status: 'running', progress: 38 }),

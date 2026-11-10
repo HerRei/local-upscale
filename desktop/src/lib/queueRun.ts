@@ -5,9 +5,14 @@ const INFLIGHT = ['queued', 'starting', 'running', 'cancelling'];
 /** When the current queue run began: the oldest creation time among the jobs that wait or
  *  run, kept for as long as any do. A run ends when none is left; `previous` is the value
  *  from before the snapshot changed. */
-export function queueRunSince(jobs: JobRecord[], previous: number | null): number | null {
+export function queueRunSince(
+  jobs: JobRecord[],
+  previous: number | null,
+  stopping = false,
+): number | null {
   const open = jobs.filter((job) => INFLIGHT.includes(job.status));
-  if (!open.length) return null;
+  // A cancel the engine has not finished carrying out is still the same run.
+  if (!open.length) return stopping ? previous : null;
   return previous ?? Math.min(...open.map((job) => job.created_at));
 }
 

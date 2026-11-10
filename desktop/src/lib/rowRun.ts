@@ -48,7 +48,7 @@ export function rowRun(jobs: JobRecord[], mediaId: string, activeJobId: string):
       inflight.find((job) => job.status !== 'queued');
     if (!running) return { kind: 'queued', progress: null, text: 'Queued', title };
     if (running.status === 'cancelling')
-      return { kind: 'running', progress: null, text: 'Cancelling', title };
+      return { kind: 'running', progress: null, text: 'Stopping…', title };
     const known = running.status === 'running' && running.progress > 0;
     const progress = known ? Math.min(100, Math.max(0, running.progress)) : null;
     if (progress !== null && isSaving(progress))
