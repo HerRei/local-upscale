@@ -479,9 +479,29 @@ def test_float_grey_tiff_spans_the_full_range_instead_of_turning_black(tmp_path)
     assert abs(pixels[32] - 32 * 255 / 63) <= 1
 
 
-def test_float_grey_tiff_above_one_is_refused_instead_of_clipped_to_white(tmp_path):
-    path = tmp_path / "grey_hdr.tif"
-    Image.fromarray(np.linspace(0.0, 200.0, 64, dtype=np.float32)[None, :]).save(path)
+@pytest.mark.parametrize(
+    "peak,range_end", [(1.0, None), (255.0, 255), (254.0, 255), (65535.0, 65535), (1000.0, 65535)]
+)
+def test_float_grey_tiff_ranges_are_told_apart_by_their_largest_value(tmp_path, peak, range_end):
+    path = tmp_path / "grey_float.tif"
+    Image.fromarray(np.linspace(0.0, peak, 64, dtype=np.float32)[None, :]).save(path)
+    manager = ImageManager()
+    pixels = manager.load(str(path))["tensor"][0, 0].mul(255).round().numpy()
+    assert pixels[0] == 0
+    assert abs(pixels[-1] - 255 * peak / (range_end or 1)) <= 1
+    notes = [note for note in manager.notes if "floating-point" in note]
+    if range_end is None:
+        assert not notes
+    else:
+        assert len(notes) == 1 and f"from 0 to {range_end}" in notes[0]
+
+
+@pytest.mark.parametrize("bad", [65536.0 * 2, -5.0, float("nan"), float("inf")])
+def test_float_grey_tiff_outside_every_range_is_refused(tmp_path, bad):
+    path = tmp_path / "grey_bad.tif"
+    values = np.linspace(0.0, 1.0, 64, dtype=np.float32)[None, :]
+    values[0, 10] = bad
+    Image.fromarray(values).save(path)
     with pytest.raises(ValueError, match="floating-point"):
         ImageManager().load(str(path))
 

@@ -157,23 +157,29 @@ def require_pixel_budget(width: int, height: int) -> None:
         raise ValueError(TOO_LARGE_MESSAGE)
 
 
-def _float_grey_to_16_bit(image: Image.Image) -> Image.Image:
-    """Take a 32-bit float grey image, whose pixels run from 0 to 1, to 16 bits.
+def _float_grey_to_16_bit(image: Image.Image) -> tuple[Image.Image, int | None]:
+    """Take a 32-bit float grey image to 16 bits, and say which range it was read as.
 
     Pillow's own conversion keeps float values as they are and clips them to 0..255, so
-    every pixel of a 0..1 image became black. Values above 1 (HDR, or floats that hold
-    0..255) have no certain meaning, so they are refused rather than guessed.
+    every pixel of a 0..1 image became black. The three common conventions are told apart
+    by the largest value: up to 1 is 0..1, up to 255 is 0..255, up to 65535 is 0..65535.
+    The second element is the upper end of the range when it is not 0..1, else None.
+    Anything beyond that, below zero or not a number has no certain meaning and is refused.
     """
     values = np.asarray(image, dtype=np.float32)
-    if not np.isfinite(values).all() or values.max() > 1.001:
+    if not np.isfinite(values).all() or values.min() < -0.001 or values.max() > 65535.0 + 0.001:
         raise ValueError(
-            "This floating-point image holds values above 1 or not-a-number values. "
-            "Only floating-point images whose values run from 0 to 1 are supported; "
-            "save an 8-bit or 16-bit copy first."
+            "This floating-point image holds negative values, values above 65535 or "
+            "not-a-number values. Only floating-point images whose values run from 0 to 1, "
+            "0 to 255 or 0 to 65535 are supported; save an 8-bit or 16-bit copy first."
         )
-    wide = Image.fromarray(np.rint(np.clip(values, 0.0, 1.0) * 65535.0).astype(np.uint16))
+    peak = float(values.max())
+    scale = None if peak <= 1.001 else 255 if peak <= 255.0 + 0.001 else 65535
+    wide = Image.fromarray(
+        np.rint(np.clip(values / (scale or 1), 0.0, 1.0) * 65535.0).astype(np.uint16)
+    )
     wide.info.update(image.info)
-    return wide
+    return wide, scale
 
 
 def _is_float_tiff(path: str | Path) -> bool:
@@ -459,7 +465,12 @@ class ImageManager:
                 raise OSError(f"Could not open image: {path}")
             img = ImageOps.exif_transpose(metadata_img)
             if img.mode == "F":
-                img = _float_grey_to_16_bit(img)
+                img, float_range = _float_grey_to_16_bit(img)
+                if float_range is not None:
+                    self.notes.append(
+                        f"{Path(path).name} holds floating-point values up to "
+                        f"{float_range}; they were read as a range from 0 to {float_range}."
+                    )
             converted_icc = None
 
         self.original_mode = img.mode
