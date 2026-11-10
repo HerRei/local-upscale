@@ -62,6 +62,24 @@ export function hardwareChoices(capabilities: CapabilityInfo, architecture?: str
   );
 }
 
+/**
+ * The settings the window shows and sends. A saved device the engine does not list (an
+ * unplugged GPU) reads as the CPU, which the host also starts with; the saved value stays
+ * in the snapshot, so the choice returns with the device.
+ */
+export function withListedDevice<T extends Pick<UiSettings, 'device_id'>>(
+  settings: T,
+  capabilities: CapabilityInfo,
+): T {
+  const { devices } = capabilities;
+  if (!devices.length || devices.some((device) => device.id === settings.device_id))
+    return settings;
+  return {
+    ...settings,
+    device_id: devices.some((device) => device.id === 'cpu') ? 'cpu' : devices[0].id,
+  };
+}
+
 export function selectedHardware(
   settings: Pick<UiSettings, 'device_id' | 'neural_engine'>,
   capabilities: CapabilityInfo,

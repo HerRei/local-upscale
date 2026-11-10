@@ -1307,7 +1307,10 @@ describe('LocalSR desktop interface', () => {
       snapshot.settings.task = 'video';
       snapshot.settings.selected_video_model_id = 'seedvr2_3b';
       if (backend === 'incompatible-runtime') snapshot.engine!.video_engines = ['spandrel_image'];
-      else snapshot.settings.device_id = backend;
+      else {
+        snapshot.settings.device_id = backend;
+        snapshot.capabilities.devices.push(gpu(backend, backend.split(':')[0], 'Test GPU'));
+      }
       snapshot.catalog.video_models.forEach((model) => {
         model.installed = false;
       });
@@ -1536,6 +1539,23 @@ describe('LocalSR desktop interface', () => {
     await waitFor(() => expect(screen.queryByText(/DirectML has not been tested/)).toBeNull());
     expect(screen.getByText(/checks once that it gives the same result as the CPU/)).toBeTruthy();
     expect((screen.getByLabelText('Precision') as HTMLSelectElement).disabled).toBe(true);
+  });
+
+  it('shows the CPU and starts on it when the saved GPU is no longer listed', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.device_id = 'cuda:7';
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Upscale$/);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    const hardware = screen.getByLabelText('Hardware') as HTMLSelectElement;
+    expect(hardware.selectedOptions[0]?.textContent).toBe('CPU');
+    await user.click(screen.getByRole('button', { name: 'Upscale selected' }));
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+    expect(api.startJobs).toHaveBeenCalledWith(expect.objectContaining({ device: 'cpu' }));
+    // The saved choice stays until the user makes another: the GPU may be plugged in again.
+    expect(api.saveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ device_id: 'cuda:7' }),
+    );
   });
 
   function gpu(id: string, type: string, name: string): DeviceInfo {

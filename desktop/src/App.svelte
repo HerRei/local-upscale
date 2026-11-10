@@ -79,7 +79,7 @@
     toggleFixStage,
   } from './lib/state';
   import { demoSnapshot } from './lib/demo';
-  import { engineLabel, hardwarePatch } from './lib/neuralEngine';
+  import { engineLabel, hardwarePatch, withListedDevice } from './lib/neuralEngine';
   import { cpuHint, deviceLabel } from './lib/hardwareRoutes';
   import type {
     AppSnapshot,
@@ -270,7 +270,7 @@
       (job) => job.id === snapshot.runtime.active_job_id && job.status === 'cancelling',
     );
 
-  $: settings = snapshot.settings;
+  $: settings = withListedDevice(snapshot.settings, snapshot.capabilities);
   // Editing bundle, device and capacity checks.
   $: editModels = snapshot.edit.models;
   $: editingDevice = editDevice(snapshot.capabilities, settings);
@@ -1660,7 +1660,7 @@
       if (!folder?.paths.length) return;
       await api.addMedia(folder.paths, false);
       await api.saveSettings({
-        ...settings,
+        ...snapshot.settings,
         batch_mode: true,
         output_directory: folder.outputDirectory,
       });

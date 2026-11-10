@@ -6,6 +6,7 @@ import {
   hardwareChoices,
   hardwarePatch,
   selectedHardware,
+  withListedDevice,
 } from './neuralEngine';
 import type { CapabilityInfo, DeviceInfo } from './types';
 
@@ -124,5 +125,26 @@ describe('Intel NPU hardware entry', () => {
     expect(acceleratorFor(capabilities(true), 'FBCNN')).toBe('Neural Engine');
     expect(acceleratorFor(capabilities(false), 'SPAN')).toBeUndefined();
     expect(acceleratorFor(npuMachine(), undefined)).toBeUndefined();
+  });
+});
+
+describe('withListedDevice', () => {
+  const listed = (...ids: string[]) =>
+    ({ devices: ids.map((id) => device(id)) }) as unknown as CapabilityInfo;
+
+  it('keeps a device the engine lists, and any device before it has listed any', () => {
+    const settings = { device_id: 'cuda:0' };
+    expect(withListedDevice(settings, listed('cuda:0', 'cpu'))).toBe(settings);
+    expect(withListedDevice(settings, listed())).toBe(settings);
+  });
+
+  it('reads an unlisted device as the CPU without changing the saved settings', () => {
+    const settings = { device_id: 'cuda:7' };
+    expect(withListedDevice(settings, listed('mps', 'cpu')).device_id).toBe('cpu');
+    expect(settings.device_id).toBe('cuda:7');
+  });
+
+  it('falls back to the first listed device when the CPU is not listed', () => {
+    expect(withListedDevice({ device_id: 'cuda:7' }, listed('mps')).device_id).toBe('mps');
   });
 });
