@@ -3316,14 +3316,19 @@ describe('Several fixes in one pass', () => {
     const jpegRow = rows()[1];
     const end = jpegRow.querySelector('.plan-end')!;
     expect([...end.querySelectorAll('button')].map((button) => button.textContent)).toEqual([
-      'Change…',
       '↑',
       '↓',
+      'Change…',
     ]);
+    // A fix that can move one way shows one arrow, with no empty slot beside it.
+    expect(
+      [...rows()[2].querySelectorAll('.plan-end button')].map((button) => button.textContent),
+    ).toEqual(['↑', 'Change…']);
+    expect(document.querySelector('.move-gap')).toBeNull();
     expect(move('Move the JPEG fix earlier').getAttribute('title')).toBe('Move earlier');
     expect(move('Move the JPEG fix later').getAttribute('title')).toBe('Move later');
     expect(jpegRow.querySelector('.name')?.getAttribute('title')).toBe('FBCNN Color');
-    expect(rows()[0].querySelector('.plan-notes')?.textContent).toMatch(/^Can add artifacts/);
+    expect(rows()[0].querySelector('.plan-note')?.textContent).toMatch(/^Can add artifacts/);
     expect(screen.queryByText('Move earlier')).toBeNull();
 
     await user.click(move('Move the noise fix earlier'));

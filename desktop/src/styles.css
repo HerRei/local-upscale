@@ -2383,62 +2383,57 @@ input[type='number'],
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Line 2, from the name to the right edge: the note in at most two lines (the full text is
-   its tooltip), the library hint after it, Try others at the right. */
-.plan-notes,
+/* Line 2 holds the library links, line 3 the note; both run from the name column to the right
+   edge. The note takes at most two lines (the full text is its tooltip). */
+.plan-links,
+.plan-note,
 .plan-extra {
   grid-column: 2 / -1;
   min-width: 0;
 }
-.plan-notes {
+.plan-links {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: space-between;
   gap: 10px;
   /* Room for the 24 px targets of the links on both lines (see .model-section .link-button). */
   margin-top: 6px;
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
-  line-height: 1.4;
+}
+.plan-links .link-button,
+.plan-links .try-others {
+  flex: none;
+  white-space: nowrap;
+}
+.plan-links .try-others {
+  margin-left: auto;
 }
 .plan-note {
-  flex: 0 1 auto;
-  min-width: 0;
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   overflow: hidden;
-}
-.plan-note:empty {
-  display: none;
-}
-.plan-notes .link-button,
-.plan-notes .try-others {
-  flex: none;
-  white-space: nowrap;
-}
-.plan-notes .try-others {
-  margin-left: auto;
+  margin: 2px 0 0;
+  color: var(--secondary);
+  font-size: calc(12px * var(--ui-scale));
+  line-height: 1.4;
 }
 .plan-end {
   display: flex;
   align-items: center;
   gap: 4px;
-}
-/* With arrows in the plan, every first line is as tall as the arrow buttons. */
-.plan.movable .plan-end {
+  /* As tall as the arrow buttons, so a row's links never touch the line below. */
   min-height: 24px;
 }
 .plan-moves {
   display: flex;
 }
-.move-button,
-.move-gap {
-  width: 24px;
-  height: 24px;
-}
 .move-button {
   display: grid;
   place-items: center;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: 0;
   border-radius: var(--radius);

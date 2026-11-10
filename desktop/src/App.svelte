@@ -3273,8 +3273,7 @@
                   {@const fixIndex = stage.fix
                     ? imageFixes.findIndex((selection) => selection.fix === stage.fix)
                     : -1}
-                  <!-- Line 1: role, name, Change… and the arrows; line 2 only when there is
-                       something to say. -->
+                  <!-- Line 1: role, name, arrows and Change…; line 2 the library links; line 3 the note. -->
                   <div class="plan-row" role="listitem">
                     <span class="stage">{stage.label}</span>
                     <div class="name" title={name}>{name}</div>
@@ -3286,6 +3285,25 @@
                             ? 'Needs your file'
                             : ''}</span
                       >
+                      {#if movable}
+                        <!-- Only the moves this fix can make, directly left of Change…. -->
+                        <span class="plan-moves">
+                          {#if fixIndex > 0}<button
+                              class="move-button"
+                              type="button"
+                              title="Move earlier"
+                              aria-label={`Move the ${FIX_NAMES[stage.fix!]} fix earlier`}
+                              on:click={() => void moveFix(stage.fix!, -1)}>↑</button
+                            >{/if}
+                          {#if fixIndex >= 0 && fixIndex < imageFixes.length - 1}<button
+                              class="move-button"
+                              type="button"
+                              title="Move later"
+                              aria-label={`Move the ${FIX_NAMES[stage.fix!]} fix later`}
+                              on:click={() => void moveFix(stage.fix!, 1)}>↓</button
+                            >{/if}
+                        </span>
+                      {/if}
                       {#if changeSlot}<button
                           class="link-button"
                           type="button"
@@ -3299,42 +3317,8 @@
                           on:click={() => openLibrary(changeSlot, stage.fix)}>Change…</button
                         >
                       {/if}
-                      {#if movable}
-                        <!-- Only the moves this fix can make; the other leaves its place
-                             empty so the arrows line up from fix to fix. -->
-                        <span class="plan-moves">
-                          {#if fixIndex > 0}<button
-                              class="move-button"
-                              type="button"
-                              title="Move earlier"
-                              aria-label={`Move the ${FIX_NAMES[stage.fix!]} fix earlier`}
-                              on:click={() => void moveFix(stage.fix!, -1)}>↑</button
-                            >{:else}<span class="move-gap"></span>{/if}
-                          {#if fixIndex >= 0 && fixIndex < imageFixes.length - 1}<button
-                              class="move-button"
-                              type="button"
-                              title="Move later"
-                              aria-label={`Move the ${FIX_NAMES[stage.fix!]} fix later`}
-                              on:click={() => void moveFix(stage.fix!, 1)}>↓</button
-                            >{:else}<span class="move-gap"></span>{/if}
-                        </span>
-                      {/if}
                     </div>
-                    {#if meta || warning || stage.custom !== undefined || moreModelCount || tryOthers}<div
-                        class="plan-notes"
-                      >
-                        <span
-                          class="plan-note"
-                          title={(stage.custom !== undefined
-                            ? settings.custom_model_path
-                            : [meta, warning].filter(Boolean).join(' · ')) || undefined}
-                          >{#if stage.custom !== undefined}<span class="path-text"
-                              >{settings.custom_model_path ||
-                                'Safetensors is strongly recommended.'}</span
-                            >{:else}{meta}{#if meta && warning}{' · '}{/if}{#if warning}<span
-                                >{warning}</span
-                              >{/if}{/if}</span
-                        >
+                    {#if moreModelCount || tryOthers}<div class="plan-links">
                         {#if moreModelCount}<button
                             class="link-button"
                             type="button"
@@ -3359,6 +3343,19 @@
                             /></span
                           >{/if}
                       </div>{/if}
+                    {#if meta || warning || stage.custom !== undefined}<p
+                        class="plan-note"
+                        title={(stage.custom !== undefined
+                          ? settings.custom_model_path
+                          : [meta, warning].filter(Boolean).join(' · ')) || undefined}
+                      >
+                        {#if stage.custom !== undefined}<span class="path-text"
+                            >{settings.custom_model_path ||
+                              'Safetensors is strongly recommended.'}</span
+                          >{:else}{meta}{#if meta && warning}{' · '}{/if}{#if warning}<span
+                              >{warning}</span
+                            >{/if}{/if}
+                      </p>{/if}
                     {#if stage.custom !== undefined || (target && !stage.installed)}<div
                         class="plan-extra"
                       >

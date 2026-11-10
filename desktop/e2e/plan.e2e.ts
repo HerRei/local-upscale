@@ -78,8 +78,29 @@ test.describe('plan card', () => {
       expect(arrow.height).toBeGreaterThanOrEqual(24);
     }
     // The blur fix's warning stays within two lines under its name.
-    const notes = (await rows(page).first().locator('.plan-notes').boundingBox())!;
+    const notes = (await rows(page).first().locator('.plan-note').boundingBox())!;
     expect(notes.height).toBeLessThanOrEqual(2 * 18);
+    // Change… is one column on every row, the arrows sit directly left of it, and no name is cut.
+    const changes = page.locator('.plan-row').getByRole('button', { name: /^Change/ });
+    expect(await changes.count()).toBe(4);
+    const rights = await changes.evaluateAll((els) =>
+      els.map((el) => Math.round(el.getBoundingClientRect().right)),
+    );
+    expect(new Set(rights).size).toBe(1);
+    const later = (await page
+      .getByRole('button', { name: 'Move the JPEG fix later' })
+      .boundingBox())!;
+    const change = (await changes.nth(1).boundingBox())!;
+    expect(change.x - (later.x + later.width)).toBeLessThanOrEqual(8);
+    const cut = await rows(page)
+      .locator('.name')
+      .evaluateAll((els) => els.filter((el) => el.scrollWidth > el.clientWidth).length);
+    expect(cut).toBe(0);
+    // The note spans the name column to the right edge.
+    const name = (await rows(page).first().locator('.name').boundingBox())!;
+    const rowBox = (await rows(page).first().boundingBox())!;
+    expect(Math.abs(notes.x - name.x)).toBeLessThan(1);
+    expect(notes.x + notes.width).toBeGreaterThan(rowBox.x + rowBox.width - 4);
   });
 
   test('Faces is unavailable without a face model', async ({ page }) => {
