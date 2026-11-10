@@ -10,6 +10,9 @@ listed under 0.3.1 to 0.3.8 below, which were never published on their own.
 - Compare videos in the same slider or linked boxes as photos, with one synchronised
   transport, a shared timeline and audio from the first slot.
 
+- Finished videos appear in Outputs with their catalog model name, duration, frame rate
+  and size; they can be played, revealed, opened and used as input.
+- An Interpolate help tip explains the video setting.
 - Two start buttons in the status bar: "Only this one" runs the selected picture and a
   second button ("Upscale all N") runs all of them. A button that would start 0 items
   is hidden.
@@ -17,7 +20,7 @@ listed under 0.3.1 to 0.3.8 below, which were never published on their own.
 - Click a result in Outputs to see it in the centre, alone or against its original.
   Picking for Compare moves to a box at the end of the row; Compare opens only from
   "Compare these N", shows its tabs only while it is open and closes below two picks.
-- Clear in the Outputs list asks first and empties the list without touching any file.
+- Clear in the Outputs list asks first and hides finished jobs without touching any file.
   Unpick all keeps its old action. Every Outputs group starts open, and the empty tab
   says how to fill it.
 - An Edit result's list row shows its file size next to its time and its instruction as
@@ -35,6 +38,9 @@ listed under 0.3.1 to 0.3.8 below, which were never published on their own.
 
 ### Changed
 
+- Other inputs and results can be viewed while a video job runs.
+- The External FFmpeg row is restyled, and Faces and HDR choices are kept when switching
+  the video engine to SeedVR2 and back.
 - The remaining-time estimate is rewritten. An image job's time comes from its steady
   pixel rate and a video's from its steady frame rate, both without model loading or
   the first tile or frame, and none is shown until a rate is measured. The shown time
@@ -67,6 +73,17 @@ listed under 0.3.1 to 0.3.8 below, which were never published on their own.
 
 ### Fixed
 
+- H.264 and HEVC export no longer fails with "Cannot Encode Media" for low-sample-rate
+  audio: the AAC bit rate is one the system encoder accepts.
+- With Video format Automatic, an early system HEVC encoder refusal can continue as AV1
+  with a note, using at most 256 MiB of temporary space.
+- Preparation notices disappear when preparation ends, and the status line shows each
+  fact once.
+- Clear in Outputs hides only finished jobs; an unrecorded result path is refused before
+  any disk access.
+- The free-space estimate handles very large videos, temporal models’ target resolution
+  and the reserve override.
+- On Windows, an update-journal location beneath a file is reported as an error.
 - A result is never written over an existing file. The finished file is renamed into its
   final name without replacing anything, a file that appeared at that name during the job
   makes the job fail for that item, and names that differ only by letter case or Unicode
