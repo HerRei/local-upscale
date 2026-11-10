@@ -3060,7 +3060,7 @@ describe('LocalSR desktop interface', () => {
       });
       stateChanged();
       await user.click(screen.getByRole('tab', { name: /^Outputs/ }));
-      const row1 = await screen.findByRole('checkbox', { name: `SPAN x4, ${ended}.png` });
+      const row1 = await screen.findByRole('button', { name: `Show SPAN x4, ${ended}.png` });
       expect(row1.textContent).toContain('SPAN x4');
       expect(screen.getByRole('tab', { name: /^Outputs/ }).textContent).toContain('1');
       // A second one follows the same way.
@@ -4835,6 +4835,52 @@ describe('Comparing saved results', () => {
     expect(named('.preview-header')).toBe('26811.jpeg');
     await user.click(screen.getByRole('tab', { name: /Outputs/ }));
     await waitFor(() => expect(named('.group-head')).toBe('26811.jpeg'));
+  });
+
+  it('a click on an Outputs row selects its input and shows that result in the Preview', async () => {
+    const current = pairHost(readySnapshot([image('first', true), image('second')]), {
+      a1: { width: 1600, height: 1067 },
+      b1: { width: 512, height: 320 },
+    });
+    current.jobs = [completedJob('a1', 'first'), completedJob('b1', 'second')];
+    api.listAllMediaResults.mockResolvedValue([
+      historyOf('first', [row('a1')]),
+      historyOf('second', [row('b1', { kind: 'edit', model_label: 'Qwen Edit', scale: 0 })]),
+    ]);
+    api.listMediaResults.mockImplementation(async (id: string) =>
+      id === 'first' ? historyOf('first', [row('a1')]) : historyOf('second', [row('b1')]),
+    );
+    api.bootstrap.mockResolvedValue(structuredClone(current));
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+    api.selectMedia.mockImplementation(async (id: string) => {
+      current.media.forEach((item) => (item.selected = item.id === id));
+      api.refreshSnapshot.mockResolvedValue(structuredClone(current));
+    });
+    render(App);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('tab', { name: /^Outputs/ }));
+    // Two picks, Compare open: a click on a row still goes to the Preview of that picture.
+    await user.click(await screen.findByRole('checkbox', { name: 'Original, first.png' }));
+    await user.click(screen.getByRole('checkbox', { name: 'a1, first.png' }));
+    await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
+    expect(screen.getByRole('tablist', { name: 'Main pane' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Show Qwen Edit, second.png' }));
+    expect(api.selectMedia).toHaveBeenCalledWith('second');
+    await waitFor(() =>
+      expect(document.querySelector('.result-image')?.getAttribute('src')).toContain('b1'),
+    );
+    expect(screen.queryByRole('tablist', { name: 'Main pane' })).toBeNull();
+    // The shown row is marked, and no pick changed.
+    expect(
+      screen.getByRole('button', { name: 'Show Qwen Edit, second.png' }).closest('.media-row')
+        ?.classList,
+    ).toContain('selected');
+    expect(
+      screen.getByRole('checkbox', { name: 'a1, first.png' }).getAttribute('aria-checked'),
+    ).toBe('true');
+    expect(
+      screen.getByRole('checkbox', { name: 'Qwen Edit, second.png' }).getAttribute('aria-checked'),
+    ).toBe('false');
   });
 
   it('drops the picks of an image that left the list, in Compare and in the request to the host', async () => {

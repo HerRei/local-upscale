@@ -11,6 +11,9 @@
   export let togglePick: (pick: ComparePick) => void;
   export let clearPicks: () => void;
   export let clearOutputs: () => void;
+  /** The row the centre pane shows now, if it shows one of these. */
+  export let shown: ComparePick | null = null;
+  export let showResult: (pick: ComparePick) => void;
   export let openCompare: () => void;
   export let compareActive: boolean;
   export let error = '';
@@ -74,11 +77,18 @@
         ? `${result.prompt.slice(0, 120)}…`
         : result.prompt
       : '';
-  /** What a click on a row does: it marks the row for Compare, or takes the mark away. */
-  const rowTip = (result: ResultSummary | null, picked: boolean) =>
-    [picked ? 'Remove from Compare' : 'Pick for Compare', promptTip(result)]
+  /** What a click on a row does: it shows the result (or the original) in the centre. */
+  const rowTip = (result: ResultSummary | null) =>
+    [result ? 'Show this result' : 'Show the original', promptTip(result)]
       .filter(Boolean)
       .join('\n');
+  const pickTip = (n: number) => (n > 0 ? `Picked for Compare, slot ${n}` : 'Pick for Compare');
+  /** Space on a focused row picks it; Enter and a click show it. */
+  function rowKey(event: KeyboardEvent, pick: ComparePick): void {
+    if (event.key !== ' ') return;
+    event.preventDefault();
+    togglePick(pick);
+  }
 </script>
 
 {#if error}<div class="empty-card" role="alert">Could not load outputs: {error}</div>
@@ -112,17 +122,19 @@
       {#if !folded.has(group.media.id)}
         {#each [{ pick: group.original, result: null }, ...group.outputs] as entry (pickKey(entry.pick))}
           {@const n = slot(entry.pick)}
-          <!-- Rows read like the Inputs list; a click marks one for Compare. -->
-          <div class="media-row" class:selected={n > 0}>
+          <!-- Rows read like the Inputs list; a click shows the result, the box at the end picks it. -->
+          <div
+            class="media-row"
+            class:selected={shown !== null && pickKey(shown) === pickKey(entry.pick)}
+          >
             <button
               class="media-select"
               type="button"
-              role="checkbox"
-              title={rowTip(entry.result, n > 0)}
-              aria-checked={n > 0}
-              aria-label={`${entry.result?.model_label ?? 'Original'}, ${group.media.name}`}
-              disabled={!n && (picks.length >= MAX_SLOTS || entry.result?.available === false)}
-              on:click={() => togglePick(entry.pick)}
+              title={rowTip(entry.result)}
+              aria-label={`Show ${entry.result?.model_label ?? 'the original'}, ${group.media.name}`}
+              on:click={() => showResult(entry.pick)}
+              on:keydown={(event) => rowKey(event, entry.pick)}
+              on:keyup={(event) => event.key === ' ' && event.preventDefault()}
             >
               <div class="thumb">
                 {#if group.media.preview_data_url}<img
@@ -138,8 +150,19 @@
                     : `${group.media.width} × ${group.media.height}`}</span
                 >
               </div>
-              {#if n}<b class="slot-number">{n}</b>{/if}
             </button>
+            <button
+              class="pick-box"
+              class:on={n > 0}
+              type="button"
+              role="checkbox"
+              aria-checked={n > 0}
+              aria-label={`${entry.result?.model_label ?? 'Original'}, ${group.media.name}`}
+              title={pickTip(n)}
+              disabled={!n && (picks.length >= MAX_SLOTS || entry.result?.available === false)}
+              on:click={() => togglePick(entry.pick)}
+              >{#if n}<b class="slot-number">{n}</b>{/if}</button
+            >
           </div>
         {/each}
       {/if}
@@ -220,10 +243,27 @@
   .media-select {
     cursor: pointer;
   }
-  .media-select .slot-number {
-    margin-left: auto;
+  /* The box at the row's end: empty until picked, then the slot number, like a checkbox. */
+  .pick-box {
+    flex: none;
+    width: 24px;
+    height: 24px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
   }
-  .media-select:disabled {
+  .pick-box:hover:not(:disabled) {
+    border-color: var(--secondary);
+  }
+  .pick-box.on {
+    background: rgba(255, 255, 255, 0.075);
+  }
+  .pick-box:disabled {
     opacity: 0.45;
     cursor: default;
   }

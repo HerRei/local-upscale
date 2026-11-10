@@ -1765,6 +1765,29 @@
     }
   }
 
+  // The Outputs row that matches what the centre pane shows.
+  $: shownPick = ((): ComparePick | null => {
+    if (mainTab !== 'preview' || !selectedImage || !pairShown) return null;
+    return choice.showing === ORIGINAL
+      ? { kind: 'original', media_id: selectedImage.id }
+      : { kind: 'output', media_id: selectedImage.id, job_id: choice.showing };
+  })();
+
+  /** A click on an Outputs row: that input and that result in the centre pane's Preview. */
+  async function showResult(pick: ComparePick): Promise<void> {
+    const results = bulkHistories.find((entry) => entry.media_id === pick.media_id)?.results ?? [];
+    const showing = pick.kind === 'original' ? ORIGINAL : pick.job_id;
+    const newest = results.find((row) => row.status === 'completed' && row.available);
+    const against = pick.kind === 'original' ? (newest?.job_id ?? ORIGINAL) : ORIGINAL;
+    const remembered = { ...rememberedResults };
+    for (const row of results)
+      if ([showing, against].includes(row.job_id)) remembered[row.job_id] = row;
+    rememberedResults = remembered;
+    pairChoices = { ...pairChoices, [pick.media_id]: { showing, against, pinned: true } };
+    mainTab = 'preview';
+    await selectQueueMedia(pick.media_id);
+  }
+
   /** A manual choice pins the pair of this image until a new run starts. */
   function choosePair(side: 'showing' | 'against', target: string): void {
     if (!selectedImage) return;
@@ -2804,6 +2827,8 @@
       togglePick={(pick) => setComparePicks(toggleSlot(comparePicks, pick))}
       clearPicks={() => setComparePicks([])}
       clearOutputs={askClearOutputs}
+      shown={shownPick}
+      {showResult}
       openCompare={() => {
         if (comparePicks.length < 2) return;
         mainTab = 'compare';

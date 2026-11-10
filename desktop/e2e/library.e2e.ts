@@ -48,7 +48,9 @@ test.describe('Inputs and Outputs tabs', () => {
     await expect(outputs.getByText('512 × 320 · 1:01')).toBeVisible();
     await expect(outputs.getByText('512 × 320 · 48s')).toBeVisible();
     await expect(outputs.getByText('Quick · 4× · 31s')).toBeVisible();
-    await expect(edits.first()).toHaveAttribute('title', 'Pick for Compare\nMake it dusk');
+    await expect(
+      page.getByRole('button', { name: 'Show FLUX.2 klein 4B, Alpine lake 1.jpg' }).first(),
+    ).toHaveAttribute('title', 'Show this result\nMake it dusk');
     await tick(page, 'Original, Alpine lake 1.jpg').check();
     await edits.first().check();
     await page.getByRole('button', { name: 'Compare these 2' }).click();
@@ -95,6 +97,28 @@ test.describe('Inputs and Outputs tabs', () => {
       await page.keyboard.press('Space');
       await expect(header).toHaveAttribute('aria-expanded', 'true');
     });
+
+  test('a click on an output row shows it in the centre, the box at its end only picks', async ({
+    page,
+  }) => {
+    await openApp(page, withEdits);
+    await mediaTabs(page).getByRole('tab', { name: 'Outputs 3' }).click();
+    const row = page.getByRole('button', { name: 'Show SPAN ×4, Alpine lake 1.jpg' });
+    await row.click();
+    await expect(row.locator('xpath=..')).toHaveClass(/selected/);
+    await expect(page.locator('.result-image')).toBeVisible();
+    await expect(page.locator('.divider-labels')).toContainText('SPAN ×4');
+    await expect(page.getByText(/of 4 chosen/)).toHaveCount(0);
+    const edit = page
+      .getByRole('button', { name: 'Show FLUX.2 klein 4B, Alpine lake 1.jpg' })
+      .first();
+    await tick(page, 'FLUX.2 klein 4B, Alpine lake 1.jpg').first().click();
+    await expect(page.getByText(/^1 of 4 chosen/)).toBeVisible();
+    await expect(row.locator('xpath=..')).toHaveClass(/selected/);
+    await edit.click();
+    await expect(page.locator('.divider-labels')).toContainText('FLUX.2 klein 4B');
+    await expect(edit.locator('xpath=..')).toHaveClass(/selected/);
+  });
 
   test('both tabs have an empty state', async ({ page }) => {
     await openApp(page, empty);

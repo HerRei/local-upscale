@@ -14,6 +14,8 @@
   export let togglePick: (pick: ComparePick) => void;
   export let clearPicks: () => void;
   export let clearOutputs: () => void;
+  export let shown: ComparePick | null = null;
+  export let showResult: (pick: ComparePick) => void;
   export let openCompare: () => void;
   export let compareActive: boolean;
   export let historyError = '';
@@ -146,6 +148,8 @@
       {togglePick}
       {clearPicks}
       {clearOutputs}
+      {shown}
+      {showResult}
       {openCompare}
       {compareActive}
       error={historyError}

@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, expect, describe, it, vi } from 'vitest';
 import OutputsList from './OutputsList.svelte';
 import { outputGroups } from './lib/compareOutputs';
-import type { MediaItem, MediaResults, ResultSummary } from './lib/types';
+import type { ComparePick, MediaItem, MediaResults, ResultSummary } from './lib/types';
 
 afterEach(cleanup);
 
@@ -59,6 +59,8 @@ function mount(results: ResultSummary[]) {
     clearOutputs: vi.fn(),
     openCompare: vi.fn(),
     compareActive: false,
+    shown: null,
+    showResult: vi.fn(),
   });
 }
 
@@ -77,12 +79,12 @@ it('lists an upscale and two edits of one input as three rows with their own lab
     ['FLUX.2 klein 4B', '512 × 320 · 48s'],
     ['SPAN ×4', 'Quick · 4× · 31s'],
   ]);
-  const tips = [...list.querySelectorAll<HTMLElement>('.media-select')].map((row) =>
+  const tips = [...list.querySelectorAll<HTMLElement>('.media-row > .media-select')].map((row) =>
     row.getAttribute('title'),
   );
-  expect(tips[0]).toBe('Pick for Compare');
-  expect(tips[1]).toBe('Pick for Compare\nRemove the boat');
-  expect(tips[2]).toHaveLength('Pick for Compare\n'.length + 121);
+  expect(tips[0]).toBe('Show the original');
+  expect(tips[1]).toBe('Show this result\nRemove the boat');
+  expect(tips[2]).toHaveLength('Show this result\n'.length + 121);
   expect(tips[2]?.endsWith('…')).toBe(true);
 });
 
@@ -96,22 +98,27 @@ const props = (ids: string[]) => ({
   clearOutputs: vi.fn(),
   openCompare: vi.fn(),
   compareActive: false,
+  shown: null,
+  showResult: vi.fn(),
 });
 
 it('opens every group, names the header as a control and tells what a row click does', () => {
   render(OutputsList, props(['one']));
-  const header = screen.getByRole('button', { name: /Lake\.jpg/ });
+  const header = screen.getByRole('button', { name: /^Lake\.jpg\s*\d+ outputs?$/ });
   expect(header.getAttribute('aria-expanded')).toBe('true');
   expect(header.getAttribute('title')).toBe('Hide outputs');
   expect(header.textContent).toContain('1 output');
   expect(screen.getByRole('checkbox', { name: 'one, Lake.jpg' }).getAttribute('title')).toBe(
     'Pick for Compare',
   );
+  expect(screen.getByRole('button', { name: 'Show one, Lake.jpg' }).getAttribute('title')).toBe(
+    'Show this result',
+  );
 });
 
 it('collapses by the header, keeps that choice while results change and opens for a new result', async () => {
   const view = render(OutputsList, props(['one']));
-  const header = () => screen.getByRole('button', { name: /Lake\.jpg/ });
+  const header = () => screen.getByRole('button', { name: /^Lake\.jpg\s*\d+ outputs?$/ });
   await fireEvent.click(header());
   expect(header().getAttribute('aria-expanded')).toBe('false');
   expect(header().getAttribute('title')).toBe('Show outputs');
@@ -142,4 +149,55 @@ it('scrolls a new result into view unless the list was used in the last 10 secon
 it('says in one muted line that results appear as they finish', () => {
   render(OutputsList, { ...props([]), groups: [] });
   expect(screen.getByText('Results appear here as they finish.')).toBeTruthy();
+});
+
+describe('showing a result and picking it for Compare', () => {
+  const original: ComparePick = { kind: 'original', media_id: 'a' };
+  const output = (id: string): ComparePick => ({ kind: 'output', media_id: 'a', job_id: id });
+
+  it('a click on the row shows it; the pick box at its end only picks', async () => {
+    const options = props(['one', 'two']);
+    render(OutputsList, options);
+    await fireEvent.click(screen.getByRole('button', { name: 'Show two, Lake.jpg' }));
+    expect(options.showResult).toHaveBeenCalledWith(output('two'));
+    expect(options.togglePick).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole('button', { name: 'Show the original, Lake.jpg' }));
+    expect(options.showResult).toHaveBeenLastCalledWith(original);
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'one, Lake.jpg' }));
+    expect(options.togglePick).toHaveBeenCalledWith(output('one'));
+    expect(options.showResult).toHaveBeenCalledTimes(2);
+  });
+
+  it('Space on a focused row picks it and Enter shows it', async () => {
+    const options = props(['one']);
+    render(OutputsList, options);
+    const row = screen.getByRole('button', { name: 'Show one, Lake.jpg' });
+    await fireEvent.keyDown(row, { key: ' ' });
+    expect(options.togglePick).toHaveBeenCalledWith(output('one'));
+    expect(options.showResult).not.toHaveBeenCalled();
+  });
+
+  it('marks the shown row as selected and numbers the picked ones in the box', () => {
+    const options = props(['one', 'two']);
+    render(OutputsList, { ...options, shown: output('two'), picks: [output('one')] });
+    const rows = [...document.querySelectorAll('.media-row')];
+    expect(rows.map((row) => row.classList.contains('selected'))).toEqual([false, false, true]);
+    const picked = screen.getByRole('checkbox', { name: 'one, Lake.jpg' });
+    expect(picked.getAttribute('aria-checked')).toBe('true');
+    expect(picked.getAttribute('title')).toBe('Picked for Compare, slot 1');
+    expect(picked.querySelector('.slot-number')?.textContent).toBe('1');
+    expect(
+      screen.getByRole('checkbox', { name: 'two, Lake.jpg' }).querySelector('.slot-number'),
+    ).toBeNull();
+  });
+
+  it('refuses a fifth pick but still shows that row', async () => {
+    const options = props(['one', 'two']);
+    const picks = [original, output('one'), { ...original, media_id: 'b' }, output('x')] as never[];
+    render(OutputsList, { ...options, picks });
+    const box = screen.getByRole('checkbox', { name: 'two, Lake.jpg' }) as HTMLButtonElement;
+    expect(box.disabled).toBe(true);
+    await fireEvent.click(screen.getByRole('button', { name: 'Show two, Lake.jpg' }));
+    expect(options.showResult).toHaveBeenCalledWith(output('two'));
+  });
 });
