@@ -141,6 +141,18 @@ fn installation_folder(name: &str, kind: &str) -> bool {
         .is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
+/// The folder an engine folder sits in. For a bare name such as `engine` that is the
+/// current folder: `Path::parent` gives an empty path there, which no call accepts.
+fn parent_folder(destination: &Path) -> Option<&Path> {
+    destination.parent().map(|parent| {
+        if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        }
+    })
+}
+
 /// Whether `folder` holds the worker of a whole engine.
 fn has_worker(folder: &Path) -> bool {
     folder.join("localsr-worker.exe").is_file() || folder.join("localsr-worker").is_file()
@@ -153,7 +165,7 @@ fn has_worker(folder: &Path) -> bool {
 /// under the name `deleting`, so a `previous` is always a whole engine; one without its
 /// worker (left by an earlier version's removal) is never put in place.
 pub fn recover_install(destination: &Path) -> io::Result<()> {
-    let Some(parent) = destination.parent() else {
+    let Some(parent) = parent_folder(destination) else {
         return Ok(());
     };
     let mut previous = Vec::new();
@@ -224,9 +236,7 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
     {
         return Err(invalid("unsupported or invalid engine payload manifest"));
     }
-    let parent = destination
-        .parent()
-        .ok_or_else(|| invalid("missing engine parent"))?;
+    let parent = parent_folder(destination).ok_or_else(|| invalid("missing engine parent"))?;
     if destination.file_name().is_none_or(|name| name != "engine") {
         return Err(invalid("engine destination must be an engine directory"));
     }
@@ -1125,6 +1135,15 @@ mod tests {
         assert_eq!(key("d/f"), key("D/F"));
         assert_ne!(key("d/f"), key("d/g"));
         assert_ne!(key("d/f"), key("df"));
+    }
+
+    #[test]
+    fn an_engine_folder_named_without_a_parent_sits_in_the_current_folder() {
+        assert_eq!(parent_folder(Path::new("engine")), Some(Path::new(".")));
+        assert_eq!(parent_folder(Path::new("a/engine")), Some(Path::new("a")));
+        assert_eq!(parent_folder(Path::new("/")), None);
+        // Reading the current folder works where reading an empty path does not.
+        assert!(recover_install(Path::new("engine")).is_ok());
     }
 
     /// A part whose size is right but whose bytes are not the ones the manifest names.
