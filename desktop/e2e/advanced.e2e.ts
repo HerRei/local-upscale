@@ -117,7 +117,7 @@ test('chooses an external FFmpeg through the host and displays a read-only path'
   await answer(page, 'choose_external_ffmpeg', '/chosen/ffmpeg');
   const field = page.getByLabel('External FFmpeg');
   await expect(field).toHaveAttribute('readonly', '');
-  await page.getByRole('button', { name: 'Choose…' }).click();
+  await page.getByRole('button', { name: 'Choose…', exact: true }).click();
   await expect(field).toHaveValue('/chosen/ffmpeg');
   expect((await hostCalls(page, 'choose_external_ffmpeg')).at(-1)?.args).toEqual({
     current: '/old/ffmpeg',
