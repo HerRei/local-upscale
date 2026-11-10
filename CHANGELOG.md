@@ -1,5 +1,110 @@
 # Changelog
 
+## [0.4.0-beta] - Unreleased
+
+0.4.0-beta is the first public release since 0.3.0-beta. It includes the changes
+listed under 0.3.1 to 0.3.8 below, which were never published on their own.
+
+### Added
+
+- Two start buttons in the status bar: "Only this one" runs the selected picture and a
+  second button ("Upscale all N") runs all of them. A button that would start 0 items
+  is hidden.
+- "Use as input" adds the result on screen to Inputs and selects it.
+- Click a result in Outputs to see it in the centre, alone or against its original.
+  Picking for Compare moves to a box at the end of the row; Compare opens only from
+  "Compare these N", shows its tabs only while it is open and closes below two picks.
+- Clear in the Outputs list asks first and empties the list without touching any file.
+  Unpick all keeps its old action. Every Outputs group starts open, and the empty tab
+  says how to fill it.
+- An Edit result's list row shows its file size next to its time and its instruction as
+  a tooltip.
+- Help tips ("?") on the Advanced controls that had none.
+- The model library shows which hardware each model will run on, in its details and on
+  every row.
+- Before a job starts, LocalSR checks that its files fit on the output's volume and
+  keeps 8 GB free on the system volume (1 GB on other volumes). A job that does not
+  fit is refused, a write that runs out of space is reported in words, and the queue
+  stops once instead of failing every job.
+- Try again is offered when the inference engine has stopped too often to restart itself.
+- Every dialog takes keyboard focus when it opens, keeps Tab inside, closes with Escape
+  and returns focus to the control that opened it.
+
+### Changed
+
+- The remaining-time estimate is rewritten. An image job's time comes from its steady
+  pixel rate and a video's from its steady frame rate, both without model loading or
+  the first tile or frame, and none is shown until a rate is measured. The shown time
+  counts down by itself, follows a new speed only when it has lasted, and rounds to
+  steps that do not flicker. A photo batch has one speed over all lanes, and queued jobs
+  are predicted from the typical speed of recent comparable runs.
+- The Illustration choice now picks illustration models: Real-ESRGAN Anime 6B for Quick
+  and RealPLKSR HFA2k for Best. This replaces the 0.3.7 choice of the photo models, and
+  the note about the missing illustration model is gone from the Enhance pane.
+- The Single and Batch switch is gone; see the start buttons above.
+- The Media pane has Inputs and Outputs tabs with their counts in its header row. The
+  centre pane's tabs, file name and view options share one header row, Preview and
+  Compare form a segmented switch, and the narrow window's middle page is called Viewer.
+- The running picture has its own progress line, a lighter row and a "Running" percentage.
+  "Saving…" replaces a full percentage while the result is written, and "Stopping…"
+  shows from Cancel until the engine is idle. A single job says Cancel; Cancel queue
+  appears only when more than one job is running or waiting.
+- While a job runs, the Enhance pane is dimmed with one quiet "Settings locked" line,
+  pictures that are not running can be removed, and Refresh keeps working.
+- In the library each model sits on one line with Change and arrow buttons and its notes
+  on a second line; model names get the full line width.
+- FFmpeg and the editing runtime are chosen only through the app's own file dialogs, and
+  only programs the app found itself or the user picked there are run.
+- On a Mac, editing no longer stops for 2 GiB of swap; it stops only when the edit is
+  large for the Mac or the system disk is nearly full.
+- Text and layout: library labels that were too faint have more contrast, help tips and
+  model links have 24 px targets, long text stays inside its space, the update notice
+  sits at the bottom right of the preview, and a cut file name keeps its end in view with
+  the full name on hover.
+
+### Fixed
+
+- A result is never written over an existing file. The finished file is renamed into its
+  final name without replacing anything, a file that appeared at that name during the job
+  makes the job fail for that item, and names that differ only by letter case or Unicode
+  normalisation count as one. A long source name is shortened so the result name fits
+  the file system, and a path Windows cannot open is refused before the job runs.
+- Core ML preparation can no longer hang a job. Preparation has one cancellable 120 s
+  budget per job; a program that does not finish compiling is remembered and tried again
+  after a week or after an app or macOS update, and the job continues on the standard
+  path with a note. Model checks, downloads and the GPU preflight are bounded too.
+- Intel NPU models are compiled in a separate process, so a compiler that never returns
+  cannot freeze the engine.
+- Engine processes and their helpers (FFmpeg, the system codec helper, the playback
+  converter) are stopped as a whole group when the engine ends or a job fails.
+- A damaged queue database is moved aside, the app starts, and the user is told once.
+  Settings and recipes are put back when writing them fails.
+- A job whose output folder cannot be used fails by itself instead of stopping the queue
+  behind it. A relative output folder is refused, and a watch output folder that is the
+  watched folder or holds it is refused.
+- The engine ignores messages about jobs that have ended or were never dispatched, and a
+  job that reports a result the app did not ask for fails and restarts the engine.
+- A model download stops when the server goes silent or exceeds its pinned size, and a
+  resumed download checks the disk space it still needs.
+- Source images: those up to the decompression limit open without a warning and larger
+  ones are refused in one sentence before decoding; a PNG that ends early is refused
+  instead of filled with black; pipes, devices and sockets are refused; floating-point
+  grey TIFFs are accepted and the range used is noted, and floating-point colour TIFFs
+  are refused with an explanation. A source tag too long for a JPEG's EXIF block is left
+  out and the job says so.
+- A tile's output is rounded to the nearest level instead of truncated, and video frames
+  without a face run on the general model.
+- Compare crops are cut from results above Pillow's pixel limit, such as a 4x upscale of
+  a phone photo, and an engine too old for Compare says so instead of leaving every box on
+  Loading.
+- The command line writes H.264 and HEVC with an FFmpeg found on the computer, as its help
+  says. A device the computer does not report is refused, and a saved device that is no
+  longer listed runs on the CPU.
+- After an interrupted job, only the scratch folder recorded for it is removed, and the
+  scratch folders a stopped app left beside outputs are cleaned up.
+- Internal: the front end's state module is split, unused scripts and styles are removed,
+  and the host's tests moved into their own files.
+
 ## [0.3.8-beta] - Unreleased
 
 ### Added

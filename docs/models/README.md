@@ -31,11 +31,11 @@ The native scale is the model's trained output scale. A smaller requested output
 can be resampled after inference. A 1× restoration model cleans an image without
 enlarging it and can run before an upscaler.
 
-For photos and illustrations, **Quick** selects SPAN NomosUni; **Best** selects
-RealPLKSR NomosWebPhoto. On tested manga and colour illustrations these general
-models retained fine tones better than the anime-specific models tested. HFA2k
-remains available in Labs, but can soften fine lines and screentones, darken
-white paper, and reduce colour saturation. HAT-S is
+For photos, **Quick** selects SPAN NomosUni and **Best** selects RealPLKSR
+NomosWebPhoto. For illustrations, **Quick** selects Real-ESRGAN Anime 6B and
+**Best** selects RealPLKSR HFA2k, which can soften fine lines and screentones,
+darken white paper and reduce colour saturation on some manga and comic scans.
+Photo models remain a choice in the library. HAT-S is
 the smaller stock HAT option. No preset picks the two DAT2 models on its own: on an M1
 Pro they take about ten times as long as Best (around 73 seconds per input megapixel;
 on a CPU the gap is smaller), so choose them in the library, or pin one to Best, for

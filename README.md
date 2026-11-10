@@ -63,8 +63,8 @@ FBCNN, and each model shows its size, licence and source before you download it.
 [Model guide](docs/models/README.md) · [Model licences](docs/model-licenses.md).
 
 <!-- release-candidate -->
-v0.3.8-beta is in preparation; the downloads below are still v0.3.0-beta.
-[Draft release notes](docs/releases/v0.3.8-beta.md).
+v0.4.0-beta is in preparation; the downloads below are still v0.3.0-beta.
+[Draft release notes](docs/releases/v0.4.0-beta.md).
 <!-- /release-candidate -->
 
 ## Download
