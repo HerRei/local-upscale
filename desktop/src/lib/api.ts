@@ -308,7 +308,10 @@ export async function listenForWorker(
   handler: (message: WorkerEnvelope) => void,
 ): Promise<UnlistenFn> {
   if (!isTauri()) return () => {};
-  return listen<WorkerEnvelope>('worker-message', (event) => handler(event.payload));
+  // The host forwards a message the engine sent without data as null.
+  return listen<WorkerEnvelope>('worker-message', (event) =>
+    handler({ ...event.payload, data: event.payload.data ?? {} }),
+  );
 }
 
 export async function listenForStateChange(handler: () => void): Promise<UnlistenFn> {
