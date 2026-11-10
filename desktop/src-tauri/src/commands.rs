@@ -1195,14 +1195,9 @@ fn write_benchmark_export(destination: &Path, bytes: &[u8]) -> AppResult<()> {
             "the chosen benchmark file already exists; choose a new name".into(),
         ));
     }
-    let file_name = destination
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| AppError::Validation("benchmark destination is invalid".into()))?;
-    let temporary = parent.join(format!(
-        ".{file_name}.localsr-benchmark-{}.tmp",
-        Uuid::new_v4()
-    ));
+    // A short fixed name: the destination's own name may already be at the file
+    // system's limit.
+    let temporary = parent.join(format!(".localsr-benchmark-{}.tmp", Uuid::new_v4()));
     let export_result = (|| -> AppResult<()> {
         let mut output = fs::OpenOptions::new()
             .write(true)
@@ -1211,19 +1206,7 @@ fn write_benchmark_export(destination: &Path, bytes: &[u8]) -> AppResult<()> {
         output.write_all(bytes)?;
         output.sync_all()?;
         drop(output);
-
-        // hard_link() creates the destination without replacing an existing
-        // file, then unlinking our same-directory temporary makes the publish
-        // atomic and no-clobber on supported desktop filesystems.
-        fs::hard_link(&temporary, destination).map_err(|error| {
-            if destination.exists() {
-                AppError::Validation(
-                    "the chosen benchmark file already exists; choose a new name".into(),
-                )
-            } else {
-                AppError::Io(error)
-            }
-        })?;
+        publish_without_replacing(&temporary, destination, |from, to| fs::hard_link(from, to))?;
         fs::remove_file(&temporary)?;
         Ok(())
     })();
@@ -1231,6 +1214,37 @@ fn write_benchmark_export(destination: &Path, bytes: &[u8]) -> AppResult<()> {
         let _ = fs::remove_file(&temporary);
     }
     export_result
+}
+
+/// Give `temporary` the name `destination` without replacing a file that is there.
+/// A hard link does it atomically; a volume that has none (FAT, exFAT, a network
+/// share) gets a copy into a file only this call created.
+fn publish_without_replacing(
+    temporary: &Path,
+    destination: &Path,
+    link: impl Fn(&Path, &Path) -> std::io::Result<()>,
+) -> AppResult<()> {
+    let Err(error) = link(temporary, destination) else {
+        return Ok(());
+    };
+    if destination.exists() {
+        return Err(AppError::Validation(
+            "the chosen benchmark file already exists; choose a new name".into(),
+        ));
+    }
+    let copied = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .and_then(|mut output| {
+            std::io::copy(&mut fs::File::open(temporary)?, &mut output)?;
+            output.sync_all()
+        });
+    if copied.is_err() {
+        let _ = fs::remove_file(destination);
+        return Err(AppError::Io(error));
+    }
+    Ok(())
 }
 
 /// Decode saved results for the preview. With `showing` (and `against`, which
@@ -4902,6 +4916,31 @@ mod tests {
             &mut reserved,
         );
         assert_eq!(path.file_name().unwrap(), "holiday_upscaled_4x.png");
+    }
+
+    #[test]
+    fn a_benchmark_can_be_exported_under_the_longest_file_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join(format!("{}.json", "n".repeat(250)));
+        write_benchmark_export(&destination, b"{}").unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"{}");
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_volume_without_hard_links_gets_a_copy_that_never_replaces_a_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let no_links = |_: &Path, _: &Path| -> std::io::Result<()> {
+            Err(std::io::ErrorKind::Unsupported.into())
+        };
+        let temporary = directory.path().join("temporary");
+        fs::write(&temporary, b"new").unwrap();
+        let destination = directory.path().join("export.json");
+        publish_without_replacing(&temporary, &destination, no_links).unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"new");
+        let error = publish_without_replacing(&temporary, &destination, no_links).unwrap_err();
+        assert!(error.to_string().contains("already exists"));
+        assert_eq!(fs::read(&destination).unwrap(), b"new");
     }
 
     #[test]
