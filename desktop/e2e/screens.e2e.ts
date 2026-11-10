@@ -49,7 +49,7 @@ test.describe('screens @visual', () => {
     await outputsTab(page).click();
     await pick(page, 'Original');
     await pick(page, 'HAT-S ×4');
-    await expect(page.getByText('2 of 4 slots')).toBeVisible();
+    await expect(page.getByText('2 of 4 chosen')).toBeVisible();
     await shoot(page, 'outputs-picked');
   });
 
@@ -58,7 +58,7 @@ test.describe('screens @visual', () => {
     await outputsTab(page).click();
     await pick(page, 'Original');
     await pick(page, 'HAT-S ×4');
-    await page.getByRole('button', { name: 'Show in Compare 2' }).click();
+    await page.getByRole('button', { name: 'Compare these 2' }).click();
     await expect(page.getByRole('slider')).toBeVisible();
     await shoot(page, 'compare-slider');
   });
@@ -68,7 +68,7 @@ test.describe('screens @visual', () => {
     await outputsTab(page).click();
     for (const label of ['Original', 'SPAN ×4', 'HAT-S ×4', 'RealESRGAN ×4'])
       await pick(page, label);
-    await page.getByRole('button', { name: 'Show in Compare 4' }).click();
+    await page.getByRole('button', { name: 'Compare these 4' }).click();
     await expect(
       page.getByRole('list', { name: 'Compared items' }).getByRole('listitem'),
     ).toHaveCount(4);

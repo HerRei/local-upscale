@@ -61,6 +61,48 @@ test.describe('plan card', () => {
     expect(await savedFixes(page)).toEqual(['jpeg', 'blur', 'noise']);
   });
 
+  test('each model row keeps its name, Change… and arrows on one line', async ({ page }) => {
+    for (const name of ['Noise', 'JPEG artifacts', 'Blur']) await chip(page, name).click();
+    await expect(rows(page)).toHaveCount(4);
+    const row = rows(page).nth(1);
+    const centre = async (selector: string) => {
+      const box = (await row.locator(selector).first().boundingBox())!;
+      return box.y + box.height / 2;
+    };
+    const line = await centre('.stage');
+    for (const part of ['.name', '.plan-end'])
+      expect(Math.abs((await centre(part)) - line)).toBeLessThan(4);
+    for (const label of ['Move the JPEG fix earlier', 'Move the JPEG fix later']) {
+      const arrow = (await page.getByRole('button', { name: label }).boundingBox())!;
+      expect(arrow.width).toBeGreaterThanOrEqual(24);
+      expect(arrow.height).toBeGreaterThanOrEqual(24);
+    }
+    // The blur fix's warning stays within two lines under its name.
+    const notes = (await rows(page).first().locator('.plan-note').boundingBox())!;
+    expect(notes.height).toBeLessThanOrEqual(2 * 18);
+    // Change… is one column on every row, the arrows sit directly left of it, and no name is cut.
+    const changes = page.locator('.plan-row').getByRole('button', { name: /^Change/ });
+    expect(await changes.count()).toBe(4);
+    const rights = await changes.evaluateAll((els) =>
+      els.map((el) => Math.round(el.getBoundingClientRect().right)),
+    );
+    expect(new Set(rights).size).toBe(1);
+    const later = (await page
+      .getByRole('button', { name: 'Move the JPEG fix later' })
+      .boundingBox())!;
+    const change = (await changes.nth(1).boundingBox())!;
+    expect(change.x - (later.x + later.width)).toBeLessThanOrEqual(8);
+    const cut = await rows(page)
+      .locator('.name')
+      .evaluateAll((els) => els.filter((el) => el.scrollWidth > el.clientWidth).length);
+    expect(cut).toBe(0);
+    // The note spans the name column to the right edge.
+    const name = (await rows(page).first().locator('.name').boundingBox())!;
+    const rowBox = (await rows(page).first().boundingBox())!;
+    expect(Math.abs(notes.x - name.x)).toBeLessThan(1);
+    expect(notes.x + notes.width).toBeGreaterThan(rowBox.x + rowBox.width - 4);
+  });
+
   test('Faces is unavailable without a face model', async ({ page }) => {
     await expect(chip(page, 'Faces')).toBeDisabled();
   });

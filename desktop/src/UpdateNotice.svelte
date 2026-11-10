@@ -10,6 +10,22 @@
 
   /** Installing replaces the running engine, so it waits for the queue. */
   export let processing = false;
+  /** The card's height while it shows, 0 otherwise: notes and controls at the bottom of the
+   *  stage move up by it. */
+  export let height = 0;
+
+  function measure(node: HTMLElement): { destroy: () => void } {
+    const report = () => (height = node.offsetHeight);
+    report();
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(report) : null;
+    observer?.observe(node);
+    return {
+      destroy() {
+        observer?.disconnect();
+        height = 0;
+      },
+    };
+  }
 
   let dismissed = dismissedVersion();
   let requested = false;
@@ -42,7 +58,7 @@
 </script>
 
 {#if visible}
-  <div class="update-notice" role="status" aria-live="polite">
+  <div class="update-notice" role="status" aria-live="polite" use:measure>
     <div class="glyph" aria-hidden="true">
       <svg viewBox="0 0 24 24"
         ><path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5" /><path d="M5 19h14" /></svg
@@ -93,11 +109,16 @@
 {/if}
 
 <style>
+  /* Docked at the bottom right of the centre pane, above the stage and clear of the status
+     bar (the workspace ends where the status bar starts). */
   .update-notice {
-    position: fixed;
+    position: absolute;
     z-index: 80;
-    top: 58px;
-    right: 14px;
+    top: auto;
+    right: 12px;
+    bottom: 12px;
+    left: auto;
+    height: auto;
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
@@ -113,11 +134,10 @@
       0 18px 46px rgba(0, 0, 0, 0.5);
     animation: arrive 0.32s cubic-bezier(0.2, 0.9, 0.3, 1.1);
   }
-  /* Wide windows have no top bar: float over the preview, clear of the Enhance pane. */
+  /* Wide windows keep the Enhance pane beside the preview: stay clear of it. */
   @media (min-width: 1280px) {
     .update-notice {
-      top: 64px;
-      right: calc(340px + 14px);
+      right: calc(340px + 12px);
     }
   }
   .glyph {

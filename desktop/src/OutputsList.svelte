@@ -1,4 +1,5 @@
 <script lang="ts">
+  import FileName from './FileName.svelte';
   import { MAX_SLOTS, pickKey, type OutputGroup } from './lib/compareOutputs';
   import { formatDuration } from './lib/state';
   import type { ComparePick } from './lib/types';
@@ -36,7 +37,7 @@
           on:click={() => fold(group.media.id)}>{folded.has(group.media.id) ? '▸' : '▾'}</button
         >
         <button class="group-select" on:click={() => selectMedia(group.media.id)}
-          ><strong>{group.media.name}</strong><span
+          ><strong><FileName name={group.media.name} /></strong><span
             >{group.outputs.length} {group.outputs.length === 1 ? 'output' : 'outputs'}</span
           ></button
         >
@@ -78,21 +79,20 @@
                     : `${group.media.width} × ${group.media.height}`}</span
                 >
               </div>
+              {#if n}<b class="slot-number">{n}</b>{/if}
             </button>
           </div>
         {/each}
       {/if}
     {/each}
   </div>
-  <div class="media-actions compare-bar">
-    <button class="button" disabled={picks.length < 2 || compareActive} on:click={openCompare}
-      >{compareActive ? 'Comparing' : 'Show in Compare'}{picks.length
-        ? ` ${picks.length}`
-        : ''}</button
-    ><button class="button" disabled={!picks.length} on:click={clearPicks}>Clear</button><span
-      >{picks.length} of 4 slots</span
-    >
-  </div>
+  {#if picks.length}<div class="media-actions compare-bar">
+      {#if picks.length >= 2 && !compareActive}<button class="button" on:click={openCompare}
+          >Compare these {picks.length}</button
+        >{/if}<button class="button" on:click={clearPicks}>Clear</button><span
+        >{picks.length} of 4 chosen</span
+      >
+    </div>{/if}
 {/if}
 
 <style>
@@ -138,6 +138,9 @@
     font-size: calc(12px * var(--ui-scale));
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+  }
+  .media-select .slot-number {
+    margin-left: auto;
   }
   .media-select:disabled {
     opacity: 0.45;

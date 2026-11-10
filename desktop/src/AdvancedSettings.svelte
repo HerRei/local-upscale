@@ -306,7 +306,7 @@
               updateSettings({ external_ffmpeg_path: event.currentTarget.value.trim() })}
           />
         </div>
-        <div class="field-row">
+        <div class="field-row button-row">
           <button on:click={findFFmpeg}>Find installed FFmpeg</button>
           <button on:click={pickFFmpeg}>Choose…</button>
           {#if settings.external_ffmpeg_path}<button

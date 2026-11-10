@@ -107,3 +107,17 @@ it('debounces region requests while zooming and clears them on leaving Compare',
     vi.useRealTimers();
   }
 });
+
+it('names the compared pictures by their ends, with the full names on hover', () => {
+  const first = 'IMG_490C1E18-B4D1-47E5-AC62-FD97F5A26811.jpeg';
+  const second = 'Holiday at the lake, evening light, second attempt.png';
+  const { container } = render(ComparePane, {
+    ...props,
+    items: [item('one', first), item('two', first), item('three', second)],
+  });
+  // The slider holds two versions of one picture; the chips name the picture of each slot.
+  for (const name of [first, second]) {
+    expect(container.querySelector(`.compare-slot .file-name[title="${name}"]`)).toBeTruthy();
+    expect(container.querySelector(`.compare-header .file-name[title="${name}"]`)).toBeTruthy();
+  }
+});

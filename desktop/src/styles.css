@@ -156,13 +156,13 @@ input:focus-visible {
   padding-left: 84px;
 }
 /* Wide windows have no bar: the pane headings form the title row and the
-   window buttons sit at the start of the Media heading. */
+   window buttons sit at the start of the Media heading (its tab words carry 8 px). */
 .mac .media-pane .pane-heading {
-  padding-left: 84px;
+  padding-left: 76px;
 }
 @media (max-width: 1279px) {
   .mac .media-pane .pane-heading {
-    padding-left: 16px;
+    padding-left: 8px;
   }
 }
 
@@ -205,11 +205,13 @@ input:focus-visible {
   align-items: center;
   gap: 4px;
 }
-/* The anchor is only as wide as the link, so the text needs a width of its own. */
+/* The anchor is only as wide as the link, so the text needs a width of its own; the link
+   row does not wrap, the text does. */
 .try-others .help-tip-text {
   right: 0;
   left: auto;
   width: min(280px, 80vw);
+  white-space: normal;
 }
 /* With work queued the footer may take a second line for its buttons. */
 .app-shell.queue-timing-visible .status-actions {
@@ -224,39 +226,28 @@ input:focus-visible {
   text-align: left;
 }
 
+/* Narrow windows: the panes become pages, chosen with pane tabs (view-switch words). */
 .compact-nav {
-  display: none;
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  height: 30px;
-  padding: 3px;
-  border-radius: var(--radius);
-  background: var(--recess);
-  border: 1px solid rgba(255, 255, 255, 0.06);
 }
-.compact-nav button {
-  min-width: 78px;
-  border: 0;
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--secondary);
-  font-size: calc(12px * var(--ui-scale));
+.view-switch.compact-nav {
+  display: none;
 }
-.compact-nav button.active {
-  color: white;
-  background: var(--raised);
-  box-shadow: inset 0 1px rgba(255, 255, 255, 0.06);
-}
+/* The count takes the word's colour; on the faint border tint both stay above 4.5:1. */
 .compact-nav span {
   margin-left: 4px;
   padding: 1px 5px;
   border-radius: var(--radius);
-  background: rgba(255, 255, 255, 0.121);
-  color: var(--secondary);
+  background: var(--border);
+  color: inherit;
+  font-size: calc(12px * var(--ui-scale));
+  font-weight: 400;
 }
 
 .workspace {
+  position: relative;
   min-height: 0;
   overflow: hidden;
   display: grid;
@@ -308,6 +299,22 @@ input:focus-visible {
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
 }
+/* Under the Enhance header while a queue runs; the header already says it is locked. */
+.settings-lock {
+  flex: none;
+  margin: -12px 16px 0;
+  color: var(--secondary);
+  font-size: calc(12px * var(--ui-scale));
+  line-height: 1.4;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 .icon-button {
   width: 28px;
   height: 28px;
@@ -328,39 +335,32 @@ input:focus-visible {
   opacity: 0.4;
 }
 
-.segmented {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 2px;
-  margin: 0 16px 12px;
-  padding: 3px;
-  border-radius: var(--radius);
-  background: var(--recess);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-}
-.segmented button {
-  min-height: 30px;
-  border: 0;
-  border-radius: var(--radius);
-  background: transparent;
+/* Process Selected | All n: view-option words after a muted label and nothing after them.
+   The words carry 8 px of padding. */
+.process-scope {
+  display: flex;
+  align-items: baseline;
+  gap: 0 4px;
+  margin: 0 0 8px;
+  padding: 0 16px;
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
+  white-space: nowrap;
 }
-.segmented button.active {
-  background: var(--raised);
-  color: var(--text);
-  box-shadow: inset 0 1px rgba(255, 255, 255, 0.06);
+.process-scope .view-switch {
+  flex: none;
 }
-.segmented button:disabled {
+.process-scope .view-switch button:disabled {
+  color: var(--tertiary);
   cursor: default;
-  opacity: 0.55;
 }
 .mode-scope {
-  min-height: 30px;
-  margin: -5px 16px 8px;
+  margin: 0 0 8px;
+  padding: 0 16px;
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
   line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 .mode-scope.warning {
   color: #e7bc72;
@@ -540,36 +540,49 @@ input:focus-visible {
   min-width: 0;
   min-height: 0;
   display: grid;
+  /* A long name in the header must not widen the pane. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   background: var(--base);
 }
+/* One row: the pane tabs, the file and its size, the view options at the end. The words
+   carry 8 px of padding, so the row's 8 px puts their text on the panes' 16 px line. */
 .preview-header {
   min-height: 52px;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  column-gap: 12px;
-  padding: 0 16px;
+  gap: 8px;
+  padding: 0 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   background: #1b1b1d;
+  white-space: nowrap;
 }
-.preview-header > div:first-child {
+.preview-header > .view-switch {
+  flex: none;
+  margin-left: auto;
+}
+/* The name shrinks first and keeps its end. When even a short name would not fit beside
+   the size, the size wraps onto a second line that the fixed height hides. */
+.header-file {
+  flex: 1 1 auto;
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.preview-header strong {
-  max-width: 45vw;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 8px;
+  height: 1.4em;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: calc(13px * var(--ui-scale));
+  font-size: calc(12px * var(--ui-scale));
+  line-height: 1.4;
 }
-.preview-header span {
+.header-name {
+  flex: 1 1 96px;
+  min-width: 0;
+  max-width: max-content;
+}
+.header-size {
+  flex: none;
   color: var(--secondary);
-  font-size: calc(11px * var(--ui-scale));
 }
 .labs-chip,
 .original-chip {
@@ -599,6 +612,11 @@ input:focus-visible {
 .view-switch button.active {
   color: var(--text);
   box-shadow: inset 0 -1px 0 var(--text);
+}
+/* Pane tabs: the same words a size up; they head their pane. */
+.view-switch.pane-tabs button {
+  font-size: calc(13px * var(--ui-scale));
+  font-weight: 600;
 }
 .canvas-well {
   position: relative;
@@ -779,7 +797,8 @@ input:focus-visible {
   position: absolute;
   z-index: 5;
   right: 14px;
-  bottom: 14px;
+  /* --notice-room: the update notice's height plus its margins while it shows. */
+  bottom: max(14px, var(--notice-room, 0px));
   display: flex;
   min-height: 34px;
   padding: 3px;
@@ -1019,6 +1038,7 @@ input:focus-visible {
 }
 select,
 input[type='text'],
+input[type='number'],
 .recipe-input input {
   width: 100%;
   min-height: 34px;
@@ -1191,11 +1211,13 @@ input[type='text'],
   color: var(--text);
   font-size: calc(11px * var(--ui-scale));
 }
+/* The first column is as wide as the label column of the rows above, so the second starts
+   on their select edge. */
 .field-grid {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
+  grid-template-columns: 92px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px 8px;
 }
 .field-grid label {
   color: var(--secondary);
@@ -1827,14 +1849,14 @@ input[type='text'],
 .benchmark-device-heading > div:first-child {
   min-width: 0;
 }
-.benchmark-device-heading > div:first-child span {
+.benchmark-device-heading > div:first-child > span {
   display: block;
   margin-bottom: 3px;
   color: var(--secondary);
   font-size: calc(10px * var(--ui-scale));
   font-weight: 600;
 }
-.benchmark-device.cpu .benchmark-device-heading > div:first-child span {
+.benchmark-device.cpu .benchmark-device-heading > div:first-child > span {
   color: var(--tertiary);
 }
 .benchmark-device-heading > div:first-child strong {
@@ -2038,7 +2060,7 @@ input[type='text'],
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 14px 14px;
+  padding: 0 14px max(14px, var(--notice-room, 0px));
 }
 /* In the video bar, zoom sits beside the always-visible transport: fading it
    on pointer-out left the bar cut short with an empty gap. */
@@ -2189,13 +2211,13 @@ input[type='text'],
   .enhance-pane {
     position: absolute;
     z-index: 20;
-    top: 52px;
+    top: 0;
     right: 0;
-    bottom: 54px;
+    bottom: 0;
     width: 360px;
     box-shadow: -22px 0 50px rgba(0, 0, 0, 0.38);
   }
-  .compact-nav {
+  .view-switch.compact-nav {
     display: flex;
   }
   .compact-nav button:first-child {
@@ -2211,7 +2233,6 @@ input[type='text'],
   }
   .workspace {
     display: block;
-    position: relative;
   }
   .workspace > * {
     position: absolute;
@@ -2225,9 +2246,20 @@ input[type='text'],
     border: 0;
     box-shadow: none;
   }
+  /* Enhance reads as a column as wide as Media's, centred the same way. */
+  .enhance-pane .pane-heading {
+    width: min(440px, calc(100% - 24px));
+    margin-inline: auto;
+  }
+  .enhance-pane .settings-lock {
+    margin-inline: max(16px, calc(50% - 204px));
+  }
+  .enhance-pane .inspector-scroll {
+    padding-inline: max(16px, calc(50% - 204px));
+  }
   .media-pane .pane-heading,
-  .media-pane .segmented,
-  .media-pane .seg-inline,
+  .media-pane .process-scope,
+  .media-pane .mode-scope,
   .media-pane .empty-card,
   .media-pane .media-list,
   .media-pane .media-actions {
@@ -2326,50 +2358,93 @@ input[type='text'],
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+/* In the Model card the links are 24 px targets; the padding is taken back by the margin, so
+   the text sits where it did. */
+.model-section .link-button {
+  padding-block: 5px;
+  margin-block: -5px;
+}
 .plan-row {
   display: grid;
   grid-template-columns: 76px minmax(0, 1fr) auto;
   gap: 2px 10px;
-  align-items: start;
+  align-items: center;
   padding: 4px 0;
 }
 .plan-row .stage {
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
 }
-.plan-copy {
-  min-width: 0;
-}
 .plan-row .name {
+  min-width: 0;
+  overflow: hidden;
   font-size: calc(13px * var(--ui-scale));
   font-weight: 500;
-  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-/* Under the model name: the library hint on the left, Try others on the right. */
-.plan-links {
+/* Line 2 holds the library links, line 3 the note; both run from the name column to the right
+   edge. The note takes at most two lines (the full text is its tooltip). */
+.plan-links,
+.plan-note,
+.plan-extra {
   grid-column: 2 / -1;
+  min-width: 0;
+}
+.plan-links {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
+  /* Room for the 24 px targets of the links on both lines (see .model-section .link-button). */
+  margin-top: 6px;
+  color: var(--secondary);
+  font-size: calc(12px * var(--ui-scale));
 }
 .plan-links .link-button,
 .plan-links .try-others {
+  flex: none;
   white-space: nowrap;
 }
 .plan-links .try-others {
   margin-left: auto;
 }
-.plan-row .meta {
-  margin-top: 2px;
+.plan-note {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  margin: 2px 0 0;
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
   line-height: 1.4;
 }
 .plan-end {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
+  align-items: center;
+  gap: 4px;
+  /* As tall as the arrow buttons, so a row's links never touch the line below. */
+  min-height: 24px;
+}
+.plan-moves {
+  display: flex;
+}
+.move-button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--secondary);
+  font-size: calc(13px * var(--ui-scale));
+  line-height: 1;
+}
+.move-button:hover {
+  background: var(--hover);
+  color: var(--text);
 }
 .plan-row .state:empty {
   display: none;
@@ -2409,7 +2484,6 @@ input[type='text'],
   outline-offset: 1px;
 }
 .field-grid input[type='number'] {
-  width: 100%;
   margin-top: 4px;
 }
 
@@ -2496,7 +2570,7 @@ input[type='text'],
   color: var(--text);
 }
 .rail-item small {
-  color: var(--tertiary);
+  color: var(--secondary);
   font-size: calc(11px * var(--ui-scale));
 }
 .list {
@@ -2570,7 +2644,7 @@ input[type='text'],
   grid-template-columns: 42px 1fr;
   align-items: center;
   gap: 6px;
-  color: var(--tertiary);
+  color: var(--secondary);
   font-size: calc(10px * var(--ui-scale));
 }
 .dots {
@@ -2592,7 +2666,7 @@ input[type='text'],
 }
 .row .name .tech {
   margin-left: 7px;
-  color: var(--tertiary);
+  color: var(--secondary);
   font:
     500 calc(10px * var(--ui-scale)) ui-monospace,
     SFMono-Regular,
@@ -2716,6 +2790,15 @@ input[type='text'],
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* A long author shrinks and keeps its end; the link words always show. */
+.kv dd .link-button {
+  display: inline-flex;
+  max-width: 100%;
+}
+.kv dd .source-link {
+  flex: none;
+  white-space: pre;
+}
 .fit {
   display: flex;
   align-items: center;
@@ -2734,11 +2817,18 @@ input[type='text'],
   background: #de9935;
   box-shadow: none;
 }
+/* The action area stays at the bottom of the details while they scroll. */
 .actions {
+  position: sticky;
+  /* The details keep 16 px of padding below the sticky edge; reach past it to the bottom. */
+  bottom: -16px;
   display: flex;
   flex-direction: column;
   gap: 6px;
   margin-top: auto;
+  padding: 8px 0 16px;
+  margin-bottom: -16px;
+  background: var(--panel);
 }
 .actions .pair {
   display: grid;
@@ -2784,6 +2874,13 @@ input[type='text'],
   border-color: var(--border);
   background: rgba(255, 255, 255, 0.04);
   color: var(--secondary);
+}
+/* On the lighter selected row the muted pills need the full text colour to stay readable. */
+.row.selected .pill.labs,
+.row.selected .pill.best,
+.row.selected .pill.quick,
+.row.selected .pill.ok {
+  color: var(--text);
 }
 .pill.warn {
   border-color: rgba(222, 153, 53, 0.3);
@@ -2856,16 +2953,18 @@ input[type='text'],
   margin: 0;
 }
 .help-tip {
+  position: relative;
   display: inline-grid;
   place-items: center;
-  width: calc(14px * var(--ui-scale));
+  /* A 24 px target around the 14 px circle; the negative margins keep the layout of the
+     14 px button. */
+  width: calc(14px * var(--ui-scale) + 10px);
   min-width: 0;
-  height: calc(14px * var(--ui-scale));
+  height: calc(14px * var(--ui-scale) + 10px);
   min-height: 0;
-  margin: 0 0 0 5px;
+  margin: -5px -5px -5px 0;
   padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 50%;
+  border: 0;
   background: transparent;
   color: var(--tertiary);
   font-size: calc(9px * var(--ui-scale));
@@ -2874,15 +2973,25 @@ input[type='text'],
   vertical-align: 1px;
   cursor: help;
 }
+.help-tip::before {
+  content: '';
+  position: absolute;
+  inset: 5px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+}
 .help-tip:hover,
 .help-tip:focus-visible {
-  border-color: var(--accent-line);
   background: transparent;
   color: var(--text);
 }
+.help-tip:hover::before,
+.help-tip:focus-visible::before {
+  border-color: var(--accent-line);
+}
 .help-tip:focus-visible {
   outline: 1px solid var(--focus);
-  outline-offset: 1px;
+  outline-offset: -4px;
 }
 .help-tip-text {
   position: absolute;
@@ -2900,6 +3009,11 @@ input[type='text'],
   line-height: 1.45;
   pointer-events: none;
 }
+/* Near the bottom of a scrolling column the text opens upwards instead of being cut off. */
+.help-tip-text.above {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
 .help-tip-text[hidden] {
   display: none;
 }
@@ -2908,6 +3022,13 @@ input[type='text'],
   align-items: center;
 }
 /* A long Hardware entry (a GPU and its route) gets the full width under its label. */
+.field-row.button-row {
+  display: flex;
+  flex-wrap: wrap;
+}
+.button-row button {
+  white-space: nowrap;
+}
 .field-row.stacked {
   grid-template-columns: minmax(0, 1fr);
   gap: 6px;
@@ -2937,12 +3058,18 @@ input[type='text'],
 .main-area > .preview-pane {
   flex: 1;
 }
-/* Preview | Compare: the heading row and switch the side panes use. */
-.main-heading {
-  background: var(--panel);
-}
-.main-switch {
-  width: min(220px, 100%);
+/* A Compare slot's number: on the chips, the image labels and the picked Outputs rows. */
+.slot-number {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius);
+  background: var(--text);
+  color: var(--base);
+  font-size: 10px;
+  font-weight: 600;
 }
 .compare-request-error {
   color: var(--text);

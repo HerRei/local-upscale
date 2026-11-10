@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte';
   import VideoComparison from './VideoComparison.svelte';
   import EmptyStage from './EmptyStage.svelte';
+  import FileName from './FileName.svelte';
   import MediaIllustration from './MediaIllustration.svelte';
   import PreviewActivity from './PreviewActivity.svelte';
   import SplitComparison from './SplitComparison.svelte';
@@ -859,9 +860,10 @@
 
 <section class="preview-pane" class:compact-hidden={compactHidden}>
   <div class="preview-header" data-tauri-drag-region>
-    <div data-tauri-drag-region>
-      <strong data-tauri-drag-region>{selectedMedia?.name ?? 'Preview'}</strong>
-      <span
+    <slot name="tabs" />
+    <div class="header-file" data-tauri-drag-region>
+      {#if selectedMedia}<span class="header-name"><FileName name={selectedMedia.name} /></span
+        >{/if}<span class="header-size" data-tauri-drag-region
         >{selectedMedia
           ? `${selectedMedia.width || '—'} × ${selectedMedia.height || '—'}${selectedMedia.kind === 'video' ? ' · Video' : ''}`
           : 'No media selected'}</span
@@ -1112,12 +1114,21 @@
     }
   }
 
+  /* A long name or error without spaces breaks anywhere, so the block keeps to the stage and
+     stays centred. */
+  .preview-error {
+    width: 100%;
+    max-width: 520px;
+    padding: 0 24px;
+    overflow-wrap: anywhere;
+  }
+  /* The notes sit above the update notice while it shows (--notice-room). */
   .comparison-error {
     position: absolute;
     z-index: 5;
     left: 16px;
     right: 16px;
-    bottom: 16px;
+    bottom: max(16px, var(--notice-room, 0px));
     padding: 12px;
     border-radius: var(--radius);
     background: #351918;
@@ -1228,7 +1239,7 @@
     position: absolute;
     z-index: 5;
     left: 16px;
-    bottom: 16px;
+    bottom: max(16px, var(--notice-room, 0px));
     max-width: calc(100% - 32px);
     margin: 0;
     padding: 6px 10px;

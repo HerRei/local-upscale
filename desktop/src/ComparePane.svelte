@@ -5,6 +5,7 @@
    */
   import { onDestroy, onMount, tick } from 'svelte';
   import { visibleRegion, type Region } from './lib/compareRegions';
+  import FileName from './FileName.svelte';
   import HelpTip from './HelpTip.svelte';
   import { comparisonFromKey, comparisonFromPointer } from './lib/comparison';
   import { boxColumns, sliderBlock, type CompareItem } from './lib/compareOutputs';
@@ -332,17 +333,17 @@
 
 <section class="preview-pane compare-pane" class:compact-hidden={compactHidden}>
   <div class="preview-header compare-header" data-tauri-drag-region>
-    <div data-tauri-drag-region>
-      <strong data-tauri-drag-region>Compare</strong>
-      <span class="compare-names"
-        ><span class="names"
-          >{inputs.length > 2 ? `${inputs.length} images` : inputs.join(' and ')}</span
-        ><HelpTip
-          label="Compare"
-          text="The slider holds slot 1 against slot 2; boxes show every slot with one zoom and pan. Zoom enlarges the preview."
-        /></span
-      >
-    </div>
+    <slot name="tabs" />
+    <span class="compare-names"
+      ><span class="names"
+        >{#if inputs.length > 2}{inputs.length} images{:else}{#each inputs as name, index (name)}{#if index}<span
+                class="names-and">and</span
+              >{/if}<FileName {name} />{/each}{/if}</span
+      ><HelpTip
+        label="Compare"
+        text="The slider holds slot 1 against slot 2; boxes show every slot with one zoom and pan. Zoom enlarges the preview."
+      /></span
+    >
     <div class="compare-tools">
       <div class="view-switch" role="radiogroup" aria-label="Compare layout">
         <button
@@ -375,7 +376,7 @@
         role="listitem"
         class:resting={shownLayout === 'slider' && index > 1}
       >
-        <b>{index + 1}</b>
+        <b class="slot-number">{index + 1}</b>
         <span class="slot-label">{item.label}</span>
         {#if (items.length < 2 || (shownLayout === 'slider' && index > 1)) && item.status !== 'ready'}<span
             class="slot-meta"
@@ -387,7 +388,9 @@
                 : item.error || 'Preview unavailable'}</span
           >{/if}
         {#if shownLayout !== 'boxes'}<span class="slot-meta"
-            >{item.meta}{inputs.length > 1 ? ` · ${item.media_name}` : ''}</span
+            >{item.meta}{#if inputs.length > 1}{item.meta ? ' · ' : ''}<FileName
+                name={item.media_name}
+              />{/if}</span
           >{/if}
         {#if index > 1}<button
             class="slot-remove"
@@ -510,19 +513,19 @@
       <span
         class="original-chip side"
         style={`left:${geometry.left + 10}px;top:${geometry.top + 10}px`}
-        ><b>1</b>{items[0].label}</span
+        ><b class="slot-number">1</b>{items[0].label}</span
       >
       <span
         class="original-chip side right"
         style={`right:${canvasWidth - geometry.right + 10}px;top:${geometry.top + 10}px`}
-        ><b>2</b>{items[1].label}</span
+        ><b class="slot-number">2</b>{items[1].label}</span
       >
     {:else}
       <div class="boxes" style={`grid-template-columns: repeat(${cols}, minmax(0, 1fr));`}>
         {#each boxes as item, index (item.key)}
           <div class="box">
             <div class="box-bar">
-              <b>{index + 1}</b>
+              <b class="slot-number">{index + 1}</b>
               <strong>{item.label}</strong>
               <span>{item.meta}{inputs.length > 1 ? ` · ${item.media_name}` : ''}</span>
             </div>
@@ -606,21 +609,20 @@
   .compare-header span :global(.help-tip) {
     vertical-align: 0;
   }
-  .compare-header > div:first-child {
-    position: relative;
-    min-width: 0;
-  }
   /* The help text is positioned inside this block, so it must not clip: only the
      file names truncate. */
   .compare-names {
+    position: relative;
+    flex: 1 1 auto;
     display: flex;
     align-items: center;
     min-width: 0;
+    font-size: calc(12px * var(--ui-scale));
   }
   .compare-names .names {
+    display: flex;
+    gap: 4px;
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
   }
   .compare-header :global(.help-tip) {
@@ -632,9 +634,11 @@
     white-space: normal;
   }
   .compare-tools {
+    flex: none;
     display: flex;
     align-items: center;
     gap: 12px;
+    margin-left: auto;
   }
   .view-switch button:disabled {
     color: var(--tertiary);
@@ -668,20 +672,6 @@
   .compare-slot.resting {
     color: var(--tertiary);
   }
-  .compare-slot b,
-  .box-bar b,
-  .original-chip.side b {
-    flex: none;
-    display: grid;
-    place-items: center;
-    width: 16px;
-    height: 16px;
-    border-radius: var(--radius);
-    background: var(--text);
-    color: var(--base);
-    font-size: 10px;
-    font-weight: 600;
-  }
   .compare-slot.resting b {
     background: var(--tertiary);
   }
@@ -691,6 +681,8 @@
     white-space: nowrap;
   }
   .slot-meta {
+    display: inline-flex;
+    min-width: 0;
     color: var(--secondary);
     font-size: calc(11px * var(--ui-scale));
     white-space: nowrap;

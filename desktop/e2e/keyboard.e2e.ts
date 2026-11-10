@@ -80,7 +80,7 @@ test.describe('keyboard navigation', () => {
     expect(await hasFocusRing(checkbox)).toBe(true);
     await page.keyboard.press('Space');
     await expect(checkbox).toBeChecked();
-    await expect(page.getByText('1 of 4 slots')).toBeVisible();
+    await expect(page.getByText('1 of 4 chosen')).toBeVisible();
   });
 
   test('every control on the first Tab stops shows where the focus is', async ({

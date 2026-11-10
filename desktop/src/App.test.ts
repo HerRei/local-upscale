@@ -439,9 +439,12 @@ describe('Edit task', () => {
     await user.click(
       within(dialog).getByRole('button', { name: /^Show \d+ more that need more memory/ }),
     );
-    await user.click(
-      within(dialog).getByRole('button', { name: /^Full detail\s*Q8_0\s*Needs a Mac with 48 GB/ }),
-    );
+    const heavy = within(dialog).getByRole('button', {
+      name: /^Full detail\s*Q8_0\s*Needs a Mac with 48 GB/,
+    });
+    // The row can still be chosen to read about it, so it is not dimmed like a disabled one.
+    expect(heavy.classList.contains('dimmed')).toBe(false);
+    await user.click(heavy);
     expect(within(dialog).getByText('48 GB memory')).toBeTruthy();
     await user.click(within(dialog).getByRole('button', { name: 'Remove from this computer' }));
     expect(api.removeModel).toHaveBeenCalledWith('qwen_edit_2511_q8_0');
@@ -633,6 +636,60 @@ describe('LocalSR desktop interface', () => {
     ).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Add Media…' })).toBeNull();
     expect(document.querySelector('.empty-stage .shot canvas')).toBeTruthy();
+  });
+
+  it('heads the Media pane with its Inputs and Outputs tabs, each with its count', async () => {
+    api.listAllMediaResults.mockResolvedValue([
+      {
+        media_id: 'photo',
+        results: [],
+        total_count: 1,
+        completed_count: 1,
+        available_count: 1,
+        default_result_id: 'done',
+        next_before: null,
+      },
+    ]);
+    const snapshot = readySnapshot([image('photo', true), image('other')]);
+    snapshot.jobs = [
+      {
+        id: 'done',
+        media_id: 'photo',
+        media_name: 'photo.png',
+        media_kind: 'image',
+        status: 'completed',
+        progress: 100,
+        output_path: '/out/done.png',
+        error: '',
+        created_at: 1,
+      },
+    ];
+    await mountWith(snapshot);
+    const heading = document.querySelector<HTMLElement>('.media-pane .pane-heading')!;
+    const tabs = within(heading).getByRole('tablist', { name: 'Media' });
+    expect(within(tabs).getByRole('tab', { name: 'Inputs 2' })).toBeTruthy();
+    expect(within(heading).getByRole('button', { name: 'Add Media…' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Media' })).toBeNull();
+    expect(screen.queryByText('2 inputs')).toBeNull();
+    cleanup();
+
+    await mountWith(readySnapshot());
+    expect(
+      within(screen.getByRole('tablist', { name: 'Media' }))
+        .getAllByRole('tab')
+        .map((tab) => tab.textContent?.trim()),
+    ).toEqual(['Inputs', 'Outputs']);
+  });
+
+  it('names the narrow window pages Media, Viewer and Enhance, apart from the Preview tab', async () => {
+    await mountWith(readySnapshot([image('photo', true)]));
+    const pages = within(screen.getByRole('navigation', { name: 'Workspace' }));
+    expect(pages.getAllByRole('button').map((button) => button.textContent?.trim())).toEqual([
+      'Media 1',
+      'Viewer',
+      'Enhance',
+    ]);
+    expect(pages.queryByRole('button', { name: 'Preview' })).toBeNull();
   });
 
   it('makes the real benchmark discoverable and starts it from the View menu', async () => {
@@ -877,6 +934,9 @@ describe('LocalSR desktop interface', () => {
       within(dialog).getByRole('article', { name: 'Apple GPU (Metal) benchmark result' }),
     ).toBeTruthy();
     expect(within(dialog).getByRole('article', { name: 'CPU benchmark result' })).toBeTruthy();
+    expect(
+      dialog.querySelector('.benchmark-device .file-name[title="Apple GPU (Metal)"]'),
+    ).toBeTruthy();
     expect(within(dialog).getByText('Hardware results')).toBeTruthy();
   });
 
@@ -1369,6 +1429,15 @@ describe('LocalSR desktop interface', () => {
     await user.click(screen.getByRole('button', { name: /^Best/ }));
     expect(api.saveSettings).not.toHaveBeenCalled();
     expect(api.startJobs).not.toHaveBeenCalled();
+    // One quiet line under the header instead of a block above Task; the full
+    // explanation stays with the settings region for screen readers.
+    expect(screen.getByText('Locked during processing')).toBeTruthy();
+    expect(screen.getByText('Finish or cancel the queue to change settings.')).toBeTruthy();
+    expect(document.querySelector('.inspector-scroll .settings-lock')).toBeNull();
+    const region = screen.getByRole('region', { name: 'Enhancement settings' });
+    const described = document.getElementById(region.getAttribute('aria-describedby') ?? '');
+    expect(described?.textContent).toMatch(/^Settings locked\. Your queue uses the settings/);
+    expect(described?.closest('[role="status"]')).toBeTruthy();
   });
 
   it('disables media-incompatible task cards', async () => {
@@ -1929,7 +1998,7 @@ describe('LocalSR desktop interface', () => {
   it('submits every compatible item when batch mode is selected', async () => {
     const snapshot = readySnapshot([image('first', true), image('second')]);
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: 'Batch' }));
+    await user.click(screen.getByRole('button', { name: 'All 2' }));
     await chooseTask(user, /^Upscale$/);
 
     const start = screen.getByRole('button', { name: 'Start 2 items' });
@@ -1953,6 +2022,18 @@ describe('LocalSR desktop interface', () => {
 
     const start = screen.getByRole('button', { name: 'Start 1 item' }) as HTMLButtonElement;
     expect(start.disabled).toBe(false);
+    // The images are left out; the line under the tabs says why, and so does All on hover.
+    const why =
+      '1 video item can be queued with this setup; select the other media type to configure it separately.';
+    expect(screen.getByRole('button', { name: 'All 1' }).getAttribute('title')).toBe(why);
+    // Nothing trails the line: the reason is its tooltip and the choice's description.
+    const scope = document.querySelector('.process-scope')!;
+    expect(scope.getAttribute('title')).toBe(why);
+    expect(scope.textContent?.replace(/\s+/g, ' ').trim()).toBe(`Process Selected All 1 ${why}`);
+    expect(document.querySelector('.process-hint')).toBeNull();
+    const describedBy = scope.querySelector('.view-switch')!.getAttribute('aria-describedby')!;
+    expect(document.getElementById(describedBy)?.textContent).toBe(why);
+    expect(document.getElementById(describedBy)?.classList).toContain('visually-hidden');
     expect((screen.getByRole('button', { name: /^Restore$/ }) as HTMLButtonElement).disabled).toBe(
       true,
     );
@@ -1977,11 +2058,14 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.task = 'upscale';
     const user = await mountWith(snapshot);
 
-    await user.click(screen.getByRole('button', { name: 'Single' }));
+    await user.click(screen.getByRole('button', { name: 'Selected' }));
 
     expect(screen.getAllByText('first.png').length).toBeGreaterThan(0);
     expect(screen.getByText('second.png')).toBeTruthy();
-    expect(screen.getByText(/Single processes only “first.png”/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Selected' }).classList).toContain('active');
+    // Selected says it all: no sentence under it, and All needs no explanation.
+    expect(document.querySelector('.process-hint')).toBeNull();
+    expect(screen.getByRole('button', { name: 'All 2' }).hasAttribute('title')).toBe(false);
     await user.click(screen.getByRole('button', { name: 'Upscale selected' }));
 
     await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
@@ -1996,9 +2080,11 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.task = 'upscale';
     const user = await mountWith(snapshot);
 
-    await user.click(screen.getByRole('button', { name: 'Single' }));
+    await user.click(screen.getByRole('button', { name: 'Selected' }));
 
-    expect(screen.getByText(/Single processes only “selected-video.mp4”/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'All 1' }).getAttribute('title')).toMatch(
+      /select the other media type/,
+    );
     expect((screen.getByRole('button', { name: /^Restore$/ }) as HTMLButtonElement).disabled).toBe(
       true,
     );
@@ -2040,16 +2126,48 @@ describe('LocalSR desktop interface', () => {
     expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ task: 'upscale' }));
   });
 
+  it('hides a status bar button whose count would be 0 and keeps no room for it', async () => {
+    const queued = (id: string, status: JobRecord['status']): JobRecord => ({
+      id: `job-${id}`,
+      media_id: id,
+      media_name: `${id}.png`,
+      media_kind: 'image',
+      status,
+      progress: 0,
+      output_path: '',
+      error: '',
+      created_at: 1,
+    });
+    const snapshot = readySnapshot([image('first', true), image('second')]);
+    snapshot.settings.batch_mode = true;
+    snapshot.settings.task = 'upscale';
+    snapshot.runtime.active_job_id = 'job-first';
+    snapshot.jobs = [queued('first', 'running'), queued('second', 'queued')];
+    await mountWith(snapshot);
+    expect(screen.queryByRole('button', { name: /^Add \d+ to queue$/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Cancel queue' })).toBeTruthy();
+    expect(
+      [...document.querySelectorAll('.status-actions .button')].map((b) => b.textContent),
+    ).toEqual(['Cancel runs for this image', 'Cancel queue']);
+    cleanup();
+
+    // Between two jobs of a queue every item is queued: there is nothing to start.
+    snapshot.runtime.active_job_id = '';
+    snapshot.jobs = [queued('first', 'queued'), queued('second', 'queued')];
+    await mountWith(snapshot);
+    expect(screen.queryByRole('button', { name: /^Start \d+ items?$/ })).toBeNull();
+  });
+
   it('locks the single/batch scope for an active queue', async () => {
     const snapshot = readySnapshot([image('first', true), image('second')]);
     snapshot.settings.task = 'upscale';
     snapshot.runtime.active_job_id = 'running-job';
     await mountWith(snapshot);
 
-    expect((screen.getByRole('button', { name: 'Single' }) as HTMLButtonElement).disabled).toBe(
+    expect((screen.getByRole('button', { name: 'Selected' }) as HTMLButtonElement).disabled).toBe(
       true,
     );
-    expect((screen.getByRole('button', { name: 'Batch' }) as HTMLButtonElement).disabled).toBe(
+    expect((screen.getByRole('button', { name: 'All 2' }) as HTMLButtonElement).disabled).toBe(
       true,
     );
   });
@@ -2907,6 +3025,10 @@ describe('LocalSR desktop interface', () => {
     ).not.toMatch(/Neural Engine/);
     await user.click(within(library).getByRole('button', { name: /SPAN ×4/ }));
     expect(within(library).getByText('Runs on')).toBeTruthy();
+    // The file and the author keep their ends when the details column is narrow.
+    const file = mac.catalog.models.find((model) => model.model_id === 'span_photo_x4')!;
+    expect(library.querySelector(`.kv .file-name[title="${file.filename}"]`)).toBeTruthy();
+    expect(library.querySelector(`.kv .file-name[title="${file.author}"]`)).toBeTruthy();
     cleanup();
 
     const pc = readySnapshot([image('photo', true)]);
@@ -3190,6 +3312,24 @@ describe('Several fixes in one pass', () => {
     expect(screen.queryByRole('button', { name: 'Move the noise fix later' })).toBeNull();
     expect(move('Move the JPEG fix earlier')).toBeTruthy();
     expect(move('Move the JPEG fix later')).toBeTruthy();
+    // One line per model: role, name, Change… and the arrows; notes and links below it.
+    const jpegRow = rows()[1];
+    const end = jpegRow.querySelector('.plan-end')!;
+    expect([...end.querySelectorAll('button')].map((button) => button.textContent)).toEqual([
+      '↑',
+      '↓',
+      'Change…',
+    ]);
+    // A fix that can move one way shows one arrow, with no empty slot beside it.
+    expect(
+      [...rows()[2].querySelectorAll('.plan-end button')].map((button) => button.textContent),
+    ).toEqual(['↑', 'Change…']);
+    expect(document.querySelector('.move-gap')).toBeNull();
+    expect(move('Move the JPEG fix earlier').getAttribute('title')).toBe('Move earlier');
+    expect(move('Move the JPEG fix later').getAttribute('title')).toBe('Move later');
+    expect(jpegRow.querySelector('.name')?.getAttribute('title')).toBe('FBCNN Color');
+    expect(rows()[0].querySelector('.plan-note')?.textContent).toMatch(/^Can add artifacts/);
+    expect(screen.queryByText('Move earlier')).toBeNull();
 
     await user.click(move('Move the noise fix earlier'));
     expect(labels()).toEqual(['Fix blur', 'Fix noise', 'Fix JPEG', 'Upscale ×4']);
@@ -3846,7 +3986,11 @@ describe('Comparing saved results', () => {
     await user.click(screen.getByRole('tab', { name: /Outputs/ }));
     const original = await screen.findByRole('checkbox', { name: 'Original, photo.png' });
     const output = screen.getByRole('checkbox', { name: 'old, photo.png' });
+    // No picks, no Compare bar; one pick offers only Clear.
+    expect(document.querySelector('.compare-bar')).toBeNull();
     await user.click(original);
+    expect(screen.queryByRole('button', { name: /^Compare these/ })).toBeNull();
+    expect(screen.getByText('1 of 4 chosen')).toBeTruthy();
     await user.click(output);
     await waitFor(() =>
       expect(api.requestCompare).toHaveBeenLastCalledWith([
@@ -3854,14 +3998,58 @@ describe('Comparing saved results', () => {
         { kind: 'output', media_id: 'photo', job_id: 'old' },
       ]),
     );
-    await user.click(screen.getByRole('button', { name: 'Show in Compare 2' }));
+    // A picked row shows its slot number at its end.
+    expect(original.querySelector('.slot-number')?.textContent).toBe('1');
+    expect(output.querySelector('.slot-number')?.textContent).toBe('2');
+    expect(
+      screen.getByRole('checkbox', { name: 'new, photo.png' }).querySelector('.slot-number'),
+    ).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
+    expect(screen.queryByRole('button', { name: /^Compare these|^Comparing/ })).toBeNull();
+    expect(screen.getByText('2 of 4 chosen')).toBeTruthy();
     expect(screen.getByRole('slider', { name: /Divider between slot 1 and slot 2/ })).toBeTruthy();
     await user.click(screen.getByRole('tab', { name: 'Preview' }));
-    await user.click(screen.getByRole('tab', { name: 'Compare 2' }));
+    // The tab names the mode only: how many are picked shows in the chips and in Outputs.
+    await user.click(screen.getByRole('tab', { name: 'Compare' }));
     expect(screen.getByRole('button', { name: 'Swap slots 1 and 2' })).toBeTruthy();
-    const tabs = screen.getByRole('tablist', { name: 'Main pane' });
-    await fireEvent.keyDown(tabs, { key: 'ArrowLeft' });
-    expect(screen.getByRole('tab', { name: 'Preview' }).getAttribute('aria-selected')).toBe('true');
+    await fireEvent.keyDown(screen.getByRole('tablist', { name: 'Main pane' }), {
+      key: 'ArrowLeft',
+    });
+    const preview = screen.getByRole('tab', { name: 'Preview' });
+    expect(preview.getAttribute('aria-selected')).toBe('true');
+    await waitFor(() => expect(document.activeElement).toBe(preview));
+  });
+
+  it('shows the centre tabs, the file name with its size and the view options in one row', async () => {
+    const snapshot = pairHost(readySnapshot([image('photo', true)]));
+    snapshot.jobs = [completedJob('saved')];
+    api.listMediaResults.mockResolvedValue(historyOf('photo', [row('saved')]));
+    await mountWith(snapshot);
+    const header = document.querySelector<HTMLElement>('.preview-header')!;
+    const tabs = within(header).getByRole('tablist', { name: 'Main pane' });
+    expect(
+      within(tabs)
+        .getAllByRole('tab')
+        .map((tab) => tab.textContent),
+    ).toEqual(['Preview', 'Compare']);
+    expect(header.querySelector('.file-name')?.getAttribute('title')).toBe('photo.png');
+    expect(within(header).getByText('640 × 480')).toBeTruthy();
+    expect(await within(header).findByRole('radiogroup', { name: 'Comparison view' })).toBeTruthy();
+    expect(document.querySelector('.main-heading')).toBeNull();
+  });
+
+  it('keeps the end of a long file name in the list, the header and Outputs, with the full name on hover', async () => {
+    const name = 'IMG_490C1E18-B4D1-47E5-AC62-FD97F5A26811.jpeg';
+    const snapshot = pairHost(readySnapshot([{ ...image('photo', true), name }]));
+    snapshot.jobs = [completedJob('saved')];
+    api.listAllMediaResults.mockResolvedValue([historyOf('photo', [row('saved')])]);
+    const user = await mountWith(snapshot);
+    const named = (scope: string) =>
+      document.querySelector(`${scope} .file-name[title="${name}"] .file-name-tail`)?.textContent;
+    expect(named('.media-row')).toBe('26811.jpeg');
+    expect(named('.preview-header')).toBe('26811.jpeg');
+    await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+    await waitFor(() => expect(named('.group-head')).toBe('26811.jpeg'));
   });
 
   it('drops the picks of an image that left the list, in Compare and in the request to the host', async () => {
@@ -3875,7 +4063,9 @@ describe('Comparing saved results', () => {
     await user.click(screen.getByRole('tab', { name: /Outputs/ }));
     await user.click(await screen.findByRole('checkbox', { name: 'Original, first.png' }));
     await user.click(screen.getByRole('checkbox', { name: 'b1, second.png' }));
-    expect(screen.getByRole('tab', { name: 'Compare 2' })).toBeTruthy();
+    await waitFor(() =>
+      expect(api.requestCompare).toHaveBeenLastCalledWith([expect.anything(), expect.anything()]),
+    );
     api.removeMedia.mockImplementationOnce(async () => {
       const left = structuredClone(snapshot);
       left.media = left.media.filter((item) => item.id === 'first');
@@ -3883,9 +4073,8 @@ describe('Comparing saved results', () => {
       api.refreshSnapshot.mockResolvedValue(left);
       api.listAllMediaResults.mockResolvedValue([historyOf('first', [row('a1')])]);
     });
-    await user.click(screen.getByRole('tab', { name: 'Inputs' }));
+    await user.click(screen.getByRole('tab', { name: /^Inputs/ }));
     await user.click(screen.getByRole('button', { name: 'Remove second.png' }));
-    await waitFor(() => expect(screen.getByRole('tab', { name: 'Compare 1' })).toBeTruthy());
     await waitFor(() =>
       expect(api.requestCompare).toHaveBeenLastCalledWith([
         { kind: 'original', media_id: 'first' },
