@@ -1478,6 +1478,61 @@ fn a_completion_must_name_the_output_the_host_requested() {
 }
 
 #[test]
+fn a_completion_with_the_wrong_output_fails_its_job_and_the_engine_restarts() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = running_batch(directory.path());
+    let wrong = directory.path().join("a.png");
+    let done = |id: &str, path: &std::path::Path| {
+        envelope(
+            "job_completed",
+            json!({"job_id": id, "output_path": path.to_string_lossy()}),
+        )
+    };
+    // Messages about jobs that were never dispatched stay ignored.
+    assert!(refuse_wrong_result(&state, &done("ghost", &wrong))
+        .unwrap()
+        .is_none());
+    // A correct completion is not touched.
+    let own = directory.path().join("out").join("a.png");
+    assert!(refuse_wrong_result(&state, &done("a", &own))
+        .unwrap()
+        .is_none());
+    assert!(accept_envelope(&state, &envelope("job_started", json!({"job_id": "a"}))).unwrap());
+    let failure = refuse_wrong_result(&state, &done("a", &wrong))
+        .unwrap()
+        .expect("the active job must fail");
+    assert_eq!(failure.message_type, "job_failed");
+    assert_eq!(failure.data["job_id"], "a");
+    assert_eq!(failure.data["restart_required"], true);
+    assert!(accept_envelope(&state, &failure).unwrap());
+    let jobs = lock(&state.database).unwrap().list_jobs().unwrap();
+    let job = jobs.iter().find(|job| job.id == "a").unwrap();
+    assert_eq!(job.status, "failed");
+    assert_eq!(
+        job.error,
+        "The engine reported a result the app did not ask for."
+    );
+    assert!(job.output_path.is_empty());
+    {
+        let runtime = lock(&state.runtime).unwrap();
+        assert_ne!(runtime.active_job_id, "a");
+        assert!(runtime.last_output_path.is_empty());
+        assert_eq!(runtime.worker, "restarting");
+    }
+    // The failed job has ended: a second report about it is ignored.
+    assert!(refuse_wrong_result(&state, &done("a", &wrong))
+        .unwrap()
+        .is_none());
+    // An off-screen batch photo fails the same way and the batch goes on.
+    let failure = refuse_wrong_result(&state, &done("c", &own))
+        .unwrap()
+        .expect("a batch member must fail");
+    assert!(accept_envelope(&state, &failure).unwrap());
+    assert_eq!(status(&state, "c"), "failed");
+    assert_eq!(status(&state, "b"), "queued");
+}
+
+#[test]
 fn a_batch_photo_completes_only_with_its_own_output() {
     let directory = tempfile::tempdir().unwrap();
     let state = running_batch(directory.path());

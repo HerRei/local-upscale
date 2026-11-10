@@ -766,6 +766,13 @@ fn handle_worker_envelope(
         .lock()
         .map(|runtime| is_background_photo(&runtime, &job_id))
         .unwrap_or(false);
+    let envelope = match refuse_wrong_result(state, &envelope) {
+        Ok(Some(failure)) => {
+            eprintln!("LocalSR failed a job: the engine reported a result the app did not ask for");
+            failure
+        }
+        _ => envelope,
+    };
     let result = accept_envelope(state, &envelope);
     if matches!(result, Ok(false)) {
         return;
@@ -968,6 +975,27 @@ fn accept_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppResul
     Ok(true)
 }
 
+/// The failure that settles a completion naming a job the host dispatched, still
+/// active, with a result path the host did not ask for. Left alone the job would stay
+/// active and hold up the queue; the engine's state can no longer be trusted, so it is
+/// restarted. Messages about unknown or ended jobs get None and stay ignored.
+fn refuse_wrong_result(
+    state: &AppState,
+    envelope: &WorkerEnvelope,
+) -> AppResult<Option<WorkerEnvelope>> {
+    if stale_reason(state, envelope)?.is_some() || wrong_output(state, envelope)?.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(WorkerEnvelope {
+        message_type: "job_failed".into(),
+        data: json!({
+            "job_id": string(&envelope.data, "job_id"),
+            "error_message": "The engine reported a result the app did not ask for.",
+            "restart_required": true,
+        }),
+    }))
+}
+
 /// Messages that report on one job or benchmark. The engine only ever sends them
 /// for work the host sent it.
 fn is_job_scoped(message_type: &str) -> bool {
@@ -1008,6 +1036,14 @@ fn is_job_scoped(message_type: &str) -> bool {
 /// what the host records, previews and later lets the user open, so neither is
 /// taken from the engine's word alone.
 fn rejection(state: &AppState, envelope: &WorkerEnvelope) -> AppResult<Option<String>> {
+    match stale_reason(state, envelope)? {
+        Some(reason) => Ok(Some(reason)),
+        None => wrong_output(state, envelope),
+    }
+}
+
+/// A job-scoped message that names no job the host dispatched, or one that ended.
+fn stale_reason(state: &AppState, envelope: &WorkerEnvelope) -> AppResult<Option<String>> {
     let kind = envelope.message_type.as_str();
     if !is_job_scoped(kind) {
         return Ok(None);
@@ -1030,18 +1066,26 @@ fn rejection(state: &AppState, envelope: &WorkerEnvelope) -> AppResult<Option<St
             "{kind} for job {shown:?}, which already ended"
         )));
     }
-    if matches!(kind, "job_completed" | "video_job_completed") {
-        let reported = string(&envelope.data, "output_path");
-        let requested = lock(&state.database)?.requested_output(&id)?;
-        // The engine writes the file the request names and reports that same path.
-        if requested.as_deref().map(Path::new) != Some(Path::new(&reported)) {
-            let shown: String = reported.chars().take(256).collect();
-            return Ok(Some(format!(
-                "{kind} for job {id} reports {shown:?}, which is not the output the host requested"
-            )));
-        }
-    }
     Ok(None)
+}
+
+/// A completion that reports another file than the output the host requested.
+fn wrong_output(state: &AppState, envelope: &WorkerEnvelope) -> AppResult<Option<String>> {
+    let kind = envelope.message_type.as_str();
+    if !matches!(kind, "job_completed" | "video_job_completed") {
+        return Ok(None);
+    }
+    let id = string(&envelope.data, "job_id");
+    let reported = string(&envelope.data, "output_path");
+    let requested = lock(&state.database)?.requested_output(&id)?;
+    // The engine writes the file the request names and reports that same path.
+    if requested.as_deref().map(Path::new) == Some(Path::new(&reported)) {
+        return Ok(None);
+    }
+    let shown: String = reported.chars().take(256).collect();
+    Ok(Some(format!(
+        "{kind} for job {id} reports {shown:?}, which is not the output the host requested"
+    )))
 }
 
 fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppResult<()> {
