@@ -853,6 +853,69 @@ def test_a_png_that_ends_before_its_last_rows_is_refused_not_filled_with_black(t
         ImageManager().load(str(path))
 
 
+def _record_png_reads(monkeypatch):
+    import builtins
+
+    from localsr.core import image_io
+
+    sizes = []
+
+    class Recording:
+        def __init__(self, file):
+            self._file = file
+
+        def read(self, size=-1):
+            sizes.append(size)
+            return self._file.read(size)
+
+        def __getattr__(self, name):
+            return getattr(self._file, name)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self._file.close()
+
+    monkeypatch.setattr(
+        image_io, "open", lambda *a, **k: Recording(builtins.open(*a, **k)), raising=False
+    )
+    return image_io, sizes
+
+
+def test_a_png_that_declares_a_gigantic_idat_chunk_is_read_in_bounded_pieces(tmp_path, monkeypatch):
+    import zlib
+
+    path = tmp_path / "huge.png"
+    header = struct.pack(">IIBBBBB", 1, 1, 8, 0, 0, 0, 0)
+    path.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + struct.pack(">I", 13)
+        + b"IHDR"
+        + header
+        + struct.pack(">I", zlib.crc32(b"IHDR" + header))
+        + struct.pack(">I", 2**31 - 1)
+        + b"IDAT"
+        + zlib.compress(b"\x00\x07")
+    )
+    image_io, sizes = _record_png_reads(monkeypatch)
+    expected, inflated = image_io._png_scanline_bytes(path)
+    assert inflated < expected, "a chunk longer than the file cannot complete the image"
+    assert max(sizes) <= 1024 * 1024
+    with pytest.raises(OSError, match="huge.png is damaged"):
+        ImageManager().load(str(path))
+
+
+def test_a_png_check_stops_reading_once_it_has_the_rows_it_needs(tmp_path, monkeypatch):
+    path = tmp_path / "big.png"
+    rng = np.random.default_rng(1)
+    Image.fromarray(rng.integers(0, 255, (1500, 1500), dtype=np.uint8)).save(path)
+    image_io, sizes = _record_png_reads(monkeypatch)
+    expected, inflated = image_io._png_scanline_bytes(path)
+    assert inflated == expected
+    assert max(sizes) <= 1024 * 1024
+
+
 @pytest.mark.parametrize("mode", ["1", "L", "LA", "P", "RGB", "RGBA", "I;16"])
 @pytest.mark.parametrize("size", [(1, 1), (7, 5), (33, 17), (64, 64)])
 def test_the_png_rows_check_accepts_every_png_pillow_writes(tmp_path, mode, size):

@@ -121,6 +121,7 @@ def _png_scanline_bytes(path: str | Path) -> tuple[int, int] | None:
                 columns, rows = -(-(width - x0) // dx), -(-(height - y0) // dy)
                 if columns > 0 and rows > 0:
                     expected += rows * (1 + -(-columns * bits // 8))
+            size = os.fstat(file.fileno()).st_size
             inflated, decoder = 0, zlib.decompressobj()
             while inflated < expected:
                 header = file.read(8)
@@ -132,11 +133,19 @@ def _png_scanline_bytes(path: str | Path) -> tuple[int, int] | None:
                 if kind != b"IDAT":
                     file.seek(length + 4, os.SEEK_CUR)
                     continue
-                pending = file.read(length)
-                file.seek(4, os.SEEK_CUR)
-                while pending and inflated < expected:
-                    inflated += len(decoder.decompress(pending, 1 << 20))
-                    pending = decoder.unconsumed_tail
+                # The length comes from the file: read it in pieces, and never past its end.
+                if length + 4 > size - file.tell():
+                    break
+                left = length
+                while left and inflated < expected:
+                    pending = file.read(min(left, 1 << 20))
+                    if not pending:
+                        break
+                    left -= len(pending)
+                    while pending and inflated < expected:
+                        inflated += len(decoder.decompress(pending, 1 << 20))
+                        pending = decoder.unconsumed_tail
+                file.seek(left + 4, os.SEEK_CUR)
             return expected, inflated
     except (OSError, zlib.error, struct.error):
         return None
