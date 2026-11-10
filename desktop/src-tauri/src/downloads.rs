@@ -586,9 +586,9 @@ async fn install_atomically(partial: &Path, destination: &Path) -> AppResult<()>
         }
         return Err(error.into());
     }
-    if had_destination {
-        let _ = fs::remove_file(backup).await;
-    }
+    // The copy a crash between the two renames left behind is as stale as the one
+    // just replaced.
+    let _ = fs::remove_file(backup).await;
     Ok(())
 }
 
@@ -707,6 +707,21 @@ mod tests {
             .enable_all()
             .build()
             .unwrap()
+    }
+
+    #[test]
+    fn an_old_copy_left_by_an_interrupted_install_is_removed_by_the_next_install() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("model.bin");
+        let leftover = directory.path().join("model.bin.replaced");
+        std::fs::write(&leftover, b"old").unwrap();
+        let partial = directory.path().join("model.bin.part");
+        std::fs::write(&partial, b"new").unwrap();
+        current_thread_runtime()
+            .block_on(install_atomically(&partial, &destination))
+            .unwrap();
+        assert_eq!(std::fs::read(&destination).unwrap(), b"new");
+        assert!(!leftover.exists());
     }
 
     #[test]
