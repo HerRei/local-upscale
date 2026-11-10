@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    path::Path,
+    path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -32,7 +32,44 @@ pub struct Database {
     connection: Connection,
 }
 
+/// How many set-aside copies of damaged queue files are kept; older ones are removed.
+const KEPT_DAMAGED_FILES: usize = 3;
+
 impl Database {
+    /// Open the queue. A file SQLite cannot use (not a database, corrupt, a table
+    /// that does not fit) is moved aside next to itself and a new queue is made, so
+    /// a damaged history never keeps the app from starting. The path of the moved
+    /// file comes back with it. Any other failure (a locked file, a read-only
+    /// folder) is returned as it is and nothing is moved.
+    pub fn open_or_set_aside(path: &Path) -> AppResult<(Self, Option<PathBuf>)> {
+        let opened = Self::open(path).and_then(|database| {
+            database.check_integrity()?;
+            Ok(database)
+        });
+        match opened {
+            Ok(database) => Ok((database, None)),
+            Err(error) if is_damage(&error) => {
+                let aside = set_aside(path)?;
+                Ok((Self::open(path)?, Some(aside)))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn check_integrity(&self) -> AppResult<()> {
+        let verdict: String = self
+            .connection
+            .query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+        if verdict == "ok" {
+            Ok(())
+        } else {
+            Err(AppError::Database(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CORRUPT),
+                Some(verdict),
+            )))
+        }
+    }
+
     pub fn open(path: &Path) -> AppResult<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -759,6 +796,74 @@ fn media_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
     })
 }
 
+/// A failure that says the file's content is unusable, as opposed to the file being
+/// busy, read-only or out of reach.
+fn is_damage(error: &AppError) -> bool {
+    let AppError::Database(
+        rusqlite::Error::SqliteFailure(failure, _)
+        | rusqlite::Error::SqlInputError { error: failure, .. },
+    ) = error
+    else {
+        return false;
+    };
+    matches!(
+        failure.code,
+        rusqlite::ErrorCode::NotADatabase
+            | rusqlite::ErrorCode::DatabaseCorrupt
+            | rusqlite::ErrorCode::Unknown
+    )
+}
+
+/// Rename the queue and its journal files to `<name>.damaged-<time>.<extension>`
+/// beside it, and drop the oldest such copies beyond `KEPT_DAMAGED_FILES`.
+fn set_aside(path: &Path) -> AppResult<PathBuf> {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .ok_or_else(|| AppError::Config("the queue file has no name".into()))?;
+    let (stem, extension) = match name.rsplit_once('.') {
+        Some((stem, extension)) => (stem.to_owned(), format!(".{extension}")),
+        None => (name.clone(), String::new()),
+    };
+    let moved_name = |millis: i64| format!("{stem}.damaged-{millis}{extension}");
+    let directory = path.parent().unwrap_or(Path::new("."));
+    let mut millis = now_millis();
+    while directory.join(moved_name(millis)).exists() {
+        millis += 1;
+    }
+    let moved = directory.join(moved_name(millis));
+    std::fs::rename(path, &moved)?;
+    for suffix in ["-wal", "-shm"] {
+        let journal = directory.join(format!("{name}{suffix}"));
+        if journal.exists() {
+            std::fs::rename(
+                journal,
+                directory.join(format!("{}{suffix}", moved_name(millis))),
+            )?;
+        }
+    }
+    let mut copies: Vec<(i64, PathBuf)> = std::fs::read_dir(directory)?
+        .filter_map(|entry| {
+            let file = entry.ok()?.file_name().to_string_lossy().into_owned();
+            let time = file
+                .strip_prefix(&format!("{stem}.damaged-"))?
+                .strip_suffix(extension.as_str())?
+                .parse::<i64>()
+                .ok()?;
+            Some((time, directory.join(file)))
+        })
+        .collect();
+    copies.sort();
+    let surplus = copies.len().saturating_sub(KEPT_DAMAGED_FILES);
+    for (_, old) in copies.into_iter().take(surplus) {
+        let _ = std::fs::remove_file(&old);
+        for suffix in ["-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", old.display()));
+        }
+    }
+    Ok(moved)
+}
+
 fn now_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -771,6 +876,79 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_file_that_is_not_a_database_is_moved_aside_and_a_new_queue_made() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queue.sqlite3");
+        std::fs::write(&path, b"cut off by a sync tool\n".repeat(50)).unwrap();
+        let (db, moved) = Database::open_or_set_aside(&path).unwrap();
+        let moved = moved.unwrap();
+        assert!(moved
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("queue.damaged-"));
+        assert!(moved.to_string_lossy().ends_with(".sqlite3"));
+        assert_eq!(
+            std::fs::read(&moved).unwrap(),
+            b"cut off by a sync tool\n".repeat(50)
+        );
+        assert!(db.list_media().unwrap().is_empty());
+        db.insert_media("m", "/tmp/m.png", "m", "image").unwrap();
+    }
+
+    #[test]
+    fn a_sound_queue_is_opened_as_it_is() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queue.sqlite3");
+        drop(Database::open(&path).unwrap());
+        {
+            let db = Database::open(&path).unwrap();
+            db.insert_media("m", "/tmp/m.png", "m", "image").unwrap();
+        }
+        let (db, moved) = Database::open_or_set_aside(&path).unwrap();
+        assert!(moved.is_none());
+        assert_eq!(db.list_media().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_queue_whose_tables_do_not_fit_is_moved_aside() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queue.sqlite3");
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("CREATE TABLE jobs (id TEXT); CREATE TABLE media (id TEXT);")
+            .unwrap();
+        let (db, moved) = Database::open_or_set_aside(&path).unwrap();
+        assert!(moved.unwrap().is_file());
+        assert!(db.list_jobs().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_queue_that_cannot_be_opened_for_another_reason_is_left_where_it_is() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queue.sqlite3");
+        std::fs::create_dir(&path).unwrap();
+        assert!(Database::open_or_set_aside(&path).is_err());
+        assert!(path.is_dir());
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn only_the_newest_damaged_copies_are_kept() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queue.sqlite3");
+        let mut moved = Vec::new();
+        for round in 0..5 {
+            std::fs::write(&path, format!("damaged {round}")).unwrap();
+            moved.push(Database::open_or_set_aside(&path).unwrap().1.unwrap());
+        }
+        let kept: Vec<_> = moved.iter().filter(|file| file.exists()).collect();
+        assert_eq!(kept.len(), KEPT_DAMAGED_FILES);
+        assert!(moved[4].exists() && !moved[0].exists());
+        assert_eq!(std::fs::read(&moved[4]).unwrap(), b"damaged 4");
+    }
 
     fn job(id: &str, media: &str, request: &str, ui: &str) -> NewJob {
         NewJob {

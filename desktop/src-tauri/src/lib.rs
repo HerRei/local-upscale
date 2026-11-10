@@ -123,6 +123,9 @@ pub fn run() {
                 lock(&state.launch_intents)?.append(&mut early);
             }
             app.manage(state.clone());
+            if !smoke_test {
+                show_startup_notices(app.handle(), &state);
+            }
             *lock(&state.edit_runtime)? = editing::runtime_path(app.handle(), &state.paths);
             let switches = native_menu::switches(&*lock(&state.settings)?);
             native_menu::install(app, &lock(&state.recipes)?, switches)?;
@@ -239,6 +242,21 @@ pub fn run() {
             focus_main_window(app);
         }
     });
+}
+
+/// Tell the user once about what start-up had to work around.
+fn show_startup_notices(app: &tauri::AppHandle, state: &AppState) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+
+    let notices = state.take_startup_notices();
+    if notices.is_empty() {
+        return;
+    }
+    app.dialog()
+        .message(notices.join("\n\n"))
+        .title("LocalSR")
+        .kind(MessageDialogKind::Warning)
+        .show(|_| {});
 }
 
 fn run_immediate_action(action: ImmediateAction) -> Option<i32> {

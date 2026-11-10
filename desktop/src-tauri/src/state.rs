@@ -73,6 +73,9 @@ pub struct AppState {
     /// Set when no settings file existed at launch: the first device report
     /// then replaces the CPU default with the computer's GPU.
     pub choose_device: AtomicBool,
+    /// What the user has to be told once at start-up, for example that a damaged
+    /// queue file was moved aside. Shown and emptied by `take_startup_notices`.
+    startup_notices: Mutex<Vec<String>>,
 }
 
 impl AppState {
@@ -81,8 +84,24 @@ impl AppState {
     }
 
     pub(crate) fn from_paths(paths: AppPaths) -> AppResult<Self> {
-        crate::update_storage::before_version(&paths, &crate::distribution::profile_version())?;
-        let database = Database::open(&paths.database)?;
+        let mut notices = Vec::new();
+        // The safety copy is a convenience: a full disk or a damaged queue must not keep
+        // the app from starting. No update step depends on it.
+        if let Err(error) =
+            crate::update_storage::before_version(&paths, &crate::distribution::profile_version())
+        {
+            eprintln!("LocalSR could not copy its data before the new version: {error}");
+            notices.push(format!(
+                "LocalSR could not make its safety copy of your settings and queue ({error})."
+            ));
+        }
+        let (database, set_aside) = Database::open_or_set_aside(&paths.database)?;
+        if let Some(moved) = set_aside {
+            notices.push(format!(
+                "The queue and history file was damaged. LocalSR moved it to {} and started a new, empty queue. Your settings and models were not touched.",
+                moved.display()
+            ));
+        }
         let catalog = load_catalog(&paths)?;
         let first_run = !paths.settings.exists() && !paths.legacy_settings.exists();
         let (settings, recipes) = settings::load(&paths);
@@ -108,7 +127,16 @@ impl AppState {
             downloads: Mutex::new(HashMap::new()),
             launch_intents: Mutex::new(Vec::new()),
             choose_device: AtomicBool::new(first_run),
+            startup_notices: Mutex::new(notices),
         })
+    }
+
+    /// The start-up notices, once: a second call returns nothing.
+    pub fn take_startup_notices(&self) -> Vec<String> {
+        self.startup_notices
+            .lock()
+            .map(|mut notices| std::mem::take(&mut *notices))
+            .unwrap_or_default()
     }
 
     pub fn snapshot(&self) -> AppResult<AppSnapshot> {
@@ -191,6 +219,51 @@ pub fn emit_state_changed(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn paths_with_queue(directory: &std::path::Path, content: &[u8]) -> AppPaths {
+        let paths = AppPaths::under(directory);
+        std::fs::create_dir_all(&paths.next_root).unwrap();
+        std::fs::write(&paths.database, content).unwrap();
+        paths
+    }
+
+    #[test]
+    fn a_damaged_queue_does_not_keep_the_app_from_starting() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths_with_queue(directory.path(), b"not a database\n");
+        std::fs::write(&paths.settings, r#"{"schema_version":2}"#).unwrap();
+        let state = AppState::from_paths(paths.clone()).unwrap();
+        assert!(state.snapshot().unwrap().media.is_empty());
+        let notices = state.take_startup_notices();
+        let moved = std::fs::read_dir(&paths.next_root)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.to_string_lossy().contains("queue.damaged-"))
+            .unwrap();
+        assert_eq!(std::fs::read(&moved).unwrap(), b"not a database\n");
+        assert!(notices
+            .iter()
+            .any(|notice| notice.contains(moved.to_str().unwrap())));
+        assert!(state.take_startup_notices().is_empty());
+        assert_eq!(
+            std::fs::read_to_string(&paths.settings).unwrap(),
+            r#"{"schema_version":2}"#
+        );
+    }
+
+    #[test]
+    fn a_failed_safety_copy_is_reported_and_does_not_keep_the_app_from_starting() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        std::fs::create_dir_all(&paths.next_root).unwrap();
+        drop(crate::database::Database::open(&paths.database).unwrap());
+        std::fs::write(paths.next_root.join("data-version.json"), "0.0.1").unwrap();
+        std::fs::write(paths.next_root.join("backups"), b"a file, not a folder").unwrap();
+        let state = AppState::from_paths(paths).unwrap();
+        let notices = state.take_startup_notices();
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].contains("safety copy"));
+    }
 
     #[test]
     fn snapshot_reads_media_and_jobs_without_relocking_database() {
