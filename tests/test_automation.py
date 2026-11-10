@@ -118,7 +118,7 @@ def test_automation_parser_exposes_process_benchmark_and_watch_commands():
     "arguments,message",
     [
         (["--video-codec", "ffv1"], "MKV"),
-        (["--video-codec", "h264"], "--external-ffmpeg"),
+        (["--video-codec", "h264"], "No FFmpeg was found"),
         (["--video-codec", "av1", "--video-container", "mov"], "HEVC or Apple ProRes"),
         (["--video-codec", "prores", "--video-container", "mov"], "codecs of macOS"),
         (["--video-codec", "hevc", "--video-container", "mov"], "codecs of macOS"),
@@ -128,6 +128,7 @@ def test_automation_rejects_codec_choices_that_cannot_run(arguments, message, mo
     from localsr.automation import AutomationError, _validate_automation_args
 
     monkeypatch.setattr("localsr.core.media_bridge.system_codecs_available", lambda: False)
+    monkeypatch.setattr("localsr.core.media_bridge.implicit_user_ffmpeg", lambda: None)
     args = build_automation_parser().parse_args(["process", "a.mp4", "--output", "out", *arguments])
     with pytest.raises(AutomationError, match=message):
         _validate_automation_args(args)
@@ -422,3 +423,17 @@ def test_watch_stops_at_once_on_a_signal_instead_of_finishing_the_poll_sleep(tmp
     started = time.monotonic()
     assert _watch(args, runner, "cpu") == 130
     assert time.monotonic() - started < 5
+
+
+def test_automation_accepts_h264_when_only_an_installed_ffmpeg_can_write_it(monkeypatch):
+    from localsr.automation import AutomationError, _validate_automation_args
+
+    monkeypatch.setattr("localsr.core.media_bridge.system_codecs_available", lambda: False)
+    args = build_automation_parser().parse_args(
+        ["process", "a.mp4", "--output", "out", "--video-codec", "h264"]
+    )
+    monkeypatch.setattr("localsr.core.media_bridge.implicit_user_ffmpeg", lambda: object())
+    _validate_automation_args(args)
+    monkeypatch.setattr("localsr.core.media_bridge.implicit_user_ffmpeg", lambda: None)
+    with pytest.raises(AutomationError, match="No FFmpeg was found"):
+        _validate_automation_args(args)

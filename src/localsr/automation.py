@@ -620,12 +620,12 @@ def _validate_automation_args(args: argparse.Namespace) -> None:
         if not system_codecs_available():
             raise AutomationError(MACOS_ONLY_MESSAGE)
     elif args.video_codec in {"h264", "hevc"} and not args.external_ffmpeg:
-        from localsr.core.media_bridge import system_codecs_available
+        from localsr.core.media_bridge import implicit_user_ffmpeg, system_codecs_available
 
-        if not system_codecs_available():
+        if not system_codecs_available() and implicit_user_ffmpeg() is None:
             raise AutomationError(
-                "H.264/HEVC export uses the system codecs (macOS) or the FFmpeg installed on "
-                "this computer; pass --external-ffmpeg."
+                "No FFmpeg was found on this computer for H.264/HEVC export. Install FFmpeg, "
+                "or pass --external-ffmpeg with the path of one."
             )
     if args.command == "watch":
         if (
