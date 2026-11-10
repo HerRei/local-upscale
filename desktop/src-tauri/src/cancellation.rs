@@ -9,35 +9,70 @@ use std::{
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::error::AppResult;
+use crate::{database::ScratchRecord, error::AppResult};
 
 pub const CANCEL_GRACE: Duration = Duration::from_secs(8);
 
-/// Remove the scratch folders a killed host left beside the outputs of the jobs it was
-/// running: a host that ended without cleaning up (a crash, a power loss) leaves them
-/// with every partial frame. Only folders named like the host's own, and never a link.
-pub fn sweep_scratch(outputs: &[PathBuf]) {
-    let folders: std::collections::HashSet<&std::path::Path> = outputs
-        .iter()
-        .filter_map(|output| output.parent())
-        .collect();
-    for folder in folders {
-        let Ok(entries) = fs::read_dir(folder) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let ours = entry
-                .file_name()
-                .to_string_lossy()
-                .strip_prefix(".localsr-job-")
-                .is_some_and(|id| Uuid::parse_str(id).is_ok());
-            let plain_folder = entry
-                .file_type()
-                .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink());
-            if ours && plain_folder {
-                let _ = fs::remove_dir_all(entry.path());
+/// Remove the scratch folders a killed host recorded for its unfinished jobs: it ended
+/// without cleaning up (a crash, a power loss) and left them with every partial frame.
+/// Only the exact folder recorded for a job goes, and only when it is what the
+/// dispatcher made: a plain folder named `.localsr-job-<id>` directly in the output's
+/// own folder, neither of them a link. Nothing is removed while an engine of this
+/// instance runs. Returns the jobs whose folder is gone, so their records can be dropped.
+pub fn sweep_scratch(
+    records: &[ScratchRecord],
+    worker: &crate::state::WorkerControl,
+) -> Vec<String> {
+    let mut swept = Vec::new();
+    if worker.pid.load(std::sync::atomic::Ordering::SeqCst) != 0 {
+        return swept;
+    }
+    for record in records {
+        if provably_ours(record) {
+            match fs::remove_dir_all(&record.scratch) {
+                Ok(()) => swept.push(record.id.clone()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    swept.push(record.id.clone());
+                }
+                Err(_) => {}
             }
+        } else if fs::symlink_metadata(&record.scratch)
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        {
+            // Nothing is there to remove.
+            swept.push(record.id.clone());
         }
+    }
+    swept
+}
+
+/// Whether the recorded folder is a real folder of the shape the dispatcher makes,
+/// beside the output, reached without a link.
+fn provably_ours(record: &ScratchRecord) -> bool {
+    let Some(parent) = record.output.parent() else {
+        return false;
+    };
+    let named = record
+        .scratch
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix(".localsr-job-"))
+        .is_some_and(|id| Uuid::parse_str(id).is_ok());
+    if !named || record.scratch.parent() != Some(parent) {
+        return false;
+    }
+    let plain = |path: &std::path::Path| {
+        fs::symlink_metadata(path).is_ok_and(|info| info.is_dir() && !info.file_type().is_symlink())
+    };
+    if !plain(parent) || !plain(&record.scratch) {
+        return false;
+    }
+    match (fs::canonicalize(parent), fs::canonicalize(&record.scratch)) {
+        (Ok(parent), Ok(scratch)) => record
+            .scratch
+            .file_name()
+            .is_some_and(|name| scratch == parent.join(name)),
+        _ => false,
     }
 }
 
@@ -121,6 +156,11 @@ impl Cancellation {
             }
         }
         Ok(())
+    }
+
+    /// The scratch folder made for each job of the dispatch under way.
+    pub fn scratch_folders(&self) -> Vec<(String, PathBuf)> {
+        self.scratch.clone()
     }
 
     pub fn finish_member(&mut self, id: &str) -> AppResult<()> {
@@ -366,32 +406,130 @@ mod tests {
         control.finish().ok();
     }
 
+    fn record(id: &str, output: &std::path::Path, scratch: &std::path::Path) -> ScratchRecord {
+        ScratchRecord {
+            id: id.into(),
+            output: output.into(),
+            scratch: scratch.into(),
+        }
+    }
+
+    fn scratch_name() -> String {
+        format!(".localsr-job-{}", Uuid::new_v4())
+    }
+
     #[test]
-    fn leftover_scratch_folders_are_swept_and_nothing_else() {
+    fn only_the_recorded_scratch_folder_is_swept() {
         let directory = tempfile::tempdir().unwrap();
         let output = directory.path().join("clip.mp4");
-        let ours = directory
-            .path()
-            .join(format!(".localsr-job-{}", Uuid::new_v4()));
+        let ours = directory.path().join(scratch_name());
         fs::create_dir(&ours).unwrap();
         fs::write(ours.join("frame-000001.png"), b"partial frame").unwrap();
+        // Folders that look like ours but were not recorded for a job stay, whoever
+        // made them.
         let keep = [
             directory.path().join(".localsr-job-not-an-id"),
             directory.path().join("holiday"),
+            directory.path().join(scratch_name()),
         ];
         for folder in &keep {
             fs::create_dir(folder).unwrap();
             fs::write(folder.join("file"), b"x").unwrap();
         }
-        let other = tempfile::tempdir().unwrap();
-        let elsewhere = other
-            .path()
-            .join(format!(".localsr-job-{}", Uuid::new_v4()));
-        fs::create_dir(&elsewhere).unwrap();
-        sweep_scratch(&[output, directory.path().join("missing/clip.mp4")]);
+        let done = sweep_scratch(
+            &[record("job", &output, &ours)],
+            &crate::state::WorkerControl::default(),
+        );
+        assert_eq!(done, ["job"]);
         assert!(!ours.exists());
         assert!(keep.iter().all(|folder| folder.join("file").is_file()));
-        assert!(elsewhere.is_dir());
+    }
+
+    #[test]
+    fn a_recorded_name_that_the_dispatcher_could_not_have_made_is_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let output = directory.path().join("clip.mp4");
+        let worker = crate::state::WorkerControl::default();
+        let holiday = directory.path().join("holiday");
+        let elsewhere = other.path().join(scratch_name());
+        let nested = directory.path().join("sub").join(scratch_name());
+        for folder in [&holiday, &elsewhere, &nested] {
+            fs::create_dir_all(folder).unwrap();
+            fs::write(folder.join("file"), b"x").unwrap();
+        }
+        let records: Vec<ScratchRecord> = [&holiday, &elsewhere, &nested]
+            .iter()
+            .map(|folder| record("job", &output, folder))
+            .collect();
+        for one in &records {
+            assert!(sweep_scratch(std::slice::from_ref(one), &worker).is_empty());
+        }
+        for folder in [&holiday, &elsewhere, &nested] {
+            assert!(folder.join("file").is_file());
+        }
+    }
+
+    #[test]
+    fn a_folder_that_is_gone_counts_as_swept() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("clip.mp4");
+        let gone = directory.path().join(scratch_name());
+        let done = sweep_scratch(
+            &[record("job", &output, &gone)],
+            &crate::state::WorkerControl::default(),
+        );
+        assert_eq!(done, ["job"]);
+    }
+
+    #[test]
+    fn nothing_is_swept_while_an_engine_of_this_instance_runs() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("clip.mp4");
+        let ours = directory.path().join(scratch_name());
+        fs::create_dir(&ours).unwrap();
+        fs::write(ours.join("frame"), b"in use").unwrap();
+        let worker = crate::state::WorkerControl::default();
+        worker.pid.store(4242, std::sync::atomic::Ordering::SeqCst);
+        assert!(sweep_scratch(&[record("job", &output, &ours)], &worker).is_empty());
+        assert!(ours.join("frame").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_redirected_output_folder_or_scratch_folder_is_refused() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let worker = crate::state::WorkerControl::default();
+        // The output's folder was replaced by a link to another folder.
+        let real = directory.path().join("real");
+        fs::create_dir(&real).unwrap();
+        let name = scratch_name();
+        fs::create_dir(real.join(&name)).unwrap();
+        fs::write(real.join(&name).join("file"), b"x").unwrap();
+        let link = directory.path().join("out");
+        symlink(&real, &link).unwrap();
+        let swept = sweep_scratch(
+            &[record("job", &link.join("clip.mp4"), &link.join(&name))],
+            &worker,
+        );
+        assert!(swept.is_empty());
+        assert!(real.join(&name).join("file").is_file());
+        // The scratch folder itself is a link to a folder of the user's.
+        let precious = directory.path().join("precious");
+        fs::create_dir(&precious).unwrap();
+        fs::write(precious.join("file"), b"keep").unwrap();
+        let folder = directory.path().join("folder");
+        fs::create_dir(&folder).unwrap();
+        let name = scratch_name();
+        symlink(&precious, folder.join(&name)).unwrap();
+        let swept = sweep_scratch(
+            &[record("job", &folder.join("clip.mp4"), &folder.join(&name))],
+            &worker,
+        );
+        assert!(swept.is_empty());
+        assert!(precious.join("file").is_file());
     }
 
     #[test]

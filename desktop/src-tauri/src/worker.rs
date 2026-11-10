@@ -638,6 +638,12 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
         lock(&state.database)?.finish_job(&first, "failed", "", &error.to_string())?;
         return Ok(Dispatch::Failed);
     }
+    if let Err(error) = record_scratch_folders(state) {
+        // Without the record a crash would leave the folder behind for good.
+        lock(&state.worker.cancellation)?.finish()?;
+        lock(&state.database)?.finish_job(&first, "failed", "", &error.to_string())?;
+        return Ok(Dispatch::Failed);
+    }
     // Preparing can end a batch early, before a photo whose folder cannot be used.
     let ids: Vec<String> = match message["data"]["jobs"].as_array() {
         Some(jobs) if message["type"] == "image_batch_request" => {
@@ -671,6 +677,17 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
         return Err(error);
     }
     Ok(Dispatch::Sent)
+}
+
+/// Record the folders just made for this dispatch with their jobs, before the engine
+/// can write into them: a later start removes exactly these after a crash.
+fn record_scratch_folders(state: &AppState) -> AppResult<()> {
+    let folders = lock(&state.worker.cancellation)?.scratch_folders();
+    let database = lock(&state.database)?;
+    for (id, folder) in folders {
+        database.record_scratch(&id, &folder)?;
+    }
+    Ok(())
 }
 
 /// The rows of the jobs a stopped engine was running. A cancellation that had to

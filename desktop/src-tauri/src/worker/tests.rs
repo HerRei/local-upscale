@@ -1791,3 +1791,43 @@ fn a_crash_while_cancelling_a_batch_never_leaves_a_photo_cancelling() {
     assert_eq!(status(&state, "a"), "interrupted");
     assert_eq!(status(&state, "b"), "queued");
 }
+
+#[test]
+fn the_scratch_folders_made_for_a_dispatch_are_recorded_with_their_jobs() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    let mut message = json!({"type": "image_batch_request", "data": {"jobs": [
+        photo_job("a")["data"].clone(), photo_job("b")["data"].clone()]}});
+    for (index, id) in ["a", "b"].iter().enumerate() {
+        message["data"]["jobs"][index]["job_id"] = json!(id);
+        message["data"]["jobs"][index]["output_path"] =
+            json!(directory.path().join("out").join(format!("{id}.png")));
+    }
+    lock(&state.worker.cancellation)
+        .unwrap()
+        .prepare("a", &mut message)
+        .unwrap();
+    record_scratch_folders(&state).unwrap();
+    // A later start reads them back for the jobs the stopped host left.
+    let mut database = crate::database::Database::open(&state.paths.database).unwrap();
+    let mut found: Vec<(String, std::path::PathBuf)> = database
+        .take_interrupted_scratch()
+        .into_iter()
+        .map(|record| (record.id, record.scratch))
+        .collect();
+    found.sort();
+    let made: Vec<std::path::PathBuf> = message["data"]["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|job| std::path::PathBuf::from(job["scratch_directory"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("a".to_owned(), made[0].clone()),
+            ("b".to_owned(), made[1].clone())
+        ]
+    );
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
