@@ -161,6 +161,22 @@ def test_an_image_above_the_cache_budget_is_cropped_without_being_kept(tmp_path)
     assert cache.render(_region(path2)).error_message
 
 
+def test_a_result_above_pillows_pixel_limit_is_still_cropped_and_the_limit_stays(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "huge-result.png"
+    Image.new("RGB", (30, 30), "red").save(path)
+    # 900 pixels are above twice this limit: Image.open alone refuses the file as a bomb.
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 100)
+    with pytest.raises(Image.DecompressionBombError):
+        Image.open(path)
+    cache = RegionCache(1000)  # 3600 bytes in memory: above the budget, within four of it
+    reply = cache.render(_region(path))
+    assert reply.png_base64, reply
+    assert not cache.images
+    assert Image.MAX_IMAGE_PIXELS == 100
+
+
 def test_a_slot_resubmitted_while_others_wait_does_not_starve_them(tmp_path):
     started, release = threading.Event(), threading.Event()
     order = []
