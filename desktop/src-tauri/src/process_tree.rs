@@ -145,6 +145,24 @@ impl ProcessTree {
     }
 }
 
+/// The line to log when a child could not be put under a Job Object, only the first
+/// time: the app goes on without tree ownership, so the first failure is what a
+/// diagnosis needs and later ones would only repeat it.
+#[cfg(any(windows, test))]
+fn first_job_failure(
+    reported: &std::sync::atomic::AtomicBool,
+    step: &str,
+    code: Option<i32>,
+) -> Option<String> {
+    if reported.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return None;
+    }
+    let code = code.map_or_else(|| "unknown".to_owned(), |code| code.to_string());
+    Some(format!(
+        "LocalSR could not {step} (Windows error {code}); cancelling will end only the engine itself, not the programs it started."
+    ))
+}
+
 /// Whether the child has exited, seen without reaping it (`waitid` with `WNOWAIT`):
 /// the exited child stays a zombie, which keeps its process and group number from
 /// being handed to another process. With `block` it waits for the exit.
@@ -230,6 +248,17 @@ mod job {
         fn CloseHandle(handle: Handle) -> i32;
     }
 
+    /// Log a failed step with the error Windows gave, the first time only. The caller
+    /// carries on without a job: failing closed would stop the app from starting its
+    /// engine on a computer where assignment is refused.
+    fn report(step: &str) {
+        static REPORTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        let code = std::io::Error::last_os_error().raw_os_error();
+        if let Some(line) = super::first_job_failure(&REPORTED, step, code) {
+            eprintln!("{line}");
+        }
+    }
+
     /// The handle's closing, with the host's exit or crash, kills what is left.
     pub struct Job(Handle);
 
@@ -238,16 +267,17 @@ mod job {
     unsafe impl Sync for Job {}
 
     impl Job {
-        /// A kill-on-close job holding `child`. None when Windows refuses; the
-        /// caller then still ends the child itself. A helper the child started
-        /// before this call ran stays outside the job: the engine starts none
-        /// before it reads its first request.
+        /// A kill-on-close job holding `child`. None when Windows refuses (logged once);
+        /// the caller then still ends the child itself. The child runs until this call
+        /// assigns it, and a helper it started in that time stays outside the job: the
+        /// engine starts none before it reads its first request.
         pub fn around(child: &Child) -> Option<Self> {
             // SAFETY: plain Win32 calls on handles this function owns or that
             // `child` keeps open for its lifetime.
             unsafe {
                 let handle = CreateJobObjectW(ptr::null_mut(), ptr::null());
                 if handle.is_null() {
+                    report("create a Job Object");
                     return None;
                 }
                 let job = Self(handle);
@@ -259,7 +289,12 @@ mod job {
                     (&raw const limits).cast(),
                     std::mem::size_of::<ExtendedLimits>() as u32,
                 );
-                if configured == 0 || AssignProcessToJobObject(handle, child.as_raw_handle()) == 0 {
+                if configured == 0 {
+                    report("set the limits of a Job Object");
+                    return None;
+                }
+                if AssignProcessToJobObject(handle, child.as_raw_handle()) == 0 {
+                    report("assign the engine to a Job Object");
                     return None;
                 }
                 Some(job)
@@ -302,6 +337,28 @@ pub(crate) fn process_is_running(pid: u32) -> bool {
             let state = String::from_utf8_lossy(&out.stdout);
             !state.trim().is_empty() && !state.trim().starts_with('Z')
         })
+}
+
+#[cfg(test)]
+mod job_failure_tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_job_object_is_reported_once_with_the_os_error_code() {
+        let reported = std::sync::atomic::AtomicBool::new(false);
+        let line = first_job_failure(&reported, "assign the engine to a Job Object", Some(5))
+            .expect("the first failure is reported");
+        assert!(line.contains("assign the engine to a Job Object"), "{line}");
+        assert!(line.contains("error 5"), "{line}");
+        assert_eq!(
+            first_job_failure(&reported, "create a Job Object", Some(6)),
+            None
+        );
+        let reported = std::sync::atomic::AtomicBool::new(false);
+        assert!(first_job_failure(&reported, "create a Job Object", None)
+            .unwrap()
+            .contains("error unknown"));
+    }
 }
 
 #[cfg(all(test, unix))]
