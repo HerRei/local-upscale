@@ -62,23 +62,18 @@ Hofmann. The library also has HAT, Real-ESRGAN, SwinIR, NAFNet, SCUNet and
 FBCNN, and each model shows its size, licence and source before you download it.
 [Model guide](docs/models/README.md) · [Model licences](docs/model-licenses.md).
 
-<!-- release-candidate -->
-v0.4.0-beta is in preparation; the downloads below are still v0.3.0-beta.
-[Draft release notes](docs/releases/v0.4.0-beta.md).
-<!-- /release-candidate -->
-
 ## Download
 
 The [download page](https://herrei.github.io/localsr/download/) has the installers
 for each platform:
 
-- **macOS v0.3.0-beta:** Apple Silicon (M1 or newer) and macOS 14 or later. Intel
+- **macOS v0.4.0-beta:** Apple Silicon (M1 or newer) and macOS 14 or later. Intel
   Macs are not supported. Signed and notarized, and it updates itself.
-- **Windows v0.3.0-beta:** Windows 10 or 11 on x86-64, as CPU, DirectML and
+- **Windows v0.4.0-beta:** Windows 10 or 11 on x86-64, as CPU, DirectML and
   NVIDIA CUDA editions. DirectML also runs on AMD and Intel graphics, built-in ones
   included, and Intel NPUs work on Windows and Linux. The installers are unsigned, so SmartScreen warns first: choose **More info**,
   then **Run anyway**.
-- **Linux v0.3.0-beta:** x86-64 AppImages for CPU, AMD ROCm and NVIDIA CUDA.
+- **Linux v0.4.0-beta:** x86-64 AppImages for CPU, AMD ROCm and NVIDIA CUDA.
   The CPU AppImage runs Intel graphics through OpenVINO once Intel's compute
   driver (`intel-opencl-icd`) is installed.
 
