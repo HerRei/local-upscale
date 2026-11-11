@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.4.0-beta] - Unreleased
+## [0.4.0-beta] - 2026-11-11
 
 0.4.0-beta is the first public release since 0.3.0-beta. It includes the changes
 listed under 0.3.1 to 0.3.8 below, which were never published on their own.
