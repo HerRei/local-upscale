@@ -1,0 +1,48 @@
+import Foundation
+
+extension ModelKey {
+    public var displayName: String {
+        switch self {
+        case .best: return "Best"
+        case .fast: return "Fast"
+        }
+    }
+}
+
+extension ComputeUnit {
+    public var displayName: String {
+        switch self {
+        case .npu: return "NPU"
+        case .gpu: return "GPU"
+        case .cpu: return "CPU"
+        }
+    }
+}
+
+public enum UIFormatting {
+    public static func formatSeconds(_ seconds: Double) -> String {
+        let clamped = max(0.0, seconds.isFinite ? seconds : 0.0)
+        let tenths = Int((clamped * 10.0).rounded())
+        let whole = tenths / 10
+        let frac = tenths % 10
+        return "\(whole).\(frac) s"
+    }
+
+    public static func resultSummary(width: Int, height: Int, model: ModelKey, unit: ComputeUnit, seconds: Double) -> String {
+        return "\(width) \u{00D7} \(height) \u{00B7} \(model.displayName) \u{00B7} \(unit.displayName) \u{00B7} \(formatSeconds(seconds))"
+    }
+
+    public static func formatETA(_ seconds: Double?) -> String? {
+        guard let seconds, seconds.isFinite, seconds > 0.0 else { return nil }
+        let total = max(1, Int(seconds.rounded()))
+        if total < 60 {
+            return "\(total) s remaining"
+        }
+        let mins = total / 60
+        let secs = total % 60
+        if secs == 0 {
+            return "\(mins) min remaining"
+        }
+        return "\(mins) min \(secs) s remaining"
+    }
+}

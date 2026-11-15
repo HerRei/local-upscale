@@ -282,4 +282,20 @@ final class CoreLogicTests: XCTestCase {
         XCTAssertEqual(ETA.remaining(completed: 2, total: 10, elapsedSeconds: 4.0), 16.0)
         XCTAssertEqual(ETA.remaining(completed: 10, total: 10, elapsedSeconds: 4.0), 0.0)
     }
+
+    func testUIFormatting() {
+        XCTAssertEqual(ModelKey.best.displayName, "Best")
+        XCTAssertEqual(ModelKey.fast.displayName, "Fast")
+        XCTAssertEqual(ComputeUnit.npu.displayName, "NPU")
+        XCTAssertEqual(ComputeUnit.gpu.displayName, "GPU")
+        XCTAssertEqual(ComputeUnit.cpu.displayName, "CPU")
+        XCTAssertEqual(UIFormatting.formatSeconds(2.36), "2.4 s")
+        XCTAssertEqual(
+            UIFormatting.resultSummary(width: 4000, height: 3000, model: ModelKey.best, unit: ComputeUnit.npu, seconds: 2.36),
+            "4000 × 3000 · Best · NPU · 2.4 s"
+        )
+        XCTAssertEqual(UIFormatting.formatETA(45.2), "45 s remaining")
+        XCTAssertEqual(UIFormatting.formatETA(125.0), "2 min 5 s remaining")
+        XCTAssertEqual(UIFormatting.formatETA(120.0), "2 min remaining")
+    }
 }

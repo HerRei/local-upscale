@@ -15,6 +15,8 @@
 		4A10000A2FA500000000B001 /* localsr_best.mlmodelc in Resources */ = {isa = PBXBuildFile; fileRef = 4A10000A2FA500000000A001 /* localsr_best.mlmodelc */; };
 		4A10000A2FA500000000B002 /* localsr_fast.mlmodelc in Resources */ = {isa = PBXBuildFile; fileRef = 4A10000A2FA500000000A002 /* localsr_fast.mlmodelc */; };
 		4A10000A2FA500000000B003 /* probe.png in Resources */ = {isa = PBXBuildFile; fileRef = 4A10000A2FA500000000A003 /* probe.png */; };
+		4A10000A2FA500000000B004 /* NOTICE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 4A10000A2FA500000000A004 /* NOTICE.txt */; };
+		4A20000A2FA600000000B001 /* LocalSRUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A20000A2FA600000000A001 /* LocalSRUITests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -47,6 +49,9 @@
 		4A10000A2FA500000000A001 /* localsr_best.mlmodelc */ = {isa = PBXFileReference; lastKnownFileType = folder; name = localsr_best.mlmodelc; path = ../Models/ios/localsr_best.mlmodelc; sourceTree = "<group>"; };
 		4A10000A2FA500000000A002 /* localsr_fast.mlmodelc */ = {isa = PBXFileReference; lastKnownFileType = folder; name = localsr_fast.mlmodelc; path = ../Models/ios/localsr_fast.mlmodelc; sourceTree = "<group>"; };
 		4A10000A2FA500000000A003 /* probe.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = probe.png; path = ../Models/probe.png; sourceTree = "<group>"; };
+		4A10000A2FA500000000A004 /* NOTICE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; name = NOTICE.txt; path = ../Models/NOTICE.txt; sourceTree = "<group>"; };
+		4A20000A2FA600000000A001 /* LocalSRUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalSRUITests.swift; sourceTree = "<group>"; };
+		4A20000A2FA600000000E001 /* LocalSRUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LocalSRUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -65,6 +70,7 @@
 			isa = PBXGroup;
 			children = (
 				496BDBEB2B89A47800C09264 /* LocalSR.app */,
+				4A20000A2FA600000000E001 /* LocalSRUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -86,6 +92,7 @@
 				496BDBED2B8A7E9C00C09264 /* Localizable.xcstrings */,
 				493609562A6B7EAE00C401E2 /* LocalSR */,
 				49F90C2A2A52156200F06D93 /* App */,
+				4A20000A2FA600000000C001 /* UITests */,
 				4A10000A2FA500000000C001 /* Models (iOS only) */,
 				49AB54462B066A7E007B79B2 /* SkipStone */,
 				496BDBEC2B89A47800C09264 /* Products */,
@@ -110,8 +117,17 @@
 				4A10000A2FA500000000A001 /* localsr_best.mlmodelc */,
 				4A10000A2FA500000000A002 /* localsr_fast.mlmodelc */,
 				4A10000A2FA500000000A003 /* probe.png */,
+				4A10000A2FA500000000A004 /* NOTICE.txt */,
 			);
 			name = "Models (iOS only)";
+			sourceTree = "<group>";
+		};
+		4A20000A2FA600000000C001 /* UITests */ = {
+			isa = PBXGroup;
+			children = (
+				4A20000A2FA600000000A001 /* LocalSRUITests.swift */,
+			);
+			path = UITests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -138,6 +154,24 @@
 			productName = App;
 			productReference = 496BDBEB2B89A47800C09264 /* LocalSR.app */;
 			productType = "com.apple.product-type.application";
+		};
+		4A20000A2FA600000000D001 /* LocalSRUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4A20000A2FA600000000D005 /* Build configuration list for PBXNativeTarget "LocalSRUITests" */;
+			buildPhases = (
+				4A20000A2FA600000000D002 /* Sources */,
+				4A20000A2FA600000000D003 /* Frameworks */,
+				4A20000A2FA600000000D004 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				4A20000A2FA600000000D008 /* PBXTargetDependency */,
+			);
+			name = LocalSRUITests;
+			productName = LocalSRUITests;
+			productReference = 4A20000A2FA600000000E001 /* LocalSRUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
 
@@ -168,6 +202,7 @@
 			projectRoot = "";
 			targets = (
 				499CD4382AC5B799001AE8D8 /* LocalSR App */,
+				4A20000A2FA600000000D001 /* LocalSRUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -183,10 +218,43 @@
 				4A10000A2FA500000000B001 /* localsr_best.mlmodelc in Resources */,
 				4A10000A2FA500000000B002 /* localsr_fast.mlmodelc in Resources */,
 				4A10000A2FA500000000B003 /* probe.png in Resources */,
+				4A10000A2FA500000000B004 /* NOTICE.txt in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4A20000A2FA600000000D003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4A20000A2FA600000000D004 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		4A20000A2FA600000000D008 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 499CD4382AC5B799001AE8D8 /* LocalSR App */;
+			targetProxy = 4A20000A2FA600000000D009 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin PBXContainerItemProxy section */
+		4A20000A2FA600000000D009 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 49F90C202A52156200F06D93 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 499CD4382AC5B799001AE8D8;
+			remoteInfo = "LocalSR App";
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXShellScriptBuildPhase section */
 		499CD4452AC5B869001AE8D8 /* Run skip gradle */ = {
@@ -216,6 +284,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				499CD43B2AC5B799001AE8D8 /* Main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4A20000A2FA600000000D002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4A20000A2FA600000000B001 /* LocalSRUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -280,6 +356,44 @@
 			};
 			name = Release;
 		};
+		4A20000A2FA600000000D006 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.hermesreisner.localsr.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = "LocalSR App";
+			};
+			name = Debug;
+		};
+		4A20000A2FA600000000D007 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.hermesreisner.localsr.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = "LocalSR App";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -297,6 +411,15 @@
 			buildConfigurations = (
 				49F90C4B2A52156300F06D93 /* Debug */,
 				49F90C4C2A52156300F06D93 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		4A20000A2FA600000000D005 /* Build configuration list for PBXNativeTarget "LocalSRUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4A20000A2FA600000000D006 /* Debug */,
+				4A20000A2FA600000000D007 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

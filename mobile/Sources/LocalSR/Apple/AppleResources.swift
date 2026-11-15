@@ -53,5 +53,9 @@ public enum AppleResources {
     public static func probeURL() throws -> URL {
         try find("probe.png")
     }
+
+    public static func noticeURL() throws -> URL {
+        try find("NOTICE.txt")
+    }
 }
 #endif
