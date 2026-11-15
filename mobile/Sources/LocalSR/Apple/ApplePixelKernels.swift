@@ -70,9 +70,9 @@ enum ApplePixelKernels {
     }
 
     /// Copies the tile's core region from the FP16 output into the RGBA8 output image (stride `outputWidth * 4`).
-    static func stitch(tile: Tile, output: TileOutputView, image: UnsafeMutablePointer<UInt8>, outputWidth: Int, outputScale: Int = 4) {
-        precondition(outputScale == 2 || outputScale == 4)
-        let reduction = 4 / outputScale
+    static func stitch(tile: Tile, output: TileOutputView, image: UnsafeMutablePointer<UInt8>, outputWidth: Int, outputScale: Int = 4, modelScale: Int = 4) {
+        precondition((modelScale == 1 && outputScale == 1) || (modelScale == 4 && (outputScale == 2 || outputScale == 4)))
+        let reduction = modelScale / outputScale
         let rowsPerChunk = 32
         let chunks = (tile.outputHeight + rowsPerChunk - 1) / rowsPerChunk
         let w = tile.outputWidth

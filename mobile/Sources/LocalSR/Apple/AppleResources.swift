@@ -50,6 +50,30 @@ public enum AppleResources {
         try find(model.fileName + ".mlmodelc")
     }
 
+    public static func tabletModelURL(_ model: TabletModelID) throws -> URL {
+        let name = ModelCatalog.model(model).iosFileName
+        var dirs: [URL] = []
+        if let env = ProcessInfo.processInfo.environment["LOCALSR_MODELS_DIR"], !env.isEmpty {
+            let root = URL(fileURLWithPath: env, isDirectory: true)
+            dirs.append(root.appendingPathComponent("ios-tablet", isDirectory: true))
+            dirs.append(root)
+        }
+        if let root = Bundle.main.resourceURL {
+            dirs.append(root.appendingPathComponent("Models/ios-tablet", isDirectory: true))
+            dirs.append(root)
+        }
+        #if DEBUG || os(macOS)
+        var root = URL(fileURLWithPath: #filePath)
+        for _ in 0..<4 { root.deleteLastPathComponent() }
+        dirs.append(root.appendingPathComponent("Models/ios-tablet", isDirectory: true))
+        #endif
+        for dir in dirs {
+            let url = dir.appendingPathComponent(name)
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
+        throw ResourceError.missing(name)
+    }
+
     public static func probeURL() throws -> URL {
         try find("probe.png")
     }

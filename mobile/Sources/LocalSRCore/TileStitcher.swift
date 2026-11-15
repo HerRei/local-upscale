@@ -1,8 +1,8 @@
 public enum TileStitcher {
-    public static func stitch(tile: Tile, tileOutput: [Float], output: inout [UInt8], outputWidth: Int, tileSize: Int = 1536, outputScale: Int = 4) {
+    public static func stitch(tile: Tile, tileOutput: [Float], output: inout [UInt8], outputWidth: Int, tileSize: Int = 1536, outputScale: Int = 4, modelScale: Int = 4) {
         precondition(tileOutput.count == 3 * tileSize * tileSize && outputWidth > 0 && output.count % (outputWidth * 4) == 0)
-        precondition(outputScale == 2 || outputScale == 4)
-        let reduction = 4 / outputScale
+        precondition((modelScale == 1 && outputScale == 1) || (modelScale == 4 && (outputScale == 2 || outputScale == 4)))
+        let reduction = modelScale / outputScale
         let plane = tileSize * tileSize
         for y in 0..<tile.outputHeight {
             for x in 0..<tile.outputWidth {

@@ -31,21 +31,23 @@ object TilePipeline {
      * Upscales [source] 4x into [sink] (which must be (4*width) x (4*height)). Checks for coroutine
      * cancellation before every tile and calls [onTile] (done, total) after each one.
      */
-    suspend fun process(source: PixelSource, sink: PixelSink, runner: TileRunner, outputScale: Int = 4, onTile: (Int, Int) -> Unit = { _, _ -> }) {
-        val plan = TilePlanner.plan(width = source.width, height = source.height, scale = outputScale)
+    suspend fun process(source: PixelSource, sink: PixelSink, runner: TileRunner, outputScale: Int = 4, windowSize: Int = PixelKernels.WINDOW, halo: Int = PixelKernels.HALO, modelScale: Int = 4, onTile: (Int, Int) -> Unit = { _, _ -> }) {
+        require((modelScale == 1 && outputScale == 1) || (modelScale == 4 && outputScale in listOf(2, 4)))
+        val plan = TilePlanner.plan(width = source.width, height = source.height, window = windowSize, halo = halo, scale = outputScale)
         val total = plan.count
-        val region = IntArray(PixelKernels.WINDOW * PixelKernels.WINDOW)
-        val window = FloatArray(PixelKernels.WINDOW * PixelKernels.WINDOW * 3)
-        val core = IntArray(PixelKernels.CORE * PixelKernels.SCALE * PixelKernels.CORE * PixelKernels.SCALE)
+        val region = IntArray(windowSize * windowSize)
+        val window = FloatArray(windowSize * windowSize * 3)
+        val coreSide = (windowSize - 2 * halo) * outputScale
+        val core = IntArray(coreSide * coreSide)
         for (i in 0 until total) {
             currentCoroutineContext().ensureActive()
             val tile = plan[i]
-            val rw = PixelKernels.regionWidth(source.width, tile)
-            val rh = PixelKernels.regionHeight(source.height, tile)
+            val rw = PixelKernels.regionWidth(source.width, tile, windowSize)
+            val rh = PixelKernels.regionHeight(source.height, tile, windowSize)
             source.readRegion(tile.windowX, tile.windowY, rw, rh, region)
-            PixelKernels.extractWindow(region, source.width, source.height, tile, window)
+            PixelKernels.extractWindow(region, source.width, source.height, tile, window, windowSize)
             val out = runner.run(window)
-            PixelKernels.stitchRegion(out, tile, core, outputScale = outputScale)
+            PixelKernels.stitchRegion(out, tile, core, tileSize = windowSize * modelScale, outputScale = outputScale, modelScale = modelScale)
             sink.writeRegion(tile.outputX, tile.outputY, tile.outputWidth, tile.outputHeight, core)
             onTile(i + 1, total)
         }

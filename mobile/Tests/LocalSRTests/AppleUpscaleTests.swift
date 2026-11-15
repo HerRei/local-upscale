@@ -46,6 +46,51 @@ final class AppleUpscaleTests: XCTestCase {
 
     // MARK: Engine
 
+    func testTabletJPEGFixThenBest() throws {
+        let directory = tempDirectory("tablet-stages")
+        let input = try Synthetic.writePhoto(.init(width: 1200, height: 900, type: .jpeg), to: directory)
+        let decoded = try ImageIOCodec.decode(url: input)
+        let registry = TabletModelRegistry()
+        let fixed = try AppleTabletStageRunner.run(source: decoded.pixels, model: .jpegFix, unit: .npu,
+                                                   outputScale: 1, registry: registry)
+        XCTAssertEqual(fixed.width, 1200)
+        XCTAssertEqual(fixed.height, 900)
+        let result = try AppleTabletStageRunner.run(source: fixed, model: .best, unit: .npu,
+                                                    outputScale: 4, registry: registry)
+        XCTAssertEqual(result.width, 4800)
+        XCTAssertEqual(result.height, 3600)
+        var low = UInt8.max, high = UInt8.min
+        for offset in stride(from: 0, to: result.byteCount, by: 4096) {
+            low = min(low, result.pointer[offset])
+            high = max(high, result.pointer[offset])
+        }
+        XCTAssertGreaterThan(Int(high) - Int(low), 20)
+        let url = directory.appendingPathComponent("tablet-result.heic")
+        _ = try ImageIOCodec.encodeHEIC(pixels: result, colorSpace: decoded.colorSpace, decoded: decoded, to: url)
+        let source = try XCTUnwrap(CGImageSourceCreateWithURL(url as CFURL, nil))
+        let props = try XCTUnwrap(CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any])
+        XCTAssertEqual((props[kCGImagePropertyPixelWidth as String] as? NSNumber)?.intValue, 4800)
+        XCTAssertEqual((props[kCGImagePropertyPixelHeight as String] as? NSNumber)?.intValue, 3600)
+    }
+
+    func testTabletRegistryLoadsRealModels() throws {
+        let registry = TabletModelRegistry()
+        for id in [TabletModelID.jpegFix, .best, .finest] {
+            let descriptor = ModelCatalog.model(id)
+            let unit: ComputeUnit = id == .finest ? .gpu : .cpu
+            let input = [Float](repeating: 0.5, count: 3 * descriptor.window * descriptor.window)
+            try registry.withEngine(model: id, unit: unit) { engine in
+                let output = try engine.run(tile: input)
+                XCTAssertEqual(output.count, 3 * descriptor.window * descriptor.scale * descriptor.window * descriptor.scale)
+                XCTAssertFalse(PixelMath.hasNonFinite(output))
+            }
+        }
+        registry.unloadAll()
+        try registry.withEngine(model: .jpegFix, unit: .cpu) { engine in
+            XCTAssertEqual(engine.loadedTabletModel, .jpegFix)
+        }
+    }
+
     func testEngineMatchesCPU() throws {
         let probe = try AppleDeviceCheck.loadProbe()
         for model in [ModelKey.best, ModelKey.fast] {

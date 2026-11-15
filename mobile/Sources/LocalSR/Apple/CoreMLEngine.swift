@@ -23,7 +23,7 @@ public final class CoreMLEngine: SREngine, @unchecked Sendable {
         public var description: String {
             switch self {
             case .notLoaded: return "Model not loaded"
-            case .badTile(let n): return "Tile must hold \(3 * 384 * 384) floats, got \(n)"
+            case .badTile(let n): return "Unexpected tile length: \(n) floats"
             case .badOutput(let why): return "Unexpected model output: \(why)"
             }
         }
@@ -31,10 +31,13 @@ public final class CoreMLEngine: SREngine, @unchecked Sendable {
 
     public private(set) var loadedModel: ModelKey?
     public private(set) var loadedUnit: ComputeUnit?
+    public private(set) var loadedTabletModel: TabletModelID?
     private var model: MLModel?
 
-    private let inputCount = 3 * CoreMLEngine.window * CoreMLEngine.window
-    private let outputCount = 3 * CoreMLEngine.outputSize * CoreMLEngine.outputSize
+    private let inputCount: Int
+    private let outputCount: Int
+    private let modelWindow: Int
+    private let modelOutputSize: Int
     private let inputBuffer: UnsafeMutablePointer<Float16>
     /// Two output buffers used alternately, so that the caller can still read the previous tile while the
     /// next one is predicted (the view of tile n stays valid until tile n + 2 is predicted).
@@ -47,8 +50,15 @@ public final class CoreMLEngine: SREngine, @unchecked Sendable {
     /// Keeps the latest two predictions (and so the memory behind `TileOutputView`) alive.
     private var results: [MLFeatureProvider?] = [nil, nil]
 
-    public init() {
-        let w = CoreMLEngine.window, o = CoreMLEngine.outputSize
+    public convenience init() { self.init(window: Self.window, modelScale: 4) }
+
+    public init(window: Int, modelScale: Int) {
+        precondition(window > 0 && (modelScale == 1 || modelScale == 4))
+        let w = window, o = window * modelScale
+        modelWindow = w
+        modelOutputSize = o
+        inputCount = 3 * w * w
+        outputCount = 3 * o * o
         inputBuffer = UnsafeMutablePointer<Float16>.allocate(capacity: 3 * w * w)
         inputBuffer.initialize(repeating: 0, count: 3 * w * w)
         outputBuffers = (0..<2).map { _ in
@@ -81,6 +91,7 @@ public final class CoreMLEngine: SREngine, @unchecked Sendable {
     }
 
     public func load(model key: ModelKey, unit: ComputeUnit) throws {
+        precondition(modelWindow == Self.window && modelOutputSize == Self.outputSize)
         let url = try AppleResources.modelURL(key)
         let loaded = try MLModel(contentsOf: url, configuration: Self.configuration(for: unit))
         adopt(loaded, key, unit)
@@ -88,6 +99,7 @@ public final class CoreMLEngine: SREngine, @unchecked Sendable {
 
     /// Async variant (Core ML loads on its own queue, so a caller can put a timeout around it).
     public func loadAsync(model key: ModelKey, unit: ComputeUnit) async throws {
+        precondition(modelWindow == Self.window && modelOutputSize == Self.outputSize)
         let url = try AppleResources.modelURL(key)
         let loaded = try await MLModel.load(contentsOf: url, configuration: Self.configuration(for: unit))
         adopt(loaded, key, unit)
@@ -96,6 +108,20 @@ public final class CoreMLEngine: SREngine, @unchecked Sendable {
     private func adopt(_ loaded: MLModel, _ key: ModelKey, _ unit: ComputeUnit) {
         model = loaded
         loadedModel = key
+        loadedTabletModel = nil
+        loadedUnit = unit
+        results = [nil, nil]
+        useOutputBackings = true
+    }
+
+    /// Loads a converted tablet artifact matching the window and scale of this engine.
+    public func load(tabletModel key: TabletModelID, unit: ComputeUnit) throws {
+        let descriptor = ModelCatalog.model(key)
+        precondition(descriptor.window == modelWindow && descriptor.window * descriptor.scale == modelOutputSize)
+        let url = try AppleResources.tabletModelURL(key)
+        model = try MLModel(contentsOf: url, configuration: Self.configuration(for: unit))
+        loadedModel = nil
+        loadedTabletModel = key
         loadedUnit = unit
         results = [nil, nil]
         useOutputBackings = true
@@ -104,13 +130,14 @@ public final class CoreMLEngine: SREngine, @unchecked Sendable {
     public func unload() {
         model = nil
         loadedModel = nil
+        loadedTabletModel = nil
         loadedUnit = nil
         results = [nil, nil]
     }
 
     // MARK: Prediction
 
-    /// Runs one tile. `fill` writes the planar FP16 input (3 x 384 x 384) into the reused input buffer.
+    /// Runs one tile. `fill` writes the planar FP16 input into the reused input buffer.
     /// The returned view stays valid until the second next call (two alternating output buffers).
     func predict(fill: (UnsafeMutablePointer<Float16>) -> Void) throws -> TileOutputView {
         guard let model else { throw EngineError.notLoaded }
@@ -134,7 +161,7 @@ public final class CoreMLEngine: SREngine, @unchecked Sendable {
         guard let array = result.featureValue(for: Self.outputName)?.multiArrayValue else {
             throw EngineError.badOutput("no multi-array named \(Self.outputName)")
         }
-        guard array.dataType == .float16, array.shape.count == 4, array.shape[1].intValue == 3, array.shape[2].intValue == Self.outputSize, array.shape[3].intValue == Self.outputSize else {
+        guard array.dataType == .float16, array.shape.count == 4, array.shape[1].intValue == 3, array.shape[2].intValue == modelOutputSize, array.shape[3].intValue == modelOutputSize else {
             throw EngineError.badOutput("dtype \(array.dataType.rawValue) shape \(array.shape)")
         }
         let strides = array.strides.map { $0.intValue }
@@ -146,7 +173,7 @@ public final class CoreMLEngine: SREngine, @unchecked Sendable {
         return TileOutputView(base: base, channelStride: strides[1], rowStride: strides[2], columnStride: strides[3])
     }
 
-    /// `SREngine`: planar float [0,1] input (3 x 384 x 384) -> planar float output (3 x 1536 x 1536).
+    /// `SREngine`: planar float [0,1] input and output at this engine’s model dimensions.
     public func run(tile: [Float]) throws -> [Float] {
         guard tile.count == inputCount else { throw EngineError.badTile(tile.count) }
         let view = try predict { dst in
@@ -159,9 +186,9 @@ public final class CoreMLEngine: SREngine, @unchecked Sendable {
         return toFloats(view)
     }
 
-    /// Planar float copy of a prediction (3 x 1536 x 1536).
+    /// Planar float copy of a prediction.
     func toFloats(_ view: TileOutputView) -> [Float] {
-        let o = Self.outputSize
+        let o = modelOutputSize
         var result = [Float](repeating: 0, count: outputCount)
         result.withUnsafeMutableBufferPointer { out in
             for c in 0..<3 {

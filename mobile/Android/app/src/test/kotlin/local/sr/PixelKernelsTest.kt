@@ -208,6 +208,17 @@ class PixelKernelsTest {
     }
 
     @Test
+    fun restorationWindow256StitchesExactly() = runBlocking<Unit> {
+        for ((w, h) in listOf(17 to 19, 256 to 256, 480 to 257)) {
+            val image = randomImage(w, h, 71)
+            val sink = ArraySink(w, h)
+            TilePipeline.process(ArraySource(w, h, image), sink, TileRunner { it },
+                outputScale = 1, windowSize = 256, halo = 16, modelScale = 1)
+            org.junit.Assert.assertArrayEquals(image, sink.px)
+        }
+    }
+
+    @Test
     fun pipelineStopsBetweenTilesWhenCancelled() {
         val w = 1000; val h = 750
         val sink = ArraySink(w * 4, h * 4)

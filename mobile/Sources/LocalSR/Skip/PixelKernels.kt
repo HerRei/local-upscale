@@ -60,11 +60,11 @@ object PixelKernels {
      * Copies the core region of [tile] from the model output [tileOut] (NHWC, tileSize x tileSize x 3) into
      * [dest] (ARGB, row-major, stride tile.outputWidth, size >= outputWidth*outputHeight).
      */
-    fun stitchRegion(tileOut: FloatArray, tile: Tile, dest: IntArray, tileSize: Int = TILE_OUT, outputScale: Int = 4) {
+    fun stitchRegion(tileOut: FloatArray, tile: Tile, dest: IntArray, tileSize: Int = TILE_OUT, outputScale: Int = 4, modelScale: Int = 4) {
         require(tileOut.size == tileSize * tileSize * 3) { "tile output has ${tileOut.size} floats" }
         require(dest.size >= tile.outputWidth * tile.outputHeight) { "dest too small" }
-        require(outputScale == 2 || outputScale == 4)
-        val reduction = 4 / outputScale
+        require((modelScale == 1 && outputScale == 1) || (modelScale == 4 && (outputScale == 2 || outputScale == 4)))
+        val reduction = modelScale / outputScale
         require((tile.sourceX + tile.outputWidth) * reduction <= tileSize && (tile.sourceY + tile.outputHeight) * reduction <= tileSize) { "core outside tile output" }
         var d = 0
         for (y in 0 until tile.outputHeight) {
