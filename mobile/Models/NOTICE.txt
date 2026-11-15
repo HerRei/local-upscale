@@ -1,0 +1,40 @@
+LocalSR model notices
+=====================
+
+Best (localsr_photo_pulse48_v1_x4): PULSE-48 v1
+----------------------------------------------
+Fine-tuned from Phips/PULSE 4x_pulse pretrain (https://huggingface.co/Phips/PULSE), MIT License, Copyright (c) 2026 Philip Hofmann; see PULSE-pretrain-LICENSE.txt
+
+Training chain: Phips/PULSE 4x_pulse pretrain (MIT, Copyright (c) 2026 Philip Hofmann) -> Stage 2 a (bicubic L1, lucid-cc0-v2-hc, 30k) -> Stage 3a (phone degradations L1, lucid-cc0-v2-hc, 300k) -> Stage 3b (L1, lucid-cc0-v2-hc-512, HR192, 150k) -> Stage 3c GAN 0.01 (80k) -> blend 0.3 x 3b + 0.7 x 3c
+Training data: lucid-cc0-v2-hc, lucid-cc0-v2-hc-512 (CC0 only).
+
+PULSE-pretrain-LICENSE.txt:
+
+MIT License
+
+Copyright (c) 2026 Philip Hofmann
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Fast (localsr_photo_span28_v1_x4): SPAN-28 v1
+---------------------------------------------
+Trained by the LocalSR project from scratch (no upstream weights).
+Training chain: Stage 2 b (SPAN-28 from scratch, bicubic L1, lucid-cc0-v2-hc, 30k) -> Stage 3a (phone degradations L1, lucid-cc0-v2-hc, 300k) -> Stage 3b (L1, lucid-cc0-v2-hc-512, HR192, 100k) -> Stage 3c GAN 0.01 (80k) -> blend 0.2 x 3b + 0.8 x 3c
+Training data: lucid-cc0-v2-hc, lucid-cc0-v2-hc-512 (CC0 only).
+Licence note: trained only on CC0 lucid-cc0-v2-hc-512, blend of stage3b_span28_512_x4.safetensors and stage3c_span28_gan01_x4.safetensors.
