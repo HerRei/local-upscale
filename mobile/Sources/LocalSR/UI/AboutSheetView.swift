@@ -5,70 +5,30 @@ struct AboutSheetView: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
 
+    @AppStorage("fullScale") private var fullScale: Bool = false
+
     @State private var noticeText = ""
     @State private var versionText = ""
+
+    private var upscalingFooterText: String {
+        let base = "Photos over 3 MP are upscaled 2\u{00D7} by default. Full 4\u{00D7} gives up to 192 MP, takes longer to save and needs more memory."
+        if !appModel.isFullScaleAvailable {
+            return "\(base) Not available on this device."
+        }
+        return base
+    }
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    VStack(spacing: 0.0) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 16.0, style: .continuous)
-                                .fill(DesignTokens.iconCream)
-                                .frame(width: 72.0, height: 72.0)
-
-                            FrameMark(
-                                side: 44.0,
-                                bracketColor: DesignTokens.iconInk,
-                                squareColor: DesignTokens.iconRust
-                            )
-                        }
-                        .accessibilityHidden(true)
-                        .padding(.top, 24.0)
-                        .padding(.bottom, 12.0)
-
-                        Text("LocalSR")
-                            .font(.title2.bold())
-
-                        Text("Version \(versionText)")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .adaptiveMonospacedDigit()
-                            .padding(.top, 2.0)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.bottom, 8.0)
-                    .listRowBackground(Color.clear)
-                    #if !SKIP
-                    .listRowInsets(EdgeInsets())
-                    #endif
-                }
-
-                Section {
-                    factRow(
-                        symbol: "wifi.slash",
-                        title: "Works offline",
-                        detail: "No network, no account, nothing uploaded."
-                    )
-                    factRow(
-                        symbol: "arrow.up.left.and.arrow.down.right",
-                        title: "4\u{00D7} larger, up to 48 MP",
-                        detail: "Photos over 3 MP are scaled down first."
-                    )
-                    #if SKIP
-                    factRow(
-                        symbol: "photo.badge.checkmark",
-                        title: "Saves a new photo",
-                        detail: "Keeps the date. HDR isn't carried over. Your original isn't changed."
-                    )
-                    #else
-                    factRow(
-                        symbol: "photo.badge.checkmark",
-                        title: "Saves a new photo",
-                        detail: "Keeps date, location and HDR. Your original isn't changed."
-                    )
-                    #endif
+                    Toggle("Full 4\u{00D7} for Large Photos", isOn: $fullScale)
+                        .disabled(!appModel.isFullScaleAvailable)
+                        .accessibilityIdentifier("fullScaleToggle")
+                } header: {
+                    Text("Upscaling")
+                } footer: {
+                    Text(upscalingFooterText)
                 }
 
                 Section {
@@ -101,6 +61,43 @@ struct AboutSheetView: View {
                 }
 
                 Section {
+                    factRow(
+                        symbol: "wifi.slash",
+                        title: "Works offline",
+                        detail: "No network, no account, nothing uploaded."
+                    )
+                    factRow(
+                        symbol: "arrow.up.left.and.arrow.down.right",
+                        title: "Up to 4\u{00D7} larger",
+                        detail: "Small photos get 4\u{00D7}, photos over 3 MP get 2\u{00D7} of the full original (or 4\u{00D7} with Full 4\u{00D7})."
+                    )
+                    #if SKIP
+                    factRow(
+                        symbol: "photo.badge.checkmark",
+                        title: "Saves a new photo",
+                        detail: "Keeps the date. HDR isn't carried over. Your original isn't changed."
+                    )
+                    #else
+                    factRow(
+                        symbol: "photo.badge.checkmark",
+                        title: "Saves a new photo",
+                        detail: "Keeps date, location and HDR. Your original isn't changed."
+                    )
+                    #endif
+                }
+
+                Section {
+                    HStack {
+                        Text("Version")
+                        Spacer()
+                        Text(versionText)
+                            .foregroundStyle(.secondary)
+                            .adaptiveMonospacedDigit()
+                    }
+                    #if !SKIP
+                    .accessibilityElement(children: .combine)
+                    #endif
+
                     NavigationLink("Licences") {
                         LicencesView(noticeText: noticeText)
                     }
@@ -110,7 +107,7 @@ struct AboutSheetView: View {
             #if os(iOS)
             .listStyle(.insetGrouped)
             #endif
-            .navigationTitle("About")
+            .navigationTitle("Settings")
             #if !SKIP && os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -133,6 +130,7 @@ struct AboutSheetView: View {
             }
         }
         .onAppear {
+            _ = appModel.refreshFullScaleAvailability()
             if versionText.isEmpty {
                 versionText = PlatformSupport.appVersionString()
             }

@@ -41,7 +41,7 @@ Run `tools/export_models.py` to export models and `tools/export_models.py --chec
 
 ## Known limits
 
-- Output is capped at 48 MP; inputs over 3 MP are prescaled.
+- Inputs up to 3 MP produce 4× output. Larger inputs produce 2× output after a 12 MP input cap, keeping output at or below 48 MP. An optional Full 4× mode requires sufficient memory and can produce up to 192 MP.
 - The simulator has no NPU. Android NPU use needs vendor runtimes that are not bundled; the check falls back to GPU or CPU.
 - Android output is sRGB JPEG without an HDR gain map. The Android photo picker may strip GPS data.
 - Completed results are restored after process death, but the pending batch queue is not.

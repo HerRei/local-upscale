@@ -48,7 +48,7 @@ On Android, a selected accelerator must also be faster than the CPU; the GPU pro
 
 ## Limits
 
-- Output is capped at 48 MP; inputs above 3 MP are prescaled. The output RGBA8 buffer is at most 192 MB.
+- Inputs up to 3 MP produce 4× output; larger inputs produce 2× output after a 12 MP input cap. The default output is at most 48 MP (192 MB RGBA8). Optional Full 4× for larger inputs requires available memory of at least 2.5 times the output buffer and can produce up to 192 MP (768 MB RGBA8).
 - iOS 26 uses a continued processing task for user-started batches when available. GPU work falls back to CPU in the background.
 - Android uses a batch-level foreground service with a progress notification. NPU use requires a vendor runtime already on the device.
 - Android writes sRGB JPEG without an HDR gain map; the picker may strip GPS. iOS carries supported gain maps and available metadata into HEIC output.

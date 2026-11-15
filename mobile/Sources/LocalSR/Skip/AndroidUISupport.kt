@@ -1,5 +1,6 @@
 package local.sr
 
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -16,6 +17,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -81,31 +83,77 @@ object AndroidUISupport {
 
     fun decodeDisplayBitmap(context: Context, uriString: String, maxSide: Int): Bitmap? {
         return try {
-            val uri = Uri.parse(uriString)
-            val source = if (uri.scheme == null || uri.scheme == "file") {
-                val path = uri.path ?: return null
-                ImageDecoder.createSource(File(path))
-            } else {
-                ImageDecoder.createSource(context.contentResolver, uri)
-            }
-            ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
-                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
-                decoder.isMutableRequired = false
-                val w = info.size.width
-                val h = info.size.height
-                val longSide = maxOf(w, h)
-                if (longSide > maxSide && longSide > 0) {
-                    val scale = maxSide.toDouble() / longSide.toDouble()
-                    decoder.setTargetSize(maxOf(1, (w * scale).toInt()), maxOf(1, (h * scale).toInt()))
-                }
-            }
+            decodeBitmapWithCap(context, uriString, maxSide)
         } catch (t: Throwable) {
-            Log.w(TAG, "decodeDisplayBitmap failed")
-            null
+            if (maxSide <= 0) {
+                Log.w(TAG, "Full-res decode failed (${t.message}), falling back to 4096")
+                try {
+                    decodeBitmapWithCap(context, uriString, 4096)
+                } catch (fallbackErr: Throwable) {
+                    Log.w(TAG, "4096 fallback decode failed: ${fallbackErr.message}")
+                    null
+                }
+            } else {
+                Log.w(TAG, "decodeDisplayBitmap failed: ${t.message}")
+                null
+            }
         }
     }
 
-    fun imageAspectRatio(context: Context, uriString: String): Double? {
+    private fun decodeBitmapWithCap(context: Context, uriString: String, maxSide: Int): Bitmap? {
+        val uri = Uri.parse(uriString)
+        val source = if (uri.scheme == null || uri.scheme == "file") {
+            val path = uri.path ?: return null
+            ImageDecoder.createSource(File(path))
+        } else {
+            ImageDecoder.createSource(context.contentResolver, uri)
+        }
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+        val memInfo = ActivityManager.MemoryInfo()
+        am?.getMemoryInfo(memInfo)
+        val memoryClassMB = am?.largeMemoryClass ?: am?.memoryClass ?: 256
+
+        return ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+            decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            decoder.isMutableRequired = false
+            val w = info.size.width
+            val h = info.size.height
+            val longSide = maxOf(w, h)
+            if (maxSide > 0) {
+                if (longSide > maxSide && longSide > 0) {
+                    var sampleSize = 1
+                    while (longSide / (sampleSize * 2) >= maxSide) {
+                        sampleSize *= 2
+                    }
+                    if (sampleSize > 1) {
+                        decoder.setTargetSampleSize(sampleSize)
+                    } else {
+                        val scale = maxSide.toDouble() / longSide.toDouble()
+                        decoder.setTargetSize(maxOf(1, (w * scale).toInt()), maxOf(1, (h * scale).toInt()))
+                    }
+                }
+            } else {
+                val estBytes = w.toLong() * h.toLong() * 4L
+                val memoryBudgetBytes = memoryClassMB.toLong() * 1024L * 1024L
+                val lowHeadroom = memInfo.lowMemory ||
+                    memInfo.availMem < 800L * 1024L * 1024L ||
+                    memoryClassMB < 256 ||
+                    estBytes > memoryBudgetBytes / 2L ||
+                    longSide > 8192
+                if (lowHeadroom && longSide > 4096) {
+                    var sampleSize = 1
+                    while (longSide / sampleSize > 4096) {
+                        sampleSize *= 2
+                    }
+                    decoder.setTargetSampleSize(sampleSize)
+                } else {
+                    decoder.setTargetSampleSize(1)
+                }
+            }
+        }
+    }
+
+    fun imagePixelSize(context: Context, uriString: String): List<Int>? {
         return try {
             val uri = Uri.parse(uriString)
             val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -119,7 +167,22 @@ object AndroidUISupport {
             }
             var w = options.outWidth
             var h = options.outHeight
-            if (w <= 0 || h <= 0) return null
+            if ((w <= 0 || h <= 0) && uri.scheme != null && uri.scheme != "file") {
+                try {
+                    val src = ImageDecoder.createSource(context.contentResolver, uri)
+                    ImageDecoder.decodeBitmap(src) { decoder, info, _ ->
+                        w = info.size.width
+                        h = info.size.height
+                        decoder.setTargetSize(1, 1)
+                    }.recycle()
+                } catch (e: Throwable) {
+                    Log.w(TAG, "ImageDecoder header fallback failed for $uriString: ${e.message}")
+                }
+            }
+            if (w <= 0 || h <= 0) {
+                Log.w(TAG, "imagePixelSize failed for $uriString (w=$w h=$h)")
+                return null
+            }
             val orientation = try {
                 if (uri.scheme == null || uri.scheme == "file") {
                     uri.path?.let { ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL) }
@@ -139,10 +202,15 @@ object AndroidUISupport {
                 w = h
                 h = tmp
             }
-            w.toDouble() / h.toDouble()
+            listOf(w, h)
         } catch (_: Throwable) {
             null
         }
+    }
+
+    fun imageAspectRatio(context: Context, uriString: String): Double? {
+        val dims = imagePixelSize(context, uriString) ?: return null
+        return dims[0].toDouble() / dims[1].toDouble()
     }
 
     fun shareImageFile(context: Context, path: String) {
@@ -193,21 +261,35 @@ fun AndroidDecodedImage(
     uriString: String,
     maxSide: Int,
     crop: Boolean,
+    fillBounds: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    var bitmap by remember(uriString, maxSide) { mutableStateOf<Bitmap?>(null) }
+    var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(uriString, maxSide) {
-        bitmap = withContext(Dispatchers.IO) {
+        val decoded = withContext(Dispatchers.IO) {
             AndroidUISupport.decodeDisplayBitmap(context, uriString, maxSide)
+        }
+        if (decoded != null) {
+            bitmap = decoded
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            bitmap = null
         }
     }
     val bmp = bitmap
     if (bmp != null) {
+        val contentScale = when {
+            fillBounds -> ContentScale.FillBounds
+            crop -> ContentScale.Crop
+            else -> ContentScale.Fit
+        }
         Image(
             bitmap = bmp.asImageBitmap(),
             contentDescription = null,
-            contentScale = if (crop) ContentScale.Crop else ContentScale.Fit,
+            contentScale = contentScale,
             modifier = modifier.fillMaxSize(),
         )
     } else {

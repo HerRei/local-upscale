@@ -1,7 +1,7 @@
 import XCTest
 
 final class LocalSRUITests: XCTestCase {
-    private let shotDir = "/private/tmp/claude-501/-Users-hermesheiniger/619da889-5d3f-4724-b759-70d636ce5866/scratchpad/ui2/shots"
+    private let shotDir = "/private/tmp/claude-501/-Users-hermesheiniger/619da889-5d3f-4724-b759-70d636ce5866/scratchpad/view2/shots"
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -39,14 +39,14 @@ final class LocalSRUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["homeEmptyLabel"].waitForExistence(timeout: 5))
         saveShot("ios_home_empty_\(suffix).png", app: app)
 
-        // Open About sheet via Home More menu, then push Licences
-        app.buttons["homeMoreMenu"].tap()
-        let aboutButton = app.buttons["aboutButton"]
-        XCTAssertTrue(aboutButton.waitForExistence(timeout: 4))
-        aboutButton.tap()
+        // Open Settings sheet via Home gear button, verify toggle & facts, then push Licences
+        let settingsButton = app.buttons["settingsButton"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 4))
+        settingsButton.tap()
         XCTAssertTrue(app.staticTexts["Works offline"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.switches["fullScaleToggle"].waitForExistence(timeout: 4))
         Thread.sleep(forTimeInterval: 0.4)
-        saveShot("ios_about_\(suffix).png", app: app)
+        saveShot("ios_settings_\(suffix).png", app: app)
 
         let licencesLink = app.buttons["aboutLicencesLink"]
         XCTAssertTrue(licencesLink.waitForExistence(timeout: 4))
@@ -122,15 +122,14 @@ final class LocalSRUITests: XCTestCase {
         allowPhotoAccessIfPrompted(springboard: springboard)
         XCTAssertTrue(savedButton.waitForExistence(timeout: 15), "Fast result did not transition to Saved to Photos")
 
-        // Go back to Home and verify About shows prepared verdicts
+        // Go back to Home and verify Settings shows prepared verdicts
         app.navigationBars.buttons.firstMatch.tap()
         XCTAssertTrue(chooseButton.waitForExistence(timeout: 5))
-        app.buttons["homeMoreMenu"].tap()
-        XCTAssertTrue(aboutButton.waitForExistence(timeout: 4))
-        aboutButton.tap()
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 4))
+        settingsButton.tap()
         XCTAssertTrue(app.staticTexts["Works offline"].waitForExistence(timeout: 5))
         Thread.sleep(forTimeInterval: 0.4)
-        saveShot("ios_about_prepared_\(suffix).png", app: app)
+        saveShot("ios_settings_prepared_\(suffix).png", app: app)
         app.buttons["aboutDoneButton"].tap()
         XCTAssertTrue(chooseButton.waitForExistence(timeout: 5))
 
@@ -188,7 +187,69 @@ final class LocalSRUITests: XCTestCase {
     }
 
     @MainActor
-    private func selectPhotosInSystemPicker(app: XCUIApplication, count: Int) -> Bool {
+    func testViewerZoomDividerAndNoDismiss() throws {
+        try FileManager.default.createDirectory(atPath: shotDir, withIntermediateDirectories: true)
+        let app = XCUIApplication()
+        app.launch()
+
+        let chooseButton = app.buttons["choosePhotosButton"]
+        XCTAssertTrue(chooseButton.waitForExistence(timeout: 15))
+
+        chooseButton.tap()
+        XCTAssertTrue(selectPhotosInSystemPicker(app: app, count: 1, preferNewest: true), "Could not select newest test photo in PHPicker")
+
+        let summary = app.staticTexts["resultSummaryLabel"]
+        XCTAssertTrue(summary.waitForExistence(timeout: 90), "Result viewer did not open")
+        Thread.sleep(forTimeInterval: 1.4)
+
+        let handle = app.descendants(matching: .any)["compareDividerHandle"]
+        XCTAssertTrue(handle.waitForExistence(timeout: 5), "Divider handle missing")
+        saveShot("ios_viewer_zoom1.png", app: app)
+
+        let initialValue = handle.value as? String ?? ""
+        let initialMidX = handle.frame.midX
+
+        // Pinch out to zoom ~4x (full-res decode loads off main thread)
+        let canvas = app.windows.firstMatch
+        canvas.pinch(withScale: 4.0, velocity: 1.5)
+        Thread.sleep(forTimeInterval: 1.8)
+        saveShot("ios_viewer_zoom4x.png", app: app)
+
+        // Drag the divider handle while zoomed and assert its position changed
+        XCTAssertTrue(handle.exists, "Divider handle disappeared while zoomed")
+        let startCoord = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
+        let endCoord = canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.78, dy: 0.45))
+        startCoord.press(forDuration: 0.05, thenDragTo: endCoord)
+        Thread.sleep(forTimeInterval: 0.4)
+
+        let movedValue = handle.value as? String ?? ""
+        let movedMidX = handle.frame.midX
+        XCTAssertTrue(
+            movedValue != initialValue || abs(movedMidX - initialMidX) > 20.0,
+            "Divider handle did not move while zoomed (initial='\(initialValue)' midX=\(initialMidX), moved='\(movedValue)' midX=\(movedMidX))"
+        )
+        saveShot("ios_viewer_zoom4x_dragged.png", app: app)
+
+        // Pinch in while zoomed to settle at 1x, then pinch in further at 1x -> viewer must NOT dismiss
+        canvas.pinch(withScale: 0.15, velocity: -1.0)
+        Thread.sleep(forTimeInterval: 0.6)
+        XCTAssertTrue(summary.exists && handle.exists, "Viewer dismissed on pinch-in from zoomed state")
+
+        canvas.pinch(withScale: 0.25, velocity: -1.0)
+        Thread.sleep(forTimeInterval: 0.6)
+        XCTAssertTrue(summary.exists && handle.exists, "Viewer dismissed on further pinch-in at 1x")
+        saveShot("ios_viewer_after_pinch_in.png", app: app)
+    }
+
+    @MainActor
+    private func selectPhotosInSystemPicker(app: XCUIApplication, count: Int, preferNewest: Bool = false) -> Bool {
+        if preferNewest {
+            let grid = app.collectionViews.firstMatch
+            if grid.waitForExistence(timeout: 5) {
+                grid.swipeUp()
+                Thread.sleep(forTimeInterval: 0.4)
+            }
+        }
         let candidateImages = app.images.matching(
             NSPredicate(format: "label CONTAINS ',' AND (label CONTAINS[c] 'Photo' OR label CONTAINS[c] 'Image' OR label CONTAINS[c] 'PXG' OR label CONTAINS[c] 'Wallpaper')")
         )
@@ -202,7 +263,7 @@ final class LocalSRUITests: XCTestCase {
             let targetCount = min(count, total)
             let step = (count > 1 && total >= count * 2) ? 2 : 1
             for i in 0..<targetCount {
-                let idx = min(i * step, total - 1)
+                let idx = preferNewest ? max(0, total - 3 - i) : min(i * step, total - 1)
                 candidateImages.element(boundBy: idx).tap()
                 tapped += 1
             }
@@ -211,7 +272,7 @@ final class LocalSRUITests: XCTestCase {
             let targetCount = min(count, total)
             let step = (count > 1 && total >= count * 2) ? 2 : 1
             for i in 0..<targetCount {
-                let idx = min(i * step, total - 1)
+                let idx = preferNewest ? max(0, total - 3 - i) : min(i * step, total - 1)
                 candidateCells.element(boundBy: idx).tap()
                 tapped += 1
             }

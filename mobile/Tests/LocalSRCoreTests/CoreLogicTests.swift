@@ -59,6 +59,50 @@ final class CoreLogicTests: XCTestCase {
         }
     }
 
+    func testScaleTwoCoverage() {
+        for size in [[100, 100], [385, 700], [1000, 1000], [4032, 3024]] {
+            let tiles = TilePlanner.plan(width: size[0], height: size[1], scale: 2)
+            var area = 0
+            for tile in tiles {
+                XCTAssertEqual(tile.windowX * 2 + tile.sourceX, tile.outputX)
+                XCTAssertEqual(tile.windowY * 2 + tile.sourceY, tile.outputY)
+                XCTAssertLessThanOrEqual((tile.sourceX + tile.outputWidth) * 2, 1536)
+                XCTAssertLessThanOrEqual((tile.sourceY + tile.outputHeight) * 2, 1536)
+                area += tile.outputWidth * tile.outputHeight
+            }
+            XCTAssertEqual(area, size[0] * size[1] * 4)
+            for i in 0..<tiles.count {
+                for j in (i + 1)..<tiles.count {
+                    let a = tiles[i], b = tiles[j]
+                    let x = max(0, min(a.outputX + a.outputWidth, b.outputX + b.outputWidth) - max(a.outputX, b.outputX))
+                    let y = max(0, min(a.outputY + a.outputHeight, b.outputY + b.outputHeight) - max(a.outputY, b.outputY))
+                    XCTAssertEqual(x * y, 0)
+                }
+            }
+        }
+    }
+
+    func testScaleTwoModelRoundTrip() {
+        let width = 9, height = 7, window = 4, tileSize = 16
+        var input: [UInt8] = []
+        for i in 0..<(width * height) {
+            input.append(UInt8((i * 37) % 256)); input.append(UInt8((i * 13) % 256))
+            input.append(UInt8((i * 7) % 256)); input.append(UInt8(255))
+        }
+        var output = [UInt8](repeating: UInt8(0), count: width * height * 16)
+        for tile in TilePlanner.plan(width: width, height: height, window: window, halo: 1, scale: 2) {
+            let ext = PixelMath.extractWindow(input: input, width: width, height: height, tile: tile, window: window)
+            var model = [Float](repeating: Float(0), count: 3 * tileSize * tileSize)
+            for c in 0..<3 { for y in 0..<tileSize { for x in 0..<tileSize {
+                model[c * tileSize * tileSize + y * tileSize + x] = ext[c * window * window + (y / 4) * window + x / 4]
+            } } }
+            TileStitcher.stitch(tile: tile, tileOutput: model, output: &output, outputWidth: width * 2, tileSize: tileSize, outputScale: 2)
+        }
+        for y in 0..<(height * 2) { for x in 0..<(width * 2) { for c in 0..<4 {
+            XCTAssertEqual(output[(y * width * 2 + x) * 4 + c], input[((y / 2) * width + x / 2) * 4 + c])
+        } } }
+    }
+
     func testTileCounts() {
         XCTAssertEqual(TilePlanner.plan(width: 100, height: 100).count, 1)
         XCTAssertEqual(TilePlanner.plan(width: 352, height: 352).count, 1)
@@ -255,19 +299,21 @@ final class CoreLogicTests: XCTestCase {
         XCTAssertEqual(small.width, 640)
         XCTAssertEqual(small.factor, 1.0)
         let reduced = SizePolicy.target(width: 4000, height: 3000) // 12 MP phone photo
-        XCTAssertEqual(reduced.width, 2000)
-        XCTAssertEqual(reduced.height, 1500)
-        XCTAssertEqual(reduced.factor, 0.5)
+        XCTAssertEqual(reduced.width, 4000)
+        XCTAssertEqual(reduced.height, 3000)
+        XCTAssertEqual(reduced.factor, 1.0)
+        XCTAssertEqual(reduced.outputScale, 2)
+        XCTAssertEqual(same.outputScale, 4)
         let sizes: [[Int]] = [[8000, 6000], [4032, 3024], [4001, 3000], [10000, 10000], [40000, 1000], [1000, 40000], [30000, 401], [12001, 1000]]
         for size in sizes {
             let t = SizePolicy.target(width: size[0], height: size[1])
             XCTAssertGreaterThan(t.width, 0)
             XCTAssertGreaterThan(t.height, 0)
-            XCTAssertLessThanOrEqual(t.width * t.height, 3_000_000)
+            XCTAssertLessThanOrEqual(t.width * t.height, 12_000_000)
             XCTAssertLessThanOrEqual(t.width, size[0])
             XCTAssertLessThanOrEqual(t.height, size[1])
             // Output after 4x stays within 48 MP.
-            XCTAssertLessThanOrEqual((t.width * 4) * (t.height * 4), 48_000_000)
+            XCTAssertLessThanOrEqual((t.width * t.outputScale) * (t.height * t.outputScale), 48_000_000)
         }
     }
 

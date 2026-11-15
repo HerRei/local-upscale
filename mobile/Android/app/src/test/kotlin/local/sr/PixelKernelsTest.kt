@@ -90,13 +90,13 @@ class PixelKernelsTest {
     @Test
     fun stitchRegionEqualsTileStitcher() {
         val cases = listOf(listOf(7, 5, 24, 2), listOf(24, 24, 24, 2), listOf(25, 61, 24, 2), listOf(100, 37, 24, 2), listOf(60, 60, 24, 2))
-        for ((idx, c) in cases.withIndex()) {
+        for (scale in listOf(2, 4)) for ((idx, c) in cases.withIndex()) {
             val (w, h, window, halo) = c
             val tileSize = window * 4
-            val plan = TilePlanner.plan(width = w, height = h, window = window, halo = halo)
+            val plan = TilePlanner.plan(width = w, height = h, window = window, halo = halo, scale = scale)
             val r = Random(7L + idx)
-            val ow = w * 4
-            val oh = h * 4
+            val ow = w * scale
+            val oh = h * scale
             var refOut = Array<UByte>(repeating = 0.toUByte(), count = ow * oh * 4)
             val myOut = IntArray(ow * oh)
             // No exact x.5 values here: the transpiled core's .rounded() is round-half-even (Skip) while Swift's is half-away; see roundingIsHalfUpLikeSwift.
@@ -109,10 +109,10 @@ class PixelKernelsTest {
                 var planar = Array<Float>(repeating = 0f, count = 3 * plane)
                 for (p in 0 until plane) for (ch in 0 until 3) planar[ch * plane + p] = nhwc[p * 3 + ch]
                 val io = InOut<Array<UByte>>({ refOut }, { refOut = it })
-                TileStitcher.stitch(tile = tile, tileOutput = planar, output = io, outputWidth = ow, tileSize = tileSize)
+                TileStitcher.stitch(tile = tile, tileOutput = planar, output = io, outputWidth = ow, tileSize = tileSize, outputScale = scale)
 
                 val dest = IntArray(tile.outputWidth * tile.outputHeight)
-                PixelKernels.stitchRegion(nhwc, tile, dest, tileSize)
+                PixelKernels.stitchRegion(nhwc, tile, dest, tileSize, scale)
                 for (y in 0 until tile.outputHeight) for (x in 0 until tile.outputWidth) myOut[(tile.outputY + y) * ow + tile.outputX + x] = dest[y * tile.outputWidth + x]
             }
             for (p in 0 until ow * oh) {
@@ -232,7 +232,7 @@ class PixelKernelsTest {
     fun decodeSizeKeepsOutputWithin48MP() {
         for ((w, h) in listOf(1000 to 750, 4000 to 3000, 8000 to 6000, 12000 to 1000, 20000 to 20000)) {
             val (dw, dh) = AndroidCodec.decodeSize(w, h)
-            assertTrue("${dw}x$dh from ${w}x$h", dw.toLong() * dh * 16 <= AndroidCodec.MAX_OUTPUT_PIXELS)
+            assertTrue("${dw}x$dh from ${w}x$h", dw.toLong() * dh * (if (w.toLong() * h <= 3_000_000) 16 else 4) <= AndroidCodec.MAX_OUTPUT_PIXELS)
             assertTrue(dw <= w && dh <= h && dw >= 1 && dh >= 1)
             // aspect ratio kept within a pixel of rounding
             assertEquals(w.toDouble() / h, dw.toDouble() / dh, w.toDouble() / h * (2.0 / minOf(dw, dh)))

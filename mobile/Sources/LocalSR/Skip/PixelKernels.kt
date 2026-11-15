@@ -60,16 +60,20 @@ object PixelKernels {
      * Copies the core region of [tile] from the model output [tileOut] (NHWC, tileSize x tileSize x 3) into
      * [dest] (ARGB, row-major, stride tile.outputWidth, size >= outputWidth*outputHeight).
      */
-    fun stitchRegion(tileOut: FloatArray, tile: Tile, dest: IntArray, tileSize: Int = TILE_OUT) {
+    fun stitchRegion(tileOut: FloatArray, tile: Tile, dest: IntArray, tileSize: Int = TILE_OUT, outputScale: Int = 4) {
         require(tileOut.size == tileSize * tileSize * 3) { "tile output has ${tileOut.size} floats" }
         require(dest.size >= tile.outputWidth * tile.outputHeight) { "dest too small" }
-        require(tile.sourceX + tile.outputWidth <= tileSize && tile.sourceY + tile.outputHeight <= tileSize) { "core outside tile output" }
+        require(outputScale == 2 || outputScale == 4)
+        val reduction = 4 / outputScale
+        require((tile.sourceX + tile.outputWidth) * reduction <= tileSize && (tile.sourceY + tile.outputHeight) * reduction <= tileSize) { "core outside tile output" }
         var d = 0
         for (y in 0 until tile.outputHeight) {
-            var s = ((tile.sourceY + y) * tileSize + tile.sourceX) * 3
+            var s = ((tile.sourceY + y) * reduction * tileSize + tile.sourceX * reduction) * 3
             for (x in 0 until tile.outputWidth) {
-                dest[d++] = (0xFF shl 24) or (toByte(tileOut[s]) shl 16) or (toByte(tileOut[s + 1]) shl 8) or toByte(tileOut[s + 2])
-                s += 3
+                fun sample(c: Int): Float = if (reduction == 1) tileOut[s + c] else
+                    (tileOut[s + c] + tileOut[s + 3 + c] + tileOut[s + tileSize * 3 + c] + tileOut[s + tileSize * 3 + 3 + c]) / 4f
+                dest[d++] = (0xFF shl 24) or (toByte(sample(0)) shl 16) or (toByte(sample(1)) shl 8) or toByte(sample(2))
+                s += 3 * reduction
             }
         }
     }

@@ -31,8 +31,8 @@ object TilePipeline {
      * Upscales [source] 4x into [sink] (which must be (4*width) x (4*height)). Checks for coroutine
      * cancellation before every tile and calls [onTile] (done, total) after each one.
      */
-    suspend fun process(source: PixelSource, sink: PixelSink, runner: TileRunner, onTile: (Int, Int) -> Unit = { _, _ -> }) {
-        val plan = TilePlanner.plan(width = source.width, height = source.height)
+    suspend fun process(source: PixelSource, sink: PixelSink, runner: TileRunner, outputScale: Int = 4, onTile: (Int, Int) -> Unit = { _, _ -> }) {
+        val plan = TilePlanner.plan(width = source.width, height = source.height, scale = outputScale)
         val total = plan.count
         val region = IntArray(PixelKernels.WINDOW * PixelKernels.WINDOW)
         val window = FloatArray(PixelKernels.WINDOW * PixelKernels.WINDOW * 3)
@@ -45,7 +45,7 @@ object TilePipeline {
             source.readRegion(tile.windowX, tile.windowY, rw, rh, region)
             PixelKernels.extractWindow(region, source.width, source.height, tile, window)
             val out = runner.run(window)
-            PixelKernels.stitchRegion(out, tile, core)
+            PixelKernels.stitchRegion(out, tile, core, outputScale = outputScale)
             sink.writeRegion(tile.outputX, tile.outputY, tile.outputWidth, tile.outputHeight, core)
             onTile(i + 1, total)
         }

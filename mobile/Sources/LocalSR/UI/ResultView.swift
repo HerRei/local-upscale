@@ -1,5 +1,8 @@
 import SwiftUI
 import LocalSRCore
+#if !SKIP && os(iOS)
+import UIKit
+#endif
 
 struct ResultView: View {
     let resultID: String
@@ -8,6 +11,8 @@ struct ResultView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    @AppStorage("fullScale") private var fullScale: Bool = false
 
     @State private var splitFraction: CGFloat = 0.5
     @State private var dragStartFraction: CGFloat? = nil
@@ -18,8 +23,12 @@ struct ResultView: View {
     @State private var offset: CGSize = .zero
     @State private var gestureOffset: CGSize = .zero
     @State private var isPinching: Bool = false
+    @State private var isDraggingDivider: Bool = false
+    @State private var isFullResolutionActive: Bool = false
 
     @State private var photoAspect: CGFloat? = nil
+    @State private var inputPixelWidth: Int? = nil
+    @State private var inputPixelHeight: Int? = nil
     @State private var showChrome: Bool = true
     @State private var selectedModel: ModelKey = .best
     @State private var displayedResultID: String? = nil
@@ -146,7 +155,16 @@ struct ResultView: View {
         .task(id: activeResultID) {
             guard let result = currentResult else { return }
             selectedModel = result.model
+            zoom = 1.0
+            gestureZoom = 1.0
+            offset = .zero
+            gestureOffset = .zero
+            isFullResolutionActive = false
             photoAspect = await PlatformSupport.imageAspectRatio(url: result.previewURL)
+            if let size = await PlatformSupport.imagePixelSize(url: result.inputURL) {
+                inputPixelWidth = size.width
+                inputPixelHeight = size.height
+            }
 
             if appModel.revealResultID == result.id {
                 appModel.revealResultID = nil
@@ -165,6 +183,9 @@ struct ResultView: View {
             } else {
                 splitFraction = 0.5
             }
+        }
+        .onDisappear {
+            isFullResolutionActive = false
         }
         .onChange(of: selectedModel) { _, newModel in
             #if !SKIP
@@ -261,7 +282,8 @@ struct ResultView: View {
         guard let latest = currentResult, newModel != latest.model else { return }
         selectedModel = newModel
         Task {
-            if let updated = await appModel.rerun(result: latest, model: newModel) {
+            let allowFull = fullScale && appModel.refreshFullScaleAvailability()
+            if let updated = await appModel.rerun(result: latest, model: newModel, fullScale: allowFull) {
                 displayedResultID = updated.id
                 selectedModel = updated.model
             } else if let current = currentResult {
@@ -272,12 +294,16 @@ struct ResultView: View {
 
     @ViewBuilder
     private func resultBody(result: UpscaleResult) -> some View {
-        let effectiveZoom = min(max(zoom * gestureZoom, 1.0), 8.0)
-        let effectiveOffset = CGSize(
+        let rawZoom = zoom * gestureZoom
+        let effectiveZoom = rubberBandedZoom(rawZoom)
+        let rawOffset = CGSize(
             width: offset.width + gestureOffset.width,
             height: offset.height + gestureOffset.height
         )
         let isSaved = appModel.isSaved(result.id)
+        let upscaledURL = isFullResolutionActive ? result.outputURL : result.previewURL
+        let upscaledMaxPx = isFullResolutionActive ? 0 : 2048
+        let originalMaxPx = isFullResolutionActive ? 0 : 2048
 
         ZStack(alignment: .bottom) {
             GeometryReader { geo in
@@ -288,6 +314,14 @@ struct ResultView: View {
                 let fitted = fittedSize(width: width, height: height, aspect: aspect)
                 let fitW = fitted.width
                 let fitH = fitted.height
+                let effectiveOffset = clampOffset(
+                    rawOffset,
+                    zoom: max(effectiveZoom, 1.0),
+                    fitW: fitW,
+                    fitH: fitH,
+                    viewW: width,
+                    viewH: height
+                )
 
                 let activeW = min(fitW * effectiveZoom, width)
                 let activeH = min(fitH * effectiveZoom, height)
@@ -299,21 +333,87 @@ struct ResultView: View {
                 let squareX = min(max(dividerX, minSquareX), maxSquareX)
 
                 ZStack(alignment: .topLeading) {
-                    Color.black
+                    // Layer 1: Background + images + tap/pan gestures (separate from divider handle layer)
+                    ZStack(alignment: .topLeading) {
+                        Color.black
 
-                    DecodedImageView(url: result.previewURL, maxPixelSize: 2048, contentMode: .fit)
-                        .frame(width: width, height: height)
-                        .scaleEffect(effectiveZoom)
-                        .offset(effectiveOffset)
-                        .clipped()
+                        DecodedImageView(url: upscaledURL, maxPixelSize: upscaledMaxPx, contentMode: .fit, exactFrame: true)
+                            .frame(width: fitW, height: fitH)
+                            .frame(width: width, height: height)
+                            .scaleEffect(effectiveZoom)
+                            .offset(effectiveOffset)
+                            .clipped()
 
-                    DecodedImageView(url: result.inputURL, maxPixelSize: 2048, contentMode: .fit)
-                        .frame(width: width, height: height)
-                        .scaleEffect(effectiveZoom)
-                        .offset(effectiveOffset)
-                        .clipped()
-                        .clipShape(SplitClipRect(clipWidth: dividerX))
+                        DecodedImageView(url: result.inputURL, maxPixelSize: originalMaxPx, contentMode: .fit, exactFrame: true)
+                            .frame(width: fitW, height: fitH)
+                            .frame(width: width, height: height)
+                            .scaleEffect(effectiveZoom)
+                            .offset(effectiveOffset)
+                            .clipped()
+                            .clipShape(SplitClipRect(clipWidth: dividerX))
+                    }
+                    .frame(width: width, height: height)
+                    #if !SKIP
+                    .contentShape(Rectangle())
+                    #endif
+                    #if SKIP
+                    .onTapGesture(count: 2) { tap in
+                        guard !isRerunning else { return }
+                        toggleDoubleTapZoom(at: tap, fitW: fitW, fitH: fitH, viewW: width, viewH: height)
+                    }
+                    .onTapGesture {
+                        toggleChromeVisibility()
+                    }
+                    #else
+                    .gesture(
+                        SpatialTapGesture(count: 2)
+                            .onEnded { value in
+                                guard !isRerunning else { return }
+                                toggleDoubleTapZoom(at: value.location, fitW: fitW, fitH: fitH, viewW: width, viewH: height)
+                            }
+                            .exclusively(
+                                before: TapGesture(count: 1)
+                                    .onEnded {
+                                        toggleChromeVisibility()
+                                    }
+                            )
+                    )
+                    #endif
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 6.0, coordinateSpace: .global)
+                            .onChanged { value in
+                                guard !isPinching && !isDraggingDivider else { return }
+                                if zoom > 1.01 || effectiveZoom > 1.01 {
+                                    gestureOffset = value.translation
+                                } else if !isRerunning {
+                                    if dragStartFraction == nil {
+                                        dragStartFraction = splitFraction
+                                    }
+                                    let base = dragStartFraction ?? splitFraction
+                                    let next = base + value.translation.width / max(activeW, 1.0)
+                                    updateDividerFraction(next)
+                                }
+                            }
+                            .onEnded { value in
+                                guard !isPinching && !isDraggingDivider else {
+                                    gestureOffset = .zero
+                                    dragStartFraction = nil
+                                    return
+                                }
+                                if zoom > 1.01 || effectiveZoom > 1.01 {
+                                    let raw = CGSize(
+                                        width: offset.width + value.translation.width,
+                                        height: offset.height + value.translation.height
+                                    )
+                                    offset = clampOffset(raw, zoom: zoom, fitW: fitW, fitH: fitH, viewW: width, viewH: height)
+                                    gestureOffset = .zero
+                                } else {
+                                    dragStartFraction = nil
+                                }
+                            }
+                    )
 
+                    // Layer 2: Rerun overlay OR Divider + 44x44 minimum priority handle
                     if isRerunning {
                         let rerunW = fitW
                         let rerunH = fitH
@@ -363,11 +463,20 @@ struct ResultView: View {
                         .position(x: activeLeft + activeW / 2.0, y: activeTop + activeH / 2.0)
                         .allowsHitTesting(false)
 
-                        // 44pt wide hit strip over the divider line
+                        let hitMinX = min(dividerX, squareX) - 22.0
+                        let hitMaxX = max(dividerX, squareX) + 22.0
+                        let hitWidth = max(44.0, hitMaxX - hitMinX)
+                        let hitHeight = max(44.0, activeH)
+                        let hitCenterX = (hitMinX + hitMaxX) / 2.0
+
                         Color.black.opacity(0.001)
-                            .frame(width: 44.0, height: activeH)
-                            .position(x: dividerX, y: activeTop + activeH / 2.0)
+                            .frame(width: hitWidth, height: hitHeight)
+                            #if !SKIP
+                            .contentShape(Rectangle())
+                            .highPriorityGesture(dividerDragGesture(activeWidth: activeW))
+                            #else
                             .gesture(dividerDragGesture(activeWidth: activeW))
+                            #endif
                             #if !SKIP
                             .accessibilityElement(children: .ignore)
                             #endif
@@ -386,146 +495,56 @@ struct ResultView: View {
                                 }
                             }
                             #endif
+                            .position(x: hitCenterX, y: activeTop + activeH / 2.0)
                     }
                 }
                 .frame(width: width, height: height)
-                #if !SKIP
-                .contentShape(Rectangle())
-                #endif
                 .clipped()
-                #if SKIP
-                .onTapGesture(count: 2) {
-                    guard !isRerunning else { return }
-                    let toggle = {
-                        if zoom > 1.01 {
-                            zoom = 1.0
-                            gestureZoom = 1.0
-                            offset = .zero
-                            gestureOffset = .zero
-                        } else {
-                            zoom = 3.0
-                            gestureZoom = 1.0
-                            offset = .zero
-                            gestureOffset = .zero
-                        }
-                    }
-                    if reduceMotion {
-                        toggle()
-                    } else {
-                        withAnimation(.snappy(duration: 0.3)) {
-                            toggle()
-                        }
-                    }
-                }
-                .onTapGesture {
-                    if reduceMotion {
-                        showChrome.toggle()
-                    } else {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            showChrome.toggle()
-                        }
-                    }
-                }
-                #else
-                .gesture(
-                    SpatialTapGesture(count: 2)
-                        .onEnded { value in
-                            guard !isRerunning else { return }
-                            let tap = value.location
-                            let toggle = {
-                                if zoom > 1.01 {
-                                    zoom = 1.0
-                                    gestureZoom = 1.0
-                                    offset = .zero
-                                    gestureOffset = .zero
-                                } else {
-                                    let targetZoom: CGFloat = 3.0
-                                    let raw = CGSize(
-                                        width: (width / 2.0 - tap.x) * (targetZoom - 1.0),
-                                        height: (height / 2.0 - tap.y) * (targetZoom - 1.0)
-                                    )
-                                    zoom = targetZoom
-                                    gestureZoom = 1.0
-                                    offset = clampOffset(raw, zoom: targetZoom, fitW: fitW, fitH: fitH, viewW: width, viewH: height)
-                                    gestureOffset = .zero
-                                }
-                            }
-                            if reduceMotion {
-                                toggle()
-                            } else {
-                                withAnimation(.snappy(duration: 0.3)) {
-                                    toggle()
-                                }
-                            }
-                        }
-                        .exclusively(
-                            before: TapGesture(count: 1)
-                                .onEnded {
-                                    if reduceMotion {
-                                        showChrome.toggle()
-                                    } else {
-                                        withAnimation(.easeInOut(duration: 0.2)) {
-                                            showChrome.toggle()
-                                        }
-                                    }
-                                }
-                        )
-                )
-                #endif
                 .simultaneousGesture(
                     MagnifyGesture()
                         .onChanged { value in
                             isPinching = true
                             gestureZoom = value.magnification
+                            let currentEffective = rubberBandedZoom(zoom * value.magnification)
+                            if currentEffective > 1.2 && !isRerunning && !isFullResolutionActive {
+                                isFullResolutionActive = true
+                            }
                         }
                         .onEnded { value in
                             isPinching = false
-                            let updated = min(max(zoom * value.magnification, 1.0), 8.0)
-                            zoom = updated
-                            gestureZoom = 1.0
-                            if updated <= 1.01 {
-                                offset = .zero
-                                gestureOffset = .zero
-                            } else {
-                                offset = clampOffset(offset, zoom: updated, fitW: fitW, fitH: fitH, viewW: width, viewH: height)
-                            }
-                        }
-                )
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 6.0, coordinateSpace: .local)
-                        .onChanged { value in
-                            guard !isPinching else { return }
-                            if effectiveZoom > 1.01 {
-                                gestureOffset = value.translation
-                            } else if !isRerunning {
-                                if dragStartFraction == nil {
-                                    dragStartFraction = splitFraction
+                            let rawEnd = zoom * value.magnification
+                            let updated = min(max(rawEnd, 1.0), 8.0)
+                            let settle = {
+                                zoom = updated <= 1.01 ? 1.0 : updated
+                                gestureZoom = 1.0
+                                if updated <= 1.01 {
+                                    offset = .zero
+                                    gestureOffset = .zero
+                                    isFullResolutionActive = false
+                                } else {
+                                    offset = clampOffset(offset, zoom: updated, fitW: fitW, fitH: fitH, viewW: width, viewH: height)
+                                    if updated > 1.2 && !isRerunning {
+                                        isFullResolutionActive = true
+                                    }
                                 }
-                                let base = dragStartFraction ?? splitFraction
-                                let next = base + value.translation.width / max(activeW, 1.0)
-                                updateDividerFraction(next)
                             }
-                        }
-                        .onEnded { value in
-                            guard !isPinching else {
-                                gestureOffset = .zero
-                                dragStartFraction = nil
-                                return
-                            }
-                            if effectiveZoom > 1.01 {
-                                let raw = CGSize(
-                                    width: offset.width + value.translation.width,
-                                    height: offset.height + value.translation.height
-                                )
-                                offset = clampOffset(raw, zoom: zoom, fitW: fitW, fitH: fitH, viewW: width, viewH: height)
-                                gestureOffset = .zero
+                            if reduceMotion {
+                                settle()
                             } else {
-                                dragStartFraction = nil
+                                withAnimation(.snappy(duration: 0.28)) {
+                                    settle()
+                                }
                             }
                         }
                 )
             }
             .ignoresSafeArea()
+            #if !SKIP && os(iOS)
+            .background {
+                PopGestureGuard(disableInteractivePop: zoom > 1.01 || isDraggingDivider)
+                    .frame(width: 0.0, height: 0.0)
+            }
+            #endif
 
             if showChrome {
                 bottomOverlay(result: result, isSaved: isSaved)
@@ -595,8 +614,24 @@ struct ResultView: View {
                 .frame(height: 30.0)
                 .padding(.horizontal, 16.0)
 
+                let outputScale = derivedOutputScale(result: result)
+                let dimensionsLine: String = {
+                    if let outputScale {
+                        return "\(result.width) \u{00D7} \(result.height) \u{00B7} \(outputScale)\u{00D7} \u{00B7} \(UIFormatting.formatMegapixels(width: result.width, height: result.height))"
+                    }
+                    return UIFormatting.resultDimensionsLine(width: result.width, height: result.height)
+                }()
+                let baseAccessibility = UIFormatting.resultAccessibilityCaption(
+                    width: result.width,
+                    height: result.height,
+                    model: result.model,
+                    unit: result.unit,
+                    seconds: result.seconds
+                )
+                let accessibilityCaption = outputScale != nil ? "\(outputScale!) times, \(baseAccessibility)" : baseAccessibility
+
                 VStack(spacing: 2.0) {
-                    Text(UIFormatting.resultDimensionsLine(width: result.width, height: result.height))
+                    Text(dimensionsLine)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Color.white)
                         .adaptiveMonospacedDigit()
@@ -612,15 +647,7 @@ struct ResultView: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityAddTraits(.isStaticText)
                 #endif
-                .accessibilityLabel(
-                    UIFormatting.resultAccessibilityCaption(
-                        width: result.width,
-                        height: result.height,
-                        model: result.model,
-                        unit: result.unit,
-                        seconds: result.seconds
-                    )
-                )
+                .accessibilityLabel(accessibilityCaption)
                 .accessibilityIdentifier("resultSummaryLabel")
 
                 saveButton(
@@ -757,9 +784,73 @@ struct ResultView: View {
         #endif
     }
 
+    private func toggleChromeVisibility() {
+        if reduceMotion {
+            showChrome.toggle()
+        } else {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showChrome.toggle()
+            }
+        }
+    }
+
+    private func toggleDoubleTapZoom(at tap: CGPoint, fitW: CGFloat, fitH: CGFloat, viewW: CGFloat, viewH: CGFloat) {
+        let toggle = {
+            if zoom > 1.01 {
+                zoom = 1.0
+                gestureZoom = 1.0
+                offset = .zero
+                gestureOffset = .zero
+                isFullResolutionActive = false
+            } else {
+                let targetZoom: CGFloat = 3.0
+                let raw = CGSize(
+                    width: (viewW / 2.0 - tap.x) * (targetZoom - 1.0),
+                    height: (viewH / 2.0 - tap.y) * (targetZoom - 1.0)
+                )
+                zoom = targetZoom
+                gestureZoom = 1.0
+                offset = clampOffset(raw, zoom: targetZoom, fitW: fitW, fitH: fitH, viewW: viewW, viewH: viewH)
+                gestureOffset = .zero
+                isFullResolutionActive = true
+            }
+        }
+        if reduceMotion {
+            toggle()
+        } else {
+            withAnimation(.snappy(duration: 0.3)) {
+                toggle()
+            }
+        }
+    }
+
+    private func rubberBandedZoom(_ raw: CGFloat) -> CGFloat {
+        if raw < 1.0 {
+            let deficit = 1.0 - raw
+            return 1.0 - (deficit * 0.45) / (1.0 + deficit * 1.2)
+        }
+        if raw > 8.0 {
+            let excess = raw - 8.0
+            return 8.0 + (excess * 0.35) / (1.0 + excess * 0.25)
+        }
+        return raw
+    }
+
+    private func derivedOutputScale(result: UpscaleResult) -> Int? {
+        guard let inW = inputPixelWidth, let inH = inputPixelHeight, inW > 0, inH > 0 else {
+            return nil
+        }
+        let target = SizePolicy.target(width: inW, height: inH)
+        let baseWidth = max(target.width, 1)
+        let ratio = Double(result.width) / Double(baseWidth)
+        return ratio >= 3.0 ? 4 : 2
+    }
+
     private func dividerDragGesture(activeWidth: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 0.0, coordinateSpace: .local)
+        DragGesture(minimumDistance: 0.0, coordinateSpace: .global)
             .onChanged { value in
+                guard !isPinching else { return }
+                isDraggingDivider = true
                 if dragStartFraction == nil {
                     dragStartFraction = splitFraction
                 }
@@ -769,6 +860,7 @@ struct ResultView: View {
             }
             .onEnded { _ in
                 dragStartFraction = nil
+                isDraggingDivider = false
             }
     }
 
@@ -828,3 +920,59 @@ private struct SplitClipRect: Shape {
         return path
     }
 }
+
+#if !SKIP && os(iOS)
+private struct PopGestureGuard: UIViewControllerRepresentable {
+    let disableInteractivePop: Bool
+
+    func makeUIViewController(context: Context) -> PopGestureGuardController {
+        PopGestureGuardController(disableInteractivePop: disableInteractivePop)
+    }
+
+    func updateUIViewController(_ uiViewController: PopGestureGuardController, context: Context) {
+        uiViewController.disableInteractivePop = disableInteractivePop
+        uiViewController.apply()
+    }
+
+    static func dismantleUIViewController(_ uiViewController: PopGestureGuardController, coordinator: ()) {
+        uiViewController.restore()
+    }
+}
+
+private final class PopGestureGuardController: UIViewController {
+    var disableInteractivePop: Bool
+    private weak var trackedNav: UINavigationController?
+
+    init(disableInteractivePop: Bool) {
+        self.disableInteractivePop = disableInteractivePop
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func didMove(toParent parent: UIViewController?) {
+        super.didMove(toParent: parent)
+        apply()
+    }
+
+    func apply() {
+        let nav = navigationController ?? parent?.navigationController
+        if let nav {
+            trackedNav = nav
+            nav.interactivePopGestureRecognizer?.isEnabled = !disableInteractivePop
+            if #available(iOS 26.0, *) {
+                nav.interactiveContentPopGestureRecognizer?.isEnabled = false
+            }
+        }
+    }
+
+    func restore() {
+        trackedNav?.interactivePopGestureRecognizer?.isEnabled = true
+        if #available(iOS 26.0, *) {
+            trackedNav?.interactiveContentPopGestureRecognizer?.isEnabled = true
+        }
+    }
+}
+#endif

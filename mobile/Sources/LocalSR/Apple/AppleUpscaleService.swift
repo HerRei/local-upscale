@@ -3,6 +3,8 @@ import Foundation
 import Dispatch
 import CoreGraphics
 import LocalSRCore
+import ImageIO
+import os
 #if os(iOS)
 import UIKit
 #endif
@@ -73,7 +75,7 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
         }
     }
 
-    public func upscale(input: URL, model: ModelKey, progress: @escaping (Double) -> Void) async throws -> UpscaleResult {
+    public func upscale(input: URL, model: ModelKey, fullScale: Bool, progress: @escaping (Double) -> Void) async throws -> UpscaleResult {
         await mutex.lock()
         do {
             let verdict = try await prepareLocked(model: model)
@@ -88,7 +90,7 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Box<(UpscaleResult, JobStats)>, Error>) in
                     DispatchQueue.global(qos: .userInitiated).async {
                         do {
-                            let r = try Self.runPipeline(input: input, model: job.value.model, unit: job.value.unit, engine: engine, directory: directory, id: id, started: started, cancel: cancel, progress: progress)
+                            let r = try Self.runPipeline(input: input, fullScale: fullScale, model: job.value.model, unit: job.value.unit, engine: engine, directory: directory, id: id, started: started, cancel: cancel, progress: progress)
                             continuation.resume(returning: Box(r))
                         } catch {
                             try? FileManager.default.removeItem(at: directory)
@@ -116,9 +118,36 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
         }
     }
 
+    private static func availableMemory() -> UInt64 {
+        #if os(iOS)
+        return UInt64(os_proc_available_memory())
+        #else
+        var stats = vm_statistics64()
+        var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64>.size / MemoryLayout<integer_t>.size)
+        let status = withUnsafeMutablePointer(to: &stats) { ptr in
+            ptr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                host_statistics64(mach_host_self(), HOST_VM_INFO64, $0, &count)
+            }
+        }
+        guard status == KERN_SUCCESS else { return 0 }
+        return UInt64(stats.free_count + stats.inactive_count) * UInt64(getpagesize())
+        #endif
+    }
+
+    public func canUseFullScale(forInput input: URL) -> Bool {
+        guard let source = CGImageSourceCreateWithURL(input as CFURL, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any],
+              let width = (props[kCGImagePropertyPixelWidth as String] as? NSNumber)?.intValue,
+              let height = (props[kCGImagePropertyPixelHeight as String] as? NSNumber)?.intValue,
+              width > 0, height > 0 else { return false }
+        let target = SizePolicy.target(width: width, height: height)
+        guard target.outputScale == 2 else { return false }
+        return Double(Self.availableMemory()) >= Double(target.width) * Double(target.height) * 16 * 4 * 2.5
+    }
+
     public func saveToLibrary(_ result: UpscaleResult) async throws {
         let stem = result.inputURL.deletingPathExtension().lastPathComponent
-        try await PhotoLibrarySaver.save(fileURL: result.outputURL, originalFilename: "\(stem)-LocalSR-4x.heic")
+        try await PhotoLibrarySaver.save(fileURL: result.outputURL, originalFilename: "\(stem)-LocalSR-\(result.outputScale)x.heic")
     }
 
     // MARK: Preparation
@@ -155,18 +184,20 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
 
     // MARK: Pipeline (runs on a background queue)
 
-    private static func runPipeline(input: URL, model: ModelKey, unit: ComputeUnit, engine: CoreMLEngine, directory: URL, id: String, started: Date, cancel: CancelFlag, progress: SendableProgress) throws -> (UpscaleResult, JobStats) {
+    private static func runPipeline(input: URL, fullScale: Bool, model: ModelKey, unit: ComputeUnit, engine: CoreMLEngine, directory: URL, id: String, started: Date, cancel: CancelFlag, progress: SendableProgress) throws -> (UpscaleResult, JobStats) {
         let t0 = Date()
         progress.report(0)
         let decoded = try ImageIOCodec.decode(input: input)
         let source = decoded.pixels
-        let scale = 4
+        let policy = SizePolicy.target(width: decoded.originalWidth, height: decoded.originalHeight)
+        let needed = Double(source.width) * Double(source.height) * 16 * 4 * 2.5
+        let scale = fullScale && policy.outputScale == 2 && Double(Self.availableMemory()) >= needed ? 4 : policy.outputScale
         let outWidth = source.width * scale, outHeight = source.height * scale
         let tDecoded = Date()
         if cancel.isCancelled { throw ServiceError.cancelled }
 
         let output = PixelBuffer(width: outWidth, height: outHeight)
-        let tiles = TilePlanner.plan(width: source.width, height: source.height)
+        let tiles = TilePlanner.plan(width: source.width, height: source.height, scale: scale)
         let window = CoreMLEngine.window
         // Stitching tile n (CPU) overlaps with predicting tile n + 1 (NPU/GPU). The engine alternates two output
         // buffers; at most one stitch is in flight, which is what keeps tile n's buffer intact until it is done.
@@ -200,7 +231,7 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
             let planned = Box(tile)
             inFlight.enter()
             stitchQueue.async {
-                ApplePixelKernels.stitch(tile: planned.value, output: view, image: outputPointer, outputWidth: outWidth)
+                ApplePixelKernels.stitch(tile: planned.value, output: view, image: outputPointer, outputWidth: outWidth, outputScale: scale)
                 inFlight.leave()
             }
             progress.report(0.95 * Double(index + 1) / Double(tiles.count))
@@ -219,7 +250,7 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
         let tDone = Date()
         progress.report(1)
 
-        let result = UpscaleResult(id: id, inputURL: input, outputURL: outputURL, previewURL: previewURL, width: outWidth, height: outHeight, model: model, unit: usedUnit, seconds: tDone.timeIntervalSince(t0))
+        let result = UpscaleResult(id: id, inputURL: input, outputURL: outputURL, previewURL: previewURL, width: outWidth, height: outHeight, model: model, unit: usedUnit, seconds: tDone.timeIntervalSince(t0), outputScale: scale)
         let stats = JobStats(tiles: tiles.count, decodeSeconds: tDecoded.timeIntervalSince(t0), tilesSeconds: tTiles.timeIntervalSince(tDecoded), encodeSeconds: tDone.timeIntervalSince(tTiles), gainMapNote: encoded.note)
         if cancel.isCancelled { throw ServiceError.cancelled }
         return (result, stats)

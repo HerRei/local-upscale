@@ -70,7 +70,9 @@ enum ApplePixelKernels {
     }
 
     /// Copies the tile's core region from the FP16 output into the RGBA8 output image (stride `outputWidth * 4`).
-    static func stitch(tile: Tile, output: TileOutputView, image: UnsafeMutablePointer<UInt8>, outputWidth: Int) {
+    static func stitch(tile: Tile, output: TileOutputView, image: UnsafeMutablePointer<UInt8>, outputWidth: Int, outputScale: Int = 4) {
+        precondition(outputScale == 2 || outputScale == 4)
+        let reduction = 4 / outputScale
         let rowsPerChunk = 32
         let chunks = (tile.outputHeight + rowsPerChunk - 1) / rowsPerChunk
         let w = tile.outputWidth
@@ -85,10 +87,16 @@ enum ApplePixelKernels {
             let y0 = chunk * rowsPerChunk
             let y1 = min(outputHeight, y0 + rowsPerChunk)
             for y in y0..<y1 {
-                let srcRow = (sourceY + y) * rowStride + sourceX * columnStride
+                let srcRow = (sourceY + y) * reduction * rowStride + sourceX * reduction * columnStride
                 for c in 0..<3 {
                     let p = basePointer + c * channelStride + srcRow
-                    if columnStride == 1 {
+                    if reduction == 2 {
+                        for x in 0..<w {
+                            let q = p + x * 2 * columnStride
+                            let v = (Float(q[0]) + Float(q[columnStride]) + Float(q[rowStride]) + Float(q[rowStride + columnStride])) / 4
+                            scratch[c * w + x] = v.isFinite ? UInt8(Int((PixelMath.clamp01(v) * 255).rounded())) : 0
+                        }
+                    } else if columnStride == 1 {
                         convertRow(p, scratch + c * w, count: w)
                     } else {
                         for x in 0..<w { scratch[c * w + x] = byte(p[x * columnStride]) }

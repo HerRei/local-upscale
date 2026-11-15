@@ -36,15 +36,7 @@ object AndroidCodec {
      */
     fun decodeSize(width: Int, height: Int): Pair<Int, Int> {
         val t = SizePolicy.target(width = width, height = height)
-        var w = t.width
-        var h = t.height
-        val limit = MAX_OUTPUT_PIXELS / (PixelKernels.SCALE * PixelKernels.SCALE)
-        if (w.toLong() * h > limit) {
-            val f = sqrt(limit.toDouble() / (w.toDouble() * h))
-            w = maxOf(1, (w * f).toInt())
-            h = maxOf(1, minOf((limit / w).toInt(), (h * f).toInt()))
-        }
-        return Pair(w, h)
+        return Pair(t.width, t.height)
     }
 
     private fun source(context: Context, uri: Uri): ImageDecoder.Source =

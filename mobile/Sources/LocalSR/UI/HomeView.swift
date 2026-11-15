@@ -10,6 +10,7 @@ struct HomeView: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     @AppStorage("selectedModel") private var selectedModel: ModelKey = .best
+    @AppStorage("fullScale") private var fullScale: Bool = false
 
     @State private var navigationPath: [String] = []
     @State private var isPickerPresented = false
@@ -19,7 +20,6 @@ struct HomeView: View {
     @State private var isShowingSaveError = false
 
     #if !SKIP
-    @Namespace private var zoomNamespace
     @Namespace private var actionBarNamespace
     #endif
 
@@ -45,7 +45,15 @@ struct HomeView: View {
             contentRoot
                 .navigationTitle("LocalSR")
                 .toolbar {
-                    ToolbarItem(placement: .primaryAction) {
+                    ToolbarItemGroup(placement: .primaryAction) {
+                        Button {
+                            isAboutPresented = true
+                        } label: {
+                            Image(systemName: "gearshape")
+                        }
+                        .accessibilityLabel("Settings")
+                        .accessibilityIdentifier("settingsButton")
+
                         Menu {
                             Button {
                                 Task {
@@ -68,15 +76,6 @@ struct HomeView: View {
                             }
                             .disabled(appModel.results.isEmpty || appModel.isBatchRunning)
                             .accessibilityIdentifier("deleteAllMenuButton")
-
-                            Divider()
-
-                            Button {
-                                isAboutPresented = true
-                            } label: {
-                                Label("About LocalSR", systemImage: "info.circle")
-                            }
-                            .accessibilityIdentifier("aboutButton")
                         } label: {
                             Image(systemName: "ellipsis")
                         }
@@ -85,12 +84,7 @@ struct HomeView: View {
                     }
                 }
                 .navigationDestination(for: String.self) { resultID in
-                    #if !SKIP && os(iOS)
                     ResultView(resultID: resultID)
-                        .navigationTransition(.zoom(sourceID: resultID, in: zoomNamespace))
-                    #else
-                    ResultView(resultID: resultID)
-                    #endif
                 }
                 .sheet(isPresented: $isAboutPresented) {
                     AboutSheetView()
@@ -102,7 +96,8 @@ struct HomeView: View {
                             appModel.isLoadingPickedPhotos = loading
                         },
                         onPicked: { inputs in
-                            appModel.startBatch(inputs: inputs, model: selectedModel)
+                            let allowFull = fullScale && appModel.refreshFullScaleAvailability()
+                            appModel.startBatch(inputs: inputs, model: selectedModel, fullScale: allowFull)
                         }
                     )
                 }
@@ -331,22 +326,13 @@ struct HomeView: View {
     @ViewBuilder
     private var stageOrSummaryHeader: some View {
         if appModel.isBatchRunning || appModel.stageTransitionResultID != nil {
-            let card = StageCardView(
+            StageCardView(
                 item: appModel.currentBatchItem,
                 preparingModel: appModel.preparingModel,
                 preparingElapsedLong: appModel.preparingElapsedLong,
                 currentIndex: appModel.currentBatchItemNumber,
                 totalCount: appModel.batchItems.count
             )
-            #if !SKIP && os(iOS)
-            if let transID = appModel.stageTransitionResultID {
-                card.matchedTransitionSource(id: transID, in: zoomNamespace)
-            } else {
-                card
-            }
-            #else
-            card
-            #endif
         } else if let summary = appModel.batchSummary {
             BatchSummaryCard(summary: summary)
         }
@@ -378,7 +364,7 @@ struct HomeView: View {
         .accessibilityIdentifier("recentResult_\(result.id)")
 
         #if !SKIP
-        let contextualLink = link.contextMenu {
+        link.contextMenu {
             Button {
                 Task {
                     await appModel.saveToLibrary(result)
@@ -398,15 +384,6 @@ struct HomeView: View {
                 Label("Delete", systemImage: "trash")
             }
         }
-        #if os(iOS)
-        if appModel.stageTransitionResultID != result.id {
-            contextualLink.matchedTransitionSource(id: result.id, in: zoomNamespace)
-        } else {
-            contextualLink
-        }
-        #else
-        contextualLink
-        #endif
         #else
         link
         #endif

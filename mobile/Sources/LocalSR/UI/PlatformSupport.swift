@@ -4,6 +4,9 @@ import SwiftUI
 #if !SKIP
 import ImageIO
 import UniformTypeIdentifiers
+#if os(iOS)
+import os
+#endif
 #if canImport(PhotosUI)
 import PhotosUI
 #endif
@@ -64,6 +67,36 @@ public enum PlatformSupport {
         #endif
     }
 
+    public static func imagePixelSize(url: URL) async -> (width: Int, height: Int)? {
+        #if SKIP
+        let context = ProcessInfo.processInfo.androidContext
+        if let dims = AndroidUISupport.imagePixelSize(context, url.absoluteString), dims.size >= 2 {
+            let w = dims[0]
+            let h = dims[1]
+            if w > 0 && h > 0 {
+                return (w, h)
+            }
+        }
+        return nil
+        #else
+        return await Task.detached(priority: .userInitiated) {
+            let sourceOptions: [CFString: Any] = [kCGImageSourceShouldCache: false]
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions as CFDictionary),
+                  let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                  let width = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+                  let height = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
+                  width > 0, height > 0 else {
+                return nil
+            }
+            let orientation = (props[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
+            if orientation >= 5 && orientation <= 8 {
+                return (height, width)
+            }
+            return (width, height)
+        }.value
+        #endif
+    }
+
     public static func imageAspectRatio(url: URL) async -> CGFloat? {
         #if SKIP
         let context = ProcessInfo.processInfo.androidContext
@@ -72,21 +105,10 @@ public enum PlatformSupport {
         }
         return nil
         #else
-        return await Task.detached(priority: .userInitiated) {
-            let sourceOptions: [CFString: Any] = [kCGImageSourceShouldCache: false]
-            guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions as CFDictionary),
-                  let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-                  let width = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue,
-                  let height = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue,
-                  width > 0, height > 0 else {
-                return nil
-            }
-            let orientation = (props[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
-            if orientation >= 5 && orientation <= 8 {
-                return CGFloat(height / width)
-            }
-            return CGFloat(width / height)
-        }.value
+        guard let size = await imagePixelSize(url: url), size.width > 0, size.height > 0 else {
+            return nil
+        }
+        return CGFloat(size.width) / CGFloat(size.height)
         #endif
     }
 }
@@ -95,6 +117,7 @@ public struct DecodedImageView: View {
     public let url: URL
     public let maxPixelSize: Int
     public let contentMode: ContentMode
+    public let exactFrame: Bool
 
     #if !SKIP
     #if canImport(UIKit)
@@ -104,10 +127,11 @@ public struct DecodedImageView: View {
     #endif
     #endif
 
-    public init(url: URL, maxPixelSize: Int, contentMode: ContentMode = .fit) {
+    public init(url: URL, maxPixelSize: Int, contentMode: ContentMode = .fit, exactFrame: Bool = false) {
         self.url = url
         self.maxPixelSize = maxPixelSize
         self.contentMode = contentMode
+        self.exactFrame = exactFrame
     }
 
     public var body: some View {
@@ -117,6 +141,7 @@ public struct DecodedImageView: View {
                 uriString: url.absoluteString,
                 maxSide: maxPixelSize,
                 crop: contentMode == .fill,
+                fillBounds: exactFrame,
                 modifier: ctx.modifier
             )
         }
@@ -124,20 +149,38 @@ public struct DecodedImageView: View {
         Group {
             if let loadedImage {
                 #if canImport(UIKit)
-                Image(uiImage: loadedImage)
-                    .resizable()
-                    .aspectRatio(contentMode: contentMode)
+                if exactFrame {
+                    Image(uiImage: loadedImage)
+                        .resizable()
+                } else {
+                    Image(uiImage: loadedImage)
+                        .resizable()
+                        .aspectRatio(contentMode: contentMode)
+                }
                 #elseif canImport(AppKit)
-                Image(nsImage: loadedImage)
-                    .resizable()
-                    .aspectRatio(contentMode: contentMode)
+                if exactFrame {
+                    Image(nsImage: loadedImage)
+                        .resizable()
+                } else {
+                    Image(nsImage: loadedImage)
+                        .resizable()
+                        .aspectRatio(contentMode: contentMode)
+                }
                 #endif
             } else {
                 Color.clear
             }
         }
-        .task(id: url) {
-            loadedImage = await Self.decodePlatformImage(url: url, maxPixelSize: maxPixelSize)
+        .task(id: "\(url.absoluteString)_\(maxPixelSize)") {
+            let decoded = await Self.decodePlatformImage(url: url, maxPixelSize: maxPixelSize)
+            if !Task.isCancelled, let decoded {
+                loadedImage = decoded
+            }
+        }
+        .onDisappear {
+            if maxPixelSize <= 0 || maxPixelSize > 2048 {
+                loadedImage = nil
+            }
         }
         #endif
     }
@@ -165,10 +208,35 @@ public struct DecodedImageView: View {
               CGImageSourceGetCount(source) > 0 else {
             return nil
         }
+        let targetMaxSize: Int
+        if maxPixelSize > 0 {
+            targetMaxSize = maxPixelSize
+        } else {
+            let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+            let pw = (props?[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue ?? 0
+            let ph = (props?[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue ?? 0
+            let nativeLongSide = max(pw, ph)
+            #if os(iOS)
+            let memoryLimitBytes = 800 * 1024 * 1024
+            if os_proc_available_memory() < memoryLimitBytes {
+                targetMaxSize = nativeLongSide > 0 ? min(nativeLongSide, 4096) : 4096
+            } else if nativeLongSide > 0 {
+                targetMaxSize = nativeLongSide
+            } else {
+                return CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
+            }
+            #else
+            if nativeLongSide > 0 {
+                targetMaxSize = nativeLongSide
+            } else {
+                return CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
+            }
+            #endif
+        }
         let thumbOptions: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+            kCGImageSourceThumbnailMaxPixelSize: targetMaxSize,
             kCGImageSourceShouldCacheImmediately: true,
         ]
         return CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOptions as CFDictionary)

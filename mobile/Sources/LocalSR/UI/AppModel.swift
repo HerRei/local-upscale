@@ -90,8 +90,12 @@ private final class ServiceBox: @unchecked Sendable {
         try await service.prepare(model: model)
     }
 
-    func upscale(input: URL, model: ModelKey, progress: @escaping @Sendable (Double) -> Void) async throws -> UpscaleResult {
-        try await service.upscale(input: input, model: model, progress: progress)
+    func upscale(input: URL, model: ModelKey, fullScale: Bool, progress: @escaping @Sendable (Double) -> Void) async throws -> UpscaleResult {
+        try await service.upscale(input: input, model: model, fullScale: fullScale, progress: progress)
+    }
+
+    func canUseFullScale(forInput url: URL) -> Bool {
+        service.canUseFullScale(forInput: url)
     }
 
     func saveToLibrary(_ result: UpscaleResult) async throws {
@@ -144,6 +148,8 @@ public class AppModel {
     public var preparingModel: ModelKey? = nil
     public var preparingElapsedLong: Bool = false
     public var batchModel: ModelKey = .best
+    public var batchFullScale: Bool = false
+    public var isFullScaleAvailable: Bool = true
     public var batchItems: [BatchItem] = []
     public var batchCompletedCount: Int = 0
     public var batchETAText: String? = nil
@@ -183,6 +189,22 @@ public class AppModel {
             savedResultIDs = Set(savedList).intersection(validIDs)
             persistSavedResultIDs()
         }
+        _ = refreshFullScaleAvailability()
+    }
+
+    // Minimal valid 4000x3000 (12 MP) 1-bit grayscale PNG header+payload for querying service.canUseFullScale(forInput:).
+    private static let twelveMPProbePNGBase64 = "iVBORw0KGgoAAAANSUhEUgAAD6AAAAu4AQAAAADdznpKAAAFx0lEQVR42u3BMQEAAADCoPVPbQ0PoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB4NPBiAAHZAhuiAAAAAElFTkSuQmCC"
+
+    @discardableResult
+    public func refreshFullScaleAvailability() -> Bool {
+        let probeURL = FileManager.default.temporaryDirectory.appendingPathComponent("localsr-probe-12mp.png")
+        if !FileManager.default.fileExists(atPath: probeURL.path),
+           let data = Data(base64Encoded: Self.twelveMPProbePNGBase64) {
+            try? data.write(to: probeURL, options: Data.WritingOptions.atomic)
+        }
+        let available = serviceBox.canUseFullScale(forInput: probeURL)
+        isFullScaleAvailable = available
+        return available
     }
 
     private func persistResults() {
@@ -252,7 +274,7 @@ public class AppModel {
         return min(batchCompletedCount + 1, batchItems.count)
     }
 
-    public func startBatch(inputs: [PickedPhotoInput], model: ModelKey) {
+    public func startBatch(inputs: [PickedPhotoInput], model: ModelKey, fullScale: Bool = false) {
         guard !inputs.isEmpty, !isBatchRunning else { return }
 
         var items: [BatchItem] = []
@@ -269,6 +291,7 @@ public class AppModel {
         pendingAutoOpenResultID = nil
         stageTransitionResultID = nil
         batchModel = model
+        batchFullScale = fullScale
         batchItems = items
         batchCompletedCount = 0
         batchETAText = nil
@@ -278,7 +301,7 @@ public class AppModel {
 
         batchTask?.cancel()
         batchTask = Task { @MainActor in
-            await self.runBatch(model: model)
+            await self.runBatch(model: model, fullScale: fullScale)
         }
     }
 
@@ -295,7 +318,7 @@ public class AppModel {
         }
         guard !failures.isEmpty else { return }
         let inputs = failures.map { PickedPhotoInput(url: $0.inputURL, displayName: $0.displayName) }
-        startBatch(inputs: inputs, model: batchModel)
+        startBatch(inputs: inputs, model: batchModel, fullScale: batchFullScale)
     }
 
     public func cancelBatch(dismiss: Bool = true) {
@@ -391,7 +414,7 @@ public class AppModel {
         }
     }
 
-    public func rerun(result: UpscaleResult, model: ModelKey) async -> UpscaleResult? {
+    public func rerun(result: UpscaleResult, model: ModelKey, fullScale: Bool = false) async -> UpscaleResult? {
         guard isRerunningResultID == nil, !isBatchRunning else { return nil }
         isRerunningResultID = result.id
         rerunProgress = 0.0
@@ -406,7 +429,7 @@ public class AppModel {
             let verdict = try await serviceBox.prepare(model: model)
             verdicts[model] = verdict
             preparingModel = nil
-            let updated = try await serviceBox.upscale(input: result.inputURL, model: model) { @Sendable p in
+            let updated = try await serviceBox.upscale(input: result.inputURL, model: model, fullScale: fullScale) { @Sendable p in
                 Task { @MainActor in
                     self.rerunProgress = min(max(0.0, p), 1.0)
                 }
@@ -442,7 +465,7 @@ public class AppModel {
         #endif
     }
 
-    private func runBatch(model: ModelKey) async {
+    private func runBatch(model: ModelKey, fullScale: Bool) async {
         let total = batchItems.count
         let startedAt = Date()
         var wasCancelled = false
@@ -535,7 +558,7 @@ public class AppModel {
             #endif
 
             do {
-                let res = try await serviceBox.upscale(input: inputURL, model: model) { @Sendable p in
+                let res = try await serviceBox.upscale(input: inputURL, model: model, fullScale: fullScale) { @Sendable p in
                     Task { @MainActor in
                         self.updateBatchItemProgress(id: itemID, progress: p)
                     }

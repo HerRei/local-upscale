@@ -1,5 +1,9 @@
 package local.sr
 
+import android.app.ActivityManager
+import android.graphics.BitmapFactory
+import android.os.Debug
+import local.srcore.SizePolicy
 import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
@@ -33,6 +37,7 @@ class RawUpscaleResult(
     val height: Int,
     val unit: ComputeUnit,
     val seconds: Double,
+    val outputScale: Int,
 )
 
 /**
@@ -90,6 +95,28 @@ class AndroidUpscaler(context: Context) {
     /** Frees the loaded model (call from onLowMemory / when leaving the app). */
     suspend fun release() = lock.withLock { closeEngine() }
 
+    private fun dimensions(uri: Uri): Pair<Int, Int>? = try {
+        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        val stream = if (uri.scheme == null || uri.scheme == "file") File(uri.path ?: "").inputStream() else context.contentResolver.openInputStream(uri)
+        stream?.use { BitmapFactory.decodeStream(it, null, options) }
+        if (options.outWidth > 0 && options.outHeight > 0) Pair(options.outWidth, options.outHeight) else null
+    } catch (_: Exception) { null }
+
+    fun canUseFullScale(inputUri: String): Boolean {
+        val (width, height) = dimensions(Uri.parse(inputUri)) ?: return false
+        val policy = SizePolicy.target(width = width, height = height)
+        if (policy.outputScale != 2) return false
+        val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val info = ActivityManager.MemoryInfo()
+        manager.getMemoryInfo(info)
+        val runtime = Runtime.getRuntime()
+        val used = (runtime.totalMemory() - runtime.freeMemory()) + Debug.getNativeHeapAllocatedSize()
+        val heapLimit = minOf(runtime.maxMemory(), manager.largeMemoryClass.toLong() * 1024 * 1024)
+        val budget = heapLimit - used
+        val required = policy.width.toDouble() * policy.height * 16 * 4 * 2.5
+        return minOf(info.availMem, budget).toDouble() >= required
+    }
+
     // MARK: upscale
 
     /**
@@ -97,7 +124,7 @@ class AndroidUpscaler(context: Context) {
      * [progress] gets 0...1 after every tile (from the compute thread). Cancelling the coroutine stops between tiles
      * and removes the partial files. One photo at a time: concurrent calls queue.
      */
-    suspend fun upscale(inputUri: String, model: ModelKey, progress: (Double) -> Unit): RawUpscaleResult = lock.withLock {
+    suspend fun upscale(inputUri: String, model: ModelKey, fullScale: Boolean, progress: (Double) -> Unit): RawUpscaleResult = lock.withLock {
         val started = System.nanoTime()
         val uri = Uri.parse(inputUri)
         val verdict = prepareLocked(model)
@@ -107,11 +134,14 @@ class AndroidUpscaler(context: Context) {
         try {
             val result = withContext(Dispatchers.Default) {
                 dir.mkdirs()
+                val bounds = dimensions(uri) ?: throw UpscaleException("Cannot read image dimensions")
+                val policy = SizePolicy.target(width = bounds.first, height = bounds.second)
+                val scale = if (fullScale && canUseFullScale(inputUri)) 4 else policy.outputScale
                 var input: Bitmap? = AndroidCodec.decode(context, uri)
                 val w = input!!.width
                 val h = input.height
-                val ow = w * PixelKernels.SCALE
-                val oh = h * PixelKernels.SCALE
+                val ow = w * scale
+                val oh = h * scale
                 var output: Bitmap? = null
                 try {
                     output = try {
@@ -138,7 +168,7 @@ class AndroidUpscaler(context: Context) {
                             cpu.run(tile)
                         }
                     }
-                    TilePipeline.process(BitmapSource(input), BitmapSink(output), runner) { done, total ->
+                    TilePipeline.process(BitmapSource(input), BitmapSink(output), runner, outputScale = scale) { done, total ->
                         val f = done.toDouble() / total * 0.97
                         progress(f)
                         UpscaleForegroundService.updateProgress(context, f)
@@ -154,7 +184,7 @@ class AndroidUpscaler(context: Context) {
                     currentCoroutineContext().ensureActive()
                     progress(1.0)
                     val seconds = (System.nanoTime() - started) / 1e9
-                    RawUpscaleResult(id, outFile.absolutePath, File(dir, "preview.jpg").absolutePath, ow, oh, usedUnit, seconds)
+                    RawUpscaleResult(id, outFile.absolutePath, File(dir, "preview.jpg").absolutePath, ow, oh, usedUnit, seconds, scale)
                 } finally {
                     input?.recycle()
                     output?.recycle()

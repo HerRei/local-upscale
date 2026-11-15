@@ -87,12 +87,13 @@ final class AppleUpscaleTests: XCTestCase {
 
     func testKernelsMatchCore() throws {
         var rng = SystemRandomNumberGenerator()
+        for scale in [2, 4] {
         for (w, h) in [(500, 300), (384, 384), (100, 90)] {
             var rgba = [UInt8](repeating: 0, count: w * h * 4)
             for i in 0..<rgba.count { rgba[i] = UInt8.random(in: 0...255, using: &rng) }
-            let tiles = TilePlanner.plan(width: w, height: h)
-            var coreOutput = [UInt8](repeating: 0, count: w * 4 * h * 4 * 4)
-            var fastOutput = PixelBuffer(width: w * 4, height: h * 4)
+            let tiles = TilePlanner.plan(width: w, height: h, scale: scale)
+            var coreOutput = [UInt8](repeating: 0, count: w * scale * h * scale * 4)
+            var fastOutput = PixelBuffer(width: w * scale, height: h * scale)
             fastOutput.pointer.initialize(repeating: 0, count: fastOutput.byteCount)
             let half = UnsafeMutablePointer<Float16>.allocate(capacity: 3 * 384 * 384)
             defer { half.deallocate() }
@@ -109,12 +110,13 @@ final class AppleUpscaleTests: XCTestCase {
                     out[i] = r == 0 ? .nan : r == 1 ? .infinity : r == 2 ? -.infinity : Float16.random(in: -0.2...1.3, using: &rng)
                 }
                 let asFloat = (0..<(3 * 1536 * 1536)).map { Float(out[$0]) }
-                TileStitcher.stitch(tile: tile, tileOutput: asFloat, output: &coreOutput, outputWidth: w * 4)
-                ApplePixelKernels.stitch(tile: tile, output: TileOutputView(base: UnsafePointer(out), channelStride: 1536 * 1536, rowStride: 1536, columnStride: 1), image: fastOutput.pointer, outputWidth: w * 4)
+                TileStitcher.stitch(tile: tile, tileOutput: asFloat, output: &coreOutput, outputWidth: w * scale, outputScale: scale)
+                ApplePixelKernels.stitch(tile: tile, output: TileOutputView(base: UnsafePointer(out), channelStride: 1536 * 1536, rowStride: 1536, columnStride: 1), image: fastOutput.pointer, outputWidth: w * scale, outputScale: scale)
             }
             let fast = Array(UnsafeBufferPointer(start: fastOutput.pointer, count: fastOutput.byteCount))
             XCTAssertEqual(fast, coreOutput, "stitch differs for \(w)x\(h)")
             fastOutput = PixelBuffer(width: 1, height: 1)
+        }
         }
     }
 
@@ -271,6 +273,32 @@ final class AppleUpscaleTests: XCTestCase {
         XCTAssertEqual(seen.count, TilePlanner.plan(width: 1000, height: 750).count + 2)
     }
 
+    func testLargePhotoScaleTwoMetadata() async throws {
+        let (service, _, _) = makeService()
+        let dir = tempDirectory("large-p3")
+        let input = try Synthetic.writePhoto(.init(width: 4032, height: 3024, gps: true, type: .jpeg), to: dir)
+        let result = try await service.upscale(input: input, model: .fast) { _ in }
+        let target = SizePolicy.target(width: 4032, height: 3024)
+        XCTAssertEqual(result.outputScale, 2)
+        XCTAssertEqual(result.width, target.width * 2)
+        XCTAssertEqual(result.height, target.height * 2)
+        try checkMetadata(output: result.outputURL, expectedWidth: result.width, expectedHeight: result.height)
+        let source = try XCTUnwrap(CGImageSourceCreateWithURL(result.outputURL as CFURL, nil))
+        let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCache: false] as CFDictionary))
+        XCTAssertEqual(image.colorSpace?.name as String?, CGColorSpace.displayP3 as String)
+    }
+
+    func testResultOutputScaleCodingAndLegacyDefault() throws {
+        let url = URL(fileURLWithPath: "/tmp/example")
+        let result = UpscaleResult(id: "legacy", inputURL: url, outputURL: url, previewURL: url, width: 8, height: 8, model: .fast, unit: .cpu, seconds: 1, outputScale: 2)
+        let encoded = try JSONEncoder().encode(result)
+        XCTAssertEqual(try JSONDecoder().decode(UpscaleResult.self, from: encoded).outputScale, 2)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object.removeValue(forKey: "outputScale")
+        let legacy = try JSONSerialization.data(withJSONObject: object)
+        XCTAssertEqual(try JSONDecoder().decode(UpscaleResult.self, from: legacy).outputScale, 4)
+    }
+
     func testEndToEndFastModel() async throws {
         let (service, _, _) = makeService()
         let dir = tempDirectory("fast")
@@ -312,9 +340,9 @@ final class AppleUpscaleTests: XCTestCase {
         g.data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> Int in Int(raw.load(fromByteOffset: y * g.bytesPerRow + x, as: UInt8.self)) }
     }
 
-    private func checkGainMapCarried(type: CFString, orientation: Int, file: StaticString = #filePath, line: UInt = #line) async throws {
+    private func checkGainMapCarried(type: CFString, orientation: Int, width: Int = 1000, height: Int = 750, file: StaticString = #filePath, line: UInt = #line) async throws {
         let dir = tempDirectory("hdr")
-        guard let input = Synthetic.writeGainMapPhoto(width: 1000, height: 750, type: type, to: dir, orientation: orientation) else {
+        guard let input = Synthetic.writeGainMapPhoto(width: width, height: height, type: type, to: dir, orientation: orientation) else {
             throw XCTSkip("ImageIO cannot write a \(type) HEIC on this host")
         }
         let source = CGImageSourceCreateWithURL(input as CFURL, nil)!
@@ -322,7 +350,8 @@ final class AppleUpscaleTests: XCTestCase {
         XCTAssertEqual(gain.type as String, type as String)
         let (service, _, _) = makeService()
         let result = try await service.upscale(input: input, model: .fast) { _ in }
-        let upright = orientation >= 5 ? (w: 3000, h: 4000) : (w: 4000, h: 3000)
+        let scale = SizePolicy.target(width: width, height: height).outputScale
+        let upright = orientation >= 5 ? (w: height * scale, h: width * scale) : (w: width * scale, h: height * scale)
         XCTAssertEqual(result.width, upright.w, file: file, line: line)
         XCTAssertEqual(result.height, upright.h, file: file, line: line)
         let outSource = CGImageSourceCreateWithURL(result.outputURL as CFURL, nil)!
@@ -349,6 +378,7 @@ final class AppleUpscaleTests: XCTestCase {
         try checkMetadata(output: result.outputURL, expectedWidth: upright.w, expectedHeight: upright.h)
     }
 
+    func testLargeGainMapScaleTwo() async throws { try await checkGainMapCarried(type: kCGImageAuxiliaryDataTypeISOGainMap, orientation: 1, width: 2000, height: 1502) }
     func testISOGainMapKeptAndOriented() async throws { try await checkGainMapCarried(type: kCGImageAuxiliaryDataTypeISOGainMap, orientation: 1) }
     func testISOGainMapKeptWithOrientation6() async throws { try await checkGainMapCarried(type: kCGImageAuxiliaryDataTypeISOGainMap, orientation: 6) }
     func testAppleGainMapKept() async throws { try await checkGainMapCarried(type: kCGImageAuxiliaryDataTypeHDRGainMap, orientation: 1) }
@@ -438,12 +468,13 @@ final class AppleUpscaleTests: XCTestCase {
         for model in [ModelKey.best, ModelKey.fast] {
             let verdict = try await service.prepare(model: model)
             let t0 = Date()
-            let result = try await service.upscale(input: input, model: model) { _ in }
+            let result = try await service.upscale(input: input, model: model, fullScale: true) { _ in }
             let total = Date().timeIntervalSince(t0)
             let s = service.lastJobStats!
             let size = (try? FileManager.default.attributesOfItem(atPath: result.outputURL.path)[.size] as? Int) ?? 0
             print("PERF 12MP \(model.rawValue) on \(verdict.unit.rawValue): total \(String(format: "%.2f", total)) s (decode \(String(format: "%.2f", s.decodeSeconds)), \(s.tiles) tiles \(String(format: "%.2f", s.tilesSeconds)) s = \(String(format: "%.1f", s.tilesSeconds * 1000 / Double(s.tiles))) ms/tile, encode+preview \(String(format: "%.2f", s.encodeSeconds))), output \(result.width)x\(result.height), HEIC \(size / 1_000_000) MB")
-            XCTAssertGreaterThan(result.width, 15000)
+            print("PERF full scale requested; actual scale \(result.outputScale)")
+            XCTAssertEqual(result.width, SizePolicy.target(width: 4032, height: 3024).width * result.outputScale)
         }
     }
 }
