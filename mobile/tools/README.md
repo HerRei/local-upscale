@@ -57,3 +57,16 @@ fast  LiteRT   CPU       78.49     211.7       343  ok
 The Core ML check also asserts the compiled model's input/output are Float16 with the expected
 shapes (read from `metadata.json`; the Python API returns FP16 outputs as float32). The TFLite
 check asserts float32 NHWC I/O and that FP16 weight tensors are present.
+
+## Tablet conversion experiment
+
+The tablet extension shares this pipeline and uses isolated model workers. With the model-library
+Python above, run `export_models.py --set tablet` to regenerate, then `export_models.py --set tablet
+--check` to compare the generated models with deterministic PyTorch FP32 probes. Tablet outputs
+are ignored by Git under `Models/ios-tablet` and `Models/android-tablet`. See
+[TABLET-MODELS.md](TABLET-MODELS.md) for measurements, supported models, and limitations.
+
+The existing LiteRT environment is read from `mobile/tools/.venv-litert`, or the phone checkout's
+`LocalSR-mobile/mobile/tools/.venv-litert` if it is absent here. No dependencies are installed by
+the tablet command. The Core ML desktop export preparation is read from the `LocalSR-coreml`
+checkout, and PULSE registration from `localsr-train`; neither source tree is modified.

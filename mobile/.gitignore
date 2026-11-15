@@ -75,3 +75,8 @@ Carthage/Build/
 **/fastlane/Preview.html
 **/fastlane/test_output
 tools/.venv-litert/
+
+Models/ios-tablet/
+Models/android-tablet/
+tools/tablet-export.json
+tools/tablet-check.json

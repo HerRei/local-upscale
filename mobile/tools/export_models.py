@@ -441,12 +441,20 @@ def do_check() -> int:
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "--tablet-worker":
+        import tablet_models
+        tablet_models.worker(*sys.argv[2:])
+        return
     if len(sys.argv) > 1 and sys.argv[1] == "--litert-worker":
         worker(sys.argv[2:])
         return
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--check", action="store_true", help="verify mobile/Models against PyTorch FP32")
+    ap.add_argument("--set", choices=("phone", "tablet"), default="phone")
     args = ap.parse_args()
+    if args.set == "tablet":
+        import tablet_models
+        sys.exit(tablet_models.run(args.check))
     sys.exit(do_check() if args.check else (do_export() or 0))
 
 
