@@ -27,6 +27,12 @@ enum AppleBenchmark {
             FileHandle.standardError.write(data)
             try? handle?.write(contentsOf: data)
         }
+        let marker = root.appendingPathComponent("bench-in-progress.txt")
+        if let previous = try? String(contentsOf: marker, encoding: .utf8) {
+            log("previous run was killed during \(previous)")
+            try? FileManager.default.removeItem(at: marker)
+        }
+        let forceFull = ProcessInfo.processInfo.environment["LOCALSR_BENCH_FORCE_FULL"] == "1"
         var machine = utsname(); uname(&machine)
         let name = withUnsafePointer(to: &machine.machine) { $0.withMemoryRebound(to: CChar.self, capacity: 256) { String(cString: $0) } }
         #if os(iOS)
@@ -56,18 +62,29 @@ enum AppleBenchmark {
                     }
                     await placement(model, log: log)
                     try measurements(model, log: log)
-                    for (w, h) in [(1500, 1000), (4032, 3024)] {
+                    for (w, h, full) in [(1500, 1000, false), (4032, 3024, false), (4032, 3024, true), (8064, 6048, false), (8064, 6048, true)] {
+                        let caseName = "model=\(model.rawValue) e2e=\(w)x\(h) fullScale=\(full)"
                         do {
+                            try Data(caseName.utf8).write(to: marker, options: .atomic)
+                            #if os(iOS)
+                            let caseAvailable = UInt64(os_proc_available_memory())
+                            #else
+                            let caseAvailable: UInt64 = 0
+                            #endif
+                            log("\(caseName) begin available_bytes=\(caseAvailable) force_full=\(forceFull && full)")
                             let input = try makeInput(width: w, height: h, directory: dir)
                             let sampler = FootprintSampler(); sampler.start()
                             do {
-                                let result = try await service.upscale(input: input, model: model) { _ in }
+                                let result = try await service.upscaleForBenchmark(input: input, model: model, fullScale: full, forceFull: forceFull && full, gate: { decision in
+                                    log("\(caseName) gate_allowed=\(decision.allowed) required_bytes=\(decision.required) available_bytes=\(decision.available) selected_scale=\(decision.scale)")
+                                }) { _ in }
                                 let peak = sampler.stop(), stats = service.lastJobStats!
-                                log("model=\(model.rawValue) e2e=\(w)x\(h) unit=\(result.unit.rawValue) total_s=\(result.seconds) tiles_s=\(stats.tilesSeconds) encode_s=\(stats.encodeSeconds) peak_bytes=\(peak) output=\(result.width)x\(result.height)")
+                                log("\(caseName) unit=\(result.unit.rawValue) total_s=\(result.seconds) tiles_s=\(stats.tilesSeconds) encode_s=\(stats.encodeSeconds) peak_bytes=\(peak) output=\(result.width)x\(result.height)")
                                 try? FileManager.default.removeItem(at: result.outputURL.deletingLastPathComponent())
-                            } catch { _ = sampler.stop(); throw error }
+                            } catch { let peak = sampler.stop(); log("\(caseName) peak_bytes=\(peak) ERROR=\(error)") }
                             try? FileManager.default.removeItem(at: input)
-                        } catch { log("model=\(model.rawValue) e2e=\(w)x\(h) ERROR=\(error)") }
+                        } catch { log("\(caseName) ERROR=\(error)") }
+                        try? FileManager.default.removeItem(at: marker)
                     }
                 } catch { log("model=\(model.rawValue) ERROR=\(error)") }
             }
