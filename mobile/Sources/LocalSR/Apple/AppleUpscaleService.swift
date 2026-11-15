@@ -29,6 +29,16 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
         public var gainMapNote: String
     }
 
+    // Calibrate from on-device benchmark measurements; preserve the current estimate for now.
+    private static let fullScaleMemoryFactor = 2.5
+
+    struct GateDecision {
+        let required: UInt64
+        let available: UInt64
+        let allowed: Bool
+        let scale: Int
+    }
+
     private let deviceCheck: AppleDeviceCheck
     private let cacheRoot: URL
     private let mutex = AsyncMutex()
@@ -45,6 +55,7 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
     public init(defaults: UserDefaults = .standard, cachesDirectory: URL? = nil) {
         deviceCheck = AppleDeviceCheck(defaults: defaults)
         cacheRoot = (cachesDirectory ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]).appendingPathComponent("LocalSR", isDirectory: true)
+        AppleBenchmark.startIfRequested()
     }
 
     /// The verdict chosen by the last `prepare` for `model` (for the About sheet).
@@ -76,6 +87,11 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
     }
 
     public func upscale(input: URL, model: ModelKey, fullScale: Bool, progress: @escaping (Double) -> Void) async throws -> UpscaleResult {
+        try await upscaleForBenchmark(input: input, model: model, fullScale: fullScale, forceFull: false, gate: nil, progress: progress)
+    }
+
+    // Internal entry point: only the benchmark can request a gate bypass.
+    func upscaleForBenchmark(input: URL, model: ModelKey, fullScale: Bool, forceFull: Bool, gate: ((GateDecision) -> Void)?, progress: @escaping (Double) -> Void) async throws -> UpscaleResult {
         await mutex.lock()
         do {
             let verdict = try await prepareLocked(model: model)
@@ -84,13 +100,13 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
             let engine = self.engine
             let cancel = CancelFlag()
             let progress = SendableProgress(progress)
-            let job = Box((model: model, unit: verdict.unit))
+            let job = Box((model: model, unit: verdict.unit, forceFull: forceFull, gate: gate))
             let started = Date()
             let boxed: Box<(UpscaleResult, JobStats)> = try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Box<(UpscaleResult, JobStats)>, Error>) in
                     DispatchQueue.global(qos: .userInitiated).async {
                         do {
-                            let r = try Self.runPipeline(input: input, fullScale: fullScale, model: job.value.model, unit: job.value.unit, engine: engine, directory: directory, id: id, started: started, cancel: cancel, progress: progress)
+                            let r = try Self.runPipeline(input: input, fullScale: fullScale, model: job.value.model, unit: job.value.unit, engine: engine, directory: directory, id: id, started: started, cancel: cancel, progress: progress, forceFull: job.value.forceFull, gate: job.value.gate)
                             continuation.resume(returning: Box(r))
                         } catch {
                             try? FileManager.default.removeItem(at: directory)
@@ -142,7 +158,7 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
               width > 0, height > 0 else { return false }
         let target = SizePolicy.target(width: width, height: height)
         guard target.outputScale == 2 else { return false }
-        return Double(Self.availableMemory()) >= Double(target.width) * Double(target.height) * 16 * 4 * 2.5
+        return Double(Self.availableMemory()) >= Double(target.width) * Double(target.height) * 16 * 4 * Self.fullScaleMemoryFactor
     }
 
     public func saveToLibrary(_ result: UpscaleResult) async throws {
@@ -184,14 +200,17 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
 
     // MARK: Pipeline (runs on a background queue)
 
-    private static func runPipeline(input: URL, fullScale: Bool, model: ModelKey, unit: ComputeUnit, engine: CoreMLEngine, directory: URL, id: String, started: Date, cancel: CancelFlag, progress: SendableProgress) throws -> (UpscaleResult, JobStats) {
+    private static func runPipeline(input: URL, fullScale: Bool, model: ModelKey, unit: ComputeUnit, engine: CoreMLEngine, directory: URL, id: String, started: Date, cancel: CancelFlag, progress: SendableProgress, forceFull: Bool, gate: ((GateDecision) -> Void)?) throws -> (UpscaleResult, JobStats) {
         let t0 = Date()
         progress.report(0)
         let decoded = try ImageIOCodec.decode(input: input)
         let source = decoded.pixels
         let policy = SizePolicy.target(width: decoded.originalWidth, height: decoded.originalHeight)
-        let needed = Double(source.width) * Double(source.height) * 16 * 4 * 2.5
-        let scale = fullScale && policy.outputScale == 2 && Double(Self.availableMemory()) >= needed ? 4 : policy.outputScale
+        let needed = Double(source.width) * Double(source.height) * 16 * 4 * Self.fullScaleMemoryFactor
+        let available = Self.availableMemory()
+        let allowed = Double(available) >= needed
+        let scale = fullScale && policy.outputScale == 2 && (allowed || forceFull) ? 4 : policy.outputScale
+        gate?(GateDecision(required: UInt64(needed), available: available, allowed: allowed, scale: scale))
         let outWidth = source.width * scale, outHeight = source.height * scale
         let tDecoded = Date()
         if cancel.isCancelled { throw ServiceError.cancelled }

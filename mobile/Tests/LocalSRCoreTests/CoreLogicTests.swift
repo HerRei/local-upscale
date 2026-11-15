@@ -304,16 +304,20 @@ final class CoreLogicTests: XCTestCase {
         XCTAssertEqual(reduced.factor, 1.0)
         XCTAssertEqual(reduced.outputScale, 2)
         XCTAssertEqual(same.outputScale, 4)
+        let iphonePhoto = SizePolicy.target(width: 4032, height: 3024)
+        XCTAssertEqual(iphonePhoto.width, 4032)
+        XCTAssertEqual(iphonePhoto.height, 3024)
+        XCTAssertEqual(iphonePhoto.factor, 1)
         let sizes: [[Int]] = [[8000, 6000], [4032, 3024], [4001, 3000], [10000, 10000], [40000, 1000], [1000, 40000], [30000, 401], [12001, 1000]]
         for size in sizes {
             let t = SizePolicy.target(width: size[0], height: size[1])
             XCTAssertGreaterThan(t.width, 0)
             XCTAssertGreaterThan(t.height, 0)
-            XCTAssertLessThanOrEqual(t.width * t.height, 12_000_000)
+            XCTAssertLessThanOrEqual(t.width * t.height, SizePolicy.maxInputPixels)
             XCTAssertLessThanOrEqual(t.width, size[0])
             XCTAssertLessThanOrEqual(t.height, size[1])
-            // Output after 4x stays within 48 MP.
-            XCTAssertLessThanOrEqual((t.width * t.outputScale) * (t.height * t.outputScale), 48_000_000)
+            // Default output stays within the policy limit.
+            XCTAssertLessThanOrEqual((t.width * t.outputScale) * (t.height * t.outputScale), SizePolicy.maxInputPixels * 4)
         }
     }
 

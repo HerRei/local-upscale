@@ -189,7 +189,7 @@ final class AppleUpscaleTests: XCTestCase {
         let target = SizePolicy.target(width: 2900, height: 4600)
         XCTAssertEqual(decoded.pixels.width, target.width)
         XCTAssertEqual(decoded.pixels.height, target.height)
-        XCTAssertLessThanOrEqual(decoded.pixels.width * decoded.pixels.height, 12_000_000)
+        XCTAssertLessThanOrEqual(decoded.pixels.width * decoded.pixels.height, SizePolicy.maxInputPixels)
         XCTAssertLessThan(decoded.pixels.width, decoded.pixels.height)
         XCTAssertEqual(decoded.colorSpace.name as String?, CGColorSpace.displayP3 as String)
         // Marker (red square at the stored top-left) is at the upright top-right after a 90 degree CW turn.
