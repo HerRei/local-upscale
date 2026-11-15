@@ -1,8 +1,10 @@
 import UIKit
 import UniformTypeIdentifiers
+import os
 
 @objc(ShareViewController)
 final class ShareViewController: UIViewController {
+    private static let logger = Logger(subsystem: "com.hermesreisner.localsr.share", category: "Share")
     private static let appGroupID = "group.com.hermesreisner.localsr"
     private static let importURL = URL(string: "localsr://import")!
     private static let maxSharedItems = 20
@@ -31,6 +33,7 @@ final class ShareViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        Self.logger.info("viewDidAppear didStartImport=\(self.didStartImport, privacy: .public)")
         guard !didStartImport else { return }
         didStartImport = true
         Task { @MainActor in
@@ -96,6 +99,7 @@ final class ShareViewController: UIViewController {
 
     private func processSharedItems() async {
         let providers = imageProviders()
+        Self.logger.info("processSharedItems providers=\(providers.count, privacy: .public)")
         guard !providers.isEmpty else {
             extensionContext?.completeRequest(returningItems: nil)
             return
@@ -106,9 +110,11 @@ final class ShareViewController: UIViewController {
             : "Sending \(providers.count) photos\u{2026}"
 
         guard let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroupID) else {
+            Self.logger.error("containerURL nil for \(Self.appGroupID, privacy: .public)")
             showFallback(message: "Could not access LocalSR storage.")
             return
         }
+        Self.logger.info("containerURL=\(containerURL.path, privacy: .public)")
 
         let batchDir = containerURL
             .appendingPathComponent("Inbox", isDirectory: true)
@@ -150,6 +156,7 @@ final class ShareViewController: UIViewController {
         }
 
         let opened = await openContainingApp(url: Self.importURL)
+        Self.logger.info("openContainingApp returned \(opened, privacy: .public)")
         if opened {
             extensionContext?.completeRequest(returningItems: nil)
         } else {
@@ -158,6 +165,7 @@ final class ShareViewController: UIViewController {
     }
 
     private func showFallback(message: String) {
+        Self.logger.info("showFallback: \(message, privacy: .public)")
         spinner.stopAnimating()
         spinner.isHidden = true
         statusLabel.text = message
@@ -187,8 +195,12 @@ final class ShareViewController: UIViewController {
         let displayName = provider.suggestedName
 
         return await withCheckedContinuation { continuation in
-            provider.loadFileRepresentation(forTypeIdentifier: UTType.image.identifier) { tempURL, _ in
+            provider.loadFileRepresentation(forTypeIdentifier: UTType.image.identifier) { tempURL, error in
+                if let error {
+                    Self.logger.error("loadFileRepresentation error: \(error.localizedDescription, privacy: .public)")
+                }
                 guard let tempURL else {
+                    Self.logger.error("loadFileRepresentation tempURL nil")
                     continuation.resume(returning: nil)
                     return
                 }
@@ -197,8 +209,10 @@ final class ShareViewController: UIViewController {
                 let destURL = batchDir.appendingPathComponent(filename)
                 do {
                     try FileManager.default.copyItem(at: tempURL, to: destURL)
+                    Self.logger.info("Copied shared image to \(destURL.path, privacy: .public)")
                     continuation.resume(returning: Manifest.Item(filename: filename, displayName: displayName))
                 } catch {
+                    Self.logger.error("copyItem error: \(error.localizedDescription, privacy: .public)")
                     continuation.resume(returning: nil)
                 }
             }
@@ -217,15 +231,20 @@ final class ShareViewController: UIViewController {
     private func openContainingApp(url: URL) async -> Bool {
         var responder: UIResponder? = self
         while let current = responder {
+            Self.logger.info("responder chain item: \(String(describing: type(of: current)), privacy: .public)")
             if let application = current as? UIApplication {
+                let canOpen = application.canOpenURL(url)
+                Self.logger.info("found UIApplication, canOpenURL=\(canOpen, privacy: .public)")
                 return await withCheckedContinuation { continuation in
                     application.open(url, options: [:]) { success in
+                        Self.logger.info("application.open completion success=\(success, privacy: .public)")
                         continuation.resume(returning: success)
                     }
                 }
             }
             responder = current.next
         }
+        Self.logger.warning("UIApplication not found in responder chain")
         return false
     }
 }

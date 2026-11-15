@@ -19,11 +19,7 @@ public struct ContentView: View {
                 #if SKIP
                 AndroidShareInbox.setOnInputsAvailable {
                     Task { @MainActor in
-                        await appModel.importSharedInboxIfNeeded(
-                            model: selectedModel,
-                            fullScale: fullScale,
-                            startImmediately: shareStartsImmediately
-                        )
+                        await appModel.importSharedInboxIfNeeded()
                     }
                 }
                 #endif
