@@ -54,6 +54,41 @@ public enum PlatformSupport {
         }
         #endif
     }
+
+    @MainActor
+    public static func openAppSettings() {
+        #if !SKIP && os(iOS)
+        if let url = URL(string: UIApplication.openSettingsURLString) {
+            UIApplication.shared.open(url)
+        }
+        #endif
+    }
+
+    public static func imageAspectRatio(url: URL) async -> CGFloat? {
+        #if SKIP
+        let context = ProcessInfo.processInfo.androidContext
+        if let ratio = AndroidUISupport.imageAspectRatio(context, url.absoluteString), ratio > 0.0 {
+            return CGFloat(ratio)
+        }
+        return nil
+        #else
+        return await Task.detached(priority: .userInitiated) {
+            let sourceOptions: [CFString: Any] = [kCGImageSourceShouldCache: false]
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions as CFDictionary),
+                  let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                  let width = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue,
+                  let height = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue,
+                  width > 0, height > 0 else {
+                return nil
+            }
+            let orientation = (props[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
+            if orientation >= 5 && orientation <= 8 {
+                return CGFloat(height / width)
+            }
+            return CGFloat(width / height)
+        }.value
+        #endif
+    }
 }
 
 public struct DecodedImageView: View {
@@ -169,89 +204,80 @@ private final class PickerLaunchBox {
 }
 #endif
 
-public struct PlatformPhotoPickerButton: View {
-    public let disabled: Bool
+public struct PlatformPhotoPickerHost: View {
+    @Binding public var isPresented: Bool
+    public let onLoadingChanged: (Bool) -> Void
     public let onPicked: ([PickedPhotoInput]) -> Void
 
     #if SKIP
     @State private var pickerBox = PickerLaunchBox()
     #elseif canImport(PhotosUI)
     @State private var selectedItems: [PhotosPickerItem] = []
-    @State private var isLoadingSelection = false
     #endif
 
-    public init(disabled: Bool = false, onPicked: @escaping ([PickedPhotoInput]) -> Void) {
-        self.disabled = disabled
+    public init(
+        isPresented: Binding<Bool>,
+        onLoadingChanged: @escaping (Bool) -> Void,
+        onPicked: @escaping ([PickedPhotoInput]) -> Void
+    ) {
+        self._isPresented = isPresented
+        self.onLoadingChanged = onLoadingChanged
         self.onPicked = onPicked
     }
 
     public var body: some View {
         #if SKIP
-        ZStack {
-            ComposeView { ctx in
-                AndroidPhotoPickerHost(
-                    onReady: { action in
-                        pickerBox.launch = action
-                    },
-                    onPicked: { uris in
-                        let androidContext = ProcessInfo.processInfo.androidContext
-                        var inputs: [PickedPhotoInput] = []
-                        for i in 0..<uris.size {
-                            let uriStr = uris[i]
-                            if let url = URL(string: uriStr) {
-                                let name = AndroidUISupport.displayNameForUri(androidContext, uriStr, "Photo \(i + 1)")
-                                inputs.append(PickedPhotoInput(url: url, displayName: name))
-                            }
+        ComposeView { ctx in
+            AndroidPhotoPickerHost(
+                onReady: { action in
+                    pickerBox.launch = action
+                },
+                onPicked: { uris in
+                    let androidContext = ProcessInfo.processInfo.androidContext
+                    var inputs: [PickedPhotoInput] = []
+                    for i in 0..<uris.size {
+                        let uriStr = uris[i]
+                        if let url = URL(string: uriStr) {
+                            let name = AndroidUISupport.displayNameForUri(androidContext, uriStr, "Photo \(i + 1)")
+                            inputs.append(PickedPhotoInput(url: url, displayName: name))
                         }
-                        if !inputs.isEmpty {
-                            onPicked(inputs)
-                        }
-                    },
-                    modifier: ctx.modifier
-                )
-            }
-            .frame(width: 0.0, height: 0.0)
-
-            Button {
-                pickerBox.launch?()
-            } label: {
-                Text("Choose Photos")
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 4.0)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(disabled)
-            .accessibilityIdentifier("choosePhotosButton")
-        }
-        #elseif canImport(PhotosUI)
-        PhotosPicker(selection: $selectedItems, maxSelectionCount: 20, matching: .images) {
-            Text("Choose Photos")
-                .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
-        .disabled(disabled || isLoadingSelection)
-        .accessibilityIdentifier("choosePhotosButton")
-        .onChange(of: selectedItems) { _, newItems in
-            guard !newItems.isEmpty else { return }
-            let items = newItems
-            selectedItems = []
-            isLoadingSelection = true
-            Task {
-                let inputs = await Self.materializePickerItems(items)
-                await MainActor.run {
-                    isLoadingSelection = false
+                    }
                     if !inputs.isEmpty {
                         onPicked(inputs)
                     }
-                }
+                },
+                modifier: ctx.modifier
+            )
+        }
+        .frame(width: 0.0, height: 0.0)
+        .onChange(of: isPresented) { _, presented in
+            if presented {
+                isPresented = false
+                pickerBox.launch?()
             }
         }
+        #elseif canImport(PhotosUI)
+        Color.clear
+            .frame(width: 0.0, height: 0.0)
+            .photosPicker(isPresented: $isPresented, selection: $selectedItems, maxSelectionCount: 20, matching: .images)
+            .onChange(of: selectedItems) { _, newItems in
+                guard !newItems.isEmpty else { return }
+                let items = newItems
+                selectedItems = []
+                onLoadingChanged(true)
+                Task {
+                    let inputs = await Self.materializePickerItems(items)
+                    await MainActor.run {
+                        onLoadingChanged(false)
+                        if !inputs.isEmpty {
+                            onPicked(inputs)
+                        }
+                    }
+                }
+            }
         #else
-        Button("Choose Photos") {}
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(true)
+        Color.clear
+            .frame(width: 0.0, height: 0.0)
         #endif
     }
 

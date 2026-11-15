@@ -9,6 +9,7 @@ public struct ContentView: View {
     public var body: some View {
         HomeView()
             .environment(appModel)
+            .tint(DesignTokens.brandText)
             .onChange(of: scenePhase) { _, newPhase in
                 if newPhase == .background {
                     Task {

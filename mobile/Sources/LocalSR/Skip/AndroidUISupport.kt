@@ -3,10 +3,12 @@ package local.sr
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
+import androidx.exifinterface.media.ExifInterface
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -99,6 +101,46 @@ object AndroidUISupport {
             }
         } catch (t: Throwable) {
             Log.w(TAG, "decodeDisplayBitmap failed")
+            null
+        }
+    }
+
+    fun imageAspectRatio(context: Context, uriString: String): Double? {
+        return try {
+            val uri = Uri.parse(uriString)
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            if (uri.scheme == null || uri.scheme == "file") {
+                val path = uri.path ?: return null
+                BitmapFactory.decodeFile(path, options)
+            } else {
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    BitmapFactory.decodeStream(stream, null, options)
+                }
+            }
+            var w = options.outWidth
+            var h = options.outHeight
+            if (w <= 0 || h <= 0) return null
+            val orientation = try {
+                if (uri.scheme == null || uri.scheme == "file") {
+                    uri.path?.let { ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL) }
+                } else {
+                    context.contentResolver.openInputStream(uri)?.use { stream ->
+                        ExifInterface(stream).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+                    }
+                }
+            } catch (_: Throwable) {
+                ExifInterface.ORIENTATION_NORMAL
+            } ?: ExifInterface.ORIENTATION_NORMAL
+            if (orientation == ExifInterface.ORIENTATION_TRANSPOSE ||
+                orientation == ExifInterface.ORIENTATION_ROTATE_90 ||
+                orientation == ExifInterface.ORIENTATION_TRANSVERSE ||
+                orientation == ExifInterface.ORIENTATION_ROTATE_270) {
+                val tmp = w
+                w = h
+                h = tmp
+            }
+            w.toDouble() / h.toDouble()
+        } catch (_: Throwable) {
             null
         }
     }
