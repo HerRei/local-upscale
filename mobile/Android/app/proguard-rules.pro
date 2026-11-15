@@ -9,3 +9,7 @@
 -keep class * implements skip.bridge.** { *; }
 -keep class **._ModuleBundleAccessor_* { *; }
 -keep class local.sr.** { *; }
+# LiteRT: JNI looks classes up by name
+-keep class com.google.ai.edge.litert.** { *; }
+-dontwarn com.google.ai.edge.litert.**
+-dontwarn com.google.android.play.**

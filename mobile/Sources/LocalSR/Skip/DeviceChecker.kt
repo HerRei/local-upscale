@@ -1,0 +1,226 @@
+package local.sr
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.os.Build
+import android.util.Log
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import local.srcore.ComputeUnit
+import local.srcore.DeviceCheck
+import local.srcore.DeviceMeasurement
+import local.srcore.DeviceVerdict
+import local.srcore.ModelKey
+import local.srcore.TilePlanner
+
+/** What the device check measured, for logs and the About screen. */
+class DeviceCheckReport(val verdict: DeviceVerdict, val lines: List<String>, val cacheable: Boolean) {
+    override fun toString(): String = "${verdict.unit.rawValue}: ${verdict.reason}\n" + lines.joinToString("\n")
+}
+
+/**
+ * DESIGN.md "Device check": the probe tile runs on the CPU (reference), the NPU and the GPU, each on its
+ * own so a failure is explicit. A unit passes with PSNR >= 45 dB vs CPU, no NaN/Inf, not constant, and
+ * the 4x box-downsampled output >= 26 dB vs the input. NPU wins unless the GPU passes and is >= 1.3x faster.
+ * The verdict is cached in SharedPreferences under (device, OS, app build, model).
+ */
+class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long = GPU_TIMEOUT_MS) {
+    private val prefs = context.getSharedPreferences("localsr_device_check", Context.MODE_PRIVATE)
+
+    fun cacheKey(model: ModelKey): String {
+        val soc = if (Build.VERSION.SDK_INT >= 31) "${Build.SOC_MANUFACTURER} ${Build.SOC_MODEL}" else Build.HARDWARE
+        val os = "Android ${Build.VERSION.RELEASE} (${Build.VERSION.SDK_INT}) ${Build.FINGERPRINT.hashCode()}"
+        return DeviceCheck.cacheKey(
+            deviceModel = "${Build.MANUFACTURER} ${Build.MODEL} $soc",
+            osVersion = os,
+            appBuild = appBuild(),
+            modelKey = model,
+        )
+    }
+
+    private fun appBuild(): String = try {
+        val info = context.packageManager.getPackageInfo(context.packageName, 0)
+        if (Build.VERSION.SDK_INT >= 28) info.longVersionCode.toString() else @Suppress("DEPRECATION") info.versionCode.toString()
+    } catch (e: Exception) {
+        "0"
+    }
+
+    fun cached(model: ModelKey): DeviceVerdict? {
+        val raw = prefs.getString(cacheKey(model), null) ?: return null
+        val bar = raw.indexOf('|')
+        if (bar < 0) return null
+        val unit = ComputeUnit.init(rawValue = raw.substring(0, bar)) ?: return null
+        return DeviceVerdict(unit = unit, reason = raw.substring(bar + 1))
+    }
+
+    fun store(model: ModelKey, verdict: DeviceVerdict) {
+        prefs.edit().putString(cacheKey(model), "${verdict.unit.rawValue}|${verdict.reason}").apply()
+    }
+
+    fun forget(model: ModelKey) {
+        prefs.edit().remove(cacheKey(model)).apply()
+    }
+
+    /** Loads the bundled probe tile (384x384) as NHWC floats. */
+    private fun probeInput(): FloatArray {
+        val bmp = context.assets.open("probe.png").use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 }) }
+            ?: throw UpscaleException("probe.png cannot be decoded")
+        if (bmp.width != PixelKernels.WINDOW || bmp.height != PixelKernels.WINDOW) throw UpscaleException("probe.png must be 384x384, is ${bmp.width}x${bmp.height}")
+        val px = IntArray(bmp.width * bmp.height)
+        bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+        bmp.recycle()
+        val tile = TilePlanner.plan(width = PixelKernels.WINDOW, height = PixelKernels.WINDOW)[0]
+        val out = FloatArray(PixelKernels.WINDOW * PixelKernels.WINDOW * 3)
+        PixelKernels.extractWindow(px, PixelKernels.WINDOW, PixelKernels.WINDOW, tile, out)
+        return out
+    }
+
+    private class Run(val engineMs: Double, val loadMs: Double, val output: FloatArray)
+
+    /** Loads [unit], warms up, then times [timedRuns] runs (median). Returns the first timed output. */
+    private fun runUnit(model: ModelKey, unit: ComputeUnit, input: FloatArray, timedRuns: Int): Run {
+        val engine = LiteRtEngine.load(context, model, unit)
+        try {
+            engine.run(input) // warm-up (GPU compiles shaders, XNNPACK packs weights)
+            val times = ArrayList<Double>()
+            var first: FloatArray? = null
+            for (i in 0 until timedRuns) {
+                val t0 = System.nanoTime()
+                val out = engine.run(input)
+                times.add((System.nanoTime() - t0) / 1e6)
+                if (first == null) first = out
+            }
+            times.sort()
+            return Run(times[times.size / 2], engine.loadMs, first!!)
+        } finally {
+            engine.close()
+        }
+    }
+
+    private fun measure(run: Run, reference: FloatArray?, input: FloatArray): DeviceMeasurement {
+        val out = run.output
+        val finite = !PixelKernels.hasNonFinite(out)
+        val psnrCpu = if (reference == null) 99.0 else PixelKernels.psnr(reference, out)
+        val down = PixelKernels.downsample4x(out, PixelKernels.TILE_OUT, PixelKernels.TILE_OUT)
+        val psnrDown = PixelKernels.psnr(down, input)
+        return DeviceMeasurement(
+            loadMs = run.loadMs,
+            tileMs = run.engineMs,
+            psnrVsCPU = psnrCpu,
+            psnrDownsampleVsInput = psnrDown,
+            hasNaN = !finite,
+            isConstant = PixelKernels.isConstant(out),
+            placementAllNPU = true, // Android has no placement report; the quality + speed probe decides
+            timedOut = false,
+        )
+    }
+
+    /** Same thresholds as the core's DeviceCheck (kept private there). */
+    private fun passes(m: DeviceMeasurement?): Boolean =
+        m != null && !m.timedOut && !m.hasNaN && !m.isConstant && m.psnrVsCPU >= 45 && m.psnrDownsampleVsInput >= 26 && m.tileMs > 0 && m.tileMs.isFinite()
+
+    private fun describe(name: String, m: DeviceMeasurement): String =
+        "$name: load %.0f ms, %.1f ms/tile, PSNR vs CPU %.1f dB, downsample vs input %.1f dB, nan=%s constant=%s".format(m.loadMs, m.tileMs, m.psnrVsCPU, m.psnrDownsampleVsInput, m.hasNaN, m.isConstant)
+
+    /**
+     * Runs the full check for [model]. Blocking work happens on Dispatchers.Default. Does not touch the cache
+     * (the caller stores the verdict if [DeviceCheckReport.cacheable]).
+     */
+    suspend fun run(model: ModelKey): DeviceCheckReport = withContext(Dispatchers.Default) {
+        val lines = ArrayList<String>()
+        val input = probeInput()
+
+        // CPU reference.
+        var cpuMeasure: DeviceMeasurement? = null
+        var reference: FloatArray? = null
+        try {
+            val r = runUnit(model, ComputeUnit.cpu, input, timedRuns = 1)
+            reference = r.output
+            cpuMeasure = measure(r, null, input)
+            lines.add(describe("CPU", cpuMeasure))
+        } catch (t: Throwable) {
+            Log.e(TAG, "CPU probe failed", t)
+            lines.add("CPU: failed: ${t.message}")
+        }
+        currentCoroutineContext().ensureActive()
+
+        // NPU alone, with the 15 s load watchdog.
+        var npuMeasure: DeviceMeasurement? = null
+        var cacheable = true
+        if (reference != null) {
+            try {
+                val r = withLoadWatchdog(WATCHDOG_MS) { runUnit(model, ComputeUnit.npu, input, timedRuns = 3) }
+                if (r == null) {
+                    npuMeasure = DeviceMeasurement(loadMs = WATCHDOG_MS.toDouble(), tileMs = 0.0, psnrVsCPU = 0.0, psnrDownsampleVsInput = 0.0, timedOut = true)
+                    cacheable = false // "use the GPU for this session and retry later"
+                    lines.add("NPU: load + warm-up + timing exceeded $WATCHDOG_MS ms (will retry on a later start)")
+                } else {
+                    npuMeasure = measure(r, reference, input)
+                    lines.add(describe("NPU", npuMeasure))
+                }
+            } catch (t: Throwable) {
+                Log.i(TAG, "NPU probe failed: ${t.message}")
+                lines.add("NPU: failed: ${t.message}")
+            }
+        } else {
+            lines.add("NPU: skipped (no CPU reference)")
+        }
+
+        // GPU alone.
+        var gpuMeasure: DeviceMeasurement? = null
+        if (reference != null) {
+            try {
+                val r = withLoadWatchdog(gpuTimeoutMs) { runUnit(model, ComputeUnit.gpu, input, timedRuns = 3) }
+                if (r == null) {
+                    lines.add("GPU: load + warm-up + timing exceeded $gpuTimeoutMs ms (treated as failed)")
+                } else {
+                    gpuMeasure = measure(r, reference, input)
+                    lines.add(describe("GPU", gpuMeasure))
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "GPU probe failed: ${t.message}")
+                lines.add("GPU: failed: ${t.message}")
+            }
+        } else {
+            lines.add("GPU: skipped (no CPU reference)")
+        }
+        currentCoroutineContext().ensureActive()
+
+        var verdict = DeviceCheck.decide(cpu = cpuMeasure, gpu = gpuMeasure, npu = npuMeasure)
+        // An accelerator that passes but is not faster than the CPU is pointless (software GL on an emulator, a slow iGPU).
+        val cpuOk = passes(cpuMeasure)
+        val chosen = when (verdict.unit) { ComputeUnit.npu -> npuMeasure; ComputeUnit.gpu -> gpuMeasure; ComputeUnit.cpu -> null }
+        if (cpuOk && chosen != null && chosen.tileMs >= cpuMeasure!!.tileMs) {
+            verdict = DeviceVerdict(unit = ComputeUnit.cpu, reason = "${verdict.unit.rawValue.uppercase()} passed but is not faster than the CPU (%.0f vs %.0f ms/tile); using CPU.".format(chosen.tileMs, cpuMeasure.tileMs))
+        }
+        val report = DeviceCheckReport(verdict, lines, cacheable)
+        Log.i(TAG, "device check for ${model.rawValue}: $report")
+        report
+    }
+
+    /** Runs [block] on a worker thread and gives up waiting after 15 s (a native load cannot be interrupted; its result is discarded). */
+    private suspend fun <T> withLoadWatchdog(timeoutMs: Long, block: () -> T): T? {
+        val result = CompletableDeferred<Result<T>>()
+        val thread = Thread({
+            // Background priority: if this probe hangs (software GL on an emulator) it must not starve the real work.
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            result.complete(runCatching(block))
+        }, "localsr-probe")
+        thread.start()
+        val r = withTimeoutOrNull(timeoutMs) { result.await() } ?: return null
+        return r.getOrThrow()
+    }
+
+    companion object {
+        private const val TAG = "LocalSR"
+        /** DESIGN.md: an NPU that needs more than 15 s to load is not used this session. */
+        const val WATCHDOG_MS = 15_000L
+        /** First GPU run compiles shaders (can take many seconds on mid-range GPUs); a hang beyond this counts as a failure. */
+        const val GPU_TIMEOUT_MS = 60_000L
+    }
+}

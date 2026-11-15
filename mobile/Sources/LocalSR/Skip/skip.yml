@@ -1,11 +1,20 @@
 # Skip configuration for LocalSR module
 #
-# Kotlin dependencies and Gradle build options for this module can be configured here
-#build:
-#  contents:
-#    - block: 'dependencies'
-#      contents:
-#        - 'implementation("androidx.compose.runtime:runtime")'
+# Kotlin dependencies and Gradle build options for this module can be configured here.
+# The hand-written Kotlin in this folder (Skip/*.kt, package local.sr) is the Android hot path:
+# transpiled Swift arrays are boxed lists and far too slow for 48 MP of pixels, so tiling, the LiteRT
+# engine, JPEG/EXIF output and the MediaStore save are real Kotlin. Android/AndroidUpscaleService.swift
+# is a thin wrapper around AndroidUpscaler.
+build:
+  contents:
+    - block: 'dependencies'
+      contents:
+        # LiteRT CompiledModel API (NPU / GPU / CPU). litert pulls litert-api; litert-gpu ships the OpenCL/GL GPU accelerator (arm64 only).
+        - 'implementation("com.google.ai.edge.litert:litert:2.3.2")'
+        - 'implementation("com.google.ai.edge.litert:litert-gpu:2.3.2")'
+        - 'implementation("androidx.exifinterface:exifinterface:1.4.2")'
+        - 'implementation("androidx.core:core-ktx:1.17.0")'
+        - 'implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")'
 
 # this is a transpiled Skip Lite module
 skip:

@@ -9,6 +9,29 @@ plugins {
 skip {
 }
 
+val modelsDir = projectDir.resolve("../../Models")
+val stageModels = tasks.register<Sync>("stageLocalsrModels") {
+    from(modelsDir.resolve("android")) { include("*.tflite") }
+    from(modelsDir) { include("probe.png", "NOTICE.txt") }
+    into(layout.buildDirectory.dir("localsr-assets"))
+}
+// Everything that reads the assets dir (packaging, lint) waits for the staging task.
+tasks.matching { it.name != "stageLocalsrModels" && (it.name == "preBuild" || it.name.contains("Assets") || it.name.contains("lint", ignoreCase = true)) }.configureEach {
+    dependsOn(stageModels)
+}
+
+dependencies {
+    // UpscaleForegroundService / MediaStore / LiteRT are in the LocalSR module (Sources/LocalSR/Skip/*.kt)
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test:rules:1.7.0")
+    androidTestImplementation("androidx.test:core:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.exifinterface:exifinterface:1.4.2")
+    androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
+}
+
 kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.fromTarget(libs.versions.jvm.get().toString())
@@ -32,8 +55,12 @@ android {
     }
 
     defaultConfig {
-        minSdk = libs.versions.android.sdk.min.get().toInt()
+        // Android 10+: MediaStore RELATIVE_PATH / IS_PENDING (save to Pictures/LocalSR without a storage permission).
+        minSdk = maxOf(29, libs.versions.android.sdk.min.get().toInt())
         targetSdk = libs.versions.android.sdk.compile.get().toInt()
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // 64-bit ARM only: every phone LiteRT's GPU/NPU paths target, and the emulator image is arm64.
+        ndk { abiFilters += listOf("arm64-v8a") }
         // skip.tools.skip-build-plugin will automatically use Skip.env properties for:
         // applicationId = ANDROID_APPLICATION_ID ?? PRODUCT_BUNDLE_IDENTIFIER
         // versionCode = CURRENT_PROJECT_VERSION
@@ -42,6 +69,14 @@ android {
 
     buildFeatures {
         buildConfig = true
+    }
+
+    // The LiteRT models and the device-check probe live in Models/ (shared with the iOS side, single copy in git).
+    // They ship only in the APK: stage the Android ones as assets at build time; Models/ios is never included.
+    sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("localsr-assets").get().asFile)
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
     }
 
     lint {
