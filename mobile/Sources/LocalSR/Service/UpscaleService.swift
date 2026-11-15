@@ -2,7 +2,7 @@ import Foundation
 import LocalSRCore
 
 /// One finished upscale. Files live in the app's caches directory until saved or discarded.
-public struct UpscaleResult: Identifiable {
+public struct UpscaleResult: Identifiable, Sendable {
     public let id: String
     /// Original input file as picked (kept for the before/after view).
     public let inputURL: URL

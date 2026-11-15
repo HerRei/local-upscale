@@ -250,27 +250,27 @@ final class CoreLogicTests: XCTestCase {
     // MARK: Size policy, ETA
 
     func testSizePolicy() {
-        let same = SizePolicy.target(width: 4000, height: 3000) // exactly 12 MP stays
-        XCTAssertEqual(same.width, 4000)
-        XCTAssertEqual(same.height, 3000)
+        let same = SizePolicy.target(width: 2000, height: 1500) // exactly 3 MP stays
+        XCTAssertEqual(same.width, 2000)
+        XCTAssertEqual(same.height, 1500)
         XCTAssertEqual(same.factor, 1.0)
         let small = SizePolicy.target(width: 640, height: 480)
         XCTAssertEqual(small.width, 640)
         XCTAssertEqual(small.factor, 1.0)
-        let reduced = SizePolicy.target(width: 8000, height: 6000) // 48 MP
-        XCTAssertEqual(reduced.width, 4000)
-        XCTAssertEqual(reduced.height, 3000)
+        let reduced = SizePolicy.target(width: 4000, height: 3000) // 12 MP phone photo
+        XCTAssertEqual(reduced.width, 2000)
+        XCTAssertEqual(reduced.height, 1500)
         XCTAssertEqual(reduced.factor, 0.5)
         let sizes: [[Int]] = [[8000, 6000], [4032, 3024], [4001, 3000], [10000, 10000], [40000, 1000], [1000, 40000], [30000, 401], [12001, 1000]]
         for size in sizes {
             let t = SizePolicy.target(width: size[0], height: size[1])
             XCTAssertGreaterThan(t.width, 0)
             XCTAssertGreaterThan(t.height, 0)
-            XCTAssertLessThanOrEqual(t.width * t.height, 12_000_000)
+            XCTAssertLessThanOrEqual(t.width * t.height, 3_000_000)
             XCTAssertLessThanOrEqual(t.width, size[0])
             XCTAssertLessThanOrEqual(t.height, size[1])
             // Output after 4x stays within 48 MP.
-            XCTAssertLessThanOrEqual((t.width * 4) * (t.height * 4), 192_000_000)
+            XCTAssertLessThanOrEqual((t.width * 4) * (t.height * 4), 48_000_000)
         }
     }
 

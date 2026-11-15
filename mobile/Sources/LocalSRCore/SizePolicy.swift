@@ -7,13 +7,16 @@ public struct PrescaleSize {
 }
 
 public enum SizePolicy {
+    /// 4x output must stay <= 48 MP (192 MB RGBA8 buffer), so inputs are capped at 3 MP.
+    public static let maxInputPixels = 3_000_000
+
     public static func target(width: Int, height: Int) -> PrescaleSize {
         precondition(width > 0 && height > 0)
         let pixels = Double(width) * Double(height)
-        if pixels <= 12_000_000 { return PrescaleSize(factor: 1, width: width, height: height) }
-        let factor = sqrt(12_000_000 / pixels)
-        let w = min(12_000_000, max(1, Int((Double(width) * factor).rounded(.down))))
-        let h = min(12_000_000 / w, max(1, Int((Double(height) * factor).rounded(.down))))
+        if pixels <= Double(maxInputPixels) { return PrescaleSize(factor: 1, width: width, height: height) }
+        let factor = sqrt(Double(maxInputPixels) / pixels)
+        let w = min(maxInputPixels, max(1, Int((Double(width) * factor).rounded(.down))))
+        let h = min(maxInputPixels / w, max(1, Int((Double(height) * factor).rounded(.down))))
         return PrescaleSize(factor: factor, width: w, height: h)
     }
 }

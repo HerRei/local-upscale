@@ -20,7 +20,7 @@ public struct DeviceMeasurement {
     }
 }
 
-public struct DeviceVerdict: Codable {
+public struct DeviceVerdict: Codable, Sendable {
     public let unit: ComputeUnit
     public let reason: String
     public init(unit: ComputeUnit, reason: String) { self.unit = unit; self.reason = reason }

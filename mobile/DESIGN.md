@@ -62,11 +62,11 @@ Runs once per model and compute unit, cached in UserDefaults under
 4. Choose the NPU if it passes, unless the GPU also passes and is >= 1.3x faster.
    Else GPU if it passes, else CPU.
 
-The simulator has no NPU and its Core ML GPU path returns wrong pixels, so it must end on CPU.
+The simulator has no NPU. Its Core ML GPU path returned wrong pixels in one probe and correct ones in another; the check handles both (GPU if it passes, else CPU).
 
 ## Limits
 
-- Output capped at 48 MP: inputs above 12 MP are prescaled so that 4x lands at <= 48 MP.
+- Output capped at 48 MP: 4x is 16x the pixels, so inputs above 3 MP are prescaled first (a 12 MP phone photo goes in at 3 MP and comes out at 48 MP).
 - One output RGBA8 buffer per job (<= 192 MB), released before the next photo.
 - Background: iOS 26 `BGContinuedProcessingTask` for batches started by the user, NPU/CPU only
   (no background GPU on iPhone). Android: foreground service with a progress notification.

@@ -4,5 +4,11 @@
 <dict>
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>LocalSR saves the upscaled photos you choose to keep to your photo library.</string>
+    <key>BGTaskSchedulerPermittedIdentifiers</key>
+    <array>
+        <string>$(PRODUCT_BUNDLE_IDENTIFIER).batch.*</string>
+    </array>
 </dict>
 </plist>

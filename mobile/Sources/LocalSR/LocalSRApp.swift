@@ -35,6 +35,13 @@ public final class LocalSRAppDelegate : Sendable {
 
     public func onLaunch() {
         logger.debug("onLaunch")
+        #if !SKIP
+        // iOS: launch handler for continued processing of user-started batches (no-op on macOS).
+        BatchBackgroundTask.register()
+        #if DEBUG
+        AppleSelfTest.runIfRequested()   // debug-only PhotoKit smoke test, see AppleSelfTest.swift
+        #endif
+        #endif
     }
 
     public func onResume() {

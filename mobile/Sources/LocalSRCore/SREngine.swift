@@ -1,8 +1,8 @@
-public enum ComputeUnit: String, Codable {
+public enum ComputeUnit: String, Codable, Sendable {
     case npu, gpu, cpu
 }
 
-public enum ModelKey: String, Codable {
+public enum ModelKey: String, Codable, Sendable {
     case best, fast
     public var fileName: String {
         switch self {
