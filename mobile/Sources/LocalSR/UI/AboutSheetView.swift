@@ -6,6 +6,7 @@ struct AboutSheetView: View {
     @Environment(\.dismiss) private var dismiss
 
     @AppStorage("fullScale") private var fullScale: Bool = false
+    @AppStorage("shareStartsImmediately") private var shareStartsImmediately: Bool = true
 
     @State private var noticeText = ""
     @State private var versionText = ""
@@ -29,6 +30,19 @@ struct AboutSheetView: View {
                     Text("Upscaling")
                 } footer: {
                     Text(upscalingFooterText)
+                }
+
+                Section {
+                    Toggle("Start Right Away", isOn: $shareStartsImmediately)
+                        .accessibilityIdentifier("shareStartsImmediatelyToggle")
+                } header: {
+                    Text("Share Menu")
+                } footer: {
+                    #if SKIP
+                    Text("LocalSR appears when you share photos from other apps.")
+                    #else
+                    Text("\"Upscale with LocalSR\" appears when you share photos. To hide it, tap Edit Actions at the end of the share menu.")
+                    #endif
                 }
 
                 Section {

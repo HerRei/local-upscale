@@ -17,6 +17,8 @@
 		4A10000A2FA500000000B003 /* probe.png in Resources */ = {isa = PBXBuildFile; fileRef = 4A10000A2FA500000000A003 /* probe.png */; };
 		4A10000A2FA500000000B004 /* NOTICE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 4A10000A2FA500000000A004 /* NOTICE.txt */; };
 		4A20000A2FA600000000B001 /* LocalSRUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A20000A2FA600000000A001 /* LocalSRUITests.swift */; };
+		4A30000A2FB000000000B001 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A30000A2FB000000000A001 /* ShareViewController.swift */; };
+		4A30000A2FB000000000B002 /* LocalSRShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 4A30000A2FB000000000E001 /* LocalSRShare.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -29,6 +31,17 @@
 				491F27832DA55B72004926EE /* LocalSR in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4A30000A2FB000000000D010 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				4A30000A2FB000000000B002 /* LocalSRShare.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
@@ -52,6 +65,11 @@
 		4A10000A2FA500000000A004 /* NOTICE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; name = NOTICE.txt; path = ../Models/NOTICE.txt; sourceTree = "<group>"; };
 		4A20000A2FA600000000A001 /* LocalSRUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalSRUITests.swift; sourceTree = "<group>"; };
 		4A20000A2FA600000000E001 /* LocalSRUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LocalSRUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		4A30000A2FB000000000A001 /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
+		4A30000A2FB000000000A002 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		4A30000A2FB000000000A003 /* ShareExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ShareExtension.entitlements; sourceTree = "<group>"; };
+		4A30000A2FB000000000A004 /* ShareExtension.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = ShareExtension.xcconfig; sourceTree = "<group>"; };
+		4A30000A2FB000000000E001 /* LocalSRShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = LocalSRShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -71,6 +89,7 @@
 			children = (
 				496BDBEB2B89A47800C09264 /* LocalSR.app */,
 				4A20000A2FA600000000E001 /* LocalSRUITests.xctest */,
+				4A30000A2FB000000000E001 /* LocalSRShare.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -92,6 +111,7 @@
 				496BDBED2B8A7E9C00C09264 /* Localizable.xcstrings */,
 				493609562A6B7EAE00C401E2 /* LocalSR */,
 				49F90C2A2A52156200F06D93 /* App */,
+				4A30000A2FB000000000C001 /* ShareExtension */,
 				4A20000A2FA600000000C001 /* UITests */,
 				4A10000A2FA500000000C001 /* Models (iOS only) */,
 				49AB54462B066A7E007B79B2 /* SkipStone */,
@@ -130,6 +150,17 @@
 			path = UITests;
 			sourceTree = "<group>";
 		};
+		4A30000A2FB000000000C001 /* ShareExtension */ = {
+			isa = PBXGroup;
+			children = (
+				4A30000A2FB000000000A001 /* ShareViewController.swift */,
+				4A30000A2FB000000000A002 /* Info.plist */,
+				4A30000A2FB000000000A003 /* ShareExtension.entitlements */,
+				4A30000A2FB000000000A004 /* ShareExtension.xcconfig */,
+			);
+			path = ShareExtension;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -142,10 +173,12 @@
 				499CD43E2AC5B799001AE8D8 /* Resources */,
 				499CD4452AC5B869001AE8D8 /* Run skip gradle */,
 				499CD44A2AC5B9C6001AE8D8 /* Embed Frameworks */,
+				4A30000A2FB000000000D010 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				4A30000A2FB000000000D008 /* PBXTargetDependency */,
 			);
 			name = "LocalSR App";
 			packageProductDependencies = (
@@ -172,6 +205,23 @@
 			productName = LocalSRUITests;
 			productReference = 4A20000A2FA600000000E001 /* LocalSRUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		4A30000A2FB000000000D001 /* LocalSR Share */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4A30000A2FB000000000D005 /* Build configuration list for PBXNativeTarget "LocalSR Share" */;
+			buildPhases = (
+				4A30000A2FB000000000D002 /* Sources */,
+				4A30000A2FB000000000D003 /* Frameworks */,
+				4A30000A2FB000000000D004 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "LocalSR Share";
+			productName = LocalSRShare;
+			productReference = 4A30000A2FB000000000E001 /* LocalSRShare.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -202,6 +252,7 @@
 			projectRoot = "";
 			targets = (
 				499CD4382AC5B799001AE8D8 /* LocalSR App */,
+				4A30000A2FB000000000D001 /* LocalSR Share */,
 				4A20000A2FA600000000D001 /* LocalSRUITests */,
 			);
 		};
@@ -236,6 +287,20 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		4A30000A2FB000000000D003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4A30000A2FB000000000D004 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -243,6 +308,14 @@
 			isa = PBXTargetDependency;
 			target = 499CD4382AC5B799001AE8D8 /* LocalSR App */;
 			targetProxy = 4A20000A2FA600000000D009 /* PBXContainerItemProxy */;
+		};
+		4A30000A2FB000000000D008 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			platformFilters = (
+				ios,
+			);
+			target = 4A30000A2FB000000000D001 /* LocalSR Share */;
+			targetProxy = 4A30000A2FB000000000D009 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -253,6 +326,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 499CD4382AC5B799001AE8D8;
 			remoteInfo = "LocalSR App";
+		};
+		4A30000A2FB000000000D009 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 49F90C202A52156200F06D93 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4A30000A2FB000000000D001;
+			remoteInfo = "LocalSR Share";
 		};
 /* End PBXContainerItemProxy section */
 
@@ -292,6 +372,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				4A20000A2FA600000000B001 /* LocalSRUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4A30000A2FB000000000D002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4A30000A2FB000000000B001 /* ShareViewController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -394,6 +482,20 @@
 			};
 			name = Release;
 		};
+		4A30000A2FB000000000D006 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4A30000A2FB000000000A004 /* ShareExtension.xcconfig */;
+			buildSettings = {
+			};
+			name = Debug;
+		};
+		4A30000A2FB000000000D007 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4A30000A2FB000000000A004 /* ShareExtension.xcconfig */;
+			buildSettings = {
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -420,6 +522,15 @@
 			buildConfigurations = (
 				4A20000A2FA600000000D006 /* Debug */,
 				4A20000A2FA600000000D007 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		4A30000A2FB000000000D005 /* Build configuration list for PBXNativeTarget "LocalSR Share" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4A30000A2FB000000000D006 /* Debug */,
+				4A30000A2FB000000000D007 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
