@@ -31,12 +31,13 @@ public enum DeviceCheck {
         guard let m = m else { return false }
         return !m.timedOut && !m.hasNaN && !m.isConstant && m.psnrVsCPU >= 45 && m.psnrDownsampleVsInput >= 26 && m.tileMs > 0 && m.tileMs.isFinite
     }
-    public static func decide(cpu: DeviceMeasurement?, gpu: DeviceMeasurement?, npu: DeviceMeasurement?) -> DeviceVerdict {
+    public static func decide(cpu: DeviceMeasurement?, gpu: DeviceMeasurement?, npu: DeviceMeasurement?) -> DeviceVerdict? {
         let gpuPass = passes(gpu)
         if let n = npu {
             if n.timedOut || n.loadMs > 15000 {
                 if gpuPass { return DeviceVerdict(unit: .gpu, reason: "NPU load timed out; using GPU for this session and retrying later.") }
-                return DeviceVerdict(unit: .cpu, reason: "NPU load timed out and GPU failed; using CPU for this session and retrying later.")
+                if passes(cpu) { return DeviceVerdict(unit: .cpu, reason: "NPU load timed out and GPU failed; using CPU for this session and retrying later.") }
+                return nil
             }
             if n.placementAllNPU && passes(n) {
                 if let g = gpu, gpuPass && n.tileMs >= 1.3 * g.tileMs {
@@ -47,7 +48,7 @@ public enum DeviceCheck {
         }
         if gpuPass { return DeviceVerdict(unit: .gpu, reason: "NPU unavailable or failed; GPU passed.") }
         if passes(cpu) { return DeviceVerdict(unit: .cpu, reason: "NPU and GPU unavailable or failed; using CPU.") }
-        return DeviceVerdict(unit: .cpu, reason: "All units failed or are unavailable; CPU is the fallback and its output did not pass validation.")
+        return nil
     }
     public static func cacheKey(deviceModel: String, osVersion: String, appBuild: String, modelKey: ModelKey) -> String {
         return "\(deviceModel.count):\(deviceModel)\(osVersion.count):\(osVersion)\(appBuild.count):\(appBuild)\(modelKey.rawValue.count):\(modelKey.rawValue)"

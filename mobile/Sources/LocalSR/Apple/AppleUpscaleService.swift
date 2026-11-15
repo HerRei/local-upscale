@@ -3,6 +3,9 @@ import Foundation
 import Dispatch
 import CoreGraphics
 import LocalSRCore
+#if os(iOS)
+import UIKit
+#endif
 
 /// iOS (and macOS-host) implementation of `UpscaleService`: Core ML engine, ImageIO codec, PhotoKit.
 ///
@@ -11,7 +14,8 @@ import LocalSRCore
 public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
     public enum ServiceError: Error, CustomStringConvertible {
         case cancelled
-        public var description: String { "Cancelled" }
+        case gpuUnavailable
+        public var description: String { self == .cancelled ? "Cancelled" : "GPU unavailable" }
     }
 
     /// Details of the last `upscale` for logs and tests.
@@ -31,6 +35,7 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
     private var verdicts: [ModelKey: DeviceVerdict] = [:]
     private var reports: [ModelKey: AppleDeviceCheck.Report] = [:]
     private var stats: JobStats?
+    private var cpuFallbackModels: Set<ModelKey> = []
 
     /// - Parameters:
     ///   - defaults: where the device-check verdict is cached.
@@ -94,8 +99,15 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
             } onCancel: {
                 cancel.cancel()
             }
+            if Task.isCancelled {
+                try? FileManager.default.removeItem(at: directory)
+                throw ServiceError.cancelled
+            }
             let outcome = boxed.value
-            state.withLock { stats = outcome.1 }
+            state.withLock {
+                stats = outcome.1
+                if verdict.unit == .gpu && outcome.0.unit == .cpu { cpuFallbackModels.insert(model) }
+            }
             await mutex.unlock()
             return outcome.0
         } catch {
@@ -112,6 +124,10 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
     // MARK: Preparation
 
     private func prepareLocked(model: ModelKey) async throws -> DeviceVerdict {
+        if state.withLock({ cpuFallbackModels.contains(model) }) {
+            if engine.loadedModel != model || engine.loadedUnit != .cpu { try await engine.loadAsync(model: model, unit: .cpu) }
+            return DeviceVerdict(unit: .cpu, reason: "GPU unavailable during this session; using CPU.")
+        }
         if let current = engine.loadedModel, current == model, let unit = engine.loadedUnit, let verdict = verdict(for: model), verdict.unit == unit {
             return verdict
         }
@@ -158,10 +174,27 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
         let inFlight = DispatchGroup()
         defer { inFlight.wait() }
         nonisolated(unsafe) let outputPointer = output.pointer
+        var usedUnit = unit
         for (index, tile) in tiles.enumerated() {
             if cancel.isCancelled { throw ServiceError.cancelled }
-            let view = try engine.predict { dst in
-                ApplePixelKernels.fillWindow(source: source.pointer, width: source.width, height: source.height, tile: tile, window: window, dst: dst)
+            func predict() throws -> TileOutputView {
+                try engine.predict { dst in
+                    ApplePixelKernels.fillWindow(source: source.pointer, width: source.width, height: source.height, tile: tile, window: window, dst: dst)
+                }
+            }
+            let view: TileOutputView
+            do {
+                #if os(iOS)
+                let background = DispatchQueue.main.sync { UIApplication.shared.applicationState == .background }
+                if usedUnit == .gpu && background { throw ServiceError.gpuUnavailable }
+                #endif
+                view = try predict()
+            } catch {
+                guard usedUnit == .gpu else { throw error }
+                inFlight.wait()
+                try engine.load(model: model, unit: .cpu)
+                usedUnit = .cpu
+                view = try predict()
             }
             inFlight.wait()
             let planned = Box(tile)
@@ -180,12 +213,15 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
         let outputURL = directory.appendingPathComponent("output.heic")
         let previewURL = directory.appendingPathComponent("preview.jpg")
         let encoded = try ImageIOCodec.encodeHEIC(pixels: output, colorSpace: decoded.colorSpace, decoded: decoded, to: outputURL)
+        if cancel.isCancelled { throw ServiceError.cancelled }
         _ = try ImageIOCodec.writePreviewJPEG(pixels: output, colorSpace: decoded.colorSpace, to: previewURL)
+        if cancel.isCancelled { throw ServiceError.cancelled }
         let tDone = Date()
         progress.report(1)
 
-        let result = UpscaleResult(id: id, inputURL: input, outputURL: outputURL, previewURL: previewURL, width: outWidth, height: outHeight, model: model, unit: unit, seconds: tDone.timeIntervalSince(t0))
+        let result = UpscaleResult(id: id, inputURL: input, outputURL: outputURL, previewURL: previewURL, width: outWidth, height: outHeight, model: model, unit: usedUnit, seconds: tDone.timeIntervalSince(t0))
         let stats = JobStats(tiles: tiles.count, decodeSeconds: tDecoded.timeIntervalSince(t0), tilesSeconds: tTiles.timeIntervalSince(tDecoded), encodeSeconds: tDone.timeIntervalSince(tTiles), gainMapNote: encoded.note)
+        if cancel.isCancelled { throw ServiceError.cancelled }
         return (result, stats)
     }
 }

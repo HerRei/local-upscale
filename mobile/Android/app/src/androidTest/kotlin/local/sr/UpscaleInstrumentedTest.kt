@@ -234,7 +234,13 @@ class UpscaleInstrumentedTest {
         val input = makeInput("fg_1000x750.jpg", 1000, 750)
         assertFalse(serviceRunning())
         var seen = false
-        val res = upscaler.upscale(input.absolutePath, ModelKey.fast) { if (it > 0.1 && !seen) seen = serviceRunning() }
+        // The batch (not each photo) holds the foreground service: AppModel calls beginBatch/endBatch.
+        UpscaleForegroundService.acquire(ctx)
+        val res = try {
+            upscaler.upscale(input.absolutePath, ModelKey.fast) { if (it > 0.1 && !seen) seen = serviceRunning() }
+        } finally {
+            UpscaleForegroundService.release(ctx)
+        }
         log("FOREGROUND SERVICE: foreground while upscaling = $seen")
         assertTrue("foreground service was not running during the upscale", seen)
         delay(500)

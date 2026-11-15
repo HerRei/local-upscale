@@ -12,6 +12,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import local.srcore.ComputeUnit
 import local.srcore.DeviceVerdict
 import local.srcore.ModelKey
@@ -102,9 +104,8 @@ class AndroidUpscaler(context: Context) {
         val id = UUID.randomUUID().toString()
         val dir = File(context.cacheDir, "LocalSR/$id")
         var finished = false
-        UpscaleForegroundService.acquire(context)
         try {
-            withContext(Dispatchers.Default) {
+            val result = withContext(Dispatchers.Default) {
                 dir.mkdirs()
                 var input: Bitmap? = AndroidCodec.decode(context, uri)
                 val w = input!!.width
@@ -150,17 +151,19 @@ class AndroidUpscaler(context: Context) {
                     val prev = AndroidCodec.preview(output)
                     AndroidCodec.writeJpeg(prev, File(dir, "preview.jpg"))
                     if (prev !== output) prev.recycle()
+                    currentCoroutineContext().ensureActive()
                     progress(1.0)
                     val seconds = (System.nanoTime() - started) / 1e9
-                    finished = true
                     RawUpscaleResult(id, outFile.absolutePath, File(dir, "preview.jpg").absolutePath, ow, oh, usedUnit, seconds)
                 } finally {
                     input?.recycle()
                     output?.recycle()
                 }
             }
+            currentCoroutineContext().ensureActive()
+            finished = true
+            result
         } finally {
-            UpscaleForegroundService.release(context)
             if (!finished) dir.deleteRecursively()
         }
     }

@@ -178,10 +178,10 @@ final class CoreLogicTests: XCTestCase {
         let npu = meas(tileMs: 13.0, psnrVsCPU: 45.0, psnrDown: 26.0)
         let gpu = meas(tileMs: 11.0)
         let verdict = DeviceCheck.decide(cpu: cpu, gpu: gpu, npu: npu)
-        XCTAssertEqual(verdict.unit, ComputeUnit.npu)
-        XCTAssertEqual(DeviceCheck.decide(cpu: cpu, gpu: nil, npu: npu).unit, ComputeUnit.npu)
+        XCTAssertEqual(verdict?.unit, ComputeUnit.npu)
+        XCTAssertEqual(DeviceCheck.decide(cpu: cpu, gpu: nil, npu: npu)?.unit, ComputeUnit.npu)
         // GPU failing its own check never beats a passing NPU.
-        XCTAssertEqual(DeviceCheck.decide(cpu: cpu, gpu: meas(tileMs: 1.0, hasNaN: true), npu: npu).unit, ComputeUnit.npu)
+        XCTAssertEqual(DeviceCheck.decide(cpu: cpu, gpu: meas(tileMs: 1.0, hasNaN: true), npu: npu)?.unit, ComputeUnit.npu)
     }
 
     func testDeviceNPUFailsFallsToGPU() {
@@ -196,17 +196,17 @@ final class CoreLogicTests: XCTestCase {
             meas(tileMs: 0.0),
         ]
         for npu in failing {
-            XCTAssertEqual(DeviceCheck.decide(cpu: cpu, gpu: gpu, npu: npu).unit, ComputeUnit.gpu)
+            XCTAssertEqual(DeviceCheck.decide(cpu: cpu, gpu: gpu, npu: npu)?.unit, ComputeUnit.gpu)
         }
-        XCTAssertEqual(DeviceCheck.decide(cpu: cpu, gpu: gpu, npu: nil).unit, ComputeUnit.gpu)
+        XCTAssertEqual(DeviceCheck.decide(cpu: cpu, gpu: gpu, npu: nil)?.unit, ComputeUnit.gpu)
     }
 
     func testDeviceGPUMuchFasterWins() {
         let cpu = meas(tileMs: 100.0, psnrVsCPU: 99.0)
         let npu = meas(tileMs: 13.0)
-        XCTAssertEqual(DeviceCheck.decide(cpu: cpu, gpu: meas(tileMs: 10.0), npu: npu).unit, ComputeUnit.gpu) // exactly 1.3x
-        XCTAssertEqual(DeviceCheck.decide(cpu: cpu, gpu: meas(tileMs: 5.0), npu: npu).unit, ComputeUnit.gpu)
-        XCTAssertEqual(DeviceCheck.decide(cpu: cpu, gpu: meas(tileMs: 10.1), npu: npu).unit, ComputeUnit.npu) // 1.287x
+        XCTAssertEqual(DeviceCheck.decide(cpu: cpu, gpu: meas(tileMs: 10.0), npu: npu)?.unit, ComputeUnit.gpu) // exactly 1.3x
+        XCTAssertEqual(DeviceCheck.decide(cpu: cpu, gpu: meas(tileMs: 5.0), npu: npu)?.unit, ComputeUnit.gpu)
+        XCTAssertEqual(DeviceCheck.decide(cpu: cpu, gpu: meas(tileMs: 10.1), npu: npu)?.unit, ComputeUnit.npu) // 1.287x
     }
 
     func testDeviceAllFailFallsToCPU() {
@@ -214,13 +214,10 @@ final class CoreLogicTests: XCTestCase {
         let badNPU = meas(psnrVsCPU: 10.0)
         let badGPU = meas(hasNaN: true)
         let verdict = DeviceCheck.decide(cpu: cpu, gpu: badGPU, npu: badNPU)
-        XCTAssertEqual(verdict.unit, ComputeUnit.cpu)
-        XCTAssertEqual(DeviceCheck.decide(cpu: cpu, gpu: nil, npu: nil).unit, ComputeUnit.cpu)
-        // Even if the CPU probe also fails, CPU is the last resort and the reason says so.
-        let last = DeviceCheck.decide(cpu: nil, gpu: badGPU, npu: badNPU)
-        XCTAssertEqual(last.unit, ComputeUnit.cpu)
-        XCTAssertTrue(last.reason.contains("fallback"))
-        XCTAssertEqual(DeviceCheck.decide(cpu: meas(hasNaN: true), gpu: nil, npu: nil).unit, ComputeUnit.cpu)
+        XCTAssertEqual(verdict?.unit, ComputeUnit.cpu)
+        XCTAssertEqual(DeviceCheck.decide(cpu: cpu, gpu: nil, npu: nil)?.unit, ComputeUnit.cpu)
+        XCTAssertNil(DeviceCheck.decide(cpu: nil, gpu: badGPU, npu: badNPU))
+        XCTAssertNil(DeviceCheck.decide(cpu: meas(hasNaN: true), gpu: nil, npu: meas(timedOut: true)))
     }
 
     func testDeviceNPULoadTimeout() {
@@ -228,15 +225,15 @@ final class CoreLogicTests: XCTestCase {
         let gpu = meas(tileMs: 40.0)
         // The NPU is otherwise perfect and much faster, but its load timed out.
         let verdict = DeviceCheck.decide(cpu: cpu, gpu: gpu, npu: meas(tileMs: 1.0, timedOut: true))
-        XCTAssertEqual(verdict.unit, ComputeUnit.gpu)
-        XCTAssertTrue(verdict.reason.contains("timed out"))
+        XCTAssertEqual(verdict?.unit, ComputeUnit.gpu)
+        XCTAssertTrue((verdict?.reason ?? "").contains("timed out"))
         // A load longer than 15 s counts as a timeout even without the flag; exactly 15 s does not.
-        XCTAssertEqual(DeviceCheck.decide(cpu: cpu, gpu: gpu, npu: meas(loadMs: 15001.0, tileMs: 1.0)).unit, ComputeUnit.gpu)
-        XCTAssertEqual(DeviceCheck.decide(cpu: cpu, gpu: gpu, npu: meas(loadMs: 15000.0, tileMs: 1.0)).unit, ComputeUnit.npu)
+        XCTAssertEqual(DeviceCheck.decide(cpu: cpu, gpu: gpu, npu: meas(loadMs: 15001.0, tileMs: 1.0))?.unit, ComputeUnit.gpu)
+        XCTAssertEqual(DeviceCheck.decide(cpu: cpu, gpu: gpu, npu: meas(loadMs: 15000.0, tileMs: 1.0))?.unit, ComputeUnit.npu)
         // Timeout and a failing GPU: CPU.
         let noGPU = DeviceCheck.decide(cpu: cpu, gpu: meas(hasNaN: true), npu: meas(timedOut: true))
-        XCTAssertEqual(noGPU.unit, ComputeUnit.cpu)
-        XCTAssertTrue(noGPU.reason.contains("timed out"))
+        XCTAssertEqual(noGPU?.unit, ComputeUnit.cpu)
+        XCTAssertTrue((noGPU?.reason ?? "").contains("timed out"))
     }
 
     func testDeviceCacheKey() {

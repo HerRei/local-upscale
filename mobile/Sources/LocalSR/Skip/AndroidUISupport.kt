@@ -98,7 +98,7 @@ object AndroidUISupport {
                 }
             }
         } catch (t: Throwable) {
-            Log.w(TAG, "decodeDisplayBitmap failed for $uriString: ${t.message}")
+            Log.w(TAG, "decodeDisplayBitmap failed")
             null
         }
     }

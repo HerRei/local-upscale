@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import LocalSRCore
 @testable import LocalSR
 
 @Suite struct LocalSRTests {
@@ -19,4 +20,25 @@ import Foundation
 
 struct TestData : Codable, Hashable {
     var testModuleName: String
+}
+
+@Suite struct ResultPersistenceTests {
+    @Test @MainActor func restoresExistingResultsAndReportsInterruptedBatch() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appendingPathComponent("LocalSR")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let output = directory.appendingPathComponent("output")
+        let preview = directory.appendingPathComponent("preview")
+        try Data().write(to: output)
+        try Data().write(to: preview)
+        let result = UpscaleResult(id: "one", inputURL: output, outputURL: output, previewURL: preview, width: 4, height: 4, model: .best, unit: .cpu, seconds: 1)
+        let missing = UpscaleResult(id: "missing", inputURL: output, outputURL: directory.appendingPathComponent("gone"), previewURL: preview, width: 4, height: 4, model: .best, unit: .cpu, seconds: 1)
+        try JSONEncoder().encode([result, missing]).write(to: directory.appendingPathComponent("results.json"))
+        try Data().write(to: directory.appendingPathComponent("batch-in-progress"))
+        let app = AppModel(cachesDirectory: root)
+        #expect(app.results.map(\.id) == ["one"])
+        #expect(app.lastBatchInterrupted)
+        #expect(!AppModel(cachesDirectory: root).lastBatchInterrupted)
+    }
 }

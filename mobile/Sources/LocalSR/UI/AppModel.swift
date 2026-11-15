@@ -68,6 +68,14 @@ private final class ServiceBox: @unchecked Sendable {
     }
 
     #if SKIP
+    func beginBatch() async throws {
+        if let androidService = service as? AndroidUpscaleService { try await androidService.beginBatch() }
+    }
+
+    func endBatch() {
+        if let androidService = service as? AndroidUpscaleService { androidService.endBatch() }
+    }
+
     func setBatch(done: Int, total: Int) {
         if let androidService = service as? AndroidUpscaleService {
             androidService.setBatch(done: done, total: total)
@@ -88,6 +96,8 @@ public class AppModel {
     private let serviceBox: ServiceBox
 
     public var results: [UpscaleResult] = []
+    public var lastBatchInterrupted = false
+    private let storageDirectory: URL
     public var verdicts: [ModelKey: DeviceVerdict] = [:]
     public var savedResultIDs: Set<String> = []
     public var isSaving: Bool = false
@@ -107,8 +117,24 @@ public class AppModel {
     @ObservationIgnored private var batchTask: Task<Void, Never>? = nil
     @ObservationIgnored private var didRequestNotifications: Bool = false
 
-    public init(service: UpscaleService = makeUpscaleService()) {
+    public init(service: UpscaleService = makeUpscaleService(), cachesDirectory: URL? = nil) {
         self.serviceBox = ServiceBox(service)
+        self.storageDirectory = (cachesDirectory ?? URL.cachesDirectory).appendingPathComponent("LocalSR", isDirectory: true)
+        let marker = storageDirectory.appendingPathComponent("batch-in-progress")
+        lastBatchInterrupted = FileManager.default.fileExists(atPath: marker.path)
+        if lastBatchInterrupted { try? FileManager.default.removeItem(at: marker) }
+        if let data = try? Data(contentsOf: storageDirectory.appendingPathComponent("results.json")),
+           let stored = try? JSONDecoder().decode([UpscaleResult].self, from: data) {
+            results = stored.filter { FileManager.default.fileExists(atPath: $0.outputURL.path) && FileManager.default.fileExists(atPath: $0.previewURL.path) }
+            persistResults()
+        }
+    }
+
+    private func persistResults() {
+        try? FileManager.default.createDirectory(at: storageDirectory, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(results) {
+            try? data.write(to: storageDirectory.appendingPathComponent("results.json"), options: Data.WritingOptions.atomic)
+        }
     }
 
     public func result(for id: String) -> UpscaleResult? {
@@ -132,6 +158,9 @@ public class AppModel {
             items.append(BatchItem(inputURL: input.url, displayName: name))
         }
 
+        try? FileManager.default.createDirectory(at: storageDirectory, withIntermediateDirectories: true)
+        try? Data().write(to: storageDirectory.appendingPathComponent("batch-in-progress"), options: Data.WritingOptions.atomic)
+        lastBatchInterrupted = false
         batchModel = model
         batchItems = items
         batchCompletedCount = 0
@@ -188,6 +217,7 @@ public class AppModel {
             } else {
                 results.insert(updated, at: 0)
             }
+            persistResults()
             return updated
         } catch {
             if !isCancellation(error) {
@@ -211,11 +241,21 @@ public class AppModel {
         var failedCount = 0
 
         #if SKIP
+        do {
+            try await serviceBox.beginBatch()
+        } catch {
+            for i in 0..<batchItems.count {
+                batchItems[i].status = .failed
+                batchItems[i].errorMessage = describeError(error)
+            }
+            finishBatch(wasCancelled: false, failedCount: total, total: total)
+            return
+        }
+        serviceBox.setBatch(done: 0, total: total)
         if !didRequestNotifications {
             didRequestNotifications = true
             await PlatformSupport.requestNotificationPermissionIfNeeded()
         }
-        serviceBox.setBatch(done: 0, total: total)
         #else
         BatchBackgroundTask.shared.begin(
             title: "Upscaling photos",
@@ -277,6 +317,7 @@ public class AppModel {
                 batchItems[i].progress = 1.0
                 batchItems[i].resultID = res.id
                 results.insert(res, at: 0)
+                persistResults()
             } catch {
                 if isCancellation(error) || Task.isCancelled {
                     wasCancelled = true
@@ -309,9 +350,11 @@ public class AppModel {
     private func finishBatch(wasCancelled: Bool, failedCount: Int, total: Int) {
         preparingModel = nil
         isBatchRunning = false
+        try? FileManager.default.removeItem(at: storageDirectory.appendingPathComponent("batch-in-progress"))
 
         #if SKIP
         serviceBox.setBatch(done: 0, total: 0)
+        serviceBox.endBatch()
         #else
         BatchBackgroundTask.shared.end(success: !wasCancelled && failedCount == 0)
         #endif

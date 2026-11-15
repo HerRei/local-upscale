@@ -11,6 +11,8 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeout
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -48,9 +50,11 @@ class UpscaleForegroundService : Service() {
                 }
             }
             if (!started) throw last ?: IllegalStateException("no foreground type")
+            synchronized(lock) { startResult?.complete(Unit) }
         } catch (t: Throwable) {
             // e.g. ForegroundServiceStartNotAllowedException when the app is not in a state that may start one.
             Log.w(TAG, "cannot start foreground: ${t.javaClass.simpleName}: ${t.message}")
+            synchronized(lock) { startResult?.completeExceptionally(t) }
             stopSelf()
         }
     }
@@ -77,21 +81,30 @@ class UpscaleForegroundService : Service() {
         private val lock = Any()
         private var holders = 0
         private var running = false
+        private var startResult: CompletableDeferred<Unit>? = null
         private val state = State()
 
-        /** Call before starting work. Never throws. */
-        fun acquire(context: Context) {
-            synchronized(lock) {
-                holders++
-                if (holders == 1) {
+        /** Wait until Android confirms foreground execution before starting work. */
+        suspend fun acquire(context: Context) {
+            val result = synchronized(lock) {
+                if (holders == 0) {
                     state.fraction = 0.0
+                    startResult = CompletableDeferred()
                     try {
                         ContextCompat.startForegroundService(context, Intent(context, UpscaleForegroundService::class.java))
                         running = true
                     } catch (t: Throwable) {
-                        Log.w(TAG, "cannot start the foreground service: ${t.message}")
+                        startResult!!.completeExceptionally(t)
                     }
                 }
+                holders++
+                startResult!!
+            }
+            try {
+                withTimeout(10_000) { result.await() }
+            } catch (t: Throwable) {
+                release(context)
+                throw UpscaleException("Cannot start foreground execution for this batch.", t)
             }
         }
 

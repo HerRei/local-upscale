@@ -29,6 +29,11 @@ struct HomeView: View {
                         .accessibilityIdentifier("homeModelPicker")
                     }
 
+                    if appModel.lastBatchInterrupted {
+                        Text("The last batch was interrupted.")
+                            .font(.subheadline)
+                    }
+
                     if appModel.results.isEmpty {
                         Text("Upscales photos 4x on this device.")
                             .font(.subheadline)

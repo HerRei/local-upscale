@@ -30,6 +30,14 @@ public final class AndroidUpscaleService: UpscaleService {
         await upscaler.release()
     }
 
+    public func beginBatch() async throws {
+        try await UpscaleForegroundService.acquire(ProcessInfo.processInfo.androidContext)
+    }
+
+    public func endBatch() {
+        UpscaleForegroundService.release(ProcessInfo.processInfo.androidContext)
+    }
+
     /// Optional: lets the foreground notification say "Photo 2 of 5". Not part of `UpscaleService`.
     public func setBatch(done: Int, total: Int) {
         UpscaleForegroundService.setBatch(ProcessInfo.processInfo.androidContext, done, total)

@@ -63,7 +63,8 @@ public final class AppleDeviceCheck: @unchecked Sendable {
 
     public func cachedVerdict(model: ModelKey) -> DeviceVerdict? {
         guard let data = defaults.data(forKey: Self.cacheKey(model: model)) else { return nil }
-        return try? JSONDecoder().decode(DeviceVerdict.self, from: data)
+        guard let verdict = try? JSONDecoder().decode(DeviceVerdict.self, from: data), !verdict.reason.contains("its output did not pass validation") else { return nil }
+        return verdict
     }
 
     public func clearCache(model: ModelKey) {
@@ -147,7 +148,9 @@ public final class AppleDeviceCheck: @unchecked Sendable {
             }
         }
 
-        let verdict = DeviceCheck.decide(cpu: cpu, gpu: gpu, npu: npu)
+        guard let verdict = DeviceCheck.decide(cpu: cpu, gpu: gpu, npu: npu) else {
+            throw NSError(domain: "LocalSR", code: 1, userInfo: [NSLocalizedDescriptionKey: "This device produced invalid output; upscaling is disabled."])
+        }
         return Report(verdict: verdict, cpu: cpu, gpu: gpu, npu: npu, placement: placement.summary, fromCache: false, cached: false)
     }
 

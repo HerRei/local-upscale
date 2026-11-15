@@ -1,89 +1,69 @@
 # LocalSR mobile: design
 
-A small photo upscaler for iPhone (main target) and Android. One Swift codebase built with
-[Skip Lite](https://skip.dev/docs/modes/) (Swift transpiled to Kotlin/Compose for Android).
-Two bundled 4x models, run on the NPU when the device passes a check, else GPU, else CPU.
-No network, no accounts, no downloads.
+A photo upscaler for iPhone and Android, built with Skip Lite. Two bundled 4x models run on the NPU when it passes a device check, or on the GPU or CPU. The app does not use the network.
 
 ## Modules
 
-- `Sources/LocalSRCore` (shared, transpiled): pure logic, no platform imports.
-  - `TilePlanner`: tile grid with halos and fixed-size windows (see "Tiling").
-  - `TileStitcher`: copies each tile's core region into the output RGBA8 buffer.
-  - `PixelMath`: RGBA8 <-> planar float conversion helpers, PSNR, 4x box downsample.
-  - `DeviceCheck`: decides NPU / GPU / CPU from measured probe results (see "Device check").
-  - `SizePolicy`: input cap so the output stays <= 48 MP (prescale big inputs).
-  - `JobQueue` / view models: batch state, progress, ETA.
-  - `SREngine` protocol: `load(model:unit:)`, `run(tile:) -> output`, implemented per platform.
-- `Sources/LocalSR` (app UI, transpiled): SwiftUI screens. Platform code lives here behind
-  `#if SKIP` (Kotlin/Android APIs) and `#if !SKIP` (Apple APIs).
-  - iOS: `CoreMLEngine` (Core ML, `MLComputePlan`), `ImageIOCodec` (decode, HEIC encode,
-    ISO gain map), `PhotoLibrary` (PhotosPicker input, `PHAssetCreationRequest` save from file URL).
-  - Android: `LiteRTEngine` (LiteRT `CompiledModel`: NPU, GPU, CPU), `AndroidCodec`
-    (`ImageDecoder`, JPEG encode, EXIF copy), `MediaStoreLibrary` (photo picker, MediaStore save).
-- `tools/export_models.py`: converts the PyTorch checkpoints to the bundled model files and
-  checks them numerically against PyTorch FP32.
+- `Sources/LocalSRCore`: shared logic for tile planning and stitching, pixel math, device checks, size policy, formatting and the `SREngine` protocol.
+- `Sources/LocalSR`: SwiftUI screens, batch state and services. Apple code uses `#if !SKIP`; Android code uses `#if SKIP` and hand-written Kotlin in `Skip/`.
+- `tools/export_models.py`: converts checkpoints and checks model output against PyTorch FP32.
+
+### iOS
+
+- Core ML inference; ImageIO decode and HEIC encode.
+- Photos picker input and photo library save.
+
+### Android
+
+- LiteRT inference; ImageDecoder decode and JPEG encode.
+- Photo picker input and MediaStore save.
 
 ## Models
 
-| Key | Name in UI | Source checkpoint | Arch |
+| Key | Name in UI | Source checkpoint | Architecture |
 |---|---|---|---|
-| `best` | Best | `localsr_photo_pulse48_v1_x4.safetensors` | PULSE-48 (needs `localsr_train.spandrel_pulse.register()`) |
-| `fast` | Fast | `localsr_photo_span28_v1_x4.safetensors` | SPAN-28 |
+| `best` | Best | `localsr_photo_pulse48_v1_x4.safetensors` | PULSE-48 v1 |
+| `fast` | Fast | `localsr_photo_span28_v1_x4.safetensors` | SPAN-28 v1 |
 
-Both are 4x and fully convolutional. Fixed input window 384x384, output 1536x1536.
+Both are 4x models with a 384 x 384 input window and a 1536 x 1536 output.
 
-- iOS: Core ML ML Program, FP16 weights, **FP16 input and output tensors** (`image` [1,3,384,384]
-  float16 -> `out` [1,3,1536,1536] float16), `minimum_deployment_target=iOS17`, branch fusion via
-  `prepare_export_model` before tracing. Shipped precompiled as `.mlmodelc`.
-  Measured on M1 Pro: PULSE 18.9 ms/tile on the Neural Engine, 100 % of ops on the ANE.
-- Android: LiteRT `.tflite`, FP16 weights, NHWC float32 I/O ([1,384,384,3] -> [1,1536,1536,3]).
-- Never ship W8 linear-quantised weights: they produce garbage on the Apple Neural Engine.
-- PULSE-48 v1 is fine-tuned from Phips/PULSE (MIT). Its notice must appear in the app's About screen.
+- iOS: compiled Core ML ML Program, FP16 weights and FP16 input and output tensors. The Darwin Xcode target bundles the models, probe and notice.
+- Android: LiteRT models with FP16 weights and NHWC float32 input and output. The Gradle task `stageLocalsrModels` stages the models, probe and notice as assets.
+- The About sheet includes the PULSE notice.
 
 ## Tiling
 
-Same idea as the desktop (`src/localsr/core/tiling.py`, `_fixed_window` in `inference.py`):
-halo 16 px, so each window is 384 px and its core is 352 px. Edge windows are shifted inside the
-image (real pixels instead of padding); only the core region (in output coordinates) is copied.
-Images smaller than 384 px on a side are edge-padded (replicate) to 384.
+Each 384 px window has a 16 px halo and a 352 px core. Edge windows shift inside the image where possible; only the core is copied to the output. Images smaller than a window are edge-padded.
 
 ## Device check
 
-Runs once per model and compute unit, cached in UserDefaults under
-`(device model, OS version, app build, model key)`. No reference outputs are shipped.
+The check runs per model and caches a verdict by device model, OS version, app build and model key: UserDefaults on iOS and SharedPreferences on Android. A bundled probe provides the input; CPU output is the reference.
 
-1. Placement (iOS only): `MLComputePlan` with `.cpuAndNeuralEngine`; NPU candidate only if every
-   op with a device usage prefers the Neural Engine.
-2. Load watchdog: if the first NPU load takes > 15 s, use the GPU for this session and retry later.
-3. Probe tile (bundled 384x384 PNG): run it on CPU (reference), NPU and GPU.
-   - A unit passes if PSNR vs the CPU output >= 45 dB, no NaN/Inf, output not constant,
-     and the 4x box-downsampled output vs the input >= 26 dB (catches a wrong CPU path too).
-4. Choose the NPU if it passes, unless the GPU also passes and is >= 1.3x faster.
-   Else GPU if it passes, else CPU.
+1. On iOS, `MLComputePlan` checks that every operation with device usage prefers the Neural Engine before trying the NPU.
+2. An NPU load taking over 15 seconds causes a session-only fallback and a later retry.
+3. Probe outputs must have PSNR of at least 45 dB against CPU, at least 26 dB against the input after 4x box downsampling, no non-finite values and no constant output.
+4. A passing NPU is chosen unless a passing GPU is at least 1.3 times faster. Otherwise a passing GPU or CPU is chosen. If all units fail, there is no verdict and upscaling is disabled.
 
-The simulator has no NPU. Its Core ML GPU path returned wrong pixels in one probe and correct ones in another; the check handles both (GPU if it passes, else CPU).
+On Android, a selected accelerator must also be faster than the CPU; the GPU probe has a 60-second timeout. The simulator has no NPU. During a job, a GPU tile failure falls back to CPU and retries the tile; Android does the same for NPU tile failures.
 
 ## Limits
 
-- Output capped at 48 MP: 4x is 16x the pixels, so inputs above 3 MP are prescaled first (a 12 MP phone photo goes in at 3 MP and comes out at 48 MP).
-- One output RGBA8 buffer per job (<= 192 MB), released before the next photo.
-- Background: iOS 26 `BGContinuedProcessingTask` for batches started by the user, NPU/CPU only
-  (no background GPU on iPhone). Android: foreground service with a progress notification.
+- Output is capped at 48 MP; inputs above 3 MP are prescaled. The output RGBA8 buffer is at most 192 MB.
+- iOS 26 uses a continued processing task for user-started batches when available. GPU work falls back to CPU in the background.
+- Android uses a batch-level foreground service with a progress notification. NPU use requires a vendor runtime already on the device.
+- Android writes sRGB JPEG without an HDR gain map; the picker may strip GPS. iOS carries supported gain maps and available metadata into HEIC output.
+- Completed results are recorded in `results.json` in the cache and restored when their files exist. Pending batches are not restored after process death.
 
 ## UI
 
-Three screens, no settings screen.
+1. Home: choose photos and view recent results.
+2. Progress: per-photo progress, overall ETA and cancel.
+3. Result: before/after comparison, model switch, save and share. The comparison uses a preview no larger than 4096 px on its longest side.
 
-1. Home: "Choose photos" (system photo picker, no permission prompt), recent results grid.
-2. Progress: thumbnails with per-photo progress, overall ETA, cancel.
-3. Result: before/after slider with pinch zoom on a <= 4096 px preview; Best/Fast switch
-   (re-runs); "Save to Photos" (keeps EXIF date/location; iOS keeps the HDR gain map); Share.
-About sheet: model notices, licences, which unit the device check chose.
+The About sheet shows model notices and device-check information.
 
 ## Checks
 
-- `swift test` (Swift) and Skip's transpiled Kotlin tests for `LocalSRCore`.
-- `tools/export_models.py --check`: PSNR >= 55 dB vs PyTorch FP32 for both formats.
-- iOS simulator: build, UI test flow with photos added by `simctl addmedia`.
-- Android emulator `localsr_api36`: build, install, run the same flow.
+- Swift and Android tests cover shared logic and platform behavior.
+- `tools/export_models.py --check` compares model output with PyTorch FP32; CPU paths must reach 55 dB.
+- iOS simulator UI tests and Android emulator tests exercise the app flow. Real-device NPU and GPU performance has not yet been measured.

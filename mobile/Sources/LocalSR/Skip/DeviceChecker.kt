@@ -52,6 +52,7 @@ class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long
 
     fun cached(model: ModelKey): DeviceVerdict? {
         val raw = prefs.getString(cacheKey(model), null) ?: return null
+        if (raw.contains("its output did not pass validation")) return null
         val bar = raw.indexOf('|')
         if (bar < 0) return null
         val unit = ComputeUnit.init(rawValue = raw.substring(0, bar)) ?: return null
@@ -83,8 +84,7 @@ class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long
     private class Run(val engineMs: Double, val loadMs: Double, val output: FloatArray)
 
     /** Loads [unit], warms up, then times [timedRuns] runs (median). Returns the first timed output. */
-    private fun runUnit(model: ModelKey, unit: ComputeUnit, input: FloatArray, timedRuns: Int): Run {
-        val engine = LiteRtEngine.load(context, model, unit)
+    private fun runUnit(model: ModelKey, unit: ComputeUnit, input: FloatArray, timedRuns: Int, engine: LiteRtEngine = LiteRtEngine.load(context, model, unit)): Run {
         try {
             engine.run(input) // warm-up (GPU compiles shaders, XNNPACK packs weights)
             val times = ArrayList<Double>()
@@ -154,11 +154,12 @@ class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long
         var cacheable = true
         if (reference != null) {
             try {
-                val r = withLoadWatchdog(WATCHDOG_MS) { runUnit(model, ComputeUnit.npu, input, timedRuns = 3) }
+                val loaded = withLoadWatchdog(WATCHDOG_MS, onDiscard = { it.close() }) { LiteRtEngine.load(context, model, ComputeUnit.npu) }
+                val r = loaded?.let { runUnit(model, ComputeUnit.npu, input, timedRuns = 3, engine = it) }
                 if (r == null) {
                     npuMeasure = DeviceMeasurement(loadMs = WATCHDOG_MS.toDouble(), tileMs = 0.0, psnrVsCPU = 0.0, psnrDownsampleVsInput = 0.0, timedOut = true)
                     cacheable = false // "use the GPU for this session and retry later"
-                    lines.add("NPU: load + warm-up + timing exceeded $WATCHDOG_MS ms (will retry on a later start)")
+                    lines.add("NPU: load exceeded $WATCHDOG_MS ms (will retry on a later start)")
                 } else {
                     npuMeasure = measure(r, reference, input)
                     lines.add(describe("NPU", npuMeasure))
@@ -192,6 +193,7 @@ class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long
         currentCoroutineContext().ensureActive()
 
         var verdict = DeviceCheck.decide(cpu = cpuMeasure, gpu = gpuMeasure, npu = npuMeasure)
+            ?: throw UpscaleException("This device produced invalid output; upscaling is disabled.")
         // An accelerator that passes but is not faster than the CPU is pointless (software GL on an emulator, a slow iGPU).
         val cpuOk = passes(cpuMeasure)
         val chosen = when (verdict.unit) { ComputeUnit.npu -> npuMeasure; ComputeUnit.gpu -> gpuMeasure; ComputeUnit.cpu -> null }
@@ -204,15 +206,16 @@ class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long
     }
 
     /** Runs [block] on a worker thread and gives up waiting after 15 s (a native load cannot be interrupted; its result is discarded). */
-    private suspend fun <T> withLoadWatchdog(timeoutMs: Long, block: () -> T): T? {
+    private suspend fun <T> withLoadWatchdog(timeoutMs: Long, onDiscard: (T) -> Unit = {}, block: () -> T): T? {
         val result = CompletableDeferred<Result<T>>()
         val thread = Thread({
             // Background priority: if this probe hangs (software GL on an emulator) it must not starve the real work.
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
-            result.complete(runCatching(block))
+            val value = runCatching(block)
+            if (!result.complete(value)) value.getOrNull()?.let(onDiscard)
         }, "localsr-probe")
         thread.start()
-        val r = withTimeoutOrNull(timeoutMs) { result.await() } ?: return null
+        val r = withTimeoutOrNull(timeoutMs) { result.await() } ?: run { result.cancel(); return null }
         return r.getOrThrow()
     }
 

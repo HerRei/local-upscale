@@ -1,50 +1,48 @@
-# LocalSR
+# LocalSR mobile
 
-This is a [Skip](https://skip.dev) dual-platform app project.
+LocalSR is an on-device 4x photo upscaler for iPhone and Android. It bundles two models: Best (PULSE-48 v1) and Fast (SPAN-28 v1). A per-device check prefers the NPU, with GPU or CPU fallback. The app does not use the network.
 
-<!-- TODO: add iOS screenshots to fastlane metadata
-## iPhone Screenshots
+## Layout
 
-<img alt="iPhone Screenshot" src="Darwin/fastlane/screenshots/en-US/1_en-US.png" style="width: 18%" /> <img alt="iPhone Screenshot" src="Darwin/fastlane/screenshots/en-US/2_en-US.png" style="width: 18%" /> <img alt="iPhone Screenshot" src="Darwin/fastlane/screenshots/en-US/3_en-US.png" style="width: 18%" /> <img alt="iPhone Screenshot" src="Darwin/fastlane/screenshots/en-US/4_en-US.png" style="width: 18%" /> <img alt="iPhone Screenshot" src="Darwin/fastlane/screenshots/en-US/5_en-US.png" style="width: 18%" />
--->
+- `Sources/LocalSRCore/`: shared logic.
+- `Sources/LocalSR/`: app module, including `UI/`, `Service/`, `Apple/` (`#if !SKIP`), `Android/` (`#if SKIP`), and hand-written Kotlin hot-path code in `Skip/*.kt`.
+- `Darwin/`: Xcode project.
+- `Android/`: Gradle project.
+- `Models/`: bundled models, probe image and notice.
+- `tools/export_models.py`: model export and checks.
 
-<!-- TODO: add Android screenshots to fastlane metadata
-## Android Screenshots
+## Setup
 
-<img alt="Android Screenshot" src="Android/fastlane/metadata/android/en-US/images/phoneScreenshots/1_en-US.png" style="width: 18%" /> <img alt="Android Screenshot" src="Android/fastlane/metadata/android/en-US/images/phoneScreenshots/2_en-US.png" style="width: 18%" /> <img alt="Android Screenshot" src="Android/fastlane/metadata/android/en-US/images/phoneScreenshots/3_en-US.png" style="width: 18%" /> <img alt="Android Screenshot" src="Android/fastlane/metadata/android/en-US/images/phoneScreenshots/4_en-US.png" style="width: 18%" /> <img alt="Android Screenshot" src="Android/fastlane/metadata/android/en-US/images/phoneScreenshots/5_en-US.png" style="width: 18%" />
--->
+Install Xcode 27 or later and Skip with `brew install skip`. Install the Android SDK with `skip android home install`.
 
-## Building
+In every shell, run:
 
-This project is both a stand-alone Swift Package Manager module,
-as well as an Xcode project that builds and translates the project
-into a Kotlin Gradle project for Android using the skipstone plugin.
+```sh
+. ~/"Resources/Research notes/LocalSR mobile engine/android_env.sh"
+```
 
-## Running
+This path is specific to the maintainer's Mac. Recreate the file for your machine: it sets `JAVA_HOME` to openjdk@21, sets `ANDROID_HOME`, and puts cmdline-tools 19.0 first on `PATH`. Skip 1.9.21 rejects the newer "Android CLI" cmdline-tools versioning.
 
-Xcode and Android Studio must be downloaded and installed in order to
-run the app in the iOS simulator / Android emulator.
-An Android emulator must already be running, which can be launched from
-Android Studio's Device Manager.
+## Build, run and test
 
-The project can be opened and run in Xcode from
-`Project.xcworkspace`, which also enabled parallel
-development of any Skip libary dependencies.
+Run these commands from `mobile/`. Open `Project.xcworkspace` in Xcode to build and run the app. Start an Android emulator or connect a device for Android tests.
 
-To run both the Swift and Kotlin apps simultaneously,
-launch the "LocalSR App" target from Xcode.
-A build phases runs the "Launch Android APK" script that
-will deploy the Skip app to a running Android emulator or connected device.
-Logging output for the iOS app can be viewed in the Xcode console, and in
-Android Studio's logcat tab for the transpiled Kotlin app, or
-using `adb logcat` from a terminal.
+```sh
+swift test --filter LocalSRCoreTests
+swift test --filter 'Apple|LocalSRTests'
+gradle -p Android :app:testDebugUnitTest
+gradle -p Android :app:connectedDebugAndroidTest
+xcodebuild test -workspace Project.xcworkspace -scheme "LocalSR App" -destination 'platform=iOS Simulator,name=iPhone 18 Pro' SKIP_ACTION=none CODE_SIGNING_ALLOWED=NO
+```
 
-## Testing
+The connected Android test uses the `localsr_api36` emulator and takes about 10 minutes. APKs are at `.build/Android/app/outputs/apk/{debug,release}/`.
 
-The module can be tested using the standard `swift test` command
-or by running the test target for the macOS destination in Xcode,
-which will run the Swift tests as well as the transpiled
-Kotlin JUnit tests in the Robolectric Android simulation environment.
+Run `tools/export_models.py` to export models and `tools/export_models.py --check` to check them. See [tools/README.md](tools/README.md) for the required interpreter and dependencies.
 
-Parity testing can be performed with `skip test`,
-which will output a table of the test results for both platforms.
+## Known limits
+
+- Output is capped at 48 MP; inputs over 3 MP are prescaled.
+- The simulator has no NPU. Android NPU use needs vendor runtimes that are not bundled; the check falls back to GPU or CPU.
+- Android output is sRGB JPEG without an HDR gain map. The Android photo picker may strip GPS data.
+- Completed results are restored after process death, but the pending batch queue is not.
+- Real-device NPU and GPU performance has not yet been measured.
