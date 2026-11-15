@@ -45,6 +45,7 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
     public init(defaults: UserDefaults = .standard, cachesDirectory: URL? = nil) {
         deviceCheck = AppleDeviceCheck(defaults: defaults)
         cacheRoot = (cachesDirectory ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]).appendingPathComponent("LocalSR", isDirectory: true)
+        AppleBenchmark.startIfRequested()
     }
 
     /// The verdict chosen by the last `prepare` for `model` (for the About sheet).
