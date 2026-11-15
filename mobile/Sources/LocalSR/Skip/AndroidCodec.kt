@@ -25,8 +25,8 @@ class BitmapSink(private val bitmap: Bitmap) : PixelSink {
 
 /** Decode, JPEG encode, preview and EXIF copy. */
 object AndroidCodec {
-    /** Largest output the app produces: one 48 MP ARGB_8888 bitmap = 192 MB. */
-    const val MAX_OUTPUT_PIXELS = 48_000_000L
+    /** Largest default output the app produces: one 4032x3024 photo at 2x = 48,771,072 pixels (~48.8 MP). */
+    const val MAX_OUTPUT_PIXELS = 48_771_072L
     const val JPEG_QUALITY = 95
     const val PREVIEW_MAX_SIDE = 4096
 

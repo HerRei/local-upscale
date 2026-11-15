@@ -210,6 +210,7 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
         let available = Self.availableMemory()
         let allowed = Double(available) >= needed
         let scale = fullScale && policy.outputScale == 2 && (allowed || forceFull) ? 4 : policy.outputScale
+        let fullScaleFallback = fullScale && policy.outputScale == 2 && scale < 4
         gate?(GateDecision(required: UInt64(needed), available: available, allowed: allowed, scale: scale))
         let outWidth = source.width * scale, outHeight = source.height * scale
         let tDecoded = Date()
@@ -269,7 +270,7 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
         let tDone = Date()
         progress.report(1)
 
-        let result = UpscaleResult(id: id, inputURL: input, outputURL: outputURL, previewURL: previewURL, width: outWidth, height: outHeight, model: model, unit: usedUnit, seconds: tDone.timeIntervalSince(t0), outputScale: scale)
+        let result = UpscaleResult(id: id, inputURL: input, outputURL: outputURL, previewURL: previewURL, width: outWidth, height: outHeight, model: model, unit: usedUnit, seconds: tDone.timeIntervalSince(t0), outputScale: scale, fullScaleFallback: fullScaleFallback)
         let stats = JobStats(tiles: tiles.count, decodeSeconds: tDecoded.timeIntervalSince(t0), tilesSeconds: tTiles.timeIntervalSince(tDecoded), encodeSeconds: tDone.timeIntervalSince(tTiles), gainMapNote: encoded.note)
         if cancel.isCancelled { throw ServiceError.cancelled }
         return (result, stats)

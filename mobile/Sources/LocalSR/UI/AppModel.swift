@@ -345,8 +345,8 @@ public class AppModel {
                 waitingItems = []
                 persistWaitingItems()
             }
-            let allowFull = resolvedFullScale && refreshFullScaleAvailability()
-            startBatch(inputs: combined, model: resolvedModel, fullScale: allowFull)
+            _ = refreshFullScaleAvailability()
+            startBatch(inputs: combined, model: resolvedModel, fullScale: resolvedFullScale)
         } else {
             var next = waitingItems
             for i in 0..<inputs.count {
@@ -364,8 +364,8 @@ public class AppModel {
         let inputs = waitingItems.map { PickedPhotoInput(url: $0.url, displayName: $0.displayName) }
         waitingItems = []
         persistWaitingItems()
-        let allowFull = fullScale && refreshFullScaleAvailability()
-        startBatch(inputs: inputs, model: model, fullScale: allowFull)
+        _ = refreshFullScaleAvailability()
+        startBatch(inputs: inputs, model: model, fullScale: fullScale)
     }
 
     public func clearWaitingItems() {

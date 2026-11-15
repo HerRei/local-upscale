@@ -98,8 +98,8 @@ struct HomeView: View {
                             appModel.isLoadingPickedPhotos = loading
                         },
                         onPicked: { inputs in
-                            let allowFull = fullScale && appModel.refreshFullScaleAvailability()
-                            appModel.startBatch(inputs: inputs, model: selectedModel, fullScale: allowFull)
+                            _ = appModel.refreshFullScaleAvailability()
+                            appModel.startBatch(inputs: inputs, model: selectedModel, fullScale: fullScale)
                         }
                     )
                 }
@@ -344,8 +344,8 @@ struct HomeView: View {
                 WaitingPhotosCard(
                     items: appModel.waitingItems,
                     onUpscale: {
-                        let allowFull = fullScale && appModel.refreshFullScaleAvailability()
-                        appModel.startWaitingBatch(model: selectedModel, fullScale: allowFull)
+                        _ = appModel.refreshFullScaleAvailability()
+                        appModel.startWaitingBatch(model: selectedModel, fullScale: fullScale)
                     },
                     onDismiss: {
                         appModel.clearWaitingItems()

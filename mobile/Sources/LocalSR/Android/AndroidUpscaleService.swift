@@ -18,7 +18,7 @@ public final class AndroidUpscaleService: UpscaleService {
 
     public func upscale(input: URL, model: ModelKey, fullScale: Bool, progress: @escaping (Double) -> Void) async throws -> UpscaleResult {
         let raw = try await upscaler.upscale(input.absoluteString, model, fullScale, progress)
-        return UpscaleResult(id: raw.id, inputURL: input, outputURL: URL(fileURLWithPath: raw.outputPath), previewURL: URL(fileURLWithPath: raw.previewPath), width: raw.width, height: raw.height, model: model, unit: raw.unit, seconds: raw.seconds, outputScale: raw.outputScale)
+        return UpscaleResult(id: raw.id, inputURL: input, outputURL: URL(fileURLWithPath: raw.outputPath), previewURL: URL(fileURLWithPath: raw.previewPath), width: raw.width, height: raw.height, model: model, unit: raw.unit, seconds: raw.seconds, outputScale: raw.outputScale, fullScaleFallback: raw.fullScaleFallback)
     }
 
     public func canUseFullScale(forInput input: URL) -> Bool {

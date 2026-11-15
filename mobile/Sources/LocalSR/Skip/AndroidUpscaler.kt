@@ -38,6 +38,7 @@ class RawUpscaleResult(
     val unit: ComputeUnit,
     val seconds: Double,
     val outputScale: Int,
+    val fullScaleFallback: Boolean = false,
 )
 
 /**
@@ -137,6 +138,7 @@ class AndroidUpscaler(context: Context) {
                 val bounds = dimensions(uri) ?: throw UpscaleException("Cannot read image dimensions")
                 val policy = SizePolicy.target(width = bounds.first, height = bounds.second)
                 val scale = if (fullScale && canUseFullScale(inputUri)) 4 else policy.outputScale
+                val fullScaleFallback = fullScale && policy.outputScale == 2 && scale < 4
                 var input: Bitmap? = AndroidCodec.decode(context, uri)
                 val w = input!!.width
                 val h = input.height
@@ -184,7 +186,7 @@ class AndroidUpscaler(context: Context) {
                     currentCoroutineContext().ensureActive()
                     progress(1.0)
                     val seconds = (System.nanoTime() - started) / 1e9
-                    RawUpscaleResult(id, outFile.absolutePath, File(dir, "preview.jpg").absolutePath, ow, oh, usedUnit, seconds, scale)
+                    RawUpscaleResult(id, outFile.absolutePath, File(dir, "preview.jpg").absolutePath, ow, oh, usedUnit, seconds, scale, fullScaleFallback)
                 } finally {
                     input?.recycle()
                     output?.recycle()

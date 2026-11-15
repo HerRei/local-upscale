@@ -16,8 +16,9 @@ public struct UpscaleResult: Identifiable, Codable, Sendable {
     public let unit: ComputeUnit
     public let seconds: Double
     public let outputScale: Int
+    public let fullScaleFallback: Bool
 
-    public init(id: String, inputURL: URL, outputURL: URL, previewURL: URL, width: Int, height: Int, model: ModelKey, unit: ComputeUnit, seconds: Double, outputScale: Int = 4) {
+    public init(id: String, inputURL: URL, outputURL: URL, previewURL: URL, width: Int, height: Int, model: ModelKey, unit: ComputeUnit, seconds: Double, outputScale: Int = 4, fullScaleFallback: Bool = false) {
         self.id = id
         self.inputURL = inputURL
         self.outputURL = outputURL
@@ -28,8 +29,9 @@ public struct UpscaleResult: Identifiable, Codable, Sendable {
         self.unit = unit
         self.seconds = seconds
         self.outputScale = outputScale
+        self.fullScaleFallback = fullScaleFallback
     }
-    private enum CodingKeys: String, CodingKey { case id, inputURL, outputURL, previewURL, width, height, model, unit, seconds, outputScale }
+    private enum CodingKeys: String, CodingKey { case id, inputURL, outputURL, previewURL, width, height, model, unit, seconds, outputScale, fullScaleFallback }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -43,6 +45,7 @@ public struct UpscaleResult: Identifiable, Codable, Sendable {
         unit = try c.decode(ComputeUnit.self, forKey: .unit)
         seconds = try c.decode(Double.self, forKey: .seconds)
         outputScale = try c.decodeIfPresent(Int.self, forKey: .outputScale) ?? 4
+        fullScaleFallback = try c.decodeIfPresent(Bool.self, forKey: .fullScaleFallback) ?? false
     }
 
 }
