@@ -8,7 +8,7 @@ public struct PrescaleSize {
 }
 
 public enum SizePolicy {
-    public static let maxInputPixels = 12_000_000
+    public static let maxInputPixels = 12_192_768
     public static let fullOutputThreshold = 3_000_000
 
     public static func target(width: Int, height: Int) -> PrescaleSize {

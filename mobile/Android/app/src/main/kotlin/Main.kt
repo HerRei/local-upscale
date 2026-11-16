@@ -7,6 +7,7 @@ import skip.ui.*
 
 import android.Manifest
 import android.app.Application
+import android.content.Intent
 import android.graphics.Color as AndroidColor
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -57,6 +58,7 @@ open class MainActivity: AppCompatActivity {
         super.onCreate(savedInstanceState)
         logger.info("starting activity")
         UIApplication.launch(this)
+        AndroidShareInbox.handleIntent(this, intent)
         enableEdgeToEdge()
 
         setContent {
@@ -84,6 +86,12 @@ open class MainActivity: AppCompatActivity {
     override fun onStart() {
         logger.info("onStart")
         super.onStart()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        AndroidShareInbox.handleIntent(this, intent)
     }
 
     override fun onResume() {

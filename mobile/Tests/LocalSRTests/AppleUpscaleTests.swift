@@ -234,7 +234,7 @@ final class AppleUpscaleTests: XCTestCase {
         let target = SizePolicy.target(width: 2900, height: 4600)
         XCTAssertEqual(decoded.pixels.width, target.width)
         XCTAssertEqual(decoded.pixels.height, target.height)
-        XCTAssertLessThanOrEqual(decoded.pixels.width * decoded.pixels.height, 12_000_000)
+        XCTAssertLessThanOrEqual(decoded.pixels.width * decoded.pixels.height, SizePolicy.maxInputPixels)
         XCTAssertLessThan(decoded.pixels.width, decoded.pixels.height)
         XCTAssertEqual(decoded.colorSpace.name as String?, CGColorSpace.displayP3 as String)
         // Marker (red square at the stored top-left) is at the upright top-right after a 90 degree CW turn.
@@ -335,13 +335,18 @@ final class AppleUpscaleTests: XCTestCase {
 
     func testResultOutputScaleCodingAndLegacyDefault() throws {
         let url = URL(fileURLWithPath: "/tmp/example")
-        let result = UpscaleResult(id: "legacy", inputURL: url, outputURL: url, previewURL: url, width: 8, height: 8, model: .fast, unit: .cpu, seconds: 1, outputScale: 2)
+        let result = UpscaleResult(id: "legacy", inputURL: url, outputURL: url, previewURL: url, width: 8, height: 8, model: .fast, unit: .cpu, seconds: 1, outputScale: 2, fullScaleFallback: true)
         let encoded = try JSONEncoder().encode(result)
-        XCTAssertEqual(try JSONDecoder().decode(UpscaleResult.self, from: encoded).outputScale, 2)
+        let decoded = try JSONDecoder().decode(UpscaleResult.self, from: encoded)
+        XCTAssertEqual(decoded.outputScale, 2)
+        XCTAssertTrue(decoded.fullScaleFallback)
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         object.removeValue(forKey: "outputScale")
+        object.removeValue(forKey: "fullScaleFallback")
         let legacy = try JSONSerialization.data(withJSONObject: object)
-        XCTAssertEqual(try JSONDecoder().decode(UpscaleResult.self, from: legacy).outputScale, 4)
+        let legacyDecoded = try JSONDecoder().decode(UpscaleResult.self, from: legacy)
+        XCTAssertEqual(legacyDecoded.outputScale, 4)
+        XCTAssertFalse(legacyDecoded.fullScaleFallback)
     }
 
     func testEndToEndFastModel() async throws {

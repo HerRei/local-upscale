@@ -62,6 +62,18 @@ public struct BatchFailureItem: Identifiable, Equatable, Sendable {
     }
 }
 
+public struct WaitingPhotoItem: Identifiable, Codable, Equatable, Sendable {
+    public let id: String
+    public let url: URL
+    public let displayName: String
+
+    public init(id: String = UUID().uuidString, url: URL, displayName: String) {
+        self.id = id
+        self.url = url
+        self.displayName = displayName
+    }
+}
+
 public enum BatchSummaryKind: Equatable, Sendable {
     case succeeded(count: Int, resultIDs: [String])
     case partialFailure(succeededCount: Int, totalCount: Int, resultIDs: [String], failures: [BatchFailureItem])
@@ -131,10 +143,13 @@ public class AppModel {
     private let serviceBox: ServiceBox
 
     public var results: [UpscaleResult] = []
+    public var waitingItems: [WaitingPhotoItem] = []
     public var lastBatchInterrupted = false
     public var batchSummary: BatchSummary? = nil
     private let storageDirectory: URL
     private let inputsDirectory: URL
+    private let defaults: UserDefaults
+    private let customInboxDirectory: URL?
     public var verdicts: [ModelKey: DeviceVerdict] = [:]
     public var savedResultIDs: Set<String> = []
     public var isSaving: Bool = false
@@ -166,9 +181,18 @@ public class AppModel {
     @ObservationIgnored private var batchTask: Task<Void, Never>? = nil
     @ObservationIgnored private var preparingTimerTask: Task<Void, Never>? = nil
     @ObservationIgnored private var didRequestNotifications: Bool = false
+    @ObservationIgnored private var isImportingInbox: Bool = false
+    @ObservationIgnored private var pendingInboxRecheck: Bool = false
 
-    public init(service: UpscaleService = makeUpscaleService(), cachesDirectory: URL? = nil) {
+    public init(
+        service: UpscaleService = makeUpscaleService(),
+        cachesDirectory: URL? = nil,
+        defaults: UserDefaults = .standard,
+        inboxDirectory: URL? = nil
+    ) {
         self.serviceBox = ServiceBox(service)
+        self.defaults = defaults
+        self.customInboxDirectory = inboxDirectory
         let cachesBase = cachesDirectory ?? URL.cachesDirectory
         self.storageDirectory = cachesBase.appendingPathComponent("LocalSR", isDirectory: true)
         self.inputsDirectory = cachesBase.appendingPathComponent("LocalSRInputs", isDirectory: true)
@@ -182,6 +206,11 @@ public class AppModel {
            let stored = try? JSONDecoder().decode([UpscaleResult].self, from: data) {
             results = stored.filter { FileManager.default.fileExists(atPath: $0.outputURL.path) && FileManager.default.fileExists(atPath: $0.previewURL.path) }
             persistResults()
+        }
+        if let waitingData = try? Data(contentsOf: storageDirectory.appendingPathComponent("waiting.json")),
+           let storedWaiting = try? JSONDecoder().decode([WaitingPhotoItem].self, from: waitingData) {
+            waitingItems = storedWaiting.filter { FileManager.default.fileExists(atPath: $0.url.path) }
+            persistWaitingItems()
         }
         let validIDs = Set(results.map { $0.id })
         if let savedData = try? Data(contentsOf: storageDirectory.appendingPathComponent("saved.json")),
@@ -219,6 +248,132 @@ public class AppModel {
         let list = Array(savedResultIDs).sorted()
         if let data = try? JSONEncoder().encode(list) {
             try? data.write(to: storageDirectory.appendingPathComponent("saved.json"), options: Data.WritingOptions.atomic)
+        }
+    }
+
+    private func persistWaitingItems() {
+        let waitingURL = storageDirectory.appendingPathComponent("waiting.json")
+        if waitingItems.isEmpty {
+            try? FileManager.default.removeItem(at: waitingURL)
+            return
+        }
+        try? FileManager.default.createDirectory(at: storageDirectory, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(waitingItems) {
+            try? data.write(to: waitingURL, options: Data.WritingOptions.atomic)
+        }
+    }
+
+    private func currentModelSetting() -> ModelKey {
+        if let raw = defaults.string(forKey: "selectedModel"), let key = ModelKey(rawValue: raw) {
+            return key
+        }
+        return .best
+    }
+
+    private func currentFullScaleSetting() -> Bool {
+        defaults.bool(forKey: "fullScale")
+    }
+
+    private func shareStartsImmediatelySetting() -> Bool {
+        if defaults.object(forKey: "shareStartsImmediately") != nil {
+            return defaults.bool(forKey: "shareStartsImmediately")
+        }
+        return true
+    }
+
+    public func importSharedInboxIfNeeded(
+        model: ModelKey? = nil,
+        fullScale: Bool? = nil,
+        startImmediately: Bool? = nil
+    ) async {
+        if isImportingInbox {
+            pendingInboxRecheck = true
+            return
+        }
+        isImportingInbox = true
+        defer { isImportingInbox = false }
+
+        repeat {
+            pendingInboxRecheck = false
+            let imported: [PickedPhotoInput]
+            #if SKIP
+            let rawItems = await AndroidShareInbox.awaitAndDrainPendingInputs()
+            var mapped: [PickedPhotoInput] = []
+            for item in rawItems {
+                if let url = URL(string: item.urlString) {
+                    mapped.append(PickedPhotoInput(url: url, displayName: item.displayName))
+                }
+            }
+            imported = mapped
+            #else
+            let inbox = customInboxDirectory ?? ShareInboxImporter.defaultInboxDirectory()
+            if let inbox {
+                let destDir = inputsDirectory
+                imported = await Task.detached(priority: .userInitiated) {
+                    ShareInboxImporter.importAll(from: inbox, to: destDir)
+                }.value
+            } else {
+                imported = []
+            }
+            #endif
+            if !imported.isEmpty {
+                handleIncomingInputs(
+                    imported,
+                    model: model,
+                    fullScale: fullScale,
+                    startImmediately: startImmediately
+                )
+            }
+        } while pendingInboxRecheck
+    }
+
+    public func handleIncomingInputs(
+        _ inputs: [PickedPhotoInput],
+        model: ModelKey? = nil,
+        fullScale: Bool? = nil,
+        startImmediately: Bool? = nil
+    ) {
+        guard !inputs.isEmpty else { return }
+        let resolvedModel = model ?? currentModelSetting()
+        let resolvedFullScale = fullScale ?? currentFullScaleSetting()
+        let shouldStart = startImmediately ?? shareStartsImmediatelySetting()
+
+        if shouldStart && !isBatchRunning {
+            var combined: [PickedPhotoInput] = waitingItems.map { PickedPhotoInput(url: $0.url, displayName: $0.displayName) }
+            combined.append(contentsOf: inputs)
+            if !waitingItems.isEmpty {
+                waitingItems = []
+                persistWaitingItems()
+            }
+            _ = refreshFullScaleAvailability()
+            startBatch(inputs: combined, model: resolvedModel, fullScale: resolvedFullScale)
+        } else {
+            var next = waitingItems
+            for i in 0..<inputs.count {
+                let input = inputs[i]
+                let name = (input.displayName?.isEmpty == false) ? input.displayName! : "Photo \(next.count + 1)"
+                next.append(WaitingPhotoItem(url: input.url, displayName: name))
+            }
+            waitingItems = next
+            persistWaitingItems()
+        }
+    }
+
+    public func startWaitingBatch(model: ModelKey, fullScale: Bool) {
+        guard !waitingItems.isEmpty, !isBatchRunning else { return }
+        let inputs = waitingItems.map { PickedPhotoInput(url: $0.url, displayName: $0.displayName) }
+        waitingItems = []
+        persistWaitingItems()
+        _ = refreshFullScaleAvailability()
+        startBatch(inputs: inputs, model: model, fullScale: fullScale)
+    }
+
+    public func clearWaitingItems() {
+        let existing = waitingItems
+        waitingItems = []
+        persistWaitingItems()
+        for item in existing {
+            deleteInputFileIfUnreferenced(item.url)
         }
     }
 
@@ -690,14 +845,28 @@ public class AppModel {
             }
         }
 
-        if !keepInput && (isFile(result.inputURL, inside: resolvedStorage) || isFile(result.inputURL, inside: resolvedInputs)) {
-            let resolvedInputPath = result.inputURL.standardizedFileURL.resolvingSymlinksInPath().path
-            let stillReferenced = results.contains {
-                $0.inputURL.isFileURL && $0.inputURL.standardizedFileURL.resolvingSymlinksInPath().path == resolvedInputPath
-            }
-            if !stillReferenced {
-                try? fm.removeItem(at: result.inputURL)
-            }
+        if !keepInput {
+            deleteInputFileIfUnreferenced(result.inputURL)
+        }
+    }
+
+    private func deleteInputFileIfUnreferenced(_ url: URL) {
+        let fm = FileManager.default
+        let resolvedStorage = storageDirectory.standardizedFileURL.resolvingSymlinksInPath()
+        let resolvedInputs = inputsDirectory.standardizedFileURL.resolvingSymlinksInPath()
+        guard isFile(url, inside: resolvedStorage) || isFile(url, inside: resolvedInputs) else { return }
+        let resolvedPath = url.standardizedFileURL.resolvingSymlinksInPath().path
+        let referencedByResults = results.contains {
+            $0.inputURL.isFileURL && $0.inputURL.standardizedFileURL.resolvingSymlinksInPath().path == resolvedPath
+        }
+        let referencedByWaiting = waitingItems.contains {
+            $0.url.isFileURL && $0.url.standardizedFileURL.resolvingSymlinksInPath().path == resolvedPath
+        }
+        let referencedByBatch = batchItems.contains {
+            $0.inputURL.isFileURL && $0.inputURL.standardizedFileURL.resolvingSymlinksInPath().path == resolvedPath
+        }
+        if !referencedByResults && !referencedByWaiting && !referencedByBatch {
+            try? fm.removeItem(at: url)
         }
     }
 

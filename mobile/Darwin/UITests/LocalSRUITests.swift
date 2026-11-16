@@ -1,7 +1,8 @@
 import XCTest
 
 final class LocalSRUITests: XCTestCase {
-    private let shotDir = "/private/tmp/claude-501/-Users-hermesheiniger/619da889-5d3f-4724-b759-70d636ce5866/scratchpad/view2/shots"
+    private let shotDir = "/private/tmp/claude-501/-Users-hermesheiniger/619da889-5d3f-4724-b759-70d636ce5866/scratchpad/fix3/shots"
+    private let shareShotDir = "/private/tmp/claude-501/-Users-hermesheiniger/619da889-5d3f-4724-b759-70d636ce5866/scratchpad/fix3/shots"
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -49,7 +50,16 @@ final class LocalSRUITests: XCTestCase {
         saveShot("ios_settings_\(suffix).png", app: app)
 
         let licencesLink = app.buttons["aboutLicencesLink"]
+        let settingsList = app.collectionViews.firstMatch
+        for _ in 0..<5 where !(licencesLink.exists && licencesLink.isHittable) {
+            if settingsList.exists {
+                settingsList.swipeUp()
+            } else {
+                app.swipeUp()
+            }
+        }
         XCTAssertTrue(licencesLink.waitForExistence(timeout: 4))
+        XCTAssertTrue(licencesLink.isHittable, "Licences row not visible after scrolling Settings")
         licencesLink.tap()
         XCTAssertTrue(app.navigationBars["Licences"].waitForExistence(timeout: 5))
         Thread.sleep(forTimeInterval: 0.3)
@@ -243,12 +253,10 @@ final class LocalSRUITests: XCTestCase {
 
     @MainActor
     private func selectPhotosInSystemPicker(app: XCUIApplication, count: Int, preferNewest: Bool = false) -> Bool {
-        if preferNewest {
-            let grid = app.collectionViews.firstMatch
-            if grid.waitForExistence(timeout: 5) {
-                grid.swipeUp()
-                Thread.sleep(forTimeInterval: 0.4)
-            }
+        let grid = app.collectionViews.firstMatch
+        if grid.waitForExistence(timeout: 10), preferNewest {
+            grid.swipeUp()
+            Thread.sleep(forTimeInterval: 0.4)
         }
         let candidateImages = app.images.matching(
             NSPredicate(format: "label CONTAINS ',' AND (label CONTAINS[c] 'Photo' OR label CONTAINS[c] 'Image' OR label CONTAINS[c] 'PXG' OR label CONTAINS[c] 'Wallpaper')")
@@ -258,7 +266,7 @@ final class LocalSRUITests: XCTestCase {
         )
 
         var tapped = 0
-        if candidateImages.firstMatch.waitForExistence(timeout: 8) {
+        if candidateImages.firstMatch.waitForExistence(timeout: 15) {
             let total = candidateImages.count
             let targetCount = min(count, total)
             let step = (count > 1 && total >= count * 2) ? 2 : 1
@@ -325,5 +333,210 @@ final class LocalSRUITests: XCTestCase {
         attachment.name = filename
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    @MainActor
+    func testShareSettingsAndPhotosExtension() throws {
+        try FileManager.default.createDirectory(atPath: shareShotDir, withIntermediateDirectories: true)
+
+        let app = XCUIApplication()
+        app.launch()
+
+        let settingsButton = app.buttons["settingsButton"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 15))
+        settingsButton.tap()
+
+        let shareToggle = app.switches["shareStartsImmediatelyToggle"]
+        XCTAssertTrue(shareToggle.waitForExistence(timeout: 5), "Start Right Away toggle missing in Settings")
+        setSwitch(shareToggle, to: "1")
+        XCTAssertEqual(shareToggle.value as? String, "1", "Start Right Away should be ON")
+        XCTAssertTrue(app.staticTexts["Share Menu"].waitForExistence(timeout: 3))
+        Thread.sleep(forTimeInterval: 0.3)
+        saveShareShot("ios_settings_share.png")
+
+        app.buttons["aboutDoneButton"].tap()
+        XCTAssertTrue(app.buttons["choosePhotosButton"].waitForExistence(timeout: 5))
+
+        shareOnePhotoFromPhotosApp(returningTo: app, captureSheet: true)
+
+        let startedOrFinished = app.buttons["cancelBatchButton"].waitForExistence(timeout: 8)
+            || app.staticTexts["resultSummaryLabel"].waitForExistence(timeout: 60)
+            || app.buttons["dismissSummaryButton"].waitForExistence(timeout: 60)
+        XCTAssertTrue(startedOrFinished, "LocalSR did not start upscaling shared photo")
+        if app.staticTexts["resultSummaryLabel"].waitForExistence(timeout: 90) {
+            Thread.sleep(forTimeInterval: 1.0)
+            saveShareShot("ios_photos_share_result.png")
+        } else {
+            saveShareShot("ios_photos_share_active.png")
+        }
+    }
+
+    @MainActor
+    func testShareExtensionWaitingMode() throws {
+        try FileManager.default.createDirectory(atPath: shareShotDir, withIntermediateDirectories: true)
+
+        let app = XCUIApplication()
+        app.launch()
+
+        let settingsButton = app.buttons["settingsButton"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 15))
+        settingsButton.tap()
+
+        let shareToggle = app.switches["shareStartsImmediatelyToggle"]
+        XCTAssertTrue(shareToggle.waitForExistence(timeout: 5), "Start Right Away toggle missing in Settings")
+        setSwitch(shareToggle, to: "0")
+        XCTAssertEqual(shareToggle.value as? String, "0", "Start Right Away should toggle OFF")
+        app.buttons["aboutDoneButton"].tap()
+        XCTAssertTrue(app.buttons["choosePhotosButton"].waitForExistence(timeout: 5))
+
+        shareOnePhotoFromPhotosApp(returningTo: app, captureSheet: false)
+
+        let waitingCard = app.otherElements["waitingPhotosCard"]
+        let waitingTitle = app.staticTexts["waitingPhotosTitle"]
+        let upscaleBtn = app.buttons["upscaleWaitingButton"]
+        XCTAssertTrue(waitingTitle.waitForExistence(timeout: 10), "Waiting photos card did not appear when Start Right Away is OFF")
+        XCTAssertTrue(upscaleBtn.waitForExistence(timeout: 5), "Upscale button missing on waiting card")
+        XCTAssertTrue(waitingCard.exists || waitingTitle.exists)
+        Thread.sleep(forTimeInterval: 0.3)
+        saveShareShot("ios_waiting_card.png")
+
+        upscaleBtn.tap()
+        let finished = app.staticTexts["resultSummaryLabel"].waitForExistence(timeout: 90)
+            || app.buttons["dismissSummaryButton"].waitForExistence(timeout: 90)
+        XCTAssertTrue(finished, "Waiting batch did not finish after tapping Upscale")
+        Thread.sleep(forTimeInterval: 0.8)
+        saveShareShot("ios_waiting_batch_done.png")
+
+        // Restore Start Right Away to default ON
+        let dismissSummary = app.buttons["dismissSummaryButton"]
+        if dismissSummary.exists {
+            dismissSummary.tap()
+        } else if !settingsButton.exists {
+            app.navigationBars.buttons.firstMatch.tap()
+        }
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 5))
+        settingsButton.tap()
+        XCTAssertTrue(shareToggle.waitForExistence(timeout: 5))
+        setSwitch(shareToggle, to: "1")
+        XCTAssertEqual(shareToggle.value as? String, "1")
+        app.buttons["aboutDoneButton"].tap()
+    }
+
+    @MainActor
+    private func setSwitch(_ element: XCUIElement, to desiredValue: String) {
+        if (element.value as? String) == desiredValue { return }
+        let inner = element.switches.firstMatch
+        if inner.exists && inner.isHittable {
+            inner.tap()
+        } else {
+            element.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        }
+        Thread.sleep(forTimeInterval: 0.3)
+    }
+
+    @MainActor
+    private func shareOnePhotoFromPhotosApp(returningTo app: XCUIApplication, captureSheet: Bool) {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        // Dismiss any stale system alert before switching to Photos
+        for title in ["Cancel", "OK"] {
+            let stale = springboard.alerts.buttons[title]
+            if stale.exists {
+                stale.tap()
+                Thread.sleep(forTimeInterval: 0.3)
+                break
+            }
+        }
+
+        let photos = XCUIApplication(bundleIdentifier: "com.apple.mobileslideshow")
+        photos.terminate()
+        Thread.sleep(forTimeInterval: 0.4)
+        photos.launch()
+        Thread.sleep(forTimeInterval: 1.0)
+
+        for title in ["Continue", "OK", "Not Now"] {
+            let btn = photos.buttons[title]
+            if btn.waitForExistence(timeout: 1.5) {
+                btn.tap()
+                Thread.sleep(forTimeInterval: 0.4)
+            }
+        }
+        for title in ["Allow", "Don't Allow", "OK"] {
+            let alertBtn = springboard.alerts.buttons[title]
+            if alertBtn.waitForExistence(timeout: 1.5) {
+                alertBtn.tap()
+                Thread.sleep(forTimeInterval: 0.4)
+                break
+            }
+        }
+
+        let photoPred = NSPredicate(format: "(label BEGINSWITH 'Photo' OR label CONTAINS 'Image' OR label CONTAINS 'PNG') AND NOT (label CONTAINS 'rectangle')")
+        let photoMatches = photos.images.matching(photoPred)
+        XCTAssertTrue(photoMatches.firstMatch.waitForExistence(timeout: 8), "No photo found in Photos app")
+        let visiblePhoto = photoMatches.allElementsBoundByIndex.first { $0.isHittable && $0.frame.minY >= 120 }
+            ?? photoMatches.element(boundBy: min(4, max(0, photoMatches.count - 1)))
+        visiblePhoto.tap()
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let shareBtn = photos.buttons.matching(
+            NSPredicate(format: "label == 'Share' OR identifier == 'Share' OR label == 'square.and.arrow.up'")
+        ).firstMatch
+        if !shareBtn.waitForExistence(timeout: 3) {
+            photos.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            Thread.sleep(forTimeInterval: 0.6)
+        }
+        if !shareBtn.waitForExistence(timeout: 5) {
+            XCTFail("Share button not found in Photos: \(photos.buttons.allElementsBoundByIndex.map { $0.label })")
+        }
+        shareBtn.tap()
+        Thread.sleep(forTimeInterval: 1.2)
+        if captureSheet {
+            saveShareShot("ios_photos_share_sheet.png")
+        }
+
+        let actionPred = NSPredicate(format: "label CONTAINS[c] 'Upscale with LocalSR' OR label == 'LocalSR'")
+        var target = photos.cells.matching(actionPred).firstMatch
+        if !target.waitForExistence(timeout: 5) {
+            target = photos.buttons.matching(actionPred).firstMatch
+        }
+        if !target.exists {
+            target = photos.staticTexts.matching(actionPred).firstMatch
+        }
+        XCTAssertTrue(target.waitForExistence(timeout: 5), "LocalSR share extension did not appear in Photos share sheet")
+        target.tap()
+        if captureSheet {
+            Thread.sleep(forTimeInterval: 0.2)
+            saveShareShot("ios_share_extension_ui.png")
+        }
+
+        let openBtn = springboard.alerts.buttons["Open"]
+        if openBtn.waitForExistence(timeout: 4) {
+            openBtn.tap()
+        } else {
+            let photosOpen = photos.alerts.buttons["Open"]
+            if photosOpen.waitForExistence(timeout: 1) {
+                photosOpen.tap()
+            }
+        }
+
+        // Responder-chain openURL from an app extension is unreliable in the iOS Simulator
+        // (ShareViewController falls back to "Queued for LocalSR. Open LocalSR to upscale." + OK),
+        // so automatic foreground switching is not asserted here. If it happens to switch, accept it;
+        // otherwise dismiss the fallback card if visible and activate LocalSR explicitly so the test
+        // verifies the real contract: App Group Inbox import when LocalSR becomes active.
+        if !app.wait(for: .runningForeground, timeout: 5) {
+            let extensionOK = photos.buttons["OK"]
+            if extensionOK.waitForExistence(timeout: 2) {
+                extensionOK.tap()
+            }
+            app.activate()
+            XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "LocalSR did not become active after share")
+        }
+    }
+
+    @MainActor
+    private func saveShareShot(_ filename: String) {
+        let shot = XCUIScreen.main.screenshot()
+        let path = (shareShotDir as NSString).appendingPathComponent(filename)
+        try? shot.pngRepresentation.write(to: URL(fileURLWithPath: path))
     }
 }

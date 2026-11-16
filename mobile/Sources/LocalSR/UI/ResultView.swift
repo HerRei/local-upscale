@@ -282,8 +282,8 @@ struct ResultView: View {
         guard let latest = currentResult, newModel != latest.model else { return }
         selectedModel = newModel
         Task {
-            let allowFull = fullScale && appModel.refreshFullScaleAvailability()
-            if let updated = await appModel.rerun(result: latest, model: newModel, fullScale: allowFull) {
+            _ = appModel.refreshFullScaleAvailability()
+            if let updated = await appModel.rerun(result: latest, model: newModel, fullScale: fullScale) {
                 displayedResultID = updated.id
                 selectedModel = updated.model
             } else if let current = currentResult {
@@ -621,6 +621,7 @@ struct ResultView: View {
                     }
                     return UIFormatting.resultDimensionsLine(width: result.width, height: result.height)
                 }()
+                let scaleNote = result.outputScale < 4 ? scaleNoteText(result: result) : ""
                 let baseAccessibility = UIFormatting.resultAccessibilityCaption(
                     width: result.width,
                     height: result.height,
@@ -628,7 +629,10 @@ struct ResultView: View {
                     unit: result.unit,
                     seconds: result.seconds
                 )
-                let accessibilityCaption = outputScale != nil ? "\(outputScale!) times, \(baseAccessibility)" : baseAccessibility
+                let accessibilityCaption: String = {
+                    let scaled = outputScale != nil ? "\(outputScale!) times, \(baseAccessibility)" : baseAccessibility
+                    return scaleNote.isEmpty ? scaled : "\(scaled). \(scaleNote)"
+                }()
 
                 VStack(spacing: 2.0) {
                     Text(dimensionsLine)
@@ -640,6 +644,12 @@ struct ResultView: View {
                         .font(.footnote)
                         .foregroundStyle(Color.white.opacity(0.7))
                         .adaptiveMonospacedDigit()
+
+                    if !scaleNote.isEmpty {
+                        Text(scaleNote)
+                            .font(.footnote)
+                            .foregroundStyle(Color.white.opacity(0.7))
+                    }
                 }
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16.0)
@@ -834,6 +844,13 @@ struct ResultView: View {
             return 8.0 + (excess * 0.35) / (1.0 + excess * 0.25)
         }
         return raw
+    }
+
+    private func scaleNoteText(result: UpscaleResult) -> String {
+        if result.fullScaleFallback {
+            return "2\u{00D7} \u{2013} not enough memory for Full 4\u{00D7}."
+        }
+        return "2\u{00D7} \u{2013} large photo. Full 4\u{00D7} in Settings."
     }
 
     private func derivedOutputScale(result: UpscaleResult) -> Int? {

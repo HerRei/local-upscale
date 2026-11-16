@@ -10,5 +10,18 @@
     <array>
         <string>$(PRODUCT_BUNDLE_IDENTIFIER).batch.*</string>
     </array>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>CFBundleURLName</key>
+            <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>localsr</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>

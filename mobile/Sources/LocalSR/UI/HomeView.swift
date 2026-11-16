@@ -32,12 +32,14 @@ struct HomeView: View {
             && !appModel.isBatchRunning
             && appModel.batchSummary == nil
             && appModel.stageTransitionResultID == nil
+            && appModel.waitingItems.isEmpty
     }
 
     private var showStageOrSummary: Bool {
         appModel.isBatchRunning
             || appModel.batchSummary != nil
             || appModel.stageTransitionResultID != nil
+            || !appModel.waitingItems.isEmpty
     }
 
     var body: some View {
@@ -96,8 +98,8 @@ struct HomeView: View {
                             appModel.isLoadingPickedPhotos = loading
                         },
                         onPicked: { inputs in
-                            let allowFull = fullScale && appModel.refreshFullScaleAvailability()
-                            appModel.startBatch(inputs: inputs, model: selectedModel, fullScale: allowFull)
+                            _ = appModel.refreshFullScaleAvailability()
+                            appModel.startBatch(inputs: inputs, model: selectedModel, fullScale: fullScale)
                         }
                     )
                 }
@@ -325,16 +327,31 @@ struct HomeView: View {
 
     @ViewBuilder
     private var stageOrSummaryHeader: some View {
-        if appModel.isBatchRunning || appModel.stageTransitionResultID != nil {
-            StageCardView(
-                item: appModel.currentBatchItem,
-                preparingModel: appModel.preparingModel,
-                preparingElapsedLong: appModel.preparingElapsedLong,
-                currentIndex: appModel.currentBatchItemNumber,
-                totalCount: appModel.batchItems.count
-            )
-        } else if let summary = appModel.batchSummary {
-            BatchSummaryCard(summary: summary)
+        VStack(spacing: 12.0) {
+            if appModel.isBatchRunning || appModel.stageTransitionResultID != nil {
+                StageCardView(
+                    item: appModel.currentBatchItem,
+                    preparingModel: appModel.preparingModel,
+                    preparingElapsedLong: appModel.preparingElapsedLong,
+                    currentIndex: appModel.currentBatchItemNumber,
+                    totalCount: appModel.batchItems.count
+                )
+            } else if let summary = appModel.batchSummary {
+                BatchSummaryCard(summary: summary)
+            }
+
+            if !appModel.waitingItems.isEmpty && !appModel.isBatchRunning && appModel.stageTransitionResultID == nil {
+                WaitingPhotosCard(
+                    items: appModel.waitingItems,
+                    onUpscale: {
+                        _ = appModel.refreshFullScaleAvailability()
+                        appModel.startWaitingBatch(model: selectedModel, fullScale: fullScale)
+                    },
+                    onDismiss: {
+                        appModel.clearWaitingItems()
+                    }
+                )
+            }
         }
     }
 
@@ -985,5 +1002,83 @@ private struct BatchSummaryCard: View {
         #endif
         .disabled(appModel.isSaving || appModel.isSavingAll || allSaved)
         .accessibilityIdentifier("summarySaveAllButton")
+    }
+}
+
+private struct WaitingPhotosCard: View {
+    let items: [WaitingPhotoItem]
+    let onUpscale: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14.0) {
+            HStack(alignment: .center, spacing: 12.0) {
+                Text(items.count == 1 ? "1 Photo Ready" : "\(items.count) Photos Ready")
+                    .font(.headline)
+                    .adaptiveMonospacedDigit()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("waitingPhotosTitle")
+
+                Button {
+                    onDismiss()
+                } label: {
+                    ZStack {
+                        Circle()
+                            .fill(DesignTokens.controlCircleFill)
+                            .frame(width: 32.0, height: 32.0)
+                        Image(systemName: "xmark")
+                            .font(.system(size: 14.0, weight: .semibold))
+                            .foregroundStyle(DesignTokens.ink)
+                    }
+                    .frame(width: 44.0, height: 44.0)
+                    #if !SKIP
+                    .contentShape(Rectangle())
+                    #endif
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss")
+                .accessibilityIdentifier("dismissWaitingButton")
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8.0) {
+                    ForEach(items) { item in
+                        DesignTokens.controlCircleFill
+                            .frame(width: 64.0, height: 64.0)
+                            .overlay {
+                                DecodedImageView(url: item.url, maxPixelSize: 200, contentMode: .fill)
+                            }
+                            .clipped()
+                            .clipShape(RoundedRectangle(cornerRadius: 12.0, style: .continuous))
+                    }
+                }
+            }
+
+            Button {
+                onUpscale()
+            } label: {
+                Text("Upscale")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.white)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(DesignTokens.brandFill)
+            #if !SKIP
+            .buttonBorderShape(.capsule)
+            #else
+            .clipShape(Capsule())
+            #endif
+            .accessibilityIdentifier("upscaleWaitingButton")
+        }
+        .padding(20.0)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 28.0, style: .continuous)
+                .fill(DesignTokens.stage)
+        )
+        #if !SKIP
+        .accessibilityElement(children: .contain)
+        #endif
+        .accessibilityIdentifier("waitingPhotosCard")
     }
 }
