@@ -87,6 +87,7 @@ struct ResultView: View {
                         Image(systemName: "square.and.arrow.up")
                             .foregroundStyle(.primary)
                     }
+                    .tint(Color.white)
                     .accessibilityLabel("Share")
                     .accessibilityIdentifier("shareResultButton")
                     #endif
@@ -140,6 +141,9 @@ struct ResultView: View {
                         Image(systemName: "ellipsis")
                             .foregroundStyle(.primary)
                     }
+                    #if !SKIP
+                    .tint(Color.white)
+                    #endif
                     .accessibilityLabel("More")
                     .accessibilityIdentifier("resultMoreMenu")
                     // Attached to the menu so the iOS 26 popover points at "…", not at the middle of the photo.
