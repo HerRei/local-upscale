@@ -264,7 +264,8 @@ final class LocalSRUITests: XCTestCase {
         let pinchElement = pinchTarget.exists ? pinchTarget : canvas
         pinchElement.pinch(withScale: 0.15, velocity: -1.0)
         Thread.sleep(forTimeInterval: 0.6)
-        XCTAssertTrue(summary.exists && handle.exists, "Viewer dismissed on pinch-in from zoomed state")
+        // The caption fades out while zoomed and back in at 1x.
+        XCTAssertTrue(summary.waitForExistence(timeout: 3) && handle.exists, "Viewer dismissed on pinch-in from zoomed state")
 
         pinchElement.pinch(withScale: 0.15, velocity: -1.0)
         Thread.sleep(forTimeInterval: 0.6)

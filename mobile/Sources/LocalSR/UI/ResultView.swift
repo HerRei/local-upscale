@@ -139,6 +139,34 @@ struct ResultView: View {
                     }
                     .accessibilityLabel("More")
                     .accessibilityIdentifier("resultMoreMenu")
+                    // Attached to the menu so the iOS 26 popover points at "…", not at the middle of the photo.
+                    .confirmationDialog(
+                        "Delete this upscaled photo from LocalSR?",
+                        isPresented: $isShowingDeleteConfirm,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Delete Photo", role: .destructive) {
+                            if let result = currentResult {
+                                appModel.delete(result)
+                            }
+                            dismiss()
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        if let result = currentResult, !appModel.isSaved(result.id) {
+                            #if SKIP
+                            Text("It hasn't been saved to Gallery.")
+                            #else
+                            Text("It hasn't been saved to Photos.")
+                            #endif
+                        } else {
+                            #if SKIP
+                            Text("Your gallery isn't changed.")
+                            #else
+                            Text("Your photo library isn't changed.")
+                            #endif
+                        }
+                    }
                 }
             }
         }
@@ -216,33 +244,6 @@ struct ResultView: View {
             }
         } message: {
             Text(appModel.rerunErrorMessage ?? "Upscaling with the selected model failed.")
-        }
-        .confirmationDialog(
-            "Delete this upscaled photo from LocalSR?",
-            isPresented: $isShowingDeleteConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Delete Photo", role: .destructive) {
-                if let result = currentResult {
-                    appModel.delete(result)
-                }
-                dismiss()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            if let result = currentResult, !appModel.isSaved(result.id) {
-                #if SKIP
-                Text("It hasn't been saved to Gallery.")
-                #else
-                Text("It hasn't been saved to Photos.")
-                #endif
-            } else {
-                #if SKIP
-                Text("Your gallery isn't changed.")
-                #else
-                Text("Your photo library isn't changed.")
-                #endif
-            }
         }
     }
 
@@ -406,16 +407,23 @@ struct ResultView: View {
 
                     Text(UIFormatting.resultDetailsLine(model: result.model, unit: result.unit, seconds: result.seconds))
                         .font(.footnote)
-                        .foregroundStyle(Color.white.opacity(0.7))
+                        .foregroundStyle(Color.white.opacity(0.85))
                         .adaptiveMonospacedDigit()
 
                     if !scaleNote.isEmpty {
                         Text(scaleNote)
                             .font(.footnote)
-                            .foregroundStyle(Color.white.opacity(0.7))
+                            .foregroundStyle(Color.white.opacity(0.85))
                     }
                 }
                 .multilineTextAlignment(.center)
+                // A dark backing keeps the caption readable over bright photos (white at 85 % stays above 4.5:1).
+                .padding(.horizontal, 12.0)
+                .padding(.vertical, 6.0)
+                .background(RoundedRectangle(cornerRadius: 12.0).fill(Color.black.opacity(0.6)))
+                // Nobody reads the size while inspecting pixels, and the divider would run through the text.
+                .opacity(zoom > 1.01 ? 0.0 : 1.0)
+                .animation(.easeOut(duration: 0.2), value: zoom > 1.01)
                 .padding(.horizontal, 16.0)
                 #if !SKIP
                 .accessibilityElement(children: .ignore)

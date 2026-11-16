@@ -83,6 +83,39 @@ struct HomeView: View {
                         }
                         .accessibilityLabel("More")
                         .accessibilityIdentifier("homeMoreMenu")
+                        // Attached to the menu: on iOS 26 the dialog is a popover that points at the view it is attached to.
+                        .confirmationDialog(
+                            appModel.results.count == 1 ? "Delete the upscaled photo from LocalSR?" : "Delete all \(appModel.results.count) upscaled photos from LocalSR?",
+                            isPresented: $isShowingDeleteAllConfirm,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Delete All", role: .destructive) {
+                                if reduceMotion {
+                                    appModel.deleteAll()
+                                } else {
+                                    withAnimation(.easeOut(duration: 0.25)) {
+                                        appModel.deleteAll()
+                                    }
+                                }
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            let unsaved = appModel.unsavedResultsCount
+                            if unsaved > 0 {
+                                let verb = unsaved == 1 ? "hasn't" : "haven't"
+                                #if SKIP
+                                Text("Photos in your gallery stay there. \(unsaved) \(verb) been saved.")
+                                #else
+                                Text("Photos in your library stay there. \(unsaved) \(verb) been saved.")
+                                #endif
+                            } else {
+                                #if SKIP
+                                Text("Photos in your gallery stay there.")
+                                #else
+                                Text("Photos in your library stay there.")
+                                #endif
+                            }
+                        }
                     }
                 }
                 .navigationDestination(for: String.self) { resultID in
@@ -182,38 +215,6 @@ struct HomeView: View {
                         Text("Your gallery isn't changed.")
                         #else
                         Text("Your photo library isn't changed.")
-                        #endif
-                    }
-                }
-                .confirmationDialog(
-                    appModel.results.count == 1 ? "Delete the upscaled photo from LocalSR?" : "Delete all \(appModel.results.count) upscaled photos from LocalSR?",
-                    isPresented: $isShowingDeleteAllConfirm,
-                    titleVisibility: .visible
-                ) {
-                    Button("Delete All", role: .destructive) {
-                        if reduceMotion {
-                            appModel.deleteAll()
-                        } else {
-                            withAnimation(.easeOut(duration: 0.25)) {
-                                appModel.deleteAll()
-                            }
-                        }
-                    }
-                    Button("Cancel", role: .cancel) {}
-                } message: {
-                    let unsaved = appModel.unsavedResultsCount
-                    if unsaved > 0 {
-                        let verb = unsaved == 1 ? "hasn't" : "haven't"
-                        #if SKIP
-                        Text("Photos in your gallery stay there. \(unsaved) \(verb) been saved.")
-                        #else
-                        Text("Photos in your library stay there. \(unsaved) \(verb) been saved.")
-                        #endif
-                    } else {
-                        #if SKIP
-                        Text("Photos in your gallery stay there.")
-                        #else
-                        Text("Photos in your library stay there.")
                         #endif
                     }
                 }
