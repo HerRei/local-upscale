@@ -1,8 +1,9 @@
 import XCTest
 
 final class LocalSRUITests: XCTestCase {
-    private let shotDir = "/private/tmp/claude-501/-Users-hermesheiniger/619da889-5d3f-4724-b759-70d636ce5866/scratchpad/fix3/shots"
-    private let shareShotDir = "/private/tmp/claude-501/-Users-hermesheiniger/619da889-5d3f-4724-b759-70d636ce5866/scratchpad/fix3/shots"
+    /// Screenshots go to SHOT_DIR (pass it as TEST_RUNNER_SHOT_DIR to xcodebuild), else to the runner's temporary directory.
+    private let shotDir = UITestShots.directory("phone")
+    private let shareShotDir = UITestShots.directory("phone")
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -616,5 +617,13 @@ final class LocalSRUITests: XCTestCase {
         let shot = XCUIScreen.main.screenshot()
         let path = (shareShotDir as NSString).appendingPathComponent(filename)
         try? shot.pngRepresentation.write(to: URL(fileURLWithPath: path))
+    }
+}
+
+/// Where UI tests write their screenshots. Shared by the phone and tablet test classes.
+enum UITestShots {
+    static func directory(_ name: String) -> String {
+        let base = ProcessInfo.processInfo.environment["SHOT_DIR"] ?? (NSTemporaryDirectory() as NSString).appendingPathComponent("LocalSRShots")
+        return (base as NSString).appendingPathComponent(name)
     }
 }

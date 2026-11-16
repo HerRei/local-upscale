@@ -80,6 +80,9 @@ android {
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
+    // The device tests run against debug by default. -PtestBuildType=release runs them against the
+    // minified release build (R8): gradle -p Android :app:connectedReleaseAndroidTest -PtestBuildType=release
+    testBuildType = (findProperty("testBuildType") as String?) ?: "debug"
 
     lint {
         disable.add("Instantiatable")

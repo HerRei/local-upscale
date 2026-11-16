@@ -6,7 +6,7 @@
 
 Run it with the model-library Python (torch, coremltools, spandrel):
 
-    /Users/hermesheiniger/LocalSR-model-library/.venv/bin/python mobile/tools/export_models.py
+    <model-library checkout>/.venv/bin/python mobile/tools/export_models.py
 
 Core ML runs in that interpreter. LiteRT conversion and the TFLite check run in a second
 interpreter, mobile/tools/.venv-litert (litert-torch needs its own torch); this script creates
@@ -31,8 +31,10 @@ MODELS_DIR = TOOLS.parent / "Models"
 LITERT_VENV = TOOLS / ".venv-litert"
 LITERT_PYTHON = LITERT_VENV / "bin" / "python"
 
-TRAIN_SRC = Path(os.environ.get("LOCALSR_TRAIN", "/Users/hermesheiniger/Projects/LocalSR/localsr-train"))
-ENGINE_SRC = Path(os.environ.get("LOCALSR_SRC", "/Users/hermesheiniger/Projects/LocalSR/LocalSR-038-integ/src"))
+# The sources default to sibling checkouts of this repository (the folder that holds the LocalSR checkouts).
+WORKSPACE = TOOLS.parents[2]
+TRAIN_SRC = Path(os.environ.get("LOCALSR_TRAIN", WORKSPACE / "localsr-train"))
+ENGINE_SRC = Path(os.environ.get("LOCALSR_SRC", WORKSPACE / "LocalSR-038-integ" / "src"))
 CANDIDATES = TRAIN_SRC / "candidates"
 
 SIDE = 384

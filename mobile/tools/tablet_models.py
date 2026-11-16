@@ -16,7 +16,7 @@ ROOT = common.TOOLS.parent
 IOS = common.MODELS_DIR / 'ios-tablet'
 ANDROID = common.MODELS_DIR / 'android-tablet'
 SOURCE = Path.home() / 'Library/Application Support/LocalSR/models'
-CORE_SRC = Path('/Users/hermesheiniger/Projects/LocalSR/LocalSR-coreml/src')
+CORE_SRC = Path(os.environ.get('LOCALSR_CORE_SRC', common.WORKSPACE / 'LocalSR-coreml' / 'src'))
 # A 256px fixed window limits the activation memory of the larger restoration networks.
 MODELS = {
     'best': (common.CANDIDATES / 'localsr_photo_pulse48_v1_x4.safetensors', 384),
@@ -204,7 +204,9 @@ def run(check=False):
             print(f'[{key}] {action}', flush=True)
             with tempfile.TemporaryDirectory(prefix='tablet-', dir=ROOT) as temp:
                 result = Path(temp) / 'result.json'
-                python = sys.executable if platform == 'ios' else str(common.LITERT_PYTHON if common.LITERT_PYTHON.exists() else Path('/Users/hermesheiniger/Projects/LocalSR/LocalSR-mobile/mobile/tools/.venv-litert/bin/python'))
+                if platform != 'ios':
+                    common.ensure_litert_venv()
+                python = sys.executable if platform == 'ios' else str(common.LITERT_PYTHON)
                 try:
                     proc = subprocess.run([python, str(common.TOOLS / 'export_models.py'), '--tablet-worker', action, key, str(result)], timeout=600 if key == 'scunet' else None, env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'))
                     data = json.loads(result.read_text()) if result.exists() else {'ok': False, 'error': f'worker exited {proc.returncode} without a result'}

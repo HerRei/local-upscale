@@ -1,13 +1,14 @@
 
-copyright "#{Time.now.year}"
+copyright "#{Time.now.year} Hermes Reisner"
 
 force(true) # Skip HTML report verification
-automatic_release(true)
+# Upload only: submitting for review and releasing stay manual steps in App Store Connect.
+automatic_release(false)
 skip_screenshots(false)
 precheck_include_in_app_purchases(false)
 
 #skip_binary_upload(true)
-submit_for_review(true)
+submit_for_review(false)
 
 submission_information({
     add_id_info_serves_ads: false,

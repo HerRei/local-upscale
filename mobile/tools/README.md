@@ -11,7 +11,7 @@ read only: checkpoints in `localsr-train/candidates`, `prepare_export_model` fro
 `LocalSR-038-integ/src` (override with `LOCALSR_TRAIN` / `LOCALSR_SRC`).
 
 ```
-PY=/Users/hermesheiniger/LocalSR-model-library/.venv/bin/python
+PY=<model-library checkout>/.venv/bin/python
 $PY mobile/tools/export_models.py            # convert, write mobile/Models/ (about 30 s)
 $PY mobile/tools/export_models.py --check    # numeric check, exit code 1 if a CPU path < 55 dB
 ```

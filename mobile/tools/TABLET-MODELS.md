@@ -52,7 +52,7 @@ FBCNN uses its own estimated quality factor, matching Spandrel’s standard imag
 The single SCUNet Core ML attempt failed in coremltools 9.0: `ValueError: Op "attn_mask.1_internal_tensor_assign_1" (op_type: torch_tensor_assign) Input x="attn_mask.1" expects tensor or scalar of dtype from type domain ['fp16', 'fp32', 'int32'] but got tensor[32,32,8,8,8,8,bool]`. SCUNet is excluded. All eight listed models converted to LiteRT and passed the CPU probe.
 
 ```sh
-PY=/Users/hermesheiniger/LocalSR-model-library/.venv/bin/python
+PY=<model-library checkout>/.venv/bin/python
 $PY mobile/tools/export_models.py --set tablet
 $PY mobile/tools/export_models.py --set tablet --check
 ```

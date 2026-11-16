@@ -14,14 +14,20 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
-    <!-- <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" /> -->
+
+    <!-- LocalSR never uses the network. Skip's libraries bring these in (INTERNET from okhttp in SkipFoundation,
+         the other two from WorkManager in SkipUI, which only scheduled local notifications use, and this app has none),
+         so remove them from the merged manifest. Check with: aapt2 dump permissions app-release.apk -->
+    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" tools:node="remove" />
 
     <application
         android:label="${PRODUCT_NAME}"
         android:name=".AndroidAppMain"
         android:largeHeap="true"
         android:supportsRtl="true"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"
@@ -50,6 +56,9 @@
             android:name="local.sr.UpscaleForegroundService"
             android:exported="false"
             android:foregroundServiceType="mediaProcessing|dataSync" />
+
+        <!-- Compose's preview host (ui-tooling, pulled in by SkipUI) is exported; it has no place in the app. -->
+        <activity android:name="androidx.compose.ui.tooling.PreviewActivity" tools:node="remove" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

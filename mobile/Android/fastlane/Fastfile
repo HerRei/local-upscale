@@ -45,7 +45,11 @@ lane :release do
 
   assemble
 
+  # Upload to internal testing as a draft. Promoting to production stays a manual step in Play Console
+  # (the default track would be production, released at once).
   upload_to_play_store(
-    aab: '../.build/Android/app/outputs/bundle/release/app-release.aab'
+    aab: '../.build/Android/app/outputs/bundle/release/app-release.aab',
+    track: 'internal',
+    release_status: 'draft'
   )
 end

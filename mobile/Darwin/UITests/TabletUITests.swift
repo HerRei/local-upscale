@@ -2,9 +2,9 @@ import XCTest
 import UIKit
 
 final class TabletUITests: XCTestCase {
-    private let shotDir = "/private/tmp/claude-501/-Users-hermesheiniger/619da889-5d3f-4724-b759-70d636ce5866/scratchpad/tui1/shots"
-    private let tui2ShotDir = "/private/tmp/claude-501/-Users-hermesheiniger/619da889-5d3f-4724-b759-70d636ce5866/scratchpad/tui2/shots"
-    private let tui3ShotDir = "/private/tmp/claude-501/-Users-hermesheiniger/619da889-5d3f-4724-b759-70d636ce5866/scratchpad/tui3/shots"
+    private let shotDir = UITestShots.directory("tablet")
+    private let tui2ShotDir = UITestShots.directory("tablet-viewer")
+    private let tui3ShotDir = UITestShots.directory("tablet-enhance")
 
     override func setUpWithError() throws {
         continueAfterFailure = false
