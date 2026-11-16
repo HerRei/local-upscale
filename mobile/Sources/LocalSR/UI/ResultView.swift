@@ -78,12 +78,14 @@ struct ResultView: View {
                         AndroidUISupport.shareImageFile(ProcessInfo.processInfo.androidContext, result.outputURL.path)
                     } label: {
                         Image(systemName: "square.and.arrow.up")
+                            .foregroundStyle(.primary)
                     }
                     .accessibilityLabel("Share")
                     .accessibilityIdentifier("shareResultButton")
                     #else
                     ShareLink(item: result.outputURL) {
                         Image(systemName: "square.and.arrow.up")
+                            .foregroundStyle(.primary)
                     }
                     .accessibilityLabel("Share")
                     .accessibilityIdentifier("shareResultButton")
@@ -136,6 +138,7 @@ struct ResultView: View {
                         .accessibilityIdentifier("deleteResultMenuButton")
                     } label: {
                         Image(systemName: "ellipsis")
+                            .foregroundStyle(.primary)
                     }
                     .accessibilityLabel("More")
                     .accessibilityIdentifier("resultMoreMenu")

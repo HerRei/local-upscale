@@ -231,7 +231,7 @@ struct HomeView: View {
         #else
         mainScrollContent
             .scrollEdgeEffectStyle(.soft, for: .bottom)
-            .safeAreaInset(edge: .bottom, spacing: 0.0) {
+            .safeAreaBar(edge: .bottom, spacing: 0.0) {
                 actionBarContainer
             }
         #endif
@@ -478,6 +478,7 @@ struct HomeView: View {
         }
         .frame(minHeight: 40.0)
         .padding(.horizontal, 6.0)
+        .foregroundStyle(.primary)
 
         let menuContent = Menu {
             #if SKIP
@@ -564,7 +565,11 @@ struct HomeView: View {
                 }
             }
             .font(.headline)
+            #if !SKIP
+            .foregroundStyle(appModel.waitingItems.isEmpty ? Color.white : Color.primary)
+            #else
             .foregroundStyle(Color.white)
+            #endif
             .frame(maxWidth: .infinity, minHeight: 40.0)
         }
         .disabled(appModel.isLoadingPickedPhotos || appModel.isBatchRunning)
@@ -577,12 +582,20 @@ struct HomeView: View {
             .clipShape(Capsule())
             .frame(minHeight: 56.0)
         #else
-        button
-            .buttonStyle(.glassProminent)
-            .buttonBorderShape(.capsule)
-            .controlSize(.large)
-            .tint(DesignTokens.brandFill)
-            .glassEffectID("choosePhotos", in: actionBarNamespace)
+        if appModel.waitingItems.isEmpty {
+            button
+                .buttonStyle(.glassProminent)
+                .buttonBorderShape(.capsule)
+                .controlSize(.large)
+                .tint(DesignTokens.brandFill)
+                .glassEffectID("choosePhotos", in: actionBarNamespace)
+        } else {
+            button
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
+                .controlSize(.large)
+                .glassEffectID("choosePhotos", in: actionBarNamespace)
+        }
         #endif
     }
 
@@ -607,10 +620,15 @@ struct HomeView: View {
 
         let row = HStack(spacing: 12.0) {
             VStack(alignment: .leading, spacing: 4.0) {
-                Text(titleText)
-                    .font(.headline)
-                    .lineLimit(1)
-                    .accessibilityIdentifier("batchCountLabel")
+                HStack {
+                    if appModel.preparingModel != nil {
+                        ProgressView()
+                    }
+                    Text(titleText)
+                        .font(.headline)
+                        .lineLimit(1)
+                        .accessibilityIdentifier("batchCountLabel")
+                }
 
                 if let subtitleText {
                     Text(subtitleText)
@@ -621,9 +639,11 @@ struct HomeView: View {
                         .accessibilityIdentifier("batchETALabel")
                 }
 
-                ProgressView(value: appModel.overallBatchProgress, total: 1.0)
-                    .tint(DesignTokens.brandFill)
-                    .padding(.top, 2.0)
+                if appModel.preparingModel == nil {
+                    ProgressView(value: appModel.overallBatchProgress, total: 1.0)
+                        .tint(DesignTokens.brandFill)
+                        .padding(.top, 2.0)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -683,13 +703,8 @@ private struct ResultThumbnailCell: View {
             .overlay(alignment: .bottomTrailing) {
                 if isSaved {
                     ZStack {
-                        #if SKIP
                         Circle()
                             .fill(Color.black.opacity(0.6))
-                        #else
-                        Circle()
-                            .fill(.ultraThinMaterial)
-                        #endif
                         Image(systemName: "checkmark")
                             .font(.system(size: 11.0, weight: .bold))
                             .foregroundStyle(Color.white)
@@ -719,7 +734,13 @@ private struct StageCardView: View {
         RoundedRectangle(cornerRadius: 28.0, style: .continuous)
             .fill(DesignTokens.stage)
             .frame(maxWidth: .infinity)
+            #if SKIP
             .frame(height: 320.0)
+            #else
+            .containerRelativeFrame(.vertical) { height, _ in
+                min(max(height * 0.55, 320.0), 560.0)
+            }
+            #endif
             .overlay {
                 if let item {
                     GeometryReader { geo in
@@ -815,7 +836,7 @@ private struct BatchSummaryCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14.0) {
-            HStack(alignment: .top, spacing: 12.0) {
+            HStack(alignment: .center, spacing: 12.0) {
                 titleView
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("batchSummaryCard")
@@ -967,6 +988,7 @@ private struct BatchSummaryCard: View {
         }
         .buttonStyle(.bordered)
         #if !SKIP
+        .controlSize(.large)
         .buttonBorderShape(.capsule)
         #else
         .clipShape(Capsule())
@@ -1066,6 +1088,7 @@ private struct WaitingPhotosCard: View {
             .buttonStyle(.borderedProminent)
             .tint(DesignTokens.brandFill)
             #if !SKIP
+            .controlSize(.large)
             .buttonBorderShape(.capsule)
             #else
             .clipShape(Capsule())
