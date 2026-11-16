@@ -331,7 +331,9 @@ struct ModelLibraryView: View {
                     .foregroundStyle(Theme.tertiary)
             }
             .padding(.vertical, 10.0)
+            #if !SKIP
             .contentShape(Rectangle())
+            #endif
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("tabletLibraryLicenceLink")
