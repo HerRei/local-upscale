@@ -2,7 +2,7 @@ package local.sr
 
 import android.app.ActivityManager
 import android.graphics.BitmapFactory
-import android.os.Debug
+import android.os.StatFs
 import local.srcore.SizePolicy
 import android.content.ContentValues
 import android.content.Context
@@ -12,7 +12,9 @@ import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
 import androidx.exifinterface.media.ExifInterface
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -50,7 +52,12 @@ class AndroidUpscaler(context: Context) {
     private val checker = DeviceChecker(this.context)
     private val lock = Mutex()
     private var engine: LiteRtEngine? = null
-    /** Verdicts that must not be cached (NPU load timed out: "use the GPU for this session"). */
+    /** The thread all native calls of an NPU/GPU [engine] run on (null for the CPU). */
+    private var engineThread: EngineThread? = null
+    /**
+     * Verdicts that must not be cached: the NPU load timed out ("use the GPU for this session"), or an accelerator
+     * failed during a job, which can be transient (GPU busy, a driver hiccup), so it only holds for this process.
+     */
     private val sessionVerdicts = HashMap<ModelKey, DeviceVerdict>()
 
     /** Last device check report per model (human readable), for the About screen and logs. */
@@ -61,36 +68,64 @@ class AndroidUpscaler(context: Context) {
     suspend fun prepare(model: ModelKey): DeviceVerdict = lock.withLock { prepareLocked(model) }
 
     private suspend fun prepareLocked(model: ModelKey): DeviceVerdict {
-        var verdict = sessionVerdicts[model] ?: checker.cached(model)
-        if (verdict == null) {
-            val report = checker.run(model)
-            reports[model] = report.toString()
-            verdict = report.verdict
-            if (report.cacheable) checker.store(model, verdict) else sessionVerdicts[model] = verdict
-        }
+        var verdict = sessionVerdicts[model] ?: checker.cached(model) ?: runCheck(model)
         val current = engine
         if (current != null && current.model == model && current.unit == verdict.unit) return verdict
         closeEngine()
         try {
-            engine = withContext(Dispatchers.Default) { LiteRtEngine.load(context, model, verdict.unit) }
+            loadEngine(model, verdict.unit)
+        } catch (c: CancellationException) {
+            throw c
         } catch (t: Throwable) {
             if (verdict.unit == ComputeUnit.cpu) throw UpscaleException("Cannot load the ${model.rawValue} model on the CPU: ${t.message}", t)
-            // The cached unit no longer works (driver update, ...): forget it and measure again.
+            // The cached unit no longer works (driver update, ...): forget it and measure again. A load that hangs
+            // is recorded, so the new check skips that unit.
             Log.w(TAG, "cached ${verdict.unit.rawValue} verdict for ${model.rawValue} failed to load: ${t.message}")
+            if (t is UnitHangException) checker.markFailed(model, verdict.unit, "took more than ${LOAD_TIMEOUT_MS / 1000} s to load")
             checker.forget(model)
             sessionVerdicts.remove(model)
-            val report = checker.run(model)
-            reports[model] = report.toString()
-            verdict = report.verdict
-            if (report.cacheable) checker.store(model, verdict) else sessionVerdicts[model] = verdict
-            engine = withContext(Dispatchers.Default) { LiteRtEngine.load(context, model, verdict.unit) }
+            verdict = runCheck(model)
+            loadEngine(model, verdict.unit)
         }
         return verdict
     }
 
+    private suspend fun runCheck(model: ModelKey): DeviceVerdict {
+        val report = checker.run(model)
+        reports[model] = report.toString()
+        if (report.cacheable) checker.store(model, report.verdict) else sessionVerdicts[model] = report.verdict
+        return report.verdict
+    }
+
+    /** Loads [unit] into [engine]. An NPU/GPU engine gets its own thread, and its load a time limit. */
+    private suspend fun loadEngine(model: ModelKey, unit: ComputeUnit) {
+        if (unit == ComputeUnit.cpu) {
+            engine = withContext(Dispatchers.Default) { LiteRtEngine.load(context, model, unit) }
+            return
+        }
+        val thread = EngineThread("localsr-${unit.rawValue}")
+        val key = checker.cacheKey(model)
+        try {
+            engine = withContext(Dispatchers.Default) {
+                val job = coroutineContext[Job]
+                thread.call(LOAD_TIMEOUT_MS, isCancelled = { job?.isActive == false }, onDiscard = { loaded: LiteRtEngine -> loaded.close() }) {
+                    checker.guard.inUse(key, unit.rawValue) { LiteRtEngine.load(context, model, unit) }
+                }
+            }
+            engineThread = thread
+        } catch (t: Throwable) {
+            thread.retire {}
+            throw t
+        }
+    }
+
+    /** Closes the engine. An NPU/GPU engine is closed on its own thread, after a call that may still hang there. */
     private fun closeEngine() {
-        engine?.close()
+        val e = engine ?: return
+        val thread = engineThread
         engine = null
+        engineThread = null
+        if (thread == null) e.close() else thread.retire { e.close() }
     }
 
     /** Frees the loaded model (call from onLowMemory / when leaving the app). */
@@ -103,6 +138,11 @@ class AndroidUpscaler(context: Context) {
         if (options.outWidth > 0 && options.outHeight > 0) Pair(options.outWidth, options.outHeight) else null
     } catch (_: Exception) { null }
 
+    /**
+     * Whether a Full 4x run of this photo fits in memory now. The big buffers (decoded input, output and preview
+     * Bitmaps) are native memory since API 26, so they are checked against the system's available memory; the Java
+     * heap only holds per-tile arrays, whose size does not depend on the output size.
+     */
     fun canUseFullScale(inputUri: String): Boolean {
         val (width, height) = dimensions(Uri.parse(inputUri)) ?: return false
         val policy = SizePolicy.target(width = width, height = height)
@@ -111,11 +151,15 @@ class AndroidUpscaler(context: Context) {
         val info = ActivityManager.MemoryInfo()
         manager.getMemoryInfo(info)
         val runtime = Runtime.getRuntime()
-        val used = (runtime.totalMemory() - runtime.freeMemory()) + Debug.getNativeHeapAllocatedSize()
-        val heapLimit = minOf(runtime.maxMemory(), manager.largeMemoryClass.toLong() * 1024 * 1024)
-        val budget = heapLimit - used
-        val required = policy.width.toDouble() * policy.height * 16 * 4 * 2.5
-        return minOf(info.availMem, budget).toDouble() >= required
+        val heapFree = runtime.maxMemory() - (runtime.totalMemory() - runtime.freeMemory())
+        val outputPixels = policy.width.toLong() * policy.height * 16
+        return FullScaleBudget.fits(outputPixels, availMem = info.availMem, lowMemoryThreshold = info.threshold, lowMemory = info.lowMemory, javaHeapFree = heapFree)
+    }
+
+    private fun freeCacheBytes(): Long = try {
+        StatFs(context.cacheDir.absolutePath).availableBytes
+    } catch (_: Throwable) {
+        Long.MAX_VALUE
     }
 
     // MARK: upscale
@@ -139,6 +183,9 @@ class AndroidUpscaler(context: Context) {
                 val policy = SizePolicy.target(width = bounds.first, height = bounds.second)
                 val scale = if (fullScale && canUseFullScale(inputUri)) 4 else policy.outputScale
                 val fullScaleFallback = fullScale && policy.outputScale == 2 && scale < 4
+                // Fail before minutes of tiling, not at the JPEG write.
+                val storageNeeded = StorageBudget.bytesNeeded(policy.width.toLong() * policy.height * scale * scale)
+                if (freeCacheBytes() < storageNeeded) throw UpscaleException(StorageBudget.notEnoughMessage(storageNeeded))
                 var input: Bitmap? = AndroidCodec.decode(context, uri)
                 val w = input!!.width
                 val h = input.height
@@ -154,35 +201,65 @@ class AndroidUpscaler(context: Context) {
                     var usedUnit = verdict.unit
                     progress(0.0)
                     UpscaleForegroundService.updateProgress(context, 0.0)
+                    val job = coroutineContext[Job]
+                    val guardKey = checker.cacheKey(model)
                     val runner = TileRunner { tile ->
                         val e = engine ?: throw UpscaleException("Model is not loaded")
+                        val thread = engineThread
+                        if (e.unit == ComputeUnit.cpu || thread == null) return@TileRunner e.run(tile)
                         try {
-                            e.run(tile)
+                            // On the engine's own thread with a time limit: a driver that hangs fails this tile
+                            // instead of blocking the job, Cancel and every later photo.
+                            thread.call(TILE_TIMEOUT_MS, isCancelled = { job?.isActive == false }) {
+                                checker.guard.inUse(guardKey, e.unit.rawValue) { e.run(tile) }
+                            }
+                        } catch (c: CancellationException) {
+                            if (thread.isAbandoned) closeEngine() // its tile is still running; closed when it returns
+                            throw c
+                        } catch (oom: OutOfMemoryError) {
+                            // The Java heap (the tile's output array), not the accelerator: the CPU would need the same memory.
+                            throw UpscaleException("Not enough memory to upscale this photo. Close other apps and try again.", oom)
                         } catch (t: Throwable) {
-                            if (e.unit == ComputeUnit.cpu) throw t
-                            // The chosen accelerator failed mid-job: continue on the CPU and remember that.
-                            Log.w(TAG, "${e.unit.rawValue} failed during upscale (${t.message}); falling back to the CPU")
-                            checker.store(model, DeviceVerdict(unit = ComputeUnit.cpu, reason = "${e.unit.rawValue.uppercase()} failed while upscaling; using CPU."))
-                            e.close()
+                            // The accelerator failed mid-job: finish on the CPU. A failed tile can be transient, so the
+                            // CPU only holds for this session; a hang is recorded, so later checks skip the unit.
+                            Log.w(TAG, "${e.unit.rawValue} failed during upscale (${t.message}); continuing on the CPU for this session")
+                            if (t is UnitHangException) checker.markFailed(model, e.unit, "did not finish a tile within ${TILE_TIMEOUT_MS / 1000} s")
+                            sessionVerdicts[model] = DeviceVerdict(unit = ComputeUnit.cpu, reason = "${e.unit.rawValue.uppercase()} failed while upscaling; using the CPU for now.")
+                            closeEngine()
                             val cpu = LiteRtEngine.load(context, model, ComputeUnit.cpu)
                             engine = cpu
                             usedUnit = ComputeUnit.cpu
                             cpu.run(tile)
                         }
                     }
-                    TilePipeline.process(BitmapSource(input), BitmapSink(output), runner, outputScale = scale) { done, total ->
-                        val f = done.toDouble() / total * 0.97
-                        progress(f)
-                        UpscaleForegroundService.updateProgress(context, f)
+                    // While real tiles run on an NPU/GPU, keep it marked as in use: if its driver takes the process
+                    // down, the next start skips it instead of crashing on every batch.
+                    val guardedUnit = engine?.unit?.takeIf { it != ComputeUnit.cpu && engineThread != null }
+                    if (guardedUnit != null) checker.guard.begin(guardKey, guardedUnit.rawValue)
+                    try {
+                        TilePipeline.process(BitmapSource(input), BitmapSink(output), runner, outputScale = scale) { done, total ->
+                            val f = done.toDouble() / total * 0.97
+                            progress(f)
+                            UpscaleForegroundService.updateProgress(context, f)
+                        }
+                    } finally {
+                        if (guardedUnit != null) checker.guard.end(guardKey, guardedUnit.rawValue)
                     }
                     input.recycle()
                     input = null
                     val outFile = File(dir, "output.jpg")
-                    AndroidCodec.writeJpeg(output, outFile)
-                    AndroidCodec.copyExif(context, uri, outFile, ow, oh)
-                    val prev = AndroidCodec.preview(output)
-                    AndroidCodec.writeJpeg(prev, File(dir, "preview.jpg"))
-                    if (prev !== output) prev.recycle()
+                    try {
+                        AndroidCodec.writeJpeg(output, outFile)
+                        AndroidCodec.copyExif(context, uri, outFile, ow, oh)
+                        val prev = AndroidCodec.preview(output)
+                        try { AndroidCodec.writeJpeg(prev, File(dir, "preview.jpg")) } finally { if (prev !== output) prev.recycle() }
+                    } catch (t: Exception) {
+                        // A full disk shows up as "JPEG encoding failed" (Bitmap.compress swallows the IOException) or ENOSPC.
+                        if (t !is CancellationException && StorageBudget.isOutOfSpace(t, freeCacheBytes())) {
+                            throw UpscaleException("Not enough free storage to save the result. Free up some space and try again.", t)
+                        }
+                        throw t
+                    }
                     currentCoroutineContext().ensureActive()
                     progress(1.0)
                     val seconds = (System.nanoTime() - started) / 1e9
@@ -209,6 +286,55 @@ class AndroidUpscaler(context: Context) {
 
     companion object {
         private const val TAG = "LocalSR"
+        /** An NPU/GPU load that takes longer is treated as hung (the device check allows 60 s for load + warm-up + timing). */
+        const val LOAD_TIMEOUT_MS = DeviceChecker.GPU_TIMEOUT_MS
+        /** A tile takes well under a few seconds on an accelerator that passed the check; one without an answer for this long has hung. */
+        const val TILE_TIMEOUT_MS = 90_000L
+    }
+}
+
+/** DESIGN.md: Full 4x needs available memory of at least 2.5 times the output buffer. */
+object FullScaleBudget {
+    /** Java heap a run needs besides the native buffers: the 28 MB per-tile model output plus stitching arrays, with room. */
+    const val JAVA_HEAP_BYTES = 64L * 1024 * 1024
+
+    /** 2.5x the ARGB_8888 output Bitmap: covers the output, the decoded input, the preview steps and the engine. */
+    fun nativeBytesNeeded(outputPixels: Long): Long = outputPixels * 4 * 5 / 2
+
+    /**
+     * [availMem], [lowMemoryThreshold] and [lowMemory] come from ActivityManager.MemoryInfo. The need is counted
+     * above Android's low-memory threshold, so the run does not push the system into killing apps.
+     */
+    fun fits(outputPixels: Long, availMem: Long, lowMemoryThreshold: Long, lowMemory: Boolean, javaHeapFree: Long): Boolean =
+        !lowMemory && availMem - lowMemoryThreshold >= nativeBytesNeeded(outputPixels) && javaHeapFree >= JAVA_HEAP_BYTES
+}
+
+/** Free space a result needs in the cache folder, and how a full disk shows up when writing it. */
+object StorageBudget {
+    /** Below this much free space after a failed write, the disk was full. */
+    const val FULL_DISK_BYTES = 16L * 1024 * 1024
+
+    /** A quality-95 JPEG of upscaled content, per pixel, rounded up (0.2 to 0.4 is typical). */
+    private const val JPEG_BYTES_PER_PIXEL = 0.5
+
+    /** The output JPEG twice (the EXIF rewrite briefly keeps a copy) plus room for the preview. */
+    fun bytesNeeded(outputPixels: Long): Long = (outputPixels * JPEG_BYTES_PER_PIXEL * 2).toLong() + 16L * 1024 * 1024
+
+    fun notEnoughMessage(needed: Long): String {
+        val mb = (needed + 1024 * 1024 - 1) / (1024 * 1024)
+        return "Not enough free storage: this photo needs about $mb MB. Free up some space and try again."
+    }
+
+    fun isOutOfSpace(error: Throwable, freeBytes: Long): Boolean {
+        var t: Throwable? = error
+        var depth = 0
+        while (t != null && depth < 8) {
+            val msg = t.message ?: ""
+            if (msg.contains("ENOSPC") || msg.contains("No space left", ignoreCase = true)) return true
+            t = t.cause
+            depth++
+        }
+        return freeBytes < FULL_DISK_BYTES
     }
 }
 

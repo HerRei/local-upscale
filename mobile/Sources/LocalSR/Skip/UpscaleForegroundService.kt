@@ -10,6 +10,8 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeout
@@ -22,6 +24,11 @@ import androidx.core.content.ContextCompat
  * survives leaving the app. The work itself runs in the app's coroutines (AndroidUpscaler); this service only
  * holds the foreground state. Type mediaProcessing on API 35+, dataSync before. Reference counted: the first
  * acquire starts it, the last release stops it. Declared in Android/app/src/main/AndroidManifest.xml.
+ *
+ * A foreground service keeps the process alive but not the CPU awake, so while it runs it also holds a partial
+ * wake lock (the batch keeps going with the screen off). The lock has a time limit that every progress update
+ * extends, so a stuck job cannot keep the phone awake; it is released with the last release, when the service
+ * is destroyed and when the system ends it (onTimeout).
  *
  * The UI must ask for POST_NOTIFICATIONS on API 33+ (without it the service still runs, the notification is hidden).
  */
@@ -64,11 +71,15 @@ class UpscaleForegroundService : Service() {
     /** API 35+: the system gives mediaProcessing services a time budget; stop instead of being killed. */
     override fun onTimeout(startId: Int, fgsType: Int) {
         Log.w(TAG, "foreground service timeout (type $fgsType)")
+        synchronized(lock) { releaseWakeLockLocked() }
         stopSelf()
     }
 
     override fun onDestroy() {
-        synchronized(lock) { running = false }
+        synchronized(lock) {
+            running = false
+            releaseWakeLockLocked()
+        }
         super.onDestroy()
     }
 
@@ -89,6 +100,17 @@ class UpscaleForegroundService : Service() {
         private var running = false
         private var startResult: CompletableDeferred<Unit>? = null
         private val state = State()
+        private var wakeLock: PowerManager.WakeLock? = null
+        private var wakeLockExtendedAt = 0L
+        private var lastNotifiedAt = 0L
+        private var contentIntent: PendingIntent? = null
+
+        /** Safety net: the wake lock ends this long after the last progress update. */
+        private const val WAKE_LOCK_TIMEOUT_MS = 10 * 60 * 1000L
+        /** Progress updates extend the wake lock at most this often (each extension is a binder call). */
+        private const val WAKE_LOCK_EXTEND_MS = 60 * 1000L
+        /** Tile progress rebuilds the notification at most this often (Android drops faster updates anyway). */
+        private const val NOTIFY_INTERVAL_MS = 500L
 
         /** Wait until Android confirms foreground execution before starting work. */
         suspend fun acquire(context: Context) {
@@ -103,6 +125,7 @@ class UpscaleForegroundService : Service() {
                     try {
                         ContextCompat.startForegroundService(context, Intent(context, UpscaleForegroundService::class.java))
                         running = true
+                        holdWakeLockLocked(context)
                     } catch (t: Throwable) {
                         startResult!!.completeExceptionally(t)
                     }
@@ -122,9 +145,12 @@ class UpscaleForegroundService : Service() {
         fun release(context: Context) {
             synchronized(lock) {
                 holders = maxOf(0, holders - 1)
-                if (holders == 0 && running) {
-                    context.stopService(Intent(context, UpscaleForegroundService::class.java))
-                    running = false
+                if (holders == 0) {
+                    releaseWakeLockLocked()
+                    if (running) {
+                        context.stopService(Intent(context, UpscaleForegroundService::class.java))
+                        running = false
+                    }
                 }
             }
         }
@@ -132,32 +158,79 @@ class UpscaleForegroundService : Service() {
         /** Tells the notification which photo of the batch is being processed ("Photo 2 of 5"). Optional. */
         fun setBatch(context: Context, done: Int, total: Int) {
             synchronized(lock) { state.done = done; state.total = total }
-            refresh(context)
+            refresh(context, force = true)
         }
 
+        /** Called after every tile; rebuilds the notification at most every [NOTIFY_INTERVAL_MS]. */
         fun updateProgress(context: Context, fraction: Double) {
             synchronized(lock) { state.fraction = fraction }
-            refresh(context)
+            refresh(context, force = false)
         }
 
         fun setStatus(context: Context, title: String, detail: String?, fraction: Double) {
-            synchronized(lock) {
+            val titleChanged = synchronized(lock) {
+                val changed = state.title != title
                 state.title = title
                 state.detail = detail
                 state.fraction = fraction
+                changed
             }
-            refresh(context)
+            refresh(context, force = titleChanged)
         }
 
-        private fun refresh(context: Context) {
-            val isRunning = synchronized(lock) { running }
-            if (!isRunning) return
+        private fun refresh(context: Context, force: Boolean) {
+            val notification = synchronized(lock) {
+                if (!running) return
+                holdWakeLockLocked(context)
+                val now = SystemClock.elapsedRealtime()
+                if (!force && now - lastNotifiedAt < NOTIFY_INTERVAL_MS) return
+                lastNotifiedAt = now
+                try {
+                    buildNotification(context, state)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "cannot build the notification: ${t.message}")
+                    return
+                }
+            }
             try {
                 val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                nm.notify(NOTIFICATION_ID, buildNotification(context, state))
+                nm.notify(NOTIFICATION_ID, notification)
             } catch (t: Throwable) {
                 Log.w(TAG, "cannot update the notification: ${t.message}")
             }
+        }
+
+        /** Takes the partial wake lock, or extends its time limit (at most once a minute). Call with [lock] held. */
+        private fun holdWakeLockLocked(context: Context) {
+            try {
+                val now = SystemClock.elapsedRealtime()
+                val current = wakeLock
+                if (current != null && current.isHeld && now - wakeLockExtendedAt < WAKE_LOCK_EXTEND_MS) return
+                val wl = current ?: (context.applicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager)
+                    .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LocalSR:upscale")
+                    .also { it.setReferenceCounted(false); wakeLock = it }
+                // Not reference counted: acquiring again only moves the time limit.
+                wl.acquire(WAKE_LOCK_TIMEOUT_MS)
+                wakeLockExtendedAt = now
+            } catch (t: Throwable) {
+                Log.w(TAG, "cannot hold a wake lock: ${t.message}")
+            }
+        }
+
+        private fun releaseWakeLockLocked() {
+            val wl = wakeLock ?: return
+            wakeLock = null
+            try {
+                if (wl.isHeld) wl.release()
+            } catch (t: Throwable) {
+                Log.w(TAG, "cannot release the wake lock: ${t.message}")
+            }
+        }
+
+        /** The app's status-bar glyph (res/drawable/ic_stat_localsr.xml in the app module), not the system download arrow. */
+        private fun smallIcon(context: Context): Int {
+            val id = context.resources.getIdentifier("ic_stat_localsr", "drawable", context.packageName)
+            return if (id != 0) id else context.applicationInfo.icon
         }
 
         private fun ensureChannel(context: Context) {
@@ -172,10 +245,11 @@ class UpscaleForegroundService : Service() {
             val fallbackText = if (s.total > 1) "Photo ${minOf(s.done + 1, s.total)} of ${s.total}, $pct %" else "$pct %"
             val title = s.title ?: "Upscaling photos"
             val text = s.detail ?: fallbackText
-            val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
-            val content = launch?.let { PendingIntent.getActivity(context, 0, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT) }
+            val content = contentIntent ?: context.packageManager.getLaunchIntentForPackage(context.packageName)
+                ?.let { PendingIntent.getActivity(context, 0, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT) }
+                ?.also { contentIntent = it }
             return NotificationCompat.Builder(context, CHANNEL_ID)
-                .setSmallIcon(android.R.drawable.stat_sys_download)
+                .setSmallIcon(smallIcon(context))
                 .setContentTitle(title)
                 .setContentText(text)
                 .setProgress(100, pct, false)

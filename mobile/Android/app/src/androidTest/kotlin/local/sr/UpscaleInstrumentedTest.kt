@@ -20,11 +20,13 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import local.srcore.ComputeUnit
+import local.srcore.DeviceVerdict
 import local.srcore.ModelKey
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -127,6 +129,28 @@ class UpscaleInstrumentedTest {
             checker.store(model, report.verdict)
             val cached = checker.cached(model)
             assertNotNull(cached); assertEquals(report.verdict.unit, cached!!.unit); assertEquals(report.verdict.reason, cached.reason)
+            checker.forget(model)
+        }
+    }
+
+    @Test
+    fun deviceCheckSkipsAUnitThatCrashedTheAppBefore() = runBlocking<Unit> {
+        val checker = DeviceChecker(ctx)
+        val model = ModelKey.fast
+        val prefs = ctx.getSharedPreferences(DeviceChecker.PREFS_NAME, Context.MODE_PRIVATE)
+        val failedKey = UnitGuard.failedKey(checker.cacheKey(model))
+        val before = prefs.getString(failedKey, null)
+        try {
+            checker.markFailed(model, ComputeUnit.gpu, "hung in a test")
+            assertTrue(ComputeUnit.gpu in checker.failedUnits(model))
+            checker.store(model, DeviceVerdict(unit = ComputeUnit.gpu, reason = "stored before the crash"))
+            assertNull("a cached verdict naming a failed unit must be ignored", checker.cached(model))
+            val report = checker.run(model)
+            log("CRASH GUARD: ${report.verdict.unit.rawValue}; ${report.lines}")
+            assertTrue(report.lines.any { it.startsWith("GPU: skipped") })
+            assertTrue(report.verdict.unit != ComputeUnit.gpu)
+        } finally {
+            prefs.edit().apply { if (before == null) remove(failedKey) else putString(failedKey, before) }.commit()
             checker.forget(model)
         }
     }

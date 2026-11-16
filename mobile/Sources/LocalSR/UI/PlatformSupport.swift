@@ -321,17 +321,21 @@ public struct PlatformPhotoPickerHost: View {
                     pickerBox.launch = action
                 },
                 onPicked: { uris in
-                    let androidContext = ProcessInfo.processInfo.androidContext
-                    var inputs: [PickedPhotoInput] = []
-                    for i in 0..<uris.size {
-                        let uriStr = uris[i]
-                        if let url = URL(string: uriStr) {
-                            let name = AndroidUISupport.displayNameForUri(androidContext, uriStr, "Photo \(i + 1)")
-                            inputs.append(PickedPhotoInput(url: url, displayName: name))
+                    // Copy into Caches/LocalSRInputs now, like shared photos: the picker's read grant ends with the
+                    // process, and a restored result still needs its original ("Before", "Upscale Again").
+                    onLoadingChanged(true)
+                    Task { @MainActor in
+                        let copied = await AndroidShareInbox.copyPickedToCache(ProcessInfo.processInfo.androidContext, uris)
+                        var inputs: [PickedPhotoInput] = []
+                        for item in copied {
+                            if let url = URL(string: item.urlString) {
+                                inputs.append(PickedPhotoInput(url: url, displayName: item.displayName))
+                            }
                         }
-                    }
-                    if !inputs.isEmpty {
-                        onPicked(inputs)
+                        onLoadingChanged(false)
+                        if !inputs.isEmpty {
+                            onPicked(inputs)
+                        }
                     }
                 },
                 modifier: ctx.modifier

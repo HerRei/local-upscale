@@ -28,9 +28,13 @@ class DeviceCheckReport(val verdict: DeviceVerdict, val lines: List<String>, val
  * own so a failure is explicit. A unit passes with PSNR >= 45 dB vs CPU, no NaN/Inf, not constant, and
  * the 4x box-downsampled output >= 26 dB vs the input. NPU wins unless the GPU passes and is >= 1.3x faster.
  * The verdict is cached in SharedPreferences under (device, OS, app build, model).
+ * A unit that crashed or hung the app before ([UnitGuard]) is skipped, and a cached verdict naming it is ignored.
  */
 class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long = GPU_TIMEOUT_MS) {
-    private val prefs = context.getSharedPreferences("localsr_device_check", Context.MODE_PRIVATE)
+    private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    /** Marks NPU/GPU use around native calls; shared by every checker and upscaler in the process. */
+    val guard: UnitGuard = UnitGuard.shared(context)
+    private val build: String by lazy { appBuild() }
 
     fun cacheKey(model: ModelKey): String {
         val soc = if (Build.VERSION.SDK_INT >= 31) "${Build.SOC_MANUFACTURER} ${Build.SOC_MODEL}" else Build.HARDWARE
@@ -38,7 +42,7 @@ class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long
         return DeviceCheck.cacheKey(
             deviceModel = "${Build.MANUFACTURER} ${Build.MODEL} $soc",
             osVersion = os,
-            appBuild = appBuild(),
+            appBuild = build,
             modelKey = model,
         )
     }
@@ -56,7 +60,19 @@ class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long
         val bar = raw.indexOf('|')
         if (bar < 0) return null
         val unit = ComputeUnit.init(rawValue = raw.substring(0, bar)) ?: return null
+        // The unit took the app down (or hung) since this verdict was stored: measure again without it.
+        if (unit != ComputeUnit.cpu && failedUnits(model).contains(unit)) return null
         return DeviceVerdict(unit = unit, reason = raw.substring(bar + 1))
+    }
+
+    /** NPU/GPU units that crashed or hung the app for [model] on this device, OS and app build. */
+    fun failedUnits(model: ModelKey): Set<ComputeUnit> =
+        guard.failedUnits(cacheKey(model)).mapNotNull { ComputeUnit.init(rawValue = it) }.toSet()
+
+    /** Records that [unit] hung for [model]: the check skips it from now on (until the cache key changes). */
+    fun markFailed(model: ModelKey, unit: ComputeUnit, why: String) {
+        Log.w(TAG, "${unit.rawValue} $why for ${model.rawValue}; not using it again for this model")
+        guard.markFailed(cacheKey(model), unit.rawValue)
     }
 
     fun store(model: ModelKey, verdict: DeviceVerdict) {
@@ -126,7 +142,7 @@ class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long
         m != null && !m.timedOut && !m.hasNaN && !m.isConstant && m.psnrVsCPU >= 45 && m.psnrDownsampleVsInput >= 26 && m.tileMs > 0 && m.tileMs.isFinite()
 
     private fun describe(name: String, m: DeviceMeasurement): String =
-        "$name: load %.0f ms, %.1f ms/tile, PSNR vs CPU (every 2nd pixel) %.1f dB, downsample vs input %.1f dB, nan=%s constant=%s".format(m.loadMs, m.tileMs, m.psnrVsCPU, m.psnrDownsampleVsInput, m.hasNaN, m.isConstant)
+        "$name: load %.0f ms, %.1f ms/tile, PSNR vs CPU (4x box-downsampled) %.1f dB, downsample vs input %.1f dB, nan=%s constant=%s".format(m.loadMs, m.tileMs, m.psnrVsCPU, m.psnrDownsampleVsInput, m.hasNaN, m.isConstant)
 
     /**
      * Runs the full check for [model]. Blocking work happens on Dispatchers.Default. Does not touch the cache
@@ -134,6 +150,8 @@ class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long
      */
     suspend fun run(model: ModelKey): DeviceCheckReport = withContext(Dispatchers.Default) {
         val lines = ArrayList<String>()
+        val key = cacheKey(model)
+        val failed = failedUnits(model)
         val input = try { probeInput() } catch (e: OutOfMemoryError) {
             throw UpscaleException("Device check failed: not enough memory", e)
         }
@@ -157,10 +175,15 @@ class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long
         // NPU alone, with the 15 s load watchdog.
         var npuMeasure: DeviceMeasurement? = null
         var cacheable = true
-        if (reference != null) {
+        if (reference != null && ComputeUnit.npu in failed) {
+            lines.add("NPU: skipped (it crashed or hung the app before)")
+        } else if (reference != null) {
             try {
-                val loaded = withLoadWatchdog(WATCHDOG_MS, onDiscard = { it.close() }) { LiteRtEngine.load(context, model, ComputeUnit.npu) }
-                val r = loaded?.let { runUnit(model, ComputeUnit.npu, input, timedRuns = 3, engine = it) }
+                val loaded = withLoadWatchdog(WATCHDOG_MS, key, ComputeUnit.npu, onDiscard = { it.close() }) { LiteRtEngine.load(context, model, ComputeUnit.npu) }
+                val r = loaded?.let { engine ->
+                    withLoadWatchdog(gpuTimeoutMs, key, ComputeUnit.npu) { runUnit(model, ComputeUnit.npu, input, timedRuns = 3, engine = engine) }
+                        ?: throw UpscaleException("warm-up + timing exceeded $gpuTimeoutMs ms")
+                }
                 if (r == null) {
                     npuMeasure = DeviceMeasurement(loadMs = WATCHDOG_MS.toDouble(), tileMs = 0.0, psnrVsCPU = 0.0, psnrDownsampleVsInput = 0.0, timedOut = true)
                     cacheable = false // "use the GPU for this session and retry later"
@@ -172,6 +195,7 @@ class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long
             } catch (t: Throwable) {
                 Log.i(TAG, "NPU probe failed: ${failureReason(t)}")
                 lines.add("NPU: failed: ${failureReason(t)}")
+                if (t is OutOfMemoryError) cacheable = false // memory is short right now; the NPU may be fine later
             }
         } else {
             lines.add("NPU: skipped (no CPU reference)")
@@ -179,9 +203,11 @@ class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long
 
         // GPU alone.
         var gpuMeasure: DeviceMeasurement? = null
-        if (reference != null) {
+        if (reference != null && ComputeUnit.gpu in failed) {
+            lines.add("GPU: skipped (it crashed or hung the app before)")
+        } else if (reference != null) {
             try {
-                val r = withLoadWatchdog(gpuTimeoutMs) { runUnit(model, ComputeUnit.gpu, input, timedRuns = 3) }
+                val r = withLoadWatchdog(gpuTimeoutMs, key, ComputeUnit.gpu) { runUnit(model, ComputeUnit.gpu, input, timedRuns = 3) }
                 if (r == null) {
                     lines.add("GPU: load + warm-up + timing exceeded $gpuTimeoutMs ms (treated as failed)")
                 } else {
@@ -191,6 +217,7 @@ class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long
             } catch (t: Throwable) {
                 Log.w(TAG, "GPU probe failed: ${failureReason(t)}")
                 lines.add("GPU: failed: ${failureReason(t)}")
+                if (t is OutOfMemoryError) cacheable = false // memory is short right now; the GPU may be fine later
             }
         } else {
             lines.add("GPU: skipped (no CPU reference)")
@@ -210,13 +237,17 @@ class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long
         report
     }
 
-    /** Runs [block] on a worker thread and gives up waiting after 15 s (a native load cannot be interrupted; its result is discarded). */
-    private suspend fun <T> withLoadWatchdog(timeoutMs: Long, onDiscard: (T) -> Unit = {}, block: () -> T): T? {
+    /**
+     * Runs [block] on a worker thread and gives up waiting after [timeoutMs] (a native call cannot be interrupted;
+     * its result is discarded). [unit] stays marked as in use until [block] really returns, also after the watchdog
+     * gave up, so a probe that later takes the process down is still blamed on the next start.
+     */
+    private suspend fun <T> withLoadWatchdog(timeoutMs: Long, guardKey: String, unit: ComputeUnit, onDiscard: (T) -> Unit = {}, block: () -> T): T? {
         val result = CompletableDeferred<Result<T>>()
         val thread = Thread({
             // Background priority: if this probe hangs (software GL on an emulator) it must not starve the real work.
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
-            val value = runCatching(block)
+            val value = guard.inUse(guardKey, unit.rawValue) { runCatching(block) }
             if (!result.complete(value)) value.getOrNull()?.let(onDiscard)
         }, "localsr-probe")
         thread.start()
@@ -226,6 +257,7 @@ class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long
 
     companion object {
         private const val TAG = "LocalSR"
+        const val PREFS_NAME = "localsr_device_check"
         /** DESIGN.md: an NPU that needs more than 15 s to load is not used this session. */
         const val WATCHDOG_MS = 15_000L
         /** First GPU run compiles shaders (can take many seconds on mid-range GPUs); a hang beyond this counts as a failure. */
