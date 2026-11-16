@@ -63,6 +63,11 @@ struct TabletWorkspaceView: View {
         .onChange(of: fullScale) { _, newValue in
             model.fullScale = newValue
         }
+        .onChange(of: model.selection) { oldSelection, newSelection in
+            if oldSelection != newSelection {
+                model.resetViewerTransform()
+            }
+        }
         .background {
             HStack(spacing: 0.0) {
                 TabletPhotoPickerHost(

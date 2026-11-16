@@ -228,13 +228,13 @@ struct PhotoBrackets: View {
     let mode: BracketMotionMode
     let triggerID: String
     var color: Color = DesignTokens.ink
+    var arm: CGFloat = 22.0
+    var thickness: CGFloat = 5.0
+    var restOutset: CGFloat = 14.0
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var outset: CGFloat = 14.0
     @State private var bracketOpacity: Double = 1.0
-
-    private let arm: CGFloat = 22.0
-    private let thickness: CGFloat = 5.0
 
     var body: some View {
         let boxWidth = photoWidth + 2.0 * (outset + thickness)
@@ -252,28 +252,33 @@ struct PhotoBrackets: View {
         }
         .opacity(bracketOpacity)
         .allowsHitTesting(false)
+        .onAppear {
+            if mode == .hunt || reduceMotion {
+                outset = restOutset
+            }
+        }
         .task(id: "\(triggerID)_\(mode == .hunt ? "hunt" : "lock")") {
             if reduceMotion {
-                outset = 14.0
+                outset = restOutset
                 bracketOpacity = 1.0
                 return
             }
             switch mode {
             case .hunt:
-                outset = 14.0
+                outset = restOutset
                 bracketOpacity = 1.0
                 try? await Task.sleep(nanoseconds: 20_000_000)
                 if Task.isCancelled { return }
                 withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-                    outset = 22.0
+                    outset = restOutset + 8.0
                 }
             case .lock:
-                outset = 30.0
+                outset = restOutset + 16.0
                 bracketOpacity = 0.0
                 try? await Task.sleep(nanoseconds: 20_000_000)
                 if Task.isCancelled { return }
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
-                    outset = 14.0
+                    outset = restOutset
                     bracketOpacity = 1.0
                 }
             }
@@ -312,6 +317,9 @@ struct SweepLine: View {
     let height: CGFloat
     let squareSide: CGFloat
     var showHandle: Bool = false
+    var lineWidth: CGFloat = 2.0
+    var squareColor: Color = DesignTokens.brandFill
+    var handleScale: CGFloat = 1.0
 
     var body: some View {
         let cornerRadius = 0.12 * squareSide
@@ -320,15 +328,15 @@ struct SweepLine: View {
             ZStack {
                 Rectangle()
                     .fill(Color.black.opacity(0.25))
-                    .frame(width: 3.0, height: height)
+                    .frame(width: lineWidth + 1.0, height: height)
                 Rectangle()
                     .fill(Color.white)
-                    .frame(width: 2.0, height: height)
+                    .frame(width: lineWidth, height: height)
             }
             .position(x: lineX, y: height / 2.0)
 
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(DesignTokens.brandFill)
+                .fill(squareColor)
                 .frame(width: squareSide, height: squareSide)
                 .overlay {
                     if showHandle {
@@ -343,6 +351,7 @@ struct SweepLine: View {
                             .foregroundStyle(Color.white)
                     }
                 }
+                .scaleEffect(handleScale)
                 .position(x: squareX, y: height / 2.0)
         }
     }

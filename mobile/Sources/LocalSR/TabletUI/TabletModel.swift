@@ -135,6 +135,8 @@ final class TabletModel {
     var zoomScale: CGFloat = 1.0
     var panOffset: CGSize = .zero
     var dividerFraction: CGFloat = 0.5
+    var isFullResolutionActive: Bool = false
+    var revealResultID: String? = nil
     var enhanceScrollOffset: CGFloat = 0.0
 
     // Batch & status state
@@ -497,6 +499,58 @@ final class TabletModel {
         }
     }
 
+    func resetViewerTransform(divider: CGFloat = 0.5) {
+        zoomScale = 1.0
+        panOffset = .zero
+        dividerFraction = divider
+        isFullResolutionActive = false
+    }
+
+    func canEnhanceAgain(_ result: TabletResultItem) -> Bool {
+        guard !isBatchRunning else { return false }
+        if result.inputURL.isFileURL {
+            return FileManager.default.fileExists(atPath: result.inputURL.path)
+        }
+        return true
+    }
+
+    func enhanceAgain(result: TabletResultItem) {
+        guard !isBatchRunning else { return }
+        if let idx = queueItems.firstIndex(where: { $0.resultID == result.id }) {
+            queueItems[idx].resultID = nil
+            queueItems[idx].status = .waiting
+            queueItems[idx].progress = 0.0
+            queueItems[idx].errorMessage = nil
+            upscaleSingleQueueItem(id: queueItems[idx].id, switchToViewer: false)
+            return
+        }
+        guard canEnhanceAgain(result) else {
+            showTransientStatus("LocalSR can't open this file.")
+            return
+        }
+        let item = TabletQueueItem(
+            id: UUID().uuidString,
+            inputURL: result.inputURL,
+            displayName: result.displayName,
+            pixelWidth: result.inputWidth,
+            pixelHeight: result.inputHeight,
+            isPreparingPreview: false,
+            status: .waiting,
+            stageIndex: 0,
+            stageCount: activePlan.stages.count,
+            stageName: nil,
+            chipName: nil,
+            progress: 0.0,
+            resultID: nil,
+            outputWidth: nil,
+            outputHeight: nil,
+            errorMessage: nil
+        )
+        queueItems.append(item)
+        selection = .queue(item.id)
+        runQueueBatch(items: [item])
+    }
+
     func upscaleSingleQueueItem(id: String, switchToViewer: Bool = false) {
         guard !isBatchRunning,
               let item = queueItems.first(where: { $0.id == id }) else { return }
@@ -540,7 +594,11 @@ final class TabletModel {
                 queueItems[idx].stageCount = plan.stages.count
                 queueItems[idx].stageName = nil
                 queueItems[idx].chipName = nil
+                queueItems[idx].resultID = nil
                 queueItems[idx].errorMessage = nil
+            }
+            if selection == .queue(id) {
+                resetViewerTransform()
             }
         }
 
@@ -640,15 +698,13 @@ final class TabletModel {
         case .progress(let photoID, let stage, let fraction):
             isCheckingDevice = false
             if let idx = queueItems.firstIndex(where: { $0.id == photoID }) {
-                let totalStages = max(1, queueItems[idx].stageCount)
-                let clamped = min(max(0.0, fraction), 1.0)
-                let combined = (Double(stage) + clamped) / Double(totalStages)
+                let combined = combinedProgress(for: queueItems[idx], plan: plan, stage: stage, fraction: fraction)
                 queueItems[idx].status = .running
                 queueItems[idx].stageIndex = stage
                 if queueItems[idx].stageName == nil, stage < plan.stages.count {
                     queueItems[idx].stageName = stageDisplayName(for: plan.stages[stage])
                 }
-                queueItems[idx].progress = min(max(0.0, combined), 1.0)
+                queueItems[idx].progress = combined
             }
 
         case .prediction(let photoID, _, let model, let lane, _, _):
@@ -688,6 +744,11 @@ final class TabletModel {
             )
             results.insert(record, at: 0)
             persistResults()
+
+            if selection == .queue(result.id) {
+                revealResultID = record.id
+                resetViewerTransform(divider: 1.0)
+            }
 
             if let qIdx {
                 queueItems[qIdx].status = .done
@@ -815,6 +876,42 @@ final class TabletModel {
     }
 
     // MARK: - Formatting & Persistence Helpers
+
+    private func combinedProgress(for item: TabletQueueItem, plan: Plan, stage: Int, fraction: Double) -> Double {
+        let clamped = min(max(0.0, fraction), 1.0)
+        let stages = plan.stages
+        guard !stages.isEmpty else { return clamped }
+        if let pw = item.pixelWidth, let ph = item.pixelHeight, pw > 0, ph > 0 {
+            let stageSizes = plan.stageSizes(width: pw, height: ph, fullScale: fullScale)
+            let upscale = stages.contains { ModelCatalog.model($0).scale == 4 }
+            let target = SizePolicy.target(width: pw, height: ph)
+            var inW = upscale ? target.width : pw
+            var inH = upscale ? target.height : ph
+            var counts: [Double] = []
+            for (idx, modelID) in stages.enumerated() {
+                let desc = ModelCatalog.model(modelID)
+                let tiles = TilePlanner.plan(width: inW, height: inH, window: desc.window, halo: desc.halo, scale: desc.scale)
+                counts.append(Double(max(1, tiles.count)))
+                if idx < stageSizes.count {
+                    inW = stageSizes[idx].width
+                    inH = stageSizes[idx].height
+                }
+            }
+            var total = 0.0
+            for c in counts { total += c }
+            if total > 0.0 {
+                let clampedStage = min(max(0, stage), counts.count - 1)
+                var before = 0.0
+                for i in 0..<clampedStage {
+                    before += counts[i]
+                }
+                let current = counts[clampedStage] * clamped
+                return min(max(0.0, (before + current) / total), 1.0)
+            }
+        }
+        let totalStages = max(1, stages.count)
+        return min(max(0.0, (Double(stage) + clamped) / Double(totalStages)), 1.0)
+    }
 
     private func unitForLane(_ lane: ModelLane) -> ComputeUnit {
         switch lane {

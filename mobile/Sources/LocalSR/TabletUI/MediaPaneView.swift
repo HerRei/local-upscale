@@ -655,12 +655,14 @@ struct MediaPaneView: View {
                     .frame(width: max(0.0, side - lineX), height: side)
                     .offset(x: lineX)
 
-                TabletSweepLine(
+                SweepLine(
                     lineX: lineX,
+                    squareX: lineX,
                     height: side,
-                    lineWidth: 1.5,
                     squareSide: 6.0,
-                    showHandle: false
+                    showHandle: false,
+                    lineWidth: 1.5,
+                    squareColor: Theme.accent
                 )
                 .frame(width: side, height: side)
                 .animation(reduceMotion ? nil : .linear(duration: 0.25), value: item.progress)
