@@ -71,7 +71,7 @@ final class LocalSRUITests: XCTestCase {
 
         let licencesLink = app.buttons["aboutLicencesLink"]
         let settingsList = app.collectionViews.firstMatch
-        for _ in 0..<5 where !(licencesLink.exists && licencesLink.isHittable) {
+        for _ in 0..<15 where !(licencesLink.exists && licencesLink.isHittable) {
             if settingsList.exists {
                 settingsList.swipeUp()
             } else {
