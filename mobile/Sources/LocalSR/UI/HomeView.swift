@@ -990,7 +990,6 @@ private struct BatchSummaryCard: View {
         }
         .buttonStyle(.bordered)
         #if !SKIP
-        .controlSize(.large)
         .buttonBorderShape(.capsule)
         #else
         .clipShape(Capsule())
@@ -1019,9 +1018,11 @@ private struct BatchSummaryCard: View {
             Text(labelText)
                 .font(.subheadline.weight(.semibold))
                 .adaptiveMonospacedDigit()
+                .frame(minHeight: 44.0)
         }
         .buttonStyle(.bordered)
         #if !SKIP
+        .controlSize(.large)
         .buttonBorderShape(.capsule)
         #else
         .clipShape(Capsule())
@@ -1086,6 +1087,7 @@ private struct WaitingPhotosCard: View {
                 Text("Upscale")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Color.white)
+                    .frame(minHeight: 44.0)
             }
             .buttonStyle(.borderedProminent)
             .tint(DesignTokens.brandFill)
