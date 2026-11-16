@@ -118,6 +118,7 @@ public struct DecodedImageView: View {
     public let maxPixelSize: Int
     public let contentMode: ContentMode
     public let exactFrame: Bool
+    public let accessibilityID: String?
 
     #if !SKIP
     #if canImport(UIKit)
@@ -127,11 +128,12 @@ public struct DecodedImageView: View {
     #endif
     #endif
 
-    public init(url: URL, maxPixelSize: Int, contentMode: ContentMode = .fit, exactFrame: Bool = false) {
+    public init(url: URL, maxPixelSize: Int, contentMode: ContentMode = .fit, exactFrame: Bool = false, accessibilityID: String? = nil) {
         self.url = url
         self.maxPixelSize = maxPixelSize
         self.contentMode = contentMode
         self.exactFrame = exactFrame
+        self.accessibilityID = accessibilityID
     }
 
     public var body: some View {
@@ -142,6 +144,7 @@ public struct DecodedImageView: View {
                 maxSide: maxPixelSize,
                 crop: contentMode == .fill,
                 fillBounds: exactFrame,
+                accessibilityID: accessibilityID,
                 modifier: ctx.modifier
             )
         }
@@ -171,6 +174,10 @@ public struct DecodedImageView: View {
                 Color.clear
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityID ?? "Image")
+        .accessibilityIdentifier(accessibilityID ?? "")
+        .accessibilityValue(pixelSizeDescription)
         .task(id: "\(url.absoluteString)_\(maxPixelSize)") {
             let decoded = await Self.decodePlatformImage(url: url, maxPixelSize: maxPixelSize)
             if !Task.isCancelled, let decoded {
@@ -186,6 +193,18 @@ public struct DecodedImageView: View {
     }
 
     #if !SKIP
+    private var pixelSizeDescription: String {
+        #if canImport(UIKit)
+        guard let image = loadedImage?.cgImage else { return "" }
+        return "\(image.width)x\(image.height)"
+        #elseif canImport(AppKit)
+        guard let image = loadedImage, let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return "" }
+        return "\(cgImage.width)x\(cgImage.height)"
+        #else
+        return ""
+        #endif
+    }
+
     #if canImport(UIKit)
     private static func decodePlatformImage(url: URL, maxPixelSize: Int) async -> UIImage? {
         await Task.detached(priority: .userInitiated) {
@@ -218,10 +237,11 @@ public struct DecodedImageView: View {
             let nativeLongSide = max(pw, ph)
             #if os(iOS)
             let memoryLimitBytes = 800 * 1024 * 1024
-            if os_proc_available_memory() < memoryLimitBytes {
+            let availableMemory = os_proc_available_memory()
+            if availableMemory > 0 && availableMemory < memoryLimitBytes {
                 targetMaxSize = nativeLongSide > 0 ? min(nativeLongSide, 4096) : 4096
             } else if nativeLongSide > 0 {
-                targetMaxSize = nativeLongSide
+                targetMaxSize = min(nativeLongSide, 8192)
             } else {
                 return CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
             }
