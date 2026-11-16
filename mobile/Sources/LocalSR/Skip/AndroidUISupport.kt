@@ -1,12 +1,14 @@
 package local.sr
 
 import android.app.ActivityManager
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.net.Uri
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.util.Log
 import androidx.exifinterface.media.ExifInterface
@@ -213,6 +215,59 @@ object AndroidUISupport {
         return dims[0].toDouble() / dims[1].toDouble()
     }
 
+    fun isTablet(context: Context): Boolean {
+        return context.resources.configuration.smallestScreenWidthDp >= 600
+    }
+
+    fun pasteImageUriStrings(context: Context): List<String> {
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return emptyList()
+        val clip = cm.primaryClip ?: return emptyList()
+        val out = mutableListOf<String>()
+        for (i in 0 until clip.itemCount) {
+            val uri = clip.getItemAt(i).uri ?: continue
+            val mime = context.contentResolver.getType(uri)
+            if (mime?.startsWith("image/") == true) {
+                out.add(uri.toString())
+            }
+        }
+        return out
+    }
+
+    fun collectImagesInTree(context: Context, treeUriString: String): List<String> {
+        val treeUri = Uri.parse(treeUriString)
+        val out = mutableListOf<String>()
+        val rootDocId = DocumentsContract.getTreeDocumentId(treeUri)
+        val queue = ArrayDeque<String>()
+        queue.addLast(rootDocId)
+        val projection = arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_MIME_TYPE
+        )
+        while (queue.isNotEmpty()) {
+            val docId = queue.removeFirst()
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId)
+            try {
+                context.contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+                    val idCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                    val mimeCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                    while (cursor.moveToNext()) {
+                        val childId = if (idCol >= 0) cursor.getString(idCol) else continue
+                        val mime = if (mimeCol >= 0) cursor.getString(mimeCol) else ""
+                        if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                            queue.addLast(childId)
+                        } else if (mime?.startsWith("image/") == true) {
+                            val itemUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, childId)
+                            out.add(itemUri.toString())
+                        }
+                    }
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "collectImagesInTree failed for $docId: ${t.message}")
+            }
+        }
+        return out
+    }
+
     fun shareImageFile(context: Context, path: String) {
         try {
             val file = File(path)
@@ -251,6 +306,48 @@ fun AndroidPhotoPickerHost(
     SideEffect {
         onReady {
             launcher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+        }
+    }
+    Box(modifier = modifier)
+}
+
+@Composable
+fun AndroidFilePickerHost(
+    onReady: (() -> Unit) -> Unit,
+    onPicked: (List<String>) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            onPicked(uris.map { it.toString() })
+        }
+    }
+    SideEffect {
+        onReady {
+            launcher.launch(arrayOf("image/*"))
+        }
+    }
+    Box(modifier = modifier)
+}
+
+@Composable
+fun AndroidFolderPickerHost(
+    onReady: (() -> Unit) -> Unit,
+    onPickedTree: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            onPickedTree(uri.toString())
+        }
+    }
+    SideEffect {
+        onReady {
+            launcher.launch(null)
         }
     }
     Box(modifier = modifier)

@@ -2,6 +2,19 @@ import SwiftUI
 import LocalSRCore
 
 public struct ContentView: View {
+    public init() {}
+
+    @ViewBuilder
+    public var body: some View {
+        if TabletPlatform.isTablet {
+            TabletWorkspaceView()
+        } else {
+            PhoneContentView()
+        }
+    }
+}
+
+private struct PhoneContentView: View {
     @State private var appModel = AppModel()
     @Environment(\.scenePhase) private var scenePhase
 
@@ -9,9 +22,7 @@ public struct ContentView: View {
     @AppStorage("fullScale") private var fullScale: Bool = false
     @AppStorage("shareStartsImmediately") private var shareStartsImmediately: Bool = true
 
-    public init() {}
-
-    public var body: some View {
+    var body: some View {
         let root = HomeView()
             .environment(appModel)
             .tint(DesignTokens.brandText)

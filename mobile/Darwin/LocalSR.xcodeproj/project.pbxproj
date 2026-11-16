@@ -18,6 +18,7 @@
 		4A10000A2FA500000000B004 /* NOTICE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 4A10000A2FA500000000A004 /* NOTICE.txt */; };
 		4A10000A2FA500000000B005 /* ios-tablet in Resources */ = {isa = PBXBuildFile; fileRef = 4A10000A2FA500000000A005 /* ios-tablet */; };
 		4A20000A2FA600000000B001 /* LocalSRUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A20000A2FA600000000A001 /* LocalSRUITests.swift */; };
+		4A20000A2FA600000000B002 /* TabletUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A20000A2FA600000000A002 /* TabletUITests.swift */; };
 		4A30000A2FB000000000B001 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A30000A2FB000000000A001 /* ShareViewController.swift */; };
 		4A30000A2FB000000000B002 /* LocalSRShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 4A30000A2FB000000000E001 /* LocalSRShare.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
@@ -66,6 +67,7 @@
 		4A10000A2FA500000000A004 /* NOTICE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; name = NOTICE.txt; path = ../Models/NOTICE.txt; sourceTree = "<group>"; };
 		4A10000A2FA500000000A005 /* ios-tablet */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "ios-tablet"; path = "../Models/ios-tablet"; sourceTree = "<group>"; };
 		4A20000A2FA600000000A001 /* LocalSRUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalSRUITests.swift; sourceTree = "<group>"; };
+		4A20000A2FA600000000A002 /* TabletUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabletUITests.swift; sourceTree = "<group>"; };
 		4A20000A2FA600000000E001 /* LocalSRUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LocalSRUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		4A30000A2FB000000000A001 /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
 		4A30000A2FB000000000A002 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -149,6 +151,7 @@
 			isa = PBXGroup;
 			children = (
 				4A20000A2FA600000000A001 /* LocalSRUITests.swift */,
+				4A20000A2FA600000000A002 /* TabletUITests.swift */,
 			);
 			path = UITests;
 			sourceTree = "<group>";
@@ -392,6 +395,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				4A20000A2FA600000000B001 /* LocalSRUITests.swift in Sources */,
+				4A20000A2FA600000000B002 /* TabletUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
