@@ -33,6 +33,34 @@ extension ComputeUnit {
 }
 
 public enum UIFormatting {
+    /// Enlargement against the photo the user picked, not against the input the model saw:
+    /// a 48 MP photo is reduced to 12 MP first, so "Full 4x" gives it 2x and the default gives it 1x.
+    public static func scaleAgainstOriginal(inputWidth: Int, inputHeight: Int, outputWidth: Int, outputHeight: Int) -> Int {
+        let inLong = max(inputWidth, inputHeight)
+        if inLong <= 0 { return 1 }
+        let ratio = Double(max(outputWidth, outputHeight)) / Double(inLong)
+        return max(1, Int(ratio.rounded()))
+    }
+
+    /// The small line under the result caption; empty when the photo got the full 4x.
+    public static func scaleNote(inputWidth: Int, inputHeight: Int, outputScale: Int, fullScaleFallback: Bool) -> String {
+        let reduced = Double(inputWidth) * Double(inputHeight) > Double(SizePolicy.maxInputPixels)
+        if reduced {
+            if fullScaleFallback {
+                return "Large photo, reduced to 12 MP first. Not enough memory for Full 4\u{00D7}."
+            }
+            if outputScale >= 4 {
+                return "Large photo, reduced to 12 MP before upscaling."
+            }
+            return "Large photo, reduced to 12 MP first. Full 4\u{00D7} in Settings."
+        }
+        if outputScale >= 4 { return "" }
+        if fullScaleFallback {
+            return "2\u{00D7} \u{2013} not enough memory for Full 4\u{00D7}."
+        }
+        return "2\u{00D7} \u{2013} large photo. Full 4\u{00D7} in Settings."
+    }
+
     public static func formatSeconds(_ seconds: Double) -> String {
         let clamped = max(0.0, seconds.isFinite ? seconds : 0.0)
         let tenths = Int((clamped * 10.0).rounded())

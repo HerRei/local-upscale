@@ -49,6 +49,17 @@ final class LocalSRUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.4)
         saveShot("ios_settings_\(suffix).png", app: app)
 
+        let limitButton = app.buttons["fullScaleInfoButton"]
+        XCTAssertTrue(limitButton.waitForExistence(timeout: 4))
+        limitButton.tap()
+        let limitText = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "780 MP")).firstMatch
+        XCTAssertTrue(limitText.waitForExistence(timeout: 4), "Full 4x limit explanation did not appear")
+        Thread.sleep(forTimeInterval: 0.4)
+        saveShot("ios_settings_full4x_limit_\(suffix).png", app: app)
+        XCTAssertEqual(limitButton.label, "Hide")
+        limitButton.tap()
+        XCTAssertTrue(limitText.waitForNonExistence(timeout: 4), "Full 4x limit explanation did not collapse")
+
         let licencesLink = app.buttons["aboutLicencesLink"]
         let settingsList = app.collectionViews.firstMatch
         for _ in 0..<5 where !(licencesLink.exists && licencesLink.isHittable) {

@@ -385,7 +385,7 @@ struct ResultView: View {
                     }
                     return UIFormatting.resultDimensionsLine(width: result.width, height: result.height)
                 }()
-                let scaleNote = result.outputScale < 4 ? scaleNoteText(result: result) : ""
+                let scaleNote = scaleNoteText(result: result)
                 let baseAccessibility = UIFormatting.resultAccessibilityCaption(
                     width: result.width,
                     height: result.height,
@@ -531,20 +531,17 @@ struct ResultView: View {
     }
 
     private func scaleNoteText(result: UpscaleResult) -> String {
-        if result.fullScaleFallback {
-            return "2\u{00D7} \u{2013} not enough memory for Full 4\u{00D7}."
+        guard let inW = inputPixelWidth, let inH = inputPixelHeight, inW > 0, inH > 0 else {
+            return ""
         }
-        return "2\u{00D7} \u{2013} large photo. Full 4\u{00D7} in Settings."
+        return UIFormatting.scaleNote(inputWidth: inW, inputHeight: inH, outputScale: result.outputScale, fullScaleFallback: result.fullScaleFallback)
     }
 
     private func derivedOutputScale(result: UpscaleResult) -> Int? {
         guard let inW = inputPixelWidth, let inH = inputPixelHeight, inW > 0, inH > 0 else {
             return nil
         }
-        let target = SizePolicy.target(width: inW, height: inH)
-        let baseWidth = max(target.width, 1)
-        let ratio = Double(result.width) / Double(baseWidth)
-        return ratio >= 3.0 ? 4 : 2
+        return UIFormatting.scaleAgainstOriginal(inputWidth: inW, inputHeight: inH, outputWidth: result.width, outputHeight: result.height)
     }
 }
 
