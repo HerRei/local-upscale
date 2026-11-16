@@ -387,7 +387,10 @@ final class LocalSRUITests: XCTestCase {
             pickerAdd.tap()
             return true
         }
-        return false
+        // The iOS 27 picker can expose its cells but omit the checkmark button.
+        guard abs(app.frame.width - 375) < 1, app.frame.height >= 640 else { return false }
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.14)).tap()
+        return true
     }
 
     @MainActor
