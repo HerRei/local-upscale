@@ -116,6 +116,27 @@ object PixelKernels {
         return out
     }
 
+    /**
+     * Every [stride]-th pixel of an NHWC image in both directions, without averaging. The device check keeps
+     * this instead of the full 28 MB CPU output: point samples keep the error statistics, so the PSNR over the
+     * samples estimates the full-image PSNR (a box average would smooth noise away and read up to ~12 dB high).
+     */
+    fun sampleGrid(input: FloatArray, width: Int, height: Int, stride: Int = 2): FloatArray {
+        require(stride >= 1 && input.size == width * height * 3)
+        val ow = (width + stride - 1) / stride
+        val oh = (height + stride - 1) / stride
+        val out = FloatArray(ow * oh * 3)
+        var i = 0
+        for (y in 0 until oh) {
+            for (x in 0 until ow) {
+                val src = ((y * stride) * width + x * stride) * 3
+                out[i] = input[src]; out[i + 1] = input[src + 1]; out[i + 2] = input[src + 2]
+                i += 3
+            }
+        }
+        return out
+    }
+
     fun hasNonFinite(v: FloatArray): Boolean {
         for (x in v) if (x.isNaN() || x.isInfinite()) return true
         return false

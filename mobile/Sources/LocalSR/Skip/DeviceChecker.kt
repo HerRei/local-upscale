@@ -83,20 +83,18 @@ class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long
 
     private class Run(val engineMs: Double, val loadMs: Double, val output: FloatArray)
 
-    /** Loads [unit], warms up, then times [timedRuns] runs (median). Returns the first timed output. */
+    /** Loads [unit], warms up, then times [timedRuns] runs (median). Returns the last timed output. */
     private fun runUnit(model: ModelKey, unit: ComputeUnit, input: FloatArray, timedRuns: Int, engine: LiteRtEngine = LiteRtEngine.load(context, model, unit)): Run {
         try {
-            engine.run(input) // warm-up (GPU compiles shaders, XNNPACK packs weights)
+            engine.invoke(input) // warm-up (GPU compiles shaders, XNNPACK packs weights)
             val times = ArrayList<Double>()
-            var first: FloatArray? = null
             for (i in 0 until timedRuns) {
                 val t0 = System.nanoTime()
-                val out = engine.run(input)
+                engine.invoke(input)
                 times.add((System.nanoTime() - t0) / 1e6)
-                if (first == null) first = out
             }
             times.sort()
-            return Run(times[times.size / 2], engine.loadMs, first!!)
+            return Run(times[times.size / 2], engine.loadMs, engine.readOutput())
         } finally {
             engine.close()
         }
@@ -105,8 +103,8 @@ class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long
     private fun measure(run: Run, reference: FloatArray?, input: FloatArray): DeviceMeasurement {
         val out = run.output
         val finite = !PixelKernels.hasNonFinite(out)
-        val psnrCpu = if (reference == null) 99.0 else PixelKernels.psnr(reference, out)
         val down = PixelKernels.downsample4x(out, PixelKernels.TILE_OUT, PixelKernels.TILE_OUT)
+        val psnrCpu = if (reference == null) 99.0 else PixelKernels.psnr(reference, down)
         val psnrDown = PixelKernels.psnr(down, input)
         return DeviceMeasurement(
             loadMs = run.loadMs,
@@ -120,12 +118,15 @@ class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long
         )
     }
 
+    private fun failureReason(t: Throwable): String =
+        if (t is OutOfMemoryError) "not enough memory" else t.message ?: t.javaClass.simpleName
+
     /** Same thresholds as the core's DeviceCheck (kept private there). */
     private fun passes(m: DeviceMeasurement?): Boolean =
         m != null && !m.timedOut && !m.hasNaN && !m.isConstant && m.psnrVsCPU >= 45 && m.psnrDownsampleVsInput >= 26 && m.tileMs > 0 && m.tileMs.isFinite()
 
     private fun describe(name: String, m: DeviceMeasurement): String =
-        "$name: load %.0f ms, %.1f ms/tile, PSNR vs CPU %.1f dB, downsample vs input %.1f dB, nan=%s constant=%s".format(m.loadMs, m.tileMs, m.psnrVsCPU, m.psnrDownsampleVsInput, m.hasNaN, m.isConstant)
+        "$name: load %.0f ms, %.1f ms/tile, PSNR vs CPU (every 2nd pixel) %.1f dB, downsample vs input %.1f dB, nan=%s constant=%s".format(m.loadMs, m.tileMs, m.psnrVsCPU, m.psnrDownsampleVsInput, m.hasNaN, m.isConstant)
 
     /**
      * Runs the full check for [model]. Blocking work happens on Dispatchers.Default. Does not touch the cache
@@ -133,19 +134,23 @@ class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long
      */
     suspend fun run(model: ModelKey): DeviceCheckReport = withContext(Dispatchers.Default) {
         val lines = ArrayList<String>()
-        val input = probeInput()
+        val input = try { probeInput() } catch (e: OutOfMemoryError) {
+            throw UpscaleException("Device check failed: not enough memory", e)
+        }
 
         // CPU reference.
         var cpuMeasure: DeviceMeasurement? = null
         var reference: FloatArray? = null
+        var cpuFailure: String? = null
         try {
             val r = runUnit(model, ComputeUnit.cpu, input, timedRuns = 1)
-            reference = r.output
             cpuMeasure = measure(r, null, input)
+            reference = PixelKernels.downsample4x(r.output, PixelKernels.TILE_OUT, PixelKernels.TILE_OUT)
             lines.add(describe("CPU", cpuMeasure))
         } catch (t: Throwable) {
             Log.e(TAG, "CPU probe failed", t)
-            lines.add("CPU: failed: ${t.message}")
+            cpuFailure = failureReason(t)
+            lines.add("CPU: failed: $cpuFailure")
         }
         currentCoroutineContext().ensureActive()
 
@@ -165,8 +170,8 @@ class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long
                     lines.add(describe("NPU", npuMeasure))
                 }
             } catch (t: Throwable) {
-                Log.i(TAG, "NPU probe failed: ${t.message}")
-                lines.add("NPU: failed: ${t.message}")
+                Log.i(TAG, "NPU probe failed: ${failureReason(t)}")
+                lines.add("NPU: failed: ${failureReason(t)}")
             }
         } else {
             lines.add("NPU: skipped (no CPU reference)")
@@ -184,8 +189,8 @@ class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long
                     lines.add(describe("GPU", gpuMeasure))
                 }
             } catch (t: Throwable) {
-                Log.w(TAG, "GPU probe failed: ${t.message}")
-                lines.add("GPU: failed: ${t.message}")
+                Log.w(TAG, "GPU probe failed: ${failureReason(t)}")
+                lines.add("GPU: failed: ${failureReason(t)}")
             }
         } else {
             lines.add("GPU: skipped (no CPU reference)")
@@ -193,7 +198,7 @@ class DeviceChecker(private val context: Context, private val gpuTimeoutMs: Long
         currentCoroutineContext().ensureActive()
 
         var verdict = DeviceCheck.decide(cpu = cpuMeasure, gpu = gpuMeasure, npu = npuMeasure)
-            ?: throw UpscaleException("This device produced invalid output; upscaling is disabled.")
+            ?: throw UpscaleException(if (cpuFailure == "not enough memory") "Device check failed: not enough memory" else "This device produced invalid output; upscaling is disabled.")
         // An accelerator that passes but is not faster than the CPU is pointless (software GL on an emulator, a slow iGPU).
         val cpuOk = passes(cpuMeasure)
         val chosen = when (verdict.unit) { ComputeUnit.npu -> npuMeasure; ComputeUnit.gpu -> gpuMeasure; ComputeUnit.cpu -> null }
