@@ -82,7 +82,7 @@ struct ViewerPaneView: View {
                         }
                     }
                 } label: {
-                    Image(systemName: "sidebar.leading")
+                    Image(systemName: TabletPlatform.sidebarSymbol)
                         .font(.system(size: 16.0, weight: .medium))
                         .foregroundStyle(Theme.text)
                         .frame(width: 36.0, height: 36.0)
@@ -591,8 +591,16 @@ struct ViewerPaneView: View {
             Button {
                 applyZoom(model.zoomScale / 1.25, minZoom: minZoom, maxZoom: maxZoom, fitSize: fitSize, viewSize: viewSize)
             } label: {
-                Image(systemName: "minus")
-                    .font(.system(size: 14.0, weight: .medium))
+                Group {
+                    #if SKIP
+                    // SkipUI has no Material mapping for "minus"; the minus sign as text matches the plus icon's weight.
+                    Text("\u{2212}")
+                        .font(.system(size: 20.0, weight: .medium))
+                    #else
+                    Image(systemName: "minus")
+                        .font(.system(size: 14.0, weight: .medium))
+                    #endif
+                }
                     .foregroundStyle(model.zoomScale <= minZoom + 0.001 ? hudForeground.opacity(0.35) : hudForeground)
                     .frame(width: 34.0, height: 36.0)
             }

@@ -15,6 +15,7 @@ import androidx.test.uiautomator.Until
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeFalse
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
@@ -24,6 +25,8 @@ class ViewerDecodeInstrumentedTest {
     @Test fun viewerSwitchesDecodedPixelSizes() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
+        // This drives the phone result viewer. Tablets open the tablet workspace instead, which has its own viewer.
+        assumeFalse("phone viewer test; not applicable on a tablet", AndroidUISupport.isTablet(context))
         val device = UiDevice.getInstance(instrumentation)
         // The batch's foreground notification asks for this; the dialog would cover the viewer.
         if (android.os.Build.VERSION.SDK_INT >= 33) {

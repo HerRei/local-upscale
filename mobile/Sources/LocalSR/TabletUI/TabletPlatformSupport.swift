@@ -43,6 +43,12 @@ enum TabletPlatform {
         isAndroid ? "this tablet" : "this iPad"
     }
 
+    /// The pane toggle. SkipUI has no Material icon for "sidebar.leading" (it draws a warning triangle);
+    /// "line.3.horizontal" maps to Material's Menu icon.
+    static var sidebarSymbol: String {
+        isAndroid ? "line.3.horizontal" : "sidebar.leading"
+    }
+
     static var libraryName: String {
         isAndroid ? "Gallery" : "Photos"
     }

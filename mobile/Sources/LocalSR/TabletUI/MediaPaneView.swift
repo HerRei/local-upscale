@@ -102,7 +102,7 @@ struct MediaPaneView: View {
                     }
                 }
             } label: {
-                Image(systemName: "sidebar.leading")
+                Image(systemName: TabletPlatform.sidebarSymbol)
                     .font(.system(size: 16.0, weight: .medium))
                     .foregroundStyle(Theme.text)
                     .frame(width: 36.0, height: 36.0)
