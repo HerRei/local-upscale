@@ -364,17 +364,7 @@ final class LocalSRUITests: XCTestCase {
             }
         }
         guard tapped > 0 else {
-            // iOS 27 can omit the remote picker grid from the accessibility tree.
-            // On the SE, select visible grid cells and let the subsequent result
-            // and batch assertions verify that the picker returned the photos.
-            guard !preferNewest, abs(app.frame.width - 375) < 1, app.frame.height >= 640 else { return false }
-            for index in 0..<count {
-                let x = (CGFloat(index % 3) + 0.5) / 3.0
-                let y: CGFloat = index < 3 ? 0.53 : 0.72
-                app.coordinate(withNormalizedOffset: CGVector(dx: x, dy: y)).tap()
-            }
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.14)).tap()
-            return true
+            return false
         }
 
         let addButton = app.buttons.matching(NSPredicate(format: "label == 'Add' OR label == 'Hinzufügen'")).firstMatch
