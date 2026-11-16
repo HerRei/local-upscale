@@ -62,3 +62,7 @@ $PY mobile/tools/export_models.py --set tablet --check
 ```
 
 The check exits nonzero for a missing artifact, failed worker, non-finite output, or any measured lane below 45 dB. Results are generated one model per worker; intermediate packages are deleted. The model inputs are read from the locations documented in `tablet_models.py`. The experiment uses the desktop `prepare_export_model` and PULSE registration. Never use linear W8 for ANE: the optional variant uses 8-bit k-means palettization.
+
+## What ships
+
+Xcode bundles the whole `Models/ios-tablet` folder (a folder reference), so only the files the app loads may be in it. The app loads `fbcnn.mlmodelc` (FP16); the optional `fbcnn-pal8.mlmodelc` is not loaded and must stay outside the folder (it was kept in `../mobile-model-variants/` on 2026-11-17). Shipping pal8 instead of FP16 would save 69 MB at 58 dB instead of 62 dB against PyTorch on the Neural Engine (table above); that is an open decision.
