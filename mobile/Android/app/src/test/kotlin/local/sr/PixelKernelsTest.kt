@@ -162,6 +162,26 @@ class PixelKernelsTest {
         for (p in 0 until ow * oh) for (ch in 0 until 3) assertEquals(ref[ch * ow * oh + p], mine[p * 3 + ch], 0f)
     }
 
+    @Test
+    fun deviceCheckSampledPsnrMatchesFullPsnrForNoise() {
+        // Accelerator differences are mostly pixel-level noise (FP16 rounding). A box average would hide it;
+        // the point-sampled reference must give the same PSNR as the full comparison.
+        val w = 64; val h = 64
+        val rnd = java.util.Random(7)
+        val cpu = FloatArray(w * h * 3) { 0.2f + 0.6f * rnd.nextFloat() }
+        val candidate = FloatArray(cpu.size) { cpu[it] + (rnd.nextGaussian() * 0.01).toFloat() }
+        val full = PixelKernels.psnr(cpu, candidate)
+        val sampled = PixelKernels.psnr(PixelKernels.sampleGrid(cpu, w, h), PixelKernels.sampleGrid(candidate, w, h))
+        assertEquals(full, sampled, 0.5)
+        assertEquals(32 * 32 * 3, PixelKernels.sampleGrid(cpu, w, h).size)
+        // Noise at 0.01 (about 40 dB) must fail the 45 dB threshold on the samples too; the box average would pass it.
+        assertTrue(sampled < 45.0)
+        assertTrue(PixelKernels.psnr(PixelKernels.downsample4x(cpu, w, h), PixelKernels.downsample4x(candidate, w, h)) > 45.0)
+        // Small noise passes.
+        val good = FloatArray(cpu.size) { cpu[it] + (rnd.nextGaussian() * 0.002).toFloat() }
+        assertTrue(PixelKernels.psnr(PixelKernels.sampleGrid(cpu, w, h), PixelKernels.sampleGrid(good, w, h)) >= 45.0)
+    }
+
     private fun arrayOfFloats(a: FloatArray): Array<Float> {
         var out = Array<Float>(repeating = 0f, count = a.size)
         for (i in a.indices) out[i] = a[i]

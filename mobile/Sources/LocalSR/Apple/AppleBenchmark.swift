@@ -7,6 +7,9 @@ import UniformTypeIdentifiers
 import LocalSRCore
 import Darwin
 import os
+#if canImport(UIKit)
+import UIKit
+#endif
 
 enum AppleBenchmark {
     private static let launch: Void = {
@@ -42,6 +45,12 @@ enum AppleBenchmark {
         #endif
         log("device=\(name) os=\(ProcessInfo.processInfo.operatingSystemVersionString) available_bytes=\(available)")
         let dir = root.appendingPathComponent("benchmark-\(UUID().uuidString)")
+        if ProcessInfo.processInfo.environment["LOCALSR_BENCH_THERMAL"] == "1" {
+            let count = Int(ProcessInfo.processInfo.environment["LOCALSR_BENCH_THERMAL_COUNT"] ?? "") ?? 20
+            await thermal(count: count, directory: dir, log: log)
+            log("DONE")
+            return
+        }
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: dir) }
@@ -90,6 +99,54 @@ enum AppleBenchmark {
             }
         } catch { log("ERROR=\(error)") }
         log("DONE")
+    }
+
+    /// Evidence for or against a "stays cool" claim: the same 12 MP photo upscaled `count` times in a row with Best
+    /// at the default size, logging time, the system thermal state and the battery level before and after each photo.
+    private static func thermal(count: Int, directory dir: URL, log: (String) -> Void) async {
+        func state() -> String {
+            switch ProcessInfo.processInfo.thermalState {
+            case .nominal: return "nominal"
+            case .fair: return "fair"
+            case .serious: return "serious"
+            case .critical: return "critical"
+            @unknown default: return "unknown"
+            }
+        }
+        #if os(iOS)
+        await MainActor.run { UIDevice.current.isBatteryMonitoringEnabled = true }
+        func battery() async -> String {
+            await MainActor.run {
+                let level = UIDevice.current.batteryLevel
+                let charging = UIDevice.current.batteryState == .charging || UIDevice.current.batteryState == .full
+                return level < 0 ? "unknown" : String(format: "%.0f%%%@", level * 100, charging ? " charging" : "")
+            }
+        }
+        #else
+        func battery() async -> String { "n/a" }
+        #endif
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let input = try makeInput(width: 4032, height: 3024, directory: dir)
+            let service = AppleUpscaleService()
+            let verdict = try await service.prepare(model: .best)
+            log("thermal begin count=\(count) unit=\(verdict.unit.rawValue) state=\(state()) battery=\(await battery())")
+            var seen: [String: Int] = [:]
+            var worst = ProcessInfo.ThermalState.nominal
+            let started = Date()
+            for i in 1...count {
+                let result = try await service.upscaleForBenchmark(input: input, model: .best, fullScale: false, forceFull: false, gate: nil) { _ in }
+                let now = ProcessInfo.processInfo.thermalState
+                if now.rawValue > worst.rawValue { worst = now }
+                seen[state(), default: 0] += 1
+                log("thermal photo=\(i) total_s=\(String(format: "%.2f", result.seconds)) unit=\(result.unit.rawValue) state=\(state()) battery=\(await battery()) elapsed_s=\(String(format: "%.0f", Date().timeIntervalSince(started)))")
+                try? FileManager.default.removeItem(at: result.outputURL.deletingLastPathComponent())
+            }
+            let worstName: String
+            switch worst { case .nominal: worstName = "nominal"; case .fair: worstName = "fair"; case .serious: worstName = "serious"; case .critical: worstName = "critical"; @unknown default: worstName = "unknown" }
+            log("thermal end photos=\(count) minutes=\(String(format: "%.1f", Date().timeIntervalSince(started) / 60)) worst_state=\(worstName) states=\(seen) battery=\(await battery())")
+        } catch { log("thermal ERROR=\(error)") }
     }
 
     private static func placement(_ model: ModelKey, log: (String) -> Void) async {

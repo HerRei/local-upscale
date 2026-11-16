@@ -23,9 +23,24 @@ class LiteRtEngine private constructor(
 
     /** Not thread-safe; the caller serialises runs. Allocates one 1536*1536*3 float array per call (LiteRT's Kotlin API has no read-into). */
     override fun run(input: FloatArray): FloatArray {
+        invoke(input)
+        return readOutput()
+    }
+
+    fun readOutput(): FloatArray {
+        // readFloat allocates in JNI; avoid entering JNI if the Java heap cannot hold the result.
+        val runtime = Runtime.getRuntime()
+        val needed = PixelKernels.TILE_OUT.toLong() * PixelKernels.TILE_OUT * 3 * 4
+        fun available() = runtime.maxMemory() - (runtime.totalMemory() - runtime.freeMemory())
+        if (available() < needed + 4 * 1024 * 1024) System.gc()
+        if (available() < needed + 4 * 1024 * 1024) throw OutOfMemoryError("not enough memory for model output")
+        return outputs[0].readFloat()
+    }
+
+    /** Run without copying the output to the Java heap. */
+    fun invoke(input: FloatArray) {
         inputs[0].writeFloat(input)
         compiled.run(inputs, outputs)
-        return outputs[0].readFloat()
     }
 
     override fun close() {
