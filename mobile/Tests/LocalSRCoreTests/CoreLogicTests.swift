@@ -345,4 +345,23 @@ final class CoreLogicTests: XCTestCase {
         XCTAssertEqual(UIFormatting.formatETA(125.0), "2 min 5 s remaining")
         XCTAssertEqual(UIFormatting.formatETA(120.0), "2 min remaining")
     }
+
+    func testScaleAgainstOriginalAndNote() {
+        // Small photo: full 4x, no note.
+        XCTAssertEqual(UIFormatting.scaleAgainstOriginal(inputWidth: 1600, inputHeight: 1200, outputWidth: 6400, outputHeight: 4800), 4)
+        XCTAssertEqual(UIFormatting.scaleNote(inputWidth: 1600, inputHeight: 1200, outputScale: 4, fullScaleFallback: false), "")
+        // 12 MP photo: 2x by default, 4x with Full 4x, 2x when memory is short.
+        XCTAssertEqual(UIFormatting.scaleAgainstOriginal(inputWidth: 4032, inputHeight: 3024, outputWidth: 8064, outputHeight: 6048), 2)
+        XCTAssertEqual(UIFormatting.scaleNote(inputWidth: 4032, inputHeight: 3024, outputScale: 2, fullScaleFallback: false), "2× – large photo. Full 4× in Settings.")
+        XCTAssertEqual(UIFormatting.scaleNote(inputWidth: 4032, inputHeight: 3024, outputScale: 4, fullScaleFallback: false), "")
+        XCTAssertEqual(UIFormatting.scaleNote(inputWidth: 4032, inputHeight: 3024, outputScale: 2, fullScaleFallback: true), "2× – not enough memory for Full 4×.")
+        // 48 MP portrait photo, reduced to the 12 MP input cap first (the device result was 12092 x 16124).
+        XCTAssertEqual(UIFormatting.scaleAgainstOriginal(inputWidth: 6046, inputHeight: 8062, outputWidth: 12092, outputHeight: 16124), 2)
+        XCTAssertEqual(UIFormatting.scaleAgainstOriginal(inputWidth: 6048, inputHeight: 8064, outputWidth: 6048, outputHeight: 8064), 1)
+        XCTAssertEqual(UIFormatting.scaleNote(inputWidth: 6048, inputHeight: 8064, outputScale: 4, fullScaleFallback: false), "Large photo, reduced to 12 MP before upscaling.")
+        XCTAssertEqual(UIFormatting.scaleNote(inputWidth: 6048, inputHeight: 8064, outputScale: 2, fullScaleFallback: false), "Large photo, reduced to 12 MP first. Full 4× in Settings.")
+        XCTAssertEqual(UIFormatting.scaleNote(inputWidth: 6048, inputHeight: 8064, outputScale: 2, fullScaleFallback: true), "Large photo, reduced to 12 MP first. Not enough memory for Full 4×.")
+        // Exactly at the cap is not reduced.
+        XCTAssertEqual(UIFormatting.scaleNote(inputWidth: 4032, inputHeight: 3024, outputScale: 4, fullScaleFallback: false), "")
+    }
 }
