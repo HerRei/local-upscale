@@ -209,19 +209,84 @@ struct AboutSheetView: View {
     }
 }
 
+private struct NoticeSection {
+    var title: String
+    var paragraphs: [String]
+}
+
 private struct LicencesView: View {
     let noticeText: String
 
+    // NOTICE uses underlined headings and hard-wrapped paragraphs.
+    private var sections: [NoticeSection] {
+        let lines = noticeText.components(separatedBy: "\n")
+        var result: [NoticeSection] = []
+        var title = ""
+        var paragraphs: [String] = []
+        var paragraph = ""
+        var index = 0
+
+        func isRule(_ line: String) -> Bool {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.count >= 3 && (trimmed.allSatisfy { $0 == "-" } || trimmed.allSatisfy { $0 == "=" })
+        }
+        func flushParagraph() {
+            if !paragraph.isEmpty {
+                paragraphs.append(paragraph)
+                paragraph = ""
+            }
+        }
+        func flushSection() {
+            flushParagraph()
+            if !title.isEmpty || !paragraphs.isEmpty {
+                result.append(NoticeSection(title: title, paragraphs: paragraphs))
+            }
+            paragraphs = []
+        }
+        while index < lines.count {
+            let line = lines[index].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !line.isEmpty && !isRule(line) && index + 1 < lines.count && isRule(lines[index + 1]) {
+                flushSection()
+                title = line
+                index += 2
+                continue
+            }
+            if line.isEmpty || isRule(line) {
+                flushParagraph()
+            } else {
+                paragraph += paragraph.isEmpty ? line : " " + line
+            }
+            index += 1
+        }
+        flushSection()
+        return result
+    }
+
     var body: some View {
+        let noticeSections = sections
         ScrollView {
-            Text(noticeText.isEmpty ? "Licences unavailable." : noticeText)
-                .font(.footnote)
-                .monospaced()
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16.0)
-                #if !SKIP
-                .textSelection(.enabled)
-                #endif
+            VStack(alignment: .leading, spacing: 24.0) {
+                if noticeSections.isEmpty {
+                    Text("Licences unavailable.")
+                }
+                ForEach(0..<noticeSections.count, id: \.self) { index in
+                    let section = noticeSections[index]
+                    VStack(alignment: .leading, spacing: 12.0) {
+                        if !section.title.isEmpty {
+                            Text(section.title).font(.headline)
+                        }
+                        ForEach(0..<section.paragraphs.count, id: \.self) { paragraphIndex in
+                            Text(section.paragraphs[paragraphIndex]).font(.footnote)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(16.0)
+            #if !SKIP
+            .textSelection(.enabled)
+            .environment(\.locale, Locale(identifier: "en"))
+            #endif
         }
         .navigationTitle("Licences")
         #if !SKIP && os(iOS)
