@@ -15,7 +15,7 @@ public struct ContentView: View {
 }
 
 private struct PhoneContentView: View {
-    @State private var appModel = AppModel()
+    @State private var appModel = AppModel.shared
     @Environment(\.scenePhase) private var scenePhase
 
     @AppStorage("selectedModel") private var selectedModel: ModelKey = .best

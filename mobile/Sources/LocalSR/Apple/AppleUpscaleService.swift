@@ -14,7 +14,8 @@ import UIKit
 /// One engine is kept loaded (the model/unit of the last `prepare`); `prepare` and `upscale` are serialized,
 /// so jobs never share the engine's buffers concurrently.
 public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
-    public enum ServiceError: Error, CustomStringConvertible {
+    public enum ServiceError: LocalizedError, CustomStringConvertible {
+        public var errorDescription: String? { description }
         case cancelled
         case gpuUnavailable
         public var description: String { self == .cancelled ? "Cancelled" : "GPU unavailable" }
@@ -190,7 +191,8 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
             // The cached unit no longer loads (OS update, driver): forget the cache and use the CPU this session.
             if verdict.unit == .cpu { throw error }
             deviceCheck.clearCache(model: model)
-            verdict = DeviceVerdict(unit: .cpu, reason: "Loading on \(verdict.unit.rawValue) failed (\(error)); using CPU.")
+            NSLog("LocalSR: loading \(model.rawValue) on \(verdict.unit.rawValue) failed: \(error)")
+            verdict = DeviceVerdict(unit: .cpu, reason: "The \(verdict.unit.platformDisplayName) couldn't load the model this time; using the CPU.")
             try await engine.loadAsync(model: model, unit: .cpu)
         }
         let chosen = verdict

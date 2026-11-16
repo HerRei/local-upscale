@@ -5,7 +5,10 @@ import LocalSRCore
 /// Serializes each lane independently. Callers may schedule different photos concurrently.
 /// CPU fallbacks use the Neural Engine lane, so they cannot race its engine or misreport the GPU as busy.
 public final class LaneScheduler: @unchecked Sendable {
-    public enum ScheduleError: Error { case unavailable, cancelled }
+    public enum ScheduleError: LocalizedError {
+        case unavailable, cancelled
+        public var errorDescription: String? { self == .cancelled ? "Cancelled" : "No chip is free to run this step." }
+    }
     private struct State {
         var photo: String?
         var stage: Int?

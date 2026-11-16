@@ -57,15 +57,16 @@ struct DecodedImage {
 }
 
 enum ImageIOCodec {
-    enum CodecError: Error, CustomStringConvertible {
+    enum CodecError: LocalizedError, CustomStringConvertible {
+        var errorDescription: String? { description }
         case unreadable(URL)
         case decodeFailed
         case encodeFailed(String)
         var description: String {
             switch self {
-            case .unreadable(let url): return "Cannot read image: \(url.lastPathComponent)"
-            case .decodeFailed: return "Image decoding failed"
-            case .encodeFailed(let why): return "Image encoding failed: \(why)"
+            case .unreadable(let url): return "LocalSR can't open \(url.lastPathComponent)."
+            case .decodeFailed: return "This file can't be read as a photo."
+            case .encodeFailed(let why): return "The upscaled photo couldn't be written: \(why)"
             }
         }
     }

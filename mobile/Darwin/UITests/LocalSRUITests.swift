@@ -149,7 +149,10 @@ final class LocalSRUITests: XCTestCase {
         XCTAssertTrue(chooseButton.waitForExistence(timeout: 5))
         XCTAssertTrue(settingsButton.waitForExistence(timeout: 4))
         settingsButton.tap()
-        XCTAssertTrue(app.staticTexts["Works offline"].waitForExistence(timeout: 5))
+        // On small screens (iPhone SE) the device facts start below the fold.
+        let worksOffline = app.staticTexts["Works offline"]
+        for _ in 0..<4 where !worksOffline.waitForExistence(timeout: 2) { app.swipeUp() }
+        XCTAssertTrue(worksOffline.waitForExistence(timeout: 5))
         Thread.sleep(forTimeInterval: 0.4)
         saveShot("ios_settings_prepared_\(suffix).png", app: app)
         app.buttons["aboutDoneButton"].tap()
@@ -307,9 +310,10 @@ final class LocalSRUITests: XCTestCase {
         waitForValue(original, "1600x1200")
         print("VIEWER iOS 4x upscaled=\(upscaled.value ?? "nil") original=\(original.value ?? "nil")")
         let pinchTarget = app.otherElements["viewerGestureArea"]
-        for _ in 0..<4 {
+        for attempt in 0..<6 {
             if (upscaled.value as? String) == preview { break }
-            (pinchTarget.exists ? pinchTarget : canvas).pinch(withScale: 0.15, velocity: -1.0)
+            // The gesture area is small on a 4.7" screen; from the third try pinch on the whole window.
+            (pinchTarget.exists && attempt < 2 ? pinchTarget : canvas).pinch(withScale: 0.15, velocity: -1.0)
             Thread.sleep(forTimeInterval: 0.8)
         }
         waitForValue(upscaled, preview)

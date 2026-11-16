@@ -16,7 +16,8 @@ public final class CoreMLEngine: SREngine, @unchecked Sendable {
     static let inputName = "image"
     static let outputName = "out"
 
-    public enum EngineError: Error, CustomStringConvertible {
+    public enum EngineError: LocalizedError, CustomStringConvertible {
+        public var errorDescription: String? { description }
         case notLoaded
         case badTile(Int)
         case badOutput(String)

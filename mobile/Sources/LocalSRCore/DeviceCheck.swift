@@ -33,21 +33,22 @@ public enum DeviceCheck {
     }
     public static func decide(cpu: DeviceMeasurement?, gpu: DeviceMeasurement?, npu: DeviceMeasurement?) -> DeviceVerdict? {
         let gpuPass = passes(gpu)
+        let npuName = ComputeUnit.npu.platformDisplayName
         if let n = npu {
             if n.timedOut || n.loadMs > 15000 {
-                if gpuPass { return DeviceVerdict(unit: .gpu, reason: "NPU load timed out; using GPU for this session and retrying later.") }
-                if passes(cpu) { return DeviceVerdict(unit: .cpu, reason: "NPU load timed out and GPU failed; using CPU for this session and retrying later.") }
+                if gpuPass { return DeviceVerdict(unit: .gpu, reason: "The \(npuName) took too long to load; using the GPU for now and trying again later.") }
+                if passes(cpu) { return DeviceVerdict(unit: .cpu, reason: "The \(npuName) took too long to load and the GPU failed the check; using the CPU for now.") }
                 return nil
             }
             if n.placementAllNPU && passes(n) {
                 if let g = gpu, gpuPass && n.tileMs >= 1.3 * g.tileMs {
-                    return DeviceVerdict(unit: .gpu, reason: "GPU passed and is at least 1.3 times faster than NPU.")
+                    return DeviceVerdict(unit: .gpu, reason: "The GPU passed the check and is at least 1.3 times faster than the \(npuName) here.")
                 }
-                return DeviceVerdict(unit: .npu, reason: "NPU placement and image quality checks passed.")
+                return DeviceVerdict(unit: .npu, reason: "Runs entirely on the \(npuName), and its results passed the check.")
             }
         }
-        if gpuPass { return DeviceVerdict(unit: .gpu, reason: "NPU unavailable or failed; GPU passed.") }
-        if passes(cpu) { return DeviceVerdict(unit: .cpu, reason: "NPU and GPU unavailable or failed; using CPU.") }
+        if gpuPass { return DeviceVerdict(unit: .gpu, reason: "The \(npuName) isn't available or failed the check; the GPU passed.") }
+        if passes(cpu) { return DeviceVerdict(unit: .cpu, reason: "The \(npuName) and the GPU aren't available or failed the check; using the CPU.") }
         return nil
     }
     public static func cacheKey(deviceModel: String, osVersion: String, appBuild: String, modelKey: ModelKey) -> String {

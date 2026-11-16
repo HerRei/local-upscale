@@ -212,6 +212,9 @@ private struct TabletPersistedBatchState: Codable, Sendable {
 @MainActor
 @Observable
 final class TabletModel {
+    /// One model per process, for the same reason as AppModel.shared (Activity recreation on Android).
+    static let shared = TabletModel()
+
     private let serviceBox: TabletServiceBox
     private let storageDirectory: URL
     private let defaults: UserDefaults

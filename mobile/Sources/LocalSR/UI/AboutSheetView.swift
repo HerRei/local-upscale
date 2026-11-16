@@ -13,9 +13,13 @@ struct AboutSheetView: View {
     @State private var versionText = ""
 
     private var upscalingFooterText: String {
-        let base = "Photos over 3 MP get 2\u{00D7} by default. Full 4\u{00D7} takes longer to save and needs more memory."
+        let base = "Photos from 3 to 12 MP get 2\u{00D7} by default. Full 4\u{00D7} takes longer to save and needs more memory."
         if !appModel.isFullScaleAvailable {
+            #if SKIP
             return "\(base) Not available on this device."
+            #else
+            return "\(base) Not available right now: it needs more free memory."
+            #endif
         }
         return base
     }
@@ -27,7 +31,7 @@ struct AboutSheetView: View {
             List {
                 Section {
                     Toggle("Full 4\u{00D7} for Large Photos", isOn: $fullScale)
-                        .disabled(!appModel.isFullScaleAvailable)
+                        .disabled(!appModel.isFullScaleAvailable && !fullScale)
                         .accessibilityIdentifier("fullScaleToggle")
                 } header: {
                     Text("Upscaling")
@@ -99,7 +103,9 @@ struct AboutSheetView: View {
                     factRow(
                         symbol: "arrow.up.left.and.arrow.down.right",
                         title: "Up to 4\u{00D7} larger",
-                        detail: "Up to 3 MP: 4\u{00D7}. Up to 12 MP: 2\u{00D7}, or 4\u{00D7} with Full 4\u{00D7}. Larger photos are reduced to 12 MP first."
+                        detail: appModel.isFullScaleAvailable
+                            ? "Up to 3 MP: 4\u{00D7}. Up to 12 MP: 2\u{00D7}, or 4\u{00D7} with Full 4\u{00D7}. Larger photos are reduced to 12 MP first."
+                            : "Up to 3 MP: 4\u{00D7}. Up to 12 MP: 2\u{00D7}. Larger photos are reduced to 12 MP first."
                     )
                     #if SKIP
                     factRow(

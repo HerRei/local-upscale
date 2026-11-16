@@ -10,7 +10,8 @@ import CoreLocation
 /// (EXIF, HDR gain map) on iOS 26.7. Creation date and location are also set explicitly from the file's EXIF
 /// because Photos does not always derive them from a HEIC written by ImageIO.
 enum PhotoLibrarySaver {
-    enum SaveError: Error, CustomStringConvertible {
+    enum SaveError: LocalizedError, CustomStringConvertible {
+        var errorDescription: String? { description }
         case notAuthorized(PHAuthorizationStatus)
         case failed(String)
         var description: String {

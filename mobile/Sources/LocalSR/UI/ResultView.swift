@@ -394,7 +394,7 @@ struct ResultView: View {
                     seconds: result.seconds
                 )
                 let accessibilityCaption: String = {
-                    let scaled = outputScale != nil ? "\(outputScale!) times, \(baseAccessibility)" : baseAccessibility
+                    let scaled = outputScale.map { "\($0) times, \(baseAccessibility)" } ?? baseAccessibility
                     return scaleNote.isEmpty ? scaled : "\(scaled). \(scaleNote)"
                 }()
 
@@ -534,14 +534,14 @@ struct ResultView: View {
         guard let inW = inputPixelWidth, let inH = inputPixelHeight, inW > 0, inH > 0 else {
             return ""
         }
-        return UIFormatting.scaleNote(inputWidth: inW, inputHeight: inH, outputScale: result.outputScale, fullScaleFallback: result.fullScaleFallback)
+        return UIFormatting.scaleNote(inputWidth: inW, inputHeight: inH, outputScale: result.outputScale, fullScaleFallback: result.fullScaleFallback, fullScaleAvailable: appModel.isFullScaleAvailable)
     }
 
-    private func derivedOutputScale(result: UpscaleResult) -> Int? {
+    private func derivedOutputScale(result: UpscaleResult) -> String? {
         guard let inW = inputPixelWidth, let inH = inputPixelHeight, inW > 0, inH > 0 else {
             return nil
         }
-        return UIFormatting.scaleAgainstOriginal(inputWidth: inW, inputHeight: inH, outputWidth: result.width, outputHeight: result.height)
+        return UIFormatting.scaleFactorText(inputWidth: inW, inputHeight: inH, outputWidth: result.width, outputHeight: result.height)
     }
 }
 

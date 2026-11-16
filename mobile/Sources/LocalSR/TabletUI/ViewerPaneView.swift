@@ -877,7 +877,7 @@ struct ViewerPaneView: View {
         let dims: String = {
             if result.stages.contains(where: { ModelCatalog.model($0).scale == 4 }),
                let inW = result.inputWidth, let inH = result.inputHeight, inW > 0, inH > 0 {
-                let derivedScale = UIFormatting.scaleAgainstOriginal(
+                let derivedScale = UIFormatting.scaleFactorText(
                     inputWidth: inW,
                     inputHeight: inH,
                     outputWidth: result.width,

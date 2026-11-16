@@ -5,7 +5,10 @@ import LocalSRCore
 /// Runs a single image stage. Registry access is held for the whole stage because the engine owns
 /// reusable tensor buffers; a caller may run a different model/unit concurrently on another lane.
 enum AppleTabletStageRunner {
-    enum StageError: Error { case gpuRestricted }
+    enum StageError: LocalizedError {
+        case gpuRestricted
+        var errorDescription: String? { "The GPU can't be used while LocalSR is in the background." }
+    }
     static func run(source: PixelBuffer, model: TabletModelID, unit: ComputeUnit,
                     outputScale: Int, registry: TabletModelRegistry,
                     isCancelled: () -> Bool = { false },

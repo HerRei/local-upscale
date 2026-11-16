@@ -140,6 +140,11 @@ private final class ServiceBox: @unchecked Sendable {
 @MainActor
 @Observable
 public class AppModel {
+    /// The app's one model. Views use this instead of creating their own: on Android the Activity (and its views) can be
+    /// recreated while a batch keeps running in the foreground service, and a second model would orphan that batch,
+    /// report it as interrupted and overwrite its results.json.
+    public static let shared = AppModel()
+
     private let serviceBox: ServiceBox
 
     public var results: [UpscaleResult] = []
@@ -183,6 +188,8 @@ public class AppModel {
     @ObservationIgnored private var didRequestNotifications: Bool = false
     @ObservationIgnored private var isImportingInbox: Bool = false
     @ObservationIgnored private var pendingInboxRecheck: Bool = false
+    /// Set when iOS ends the background task (not the user): the unfinished photos go back to the waiting list.
+    @ObservationIgnored private var batchStoppedBySystem: Bool = false
 
     public init(
         service: UpscaleService = makeUpscaleService(),
@@ -204,12 +211,24 @@ public class AppModel {
         }
         if let data = try? Data(contentsOf: storageDirectory.appendingPathComponent("results.json")),
            let stored = try? JSONDecoder().decode([UpscaleResult].self, from: data) {
-            results = stored.filter { FileManager.default.fileExists(atPath: $0.outputURL.path) && FileManager.default.fileExists(atPath: $0.previewURL.path) }
+            let moved = stored.map { r in
+                UpscaleResult(
+                    id: r.id,
+                    inputURL: Self.rebased(r.inputURL, cachesBase: cachesBase),
+                    outputURL: Self.rebased(r.outputURL, cachesBase: cachesBase),
+                    previewURL: Self.rebased(r.previewURL, cachesBase: cachesBase),
+                    width: r.width, height: r.height, model: r.model, unit: r.unit, seconds: r.seconds,
+                    outputScale: r.outputScale, fullScaleFallback: r.fullScaleFallback
+                )
+            }
+            results = moved.filter { FileManager.default.fileExists(atPath: $0.outputURL.path) && FileManager.default.fileExists(atPath: $0.previewURL.path) }
             persistResults()
         }
         if let waitingData = try? Data(contentsOf: storageDirectory.appendingPathComponent("waiting.json")),
            let storedWaiting = try? JSONDecoder().decode([WaitingPhotoItem].self, from: waitingData) {
-            waitingItems = storedWaiting.filter { FileManager.default.fileExists(atPath: $0.url.path) }
+            waitingItems = storedWaiting
+                .map { WaitingPhotoItem(id: $0.id, url: Self.rebased($0.url, cachesBase: cachesBase), displayName: $0.displayName) }
+                .filter { FileManager.default.fileExists(atPath: $0.url.path) }
             persistWaitingItems()
         }
         let validIDs = Set(results.map { $0.id })
@@ -219,6 +238,21 @@ public class AppModel {
             persistSavedResultIDs()
         }
         _ = refreshFullScaleAvailability()
+    }
+
+    /// iOS moves the app's data container to a new path when the app is updated, so a file URL stored in
+    /// results.json or waiting.json can point to the old container. Re-root it under today's caches folder
+    /// when the old path is gone and the file exists there.
+    static func rebased(_ url: URL, cachesBase: URL) -> URL {
+        #if SKIP
+        return url
+        #else
+        guard url.isFileURL, !FileManager.default.fileExists(atPath: url.path) else { return url }
+        let path = url.path
+        guard let range = path.range(of: "/Library/Caches/", options: .backwards) else { return url }
+        let candidate = cachesBase.appendingPathComponent(String(path[range.upperBound...]))
+        return FileManager.default.fileExists(atPath: candidate.path) ? candidate : url
+        #endif
     }
 
     // Minimal valid 4000x3000 (12 MP) 1-bit grayscale PNG header+payload for querying service.canUseFullScale(forInput:).
@@ -650,9 +684,11 @@ public class AppModel {
         BatchBackgroundTask.shared.begin(
             title: "Upscaling photos",
             subtitle: "0 of \(total)",
-            totalUnits: Int64(total),
+            // 100 units per photo, so the progress also moves while one large photo runs (iOS may end a task whose progress stalls).
+            totalUnits: Int64(total * 100),
             onExpire: { [weak self] in
                 Task { @MainActor in
+                    self?.batchStoppedBySystem = true
                     self?.cancelBatch(dismiss: false)
                 }
             }
@@ -746,7 +782,7 @@ public class AppModel {
             serviceBox.setBatch(done: batchCompletedCount, total: total)
             #else
             BatchBackgroundTask.shared.update(
-                completedUnits: Int64(batchCompletedCount),
+                completedUnits: Int64(batchCompletedCount * 100),
                 subtitle: "\(batchCompletedCount) of \(total)"
             )
             #endif
@@ -777,7 +813,17 @@ public class AppModel {
         #endif
 
         if wasCancelled {
-            batchSummary = nil
+            if batchStoppedBySystem {
+                // iOS ended the background task: keep the photos that did not finish, and say so.
+                batchStoppedBySystem = false
+                let known = Set(waitingItems.map { $0.url })
+                let unfinished = batchItems.filter { $0.status != .done && $0.status != .failed && !known.contains($0.inputURL) }
+                waitingItems.append(contentsOf: unfinished.map { WaitingPhotoItem(url: $0.inputURL, displayName: $0.displayName) })
+                persistWaitingItems()
+                batchSummary = BatchSummary(id: "interrupted", kind: .interrupted)
+            } else {
+                batchSummary = nil
+            }
             return
         }
 
@@ -881,6 +927,9 @@ public class AppModel {
         guard let idx = batchItems.firstIndex(where: { $0.id == id }) else { return }
         if batchItems[idx].status == .upscaling {
             batchItems[idx].progress = min(max(0.0, progress), 1.0)
+            #if !SKIP
+            BatchBackgroundTask.shared.update(completedUnits: Int64(batchCompletedCount * 100 + Int(batchItems[idx].progress * 99.0)))
+            #endif
         }
     }
 

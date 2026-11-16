@@ -9,7 +9,8 @@ import LocalSRCore
 /// without that bundle (macOS `swift test`), the search falls back to `LOCALSR_MODELS_DIR` and then to the
 /// `mobile/Models` folder of the source tree (debug builds and the macOS host only).
 public enum AppleResources {
-    public enum ResourceError: Error, CustomStringConvertible {
+    public enum ResourceError: LocalizedError, CustomStringConvertible {
+        public var errorDescription: String? { description }
         case missing(String)
         public var description: String {
             switch self { case .missing(let name): return "Resource not found: \(name)" }

@@ -39,7 +39,15 @@ private final class TabletWorkQueue: @unchecked Sendable {
 }
 
 public final class AppleTabletUpscaleService: TabletUpscaleService, @unchecked Sendable {
-    public enum ServiceError: Error { case alreadyRunning, invalidPlan }
+    public enum ServiceError: LocalizedError {
+        case alreadyRunning, invalidPlan
+        public var errorDescription: String? {
+            switch self {
+            case .alreadyRunning: return "Another batch is already running."
+            case .invalidPlan: return "These steps can't run on this photo."
+            }
+        }
+    }
     private let checker: TabletDeviceCheck
     private let registry = TabletModelRegistry()
     private let cacheRoot: URL

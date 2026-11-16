@@ -4,8 +4,8 @@ import LocalSRCore
 struct TabletWorkspaceView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var model = TabletModel()
-    @State private var settingsAppModel = AppModel()
+    @State private var model = TabletModel.shared
+    @State private var settingsAppModel = AppModel.shared
 
     @AppStorage("fullScale") private var fullScale: Bool = false
 

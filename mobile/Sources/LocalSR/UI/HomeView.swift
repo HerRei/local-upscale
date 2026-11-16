@@ -186,7 +186,7 @@ struct HomeView: View {
                     }
                 }
                 .confirmationDialog(
-                    "Delete all \(appModel.results.count) upscaled photos from LocalSR?",
+                    appModel.results.count == 1 ? "Delete the upscaled photo from LocalSR?" : "Delete all \(appModel.results.count) upscaled photos from LocalSR?",
                     isPresented: $isShowingDeleteAllConfirm,
                     titleVisibility: .visible
                 ) {
@@ -260,7 +260,7 @@ struct HomeView: View {
                             .multilineTextAlignment(.center)
                             .accessibilityIdentifier("homeEmptyLabel")
 
-                        Text("Choose photos to enlarge them 4\u{00D7} with more detail. Everything stays on this device.")
+                        Text("Choose photos to enlarge them up to 4\u{00D7} with more detail. Everything stays on this device.")
                             .font(.body)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
