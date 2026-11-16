@@ -1,6 +1,8 @@
 import SwiftUI
 #if !SKIP && canImport(UIKit)
 import UIKit
+#elseif SKIP
+import androidx.compose.ui.platform.LocalContext
 #endif
 
 /// Design tokens for the LocalSR tablet workspace (dark values match desktop CSS; light values mirror them).
@@ -175,10 +177,32 @@ public enum Theme {
         }
     }
 
-    /// System font fallback matching the spec's point sizes and weights (IBM Plex Sans TTF is not bundled yet).
+    static let fontName = "IBM Plex Sans Var"
+
     static func font(_ style: TextStyle, weight: Font.Weight? = nil) -> Font {
-        Font.system(size: style.baseSize, weight: weight ?? style.defaultWeight)
+        let resolvedWeight = weight ?? style.defaultWeight
+        #if SKIP
+        let weightCode = composeFontWeightCode(resolvedWeight)
+        let sizeFloat = Float(style.baseSize)
+        return Font(fontImpl: {
+            AndroidUISupport.ibmPlexTextStyle(LocalContext.current, sizeFloat, weightCode)
+        })
+        #else
+        return Font.custom(fontName, size: style.baseSize, relativeTo: style.relativeTextStyle)
+            .weight(resolvedWeight)
+        #endif
     }
+
+    #if SKIP
+    private static func composeFontWeightCode(_ weight: Font.Weight) -> Int {
+        switch weight {
+        case .medium: return 500
+        case .semibold: return 600
+        case .bold, .heavy, .black: return 700
+        default: return 400
+        }
+    }
+    #endif
 }
 
 private struct ThemeFontModifier: ViewModifier {
@@ -186,32 +210,24 @@ private struct ThemeFontModifier: ViewModifier {
     let weight: Font.Weight?
     let monospacedDigits: Bool
 
-    #if !SKIP
-    @ScaledMetric private var scaledSize: CGFloat
-    #endif
-
     init(style: Theme.TextStyle, weight: Font.Weight?, monospacedDigits: Bool) {
         self.style = style
         self.weight = weight
         self.monospacedDigits = monospacedDigits
-        #if !SKIP
-        let relative = style.relativeTextStyle
-        _scaledSize = ScaledMetric(wrappedValue: style.baseSize, relativeTo: relative)
-        #endif
     }
 
     func body(content: Content) -> some View {
-        let resolvedWeight = weight ?? style.defaultWeight
+        let font = Theme.font(style, weight: weight)
         #if SKIP
-        content.font(Font.system(size: style.baseSize, weight: resolvedWeight))
+        content.font(font)
         #else
         if monospacedDigits {
             content
-                .font(Font.system(size: scaledSize, weight: resolvedWeight))
+                .font(font)
                 .monospacedDigit()
         } else {
             content
-                .font(Font.system(size: scaledSize, weight: resolvedWeight))
+                .font(font)
         }
         #endif
     }
@@ -236,5 +252,14 @@ extension View {
         } else {
             self
         }
+    }
+
+    @ViewBuilder
+    func tabletDisableLiftHover() -> some View {
+        #if !SKIP && os(iOS)
+        self.hoverEffectDisabled()
+        #else
+        self
+        #endif
     }
 }

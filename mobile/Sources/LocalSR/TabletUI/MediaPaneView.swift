@@ -12,7 +12,7 @@ struct TabletAddMenuContent: View {
         Button {
             onChoosePhotos()
         } label: {
-            Label("Choose from Photos\u{2026}", systemImage: "photo.on.rectangle")
+            Label("Choose from \(TabletPlatform.libraryName)\u{2026}", systemImage: "photo.on.rectangle")
         }
         .accessibilityIdentifier("tabletAddPhotosMenuItem")
 
@@ -57,6 +57,10 @@ struct MediaPaneView: View {
     let onConfirmDeleteResult: (TabletResultItem) -> Void
 
     @State private var hoveredID: String? = nil
+    #if SKIP
+    @State private var sheetQueueItem: TabletQueueItem? = nil
+    @State private var sheetResultItem: TabletResultItem? = nil
+    #endif
 
     private let gridColumns = [
         GridItem(.adaptive(minimum: 148.0), spacing: 8.0)
@@ -77,6 +81,14 @@ struct MediaPaneView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.panel)
+        #if SKIP
+        .sheet(item: $sheetQueueItem) { item in
+            androidQueueActionSheet(item)
+        }
+        .sheet(item: $sheetResultItem) { result in
+            androidResultActionSheet(result)
+        }
+        #endif
     }
 
     private var threePaneHeading: some View {
@@ -171,6 +183,8 @@ struct MediaPaneView: View {
                 )
         }
         .buttonStyle(.plain)
+        .tabletDisableLiftHover()
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
         .accessibilityIdentifier(identifier)
     }
 
@@ -211,7 +225,7 @@ struct MediaPaneView: View {
                 Button {
                     onChoosePhotos()
                 } label: {
-                    Text("Photos\u{2026}")
+                    Text("\(TabletPlatform.libraryName)\u{2026}")
                         .themeFont(.control, weight: .medium)
                         .foregroundStyle(Theme.text)
                         .padding(.horizontal, Theme.Spacing.md)
@@ -347,15 +361,22 @@ struct MediaPaneView: View {
         )
         #if !SKIP
         .contentShape(Rectangle())
-        .onHover { hovering in
+        .accessibilityElement(children: .combine)
+        #endif
+        .tabletHover { hovering in
             hoveredID = hovering ? item.id : (hoveredID == item.id ? nil : hoveredID)
         }
-        #endif
         .onTapGesture {
             model.selection = .queue(item.id)
         }
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : [.isButton])
         .accessibilityIdentifier("tabletQueueRow_\(item.id)")
 
+        #if SKIP
+        row.tabletLongPressAction {
+            sheetQueueItem = item
+        }
+        #else
         row.contextMenu {
             Button {
                 onStartSingle(item.id)
@@ -371,6 +392,7 @@ struct MediaPaneView: View {
             }
             .disabled(item.status == .running)
         }
+        #endif
     }
 
     // MARK: - Queue Grid (width >= 600)
@@ -428,15 +450,22 @@ struct MediaPaneView: View {
         )
         #if !SKIP
         .contentShape(Rectangle())
-        .onHover { hovering in
+        .accessibilityElement(children: .combine)
+        #endif
+        .tabletHover { hovering in
             hoveredID = hovering ? item.id : (hoveredID == item.id ? nil : hoveredID)
         }
-        #endif
         .onTapGesture {
             model.selection = .queue(item.id)
         }
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : [.isButton])
         .accessibilityIdentifier("tabletQueueCell_\(item.id)")
 
+        #if SKIP
+        cell.tabletLongPressAction {
+            sheetQueueItem = item
+        }
+        #else
         cell.contextMenu {
             Button {
                 onStartSingle(item.id)
@@ -452,6 +481,7 @@ struct MediaPaneView: View {
             }
             .disabled(item.status == .running)
         }
+        #endif
     }
 
     // MARK: - Results List & Grid
@@ -521,14 +551,16 @@ struct MediaPaneView: View {
         )
         #if !SKIP
         .contentShape(Rectangle())
-        .onHover { hovering in
+        .accessibilityElement(children: .combine)
+        #endif
+        .tabletHover { hovering in
             hoveredID = hovering ? result.id : (hoveredID == result.id ? nil : hoveredID)
         }
-        #endif
         .onTapGesture {
             model.selection = .result(result.id)
         }
         .tabletDraggableFile(result.outputURL)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : [.isButton])
         .accessibilityIdentifier("tabletResultRow_\(result.id)")
 
         resultContextMenu(for: row, result: result, isSaved: isSaved)
@@ -591,14 +623,16 @@ struct MediaPaneView: View {
         )
         #if !SKIP
         .contentShape(Rectangle())
-        .onHover { hovering in
+        .accessibilityElement(children: .combine)
+        #endif
+        .tabletHover { hovering in
             hoveredID = hovering ? result.id : (hoveredID == result.id ? nil : hoveredID)
         }
-        #endif
         .onTapGesture {
             model.selection = .result(result.id)
         }
         .tabletDraggableFile(result.outputURL)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : [.isButton])
         .accessibilityIdentifier("tabletResultCell_\(result.id)")
 
         resultContextMenu(for: cell, result: result, isSaved: isSaved)
@@ -606,6 +640,11 @@ struct MediaPaneView: View {
 
     @ViewBuilder
     private func resultContextMenu<Content: View>(for view: Content, result: TabletResultItem, isSaved: Bool) -> some View {
+        #if SKIP
+        view.tabletLongPressAction {
+            sheetResultItem = result
+        }
+        #else
         view.contextMenu {
             Button {
                 Task { await model.saveResult(result) }
@@ -614,17 +653,9 @@ struct MediaPaneView: View {
             }
             .disabled(isSaved || model.isSaving || model.isSavingAll)
 
-            #if !SKIP
             ShareLink(item: result.outputURL) {
                 Label("Share\u{2026}", systemImage: "square.and.arrow.up")
             }
-            #else
-            Button {
-                AndroidUISupport.shareImageFile(ProcessInfo.processInfo.androidContext, result.outputURL.path)
-            } label: {
-                Label("Share\u{2026}", systemImage: "square.and.arrow.up")
-            }
-            #endif
 
             Button(role: .destructive) {
                 onConfirmDeleteResult(result)
@@ -632,7 +663,94 @@ struct MediaPaneView: View {
                 Label("Delete\u{2026}", systemImage: "trash")
             }
         }
+        #endif
     }
+
+    #if SKIP
+    private func androidQueueActionSheet(_ item: TabletQueueItem) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            Text(item.displayName)
+                .themeFont(.paneTitle)
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .padding(.bottom, Theme.Spacing.xs)
+
+            androidSheetActionButton(title: model.setup.task == .restore ? "Restore Only This Photo" : "Upscale Only This Photo", systemImage: "play", destructive: false) {
+                sheetQueueItem = nil
+                onStartSingle(item.id)
+            }
+            .disabled(model.isBatchRunning)
+
+            androidSheetActionButton(title: "Remove from Queue", systemImage: "trash", destructive: true) {
+                sheetQueueItem = nil
+                model.removeQueueItem(id: item.id)
+            }
+            .disabled(item.status == .running)
+        }
+        .padding(Theme.Spacing.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.panel)
+        .presentationDetents([.height(210.0)])
+    }
+
+    private func androidResultActionSheet(_ result: TabletResultItem) -> some View {
+        let isSaved = model.isSaved(result.id)
+        return VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            Text(result.displayName)
+                .themeFont(.paneTitle)
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .padding(.bottom, Theme.Spacing.xs)
+
+            androidSheetActionButton(title: isSaved ? "Saved" : "Save to \(TabletPlatform.libraryName)", systemImage: isSaved ? "checkmark" : "square.and.arrow.down", destructive: false) {
+                sheetResultItem = nil
+                Task { await model.saveResult(result) }
+            }
+            .disabled(isSaved || model.isSaving || model.isSavingAll)
+
+            androidSheetActionButton(title: "Share\u{2026}", systemImage: "square.and.arrow.up", destructive: false) {
+                sheetResultItem = nil
+                AndroidUISupport.shareImageFile(ProcessInfo.processInfo.androidContext, result.outputURL.path)
+            }
+
+            androidSheetActionButton(title: "Delete\u{2026}", systemImage: "trash", destructive: true) {
+                sheetResultItem = nil
+                onConfirmDeleteResult(result)
+            }
+        }
+        .padding(Theme.Spacing.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.panel)
+        .presentationDetents([.height(260.0)])
+    }
+
+    private func androidSheetActionButton(title: String, systemImage: String, destructive: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: Theme.Spacing.md) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 16.0, weight: .medium))
+                    .frame(width: 24.0)
+                Text(title)
+                    .themeFont(.control, weight: .medium)
+                Spacer()
+            }
+            .foregroundStyle(destructive ? Theme.danger : Theme.text)
+            .padding(.horizontal, Theme.Spacing.md)
+            .frame(height: Theme.Spacing.hitArea)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                    .fill(Theme.raised)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                    .stroke(Theme.border, lineWidth: 1.0)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+    #endif
 
     // MARK: - Thumbnail & State Copy Helpers
 

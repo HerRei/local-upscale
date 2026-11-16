@@ -72,7 +72,13 @@ class UpscaleForegroundService : Service() {
         super.onDestroy()
     }
 
-    private class State(var fraction: Double = 0.0, var done: Int = 0, var total: Int = 0)
+    private class State(
+        var fraction: Double = 0.0,
+        var done: Int = 0,
+        var total: Int = 0,
+        var title: String? = null,
+        var detail: String? = null,
+    )
 
     companion object {
         private const val TAG = "LocalSR"
@@ -89,6 +95,10 @@ class UpscaleForegroundService : Service() {
             val result = synchronized(lock) {
                 if (holders == 0) {
                     state.fraction = 0.0
+                    state.done = 0
+                    state.total = 0
+                    state.title = null
+                    state.detail = null
                     startResult = CompletableDeferred()
                     try {
                         ContextCompat.startForegroundService(context, Intent(context, UpscaleForegroundService::class.java))
@@ -130,6 +140,15 @@ class UpscaleForegroundService : Service() {
             refresh(context)
         }
 
+        fun setStatus(context: Context, title: String, detail: String?, fraction: Double) {
+            synchronized(lock) {
+                state.title = title
+                state.detail = detail
+                state.fraction = fraction
+            }
+            refresh(context)
+        }
+
         private fun refresh(context: Context) {
             val isRunning = synchronized(lock) { running }
             if (!isRunning) return
@@ -150,12 +169,14 @@ class UpscaleForegroundService : Service() {
 
         private fun buildNotification(context: Context, s: State): Notification {
             val pct = (s.fraction * 100).toInt().coerceIn(0, 100)
-            val text = if (s.total > 1) "Photo ${minOf(s.done + 1, s.total)} of ${s.total}, $pct %" else "$pct %"
+            val fallbackText = if (s.total > 1) "Photo ${minOf(s.done + 1, s.total)} of ${s.total}, $pct %" else "$pct %"
+            val title = s.title ?: "Upscaling photos"
+            val text = s.detail ?: fallbackText
             val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
             val content = launch?.let { PendingIntent.getActivity(context, 0, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT) }
             return NotificationCompat.Builder(context, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.stat_sys_download)
-                .setContentTitle("Upscaling photos")
+                .setContentTitle(title)
                 .setContentText(text)
                 .setProgress(100, pct, false)
                 .setOngoing(true)

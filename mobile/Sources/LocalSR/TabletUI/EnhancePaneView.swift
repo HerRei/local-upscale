@@ -90,6 +90,9 @@ struct EnhancePaneView: View {
     @State private var isFolderImporterPresented: Bool = false
     @State private var checkingStep: Int = 0
     @State private var checkingTimerTask: Task<Void, Never>? = nil
+    #if SKIP
+    @State private var sheetRecipe: TabletRecipe? = nil
+    #endif
 
     private var stackQualityCards: Bool {
         #if !SKIP
@@ -201,6 +204,10 @@ struct EnhancePaneView: View {
             if case .success(let urls) = result, let folderURL = urls.first {
                 model.setSaveFolder(folderURL)
             }
+        }
+        #else
+        .sheet(item: $sheetRecipe) { recipe in
+            androidRecipeActionSheet(recipe)
         }
         #endif
     }
@@ -424,6 +431,8 @@ struct EnhancePaneView: View {
             )
         }
         .buttonStyle(.plain)
+        .tabletDisableLiftHover()
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
         .accessibilityIdentifier("tabletQualityCard_\(preset.rawValue)")
     }
 
@@ -484,6 +493,11 @@ struct EnhancePaneView: View {
             RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
                 .stroke(isActive ? Theme.selectLine : Color.clear, lineWidth: 1.0)
         )
+        #if SKIP
+        .tabletLongPressAction(enabled: !model.isBatchRunning) {
+            sheetRecipe = recipe
+        }
+        #else
         .contextMenu {
             Button {
                 recipeToRename = recipe
@@ -500,6 +514,7 @@ struct EnhancePaneView: View {
             }
             .disabled(model.isBatchRunning)
         }
+        #endif
     }
 
     // MARK: - 3. Your Photo / What to Fix
@@ -627,6 +642,9 @@ struct EnhancePaneView: View {
             )
         }
         .buttonStyle(.plain)
+        .tabletDisableLiftHover()
+        .accessibilityValue(isOn ? "On" : "Off")
+        .accessibilityAddTraits(isOn ? [.isSelected] : [])
         .accessibilityIdentifier(identifier)
     }
 
@@ -769,7 +787,7 @@ struct EnhancePaneView: View {
     // MARK: - 5. Chips
 
     private var chipsSection: some View {
-        let showNE = !TabletPlatform.isAndroid
+        let lanes = model.visibleLanes
 
         return VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.sm) {
@@ -779,22 +797,22 @@ struct EnhancePaneView: View {
 
                 Spacer(minLength: 4.0)
 
-                if showNE {
+                if lanes.count > 1 {
                     Menu {
                         ForEach(TabletLaneChoice.allCases, id: \.rawValue) { choice in
                             Button {
                                 model.updateLaneChoice(choice)
                             } label: {
                                 if model.laneChoice == choice {
-                                    Label(choice.menuTitle, systemImage: "checkmark")
+                                    Label(choice.menuTitle(isAndroid: TabletPlatform.isAndroid), systemImage: "checkmark")
                                 } else {
-                                    Text(choice.menuTitle)
+                                    Text(choice.menuTitle(isAndroid: TabletPlatform.isAndroid))
                                 }
                             }
                         }
                     } label: {
                         HStack(spacing: 4.0) {
-                            Text(model.laneChoice.shortTitle)
+                            Text(model.laneChoice.shortTitle(isAndroid: TabletPlatform.isAndroid))
                                 .themeFont(.meta, weight: .medium)
                             Image(systemName: "chevron.down")
                                 .font(.system(size: 10.0, weight: .semibold))
@@ -802,18 +820,18 @@ struct EnhancePaneView: View {
                         .foregroundStyle(model.isBatchRunning ? Theme.tertiary : Theme.text)
                     }
                     .disabled(model.isBatchRunning)
+                    .accessibilityLabel("Compute chip, \(model.laneChoice.menuTitle(isAndroid: TabletPlatform.isAndroid))")
                     .accessibilityIdentifier("tabletChipsMenu")
                 }
             }
 
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                if showNE {
-                    laneRow(lane: .neuralEngine, identifier: "tabletLaneRow_neuralEngine")
+                ForEach(lanes, id: \.self) { lane in
+                    laneRow(lane: lane, identifier: laneIdentifier(for: lane))
                 }
-                laneRow(lane: .gpu, identifier: "tabletLaneRow_gpu")
 
                 if !model.supportsBackgroundGPU && model.batchLastRunSummary == nil && !model.isBatchRunning {
-                    Text("In the background \(TabletPlatform.deviceNoun) works on the Neural Engine only.")
+                    Text("In the background \(TabletPlatform.deviceNoun) works on the \(TabletPlatform.npuName) only.")
                         .themeFont(.meta)
                         .foregroundStyle(Theme.secondary)
                         .padding(.top, 2.0)
@@ -830,6 +848,14 @@ struct EnhancePaneView: View {
         }
     }
 
+    private func laneIdentifier(for lane: ModelLane) -> String {
+        switch lane {
+        case .neuralEngine: return "tabletLaneRow_neuralEngine"
+        case .gpu: return "tabletLaneRow_gpu"
+        case .cpu: return "tabletLaneRow_cpu"
+        }
+    }
+
     private struct LaneDisplayState {
         let line2: String
         let showMeter: Bool
@@ -842,13 +868,25 @@ struct EnhancePaneView: View {
 
     private func computeLaneState(_ lane: ModelLane) -> LaneDisplayState {
         let stages = model.activePlan.stages
-        let unit: ComputeUnit = lane == .gpu ? .gpu : .npu
+        let unit: ComputeUnit = lane == .gpu ? .gpu : (lane == .cpu ? .cpu : .npu)
         let isSwitchedOff = (lane == .neuralEngine && model.laneChoice == .gpuOnly)
             || (lane == .gpu && model.laneChoice == .neuralEngineOnly)
 
         if isSwitchedOff {
             return LaneDisplayState(
                 line2: "Off",
+                showMeter: false,
+                litCount: 0,
+                steppingIndex: nil,
+                isDimmed: false,
+                isWarningCells: false,
+                isWarningTitle: false
+            )
+        }
+
+        if lane == .neuralEngine && !model.isNeuralEngineAvailable {
+            return LaneDisplayState(
+                line2: "Not available on \(TabletPlatform.deviceNoun)",
                 showMeter: false,
                 litCount: 0,
                 steppingIndex: nil,
@@ -915,8 +953,19 @@ struct EnhancePaneView: View {
         }
 
         if failedForExpectedLane {
+            let ranAndFailed: Bool = {
+                if lane != .neuralEngine { return true }
+                return stages.contains { stageModel in
+                    if let v = model.verdictsByModel[stageModel] {
+                        return v.neuralEngineChecked && !v.neuralEngine
+                    }
+                    return false
+                }
+            }()
             return LaneDisplayState(
-                line2: "Not used: gave wrong results on \(TabletPlatform.deviceNoun)",
+                line2: ranAndFailed
+                    ? "Not used: gave wrong results on \(TabletPlatform.deviceNoun)"
+                    : "Not available on \(TabletPlatform.deviceNoun)",
                 showMeter: false,
                 litCount: 0,
                 steppingIndex: nil,
@@ -943,7 +992,7 @@ struct EnhancePaneView: View {
             let otherBusy = model.laneActivities[otherLane]?.photoID != nil
             if otherBusy {
                 return LaneDisplayState(
-                    line2: lane == .gpu ? "Waiting for the Neural Engine" : "Waiting for the GPU",
+                    line2: lane == .gpu ? "Waiting for the \(TabletPlatform.npuName)" : "Waiting for the GPU",
                     showMeter: true,
                     litCount: 0,
                     steppingIndex: nil,
@@ -979,8 +1028,11 @@ struct EnhancePaneView: View {
     }
 
     private func stagesForLane(_ lane: ModelLane) -> [TabletModelID] {
-        let unit: ComputeUnit = lane == .gpu ? .gpu : .npu
+        let unit: ComputeUnit = lane == .gpu ? .gpu : (lane == .cpu ? .cpu : .npu)
         return model.activePlan.stages.filter { stageModel in
+            if TabletPlatform.isAndroid && model.visibleLanes == [.cpu] {
+                return lane == .cpu
+            }
             switch model.laneChoice {
             case .neuralEngineOnly:
                 guard lane == .neuralEngine else { return false }
@@ -992,6 +1044,9 @@ struct EnhancePaneView: View {
                 if let verdict = model.verdictsByModel[stageModel] {
                     return verdict.supports(unit)
                 }
+                if TabletPlatform.isAndroid {
+                    return lane == model.visibleLanes.first || ModelCatalog.model(stageModel).preferredLane == lane
+                }
                 return ModelCatalog.model(stageModel).preferredLane == lane
             }
         }
@@ -999,7 +1054,7 @@ struct EnhancePaneView: View {
 
     private func idleLaneLine(lane: ModelLane, stageModels: [TabletModelID]) -> String {
         let otherLaneName = lane == .gpu ? TabletPlatform.npuName : "GPU"
-        if model.laneChoice == .both && stageModels.count == 1, let only = stageModels.first,
+        if model.visibleLanes.count > 1 && model.laneChoice == .both && stageModels.count == 1, let only = stageModels.first,
            let verdict = model.verdictsByModel[only],
            verdict.neuralEngine && verdict.gpu {
             let stageName = TabletEnhanceSetup.stageTitle(for: only, outputSize: model.setup.outputSize)
@@ -1010,7 +1065,13 @@ struct EnhancePaneView: View {
     }
 
     private func laneRow(lane: ModelLane, identifier: String) -> some View {
-        let name = lane == .gpu ? "GPU" : TabletPlatform.npuName
+        let name: String = {
+            switch lane {
+            case .gpu: return "GPU"
+            case .cpu: return "CPU"
+            case .neuralEngine: return TabletPlatform.npuName
+            }
+        }()
         let state = computeLaneState(lane)
 
         return VStack(alignment: .leading, spacing: 4.0) {
@@ -1094,6 +1155,9 @@ struct EnhancePaneView: View {
                     .frame(minHeight: Theme.Spacing.controlHeight)
                 }
                 .buttonStyle(.plain)
+                .tabletDisableLiftHover()
+                .accessibilityLabel("Output, \(summaryText)")
+                .accessibilityValue(isOutputExpanded ? "Expanded" : "Collapsed")
                 .accessibilityIdentifier("tabletOutputDisclosureButton")
             } else {
                 Text("Output")
@@ -1147,6 +1211,7 @@ struct EnhancePaneView: View {
                             }
                         }
                         .disabled(model.isBatchRunning)
+                        .accessibilityLabel("Output size, \(sizeDisplay)")
                         .accessibilityIdentifier("tabletOutputSizeMenu")
                     }
                     .frame(minHeight: Theme.Spacing.controlHeight)
@@ -1189,6 +1254,7 @@ struct EnhancePaneView: View {
                     }
                 }
                 .disabled(model.isBatchRunning)
+                .accessibilityLabel("Output format, \(model.setup.outputFormat.displayName)")
                 .accessibilityIdentifier("tabletOutputFormatMenu")
             }
             .frame(minHeight: Theme.Spacing.controlHeight)
@@ -1257,6 +1323,7 @@ struct EnhancePaneView: View {
                         }
                     }
                     .disabled(model.isBatchRunning)
+                    .accessibilityLabel("Save destination, \(saveDestinationLabel)")
                     .accessibilityIdentifier("tabletSaveToMenu")
                 }
                 .frame(minHeight: Theme.Spacing.controlHeight)
@@ -1358,8 +1425,81 @@ struct EnhancePaneView: View {
                 )
         }
         .buttonStyle(.plain)
+        .tabletDisableLiftHover()
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
         .accessibilityIdentifier(identifier)
     }
+
+    #if SKIP
+    private func androidRecipeActionSheet(_ recipe: TabletRecipe) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            Text(recipe.name)
+                .themeFont(.paneTitle)
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
+                .padding(.bottom, Theme.Spacing.xs)
+
+            Button {
+                sheetRecipe = nil
+                recipeToRename = recipe
+                renameRecipeDraft = recipe.name
+            } label: {
+                HStack(spacing: Theme.Spacing.md) {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 16.0, weight: .medium))
+                        .frame(width: 24.0)
+                    Text("Rename\u{2026}")
+                        .themeFont(.control, weight: .medium)
+                    Spacer()
+                }
+                .foregroundStyle(Theme.text)
+                .padding(.horizontal, Theme.Spacing.md)
+                .frame(height: Theme.Spacing.hitArea)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                        .fill(Theme.raised)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                        .stroke(Theme.border, lineWidth: 1.0)
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(model.isBatchRunning)
+
+            Button {
+                sheetRecipe = nil
+                model.deleteRecipe(id: recipe.id)
+            } label: {
+                HStack(spacing: Theme.Spacing.md) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 16.0, weight: .medium))
+                        .frame(width: 24.0)
+                    Text("Delete")
+                        .themeFont(.control, weight: .medium)
+                    Spacer()
+                }
+                .foregroundStyle(Theme.danger)
+                .padding(.horizontal, Theme.Spacing.md)
+                .frame(height: Theme.Spacing.hitArea)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                        .fill(Theme.raised)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                        .stroke(Theme.border, lineWidth: 1.0)
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(model.isBatchRunning)
+        }
+        .padding(Theme.Spacing.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.panel)
+        .presentationDetents([.height(210.0)])
+    }
+    #endif
 
     private var sectionRule: some View {
         Rectangle()

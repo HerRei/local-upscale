@@ -146,19 +146,87 @@ public enum TabletLaneChoice: String, Codable, CaseIterable, Sendable {
     case gpuOnly
 
     public var shortTitle: String {
+        shortTitle(isAndroid: false)
+    }
+
+    public func shortTitle(isAndroid: Bool) -> String {
         switch self {
         case .both: return "Both"
-        case .neuralEngineOnly: return "Neural Engine"
+        case .neuralEngineOnly: return isAndroid ? "NPU" : "Neural Engine"
         case .gpuOnly: return "GPU"
         }
     }
 
     public var menuTitle: String {
+        menuTitle(isAndroid: false)
+    }
+
+    public func menuTitle(isAndroid: Bool) -> String {
         switch self {
         case .both: return "Both Chips"
-        case .neuralEngineOnly: return "Neural Engine Only"
+        case .neuralEngineOnly: return isAndroid ? "NPU Only" : "Neural Engine Only"
         case .gpuOnly: return "GPU Only"
         }
+    }
+}
+
+public enum TabletWorkspaceLayoutMode: String, Equatable, Sendable {
+    case threePane
+    case twoColumnTabs
+    case oneColumnTabs
+}
+
+public struct TabletLayoutMetrics: Equatable, Sendable {
+    public static let foldWidth: Double = 1100.0
+    public static let twoColumnWidth: Double = 700.0
+    public static let mediaGridWidth: Double = 600.0
+
+    public let mode: TabletWorkspaceLayoutMode
+    public let isThreePane: Bool
+    public let isTwoColumnEnhance: Bool
+    public let isMediaGrid: Bool
+    public let isCompactStatusBar: Bool
+
+    public init(
+        mode: TabletWorkspaceLayoutMode,
+        isThreePane: Bool,
+        isTwoColumnEnhance: Bool,
+        isMediaGrid: Bool,
+        isCompactStatusBar: Bool
+    ) {
+        self.mode = mode
+        self.isThreePane = isThreePane
+        self.isTwoColumnEnhance = isTwoColumnEnhance
+        self.isMediaGrid = isMediaGrid
+        self.isCompactStatusBar = isCompactStatusBar
+    }
+
+    public static func forWidth(_ width: Double) -> TabletLayoutMetrics {
+        if width >= foldWidth {
+            return TabletLayoutMetrics(
+                mode: .threePane,
+                isThreePane: true,
+                isTwoColumnEnhance: false,
+                isMediaGrid: false,
+                isCompactStatusBar: false
+            )
+        }
+        if width >= twoColumnWidth {
+            return TabletLayoutMetrics(
+                mode: .twoColumnTabs,
+                isThreePane: false,
+                isTwoColumnEnhance: true,
+                isMediaGrid: true,
+                isCompactStatusBar: false
+            )
+        }
+        return TabletLayoutMetrics(
+            mode: .oneColumnTabs,
+            isThreePane: false,
+            isTwoColumnEnhance: false,
+            isMediaGrid: width >= mediaGridWidth,
+            isCompactStatusBar: true
+        )
     }
 }
 
@@ -167,12 +235,33 @@ public struct TabletChipVerdict: Codable, Equatable, Sendable {
     public let cpu: Bool
     public let gpu: Bool
     public let neuralEngine: Bool
+    public let neuralEngineChecked: Bool
 
-    public init(preferred: ComputeUnit, cpu: Bool, gpu: Bool, neuralEngine: Bool) {
+    public init(
+        preferred: ComputeUnit,
+        cpu: Bool,
+        gpu: Bool,
+        neuralEngine: Bool,
+        neuralEngineChecked: Bool = false
+    ) {
         self.preferred = preferred
         self.cpu = cpu
         self.gpu = gpu
         self.neuralEngine = neuralEngine
+        self.neuralEngineChecked = neuralEngineChecked
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case preferred, cpu, gpu, neuralEngine, neuralEngineChecked
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        preferred = try c.decode(ComputeUnit.self, forKey: .preferred)
+        cpu = try c.decode(Bool.self, forKey: .cpu)
+        gpu = try c.decode(Bool.self, forKey: .gpu)
+        neuralEngine = try c.decode(Bool.self, forKey: .neuralEngine)
+        neuralEngineChecked = try c.decodeIfPresent(Bool.self, forKey: .neuralEngineChecked) ?? false
     }
 
     public func supports(_ unit: ComputeUnit) -> Bool {
@@ -412,15 +501,16 @@ public struct TabletEnhanceSetup: Codable, Equatable, Sendable {
             guard let verdict = verdicts[model] else { continue }
             if !isStageRunnable(model: model, verdict: verdict, laneChoice: laneChoice) {
                 let name = ModelCatalog.model(model).displayName
+                let npuName = deviceNoun == "this tablet" ? "NPU" : "Neural Engine"
                 switch laneChoice {
                 case .neuralEngineOnly:
                     if verdict.gpu {
                         return ("Ready", "\(name) needs the GPU.", false)
                     }
-                    return ("Ready", "\(name) cannot run on the Neural Engine.", false)
+                    return ("Ready", "\(name) cannot run on the \(npuName).", false)
                 case .gpuOnly:
                     if verdict.neuralEngine {
-                        return ("Ready", "\(name) needs the Neural Engine.", false)
+                        return ("Ready", "\(name) needs the \(npuName).", false)
                     }
                     return ("Ready", "\(name) cannot run on the GPU.", false)
                 case .both:

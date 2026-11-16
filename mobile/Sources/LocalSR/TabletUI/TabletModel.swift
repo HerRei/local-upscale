@@ -14,6 +14,14 @@ private final class TabletServiceBox: @unchecked Sendable {
         service.supportsBackgroundGPU
     }
 
+    var availableLanes: [ModelLane] {
+        service.availableLanes
+    }
+
+    func updateForegroundNotification(title: String, detail: String?, fraction: Double) {
+        service.updateForegroundNotification(title: title, detail: detail, fraction: fraction)
+    }
+
     func setLaneOverride(_ override: TabletLaneOverride) {
         service.laneOverride = override
     }
@@ -185,6 +193,22 @@ enum TabletBatchCompletion: Equatable, Sendable {
     case partialFailure(succeeded: Int, total: Int, failed: Int)
 }
 
+private struct TabletPersistedQueueItem: Codable, Sendable {
+    let id: String
+    let inputURL: URL
+    let displayName: String
+    let pixelWidth: Int?
+    let pixelHeight: Int?
+}
+
+private struct TabletPersistedBatchState: Codable, Sendable {
+    let items: [TabletPersistedQueueItem]
+    let totalInRun: Int
+    let completedInRun: Int
+    let pausedBySystem: Bool
+    let setup: TabletEnhanceSetup
+}
+
 @MainActor
 @Observable
 final class TabletModel {
@@ -233,6 +257,17 @@ final class TabletModel {
     var isLoadingInputs: Bool = false
     var isDropTargeted: Bool = false
     var transientStatusMessage: String? = nil
+    var storageErrorMessage: String? = nil
+
+    var isPausedBySystem: Bool = false
+    var pausedCompletedCount: Int = 0
+    var pausedTotalCount: Int = 0
+
+    var viewerActualZoom: CGFloat = 1.0
+    var viewerMinZoom: CGFloat = 1.0
+    var viewerMaxZoom: CGFloat = 8.0
+    @ObservationIgnored private var savedDividerBeforeCompare: CGFloat? = nil
+    @ObservationIgnored private var pauseRequestedBySystem: Bool = false
 
     var batchTargetIDs: [String] = []
     var batchStartedAt: Date? = nil
@@ -297,11 +332,8 @@ final class TabletModel {
 
         if let data = try? Data(contentsOf: storageDirectory.appendingPathComponent("tablet_results.json")),
            let decoded = try? JSONDecoder().decode([TabletResultItem].self, from: data) {
-            results = decoded.filter {
-                FileManager.default.fileExists(atPath: $0.outputURL.path)
-                    && FileManager.default.fileExists(atPath: $0.previewURL.path)
-            }
-            persistResults()
+            // Keep the record so the viewer can explain when its file is gone.
+            results = decoded
         }
         let validIDs = Set(results.map(\.id))
         if let savedData = try? Data(contentsOf: storageDirectory.appendingPathComponent("tablet_saved.json")),
@@ -312,9 +344,24 @@ final class TabletModel {
         if let firstResult = results.first {
             selection = .result(firstResult.id)
         }
+        restorePausedBatchIfNeeded()
     }
 
     // MARK: - Computed Properties
+
+    var visibleLanes: [ModelLane] {
+        if TabletPlatform.isAndroid {
+            return serviceBox.availableLanes
+        }
+        return [.neuralEngine, .gpu]
+    }
+
+    var isNeuralEngineAvailable: Bool {
+        if TabletPlatform.isAndroid {
+            return visibleLanes.contains(ModelLane.neuralEngine)
+        }
+        return TabletPlatform.hasNeuralEngine
+    }
 
     var activePlan: Plan {
         setup.buildPlan()
@@ -687,6 +734,9 @@ final class TabletModel {
 
         guard !batch.inputs.isEmpty else { return }
         batchLastRunSummary = nil
+        if isPausedBySystem {
+            clearPausedBatchState()
+        }
 
         var newlyAdded: [TabletQueueItem] = []
         let baseIndex = queueItems.count
@@ -781,6 +831,9 @@ final class TabletModel {
             }
         }
         deleteInputFileIfUnreferenced(removedURL)
+        if isPausedBySystem && waitingQueueItems.isEmpty {
+            clearPausedBatchState()
+        }
     }
 
     func clearFinishedQueueItems() {
@@ -860,6 +913,19 @@ final class TabletModel {
         guard !targets.isEmpty, !isBatchRunning, laneValidationError == nil else { return }
         if switchToViewer { activeTab = .viewer }
         runQueueBatch(items: targets)
+    }
+
+    func resumePausedQueue(switchToViewer: Bool = false) {
+        guard !isBatchRunning, laneValidationError == nil else { return }
+        let waiting = queueItems.filter { $0.status == .waiting || $0.status == .failed }
+        guard !waiting.isEmpty else {
+            clearPausedBatchState()
+            return
+        }
+        let carryCompleted = pausedCompletedCount
+        let carryTotal = max(pausedTotalCount, carryCompleted + waiting.count)
+        if switchToViewer { activeTab = .viewer }
+        runQueueBatch(items: waiting, carryCompleted: carryCompleted, carryTotal: carryTotal)
     }
 
     func upscaleSelected(switchToViewer: Bool = false) {
@@ -953,13 +1019,30 @@ final class TabletModel {
 
     func cancelQueue() {
         guard isBatchRunning else { return }
+        pauseRequestedBySystem = false
         pendingFollowUpIDs.removeAll()
         serviceBox.cancel()
         batchTask?.cancel()
     }
 
-    private func runQueueBatch(items: [TabletQueueItem]) {
+    func pauseBySystem() {
+        guard isBatchRunning else { return }
+        pauseRequestedBySystem = true
+        pausedCompletedCount = batchCompletedInRun
+        pausedTotalCount = max(batchTotalInRun, batchCompletedInRun)
+        isPausedBySystem = true
+        persistBatchState(pausedBySystem: true)
+        pendingFollowUpIDs.removeAll()
+        serviceBox.cancel()
+        batchTask?.cancel()
+    }
+
+    private func runQueueBatch(items: [TabletQueueItem], carryCompleted: Int = 0, carryTotal: Int? = nil) {
         guard !items.isEmpty else { return }
+        if let freeBytes = TabletPlatform.availableStorageBytes(), freeBytes < TabletPlatform.minimumRequiredStorageBytes {
+            storageErrorMessage = "Free up 120 MB and try again."
+            return
+        }
         let plan = activePlan
         let targetScale = setup.task == .restore ? 1 : setup.outputSize.rawValue
         let outputFormat = setup.outputFormat
@@ -983,6 +1066,10 @@ final class TabletModel {
             }
         }
 
+        isPausedBySystem = false
+        pauseRequestedBySystem = false
+        pausedCompletedCount = 0
+        pausedTotalCount = 0
         isBatchRunning = true
         let allChecked = plan.stages.allSatisfy { verdictsByModel[$0] != nil }
         isCheckingDevice = !allChecked
@@ -990,29 +1077,33 @@ final class TabletModel {
         lastBatchLaneSummary = nil
         batchStartedAt = Date()
         batchTargetIDs = ids
-        batchCompletedInRun = 0
+        batchCompletedInRun = carryCompleted
         batchFailedInRun = 0
-        batchTotalInRun = ids.count
+        batchTotalInRun = carryTotal ?? ids.count
         pendingFollowUpIDs = []
         itemChipsUsed = [:]
         batchStageRecords = [:]
         batchItemCompletedIDs = []
         laneActivities = [:]
+        persistBatchState(pausedBySystem: false)
 
         #if !SKIP && os(iOS)
         let verb = setup.task == .restore ? "Restoring" : "Upscaling"
-        let title = ids.count == 1 ? "\(verb) 1 Photo" : "\(verb) \(ids.count) Photos"
+        let totalForTitle = batchTotalInRun
+        let title = totalForTitle == 1 ? "\(verb) 1 Photo" : "\(verb) \(totalForTitle) Photos"
         BatchBackgroundTask.shared.begin(
             title: title,
-            subtitle: "0 of \(ids.count)",
-            totalUnits: Int64(ids.count),
+            subtitle: "\(batchCompletedInRun) of \(totalForTitle)",
+            totalUnits: Int64(totalForTitle),
             requestGPU: laneChoice != .neuralEngineOnly,
             onExpire: { [weak self] in
                 Task { @MainActor in
-                    self?.cancelQueue()
+                    self?.pauseBySystem()
                 }
             }
         )
+        #elseif SKIP
+        updateAndroidForegroundNotification()
         #endif
 
         batchTask?.cancel()
@@ -1131,6 +1222,9 @@ final class TabletModel {
                 }
                 queueItems[idx].progress = combined
             }
+            #if SKIP
+            updateAndroidForegroundNotification()
+            #endif
 
         case .prediction(let photoID, let stage, let model, let lane, _, _):
             isCheckingDevice = false
@@ -1196,11 +1290,23 @@ final class TabletModel {
             }
 
             batchCompletedInRun += 1
+            if isPausedBySystem || pauseRequestedBySystem {
+                pausedCompletedCount = batchCompletedInRun
+                persistBatchState(pausedBySystem: true)
+            } else {
+                persistBatchState(pausedBySystem: false)
+            }
             #if !SKIP && os(iOS)
+            var bgSubtitle = "\(batchCompletedInRun) of \(batchTotalInRun)"
+            if let eta = estimatedRemainingSeconds() {
+                bgSubtitle += " \u{00B7} about \(Self.formatDurationCompact(eta)) left"
+            }
             BatchBackgroundTask.shared.update(
                 completedUnits: Int64(batchCompletedInRun),
-                subtitle: "\(batchCompletedInRun) of \(batchTotalInRun)"
+                subtitle: bgSubtitle
             )
+            #elseif SKIP
+            updateAndroidForegroundNotification()
             #endif
 
             if autoSave {
@@ -1213,6 +1319,9 @@ final class TabletModel {
 
     private func handleBatchRunError(_ error: Error, targetIDs: [String]) {
         isCheckingDevice = false
+        if TabletPlatform.isOutOfSpaceError(error) {
+            storageErrorMessage = "Free up 120 MB and try again."
+        }
         let message: String
         #if !SKIP
         if let schedErr = error as? LaneScheduler.ScheduleError, case .unavailable = schedErr {
@@ -1248,9 +1357,24 @@ final class TabletModel {
             }
         }
 
+        let paused = pauseRequestedBySystem
+        pauseRequestedBySystem = false
+
         #if !SKIP && os(iOS)
-        BatchBackgroundTask.shared.end(success: !wasCancelled && batchFailedInRun == 0)
+        BatchBackgroundTask.shared.end(success: !wasCancelled && !paused && batchFailedInRun == 0)
         #endif
+
+        if paused {
+            isPausedBySystem = true
+            pausedCompletedCount = batchCompletedInRun
+            pausedTotalCount = max(batchTotalInRun, batchCompletedInRun)
+            persistBatchState(pausedBySystem: true)
+            batchLastRunSummary = nil
+            lastBatchLaneSummary = nil
+            return
+        }
+
+        clearPersistedBatchFile()
 
         if wasCancelled {
             batchLastRunSummary = nil
@@ -1381,9 +1505,13 @@ final class TabletModel {
             persistSavedIDs()
             Haptics.success()
         } catch {
-            let msg = String(describing: error)
-            saveAccessDenied = msg.contains("not granted") || msg.contains("notAuthorized")
-            saveErrorMessage = saveAccessDenied ? "Allow LocalSR to add photos in Settings." : error.localizedDescription
+            if TabletPlatform.isOutOfSpaceError(error) {
+                storageErrorMessage = "Free up 120 MB and try again."
+            } else {
+                let msg = String(describing: error)
+                saveAccessDenied = msg.contains("not granted") || msg.contains("notAuthorized")
+                saveErrorMessage = saveAccessDenied ? "Allow LocalSR to add photos in Settings." : error.localizedDescription
+            }
             Haptics.error()
         }
         isSaving = false
@@ -1410,9 +1538,13 @@ final class TabletModel {
                 persistSavedIDs()
                 saveAllDone += 1
             } catch {
-                let msg = String(describing: error)
-                saveAccessDenied = msg.contains("not granted") || msg.contains("notAuthorized")
-                saveErrorMessage = saveAccessDenied ? "Allow LocalSR to add photos in Settings." : error.localizedDescription
+                if TabletPlatform.isOutOfSpaceError(error) {
+                    storageErrorMessage = "Free up 120 MB and try again."
+                } else {
+                    let msg = String(describing: error)
+                    saveAccessDenied = msg.contains("not granted") || msg.contains("notAuthorized")
+                    saveErrorMessage = saveAccessDenied ? "Allow LocalSR to add photos in Settings." : error.localizedDescription
+                }
                 Haptics.error()
                 isSavingAll = false
                 return
@@ -1638,6 +1770,221 @@ final class TabletModel {
         }
         if !referencedByQueue && !referencedByResults {
             try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    // MARK: - Batch Recovery & Foreground Notification
+
+    private var batchStateFileURL: URL {
+        storageDirectory.appendingPathComponent("tablet_batch_state.json")
+    }
+
+    private func persistBatchState(pausedBySystem: Bool) {
+        let remaining = queueItems.filter { item in
+            batchTargetIDs.contains(item.id) && (item.status == .waiting || item.status == .running)
+        }.map { item in
+            TabletPersistedQueueItem(
+                id: item.id,
+                inputURL: item.inputURL,
+                displayName: item.displayName,
+                pixelWidth: item.pixelWidth,
+                pixelHeight: item.pixelHeight
+            )
+        }
+        guard !remaining.isEmpty else {
+            clearPersistedBatchFile()
+            return
+        }
+        let state = TabletPersistedBatchState(
+            items: remaining,
+            totalInRun: max(batchTotalInRun, batchCompletedInRun + remaining.count),
+            completedInRun: batchCompletedInRun,
+            pausedBySystem: pausedBySystem,
+            setup: setup
+        )
+        try? FileManager.default.createDirectory(at: storageDirectory, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(state) {
+            try? data.write(to: batchStateFileURL, options: Data.WritingOptions.atomic)
+        }
+    }
+
+    private func clearPersistedBatchFile() {
+        try? FileManager.default.removeItem(at: batchStateFileURL)
+    }
+
+    func clearPausedBatchState() {
+        isPausedBySystem = false
+        pausedCompletedCount = 0
+        pausedTotalCount = 0
+        clearPersistedBatchFile()
+    }
+
+    private func restorePausedBatchIfNeeded() {
+        guard let data = try? Data(contentsOf: batchStateFileURL),
+              let state = try? JSONDecoder().decode(TabletPersistedBatchState.self, from: data) else {
+            clearPersistedBatchFile()
+            return
+        }
+        var restored: [TabletQueueItem] = []
+        for entry in state.items {
+            if entry.inputURL.isFileURL && !FileManager.default.fileExists(atPath: entry.inputURL.path) {
+                continue
+            }
+            restored.append(TabletQueueItem(
+                id: entry.id,
+                inputURL: entry.inputURL,
+                displayName: entry.displayName,
+                pixelWidth: entry.pixelWidth,
+                pixelHeight: entry.pixelHeight,
+                isPreparingPreview: false,
+                status: .waiting,
+                stageIndex: 0,
+                stageCount: state.setup.buildPlan().stages.count,
+                stageName: nil,
+                chipName: nil,
+                progress: 0.0,
+                resultID: nil,
+                outputWidth: nil,
+                outputHeight: nil,
+                errorMessage: nil
+            ))
+        }
+        guard !restored.isEmpty else {
+            clearPersistedBatchFile()
+            return
+        }
+        setup = state.setup
+        if TabletPlatform.isAndroid && setup.outputFormat == .heic {
+            setup.outputFormat = .jpeg
+        }
+        queueItems.append(contentsOf: restored)
+        isPausedBySystem = true
+        pausedCompletedCount = state.completedInRun
+        pausedTotalCount = max(state.totalInRun, state.completedInRun + restored.count)
+        if selection == nil, let first = restored.first {
+            selection = .queue(first.id)
+        }
+    }
+
+    private func updateAndroidForegroundNotification() {
+        guard TabletPlatform.isAndroid else { return }
+        let total = max(1, batchTotalInRun)
+        let current = min(batchCompletedInRun + 1, total)
+        let pct = Int((wholeQueueProgress * 100.0).rounded())
+        let verb = setup.task == .restore ? "Restoring" : "Upscaling"
+        let title = isCheckingDevice ? "Getting Ready\u{2026}" : "\(verb) \(current) of \(total) \u{00B7} \(pct) %"
+        var parts: [String] = []
+        if let eta = estimatedRemainingSeconds() {
+            parts.append("About \(Self.formatDurationCompact(eta)) left")
+        }
+        if let nextName = nextQueuedItemName {
+            parts.append("next \(nextName)")
+        }
+        let detail = parts.isEmpty ? nil : parts.joined(separator: " \u{00B7} ")
+        serviceBox.updateForegroundNotification(title: title, detail: detail, fraction: isCheckingDevice ? 0.0 : wholeQueueProgress)
+    }
+
+    // MARK: - Keyboard Navigation & Viewer Controls
+
+    func selectPreviousPhoto() {
+        if mediaSegment == .queue && !queueItems.isEmpty {
+            if case .queue(let id) = selection, let idx = queueItems.firstIndex(where: { $0.id == id }) {
+                let prev = max(0, idx - 1)
+                selection = .queue(queueItems[prev].id)
+            } else if let first = queueItems.first {
+                selection = .queue(first.id)
+            }
+        } else if !results.isEmpty {
+            if case .result(let id) = selection, let idx = results.firstIndex(where: { $0.id == id }) {
+                let prev = max(0, idx - 1)
+                selection = .result(results[prev].id)
+            } else if let first = results.first {
+                selection = .result(first.id)
+            }
+        }
+    }
+
+    func selectNextPhoto() {
+        if mediaSegment == .queue && !queueItems.isEmpty {
+            if case .queue(let id) = selection, let idx = queueItems.firstIndex(where: { $0.id == id }) {
+                let next = min(queueItems.count - 1, idx + 1)
+                selection = .queue(queueItems[next].id)
+            } else if let first = queueItems.first {
+                selection = .queue(first.id)
+            }
+        } else if !results.isEmpty {
+            if case .result(let id) = selection, let idx = results.firstIndex(where: { $0.id == id }) {
+                let next = min(results.count - 1, idx + 1)
+                selection = .result(results[next].id)
+            } else if let first = results.first {
+                selection = .result(first.id)
+            }
+        }
+    }
+
+    func removeSelectedQueueItem() {
+        guard case .queue(let id) = selection,
+              let item = queueItems.first(where: { $0.id == id }),
+              item.status != .running else { return }
+        removeQueueItem(id: id)
+    }
+
+    func zoomIn() {
+        setZoomScale(zoomScale * 1.25)
+    }
+
+    func zoomOut() {
+        setZoomScale(zoomScale / 1.25)
+    }
+
+    func zoomFit() {
+        setZoomScale(1.0)
+    }
+
+    func zoomActual() {
+        setZoomScale(viewerActualZoom)
+    }
+
+    private func setZoomScale(_ rawTarget: CGFloat) {
+        let clamped = min(max(rawTarget, viewerMinZoom), viewerMaxZoom)
+        let snapped: CGFloat
+        if (viewerMinZoom >= 1.0 && clamped <= 1.01) || abs(clamped - 1.0) <= 0.015 {
+            snapped = 1.0
+        } else {
+            snapped = clamped
+        }
+        zoomScale = snapped
+        if snapped <= 1.01 {
+            panOffset = .zero
+            isFullResolutionActive = false
+        } else if snapped > 1.2 {
+            isFullResolutionActive = true
+        }
+    }
+
+    func nudgeDivider(delta: CGFloat) {
+        guard selectedResultItem != nil else { return }
+        savedDividerBeforeCompare = nil
+        dividerFraction = min(max(dividerFraction + delta, 0.0), 1.0)
+    }
+
+    func moveDivider(to value: CGFloat) {
+        guard selectedResultItem != nil else { return }
+        savedDividerBeforeCompare = nil
+        dividerFraction = min(max(value, 0.0), 1.0)
+    }
+
+    func toggleCompareOriginal() {
+        guard selectedResultItem != nil else { return }
+        if dividerFraction >= 0.99, let saved = savedDividerBeforeCompare {
+            dividerFraction = saved
+            savedDividerBeforeCompare = nil
+        } else if dividerFraction >= 0.99 {
+            dividerFraction = 0.5
+            savedDividerBeforeCompare = nil
+        } else {
+            savedDividerBeforeCompare = dividerFraction
+            dividerFraction = 1.0
         }
     }
 }

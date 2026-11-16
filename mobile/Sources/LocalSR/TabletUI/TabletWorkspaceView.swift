@@ -3,6 +3,7 @@ import LocalSRCore
 
 struct TabletWorkspaceView: View {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var model = TabletModel()
     @State private var settingsAppModel = AppModel()
 
@@ -16,13 +17,20 @@ struct TabletWorkspaceView: View {
     @State private var resultToDelete: TabletResultItem? = nil
     @State private var isShowingDeleteAllConfirm: Bool = false
     @State private var isShowingSaveError: Bool = false
+    @State private var isShowingStorageError: Bool = false
+    @State private var lastMeasuredThreePane: Bool = true
 
     var body: some View {
+        attachPresentations(to: attachStateObservers(to: workspaceShell))
+    }
+
+    private var workspaceShell: some View {
         @Bindable var bindableModel = model
 
-        GeometryReader { geo in
+        return GeometryReader { geo in
             let width = geo.size.width
-            let isThreePane = width >= Theme.Spacing.foldWidth
+            let metrics = TabletLayoutMetrics.forWidth(Double(width))
+            let isThreePane = metrics.isThreePane
 
             ZStack {
                 Theme.base
@@ -32,7 +40,7 @@ struct TabletWorkspaceView: View {
                     if isThreePane {
                         threePaneBody
                     } else {
-                        tabModeBody(width: width)
+                        tabModeBody(width: width, metrics: metrics)
                     }
 
                     StatusBarView(
@@ -50,131 +58,206 @@ struct TabletWorkspaceView: View {
 
                 if model.isDropTargeted {
                     dropOverlay
-                        .transition(.opacity)
+                        .transition(reduceMotion ? .identity : .opacity)
+                }
+
+                #if SKIP
+                ComposeView { _ in
+                    AndroidBackHandlerHost(enabled: !isThreePane && model.activeTab != .viewer) {
+                        model.activeTab = .viewer
+                    }
+                }
+                .frame(width: 0.0, height: 0.0)
+                #endif
+            }
+            .onChange(of: isThreePane) { _, newValue in
+                lastMeasuredThreePane = newValue
+                #if !SKIP
+                syncCommandRouter(isThreePane: newValue)
+                #endif
+            }
+            .onAppear {
+                lastMeasuredThreePane = isThreePane
+                #if !SKIP
+                syncCommandRouter(isThreePane: isThreePane)
+                #endif
+            }
+            #if SKIP
+            .composeModifier { modifier in
+                modifier.androidCtrlShortcuts { action in
+                    handleAndroidShortcut(action, isThreePane: isThreePane)
                 }
             }
+            #endif
             .tabletWindowDropDestination(isTargeted: $bindableModel.isDropTargeted) { batch in
                 model.importBatch(batch)
             }
         }
         .environment(model)
         .tint(Theme.text)
-        .onAppear {
-            model.fullScale = fullScale
-            TabletPlatform.configureMinimumWindowSize()
-        }
-        .onChange(of: fullScale) { _, newValue in
-            model.fullScale = newValue
-        }
-        .onChange(of: scenePhase) { _, newPhase in
-            model.isAppInBackground = (newPhase == .background)
-        }
+    }
+
+    private func attachStateObservers<Content: View>(to content: Content) -> some View {
+        let base = content
+            .onAppear {
+                model.fullScale = fullScale
+                TabletPlatform.configureMinimumWindowSize()
+                #if !SKIP
+                wireCommandRouterActions()
+                syncCommandRouter(isThreePane: lastMeasuredThreePane)
+                #endif
+            }
+            .onChange(of: fullScale) { _, newValue in
+                model.fullScale = newValue
+            }
+            .onChange(of: scenePhase) { _, newPhase in
+                model.isAppInBackground = (newPhase == .background)
+            }
+            .onChange(of: model.selection) { oldSelection, newSelection in
+                if oldSelection != newSelection {
+                    model.resetViewerTransform()
+                }
+                #if !SKIP
+                syncCommandRouter(isThreePane: lastMeasuredThreePane)
+                #endif
+            }
+
         #if !SKIP
-        .onReceive(NotificationCenter.default.publisher(for: ProcessInfo.thermalStateDidChangeNotification)) { _ in
-            model.updateThermalState()
-        }
+        return base
+            .onReceive(NotificationCenter.default.publisher(for: ProcessInfo.thermalStateDidChangeNotification)) { _ in
+                model.updateThermalState()
+            }
+            .onDisappear {
+                TabletCommandRouter.shared.isActive = false
+            }
+            .onChange(of: model.isBatchRunning) { _, _ in
+                syncCommandRouter(isThreePane: lastMeasuredThreePane)
+            }
+            .onChange(of: model.queueItems.count) { _, _ in
+                syncCommandRouter(isThreePane: lastMeasuredThreePane)
+            }
+            .onChange(of: model.results.count) { _, _ in
+                syncCommandRouter(isThreePane: lastMeasuredThreePane)
+            }
+            .onChange(of: model.savedResultIDs.count) { _, _ in
+                syncCommandRouter(isThreePane: lastMeasuredThreePane)
+            }
+            .onChange(of: model.setup.task) { _, _ in
+                syncCommandRouter(isThreePane: lastMeasuredThreePane)
+            }
+        #else
+        return base
         #endif
-        .onChange(of: model.selection) { oldSelection, newSelection in
-            if oldSelection != newSelection {
-                model.resetViewerTransform()
+    }
+
+    private func attachPresentations<Content: View>(to content: Content) -> some View {
+        content
+            .background {
+                HStack(spacing: 0.0) {
+                    TabletPhotoPickerHost(
+                        isPresented: $isPhotoPickerPresented,
+                        onLoadingChanged: { loading in
+                            model.isLoadingInputs = loading
+                        },
+                        onImported: { batch in
+                            model.importBatch(batch)
+                        }
+                    )
+                    TabletFileImporterHost(
+                        isFilesPresented: $isFilesImporterPresented,
+                        isFolderPresented: $isFolderImporterPresented,
+                        onLoadingChanged: { loading in
+                            model.isLoadingInputs = loading
+                        },
+                        onImported: { batch in
+                            model.importBatch(batch)
+                        }
+                    )
+                }
             }
-        }
-        .background {
-            HStack(spacing: 0.0) {
-                TabletPhotoPickerHost(
-                    isPresented: $isPhotoPickerPresented,
-                    onLoadingChanged: { loading in
-                        model.isLoadingInputs = loading
-                    },
-                    onImported: { batch in
-                        model.importBatch(batch)
-                    }
-                )
-                TabletFileImporterHost(
-                    isFilesPresented: $isFilesImporterPresented,
-                    isFolderPresented: $isFolderImporterPresented,
-                    onLoadingChanged: { loading in
-                        model.isLoadingInputs = loading
-                    },
-                    onImported: { batch in
-                        model.importBatch(batch)
-                    }
-                )
+            .sheet(isPresented: $isSettingsPresented) {
+                AboutSheetView()
+                    .environment(settingsAppModel)
             }
-        }
-        .sheet(isPresented: $isSettingsPresented) {
-            AboutSheetView()
-                .environment(settingsAppModel)
-        }
-        .sheet(isPresented: $isModelLibraryPresented) {
-            ModelLibraryView(initialModel: model.setup.upscaleModel)
-                .environment(model)
-        }
-        .onChange(of: model.saveErrorMessage) { _, newValue in
-            isShowingSaveError = newValue != nil
-        }
-        .alert("Couldn't Save Photo", isPresented: $isShowingSaveError) {
-            if model.saveAccessDenied {
-                Button("Open Settings") {
-                    model.saveErrorMessage = nil
-                    model.saveAccessDenied = false
-                    PlatformSupport.openAppSettings()
+            .sheet(isPresented: $isModelLibraryPresented) {
+                ModelLibraryView(initialModel: model.setup.upscaleModel)
+                    .environment(model)
+            }
+            .onChange(of: model.saveErrorMessage) { _, newValue in
+                isShowingSaveError = newValue != nil
+            }
+            .onChange(of: model.storageErrorMessage) { _, newValue in
+                isShowingStorageError = newValue != nil
+            }
+            .alert("Not Enough Storage", isPresented: $isShowingStorageError) {
+                Button("OK") {
+                    model.storageErrorMessage = nil
+                }
+            } message: {
+                Text(model.storageErrorMessage ?? "Free up 120 MB and try again.")
+            }
+            .alert("Couldn't Save Photo", isPresented: $isShowingSaveError) {
+                if model.saveAccessDenied {
+                    Button("Open Settings") {
+                        model.saveErrorMessage = nil
+                        model.saveAccessDenied = false
+                        PlatformSupport.openAppSettings()
+                    }
+                    Button("Cancel", role: .cancel) {
+                        model.saveErrorMessage = nil
+                        model.saveAccessDenied = false
+                    }
+                } else {
+                    Button("OK") {
+                        model.saveErrorMessage = nil
+                    }
+                }
+            } message: {
+                Text(model.saveErrorMessage ?? "Saving failed.")
+            }
+            .confirmationDialog(
+                "Delete this enhanced photo from LocalSR?",
+                isPresented: Binding(
+                    get: { resultToDelete != nil },
+                    set: { if !$0 { resultToDelete = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Delete Photo", role: .destructive) {
+                    if let target = resultToDelete {
+                        model.deleteResult(id: target.id)
+                    }
+                    resultToDelete = nil
                 }
                 Button("Cancel", role: .cancel) {
-                    model.saveErrorMessage = nil
-                    model.saveAccessDenied = false
+                    resultToDelete = nil
                 }
-            } else {
-                Button("OK") {
-                    model.saveErrorMessage = nil
+            } message: {
+                if let target = resultToDelete, !model.isSaved(target.id) {
+                    Text("It hasn't been saved to \(TabletPlatform.libraryName).")
+                } else {
+                    Text(TabletPlatform.isAndroid ? "Your gallery isn't changed." : "Your photo library isn't changed.")
                 }
             }
-        } message: {
-            Text(model.saveErrorMessage ?? "Saving failed.")
-        }
-        .confirmationDialog(
-            "Delete this enhanced photo from LocalSR?",
-            isPresented: Binding(
-                get: { resultToDelete != nil },
-                set: { if !$0 { resultToDelete = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Delete Photo", role: .destructive) {
-                if let target = resultToDelete {
-                    model.deleteResult(id: target.id)
+            .confirmationDialog(
+                "Delete all \(model.results.count) enhanced photos from LocalSR?",
+                isPresented: $isShowingDeleteAllConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Delete All", role: .destructive) {
+                    model.deleteAllResults()
                 }
-                resultToDelete = nil
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                let unsaved = model.unsavedResultsCount
+                if unsaved > 0 {
+                    let verb = unsaved == 1 ? "hasn't" : "haven't"
+                    let place = TabletPlatform.isAndroid ? "Photos in your gallery" : "Photos in your library"
+                    Text("\(place) stay there. \(unsaved) \(verb) been saved.")
+                } else {
+                    Text(TabletPlatform.isAndroid ? "Photos in your gallery stay there." : "Photos in your library stay there.")
+                }
             }
-            Button("Cancel", role: .cancel) {
-                resultToDelete = nil
-            }
-        } message: {
-            if let target = resultToDelete, !model.isSaved(target.id) {
-                Text("It hasn't been saved to \(TabletPlatform.libraryName).")
-            } else {
-                Text(TabletPlatform.isAndroid ? "Your gallery isn't changed." : "Your photo library isn't changed.")
-            }
-        }
-        .confirmationDialog(
-            "Delete all \(model.results.count) enhanced photos from LocalSR?",
-            isPresented: $isShowingDeleteAllConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Delete All", role: .destructive) {
-                model.deleteAllResults()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            let unsaved = model.unsavedResultsCount
-            if unsaved > 0 {
-                let verb = unsaved == 1 ? "hasn't" : "haven't"
-                let place = TabletPlatform.isAndroid ? "Photos in your gallery" : "Photos in your library"
-                Text("\(place) stay there. \(unsaved) \(verb) been saved.")
-            } else {
-                Text(TabletPlatform.isAndroid ? "Photos in your gallery stay there." : "Photos in your library stay there.")
-            }
-        }
     }
 
     private var threePaneBody: some View {
@@ -230,7 +313,7 @@ struct TabletWorkspaceView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func tabModeBody(width: CGFloat) -> some View {
+    private func tabModeBody(width: CGFloat, metrics: TabletLayoutMetrics) -> some View {
         VStack(spacing: 0.0) {
             tabTopBar(width: width)
                 .background(Theme.chrome.ignoresSafeArea(edges: .top))
@@ -244,7 +327,7 @@ struct TabletWorkspaceView: View {
                 case .media:
                     MediaPaneView(
                         isThreePane: false,
-                        showsGrid: width >= Theme.Spacing.mediaGridWidth,
+                        showsGrid: metrics.isMediaGrid,
                         onChoosePhotos: { openPhotosPicker() },
                         onChooseFiles: { openFilesImporter() },
                         onChooseFolder: { openFolderImporter() },
@@ -267,7 +350,7 @@ struct TabletWorkspaceView: View {
                 case .enhance:
                     EnhancePaneView(
                         isThreePane: false,
-                        isTwoColumn: width >= Theme.Spacing.twoColumnWidth,
+                        isTwoColumn: metrics.isTwoColumnEnhance,
                         onOpenLibrary: { isModelLibraryPresented = true },
                         onSaveAll: { Task { await model.saveAllResults() } },
                         onClearFinished: { model.clearFinishedQueueItems() },
@@ -362,6 +445,8 @@ struct TabletWorkspaceView: View {
                 )
         }
         .buttonStyle(.plain)
+        .tabletDisableLiftHover()
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
         .accessibilityIdentifier(identifier)
     }
 
@@ -417,4 +502,197 @@ struct TabletWorkspaceView: View {
             model.importBatch(batch)
         }
     }
+
+    #if !SKIP
+    private func wireCommandRouterActions() {
+        let router = TabletCommandRouter.shared
+        router.onChooseFiles = { openFilesImporter() }
+        router.onChoosePhotos = { openPhotosPicker() }
+        router.onPaste = { pasteFromClipboard() }
+        router.onUpscaleSelected = { model.upscaleSelected(switchToViewer: !lastMeasuredThreePane) }
+        router.onStartAll = { model.startAll(switchToViewer: !lastMeasuredThreePane) }
+        router.onCancelQueue = { model.cancelQueue() }
+        router.onPreviousPhoto = { model.selectPreviousPhoto() }
+        router.onNextPhoto = { model.selectNextPhoto() }
+        router.onRemoveSelected = { model.removeSelectedQueueItem() }
+        router.onTab1 = {
+            if lastMeasuredThreePane {
+                if reduceMotion {
+                    model.isMediaPaneCollapsed.toggle()
+                } else {
+                    withAnimation(.smooth(duration: 0.25)) {
+                        model.isMediaPaneCollapsed.toggle()
+                    }
+                }
+            } else {
+                model.activeTab = .media
+            }
+        }
+        router.onTab2 = {
+            if !lastMeasuredThreePane {
+                model.activeTab = .viewer
+            }
+        }
+        router.onTab3 = {
+            if !lastMeasuredThreePane {
+                model.activeTab = .enhance
+            }
+        }
+        router.onZoomFit = { model.zoomFit() }
+        router.onZoomActual = { model.zoomActual() }
+        router.onZoomIn = { model.zoomIn() }
+        router.onZoomOut = { model.zoomOut() }
+        router.onDividerLeft = { model.nudgeDivider(delta: -0.05) }
+        router.onDividerRight = { model.nudgeDivider(delta: 0.05) }
+        router.onDividerStart = { model.moveDivider(to: 0.0) }
+        router.onDividerEnd = { model.moveDivider(to: 1.0) }
+        router.onToggleOriginal = { model.toggleCompareOriginal() }
+        router.onSaveSelected = {
+            if let res = model.selectedResultItem {
+                Task { await model.saveResult(res) }
+            }
+        }
+        router.onSaveAll = {
+            Task { await model.saveAllResults() }
+        }
+        router.onModelLibrary = { isModelLibraryPresented = true }
+        router.onSettings = { isSettingsPresented = true }
+    }
+
+    private func syncCommandRouter(isThreePane: Bool) {
+        let router = TabletCommandRouter.shared
+        router.isActive = true
+        router.isThreePane = isThreePane
+        router.canPaste = TabletPlatform.canPasteImages
+        let waiting = model.waitingQueueItems
+        router.canStartSelected = !model.isBatchRunning && !model.isLoadingInputs && model.laneValidationError == nil && (!waiting.isEmpty && (model.hasRunnableSelectedItem || waiting.count > 0))
+        router.canStartAll = !model.isBatchRunning && !model.isLoadingInputs && model.laneValidationError == nil && !waiting.isEmpty
+        router.isBatchRunning = model.isBatchRunning
+        router.hasSelection = !model.queueItems.isEmpty || !model.results.isEmpty
+        if let q = model.selectedQueueItem, q.status != .running {
+            router.canRemoveSelected = true
+        } else {
+            router.canRemoveSelected = false
+        }
+        router.hasViewerPhoto = model.selectedQueueItem != nil || model.selectedResultItem != nil
+        router.hasCompareResult = model.selectedResultItem != nil
+        if let res = model.selectedResultItem {
+            router.canSaveSelected = !model.isSaved(res.id) && !model.isSaving && !model.isSavingAll
+        } else {
+            router.canSaveSelected = false
+        }
+        router.canSaveAll = model.unsavedResultsCount > 0 && !model.isBatchRunning && !model.isSaving && !model.isSavingAll
+        router.upscaleSelectedTitle = model.setup.task == .restore ? "Restore Selected" : "Upscale Selected"
+    }
+    #else
+    private func handleAndroidShortcut(_ action: String, isThreePane: Bool) -> Bool {
+        switch action {
+        case "chooseFiles":
+            openFilesImporter()
+            return true
+        case "choosePhotos":
+            openPhotosPicker()
+            return true
+        case "paste":
+            if TabletPlatform.canPasteImages {
+                pasteFromClipboard()
+                return true
+            }
+            return false
+        case "upscaleSelected":
+            if !model.isBatchRunning && !model.isLoadingInputs && model.laneValidationError == nil && !model.waitingQueueItems.isEmpty {
+                model.upscaleSelected(switchToViewer: !isThreePane)
+                return true
+            }
+            return false
+        case "startAll":
+            if !model.isBatchRunning && !model.isLoadingInputs && model.laneValidationError == nil && !model.waitingQueueItems.isEmpty {
+                model.startAll(switchToViewer: !isThreePane)
+                return true
+            }
+            return false
+        case "cancelQueue":
+            if model.isBatchRunning {
+                model.cancelQueue()
+                return true
+            }
+            return false
+        case "tab1":
+            if isThreePane {
+                model.isMediaPaneCollapsed.toggle()
+            } else {
+                model.activeTab = .media
+            }
+            return true
+        case "tab2":
+            if !isThreePane {
+                model.activeTab = .viewer
+                return true
+            }
+            return false
+        case "tab3":
+            if !isThreePane {
+                model.activeTab = .enhance
+                return true
+            }
+            return false
+        case "zoomFit":
+            model.zoomFit()
+            return true
+        case "zoom1to1":
+            model.zoomActual()
+            return true
+        case "zoomIn":
+            model.zoomIn()
+            return true
+        case "zoomOut":
+            model.zoomOut()
+            return true
+        case "save":
+            if let res = model.selectedResultItem, !model.isSaved(res.id) {
+                Task { await model.saveResult(res) }
+                return true
+            }
+            return false
+        case "saveAll":
+            if model.unsavedResultsCount > 0 && !model.isBatchRunning {
+                Task { await model.saveAllResults() }
+                return true
+            }
+            return false
+        case "modelLibrary":
+            isModelLibraryPresented = true
+            return true
+        case "settings":
+            isSettingsPresented = true
+            return true
+        case "prevPhoto":
+            model.selectPreviousPhoto()
+            return true
+        case "nextPhoto":
+            model.selectNextPhoto()
+            return true
+        case "removePhoto":
+            model.removeSelectedQueueItem()
+            return true
+        case "dividerLeft":
+            model.nudgeDivider(delta: -0.05)
+            return true
+        case "dividerRight":
+            model.nudgeDivider(delta: 0.05)
+            return true
+        case "dividerStart":
+            model.moveDivider(to: 0.0)
+            return true
+        case "dividerEnd":
+            model.moveDivider(to: 1.0)
+            return true
+        case "toggleOriginal":
+            model.toggleCompareOriginal()
+            return true
+        default:
+            return false
+        }
+    }
+    #endif
 }

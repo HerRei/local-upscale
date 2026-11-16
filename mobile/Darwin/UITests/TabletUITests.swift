@@ -190,7 +190,8 @@ final class TabletUITests: XCTestCase {
             return dims.count == 2 && (dims.max() ?? 0) > previewMax
         }
         let largerExp = expectation(for: largerPredicate, evaluatedWith: upscaledImg)
-        wait(for: [largerExp], timeout: 60)
+        // The full-resolution decode of a 6400x4800 result can take minutes on a simulator while the Mac is busy.
+        wait(for: [largerExp], timeout: 180)
 
         tapZoomHUDButton("tabletZoomActualButton", in: app)
         XCTAssertTrue(pctLabel.waitForExistence(timeout: 5))
@@ -454,6 +455,7 @@ final class TabletUITests: XCTestCase {
 
     @MainActor
     private func selectPhotosInSystemPicker(app: XCUIApplication, count: Int) -> Bool {
+        print("PHOTO_PICKER_HIERARCHY_BEGIN\n\(app.debugDescription)\nPHOTO_PICKER_HIERARCHY_END")
         let candidateImages = app.images.matching(
             NSPredicate(format: "label CONTAINS ',' AND (label CONTAINS[c] 'Photo' OR label CONTAINS[c] 'Image' OR label CONTAINS[c] 'PXG' OR label CONTAINS[c] 'Wallpaper')")
         )

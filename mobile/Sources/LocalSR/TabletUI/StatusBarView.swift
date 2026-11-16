@@ -9,7 +9,7 @@ struct StatusBarView: View {
     let onTapLanes: () -> Void
 
     private var isCompactWidth: Bool {
-        width < Theme.Spacing.twoColumnWidth
+        TabletLayoutMetrics.forWidth(Double(width)).isCompactStatusBar
     }
 
     private var waitingCount: Int {
@@ -106,6 +106,10 @@ struct StatusBarView: View {
             Circle()
                 .fill(Theme.accent)
                 .frame(width: 8.0, height: 8.0)
+        } else if model.isPausedBySystem {
+            Circle()
+                .fill(Theme.warning)
+                .frame(width: 8.0, height: 8.0)
         } else if let laneFailure = model.laneValidationError, laneFailure.allFailed {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 12.0))
@@ -134,6 +138,10 @@ struct StatusBarView: View {
             let pct = Int((activeProgress * 100.0).rounded())
             let verb = model.setup.task == .restore ? "Restoring" : "Upscaling"
             return "\(verb) \(current) of \(total) \u{00B7} \(pct) %"
+        }
+
+        if model.isPausedBySystem {
+            return TabletPlatform.isAndroid ? "Paused by Android" : "Paused by iPadOS"
         }
 
         if let laneFailure = model.laneValidationError, laneFailure.allFailed {
@@ -177,6 +185,10 @@ struct StatusBarView: View {
             return parts.joined(separator: " \u{00B7} ")
         }
 
+        if model.isPausedBySystem {
+            return "\(model.pausedCompletedCount) of \(model.pausedTotalCount) done. Nothing is lost."
+        }
+
         if let laneFailure = model.laneValidationError {
             return laneFailure.detail
         }
@@ -203,22 +215,35 @@ struct StatusBarView: View {
 
     @ViewBuilder
     private func laneMinis(compact: Bool) -> some View {
-        let showNE = !TabletPlatform.isAndroid
-        let neBusy = model.laneActivities[.neuralEngine]?.busyFraction ?? 0.0
-        let gpuBusy = model.laneActivities[.gpu]?.busyFraction ?? 0.0
+        let lanes = model.visibleLanes
 
         Button {
             onTapLanes()
         } label: {
             HStack(spacing: Theme.Spacing.md) {
-                if showNE {
-                    laneMini(label: compact ? "NE" : "Neural Engine", busy: neBusy)
+                ForEach(lanes, id: \.self) { lane in
+                    let label = laneMiniLabel(for: lane, compact: compact)
+                    let busy = model.laneActivities[lane]?.busyFraction ?? 0.0
+                    laneMini(label: label, busy: busy)
                 }
-                laneMini(label: "GPU", busy: gpuBusy)
             }
         }
         .buttonStyle(.plain)
+        .tabletDisableLiftHover()
+        .accessibilityLabel("Chip activity, open Chips section")
         .accessibilityIdentifier("tabletStatusLaneMinis")
+    }
+
+    private func laneMiniLabel(for lane: ModelLane, compact: Bool) -> String {
+        switch lane {
+        case .neuralEngine:
+            if TabletPlatform.isAndroid { return "NPU" }
+            return compact ? "NE" : "Neural Engine"
+        case .gpu:
+            return "GPU"
+        case .cpu:
+            return "CPU"
+        }
     }
 
     private func laneMini(label: String, busy: Double) -> some View {
@@ -254,6 +279,15 @@ struct StatusBarView: View {
                     dangerButton(title: "Cancel Queue", fullWidth: fullWidth, identifier: "tabletCancelBatchButton") {
                         model.cancelQueue()
                     }
+                }
+            } else if model.isPausedBySystem {
+                if model.laneValidationError != nil {
+                    disabledStartButton(title: "Resume", fullWidth: fullWidth)
+                } else {
+                    primaryStartButton(title: "Resume", fullWidth: fullWidth, identifier: "tabletResumeButton") {
+                        model.resumePausedQueue(switchToViewer: isTabMode)
+                    }
+                    .disabled(model.isLoadingInputs)
                 }
             } else if waitingCount == 0, let summary = model.batchLastRunSummary {
                 switch summary {

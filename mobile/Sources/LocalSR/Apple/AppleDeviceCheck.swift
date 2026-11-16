@@ -35,6 +35,17 @@ public final class AppleDeviceCheck: @unchecked Sendable {
 
     // MARK: Cache
 
+    public static var hasNeuralEngine: Bool {
+        #if targetEnvironment(simulator)
+        return false
+        #else
+        return MLModel.availableComputeDevices.contains { device in
+            if case .neuralEngine = device { return true }
+            return false
+        }
+        #endif
+    }
+
     public static func deviceModel() -> String {
         var name = "unknown"
         #if os(macOS)

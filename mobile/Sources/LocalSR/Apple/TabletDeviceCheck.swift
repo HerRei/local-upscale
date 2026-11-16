@@ -8,6 +8,28 @@ public struct TabletDeviceVerdict: Codable, Sendable {
     public let cpu: Bool
     public let gpu: Bool
     public let neuralEngine: Bool
+    public let neuralEngineChecked: Bool
+
+    public init(preferred: ComputeUnit, cpu: Bool, gpu: Bool, neuralEngine: Bool, neuralEngineChecked: Bool = false) {
+        self.preferred = preferred
+        self.cpu = cpu
+        self.gpu = gpu
+        self.neuralEngine = neuralEngine
+        self.neuralEngineChecked = neuralEngineChecked
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case preferred, cpu, gpu, neuralEngine, neuralEngineChecked
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        preferred = try c.decode(ComputeUnit.self, forKey: .preferred)
+        cpu = try c.decode(Bool.self, forKey: .cpu)
+        gpu = try c.decode(Bool.self, forKey: .gpu)
+        neuralEngine = try c.decode(Bool.self, forKey: .neuralEngine)
+        neuralEngineChecked = try c.decodeIfPresent(Bool.self, forKey: .neuralEngineChecked) ?? false
+    }
 
     public func supports(_ unit: ComputeUnit) -> Bool {
         switch unit { case .cpu: return cpu; case .gpu: return gpu; case .npu: return neuralEngine }
@@ -28,7 +50,7 @@ public final class TabletDeviceCheck: @unchecked Sendable {
         let version = "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)"
         let build = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String) ?? "dev"
         let device = AppleDeviceCheck.deviceModel()
-        return "LocalSR.tabletCheck.v1.\(device.count):\(device)\(version.count):\(version)\(build.count):\(build)\(model.rawValue.count):\(model.rawValue)"
+        return "LocalSR.tabletCheck.v2.\(device.count):\(device)\(version.count):\(version)\(build.count):\(build)\(model.rawValue.count):\(model.rawValue)"
     }
 
     private func failedKey(_ model: TabletModelID) -> String {
@@ -86,7 +108,9 @@ public final class TabletDeviceCheck: @unchecked Sendable {
         } catch { gpu = nil }
         var npu: DeviceMeasurement?
         var timedOut = false
-        if placement.allNeuralEngine {
+        var npuChecked = false
+        if AppleDeviceCheck.hasNeuralEngine && placement.allNeuralEngine {
+            npuChecked = true
             let engine = CoreMLEngine(window: w, modelScale: descriptor.scale)
             let t = Date()
             let task = Task { try await engine.loadAsync(tabletModel: model, unit: .npu) }
@@ -106,7 +130,7 @@ public final class TabletDeviceCheck: @unchecked Sendable {
             throw NSError(domain: "LocalSR", code: 1, userInfo: [NSLocalizedDescriptionKey: "This model failed the device check."])
         }
         defaults.removeObject(forKey: failedKey(model))
-        let result = TabletDeviceVerdict(preferred: chosen.unit, cpu: DeviceCheck.passes(cpu), gpu: DeviceCheck.passes(gpu), neuralEngine: DeviceCheck.passes(npu))
+        let result = TabletDeviceVerdict(preferred: chosen.unit, cpu: DeviceCheck.passes(cpu), gpu: DeviceCheck.passes(gpu), neuralEngine: DeviceCheck.passes(npu), neuralEngineChecked: npuChecked)
         if !timedOut, let data = try? JSONEncoder().encode(result) { defaults.set(data, forKey: cacheKey) }
         return result
     }

@@ -46,6 +46,11 @@ public final class BatchBackgroundTask: @unchecked Sendable {
     private var finished = false
     private var activeIdentifier: String?
     private var registered = false
+    private var grantedGPU = false
+
+    public var hasGrantedGPU: Bool {
+        lock.withLock { grantedGPU }
+    }
 
     private init() {}
 
@@ -83,13 +88,27 @@ public final class BatchBackgroundTask: @unchecked Sendable {
 
         let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: title, subtitle: subtitle)
         request.strategy = .fail            // the user just tapped: run now or not at all
-        request.requiredResources = requestGPU && BGTaskScheduler.supportedResources.contains(.gpu) ? [.gpu] : []
+        let gpuRequested = requestGPU && BGTaskScheduler.supportedResources.contains(.gpu)
+        request.requiredResources = gpuRequested ? [.gpu] : []
         do {
             try BGTaskScheduler.shared.submit(request)
+            lock.withLock { grantedGPU = gpuRequested }
             return true
         } catch {
+            // A supported GPU still requires a separately provisioned entitlement. Keep
+            // CPU/Neural Engine continuation when the GPU request is rejected.
+            if gpuRequested {
+                request.requiredResources = []
+                do {
+                    try BGTaskScheduler.shared.submit(request)
+                    lock.withLock { grantedGPU = false }
+                    return true
+                } catch {
+                    NSLog("LocalSR: continued processing without GPU failed: \(error)")
+                }
+            }
             NSLog("LocalSR: BGContinuedProcessingTask submit failed: \(error)")
-            lock.lock(); activeIdentifier = nil; self.onExpire = nil; lock.unlock()
+            lock.lock(); activeIdentifier = nil; self.onExpire = nil; grantedGPU = false; lock.unlock()
             return false
         }
     }
@@ -114,6 +133,7 @@ public final class BatchBackgroundTask: @unchecked Sendable {
         onExpire = nil
         let id = activeIdentifier
         activeIdentifier = nil
+        grantedGPU = false
         lock.unlock()
         if wasFinished { return }
         if #available(iOS 26.0, *) {
@@ -154,6 +174,7 @@ public final class BatchBackgroundTask: @unchecked Sendable {
     public static let shared = BatchBackgroundTask()
     public static let identifierPattern = "com.hermesreisner.localsr.batch.*"
     public static let taskIdentifier = "com.hermesreisner.localsr.batch.run"
+    public var hasGrantedGPU: Bool { false }
     private init() {}
     public static func register() {}
     @discardableResult

@@ -20,6 +20,9 @@ struct ViewerPaneView: View {
     @State private var isZoomHUDVisible: Bool = true
     @State private var isZoomHUDHovered: Bool = false
     @State private var zoomHUDFadeTask: Task<Void, Never>? = nil
+    #if SKIP
+    @State private var sheetHeaderResult: TabletResultItem? = nil
+    #endif
 
     private var activeQueueItem: TabletQueueItem? {
         model.selectedQueueItem
@@ -58,6 +61,11 @@ struct ViewerPaneView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.stage)
+        #if SKIP
+        .sheet(item: $sheetHeaderResult) { result in
+            androidHeaderActionSheet(result)
+        }
+        #endif
     }
 
     // MARK: - Header
@@ -134,11 +142,19 @@ struct ViewerPaneView: View {
         .padding(.vertical, 4.0)
         .frame(minHeight: Theme.Spacing.headerHeight)
         .background(Theme.panel)
+        #if SKIP
+        .tabletLongPressAction(enabled: activeResult != nil) {
+            if let result = activeResult {
+                sheetHeaderResult = result
+            }
+        }
+        #else
         .contextMenu {
             if let result = activeResult {
                 resultMenuItems(result: result, includeShareAndSave: true)
             }
         }
+        #endif
     }
 
     @ViewBuilder
@@ -456,6 +472,16 @@ struct ViewerPaneView: View {
                     )
                 }
                 .frame(width: width, height: height)
+                .onChange(of: actualZoom) { _, newValue in
+                    model.viewerActualZoom = newValue
+                    model.viewerMinZoom = minZoom
+                    model.viewerMaxZoom = maxZoom
+                }
+                .onAppear {
+                    model.viewerActualZoom = actualZoom
+                    model.viewerMinZoom = minZoom
+                    model.viewerMaxZoom = maxZoom
+                }
             }
             .task(id: result?.id ?? queueItem?.id ?? "") {
                 bumpZoomHUD()
@@ -877,4 +903,85 @@ struct ViewerPaneView: View {
             fullScaleFallback: result.fullScaleFallback
         )
     }
+
+    #if SKIP
+    private func androidHeaderActionSheet(_ result: TabletResultItem) -> some View {
+        let isSaved = model.isSaved(result.id)
+        return VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            Text(result.displayName)
+                .themeFont(.paneTitle)
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .padding(.bottom, Theme.Spacing.xs)
+
+            androidViewerSheetButton(
+                title: isSaved ? "Saved" : "Save to \(TabletPlatform.libraryName)",
+                systemImage: isSaved ? "checkmark" : "square.and.arrow.down",
+                destructive: false
+            ) {
+                sheetHeaderResult = nil
+                Task { await model.saveResult(result) }
+            }
+            .disabled(isSaved || model.isSaving || model.isSavingAll)
+
+            androidViewerSheetButton(
+                title: "Share\u{2026}",
+                systemImage: "square.and.arrow.up",
+                destructive: false
+            ) {
+                sheetHeaderResult = nil
+                AndroidUISupport.shareImageFile(ProcessInfo.processInfo.androidContext, result.outputURL.path)
+            }
+
+            androidViewerSheetButton(
+                title: "Enhance Again",
+                systemImage: "arrow.clockwise",
+                destructive: false
+            ) {
+                sheetHeaderResult = nil
+                model.enhanceAgain(result: result)
+            }
+            .disabled(model.isBatchRunning || !model.canEnhanceAgain(result))
+
+            androidViewerSheetButton(
+                title: "Delete Result\u{2026}",
+                systemImage: "trash",
+                destructive: true
+            ) {
+                sheetHeaderResult = nil
+                onConfirmDeleteResult(result)
+            }
+        }
+        .padding(Theme.Spacing.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.panel)
+        .presentationDetents([.height(310.0)])
+    }
+
+    private func androidViewerSheetButton(title: String, systemImage: String, destructive: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: Theme.Spacing.md) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 16.0, weight: .medium))
+                    .frame(width: 24.0)
+                Text(title)
+                    .themeFont(.control, weight: .medium)
+                Spacer()
+            }
+            .foregroundStyle(destructive ? Theme.danger : Theme.text)
+            .padding(.horizontal, Theme.Spacing.md)
+            .frame(height: Theme.Spacing.hitArea)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                    .fill(Theme.raised)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                    .stroke(Theme.border, lineWidth: 1.0)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+    #endif
 }

@@ -119,6 +119,56 @@ final class TabletCoreTests: XCTestCase {
         )
         XCTAssertEqual(allFailed?.title, "Can't Upscale on This iPad")
         XCTAssertEqual(allFailed?.allFailed, true)
+
+        XCTAssertEqual(TabletLaneChoice.neuralEngineOnly.shortTitle(isAndroid: true), "NPU")
+        XCTAssertEqual(TabletLaneChoice.neuralEngineOnly.menuTitle(isAndroid: true), "NPU Only")
+    }
+
+    func testTabletLayoutBreakpoints() {
+        let w1376 = TabletLayoutMetrics.forWidth(1376.0)
+        XCTAssertEqual(w1376.mode, TabletWorkspaceLayoutMode.threePane)
+        XCTAssertTrue(w1376.isThreePane)
+        XCTAssertFalse(w1376.isTwoColumnEnhance)
+        XCTAssertFalse(w1376.isCompactStatusBar)
+
+        let w1100 = TabletLayoutMetrics.forWidth(1100.0)
+        XCTAssertTrue(w1100.isThreePane)
+
+        let w1099 = TabletLayoutMetrics.forWidth(1099.0)
+        XCTAssertEqual(w1099.mode, TabletWorkspaceLayoutMode.twoColumnTabs)
+        XCTAssertFalse(w1099.isThreePane)
+        XCTAssertTrue(w1099.isTwoColumnEnhance)
+        XCTAssertTrue(w1099.isMediaGrid)
+        XCTAssertFalse(w1099.isCompactStatusBar)
+
+        let w834 = TabletLayoutMetrics.forWidth(834.0)
+        XCTAssertEqual(w834.mode, TabletWorkspaceLayoutMode.twoColumnTabs)
+        XCTAssertTrue(w834.isTwoColumnEnhance)
+        XCTAssertTrue(w834.isMediaGrid)
+
+        let w700 = TabletLayoutMetrics.forWidth(700.0)
+        XCTAssertEqual(w700.mode, TabletWorkspaceLayoutMode.twoColumnTabs)
+        XCTAssertTrue(w700.isTwoColumnEnhance)
+
+        let w699 = TabletLayoutMetrics.forWidth(699.0)
+        XCTAssertEqual(w699.mode, TabletWorkspaceLayoutMode.oneColumnTabs)
+        XCTAssertFalse(w699.isTwoColumnEnhance)
+        XCTAssertTrue(w699.isMediaGrid)
+        XCTAssertTrue(w699.isCompactStatusBar)
+
+        let w600 = TabletLayoutMetrics.forWidth(600.0)
+        XCTAssertTrue(w600.isMediaGrid)
+        XCTAssertTrue(w600.isCompactStatusBar)
+
+        let w507 = TabletLayoutMetrics.forWidth(507.0)
+        XCTAssertEqual(w507.mode, TabletWorkspaceLayoutMode.oneColumnTabs)
+        XCTAssertFalse(w507.isMediaGrid)
+        XCTAssertTrue(w507.isCompactStatusBar)
+
+        let w375 = TabletLayoutMetrics.forWidth(375.0)
+        XCTAssertEqual(w375.mode, TabletWorkspaceLayoutMode.oneColumnTabs)
+        XCTAssertFalse(w375.isMediaGrid)
+        XCTAssertTrue(w375.isCompactStatusBar)
     }
 
     func testScaleOneWindow256Coverage() {

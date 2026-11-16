@@ -51,6 +51,52 @@ enum TabletPlatform {
         isAndroid ? "NPU" : "Neural Engine"
     }
 
+    static var hasNeuralEngine: Bool {
+        #if SKIP
+        return false
+        #else
+        return AppleDeviceCheck.hasNeuralEngine
+        #endif
+    }
+
+    static let minimumRequiredStorageBytes: Int64 = 120_000_000
+
+    static func availableStorageBytes() -> Int64? {
+        #if SKIP
+        let bytes = AndroidUISupport.availableStorageBytes(ProcessInfo.processInfo.androidContext)
+        return bytes == Int64.max ? nil : bytes
+        #else
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        if let values = try? caches.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey]) {
+            if let important = values.volumeAvailableCapacityForImportantUsage, important > 0 {
+                return important
+            }
+            if let regular = values.volumeAvailableCapacity {
+                return Int64(regular)
+            }
+        }
+        return nil
+        #endif
+    }
+
+    static func isOutOfSpaceError(_ error: Error) -> Bool {
+        #if SKIP
+        let msg = String(describing: error).lowercased()
+        return msg.contains("enospc") || msg.contains("no space left")
+        #else
+        let ns = error as NSError
+        if ns.domain == NSCocoaErrorDomain && ns.code == NSFileWriteOutOfSpaceError {
+            return true
+        }
+        if ns.domain == NSPOSIXErrorDomain && ns.code == Int(ENOSPC) {
+            return true
+        }
+        let msg = ns.localizedDescription.lowercased()
+        return msg.contains("no space left") || msg.contains("not enough space")
+        #endif
+    }
+
     @MainActor
     static func configureMinimumWindowSize() {
         #if !SKIP && os(iOS)
@@ -505,7 +551,28 @@ extension View {
         onDropped: @escaping (TabletImportBatch) -> Void
     ) -> some View {
         #if SKIP
-        self
+        self.composeModifier { modifier in
+            modifier.androidWindowDropTarget(
+                context: ProcessInfo.processInfo.androidContext,
+                onTargeted: { targeted in
+                    Task { @MainActor in
+                        isTargeted.wrappedValue = targeted
+                    }
+                },
+                onDropped: { paths, names, hasVideo, hasUnreadable in
+                    var inputs: [PickedPhotoInput] = []
+                    for i in 0..<paths.size {
+                        let p = paths[i]
+                        let name = i < names.size ? names[i] : nil
+                        inputs.append(PickedPhotoInput(url: URL(fileURLWithPath: p), displayName: name))
+                    }
+                    let batch = TabletImportBatch(inputs: inputs, hasVideo: hasVideo, hasUnreadable: hasUnreadable)
+                    Task { @MainActor in
+                        onDropped(batch)
+                    }
+                }
+            )
+        }
         #else
         self.dropDestination(for: DroppedMediaPayload.self) { items, _ in
             guard !items.isEmpty else { return false }
@@ -550,7 +617,35 @@ extension View {
             self
         }
         #else
+        if let url {
+            self.composeModifier { modifier in
+                modifier.androidDragOutFile(context: ProcessInfo.processInfo.androidContext, path: url.path)
+            }
+        } else {
+            self
+        }
+        #endif
+    }
+
+    @ViewBuilder
+    func tabletLongPressAction(enabled: Bool = true, action: @escaping () -> Void) -> some View {
+        #if SKIP
+        self.composeModifier { modifier in
+            androidLongPressModifier(modifier: modifier, enabled: enabled, onLongPress: action)
+        }
+        #else
         self
+        #endif
+    }
+
+    @ViewBuilder
+    func tabletHover(_ onChanged: @escaping (Bool) -> Void) -> some View {
+        #if SKIP
+        self.composeModifier { modifier in
+            modifier.androidHover(onHoverChanged: onChanged)
+        }
+        #else
+        self.onHover(perform: onChanged)
         #endif
     }
 

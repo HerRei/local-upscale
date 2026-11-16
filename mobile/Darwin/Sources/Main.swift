@@ -13,6 +13,9 @@ private typealias AppDelegate = LocalSRAppDelegate
         WindowGroup {
             AppRootView()
         }
+        .commands {
+            LocalSRCommands()
+        }
         .onChange(of: scenePhase) { oldPhase, newPhase in
             switch newPhase {
             case .active:

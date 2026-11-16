@@ -79,7 +79,7 @@ public final class AppleTabletUpscaleService: TabletUpscaleService, @unchecked S
 
     public func cachedVerdict(for model: TabletModelID) -> TabletChipVerdict? {
         guard let v = checker.cachedVerdict(for: model) else { return nil }
-        return TabletChipVerdict(preferred: v.preferred, cpu: v.cpu, gpu: v.gpu, neuralEngine: v.neuralEngine)
+        return TabletChipVerdict(preferred: v.preferred, cpu: v.cpu, gpu: v.gpu, neuralEngine: v.neuralEngine, neuralEngineChecked: v.neuralEngineChecked)
     }
 
     public func isModelBundled(_ model: TabletModelID) -> Bool {
@@ -121,7 +121,7 @@ public final class AppleTabletUpscaleService: TabletUpscaleService, @unchecked S
                         verdicts[model] = v
                         events(.verdict(
                             model: model,
-                            verdict: TabletChipVerdict(preferred: v.preferred, cpu: v.cpu, gpu: v.gpu, neuralEngine: v.neuralEngine)
+                            verdict: TabletChipVerdict(preferred: v.preferred, cpu: v.cpu, gpu: v.gpu, neuralEngine: v.neuralEngine, neuralEngineChecked: v.neuralEngineChecked)
                         ))
                     } catch {
                         let ns = error as NSError
@@ -134,7 +134,8 @@ public final class AppleTabletUpscaleService: TabletUpscaleService, @unchecked S
             }
             #if os(iOS)
             let background = await MainActor.run { UIApplication.shared.applicationState == .background }
-            let backgroundState = TabletBackgroundState(background: background, supportsGPU: backgroundGPUGranted && BGTaskScheduler.supportedResources.contains(.gpu))
+            let bgGPUAllowed = (backgroundGPUGranted || BatchBackgroundTask.shared.hasGrantedGPU) && BGTaskScheduler.supportedResources.contains(.gpu)
+            let backgroundState = TabletBackgroundState(background: background, supportsGPU: bgGPUAllowed)
             #else
             let backgroundState = TabletBackgroundState(background: false, supportsGPU: true)
             #endif

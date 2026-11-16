@@ -76,15 +76,19 @@ public protocol TabletUpscaleService {
     /// Latest activity for both lanes; events are also delivered to the batch callback.
     var laneActivity: AsyncStream<TabletLaneActivity> { get }
     var supportsBackgroundGPU: Bool { get }
+    var availableLanes: [ModelLane] { get }
     func run(plan: Plan, inputs: [TabletInput], fullScale: Bool, targetScale: Int, outputFormat: TabletOutputFormat, events: @escaping @Sendable (TabletUpscaleEvent) -> Void) async throws -> [TabletUpscaleResult]
     func cachedVerdict(for model: TabletModelID) -> TabletChipVerdict?
     func isModelBundled(_ model: TabletModelID) -> Bool
     func hasModelFailedCheck(_ model: TabletModelID) -> Bool
     func bundledModelByteSize(_ model: TabletModelID) -> Int64?
+    func updateForegroundNotification(title: String, detail: String?, fraction: Double)
     func cancel()
 }
 
 public extension TabletUpscaleService {
+    var availableLanes: [ModelLane] { [.neuralEngine, .gpu] }
+    func updateForegroundNotification(title: String, detail: String?, fraction: Double) {}
     func run(plan: Plan, inputs: [TabletInput], fullScale: Bool, events: @escaping @Sendable (TabletUpscaleEvent) -> Void) async throws -> [TabletUpscaleResult] {
         try await run(plan: plan, inputs: inputs, fullScale: fullScale, targetScale: 4, outputFormat: .heic, events: events)
     }

@@ -17,6 +17,7 @@
 		4A10000A2FA500000000B003 /* probe.png in Resources */ = {isa = PBXBuildFile; fileRef = 4A10000A2FA500000000A003 /* probe.png */; };
 		4A10000A2FA500000000B004 /* NOTICE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 4A10000A2FA500000000A004 /* NOTICE.txt */; };
 		4A10000A2FA500000000B005 /* ios-tablet in Resources */ = {isa = PBXBuildFile; fileRef = 4A10000A2FA500000000A005 /* ios-tablet */; };
+		4A10000A2FA500000000B006 /* IBMPlexSansVar-Roman.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 4A10000A2FA500000000A006 /* IBMPlexSansVar-Roman.ttf */; };
 		4A20000A2FA600000000B001 /* LocalSRUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A20000A2FA600000000A001 /* LocalSRUITests.swift */; };
 		4A20000A2FA600000000B002 /* TabletUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A20000A2FA600000000A002 /* TabletUITests.swift */; };
 		4A30000A2FB000000000B001 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A30000A2FB000000000A001 /* ShareViewController.swift */; };
@@ -83,6 +84,7 @@
 		4A10000A2FA500000000A003 /* probe.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = probe.png; path = ../Models/probe.png; sourceTree = "<group>"; };
 		4A10000A2FA500000000A004 /* NOTICE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; name = NOTICE.txt; path = ../Models/NOTICE.txt; sourceTree = "<group>"; };
 		4A10000A2FA500000000A005 /* ios-tablet */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "ios-tablet"; path = "../Models/ios-tablet"; sourceTree = "<group>"; };
+		4A10000A2FA500000000A006 /* IBMPlexSansVar-Roman.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; name = "IBMPlexSansVar-Roman.ttf"; path = "Fonts/IBMPlexSansVar-Roman.ttf"; sourceTree = "<group>"; };
 		4A20000A2FA600000000A001 /* LocalSRUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalSRUITests.swift; sourceTree = "<group>"; };
 		4A20000A2FA600000000A002 /* TabletUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabletUITests.swift; sourceTree = "<group>"; };
 		4A20000A2FA600000000E001 /* LocalSRUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LocalSRUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -162,6 +164,7 @@
 				49F90C312A52156300F06D93 /* Entitlements.plist */,
 				4900101C2BACEA710000DE33 /* Info.plist */,
 				4971EFA92FA4FEA50002D3F7 /* InfoPlist.xcstrings */,
+				4A10000A2FA500000000A006 /* IBMPlexSansVar-Roman.ttf */,
 			);
 			name = App;
 			sourceTree = "<group>";
@@ -325,6 +328,7 @@
 				4A10000A2FA500000000B003 /* probe.png in Resources */,
 				4A10000A2FA500000000B004 /* NOTICE.txt in Resources */,
 				4A10000A2FA500000000B005 /* ios-tablet in Resources */,
+				4A10000A2FA500000000B006 /* IBMPlexSansVar-Roman.ttf in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

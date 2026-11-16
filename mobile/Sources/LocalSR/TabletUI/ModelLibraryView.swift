@@ -78,6 +78,7 @@ struct ModelLibraryView: View {
                     Button(role: .close) {
                         dismiss()
                     }
+                    .accessibilityLabel("Close")
                     .accessibilityIdentifier("tabletModelLibraryCloseButton")
                 }
                 #else
@@ -169,6 +170,8 @@ struct ModelLibraryView: View {
             )
         }
         .buttonStyle(.plain)
+        .tabletDisableLiftHover()
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
         .accessibilityIdentifier("tabletLibraryRow_\(desc.id.rawValue)")
     }
 

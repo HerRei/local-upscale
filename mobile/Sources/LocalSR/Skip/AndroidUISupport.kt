@@ -1,5 +1,8 @@
 package local.sr
 
+import android.app.Activity
+import android.content.ClipData
+import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -7,14 +10,22 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.net.Uri
+import android.os.StatFs
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.util.Log
+import android.view.View
+import androidx.activity.compose.BackHandler
 import androidx.exifinterface.media.ExifInterface
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.draganddrop.dragAndDropSource
+import androidx.compose.foundation.draganddrop.dragAndDropTarget
+import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -26,20 +37,91 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draganddrop.DragAndDropEvent
+import androidx.compose.ui.draganddrop.DragAndDropTarget
+import androidx.compose.ui.draganddrop.DragAndDropTransferData
+import androidx.compose.ui.draganddrop.mimeTypes
+import androidx.compose.ui.draganddrop.toAndroidDragEvent
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontVariation
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.util.UUID
+import kotlin.math.abs
 
 object AndroidUISupport {
     private const val TAG = "LocalSR"
+    @Volatile private var cachedIbmPlexFamily: FontFamily? = null
+
+    @OptIn(ExperimentalTextApi::class)
+    fun ibmPlexFontFamily(context: Context): FontFamily {
+        cachedIbmPlexFamily?.let { return it }
+        val resId = context.resources.getIdentifier("ibm_plex_sans_var", "font", context.packageName)
+        if (resId == 0) {
+            Log.w(TAG, "ibm_plex_sans_var font resource not found; falling back to default")
+            return FontFamily.Default
+        }
+        val family = try {
+            FontFamily(
+                Font(resId = resId, weight = FontWeight.Normal, variationSettings = FontVariation.Settings(FontVariation.weight(400))),
+                Font(resId = resId, weight = FontWeight.Medium, variationSettings = FontVariation.Settings(FontVariation.weight(500))),
+                Font(resId = resId, weight = FontWeight.SemiBold, variationSettings = FontVariation.Settings(FontVariation.weight(600))),
+                Font(resId = resId, weight = FontWeight.Bold, variationSettings = FontVariation.Settings(FontVariation.weight(700))),
+            )
+        } catch (t: Throwable) {
+            Log.w(TAG, "Failed to load ibm_plex_sans_var FontFamily: ${t.message}")
+            FontFamily.Default
+        }
+        cachedIbmPlexFamily = family
+        return family
+    }
+
+    fun ibmPlexTextStyle(context: Context, sizeSp: Float, weightCode: Int): androidx.compose.ui.text.TextStyle {
+        val weight = when {
+            weightCode >= 700 -> FontWeight.Bold
+            weightCode >= 600 -> FontWeight.SemiBold
+            weightCode >= 500 -> FontWeight.Medium
+            else -> FontWeight.Normal
+        }
+        return androidx.compose.ui.text.TextStyle(
+            fontFamily = ibmPlexFontFamily(context),
+            fontSize = androidx.compose.ui.unit.TextUnit(sizeSp, androidx.compose.ui.unit.TextUnitType.Sp),
+            fontWeight = weight,
+        )
+    }
+
+    fun availableStorageBytes(context: Context): Long {
+        return try {
+            StatFs(context.cacheDir.absolutePath).availableBytes
+        } catch (_: Throwable) {
+            Long.MAX_VALUE
+        }
+    }
 
     fun readNoticeText(context: Context): String {
         return try {
@@ -391,4 +473,200 @@ fun Modifier.clipHorizontalBounds(widthDp: Double): Modifier =
         layout(clippedWidth, placeable.height) {
             placeable.place(0, 0)
         }
+    }
+
+@Composable
+fun AndroidBackHandlerHost(enabled: Boolean, onBack: () -> Unit) {
+    BackHandler(enabled = enabled, onBack = onBack)
+}
+
+fun androidLongPressModifier(modifier: Modifier, enabled: Boolean, onLongPress: () -> Unit): Modifier {
+    if (!enabled) return modifier
+    return modifier.pointerInput(enabled) {
+        val slop = viewConfiguration.touchSlop
+        awaitEachGesture {
+            val down = awaitPointerEvent(pass = PointerEventPass.Initial)
+            val start = down.changes.firstOrNull { it.pressed }?.position
+            if (start != null) {
+                val longPressed = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                    var active = true
+                    while (active) {
+                        val c = awaitPointerEvent(pass = PointerEventPass.Initial).changes.firstOrNull()
+                        active = if (c != null) {
+                            c.pressed && abs(c.position.x - start.x) <= slop && abs(c.position.y - start.y) <= slop
+                        } else {
+                            false
+                        }
+                    }
+                } == null
+                if (longPressed) {
+                    onLongPress()
+                    var pressed = true
+                    while (pressed) {
+                        val event = awaitPointerEvent(pass = PointerEventPass.Initial)
+                        event.changes.forEach { it.consume() }
+                        pressed = event.changes.any { it.pressed }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fun Modifier.androidHover(onHoverChanged: (Boolean) -> Unit): Modifier =
+    this.pointerInput(Unit) {
+        awaitPointerEventScope {
+            while (true) {
+                val event = awaitPointerEvent(pass = PointerEventPass.Initial)
+                when (event.type) {
+                    PointerEventType.Enter -> onHoverChanged(true)
+                    PointerEventType.Exit -> onHoverChanged(false)
+                }
+            }
+        }
+    }
+
+@OptIn(ExperimentalFoundationApi::class)
+fun Modifier.androidWindowDropTarget(
+    context: Context,
+    onTargeted: (Boolean) -> Unit,
+    onDropped: (List<String>, List<String>, Boolean, Boolean) -> Unit,
+): Modifier {
+    val target = object : DragAndDropTarget {
+        override fun onStarted(event: DragAndDropEvent) {
+            onTargeted(true)
+        }
+
+        override fun onEntered(event: DragAndDropEvent) {
+            onTargeted(true)
+        }
+
+        override fun onExited(event: DragAndDropEvent) {
+            onTargeted(false)
+        }
+
+        override fun onEnded(event: DragAndDropEvent) {
+            onTargeted(false)
+        }
+
+        override fun onDrop(event: DragAndDropEvent): Boolean {
+            onTargeted(false)
+            val dragEvent = event.toAndroidDragEvent()
+            val clipData = dragEvent.clipData ?: return false
+            val activity = context as? Activity
+            val permission = try {
+                activity?.requestDragAndDropPermissions(dragEvent)
+            } catch (_: Throwable) {
+                null
+            }
+            val copiedPaths = mutableListOf<String>()
+            val displayNames = mutableListOf<String>()
+            var hasVideo = false
+            var hasUnreadable = false
+            try {
+                val inputsDir = File(context.cacheDir, "LocalSRTabletInputs").apply { mkdirs() }
+                for (i in 0 until clipData.itemCount) {
+                    val uri = clipData.getItemAt(i).uri ?: continue
+                    val mime = context.contentResolver.getType(uri) ?: ""
+                    if (mime.startsWith("video/")) {
+                        hasVideo = true
+                        continue
+                    }
+                    val name = AndroidUISupport.displayNameForUri(context, uri.toString(), "Photo ${i + 1}.jpg")
+                    val ext = name.substringAfterLast('.', "jpg").ifEmpty { "jpg" }
+                    val dest = File(inputsDir, "${UUID.randomUUID()}.$ext")
+                    val copied = try {
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            dest.outputStream().use { out -> input.copyTo(out) }
+                            true
+                        } ?: false
+                    } catch (_: Throwable) {
+                        false
+                    }
+                    if (copied && AndroidUISupport.imagePixelSize(context, dest.toURI().toString()) != null) {
+                        copiedPaths.add(dest.absolutePath)
+                        displayNames.add(name)
+                    } else {
+                        dest.delete()
+                        hasUnreadable = true
+                    }
+                }
+            } finally {
+                try {
+                    permission?.release()
+                } catch (_: Throwable) {
+                }
+            }
+            onDropped(copiedPaths, displayNames, hasVideo, hasUnreadable)
+            return copiedPaths.isNotEmpty() || hasVideo || hasUnreadable
+        }
+    }
+    return this.dragAndDropTarget(
+        shouldStartDragAndDrop = { event ->
+            val mimes = event.mimeTypes()
+            mimes.any {
+                it.startsWith("image/") ||
+                    it.startsWith("video/") ||
+                    it == ClipDescription.MIMETYPE_TEXT_URILIST
+            }
+        },
+        target = target,
+    )
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+fun Modifier.androidDragOutFile(context: Context, path: String?): Modifier {
+    if (path.isNullOrBlank()) return this
+    return this.dragAndDropSource { _ ->
+        try {
+            val file = File(path)
+            if (!file.exists()) return@dragAndDropSource null
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            val clip = ClipData.newUri(context.contentResolver, file.name, uri)
+            DragAndDropTransferData(
+                clipData = clip,
+                flags = View.DRAG_FLAG_GLOBAL or View.DRAG_FLAG_GLOBAL_URI_READ,
+            )
+        } catch (t: Throwable) {
+            Log.w("LocalSR", "androidDragOutFile failed: ${t.message}")
+            null
+        }
+    }
+}
+
+fun Modifier.androidCtrlShortcuts(onAction: (String) -> Boolean): Modifier =
+    this.onPreviewKeyEvent { event ->
+        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+        val ctrl = event.isCtrlPressed
+        val shift = event.isShiftPressed
+        val alt = event.isAltPressed
+        val action: String? = when {
+            ctrl && shift && event.key == Key.O -> "choosePhotos"
+            ctrl && !shift && event.key == Key.O -> "chooseFiles"
+            ctrl && event.key == Key.V -> "paste"
+            ctrl && shift && (event.key == Key.Enter || event.key == Key.NumPadEnter) -> "startAll"
+            ctrl && !shift && (event.key == Key.Enter || event.key == Key.NumPadEnter) -> "upscaleSelected"
+            ctrl && event.key == Key.Period -> "cancelQueue"
+            ctrl && event.key == Key.One -> "tab1"
+            ctrl && event.key == Key.Two -> "tab2"
+            ctrl && event.key == Key.Three -> "tab3"
+            ctrl && alt && (event.key == Key.Zero || event.key == Key.NumPad0) -> "zoom1to1"
+            ctrl && !alt && (event.key == Key.Zero || event.key == Key.NumPad0) -> "zoomFit"
+            ctrl && (event.key == Key.Equals || event.key == Key.Plus || event.key == Key.NumPadAdd) -> "zoomIn"
+            ctrl && (event.key == Key.Minus || event.key == Key.NumPadSubtract) -> "zoomOut"
+            ctrl && shift && event.key == Key.S -> "saveAll"
+            ctrl && !shift && event.key == Key.S -> "save"
+            ctrl && shift && event.key == Key.L -> "modelLibrary"
+            ctrl && event.key == Key.Comma -> "settings"
+            !ctrl && event.key == Key.DirectionUp -> "prevPhoto"
+            !ctrl && event.key == Key.DirectionDown -> "nextPhoto"
+            !ctrl && (event.key == Key.Delete || event.key == Key.Backspace) -> "removePhoto"
+            !ctrl && event.key == Key.DirectionLeft -> "dividerLeft"
+            !ctrl && event.key == Key.DirectionRight -> "dividerRight"
+            !ctrl && event.key == Key.MoveHome -> "dividerStart"
+            !ctrl && event.key == Key.MoveEnd -> "dividerEnd"
+            !ctrl && event.key == Key.M -> "toggleOriginal"
+            else -> null
+        }
+        if (action != null) onAction(action) else false
     }
