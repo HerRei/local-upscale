@@ -15,11 +15,7 @@ struct AboutSheetView: View {
     private var upscalingFooterText: String {
         let base = "Photos from 3 to 12 MP get 2\u{00D7} by default. Full 4\u{00D7} takes longer to save and needs more memory."
         if !appModel.isFullScaleAvailable {
-            #if SKIP
-            return "\(base) Not available on this device."
-            #else
             return "\(base) Not available right now: it needs more free memory."
-            #endif
         }
         return base
     }

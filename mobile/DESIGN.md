@@ -46,13 +46,20 @@ The check runs per model and caches a verdict by device model, OS version, app b
 
 On Android, a selected accelerator must also be faster than the CPU; the GPU probe has a 60-second timeout. The simulator has no NPU. During a job, a GPU tile failure falls back to CPU and retries the tile; Android does the same for NPU tile failures.
 
+Android also guards against accelerator drivers that crash or hang the process:
+
+- Each NPU/GPU engine runs its native calls on its own thread, with a 60-second load limit and a 90-second limit per tile. Cancel waits at most 2 seconds for a running tile. A unit that hangs is recorded as failed.
+- Before a probe or a job runs native code on an NPU or GPU, an in-use marker is written to SharedPreferences synchronously and removed afterwards. A marker left by a dead process records that unit as failed for the cache key, unless Android reports that the process was stopped for another reason (low memory, the user, an update). Without that report (API 29), the unit is blamed.
+- The check and the cached verdict skip failed units until the cache key changes.
+- A tile failure during a job switches to the CPU for the rest of the session only, because it can be transient. A Java-heap out-of-memory error fails the photo instead, since the CPU needs the same memory. A probe that runs out of memory does not cache its verdict.
+
 ## Limits
 
-- Inputs up to 3 MP produce 4× output; larger inputs produce 2× output after a 12 MP input cap. The default output is at most 48 MP (192 MB RGBA8). Optional Full 4× for larger inputs requires available memory of at least 2.5 times the output buffer and can produce up to 192 MP (768 MB RGBA8).
+- Inputs up to 3 MP produce 4× output; larger inputs produce 2× output after a 12 MP input cap. The default output is at most 48 MP (192 MB RGBA8). Optional Full 4× for larger inputs requires available memory of at least 2.5 times the output buffer and can produce up to 192 MP (768 MB RGBA8). On Android this is the system's available memory above its low-memory threshold: the large buffers are Bitmaps in native memory, and the Java heap holds only per-tile arrays.
 - iOS 26 uses a continued processing task for user-started batches when available. GPU work falls back to CPU in the background.
-- Android uses a batch-level foreground service with a progress notification. NPU use requires a vendor runtime already on the device.
+- Android uses a batch-level foreground service with a progress notification, also for a model switch on one result. While it runs it holds a partial wake lock, so batches continue with the screen off. The lock expires 10 minutes after the last progress update. Before tiling, the phone path checks that the cache has room for the output JPEG twice. NPU use requires a vendor runtime already on the device.
 - Android writes sRGB JPEG without an HDR gain map; the picker may strip GPS. iOS carries supported gain maps and available metadata into HEIC output.
-- Completed results are recorded in `results.json` in the cache and restored when their files exist. Pending batches are not restored after process death.
+- Completed results are recorded in `results.json` in the cache and restored when their files exist. Pending batches are not restored after process death. Picked and shared photos are copied into the cache, so a restored result keeps its original.
 
 ## UI
 
