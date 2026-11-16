@@ -32,6 +32,7 @@ struct AboutSheetView: View {
             List {
                 Section {
                     Toggle("Full 4\u{00D7} for Large Photos", isOn: $fullScale)
+                        .foregroundStyle(appModel.isFullScaleAvailable || fullScale ? .primary : .secondary)
                         .disabled(!appModel.isFullScaleAvailable && !fullScale)
                         .accessibilityIdentifier("fullScaleToggle")
                 } header: {
@@ -43,13 +44,16 @@ struct AboutSheetView: View {
                             Text(fullScaleInfoText)
                                 .accessibilityIdentifier("fullScaleInfoText")
                         }
-                        Button(isShowingFullScaleInfo ? "Hide" : "Why 195 MP?") {
-                            withAnimation(.smooth(duration: 0.25)) {
-                                isShowingFullScaleInfo.toggle()
+                        if appModel.isFullScaleAvailable || fullScale {
+                            Button(isShowingFullScaleInfo ? "Hide" : "Why 195 MP?") {
+                                withAnimation(.smooth(duration: 0.25)) {
+                                    isShowingFullScaleInfo.toggle()
+                                }
                             }
+                            .font(.footnote)
+                            .frame(minHeight: 44.0)
+                            .accessibilityIdentifier("fullScaleInfoButton")
                         }
-                        .font(.footnote)
-                        .accessibilityIdentifier("fullScaleInfoButton")
                     }
                 }
 
@@ -62,7 +66,7 @@ struct AboutSheetView: View {
                     #if SKIP
                     Text("LocalSR appears when you share photos from other apps.")
                     #else
-                    Text("\"Upscale with LocalSR\" appears when you share photos. To hide it, tap Edit Actions at the end of the share menu.")
+                    Text("“Upscale with LocalSR” appears when you share photos. To hide it, tap Edit Actions at the end of the share menu.")
                     #endif
                 }
 
