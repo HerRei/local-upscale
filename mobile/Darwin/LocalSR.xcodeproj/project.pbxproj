@@ -21,6 +21,23 @@
 		4A30000A2FB000000000B002 /* LocalSRShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 4A30000A2FB000000000E001 /* LocalSRShare.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		4A20000A2FA600000000D009 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 49F90C202A52156200F06D93 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 499CD4382AC5B799001AE8D8;
+			remoteInfo = "LocalSR App";
+		};
+		4A30000A2FB000000000D009 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 49F90C202A52156200F06D93 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4A30000A2FB000000000D001;
+			remoteInfo = "LocalSR Share";
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXCopyFilesBuildPhase section */
 		499CD44A2AC5B9C6001AE8D8 /* Embed Frameworks */ = {
 			isa = PBXCopyFilesBuildPhase;
@@ -78,6 +95,20 @@
 			buildActionMask = 2147483647;
 			files = (
 				491F27822DA55B72004926EE /* LocalSR in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4A20000A2FA600000000D003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4A30000A2FB000000000D003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -174,6 +205,7 @@
 				499CD4452AC5B869001AE8D8 /* Run skip gradle */,
 				499CD44A2AC5B9C6001AE8D8 /* Embed Frameworks */,
 				4A30000A2FB000000000D010 /* Embed Foundation Extensions */,
+				4A30000A2FB000000000D021 /* Ad-hoc sign entitlements (unsigned simulator) */,
 			);
 			buildRules = (
 			);
@@ -213,6 +245,7 @@
 				4A30000A2FB000000000D002 /* Sources */,
 				4A30000A2FB000000000D003 /* Frameworks */,
 				4A30000A2FB000000000D004 /* Resources */,
+				4A30000A2FB000000000D020 /* Ad-hoc sign entitlements (unsigned simulator) */,
 			);
 			buildRules = (
 			);
@@ -279,7 +312,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				4971EFAA2FA4FEA50002D3F7 /* InfoPlist.xcstrings in Resources */,
 				499CD4402AC5B799001AE8D8 /* Assets.xcassets in Resources */,
 				496BDBEE2B8A7E9C00C09264 /* Localizable.xcstrings in Resources */,
 				4A10000A2FA500000000B001 /* localsr_best.mlmodelc in Resources */,
@@ -289,22 +321,8 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		4A20000A2FA600000000D003 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		4A20000A2FA600000000D004 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		4A30000A2FB000000000D003 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
@@ -318,39 +336,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
-
-/* Begin PBXTargetDependency section */
-		4A20000A2FA600000000D008 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 499CD4382AC5B799001AE8D8 /* LocalSR App */;
-			targetProxy = 4A20000A2FA600000000D009 /* PBXContainerItemProxy */;
-		};
-		4A30000A2FB000000000D008 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			platformFilters = (
-				ios,
-			);
-			target = 4A30000A2FB000000000D001 /* LocalSR Share */;
-			targetProxy = 4A30000A2FB000000000D009 /* PBXContainerItemProxy */;
-		};
-/* End PBXTargetDependency section */
-
-/* Begin PBXContainerItemProxy section */
-		4A20000A2FA600000000D009 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 49F90C202A52156200F06D93 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 499CD4382AC5B799001AE8D8;
-			remoteInfo = "LocalSR App";
-		};
-		4A30000A2FB000000000D009 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 49F90C202A52156200F06D93 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 4A30000A2FB000000000D001;
-			remoteInfo = "LocalSR Share";
-		};
-/* End PBXContainerItemProxy section */
 
 /* Begin PBXShellScriptBuildPhase section */
 		499CD4452AC5B869001AE8D8 /* Run skip gradle */ = {
@@ -371,6 +356,44 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = "/bin/sh -e";
 			shellScript = "if [ \"${SKIP_ZERO}\" != \"\" ]; then\n  echo \"note: skipping skip due to SKIP_ZERO\"\n  exit 0\nelif [ \"${ENABLE_PREVIEWS}\" = \"YES\" ]; then\n  echo \"note: skipping skip due to ENABLE_PREVIEWS\"\n  exit 0\nelif [ \"${ACTION}\" = \"install\" ]; then\n  echo \"note: skipping skip due to archive install\"\n  exit 0\nelif [ \"${SKIP_ACTION}\" = \"none\" ]; then\n  echo \"note: skipping skip due to SKIP_ACTION none\"\n  exit 0\nelse\n  SKIP_ACTION=\"${SKIP_ACTION:-launch}\"\nfi\nPATH=${BUILD_ROOT}/Release:${BUILD_ROOT}/Debug:${BUILD_ROOT}/../../SourcePackages/artifacts/skip/skip/skip.artifactbundle/macos:${PATH}:${HOMEBREW_PREFIX:-/opt/homebrew}/bin\necho \"note: running gradle build with: $(which skip) gradle -p ${PWD}/../Android ${SKIP_ACTION:-launch}${CONFIGURATION:-Debug}\"\nskip gradle -p ../Android ${SKIP_ACTION:-launch}${CONFIGURATION:-Debug}\n";
+		};
+		4A30000A2FB000000000D020 /* Ad-hoc sign entitlements (unsigned simulator) */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Ad-hoc sign entitlements (unsigned simulator)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = "/bin/sh -e";
+			shellScript = "if [ \"${CODE_SIGNING_ALLOWED}\" = \"NO\" ] && [ \"${PLATFORM_NAME}\" = \"iphonesimulator\" ] && [ -n \"${CODE_SIGN_ENTITLEMENTS}\" ]; then\n  ENT_PATH=\"${CODE_SIGN_ENTITLEMENTS}\"\n  case \"${ENT_PATH}\" in\n    /*) ;;\n    *) ENT_PATH=\"${SRCROOT}/${ENT_PATH}\" ;;\n  esac\n  if [ -f \"${ENT_PATH}\" ]; then\n    SIM_ENT=\"${TARGET_TEMP_DIR}/sim-entitlements.plist\"\n    cp \"${ENT_PATH}\" \"${SIM_ENT}\"\n    /usr/libexec/PlistBuddy -c \"Delete :com.apple.developer.kernel.increased-memory-limit\" \"${SIM_ENT}\" 2>/dev/null || true\n    /usr/bin/codesign --force --sign - --entitlements \"${SIM_ENT}\" --generate-entitlement-der --timestamp=none \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n  fi\nfi\n";
+		};
+		4A30000A2FB000000000D021 /* Ad-hoc sign entitlements (unsigned simulator) */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Ad-hoc sign entitlements (unsigned simulator)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = "/bin/sh -e";
+			shellScript = "if [ \"${CODE_SIGNING_ALLOWED}\" = \"NO\" ] && [ \"${PLATFORM_NAME}\" = \"iphonesimulator\" ] && [ -n \"${CODE_SIGN_ENTITLEMENTS}\" ]; then\n  ENT_PATH=\"${CODE_SIGN_ENTITLEMENTS}\"\n  case \"${ENT_PATH}\" in\n    /*) ;;\n    *) ENT_PATH=\"${SRCROOT}/${ENT_PATH}\" ;;\n  esac\n  if [ -f \"${ENT_PATH}\" ]; then\n    SIM_ENT=\"${TARGET_TEMP_DIR}/sim-entitlements.plist\"\n    cp \"${ENT_PATH}\" \"${SIM_ENT}\"\n    /usr/libexec/PlistBuddy -c \"Delete :com.apple.developer.kernel.increased-memory-limit\" \"${SIM_ENT}\" 2>/dev/null || true\n    /usr/bin/codesign --force --sign - --entitlements \"${SIM_ENT}\" --generate-entitlement-der --timestamp=none \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n  fi\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -401,11 +424,26 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		4A20000A2FA600000000D008 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 499CD4382AC5B799001AE8D8 /* LocalSR App */;
+			targetProxy = 4A20000A2FA600000000D009 /* PBXContainerItemProxy */;
+		};
+		4A30000A2FB000000000D008 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			platformFilter = ios;
+			target = 4A30000A2FB000000000D001 /* LocalSR Share */;
+			targetProxy = 4A30000A2FB000000000D009 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
 		499CD4422AC5B799001AE8D8 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 496EB72F2A6AE4DE00C1253B /* LocalSR.xcconfig */;
 			buildSettings = {
+				DEVELOPMENT_TEAM = Z2TU844D84;
 				ENABLE_PREVIEWS = YES;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
@@ -416,6 +454,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 496EB72F2A6AE4DE00C1253B /* LocalSR.xcconfig */;
 			buildSettings = {
+				DEVELOPMENT_TEAM = Z2TU844D84;
 				ENABLE_PREVIEWS = YES;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
@@ -448,7 +487,7 @@
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				COPY_PHASE_STRIP = NO;
-				DEBUG_INFORMATION_FORMAT = dwarf-with-dsym;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -465,6 +504,7 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = Z2TU844D84;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
@@ -484,6 +524,7 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = Z2TU844D84;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
@@ -502,6 +543,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 4A30000A2FB000000000A004 /* ShareExtension.xcconfig */;
 			buildSettings = {
+				DEVELOPMENT_TEAM = Z2TU844D84;
 			};
 			name = Debug;
 		};
@@ -509,6 +551,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 4A30000A2FB000000000A004 /* ShareExtension.xcconfig */;
 			buildSettings = {
+				DEVELOPMENT_TEAM = Z2TU844D84;
 			};
 			name = Release;
 		};

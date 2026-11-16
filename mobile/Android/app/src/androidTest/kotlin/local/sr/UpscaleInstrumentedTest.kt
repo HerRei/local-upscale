@@ -2,6 +2,7 @@ package local.sr
 
 import android.app.ActivityManager
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -43,10 +44,21 @@ class UpscaleInstrumentedTest {
     private val dir = File(ctx.cacheDir, "test-inputs")
 
     // A visible activity keeps the app in the foreground state, which Android requires to start a foreground service.
-    private var scenario: androidx.test.core.app.ActivityScenario<MainActivity>? = null
+    // Started directly: ActivityScenario's helper activities need androidx.test:monitor in the test APK, which AGP strips because Skip ships it in the app.
+    private var activity: android.app.Activity? = null
 
-    @Before fun setUp() { dir.deleteRecursively(); dir.mkdirs(); scenario = androidx.test.core.app.ActivityScenario.launch(MainActivity::class.java) }
-    @After fun tearDown() { scenario?.close(); dir.deleteRecursively() }
+    @Before fun setUp() {
+        dir.deleteRecursively(); dir.mkdirs()
+        activity = InstrumentationRegistry.getInstrumentation().startActivitySync(Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+    // All tests share one process; loaded models must not pile up across tests.
+    private val upscalers = ArrayList<AndroidUpscaler>()
+    private fun newUpscaler() = AndroidUpscaler(ctx).also { upscalers.add(it) }
+
+    @After fun tearDown() {
+        runBlocking { for (u in upscalers) u.release() }
+        activity?.finish(); dir.deleteRecursively()
+    }
 
     private fun log(msg: String) { Log.i(TAG, msg) }
 
@@ -150,7 +162,7 @@ class UpscaleInstrumentedTest {
 
     @Test
     fun endToEndBothModels() = runBlocking<Unit> {
-        val upscaler = AndroidUpscaler(ctx)
+        val upscaler = newUpscaler()
         val input = makeInput("synthetic_1000x750.jpg", 1000, 750)
         val original = BitmapFactory.decodeFile(input.path)
         for (model in listOf(ModelKey.fast, ModelKey.best)) {
@@ -158,7 +170,7 @@ class UpscaleInstrumentedTest {
             log("E2E ${model.rawValue}: verdict ${verdict.unit.rawValue} (${verdict.reason})")
             val fractions = ArrayList<Double>()
             val t0 = System.nanoTime()
-            val res = upscaler.upscale("file://${input.absolutePath}", model) { fractions.add(it) }
+            val res = upscaler.upscale("file://${input.absolutePath}", model, false) { fractions.add(it) }
             val ms = (System.nanoTime() - t0) / 1e6
             val tiles = TilePipeline.tileCount(1000, 750) // 3 x 3 core tiles
             log("E2E ${model.rawValue}: ${res.width}x${res.height} on ${res.unit.rawValue} in %.1f s (%.0f ms/tile incl. decode/stitch/encode), result in ${res.outputPath}".format(ms / 1000, ms / tiles))
@@ -185,9 +197,9 @@ class UpscaleInstrumentedTest {
 
     @Test
     fun orientationIsAppliedAndReset() = runBlocking<Unit> {
-        val upscaler = AndroidUpscaler(ctx)
+        val upscaler = newUpscaler()
         val input = makeInput("rotated_400x300.jpg", 400, 300, ExifInterface.ORIENTATION_ROTATE_90)
-        val res = upscaler.upscale(input.absolutePath, ModelKey.fast) { }
+        val res = upscaler.upscale(input.absolutePath, ModelKey.fast, false) { }
         log("ORIENTATION: 400x300 with EXIF orientation 6 -> ${res.width}x${res.height}")
         checkOutput(input, res, 1200, 1600) // portrait after rotation
         File(res.outputPath).parentFile!!.deleteRecursively()
@@ -195,21 +207,21 @@ class UpscaleInstrumentedTest {
 
     @Test
     fun tinyImageIsPadded() = runBlocking<Unit> {
-        val upscaler = AndroidUpscaler(ctx)
+        val upscaler = newUpscaler()
         val input = makeInput("tiny_100x60.jpg", 100, 60)
-        val res = upscaler.upscale(input.absolutePath, ModelKey.fast) { }
+        val res = upscaler.upscale(input.absolutePath, ModelKey.fast, false) { }
         checkOutput(input, res, 400, 240)
         File(res.outputPath).parentFile!!.deleteRecursively()
     }
 
     @Test
     fun cancellationStopsAndCleansUp() = runBlocking<Unit> {
-        val upscaler = AndroidUpscaler(ctx)
+        val upscaler = newUpscaler()
         val input = makeInput("cancel_1000x750.jpg", 1000, 750)
         val root = File(ctx.cacheDir, "LocalSR")
         val before = root.list()?.toSet() ?: emptySet()
         var steps = 0
-        val job = async { upscaler.upscale(input.absolutePath, ModelKey.fast) { steps++ } }
+        val job = async { upscaler.upscale(input.absolutePath, ModelKey.fast, false) { steps++ } }
         while (steps < 3) delay(20)
         job.cancel()
         try { job.await(); fail("should be cancelled") } catch (e: CancellationException) { /* expected */ }
@@ -217,7 +229,7 @@ class UpscaleInstrumentedTest {
         assertTrue("stopped early", steps < 11)
         assertEquals("partial files must be removed", before, root.list()?.toSet() ?: emptySet<String>())
         // The engine still works afterwards.
-        val res = upscaler.upscale(input.absolutePath, ModelKey.fast) { }
+        val res = upscaler.upscale(input.absolutePath, ModelKey.fast, false) { }
         assertTrue(File(res.outputPath).isFile)
         File(res.outputPath).parentFile!!.deleteRecursively()
     }
@@ -230,14 +242,14 @@ class UpscaleInstrumentedTest {
 
     @Test
     fun foregroundServiceRunsDuringUpscaleAndStopsAfter() = runBlocking<Unit> {
-        val upscaler = AndroidUpscaler(ctx)
+        val upscaler = newUpscaler()
         val input = makeInput("fg_1000x750.jpg", 1000, 750)
         assertFalse(serviceRunning())
         var seen = false
         // The batch (not each photo) holds the foreground service: AppModel calls beginBatch/endBatch.
         UpscaleForegroundService.acquire(ctx)
         val res = try {
-            upscaler.upscale(input.absolutePath, ModelKey.fast) { if (it > 0.1 && !seen) seen = serviceRunning() }
+            upscaler.upscale(input.absolutePath, ModelKey.fast, false) { if (it > 0.1 && !seen) seen = serviceRunning() }
         } finally {
             UpscaleForegroundService.release(ctx)
         }

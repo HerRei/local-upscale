@@ -333,24 +333,37 @@ struct ResultView: View {
                 let squareX = min(max(dividerX, minSquareX), maxSquareX)
 
                 ZStack(alignment: .topLeading) {
+                    #if !SKIP
+                    Color.clear
+                        .frame(width: max(width - 80.0, 1.0), height: max(height - 320.0, 1.0))
+                        .position(x: width / 2.0, y: height / 2.0)
+                        .allowsHitTesting(false)
+                        .accessibilityElement()
+                        .accessibilityLabel("Viewer Canvas")
+                        .accessibilityIdentifier("viewerGestureArea")
+                    #endif
                     // Layer 1: Background + images + tap/pan gestures (separate from divider handle layer)
                     ZStack(alignment: .topLeading) {
                         Color.black
 
-                        DecodedImageView(url: upscaledURL, maxPixelSize: upscaledMaxPx, contentMode: .fit, exactFrame: true)
+                        DecodedImageView(url: upscaledURL, maxPixelSize: upscaledMaxPx, contentMode: .fit, exactFrame: true, accessibilityID: "viewerUpscaledImage")
                             .frame(width: fitW, height: fitH)
                             .frame(width: width, height: height)
                             .scaleEffect(effectiveZoom)
                             .offset(effectiveOffset)
                             .clipped()
 
-                        DecodedImageView(url: result.inputURL, maxPixelSize: originalMaxPx, contentMode: .fit, exactFrame: true)
+                        DecodedImageView(url: result.inputURL, maxPixelSize: originalMaxPx, contentMode: .fit, exactFrame: true, accessibilityID: "viewerOriginalImage")
                             .frame(width: fitW, height: fitH)
                             .frame(width: width, height: height)
                             .scaleEffect(effectiveZoom)
                             .offset(effectiveOffset)
                             .clipped()
+                            #if SKIP
+                            .composeModifier { $0.clipHorizontalBounds(dividerX) }
+                            #else
                             .clipShape(SplitClipRect(clipWidth: dividerX))
+                            #endif
                     }
                     .frame(width: width, height: height)
                     #if !SKIP

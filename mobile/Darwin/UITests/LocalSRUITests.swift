@@ -241,14 +241,67 @@ final class LocalSRUITests: XCTestCase {
         saveShot("ios_viewer_zoom4x_dragged.png", app: app)
 
         // Pinch in while zoomed to settle at 1x, then pinch in further at 1x -> viewer must NOT dismiss
-        canvas.pinch(withScale: 0.15, velocity: -1.0)
+        let pinchTarget = app.otherElements["viewerGestureArea"]
+        let pinchElement = pinchTarget.exists ? pinchTarget : canvas
+        pinchElement.pinch(withScale: 0.15, velocity: -1.0)
         Thread.sleep(forTimeInterval: 0.6)
         XCTAssertTrue(summary.exists && handle.exists, "Viewer dismissed on pinch-in from zoomed state")
 
-        canvas.pinch(withScale: 0.25, velocity: -1.0)
+        pinchElement.pinch(withScale: 0.15, velocity: -1.0)
+        Thread.sleep(forTimeInterval: 0.6)
+        XCTAssertTrue(summary.exists && handle.exists, "Viewer dismissed on settling pinch-in to 1x")
+
+        pinchElement.pinch(withScale: 0.25, velocity: -1.0)
         Thread.sleep(forTimeInterval: 0.6)
         XCTAssertTrue(summary.exists && handle.exists, "Viewer dismissed on further pinch-in at 1x")
         saveShot("ios_viewer_after_pinch_in.png", app: app)
+    }
+
+    @MainActor
+    func testViewerReportsDecodedPixelSizes() throws {
+        let app = XCUIApplication()
+        app.launch()
+        let choose = app.buttons["choosePhotosButton"]
+        XCTAssertTrue(choose.waitForExistence(timeout: 15))
+        choose.tap()
+        let fixture = app.images.matching(NSPredicate(format: "label CONTAINS '2099' AND label CONTAINS[c] 'Photo'")).firstMatch
+        XCTAssertTrue(fixture.waitForExistence(timeout: 15), "Detailed fixture missing from picker")
+        XCTAssertTrue(fixture.isHittable, "Detailed fixture not visible: \(fixture.label)")
+        fixture.tap()
+        let add = app.buttons["Add"]
+        XCTAssertTrue(add.waitForExistence(timeout: 5))
+        add.tap()
+        XCTAssertTrue(app.staticTexts["resultSummaryLabel"].waitForExistence(timeout: 180))
+        let upscaled = app.descendants(matching: .any)["viewerUpscaledImage"]
+        let original = app.descendants(matching: .any)["viewerOriginalImage"]
+        XCTAssertTrue(upscaled.waitForExistence(timeout: 15))
+        XCTAssertTrue(original.waitForExistence(timeout: 15))
+        func waitForValue(_ element: XCUIElement, _ value: String, timeout: TimeInterval = 30) {
+            let predicate = NSPredicate(format: "value == %@", value)
+            expectation(for: predicate, evaluatedWith: element)
+            waitForExpectations(timeout: timeout)
+        }
+        waitForValue(original, "1600x1200")
+        expectation(for: NSPredicate(format: "value MATCHES %@", "[0-9]+x[0-9]+"), evaluatedWith: upscaled)
+        waitForExpectations(timeout: 30)
+        let preview = upscaled.value as? String ?? ""
+        let dimensions = preview.split(separator: "x").compactMap { Int($0) }
+        XCTAssertEqual(dimensions.count, 2, "Invalid preview size: \(preview)")
+        XCTAssertLessThanOrEqual(dimensions.max() ?? Int.max, 2048)
+        print("VIEWER iOS 1x upscaled=\(preview) original=\(original.value ?? "nil")")
+        let canvas = app.windows.firstMatch
+        canvas.pinch(withScale: 4.0, velocity: 1.5)
+        waitForValue(upscaled, "6400x4800", timeout: 90)
+        waitForValue(original, "1600x1200")
+        print("VIEWER iOS 4x upscaled=\(upscaled.value ?? "nil") original=\(original.value ?? "nil")")
+        let pinchTarget = app.otherElements["viewerGestureArea"]
+        for _ in 0..<4 {
+            if (upscaled.value as? String) == preview { break }
+            (pinchTarget.exists ? pinchTarget : canvas).pinch(withScale: 0.15, velocity: -1.0)
+            Thread.sleep(forTimeInterval: 0.8)
+        }
+        waitForValue(upscaled, preview)
+        print("VIEWER iOS 1x return upscaled=\(upscaled.value ?? "nil") original=\(original.value ?? "nil")")
     }
 
     @MainActor
@@ -258,9 +311,9 @@ final class LocalSRUITests: XCTestCase {
             grid.swipeUp()
             Thread.sleep(forTimeInterval: 0.4)
         }
-        let candidateImages = app.images.matching(
-            NSPredicate(format: "label CONTAINS ',' AND (label CONTAINS[c] 'Photo' OR label CONTAINS[c] 'Image' OR label CONTAINS[c] 'PXG' OR label CONTAINS[c] 'Wallpaper')")
-        )
+        let basePredicate = "label CONTAINS ',' AND (label CONTAINS[c] 'Photo' OR label CONTAINS[c] 'Image' OR label CONTAINS[c] 'PXG' OR label CONTAINS[c] 'Wallpaper')"
+        let predicateFormat = preferNewest ? basePredicate : "\(basePredicate) AND NOT (label CONTAINS '2099')"
+        let candidateImages = app.images.matching(NSPredicate(format: predicateFormat))
         let candidateCells = app.collectionViews.cells.matching(
             NSPredicate(format: "identifier == 'PXAssetsCollectionViewCell' OR label CONTAINS[c] 'Photo' OR label CONTAINS ','")
         )
@@ -313,7 +366,7 @@ final class LocalSRUITests: XCTestCase {
         for _ in 0..<3 {
             var handled = false
             for title in allowButtons {
-                let alertBtn = springboard.alerts.buttons[title]
+                let alertBtn = springboard.alerts.buttons[title].firstMatch
                 if alertBtn.waitForExistence(timeout: 1.0) {
                     alertBtn.tap()
                     handled = true
@@ -439,7 +492,7 @@ final class LocalSRUITests: XCTestCase {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         // Dismiss any stale system alert before switching to Photos
         for title in ["Cancel", "OK"] {
-            let stale = springboard.alerts.buttons[title]
+            let stale = springboard.alerts.buttons[title].firstMatch
             if stale.exists {
                 stale.tap()
                 Thread.sleep(forTimeInterval: 0.3)
@@ -461,7 +514,7 @@ final class LocalSRUITests: XCTestCase {
             }
         }
         for title in ["Allow", "Don't Allow", "OK"] {
-            let alertBtn = springboard.alerts.buttons[title]
+            let alertBtn = springboard.alerts.buttons[title].firstMatch
             if alertBtn.waitForExistence(timeout: 1.5) {
                 alertBtn.tap()
                 Thread.sleep(forTimeInterval: 0.4)
@@ -469,8 +522,22 @@ final class LocalSRUITests: XCTestCase {
             }
         }
 
+        let oneUpBack = photos.navigationBars["PUOneUpView"].buttons["BackButton"].firstMatch
+        if oneUpBack.waitForExistence(timeout: 1.5) {
+            oneUpBack.tap()
+            Thread.sleep(forTimeInterval: 0.6)
+        }
+
         let photoPred = NSPredicate(format: "(label BEGINSWITH 'Photo' OR label CONTAINS 'Image' OR label CONTAINS 'PNG') AND NOT (label CONTAINS 'rectangle')")
         let photoMatches = photos.images.matching(photoPred)
+        if !photoMatches.firstMatch.waitForExistence(timeout: 8) {
+            photos.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            Thread.sleep(forTimeInterval: 0.5)
+            if oneUpBack.waitForExistence(timeout: 2) {
+                oneUpBack.tap()
+                Thread.sleep(forTimeInterval: 0.6)
+            }
+        }
         XCTAssertTrue(photoMatches.firstMatch.waitForExistence(timeout: 8), "No photo found in Photos app")
         let visiblePhoto = photoMatches.allElementsBoundByIndex.first { $0.isHittable && $0.frame.minY >= 120 }
             ?? photoMatches.element(boundBy: min(4, max(0, photoMatches.count - 1)))
@@ -508,11 +575,11 @@ final class LocalSRUITests: XCTestCase {
             saveShareShot("ios_share_extension_ui.png")
         }
 
-        let openBtn = springboard.alerts.buttons["Open"]
+        let openBtn = springboard.alerts.buttons["Open"].firstMatch
         if openBtn.waitForExistence(timeout: 4) {
             openBtn.tap()
         } else {
-            let photosOpen = photos.alerts.buttons["Open"]
+            let photosOpen = photos.alerts.buttons["Open"].firstMatch
             if photosOpen.waitForExistence(timeout: 1) {
                 photosOpen.tap()
             }

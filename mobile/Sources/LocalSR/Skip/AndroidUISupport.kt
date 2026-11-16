@@ -1,6 +1,5 @@
 package local.sr
 
-import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -25,9 +24,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -108,49 +111,31 @@ object AndroidUISupport {
         } else {
             ImageDecoder.createSource(context.contentResolver, uri)
         }
-        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
-        val memInfo = ActivityManager.MemoryInfo()
-        am?.getMemoryInfo(memInfo)
-        val memoryClassMB = am?.largeMemoryClass ?: am?.memoryClass ?: 256
-
         return ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
             decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
             decoder.isMutableRequired = false
             val w = info.size.width
             val h = info.size.height
-            val longSide = maxOf(w, h)
-            if (maxSide > 0) {
-                if (longSide > maxSide && longSide > 0) {
-                    var sampleSize = 1
-                    while (longSide / (sampleSize * 2) >= maxSide) {
-                        sampleSize *= 2
-                    }
-                    if (sampleSize > 1) {
-                        decoder.setTargetSampleSize(sampleSize)
-                    } else {
-                        val scale = maxSide.toDouble() / longSide.toDouble()
-                        decoder.setTargetSize(maxOf(1, (w * scale).toInt()), maxOf(1, (h * scale).toInt()))
-                    }
-                }
-            } else {
-                val estBytes = w.toLong() * h.toLong() * 4L
-                val memoryBudgetBytes = memoryClassMB.toLong() * 1024L * 1024L
-                val lowHeadroom = memInfo.lowMemory ||
-                    memInfo.availMem < 800L * 1024L * 1024L ||
-                    memoryClassMB < 256 ||
-                    estBytes > memoryBudgetBytes / 2L ||
-                    longSide > 8192
-                if (lowHeadroom && longSide > 4096) {
-                    var sampleSize = 1
-                    while (longSide / sampleSize > 4096) {
-                        sampleSize *= 2
-                    }
-                    decoder.setTargetSampleSize(sampleSize)
-                } else {
-                    decoder.setTargetSampleSize(1)
-                }
-            }
+            val (tw, th) = displayDecodeSize(w, h, maxSide)
+            if (tw != w || th != h) decoder.setTargetSize(tw, th) else decoder.setTargetSampleSize(1)
         }
+    }
+
+    // RecordingCanvas throws for bitmaps over 100 MiB (about 26 MP in ARGB_8888), so a full 4x result
+    // (6400x4800 and up) can never be drawn at native size. The long-side cap matches the iOS viewer.
+    const val MAX_DRAW_PIXELS = 25_000_000L
+    const val MAX_DRAW_LONG_SIDE = 8192
+
+    /** The size the viewer decodes a w x h image to; maxSide 0 means as large as Android can draw. */
+    fun displayDecodeSize(w: Int, h: Int, maxSide: Int): Pair<Int, Int> {
+        val longSide = maxOf(w, h)
+        if (longSide <= 0) return Pair(w, h)
+        val sideCap = if (maxSide > 0) minOf(maxSide, MAX_DRAW_LONG_SIDE) else MAX_DRAW_LONG_SIDE
+        var scale = minOf(1.0, sideCap.toDouble() / longSide.toDouble())
+        val pixels = w.toDouble() * h.toDouble() * scale * scale
+        if (pixels > MAX_DRAW_PIXELS) scale *= Math.sqrt(MAX_DRAW_PIXELS / pixels)
+        if (scale >= 1.0) return Pair(w, h)
+        return Pair(maxOf(1, (w * scale).toInt()), maxOf(1, (h * scale).toInt()))
     }
 
     fun imagePixelSize(context: Context, uriString: String): List<Int>? {
@@ -262,6 +247,7 @@ fun AndroidDecodedImage(
     maxSide: Int,
     crop: Boolean,
     fillBounds: Boolean = false,
+    accessibilityID: String? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -288,11 +274,24 @@ fun AndroidDecodedImage(
         }
         Image(
             bitmap = bmp.asImageBitmap(),
-            contentDescription = null,
+            contentDescription = accessibilityID?.let { "$it ${bmp.width}x${bmp.height}" },
             contentScale = contentScale,
-            modifier = modifier.fillMaxSize(),
+            modifier = (if (accessibilityID != null) modifier.testTag(accessibilityID) else modifier).fillMaxSize(),
         )
     } else {
         Box(modifier = modifier.fillMaxSize())
     }
 }
+
+/**
+ * Clips drawing and layout bounds horizontally to [widthDp] without centering overflowed content,
+ * so layers behind this view remain uncovered to Compose accessibility.
+ */
+fun Modifier.clipHorizontalBounds(widthDp: Double): Modifier =
+    this.clipToBounds().layout { measurable, constraints ->
+        val placeable = measurable.measure(constraints)
+        val clippedWidth = widthDp.coerceAtLeast(0.0).dp.roundToPx().coerceIn(0, placeable.width)
+        layout(clippedWidth, placeable.height) {
+            placeable.place(0, 0)
+        }
+    }
