@@ -12,6 +12,11 @@ struct AboutSheetView: View {
     @State private var isShowingFullScaleInfo = false
     @State private var versionText = ""
 
+    /// The tablet shows this sheet as its Settings; its chips per model are in the Model Library.
+    private var isTablet: Bool {
+        TabletPlatform.isTablet
+    }
+
     private var upscalingFooterText: String {
         let base = "Photos from 3 to 12 MP get 2\u{00D7} by default. Full 4\u{00D7} takes longer to save and needs more memory."
         if !appModel.isFullScaleAvailable {
@@ -61,33 +66,35 @@ struct AboutSheetView: View {
                     #endif
                 }
 
-                Section {
-                    ForEach([ModelKey.best, ModelKey.fast], id: \.self) { model in
-                        let verdict = appModel.verdicts[model]
-                        VStack(alignment: .leading, spacing: 4.0) {
-                            HStack {
-                                Text(model.displayName)
-                                    .font(.body)
-                                Spacer()
-                                Text(verdict?.unit.platformDisplayName ?? "Checked on first use")
-                                    .font(.body)
-                                    .foregroundStyle(.secondary)
+                if !isTablet {
+                    Section {
+                        ForEach([ModelKey.best, ModelKey.fast], id: \.self) { model in
+                            let verdict = appModel.verdicts[model]
+                            VStack(alignment: .leading, spacing: 4.0) {
+                                HStack {
+                                    Text(model.displayName)
+                                        .font(.body)
+                                    Spacer()
+                                    Text(verdict?.unit.platformDisplayName ?? "Checked on first use")
+                                        .font(.body)
+                                        .foregroundStyle(.secondary)
+                                }
+                                if let verdict {
+                                    Text(verdict.reason)
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
-                            if let verdict {
-                                Text(verdict.reason)
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
+                            .padding(.vertical, 2.0)
+                            #if !SKIP
+                            .accessibilityElement(children: .combine)
+                            #endif
                         }
-                        .padding(.vertical, 2.0)
-                        #if !SKIP
-                        .accessibilityElement(children: .combine)
-                        #endif
+                    } header: {
+                        Text("This Device")
+                    } footer: {
+                        Text("LocalSR tests each model once and uses the fastest chip that gives correct results.")
                     }
-                } header: {
-                    Text("This Device")
-                } footer: {
-                    Text("LocalSR tests each model once and uses the fastest chip that gives correct results.")
                 }
 
                 Section {
@@ -113,7 +120,10 @@ struct AboutSheetView: View {
                     factRow(
                         symbol: "photo.badge.checkmark",
                         title: "Saves a new photo",
-                        detail: "Keeps date, location and HDR. Your original isn't changed."
+                        // The tablet can save PNG, which has no HDR gain map.
+                        detail: isTablet
+                            ? "Keeps date and location, and HDR in HEIC and JPEG. Your original isn't changed."
+                            : "Keeps date, location and HDR. Your original isn't changed."
                     )
                     #endif
                 }

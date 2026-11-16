@@ -20,6 +20,25 @@ val stageModels = tasks.register<Sync>("stageLocalsrModels") {
 tasks.matching { it.name != "stageLocalsrModels" && (it.name == "preBuild" || it.name.contains("Assets") || it.name.contains("lint", ignoreCase = true)) }.configureEach {
     dependsOn(stageModels)
 }
+// A release must include the tablet models; Models/android-tablet is git-ignored, so a fresh clone
+// would otherwise build an APK without them. Debug builds stay possible without the models.
+val checkTabletModels = tasks.register("checkTabletModels") {
+    val tabletDir = modelsDir.resolve("android-tablet")
+    val expected = listOf("fast", "best", "nomos_realplksr", "denoise_realplksr", "fbcnn", "anime_esrgan", "nomos_span", "span48")
+        .map { "$it.tflite" }
+    doLast {
+        val missing = expected.filter { !tabletDir.resolve(it).isFile || tabletDir.resolve(it).length() == 0L }
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                "mobile/Models/android-tablet is missing or incomplete (missing: ${missing.joinToString()}). " +
+                    "A release build must include the tablet models; see mobile/tools/TABLET-MODELS.md to convert them."
+            )
+        }
+    }
+}
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(checkTabletModels)
+}
 
 dependencies {
     // UpscaleForegroundService / MediaStore / LiteRT are in the LocalSR module (Sources/LocalSR/Skip/*.kt)

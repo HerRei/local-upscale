@@ -1,3 +1,5 @@
+import Foundation
+
 public enum TabletLibraryGroup: String, Codable, CaseIterable, Sendable {
     case upscalePhotos
     case illustration
@@ -38,6 +40,7 @@ public struct ModelDescriptor: Sendable {
     public let preferredLane: ModelLane
     public let iosFileName: String
     public let androidFileName: String
+    /// The "(key)" in this model's section title in Models/NOTICE.txt (see `ModelNotice`).
     public let licenceNoticeKey: String
     public let qualityRating: Int
     public let speedRating: Int
@@ -86,6 +89,59 @@ public struct ModelDescriptor: Sendable {
     }
 }
 
+public extension ModelDescriptor {
+    /// A licence whose full text is a section of its own in NOTICE.txt, shared by several models.
+    var sharedLicenceNoticeKey: String? {
+        licence == "Apache-2.0" ? "apache-2.0" : nil
+    }
+}
+
+/// Finds a model's part of Models/NOTICE.txt, the text the Licences screen shows.
+/// A section starts with a title line that contains "(key)" and is underlined with "-" or "=";
+/// it runs to the next underlined title or the end of the text.
+public enum ModelNotice {
+    public static func section(key: String, in text: String) -> String? {
+        let lines = text.components(separatedBy: "\n")
+        var start: Int? = nil
+        var end = lines.count
+        var index = 0
+        while index + 1 < lines.count {
+            if isTitle(lines, at: index) {
+                if start != nil {
+                    end = index
+                    break
+                }
+                if lines[index].contains("(\(key))") {
+                    start = index
+                }
+            }
+            index += 1
+        }
+        guard let first = start else { return nil }
+        var body: [String] = []
+        for line in first..<end {
+            body.append(lines[line])
+        }
+        return body.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The model's own section, followed by the full text of its licence when that is shared.
+    public static func text(for model: ModelDescriptor, in notice: String) -> String? {
+        guard let own = section(key: model.licenceNoticeKey, in: notice) else { return nil }
+        if let sharedKey = model.sharedLicenceNoticeKey, let shared = section(key: sharedKey, in: notice) {
+            return own + "\n\n" + shared
+        }
+        return own
+    }
+
+    private static func isTitle(_ lines: [String], at index: Int) -> Bool {
+        let title = lines[index].trimmingCharacters(in: .whitespacesAndNewlines)
+        let rule = lines[index + 1].trimmingCharacters(in: .whitespacesAndNewlines)
+        let ruleMarks = rule.replacingOccurrences(of: "-", with: "").replacingOccurrences(of: "=", with: "")
+        return !title.isEmpty && rule.count >= 3 && ruleMarks.isEmpty
+    }
+}
+
 public enum ModelCatalog {
     public static let all: [ModelDescriptor] = [
         ModelDescriptor(
@@ -97,7 +153,7 @@ public enum ModelCatalog {
             window: 384,
             halo: 16,
             preferredLane: .neuralEngine,
-            licenceNoticeKey: "span",
+            licenceNoticeKey: "localsr_photo_span28_v1_x4",
             qualityRating: 2,
             speedRating: 4,
             author: "LocalSR",
@@ -115,7 +171,7 @@ public enum ModelCatalog {
             window: 384,
             halo: 16,
             preferredLane: .neuralEngine,
-            licenceNoticeKey: "pulse",
+            licenceNoticeKey: "localsr_photo_pulse48_v1_x4",
             qualityRating: 3,
             speedRating: 3,
             author: "LocalSR / Philip Hofmann",
@@ -133,7 +189,7 @@ public enum ModelCatalog {
             window: 256,
             halo: 16,
             preferredLane: .gpu,
-            licenceNoticeKey: "realplksr",
+            licenceNoticeKey: "nomos_realplksr",
             qualityRating: 4,
             speedRating: 2,
             author: "Philip Hofmann",
@@ -151,12 +207,12 @@ public enum ModelCatalog {
             window: 256,
             halo: 16,
             preferredLane: .gpu,
-            licenceNoticeKey: "realplksr",
+            licenceNoticeKey: "denoise_realplksr",
             qualityRating: 3,
             speedRating: 4,
             author: "Philip Hofmann",
             licence: "CC BY 4.0",
-            sourceURL: "https://github.com/Phhofm/models",
+            sourceURL: "https://github.com/Phhofm/models/releases/tag/1xDeNoise_realplksr_otf",
             libraryGroup: .fixNoiseAndJpeg,
             fallbackBytes: 15_700_000
         ),
@@ -172,7 +228,7 @@ public enum ModelCatalog {
             licenceNoticeKey: "fbcnn",
             qualityRating: 3,
             speedRating: 3,
-            author: "Jiaxi Jiang et al.",
+            author: "Jiaxi Jiang, Kai Zhang, Radu Timofte",
             licence: "Apache-2.0",
             sourceURL: "https://github.com/jiaxi-jiang/FBCNN",
             libraryGroup: .fixNoiseAndJpeg,
@@ -187,7 +243,7 @@ public enum ModelCatalog {
             window: 384,
             halo: 16,
             preferredLane: .neuralEngine,
-            licenceNoticeKey: "realesrgan",
+            licenceNoticeKey: "anime_esrgan",
             qualityRating: 3,
             speedRating: 4,
             author: "Xintao Wang et al.",
@@ -205,12 +261,12 @@ public enum ModelCatalog {
             window: 384,
             halo: 16,
             preferredLane: .neuralEngine,
-            licenceNoticeKey: "span",
+            licenceNoticeKey: "nomos_span",
             qualityRating: 2,
             speedRating: 4,
             author: "Philip Hofmann",
             licence: "CC BY 4.0",
-            sourceURL: "https://github.com/Phhofm/models",
+            sourceURL: "https://github.com/Phhofm/models/releases/tag/4xNomosUni_span_multijpg",
             libraryGroup: .upscalePhotos,
             fallbackBytes: 917_000
         ),
@@ -218,17 +274,17 @@ public enum ModelCatalog {
             id: .span48,
             displayName: "SPAN \u{00D7}4 ch48",
             fullName: "SPAN \u{00D7}4 ch48",
-            summary: "Compact 48-channel SPAN photo upscaler with higher detail.",
+            summary: "The SPAN authors' official 48-channel \u{00D7}4 checkpoint for clean photos.",
             scale: 4,
             window: 384,
             halo: 16,
             preferredLane: .neuralEngine,
-            licenceNoticeKey: "span",
+            licenceNoticeKey: "span48",
             qualityRating: 3,
             speedRating: 4,
-            author: "LocalSR",
-            licence: "MIT",
-            sourceURL: "https://github.com/HerRei/LocalSR",
+            author: "Cheng Wan, Hongyuan Yu et al.",
+            licence: "Apache-2.0",
+            sourceURL: "https://github.com/hongyuanyu/SPAN",
             libraryGroup: .upscalePhotos,
             fallbackBytes: 917_000
         )

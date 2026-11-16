@@ -76,6 +76,19 @@ enum ImageIOCodec {
 
     // MARK: Decode
 
+    /// Upright pixel size from the file's properties, without decoding the image.
+    static func uprightPixelSize(url: URL) -> (width: Int, height: Int)? {
+        let options: [CFString: Any] = [kCGImageSourceShouldCache: false]
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, options as CFDictionary), CGImageSourceGetCount(source) > 0,
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any],
+              let w = (props[kCGImagePropertyPixelWidth as String] as? NSNumber)?.intValue,
+              let h = (props[kCGImagePropertyPixelHeight as String] as? NSNumber)?.intValue, w > 0, h > 0 else {
+            return nil
+        }
+        let orientation = (props[kCGImagePropertyOrientation as String] as? NSNumber)?.intValue ?? 1
+        return orientation >= 5 ? (width: h, height: w) : (width: w, height: h)
+    }
+
     /// Decodes with EXIF orientation applied and the `SizePolicy` prescale in one ImageIO step
     /// (`CGImageSourceCreateThumbnailAtIndex` with transform + max pixel size), keeps the file's colour
     /// space, and renders 8-bit RGBA in that colour space.

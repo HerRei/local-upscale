@@ -163,6 +163,13 @@ struct EnhancePaneView: View {
             checkingTimerTask?.cancel()
             checkingTimerTask = nil
         }
+        // While a recipe name is typed, the bare keys (arrows, Delete, M) belong to the text field.
+        .onChange(of: isShowingSaveRecipeAlert) { _, showing in
+            model.isTextEntryActive = showing || recipeToRename != nil
+        }
+        .onChange(of: recipeToRename?.id) { _, renamingID in
+            model.isTextEntryActive = renamingID != nil || isShowingSaveRecipeAlert
+        }
         .alert("Save as Recipe", isPresented: $isShowingSaveRecipeAlert) {
             TextField("Name this setup", text: $recipeNameDraft)
             Button("Cancel", role: .cancel) {
@@ -831,7 +838,7 @@ struct EnhancePaneView: View {
                 }
 
                 if !model.supportsBackgroundGPU && model.batchLastRunSummary == nil && !model.isBatchRunning {
-                    Text("In the background \(TabletPlatform.deviceNoun) works on the \(TabletPlatform.npuName) only.")
+                    Text("In the background \(TabletPlatform.deviceNoun) works on the \(TabletPlatform.npuName) only. Steps that need the GPU run on the slower CPU until you return.")
                         .themeFont(.meta)
                         .foregroundStyle(Theme.secondary)
                         .padding(.top, 2.0)
@@ -896,7 +903,8 @@ struct EnhancePaneView: View {
             )
         }
 
-        let isPausedBackground = lane == .gpu && model.isBatchRunning && model.isAppInBackground && !model.supportsBackgroundGPU
+        // Keyed on what iPadOS granted this batch, not on what the chip supports.
+        let isPausedBackground = lane == .gpu && model.isGPUPausedInBackground
         if isPausedBackground {
             return LaneDisplayState(
                 line2: "Paused while LocalSR is in the background",
@@ -931,8 +939,10 @@ struct EnhancePaneView: View {
                     isWarningTitle: false
                 )
             }
+            // A GPU step that fell back to the CPU (in the background) says so instead of looking normal.
+            let onCPU = activity.unit == .cpu && lane != .cpu
             return LaneDisplayState(
-                line2: "\(stageVerb) \u{00B7} \(fileName)",
+                line2: onCPU ? "\(stageVerb) on the CPU \u{00B7} \(fileName)" : "\(stageVerb) \u{00B7} \(fileName)",
                 showMeter: true,
                 litCount: lit,
                 steppingIndex: nil,
@@ -977,7 +987,7 @@ struct EnhancePaneView: View {
 
         if model.isBatchRunning && model.isCheckingDevice {
             return LaneDisplayState(
-                line2: "Checking\u{2026}",
+                line2: model.runsDeviceCheck ? "Checking\u{2026}" : "Loading\u{2026}",
                 showMeter: true,
                 litCount: 0,
                 steppingIndex: checkingStep % 12,

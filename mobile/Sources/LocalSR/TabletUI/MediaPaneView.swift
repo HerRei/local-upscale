@@ -368,6 +368,7 @@ struct MediaPaneView: View {
         }
         .onTapGesture {
             model.selection = .queue(item.id)
+            model.keyboardPane = .media
         }
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : [.isButton])
         .accessibilityIdentifier("tabletQueueRow_\(item.id)")
@@ -457,6 +458,7 @@ struct MediaPaneView: View {
         }
         .onTapGesture {
             model.selection = .queue(item.id)
+            model.keyboardPane = .media
         }
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : [.isButton])
         .accessibilityIdentifier("tabletQueueCell_\(item.id)")
@@ -558,6 +560,7 @@ struct MediaPaneView: View {
         }
         .onTapGesture {
             model.selection = .result(result.id)
+            model.keyboardPane = .media
         }
         .tabletDraggableFile(result.outputURL)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : [.isButton])
@@ -630,6 +633,7 @@ struct MediaPaneView: View {
         }
         .onTapGesture {
             model.selection = .result(result.id)
+            model.keyboardPane = .media
         }
         .tabletDraggableFile(result.outputURL)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : [.isButton])
@@ -842,7 +846,7 @@ struct MediaPaneView: View {
                         .font(.system(size: 11.0))
                         .foregroundStyle(Theme.text)
                         .padding(.top, 2.0)
-                    Text("Couldn't upscale: \(item.errorMessage ?? "Unknown error")")
+                    Text("\(item.lastTask == .restore ? "Couldn't restore" : "Couldn't upscale"): \(item.errorMessage ?? "Unknown error")")
                         .themeFont(.meta)
                         .foregroundStyle(Theme.secondary)
                         .lineLimit(2)

@@ -89,6 +89,10 @@ final class TabletCoreTests: XCTestCase {
             TabletEnhanceSetup.chipLabel(for: TabletModelID.best, verdict: nil, laneChoice: TabletLaneChoice.both, isAndroid: false),
             "Checked on first use"
         )
+        XCTAssertEqual(
+            TabletEnhanceSetup.chipLabel(for: TabletModelID.best, verdict: nil, laneChoice: TabletLaneChoice.both, isAndroid: true),
+            "Chosen on first use"
+        )
 
         let verdicts: [TabletModelID: TabletChipVerdict] = [TabletModelID.jpegFix: bothVerdict, TabletModelID.finest: gpuOnlyVerdict]
         let neFailure = TabletEnhanceSetup.laneValidationFailureMessage(
@@ -110,12 +114,14 @@ final class TabletCoreTests: XCTestCase {
         )
         XCTAssertNil(noFailure)
 
+        // Only when every bundled model failed is the iPad unable to upscale at all.
         let allFailed = TabletEnhanceSetup.laneValidationFailureMessage(
             plan: Plan(stages: [TabletModelID.best]),
             verdicts: [:],
             failedModels: [TabletModelID.best],
             laneChoice: TabletLaneChoice.both,
-            deviceNoun: "this iPad"
+            deviceNoun: "this iPad",
+            bundledModels: [TabletModelID.best]
         )
         XCTAssertEqual(allFailed?.title, "Can't Upscale on This iPad")
         XCTAssertEqual(allFailed?.allFailed, true)
@@ -202,4 +208,136 @@ final class TabletCoreTests: XCTestCase {
         TileStitcher.stitch(tile: tile, tileOutput: extracted, output: &output, outputWidth: 2, tileSize: 4, outputScale: 1, modelScale: 1)
         XCTAssertEqual(output, input)
     }
+
+    func testValidationNamesTheOneFailedOrMissingModel() {
+        let bundled: Set<TabletModelID> = [TabletModelID.best, TabletModelID.fast, TabletModelID.finest, TabletModelID.jpegFix]
+        let oneFailed = TabletEnhanceSetup.laneValidationFailureMessage(
+            plan: Plan(stages: [TabletModelID.finest]),
+            verdicts: [:],
+            failedModels: [TabletModelID.finest],
+            laneChoice: TabletLaneChoice.both,
+            deviceNoun: "this iPad",
+            bundledModels: bundled
+        )
+        XCTAssertEqual(oneFailed?.title, "Can't Use Finest")
+        XCTAssertEqual(oneFailed?.detail, "Finest doesn't run correctly on this iPad. Choose another quality.")
+        XCTAssertEqual(oneFailed?.allFailed, true)
+
+        let fixFailed = TabletEnhanceSetup.laneValidationFailureMessage(
+            plan: Plan(stages: [TabletModelID.jpegFix, TabletModelID.best]),
+            verdicts: [:],
+            failedModels: [TabletModelID.jpegFix],
+            laneChoice: TabletLaneChoice.both,
+            deviceNoun: "this tablet",
+            bundledModels: bundled
+        )
+        XCTAssertEqual(fixFailed?.title, "Can't Use JPEG Fix")
+        XCTAssertEqual(fixFailed?.detail, "JPEG fix doesn't run correctly on this tablet. Turn off JPEG artifacts.")
+
+        let missing = TabletEnhanceSetup.laneValidationFailureMessage(
+            plan: Plan(stages: [TabletModelID.anime]),
+            verdicts: [:],
+            failedModels: [],
+            laneChoice: TabletLaneChoice.both,
+            deviceNoun: "this iPad",
+            bundledModels: bundled
+        )
+        XCTAssertEqual(missing?.title, "Model Not Included")
+        XCTAssertEqual(missing?.detail, "Anime isn't included in this build.")
+
+        let restoreAllFailed = TabletEnhanceSetup.laneValidationFailureMessage(
+            plan: Plan(stages: [TabletModelID.jpegFix]),
+            verdicts: [:],
+            failedModels: [TabletModelID.jpegFix],
+            laneChoice: TabletLaneChoice.both,
+            deviceNoun: "this tablet",
+            bundledModels: [TabletModelID.jpegFix]
+        )
+        XCTAssertEqual(restoreAllFailed?.title, "Can't Restore on This Tablet")
+
+        XCTAssertNil(TabletEnhanceSetup.laneValidationFailureMessage(
+            plan: Plan(stages: [TabletModelID.best]),
+            verdicts: [:],
+            failedModels: [TabletModelID.finest],
+            laneChoice: TabletLaneChoice.both,
+            deviceNoun: "this iPad",
+            bundledModels: bundled
+        ))
+    }
+
+    func testBatchSummaryStaysWhileItDescribesTheQueue() {
+        let complete = TabletBatchCompletion.complete(count: 5, seconds: 72.0)
+        XCTAssertTrue(complete.isShown(failedInQueue: 0))
+        XCTAssertTrue(complete.isShown(failedInQueue: 2))
+        let someFailed = TabletBatchCompletion.partialFailure(succeeded: 3, total: 5, failed: 2)
+        XCTAssertTrue(someFailed.isShown(failedInQueue: 2))
+        XCTAssertFalse(someFailed.isShown(failedInQueue: 0), "Removing every failed photo leaves nothing to try again")
+    }
+
+    func testMemoryPolicyWorkersAndRestoreCap() {
+        let gib: Int64 = 1_073_741_824
+        XCTAssertEqual(TabletMemoryPolicy.workerCount(physicalMemory: 3 * gib, photoCount: 6), 1)
+        XCTAssertEqual(TabletMemoryPolicy.workerCount(physicalMemory: 3_900_000_000, photoCount: 6), 1)
+        XCTAssertEqual(TabletMemoryPolicy.workerCount(physicalMemory: 5_900_000_000, photoCount: 6), 2)
+        XCTAssertEqual(TabletMemoryPolicy.workerCount(physicalMemory: 16 * gib, photoCount: 6), 2)
+        XCTAssertEqual(TabletMemoryPolicy.workerCount(physicalMemory: 16 * gib, photoCount: 1), 1)
+        XCTAssertEqual(TabletMemoryPolicy.workerCount(physicalMemory: 16 * gib, photoCount: 0), 0)
+        XCTAssertFalse(TabletMemoryPolicy.isRestoreInputTooLarge(width: 8000, height: 6000))
+        XCTAssertTrue(TabletMemoryPolicy.isRestoreInputTooLarge(width: 8001, height: 6000))
+        XCTAssertTrue(TabletMemoryPolicy.isRestoreInputTooLarge(width: 16000, height: 4000))
+    }
+
+    func testModelNoticeSections() {
+        let text = """
+        LocalSR model notices
+        =====================
+
+        Best (best_key): PULSE
+        ----------------------
+        Best body.
+
+        Tablet models
+        =============
+        Intro.
+
+        JPEG fix (fbcnn): FBCNN
+        -----------------------
+        FBCNN body.
+
+        Apache License 2.0 (apache-2.0)
+        -------------------------------
+        Apache text.
+        """
+        XCTAssertEqual(ModelNotice.section(key: "best_key", in: text), "Best (best_key): PULSE\n----------------------\nBest body.")
+        XCTAssertEqual(ModelNotice.section(key: "fbcnn", in: text), "JPEG fix (fbcnn): FBCNN\n-----------------------\nFBCNN body.")
+        XCTAssertNil(ModelNotice.section(key: "missing", in: text))
+        let fbcnn = ModelNotice.text(for: ModelCatalog.model(TabletModelID.jpegFix), in: text)
+        XCTAssertEqual(fbcnn?.hasSuffix("Apache text."), true)
+        XCTAssertEqual(ModelCatalog.model(TabletModelID.span48).licence, "Apache-2.0")
+        XCTAssertEqual(ModelCatalog.model(TabletModelID.span48).sourceURL, "https://github.com/hongyuanyu/SPAN")
+        XCTAssertNil(ModelCatalog.model(TabletModelID.finest).sharedLicenceNoticeKey)
+    }
+
+    #if !SKIP
+    /// Every bundled model's notice must be in the NOTICE.txt the Licences screen shows.
+    func testShippedNoticeCoversEveryModel() throws {
+        var url = URL(fileURLWithPath: #filePath)
+        for _ in 0..<3 { url.deleteLastPathComponent() }
+        let notice = try String(contentsOf: url.appendingPathComponent("Models/NOTICE.txt"), encoding: .utf8)
+        for model in ModelCatalog.all {
+            let text = ModelNotice.text(for: model, in: notice)
+            XCTAssertNotNil(text, "No NOTICE.txt section for \(model.id.rawValue)")
+            if model.licence == "Apache-2.0" {
+                XCTAssertEqual(text?.contains("END OF TERMS AND CONDITIONS"), true, "\(model.id.rawValue) lacks the Apache-2.0 text")
+            }
+            if model.licence == "CC BY 4.0" {
+                XCTAssertEqual(text?.contains("https://creativecommons.org/licenses/by/4.0/"), true)
+                XCTAssertEqual(text?.contains("Changes:"), true)
+            }
+        }
+        let anime = ModelNotice.text(for: ModelCatalog.model(TabletModelID.anime), in: notice) ?? ""
+        XCTAssertTrue(anime.contains("Copyright (c) 2021, Xintao Wang"))
+        XCTAssertTrue(anime.contains("Redistributions in binary form must reproduce the above copyright notice"))
+    }
+    #endif
 }

@@ -1,5 +1,8 @@
 import SwiftUI
 import LocalSRCore
+#if !SKIP && canImport(UIKit)
+import UIKit
+#endif
 
 struct TabletWorkspaceView: View {
     @Environment(\.scenePhase) private var scenePhase
@@ -110,8 +113,24 @@ struct TabletWorkspaceView: View {
             .onChange(of: fullScale) { _, newValue in
                 model.fullScale = newValue
             }
+            .task {
+                // Photos shared to LocalSR from other apps, as on the phone (ContentView.swift).
+                #if SKIP
+                AndroidShareInbox.setOnInputsAvailable {
+                    Task { @MainActor in
+                        await model.importSharedInbox()
+                    }
+                }
+                #endif
+                await model.importSharedInbox()
+            }
             .onChange(of: scenePhase) { _, newPhase in
                 model.isAppInBackground = (newPhase == .background)
+                if newPhase == .active {
+                    Task { @MainActor in
+                        await model.importSharedInbox()
+                    }
+                }
             }
             .onChange(of: model.selection) { oldSelection, newSelection in
                 if oldSelection != newSelection {
@@ -124,6 +143,14 @@ struct TabletWorkspaceView: View {
 
         #if !SKIP
         return base
+            .onOpenURL { url in
+                // The share extension opens localsr://import after writing to the App Group inbox.
+                if url.scheme?.lowercased() == ShareInboxConstants.urlScheme {
+                    Task { @MainActor in
+                        await model.importSharedInbox()
+                    }
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: ProcessInfo.thermalStateDidChangeNotification)) { _ in
                 model.updateThermalState()
             }
@@ -145,6 +172,30 @@ struct TabletWorkspaceView: View {
             .onChange(of: model.setup.task) { _, _ in
                 syncCommandRouter(isThreePane: lastMeasuredThreePane)
             }
+            .onChange(of: model.keyboardPane) { _, _ in
+                syncCommandRouter(isThreePane: lastMeasuredThreePane)
+            }
+            .onChange(of: model.activeTab) { _, _ in
+                syncCommandRouter(isThreePane: lastMeasuredThreePane)
+            }
+            .onChange(of: model.isTextEntryActive) { _, _ in
+                syncCommandRouter(isThreePane: lastMeasuredThreePane)
+            }
+            .onChange(of: isSettingsPresented) { _, _ in
+                syncCommandRouter(isThreePane: lastMeasuredThreePane)
+            }
+            .onChange(of: isModelLibraryPresented) { _, _ in
+                syncCommandRouter(isThreePane: lastMeasuredThreePane)
+            }
+            #if os(iOS)
+            // canPaste is a snapshot; copying in another app changes it without any state change here.
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                syncCommandRouter(isThreePane: lastMeasuredThreePane)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in
+                syncCommandRouter(isThreePane: lastMeasuredThreePane)
+            }
+            #endif
         #else
         return base
         #endif
@@ -433,6 +484,7 @@ struct TabletWorkspaceView: View {
         let isSelected = model.activeTab == tab
         return Button {
             model.activeTab = tab
+            model.keyboardPane = tab
         } label: {
             Text(title)
                 .themeFont(.control, weight: isSelected ? .semibold : .medium)
@@ -495,11 +547,13 @@ struct TabletWorkspaceView: View {
     }
 
     private func pasteFromClipboard() {
-        let batch = TabletPlatform.pasteImagesFromClipboard()
-        if batch.inputs.isEmpty && !batch.hasVideo && !batch.hasUnreadable {
-            model.showTransientStatus("LocalSR can't open this file.")
-        } else {
-            model.importBatch(batch)
+        Task { @MainActor in
+            let batch = await TabletPlatform.pasteImagesFromClipboard()
+            if batch.inputs.isEmpty && !batch.hasVideo && !batch.hasUnreadable {
+                model.showTransientStatus("LocalSR can't open this file.")
+            } else {
+                model.importBatch(batch)
+            }
         }
     }
 
@@ -568,12 +622,14 @@ struct TabletWorkspaceView: View {
         router.canStartSelected = !model.isBatchRunning && !model.isLoadingInputs && model.laneValidationError == nil && (!waiting.isEmpty && (model.hasRunnableSelectedItem || waiting.count > 0))
         router.canStartAll = !model.isBatchRunning && !model.isLoadingInputs && model.laneValidationError == nil && !waiting.isEmpty
         router.isBatchRunning = model.isBatchRunning
+        // Bare keys (arrows, Delete, Home, End, M) are menu commands on iPadOS: they stay off while a
+        // sheet or text field is up, and Delete only acts on the Media pane.
+        let bareKeysAllowed = !model.isTextEntryActive && !isSettingsPresented && !isModelLibraryPresented
+        router.bareKeysAllowed = bareKeysAllowed
         router.hasSelection = !model.queueItems.isEmpty || !model.results.isEmpty
-        if let q = model.selectedQueueItem, q.status != .running {
-            router.canRemoveSelected = true
-        } else {
-            router.canRemoveSelected = false
-        }
+        router.canRemoveSelected = bareKeysAllowed
+            && model.keyboardTargetPane(isThreePane: isThreePane) == .media
+            && model.canRemoveSelectedQueueItem
         router.hasViewerPhoto = model.selectedQueueItem != nil || model.selectedResultItem != nil
         router.hasCompareResult = model.selectedResultItem != nil
         if let res = model.selectedResultItem {
@@ -666,33 +722,45 @@ struct TabletWorkspaceView: View {
         case "settings":
             isSettingsPresented = true
             return true
-        case "prevPhoto":
-            model.selectPreviousPhoto()
-            return true
-        case "nextPhoto":
-            model.selectNextPhoto()
-            return true
+        // Bare keys: handled only when they do something here, so arrows and D-pad still move the
+        // focus otherwise; never while a text field or sheet is up.
+        case "prevPhoto", "nextPhoto":
+            if bareKeysBlocked || model.keyboardTargetPane(isThreePane: isThreePane) == .enhance {
+                return false
+            }
+            let before = model.selection
+            if action == "prevPhoto" {
+                model.selectPreviousPhoto()
+            } else {
+                model.selectNextPhoto()
+            }
+            return model.selection != before
         case "removePhoto":
+            // Delete removes the selected photo only while the Media pane has the keyboard.
+            if bareKeysBlocked || model.keyboardTargetPane(isThreePane: isThreePane) != .media || !model.canRemoveSelectedQueueItem {
+                return false
+            }
             model.removeSelectedQueueItem()
             return true
-        case "dividerLeft":
-            model.nudgeDivider(delta: -0.05)
-            return true
-        case "dividerRight":
-            model.nudgeDivider(delta: 0.05)
-            return true
-        case "dividerStart":
-            model.moveDivider(to: 0.0)
-            return true
-        case "dividerEnd":
-            model.moveDivider(to: 1.0)
-            return true
-        case "toggleOriginal":
-            model.toggleCompareOriginal()
+        case "dividerLeft", "dividerRight", "dividerStart", "dividerEnd", "toggleOriginal":
+            if bareKeysBlocked || model.keyboardTargetPane(isThreePane: isThreePane) != .viewer || model.selectedResultItem == nil {
+                return false
+            }
+            switch action {
+            case "dividerLeft": model.nudgeDivider(delta: -0.05)
+            case "dividerRight": model.nudgeDivider(delta: 0.05)
+            case "dividerStart": model.moveDivider(to: 0.0)
+            case "dividerEnd": model.moveDivider(to: 1.0)
+            default: model.toggleCompareOriginal()
+            }
             return true
         default:
             return false
         }
+    }
+
+    private var bareKeysBlocked: Bool {
+        model.isTextEntryActive || isSettingsPresented || isModelLibraryPresented
     }
     #endif
 }

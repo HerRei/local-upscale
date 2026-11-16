@@ -6,6 +6,7 @@ struct ModelLibraryView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var selectedModelID: TabletModelID
+    @State private var noticeText: String = ""
 
     init(initialModel: TabletModelID) {
         _selectedModelID = State(initialValue: initialModel)
@@ -94,6 +95,11 @@ struct ModelLibraryView: View {
         #if !SKIP
         .presentationSizing(.page)
         #endif
+        .onAppear {
+            if noticeText.isEmpty {
+                noticeText = PlatformSupport.loadNoticeText()
+            }
+        }
     }
 
     private var libraryList: some View {
@@ -225,6 +231,8 @@ struct ModelLibraryView: View {
                     detailRow("Author", value: desc.author)
                     detailRule
                     sourceRow(desc.sourceURL)
+                    detailRule
+                    licenceTextRow(desc)
                 }
                 .padding(.horizontal, Theme.Spacing.md)
                 .background(
@@ -305,6 +313,30 @@ struct ModelLibraryView: View {
         .padding(.vertical, 10.0)
     }
 
+    /// The model's notice (author, source, licence, changes) from NOTICE.txt, plus the shared licence text.
+    private func licenceTextRow(_ desc: ModelDescriptor) -> some View {
+        NavigationLink {
+            ModelLicenceTextView(
+                title: desc.fullName,
+                text: ModelNotice.text(for: desc, in: noticeText) ?? "Licence text unavailable."
+            )
+        } label: {
+            HStack(spacing: Theme.Spacing.sm) {
+                Text("Licence Text")
+                    .themeFont(.meta)
+                    .foregroundStyle(Theme.text)
+                Spacer(minLength: 8.0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11.0, weight: .semibold))
+                    .foregroundStyle(Theme.tertiary)
+            }
+            .padding(.vertical, 10.0)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("tabletLibraryLicenceLink")
+    }
+
     private func sourceDisplayText(_ raw: String) -> String {
         raw.replacingOccurrences(of: "https://", with: "")
     }
@@ -313,5 +345,30 @@ struct ModelLibraryView: View {
         Rectangle()
             .fill(Theme.border)
             .frame(height: 1.0)
+    }
+}
+
+private struct ModelLicenceTextView: View {
+    let title: String
+    let text: String
+
+    var body: some View {
+        ScrollView {
+            Text(text)
+                .font(.footnote)
+                .monospaced()
+                .foregroundStyle(Theme.text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(Theme.Spacing.panePadding)
+                #if !SKIP
+                .textSelection(.enabled)
+                #endif
+                .accessibilityIdentifier("tabletLibraryLicenceText")
+        }
+        .background(Theme.panel)
+        .navigationTitle(title)
+        #if !SKIP && os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
     }
 }
