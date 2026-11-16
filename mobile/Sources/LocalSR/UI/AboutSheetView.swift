@@ -138,6 +138,12 @@ struct AboutSheetView: View {
                         LicencesView(noticeText: noticeText)
                     }
                     .accessibilityIdentifier("aboutLicencesLink")
+
+                    // Required by App Store guideline 5.1.1: the privacy policy, reachable from inside the app.
+                    if let privacyURL = URL(string: "https://herrei.github.io/localsr/privacy/") {
+                        Link("Privacy Policy", destination: privacyURL)
+                            .accessibilityIdentifier("aboutPrivacyLink")
+                    }
                 }
             }
             #if os(iOS)
