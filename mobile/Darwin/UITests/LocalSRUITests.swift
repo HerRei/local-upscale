@@ -40,6 +40,9 @@ final class LocalSRUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["homeEmptyLabel"].waitForExistence(timeout: 5))
         saveShot("ios_home_empty_\(suffix).png", app: app)
+        app.swipeUp()
+        saveShot("ios_home_empty_scrolled_\(suffix).png", app: app)
+        app.swipeDown()
 
         // Open Settings sheet via Home gear button, verify toggle & facts, then push Licences
         let settingsButton = app.buttons["settingsButton"]
