@@ -9,15 +9,18 @@ struct AboutSheetView: View {
     @AppStorage("shareStartsImmediately") private var shareStartsImmediately: Bool = true
 
     @State private var noticeText = ""
+    @State private var isShowingFullScaleInfo = false
     @State private var versionText = ""
 
     private var upscalingFooterText: String {
-        let base = "Photos over 3 MP are upscaled 2\u{00D7} by default. Full 4\u{00D7} gives up to 192 MP, takes longer to save and needs more memory."
+        let base = "Photos over 3 MP get 2\u{00D7} by default. Full 4\u{00D7} takes longer to save and needs more memory."
         if !appModel.isFullScaleAvailable {
             return "\(base) Not available on this device."
         }
         return base
     }
+
+    private let fullScaleInfoText = "Full 4\u{00D7} enlarges photos up to 12 MP four times, to at most 16128 \u{00D7} 12096 (195 MP).\n\nLarger photos, like 48 MP shots, are reduced to 12 MP first, so they come out at 2\u{00D7}, also 195 MP. A true 4\u{00D7} of 48 MP would be 780 MP: more memory than this device gives an app, and a file most apps can't open."
 
     var body: some View {
         NavigationStack {
@@ -29,7 +32,24 @@ struct AboutSheetView: View {
                 } header: {
                     Text("Upscaling")
                 } footer: {
-                    Text(upscalingFooterText)
+                    VStack(alignment: .leading, spacing: 6.0) {
+                        Text(upscalingFooterText)
+                        Button("Why 195 MP?") {
+                            isShowingFullScaleInfo = true
+                        }
+                        .font(.footnote)
+                        .accessibilityIdentifier("fullScaleInfoButton")
+                        #if !SKIP
+                        .popover(isPresented: $isShowingFullScaleInfo) {
+                            Text(fullScaleInfoText)
+                                .font(.footnote)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(width: 300.0, alignment: .leading)
+                                .padding(16.0)
+                                .presentationCompactAdaptation(.popover)
+                        }
+                        #endif
+                    }
                 }
 
                 Section {
@@ -83,7 +103,7 @@ struct AboutSheetView: View {
                     factRow(
                         symbol: "arrow.up.left.and.arrow.down.right",
                         title: "Up to 4\u{00D7} larger",
-                        detail: "Small photos get 4\u{00D7}, photos over 3 MP get 2\u{00D7} of the full original (or 4\u{00D7} with Full 4\u{00D7})."
+                        detail: "Up to 3 MP: 4\u{00D7}. Up to 12 MP: 2\u{00D7}, or 4\u{00D7} with Full 4\u{00D7}. Larger photos are reduced to 12 MP first."
                     )
                     #if SKIP
                     factRow(
@@ -142,6 +162,13 @@ struct AboutSheetView: View {
                 }
                 #endif
             }
+            #if SKIP
+            .alert("Full 4\u{00D7}", isPresented: $isShowingFullScaleInfo) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(fullScaleInfoText)
+            }
+            #endif
         }
         .onAppear {
             _ = appModel.refreshFullScaleAvailability()
