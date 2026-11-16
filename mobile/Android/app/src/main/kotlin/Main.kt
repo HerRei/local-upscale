@@ -58,7 +58,10 @@ open class MainActivity: AppCompatActivity {
         super.onCreate(savedInstanceState)
         logger.info("starting activity")
         UIApplication.launch(this)
-        AndroidShareInbox.handleIntent(this, intent)
+        // A restored Activity (after process death) or a relaunch from Recents gets the original SEND intent again.
+        if (ShareLaunchPolicy.isNewShare(hasSavedState = savedInstanceState != null, intentFlags = intent?.flags ?: 0)) {
+            AndroidShareInbox.handleIntent(this, intent)
+        }
         enableEdgeToEdge()
 
         setContent {
