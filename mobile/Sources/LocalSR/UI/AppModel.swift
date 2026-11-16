@@ -609,10 +609,28 @@ public class AppModel {
         rerunProgress = 0.0
         rerunErrorMessage = nil
         preparingModel = model
+        #if SKIP
+        // A rerun is a one-photo batch: the foreground service (and its wake lock) keeps it going when the user
+        // leaves the app or the screen turns off. If Android refuses it, run anyway: the user is in the app.
+        var holdsForegroundService = false
+        #endif
         defer {
             isRerunningResultID = nil
             preparingModel = nil
+            #if SKIP
+            if holdsForegroundService {
+                serviceBox.endBatch()
+            }
+            #endif
         }
+        #if SKIP
+        do {
+            try await serviceBox.beginBatch()
+            holdsForegroundService = true
+        } catch {
+            holdsForegroundService = false
+        }
+        #endif
 
         do {
             let verdict = try await serviceBox.prepare(model: model)
