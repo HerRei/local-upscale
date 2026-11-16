@@ -1,1 +1,1 @@
-app,key,words
+upscale,upscaler,enhance,sharpen,photo,resolution,jpeg,blurry,pixelated,offline,private,zoom,4x

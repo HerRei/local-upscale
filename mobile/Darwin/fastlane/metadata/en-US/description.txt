@@ -1,1 +1,20 @@
-A great new app built with Skip!
+LocalSR makes small, blurry and blocky photos sharper, right on your iPhone.
+
+Pick a photo, or share it to LocalSR from Photos or any other app. LocalSR enlarges it up to 4× and cleans up blur and JPEG blocks, then saves a new photo next to the original. Your original isn't changed.
+
+EVERYTHING STAYS ON YOUR PHONE
+• No account, no sign-up, no uploads. LocalSR works offline.
+• The models run on the Neural Engine. On first use, LocalSR checks which chip of your iPhone gives correct results fastest and uses it.
+• A 12 MP photo takes about 2 seconds on an iPhone 17 Pro and about 6 seconds on an iPhone 11 Pro.
+
+WHAT YOU GET
+• Up to 3 MP: 4×. Up to 12 MP: 2×, or 4× with Full 4× in Settings. Larger photos are reduced to 12 MP first.
+• Two models: Best for the most detail, Fast for many photos at once.
+• Compare before and after with a slider and zoom in to check the details.
+• "Upscale with LocalSR" in the share sheet, for one photo or many.
+• Keeps the date and location of the original.
+
+HONEST ABOUT WHAT IT DOES
+LocalSR sharpens what is in the photo. It doesn't invent details, and text that can't be read in the photo stays unreadable.
+
+Free and open source (MIT): github.com/HerRei/local-upscale

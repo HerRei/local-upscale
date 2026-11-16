@@ -1,1 +1,1 @@
-LocalSR
+LocalSR: Photo Upscaler
