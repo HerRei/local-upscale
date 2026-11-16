@@ -31,9 +31,10 @@ final class TabletCoreTests: XCTestCase {
         XCTAssertEqual(sizes[2].height, 6000)
         XCTAssertEqual(decoded.stageSizes(width: 4000, height: 3000, fullScale: true)[2].width, 16000)
         XCTAssertEqual(decoded.stageSizes(width: 1200, height: 900)[2].height, 3600)
+        // A 48 MP input is prescaled to the 12.19 MP cap (4032 x 3024, the iPhone photo size) before 2x.
         let capped = decoded.stageSizes(width: 8000, height: 6000)
-        XCTAssertEqual(capped[0].width, 4000)
-        XCTAssertEqual(capped[2].width, 8000)
+        XCTAssertEqual(capped[0].width, 4032)
+        XCTAssertEqual(capped[2].width, 8064)
         let restore = Plan(stages: [.jpegFix, .noiseFix]).stageSizes(width: 8000, height: 6000)
         XCTAssertEqual(restore[1].width, 8000)
         XCTAssertEqual(restore[1].height, 6000)
