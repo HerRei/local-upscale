@@ -20,11 +20,11 @@ final class PixelBuffer: @unchecked Sendable {
     }
     deinit { pointer.deallocate() }
 
-    func makeCGImage(colorSpace: CGColorSpace) -> CGImage? {
+    func makeCGImage(colorSpace: CGColorSpace, alphaInfo: CGImageAlphaInfo = .noneSkipLast) -> CGImage? {
         guard let provider = CGDataProvider(dataInfo: Unmanaged.passRetained(self).toOpaque(), data: pointer, size: byteCount, releaseData: { info, _, _ in
             if let info { Unmanaged<PixelBuffer>.fromOpaque(info).release() }
         }) else { return nil }
-        return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4, space: colorSpace, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue), provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+        return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4, space: colorSpace, bitmapInfo: CGBitmapInfo(rawValue: alphaInfo.rawValue), provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
     }
 }
 
@@ -54,6 +54,9 @@ struct DecodedImage {
     let originalHeight: Int
     let properties: [String: Any]
     let gainMap: GainMapSource?
+    /// Transparency of the source at the decoded size (one byte per pixel), nil when the source is opaque.
+    /// The colours in `pixels` are then un-premultiplied, so the upscaled image can take this mask back.
+    var alpha: Data? = nil
 }
 
 enum ImageIOCodec {
@@ -108,12 +111,40 @@ enum ImageIOCodec {
             throw CodecError.decodeFailed
         }
         context.interpolationQuality = .high
-        // Opaque black first so that transparent sources (PNG) do not leave garbage under the skip channel.
-        context.setFillColor(CGColor(colorSpace: colorSpace, components: [0, 0, 0, 1]) ?? CGColor(gray: 0, alpha: 1))
-        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
-        context.draw(thumb, in: CGRect(x: 0, y: 0, width: width, height: height))
+        let rect = CGRect(x: 0, y: 0, width: width, height: height)
+        var alpha: Data? = nil
+        switch thumb.alphaInfo {
+        case .first, .last, .premultipliedFirst, .premultipliedLast:
+            // Transparent source (PNG, HEIC with alpha): draw premultiplied, keep the mask, un-premultiply the colours.
+            guard let alphaContext = CGContext(data: buffer.pointer, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+                throw CodecError.decodeFailed
+            }
+            alphaContext.interpolationQuality = .high
+            alphaContext.clear(rect)
+            alphaContext.draw(thumb, in: rect)
+            var mask = Data(count: width * height)
+            var opaque = true
+            mask.withUnsafeMutableBytes { raw in
+                let dst = raw.bindMemory(to: UInt8.self)
+                for i in 0..<(width * height) {
+                    let a = buffer.pointer[i * 4 + 3]
+                    dst[i] = a
+                    if a != 255 { opaque = false }
+                }
+            }
+            if !opaque {
+                var vb = vImage_Buffer(data: buffer.pointer, height: vImagePixelCount(height), width: vImagePixelCount(width), rowBytes: width * 4)
+                vImageUnpremultiplyData_RGBA8888(&vb, &vb, vImage_Flags(kvImageNoFlags))
+                alpha = mask
+            }
+        default:
+            // Opaque black first so that nothing undefined is left under the skip channel.
+            context.setFillColor(CGColor(colorSpace: colorSpace, components: [0, 0, 0, 1]) ?? CGColor(gray: 0, alpha: 1))
+            context.fill(rect)
+            context.draw(thumb, in: rect)
+        }
 
-        return DecodedImage(pixels: buffer, colorSpace: colorSpace, orientation: orientation, originalWidth: uprightW, originalHeight: uprightH, properties: props, gainMap: readGainMap(source))
+        return DecodedImage(pixels: buffer, colorSpace: colorSpace, orientation: orientation, originalWidth: uprightW, originalHeight: uprightH, properties: props, gainMap: readGainMap(source), alpha: alpha)
     }
 
     /// The file's own RGB colour space (Display P3 for iPhone photos). Grey/CMYK/extended-range/HDR spaces
@@ -214,8 +245,8 @@ enum ImageIOCodec {
         try encodeOutput(pixels: pixels, colorSpace: colorSpace, decoded: decoded, format: .heic, to: url, quality: quality)
     }
 
-    static func encodeOutput(pixels: PixelBuffer, colorSpace: CGColorSpace, decoded: DecodedImage, format: TabletOutputFormat, to url: URL, quality: Double = 0.9) throws -> (hasGainMap: Bool, note: String) {
-        guard let image = pixels.makeCGImage(colorSpace: colorSpace) else { throw CodecError.encodeFailed("CGImage") }
+    static func encodeOutput(pixels: PixelBuffer, colorSpace: CGColorSpace, decoded: DecodedImage, format: TabletOutputFormat, to url: URL, quality: Double = 0.9, alphaInfo: CGImageAlphaInfo = .noneSkipLast) throws -> (hasGainMap: Bool, note: String) {
+        guard let image = pixels.makeCGImage(colorSpace: colorSpace, alphaInfo: alphaInfo) else { throw CodecError.encodeFailed("CGImage") }
         let utType: UTType
         switch format {
         case .heic: utType = .heic
@@ -262,18 +293,43 @@ enum ImageIOCodec {
         return (gainOutput != nil, note)
     }
 
+    /// Scales the source's transparency mask to the output size and writes it into the output's fourth byte,
+    /// so the output can be encoded with `alphaInfo: .last`.
+    static func applyAlpha(_ mask: Data, width: Int, height: Int, to output: PixelBuffer) throws {
+        let gray = CGColorSpaceCreateDeviceGray()
+        guard let provider = CGDataProvider(data: mask as CFData),
+              let maskImage = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: width, space: gray, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue), provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent),
+              let ctx = CGContext(data: nil, width: output.width, height: output.height, bitsPerComponent: 8, bytesPerRow: output.width, space: gray, bitmapInfo: CGImageAlphaInfo.none.rawValue),
+              let scaled = ctx.data else { throw CodecError.encodeFailed("transparency") }
+        ctx.interpolationQuality = .high
+        ctx.draw(maskImage, in: CGRect(x: 0, y: 0, width: output.width, height: output.height))
+        let src = scaled.bindMemory(to: UInt8.self, capacity: output.width * output.height)
+        let rowBytes = ctx.bytesPerRow
+        for y in 0..<output.height {
+            for x in 0..<output.width {
+                output.pointer[(y * output.width + x) * 4 + 3] = src[y * rowBytes + x]
+            }
+        }
+    }
+
     /// JPEG preview with the long side <= `maxSide` (the whole image when it is already smaller).
-    static func writePreviewJPEG(pixels: PixelBuffer, colorSpace: CGColorSpace, to url: URL, maxSide: Int = 4096, quality: Double = 0.85) throws -> (width: Int, height: Int) {
-        guard let full = pixels.makeCGImage(colorSpace: colorSpace) else { throw CodecError.encodeFailed("CGImage") }
+    static func writePreviewJPEG(pixels: PixelBuffer, colorSpace: CGColorSpace, to url: URL, maxSide: Int = 4096, quality: Double = 0.85, alphaInfo: CGImageAlphaInfo = .noneSkipLast) throws -> (width: Int, height: Int) {
+        guard let full = pixels.makeCGImage(colorSpace: colorSpace, alphaInfo: alphaInfo) else { throw CodecError.encodeFailed("CGImage") }
         let longSide = max(pixels.width, pixels.height)
         var image = full
         var pw = pixels.width, ph = pixels.height
-        if longSide > maxSide {
+        let transparent = alphaInfo != .noneSkipLast && alphaInfo != .none
+        if longSide > maxSide || transparent {
             let scale = Double(maxSide) / Double(longSide)
             pw = max(1, Int((Double(pixels.width) * scale).rounded()))
             ph = max(1, Int((Double(pixels.height) * scale).rounded()))
             guard let ctx = CGContext(data: nil, width: pw, height: ph, bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { throw CodecError.encodeFailed("preview context") }
             ctx.interpolationQuality = .high
+            if transparent {
+                // JPEG has no transparency: show transparent areas as white in the compare view.
+                ctx.setFillColor(CGColor(gray: 1, alpha: 1))
+                ctx.fill(CGRect(x: 0, y: 0, width: pw, height: ph))
+            }
             ctx.draw(full, in: CGRect(x: 0, y: 0, width: pw, height: ph))
             guard let scaled = ctx.makeImage() else { throw CodecError.encodeFailed("preview image") }
             image = scaled

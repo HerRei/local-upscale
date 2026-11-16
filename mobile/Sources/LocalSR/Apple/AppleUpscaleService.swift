@@ -164,7 +164,8 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
 
     public func saveToLibrary(_ result: UpscaleResult) async throws {
         let stem = result.inputURL.deletingPathExtension().lastPathComponent
-        try await PhotoLibrarySaver.save(fileURL: result.outputURL, originalFilename: "\(stem)-LocalSR-\(result.outputScale)x.heic")
+        // No scale in the name: for large photos the scale against the original is not the model's 2x.
+        try await PhotoLibrarySaver.save(fileURL: result.outputURL, originalFilename: "\(stem)-LocalSR.\(result.outputURL.pathExtension)")
     }
 
     // MARK: Preparation
@@ -263,11 +264,17 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
         if cancel.isCancelled { throw ServiceError.cancelled }
 
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let outputURL = directory.appendingPathComponent("output.heic")
+        // A transparent source keeps its transparency: the mask is scaled up and the result is saved as PNG.
+        var alphaInfo = CGImageAlphaInfo.noneSkipLast
+        if let mask = decoded.alpha {
+            try ImageIOCodec.applyAlpha(mask, width: source.width, height: source.height, to: output)
+            alphaInfo = .last
+        }
+        let outputURL = directory.appendingPathComponent(decoded.alpha == nil ? "output.heic" : "output.png")
         let previewURL = directory.appendingPathComponent("preview.jpg")
-        let encoded = try ImageIOCodec.encodeHEIC(pixels: output, colorSpace: decoded.colorSpace, decoded: decoded, to: outputURL)
+        let encoded = try ImageIOCodec.encodeOutput(pixels: output, colorSpace: decoded.colorSpace, decoded: decoded, format: decoded.alpha == nil ? .heic : .png, to: outputURL, alphaInfo: alphaInfo)
         if cancel.isCancelled { throw ServiceError.cancelled }
-        _ = try ImageIOCodec.writePreviewJPEG(pixels: output, colorSpace: decoded.colorSpace, to: previewURL)
+        _ = try ImageIOCodec.writePreviewJPEG(pixels: output, colorSpace: decoded.colorSpace, to: previewURL, alphaInfo: alphaInfo)
         if cancel.isCancelled { throw ServiceError.cancelled }
         let tDone = Date()
         progress.report(1)

@@ -1,5 +1,6 @@
 #if !SKIP
 import XCTest
+import UniformTypeIdentifiers
 import Foundation
 import ImageIO
 import CoreGraphics
@@ -469,6 +470,39 @@ final class AppleUpscaleTests: XCTestCase {
         // The service still works afterwards.
         let again = try await service.upscale(input: input, model: .fast) { _ in }
         XCTAssertEqual(again.width, 6400)
+    }
+
+    /// A transparent PNG (sticker, logo) keeps its transparency: PNG out, the transparent half stays transparent,
+    /// and the visible half keeps its colour (it used to be composited onto black).
+    func testTransparentPNGKeepsAlpha() async throws {
+        let (service, _, _) = makeService()
+        let dir = tempDirectory("alpha")
+        let w = 96, h = 64
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.clear(CGRect(x: 0, y: 0, width: w, height: h))
+        ctx.setFillColor(CGColor(colorSpace: space, components: [0.9, 0.5, 0.1, 1])!)
+        ctx.fill(CGRect(x: w / 2, y: 0, width: w / 2, height: h))   // right half opaque orange, left half transparent
+        let input = dir.appendingPathComponent("sticker.png")
+        let dest = CGImageDestinationCreateWithURL(input as CFURL, UTType.png.identifier as CFString, 1, nil)!
+        CGImageDestinationAddImage(dest, ctx.makeImage()!, nil)
+        XCTAssertTrue(CGImageDestinationFinalize(dest))
+
+        let result = try await service.upscale(input: input, model: .fast) { _ in }
+        XCTAssertEqual(result.outputURL.pathExtension, "png")
+        XCTAssertEqual(result.width, w * 4)
+        let source = CGImageSourceCreateWithURL(result.outputURL as CFURL, nil)!
+        let image = CGImageSourceCreateImageAtIndex(source, 0, nil)!
+        XCTAssertTrue([.last, .premultipliedLast, .first, .premultipliedFirst].contains(image.alphaInfo), "output has no alpha: \(image.alphaInfo.rawValue)")
+        var px = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        px.withUnsafeMutableBytes { raw in
+            let c = CGContext(data: raw.baseAddress, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            c.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        }
+        func at(_ x: Int, _ y: Int) -> (r: UInt8, a: UInt8) { let i = (y * image.width + x) * 4; return (px[i], px[i + 3]) }
+        XCTAssertEqual(at(image.width / 8, image.height / 2).a, 0, "transparent half lost its transparency")
+        XCTAssertEqual(at(image.width * 7 / 8, image.height / 2).a, 255)
+        XCTAssertGreaterThan(at(image.width * 7 / 8, image.height / 2).r, 180, "visible half went dark")
     }
 
     func testUnreadableInputThrows() async throws {
