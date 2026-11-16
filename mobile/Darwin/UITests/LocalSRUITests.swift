@@ -178,6 +178,7 @@ final class LocalSRUITests: XCTestCase {
         saveShot("ios_result_relaunch_saved_\(suffix).png", app: app)
         app.navigationBars.buttons.firstMatch.tap()
         XCTAssertTrue(chooseButton.waitForExistence(timeout: 5))
+        saveShot("ios_home_saved_\(suffix).png", app: app)
 
         // Pick 5 photos for a multi-photo batch (creates 6 total results!)
         chooseButton.tap()
