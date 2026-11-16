@@ -52,6 +52,20 @@ public final class BatchBackgroundTask: @unchecked Sendable {
         lock.withLock { grantedGPU }
     }
 
+    /// Set to true together with `com.apple.developer.background-tasks.continued-processing.gpu` in
+    /// Darwin/Entitlements.plist once Apple has provisioned it. Without the entitlement a GPU request
+    /// can't be granted, so the app neither asks for it nor tells the user the GPU keeps working.
+    public static let isGPUEntitlementProvisioned = false
+
+    /// True when a batch may ask iPadOS to keep the GPU in the background (M3 and newer, with the entitlement).
+    public static var canRequestBackgroundGPU: Bool {
+        guard isGPUEntitlementProvisioned else { return false }
+        if #available(iOS 26.0, *) {
+            return BGTaskScheduler.supportedResources.contains(.gpu)
+        }
+        return false
+    }
+
     private init() {}
 
     /// Registers the launch handler. Idempotent; call at launch.
@@ -88,7 +102,7 @@ public final class BatchBackgroundTask: @unchecked Sendable {
 
         let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: title, subtitle: subtitle)
         request.strategy = .fail            // the user just tapped: run now or not at all
-        let gpuRequested = requestGPU && BGTaskScheduler.supportedResources.contains(.gpu)
+        let gpuRequested = requestGPU && Self.canRequestBackgroundGPU
         request.requiredResources = gpuRequested ? [.gpu] : []
         do {
             try BGTaskScheduler.shared.submit(request)
@@ -175,6 +189,8 @@ public final class BatchBackgroundTask: @unchecked Sendable {
     public static let identifierPattern = "com.hermesreisner.localsr.batch.*"
     public static let taskIdentifier = "com.hermesreisner.localsr.batch.run"
     public var hasGrantedGPU: Bool { false }
+    public static let isGPUEntitlementProvisioned = false
+    public static var canRequestBackgroundGPU: Bool { false }
     private init() {}
     public static func register() {}
     @discardableResult

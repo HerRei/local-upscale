@@ -299,10 +299,10 @@ Registered with `.commands` so they also fill the iPad menu bar (File, View, Que
 | Keys | Action |
 |---|---|
 | ⌘O / ⇧⌘O | Choose Files… / Choose from Photos… |
-| ⌘V | Paste a photo into the queue |
+| ⇧⌘V | Paste photos into the queue (⌘V stays the system Paste for text fields; Ctrl+V on Android) |
 | ⌘↩ / ⇧⌘↩ | Upscale Selected / Start All |
 | ⌘. | Cancel Queue |
-| ↑ ↓ / ⌫ | Previous or next photo / remove it from the queue |
+| ↑ ↓ / ⌫ | Previous or next photo / remove it from the queue (⌫ only while the Media pane was used last) |
 | ⌘1 ⌘2 ⌘3 | Media, Viewer, Enhance in tab mode; in three-pane mode ⌘1 toggles the Media pane |
 | ⌘0 / ⌥⌘0 / ⌘+ / ⌘− | Fit / 1:1 / zoom in / zoom out |
 | ← → | Move the divider 5 %; Home and End jump to the ends (desktop) |
@@ -350,9 +350,9 @@ Fix JPEG · IMG_0412.jpg                          line 2: meta, secondary, middl
 
 Video (queue, scrubber, frame compare, audio) is out of scope for v1. Photo batches continue in the background:
 
-- A Start button submits a `BGContinuedProcessingTaskRequest` with the title "Upscaling 5 Photos", the subtitle "2 of 5 · about 50 s left" and live progress. It asks for the GPU only when `BGTaskScheduler.supportedResources` offers it (M3 and newer).
-- On an iPad without background GPU (the A12Z) the Chips section shows, before the first start, one `meta` line under the GPU row: "In the background this iPad works on the Neural Engine only." When the app leaves the foreground the GPU row goes to "Paused…" and photos that need a GPU-only model wait.
-- If the system ends the task, finished photos are kept and the status bar shows "Paused by iPadOS" with "Resume", also on the next launch.
+- A Start button submits a `BGContinuedProcessingTaskRequest` with the title "Upscaling 5 Photos", the subtitle "2 of 5 · about 50 s left" and live progress. It asks for the GPU only when `BGTaskScheduler.supportedResources` offers it (M3 and newer) and the app has the `com.apple.developer.background-tasks.continued-processing.gpu` entitlement (`BatchBackgroundTask.isGPUEntitlementProvisioned`, false until Apple provisions it). The Chips texts follow what the batch was actually granted.
+- On an iPad without background GPU (every iPad until the entitlement is provisioned) the Chips section shows, before the first start, one `meta` line under the GPU row: "In the background this iPad works on the Neural Engine only. Steps that need the GPU run on the slower CPU until you return." When the app leaves the foreground the GPU row goes to "Paused…" and a GPU step that moved to the CPU says "Upscaling on the CPU · IMG_0412.jpg".
+- If the system ends the task, finished photos are kept and the status bar shows "Paused by iPadOS" with "Resume", also on the next launch. If the app was quit or crashed during a batch, the next launch shows "Batch Interrupted" / "3 of 5 done before LocalSR closed." with "Resume".
 
 ## 6. States
 
@@ -395,6 +395,8 @@ Video (queue, scrubber, frame compare, audio) is out of scope for v1. Photo batc
 - Back: in tab mode from Media or Enhance to Viewer, then out of the app; sheets close first.
 - Native behind `#if SKIP`: drag and drop (`Modifier.dragAndDropTarget`), a long-press bottom sheet in place of context menus, hover fills. Shortcuts use Ctrl for ⌘.
 - Long batches keep the phone's foreground-service notification with the status bar's title and progress.
+- No device check yet: the engine takes the first accelerator that loads (NPU or GPU, then CPU) and has no PSNR, NaN or constant-output check and no GPU watchdog like the phone's `DeviceChecker.kt`. Until one exists the status bar says "Getting Ready…" / "Loading Best…", never "Checking…", and plan rows show the chip that ran.
+- Picked, pasted and folder photos are copied into `cacheDir/LocalSRTabletInputs`, so Resume, Enhance Again and the compare view keep working after the content:// grant ends.
 
 ## 8. Acceptance checklist
 

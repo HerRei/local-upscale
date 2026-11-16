@@ -17,6 +17,7 @@ import kotlinx.coroutines.withContext
 import local.srcore.ModelCatalog
 import local.srcore.Plan
 import local.srcore.SizePolicy
+import local.srcore.TabletMemoryPolicy
 import java.io.File
 import java.util.UUID
 import java.util.Timer
@@ -92,6 +93,50 @@ private class TabletInterpreter private constructor(
                 throw t
             }
         }
+    }
+}
+
+/** Readable text of a Kotlin exception that reached Swift (Skip wraps it in ErrorException). */
+object AndroidTabletErrors {
+    fun message(error: Any?): String? {
+        var throwable = error as? Throwable
+        if (throwable is skip.lib.ErrorException && throwable.cause != null) throwable = throwable.cause
+        val text = throwable?.message?.trim()
+        return if (text.isNullOrEmpty()) null else text
+    }
+}
+
+/** A picked or pasted photo copied into the app's cache, so it stays readable after the URI grant ends. */
+class AndroidTabletCopiedInput(val path: String, val displayName: String)
+
+class AndroidTabletCopyResult(val inputs: List<AndroidTabletCopiedInput>, val hasUnreadable: Boolean)
+
+/** Copies content:// photos into cacheDir/LocalSRTabletInputs, like the iPad and the window drop do. */
+object AndroidTabletInputs {
+    suspend fun copy(context: Context, uriStrings: List<String>, fallbackPrefix: String): AndroidTabletCopyResult = withContext(Dispatchers.IO) {
+        val app = context.applicationContext
+        val dir = File(app.cacheDir, "LocalSRTabletInputs").apply { mkdirs() }
+        val copied = ArrayList<AndroidTabletCopiedInput>()
+        var unreadable = false
+        for ((index, uriString) in uriStrings.withIndex()) {
+            val uri = Uri.parse(uriString)
+            val name = AndroidUISupport.displayNameForUri(app, uriString, "$fallbackPrefix ${index + 1}.jpg")
+            val ext = name.substringAfterLast('.', "jpg").ifEmpty { "jpg" }
+            val dest = File(dir, "${UUID.randomUUID()}.$ext")
+            val ok = try {
+                val stream = if (uri.scheme == "file") uri.path?.let { File(it).inputStream() } else app.contentResolver.openInputStream(uri)
+                stream?.use { input -> dest.outputStream().use { out -> input.copyTo(out) }; true } ?: false
+            } catch (_: Throwable) {
+                false
+            }
+            if (ok && dest.length() > 0L && AndroidUISupport.imagePixelSize(app, dest.toURI().toString()) != null) {
+                copied.add(AndroidTabletCopiedInput(dest.absolutePath, name))
+            } else {
+                dest.delete()
+                unreadable = true
+            }
+        }
+        AndroidTabletCopyResult(copied, unreadable)
     }
 }
 
@@ -203,6 +248,13 @@ class AndroidTabletEngine(context: Context) {
         try {
             checkCancelled()
             val upscale = plan.stages.any { ModelCatalog.model(it).scale == 4 }
+            if (!upscale) {
+                // Restore keeps the size: refuse photos whose three full-size bitmaps would not fit.
+                val dims = AndroidUISupport.imagePixelSize(context, inputUri)
+                if (dims != null && TabletMemoryPolicy.isRestoreInputTooLarge(width = dims[0], height = dims[1])) {
+                    throw UpscaleException("This photo is too large to restore. Restore works on photos up to ${TabletMemoryPolicy.maxRestorePixels / 1_000_000} MP.")
+                }
+            }
             pixels = AndroidCodec.decode(context, uri, preserveDimensions = !upscale)
             val policy = SizePolicy.target(width = pixels.width, height = pixels.height)
             val canUpgradeFull = fullScale && policy.outputScale == 2 && memory.canUseFullScale(inputUri)

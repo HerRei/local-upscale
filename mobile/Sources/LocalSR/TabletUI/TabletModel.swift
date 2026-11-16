@@ -18,6 +18,14 @@ private final class TabletServiceBox: @unchecked Sendable {
         service.availableLanes
     }
 
+    var runsDeviceCheck: Bool {
+        service.runsDeviceCheck
+    }
+
+    func skip(photoID: String) {
+        service.skip(photoID: photoID)
+    }
+
     func updateForegroundNotification(title: String, detail: String?, fraction: Double) {
         service.updateForegroundNotification(title: title, detail: detail, fraction: fraction)
     }
@@ -105,6 +113,8 @@ struct TabletQueueItem: Identifiable, Equatable, Sendable {
     var outputWidth: Int?
     var outputHeight: Int?
     var errorMessage: String?
+    /// The task of the photo's last run, for "Couldn't upscale" vs "Couldn't restore".
+    var lastTask: TabletTaskKind
 
     var dimensionsText: String? {
         guard let w = pixelWidth, let h = pixelHeight, w > 0, h > 0 else { return nil }
@@ -188,11 +198,6 @@ struct TabletResultItem: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
-enum TabletBatchCompletion: Equatable, Sendable {
-    case complete(count: Int, seconds: Double)
-    case partialFailure(succeeded: Int, total: Int, failed: Int)
-}
-
 private struct TabletPersistedQueueItem: Codable, Sendable {
     let id: String
     let inputURL: URL
@@ -227,6 +232,10 @@ final class TabletModel {
     var selection: TabletSelection? = nil
     var activeTab: TabletWorkspaceTab = .viewer
     var isMediaPaneCollapsed: Bool = false
+    /// The pane the user last worked in, for the bare keys (arrows, Delete, M) in three-pane mode.
+    var keyboardPane: TabletWorkspaceTab = .media
+    /// A recipe name is being typed: the bare keys are not shortcuts then.
+    var isTextEntryActive: Bool = false
 
     // Preserved viewer & enhance state across layout breakpoints
     var zoomScale: CGFloat = 1.0
@@ -263,8 +272,12 @@ final class TabletModel {
     var storageErrorMessage: String? = nil
 
     var isPausedBySystem: Bool = false
+    /// The paused batch was found at launch without a system pause: the app was quit or crashed mid-batch.
+    var wasBatchInterrupted: Bool = false
     var pausedCompletedCount: Int = 0
     var pausedTotalCount: Int = 0
+    /// True only while a batch runs whose background task actually got the GPU from iPadOS.
+    var isBackgroundGPUGranted: Bool = false
 
     var viewerActualZoom: CGFloat = 1.0
     var viewerMinZoom: CGFloat = 1.0
@@ -298,6 +311,15 @@ final class TabletModel {
     @ObservationIgnored private var itemChipsUsed: [String: [String]] = [:]
     @ObservationIgnored private var batchStageRecords: [String: [Int: (model: TabletModelID, lane: ModelLane)]] = [:]
     @ObservationIgnored private var batchItemCompletedIDs: Set<String> = []
+    /// Photos removed while their batch ran: the service skips them and late events for them are dropped.
+    @ObservationIgnored private var removedDuringBatchIDs: Set<String> = []
+    /// Inputs of removed photos; deleted when the batch ends so the service never reads a missing file.
+    @ObservationIgnored private var deferredInputDeletions: [URL] = []
+    /// Results waiting for "Save Automatically", saved one after another.
+    @ObservationIgnored private var autoSaveQueue: [TabletResultItem] = []
+    @ObservationIgnored private var isDrainingAutoSave: Bool = false
+    @ObservationIgnored private var isImportingShareInbox: Bool = false
+    @ObservationIgnored private var pendingShareInboxRecheck: Bool = false
 
     private static let recipesDefaultsKey = "tabletRecipesJSON"
     private static let setupDefaultsKey = "tabletEnhanceSetupJSON"
@@ -378,8 +400,20 @@ final class TabletModel {
         setup.headingSummary(matchingRecipe: matchingRecipe)
     }
 
+    /// This build and device can keep the GPU in the background (iOS: entitlement + M3 or newer).
     var supportsBackgroundGPU: Bool {
         serviceBox.supportsBackgroundGPU
+    }
+
+    /// The GPU lane stops while the app is in the background during this batch.
+    var isGPUPausedInBackground: Bool {
+        guard isBatchRunning && isAppInBackground && !TabletPlatform.isAndroid else { return false }
+        return !isBackgroundGPUGranted
+    }
+
+    /// False on Android tablets: the engine takes the first chip that loads, without a check.
+    var runsDeviceCheck: Bool {
+        serviceBox.runsDeviceCheck
     }
 
     var checkingModelDisplayName: String {
@@ -395,7 +429,8 @@ final class TabletModel {
             verdicts: verdictsByModel,
             failedModels: failedModels,
             laneChoice: laneChoice,
-            deviceNoun: TabletPlatform.deviceNoun
+            deviceNoun: TabletPlatform.deviceNoun,
+            bundledModels: bundledModels
         )
     }
 
@@ -405,6 +440,10 @@ final class TabletModel {
 
     var runnableQueueCount: Int {
         queueItems.filter { $0.status == .waiting }.count
+    }
+
+    var failedQueueCount: Int {
+        queueItems.filter { $0.status == .failed }.count
     }
 
     var hasRunnableSelectedItem: Bool {
@@ -457,7 +496,7 @@ final class TabletModel {
         for id in ids {
             if let item = queueItems.first(where: { $0.id == id }) {
                 switch item.status {
-                case .waiting: sum += 0.0
+                case .waiting: sum += batchItemCompletedIDs.contains(id) ? 1.0 : 0.0
                 case .running: sum += min(max(0.0, item.progress), 1.0)
                 case .done, .failed: sum += 1.0
                 }
@@ -469,7 +508,7 @@ final class TabletModel {
     }
 
     var nextQueuedItemName: String? {
-        for id in batchTargetIDs {
+        for id in batchTargetIDs where !batchItemCompletedIDs.contains(id) {
             if let item = queueItems.first(where: { $0.id == id }), item.status == .waiting {
                 return item.displayName
             }
@@ -478,13 +517,15 @@ final class TabletModel {
     }
 
     func queuePosition(for id: String) -> Int? {
+        // A photo whose result was deleted mid-run is waiting again but won't run in this batch.
         var pos = 1
         for tid in batchTargetIDs {
             guard let item = queueItems.first(where: { $0.id == tid }) else { continue }
+            let willRun = item.status == .waiting && !batchItemCompletedIDs.contains(tid)
             if item.id == id {
-                return item.status == .waiting ? pos : nil
+                return willRun ? pos : nil
             }
-            if item.status == .waiting {
+            if willRun {
                 pos += 1
             }
         }
@@ -568,6 +609,7 @@ final class TabletModel {
     // MARK: - Enhance Setup Actions
 
     func setTask(_ task: TabletTaskKind) {
+        keyboardPane = .enhance
         guard !isBatchRunning else { return }
         setup.task = task
         if task == .restore && !setup.fixNoise && !setup.fixJpeg {
@@ -577,6 +619,7 @@ final class TabletModel {
     }
 
     func setContent(_ content: TabletContentKind) {
+        keyboardPane = .enhance
         guard !isBatchRunning else { return }
         setup.content = content
         let presets = availablePresets(for: content)
@@ -591,6 +634,7 @@ final class TabletModel {
     }
 
     func selectPreset(_ preset: TabletQualityPreset) {
+        keyboardPane = .enhance
         guard !isBatchRunning, let modelID = preset.modelID, isModelAvailable(modelID) else { return }
         setup.task = .upscale
         setup.content = preset.contentKind
@@ -628,6 +672,7 @@ final class TabletModel {
     }
 
     func toggleFixNoise() {
+        keyboardPane = .enhance
         guard !isBatchRunning else { return }
         if setup.task == .restore && setup.fixNoise && !setup.fixJpeg {
             return
@@ -637,6 +682,7 @@ final class TabletModel {
     }
 
     func toggleFixJpeg() {
+        keyboardPane = .enhance
         guard !isBatchRunning else { return }
         if setup.task == .restore && setup.fixJpeg && !setup.fixNoise {
             return
@@ -646,18 +692,21 @@ final class TabletModel {
     }
 
     func setOutputSize(_ size: TabletOutputSizeChoice) {
+        keyboardPane = .enhance
         guard !isBatchRunning else { return }
         setup.outputSize = size
         persistSetup()
     }
 
     func setOutputFormat(_ format: TabletOutputFormat) {
+        keyboardPane = .enhance
         guard !isBatchRunning else { return }
         setup.outputFormat = TabletPlatform.isAndroid && format == .heic ? .jpeg : format
         persistSetup()
     }
 
     func updateLaneChoice(_ choice: TabletLaneChoice) {
+        keyboardPane = .enhance
         guard !isBatchRunning else { return }
         laneChoice = choice
         applyLaneChoiceToService()
@@ -703,6 +752,7 @@ final class TabletModel {
     }
 
     func applyRecipe(_ recipe: TabletRecipe) {
+        keyboardPane = .enhance
         guard !isBatchRunning else { return }
         setup = setup.applying(recipe: recipe)
         if TabletPlatform.isAndroid && setup.outputFormat == .heic {
@@ -726,7 +776,9 @@ final class TabletModel {
 
     // MARK: - Importing
 
-    func importBatch(_ batch: TabletImportBatch) {
+    /// Adds the photos to the queue and returns their queue IDs.
+    @discardableResult
+    func importBatch(_ batch: TabletImportBatch) -> [String] {
         if batch.hasVideo {
             showTransientStatus("Videos aren't supported yet.")
         } else if batch.hasUnreadable && batch.inputs.isEmpty {
@@ -735,7 +787,7 @@ final class TabletModel {
             showTransientStatus("LocalSR can't open this file.")
         }
 
-        guard !batch.inputs.isEmpty else { return }
+        guard !batch.inputs.isEmpty else { return [] }
         batchLastRunSummary = nil
         if isPausedBySystem {
             clearPausedBatchState()
@@ -763,7 +815,8 @@ final class TabletModel {
                 resultID: nil,
                 outputWidth: nil,
                 outputHeight: nil,
-                errorMessage: nil
+                errorMessage: nil,
+                lastTask: setup.task
             )
             newlyAdded.append(item)
         }
@@ -788,6 +841,80 @@ final class TabletModel {
                 }
             }
         }
+        return newlyAdded.map(\.id)
+    }
+
+    // MARK: - Share Menu
+
+    /// Imports photos shared to LocalSR: on iPad the share extension's App Group inbox, on Android the
+    /// copies the share intent made. With "Start Right Away" they start at once, or join a running batch.
+    func importSharedInbox() async {
+        if isImportingShareInbox {
+            pendingShareInboxRecheck = true
+            return
+        }
+        isImportingShareInbox = true
+        repeat {
+            pendingShareInboxRecheck = false
+            let imported = await Self.drainShareInbox()
+            if !imported.isEmpty {
+                let ids = importBatch(TabletImportBatch(inputs: imported, hasVideo: false, hasUnreadable: false))
+                if shareStartsImmediately() {
+                    startSharedPhotos(ids: ids)
+                }
+            }
+        } while pendingShareInboxRecheck
+        isImportingShareInbox = false
+    }
+
+    private func shareStartsImmediately() -> Bool {
+        if defaults.object(forKey: "shareStartsImmediately") != nil {
+            return defaults.bool(forKey: "shareStartsImmediately")
+        }
+        return true
+    }
+
+    private func startSharedPhotos(ids: [String]) {
+        guard !ids.isEmpty else { return }
+        if isBatchRunning {
+            var added = 0
+            for id in ids where !batchTargetIDs.contains(id) && !pendingFollowUpIDs.contains(id) {
+                pendingFollowUpIDs.append(id)
+                batchTargetIDs.append(id)
+                added += 1
+            }
+            batchTotalInRun += added
+            return
+        }
+        guard laneValidationError == nil else { return }
+        if let first = ids.first {
+            selection = .queue(first)
+        }
+        runQueueBatch(items: queueItems.filter { ids.contains($0.id) })
+    }
+
+    private static func drainShareInbox() async -> [PickedPhotoInput] {
+        #if SKIP
+        let rawItems = await AndroidShareInbox.awaitAndDrainPendingInputs()
+        var mapped: [PickedPhotoInput] = []
+        for item in rawItems {
+            guard let url = URL(string: item.urlString) else { continue }
+            // Move the copy into the tablet inputs folder, so removing the photo also deletes it.
+            if url.isFileURL, let moved = TabletPlatform.copyFileToInputs(url, preferredName: item.displayName) {
+                try? FileManager.default.removeItem(at: url)
+                mapped.append(moved)
+            } else {
+                mapped.append(PickedPhotoInput(url: url, displayName: item.displayName))
+            }
+        }
+        return mapped
+        #else
+        guard let inbox = ShareInboxImporter.defaultInboxDirectory() else { return [] }
+        let destination = TabletPlatform.tabletInputsDirectory()
+        return await Task.detached(priority: .userInitiated) {
+            ShareInboxImporter.importAll(from: inbox, to: destination)
+        }.value
+        #endif
     }
 
     private var isCurrentSelectionValid: Bool {
@@ -818,7 +945,18 @@ final class TabletModel {
         guard let idx = queueItems.firstIndex(where: { $0.id == id }) else { return }
         if queueItems[idx].status == .running { return }
         let removedURL = queueItems[idx].inputURL
+        let removedStatus = queueItems[idx].status
+        // The running service still holds this photo: tell it to skip the photo, and keep the file
+        // until the batch ends in case a worker is opening it right now.
+        let inRunningBatch = isBatchRunning && (batchTargetIDs.contains(id) || pendingFollowUpIDs.contains(id))
         queueItems.remove(at: idx)
+        if inRunningBatch {
+            serviceBox.skip(photoID: id)
+            removedDuringBatchIDs.insert(id)
+            if removedStatus == .waiting && !batchItemCompletedIDs.contains(id) {
+                batchTotalInRun = max(batchCompletedInRun + batchFailedInRun, batchTotalInRun - 1)
+            }
+        }
         pendingFollowUpIDs.removeAll { $0 == id }
         batchTargetIDs.removeAll { $0 == id }
 
@@ -833,7 +971,14 @@ final class TabletModel {
                 selection = nil
             }
         }
-        deleteInputFileIfUnreferenced(removedURL)
+        if inRunningBatch {
+            deferredInputDeletions.append(removedURL)
+        } else {
+            deleteInputFileIfUnreferenced(removedURL)
+        }
+        if isBatchRunning {
+            persistBatchState(pausedBySystem: pauseRequestedBySystem)
+        }
         if isPausedBySystem && waitingQueueItems.isEmpty {
             clearPausedBatchState()
         }
@@ -990,7 +1135,8 @@ final class TabletModel {
             resultID: nil,
             outputWidth: nil,
             outputHeight: nil,
-            errorMessage: nil
+            errorMessage: nil,
+            lastTask: setup.task
         )
         queueItems.append(item)
         selection = .queue(item.id)
@@ -1053,8 +1199,10 @@ final class TabletModel {
 
         applyLaneChoiceToService()
 
+        let task = setup.task
         for id in ids {
             if let idx = queueItems.firstIndex(where: { $0.id == id }) {
+                queueItems[idx].lastTask = task
                 queueItems[idx].status = .waiting
                 queueItems[idx].progress = 0.0
                 queueItems[idx].stageIndex = 0
@@ -1070,9 +1218,12 @@ final class TabletModel {
         }
 
         isPausedBySystem = false
+        wasBatchInterrupted = false
         pauseRequestedBySystem = false
         pausedCompletedCount = 0
         pausedTotalCount = 0
+        removedDuringBatchIDs = []
+        isBackgroundGPUGranted = false
         isBatchRunning = true
         let allChecked = plan.stages.allSatisfy { verdictsByModel[$0] != nil }
         isCheckingDevice = !allChecked
@@ -1105,6 +1256,7 @@ final class TabletModel {
                 }
             }
         )
+        isBackgroundGPUGranted = BatchBackgroundTask.shared.hasGrantedGPU
         #elseif SKIP
         updateAndroidForegroundNotification()
         #endif
@@ -1242,8 +1394,19 @@ final class TabletModel {
             rec[stage] = (model, lane)
             batchStageRecords[photoID] = rec
 
+        case .failed(let failure):
+            handlePhotoFailure(failure)
+
         case .completed(let result):
             isCheckingDevice = false
+            if removedDuringBatchIDs.contains(result.id) {
+                // Removed while a worker had already started on it: drop the result.
+                let outputDir = result.outputURL.deletingLastPathComponent()
+                if outputDir.deletingLastPathComponent().standardizedFileURL.path == storageDirectory.standardizedFileURL.path {
+                    try? FileManager.default.removeItem(at: outputDir)
+                }
+                return
+            }
             batchItemCompletedIDs.insert(result.id)
             let qIdx = queueItems.firstIndex(where: { $0.id == result.id })
             let displayName = qIdx.map { queueItems[$0].displayName } ?? result.inputURL.lastPathComponent
@@ -1313,13 +1476,32 @@ final class TabletModel {
             #endif
 
             if autoSave {
-                Task { @MainActor in
-                    await autoSaveResult(record)
-                }
+                enqueueAutoSave(record)
             }
         }
     }
 
+    /// One photo failed: only it is marked failed, with its own reason; the batch goes on.
+    private func handlePhotoFailure(_ failure: TabletPhotoFailure) {
+        isCheckingDevice = false
+        if removedDuringBatchIDs.contains(failure.photoID) { return }
+        if failure.isOutOfSpace {
+            storageErrorMessage = "Free up 120 MB and try again."
+        }
+        guard let idx = queueItems.firstIndex(where: { $0.id == failure.photoID }) else { return }
+        queueItems[idx].status = .failed
+        queueItems[idx].errorMessage = failure.message
+        queueItems[idx].progress = 0.0
+        queueItems[idx].stageName = nil
+        queueItems[idx].chipName = nil
+        batchFailedInRun += 1
+        persistBatchState(pausedBySystem: isPausedBySystem || pauseRequestedBySystem)
+        #if SKIP
+        updateAndroidForegroundNotification()
+        #endif
+    }
+
+    /// A batch-level error (device check, missing model, chip setting): it applies to every photo of the batch.
     private func handleBatchRunError(_ error: Error, targetIDs: [String]) {
         isCheckingDevice = false
         if TabletPlatform.isOutOfSpaceError(error) {
@@ -1330,10 +1512,10 @@ final class TabletModel {
         if let schedErr = error as? LaneScheduler.ScheduleError, case .unavailable = schedErr {
             message = laneValidationError?.detail ?? "No chip available for this setup."
         } else {
-            message = error.localizedDescription.isEmpty ? String(describing: error) : error.localizedDescription
+            message = TabletErrorText.message(for: error)
         }
         #else
-        message = error.localizedDescription.isEmpty ? String(describing: error) : error.localizedDescription
+        message = TabletErrorText.message(for: error)
         #endif
         for id in targetIDs {
             if let idx = queueItems.firstIndex(where: { $0.id == id }),
@@ -1348,8 +1530,14 @@ final class TabletModel {
     private func finalizeBatchRun(wasCancelled: Bool, plan: Plan) {
         isBatchRunning = false
         isCheckingDevice = false
+        isBackgroundGPUGranted = false
         laneActivities = [:]
         refreshCatalogState()
+        let deletions = deferredInputDeletions
+        deferredInputDeletions = []
+        for url in deletions {
+            deleteInputFileIfUnreferenced(url)
+        }
 
         if wasCancelled {
             for idx in queueItems.indices where queueItems[idx].status == .running {
@@ -1462,6 +1650,26 @@ final class TabletModel {
     }
 
     // MARK: - Saving
+
+    /// Two photos can finish within one save; each is queued and saved in turn so none is skipped.
+    private func enqueueAutoSave(_ result: TabletResultItem) {
+        autoSaveQueue.append(result)
+        guard !isDrainingAutoSave else { return }
+        isDrainingAutoSave = true
+        Task { @MainActor in
+            while !self.autoSaveQueue.isEmpty {
+                // A manual Save or Save All runs first; this one waits for it instead of being dropped.
+                while self.isSaving || self.isSavingAll {
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                }
+                let next = self.autoSaveQueue.removeFirst()
+                if self.results.contains(where: { $0.id == next.id }) && !self.savedResultIDs.contains(next.id) {
+                    await self.autoSaveResult(next)
+                }
+            }
+            self.isDrainingAutoSave = false
+        }
+    }
 
     private func autoSaveResult(_ result: TabletResultItem) async {
         if saveDestination == .folder, let folderURL = saveFolderURL {
@@ -1817,6 +2025,7 @@ final class TabletModel {
 
     func clearPausedBatchState() {
         isPausedBySystem = false
+        wasBatchInterrupted = false
         pausedCompletedCount = 0
         pausedTotalCount = 0
         clearPersistedBatchFile()
@@ -1849,7 +2058,8 @@ final class TabletModel {
                 resultID: nil,
                 outputWidth: nil,
                 outputHeight: nil,
-                errorMessage: nil
+                errorMessage: nil,
+                lastTask: state.setup.task
             ))
         }
         guard !restored.isEmpty else {
@@ -1862,6 +2072,8 @@ final class TabletModel {
         }
         queueItems.append(contentsOf: restored)
         isPausedBySystem = true
+        // Without a system pause on record the app was quit or crashed during the batch.
+        wasBatchInterrupted = !state.pausedBySystem
         pausedCompletedCount = state.completedInRun
         pausedTotalCount = max(state.totalInRun, state.completedInRun + restored.count)
         if selection == nil, let first = restored.first {
@@ -1925,10 +2137,19 @@ final class TabletModel {
         }
     }
 
-    func removeSelectedQueueItem() {
+    /// The pane the bare keys act on: the visible one in tab mode, the last one used in three-pane mode.
+    func keyboardTargetPane(isThreePane: Bool) -> TabletWorkspaceTab {
+        isThreePane ? keyboardPane : activeTab
+    }
+
+    var canRemoveSelectedQueueItem: Bool {
         guard case .queue(let id) = selection,
-              let item = queueItems.first(where: { $0.id == id }),
-              item.status != .running else { return }
+              let item = queueItems.first(where: { $0.id == id }) else { return false }
+        return item.status != .running
+    }
+
+    func removeSelectedQueueItem() {
+        guard canRemoveSelectedQueueItem, case .queue(let id) = selection else { return }
         removeQueueItem(id: id)
     }
 

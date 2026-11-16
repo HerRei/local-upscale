@@ -47,6 +47,10 @@ SPAN, PULSE, and ESRGAN use a 384×384 fixed input; RealPLKSR and FBCNN use 256�
 
 FBCNN uses its own estimated quality factor, matching Spandrel’s standard image-only inference. There is no externally adjustable QF input; a user-selectable QF would require a separately traced interface and checks. The model returns the restored image only.
 
+## Release builds and licences
+
+`Models/ios-tablet` and `Models/android-tablet` are git-ignored. A Release build fails when one of the eight model files is missing: the Xcode build phase "Check tablet models (Release)" and the Gradle task `checkTabletModels` (before `preReleaseBuild`) name the missing files and point here. Debug builds skip the check (Xcode may still stop at Copy Bundle Resources when the folder doesn't exist at all); a model missing at runtime shows "Model Not Included" instead of a file error. The licence notice of every bundled model is in `tools/NOTICE-third-party.txt`, which `export_models.py` appends to `Models/NOTICE.txt` (the in-app Licences screen and the Model Library's "Licence Text").
+
 ## Failures and regeneration
 
 The single SCUNet Core ML attempt failed in coremltools 9.0: `ValueError: Op "attn_mask.1_internal_tensor_assign_1" (op_type: torch_tensor_assign) Input x="attn_mask.1" expects tensor or scalar of dtype from type domain ['fp16', 'fp32', 'int32'] but got tensor[32,32,8,8,8,8,bool]`. SCUNet is excluded. All eight listed models converted to LiteRT and passed the CPU probe.

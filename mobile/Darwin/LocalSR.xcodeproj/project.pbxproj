@@ -211,6 +211,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 499CD4412AC5B799001AE8D8 /* Build configuration list for PBXNativeTarget "LocalSR App" */;
 			buildPhases = (
+				4A60000A2FD000000000D001 /* Check tablet models (Release) */,
 				499CD43A2AC5B799001AE8D8 /* Sources */,
 				499CD43C2AC5B799001AE8D8 /* Frameworks */,
 				499CD43E2AC5B799001AE8D8 /* Resources */,
@@ -353,6 +354,25 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		4A60000A2FD000000000D001 /* Check tablet models (Release) */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Check tablet models (Release)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = "/bin/sh -e";
+			shellScript = "if [ \"${CONFIGURATION}\" != \"Release\" ]; then\n  exit 0\nfi\nDIR=\"${SRCROOT}/../Models/ios-tablet\"\nMISSING=\"\"\nfor MODEL in fast best nomos_realplksr denoise_realplksr fbcnn anime_esrgan nomos_span span48; do\n  if [ ! -d \"${DIR}/${MODEL}.mlmodelc\" ] || [ -z \"$(ls -A \"${DIR}/${MODEL}.mlmodelc\" 2>/dev/null)\" ]; then\n    MISSING=\"${MISSING} ${MODEL}.mlmodelc\"\n  fi\ndone\nif [ -n \"${MISSING}\" ]; then\n  echo \"error: mobile/Models/ios-tablet is missing or incomplete (missing:${MISSING}). A Release build must include the tablet models; see mobile/tools/TABLET-MODELS.md to convert them.\"\n  exit 1\nfi\n";
+		};
 		499CD4452AC5B869001AE8D8 /* Run skip gradle */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;

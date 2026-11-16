@@ -16,6 +16,8 @@ public final class TabletCommandRouter {
     var isBatchRunning: Bool = false
     var hasSelection: Bool = false
     var canRemoveSelected: Bool = false
+    /// False while a sheet or a text field is up, so arrows, Delete, Home, End and M act there instead.
+    var bareKeysAllowed: Bool = true
     var hasViewerPhoto: Bool = false
     var hasCompareResult: Bool = false
     var canSaveSelected: Bool = false
@@ -71,12 +73,14 @@ public struct LocalSRCommands: Commands {
             }
         }
 
-        CommandGroup(replacing: .pasteboard) {
+        // The system Cut, Copy, Paste and Select All stay (text fields need them); the photo paste is a
+        // command of its own. It can't share Command-V with the system Paste, so it is Shift-Command-V.
+        CommandGroup(after: .pasteboard) {
             if router.isActive {
-                Button("Paste") {
+                Button("Paste Photos") {
                     router.onPaste?()
                 }
-                .keyboardShortcut("v", modifiers: .command)
+                .keyboardShortcut("v", modifiers: [.command, .shift])
                 .disabled(!router.canPaste)
             }
         }
@@ -170,31 +174,31 @@ public struct LocalSRCommands: Commands {
                     router.onDividerLeft?()
                 }
                 .keyboardShortcut(.leftArrow, modifiers: [])
-                .disabled(!router.hasCompareResult)
+                .disabled(!router.hasCompareResult || !router.bareKeysAllowed)
 
                 Button("Move Divider Right") {
                     router.onDividerRight?()
                 }
                 .keyboardShortcut(.rightArrow, modifiers: [])
-                .disabled(!router.hasCompareResult)
+                .disabled(!router.hasCompareResult || !router.bareKeysAllowed)
 
                 Button("Show Enhanced") {
                     router.onDividerStart?()
                 }
                 .keyboardShortcut(.home, modifiers: [])
-                .disabled(!router.hasCompareResult)
+                .disabled(!router.hasCompareResult || !router.bareKeysAllowed)
 
                 Button("Show Original") {
                     router.onDividerEnd?()
                 }
                 .keyboardShortcut(.end, modifiers: [])
-                .disabled(!router.hasCompareResult)
+                .disabled(!router.hasCompareResult || !router.bareKeysAllowed)
 
                 Button("Compare Original") {
                     router.onToggleOriginal?()
                 }
                 .keyboardShortcut("m", modifiers: [])
-                .disabled(!router.hasCompareResult)
+                .disabled(!router.hasCompareResult || !router.bareKeysAllowed)
             }
         }
 
@@ -224,13 +228,13 @@ public struct LocalSRCommands: Commands {
                     router.onPreviousPhoto?()
                 }
                 .keyboardShortcut(.upArrow, modifiers: [])
-                .disabled(!router.hasSelection)
+                .disabled(!router.hasSelection || !router.bareKeysAllowed)
 
                 Button("Next Photo") {
                     router.onNextPhoto?()
                 }
                 .keyboardShortcut(.downArrow, modifiers: [])
-                .disabled(!router.hasSelection)
+                .disabled(!router.hasSelection || !router.bareKeysAllowed)
 
                 Button("Remove from Queue") {
                     router.onRemoveSelected?()

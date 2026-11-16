@@ -214,20 +214,28 @@ enum TabletPlatform {
     }
     #endif
 
-    @MainActor
-    static func pasteImagesFromClipboard() -> TabletImportBatch {
-        #if SKIP
-        let context = ProcessInfo.processInfo.androidContext
-        let uris = AndroidUISupport.pasteImageUriStrings(context)
+    #if SKIP
+    /// Picked, pasted and folder photos are copied into the cache, as on the iPad: a content:// grant
+    /// can end with the process or the next clipboard change, and Resume and Enhance Again need the file.
+    static func importBatch(from copied: AndroidTabletCopyResult) -> TabletImportBatch {
         var inputs: [PickedPhotoInput] = []
-        for i in 0..<uris.size {
-            let uriStr = uris[i]
-            if let url = URL(string: uriStr) {
-                let name = AndroidUISupport.displayNameForUri(context, uriStr, "Pasted photo \(i + 1)")
-                inputs.append(PickedPhotoInput(url: url, displayName: name))
-            }
+        for i in 0..<copied.inputs.size {
+            let item = copied.inputs[i]
+            inputs.append(PickedPhotoInput(url: URL(fileURLWithPath: item.path), displayName: item.displayName))
         }
-        return TabletImportBatch(inputs: inputs, hasVideo: false, hasUnreadable: inputs.isEmpty)
+        return TabletImportBatch(inputs: inputs, hasVideo: false, hasUnreadable: copied.hasUnreadable)
+    }
+    #endif
+
+    @MainActor
+    static func pasteImagesFromClipboard() async -> TabletImportBatch {
+        #if SKIP
+        let uris = AndroidUISupport.pasteImageUriStrings(ProcessInfo.processInfo.androidContext)
+        if uris.isEmpty() {
+            return TabletImportBatch(inputs: [], hasVideo: false, hasUnreadable: true)
+        }
+        let copied = await AndroidTabletInputs.copy(ProcessInfo.processInfo.androidContext, uris, "Pasted photo")
+        return importBatch(from: copied)
         #elseif os(iOS)
         let pb = UIPasteboard.general
         var inputs: [PickedPhotoInput] = []
@@ -299,17 +307,14 @@ struct TabletPhotoPickerHost: View {
                     pickerBox.launch = action
                 },
                 onPicked: { uris in
-                    let androidContext = ProcessInfo.processInfo.androidContext
-                    var inputs: [PickedPhotoInput] = []
-                    for i in 0..<uris.size {
-                        let uriStr = uris[i]
-                        if let url = URL(string: uriStr) {
-                            let name = AndroidUISupport.displayNameForUri(androidContext, uriStr, "Photo \(i + 1)")
-                            inputs.append(PickedPhotoInput(url: url, displayName: name))
+                    if !uris.isEmpty() {
+                        onLoadingChanged(true)
+                        Task { @MainActor in
+                            let copied = await AndroidTabletInputs.copy(ProcessInfo.processInfo.androidContext, uris, "Photo")
+                            let batch = TabletPlatform.importBatch(from: copied)
+                            onLoadingChanged(false)
+                            onImported(batch)
                         }
-                    }
-                    if !inputs.isEmpty {
-                        onImported(TabletImportBatch(inputs: inputs, hasVideo: false, hasUnreadable: false))
                     }
                 },
                 modifier: ctx.modifier
@@ -413,17 +418,13 @@ struct TabletFileImporterHost: View {
                 AndroidFilePickerHost(
                     onReady: { action in filesBox.launch = action },
                     onPicked: { uris in
-                        let context = ProcessInfo.processInfo.androidContext
-                        var inputs: [PickedPhotoInput] = []
-                        for i in 0..<uris.size {
-                            let uriStr = uris[i]
-                            if let url = URL(string: uriStr) {
-                                let name = AndroidUISupport.displayNameForUri(context, uriStr, "File \(i + 1)")
-                                inputs.append(PickedPhotoInput(url: url, displayName: name))
+                        if !uris.isEmpty() {
+                            onLoadingChanged(true)
+                            Task { @MainActor in
+                                let copied = await AndroidTabletInputs.copy(ProcessInfo.processInfo.androidContext, uris, "File")
+                                onLoadingChanged(false)
+                                onImported(TabletPlatform.importBatch(from: copied))
                             }
-                        }
-                        if !inputs.isEmpty {
-                            onImported(TabletImportBatch(inputs: inputs, hasVideo: false, hasUnreadable: false))
                         }
                     },
                     modifier: ctx.modifier
@@ -435,17 +436,15 @@ struct TabletFileImporterHost: View {
                 AndroidFolderPickerHost(
                     onReady: { action in folderBox.launch = action },
                     onPickedTree: { treeUri in
-                        let context = ProcessInfo.processInfo.androidContext
-                        let uris = AndroidUISupport.collectImagesInTree(context, treeUri)
-                        var inputs: [PickedPhotoInput] = []
-                        for i in 0..<uris.size {
-                            let uriStr = uris[i]
-                            if let url = URL(string: uriStr) {
-                                let name = AndroidUISupport.displayNameForUri(context, uriStr, "File \(i + 1)")
-                                inputs.append(PickedPhotoInput(url: url, displayName: name))
-                            }
+                        onLoadingChanged(true)
+                        Task { @MainActor in
+                            let context = ProcessInfo.processInfo.androidContext
+                            let uris = AndroidUISupport.collectImagesInTree(context, treeUri)
+                            let copied = await AndroidTabletInputs.copy(context, uris, "File")
+                            let batch = TabletPlatform.importBatch(from: copied)
+                            onLoadingChanged(false)
+                            onImported(TabletImportBatch(inputs: batch.inputs, hasVideo: false, hasUnreadable: batch.hasUnreadable || batch.inputs.isEmpty))
                         }
-                        onImported(TabletImportBatch(inputs: inputs, hasVideo: false, hasUnreadable: inputs.isEmpty))
                     },
                     modifier: ctx.modifier
                 )

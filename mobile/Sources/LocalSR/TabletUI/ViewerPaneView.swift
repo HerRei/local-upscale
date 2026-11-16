@@ -457,8 +457,8 @@ struct ViewerPaneView: View {
                         offset: $bindableModel.panOffset,
                         isFullResolutionActive: $bindableModel.isFullResolutionActive,
                         isDraggingDivider: $isDraggingDivider,
-                        onSingleTap: { bumpZoomHUD() },
-                        onUserInteraction: { bumpZoomHUD() }
+                        onSingleTap: { noteViewerTouched() },
+                        onUserInteraction: { noteViewerTouched() }
                     )
 
                     hudOverlay(
@@ -548,7 +548,7 @@ struct ViewerPaneView: View {
                         useLiquidGlass: true,
                         reduceMotion: reduceMotion,
                         reduceTransparency: reduceTransparency,
-                        onTapChip: { bumpZoomHUD() }
+                        onTapChip: { noteViewerTouched() }
                     )
                     .padding(.horizontal, Theme.Spacing.lg)
                     .padding(.bottom, Theme.Spacing.lg)
@@ -722,7 +722,7 @@ struct ViewerPaneView: View {
                 .font(.system(size: 24.0))
                 .foregroundStyle(Theme.stageText)
 
-            Text("Couldn't upscale this photo.")
+            Text(item.lastTask == .restore ? "Couldn't restore this photo." : "Couldn't upscale this photo.")
                 .themeFont(.paneTitle)
                 .foregroundStyle(Theme.stageText)
 
@@ -779,6 +779,12 @@ struct ViewerPaneView: View {
 
     // MARK: - Helpers
 
+    /// A touch on the stage or its HUD: the bare keys (arrows, Home, End, M) now act on the viewer.
+    private func noteViewerTouched() {
+        model.keyboardPane = .viewer
+        bumpZoomHUD()
+    }
+
     private func bumpZoomHUD() {
         isZoomHUDVisible = true
         scheduleZoomHUDFade()
@@ -802,7 +808,7 @@ struct ViewerPaneView: View {
         fitSize: CGSize,
         viewSize: CGSize
     ) {
-        bumpZoomHUD()
+        noteViewerTouched()
         let clamped = min(max(rawTarget, minZoom), maxZoom)
         let snapped: CGFloat
         if (minZoom >= 1.0 && clamped <= 1.01) || abs(clamped - 1.0) <= 0.015 {

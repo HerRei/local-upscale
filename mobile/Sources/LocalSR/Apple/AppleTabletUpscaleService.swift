@@ -38,6 +38,30 @@ private final class TabletWorkQueue: @unchecked Sendable {
     func take() -> Int? { lock.withLock { guard next < count else { return nil }; defer { next += 1 }; return next } }
 }
 
+/// Memory promised to a Full 4x output that is not allocated yet, so two workers can't both pass the check.
+final class TabletMemoryBudget: @unchecked Sendable {
+    private let lock = NSLock()
+    private var reserved: Double = 0
+    private let available: @Sendable () -> UInt64
+
+    init(available: @escaping @Sendable () -> UInt64 = { AppleUpscaleService.availableMemory() }) {
+        self.available = available
+    }
+
+    /// Reserves `bytes` when the free memory, less what other workers reserved, covers it.
+    func reserve(_ bytes: Double) -> Bool {
+        lock.withLock {
+            guard Double(available()) - reserved >= bytes else { return false }
+            reserved += bytes
+            return true
+        }
+    }
+
+    func release(_ bytes: Double) {
+        lock.withLock { reserved = max(0, reserved - bytes) }
+    }
+}
+
 public final class AppleTabletUpscaleService: TabletUpscaleService, @unchecked Sendable {
     public enum ServiceError: LocalizedError {
         case alreadyRunning, invalidPlan
@@ -63,17 +87,22 @@ public final class AppleTabletUpscaleService: TabletUpscaleService, @unchecked S
     /// Optional injection for testing background restrictions; nil observes the real iOS state.
     private let restriction: (@Sendable () -> Bool)?
     private let backgroundGPUGranted: Bool
+    private let physicalMemory: Int64
+    private let memoryBudget: TabletMemoryBudget
+    /// Photos removed from the queue while their batch runs. Kept until the run that holds them ends.
+    private var skippedIDs: Set<String> = []
 
     public var supportsBackgroundGPU: Bool {
         #if os(iOS)
-        return BGTaskScheduler.supportedResources.contains(.gpu)
+        return BatchBackgroundTask.canRequestBackgroundGPU
         #else
         return true
         #endif
     }
 
     /// Set backgroundGPUGranted only when the continued-processing request actually acquired .gpu.
-    public init(defaults: UserDefaults = .standard, cachesDirectory: URL? = nil, backgroundGPUGranted: Bool = false, gpuRestricted: (@Sendable () -> Bool)? = nil) {
+    /// `physicalMemory` and `availableMemory` exist for tests; nil uses the device's values.
+    public init(defaults: UserDefaults = .standard, cachesDirectory: URL? = nil, backgroundGPUGranted: Bool = false, gpuRestricted: (@Sendable () -> Bool)? = nil, physicalMemory: Int64? = nil, availableMemory: (@Sendable () -> UInt64)? = nil) {
         let (stream, continuation) = AsyncStream<TabletLaneActivity>.makeStream(bufferingPolicy: .bufferingNewest(4))
         laneActivity = stream
         laneContinuation = continuation
@@ -81,9 +110,19 @@ public final class AppleTabletUpscaleService: TabletUpscaleService, @unchecked S
         cacheRoot = (cachesDirectory ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]).appendingPathComponent("LocalSR", isDirectory: true)
         restriction = gpuRestricted
         self.backgroundGPUGranted = backgroundGPUGranted
+        self.physicalMemory = physicalMemory ?? Int64(clamping: ProcessInfo.processInfo.physicalMemory)
+        memoryBudget = availableMemory.map { TabletMemoryBudget(available: $0) } ?? TabletMemoryBudget()
     }
     deinit { laneContinuation.finish() }
     public func cancel() { lock.withLock { cancellation?.cancel() } }
+
+    public func skip(photoID: String) {
+        _ = lock.withLock { skippedIDs.insert(photoID) }
+    }
+
+    private func isSkipped(_ photoID: String) -> Bool {
+        lock.withLock { skippedIDs.contains(photoID) }
+    }
 
     public func cachedVerdict(for model: TabletModelID) -> TabletChipVerdict? {
         guard let v = checker.cachedVerdict(for: model) else { return nil }
@@ -111,6 +150,11 @@ public final class AppleTabletUpscaleService: TabletUpscaleService, @unchecked S
         events: @escaping @Sendable (TabletUpscaleEvent) -> Void
     ) async throws -> [TabletUpscaleResult] {
         guard plan.isValid && inputs.allSatisfy({ ($0.plan ?? plan).isValid }) else { throw ServiceError.invalidPlan }
+        for input in inputs {
+            for model in (input.plan ?? plan).stages where !isModelBundled(model) {
+                throw TabletServiceError.modelNotIncluded(model)
+            }
+        }
         let cancel = CancelFlag()
         let accepted = lock.withLock { () -> Bool in
             if cancellation != nil { return false }
@@ -118,7 +162,8 @@ public final class AppleTabletUpscaleService: TabletUpscaleService, @unchecked S
             return true
         }
         guard accepted else { throw ServiceError.alreadyRunning }
-        defer { lock.withLock { cancellation = nil } }
+        let inputIDs = Set(inputs.map(\.id))
+        defer { lock.withLock { cancellation = nil; skippedIDs.subtract(inputIDs) } }
         return try await withTaskCancellationHandler {
             var verdicts: [TabletModelID: TabletDeviceVerdict] = [:]
             for input in inputs {
@@ -158,13 +203,16 @@ public final class AppleTabletUpscaleService: TabletUpscaleService, @unchecked S
             let selected = laneOverride
             let checked = verdicts
             for (model, verdict) in checked { try scheduler.validate(model: model, verdict: verdict, override: selected) }
+            // One photo at a time on iPads with less than 6 GB, so two large photos can't exhaust memory.
+            let workers = TabletMemoryPolicy.workerCount(physicalMemory: physicalMemory, photoCount: inputs.count)
             return try await withThrowingTaskGroup(of: [(Int, TabletUpscaleResult)].self) { group in
-                for _ in 0..<min(2, inputs.count) {
+                for _ in 0..<workers {
                     group.addTask {
                         var results: [(Int, TabletUpscaleResult)] = []
                         while !cancel.isCancelled, let index = queue.take() {
+                            let input = inputs[index]
+                            if self.isSkipped(input.id) { continue }
                             do {
-                                let input = inputs[index]
                                 let result = try self.process(
                                     input: input,
                                     plan: input.plan ?? plan,
@@ -180,7 +228,18 @@ public final class AppleTabletUpscaleService: TabletUpscaleService, @unchecked S
                                 )
                                 results.append((index, result))
                                 events(.completed(result))
-                            } catch { cancel.cancel(); throw error }
+                            } catch {
+                                if cancel.isCancelled || error is CancellationError {
+                                    cancel.cancel()
+                                    throw CancellationError()
+                                }
+                                // Only this photo failed: report it and go on with the next one.
+                                events(.failed(TabletPhotoFailure(
+                                    photoID: input.id,
+                                    message: TabletErrorText.message(for: error),
+                                    isOutOfSpace: TabletPlatform.isOutOfSpaceError(error)
+                                )))
+                            }
                         }
                         if cancel.isCancelled { throw CancellationError() }
                         return results
@@ -208,12 +267,21 @@ public final class AppleTabletUpscaleService: TabletUpscaleService, @unchecked S
     ) throws -> TabletUpscaleResult {
         let started = Date()
         let directory = cacheRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        var reservedBytes = 0.0
+        defer { if reservedBytes > 0 { memoryBudget.release(reservedBytes) } }
         do {
             let upscale = plan.stages.contains { ModelCatalog.model($0).scale == 4 }
+            if !upscale, let size = ImageIOCodec.uprightPixelSize(url: input.url),
+               TabletMemoryPolicy.isRestoreInputTooLarge(width: size.width, height: size.height) {
+                throw TabletServiceError.restoreTooLarge
+            }
             let decoded = try ImageIOCodec.decode(url: input.url, preserveDimensions: !upscale)
             let policy = SizePolicy.target(width: decoded.originalWidth, height: decoded.originalHeight)
             let needed = Double(decoded.pixels.width) * Double(decoded.pixels.height) * 16 * 4 * 2.5
-            let canUpgradeFull = fullScale && policy.outputScale == 2 && Double(AppleUpscaleService.availableMemory()) >= needed
+            // The reservation makes the check and the allocation one step for both workers.
+            let wantsFull = upscale && targetScale != 2 && fullScale && policy.outputScale == 2
+            let canUpgradeFull = wantsFull && memoryBudget.reserve(needed)
+            if canUpgradeFull { reservedBytes = needed }
             let scale: Int
             let fullScaleFallback: Bool
             if !upscale {

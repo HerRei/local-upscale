@@ -20,7 +20,107 @@ private final class TabletEvents: @unchecked Sendable {
     var lanes: [ModelLane] { lock.withLock { intervals.map { $0.0 } } }
 }
 
+/// Which photos completed or failed, and when each photo's predictions ran.
+private final class TabletOutcomes: @unchecked Sendable {
+    private let lock = NSLock()
+    private var completed: [String] = []
+    private var failed: [(String, String)] = []
+    private var spans: [String: (Double, Double)] = [:]
+    private var seen: Set<String> = []
+    func record(_ event: TabletUpscaleEvent) {
+        lock.withLock {
+            switch event {
+            case .completed(let result): completed.append(result.id); seen.insert(result.id)
+            case .failed(let failure): failed.append((failure.photoID, failure.message)); seen.insert(failure.photoID)
+            case .progress(let id, _, _): seen.insert(id)
+            case let .prediction(id, _, _, _, start, end):
+                seen.insert(id)
+                let old = spans[id] ?? (start, end)
+                spans[id] = (min(old.0, start), max(old.1, end))
+            default: break
+            }
+        }
+    }
+    var completedIDs: Set<String> { lock.withLock { Set(completed) } }
+    var failedIDs: [String] { lock.withLock { failed.map { $0.0 } } }
+    var failureMessages: [String] { lock.withLock { failed.map { $0.1 } } }
+    var seenIDs: Set<String> { lock.withLock { seen } }
+    /// True when two photos had predictions running at the same time.
+    var photosOverlap: Bool {
+        lock.withLock {
+            let list = Array(spans.values)
+            for i in 0..<list.count { for j in (i + 1)..<list.count where list[i].0 < list[j].1 && list[j].0 < list[i].1 { return true } }
+            return false
+        }
+    }
+}
+
 final class AppleTabletServiceTests: XCTestCase {
+    private func makeService(_ name: String, physicalMemory: Int64? = nil) -> (AppleTabletUpscaleService, URL, () -> Void) {
+        let root = Synthetic.tempDirectory(name)
+        let suite = "localsr.tablet.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        let service = AppleTabletUpscaleService(defaults: defaults, cachesDirectory: root, physicalMemory: physicalMemory)
+        return (service, root, {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: root)
+        })
+    }
+
+    /// Finding #3: a broken photo fails alone, with its own reason, and the batch finishes the others.
+    func testOneFailingPhotoFailsOnlyThatPhoto() async throws {
+        let (service, root, cleanup) = makeService("tablet-one-fails")
+        defer { cleanup() }
+        let good = try Synthetic.writePhoto(.init(width: 200, height: 150, type: .jpeg), to: root)
+        let broken = root.appendingPathComponent("broken.jpg")
+        try Data([0xFF, 0xD8, 0xFF, 0x00, 0x01, 0x02, 0x03]).write(to: broken)
+        let outcomes = TabletOutcomes()
+        let inputs = [TabletInput(id: "a", url: good), TabletInput(id: "broken", url: broken), TabletInput(id: "c", url: good)]
+        let results = try await service.run(plan: Plan(stages: [.fast]), inputs: inputs, fullScale: false) { outcomes.record($0) }
+        XCTAssertEqual(Set(results.map(\.id)), ["a", "c"])
+        XCTAssertEqual(outcomes.completedIDs, ["a", "c"])
+        XCTAssertEqual(outcomes.failedIDs, ["broken"])
+        let message = outcomes.failureMessages.first ?? ""
+        XCTAssertFalse(message.isEmpty)
+        XCTAssertFalse(message.contains("error 0"), "The reason must be readable: \(message)")
+    }
+
+    /// Finding #4: a photo removed while its batch runs is skipped, and only for that run.
+    func testSkippedPhotoIsLeftOutOfTheRun() async throws {
+        let (service, root, cleanup) = makeService("tablet-skip")
+        defer { cleanup() }
+        let url = try Synthetic.writePhoto(.init(width: 200, height: 150, type: .jpeg), to: root)
+        service.skip(photoID: "b")
+        let outcomes = TabletOutcomes()
+        let inputs = ["a", "b", "c"].map { TabletInput(id: $0, url: url) }
+        let results = try await service.run(plan: Plan(stages: [.fast]), inputs: inputs, fullScale: false) { outcomes.record($0) }
+        XCTAssertEqual(Set(results.map(\.id)), ["a", "c"])
+        XCTAssertFalse(outcomes.seenIDs.contains("b"))
+        let again = try await service.run(plan: Plan(stages: [.fast]), inputs: [TabletInput(id: "b", url: url)], fullScale: false) { _ in }
+        XCTAssertEqual(again.map(\.id), ["b"])
+    }
+
+    /// Finding #8: iPads with less than 6 GB run one photo at a time.
+    func testLowMemoryIPadRunsOnePhotoAtATime() async throws {
+        let (service, root, cleanup) = makeService("tablet-one-worker", physicalMemory: 3 * 1024 * 1024 * 1024)
+        defer { cleanup() }
+        let url = try Synthetic.writePhoto(.init(width: 400, height: 300, type: .jpeg), to: root)
+        let outcomes = TabletOutcomes()
+        let inputs = (0..<4).map { TabletInput(id: String($0), url: url) }
+        let results = try await service.run(plan: Plan(stages: [.best]), inputs: inputs, fullScale: false) { outcomes.record($0) }
+        XCTAssertEqual(results.count, 4)
+        XCTAssertFalse(outcomes.photosOverlap, "One worker must not run two photos at once")
+    }
+
+    /// Finding #8: the Full 4x memory check and the reservation are one step for both workers.
+    func testFullScaleBudgetAdmitsOneWorkerAtATime() {
+        let budget = TabletMemoryBudget(available: { 1_000 })
+        XCTAssertTrue(budget.reserve(600))
+        XCTAssertFalse(budget.reserve(600), "A second worker must not pass the check the first one used")
+        budget.release(600)
+        XCTAssertTrue(budget.reserve(600))
+    }
+
     func testMixedSixPhotoBatch() async throws {
         let root = Synthetic.tempDirectory("tablet-batch")
         defer { try? FileManager.default.removeItem(at: root) }

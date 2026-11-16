@@ -12,8 +12,16 @@ struct StatusBarView: View {
         TabletLayoutMetrics.forWidth(Double(width)).isCompactStatusBar
     }
 
+    /// Photos Start All would run: waiting and failed ones.
     private var waitingCount: Int {
         model.waitingQueueItems.count
+    }
+
+    /// The last batch's summary while it still describes the queue.
+    private var shownSummary: TabletBatchCompletion? {
+        guard let summary = model.batchLastRunSummary,
+              summary.isShown(failedInQueue: model.failedQueueCount) else { return nil }
+        return summary
     }
 
     private var activeProgress: Double {
@@ -114,7 +122,7 @@ struct StatusBarView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 12.0))
                 .foregroundStyle(Theme.text)
-        } else if let summary = model.batchLastRunSummary, waitingCount == 0 {
+        } else if let summary = shownSummary {
             switch summary {
             case .complete:
                 Circle()
@@ -141,6 +149,9 @@ struct StatusBarView: View {
         }
 
         if model.isPausedBySystem {
+            if model.wasBatchInterrupted {
+                return "Batch Interrupted"
+            }
             return TabletPlatform.isAndroid ? "Paused by Android" : "Paused by iPadOS"
         }
 
@@ -148,7 +159,7 @@ struct StatusBarView: View {
             return laneFailure.title
         }
 
-        if waitingCount == 0, let summary = model.batchLastRunSummary {
+        if let summary = shownSummary {
             switch summary {
             case .complete:
                 return "Complete"
@@ -170,6 +181,10 @@ struct StatusBarView: View {
         }
         if model.isBatchRunning {
             if model.isCheckingDevice {
+                // Android tablets pick a chip without a check; there the wait is the model loading.
+                if !model.runsDeviceCheck {
+                    return "Loading \(model.checkingModelDisplayName)\u{2026}"
+                }
                 return "Checking which chip runs \(model.checkingModelDisplayName) correctly."
             }
             var parts: [String] = []
@@ -186,6 +201,9 @@ struct StatusBarView: View {
         }
 
         if model.isPausedBySystem {
+            if model.wasBatchInterrupted {
+                return "\(model.pausedCompletedCount) of \(model.pausedTotalCount) done before LocalSR closed."
+            }
             return "\(model.pausedCompletedCount) of \(model.pausedTotalCount) done. Nothing is lost."
         }
 
@@ -193,7 +211,7 @@ struct StatusBarView: View {
             return laneFailure.detail
         }
 
-        if waitingCount == 0, let summary = model.batchLastRunSummary {
+        if let summary = shownSummary {
             switch summary {
             case .complete(let count, let seconds):
                 let unit = count == 1 ? "photo" : "photos"
@@ -289,33 +307,19 @@ struct StatusBarView: View {
                     }
                     .disabled(model.isLoadingInputs)
                 }
-            } else if waitingCount == 0, let summary = model.batchLastRunSummary {
+            } else if let summary = shownSummary {
                 switch summary {
                 case .complete:
-                    if model.unsavedResultsCount > 0 {
-                        secondaryButton(
-                            title: model.isSavingAll
-                                ? "Saving \(model.saveAllDone) of \(model.saveAllTotal)\u{2026}"
-                                : "Save All to \(TabletPlatform.libraryName)",
-                            fullWidth: fullWidth,
-                            identifier: "tabletStatusSaveAllButton"
-                        ) {
-                            Task { await model.saveAllResults() }
-                        }
-                        .disabled(model.isSaving || model.isSavingAll)
-                    } else {
-                        secondaryButton(
-                            title: "Saved",
-                            fullWidth: fullWidth,
-                            identifier: "tabletStatusSavedButton"
-                        ) {}
-                        .disabled(true)
+                    saveAllButton(fullWidth: fullWidth)
+                    if waitingCount > 0 {
+                        startButtons(fullWidth: fullWidth)
                     }
 
                 case .partialFailure:
                     secondaryButton(title: "Try Again", fullWidth: fullWidth, identifier: "tabletTryAgainButton") {
                         model.retryFailed(switchToViewer: isTabMode)
                     }
+                    .disabled(model.laneValidationError != nil || model.isLoadingInputs)
                     if model.unsavedResultsCount > 0 {
                         secondaryButton(
                             title: "Save All to \(TabletPlatform.libraryName)",
@@ -327,33 +331,64 @@ struct StatusBarView: View {
                         .disabled(model.isSaving || model.isSavingAll)
                     }
                 }
-            } else if waitingCount == 0 {
-                let startTitle = model.setup.task == .restore ? "Restore Selected" : "Upscale Selected"
-                disabledStartButton(title: startTitle, fullWidth: fullWidth)
-            } else if model.laneValidationError != nil {
-                let title = waitingCount == 1
-                    ? (model.setup.task == .restore ? "Restore Selected" : "Upscale Selected")
-                    : "Start All \(waitingCount)"
-                disabledStartButton(title: title, fullWidth: fullWidth)
-            } else if waitingCount == 1 {
-                let startTitle = model.setup.task == .restore ? "Restore Selected" : "Upscale Selected"
-                primaryStartButton(title: startTitle, fullWidth: fullWidth, identifier: "tabletUpscaleSelectedButton") {
+            } else {
+                startButtons(fullWidth: fullWidth)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func saveAllButton(fullWidth: Bool) -> some View {
+        if model.unsavedResultsCount > 0 {
+            secondaryButton(
+                title: model.isSavingAll
+                    ? "Saving \(model.saveAllDone) of \(model.saveAllTotal)\u{2026}"
+                    : "Save All to \(TabletPlatform.libraryName)",
+                fullWidth: fullWidth,
+                identifier: "tabletStatusSaveAllButton"
+            ) {
+                Task { await model.saveAllResults() }
+            }
+            .disabled(model.isSaving || model.isSavingAll)
+        } else {
+            secondaryButton(
+                title: "Saved",
+                fullWidth: fullWidth,
+                identifier: "tabletStatusSavedButton"
+            ) {}
+            .disabled(true)
+        }
+    }
+
+    /// "Upscale Selected" and "Start All n" for the waiting (and failed) photos.
+    @ViewBuilder
+    private func startButtons(fullWidth: Bool) -> some View {
+        if waitingCount == 0 {
+            let startTitle = model.setup.task == .restore ? "Restore Selected" : "Upscale Selected"
+            disabledStartButton(title: startTitle, fullWidth: fullWidth)
+        } else if model.laneValidationError != nil {
+            let title = waitingCount == 1
+                ? (model.setup.task == .restore ? "Restore Selected" : "Upscale Selected")
+                : "Start All \(waitingCount)"
+            disabledStartButton(title: title, fullWidth: fullWidth)
+        } else if waitingCount == 1 {
+            let startTitle = model.setup.task == .restore ? "Restore Selected" : "Upscale Selected"
+            primaryStartButton(title: startTitle, fullWidth: fullWidth, identifier: "tabletUpscaleSelectedButton") {
+                model.upscaleSelected(switchToViewer: isTabMode)
+            }
+            .disabled(model.isLoadingInputs)
+        } else {
+            if !fullWidth {
+                let selectedTitle = model.setup.task == .restore ? "Restore Selected" : "Upscale Selected"
+                secondaryButton(title: selectedTitle, fullWidth: false, identifier: "tabletUpscaleSelectedButton") {
                     model.upscaleSelected(switchToViewer: isTabMode)
                 }
-                .disabled(model.isLoadingInputs)
-            } else {
-                if !fullWidth {
-                    let selectedTitle = model.setup.task == .restore ? "Restore Selected" : "Upscale Selected"
-                    secondaryButton(title: selectedTitle, fullWidth: false, identifier: "tabletUpscaleSelectedButton") {
-                        model.upscaleSelected(switchToViewer: isTabMode)
-                    }
-                    .disabled(model.isLoadingInputs || !model.hasRunnableSelectedItem)
-                }
-                primaryStartButton(title: "Start All \(waitingCount)", fullWidth: fullWidth, identifier: "tabletStartAllButton") {
-                    model.startAll(switchToViewer: isTabMode)
-                }
-                .disabled(model.isLoadingInputs)
+                .disabled(model.isLoadingInputs || !model.hasRunnableSelectedItem)
             }
+            primaryStartButton(title: "Start All \(waitingCount)", fullWidth: fullWidth, identifier: "tabletStartAllButton") {
+                model.startAll(switchToViewer: isTabMode)
+            }
+            .disabled(model.isLoadingInputs)
         }
     }
 
