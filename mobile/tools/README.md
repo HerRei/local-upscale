@@ -28,7 +28,7 @@ ai-edge-quantizer 0.10.1. The venv is about 1 GB and not part of the deliverable
 | `ios/localsr_{best,fast}.mlmodelc` | Core ML ML Program, iOS17, FP16 compute, FP16 `image` [1,3,384,384] -> FP16 `out` [1,3,1536,1536], compiled with `xcrun coremlcompiler` |
 | `android/localsr_{best,fast}.tflite` | LiteRT, FP16 weights (weight-only FLOAT_CASTING), NHWC float32 [1,384,384,3] -> [1,1536,1536,3] |
 | `probe.png` | deterministic 384x384 RGB probe tile for the on-device check |
-| `NOTICE.txt` | PULSE-48 notice + MIT text, SPAN-28 info |
+| `NOTICE.txt` | PULSE-48 notice + MIT text, SPAN-28 info, then `tools/NOTICE-third-party.txt` (tablet model notices, Apache-2.0 text, IBM Plex); the Licences screen shows this file |
 | `manifest.json` | file names, sha256 (a `.mlmodelc` is hashed as a tree), shapes, layout, source checkpoint sha256, tool versions |
 
 Android path: `litert_torch.to_channel_last_io(model, args=[0], outputs=[0])` -> `litert_torch.convert`

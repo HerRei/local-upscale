@@ -7,7 +7,7 @@
   },
   "notice": {
     "file": "NOTICE.txt",
-    "sha256": "f3eae36a7613962c61192e813e5f8c7f7b00184abb7fb7e17da44b50a624dc3f"
+    "sha256": "ec87585afaca28e32824f7f8b9ee52cccde5fb7434a765476df890721e93582a"
   },
   "tools": {
     "coremltools": "9.0",

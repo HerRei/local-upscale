@@ -314,7 +314,9 @@ def write_notice(dest: Path) -> None:
         f"Licence note: {span['licence_note']}.",
         "",
     ]
-    dest.write_text("\n".join(parts))
+    # Hand-maintained notices (tablet models, Apache-2.0 text, IBM Plex) follow the generated part.
+    third_party = (TOOLS / "NOTICE-third-party.txt").read_text()
+    dest.write_text("\n".join(parts) + "\n" + third_party)
 
 
 def tool_versions() -> dict:
