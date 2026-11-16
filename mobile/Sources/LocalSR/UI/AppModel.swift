@@ -143,7 +143,15 @@ public class AppModel {
     /// The app's one model. Views use this instead of creating their own: on Android the Activity (and its views) can be
     /// recreated while a batch keeps running in the foreground service, and a second model would orphan that batch,
     /// report it as interrupted and overwrite its results.json.
-    public static let shared = AppModel()
+    /// Created on first use, not when the class loads: Skip turns a `static let` into an eager Kotlin field, which
+    /// would build the model (and its engine) as soon as anything touches AppModel, also in unit tests.
+    public static var shared: AppModel {
+        if let existing = sharedInstance { return existing }
+        let created = AppModel()
+        sharedInstance = created
+        return created
+    }
+    private static var sharedInstance: AppModel? = nil
 
     private let serviceBox: ServiceBox
 

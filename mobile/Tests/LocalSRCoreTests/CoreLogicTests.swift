@@ -270,14 +270,14 @@ final class CoreLogicTests: XCTestCase {
         // The NPU is otherwise perfect and much faster, but its load timed out.
         let verdict = DeviceCheck.decide(cpu: cpu, gpu: gpu, npu: meas(tileMs: 1.0, timedOut: true))
         XCTAssertEqual(verdict?.unit, ComputeUnit.gpu)
-        XCTAssertTrue((verdict?.reason ?? "").contains("timed out"))
+        XCTAssertTrue((verdict?.reason ?? "").contains("took too long to load"))
         // A load longer than 15 s counts as a timeout even without the flag; exactly 15 s does not.
         XCTAssertEqual(DeviceCheck.decide(cpu: cpu, gpu: gpu, npu: meas(loadMs: 15001.0, tileMs: 1.0))?.unit, ComputeUnit.gpu)
         XCTAssertEqual(DeviceCheck.decide(cpu: cpu, gpu: gpu, npu: meas(loadMs: 15000.0, tileMs: 1.0))?.unit, ComputeUnit.npu)
         // Timeout and a failing GPU: CPU.
         let noGPU = DeviceCheck.decide(cpu: cpu, gpu: meas(hasNaN: true), npu: meas(timedOut: true))
         XCTAssertEqual(noGPU?.unit, ComputeUnit.cpu)
-        XCTAssertTrue((noGPU?.reason ?? "").contains("timed out"))
+        XCTAssertTrue((noGPU?.reason ?? "").contains("took too long to load"))
     }
 
     func testDeviceCacheKey() {
