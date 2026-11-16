@@ -45,7 +45,11 @@ final class LocalSRUITests: XCTestCase {
         let settingsButton = app.buttons["settingsButton"]
         XCTAssertTrue(settingsButton.waitForExistence(timeout: 4))
         settingsButton.tap()
-        XCTAssertTrue(app.staticTexts["Works offline"].waitForExistence(timeout: 5))
+        // At the largest text sizes and on small screens the device facts start below the fold.
+        let offlineFact = app.staticTexts["Works offline"]
+        for _ in 0..<6 where !offlineFact.waitForExistence(timeout: 2) { app.swipeUp() }
+        XCTAssertTrue(offlineFact.waitForExistence(timeout: 5))
+        for _ in 0..<6 where !app.switches["fullScaleToggle"].waitForExistence(timeout: 1) { app.swipeDown() }
         XCTAssertTrue(app.switches["fullScaleToggle"].waitForExistence(timeout: 4))
         Thread.sleep(forTimeInterval: 0.4)
         saveShot("ios_settings_\(suffix).png", app: app)
@@ -283,7 +287,7 @@ final class LocalSRUITests: XCTestCase {
         XCTAssertTrue(fixture.waitForExistence(timeout: 15), "Detailed fixture missing from picker")
         XCTAssertTrue(fixture.isHittable, "Detailed fixture not visible: \(fixture.label)")
         fixture.tap()
-        let add = app.buttons["Add"]
+        let add = app.buttons.matching(NSPredicate(format: "label == 'Add' OR label == 'Hinzufügen'")).firstMatch
         XCTAssertTrue(add.waitForExistence(timeout: 5))
         add.tap()
         XCTAssertTrue(app.staticTexts["resultSummaryLabel"].waitForExistence(timeout: 180))
@@ -327,7 +331,7 @@ final class LocalSRUITests: XCTestCase {
             grid.swipeUp()
             Thread.sleep(forTimeInterval: 0.4)
         }
-        let basePredicate = "label CONTAINS ',' AND (label CONTAINS[c] 'Photo' OR label CONTAINS[c] 'Image' OR label CONTAINS[c] 'PXG' OR label CONTAINS[c] 'Wallpaper')"
+        let basePredicate = "label CONTAINS ',' AND (label CONTAINS[c] 'Photo' OR label CONTAINS[c] 'Foto' OR label CONTAINS[c] 'Image' OR label CONTAINS[c] 'Bild' OR label CONTAINS[c] 'PXG' OR label CONTAINS[c] 'Wallpaper')"
         let predicateFormat = preferNewest ? basePredicate : "\(basePredicate) AND NOT (label CONTAINS '2099')"
         let candidateImages = app.images.matching(NSPredicate(format: predicateFormat))
         let candidateCells = app.collectionViews.cells.matching(
@@ -358,7 +362,7 @@ final class LocalSRUITests: XCTestCase {
             return false
         }
 
-        let addButton = app.buttons["Add"]
+        let addButton = app.buttons.matching(NSPredicate(format: "label == 'Add' OR label == 'Hinzufügen'")).firstMatch
         if addButton.waitForExistence(timeout: 5) {
             addButton.tap()
             return true
