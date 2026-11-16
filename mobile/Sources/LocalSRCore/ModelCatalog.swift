@@ -10,7 +10,7 @@ public enum TabletModelID: String, Codable, Sendable {
 }
 
 public enum ModelLane: String, Codable, Sendable {
-    case neuralEngine, gpu
+    case neuralEngine, gpu, cpu
 }
 
 public struct ModelDescriptor: Sendable {

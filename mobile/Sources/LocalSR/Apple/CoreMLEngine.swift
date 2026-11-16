@@ -127,6 +127,19 @@ public final class CoreMLEngine: SREngine, @unchecked Sendable {
         useOutputBackings = true
     }
 
+    public func loadAsync(tabletModel key: TabletModelID, unit: ComputeUnit) async throws {
+        let descriptor = ModelCatalog.model(key)
+        precondition(descriptor.window == modelWindow && descriptor.window * descriptor.scale == modelOutputSize)
+        let url = try AppleResources.tabletModelURL(key)
+        let loaded = try await MLModel.load(contentsOf: url, configuration: Self.configuration(for: unit))
+        model = loaded
+        loadedModel = nil
+        loadedTabletModel = key
+        loadedUnit = unit
+        results = [nil, nil]
+        useOutputBackings = true
+    }
+
     public func unload() {
         model = nil
         loadedModel = nil
@@ -139,9 +152,11 @@ public final class CoreMLEngine: SREngine, @unchecked Sendable {
 
     /// Runs one tile. `fill` writes the planar FP16 input into the reused input buffer.
     /// The returned view stays valid until the second next call (two alternating output buffers).
-    func predict(fill: (UnsafeMutablePointer<Float16>) -> Void) throws -> TileOutputView {
+    func predict(predictionStarted: () -> Void = {}, predictionEnded: () -> Void = {}, fill: (UnsafeMutablePointer<Float16>) -> Void) throws -> TileOutputView {
         guard let model else { throw EngineError.notLoaded }
         fill(inputBuffer)
+        predictionStarted()
+        defer { predictionEnded() }
         phase ^= 1
         let result: MLFeatureProvider
         if useOutputBackings {

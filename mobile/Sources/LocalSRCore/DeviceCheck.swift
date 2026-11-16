@@ -27,7 +27,7 @@ public struct DeviceVerdict: Codable, Sendable {
 }
 
 public enum DeviceCheck {
-    private static func passes(_ m: DeviceMeasurement?) -> Bool {
+    public static func passes(_ m: DeviceMeasurement?) -> Bool {
         guard let m = m else { return false }
         return !m.timedOut && !m.hasNaN && !m.isConstant && m.psnrVsCPU >= 45 && m.psnrDownsampleVsInput >= 26 && m.tileMs > 0 && m.tileMs.isFinite
     }

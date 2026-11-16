@@ -60,6 +60,7 @@ public enum AppleResources {
         }
         if let root = Bundle.main.resourceURL {
             dirs.append(root.appendingPathComponent("Models/ios-tablet", isDirectory: true))
+            dirs.append(root.appendingPathComponent("ios-tablet", isDirectory: true))
             dirs.append(root)
         }
         #if DEBUG || os(macOS)

@@ -4,7 +4,7 @@ public struct Plan: Codable, Sendable {
 
     public init(stages: [TabletModelID]) { self.stages = stages }
 
-    /// A valid upscale has at most one of each fix, in order, followed by exactly one 4x model.
+    /// A plan has at most one of each fix, in order, optionally followed by one 4x model.
     public var isValid: Bool {
         if stages.isEmpty || stages.count > 3 { return false }
         var lastRank = -1
@@ -16,16 +16,16 @@ public struct Plan: Codable, Sendable {
             if rank <= lastRank { return false }
             lastRank = rank
         }
-        return lastRank == 2
+        return true
     }
 
-    /// Dimensions after each stage, after the common SizePolicy input cap. The caller must
-    /// check memory availability before passing `fullScale: true`.
+    /// Upscales use the common input cap. Restore-only plans retain the original dimensions.
     public func stageSizes(width: Int, height: Int, fullScale: Bool = false) -> [StageSize] {
         precondition(isValid && width > 0 && height > 0)
         let target = SizePolicy.target(width: width, height: height)
-        var w = target.width
-        var h = target.height
+        let upscale = stages.contains { ModelCatalog.model($0).scale == 4 }
+        var w = upscale ? target.width : width
+        var h = upscale ? target.height : height
         var sizes: [StageSize] = []
         for stage in stages {
             let scale = ModelCatalog.model(stage).scale == 1 ? 1 : (fullScale ? 4 : target.outputScale)

@@ -118,7 +118,7 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
         }
     }
 
-    private static func availableMemory() -> UInt64 {
+    static func availableMemory() -> UInt64 {
         #if os(iOS)
         return UInt64(os_proc_available_memory())
         #else

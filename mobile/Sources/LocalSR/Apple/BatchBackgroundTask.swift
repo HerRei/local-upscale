@@ -23,9 +23,9 @@ import BackgroundTasks
 /// BatchBackgroundTask.shared.end(success: true)
 /// ```
 /// `begin` returns false when the request is rejected (queue full, iOS < 26, simulator without support); the
-/// batch then simply runs in the foreground only. The task only requests default resources (CPU + Neural
-/// Engine, no `.gpu`), so the batch must run on the NPU or CPU while in the background; the GPU is not
-/// available to background work on iPhone. The system shows a Live Activity with the progress bar; it may
+/// batch then simply runs in the foreground only. By default the task requests CPU and Neural Engine.
+/// A tablet caller may request `.gpu` where supported and when the app has the necessary entitlement;
+/// the scheduler rejects that request if the entitlement is absent. The system shows a Live Activity with the progress bar; it may
 /// expire the task if progress stalls, so call `update` regularly.
 public final class BatchBackgroundTask: @unchecked Sendable {
     public static let shared = BatchBackgroundTask()
@@ -66,7 +66,7 @@ public final class BatchBackgroundTask: @unchecked Sendable {
     }
 
     @discardableResult
-    public func begin(title: String, subtitle: String, totalUnits: Int64, onExpire: @escaping () -> Void) -> Bool {
+    public func begin(title: String, subtitle: String, totalUnits: Int64, requestGPU: Bool = false, onExpire: @escaping () -> Void) -> Bool {
         guard #available(iOS 26.0, *) else { return false }
         Self.register()
         let identifier = Self.taskIdentifier
@@ -83,7 +83,7 @@ public final class BatchBackgroundTask: @unchecked Sendable {
 
         let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: title, subtitle: subtitle)
         request.strategy = .fail            // the user just tapped: run now or not at all
-        request.requiredResources = []      // default = CPU (+ Neural Engine via Core ML); no .gpu
+        request.requiredResources = requestGPU && BGTaskScheduler.supportedResources.contains(.gpu) ? [.gpu] : []
         do {
             try BGTaskScheduler.shared.submit(request)
             return true
@@ -157,7 +157,7 @@ public final class BatchBackgroundTask: @unchecked Sendable {
     private init() {}
     public static func register() {}
     @discardableResult
-    public func begin(title: String, subtitle: String, totalUnits: Int64, onExpire: @escaping () -> Void) -> Bool { false }
+    public func begin(title: String, subtitle: String, totalUnits: Int64, requestGPU: Bool = false, onExpire: @escaping () -> Void) -> Bool { false }
     public func update(completedUnits: Int64, title: String? = nil, subtitle: String? = nil) {}
     public func end(success: Bool) {}
 }

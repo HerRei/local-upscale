@@ -47,14 +47,14 @@ object AndroidCodec {
      * Decodes with EXIF orientation applied, in sRGB, as a software ARGB_8888 bitmap no larger than
      * [decodeSize]. Wide-gamut sources are converted to sRGB (v1 limitation).
      */
-    fun decode(context: Context, uri: Uri): Bitmap {
+    fun decode(context: Context, uri: Uri, preserveDimensions: Boolean = false): Bitmap {
         try {
             val bmp = ImageDecoder.decodeBitmap(source(context, uri)) { decoder, info, _ ->
                 decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
                 decoder.isMutableRequired = false
                 decoder.setTargetColorSpace(ColorSpace.get(ColorSpace.Named.SRGB))
                 val (w, h) = decodeSize(info.size.width, info.size.height)
-                if (w != info.size.width || h != info.size.height) decoder.setTargetSize(w, h)
+                if (!preserveDimensions && (w != info.size.width || h != info.size.height)) decoder.setTargetSize(w, h)
             }
             return if (bmp.config == Bitmap.Config.ARGB_8888) bmp else (bmp.copy(Bitmap.Config.ARGB_8888, false) ?: throw UpscaleException("Cannot convert the decoded image to ARGB_8888")).also { bmp.recycle() }
         } catch (e: UpscaleException) {

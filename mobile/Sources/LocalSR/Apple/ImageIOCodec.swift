@@ -75,7 +75,7 @@ enum ImageIOCodec {
     /// Decodes with EXIF orientation applied and the `SizePolicy` prescale in one ImageIO step
     /// (`CGImageSourceCreateThumbnailAtIndex` with transform + max pixel size), keeps the file's colour
     /// space, and renders 8-bit RGBA in that colour space.
-    static func decode(url: URL) throws -> DecodedImage {
+    static func decode(url: URL, preserveDimensions: Bool = false) throws -> DecodedImage {
         let sourceOptions: [CFString: Any] = [kCGImageSourceShouldCache: false]
         guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions as CFDictionary), CGImageSourceGetCount(source) > 0 else {
             throw CodecError.unreadable(url)
@@ -91,24 +91,26 @@ enum ImageIOCodec {
         let uprightH = swap ? pw : ph
 
         let target = SizePolicy.target(width: uprightW, height: uprightH)
+        let width = preserveDimensions ? uprightW : target.width
+        let height = preserveDimensions ? uprightH : target.height
         let thumbOptions: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: max(target.width, target.height),
+            kCGImageSourceThumbnailMaxPixelSize: max(width, height),
             kCGImageSourceShouldCacheImmediately: true,
         ]
         guard let thumb = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOptions as CFDictionary) else { throw CodecError.decodeFailed }
 
         let colorSpace = renderingColorSpace(source: source, fallback: thumb.colorSpace)
-        let buffer = PixelBuffer(width: target.width, height: target.height)
-        guard let context = CGContext(data: buffer.pointer, width: target.width, height: target.height, bitsPerComponent: 8, bytesPerRow: target.width * 4, space: colorSpace, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else {
+        let buffer = PixelBuffer(width: width, height: height)
+        guard let context = CGContext(data: buffer.pointer, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: colorSpace, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else {
             throw CodecError.decodeFailed
         }
         context.interpolationQuality = .high
         // Opaque black first so that transparent sources (PNG) do not leave garbage under the skip channel.
         context.setFillColor(CGColor(colorSpace: colorSpace, components: [0, 0, 0, 1]) ?? CGColor(gray: 0, alpha: 1))
-        context.fill(CGRect(x: 0, y: 0, width: target.width, height: target.height))
-        context.draw(thumb, in: CGRect(x: 0, y: 0, width: target.width, height: target.height))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.draw(thumb, in: CGRect(x: 0, y: 0, width: width, height: height))
 
         return DecodedImage(pixels: buffer, colorSpace: colorSpace, orientation: orientation, originalWidth: uprightW, originalHeight: uprightH, properties: props, gainMap: readGainMap(source))
     }

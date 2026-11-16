@@ -12,7 +12,8 @@ final class TabletCoreTests: XCTestCase {
         XCTAssertTrue(Plan(stages: [.jpegFix, .noiseFix, .best]).isValid)
         XCTAssertTrue(Plan(stages: [.finest]).isValid)
         XCTAssertFalse(Plan(stages: []).isValid)
-        XCTAssertFalse(Plan(stages: [.jpegFix]).isValid)
+        XCTAssertTrue(Plan(stages: [.jpegFix]).isValid)
+        XCTAssertTrue(Plan(stages: [.jpegFix, .noiseFix]).isValid)
         XCTAssertFalse(Plan(stages: [.noiseFix, .jpegFix, .best]).isValid)
         XCTAssertFalse(Plan(stages: [.jpegFix, .jpegFix, .best]).isValid)
         XCTAssertFalse(Plan(stages: [.best, .fast]).isValid)
@@ -33,6 +34,9 @@ final class TabletCoreTests: XCTestCase {
         let capped = decoded.stageSizes(width: 8000, height: 6000)
         XCTAssertEqual(capped[0].width, 4000)
         XCTAssertEqual(capped[2].width, 8000)
+        let restore = Plan(stages: [.jpegFix, .noiseFix]).stageSizes(width: 8000, height: 6000)
+        XCTAssertEqual(restore[1].width, 8000)
+        XCTAssertEqual(restore[1].height, 6000)
     }
 
     func testScaleOneWindow256Coverage() {

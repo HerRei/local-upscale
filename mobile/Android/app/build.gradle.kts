@@ -12,6 +12,7 @@ skip {
 val modelsDir = projectDir.resolve("../../Models")
 val stageModels = tasks.register<Sync>("stageLocalsrModels") {
     from(modelsDir.resolve("android")) { include("*.tflite") }
+    from(modelsDir.resolve("android-tablet")) { include("*.tflite"); into("tablet") }
     from(modelsDir) { include("probe.png", "NOTICE.txt") }
     into(layout.buildDirectory.dir("localsr-assets"))
 }

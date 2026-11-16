@@ -5,9 +5,13 @@ import LocalSRCore
 /// Runs a single image stage. Registry access is held for the whole stage because the engine owns
 /// reusable tensor buffers; a caller may run a different model/unit concurrently on another lane.
 enum AppleTabletStageRunner {
+    enum StageError: Error { case gpuRestricted }
     static func run(source: PixelBuffer, model: TabletModelID, unit: ComputeUnit,
                     outputScale: Int, registry: TabletModelRegistry,
                     isCancelled: () -> Bool = { false },
+                    gpuRestricted: () -> Bool = { false },
+                    predictionStarted: () -> Void = {},
+                    predictionEnded: () -> Void = {},
                     progress: (Int, Int) -> Void = { _, _ in }) throws -> PixelBuffer {
         let descriptor = ModelCatalog.model(model)
         precondition((descriptor.scale == 1 && outputScale == 1) ||
@@ -18,7 +22,8 @@ enum AppleTabletStageRunner {
         try registry.withEngine(model: model, unit: unit) { engine in
             for (index, tile) in tiles.enumerated() {
                 if isCancelled() { throw CancellationError() }
-                let view = try engine.predict { destination in
+                if unit == .gpu && gpuRestricted() { throw StageError.gpuRestricted }
+                let view = try engine.predict(predictionStarted: predictionStarted, predictionEnded: predictionEnded) { destination in
                     ApplePixelKernels.fillWindow(source: source.pointer, width: source.width, height: source.height,
                                                  tile: tile, window: descriptor.window, dst: destination)
                 }
@@ -28,6 +33,7 @@ enum AppleTabletStageRunner {
                 progress(index + 1, tiles.count)
             }
             if isCancelled() { throw CancellationError() }
+            if unit == .gpu && gpuRestricted() { throw StageError.gpuRestricted }
         }
         return output
     }
