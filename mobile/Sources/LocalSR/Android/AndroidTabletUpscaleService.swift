@@ -6,15 +6,34 @@ import LocalSRCore
 public final class AndroidTabletUpscaleService: TabletUpscaleService {
     private let engine: AndroidTabletEngine
     private let activityStream: AndroidTabletActivityStream
+    private var observedVerdicts: [TabletModelID: TabletChipVerdict] = [:]
     public var laneActivity: AsyncStream<TabletLaneActivity> { activityStream.stream }
     public var laneOverride: TabletLaneOverride = .both
+    public var supportsBackgroundGPU: Bool { true }
+
     public init() {
         activityStream = AndroidTabletActivityStream()
         engine = AndroidTabletEngine(ProcessInfo.processInfo.androidContext)
     }
     public func cancel() { engine.cancel() }
 
-    public func run(plan: Plan, inputs: [TabletInput], fullScale: Bool, events: @escaping @Sendable (TabletUpscaleEvent) -> Void) async throws -> [TabletUpscaleResult] {
+    public func cachedVerdict(for model: TabletModelID) -> TabletChipVerdict? {
+        observedVerdicts[model]
+    }
+
+    public func isModelBundled(_ model: TabletModelID) -> Bool {
+        engine.isModelBundled(ModelCatalog.model(model).androidFileName)
+    }
+
+    public func hasModelFailedCheck(_ model: TabletModelID) -> Bool {
+        false
+    }
+
+    public func bundledModelByteSize(_ model: TabletModelID) -> Int64? {
+        engine.bundledModelByteSize(ModelCatalog.model(model).androidFileName)
+    }
+
+    public func run(plan: Plan, inputs: [TabletInput], fullScale: Bool, targetScale: Int, outputFormat: TabletOutputFormat, events: @escaping @Sendable (TabletUpscaleEvent) -> Void) async throws -> [TabletUpscaleResult] {
         guard plan.isValid && inputs.allSatisfy({ ($0.plan ?? plan).isValid }) else { throw NSError(domain: "LocalSR", code: 1) }
         guard laneOverride != .neuralEngineOnly else { throw NSError(domain: "LocalSR", code: 3) }
         guard engine.start() else { throw NSError(domain: "LocalSR", code: 2) }
@@ -24,7 +43,7 @@ public final class AndroidTabletUpscaleService: TabletUpscaleService {
         var results: [TabletUpscaleResult] = []
         for input in inputs {
             let selected = input.plan ?? plan
-            let raw = try await engine.process(input.url.absoluteString, selected, fullScale, laneOverride == .gpuOnly, { stage, fraction in
+            let raw = try await engine.process(input.url.absoluteString, selected, fullScale, targetScale, outputFormat.rawValue, laneOverride == .gpuOnly, { stage, fraction in
                 events(.progress(photoID: input.id, stage: stage, fraction: fraction))
             }, { stage, gpu, start, end in
                 events(.prediction(photoID: input.id, stage: stage, model: selected.stages[stage], lane: gpu ? .gpu : .cpu, start: start, end: end))
@@ -33,8 +52,25 @@ public final class AndroidTabletUpscaleService: TabletUpscaleService {
                 let activity = TabletLaneActivity(lane: gpu ? .gpu : .cpu, photoID: active ? input.id : nil, stage: active ? stage : nil, model: active ? selected.stages[stage] : nil, unit: active ? (gpu ? .gpu : .cpu) : nil, busyFraction: busy)
                 activityStream.emit(activity)
                 events(.lane(activity))
+            }, { stage, gpu, seconds in
+                let modelID = selected.stages[stage]
+                let verdict = TabletChipVerdict(preferred: gpu ? .gpu : .cpu, cpu: true, gpu: gpu, neuralEngine: false)
+                self.observedVerdicts[modelID] = verdict
+                events(.verdict(model: modelID, verdict: verdict))
+                events(.stageTiming(photoID: input.id, stage: stage, model: modelID, lane: gpu ? .gpu : .cpu, seconds: seconds))
             })
-            let result = TabletUpscaleResult(id: input.id, inputURL: input.url, outputURL: URL(fileURLWithPath: raw.outputPath), previewURL: URL(fileURLWithPath: raw.previewPath), width: raw.width, height: raw.height, outputScale: raw.scale, seconds: raw.seconds, plan: selected)
+            let result = TabletUpscaleResult(
+                id: input.id,
+                inputURL: input.url,
+                outputURL: URL(fileURLWithPath: raw.outputPath),
+                previewURL: URL(fileURLWithPath: raw.previewPath),
+                width: raw.width,
+                height: raw.height,
+                outputScale: raw.scale,
+                fullScaleFallback: raw.fullScaleFallback,
+                seconds: raw.seconds,
+                plan: selected
+            )
             results.append(result)
             events(.completed(result))
         }

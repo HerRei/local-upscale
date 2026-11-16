@@ -75,6 +75,29 @@ public enum AppleResources {
         throw ResourceError.missing(name)
     }
 
+    public static func tabletModelByteSize(_ model: TabletModelID) -> Int64? {
+        guard let url = try? tabletModelURL(model) else { return nil }
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { return nil }
+        if !isDir.boolValue {
+            let attrs = try? fm.attributesOfItem(atPath: url.path)
+            return (attrs?[.size] as? NSNumber)?.int64Value
+        }
+        guard let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey]) else {
+            return nil
+        }
+        var total: Int64 = 0
+        for case let fileURL as URL in enumerator {
+            if let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+               values.isRegularFile == true,
+               let size = values.fileSize {
+                total += Int64(size)
+            }
+        }
+        return total > 0 ? total : nil
+    }
+
     public static func probeURL() throws -> URL {
         try find("probe.png")
     }

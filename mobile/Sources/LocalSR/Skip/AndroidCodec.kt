@@ -73,6 +73,13 @@ object AndroidCodec {
         }
     }
 
+    fun writePng(bitmap: Bitmap, file: File) {
+        file.parentFile?.mkdirs()
+        BufferedOutputStream(FileOutputStream(file), 1 shl 16).use { out ->
+            if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)) throw UpscaleException("PNG encoding failed")
+        }
+    }
+
     /** Downscales to a long side <= [PREVIEW_MAX_SIDE] by repeated halving (box filter) plus one final bilinear step. Never recycles [bitmap]. */
     fun preview(bitmap: Bitmap): Bitmap {
         val longSide = maxOf(bitmap.width, bitmap.height)

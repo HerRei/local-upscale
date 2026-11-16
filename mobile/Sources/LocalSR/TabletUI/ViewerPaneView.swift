@@ -86,6 +86,7 @@ struct ViewerPaneView: View {
             }
 
             if let result = activeResult {
+                let note = resultScaleNote(result)
                 VStack(alignment: .leading, spacing: 1.0) {
                     Text(result.displayName)
                         .themeFont(.paneTitle)
@@ -97,6 +98,15 @@ struct ViewerPaneView: View {
                         .themeFont(.meta)
                         .foregroundStyle(Theme.secondary)
                         .lineLimit(1)
+                        .accessibilityIdentifier("tabletViewerResultMeta")
+
+                    if !note.isEmpty {
+                        Text(note)
+                            .themeFont(.meta)
+                            .foregroundStyle(Theme.secondary)
+                            .lineLimit(1)
+                            .accessibilityIdentifier("tabletViewerResultScaleNote")
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .tabletDraggableFile(result.outputURL)
@@ -121,7 +131,8 @@ struct ViewerPaneView: View {
             }
         }
         .padding(.horizontal, Theme.Spacing.lg)
-        .frame(height: Theme.Spacing.headerHeight)
+        .padding(.vertical, 4.0)
+        .frame(minHeight: Theme.Spacing.headerHeight)
         .background(Theme.panel)
         .contextMenu {
             if let result = activeResult {
@@ -829,11 +840,41 @@ struct ViewerPaneView: View {
     }
 
     private func resultSubtitle(_ result: TabletResultItem) -> String {
-        let dims = UIFormatting.resultDimensionsLine(width: result.width, height: result.height)
+        let dims: String = {
+            if result.stages.contains(where: { ModelCatalog.model($0).scale == 4 }),
+               let inW = result.inputWidth, let inH = result.inputHeight, inW > 0, inH > 0 {
+                let derivedScale = UIFormatting.scaleAgainstOriginal(
+                    inputWidth: inW,
+                    inputHeight: inH,
+                    outputWidth: result.width,
+                    outputHeight: result.height
+                )
+                return "\(result.width) \u{00D7} \(result.height) \u{00B7} \(derivedScale)\u{00D7} \u{00B7} \(UIFormatting.formatMegapixels(width: result.width, height: result.height))"
+            }
+            return UIFormatting.resultDimensionsLine(width: result.width, height: result.height)
+        }()
         let stages = result.stages.isEmpty
             ? "Best"
             : result.stages.map { ModelCatalog.model($0).displayName }.joined(separator: " + ")
         let sec = UIFormatting.formatSeconds(result.seconds)
         return "\(dims) \u{00B7} \(stages) \u{00B7} \(result.chipsLabel) \u{00B7} \(sec)"
+    }
+
+    private func resultScaleNote(_ result: TabletResultItem) -> String {
+        guard result.stages.contains(where: { ModelCatalog.model($0).scale == 4 }),
+              let inW = result.inputWidth, let inH = result.inputHeight, inW > 0, inH > 0 else {
+            return ""
+        }
+        let reduced = Double(inW) * Double(inH) > Double(SizePolicy.maxInputPixels)
+        let policyScale = SizePolicy.target(width: inW, height: inH).outputScale
+        if !reduced && result.outputScale < 4 && policyScale == 4 {
+            return ""
+        }
+        return UIFormatting.scaleNote(
+            inputWidth: inW,
+            inputHeight: inH,
+            outputScale: result.outputScale,
+            fullScaleFallback: result.fullScaleFallback
+        )
     }
 }

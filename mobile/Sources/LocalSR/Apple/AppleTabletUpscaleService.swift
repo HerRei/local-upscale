@@ -56,6 +56,14 @@ public final class AppleTabletUpscaleService: TabletUpscaleService, @unchecked S
     private let restriction: (@Sendable () -> Bool)?
     private let backgroundGPUGranted: Bool
 
+    public var supportsBackgroundGPU: Bool {
+        #if os(iOS)
+        return BGTaskScheduler.supportedResources.contains(.gpu)
+        #else
+        return true
+        #endif
+    }
+
     /// Set backgroundGPUGranted only when the continued-processing request actually acquired .gpu.
     public init(defaults: UserDefaults = .standard, cachesDirectory: URL? = nil, backgroundGPUGranted: Bool = false, gpuRestricted: (@Sendable () -> Bool)? = nil) {
         let (stream, continuation) = AsyncStream<TabletLaneActivity>.makeStream(bufferingPolicy: .bufferingNewest(4))
@@ -69,7 +77,31 @@ public final class AppleTabletUpscaleService: TabletUpscaleService, @unchecked S
     deinit { laneContinuation.finish() }
     public func cancel() { lock.withLock { cancellation?.cancel() } }
 
-    public func run(plan: Plan, inputs: [TabletInput], fullScale: Bool, events: @escaping @Sendable (TabletUpscaleEvent) -> Void) async throws -> [TabletUpscaleResult] {
+    public func cachedVerdict(for model: TabletModelID) -> TabletChipVerdict? {
+        guard let v = checker.cachedVerdict(for: model) else { return nil }
+        return TabletChipVerdict(preferred: v.preferred, cpu: v.cpu, gpu: v.gpu, neuralEngine: v.neuralEngine)
+    }
+
+    public func isModelBundled(_ model: TabletModelID) -> Bool {
+        (try? AppleResources.tabletModelURL(model)) != nil
+    }
+
+    public func hasModelFailedCheck(_ model: TabletModelID) -> Bool {
+        checker.hasFailedCheck(for: model)
+    }
+
+    public func bundledModelByteSize(_ model: TabletModelID) -> Int64? {
+        AppleResources.tabletModelByteSize(model)
+    }
+
+    public func run(
+        plan: Plan,
+        inputs: [TabletInput],
+        fullScale: Bool,
+        targetScale: Int,
+        outputFormat: TabletOutputFormat,
+        events: @escaping @Sendable (TabletUpscaleEvent) -> Void
+    ) async throws -> [TabletUpscaleResult] {
         guard plan.isValid && inputs.allSatisfy({ ($0.plan ?? plan).isValid }) else { throw ServiceError.invalidPlan }
         let cancel = CancelFlag()
         let accepted = lock.withLock { () -> Bool in
@@ -84,7 +116,20 @@ public final class AppleTabletUpscaleService: TabletUpscaleService, @unchecked S
             for input in inputs {
                 for model in (input.plan ?? plan).stages where verdicts[model] == nil {
                     if cancel.isCancelled { throw CancellationError() }
-                    verdicts[model] = try await checker.verdict(for: model)
+                    do {
+                        let v = try await checker.verdict(for: model)
+                        verdicts[model] = v
+                        events(.verdict(
+                            model: model,
+                            verdict: TabletChipVerdict(preferred: v.preferred, cpu: v.cpu, gpu: v.gpu, neuralEngine: v.neuralEngine)
+                        ))
+                    } catch {
+                        let ns = error as NSError
+                        if ns.domain == "LocalSR" && ns.code == 1 {
+                            events(.verdictFailed(model: model))
+                        }
+                        throw error
+                    }
                 }
             }
             #if os(iOS)
@@ -111,7 +156,19 @@ public final class AppleTabletUpscaleService: TabletUpscaleService, @unchecked S
                         while !cancel.isCancelled, let index = queue.take() {
                             do {
                                 let input = inputs[index]
-                                let result = try self.process(input: input, plan: input.plan ?? plan, fullScale: fullScale, verdicts: checked, scheduler: scheduler, override: selected, restricted: restricted, cancel: cancel, events: events)
+                                let result = try self.process(
+                                    input: input,
+                                    plan: input.plan ?? plan,
+                                    fullScale: fullScale,
+                                    targetScale: targetScale,
+                                    outputFormat: outputFormat,
+                                    verdicts: checked,
+                                    scheduler: scheduler,
+                                    override: selected,
+                                    restricted: restricted,
+                                    cancel: cancel,
+                                    events: events
+                                )
                                 results.append((index, result))
                                 events(.completed(result))
                             } catch { cancel.cancel(); throw error }
@@ -127,7 +184,19 @@ public final class AppleTabletUpscaleService: TabletUpscaleService, @unchecked S
         } onCancel: { cancel.cancel() }
     }
 
-    private func process(input: TabletInput, plan: Plan, fullScale: Bool, verdicts: [TabletModelID: TabletDeviceVerdict], scheduler: LaneScheduler, override: TabletLaneOverride, restricted: @escaping @Sendable () -> Bool, cancel: CancelFlag, events: @escaping @Sendable (TabletUpscaleEvent) -> Void) throws -> TabletUpscaleResult {
+    private func process(
+        input: TabletInput,
+        plan: Plan,
+        fullScale: Bool,
+        targetScale: Int,
+        outputFormat: TabletOutputFormat,
+        verdicts: [TabletModelID: TabletDeviceVerdict],
+        scheduler: LaneScheduler,
+        override: TabletLaneOverride,
+        restricted: @escaping @Sendable () -> Bool,
+        cancel: CancelFlag,
+        events: @escaping @Sendable (TabletUpscaleEvent) -> Void
+    ) throws -> TabletUpscaleResult {
         let started = Date()
         let directory = cacheRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
         do {
@@ -135,30 +204,57 @@ public final class AppleTabletUpscaleService: TabletUpscaleService, @unchecked S
             let decoded = try ImageIOCodec.decode(url: input.url, preserveDimensions: !upscale)
             let policy = SizePolicy.target(width: decoded.originalWidth, height: decoded.originalHeight)
             let needed = Double(decoded.pixels.width) * Double(decoded.pixels.height) * 16 * 4 * 2.5
-            let scale = !upscale ? 1 : (fullScale && policy.outputScale == 2 && Double(AppleUpscaleService.availableMemory()) >= needed ? 4 : policy.outputScale)
+            let canUpgradeFull = fullScale && policy.outputScale == 2 && Double(AppleUpscaleService.availableMemory()) >= needed
+            let scale: Int
+            let fullScaleFallback: Bool
+            if !upscale {
+                scale = 1
+                fullScaleFallback = false
+            } else if targetScale == 2 {
+                scale = 2
+                fullScaleFallback = false
+            } else {
+                scale = canUpgradeFull ? 4 : policy.outputScale
+                fullScaleFallback = fullScale && policy.outputScale == 2 && !canUpgradeFull
+            }
             var pixels = decoded.pixels
             for (index, model) in plan.stages.enumerated() {
                 let stageScale = ModelCatalog.model(model).scale == 1 ? 1 : scale
                 while true {
                     do {
+                        let stageStart = Date()
+                        var usedLane: ModelLane = .neuralEngine
                         pixels = try scheduler.run(photoID: input.id, stage: index, model: model, verdict: verdicts[model]!, override: override, isCancelled: { cancel.isCancelled }) { unit, lane in
-                            try AppleTabletStageRunner.run(source: pixels, model: model, unit: unit, outputScale: stageScale, registry: registry, isCancelled: { cancel.isCancelled }, gpuRestricted: restricted, predictionStarted: { scheduler.predictionStarted(lane) }, predictionEnded: { scheduler.predictionEnded(lane) }) { done, total in
+                            usedLane = lane
+                            return try AppleTabletStageRunner.run(source: pixels, model: model, unit: unit, outputScale: stageScale, registry: registry, isCancelled: { cancel.isCancelled }, gpuRestricted: restricted, predictionStarted: { scheduler.predictionStarted(lane) }, predictionEnded: { scheduler.predictionEnded(lane) }) { done, total in
                                 events(.progress(photoID: input.id, stage: index, fraction: Double(done) / Double(total)))
                             }
                         }
+                        events(.stageTiming(photoID: input.id, stage: index, model: model, lane: usedLane, seconds: Date().timeIntervalSince(stageStart)))
                         break
                     } catch AppleTabletStageRunner.StageError.gpuRestricted { continue }
                 }
             }
             if cancel.isCancelled { throw CancellationError() }
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            let output = directory.appendingPathComponent("output.heic")
+            let output = directory.appendingPathComponent("output.\(outputFormat.fileExtension)")
             let preview = directory.appendingPathComponent("preview.jpg")
-            _ = try ImageIOCodec.encodeHEIC(pixels: pixels, colorSpace: decoded.colorSpace, decoded: decoded, to: output)
+            _ = try ImageIOCodec.encodeOutput(pixels: pixels, colorSpace: decoded.colorSpace, decoded: decoded, format: outputFormat, to: output)
             if cancel.isCancelled { throw CancellationError() }
             _ = try ImageIOCodec.writePreviewJPEG(pixels: pixels, colorSpace: decoded.colorSpace, to: preview)
             if cancel.isCancelled { throw CancellationError() }
-            return TabletUpscaleResult(id: input.id, inputURL: input.url, outputURL: output, previewURL: preview, width: pixels.width, height: pixels.height, outputScale: scale, seconds: Date().timeIntervalSince(started), plan: plan)
+            return TabletUpscaleResult(
+                id: input.id,
+                inputURL: input.url,
+                outputURL: output,
+                previewURL: preview,
+                width: pixels.width,
+                height: pixels.height,
+                outputScale: scale,
+                fullScaleFallback: fullScaleFallback,
+                seconds: Date().timeIntervalSince(started),
+                plan: plan
+            )
         } catch {
             try? FileManager.default.removeItem(at: directory)
             throw error

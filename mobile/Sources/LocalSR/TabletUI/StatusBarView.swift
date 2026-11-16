@@ -106,6 +106,10 @@ struct StatusBarView: View {
             Circle()
                 .fill(Theme.accent)
                 .frame(width: 8.0, height: 8.0)
+        } else if let laneFailure = model.laneValidationError, laneFailure.allFailed {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 12.0))
+                .foregroundStyle(Theme.text)
         } else if let summary = model.batchLastRunSummary, waitingCount == 0 {
             switch summary {
             case .complete:
@@ -128,7 +132,12 @@ struct StatusBarView: View {
             let total = max(1, model.batchTotalInRun)
             let current = min(model.batchCompletedInRun + 1, total)
             let pct = Int((activeProgress * 100.0).rounded())
-            return "Upscaling \(current) of \(total) \u{00B7} \(pct) %"
+            let verb = model.setup.task == .restore ? "Restoring" : "Upscaling"
+            return "\(verb) \(current) of \(total) \u{00B7} \(pct) %"
+        }
+
+        if let laneFailure = model.laneValidationError, laneFailure.allFailed {
+            return laneFailure.title
         }
 
         if waitingCount == 0, let summary = model.batchLastRunSummary {
@@ -136,7 +145,8 @@ struct StatusBarView: View {
             case .complete:
                 return "Complete"
             case .partialFailure(let succeeded, let total, _):
-                return "\(succeeded) of \(total) Upscaled"
+                let verb = model.setup.task == .restore ? "Restored" : "Upscaled"
+                return "\(succeeded) of \(total) \(verb)"
             }
         }
 
@@ -152,7 +162,7 @@ struct StatusBarView: View {
         }
         if model.isBatchRunning {
             if model.isCheckingDevice {
-                return "Checking which chip runs Best correctly."
+                return "Checking which chip runs \(model.checkingModelDisplayName) correctly."
             }
             var parts: [String] = []
             if let eta = model.estimatedRemainingSeconds() {
@@ -165,6 +175,10 @@ struct StatusBarView: View {
                 return "\(model.batchTotalInRun) \(model.batchTotalInRun == 1 ? "photo" : "photos")"
             }
             return parts.joined(separator: " \u{00B7} ")
+        }
+
+        if let laneFailure = model.laneValidationError {
+            return laneFailure.detail
         }
 
         if waitingCount == 0, let summary = model.batchLastRunSummary {
@@ -280,15 +294,23 @@ struct StatusBarView: View {
                     }
                 }
             } else if waitingCount == 0 {
-                disabledStartButton(title: "Upscale Selected", fullWidth: fullWidth)
+                let startTitle = model.setup.task == .restore ? "Restore Selected" : "Upscale Selected"
+                disabledStartButton(title: startTitle, fullWidth: fullWidth)
+            } else if model.laneValidationError != nil {
+                let title = waitingCount == 1
+                    ? (model.setup.task == .restore ? "Restore Selected" : "Upscale Selected")
+                    : "Start All \(waitingCount)"
+                disabledStartButton(title: title, fullWidth: fullWidth)
             } else if waitingCount == 1 {
-                primaryStartButton(title: "Upscale Selected", fullWidth: fullWidth, identifier: "tabletUpscaleSelectedButton") {
+                let startTitle = model.setup.task == .restore ? "Restore Selected" : "Upscale Selected"
+                primaryStartButton(title: startTitle, fullWidth: fullWidth, identifier: "tabletUpscaleSelectedButton") {
                     model.upscaleSelected(switchToViewer: isTabMode)
                 }
                 .disabled(model.isLoadingInputs)
             } else {
                 if !fullWidth {
-                    secondaryButton(title: "Upscale Selected", fullWidth: false, identifier: "tabletUpscaleSelectedButton") {
+                    let selectedTitle = model.setup.task == .restore ? "Restore Selected" : "Upscale Selected"
+                    secondaryButton(title: selectedTitle, fullWidth: false, identifier: "tabletUpscaleSelectedButton") {
                         model.upscaleSelected(switchToViewer: isTabMode)
                     }
                     .disabled(model.isLoadingInputs || !model.hasRunnableSelectedItem)

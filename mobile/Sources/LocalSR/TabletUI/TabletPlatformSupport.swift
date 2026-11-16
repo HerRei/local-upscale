@@ -47,6 +47,10 @@ enum TabletPlatform {
         isAndroid ? "Gallery" : "Photos"
     }
 
+    static var npuName: String {
+        isAndroid ? "NPU" : "Neural Engine"
+    }
+
     @MainActor
     static func configureMinimumWindowSize() {
         #if !SKIP && os(iOS)

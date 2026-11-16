@@ -32,8 +32,33 @@ public struct TabletUpscaleResult: Sendable {
     public let width: Int
     public let height: Int
     public let outputScale: Int
+    public let fullScaleFallback: Bool
     public let seconds: Double
     public let plan: Plan
+
+    public init(
+        id: String,
+        inputURL: URL,
+        outputURL: URL,
+        previewURL: URL,
+        width: Int,
+        height: Int,
+        outputScale: Int,
+        fullScaleFallback: Bool = false,
+        seconds: Double,
+        plan: Plan
+    ) {
+        self.id = id
+        self.inputURL = inputURL
+        self.outputURL = outputURL
+        self.previewURL = previewURL
+        self.width = width
+        self.height = height
+        self.outputScale = outputScale
+        self.fullScaleFallback = fullScaleFallback
+        self.seconds = seconds
+        self.plan = plan
+    }
 }
 
 public enum TabletUpscaleEvent: Sendable {
@@ -41,14 +66,28 @@ public enum TabletUpscaleEvent: Sendable {
     case completed(TabletUpscaleResult)
     case lane(TabletLaneActivity)
     case prediction(photoID: String, stage: Int, model: TabletModelID, lane: ModelLane, start: Double, end: Double)
+    case verdict(model: TabletModelID, verdict: TabletChipVerdict)
+    case verdictFailed(model: TabletModelID)
+    case stageTiming(photoID: String, stage: Int, model: TabletModelID, lane: ModelLane, seconds: Double)
 }
 
 public protocol TabletUpscaleService {
     var laneOverride: TabletLaneOverride { get set }
     /// Latest activity for both lanes; events are also delivered to the batch callback.
     var laneActivity: AsyncStream<TabletLaneActivity> { get }
-    func run(plan: Plan, inputs: [TabletInput], fullScale: Bool, events: @escaping @Sendable (TabletUpscaleEvent) -> Void) async throws -> [TabletUpscaleResult]
+    var supportsBackgroundGPU: Bool { get }
+    func run(plan: Plan, inputs: [TabletInput], fullScale: Bool, targetScale: Int, outputFormat: TabletOutputFormat, events: @escaping @Sendable (TabletUpscaleEvent) -> Void) async throws -> [TabletUpscaleResult]
+    func cachedVerdict(for model: TabletModelID) -> TabletChipVerdict?
+    func isModelBundled(_ model: TabletModelID) -> Bool
+    func hasModelFailedCheck(_ model: TabletModelID) -> Bool
+    func bundledModelByteSize(_ model: TabletModelID) -> Int64?
     func cancel()
+}
+
+public extension TabletUpscaleService {
+    func run(plan: Plan, inputs: [TabletInput], fullScale: Bool, events: @escaping @Sendable (TabletUpscaleEvent) -> Void) async throws -> [TabletUpscaleResult] {
+        try await run(plan: plan, inputs: inputs, fullScale: fullScale, targetScale: 4, outputFormat: .heic, events: events)
+    }
 }
 
 public func makeTabletUpscaleService() -> TabletUpscaleService {

@@ -20,7 +20,7 @@ public struct Plan: Codable, Sendable {
     }
 
     /// Upscales use the common input cap. Restore-only plans retain the original dimensions.
-    public func stageSizes(width: Int, height: Int, fullScale: Bool = false) -> [StageSize] {
+    public func stageSizes(width: Int, height: Int, fullScale: Bool = false, requestedScale: Int = 4) -> [StageSize] {
         precondition(isValid && width > 0 && height > 0)
         let target = SizePolicy.target(width: width, height: height)
         let upscale = stages.contains { ModelCatalog.model($0).scale == 4 }
@@ -28,7 +28,14 @@ public struct Plan: Codable, Sendable {
         var h = upscale ? target.height : height
         var sizes: [StageSize] = []
         for stage in stages {
-            let scale = ModelCatalog.model(stage).scale == 1 ? 1 : (fullScale ? 4 : target.outputScale)
+            let scale: Int
+            if ModelCatalog.model(stage).scale == 1 {
+                scale = 1
+            } else if requestedScale == 2 {
+                scale = 2
+            } else {
+                scale = fullScale ? 4 : target.outputScale
+            }
             w *= scale
             h *= scale
             sizes.append(StageSize(width: w, height: h, scale: scale))

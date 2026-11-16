@@ -31,6 +31,22 @@ public final class TabletDeviceCheck: @unchecked Sendable {
         return "LocalSR.tabletCheck.v1.\(device.count):\(device)\(version.count):\(version)\(build.count):\(build)\(model.rawValue.count):\(model.rawValue)"
     }
 
+    private func failedKey(_ model: TabletModelID) -> String {
+        key(model) + ".failed"
+    }
+
+    public func cachedVerdict(for model: TabletModelID) -> TabletDeviceVerdict? {
+        guard let data = defaults.data(forKey: key(model)),
+              let result = try? JSONDecoder().decode(TabletDeviceVerdict.self, from: data) else {
+            return nil
+        }
+        return result
+    }
+
+    public func hasFailedCheck(for model: TabletModelID) -> Bool {
+        defaults.bool(forKey: failedKey(model))
+    }
+
     public func verdict(for model: TabletModelID, force: Bool = false) async throws -> TabletDeviceVerdict {
         let cacheKey = key(model)
         if !force, let data = defaults.data(forKey: cacheKey), let result = try? JSONDecoder().decode(TabletDeviceVerdict.self, from: data) { return result }
@@ -84,8 +100,12 @@ public final class TabletDeviceCheck: @unchecked Sendable {
             }
         }
         guard let chosen = DeviceCheck.decide(cpu: cpu, gpu: gpu, npu: npu) else {
+            if !timedOut {
+                defaults.set(true, forKey: failedKey(model))
+            }
             throw NSError(domain: "LocalSR", code: 1, userInfo: [NSLocalizedDescriptionKey: "This model failed the device check."])
         }
+        defaults.removeObject(forKey: failedKey(model))
         let result = TabletDeviceVerdict(preferred: chosen.unit, cpu: DeviceCheck.passes(cpu), gpu: DeviceCheck.passes(gpu), neuralEngine: DeviceCheck.passes(npu))
         if !timedOut, let data = try? JSONEncoder().encode(result) { defaults.set(data, forKey: cacheKey) }
         return result

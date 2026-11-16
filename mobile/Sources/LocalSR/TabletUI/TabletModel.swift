@@ -3,7 +3,6 @@ import Observation
 import SwiftUI
 import LocalSRCore
 
-#if !SKIP
 private final class TabletServiceBox: @unchecked Sendable {
     var service: TabletUpscaleService
 
@@ -11,41 +10,52 @@ private final class TabletServiceBox: @unchecked Sendable {
         self.service = service
     }
 
+    var supportsBackgroundGPU: Bool {
+        service.supportsBackgroundGPU
+    }
+
+    func setLaneOverride(_ override: TabletLaneOverride) {
+        service.laneOverride = override
+    }
+
+    func cachedVerdict(for model: TabletModelID) -> TabletChipVerdict? {
+        service.cachedVerdict(for: model)
+    }
+
+    func isModelBundled(_ model: TabletModelID) -> Bool {
+        service.isModelBundled(model)
+    }
+
+    func hasModelFailedCheck(_ model: TabletModelID) -> Bool {
+        service.hasModelFailedCheck(model)
+    }
+
+    func bundledModelByteSize(_ model: TabletModelID) -> Int64? {
+        service.bundledModelByteSize(model)
+    }
+
     func run(
         plan: Plan,
         inputs: [TabletInput],
         fullScale: Bool,
+        targetScale: Int,
+        outputFormat: TabletOutputFormat,
         events: @escaping @Sendable (TabletUpscaleEvent) -> Void
     ) async throws -> [TabletUpscaleResult] {
-        try await service.run(plan: plan, inputs: inputs, fullScale: fullScale, events: events)
+        try await service.run(
+            plan: plan,
+            inputs: inputs,
+            fullScale: fullScale,
+            targetScale: targetScale,
+            outputFormat: outputFormat,
+            events: events
+        )
     }
 
     func cancel() {
         service.cancel()
     }
 }
-#else
-private final class TabletServiceBox: @unchecked Sendable {
-    var service: TabletUpscaleService
-
-    init(_ service: TabletUpscaleService) {
-        self.service = service
-    }
-
-    func run(
-        plan: Plan,
-        inputs: [TabletInput],
-        fullScale: Bool,
-        events: @escaping @Sendable (TabletUpscaleEvent) -> Void
-    ) async throws -> [TabletUpscaleResult] {
-        try await service.run(plan: plan, inputs: inputs, fullScale: fullScale, events: events)
-    }
-
-    func cancel() {
-        service.cancel()
-    }
-}
-#endif
 
 enum TabletMediaSegment: String, CaseIterable, Sendable {
     case queue
@@ -105,10 +115,69 @@ struct TabletResultItem: Identifiable, Codable, Equatable, Sendable {
     let width: Int
     let height: Int
     let outputScale: Int
+    let fullScaleFallback: Bool
     let seconds: Double
     let stages: [TabletModelID]
     let chipsLabel: String
     let createdAt: Date
+
+    init(
+        id: String,
+        displayName: String,
+        inputURL: URL,
+        outputURL: URL,
+        previewURL: URL,
+        inputWidth: Int?,
+        inputHeight: Int?,
+        width: Int,
+        height: Int,
+        outputScale: Int,
+        fullScaleFallback: Bool = false,
+        seconds: Double,
+        stages: [TabletModelID],
+        chipsLabel: String,
+        createdAt: Date
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.inputURL = inputURL
+        self.outputURL = outputURL
+        self.previewURL = previewURL
+        self.inputWidth = inputWidth
+        self.inputHeight = inputHeight
+        self.width = width
+        self.height = height
+        self.outputScale = outputScale
+        self.fullScaleFallback = fullScaleFallback
+        self.seconds = seconds
+        self.stages = stages
+        self.chipsLabel = chipsLabel
+        self.createdAt = createdAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, displayName, inputURL, outputURL, previewURL, inputWidth, inputHeight
+        case width, height, outputScale, fullScaleFallback, seconds, stages, chipsLabel, createdAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        displayName = try c.decode(String.self, forKey: .displayName)
+        inputURL = try c.decode(URL.self, forKey: .inputURL)
+        outputURL = try c.decode(URL.self, forKey: .outputURL)
+        previewURL = try c.decode(URL.self, forKey: .previewURL)
+        inputWidth = try c.decodeIfPresent(Int.self, forKey: .inputWidth)
+        inputHeight = try c.decodeIfPresent(Int.self, forKey: .inputHeight)
+        width = try c.decode(Int.self, forKey: .width)
+        height = try c.decode(Int.self, forKey: .height)
+        outputScale = try c.decode(Int.self, forKey: .outputScale)
+        fullScaleFallback = try c.decodeIfPresent(Bool.self, forKey: .fullScaleFallback) ?? false
+        seconds = try c.decode(Double.self, forKey: .seconds)
+        stages = try c.decode([TabletModelID].self, forKey: .stages)
+        chipsLabel = try c.decode(String.self, forKey: .chipsLabel)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+    }
 }
 
 enum TabletBatchCompletion: Equatable, Sendable {
@@ -121,6 +190,7 @@ enum TabletBatchCompletion: Equatable, Sendable {
 final class TabletModel {
     private let serviceBox: TabletServiceBox
     private let storageDirectory: URL
+    private let defaults: UserDefaults
 
     var queueItems: [TabletQueueItem] = []
     var results: [TabletResultItem] = []
@@ -138,6 +208,24 @@ final class TabletModel {
     var isFullResolutionActive: Bool = false
     var revealResultID: String? = nil
     var enhanceScrollOffset: CGFloat = 0.0
+    var scrollToChipsTrigger: Int = 0
+
+    // Enhance setup, recipes & verdicts
+    var setup: TabletEnhanceSetup = TabletEnhanceSetup()
+    var recipes: [TabletRecipe] = []
+    var laneChoice: TabletLaneChoice = .both
+    var verdictsByModel: [TabletModelID: TabletChipVerdict] = [:]
+    var bundledModels: Set<TabletModelID> = []
+    var failedModels: Set<TabletModelID> = []
+    var modelByteSizes: [TabletModelID: Int64] = [:]
+    var measuredSecondsByModel: [TabletModelID: Double] = [:]
+
+    // Output & auto-save settings
+    var fullScale: Bool = false
+    var autoSave: Bool = false
+    var saveDestination: TabletSaveDestination = .photos
+    var saveFolderURL: URL? = nil
+    var saveFolderDisplayName: String? = nil
 
     // Batch & status state
     var isCheckingDevice: Bool = false
@@ -152,10 +240,13 @@ final class TabletModel {
     var batchTotalInRun: Int = 0
     var batchFailedInRun: Int = 0
     var batchLastRunSummary: TabletBatchCompletion? = nil
+    var lastBatchLaneSummary: String? = nil
 
     var laneActivities: [ModelLane: TabletLaneActivity] = [:]
     var lastKnownChipByModel: [TabletModelID: String] = [:]
-    var fullScale: Bool = false
+    var isThermalSlowed: Bool = false
+    var isAppInBackground: Bool = false
+
     var isSaving: Bool = false
     var isSavingAll: Bool = false
     var saveAllDone: Int = 0
@@ -167,18 +258,42 @@ final class TabletModel {
     @ObservationIgnored private var transientTimerTask: Task<Void, Never>? = nil
     @ObservationIgnored private var pendingFollowUpIDs: [String] = []
     @ObservationIgnored private var itemChipsUsed: [String: [String]] = [:]
+    @ObservationIgnored private var batchStageRecords: [String: [Int: (model: TabletModelID, lane: ModelLane)]] = [:]
+    @ObservationIgnored private var batchItemCompletedIDs: Set<String> = []
 
-    /// Default plan for chunk 1: Best 4x.
-    let activePlan = Plan(stages: [.best])
+    private static let recipesDefaultsKey = "tabletRecipesJSON"
+    private static let setupDefaultsKey = "tabletEnhanceSetupJSON"
+    private static let laneChoiceDefaultsKey = "tabletLaneChoice"
+    private static let measuredSecondsDefaultsKey = "tabletMeasuredSecondsJSON"
+    private static let autoSaveDefaultsKey = "tabletAutoSave"
+    private static let saveDestinationDefaultsKey = "tabletSaveDestination"
+    private static let saveFolderPathDefaultsKey = "tabletSaveFolderPath"
+    private static let saveFolderBookmarkDefaultsKey = "tabletSaveFolderBookmark"
 
-    init(service: TabletUpscaleService = makeTabletUpscaleService(), cachesDirectory: URL? = nil) {
+    init(
+        service: TabletUpscaleService = makeTabletUpscaleService(),
+        cachesDirectory: URL? = nil,
+        defaults: UserDefaults = .standard
+    ) {
         self.serviceBox = TabletServiceBox(service)
+        self.defaults = defaults
         #if SKIP
         let cachesBase = cachesDirectory ?? URL(fileURLWithPath: ProcessInfo.processInfo.androidContext.cacheDir.absolutePath, isDirectory: true)
         #else
         let cachesBase = cachesDirectory ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         #endif
         self.storageDirectory = cachesBase.appendingPathComponent("LocalSR", isDirectory: true)
+
+        if TabletPlatform.isAndroid {
+            self.setup.outputFormat = .jpeg
+        }
+
+        loadPersistedState()
+        refreshCatalogState()
+
+        #if !SKIP
+        updateThermalState()
+        #endif
 
         if let data = try? Data(contentsOf: storageDirectory.appendingPathComponent("tablet_results.json")),
            let decoded = try? JSONDecoder().decode([TabletResultItem].self, from: data) {
@@ -200,6 +315,39 @@ final class TabletModel {
     }
 
     // MARK: - Computed Properties
+
+    var activePlan: Plan {
+        setup.buildPlan()
+    }
+
+    var matchingRecipe: TabletRecipe? {
+        recipes.first { setup.matches(recipe: $0) }
+    }
+
+    var headingSummary: String {
+        setup.headingSummary(matchingRecipe: matchingRecipe)
+    }
+
+    var supportsBackgroundGPU: Bool {
+        serviceBox.supportsBackgroundGPU
+    }
+
+    var checkingModelDisplayName: String {
+        if setup.task == .restore {
+            return "the models"
+        }
+        return ModelCatalog.model(setup.upscaleModel).displayName
+    }
+
+    var laneValidationError: (title: String, detail: String, allFailed: Bool)? {
+        TabletEnhanceSetup.laneValidationFailureMessage(
+            plan: activePlan,
+            verdicts: verdictsByModel,
+            failedModels: failedModels,
+            laneChoice: laneChoice,
+            deviceNoun: TabletPlatform.deviceNoun
+        )
+    }
 
     var waitingQueueItems: [TabletQueueItem] {
         queueItems.filter { $0.status == .waiting || $0.status == .failed }
@@ -295,6 +443,235 @@ final class TabletModel {
 
     func isSaved(_ resultID: String) -> Bool {
         savedResultIDs.contains(resultID)
+    }
+
+    // MARK: - Model Catalog & Verdicts
+
+    func refreshCatalogState() {
+        var bundled: Set<TabletModelID> = []
+        var failed: Set<TabletModelID> = []
+        var verdicts: [TabletModelID: TabletChipVerdict] = verdictsByModel
+        var sizes: [TabletModelID: Int64] = [:]
+
+        for modelID in TabletModelID.allCases {
+            if serviceBox.isModelBundled(modelID) {
+                bundled.insert(modelID)
+            }
+            if serviceBox.hasModelFailedCheck(modelID) {
+                failed.insert(modelID)
+            }
+            if let v = serviceBox.cachedVerdict(for: modelID) {
+                verdicts[modelID] = v
+            }
+            if let bytes = serviceBox.bundledModelByteSize(modelID) {
+                sizes[modelID] = bytes
+            } else {
+                sizes[modelID] = ModelCatalog.model(modelID).fallbackBytes
+            }
+        }
+
+        bundledModels = bundled
+        failedModels = failed
+        verdictsByModel = verdicts
+        modelByteSizes = sizes
+    }
+
+    func isModelAvailable(_ id: TabletModelID) -> Bool {
+        bundledModels.contains(id) && !failedModels.contains(id)
+    }
+
+    func availablePresets(for content: TabletContentKind) -> [TabletQualityPreset] {
+        TabletQualityPreset.presets(for: content).filter { preset in
+            guard let id = preset.modelID else { return false }
+            return isModelAvailable(id)
+        }
+    }
+
+    func availableLibraryModels(in group: TabletLibraryGroup) -> [ModelDescriptor] {
+        ModelCatalog.models(in: group).filter { isModelAvailable($0.id) }
+    }
+
+    func chipLabel(for modelID: TabletModelID) -> String {
+        TabletEnhanceSetup.chipLabel(
+            for: modelID,
+            verdict: verdictsByModel[modelID],
+            laneChoice: laneChoice,
+            isAndroid: TabletPlatform.isAndroid
+        )
+    }
+
+    func measuredSeconds(for modelID: TabletModelID) -> Double? {
+        measuredSecondsByModel[modelID]
+    }
+
+    func estimatedSecondsPerPhotoForActivePlan() -> Double? {
+        let stages = activePlan.stages
+        guard !stages.isEmpty else { return nil }
+        var total = 0.0
+        for stage in stages {
+            guard let s = measuredSecondsByModel[stage] else { return nil }
+            total += s
+        }
+        return total
+    }
+
+    // MARK: - Enhance Setup Actions
+
+    func setTask(_ task: TabletTaskKind) {
+        guard !isBatchRunning else { return }
+        setup.task = task
+        if task == .restore && !setup.fixNoise && !setup.fixJpeg {
+            setup.fixNoise = true
+        }
+        persistSetup()
+    }
+
+    func setContent(_ content: TabletContentKind) {
+        guard !isBatchRunning else { return }
+        setup.content = content
+        let presets = availablePresets(for: content)
+        if !presets.contains(where: { $0.modelID == setup.upscaleModel }) {
+            if let preferred = presets.first(where: { $0 == .best }) ?? presets.first,
+               let modelID = preferred.modelID {
+                setup.upscaleModel = modelID
+                setup.isManualModelChoice = false
+            }
+        }
+        persistSetup()
+    }
+
+    func selectPreset(_ preset: TabletQualityPreset) {
+        guard !isBatchRunning, let modelID = preset.modelID, isModelAvailable(modelID) else { return }
+        setup.task = .upscale
+        setup.content = preset.contentKind
+        setup.upscaleModel = modelID
+        setup.isManualModelChoice = false
+        persistSetup()
+    }
+
+    func selectModelFromLibrary(_ modelID: TabletModelID) {
+        guard !isBatchRunning, isModelAvailable(modelID) else { return }
+        if modelID == .jpegFix {
+            setup.fixJpeg = true
+        } else if modelID == .noiseFix {
+            setup.fixNoise = true
+        } else {
+            setup.task = .upscale
+            if modelID == .anime {
+                setup.content = .illustration
+            } else {
+                setup.content = .photo
+            }
+            setup.upscaleModel = modelID
+            setup.isManualModelChoice = (modelID != .best)
+        }
+        persistSetup()
+    }
+
+    func resetToBestModel() {
+        guard !isBatchRunning else { return }
+        setup.task = .upscale
+        setup.content = .photo
+        setup.upscaleModel = .best
+        setup.isManualModelChoice = false
+        persistSetup()
+    }
+
+    func toggleFixNoise() {
+        guard !isBatchRunning else { return }
+        if setup.task == .restore && setup.fixNoise && !setup.fixJpeg {
+            return
+        }
+        setup.fixNoise.toggle()
+        persistSetup()
+    }
+
+    func toggleFixJpeg() {
+        guard !isBatchRunning else { return }
+        if setup.task == .restore && setup.fixJpeg && !setup.fixNoise {
+            return
+        }
+        setup.fixJpeg.toggle()
+        persistSetup()
+    }
+
+    func setOutputSize(_ size: TabletOutputSizeChoice) {
+        guard !isBatchRunning else { return }
+        setup.outputSize = size
+        persistSetup()
+    }
+
+    func setOutputFormat(_ format: TabletOutputFormat) {
+        guard !isBatchRunning else { return }
+        setup.outputFormat = TabletPlatform.isAndroid && format == .heic ? .jpeg : format
+        persistSetup()
+    }
+
+    func updateLaneChoice(_ choice: TabletLaneChoice) {
+        guard !isBatchRunning else { return }
+        laneChoice = choice
+        applyLaneChoiceToService()
+        defaults.set(choice.rawValue, forKey: Self.laneChoiceDefaultsKey)
+    }
+
+    func updateAutoSave(_ enabled: Bool) {
+        guard !isBatchRunning else { return }
+        autoSave = enabled
+        defaults.set(enabled, forKey: Self.autoSaveDefaultsKey)
+    }
+
+    func updateSaveDestination(_ dest: TabletSaveDestination) {
+        guard !isBatchRunning else { return }
+        saveDestination = dest
+        defaults.set(dest.rawValue, forKey: Self.saveDestinationDefaultsKey)
+    }
+
+    func setSaveFolder(_ url: URL) {
+        #if !SKIP
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer {
+            if scoped { url.stopAccessingSecurityScopedResource() }
+        }
+        if let bookmark = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
+            defaults.set(bookmark, forKey: Self.saveFolderBookmarkDefaultsKey)
+        }
+        #endif
+        saveFolderURL = url
+        saveFolderDisplayName = url.lastPathComponent.isEmpty ? "Folder" : url.lastPathComponent
+        defaults.set(url.path, forKey: Self.saveFolderPathDefaultsKey)
+        updateSaveDestination(.folder)
+    }
+
+    // MARK: - Recipes
+
+    func saveRecipe(name rawName: String) {
+        let trimmed = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = trimmed.isEmpty ? "Recipe \(recipes.count + 1)" : trimmed
+        let recipe = setup.makeRecipe(name: name)
+        recipes.append(recipe)
+        persistRecipes()
+    }
+
+    func applyRecipe(_ recipe: TabletRecipe) {
+        guard !isBatchRunning else { return }
+        setup = setup.applying(recipe: recipe)
+        if TabletPlatform.isAndroid && setup.outputFormat == .heic {
+            setup.outputFormat = .jpeg
+        }
+        persistSetup()
+    }
+
+    func renameRecipe(id: String, name rawName: String) {
+        let trimmed = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let idx = recipes.firstIndex(where: { $0.id == id }) else { return }
+        recipes[idx].name = trimmed
+        persistRecipes()
+    }
+
+    func deleteRecipe(id: String) {
+        recipes.removeAll { $0.id == id }
+        persistRecipes()
     }
 
     // MARK: - Importing
@@ -480,13 +857,13 @@ final class TabletModel {
 
     func startAll(switchToViewer: Bool = false) {
         let targets = queueItems.filter { $0.status == .waiting || $0.status == .failed }
-        guard !targets.isEmpty, !isBatchRunning else { return }
+        guard !targets.isEmpty, !isBatchRunning, laneValidationError == nil else { return }
         if switchToViewer { activeTab = .viewer }
         runQueueBatch(items: targets)
     }
 
     func upscaleSelected(switchToViewer: Bool = false) {
-        guard !isBatchRunning else { return }
+        guard !isBatchRunning, laneValidationError == nil else { return }
         if let selected = selectedQueueItem, selected.status == .waiting || selected.status == .failed {
             if switchToViewer { activeTab = .viewer }
             runQueueBatch(items: [selected])
@@ -515,7 +892,7 @@ final class TabletModel {
     }
 
     func enhanceAgain(result: TabletResultItem) {
-        guard !isBatchRunning else { return }
+        guard !isBatchRunning, laneValidationError == nil else { return }
         if let idx = queueItems.firstIndex(where: { $0.resultID == result.id }) {
             queueItems[idx].resultID = nil
             queueItems[idx].status = .waiting
@@ -552,7 +929,7 @@ final class TabletModel {
     }
 
     func upscaleSingleQueueItem(id: String, switchToViewer: Bool = false) {
-        guard !isBatchRunning,
+        guard !isBatchRunning, laneValidationError == nil,
               let item = queueItems.first(where: { $0.id == id }) else { return }
         selection = .queue(id)
         if switchToViewer { activeTab = .viewer }
@@ -569,7 +946,7 @@ final class TabletModel {
 
     func retryFailed(switchToViewer: Bool = false) {
         let failed = queueItems.filter { $0.status == .failed }
-        guard !failed.isEmpty, !isBatchRunning else { return }
+        guard !failed.isEmpty, !isBatchRunning, laneValidationError == nil else { return }
         if switchToViewer { activeTab = .viewer }
         runQueueBatch(items: failed)
     }
@@ -584,7 +961,11 @@ final class TabletModel {
     private func runQueueBatch(items: [TabletQueueItem]) {
         guard !items.isEmpty else { return }
         let plan = activePlan
+        let targetScale = setup.task == .restore ? 1 : setup.outputSize.rawValue
+        let outputFormat = setup.outputFormat
         let ids = items.map(\.id)
+
+        applyLaneChoiceToService()
 
         for id in ids {
             if let idx = queueItems.firstIndex(where: { $0.id == id }) {
@@ -603,8 +984,10 @@ final class TabletModel {
         }
 
         isBatchRunning = true
-        isCheckingDevice = true
+        let allChecked = plan.stages.allSatisfy { verdictsByModel[$0] != nil }
+        isCheckingDevice = !allChecked
         batchLastRunSummary = nil
+        lastBatchLaneSummary = nil
         batchStartedAt = Date()
         batchTargetIDs = ids
         batchCompletedInRun = 0
@@ -612,15 +995,18 @@ final class TabletModel {
         batchTotalInRun = ids.count
         pendingFollowUpIDs = []
         itemChipsUsed = [:]
+        batchStageRecords = [:]
+        batchItemCompletedIDs = []
         laneActivities = [:]
 
         #if !SKIP && os(iOS)
-        let title = ids.count == 1 ? "Upscaling 1 Photo" : "Upscaling \(ids.count) Photos"
+        let verb = setup.task == .restore ? "Restoring" : "Upscaling"
+        let title = ids.count == 1 ? "\(verb) 1 Photo" : "\(verb) \(ids.count) Photos"
         BatchBackgroundTask.shared.begin(
             title: title,
             subtitle: "0 of \(ids.count)",
             totalUnits: Int64(ids.count),
-            requestGPU: true,
+            requestGPU: laneChoice != .neuralEngineOnly,
             onExpire: { [weak self] in
                 Task { @MainActor in
                     self?.cancelQueue()
@@ -643,7 +1029,13 @@ final class TabletModel {
                 if batchInputs.isEmpty { break }
 
                 do {
-                    _ = try await self.serviceBox.run(plan: plan, inputs: batchInputs, fullScale: self.fullScale) { event in
+                    _ = try await self.serviceBox.run(
+                        plan: plan,
+                        inputs: batchInputs,
+                        fullScale: self.fullScale,
+                        targetScale: targetScale,
+                        outputFormat: outputFormat
+                    ) { event in
                         Task { @MainActor in
                             self.handleServiceEvent(event, plan: plan)
                         }
@@ -668,12 +1060,42 @@ final class TabletModel {
                 }
             }
 
-            self.finalizeBatchRun(wasCancelled: wasCancelled)
+            self.finalizeBatchRun(wasCancelled: wasCancelled, plan: plan)
         }
     }
 
     private func handleServiceEvent(_ event: TabletUpscaleEvent, plan: Plan) {
         switch event {
+        case .verdict(let model, let verdict):
+            verdictsByModel[model] = verdict
+            failedModels.remove(model)
+
+        case .verdictFailed(let model):
+            failedModels.insert(model)
+            isCheckingDevice = false
+
+        case .stageTiming(let photoID, let stage, let model, let lane, let seconds):
+            let chip = unitForLane(lane).platformDisplayName
+            lastKnownChipByModel[model] = chip
+            var chips = itemChipsUsed[photoID] ?? []
+            if !chips.contains(chip) {
+                chips.append(chip)
+                itemChipsUsed[photoID] = chips
+            }
+            var rec = batchStageRecords[photoID] ?? [:]
+            if rec[stage] == nil {
+                rec[stage] = (model, lane)
+                batchStageRecords[photoID] = rec
+            }
+            if seconds.isFinite && seconds > 0.0 {
+                if let prev = measuredSecondsByModel[model] {
+                    measuredSecondsByModel[model] = prev * 0.5 + seconds * 0.5
+                } else {
+                    measuredSecondsByModel[model] = seconds
+                }
+                persistMeasuredSeconds()
+            }
+
         case .lane(let activity):
             laneActivities[activity.lane] = activity
             if let pid = activity.photoID {
@@ -692,6 +1114,9 @@ final class TabletModel {
                         chips.append(chip)
                         itemChipsUsed[pid] = chips
                     }
+                    var rec = batchStageRecords[pid] ?? [:]
+                    rec[stageIdx] = (model, activity.lane)
+                    batchStageRecords[pid] = rec
                 }
             }
 
@@ -707,7 +1132,7 @@ final class TabletModel {
                 queueItems[idx].progress = combined
             }
 
-        case .prediction(let photoID, _, let model, let lane, _, _):
+        case .prediction(let photoID, let stage, let model, let lane, _, _):
             isCheckingDevice = false
             let chip = unitForLane(lane).platformDisplayName
             lastKnownChipByModel[model] = chip
@@ -716,15 +1141,26 @@ final class TabletModel {
                 chips.append(chip)
                 itemChipsUsed[photoID] = chips
             }
+            var rec = batchStageRecords[photoID] ?? [:]
+            rec[stage] = (model, lane)
+            batchStageRecords[photoID] = rec
 
         case .completed(let result):
             isCheckingDevice = false
+            batchItemCompletedIDs.insert(result.id)
             let qIdx = queueItems.firstIndex(where: { $0.id == result.id })
             let displayName = qIdx.map { queueItems[$0].displayName } ?? result.inputURL.lastPathComponent
             let inW = qIdx.flatMap { queueItems[$0].pixelWidth }
             let inH = qIdx.flatMap { queueItems[$0].pixelHeight }
             let chips = itemChipsUsed[result.id] ?? []
             let chipsLabel = chips.isEmpty ? ComputeUnit.npu.platformDisplayName : chips.joined(separator: " + ")
+
+            if result.plan.stages.count == 1, let onlyModel = result.plan.stages.first, result.seconds.isFinite, result.seconds > 0.0 {
+                if measuredSecondsByModel[onlyModel] == nil {
+                    measuredSecondsByModel[onlyModel] = result.seconds
+                    persistMeasuredSeconds()
+                }
+            }
 
             let record = TabletResultItem(
                 id: UUID().uuidString,
@@ -737,6 +1173,7 @@ final class TabletModel {
                 width: result.width,
                 height: result.height,
                 outputScale: result.outputScale,
+                fullScaleFallback: result.fullScaleFallback,
                 seconds: result.seconds,
                 stages: result.plan.stages,
                 chipsLabel: chipsLabel,
@@ -765,12 +1202,27 @@ final class TabletModel {
                 subtitle: "\(batchCompletedInRun) of \(batchTotalInRun)"
             )
             #endif
+
+            if autoSave {
+                Task { @MainActor in
+                    await autoSaveResult(record)
+                }
+            }
         }
     }
 
     private func handleBatchRunError(_ error: Error, targetIDs: [String]) {
         isCheckingDevice = false
-        let message = error.localizedDescription.isEmpty ? String(describing: error) : error.localizedDescription
+        let message: String
+        #if !SKIP
+        if let schedErr = error as? LaneScheduler.ScheduleError, case .unavailable = schedErr {
+            message = laneValidationError?.detail ?? "No chip available for this setup."
+        } else {
+            message = error.localizedDescription.isEmpty ? String(describing: error) : error.localizedDescription
+        }
+        #else
+        message = error.localizedDescription.isEmpty ? String(describing: error) : error.localizedDescription
+        #endif
         for id in targetIDs {
             if let idx = queueItems.firstIndex(where: { $0.id == id }),
                queueItems[idx].status == .running || queueItems[idx].status == .waiting {
@@ -781,10 +1233,11 @@ final class TabletModel {
         }
     }
 
-    private func finalizeBatchRun(wasCancelled: Bool) {
+    private func finalizeBatchRun(wasCancelled: Bool, plan: Plan) {
         isBatchRunning = false
         isCheckingDevice = false
         laneActivities = [:]
+        refreshCatalogState()
 
         if wasCancelled {
             for idx in queueItems.indices where queueItems[idx].status == .running {
@@ -801,6 +1254,7 @@ final class TabletModel {
 
         if wasCancelled {
             batchLastRunSummary = nil
+            lastBatchLaneSummary = nil
             return
         }
 
@@ -814,11 +1268,104 @@ final class TabletModel {
             Haptics.warning()
         } else if batchCompletedInRun > 0 {
             batchLastRunSummary = .complete(count: batchCompletedInRun, seconds: elapsed)
+            lastBatchLaneSummary = buildLastBatchLaneSummary(
+                completedCount: batchCompletedInRun,
+                elapsed: elapsed,
+                plan: plan
+            )
             Haptics.success()
         }
     }
 
+    private func buildLastBatchLaneSummary(completedCount: Int, elapsed: Double, plan: Plan) -> String {
+        let photoWord = completedCount == 1 ? "photo" : "photos"
+        let duration = Self.formatDurationCompact(elapsed)
+
+        var neCount = 0
+        var gpuCount = 0
+        var cpuCount = 0
+        var neFixed = 0
+        var gpuFixed = 0
+        var neUpscaled = 0
+        var gpuUpscaled = 0
+
+        for pid in batchItemCompletedIDs {
+            guard let stageMap = batchStageRecords[pid] else { continue }
+            if plan.stages.count > 1 {
+                for (_, entry) in stageMap {
+                    let isFix = entry.model == .jpegFix || entry.model == .noiseFix
+                    if isFix {
+                        if entry.lane == .neuralEngine { neFixed += 1 }
+                        else if entry.lane == .gpu { gpuFixed += 1 }
+                    } else {
+                        if entry.lane == .neuralEngine { neUpscaled += 1 }
+                        else if entry.lane == .gpu { gpuUpscaled += 1 }
+                    }
+                }
+            } else if let firstStage = stageMap[0] {
+                switch firstStage.lane {
+                case .neuralEngine: neCount += 1
+                case .gpu: gpuCount += 1
+                case .cpu: cpuCount += 1
+                }
+            }
+        }
+
+        let laneText: String
+        if plan.stages.count > 1 {
+            var parts: [String] = []
+            if neFixed > 0 { parts.append("\(TabletPlatform.npuName) fixed \(neFixed)") }
+            if gpuFixed > 0 { parts.append("GPU fixed \(gpuFixed)") }
+            if neUpscaled > 0 { parts.append("\(TabletPlatform.npuName) upscaled \(neUpscaled)") }
+            if gpuUpscaled > 0 { parts.append("GPU upscaled \(gpuUpscaled)") }
+            laneText = parts.isEmpty ? "\(TabletPlatform.npuName) \(neCount), GPU \(gpuCount)" : parts.joined(separator: ", ")
+        } else if !TabletPlatform.isAndroid && laneChoice == .both {
+            laneText = "Neural Engine \(neCount), GPU \(gpuCount)"
+        } else {
+            var parts: [String] = []
+            if neCount > 0 { parts.append("\(TabletPlatform.npuName) \(neCount)") }
+            if gpuCount > 0 { parts.append("GPU \(gpuCount)") }
+            if cpuCount > 0 { parts.append("CPU \(cpuCount)") }
+            if parts.isEmpty {
+                parts.append(laneChoice == .gpuOnly ? "GPU \(completedCount)" : "\(TabletPlatform.npuName) \(completedCount)")
+            }
+            laneText = parts.joined(separator: ", ")
+        }
+        return "Last batch: \(completedCount) \(photoWord) in \(duration). \(laneText)."
+    }
+
     // MARK: - Saving
+
+    private func autoSaveResult(_ result: TabletResultItem) async {
+        if saveDestination == .folder, let folderURL = saveFolderURL {
+            #if !SKIP
+            let scoped = folderURL.startAccessingSecurityScopedResource()
+            defer {
+                if scoped { folderURL.stopAccessingSecurityScopedResource() }
+            }
+            let ext = result.outputURL.pathExtension.isEmpty ? "heic" : result.outputURL.pathExtension
+            let base = URL(fileURLWithPath: result.displayName).deletingPathExtension().lastPathComponent
+            let cleanBase = base.isEmpty ? "LocalSR" : base
+            var dest = folderURL.appendingPathComponent("\(cleanBase)-enhanced.\(ext)")
+            var suffix = 2
+            while FileManager.default.fileExists(atPath: dest.path) {
+                dest = folderURL.appendingPathComponent("\(cleanBase)-enhanced-\(suffix).\(ext)")
+                suffix += 1
+            }
+            do {
+                try FileManager.default.copyItem(at: result.outputURL, to: dest)
+                savedResultIDs.insert(result.id)
+                persistSavedIDs()
+            } catch {
+                saveErrorMessage = error.localizedDescription
+            }
+            #else
+            await saveResult(result)
+            #endif
+        } else {
+            await saveResult(result)
+        }
+    }
 
     func saveResult(_ result: TabletResultItem) async {
         guard !isSaving, !isSavingAll, !savedResultIDs.contains(result.id) else { return }
@@ -877,12 +1424,103 @@ final class TabletModel {
 
     // MARK: - Formatting & Persistence Helpers
 
+    private func applyLaneChoiceToService() {
+        switch laneChoice {
+        case .both: serviceBox.setLaneOverride(.both)
+        case .neuralEngineOnly: serviceBox.setLaneOverride(.neuralEngineOnly)
+        case .gpuOnly: serviceBox.setLaneOverride(.gpuOnly)
+        }
+    }
+
+    private func loadPersistedState() {
+        if let json = defaults.string(forKey: Self.recipesDefaultsKey) {
+            recipes = TabletRecipeStore.decode(json)
+        }
+        if let setupData = defaults.data(forKey: Self.setupDefaultsKey),
+           let decoded = try? JSONDecoder().decode(TabletEnhanceSetup.self, from: setupData) {
+            setup = decoded
+            if TabletPlatform.isAndroid && setup.outputFormat == .heic {
+                setup.outputFormat = .jpeg
+            }
+        }
+        if let rawLane = defaults.string(forKey: Self.laneChoiceDefaultsKey),
+           let decodedLane = TabletLaneChoice(rawValue: rawLane) {
+            laneChoice = decodedLane
+        }
+        applyLaneChoiceToService()
+
+        if let secData = defaults.data(forKey: Self.measuredSecondsDefaultsKey),
+           let decodedSec = try? JSONDecoder().decode([String: Double].self, from: secData) {
+            var mapped: [TabletModelID: Double] = [:]
+            for (k, v) in decodedSec {
+                if let id = TabletModelID(rawValue: k) {
+                    mapped[id] = v
+                }
+            }
+            measuredSecondsByModel = mapped
+        }
+
+        fullScale = defaults.bool(forKey: "fullScale")
+        autoSave = defaults.bool(forKey: Self.autoSaveDefaultsKey)
+        if let rawDest = defaults.string(forKey: Self.saveDestinationDefaultsKey),
+           let dest = TabletSaveDestination(rawValue: rawDest) {
+            saveDestination = dest
+        }
+
+        #if !SKIP
+        if let bookmark = defaults.data(forKey: Self.saveFolderBookmarkDefaultsKey) {
+            var isStale = false
+            if let url = try? URL(resolvingBookmarkData: bookmark, options: [], relativeTo: nil, bookmarkDataIsStale: &isStale) {
+                saveFolderURL = url
+                saveFolderDisplayName = url.lastPathComponent.isEmpty ? "Folder" : url.lastPathComponent
+            }
+        }
+        #endif
+        if saveFolderURL == nil, let path = defaults.string(forKey: Self.saveFolderPathDefaultsKey), !path.isEmpty {
+            let url = URL(fileURLWithPath: path, isDirectory: true)
+            saveFolderURL = url
+            saveFolderDisplayName = url.lastPathComponent.isEmpty ? "Folder" : url.lastPathComponent
+        }
+    }
+
+    private func persistRecipes() {
+        defaults.set(TabletRecipeStore.encode(recipes), forKey: Self.recipesDefaultsKey)
+    }
+
+    private func persistSetup() {
+        if let data = try? JSONEncoder().encode(setup) {
+            defaults.set(data, forKey: Self.setupDefaultsKey)
+        }
+    }
+
+    private func persistMeasuredSeconds() {
+        var dict: [String: Double] = [:]
+        for (k, v) in measuredSecondsByModel {
+            dict[k.rawValue] = v
+        }
+        if let data = try? JSONEncoder().encode(dict) {
+            defaults.set(data, forKey: Self.measuredSecondsDefaultsKey)
+        }
+    }
+
+    #if !SKIP
+    func updateThermalState() {
+        let state = ProcessInfo.processInfo.thermalState
+        isThermalSlowed = (state == .serious || state == .critical)
+    }
+    #endif
+
     private func combinedProgress(for item: TabletQueueItem, plan: Plan, stage: Int, fraction: Double) -> Double {
         let clamped = min(max(0.0, fraction), 1.0)
         let stages = plan.stages
         guard !stages.isEmpty else { return clamped }
         if let pw = item.pixelWidth, let ph = item.pixelHeight, pw > 0, ph > 0 {
-            let stageSizes = plan.stageSizes(width: pw, height: ph, fullScale: fullScale)
+            let stageSizes = plan.stageSizes(
+                width: pw,
+                height: ph,
+                fullScale: fullScale,
+                requestedScale: setup.task == .restore ? 1 : setup.outputSize.rawValue
+            )
             let upscale = stages.contains { ModelCatalog.model($0).scale == 4 }
             let target = SizePolicy.target(width: pw, height: ph)
             var inW = upscale ? target.width : pw
@@ -948,6 +1586,19 @@ final class TabletModel {
             return "\(mins) min"
         }
         return "\(mins) min \(secs) s"
+    }
+
+    static func formatBytesCompact(_ bytes: Int64) -> String {
+        if bytes < 1_000_000 {
+            let kb = max(1, Int((Double(bytes) / 1000.0).rounded()))
+            return "\(kb) KB"
+        }
+        let mb = Double(bytes) / 1_000_000.0
+        if mb < 10.0 {
+            let tenths = Int((mb * 10.0).rounded())
+            return "\(tenths / 10).\(tenths % 10) MB"
+        }
+        return "\(Int(mb.rounded())) MB"
     }
 
     private func persistResults() {

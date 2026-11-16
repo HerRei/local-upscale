@@ -4,6 +4,7 @@ import UIKit
 final class TabletUITests: XCTestCase {
     private let shotDir = "/private/tmp/claude-501/-Users-hermesheiniger/619da889-5d3f-4724-b759-70d636ce5866/scratchpad/tui1/shots"
     private let tui2ShotDir = "/private/tmp/claude-501/-Users-hermesheiniger/619da889-5d3f-4724-b759-70d636ce5866/scratchpad/tui2/shots"
+    private let tui3ShotDir = "/private/tmp/claude-501/-Users-hermesheiniger/619da889-5d3f-4724-b759-70d636ce5866/scratchpad/tui3/shots"
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -242,6 +243,192 @@ final class TabletUITests: XCTestCase {
         ensureZoomHUDVisible(app: app)
         Thread.sleep(forTimeInterval: 0.3)
         saveShot("viewer_\(deviceTag)_portrait_\(appearance).png", in: tui2ShotDir)
+    }
+
+    @MainActor
+    func testTabletEnhanceRecipesLibraryAndMeters() throws {
+        try FileManager.default.createDirectory(atPath: tui3ShotDir, withIntermediateDirectories: true)
+        let appearance = ProcessInfo.processInfo.environment["SHOT_APPEARANCE"] ?? "light"
+        let deviceTag = ProcessInfo.processInfo.environment["SHOT_DEVICE"] ?? "ipad13"
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = XCUIApplication()
+        app.launch()
+        Thread.sleep(forTimeInterval: 0.6)
+
+        cleanExistingResultsIfNeeded(app: app)
+
+        // Ensure Enhance pane is reachable (in tab mode on narrower devices, switch to Enhance tab)
+        let enhanceTab = app.buttons["tabletTabEnhance"]
+        let isTabModeAtLaunch = enhanceTab.exists
+        if isTabModeAtLaunch {
+            enhanceTab.tap()
+            Thread.sleep(forTimeInterval: 0.4)
+        }
+
+        // 1. Switch Quality to Fast and back to Best
+        let fastCard = app.buttons["tabletQualityCard_fast"]
+        let bestCard = app.buttons["tabletQualityCard_best"]
+        XCTAssertTrue(fastCard.waitForExistence(timeout: 10), "Fast quality card missing")
+        XCTAssertTrue(bestCard.waitForExistence(timeout: 5), "Best quality card missing")
+        fastCard.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["tabletPlanRow_fast"].waitForExistence(timeout: 4), "Plan row did not switch to Fast")
+        bestCard.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["tabletPlanRow_best"].waitForExistence(timeout: 4), "Plan row did not switch back to Best")
+
+        // 2. Turn on JPEG artifacts and check plan shows Fix JPEG above Upscale x4 + Auto strength note
+        let jpegChip = app.buttons["tabletFixJpegButton"]
+        XCTAssertTrue(jpegChip.waitForExistence(timeout: 5), "JPEG artifacts fix chip missing")
+        jpegChip.tap()
+        XCTAssertTrue(app.staticTexts["tabletJpegStrengthNote"].waitForExistence(timeout: 4), "FBCNN Auto strength caption missing")
+        let fixJpegRow = app.descendants(matching: .any)["tabletPlanRow_fbcnn"]
+        let upscaleRow = app.descendants(matching: .any)["tabletPlanRow_best"]
+        XCTAssertTrue(fixJpegRow.waitForExistence(timeout: 4), "Fix JPEG plan row missing")
+        XCTAssertTrue(upscaleRow.waitForExistence(timeout: 4), "Upscale x4 plan row missing")
+        XCTAssertLessThan(fixJpegRow.frame.minY, upscaleRow.frame.minY, "Fix JPEG must appear above Upscale x4")
+
+        // 3. Save a recipe, reset, apply it, rename and delete it
+        let saveRecipeBtn = app.buttons["tabletSaveRecipeButton"]
+        XCTAssertTrue(saveRecipeBtn.waitForExistence(timeout: 4), "Save as Recipe button missing")
+        saveRecipeBtn.tap()
+        let saveAlert = app.alerts["Save as Recipe"]
+        XCTAssertTrue(saveAlert.waitForExistence(timeout: 5), "Save as Recipe alert missing")
+        let nameField = saveAlert.textFields.firstMatch
+        XCTAssertTrue(nameField.waitForExistence(timeout: 3))
+        nameField.tap()
+        nameField.typeText("Old scans")
+        saveAlert.buttons["Save"].tap()
+
+        let savedRecipeBtn = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Old scans'")).firstMatch
+        XCTAssertTrue(savedRecipeBtn.waitForExistence(timeout: 5), "Saved recipe row 'Old scans' missing")
+
+        // Turn off JPEG artifacts and switch to Fast, then apply recipe to verify restore
+        jpegChip.tap()
+        fastCard.tap()
+        XCTAssertFalse(fixJpegRow.exists, "Fix JPEG row should disappear when turned off")
+        savedRecipeBtn.tap()
+        XCTAssertTrue(fixJpegRow.waitForExistence(timeout: 4), "Applying recipe should re-enable Fix JPEG")
+        XCTAssertTrue(upscaleRow.waitForExistence(timeout: 4), "Applying recipe should restore Best model")
+
+        // Rename recipe via recipe menu
+        let recipeMenu = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'tabletRecipeMenu_'")).firstMatch
+        XCTAssertTrue(recipeMenu.waitForExistence(timeout: 4), "Recipe options menu missing")
+        recipeMenu.tap()
+        let renameMenuBtn = app.buttons["Rename\u{2026}"]
+        XCTAssertTrue(renameMenuBtn.waitForExistence(timeout: 4), "Rename menu item missing")
+        renameMenuBtn.tap()
+
+        let renameAlert = app.alerts["Rename Recipe"]
+        XCTAssertTrue(renameAlert.waitForExistence(timeout: 5), "Rename Recipe alert missing")
+        let renameField = renameAlert.textFields.firstMatch
+        XCTAssertTrue(renameField.waitForExistence(timeout: 3))
+        renameField.tap()
+        if let existing = renameField.value as? String, !existing.isEmpty {
+            let deleteStr = String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing.count)
+            renameField.typeText(deleteStr)
+        }
+        renameField.typeText("Clean scan")
+        renameAlert.buttons["Save"].tap()
+
+        let renamedRecipeBtn = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Clean scan'")).firstMatch
+        XCTAssertTrue(renamedRecipeBtn.waitForExistence(timeout: 5), "Renamed recipe row missing")
+
+        // Delete recipe
+        recipeMenu.tap()
+        let deleteMenuBtn = app.buttons["Delete"]
+        XCTAssertTrue(deleteMenuBtn.waitForExistence(timeout: 4), "Delete menu item missing")
+        deleteMenuBtn.tap()
+        XCTAssertTrue(renamedRecipeBtn.waitForNonExistence(timeout: 4), "Deleted recipe row still present")
+
+        // Turn JPEG artifacts back off so batch runs fast with Best
+        jpegChip.tap()
+
+        // 4. Open Model Library and check the 3 groups
+        let changeBtn = app.buttons["tabletModelChangeButton"]
+        XCTAssertTrue(changeBtn.waitForExistence(timeout: 4), "Change... button missing")
+        changeBtn.tap()
+
+        XCTAssertTrue(app.staticTexts["tabletLibraryGroup_upscalePhotos"].waitForExistence(timeout: 6), "Upscale photos group missing")
+        XCTAssertTrue(app.staticTexts["tabletLibraryGroup_illustration"].waitForExistence(timeout: 4), "Illustration group missing")
+        XCTAssertTrue(app.staticTexts["tabletLibraryGroup_fixNoiseAndJpeg"].waitForExistence(timeout: 4), "Fix noise and JPEG group missing")
+        Thread.sleep(forTimeInterval: 0.4)
+        saveShot("model_library_\(deviceTag)_\(appearance).png", in: tui3ShotDir)
+
+        // Pick SPAN x4 NomosUni, tap Use for This Job, verify Back to Best, then reset
+        let nomosSpanRow = app.buttons["tabletLibraryRow_nomos_span"]
+        XCTAssertTrue(nomosSpanRow.waitForExistence(timeout: 4), "SPAN x4 NomosUni row missing")
+        nomosSpanRow.tap()
+        let useBtn = app.buttons["tabletLibraryUseButton"]
+        XCTAssertTrue(useBtn.waitForExistence(timeout: 4), "Use for This Job button missing")
+        useBtn.tap()
+
+        let backToBest = app.buttons["tabletModelBackToBestButton"]
+        XCTAssertTrue(backToBest.waitForExistence(timeout: 5), "Back to Best link did not appear after manual model choice")
+        backToBest.tap()
+        XCTAssertTrue(backToBest.waitForNonExistence(timeout: 4), "Back to Best link should disappear after reset")
+
+        // 5. Check Chips rows exist with their second lines
+        let neRow = app.descendants(matching: .any)["tabletLaneRow_neuralEngine"]
+        let gpuRow = app.descendants(matching: .any)["tabletLaneRow_gpu"]
+        if !neRow.exists || !neRow.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(neRow.waitForExistence(timeout: 4), "Neural Engine chips row missing")
+        XCTAssertTrue(gpuRow.waitForExistence(timeout: 4), "GPU chips row missing")
+        XCTAssertTrue(neRow.label.contains(","), "Neural Engine row label should include second line: \(neRow.label)")
+        XCTAssertTrue(gpuRow.label.contains(","), "GPU row label should include second line: \(gpuRow.label)")
+
+        // Capture Enhance landscape screenshot (only in three-pane landscape)
+        if !isTabModeAtLaunch {
+            saveShot("enhance_\(deviceTag)_landscape_\(appearance).png", in: tui3ShotDir)
+        }
+
+        // 6. Import 3 photos, run batch, capture running meters, verify "Last batch" line
+        let addBtn = isTabModeAtLaunch ? app.buttons["tabletTopBarAddButton"] : app.buttons["tabletMediaAddButton"]
+        XCTAssertTrue(addBtn.waitForExistence(timeout: 5))
+        addBtn.tap()
+        let photosMenuItem = app.buttons["tabletAddPhotosMenuItem"]
+        XCTAssertTrue(photosMenuItem.waitForExistence(timeout: 5))
+        photosMenuItem.tap()
+        XCTAssertTrue(selectPhotosInSystemPicker(app: app, count: 3), "Could not select 3 photos")
+
+        let startAllBtn = app.buttons["tabletStartAllButton"]
+        XCTAssertTrue(startAllBtn.waitForExistence(timeout: 15), "Start All 3 button missing")
+        startAllBtn.tap()
+
+        let statusTitle = app.staticTexts["tabletStatusTitle"]
+        let runningPredicate = NSPredicate(format: "label BEGINSWITH 'Upscaling' OR label BEGINSWITH 'Restoring' OR label == 'Complete'")
+        let runningExp = expectation(for: runningPredicate, evaluatedWith: statusTitle)
+        wait(for: [runningExp], timeout: 30)
+        if statusTitle.label != "Complete" {
+            Thread.sleep(forTimeInterval: 0.6)
+            saveShot("running_batch_meters_\(deviceTag)_\(appearance).png", in: tui3ShotDir)
+        }
+
+        let completePredicate = NSPredicate(format: "label == 'Complete'")
+        let exp = expectation(for: completePredicate, evaluatedWith: statusTitle)
+        wait(for: [exp], timeout: 180)
+        Thread.sleep(forTimeInterval: 0.5)
+
+        if isTabModeAtLaunch {
+            app.buttons["tabletTabEnhance"].tap()
+            Thread.sleep(forTimeInterval: 0.4)
+        }
+        let lastBatchLine = app.staticTexts["tabletLastBatchLine"]
+        if !lastBatchLine.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(lastBatchLine.waitForExistence(timeout: 5), "Last batch line missing after batch completion")
+        XCTAssertTrue(lastBatchLine.label.hasPrefix("Last batch:"), "Unexpected Last batch text: \(lastBatchLine.label)")
+
+        // 7. Portrait Enhance tab two columns screenshot (on 13" or 11" iPad)
+        XCUIDevice.shared.orientation = .portrait
+        Thread.sleep(forTimeInterval: 1.0)
+        if app.buttons["tabletTabEnhance"].waitForExistence(timeout: 5) {
+            app.buttons["tabletTabEnhance"].tap()
+            Thread.sleep(forTimeInterval: 0.5)
+            saveShot("enhance_\(deviceTag)_portrait_\(appearance).png", in: tui3ShotDir)
+        }
     }
 
     @MainActor

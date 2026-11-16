@@ -126,5 +126,59 @@ final class AppleTabletServiceTests: XCTestCase {
             if name == "GPU" { XCTAssertTrue(events.lanes.allSatisfy { $0 == .gpu }) }
         }
     }
+
+    func testLaneSchedulerSpreadsDualChipWorkAcrossBothLanes() throws {
+        final class LaneBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var lanes: [ModelLane] = []
+            func append(_ lane: ModelLane) { lock.withLock { lanes.append(lane) } }
+            var values: [ModelLane] { lock.withLock { lanes } }
+        }
+        let scheduler = LaneScheduler()
+        let verdict = TabletDeviceVerdict(preferred: .npu, cpu: true, gpu: true, neuralEngine: true)
+        let enteredFirst = DispatchSemaphore(value: 0)
+        let releaseFirst = DispatchSemaphore(value: 0)
+        let recorded = LaneBox()
+        let group = DispatchGroup()
+
+        group.enter()
+        DispatchQueue.global().async {
+            defer { group.leave() }
+            try? scheduler.run(photoID: "p1", stage: 0, model: .best, verdict: verdict, override: .both, isCancelled: { false }) { _, lane in
+                recorded.append(lane)
+                enteredFirst.signal()
+                _ = releaseFirst.wait(timeout: .now() + 2)
+            }
+        }
+
+        _ = enteredFirst.wait(timeout: .now() + 2)
+        group.enter()
+        DispatchQueue.global().async {
+            defer { group.leave() }
+            try? scheduler.run(photoID: "p2", stage: 0, model: .best, verdict: verdict, override: .both, isCancelled: { false }) { _, lane in
+                recorded.append(lane)
+                releaseFirst.signal()
+            }
+        }
+
+        XCTAssertEqual(group.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(Set(recorded.values), Set([.neuralEngine, .gpu]), "Dual-chip model should spread concurrent jobs across both lanes")
+
+        // When NPU failed and GPU passed, concurrent jobs must not spill onto CPU.
+        let gpuOnlyVerdict = TabletDeviceVerdict(preferred: .gpu, cpu: true, gpu: true, neuralEngine: false)
+        let gpuUnits = LaneBox()
+        let gpuGroup = DispatchGroup()
+        for idx in 0..<2 {
+            gpuGroup.enter()
+            DispatchQueue.global().async {
+                defer { gpuGroup.leave() }
+                try? scheduler.run(photoID: "g\(idx)", stage: 0, model: .best, verdict: gpuOnlyVerdict, override: .both, isCancelled: { false }) { _, lane in
+                    gpuUnits.append(lane)
+                }
+            }
+        }
+        XCTAssertEqual(gpuGroup.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(gpuUnits.values, [.gpu, .gpu])
+    }
 }
 #endif

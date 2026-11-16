@@ -210,13 +210,25 @@ enum ImageIOCodec {
     }
 
     static func encodeHEIC(pixels: PixelBuffer, colorSpace: CGColorSpace, decoded: DecodedImage, to url: URL, quality: Double = 0.9) throws -> (hasGainMap: Bool, note: String) {
+        try encodeOutput(pixels: pixels, colorSpace: colorSpace, decoded: decoded, format: .heic, to: url, quality: quality)
+    }
+
+    static func encodeOutput(pixels: PixelBuffer, colorSpace: CGColorSpace, decoded: DecodedImage, format: TabletOutputFormat, to url: URL, quality: Double = 0.9) throws -> (hasGainMap: Bool, note: String) {
         guard let image = pixels.makeCGImage(colorSpace: colorSpace) else { throw CodecError.encodeFailed("CGImage") }
-        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.heic.identifier as CFString, 1, nil) else { throw CodecError.encodeFailed("HEIC destination") }
+        let utType: UTType
+        switch format {
+        case .heic: utType = .heic
+        case .jpeg: utType = .jpeg
+        case .png: utType = .png
+        }
+        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, utType.identifier as CFString, 1, nil) else {
+            throw CodecError.encodeFailed("\(format.displayName) destination")
+        }
 
         // Gain map: ISO first, else Apple's; oriented like the base, sized by the source's gain-map-to-base ratio.
         var gainOutput: (type: CFString, data: Data, description: [String: Any], metadata: CGImageMetadata?, colorSpace: CGColorSpace?)?
         var note = "no gain map"
-        if let gain = decoded.gainMap {
+        if format != .png, let gain = decoded.gainMap {
             let uprightGainW = decoded.orientation >= 5 ? gain.height : gain.width
             let ratio = decoded.originalWidth > 0 ? Double(uprightGainW) / Double(decoded.originalWidth) : 0.5
             let usable = ratio > 0 && ratio <= 1 ? ratio : 0.5
@@ -231,8 +243,10 @@ enum ImageIOCodec {
         }
 
         var props = outputProperties(source: decoded.properties, width: pixels.width, height: pixels.height)
-        props[kCGImageDestinationLossyCompressionQuality as String] = quality
-        props[kCGImageDestinationOptimizeColorForSharing as String] = false
+        if format != .png {
+            props[kCGImageDestinationLossyCompressionQuality as String] = format == .jpeg ? max(quality, 0.92) : quality
+            props[kCGImageDestinationOptimizeColorForSharing as String] = false
+        }
         CGImageDestinationAddImage(destination, image, props as CFDictionary)
         if let g = gainOutput {
             var info: [String: Any] = [

@@ -35,28 +35,29 @@ public final class LaneScheduler: @unchecked Sendable {
     }
     deinit { timer.cancel() }
 
-    private func choose(model: TabletModelID, verdict: TabletDeviceVerdict, override: TabletLaneOverride) throws -> ComputeUnit {
+    private func candidates(model: TabletModelID, verdict: TabletDeviceVerdict, override: TabletLaneOverride) throws -> [ComputeUnit] {
         let restricted = gpuRestricted()
+        var list: [ComputeUnit] = []
         switch override {
         case .gpuOnly:
-            if !restricted && verdict.gpu { return .gpu }
-            if restricted && verdict.neuralEngine { return .npu }
-            if restricted && verdict.cpu { return .cpu }
+            if !restricted && verdict.gpu { list.append(.gpu) }
+            else if restricted && verdict.neuralEngine { list.append(.npu) }
+            else if restricted && verdict.cpu { list.append(.cpu) }
         case .neuralEngineOnly:
-            if verdict.neuralEngine { return .npu }
+            if verdict.neuralEngine { list.append(.npu) }
         case .both:
-            if verdict.preferred == .gpu && !restricted && verdict.gpu { return .gpu }
-            if verdict.preferred == .npu && verdict.neuralEngine { return .npu }
-            if verdict.preferred == .cpu && verdict.cpu { return .cpu }
-            if !restricted && verdict.gpu { return .gpu }
-            if verdict.neuralEngine { return .npu }
-            if verdict.cpu { return .cpu }
+            if verdict.preferred == .gpu && !restricted && verdict.gpu { list.append(.gpu) }
+            if verdict.preferred == .npu && verdict.neuralEngine { list.append(.npu) }
+            if !restricted && verdict.gpu && !list.contains(.gpu) { list.append(.gpu) }
+            if verdict.neuralEngine && !list.contains(.npu) { list.append(.npu) }
+            if list.isEmpty && verdict.cpu { list.append(.cpu) }
         }
-        throw ScheduleError.unavailable
+        if list.isEmpty { throw ScheduleError.unavailable }
+        return list
     }
 
     func validate(model: TabletModelID, verdict: TabletDeviceVerdict, override: TabletLaneOverride) throws {
-        _ = try choose(model: model, verdict: verdict, override: override)
+        _ = try candidates(model: model, verdict: verdict, override: override)
     }
 
     /// Acquires a lane for a stage. The synchronous body executes on the caller's worker thread.
@@ -65,12 +66,32 @@ public final class LaneScheduler: @unchecked Sendable {
                 body: (ComputeUnit, ModelLane) throws -> T) throws -> T {
         while true {
             if isCancelled() { throw ScheduleError.cancelled }
-            let unit = try choose(model: model, verdict: verdict, override: override)
-            let lane: ModelLane = unit == .gpu ? .gpu : .neuralEngine
-            let semaphore = lane == .gpu ? gpu : ane
-            if semaphore.wait(timeout: .now() + .milliseconds(100)) != .success { continue }
-            // The app can enter the background while this job waits for the GPU.
-            if lane == .gpu && gpuRestricted() { semaphore.signal(); continue }
+            let options = try candidates(model: model, verdict: verdict, override: override)
+            var acquired: (ComputeUnit, ModelLane, DispatchSemaphore)?
+            for option in options {
+                let lane: ModelLane = option == .gpu ? .gpu : .neuralEngine
+                let semaphore = lane == .gpu ? gpu : ane
+                if semaphore.wait(timeout: .now()) == .success {
+                    if lane == .gpu && gpuRestricted() {
+                        semaphore.signal()
+                        continue
+                    }
+                    acquired = (option, lane, semaphore)
+                    break
+                }
+            }
+            if acquired == nil, let primary = options.first {
+                let lane: ModelLane = primary == .gpu ? .gpu : .neuralEngine
+                let semaphore = lane == .gpu ? gpu : ane
+                if semaphore.wait(timeout: .now() + .milliseconds(50)) == .success {
+                    if lane == .gpu && gpuRestricted() {
+                        semaphore.signal()
+                    } else {
+                        acquired = (primary, lane, semaphore)
+                    }
+                }
+            }
+            guard let (unit, lane, semaphore) = acquired else { continue }
             lock.withLock {
                 states[lane]?.photo = photoID
                 states[lane]?.stage = stage

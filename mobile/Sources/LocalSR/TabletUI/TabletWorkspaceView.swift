@@ -2,6 +2,7 @@ import SwiftUI
 import LocalSRCore
 
 struct TabletWorkspaceView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @State private var model = TabletModel()
     @State private var settingsAppModel = AppModel()
 
@@ -11,6 +12,7 @@ struct TabletWorkspaceView: View {
     @State private var isFilesImporterPresented: Bool = false
     @State private var isFolderImporterPresented: Bool = false
     @State private var isSettingsPresented: Bool = false
+    @State private var isModelLibraryPresented: Bool = false
     @State private var resultToDelete: TabletResultItem? = nil
     @State private var isShowingDeleteAllConfirm: Bool = false
     @State private var isShowingSaveError: Bool = false
@@ -40,6 +42,7 @@ struct TabletWorkspaceView: View {
                             if !isThreePane {
                                 model.activeTab = .enhance
                             }
+                            model.scrollToChipsTrigger += 1
                         }
                     )
                     .background(Theme.chrome.ignoresSafeArea(edges: .bottom))
@@ -63,6 +66,14 @@ struct TabletWorkspaceView: View {
         .onChange(of: fullScale) { _, newValue in
             model.fullScale = newValue
         }
+        .onChange(of: scenePhase) { _, newPhase in
+            model.isAppInBackground = (newPhase == .background)
+        }
+        #if !SKIP
+        .onReceive(NotificationCenter.default.publisher(for: ProcessInfo.thermalStateDidChangeNotification)) { _ in
+            model.updateThermalState()
+        }
+        #endif
         .onChange(of: model.selection) { oldSelection, newSelection in
             if oldSelection != newSelection {
                 model.resetViewerTransform()
@@ -94,6 +105,10 @@ struct TabletWorkspaceView: View {
         .sheet(isPresented: $isSettingsPresented) {
             AboutSheetView()
                 .environment(settingsAppModel)
+        }
+        .sheet(isPresented: $isModelLibraryPresented) {
+            ModelLibraryView(initialModel: model.setup.upscaleModel)
+                .environment(model)
         }
         .onChange(of: model.saveErrorMessage) { _, newValue in
             isShowingSaveError = newValue != nil
@@ -203,6 +218,7 @@ struct TabletWorkspaceView: View {
             EnhancePaneView(
                 isThreePane: true,
                 isTwoColumn: false,
+                onOpenLibrary: { isModelLibraryPresented = true },
                 onSaveAll: { Task { await model.saveAllResults() } },
                 onClearFinished: { model.clearFinishedQueueItems() },
                 onDeleteAllResults: { isShowingDeleteAllConfirm = true },
@@ -252,6 +268,7 @@ struct TabletWorkspaceView: View {
                     EnhancePaneView(
                         isThreePane: false,
                         isTwoColumn: width >= Theme.Spacing.twoColumnWidth,
+                        onOpenLibrary: { isModelLibraryPresented = true },
                         onSaveAll: { Task { await model.saveAllResults() } },
                         onClearFinished: { model.clearFinishedQueueItems() },
                         onDeleteAllResults: { isShowingDeleteAllConfirm = true },
@@ -309,6 +326,7 @@ struct TabletWorkspaceView: View {
 
             Menu {
                 TabletEnhanceMenuContent(
+                    onOpenLibrary: { isModelLibraryPresented = true },
                     onSaveAll: { Task { await model.saveAllResults() } },
                     onClearFinished: { model.clearFinishedQueueItems() },
                     onDeleteAllResults: { isShowingDeleteAllConfirm = true },
