@@ -250,7 +250,7 @@ struct HomeView: View {
                                 isPickerPresented = true
                             }
                         } label: {
-                            FrameMark(side: 200.0, showsPlus: true, animateLockOnAppear: true)
+                            FrameMark(side: usesVerticalActionBar ? 96.0 : 200.0, showsPlus: true, animateLockOnAppear: true)
                         }
                         .buttonStyle(.plain)
                         .accessibilityHidden(true)
@@ -441,6 +441,7 @@ struct HomeView: View {
         .animation(reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.35), value: appModel.isBatchRunning)
         .padding(.horizontal, 16.0)
         .padding(.bottom, 8.0)
+        .dynamicTypeSize(...DynamicTypeSize.accessibility2)
         #endif
     }
 
