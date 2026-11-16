@@ -34,21 +34,17 @@ struct AboutSheetView: View {
                 } footer: {
                     VStack(alignment: .leading, spacing: 6.0) {
                         Text(upscalingFooterText)
-                        Button("Why 195 MP?") {
-                            isShowingFullScaleInfo = true
+                        if isShowingFullScaleInfo {
+                            Text(fullScaleInfoText)
+                                .accessibilityIdentifier("fullScaleInfoText")
+                        }
+                        Button(isShowingFullScaleInfo ? "Hide" : "Why 195 MP?") {
+                            withAnimation(.smooth(duration: 0.25)) {
+                                isShowingFullScaleInfo.toggle()
+                            }
                         }
                         .font(.footnote)
                         .accessibilityIdentifier("fullScaleInfoButton")
-                        #if !SKIP
-                        .popover(isPresented: $isShowingFullScaleInfo) {
-                            Text(fullScaleInfoText)
-                                .font(.footnote)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .frame(width: 300.0, alignment: .leading)
-                                .padding(16.0)
-                                .presentationCompactAdaptation(.popover)
-                        }
-                        #endif
                     }
                 }
 
@@ -162,13 +158,6 @@ struct AboutSheetView: View {
                 }
                 #endif
             }
-            #if SKIP
-            .alert("Full 4\u{00D7}", isPresented: $isShowingFullScaleInfo) {
-                Button("OK", role: .cancel) { }
-            } message: {
-                Text(fullScaleInfoText)
-            }
-            #endif
         }
         .onAppear {
             _ = appModel.refreshFullScaleAvailability()

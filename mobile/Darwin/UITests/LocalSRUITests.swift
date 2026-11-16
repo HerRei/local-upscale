@@ -56,13 +56,9 @@ final class LocalSRUITests: XCTestCase {
         XCTAssertTrue(limitText.waitForExistence(timeout: 4), "Full 4x limit explanation did not appear")
         Thread.sleep(forTimeInterval: 0.4)
         saveShot("ios_settings_full4x_limit_\(suffix).png", app: app)
-        let dismissRegion = app.otherElements["PopoverDismissRegion"]
-        if dismissRegion.exists {
-            dismissRegion.tap()
-        } else {
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.06)).tap()
-        }
-        XCTAssertTrue(limitText.waitForNonExistence(timeout: 4), "Full 4x limit explanation did not close")
+        XCTAssertEqual(limitButton.label, "Hide")
+        limitButton.tap()
+        XCTAssertTrue(limitText.waitForNonExistence(timeout: 4), "Full 4x limit explanation did not collapse")
 
         let licencesLink = app.buttons["aboutLicencesLink"]
         let settingsList = app.collectionViews.firstMatch
