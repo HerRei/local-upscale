@@ -237,7 +237,41 @@ public class AppModel {
             savedResultIDs = Set(savedList).intersection(validIDs)
             persistSavedResultIDs()
         }
+        sweepOrphanedFiles()
         _ = refreshFullScaleAvailability()
+    }
+
+    /// Removes result folders and input copies that no result or waiting photo refers to: what cancelled, failed or
+    /// killed runs leave behind. Runs once per process at startup, before any batch of this process can start, and
+    /// only touches entries older than an hour (a batch of another process could still be writing newer ones).
+    private func sweepOrphanedFiles() {
+        // Tablets keep their own results in the same Caches/LocalSR folder, which this model knows nothing about.
+        guard !TabletPlatform.isTablet else { return }
+        let fm = FileManager.default
+        let keepIDs = Set(results.map { $0.id })
+        var keepInputs = Set<String>()
+        for r in results where r.inputURL.isFileURL { keepInputs.insert(r.inputURL.lastPathComponent) }
+        for w in waitingItems where w.url.isFileURL { keepInputs.insert(w.url.lastPathComponent) }
+        let cutoff = Date().addingTimeInterval(-3600.0)
+        func isOld(_ path: String) -> Bool {
+            guard let attrs = try? fm.attributesOfItem(atPath: path),
+                  let date = attrs[FileAttributeKey.modificationDate] as? Date else { return false }
+            return date < cutoff
+        }
+        // Result folders are named by the result's UUID (36 characters); files such as results.json stay.
+        if let names = try? fm.contentsOfDirectory(atPath: storageDirectory.path) {
+            for name in names where name.count == 36 && !keepIDs.contains(name) {
+                let path = storageDirectory.appendingPathComponent(name).path
+                if isOld(path) { try? fm.removeItem(atPath: path) }
+            }
+        }
+        // Input copies are flat files named <UUID>.<ext>.
+        if let names = try? fm.contentsOfDirectory(atPath: inputsDirectory.path) {
+            for name in names where !keepInputs.contains(name) {
+                let path = inputsDirectory.appendingPathComponent(name).path
+                if isOld(path) { try? fm.removeItem(atPath: path) }
+            }
+        }
     }
 
     /// iOS moves the app's data container to a new path when the app is updated, so a file URL stored in
