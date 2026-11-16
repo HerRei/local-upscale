@@ -1018,7 +1018,6 @@ private struct BatchSummaryCard: View {
             Text(labelText)
                 .font(.subheadline.weight(.semibold))
                 .adaptiveMonospacedDigit()
-                .frame(minHeight: 44.0)
         }
         .buttonStyle(.bordered)
         #if !SKIP
@@ -1026,6 +1025,10 @@ private struct BatchSummaryCard: View {
         .buttonBorderShape(.capsule)
         #else
         .clipShape(Capsule())
+        #endif
+        .frame(minHeight: 44.0)
+        #if !SKIP
+        .contentShape(Rectangle())
         #endif
         .disabled(appModel.isSaving || appModel.isSavingAll || allSaved)
         .accessibilityIdentifier("summarySaveAllButton")
@@ -1087,7 +1090,6 @@ private struct WaitingPhotosCard: View {
                 Text("Upscale")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Color.white)
-                    .frame(minHeight: 44.0)
             }
             .buttonStyle(.borderedProminent)
             .tint(DesignTokens.brandFill)
@@ -1096,6 +1098,10 @@ private struct WaitingPhotosCard: View {
             .buttonBorderShape(.capsule)
             #else
             .clipShape(Capsule())
+            #endif
+            .frame(minHeight: 44.0)
+            #if !SKIP
+            .contentShape(Rectangle())
             #endif
             .accessibilityIdentifier("upscaleWaitingButton")
         }
