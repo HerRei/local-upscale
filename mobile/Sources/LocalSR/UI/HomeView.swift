@@ -532,12 +532,14 @@ struct HomeView: View {
         #else
         if reduceTransparency {
             menuContent
+                .tint(Color.primary)
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
                 .controlSize(.large)
                 .glassEffectID("modelMenu", in: actionBarNamespace)
         } else {
             menuContent
+                .tint(Color.primary)
                 .buttonStyle(.glass)
                 .buttonBorderShape(.capsule)
                 .controlSize(.large)
