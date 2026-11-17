@@ -119,7 +119,7 @@ struct EnhancePaneView: View {
                             settingsLockedBanner
                         }
 
-                        if isTwoColumn {
+                        if isTwoColumn && !stackQualityCards {
                             HStack(alignment: .top, spacing: Theme.Spacing.lg) {
                                 leftColumn
                                     .frame(maxWidth: 520.0, alignment: .leading)
@@ -227,12 +227,14 @@ struct EnhancePaneView: View {
                 .themeFont(.paneTitle)
                 .foregroundStyle(Theme.text)
 
-            Text(model.headingSummary)
-                .themeFont(.meta)
-                .foregroundStyle(Theme.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .accessibilityIdentifier("tabletEnhanceSummary")
+            if !stackQualityCards {
+                Text(model.headingSummary)
+                    .themeFont(.meta)
+                    .foregroundStyle(Theme.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .accessibilityIdentifier("tabletEnhanceSummary")
+            }
 
             Spacer(minLength: 4.0)
 
@@ -249,12 +251,13 @@ struct EnhancePaneView: View {
                     .font(.system(size: 16.0, weight: .medium))
                     .foregroundStyle(Theme.text)
                     .frame(width: 36.0, height: 36.0)
+                    .tabletHitTarget()
             }
             .accessibilityLabel("More")
             .accessibilityIdentifier("tabletEnhanceMoreMenu")
         }
         .padding(.horizontal, Theme.Spacing.lg)
-        .frame(height: Theme.Spacing.headerHeight)
+        .frame(minHeight: Theme.Spacing.headerHeight)
     }
 
     private var settingsLockedBanner: some View {
@@ -298,7 +301,7 @@ struct EnhancePaneView: View {
                 .id("enhanceChipsSection")
             sectionRule
             outputSection
-            if !model.queueItems.isEmpty {
+            if !model.waitingQueueItems.isEmpty || model.isBatchRunning {
                 sectionRule
                 queueSection
             }
@@ -377,6 +380,7 @@ struct EnhancePaneView: View {
                             qualityCard(preset)
                         }
                     }
+                    .fixedSize(horizontal: false, vertical: true)
                     .disabled(model.isBatchRunning)
                 } else {
                     HStack(alignment: .top, spacing: 6.0) {
@@ -841,6 +845,7 @@ struct EnhancePaneView: View {
                     Text("In the background \(TabletPlatform.deviceNoun) works on the \(TabletPlatform.npuName) only. Steps that need the GPU run on the slower CPU until you return.")
                         .themeFont(.meta)
                         .foregroundStyle(Theme.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 2.0)
                 }
 
@@ -848,6 +853,7 @@ struct EnhancePaneView: View {
                     Text(summary)
                         .themeFont(.meta)
                         .foregroundStyle(Theme.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 2.0)
                         .accessibilityIdentifier("tabletLastBatchLine")
                 }
@@ -1230,6 +1236,7 @@ struct EnhancePaneView: View {
                         Text("4\u{00D7} needs more memory than \(TabletPlatform.deviceNoun) has free. This photo is saved at 2\u{00D7}.")
                             .themeFont(.meta)
                             .foregroundStyle(Theme.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
@@ -1280,6 +1287,7 @@ struct EnhancePaneView: View {
                 Text("Photos over 3 MP get 2\u{00D7} by default. Full 4\u{00D7} takes longer to save and needs more memory.")
                     .themeFont(.meta)
                     .foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Toggle(
@@ -1371,7 +1379,7 @@ struct EnhancePaneView: View {
     // MARK: - 7. Queue
 
     private var queueSection: some View {
-        let count = model.queueItems.count
+        let count = model.waitingQueueItems.count
         let photoWord = count == 1 ? "photo" : "photos"
 
         return VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
@@ -1405,7 +1413,7 @@ struct EnhancePaneView: View {
                         .truncationMode(.middle)
                 }
             } else if let perPhoto = model.estimatedSecondsPerPhotoForActivePlan() {
-                let targetCount = max(1, model.waitingQueueItems.isEmpty ? count : model.waitingQueueItems.count)
+                let targetCount = count
                 let est = perPhoto * Double(targetCount)
                 Text("\(count) \(photoWord) \u{00B7} about \(TabletModel.formatDurationCompact(est)) with this setup")
                     .themeFont(.meta)

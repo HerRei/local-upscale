@@ -189,7 +189,7 @@ struct ModelLibraryView: View {
             HStack(spacing: 3.0) {
                 ForEach(1...4, id: \.self) { index in
                     Circle()
-                        .fill(index <= count ? Theme.text : Theme.track)
+                        .fill(index <= count ? Theme.text : Theme.tertiary)
                         .frame(width: 5.0, height: 5.0)
                 }
             }
