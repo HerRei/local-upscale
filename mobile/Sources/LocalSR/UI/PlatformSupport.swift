@@ -136,6 +136,19 @@ public struct DecodedImageView: View {
         self.accessibilityID = accessibilityID
     }
 
+    /// What VoiceOver says. The Android device tests find the viewer images by their description, so it stays the ID there.
+    private var spokenLabel: String {
+        #if SKIP
+        return accessibilityID ?? "Image"
+        #else
+        switch accessibilityID {
+        case "viewerOriginalImage": return "Original photo"
+        case "viewerUpscaledImage": return "Upscaled photo"
+        default: return "Photo"
+        }
+        #endif
+    }
+
     public var body: some View {
         #if SKIP
         ComposeView { ctx in
@@ -175,7 +188,7 @@ public struct DecodedImageView: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityID ?? "Image")
+        .accessibilityLabel(spokenLabel)
         .accessibilityIdentifier(accessibilityID ?? "")
         .accessibilityValue(pixelSizeDescription)
         .task(id: "\(url.absoluteString)_\(maxPixelSize)") {

@@ -124,7 +124,8 @@ struct CompareStageView: View {
                     .position(x: width / 2.0, y: height / 2.0)
                     .allowsHitTesting(false)
                     .accessibilityElement()
-                    .accessibilityLabel("Viewer Canvas")
+                    .accessibilityLabel("Photo comparison")
+                    .accessibilityHint("Pinch to zoom. Drag the divider to compare.")
                     .accessibilityIdentifier("viewerGestureArea")
                 #endif
 
