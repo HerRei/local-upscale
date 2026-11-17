@@ -1441,6 +1441,8 @@ struct EnhancePaneView: View {
                     RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                         .fill(isSelected ? Theme.raised : Color.clear)
                 )
+                .tabletCompactDynamicType()
+                .tabletHitTarget()
         }
         .buttonStyle(.plain)
         .tabletDisableLiftHover()
