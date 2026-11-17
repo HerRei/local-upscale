@@ -105,16 +105,21 @@ class AndroidUpscaler(context: Context) {
         }
         val thread = EngineThread("localsr-${unit.rawValue}")
         val key = checker.cacheKey(model)
+        // Kept outside the cancellable withContext: if Cancel wins after the load finished but before withContext
+        // returns, the loaded engine would otherwise be dropped without being closed.
+        var loaded: LiteRtEngine? = null
         try {
-            engine = withContext(Dispatchers.Default) {
+            withContext(Dispatchers.Default) {
                 val job = coroutineContext[Job]
-                thread.call(LOAD_TIMEOUT_MS, isCancelled = { job?.isActive == false }, onDiscard = { loaded: LiteRtEngine -> loaded.close() }) {
+                loaded = thread.call(LOAD_TIMEOUT_MS, isCancelled = { job?.isActive == false }, onDiscard = { late: LiteRtEngine -> late.close() }) {
                     checker.guard.inUse(key, unit.rawValue) { LiteRtEngine.load(context, model, unit) }
                 }
             }
+            engine = loaded
             engineThread = thread
         } catch (t: Throwable) {
-            thread.retire {}
+            val orphan = loaded
+            thread.retire { orphan?.close() }
             throw t
         }
     }
@@ -203,6 +208,9 @@ class AndroidUpscaler(context: Context) {
                     UpscaleForegroundService.updateProgress(context, 0.0)
                     val job = coroutineContext[Job]
                     val guardKey = checker.cacheKey(model)
+                    // The unit marked "in use" for the whole job; cleared as soon as the job falls back to the CPU,
+                    // so a later stop during CPU work does not blame the accelerator.
+                    var guardedUnit: ComputeUnit? = null
                     val runner = TileRunner { tile ->
                         val e = engine ?: throw UpscaleException("Model is not loaded")
                         val thread = engineThread
@@ -225,6 +233,8 @@ class AndroidUpscaler(context: Context) {
                             Log.w(TAG, "${e.unit.rawValue} failed during upscale (${t.message}); continuing on the CPU for this session")
                             if (t is UnitHangException) checker.markFailed(model, e.unit, "did not finish a tile within ${TILE_TIMEOUT_MS / 1000} s")
                             sessionVerdicts[model] = DeviceVerdict(unit = ComputeUnit.cpu, reason = "${e.unit.rawValue.uppercase()} failed while upscaling; using the CPU for now.")
+                            guardedUnit?.let { checker.guard.end(guardKey, it.rawValue) }
+                            guardedUnit = null
                             closeEngine()
                             val cpu = LiteRtEngine.load(context, model, ComputeUnit.cpu)
                             engine = cpu
@@ -234,8 +244,8 @@ class AndroidUpscaler(context: Context) {
                     }
                     // While real tiles run on an NPU/GPU, keep it marked as in use: if its driver takes the process
                     // down, the next start skips it instead of crashing on every batch.
-                    val guardedUnit = engine?.unit?.takeIf { it != ComputeUnit.cpu && engineThread != null }
-                    if (guardedUnit != null) checker.guard.begin(guardKey, guardedUnit.rawValue)
+                    guardedUnit = engine?.unit?.takeIf { it != ComputeUnit.cpu && engineThread != null }
+                    guardedUnit?.let { checker.guard.begin(guardKey, it.rawValue) }
                     try {
                         TilePipeline.process(BitmapSource(input), BitmapSink(output), runner, outputScale = scale) { done, total ->
                             val f = done.toDouble() / total * 0.97
@@ -243,7 +253,8 @@ class AndroidUpscaler(context: Context) {
                             UpscaleForegroundService.updateProgress(context, f)
                         }
                     } finally {
-                        if (guardedUnit != null) checker.guard.end(guardKey, guardedUnit.rawValue)
+                        guardedUnit?.let { checker.guard.end(guardKey, it.rawValue) }
+                        guardedUnit = null
                     }
                     input.recycle()
                     input = null

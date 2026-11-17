@@ -287,7 +287,8 @@ public final class AppleUpscaleService: UpscaleService, @unchecked Sendable {
 }
 
 extension ImageIOCodec {
-    static func decode(input: URL) throws -> DecodedImage { try decode(url: input) }
+    /// The phone pipeline keeps transparency (it restores the mask and saves PNG).
+    static func decode(input: URL) throws -> DecodedImage { try decode(url: input, keepAlpha: true) }
 }
 
 struct Box<T>: @unchecked Sendable { let value: T; init(_ value: T) { self.value = value } }

@@ -92,7 +92,9 @@ enum ImageIOCodec {
     /// Decodes with EXIF orientation applied and the `SizePolicy` prescale in one ImageIO step
     /// (`CGImageSourceCreateThumbnailAtIndex` with transform + max pixel size), keeps the file's colour
     /// space, and renders 8-bit RGBA in that colour space.
-    static func decode(url: URL, preserveDimensions: Bool = false) throws -> DecodedImage {
+    /// `keepAlpha`: return a transparent source's mask (and straight colours) so the caller can restore it; without it,
+    /// transparent sources are composited onto black as before (the tablet pipeline does not restore a mask yet).
+    static func decode(url: URL, preserveDimensions: Bool = false, keepAlpha: Bool = false) throws -> DecodedImage {
         let sourceOptions: [CFString: Any] = [kCGImageSourceShouldCache: false]
         guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions as CFDictionary), CGImageSourceGetCount(source) > 0 else {
             throw CodecError.unreadable(url)
@@ -126,7 +128,7 @@ enum ImageIOCodec {
         context.interpolationQuality = .high
         let rect = CGRect(x: 0, y: 0, width: width, height: height)
         var alpha: Data? = nil
-        switch thumb.alphaInfo {
+        switch keepAlpha ? thumb.alphaInfo : .none {
         case .first, .last, .premultipliedFirst, .premultipliedLast:
             // Transparent source (PNG, HEIC with alpha): draw premultiplied, keep the mask, un-premultiply the colours.
             guard let alphaContext = CGContext(data: buffer.pointer, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
@@ -333,14 +335,15 @@ enum ImageIOCodec {
         var pw = pixels.width, ph = pixels.height
         let transparent = alphaInfo != .noneSkipLast && alphaInfo != .none
         if longSide > maxSide || transparent {
-            let scale = Double(maxSide) / Double(longSide)
+            let scale = min(1.0, Double(maxSide) / Double(longSide))
             pw = max(1, Int((Double(pixels.width) * scale).rounded()))
             ph = max(1, Int((Double(pixels.height) * scale).rounded()))
             guard let ctx = CGContext(data: nil, width: pw, height: ph, bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { throw CodecError.encodeFailed("preview context") }
             ctx.interpolationQuality = .high
             if transparent {
-                // JPEG has no transparency: show transparent areas as white in the compare view.
-                ctx.setFillColor(CGColor(gray: 1, alpha: 1))
+                // JPEG has no transparency: use the viewer's black background, so the preview matches the PNG
+                // the viewer shows when zoomed in.
+                ctx.setFillColor(CGColor(gray: 0, alpha: 1))
                 ctx.fill(CGRect(x: 0, y: 0, width: pw, height: ph))
             }
             ctx.draw(full, in: CGRect(x: 0, y: 0, width: pw, height: ph))

@@ -266,9 +266,18 @@ public class AppModel {
                   let date = attrs[FileAttributeKey.modificationDate] as? Date else { return false }
             return date < cutoff
         }
+        // The tablet UI keeps its results in the same folder, and a foldable or a display-size change can switch the
+        // same device between the phone and the tablet UI: never touch a folder the tablet's files mention.
+        var tabletManifests = ""
+        for manifest in ["tablet_results.json", "tablet_batch_state.json", "tablet_saved.json"] {
+            if let data = try? Data(contentsOf: storageDirectory.appendingPathComponent(manifest)),
+               let text = String(data: data, encoding: .utf8) {
+                tabletManifests += text
+            }
+        }
         // Result folders are named by the result's UUID (36 characters); files such as results.json stay.
         if let names = try? fm.contentsOfDirectory(atPath: storageDirectory.path) {
-            for name in names where name.count == 36 && !keepIDs.contains(name) {
+            for name in names where name.count == 36 && !keepIDs.contains(name) && !tabletManifests.contains(name) {
                 let path = storageDirectory.appendingPathComponent(name).path
                 if isOld(path) { try? fm.removeItem(atPath: path) }
             }

@@ -861,6 +861,9 @@ final class TabletModel {
             return
         }
         isImportingShareInbox = true
+        // Reset even when the waiting task is cancelled (Android recreates the view while the shared model lives on);
+        // otherwise every later share would only set the recheck flag.
+        defer { isImportingShareInbox = false }
         repeat {
             pendingShareInboxRecheck = false
             let imported = await Self.drainShareInbox()
@@ -871,7 +874,6 @@ final class TabletModel {
                 }
             }
         } while pendingShareInboxRecheck
-        isImportingShareInbox = false
     }
 
     private func shareStartsImmediately() -> Bool {
@@ -891,6 +893,8 @@ final class TabletModel {
                 added += 1
             }
             batchTotalInRun += added
+            // Saved now: the inbox is already drained, so a crash before the next photo finishes would lose them.
+            persistBatchState(pausedBySystem: pauseRequestedBySystem)
             return
         }
         guard laneValidationError == nil else { return }
