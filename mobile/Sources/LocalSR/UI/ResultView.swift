@@ -427,7 +427,9 @@ struct ResultView: View {
                 // A dark backing keeps the caption readable over bright photos (white at 85 % stays above 4.5:1).
                 .padding(.horizontal, 12.0)
                 .padding(.vertical, 6.0)
-                .background(RoundedRectangle(cornerRadius: 12.0).fill(Color.black.opacity(0.6)))
+                // A plain colour clipped to the shape: SkipUI draws a filled shape used as a background light on Android.
+                .background(Color.black.opacity(0.6))
+                .clipShape(RoundedRectangle(cornerRadius: 12.0))
                 // Nobody reads the size while inspecting pixels, and the divider would run through the text.
                 .opacity(zoom > 1.01 ? 0.0 : 1.0)
                 .animation(.easeOut(duration: 0.2), value: zoom > 1.01)
