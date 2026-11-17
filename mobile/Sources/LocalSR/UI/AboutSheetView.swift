@@ -232,7 +232,8 @@ private struct LicencesView: View {
 
         func isRule(_ line: String) -> Bool {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.count >= 3 && (trimmed.allSatisfy { $0 == "-" } || trimmed.allSatisfy { $0 == "=" })
+            // No allSatisfy: Skip's String has none.
+            return trimmed.count >= 3 && (trimmed.replacingOccurrences(of: "-", with: "").isEmpty || trimmed.replacingOccurrences(of: "=", with: "").isEmpty)
         }
         func flushParagraph() {
             if !paragraph.isEmpty {
