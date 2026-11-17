@@ -1436,7 +1436,8 @@ struct EnhancePaneView: View {
                 .themeFont(.control, weight: isSelected ? .semibold : .medium)
                 .foregroundStyle(isSelected ? Theme.text : Theme.secondary)
                 .lineLimit(1)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity)
+                .frame(height: 30.0)
                 .background(
                     RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                         .fill(isSelected ? Theme.raised : Color.clear)
