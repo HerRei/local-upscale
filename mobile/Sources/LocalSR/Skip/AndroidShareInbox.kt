@@ -140,6 +140,12 @@ object AndroidShareInbox {
         val seen = HashSet<String>()
         val unique = ArrayList<Uri>()
         for (uri in collected) {
+            // Other apps share through content:// with a granted permission; a file:// path could point at
+            // LocalSR's own private files, so it is not accepted from an intent.
+            if (uri.scheme != "content") {
+                Log.w(TAG, "Ignoring a shared ${uri.scheme} URI; only content:// is accepted")
+                continue
+            }
             val key = uri.toString()
             if (seen.add(key)) {
                 unique.add(uri)
