@@ -223,6 +223,7 @@ struct ViewerPaneView: View {
             .accessibilityLabel("Photo Actions")
             .accessibilityIdentifier("tabletViewerMoreMenu")
         }
+        .tabletCompactDynamicType()
     }
 
     @ViewBuilder

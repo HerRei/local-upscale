@@ -130,7 +130,7 @@ struct MediaPaneView: View {
                 .themeFont(.paneTitle)
                 .foregroundStyle(Theme.text)
 
-            if !model.queueItems.isEmpty || !model.results.isEmpty {
+            if !usesAccessibilityText && (!model.queueItems.isEmpty || !model.results.isEmpty) {
                 let count = model.mediaSegment == .queue ? model.queueItems.count : model.results.count
                 Text("\(count)")
                     .themeFont(.caption)

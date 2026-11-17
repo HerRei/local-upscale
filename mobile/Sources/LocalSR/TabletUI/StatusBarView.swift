@@ -61,6 +61,7 @@ struct StatusBarView: View {
                     .frame(height: Theme.Spacing.statusBarHeight)
                 }
             }
+            .tabletCompactDynamicType()
             .background(Theme.chrome)
         }
         .background(Theme.chrome)
