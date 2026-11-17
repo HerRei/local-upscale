@@ -45,6 +45,9 @@ struct TabletAddMenuContent: View {
 struct MediaPaneView: View {
     @Environment(TabletModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    #if !SKIP
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize: DynamicTypeSize
+    #endif
 
     let isThreePane: Bool
     let showsGrid: Bool
@@ -62,6 +65,14 @@ struct MediaPaneView: View {
     @State private var sheetResultItem: TabletResultItem? = nil
     #endif
 
+    private var usesAccessibilityText: Bool {
+        #if !SKIP
+        return dynamicTypeSize.isAccessibilitySize
+        #else
+        return false
+        #endif
+    }
+
     private let gridColumns = [
         GridItem(.adaptive(minimum: 148.0), spacing: 8.0)
     ]
@@ -76,6 +87,8 @@ struct MediaPaneView: View {
                 .padding(.horizontal, 12.0)
                 .padding(.top, isThreePane ? 4.0 : 12.0)
                 .padding(.bottom, 10.0)
+                .frame(maxWidth: showsGrid ? 384.0 : .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             contentArea
         }
@@ -106,6 +119,7 @@ struct MediaPaneView: View {
                     .font(.system(size: 16.0, weight: .medium))
                     .foregroundStyle(Theme.text)
                     .frame(width: 36.0, height: 36.0)
+                    .tabletHitTarget()
             }
             .buttonStyle(.plain)
             .tabletCornerOffsetLeading()
@@ -138,12 +152,13 @@ struct MediaPaneView: View {
                     .font(.system(size: 16.0, weight: .medium))
                     .foregroundStyle(Theme.text)
                     .frame(width: 36.0, height: 36.0)
+                    .tabletHitTarget()
             }
             .accessibilityLabel("Add Photos")
             .accessibilityIdentifier("tabletMediaAddButton")
         }
         .padding(.horizontal, Theme.Spacing.md)
-        .frame(height: Theme.Spacing.headerHeight)
+        .frame(minHeight: Theme.Spacing.headerHeight)
     }
 
     private var segmentBar: some View {
@@ -161,6 +176,7 @@ struct MediaPaneView: View {
         }
         .padding(3.0)
         .frame(height: Theme.Spacing.controlHeight)
+        .tabletCompactDynamicType()
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                 .fill(Theme.recess)
@@ -181,6 +197,7 @@ struct MediaPaneView: View {
                     RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                         .fill(isSelected ? Theme.raised : Color.clear)
                 )
+                .tabletHitTarget()
         }
         .buttonStyle(.plain)
         .tabletDisableLiftHover()
@@ -221,52 +238,57 @@ struct MediaPaneView: View {
                 .foregroundStyle(Theme.secondary)
                 .multilineTextAlignment(.center)
 
-            HStack(spacing: Theme.Spacing.sm) {
-                Button {
-                    onChoosePhotos()
-                } label: {
-                    Text("\(TabletPlatform.libraryName)\u{2026}")
-                        .themeFont(.control, weight: .medium)
-                        .foregroundStyle(Theme.text)
-                        .padding(.horizontal, Theme.Spacing.md)
-                        .frame(height: Theme.Spacing.controlHeight)
-                        .background(
-                            RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-                                .fill(Theme.raised)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-                                .stroke(Theme.border, lineWidth: 1.0)
-                        )
+            Group {
+                if usesAccessibilityText {
+                    VStack(spacing: Theme.Spacing.sm) {
+                        emptyPhotosButton
+                        emptyFilesButton
+                    }
+                } else {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        emptyPhotosButton
+                        emptyFilesButton
+                    }
                 }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("tabletEmptyPhotosButton")
-
-                Button {
-                    onChooseFiles()
-                } label: {
-                    Text("Files\u{2026}")
-                        .themeFont(.control, weight: .medium)
-                        .foregroundStyle(Theme.text)
-                        .padding(.horizontal, Theme.Spacing.md)
-                        .frame(height: Theme.Spacing.controlHeight)
-                        .background(
-                            RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-                                .fill(Theme.raised)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-                                .stroke(Theme.border, lineWidth: 1.0)
-                        )
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("tabletEmptyFilesButton")
             }
             .padding(.top, Theme.Spacing.xs)
             Spacer()
         }
         .padding(Theme.Spacing.panePadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var emptyPhotosButton: some View {
+        Button { onChoosePhotos() } label: {
+            emptyButtonLabel("\(TabletPlatform.libraryName)\u{2026}")
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("tabletEmptyPhotosButton")
+    }
+
+    private var emptyFilesButton: some View {
+        Button { onChooseFiles() } label: {
+            emptyButtonLabel("Files\u{2026}")
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("tabletEmptyFilesButton")
+    }
+
+    private func emptyButtonLabel(_ title: String) -> some View {
+        Text(title)
+            .themeFont(.control, weight: .medium)
+            .foregroundStyle(Theme.text)
+            .padding(.horizontal, Theme.Spacing.md)
+            .frame(minHeight: Theme.Spacing.controlHeight)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                    .fill(Theme.raised)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                    .stroke(Theme.border, lineWidth: 1.0)
+            )
+            .tabletHitTarget()
     }
 
     private var resultsEmptyState: some View {
@@ -325,7 +347,7 @@ struct MediaPaneView: View {
                 Text(item.displayName)
                     .themeFont(.control)
                     .foregroundStyle(Theme.text)
-                    .lineLimit(1)
+                    .lineLimit(usesAccessibilityText ? 2 : 1)
                     .truncationMode(.middle)
 
                 queueStateLine(item)
@@ -350,7 +372,8 @@ struct MediaPaneView: View {
             }
         }
         .padding(.horizontal, Theme.Spacing.sm)
-        .frame(height: Theme.Spacing.listRowHeight)
+        .padding(.vertical, 8.0)
+        .frame(minHeight: Theme.Spacing.listRowHeight)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                 .fill(isSelected ? Theme.selectFill : (isHovered ? Theme.hover : Color.clear))
@@ -435,7 +458,7 @@ struct MediaPaneView: View {
             Text(item.displayName)
                 .themeFont(.control)
                 .foregroundStyle(Theme.text)
-                .lineLimit(1)
+                .lineLimit(usesAccessibilityText ? 2 : 1)
                 .truncationMode(.middle)
 
             queueStateLine(item)
@@ -525,13 +548,13 @@ struct MediaPaneView: View {
                 Text(result.displayName)
                     .themeFont(.control)
                     .foregroundStyle(Theme.text)
-                    .lineLimit(1)
+                    .lineLimit(usesAccessibilityText ? 2 : 1)
                     .truncationMode(.middle)
 
                 Text(UIFormatting.resultDimensionsLine(width: result.width, height: result.height))
                     .themeFont(.meta)
                     .foregroundStyle(Theme.secondary)
-                    .lineLimit(1)
+                    .lineLimit(usesAccessibilityText ? 2 : 1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -542,7 +565,8 @@ struct MediaPaneView: View {
             }
         }
         .padding(.horizontal, Theme.Spacing.sm)
-        .frame(height: Theme.Spacing.listRowHeight)
+        .padding(.vertical, 8.0)
+        .frame(minHeight: Theme.Spacing.listRowHeight)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                 .fill(isSelected ? Theme.selectFill : (isHovered ? Theme.hover : Color.clear))
@@ -607,13 +631,13 @@ struct MediaPaneView: View {
             Text(result.displayName)
                 .themeFont(.control)
                 .foregroundStyle(Theme.text)
-                .lineLimit(1)
+                .lineLimit(usesAccessibilityText ? 2 : 1)
                 .truncationMode(.middle)
 
             Text(UIFormatting.resultDimensionsLine(width: result.width, height: result.height))
                 .themeFont(.meta)
                 .foregroundStyle(Theme.secondary)
-                .lineLimit(1)
+                .lineLimit(usesAccessibilityText ? 2 : 1)
         }
         .padding(6.0)
         .background(
@@ -813,7 +837,7 @@ struct MediaPaneView: View {
             Text("Preparing preview\u{2026}")
                 .themeFont(.meta)
                 .foregroundStyle(Theme.secondary)
-                .lineLimit(1)
+                .lineLimit(usesAccessibilityText ? 2 : 1)
         } else {
             switch item.status {
             case .waiting:
@@ -823,7 +847,7 @@ struct MediaPaneView: View {
                 Text(text)
                     .themeFont(.meta)
                     .foregroundStyle(Theme.secondary)
-                    .lineLimit(1)
+                    .lineLimit(usesAccessibilityText ? 2 : 1)
 
             case .running:
                 let stage = item.stageName ?? "Upscaling"
@@ -831,14 +855,14 @@ struct MediaPaneView: View {
                 Text("\(stage) \u{00B7} \(chip)")
                     .themeFont(.meta)
                     .foregroundStyle(Theme.secondary)
-                    .lineLimit(1)
+                    .lineLimit(usesAccessibilityText ? 2 : 1)
 
             case .done:
                 let mp = UIFormatting.formatMegapixels(width: item.outputWidth ?? 0, height: item.outputHeight ?? 0)
                 Text("Done \u{00B7} \(mp)")
                     .themeFont(.meta)
                     .foregroundStyle(Theme.secondary)
-                    .lineLimit(1)
+                    .lineLimit(usesAccessibilityText ? 2 : 1)
 
             case .failed:
                 HStack(alignment: .top, spacing: 4.0) {

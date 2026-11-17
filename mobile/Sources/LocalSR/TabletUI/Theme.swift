@@ -243,6 +243,24 @@ extension View {
     }
 
     @ViewBuilder
+    func tabletCompactDynamicType() -> some View {
+        #if !SKIP
+        self.dynamicTypeSize(...DynamicTypeSize.xLarge)
+        #else
+        self
+        #endif
+    }
+
+    @ViewBuilder
+    func tabletHitTarget() -> some View {
+        #if !SKIP
+        self.frame(minWidth: 44.0, minHeight: 44.0).contentShape(Rectangle())
+        #else
+        self.frame(minWidth: 44.0, minHeight: 44.0)
+        #endif
+    }
+
+    @ViewBuilder
     func tabletHoverFill(_ isHovered: Bool, cornerRadius: CGFloat = Theme.Radius.control) -> some View {
         if isHovered {
             self.background(

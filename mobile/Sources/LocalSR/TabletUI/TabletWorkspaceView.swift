@@ -437,6 +437,7 @@ struct TabletWorkspaceView: View {
                     .font(.system(size: 16.0, weight: .medium))
                     .foregroundStyle(Theme.text)
                     .frame(width: 36.0, height: 36.0)
+                    .tabletHitTarget()
             }
             .tabletCornerOffsetLeading()
             .accessibilityLabel("Add Photos")
@@ -451,6 +452,7 @@ struct TabletWorkspaceView: View {
             }
             .padding(3.0)
             .frame(height: Theme.Spacing.controlHeight)
+            .tabletCompactDynamicType()
             .background(
                 RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                     .fill(Theme.recess)
@@ -471,12 +473,13 @@ struct TabletWorkspaceView: View {
                     .font(.system(size: 16.0, weight: .medium))
                     .foregroundStyle(Theme.text)
                     .frame(width: 36.0, height: 36.0)
+                    .tabletHitTarget()
             }
             .accessibilityLabel("More")
             .accessibilityIdentifier("tabletTopBarMoreMenu")
         }
         .padding(.horizontal, hideCount ? Theme.Spacing.md : Theme.Spacing.lg)
-        .frame(height: Theme.Spacing.headerHeight)
+        .frame(minHeight: Theme.Spacing.headerHeight)
         .background(Theme.chrome)
     }
 
@@ -495,6 +498,7 @@ struct TabletWorkspaceView: View {
                     RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                         .fill(isSelected ? Theme.raised : Color.clear)
                 )
+                .tabletHitTarget()
         }
         .buttonStyle(.plain)
         .tabletDisableLiftHover()
