@@ -693,7 +693,7 @@ struct ViewerPaneView: View {
                     .background(Theme.chrome.opacity(0.92), in: Capsule())
             } else {
                 controls
-                    .glassEffect(.regular, in: Capsule())
+                    .glassEffect(.regular.tint(.black.opacity(0.35)), in: Capsule())
             }
         }
         .onHover { hovering in
@@ -782,7 +782,7 @@ struct ViewerPaneView: View {
         if reduceTransparency {
             text.background(Theme.chrome.opacity(0.92), in: Capsule())
         } else {
-            text.glassEffect(.regular, in: Capsule())
+            text.glassEffect(.regular.tint(.black.opacity(0.35)), in: Capsule())
         }
         #endif
     }

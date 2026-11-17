@@ -597,7 +597,7 @@ private struct TabletGlassCapsuleModifier: ViewModifier {
         if reduceTransparency {
             content.background(Theme.chrome.opacity(0.92), in: Capsule())
         } else {
-            content.glassEffect(.regular, in: Capsule())
+            content.glassEffect(.regular.tint(.black.opacity(0.35)), in: Capsule())
         }
     }
 }
