@@ -465,6 +465,9 @@ struct CompareStageView: View {
 }
 
 struct CompareChipsRow: View {
+    #if !SKIP
+    @ScaledMetric(relativeTo: .caption) private var scaledRowHeight: CGFloat = 44.0
+    #endif
     @Binding var splitFraction: CGFloat
     let enhancedTitle: String
     let enhancedIdentifier: String
@@ -506,7 +509,11 @@ struct CompareChipsRow: View {
                 }
             }
         }
-        .frame(height: 30.0)
+        #if SKIP
+        .frame(height: 44.0)
+        #else
+        .frame(height: scaledRowHeight)
+        #endif
     }
 
     @ViewBuilder
@@ -555,6 +562,10 @@ struct CompareChipsRow: View {
                 #endif
             }
         }
+        .padding(.vertical, 8.0)
+        #if !SKIP
+        .contentShape(Rectangle())
+        #endif
         .buttonStyle(.plain)
         .opacity(visible ? 1.0 : 0.0)
         .allowsHitTesting(visible && !isDisabled)

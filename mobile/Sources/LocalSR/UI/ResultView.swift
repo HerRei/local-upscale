@@ -78,13 +78,16 @@ struct ResultView: View {
                         AndroidUISupport.shareImageFile(ProcessInfo.processInfo.androidContext, result.outputURL.path)
                     } label: {
                         Image(systemName: "square.and.arrow.up")
+                            .foregroundStyle(.primary)
                     }
                     .accessibilityLabel("Share")
                     .accessibilityIdentifier("shareResultButton")
                     #else
                     ShareLink(item: result.outputURL) {
                         Image(systemName: "square.and.arrow.up")
+                            .foregroundStyle(.primary)
                     }
+                    .tint(Color.white)
                     .accessibilityLabel("Share")
                     .accessibilityIdentifier("shareResultButton")
                     #endif
@@ -136,7 +139,11 @@ struct ResultView: View {
                         .accessibilityIdentifier("deleteResultMenuButton")
                     } label: {
                         Image(systemName: "ellipsis")
+                            .foregroundStyle(.primary)
                     }
+                    #if !SKIP
+                    .tint(Color.white)
+                    #endif
                     .accessibilityLabel("More")
                     .accessibilityIdentifier("resultMoreMenu")
                     // Attached to the menu so the iOS 26 popover points at "…", not at the middle of the photo.

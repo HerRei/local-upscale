@@ -168,7 +168,7 @@ struct FrameMark: View {
                 .overlay {
                     if showsPlus {
                         Image(systemName: "plus")
-                            .font(.title3.bold())
+                            .font(.system(size: squareSide * 0.42, weight: .bold))
                             .foregroundStyle(Color.white)
                     }
                 }

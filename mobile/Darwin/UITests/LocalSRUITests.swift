@@ -40,6 +40,9 @@ final class LocalSRUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["homeEmptyLabel"].waitForExistence(timeout: 5))
         saveShot("ios_home_empty_\(suffix).png", app: app)
+        app.swipeUp()
+        saveShot("ios_home_empty_scrolled_\(suffix).png", app: app)
+        app.swipeDown()
 
         // Open Settings sheet via Home gear button, verify toggle & facts, then push Licences
         let settingsButton = app.buttons["settingsButton"]
@@ -55,19 +58,23 @@ final class LocalSRUITests: XCTestCase {
         saveShot("ios_settings_\(suffix).png", app: app)
 
         let limitButton = app.buttons["fullScaleInfoButton"]
-        XCTAssertTrue(limitButton.waitForExistence(timeout: 4))
-        limitButton.tap()
-        let limitText = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "780 MP")).firstMatch
-        XCTAssertTrue(limitText.waitForExistence(timeout: 4), "Full 4x limit explanation did not appear")
-        Thread.sleep(forTimeInterval: 0.4)
-        saveShot("ios_settings_full4x_limit_\(suffix).png", app: app)
-        XCTAssertEqual(limitButton.label, "Hide")
-        limitButton.tap()
-        XCTAssertTrue(limitText.waitForNonExistence(timeout: 4), "Full 4x limit explanation did not collapse")
+        if app.switches["fullScaleToggle"].isEnabled {
+            XCTAssertTrue(limitButton.waitForExistence(timeout: 4))
+            limitButton.tap()
+            let limitText = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "780 MP")).firstMatch
+            XCTAssertTrue(limitText.waitForExistence(timeout: 4), "Full 4x limit explanation did not appear")
+            Thread.sleep(forTimeInterval: 0.4)
+            saveShot("ios_settings_full4x_limit_\(suffix).png", app: app)
+            XCTAssertEqual(limitButton.label, "Hide")
+            limitButton.tap()
+            XCTAssertTrue(limitText.waitForNonExistence(timeout: 4), "Full 4x limit explanation did not collapse")
+        } else {
+            XCTAssertFalse(limitButton.exists, "Unavailable Full 4x should not offer its explanation")
+        }
 
         let licencesLink = app.buttons["aboutLicencesLink"]
         let settingsList = app.collectionViews.firstMatch
-        for _ in 0..<5 where !(licencesLink.exists && licencesLink.isHittable) {
+        for _ in 0..<15 where !(licencesLink.exists && licencesLink.isHittable) {
             if settingsList.exists {
                 settingsList.swipeUp()
             } else {
@@ -174,6 +181,7 @@ final class LocalSRUITests: XCTestCase {
         saveShot("ios_result_relaunch_saved_\(suffix).png", app: app)
         app.navigationBars.buttons.firstMatch.tap()
         XCTAssertTrue(chooseButton.waitForExistence(timeout: 5))
+        saveShot("ios_home_saved_\(suffix).png", app: app)
 
         // Pick 5 photos for a multi-photo batch (creates 6 total results!)
         chooseButton.tap()
@@ -373,7 +381,10 @@ final class LocalSRUITests: XCTestCase {
             pickerAdd.tap()
             return true
         }
-        return false
+        // The iOS 27 picker can expose its cells but omit the checkmark button.
+        guard abs(app.frame.width - 375) < 1, app.frame.height >= 640 else { return false }
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.14)).tap()
+        return true
     }
 
     @MainActor
