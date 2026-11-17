@@ -466,7 +466,7 @@ struct CompareStageView: View {
 
 struct CompareChipsRow: View {
     #if !SKIP
-    @ScaledMetric(relativeTo: .caption) private var scaledRowHeight: CGFloat = 44.0
+    @ScaledMetric(relativeTo: .footnote) private var scaledRowHeight: CGFloat = 44.0
     #endif
     @Binding var splitFraction: CGFloat
     let enhancedTitle: String

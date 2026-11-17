@@ -99,20 +99,20 @@ struct ViewerPaneView: View {
                     Text(result.displayName)
                         .themeFont(.paneTitle)
                         .foregroundStyle(Theme.text)
-                        .lineLimit(1)
+                        .lineLimit(2)
                         .truncationMode(.middle)
 
                     Text(resultSubtitle(result))
                         .themeFont(.meta)
                         .foregroundStyle(Theme.secondary)
-                        .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("tabletViewerResultMeta")
 
                     if !note.isEmpty {
                         Text(note)
                             .themeFont(.meta)
                             .foregroundStyle(Theme.secondary)
-                            .lineLimit(1)
+                            .fixedSize(horizontal: false, vertical: true)
                             .accessibilityIdentifier("tabletViewerResultScaleNote")
                     }
                 }
@@ -125,13 +125,13 @@ struct ViewerPaneView: View {
                     Text(item.displayName)
                         .themeFont(.paneTitle)
                         .foregroundStyle(Theme.text)
-                        .lineLimit(1)
+                        .lineLimit(2)
                         .truncationMode(.middle)
 
                     Text(item.dimensionsText ?? (item.isPreparingPreview ? "Preparing preview\u{2026}" : "Ready"))
                         .themeFont(.meta)
                         .foregroundStyle(Theme.secondary)
-                        .lineLimit(1)
+                        .lineLimit(2)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else {
@@ -167,6 +167,7 @@ struct ViewerPaneView: View {
                     .font(.system(size: 15.0, weight: .medium))
                     .foregroundStyle(Theme.text)
                     .frame(width: 36.0, height: 36.0)
+                    .tabletHitTarget()
             }
             .accessibilityLabel("Share")
             .accessibilityIdentifier("tabletViewerShareButton")
@@ -178,6 +179,7 @@ struct ViewerPaneView: View {
                     .font(.system(size: 15.0, weight: .medium))
                     .foregroundStyle(Theme.text)
                     .frame(width: 36.0, height: 36.0)
+                    .tabletHitTarget()
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Share")
@@ -212,12 +214,13 @@ struct ViewerPaneView: View {
             Menu {
                 resultMenuItems(result: result, includeShareAndSave: false)
             } label: {
-                Image(systemName: "ellipsis")
+                Image(systemName: "ellipsis.circle")
                     .font(.system(size: 15.0, weight: .medium))
                     .foregroundStyle(Theme.text)
                     .frame(width: 36.0, height: 36.0)
+                    .tabletHitTarget()
             }
-            .accessibilityLabel("More")
+            .accessibilityLabel("Photo Actions")
             .accessibilityIdentifier("tabletViewerMoreMenu")
         }
     }
@@ -569,6 +572,7 @@ struct ViewerPaneView: View {
         GlassEffectContainer {
             content
         }
+        .environment(\.colorScheme, .dark)
         #else
         content
         #endif
@@ -603,6 +607,7 @@ struct ViewerPaneView: View {
                 }
                     .foregroundStyle(model.zoomScale <= minZoom + 0.001 ? hudForeground.opacity(0.35) : hudForeground)
                     .frame(width: 34.0, height: 36.0)
+                    .tabletHitTarget()
             }
             .buttonStyle(.plain)
             .disabled(model.zoomScale <= minZoom + 0.001)
@@ -624,6 +629,7 @@ struct ViewerPaneView: View {
                     .font(.system(size: 14.0, weight: .medium))
                     .foregroundStyle(model.zoomScale >= maxZoom - 0.001 ? hudForeground.opacity(0.35) : hudForeground)
                     .frame(width: 34.0, height: 36.0)
+                    .tabletHitTarget()
             }
             .buttonStyle(.plain)
             .disabled(model.zoomScale >= maxZoom - 0.001)
@@ -647,6 +653,7 @@ struct ViewerPaneView: View {
                         Capsule()
                             .fill(isFitActive ? hudForeground.opacity(0.16) : Color.clear)
                     )
+                    .tabletHitTarget()
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Fit Photo")
@@ -664,6 +671,7 @@ struct ViewerPaneView: View {
                         Capsule()
                             .fill(isActualActive ? hudForeground.opacity(0.16) : Color.clear)
                     )
+                    .tabletHitTarget()
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Actual Size 1 to 1")
@@ -671,6 +679,7 @@ struct ViewerPaneView: View {
         }
         .padding(.horizontal, 8.0)
         .frame(height: 44.0)
+        .tabletCompactDynamicType()
 
         #if SKIP
         controls
@@ -915,7 +924,7 @@ struct ViewerPaneView: View {
             inputHeight: inH,
             outputScale: result.outputScale,
             fullScaleFallback: result.fullScaleFallback
-        )
+        ).replacingOccurrences(of: "in Settings", with: "in Enhance \u{203A} Output")
     }
 
     #if SKIP
