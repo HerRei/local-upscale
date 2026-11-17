@@ -296,7 +296,7 @@ final class LocalSRUITests: XCTestCase {
         XCTAssertTrue(fixture.waitForExistence(timeout: 15), "Detailed fixture missing from picker")
         XCTAssertTrue(fixture.isHittable, "Detailed fixture not visible: \(fixture.label)")
         fixture.tap()
-        let add = app.buttons.matching(NSPredicate(format: "label == 'Add' OR label == 'Hinzufügen'")).firstMatch
+        let add = app.buttons.matching(NSPredicate(format: "identifier == 'Add' OR label == 'Add' OR identifier == 'Hinzufügen' OR label == 'Hinzufügen'")).firstMatch
         XCTAssertTrue(add.waitForExistence(timeout: 5))
         add.tap()
         XCTAssertTrue(app.staticTexts["resultSummaryLabel"].waitForExistence(timeout: 180))
@@ -371,7 +371,7 @@ final class LocalSRUITests: XCTestCase {
             return false
         }
 
-        let addButton = app.buttons.matching(NSPredicate(format: "label == 'Add' OR label == 'Hinzufügen'")).firstMatch
+        let addButton = app.buttons.matching(NSPredicate(format: "identifier == 'Add' OR label == 'Add' OR identifier == 'Hinzufügen' OR label == 'Hinzufügen'")).firstMatch
         if addButton.waitForExistence(timeout: 5) {
             addButton.tap()
             return true
