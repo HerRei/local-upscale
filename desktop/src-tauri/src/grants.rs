@@ -9,7 +9,11 @@
 //! directory creation uses the path again, so another program that swaps a folder for
 //! a link in between can still redirect that use. Tauri adds natively dropped files and
 //! folders to its asset scope by itself, and removing them from the list does not take
-//! that asset access back.
+//! that asset access back. Windows has no link-count check, so a result replaced by a
+//! hard link to another file on the same volume still passes as that result. Saved
+//! settings and recipes keep the path as chosen, so a saved folder or checkpoint that
+//! another program later turns into a link grants the link's new target on the next
+//! reconcile or restart.
 use std::{
     collections::HashSet,
     fs,
@@ -327,15 +331,10 @@ impl GrantRegistry {
     }
 
     fn lexically_allowed(&self, path: &Path) -> bool {
-        let wanted = match remote_prefix(&path.to_string_lossy()) {
-            None => return true,
-            Some(Remote::Device) => return false,
-            Some(Remote::Share(share)) => share,
-        };
         self.inner
             .lock()
             .map(|state| {
-                state
+                let roots = state
                     .app_owned_roots
                     .iter()
                     .chain(&state.default_output)
@@ -344,10 +343,8 @@ impl GrantRegistry {
                     .chain(&state.output_folders)
                     .chain(&state.model_files)
                     .chain(&state.export_files)
-                    .any(|root| {
-                        remote_prefix(&root.to_string_lossy())
-                            == Some(Remote::Share(wanted.clone()))
-                    })
+                    .map(|root| root.to_string_lossy().into_owned());
+                local_or_on_share_of(&path.to_string_lossy(), roots)
             })
             .unwrap_or(false)
     }
@@ -421,6 +418,23 @@ enum Remote {
     Share(String),
     /// A `\\.\` device path or a verbatim path that is not a drive or a share.
     Device,
+}
+
+/// True for a path whose text names no network share or device.
+pub fn is_local(text: &str) -> bool {
+    remote_prefix(text).is_none()
+}
+
+/// True for a local path, or one on the same share as one of `roots`; never for a
+/// device path. Read from the text alone, so nothing reaches the filesystem.
+pub fn local_or_on_share_of<I: IntoIterator<Item = String>>(text: &str, roots: I) -> bool {
+    match remote_prefix(text) {
+        None => true,
+        Some(Remote::Device) => false,
+        Some(share) => roots
+            .into_iter()
+            .any(|root| remote_prefix(&root).as_ref() == Some(&share)),
+    }
 }
 
 /// What a Windows path names before its first folder, read from the text alone:

@@ -2565,7 +2565,12 @@ async fn pick_folder(app: AppHandle, title: &str, current: &str) -> AppResult<Op
 
     let mut dialog = app.dialog().file().set_title(title);
     let current_path = Path::new(current);
-    if !current.trim().is_empty() && current_path.is_absolute() && current_path.is_dir() {
+    // A hint that names a share or device is ignored before it reaches the filesystem.
+    if !current.trim().is_empty()
+        && crate::grants::is_local(current)
+        && current_path.is_absolute()
+        && current_path.is_dir()
+    {
         dialog = dialog.set_directory(current_path);
     }
     let picked = tauri::async_runtime::spawn_blocking(move || dialog.blocking_pick_folder())
@@ -2586,7 +2591,10 @@ async fn pick_program(app: AppHandle, title: &str, current: &str) -> AppResult<O
     use tauri_plugin_dialog::DialogExt;
 
     let mut dialog = app.dialog().file().set_title(title);
-    if let Some(folder) = Path::new(current).parent().filter(|folder| folder.is_dir()) {
+    if let Some(folder) = Path::new(current)
+        .parent()
+        .filter(|folder| crate::grants::is_local(current) && folder.is_dir())
+    {
         dialog = dialog.set_directory(folder);
     }
     let picked = tauri::async_runtime::spawn_blocking(move || dialog.blocking_pick_file())
@@ -4042,11 +4050,9 @@ fn is_openable_output(path: &Path) -> bool {
 fn authorized_result(state: &AppState, requested: &str) -> AppResult<PathBuf> {
     let recorded = lock(&state.database)?.is_completed_output(requested)?;
     let last_output = lock(&state.runtime)?.last_output_path.clone();
-    let is_last_output = !last_output.is_empty()
-        && (last_output == requested
-            || fs::canonicalize(&last_output)
-                .map(|expected| expected == Path::new(requested))
-                .unwrap_or(false));
+    // Only the recorded string itself: another spelling, such as what the recorded
+    // path resolves to once it became a link, names a file the engine never wrote.
+    let is_last_output = !last_output.is_empty() && last_output == requested;
     if !recorded && !is_last_output {
         return Err(AppError::Validation(
             "output path was not authorized".into(),
@@ -4055,11 +4061,7 @@ fn authorized_result(state: &AppState, requested: &str) -> AppResult<PathBuf> {
     fs::symlink_metadata(requested)?;
     crate::results::ensure_not_linked(Path::new(requested))?;
     let requested = fs::canonicalize(requested)?;
-    let is_last_output = !last_output.is_empty()
-        && fs::canonicalize(last_output)
-            .map(|expected| expected == requested)
-            .unwrap_or(false);
-    if !(recorded || is_last_output) || !requested.is_file() {
+    if !requested.is_file() {
         return Err(AppError::Validation(
             "output path was not authorized".into(),
         ));
