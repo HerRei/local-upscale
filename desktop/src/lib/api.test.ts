@@ -6,8 +6,20 @@ const invoke = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/api/core', () => ({ invoke, convertFileSrc: vi.fn() }));
 const listen = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/api/event', () => ({ listen }));
+vi.mock('@tauri-apps/api/path', () => ({
+  join: vi.fn(async (...parts: string[]) => parts.join('/')),
+}));
 
-import { chooseEditRuntime, chooseExternalFFmpeg, listenForWorker } from './api';
+import {
+  chooseCustomModel,
+  chooseEditRuntime,
+  chooseExternalFFmpeg,
+  chooseMediaFiles,
+  chooseMediaFolder,
+  chooseOutputDirectory,
+  exportBenchmark,
+  listenForWorker,
+} from './api';
 
 afterEach(() => {
   delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
@@ -49,6 +61,36 @@ it('asks the host to choose and grant the editing runtime', async () => {
   expect(invoke).toHaveBeenCalledWith('choose_edit_runtime');
   invoke.mockResolvedValueOnce(null);
   expect(await chooseEditRuntime()).toBeNull();
+});
+
+it('asks the host to pick and grant media, output folders, checkpoints, and exports', async () => {
+  (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+  invoke.mockResolvedValueOnce(['/chosen/a.png']);
+  expect(await chooseMediaFiles()).toEqual(['/chosen/a.png']);
+  expect(invoke).toHaveBeenCalledWith('choose_media_files');
+
+  invoke.mockResolvedValueOnce('/chosen/folder');
+  invoke.mockResolvedValueOnce(['/chosen/folder/a.png']);
+  expect(await chooseMediaFolder()).toEqual({
+    paths: ['/chosen/folder/a.png'],
+    outputDirectory: '/chosen/folder/LocalSR Results',
+  });
+  expect(invoke).toHaveBeenCalledWith('choose_media_folder');
+  expect(invoke).toHaveBeenCalledWith('scan_media_folder', { path: '/chosen/folder' });
+
+  invoke.mockResolvedValueOnce('/chosen/out');
+  expect(await chooseOutputDirectory('/old/out')).toBe('/chosen/out');
+  expect(invoke).toHaveBeenCalledWith('choose_output_directory', { current: '/old/out' });
+
+  invoke.mockResolvedValueOnce('/chosen/model.safetensors');
+  expect(await chooseCustomModel()).toBe('/chosen/model.safetensors');
+  expect(invoke).toHaveBeenCalledWith('choose_custom_model');
+
+  invoke.mockResolvedValueOnce('/chosen/bench.json');
+  invoke.mockResolvedValueOnce(null);
+  expect(await exportBenchmark()).toBe(true);
+  expect(invoke).toHaveBeenCalledWith('choose_benchmark_export');
+  expect(invoke).toHaveBeenCalledWith('export_benchmark', { destination: '/chosen/bench.json' });
 });
 
 import { prepareCompareVideo } from './api';

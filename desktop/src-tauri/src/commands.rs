@@ -73,8 +73,18 @@ pub fn start_edit(
     input: crate::editing::StartEditInput,
 ) -> AppResult<()> {
     let _scheduler = lock(&state.scheduler)?;
-    crate::updates::ensure_not_installing(&state)?;
-    ensure_queue_idle(&state)?;
+    start_edit_checked(&state, input)?;
+    worker::dispatch_next_locked(&state, &app)?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
+pub(crate) fn start_edit_checked(
+    state: &AppState,
+    input: crate::editing::StartEditInput,
+) -> AppResult<()> {
+    crate::updates::ensure_not_installing(state)?;
+    ensure_queue_idle(state)?;
     if lock(&state.runtime)?.worker != "ready" {
         return Err(AppError::Validation(
             "Wait for the editing worker to become ready.".into(),
@@ -102,16 +112,17 @@ pub fn start_edit(
             "The selected editing GPU is unavailable.".into(),
         ));
     }
-    let runtime = edit_runtime(&state, &input.runtime_path)?;
+    let runtime = edit_runtime(state, &input.runtime_path)?;
     let media = lock(&state.database)?
         .get_media(&input.media_id)?
         .ok_or_else(|| AppError::Validation("Choose an image to edit.".into()))?;
+    state.grants.check_media_input(Path::new(&media.path))?;
     if media.kind != "image" || media.probe_status != "ready" || !Path::new(&media.path).is_file() {
         return Err(AppError::Validation(
             "Wait for a valid image preview before editing.".into(),
         ));
     }
-    let directory = prepare_output_directory(&state, &input.output_directory)?;
+    let directory = prepare_output_directory(state, &input.output_directory)?;
     let id = Uuid::new_v4().to_string();
     let stem = Path::new(&media.path)
         .file_stem()
@@ -127,8 +138,6 @@ pub fn start_edit(
         "steps": input.steps, "seed": input.seed, "accepted_terms": input.accepted_terms,
     }});
     lock(&state.database)?.insert_job(&id, &media.id, &serde_json::to_string(&request)?)?;
-    worker::dispatch_next_locked(&state, &app)?;
-    emit_state_changed(&app);
     Ok(())
 }
 
@@ -175,8 +184,13 @@ pub fn take_launch_intents(state: State<'_, Arc<AppState>>) -> AppResult<Vec<Lau
 }
 
 #[tauri::command]
-pub fn scan_media_folder(path: String) -> AppResult<Vec<String>> {
-    let directory = canonical_directory(&path)?;
+pub fn scan_media_folder(state: State<'_, Arc<AppState>>, path: String) -> AppResult<Vec<String>> {
+    scan_media_folder_checked(&state, &path)
+}
+
+pub(crate) fn scan_media_folder_checked(state: &AppState, path: &str) -> AppResult<Vec<String>> {
+    state.grants.check_media_folder(Path::new(path))?;
+    let directory = canonical_directory(path)?;
     let mut paths = Vec::new();
     for entry in fs::read_dir(directory)? {
         let entry = entry?;
@@ -186,7 +200,10 @@ pub fn scan_media_folder(path: String) -> AppResult<Vec<String>> {
         let Some(text) = path.to_str() else {
             continue;
         };
-        if path.is_file() && media_kind(&path).is_some() {
+        if path.is_file()
+            && media_kind(&path).is_some()
+            && state.grants.check_media_input(&path).is_ok()
+        {
             paths.push(text.to_owned());
             if paths.len() >= MAX_MEDIA_ITEMS {
                 break;
@@ -206,7 +223,19 @@ pub fn add_media(
 ) -> AppResult<()> {
     crate::updates::ensure_not_installing(&state)?;
     let _scheduler = lock(&state.scheduler)?;
-    crate::updates::ensure_not_installing(&state)?;
+    for encoded in add_media_checked(&state, paths, replace)? {
+        let _ = worker::send(&state, &worker::media_probe_request(&state, &encoded));
+    }
+    emit_state_changed(&app);
+    Ok(())
+}
+
+pub(crate) fn add_media_checked(
+    state: &AppState,
+    paths: Vec<String>,
+    replace: bool,
+) -> AppResult<Vec<String>> {
+    crate::updates::ensure_not_installing(state)?;
     if paths.len() > MAX_MEDIA_ITEMS {
         return Err(AppError::Validation(
             "too many media files were selected".into(),
@@ -217,12 +246,14 @@ pub fn add_media(
             "wait for the current queue to finish or cancel it before changing media".into(),
         ));
     }
-    let normalized = normalize_media_paths(paths)?;
+    let normalized = normalize_media_paths_checked(paths, &state.grants)?;
     if replace {
         lock(&state.database)?.clear_media()?;
-        clear_completed_result(&state)?;
+        clear_completed_result(state)?;
     }
 
+    let mut granted = Vec::with_capacity(normalized.len());
+    let mut to_probe = Vec::new();
     for (path, kind) in normalized {
         let encoded = path.to_string_lossy().into_owned();
         let name = path
@@ -236,11 +267,16 @@ pub fn add_media(
             &name,
             kind,
         )? {
-            let _ = worker::send(&state, &worker::media_probe_request(&state, &encoded));
+            to_probe.push(encoded);
         }
+        granted.push(path);
     }
-    emit_state_changed(&app);
-    Ok(())
+    if replace {
+        state.grants.replace_media_files(&granted);
+    } else {
+        state.grants.grant_media_files(&granted);
+    }
+    Ok(to_probe)
 }
 
 /// Adds a finished result as a new input and selects it. The result is named the way Reveal
@@ -267,6 +303,7 @@ fn add_result_as_input(state: &AppState, requested: &str) -> AppResult<(String, 
         }
     };
     database.select_media(&id)?;
+    state.grants.grant_media_file(&authorized);
     Ok((id, to_probe))
 }
 
@@ -303,12 +340,25 @@ pub fn select_media(state: State<'_, Arc<AppState>>, app: AppHandle, id: String)
 pub fn remove_media(state: State<'_, Arc<AppState>>, app: AppHandle, id: String) -> AppResult<()> {
     crate::updates::ensure_not_installing(&state)?;
     let _scheduler = lock(&state.scheduler)?;
-    crate::updates::ensure_not_installing(&state)?;
+    remove_media_checked(&state, &id)?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
+pub(crate) fn remove_media_checked(state: &AppState, id: &str) -> AppResult<()> {
+    crate::updates::ensure_not_installing(state)?;
     // The scheduler lock keeps the dispatcher from sending this picture's job meanwhile. The
     // batch the engine already holds is not removed from under it.
     let engine_jobs = lock(&state.runtime)?.active_batch_job_ids.clone();
-    lock(&state.database)?.remove_media_guarded(&id, &engine_jobs)?;
-    emit_state_changed(&app);
+    let existing = {
+        let database = lock(&state.database)?;
+        let existing = database.get_media(id)?;
+        database.remove_media_guarded(id, &engine_jobs)?;
+        existing
+    };
+    if let Some(media) = existing {
+        state.grants.revoke_media_file(Path::new(&media.path));
+    }
     Ok(())
 }
 
@@ -326,11 +376,17 @@ pub fn clear_results(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResu
 pub fn clear_media(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
     crate::updates::ensure_not_installing(&state)?;
     let _scheduler = lock(&state.scheduler)?;
-    crate::updates::ensure_not_installing(&state)?;
-    ensure_queue_idle(&state)?;
-    lock(&state.database)?.clear_media()?;
-    clear_completed_result(&state)?;
+    clear_media_checked(&state)?;
     emit_state_changed(&app);
+    Ok(())
+}
+
+pub(crate) fn clear_media_checked(state: &AppState) -> AppResult<()> {
+    crate::updates::ensure_not_installing(state)?;
+    ensure_queue_idle(state)?;
+    lock(&state.database)?.clear_media()?;
+    state.grants.clear_media();
+    clear_completed_result(state)?;
     Ok(())
 }
 
@@ -338,7 +394,11 @@ pub fn clear_media(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult
 pub fn save_settings(state: State<'_, Arc<AppState>>, settings: UiSettings) -> AppResult<()> {
     crate::updates::ensure_not_installing(&state)?;
     let _scheduler = lock(&state.scheduler)?;
-    crate::updates::ensure_not_installing(&state)?;
+    save_settings_checked(&state, settings)
+}
+
+pub(crate) fn save_settings_checked(state: &AppState, settings: UiSettings) -> AppResult<()> {
+    crate::updates::ensure_not_installing(state)?;
     if !lock(&state.runtime)?.active_job_id.is_empty() {
         return Err(AppError::Validation(
             "Finish or cancel the current queue before changing settings.".into(),
@@ -346,7 +406,17 @@ pub fn save_settings(state: State<'_, Arc<AppState>>, settings: UiSettings) -> A
     }
     validate_settings(&settings)?;
     state.programs.check(&settings.external_ffmpeg_path)?;
-    replace_settings(&state, settings)
+    if !settings.output_directory.trim().is_empty() {
+        state
+            .grants
+            .check_output_folder(Path::new(&settings.output_directory))?;
+    }
+    if !settings.custom_model_path.trim().is_empty() {
+        state
+            .grants
+            .check_model_file(Path::new(&settings.custom_model_path))?;
+    }
+    replace_settings(state, settings)
 }
 
 /// Make `settings` the current ones and write them. When the write fails the
@@ -360,7 +430,22 @@ fn replace_settings(state: &AppState, mut settings: UiSettings) -> AppResult<()>
     };
     persist_or_restore(state, |state| {
         *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = previous
-    })
+    })?;
+    reconcile_persisted_grants(state)
+}
+
+fn reconcile_persisted_grants(state: &AppState) -> AppResult<()> {
+    let (output_directory, custom_model_path) = {
+        let current = lock(&state.settings)?;
+        (
+            current.output_directory.clone(),
+            current.custom_model_path.clone(),
+        )
+    };
+    let recipes = lock(&state.recipes)?.clone();
+    state.grants.reconcile_outputs(&output_directory);
+    state.grants.reconcile_models(&custom_model_path, &recipes);
+    Ok(())
 }
 
 /// Write the settings and recipes; on a failed write run `restore` to put the
@@ -569,11 +654,23 @@ fn refresh_update_switches(app: &AppHandle) {
 pub fn save_recipe(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
-    mut recipe: Recipe,
+    recipe: Recipe,
 ) -> AppResult<()> {
     crate::updates::ensure_not_installing(&state)?;
     let _scheduler = lock(&state.scheduler)?;
-    crate::updates::ensure_not_installing(&state)?;
+    save_recipe_checked(&state, recipe)?;
+    let switches = native_menu::switches(&*lock(&state.settings)?);
+    native_menu::rebuild(&app, &lock(&state.recipes)?, switches).map_err(|error| {
+        AppError::Config(format!(
+            "could not refresh the native presets menu: {error}"
+        ))
+    })?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
+pub(crate) fn save_recipe_checked(state: &AppState, mut recipe: Recipe) -> AppResult<()> {
+    crate::updates::ensure_not_installing(state)?;
     recipe.name = recipe.name.trim().chars().take(60).collect();
     if recipe.name.is_empty() || !matches!(recipe.task.as_str(), "upscale" | "denoise" | "video") {
         return Err(AppError::Validation(
@@ -606,15 +703,12 @@ pub fn save_recipe(
         ));
     }
     validate_recipe_stages(&recipe)?;
-    store_recipe(&state, recipe)?;
-    let switches = native_menu::switches(&*lock(&state.settings)?);
-    native_menu::rebuild(&app, &lock(&state.recipes)?, switches).map_err(|error| {
-        AppError::Config(format!(
-            "could not refresh the native presets menu: {error}"
-        ))
-    })?;
-    emit_state_changed(&app);
-    Ok(())
+    if !recipe.custom_model_path.trim().is_empty() {
+        state
+            .grants
+            .check_model_file(Path::new(&recipe.custom_model_path))?;
+    }
+    store_recipe(state, recipe)
 }
 
 /// Add or replace a recipe and write it; a failed write leaves the recipes as they were.
@@ -634,7 +728,8 @@ fn store_recipe(state: &AppState, recipe: Recipe) -> AppResult<()> {
     };
     persist_or_restore(state, |state| {
         *state.recipes.lock().unwrap_or_else(|e| e.into_inner()) = previous
-    })
+    })?;
+    reconcile_persisted_grants(state)
 }
 
 /// Remove a recipe and write the change; a failed write leaves the recipes as they were.
@@ -647,7 +742,8 @@ fn remove_recipe(state: &AppState, id: &str) -> AppResult<()> {
     };
     persist_or_restore(state, |state| {
         *state.recipes.lock().unwrap_or_else(|e| e.into_inner()) = previous
-    })
+    })?;
+    reconcile_persisted_grants(state)
 }
 
 fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
@@ -730,8 +826,7 @@ fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
 pub fn delete_recipe(state: State<'_, Arc<AppState>>, app: AppHandle, id: String) -> AppResult<()> {
     crate::updates::ensure_not_installing(&state)?;
     let _scheduler = lock(&state.scheduler)?;
-    crate::updates::ensure_not_installing(&state)?;
-    remove_recipe(&state, &id)?;
+    delete_recipe_checked(&state, &id)?;
     let switches = native_menu::switches(&*lock(&state.settings)?);
     native_menu::rebuild(&app, &lock(&state.recipes)?, switches).map_err(|error| {
         AppError::Config(format!(
@@ -740,6 +835,11 @@ pub fn delete_recipe(state: State<'_, Arc<AppState>>, app: AppHandle, id: String
     })?;
     emit_state_changed(&app);
     Ok(())
+}
+
+pub(crate) fn delete_recipe_checked(state: &AppState, id: &str) -> AppResult<()> {
+    crate::updates::ensure_not_installing(state)?;
+    remove_recipe(state, id)
 }
 
 #[tauri::command]
@@ -756,6 +856,13 @@ pub fn start_jobs(
         return Err(AppError::Validation("An update is being installed".into()));
     }
     let _scheduler = lock(&state.scheduler)?;
+    start_jobs_checked(&state, input)?;
+    worker::dispatch_next_locked(&state, &app)?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
+pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -> AppResult<()> {
     if state
         .updates
         .installing
@@ -763,9 +870,8 @@ pub fn start_jobs(
     {
         return Err(AppError::Validation("An update is being installed".into()));
     }
-    let mut input = input;
-    input.device = resolve_device(&state, &input.device)?;
-    validate_start(&input, &state)?;
+    input.device = resolve_device(state, &input.device)?;
+    validate_start(&input, state)?;
     validate_fix_engine(&input, lock(&state.engine)?.as_ref())?;
     if input.task == "video"
         && input.video_interpolation != "off"
@@ -788,9 +894,9 @@ pub fn start_jobs(
     // A deliberate catalog refresh belongs on a background maintenance path,
     // never in this latency-sensitive command.
 
-    let output_directory = prepare_output_directory(&state, &input.output_directory)?;
+    let output_directory = prepare_output_directory(state, &input.output_directory)?;
     check_output_room(&output_directory, &input, platform_path_limit())?;
-    let selection = resolve_model_selection(&state, &input)?;
+    let selection = resolve_model_selection(state, &input)?;
     let media = {
         let database = lock(&state.database)?;
         let inflight_media: HashSet<String> = database
@@ -829,6 +935,7 @@ pub fn start_jobs(
     }
 
     for item in &media {
+        state.grants.check_media_input(Path::new(&item.path))?;
         if item.probe_status == "failed" {
             return Err(AppError::Validation(format!(
                 "{} could not be opened: {}",
@@ -880,8 +987,6 @@ pub fn start_jobs(
             })
             .collect()
     })?;
-    worker::dispatch_next_locked(&state, &app)?;
-    emit_state_changed(&app);
     Ok(())
 }
 
@@ -1154,6 +1259,7 @@ fn admit_model_trials(
     let media = database
         .get_media(media_id)?
         .ok_or_else(|| AppError::Validation("The selected image is no longer queued.".into()))?;
+    state.grants.check_media_input(Path::new(&media.path))?;
     if media.kind != "image" || media.probe_status != "ready" || !Path::new(&media.path).is_file() {
         return Err(AppError::Validation(
             "Choose an available image with a ready preview.".into(),
@@ -1455,11 +1561,13 @@ pub fn start_benchmark(
 
 #[tauri::command]
 pub fn export_benchmark(state: State<'_, Arc<AppState>>, destination: String) -> AppResult<()> {
+    let resolved = state.grants.check_export_file(Path::new(&destination))?;
     let result = lock(&state.latest_benchmark)?
         .clone()
         .ok_or_else(|| AppError::Validation("run a benchmark before exporting it".into()))?;
-    let destination = PathBuf::from(destination);
-    write_benchmark_export(&destination, &serde_json::to_vec_pretty(&result)?)
+    write_benchmark_export(&resolved, &serde_json::to_vec_pretty(&result)?)?;
+    state.grants.consume_export_file(&resolved);
+    Ok(())
 }
 
 fn write_benchmark_export(destination: &Path, bytes: &[u8]) -> AppResult<()> {
@@ -1769,24 +1877,19 @@ fn canonical_video(path: PathBuf) -> AppResult<PathBuf> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn video_comparison_sources(
+pub(crate) fn resolve_video_comparison_inputs(
     state: &AppState,
-    app: &AppHandle,
     media_id: &str,
-    request_id: &str,
-    force_compatible: bool,
     result_id: Option<&str>,
-    defer_conversion: bool,
-    cancel: Arc<std::sync::atomic::AtomicBool>,
     compare_path: Option<(String, bool)>,
-) -> AppResult<VideoComparisonSources> {
+) -> AppResult<(PathBuf, Option<PathBuf>)> {
     let (original, enhanced) = if let Some((path, is_result)) = compare_path {
         let path = PathBuf::from(path);
         (
             if is_result {
                 canonical_result_video(path)?
             } else {
+                state.grants.check_media_input(&path)?;
                 canonical_video(path)?
             },
             None,
@@ -1801,6 +1904,7 @@ fn video_comparison_sources(
                 "video playback is available only for videos".into(),
             ));
         }
+        state.grants.check_media_input(Path::new(&media.path))?;
         // Before a job finishes there is no output: play the source alone.
         let output = match result_id {
             Some("") => None,
@@ -1811,6 +1915,23 @@ fn video_comparison_sources(
     };
     let original = canonical_video(original)?;
     let enhanced = enhanced.map(canonical_result_video).transpose()?;
+    Ok((original, enhanced))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn video_comparison_sources(
+    state: &AppState,
+    app: &AppHandle,
+    media_id: &str,
+    request_id: &str,
+    force_compatible: bool,
+    result_id: Option<&str>,
+    defer_conversion: bool,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+    compare_path: Option<(String, bool)>,
+) -> AppResult<VideoComparisonSources> {
+    let (original, enhanced) =
+        resolve_video_comparison_inputs(state, media_id, result_id, compare_path)?;
     let mut converted = false;
     let mut playback = |path: PathBuf| -> AppResult<PathBuf> {
         if force_compatible || crate::video_preview::needs_conversion(&path) {
@@ -1914,26 +2035,14 @@ pub fn refresh_capabilities(state: State<'_, Arc<AppState>>) -> AppResult<()> {
 
 #[tauri::command]
 pub fn probe_path(state: State<'_, Arc<AppState>>, app: AppHandle, path: String) -> AppResult<()> {
-    let canonical = fs::canonicalize(path)?;
-    let encoded = canonical.to_string_lossy().into_owned();
-    let queued_media = lock(&state.database)?.get_media_by_path(&encoded)?;
-    let last_output = lock(&state.runtime)?.last_output_path.clone();
-    let is_last_output = !last_output.is_empty()
-        && fs::canonicalize(last_output)
-            .map(|expected| expected == canonical)
-            .unwrap_or(false);
-    if queued_media.is_none() && !is_last_output {
-        return Err(AppError::Validation(
-            "preview path was not authorized by the media queue".into(),
-        ));
-    }
+    let (encoded, is_queued, is_video) = probe_path_checked(&state, &path)?;
     // A queued source must update its own persisted thumbnail. `preview_ready`
     // is reserved for the completed output comparison.
-    if queued_media.is_some() {
+    if is_queued {
         lock(&state.database)?.start_media_probe(&encoded)?;
         emit_state_changed(&app);
     }
-    let result = if queued_media.is_some() || media_kind(&canonical) == Some("video") {
+    let result = if is_queued || is_video {
         worker::send(&state, &worker::media_probe_request(&state, &encoded))
     } else {
         worker::send(
@@ -1945,12 +2054,37 @@ pub fn probe_path(state: State<'_, Arc<AppState>>, app: AppHandle, path: String)
         )
     };
     if let Err(error) = &result {
-        if queued_media.is_some() {
+        if is_queued {
             lock(&state.database)?.fail_media_probe(&encoded, &error.to_string())?;
             emit_state_changed(&app);
         }
     }
     result
+}
+
+pub(crate) fn probe_path_checked(state: &AppState, path: &str) -> AppResult<(String, bool, bool)> {
+    let last_output = lock(&state.runtime)?.last_output_path.clone();
+    let requested_resolved = crate::grants::resolve_path(Path::new(path))?;
+    let is_last_output = !last_output.is_empty()
+        && crate::grants::resolve_path(Path::new(&last_output))
+            .map(|expected| expected == requested_resolved)
+            .unwrap_or(false);
+    if !is_last_output {
+        state.grants.check_media_input(Path::new(path))?;
+    }
+    let canonical = fs::canonicalize(path)?;
+    let encoded = canonical.to_string_lossy().into_owned();
+    let queued_media = lock(&state.database)?.get_media_by_path(&encoded)?;
+    if queued_media.is_none() && !is_last_output {
+        return Err(AppError::Validation(
+            "preview path was not authorized by the media queue".into(),
+        ));
+    }
+    Ok((
+        encoded,
+        queued_media.is_some(),
+        media_kind(&canonical) == Some("video"),
+    ))
 }
 
 #[tauri::command]
@@ -2041,7 +2175,18 @@ pub fn import_catalog_model(
 ) -> AppResult<()> {
     crate::updates::ensure_not_installing(&state)?;
     let _scheduler = lock(&state.scheduler)?;
-    crate::updates::ensure_not_installing(&state)?;
+    import_catalog_model_checked(&state, &model_id, &source_path, accepted_terms)?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
+pub(crate) fn import_catalog_model_checked(
+    state: &AppState,
+    model_id: &str,
+    source_path: &str,
+    accepted_terms: bool,
+) -> AppResult<()> {
+    crate::updates::ensure_not_installing(state)?;
     let (filename, size_bytes, sha256, terms_required) = {
         let catalog = lock(&state.catalog)?;
         let model = catalog
@@ -2061,8 +2206,10 @@ pub fn import_catalog_model(
             "review and accept this checkpoint's stated terms before importing it".into(),
         ));
     }
+    state.grants.check_model_file(Path::new(source_path))?;
     let source = fs::canonicalize(source_path)
         .map_err(|_| AppError::Validation("the selected checkpoint is unavailable".into()))?;
+    state.grants.check_model_file(&source)?;
     if !source.is_file() || !catalog::verified_file(&source, size_bytes, &sha256) {
         return Err(AppError::Validation(
             "the selected file does not match the catalog size and SHA-256 digest".into(),
@@ -2071,9 +2218,7 @@ pub fn import_catalog_model(
     fs::create_dir_all(&state.paths.model_root)?;
     let destination = state.paths.model_root.join(filename);
     import_verified_catalog_file(&source, &destination, size_bytes, &sha256)?;
-    state.refresh_catalog()?;
-    emit_state_changed(&app);
-    Ok(())
+    state.refresh_catalog()
 }
 
 fn import_verified_catalog_file(
@@ -2196,6 +2341,146 @@ pub async fn choose_edit_runtime(
         state.edit_programs.grant(path);
     }
     Ok(picked)
+}
+
+const MEDIA_DIALOG_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "gif", "avif", "jp2", "j2k", "heic",
+    "heif", "hif", "jxl", "dng", "cr2", "cr3", "nef", "nrw", "arw", "srf", "sr2", "raf", "orf",
+    "rw2", "pef", "srw", "3fr", "iiq", "erf", "rwl", "mrw", "mef", "mos", "dcr", "kdc", "mp4",
+    "mov", "m4v", "avi", "mkv", "webm", "mpg", "mpeg", "mpe", "vob", "ts", "mts", "m2ts", "wmv",
+    "asf", "flv", "f4v", "3gp", "3g2", "ogv", "divx",
+];
+
+#[tauri::command]
+pub async fn choose_media_files(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> AppResult<Vec<String>> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let dialog = app
+        .dialog()
+        .file()
+        .set_title("Add media")
+        .add_filter("Images and video", MEDIA_DIALOG_EXTENSIONS);
+    let picked = tauri::async_runtime::spawn_blocking(move || dialog.blocking_pick_files())
+        .await
+        .map_err(|error| AppError::Config(format!("the file dialog failed: {error}")))?;
+    let Some(picked) = picked else {
+        return Ok(Vec::new());
+    };
+    let mut paths = Vec::with_capacity(picked.len());
+    for entry in picked {
+        paths.push(
+            entry.into_path().map_err(|error| {
+                AppError::Validation(format!("that is not a file path: {error}"))
+            })?,
+        );
+    }
+    state.grants.grant_media_files(&paths);
+    Ok(paths
+        .into_iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect())
+}
+
+#[tauri::command]
+pub async fn choose_media_folder(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> AppResult<Option<String>> {
+    let picked = pick_folder(app, "Add media folder", "").await?;
+    if let Some(folder) = &picked {
+        state.grants.grant_media_folder(folder);
+        state
+            .grants
+            .grant_output_folder(&folder.join("LocalSR Results"));
+    }
+    Ok(picked.map(|path| path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+pub async fn choose_output_directory(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    current: String,
+) -> AppResult<Option<String>> {
+    let picked = pick_folder(app, "Choose output folder", &current).await?;
+    if let Some(folder) = &picked {
+        state.grants.grant_output_folder(folder);
+    }
+    Ok(picked.map(|path| path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+pub async fn choose_custom_model(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> AppResult<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let dialog = app
+        .dialog()
+        .file()
+        .set_title("Choose model checkpoint")
+        .add_filter("Model checkpoints", &["safetensors", "pth", "pt", "ckpt"]);
+    let picked = tauri::async_runtime::spawn_blocking(move || dialog.blocking_pick_file())
+        .await
+        .map_err(|error| AppError::Config(format!("the file dialog failed: {error}")))?;
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|error| AppError::Validation(format!("that is not a file path: {error}")))?;
+    state.grants.grant_model_file(&path);
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+pub async fn choose_benchmark_export(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> AppResult<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let dialog = app
+        .dialog()
+        .file()
+        .set_title("Export benchmark")
+        .set_file_name("localsr-benchmark-v1.json")
+        .add_filter("JSON", &["json"]);
+    let picked = tauri::async_runtime::spawn_blocking(move || dialog.blocking_save_file())
+        .await
+        .map_err(|error| AppError::Config(format!("the file dialog failed: {error}")))?;
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|error| AppError::Validation(format!("that is not a file path: {error}")))?;
+    state.grants.grant_export_file(&path);
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+async fn pick_folder(app: AppHandle, title: &str, current: &str) -> AppResult<Option<PathBuf>> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let mut dialog = app.dialog().file().set_title(title);
+    let current_path = Path::new(current);
+    if !current.trim().is_empty() && current_path.is_absolute() && current_path.is_dir() {
+        dialog = dialog.set_directory(current_path);
+    }
+    let picked = tauri::async_runtime::spawn_blocking(move || dialog.blocking_pick_folder())
+        .await
+        .map_err(|error| AppError::Config(format!("the folder dialog failed: {error}")))?;
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|error| AppError::Validation(format!("that is not a folder path: {error}")))?;
+    Ok(Some(path))
 }
 
 /// The host's own file dialog for one program, opened beside `current` when that
@@ -2580,6 +2865,16 @@ fn resolve_device(state: &AppState, requested: &str) -> AppResult<String> {
 fn validate_start(input: &StartBatchInput, state: &AppState) -> AppResult<()> {
     validate_start_input(input, external_codecs_available(state))?;
     state.programs.check(&input.external_ffmpeg_path)?;
+    if !input.output_directory.trim().is_empty() {
+        state
+            .grants
+            .check_output_folder(Path::new(&input.output_directory))?;
+    }
+    if input.model_id == "__custom__" {
+        state
+            .grants
+            .check_model_file(Path::new(&input.custom_model_path))?;
+    }
     let media = state
         .capabilities
         .lock()
@@ -2853,8 +3148,12 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
     }
 
     let (path, selected_model) = if input.model_id == "__custom__" {
+        state
+            .grants
+            .check_model_file(Path::new(&input.custom_model_path))?;
         let path = fs::canonicalize(&input.custom_model_path)
             .map_err(|_| AppError::Validation("custom checkpoint is unavailable".into()))?;
+        state.grants.check_model_file(&path)?;
         if !path.is_file() {
             return Err(AppError::Validation(
                 "custom checkpoint is not a file".into(),
@@ -3243,8 +3542,10 @@ fn prepare_output_directory(state: &AppState, requested: &str) -> AppResult<Path
             "choose the full path of the output folder".into(),
         ));
     }
+    state.grants.check_output_folder(&path)?;
     fs::create_dir_all(&path)?;
     let canonical = fs::canonicalize(path)?;
+    state.grants.check_output_folder(&canonical)?;
     if !canonical.is_dir() {
         return Err(AppError::Validation(
             "output path is not a directory".into(),
@@ -3445,13 +3746,18 @@ fn media_kind(path: &Path) -> Option<&'static str> {
     }
 }
 
-fn normalize_media_paths(paths: Vec<String>) -> AppResult<Vec<(PathBuf, &'static str)>> {
+fn normalize_media_paths_checked(
+    paths: Vec<String>,
+    grants: &crate::grants::GrantRegistry,
+) -> AppResult<Vec<(PathBuf, &'static str)>> {
     let mut normalized = Vec::new();
     let mut seen = HashSet::new();
     for requested in paths {
+        grants.check_media_input(Path::new(&requested))?;
         let canonical = fs::canonicalize(&requested)
             .map_err(|_| AppError::Validation(format!("media path is unavailable: {requested}")))?;
         if canonical.is_file() {
+            grants.check_media_input(&canonical)?;
             let kind = media_kind(&canonical)
                 .ok_or_else(|| AppError::Validation("unsupported media file type".into()))?;
             push_normalized_media(&mut normalized, &mut seen, canonical, kind)?;
@@ -3462,6 +3768,7 @@ fn normalize_media_paths(paths: Vec<String>) -> AppResult<Vec<(PathBuf, &'static
                 "media selection is not a file or directory: {requested}"
             )));
         }
+        grants.check_media_folder(&canonical)?;
 
         let mut children = fs::read_dir(&canonical)?
             .filter_map(Result::ok)
@@ -3471,8 +3778,10 @@ fn normalize_media_paths(paths: Vec<String>) -> AppResult<Vec<(PathBuf, &'static
         children.sort_by_key(|path| path.to_string_lossy().to_lowercase());
         for child in children {
             let child = fs::canonicalize(child)?;
-            if let Some(kind) = media_kind(&child) {
-                push_normalized_media(&mut normalized, &mut seen, child, kind)?;
+            if grants.check_media_input(&child).is_ok() {
+                if let Some(kind) = media_kind(&child) {
+                    push_normalized_media(&mut normalized, &mut seen, child, kind)?;
+                }
             }
         }
     }

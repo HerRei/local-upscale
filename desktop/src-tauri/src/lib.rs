@@ -10,6 +10,7 @@ mod downloads;
 mod editing;
 mod engine_payload;
 mod error;
+mod grants;
 mod headless_smoke;
 mod integrations;
 mod launch;
@@ -117,7 +118,13 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .on_menu_event(|app, event| native_menu::dispatch(app, event.id().as_ref()))
-        .on_window_event(hide_instead_of_close)
+        .on_window_event(|window, event| {
+            grant_dropped_window_paths(window.app_handle(), event);
+            hide_instead_of_close(window, event);
+        })
+        .on_webview_event(|webview, event| {
+            grant_dropped_webview_paths(webview.app_handle(), event);
+        })
         .setup(move |app| {
             let state = Arc::new(AppState::new()?);
             // A Windows installer that finished while LocalSR was closed.
@@ -126,10 +133,14 @@ pub fn run() {
                 &app.package_info().version.to_string(),
             );
             if !initial_intent.is_empty() {
+                state.grants.grant_launch_files(&initial_intent.files);
                 lock(&state.launch_intents)?.push(initial_intent.clone());
             }
             #[cfg(target_os = "macos")]
             if let Ok(mut early) = EARLY_OPEN_INTENTS.lock() {
+                for intent in early.iter() {
+                    state.grants.grant_launch_files(&intent.files);
+                }
                 lock(&state.launch_intents)?.append(&mut early);
             }
             app.manage(state.clone());
@@ -175,6 +186,11 @@ pub fn run() {
             commands::take_launch_intents,
             commands::scan_media_folder,
             commands::add_media,
+            commands::choose_media_files,
+            commands::choose_media_folder,
+            commands::choose_output_directory,
+            commands::choose_custom_model,
+            commands::choose_benchmark_export,
             commands::select_media,
             commands::remove_media,
             commands::clear_media,
@@ -318,6 +334,7 @@ fn enqueue_launch_intent(app: &tauri::AppHandle, intent: LaunchIntent) {
         }
         return;
     };
+    state.grants.grant_launch_files(&intent.files);
     if let Ok(mut pending) = state.launch_intents.lock() {
         pending.push(intent);
     }
@@ -353,6 +370,22 @@ fn fit_main_window(app: &tauri::AppHandle) {
     let left = area.position.x + (area.size.width.saturating_sub(width + frame_width) / 2) as i32;
     let top = area.position.y + (area.size.height.saturating_sub(height + frame_height) / 2) as i32;
     let _ = window.set_position(tauri::PhysicalPosition::new(left, top));
+}
+
+fn grant_dropped_window_paths(app: &tauri::AppHandle, event: &tauri::WindowEvent) {
+    if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+        if let Some(state) = app.try_state::<Arc<AppState>>() {
+            state.grants.grant_dropped_media(paths);
+        }
+    }
+}
+
+fn grant_dropped_webview_paths(app: &tauri::AppHandle, event: &tauri::WebviewEvent) {
+    if let tauri::WebviewEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+        if let Some(state) = app.try_state::<Arc<AppState>>() {
+            state.grants.grant_dropped_media(paths);
+        }
+    }
 }
 
 /// On macOS, closing the window (Command-W or the close button) only hides it, as in other

@@ -1,7 +1,6 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { join } from '@tauri-apps/api/path';
-import { open, save } from '@tauri-apps/plugin-dialog';
 import { demoSnapshot } from './demo';
 import type {
   AppSnapshot,
@@ -33,79 +32,7 @@ export async function refreshSnapshot(): Promise<AppSnapshot> {
 
 export async function chooseMediaFiles(): Promise<string[]> {
   if (!isTauri()) return [];
-  const selection = await open({
-    multiple: true,
-    directory: false,
-    filters: [
-      {
-        name: 'Images and video',
-        extensions: [
-          'png',
-          'jpg',
-          'jpeg',
-          'webp',
-          'bmp',
-          'tif',
-          'tiff',
-          'gif',
-          'avif',
-          'jp2',
-          'j2k',
-          // Decoded by macOS; the host rejects them elsewhere.
-          'heic',
-          'heif',
-          'hif',
-          'jxl',
-          // Camera RAW (LibRaw).
-          'dng',
-          'cr2',
-          'cr3',
-          'nef',
-          'nrw',
-          'arw',
-          'srf',
-          'sr2',
-          'raf',
-          'orf',
-          'rw2',
-          'pef',
-          'srw',
-          '3fr',
-          'iiq',
-          'erf',
-          'rwl',
-          'mrw',
-          'mef',
-          'mos',
-          'dcr',
-          'kdc',
-          'mp4',
-          'mov',
-          'm4v',
-          'avi',
-          'mkv',
-          'webm',
-          'mpg',
-          'mpeg',
-          'mpe',
-          'vob',
-          'ts',
-          'mts',
-          'm2ts',
-          'wmv',
-          'asf',
-          'flv',
-          'f4v',
-          '3gp',
-          '3g2',
-          'ogv',
-          'divx',
-        ],
-      },
-    ],
-  });
-  if (!selection) return [];
-  return Array.isArray(selection) ? selection : [selection];
+  return invoke<string[]>('choose_media_files');
 }
 
 export async function chooseMediaFolder(): Promise<{
@@ -113,30 +40,20 @@ export async function chooseMediaFolder(): Promise<{
   outputDirectory: string;
 } | null> {
   if (!isTauri()) return null;
-  const selection = await open({ multiple: false, directory: true });
-  if (!selection || Array.isArray(selection)) return null;
+  const selection = await invoke<string | null>('choose_media_folder');
+  if (!selection) return null;
   const paths = await invoke<string[]>('scan_media_folder', { path: selection });
   return { paths, outputDirectory: await join(selection, 'LocalSR Results') };
 }
 
 export async function chooseOutputDirectory(current: string): Promise<string | null> {
   if (!isTauri()) return null;
-  const selection = await open({
-    multiple: false,
-    directory: true,
-    defaultPath: current || undefined,
-  });
-  return typeof selection === 'string' ? selection : null;
+  return invoke<string | null>('choose_output_directory', { current });
 }
 
 export async function chooseCustomModel(): Promise<string | null> {
   if (!isTauri()) return null;
-  const selection = await open({
-    multiple: false,
-    directory: false,
-    filters: [{ name: 'Model checkpoints', extensions: ['safetensors', 'pth', 'pt', 'ckpt'] }],
-  });
-  return typeof selection === 'string' ? selection : null;
+  return invoke<string | null>('choose_custom_model');
 }
 
 export const addMedia = (paths: string[], replace: boolean): Promise<void> =>
@@ -178,10 +95,7 @@ export const startBenchmark = (device: string): Promise<void> =>
   invoke('start_benchmark', { input: { device } });
 export const exportBenchmark = async (): Promise<boolean> => {
   if (!isTauri()) return false;
-  const destination = await save({
-    defaultPath: 'localsr-benchmark-v1.json',
-    filters: [{ name: 'JSON', extensions: ['json'] }],
-  });
+  const destination = await invoke<string | null>('choose_benchmark_export');
   if (!destination) return false;
   await invoke('export_benchmark', { destination });
   return true;

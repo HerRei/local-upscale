@@ -1081,6 +1081,10 @@ pub fn recover_update_settings(state: State<'_, Arc<AppState>>, app: AppHandle) 
         let _io = lock(&state.settings_io)?;
         crate::settings::recover_defaults(&state.paths)?;
         let (settings, recipes) = crate::settings::load(&state.paths);
+        state.grants.reconcile_outputs(&settings.output_directory);
+        state
+            .grants
+            .reconcile_models(&settings.custom_model_path, &recipes);
         *lock(&state.settings)? = settings;
         *lock(&state.recipes)? = recipes;
         state.write_settings()?;
