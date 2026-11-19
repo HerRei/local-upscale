@@ -17,7 +17,7 @@ export default defineConfig({
   timeout: 30_000,
   expect: {
     timeout: 7_000,
-    toHaveScreenshot: { maxDiffPixelRatio: 0.002, animations: 'disabled', caret: 'hide' },
+    toHaveScreenshot: { animations: 'disabled', caret: 'hide' },
   },
   // One baseline per project and platform: font rendering differs between them.
   snapshotPathTemplate: '{testDir}/__screenshots__/{projectName}/{arg}-{platform}{ext}',
