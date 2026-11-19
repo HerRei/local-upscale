@@ -3168,3 +3168,30 @@ fn a_result_that_became_a_second_name_for_another_file_is_refused() {
     assert!(add_result_as_input(&state, &recorded).is_err());
     assert!(probe_path_checked(&state, &recorded).is_err());
 }
+
+#[cfg(unix)]
+#[test]
+fn the_target_of_a_last_output_that_became_a_link_is_not_a_result() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(directory.path()).unwrap();
+    let state = Arc::new(AppState::from_paths(AppPaths::under(&root.join("app"))).unwrap());
+    let app = tauri::test::mock_app();
+    app.manage(state.clone());
+    let private = root.join("private.png");
+    let output = root.join("result.png");
+    fs::write(&private, b"private").unwrap();
+    std::os::unix::fs::symlink(&private, &output).unwrap();
+    lock(&state.runtime).unwrap().last_output_path = output.to_string_lossy().into_owned();
+    let target = private.to_string_lossy().into_owned();
+
+    assert!(open_result(app.state(), target.clone()).is_err());
+    assert!(reveal_result(app.state(), target.clone()).is_err());
+    assert!(add_result_as_input(&state, &target).is_err());
+    assert!(probe_path_checked(&state, &target).is_err());
+    assert!(lock(&state.database)
+        .unwrap()
+        .list_media()
+        .unwrap()
+        .is_empty());
+    assert!(state.grants.check_media_input(&private).is_err());
+}
