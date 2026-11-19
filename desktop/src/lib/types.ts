@@ -321,7 +321,7 @@ export interface UiSettings {
   /** Off by default; the host fills both in for settings saved before 0.3.7. */
   video_interpolation?: InterpolationTarget;
   video_interpolation_order?: InterpolationOrder;
-  /** Direct builds send version, platform and channel after an update check. Defaults to true. */
+  /** Direct builds send version, platform and channel after an update check. Off unless turned on. */
   anonymous_update_count?: boolean;
   check_updates_at_launch?: boolean;
   enable_face_model: boolean;

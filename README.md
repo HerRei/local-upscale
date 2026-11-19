@@ -116,8 +116,9 @@ app reads its update feed on GitHub Pages (for the beta,
 `herrei.github.io/localsr/updates/beta.json`) and can update itself, on the Mac,
 on Windows and as a Linux AppImage. After a check it
 sends one anonymous count with the app version, platform and channel to my Mac
-mini at `macmini-ci.tail34a4e0.ts.net`, without an install ID or cookies. Both
-are on by default. Turn either off in the LocalSR menu on the Mac, the Help menu
+mini at `macmini-ci.tail34a4e0.ts.net`, without an install ID or cookies, but only
+if you turn the count on (it is off for new installs since 0.4.1; installs that
+already had it keep their setting). The update check is on by default. Turn either on or off in the LocalSR menu on the Mac, the Help menu
 on Windows and Linux, or the Software Update dialog; **Check for Updates…** still
 works when you ask. The Microsoft Store edition does neither.
 
