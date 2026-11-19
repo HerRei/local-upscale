@@ -126,8 +126,9 @@ works when you ask. The Microsoft Store edition does neither.
 
 Updates come from GitHub Releases, and the app checks their signature before it
 replaces anything. Models download from their authors on GitHub or Hugging Face
-when you choose them. That is all, and once your models are downloaded, LocalSR
-works offline. [Privacy details](https://herrei.github.io/localsr/privacy/).
+when you choose them. The face-detection model downloads the first time a
+face-aware job runs. Once your models are downloaded, LocalSR works offline.
+[Privacy details](https://herrei.github.io/localsr/privacy/).
 
 ## FAQ
 

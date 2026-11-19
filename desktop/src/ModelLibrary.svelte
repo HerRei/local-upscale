@@ -622,15 +622,19 @@
                     </div>
                   {/if}
                 </div>
-                <div class="meters" aria-hidden="true">
+                <div class="meters">
                   <div class="meter">
-                    Quality<span class="dots"
+                    Quality<span class="visually-hidden">: {model.quality_tier} out of 4</span><span
+                      class="dots"
+                      aria-hidden="true"
                       >{#each [1, 2, 3, 4] as tier}<i class:f={model.quality_tier >= tier}
                         ></i>{/each}</span
                     >
                   </div>
                   <div class="meter">
-                    Speed<span class="dots"
+                    Speed<span class="visually-hidden"
+                      >: {Math.min(model.speed_tier, 3)} out of 4</span
+                    ><span class="dots" aria-hidden="true"
                       >{#each [1, 2, 3, 4] as tier}<i
                           class:f={model.speed_tier >= tier && tier <= 3}
                         ></i>{/each}</span
