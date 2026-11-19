@@ -150,7 +150,7 @@ export const saveSettings = (settings: UiSettings): Promise<void> =>
 
 /** One update switch, saved by the host on its own: a full settings save never changes it. */
 export const setUpdateSwitch = (
-  name: 'check_updates_at_launch' | 'anonymous_update_count' | 'crash_reports',
+  name: 'check_updates_at_launch' | 'anonymous_update_count' | 'crash_reports' | 'low_priority',
   value: boolean,
 ): Promise<void> => invoke('set_update_switch', { name, value });
 export interface SetupChoices {
@@ -199,6 +199,11 @@ export async function openUserGuide(): Promise<void> {
 /** LocalSR's download page, for the editions that use a GPU this one cannot (CUDA, DirectML, ROCm). */
 export async function openDownloadPage(): Promise<void> {
   if (isTauri()) await invoke('open_download_page');
+}
+
+/** In-app tutorial for loading a custom checkpoint file. */
+export async function openCustomModelTutorial(): Promise<void> {
+  if (isTauri()) await invoke('open_custom_model_tutorial');
 }
 
 /** Open ffmpeg.org's download page; installing FFmpeg stays the user's own action. */

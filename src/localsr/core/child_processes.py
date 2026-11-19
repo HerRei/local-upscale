@@ -10,6 +10,7 @@ the worker ends or is asked to terminate while a program still runs.
 from __future__ import annotations
 
 import atexit
+import ctypes
 import os
 import signal
 import subprocess
@@ -19,14 +20,98 @@ import weakref
 
 _running: weakref.WeakSet[subprocess.Popen] = weakref.WeakSet()
 _lock = threading.Lock()
+_low_priority = False
+
+_PRIO_DARWIN_PROCESS = 4
+_PRIO_DARWIN_BG = 0x1000
+_LOW_NICE = 10
+
+
+def _darwin_libc():
+    try:
+        libc = ctypes.CDLL("libc.dylib")
+        libc.setpriority.restype = ctypes.c_int
+        libc.setpriority.argtypes = [ctypes.c_int, ctypes.c_uint, ctypes.c_int]
+        return libc
+    except OSError:
+        return None
+
+
+def _apply_pid_priority(pid: int, enabled: bool, *, is_self: bool = False) -> None:
+    if pid <= 0:
+        return
+    if sys.platform == "darwin":
+        libc = _darwin_libc()
+        if libc is not None:
+            who = 0 if is_self else pid
+            libc.setpriority(_PRIO_DARWIN_PROCESS, who, _PRIO_DARWIN_BG if enabled else 0)
+        # No nice on macOS: it could not be raised back, and background QoS is reversible.
+        return
+    if os.name == "nt":
+        try:
+            import psutil
+
+            proc = psutil.Process(pid)
+            proc.nice(
+                psutil.BELOW_NORMAL_PRIORITY_CLASS if enabled else psutil.NORMAL_PRIORITY_CLASS
+            )
+        except Exception:
+            pass
+        return
+    if sys.platform.startswith("linux"):
+        if enabled:
+            try:
+                os.setpriority(os.PRIO_PROCESS, 0 if is_self else pid, _LOW_NICE)
+            except OSError:
+                pass
+        try:
+            import psutil
+
+            proc = psutil.Process(pid)
+            if hasattr(proc, "ionice"):
+                proc.ionice(psutil.IOPRIO_CLASS_IDLE if enabled else psutil.IOPRIO_CLASS_NONE)
+        except Exception:
+            pass
+
+
+def set_low_priority(enabled: bool) -> None:
+    """Apply or clear low scheduling priority on this worker and its running children."""
+    enabled = bool(enabled)
+    with _lock:
+        global _low_priority
+        _low_priority = enabled
+        tracked_pids = [process.pid for process in _running if process.poll() is None]
+    _apply_pid_priority(os.getpid(), enabled, is_self=True)
+    seen = {os.getpid()}
+    for pid in tracked_pids:
+        if pid not in seen:
+            seen.add(pid)
+            _apply_pid_priority(pid, enabled)
+    try:
+        import psutil
+
+        for child in psutil.Process(os.getpid()).children(recursive=True):
+            if child.pid not in seen:
+                seen.add(child.pid)
+                _apply_pid_priority(child.pid, enabled)
+    except Exception:
+        pass
+
+
+def track(process: subprocess.Popen) -> subprocess.Popen:
+    """Track an externally spawned child process for shutdown and priority updates."""
+    with _lock:
+        _running.add(process)
+        enabled = _low_priority
+    if enabled and process.poll() is None:
+        _apply_pid_priority(process.pid, True)
+    return process
 
 
 def start(command: list[str], **options) -> subprocess.Popen:
     """Start a program that is stopped again when this process ends."""
     process = subprocess.Popen(command, **options)
-    with _lock:
-        _running.add(process)
-    return process
+    return track(process)
 
 
 def stop(process: subprocess.Popen, grace: float = 5.0) -> None:

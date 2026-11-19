@@ -2355,3 +2355,43 @@ fn a_result_that_became_a_link_is_not_added() {
         1
     );
 }
+
+#[test]
+fn low_priority_switch_saves_while_a_job_runs_and_notifies_the_engine() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(directory.path());
+    fs::create_dir_all(&paths.next_root).unwrap();
+    fs::create_dir_all(&paths.model_root).unwrap();
+    let state = AppState::from_paths(paths).unwrap();
+    assert!(!crate::settings::load(&state.paths).0.low_priority);
+
+    let (sender, receiver) = std::sync::mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+    lock(&state.runtime).unwrap().active_job_id = "running".into();
+
+    apply_update_switch(&state, "low_priority", |_| true).unwrap();
+    let saved = crate::settings::load(&state.paths).0;
+    assert!(saved.low_priority);
+
+    let message: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+    assert_eq!(message["type"], "set_low_priority");
+    assert_eq!(message["data"]["low_priority"], true);
+
+    let mut stale = UiSettings::default();
+    keep_update_switches(&saved, &mut stale);
+    assert!(stale.low_priority);
+
+    // Older settings JSON without low_priority defaults to false.
+    let mut old = serde_json::to_value(UiSettings::default()).unwrap();
+    old.as_object_mut().unwrap().remove("low_priority");
+    let loaded = serde_json::from_value::<UiSettings>(old).unwrap();
+    assert!(!loaded.low_priority);
+}
+
+#[test]
+fn custom_model_tutorial_url_points_to_the_exact_help_anchor() {
+    assert_eq!(
+        CUSTOM_MODEL_TUTORIAL_URL,
+        "https://herrei.github.io/localsr/help/#custom-model"
+    );
+}

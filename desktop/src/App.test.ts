@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 
 import App from './App.svelte';
 import { demoSnapshot } from './lib/demo';
+import { applyWorkerEnvelope } from './lib/workerEvents';
 import type {
   AppSnapshot,
   DeviceInfo,
@@ -129,10 +130,11 @@ const api = vi.hoisted(() => ({
   chooseExternalFFmpeg: vi.fn(async (): Promise<string | null> => null),
   openFfmpegDownloadPage: vi.fn(async () => undefined),
   openDownloadPage: vi.fn(async () => undefined),
+  openCustomModelTutorial: vi.fn(async () => undefined),
   ffmpegInstallHint: vi.fn(async () => null),
   openTerminalWithInstallCommand: vi.fn(async () => undefined),
   downloadModel: vi.fn(async (_id: string, _accepted: boolean) => undefined),
-  cancelDownload: vi.fn(async () => undefined),
+  cancelDownload: vi.fn(async (_id: string) => undefined),
   removeModel: vi.fn(async () => undefined),
   importCatalogModel: vi.fn(async () => undefined),
   startEdit: vi.fn(async () => undefined),
@@ -4572,7 +4574,7 @@ describe('Several fixes in one pass', () => {
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({ enable_face_model: false, fixes: ['noise', 'faces'] }),
     );
-    await chooseTask(user, /^Upscale/);
+    await chooseTask(user, /^Upscale$/);
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
         task: 'upscale',
@@ -5839,6 +5841,31 @@ it('does not ask for a catalog model under Your own file', async () => {
   expect(
     screen.queryByText('Select a model to see what it is for and where it comes from.'),
   ).toBeNull();
+  await user.click(screen.getByRole('button', { name: 'Watch the tutorial' }));
+  expect(api.openCustomModelTutorial).toHaveBeenCalledTimes(1);
+});
+
+it('saves Run at low priority via setUpdateSwitch even while a job is running', async () => {
+  const snapshot = readySnapshot([image('photo', true)]);
+  snapshot.settings.task = 'upscale';
+  const user = await mountWith(snapshot);
+  await user.click(screen.getByRole('button', { name: /Advanced/ }));
+  // Start a job so processing settings lock.
+  const running = structuredClone(snapshot);
+  running.runtime.active_job_id = 'job-1';
+  api.refreshSnapshot.mockResolvedValue(running);
+  (api.listenForStateChange.mock.calls[0][0] as () => void)();
+  await waitFor(() =>
+    expect(screen.getByRole('group', { name: 'Processing settings' }).matches(':disabled')).toBe(
+      true,
+    ),
+  );
+  // user-event skips any descendant of fieldset[disabled], even non-form spans; fireEvent matches a real browser.
+  await fireEvent.click(screen.getByRole('checkbox', { name: 'Run at low priority' }));
+  expect(api.setUpdateSwitch).toHaveBeenCalledWith('low_priority', true);
+  expect(api.saveSettings).not.toHaveBeenCalledWith(
+    expect.objectContaining({ low_priority: true }),
+  );
 });
 
 describe('first-launch setup screen', () => {
@@ -6082,5 +6109,119 @@ describe('crash reports', () => {
     api.listCrashReports.mockResolvedValueOnce([]).mockResolvedValue([]);
     await user.click(within(section).getByRole('button', { name: 'Delete All' }));
     await waitFor(() => expect(api.deleteAllCrashReports).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('Concurrent model downloads in the Model Library', () => {
+  it('runs multiple downloads with per-model progress, cancel, queue state, and isolated errors', async () => {
+    const snapshot = readySnapshot();
+    const ids = ['span_photo_x4', 'realplksr_nomoswebphoto_x4', 'swinir_m_real_x4_gan', 'hat_s_x4'];
+    for (const model of snapshot.catalog.models) {
+      if (ids.includes(model.model_id)) {
+        model.installed = false;
+        model.terms_acceptance_required = false;
+      }
+    }
+    const pending = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
+    api.downloadModel.mockImplementation(
+      (id: string) =>
+        new Promise<undefined>((resolve, reject) => {
+          pending.set(id, { resolve: () => resolve(undefined), reject });
+        }),
+    );
+    let hostSnapshot = structuredClone(snapshot);
+    const user = await mountWith(snapshot);
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(hostSnapshot));
+    const emitWorker = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+    const sendWorker = (message: WorkerEnvelope) => {
+      hostSnapshot = applyWorkerEnvelope(hostSnapshot, message);
+      emitWorker(message);
+    };
+    api.cancelDownload.mockImplementation(async (id: string) => {
+      sendWorker({ type: 'download-cancelled', data: { model_id: id } });
+      pending.get(id)?.reject(new Error('download cancelled'));
+      pending.delete(id);
+      return undefined;
+    });
+    await chooseMenuItem('view.models');
+    const dialog = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(dialog).getByRole('button', { name: /^Upscale photos/ }));
+
+    const clickRowAndDownload = async (rowPattern: RegExp) => {
+      await user.click(within(dialog).getByRole('button', { name: rowPattern }));
+      const button = within(dialog).getByRole('button', { name: /^Download / });
+      expect((button as HTMLButtonElement).disabled).toBe(false);
+      await user.click(button);
+    };
+
+    await clickRowAndDownload(/SPAN ×4/);
+    sendWorker({ type: 'download-started', data: { model_id: 'span_photo_x4', total_bytes: 100 } });
+    sendWorker({
+      type: 'download-progress',
+      data: { model_id: 'span_photo_x4', downloaded_bytes: 40, total_bytes: 100, progress: 40 },
+    });
+
+    await clickRowAndDownload(/RealPLKSR ×4 NomosWebPhoto/);
+    sendWorker({
+      type: 'download-started',
+      data: { model_id: 'realplksr_nomoswebphoto_x4', total_bytes: 100 },
+    });
+    sendWorker({
+      type: 'download-progress',
+      data: {
+        model_id: 'realplksr_nomoswebphoto_x4',
+        downloaded_bytes: 75,
+        total_bytes: 100,
+        progress: 75,
+      },
+    });
+
+    await clickRowAndDownload(/SwinIR ×4 Real/);
+    sendWorker({
+      type: 'download-started',
+      data: { model_id: 'swinir_m_real_x4_gan', total_bytes: 100 },
+    });
+
+    await clickRowAndDownload(/HAT-S ×4/);
+    sendWorker({ type: 'download-queued', data: { model_id: 'hat_s_x4', total_bytes: 100 } });
+
+    expect(api.downloadModel).toHaveBeenCalledTimes(4);
+
+    const downloadsPanel = () => within(dialog).getByRole('region', { name: 'Model downloads' });
+    await waitFor(() =>
+      expect(downloadsPanel().textContent).toContain('Downloads · 3 active · 1 waiting'),
+    );
+    expect(within(downloadsPanel()).getByText('40%')).toBeTruthy();
+    expect(within(downloadsPanel()).getByText('75%')).toBeTruthy();
+    expect(within(downloadsPanel()).getByText(/Waiting/)).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: 'Waiting in queue · Cancel' })).toBeTruthy();
+
+    // Cancel one active download while others keep running.
+    await user.click(within(downloadsPanel()).getByRole('button', { name: /Cancel .*SwinIR/ }));
+    expect(api.cancelDownload).toHaveBeenCalledWith('swinir_m_real_x4_gan');
+    await waitFor(() => expect(within(downloadsPanel()).queryByText(/SwinIR/)).toBeNull());
+    // No failure modal or error banner when cancelled intentionally.
+    expect(within(dialog).queryByRole('alert')).toBeNull();
+    expect(within(downloadsPanel()).getByText('40%')).toBeTruthy();
+    expect(within(downloadsPanel()).getByText('75%')).toBeTruthy();
+
+    // Fail one download: shows its own inline error without blocking others with a modal.
+    sendWorker({
+      type: 'download-failed',
+      data: { model_id: 'realplksr_nomoswebphoto_x4', error_message: 'download checksum mismatch' },
+    });
+    pending.get('realplksr_nomoswebphoto_x4')?.reject(new Error('download checksum mismatch'));
+    const alert = await within(downloadsPanel()).findByRole('alert');
+    expect(alert.textContent).toContain('download checksum mismatch');
+    expect(screen.queryByRole('dialog', { name: 'Download failed' })).toBeNull();
+    // Dismiss error cleanly.
+    await user.click(within(alert).getByRole('button', { name: /Dismiss/ }));
+    expect(within(downloadsPanel()).queryByRole('alert')).toBeNull();
+
+    // Clean up remaining pending downloads.
+    sendWorker({ type: 'download-completed', data: { model_id: 'span_photo_x4' } });
+    pending.get('span_photo_x4')?.resolve();
+    sendWorker({ type: 'download-completed', data: { model_id: 'hat_s_x4' } });
+    pending.get('hat_s_x4')?.resolve();
   });
 });

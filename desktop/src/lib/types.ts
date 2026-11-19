@@ -333,6 +333,7 @@ export interface UiSettings {
   enable_face_model: boolean;
   face_fidelity: number;
   enable_live_preview: boolean;
+  low_priority?: boolean;
   allow_unsafe_pickle_model: boolean;
   // Model-library state. `quality` is the active recipe ('' before any choice,
   // 'custom' after a manual pick); `preset_pins` maps a slot such as
@@ -373,6 +374,14 @@ export interface VideoMemoryStatus {
   oom: boolean;
 }
 
+export interface ModelDownloadStatus {
+  model_id: string;
+  status: 'queued' | 'downloading';
+  progress: number;
+  downloaded_bytes?: number;
+  total_bytes?: number;
+}
+
 export interface RuntimeStatus {
   comparison_pair?: ComparisonPair;
   compare?: CompareState;
@@ -393,6 +402,7 @@ export interface RuntimeStatus {
   comparison_error?: string;
   download_model_id: string;
   download_progress: number;
+  downloads?: ModelDownloadStatus[];
   elapsed_seconds: number;
   estimated_remaining_seconds: number;
   throughput: number;

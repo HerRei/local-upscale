@@ -383,6 +383,7 @@ fn keep_update_switches(current: &UiSettings, incoming: &mut UiSettings) {
     incoming.anonymous_update_count = current.anonymous_update_count;
     incoming.privacy_choice_made = current.privacy_choice_made;
     incoming.crash_reports = current.crash_reports;
+    incoming.low_priority = current.low_priority;
     incoming.skipped_update_version = current.skipped_update_version.clone();
 }
 
@@ -527,6 +528,7 @@ fn apply_update_switch(
             "check_updates_at_launch" => &mut settings.check_updates_at_launch,
             "anonymous_update_count" => &mut settings.anonymous_update_count,
             "crash_reports" => &mut settings.crash_reports,
+            "low_priority" => &mut settings.low_priority,
             _ => {
                 return Err(AppError::Validation(format!(
                     "unknown update switch: {name}"
@@ -544,6 +546,7 @@ fn apply_update_switch(
                 "check_updates_at_launch" => settings.check_updates_at_launch = previous,
                 "anonymous_update_count" => settings.anonymous_update_count = previous,
                 "crash_reports" => settings.crash_reports = previous,
+                "low_priority" => settings.low_priority = previous,
                 _ => {}
             }
         }
@@ -555,6 +558,9 @@ fn apply_update_switch(
         if !enabled {
             crate::crash_reports::delete_all(&state.paths)?;
         }
+    } else if name == "low_priority" {
+        let enabled = lock(&state.settings)?.low_priority;
+        crate::worker::apply_low_priority(state, enabled);
     }
     Ok(())
 }
@@ -1980,7 +1986,7 @@ pub fn remove_model(
             "finish or cancel processing before removing a model".into(),
         ));
     }
-    if !lock(&state.runtime)?.download_model_id.is_empty() {
+    if !lock(&state.downloads)?.is_empty() {
         return Err(AppError::Validation(
             "wait for the current download to finish before removing a model".into(),
         ));
@@ -2257,6 +2263,15 @@ pub(crate) const DOWNLOAD_PAGE_URL: &str = "https://herrei.github.io/localsr/dow
 pub fn open_download_page() -> AppResult<()> {
     open::that_detached(DOWNLOAD_PAGE_URL)
         .map_err(|error| AppError::Config(format!("could not open the download page: {error}")))
+}
+
+pub(crate) const CUSTOM_MODEL_TUTORIAL_URL: &str =
+    "https://herrei.github.io/localsr/help/#custom-model";
+
+#[tauri::command]
+pub fn open_custom_model_tutorial() -> AppResult<()> {
+    open::that_detached(CUSTOM_MODEL_TUTORIAL_URL)
+        .map_err(|error| AppError::Config(format!("could not open the tutorial: {error}")))
 }
 
 /// FFmpeg stays the user's own action: LocalSR never downloads or bundles it.

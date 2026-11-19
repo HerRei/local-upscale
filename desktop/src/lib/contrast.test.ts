@@ -63,12 +63,17 @@ describe.each([
       ['--warning-text', '--base'],
       ['--success-strong', '--base'],
     );
-    if (light || accessible) {
-      for (const border of ['--danger-border', '--warning-border']) {
-        expect(ratio(rgb(p[border]), rgb(p['--panel'])), border).toBeGreaterThanOrEqual(3);
-      }
-    }
     const panel = rgb(p['--panel']);
+    expect(
+      ratio(rgb(p['--danger-border'], panel), panel),
+      '--danger-border',
+    ).toBeGreaterThanOrEqual(3);
+    if (light || accessible) {
+      expect(
+        ratio(rgb(p['--warning-border'], panel), panel),
+        '--warning-border',
+      ).toBeGreaterThanOrEqual(3);
+    }
     for (const [foreground, fill] of [
       ['--danger-text', '--danger-fill'],
       ['--warning-text', '--warning-fill'],

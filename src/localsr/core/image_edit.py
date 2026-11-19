@@ -18,7 +18,7 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
-from localsr.core.child_processes import native_environment, stop_process
+from localsr.core.child_processes import native_environment, stop_process, track
 from localsr.core.disk_space import edit_bytes, require_room
 from localsr.core.edit_memory import GIB, plan_edit, read_edit_memory
 from localsr.core.image_io import open_photo
@@ -404,12 +404,14 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
             guard_command += ["-m", "localsr.worker"]
         guard_command += ["--edit-guard", str(specification)]
         logs = deque(maxlen=12)
-        process = subprocess.Popen(
-            guard_command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            creationflags=0x08000000 if os.name == "nt" else 0,
+        process = track(
+            subprocess.Popen(
+                guard_command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                creationflags=0x08000000 if os.name == "nt" else 0,
+            )
         )
 
         def read_logs():

@@ -112,7 +112,7 @@
   --control-accent: #cfcfcf;
   --success-fill: rgba(109, 176, 127, 0.1);
   --meter-track: #111113;
-  --danger-border: rgba(229, 72, 77, 0.28);
+  --danger-border: rgba(229, 72, 77, 0.85);
   --danger-fill: rgba(229, 72, 77, 0.09);
   --divider: rgba(255, 255, 255, 0.07);
   --row-progress-sheen: rgba(231, 231, 231, 0.8);
@@ -1457,6 +1457,32 @@ input[type='number'],
   color: var(--warning-text-muted);
   font-style: normal;
 }
+.live-setting {
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+.live-setting:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius);
+}
+.live-checkbox {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  /* The same outer margins as a native checkbox, so the box lines up with the rows above. */
+  margin: 0 3px 0 4px;
+  border: 1px solid var(--control-accent);
+  border-radius: var(--radius);
+  background: var(--recess);
+  color: var(--base);
+}
+.live-checkbox.checked {
+  background: var(--control-accent);
+}
 .path-text {
   overflow-wrap: anywhere;
   color: var(--secondary);
@@ -1483,6 +1509,34 @@ input[type='number'],
   display: block;
   height: 100%;
   background: var(--accent-hi);
+}
+.download-progress {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 3px;
+  margin-top: 6px;
+  border: 0 solid;
+  border-radius: 2px;
+  overflow: clip;
+  background: var(--meter-track);
+}
+.download-progress::-webkit-progress-bar {
+  background: transparent;
+}
+.download-progress::-webkit-progress-value {
+  background: var(--accent-hi);
+  border-radius: 2px;
+  transition: inline-size 0.2s;
+}
+.download-progress::-moz-progress-bar {
+  background: var(--accent-hi);
+  border-radius: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .download-progress::-webkit-progress-value {
+    transition: none;
+  }
 }
 /* Memory pressure is information, not an action: grey, so terracotta stays on Start and
    progress. */
@@ -2971,12 +3025,99 @@ input[type='number'],
   width: min(1080px, calc(100vw - 40px));
   height: min(700px, calc(100vh - 48px));
   display: grid;
-  grid-template-rows: 56px 1fr;
+  grid-template-rows: 56px minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--surface-border);
   border-radius: var(--radius-surface);
   background: var(--dialog-bg);
   box-shadow: 0 24px 80px var(--shadow-modal);
+}
+.sheet:has(> .library-downloads) {
+  grid-template-rows: 56px auto minmax(0, 1fr);
+}
+.library-downloads {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 148px;
+  overflow: auto;
+  padding: 8px 16px 10px;
+  border-bottom: 1px solid var(--divider);
+  background: var(--recess);
+}
+.library-downloads-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.library-downloads-title {
+  color: var(--secondary);
+  font-size: calc(11px * var(--ui-scale));
+  font-weight: 600;
+}
+.library-downloads-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+.library-download-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.library-download-item.is-error {
+  border-color: var(--danger-pill-border);
+  background: var(--danger-pill-bg);
+}
+.library-download-item .download-progress {
+  margin-top: 0;
+}
+.library-download-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.library-download-name {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: calc(12px * var(--ui-scale));
+  font-weight: 500;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.library-download-name:hover {
+  text-decoration: underline;
+}
+.library-download-meta {
+  flex: none;
+  color: var(--secondary);
+  font-size: calc(11px * var(--ui-scale));
+  font-variant-numeric: tabular-nums;
+}
+.library-download-error,
+.download-error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: calc(11px * var(--ui-scale));
+  line-height: 1.35;
+}
+.download-error {
+  padding: 6px 8px;
+  border: 1px solid var(--danger-pill-border);
+  border-radius: var(--radius);
+  background: var(--danger-pill-bg);
 }
 .sheet-head {
   display: flex;
@@ -3178,6 +3319,13 @@ input[type='number'],
 .row .right .ok {
   color: var(--secondary);
 }
+.row .right .downloading {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.row .right .error {
+  color: var(--danger-text);
+}
 .library-empty,
 .own-file {
   flex: 0 0 auto;
@@ -3188,6 +3336,16 @@ input[type='number'],
 }
 .own-file p {
   margin: 0 0 12px;
+}
+.own-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.own-file .own-note {
+  margin: 10px 0 0;
+  color: var(--danger-text);
 }
 .detail {
   min-width: 0;

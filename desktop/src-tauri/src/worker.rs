@@ -156,18 +156,11 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         return Ok(());
     }
 
+    let low_priority = lock(&state.settings)?.low_priority;
     let specification = resolve_worker_command(&state, &app)?;
     let mut command = Command::new(&specification.program);
     command.args(&specification.arguments);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-
-        // Keep the JSON-lines worker attached to pipes without flashing a
-        // console window behind the desktop application.
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
+    crate::process_priority::configure_command(&mut command, low_priority);
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -485,6 +478,21 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
     });
 
     Ok(())
+}
+
+pub fn apply_low_priority(state: &AppState, low_priority: bool) {
+    let pid = state.worker.pid.load(Ordering::SeqCst);
+    if pid != 0 {
+        crate::process_priority::apply_to_pid(pid, low_priority);
+    }
+    state.video_preview.apply_low_priority(low_priority);
+    let _ = send(
+        state,
+        &json!({
+            "type": "set_low_priority",
+            "data": {"low_priority": low_priority}
+        }),
+    );
 }
 
 pub fn send(state: &AppState, message: &Value) -> AppResult<()> {
@@ -1340,6 +1348,10 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 runtime.status_title = "Ready".into();
                 runtime.status_detail = "The isolated inference engine is ready.".into();
             }
+            // Always the current value: the switch may have changed while the
+            // engine was starting, before its pid and pipe existed.
+            let low_priority = lock(&state.settings)?.low_priority;
+            apply_low_priority(state, low_priority);
             send(state, &json!({"type": "capabilities_request", "data": {}}))?;
             for path in lock(&state.database)?.pending_probe_paths()? {
                 send(state, &media_probe_request(state, &path))?;
@@ -1936,11 +1948,14 @@ pub(crate) fn codec_helper_command(state: &AppState, app: &AppHandle) -> AppResu
     let specification = resolve_worker_command(state, app)?;
     let mut command = Command::new(specification.program);
     command.args(specification.arguments);
-    if let Ok(settings) = state.settings.lock() {
+    let low_priority = if let Ok(settings) = state.settings.lock() {
         if !settings.external_ffmpeg_path.is_empty() {
             command.env("LOCALSR_EXTERNAL_FFMPEG", &settings.external_ffmpeg_path);
         }
-    }
+        settings.low_priority
+    } else {
+        false
+    };
     if let Some(directory) = specification.working_directory {
         command.current_dir(directory);
     }
@@ -1949,11 +1964,7 @@ pub(crate) fn codec_helper_command(state: &AppState, app: &AppHandle) -> AppResu
         command.env("PYTHONUTF8", "1");
     }
     command.env("PYTHONUNBUFFERED", "1");
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000);
-    }
+    crate::process_priority::configure_command(&mut command, low_priority);
     Ok(command)
 }
 

@@ -373,6 +373,12 @@ class WorkerServer:
             return
         if request_type == "capabilities_request" and self._answer_capabilities_during_job():
             return
+        if request_type == "set_low_priority":
+            if isinstance(data, dict) and isinstance(data.get("low_priority"), bool):
+                from localsr.core.child_processes import set_low_priority
+
+                set_low_priority(data["low_priority"])
+            return
         self.message_queue.put(msg)
         if request_type == "shutdown_request":
             self.shutdown_event.set()

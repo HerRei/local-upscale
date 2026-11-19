@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         Arc, Mutex,
     },
     thread,
@@ -32,6 +32,7 @@ pub struct VideoPreviewControl {
     gate: Mutex<()>,
     cache: Mutex<Option<TempDir>>,
     closed: AtomicBool,
+    active_pid: AtomicU32,
 }
 
 impl VideoPreviewControl {
@@ -69,6 +70,13 @@ impl VideoPreviewControl {
             if let Ok(mut cache) = self.cache.lock() {
                 *cache = None;
             }
+        }
+    }
+
+    pub fn apply_low_priority(&self, low_priority: bool) {
+        let pid = self.active_pid.load(Ordering::SeqCst);
+        if pid != 0 {
+            crate::process_priority::apply_to_pid(pid, low_priority);
         }
     }
 
@@ -119,13 +127,14 @@ impl VideoPreviewControl {
             .arg("--video-playback-preview")
             .arg(source)
             .arg(&output);
-        run_conversion(
+        run_conversion_with_pid(
             command,
             work.path(),
             cancel,
             report,
             Duration::from_secs(1800),
             COPY_LIMIT,
+            Some(&self.active_pid),
         )?;
         if !output.is_file() || output.metadata()?.len() == 0 {
             return Err(AppError::Worker(
@@ -228,13 +237,26 @@ fn tree_bytes(work: &Path) -> u64 {
     total
 }
 
+#[cfg(test)]
 fn run_conversion(
+    command: Command,
+    work: &Path,
+    cancel: Arc<AtomicBool>,
+    report: impl Fn(serde_json::Value) + Send + 'static,
+    timeout: Duration,
+    size_limit: u64,
+) -> AppResult<()> {
+    run_conversion_with_pid(command, work, cancel, report, timeout, size_limit, None)
+}
+
+fn run_conversion_with_pid(
     mut command: Command,
     work: &Path,
     cancel: Arc<AtomicBool>,
     report: impl Fn(serde_json::Value) + Send + 'static,
     timeout: Duration,
     size_limit: u64,
+    active_pid: Option<&AtomicU32>,
 ) -> AppResult<()> {
     command
         .stdin(Stdio::null())
@@ -244,6 +266,9 @@ fn run_conversion(
     // so stopping the conversion stops them too.
     lead_own_group(&mut command);
     let mut child = command.spawn()?;
+    if let Some(slot) = active_pid {
+        slot.store(child.id(), Ordering::SeqCst);
+    }
     let tree = ProcessTree::new(&child);
     let stdout = child.stdout.take().expect("piped converter stdout");
     let stderr = child.stderr.take().expect("piped converter stderr");
@@ -313,6 +338,9 @@ fn run_conversion(
     // Whatever ended the converter, nothing it started may keep the pipes or the
     // work folder.
     tree.terminate();
+    if let Some(slot) = active_pid {
+        slot.store(0, Ordering::SeqCst);
+    }
     let _ = progress.join();
     let message = errors.join().unwrap_or_default();
     match result {

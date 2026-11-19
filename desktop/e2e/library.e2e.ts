@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { openApp, showPane } from './app';
 import { empty, upscale, withEdits, withOutputs } from './fixtures';
-import { hostCalls } from './fake-host';
+import { emit, failDownload, finishDownload, hostCalls, progressDownload } from './fake-host';
 
 const mediaTabs = (page: Page) => page.getByRole('tablist', { name: 'Media' });
 const mainTabs = (page: Page) => page.getByRole('tablist', { name: 'Main pane' });
@@ -371,4 +371,99 @@ test.describe('Clear', () => {
     await dialog.getByRole('button', { name: 'Clear', exact: true }).click();
     await expect.poll(async () => (await hostCalls(page, 'clear_results')).length).toBe(1);
   });
+});
+
+test.describe('Concurrent model downloads', () => {
+  test('shows up to 3 active downloads and a queued 4th with independent progress, cancel, and error', async ({
+    page,
+  }) => {
+    await openApp(page, {
+      ...empty,
+      worker: 'ready',
+      concurrentDownloads: true,
+      installed: [],
+    });
+    await emit(page, 'native-menu-action', 'view.models');
+    const library = page.getByRole('dialog', { name: 'Model library' });
+    await library.getByRole('button', { name: /^Upscale photos/ }).click();
+
+    const startModelDownload = async (rowName: RegExp) => {
+      await library.getByRole('button', { name: rowName }).click();
+      const button = library.getByRole('button', { name: /^Download / });
+      await expect(button).toBeEnabled();
+      await button.click();
+    };
+
+    await startModelDownload(/HAT-L ×4 ImageNet/);
+    await startModelDownload(/SwinIR ×4 Real/);
+    await startModelDownload(/HAT-S ×4/);
+    await startModelDownload(/Real-ESRGAN ×4/);
+
+    const panel = library.getByRole('region', { name: 'Model downloads' });
+    await expect(panel).toContainText('Downloads · 3 active · 1 waiting');
+    await expect(panel.getByRole('progressbar')).toHaveCount(3);
+    await expect(panel).toContainText('Waiting');
+
+    await progressDownload(page, 'hat_l_x4_imagenet', 35);
+    await progressDownload(page, 'swinir_m_real_x4_gan', 80);
+    await expect(panel).toContainText('35%');
+    await expect(panel).toContainText('80%');
+
+    // Cancelling one active download promotes the 4th waiting download without blocking others.
+    await panel.getByRole('button', { name: /Cancel .*SwinIR/ }).click();
+    await expect(panel).toContainText('Downloads · 3 active');
+    await expect(panel).not.toContainText('waiting');
+    await expect(panel.getByRole('progressbar')).toHaveCount(3);
+
+    // Failing one download shows its own error without affecting the other two.
+    await failDownload(page, 'hat_s_x4', 'checksum mismatch');
+    const alert = panel.getByRole('alert');
+    await expect(alert).toContainText('checksum mismatch');
+    await expect(panel).toContainText('Downloads · 2 active');
+    await alert.getByRole('button', { name: /Dismiss/ }).click();
+    await expect(panel.getByRole('alert')).toHaveCount(0);
+
+    // Completing the remaining two clears the Downloads bar.
+    await finishDownload(page, 'hat_l_x4_imagenet');
+    await finishDownload(page, 'realesrgan_x4plus');
+    await expect(panel).toHaveCount(0);
+  });
+
+  for (const theme of [
+    { name: 'dark', appearance: 'dark', colour_blind_palette: false },
+    { name: 'light', appearance: 'light', colour_blind_palette: false },
+    { name: 'colour-blind', appearance: 'dark', colour_blind_palette: true },
+  ]) {
+    test(`renders active downloads without overflow in ${theme.name} theme at 880x640`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 880, height: 640 });
+      await openApp(page, {
+        ...empty,
+        worker: 'ready',
+        concurrentDownloads: true,
+        installed: [],
+        settings: {
+          appearance: theme.appearance,
+          colour_blind_palette: theme.colour_blind_palette,
+        },
+      });
+      await emit(page, 'native-menu-action', 'view.models');
+      const library = page.getByRole('dialog', { name: 'Model library' });
+      await library.getByRole('button', { name: /^Upscale photos/ }).click();
+      await library.getByRole('button', { name: /HAT-L ×4 ImageNet/ }).click();
+      await library.getByRole('button', { name: /^Download / }).click();
+      await library.getByRole('button', { name: /SwinIR ×4 Real/ }).click();
+      await library.getByRole('button', { name: /^Download / }).click();
+      await progressDownload(page, 'hat_l_x4_imagenet', 45);
+      await progressDownload(page, 'swinir_m_real_x4_gan', 65);
+
+      const panel = library.getByRole('region', { name: 'Model downloads' });
+      await expect(panel).toBeVisible();
+      const noOverflow = await library.evaluate(
+        (el) => el.scrollWidth <= el.clientWidth + 1 && el.scrollHeight <= el.clientHeight + 1,
+      );
+      expect(noOverflow).toBe(true);
+    });
+  }
 });

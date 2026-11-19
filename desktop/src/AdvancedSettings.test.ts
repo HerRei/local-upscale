@@ -208,3 +208,37 @@ describe('Refresh in the memory line', () => {
     fieldset.remove();
   });
 });
+
+describe('Run at low priority', () => {
+  it('shows its help tip, toggles by click or keyboard, and stays usable inside a disabled fieldset', async () => {
+    const fieldset = document.body.appendChild(document.createElement('fieldset'));
+    const setLowPriority = vi.fn();
+    render(AdvancedSettings, {
+      target: fieldset,
+      props: {
+        settings: { ...demoSnapshot().settings, task: 'upscale', low_priority: false },
+        selectedModel: undefined,
+        capabilities: base,
+        usingTemporalVideo: false,
+        updateSettings: vi.fn(),
+        setLowPriority,
+        chooseOutput: async () => undefined,
+        refreshCapabilities: async () => true,
+      },
+    });
+    await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+    expect(screen.getByRole('button', { name: 'About Run at low priority' })).toBeTruthy();
+
+    fieldset.disabled = true;
+    const checkbox = screen.getByRole('checkbox', { name: 'Run at low priority' });
+    expect(checkbox.getAttribute('aria-checked')).toBe('false');
+    expect(checkbox.matches(':disabled')).toBe(false);
+
+    await fireEvent.click(checkbox);
+    await fireEvent.keyDown(checkbox, { key: ' ' });
+    await fireEvent.keyDown(checkbox, { key: 'Enter' });
+    expect(setLowPriority).toHaveBeenCalledTimes(3);
+    expect(setLowPriority).toHaveBeenNthCalledWith(1, true);
+    fieldset.remove();
+  });
+});

@@ -33,6 +33,8 @@
   export let preservingHdr = false;
   export let interpolationSupported = false;
   export let updateSettings: (patch: Partial<UiSettings>) => void;
+  export let setLowPriority: (value: boolean) => void = (value) =>
+    updateSettings({ low_priority: value });
   export let chooseOutput: () => Promise<void>;
   /** Resolves true when the host took the request, false when it refused (and said so). */
   export let refreshCapabilities: () => Promise<boolean>;
@@ -639,6 +641,41 @@
             text="Shows the result in the preview while a job runs, as reduced pictures at most twice a second. They are made on the side, and the job does not wait for them."
           />
         </div>{/if}
+      <!-- Not an <input> or <label>: this stays clickable and full-strength while a job locks the settings above. -->
+      <div class="check-line">
+        <span
+          id="low-priority"
+          role="checkbox"
+          tabindex="0"
+          aria-checked={Boolean(settings.low_priority)}
+          class="check-row live-setting"
+          on:click={() => setLowPriority(!settings.low_priority)}
+          on:keydown={(event) => {
+            if (event.key === ' ' || event.key === 'Enter') {
+              event.preventDefault();
+              setLowPriority(!settings.low_priority);
+            }
+          }}
+          ><span
+            class="live-checkbox"
+            class:checked={Boolean(settings.low_priority)}
+            aria-hidden="true"
+            >{#if settings.low_priority}<svg
+                viewBox="0 0 12 12"
+                width="10"
+                height="10"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"><path d="M2.5 6.2 5 8.7 9.5 3.5" /></svg
+              >{/if}</span
+          ><span class="live-setting-label">Run at low priority</span></span
+        ><HelpTip
+          label="Run at low priority"
+          text="Lets other apps stay responsive while LocalSR works. Jobs may take longer, most of all when they read or write large files. You can switch it during a job. On Linux, switching it off takes full effect the next time the engine starts."
+        />
+      </div>
       <div class="hardware-card">
         <span class="label-with-tip"
           >{capabilities.system_memory_pressure_level === 'unknown'

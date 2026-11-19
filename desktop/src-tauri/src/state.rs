@@ -1,8 +1,9 @@
 use std::{
     collections::HashMap,
+    path::PathBuf,
     sync::{
         atomic::{AtomicBool, AtomicU32, AtomicU64},
-        Arc, Mutex, MutexGuard,
+        Arc, Mutex, MutexGuard, Weak,
     },
 };
 
@@ -79,7 +80,10 @@ pub struct AppState {
     // One writer of the settings file at a time, from taking the copy to writing it, so an
     // older copy can never land after a newer one.
     pub settings_io: Mutex<()>,
-    pub downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    pub downloads: Mutex<HashMap<String, crate::downloads::DownloadEntry>>,
+    pub download_semaphore: Arc<tokio::sync::Semaphore>,
+    pub download_sequence: AtomicU64,
+    pub download_file_locks: Mutex<HashMap<PathBuf, Weak<tokio::sync::Mutex<()>>>>,
     pub launch_intents: Mutex<Vec<LaunchIntent>>,
     /// Set when no settings file existed at launch: the first device report
     /// then replaces the CPU default with the computer's GPU.
@@ -150,6 +154,11 @@ impl AppState {
             scheduler: Mutex::new(()),
             settings_io: Mutex::new(()),
             downloads: Mutex::new(HashMap::new()),
+            download_semaphore: Arc::new(tokio::sync::Semaphore::new(
+                crate::downloads::MAX_CONCURRENT_DOWNLOADS,
+            )),
+            download_sequence: AtomicU64::new(0),
+            download_file_locks: Mutex::new(HashMap::new()),
             launch_intents: Mutex::new(Vec::new()),
             choose_device: AtomicBool::new(first_run),
             startup_notices: Mutex::new(notices),
@@ -241,7 +250,7 @@ pub fn lock<T>(mutex: &Mutex<T>) -> AppResult<MutexGuard<'_, T>> {
         .map_err(|_| AppError::Config("internal state lock was poisoned".into()))
 }
 
-pub fn emit_state_changed(app: &AppHandle) {
+pub fn emit_state_changed<R: tauri::Runtime>(app: &AppHandle<R>) {
     let _ = app.emit("state-changed", ());
 }
 

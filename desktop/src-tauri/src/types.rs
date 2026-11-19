@@ -369,6 +369,7 @@ pub struct UiSettings {
     pub enable_face_model: bool,
     pub face_fidelity: u32,
     pub enable_live_preview: bool,
+    pub low_priority: bool,
     pub allow_unsafe_pickle_model: bool,
     // Model-library state: which recipe is active ("quick", "best", "custom"
     // or empty), what the image contains, which problems to fix first, and
@@ -481,6 +482,7 @@ impl Default for UiSettings {
             enable_face_model: false,
             face_fidelity: 70,
             enable_live_preview: true,
+            low_priority: false,
             allow_unsafe_pickle_model: false,
             quality: String::new(),
             content: "photo".into(),
@@ -492,6 +494,17 @@ impl Default for UiSettings {
             edit_seed: default_edit_seed(),
         }
     }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct ModelDownloadStatus {
+    pub model_id: String,
+    pub status: String,
+    pub progress: f64,
+    #[serde(default)]
+    pub downloaded_bytes: u64,
+    #[serde(default)]
+    pub total_bytes: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -521,6 +534,8 @@ pub struct RuntimeStatus {
     pub comparison_error: String,
     pub download_model_id: String,
     pub download_progress: f64,
+    #[serde(default)]
+    pub downloads: Vec<ModelDownloadStatus>,
     pub elapsed_seconds: f64,
     pub estimated_remaining_seconds: f64,
     pub throughput: f64,
@@ -691,6 +706,7 @@ impl Default for RuntimeStatus {
             comparison_error: String::new(),
             download_model_id: String::new(),
             download_progress: 0.0,
+            downloads: Vec::new(),
             elapsed_seconds: 0.0,
             estimated_remaining_seconds: 0.0,
             throughput: 0.0,

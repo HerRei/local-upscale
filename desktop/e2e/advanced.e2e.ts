@@ -153,3 +153,26 @@ test('chooses the editing runtime through the host and sends that path to Start 
     '/chosen/sd-cli',
   );
 });
+
+test('Run at low priority stays clickable while a job runs and uses set_update_switch', async ({
+  page,
+}) => {
+  await openApp(page, { ...upscale, running: true });
+  await showPane(page, 'enhance');
+  await page.evaluate(() => {
+    const fieldset = document.querySelector('fieldset.processing-settings') as HTMLFieldSetElement;
+    fieldset.disabled = false;
+    (document.querySelector('.disclosure') as HTMLButtonElement).click();
+    fieldset.disabled = true;
+  });
+  const lowPriority = page.getByRole('checkbox', { name: 'Run at low priority' });
+  await lowPriority.scrollIntoViewIfNeeded();
+  await expect(lowPriority).not.toBeChecked();
+  await lowPriority.click();
+  await expect(lowPriority).toBeChecked();
+  expect((await hostCalls(page, 'set_update_switch')).at(-1)?.args).toEqual({
+    name: 'low_priority',
+    value: true,
+  });
+  expect((await hostCalls(page, 'save_settings')).length).toBe(0);
+});

@@ -19,6 +19,7 @@ mod native_menu;
 mod output_names;
 mod paths;
 mod pipe_lines;
+mod process_priority;
 mod process_tree;
 mod programs;
 mod queue_timing;
@@ -211,6 +212,7 @@ pub fn run() {
             commands::open_result,
             commands::open_user_guide,
             commands::open_download_page,
+            commands::open_custom_model_tutorial,
             commands::reveal_result,
             commands::use_result_as_input,
             commands::open_output_directory,

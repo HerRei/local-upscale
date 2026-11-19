@@ -15,6 +15,7 @@
     { "$ref": "#/$defs/videoJobRequest" },
     { "$ref": "#/$defs/benchmarkRequest" },
     { "$ref": "#/$defs/cancelRequest" },
+    { "$ref": "#/$defs/setLowPriorityRequest" },
     { "$ref": "#/$defs/workerReady" },
     { "$ref": "#/$defs/engineInfo" },
     { "$ref": "#/$defs/workerResponse" }
@@ -102,6 +103,24 @@
           "properties": {
             "type": { "enum": ["capabilities_request", "shutdown_request", "region_clear"] },
             "data": { "type": "object", "maxProperties": 0 }
+          }
+        }
+      ]
+    },
+    "setLowPriorityRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        {
+          "properties": {
+            "type": { "const": "set_low_priority" },
+            "data": {
+              "type": "object",
+              "required": ["low_priority"],
+              "properties": {
+                "low_priority": { "type": "boolean" }
+              },
+              "additionalProperties": false
+            }
           }
         }
       ]

@@ -112,6 +112,7 @@
     LaunchIntent,
     MediaItem,
     MediaResults,
+    ModelDownloadStatus,
     PairChoice,
     Quality,
     Recipe,
@@ -131,6 +132,8 @@
   let benchmarkSetup: 'idle' | 'downloading' | 'starting' = 'idle';
   let benchmarkError = '';
   let benchmarkTile: WorkerEnvelope | undefined;
+  let downloadErrors: Record<string, string> = {};
+  const cancelledDownloads = new Set<string>();
   $: benchmarkScores = snapshot.latest_benchmark?.device_history?.length
     ? snapshot.latest_benchmark.device_history
     : (snapshot.latest_benchmark?.device_results ?? []);
@@ -612,7 +615,22 @@
     ['realplksr_hfa2k_anime_x4', 'realplksr_nomoswebphoto_x4'].includes(selectedModel.model_id)
       ? selectedModel
       : undefined;
-  $: activeDownload = snapshot.runtime.download_model_id;
+  $: activeDownloads =
+    snapshot.runtime.downloads && snapshot.runtime.downloads.length > 0
+      ? snapshot.runtime.downloads
+      : snapshot.runtime.download_model_id
+        ? [
+            {
+              model_id: snapshot.runtime.download_model_id,
+              status: 'downloading' as const,
+              progress: snapshot.runtime.download_progress,
+            },
+          ]
+        : [];
+  $: downloadMap = new Map<string, ModelDownloadStatus>(
+    activeDownloads.map((item) => [item.model_id, item]),
+  );
+  $: activeDownload = activeDownloads[0]?.model_id ?? '';
   $: benchmarkRunning = snapshot.runtime.active_job_id.startsWith('benchmark-');
   $: benchmarkModel = snapshot.catalog.models.find((model) => model.model_id === 'span_photo_x4');
   $: benchmarkStartBlockReason =
@@ -1517,6 +1535,28 @@
     if (message.type === 'job_completed' || message.type === 'video_job_completed') {
       scheduleRefresh();
     }
+    if (
+      message.type === 'download-queued' ||
+      message.type === 'download-started' ||
+      message.type === 'download-completed' ||
+      message.type === 'download-cancelled'
+    ) {
+      const id = String(message.data.model_id ?? '');
+      if (id && id in downloadErrors) {
+        const nextErrors = { ...downloadErrors };
+        delete nextErrors[id];
+        downloadErrors = nextErrors;
+      }
+      if (message.type === 'download-completed') scheduleRefresh();
+    } else if (message.type === 'download-failed') {
+      const id = String(message.data.model_id ?? '');
+      if (id) {
+        downloadErrors = {
+          ...downloadErrors,
+          [id]: String(message.data.error_message ?? 'Download failed.'),
+        };
+      }
+    }
   }
 
   function queueRuntimePulse(message: WorkerEnvelope): void {
@@ -1867,7 +1907,7 @@
     preparingCancelled = true;
     // The host registers a download a moment after Start asks for it.
     for (let attempt = 0; attempt < 30 && preparing; attempt += 1) {
-      const modelId = activeDownload || preparingModelId;
+      const modelId = preparingModelId || activeDownload;
       if (modelId) {
         try {
           await api.cancelDownload(modelId);
@@ -1942,10 +1982,13 @@
    * The window shows the host's value afterwards, also when saving failed.
    */
   function setUpdateSwitch(
-    name: 'check_updates_at_launch' | 'anonymous_update_count' | 'crash_reports',
+    name: 'check_updates_at_launch' | 'anonymous_update_count' | 'crash_reports' | 'low_priority',
     value: boolean,
   ): void {
-    if (!api.isTauri()) return;
+    if (!api.isTauri()) {
+      snapshot = { ...snapshot, settings: { ...snapshot.settings, [name]: value } };
+      return;
+    }
     void api
       .setUpdateSwitch(name, value)
       .catch((error) => showModal('Could not save settings', String(error)))
@@ -2247,13 +2290,25 @@
     resolveRecipe({ quality: kind });
   }
 
+  function dismissDownloadError(modelId: string): void {
+    if (!(modelId in downloadErrors)) return;
+    const nextErrors = { ...downloadErrors };
+    delete nextErrors[modelId];
+    downloadErrors = nextErrors;
+  }
+
+  async function cancelDownloadById(modelId: string): Promise<void> {
+    cancelledDownloads.add(modelId);
+    await attempt('Could not cancel the download', () => api.cancelDownload(modelId));
+  }
+
   async function runDownload(
     target: CatalogModel | CatalogVideoModel | EditModel | undefined = currentDownloadTarget,
     accepted?: boolean,
   ): Promise<void> {
     if (!target) return;
-    if (activeDownload === target.model_id) {
-      await attempt('Could not cancel the download', () => api.cancelDownload(target.model_id));
+    if (downloadMap.has(target.model_id)) {
+      await cancelDownloadById(target.model_id);
       return;
     }
     accepted ??= Boolean(termsAccepted[target.model_id]);
@@ -2261,6 +2316,8 @@
       showModal('Review the model terms', 'Confirm the model-specific license before downloading.');
       return;
     }
+    dismissDownloadError(target.model_id);
+    cancelledDownloads.delete(target.model_id);
     try {
       if (!target.automated_download_allowed) {
         const sourcePath = await api.chooseCustomModel();
@@ -2271,10 +2328,17 @@
       }
       await refresh();
     } catch (error) {
-      showModal(
-        target.automated_download_allowed ? 'Download failed' : 'Import failed',
-        String(error),
-      );
+      const message = String(error);
+      const wasCancelled =
+        cancelledDownloads.delete(target.model_id) || message.includes('download cancelled');
+      if (wasCancelled) {
+        await refresh();
+        return;
+      }
+      downloadErrors = { ...downloadErrors, [target.model_id]: message };
+      if (!libraryOpen || !target.automated_download_allowed) {
+        showModal(target.automated_download_allowed ? 'Download failed' : 'Import failed', message);
+      }
     }
   }
 
@@ -3738,14 +3802,17 @@
                   {@const fixIndex = stage.fix
                     ? imageFixes.findIndex((selection) => selection.fix === stage.fix)
                     : -1}
+                  {@const stageDownload = target ? downloadMap.get(target.model_id) : undefined}
                   <!-- Line 1: role, name, arrows and Change…; line 2 the library links; line 3 the note. -->
                   <div class="plan-row" role="listitem">
                     <span class="stage">{stage.label}</span>
                     <div class="name" title={name}>{name}</div>
                     <div class="plan-end">
                       <span class="state" class:warn={stage.needsFile}
-                        >{activeDownload === target?.model_id
-                          ? `${Math.round(snapshot.runtime.download_progress)}%`
+                        >{stageDownload
+                          ? stageDownload.status === 'queued'
+                            ? 'Waiting'
+                            : `${Math.round(stageDownload.progress)}%`
                           : stage.needsFile && !stage.installed
                             ? 'Needs your file'
                             : ''}</span
@@ -3865,12 +3932,12 @@
                           <button
                             class="button full"
                             class:primary={stage.model.automated_download_allowed}
-                            disabled={Boolean(activeDownload) &&
-                              activeDownload !== stage.model.model_id}
                             on:click={() => runDownload(stage.model, faceTermsAccepted)}
                           >
-                            {activeDownload === stage.model.model_id
-                              ? `Downloading ${Math.round(snapshot.runtime.download_progress)}% · Cancel`
+                            {stageDownload
+                              ? stageDownload.status === 'queued'
+                                ? 'Waiting in queue · Cancel'
+                                : `Downloading ${Math.round(stageDownload.progress)}% · Cancel`
                               : stage.model.automated_download_allowed
                                 ? `Download companion · ${formatBytes(stage.model.size_bytes)}`
                                 : 'Choose externally downloaded face checkpoint…'}
@@ -3886,24 +3953,28 @@
                               /> I reviewed the model license and restrictions.</label
                             >
                           {/if}
-                          {#if !stage.canDownload || target.terms_acceptance_required || activeDownload === target.model_id}
+                          {#if !stage.canDownload || target.terms_acceptance_required || Boolean(stageDownload)}
                             <button
                               class="button full"
                               disabled={(stage.videoModel && Boolean(temporalUnavailableReason)) ||
-                                preparing ||
-                                (Boolean(activeDownload) && activeDownload !== target.model_id)}
+                                preparing}
                               on:click={() => runDownload(target)}
                             >
-                              {activeDownload === target.model_id
-                                ? `Downloading ${Math.round(snapshot.runtime.download_progress)}% · Cancel`
+                              {stageDownload
+                                ? stageDownload.status === 'queued'
+                                  ? 'Waiting in queue · Cancel'
+                                  : `Downloading ${Math.round(stageDownload.progress)}% · Cancel`
                                 : stage.canDownload
                                   ? `Download model · ${formatBytes(stage.sizeBytes)}`
                                   : 'Choose externally downloaded checkpoint…'}
                             </button>
                           {/if}
-                          {#if activeDownload === target.model_id}<div class="download-track">
-                              <i style={`width:${snapshot.runtime.download_progress}%`}></i>
-                            </div>{/if}
+                          {#if stageDownload?.status === 'downloading'}<progress
+                              class="download-progress"
+                              value={stageDownload.progress}
+                              max="100"
+                              aria-label={`${name} download progress`}
+                            ></progress>{/if}
                         {/if}
                       </div>{/if}
                   </div>
@@ -4032,6 +4103,7 @@
               interpolationSupported={snapshot.engine?.features.includes('video_interpolation') ===
                 true}
               {updateSettings}
+              setLowPriority={(value) => setUpdateSwitch('low_priority', value)}
               {chooseOutput}
               refreshCapabilities={async () => {
                 try {
@@ -4218,8 +4290,10 @@
       fix: libraryContext.fix,
     }}
     device={activeDevice}
-    {activeDownload}
-    downloadProgress={snapshot.runtime.download_progress}
+    downloads={activeDownloads}
+    {downloadErrors}
+    cancelDownload={cancelDownloadById}
+    {dismissDownloadError}
     busy={settingsLocked || preparing}
     close={closeLibrary}
     {trialMedia}
@@ -4407,14 +4481,14 @@
                 : benchmarkRunning
                   ? 'Cancel Benchmark'
                   : benchmarkSetup === 'downloading'
-                    ? `Downloading SPAN · ${Math.round(snapshot.runtime.download_progress)}%`
+                    ? `Downloading SPAN · ${Math.round(downloadMap.get('span_photo_x4')?.progress ?? snapshot.runtime.download_progress)}%`
                     : benchmarkSetup === 'starting'
                       ? 'Starting benchmark…'
                       : !benchmarkModel?.installed
                         ? 'Download & run benchmark'
                         : 'Run Benchmark'}</button
             >
-            {#if benchmarkSetup === 'downloading' && activeDownload === 'span_photo_x4'}<button
+            {#if benchmarkSetup === 'downloading' && downloadMap.has('span_photo_x4')}<button
                 class="button"
                 on:click={() =>
                   api

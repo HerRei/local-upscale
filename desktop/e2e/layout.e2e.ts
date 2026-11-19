@@ -431,7 +431,7 @@ test.describe('overflow and alignment', () => {
           ];
           const full = [
             ...document.querySelectorAll(
-              '.processing-settings :is(.eyebrow, .disclosure, .help-tip, .memory-refresh), .pane-heading',
+              '.processing-settings :is(.eyebrow, .disclosure, .help-tip, .memory-refresh, .live-setting), .pane-heading',
             ),
           ];
           return {
