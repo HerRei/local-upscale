@@ -4,6 +4,12 @@
 //! benchmark exports that the host obtained from a native dialog, a drag-and-drop
 //! event, a launch / Open With event, the app's own default and profile folders, or
 //! previously persisted media and settings.
+//!
+//! Known limits: a check resolves a path once, and the later read, write or
+//! directory creation uses the path again, so another program that swaps a folder for
+//! a link in between can still redirect that use. Tauri adds natively dropped files and
+//! folders to its asset scope by itself, and removing them from the list does not take
+//! that asset access back.
 use std::{
     collections::HashSet,
     fs,
@@ -171,6 +177,19 @@ impl GrantRegistry {
         }
     }
 
+    /// Grant the results folder a chosen media folder gets, but only while it really
+    /// lies inside that folder: a `LocalSR Results` link to elsewhere grants nothing.
+    pub fn grant_results_folder(&self, media_folder: &Path, results: &Path) {
+        let (Ok(folder), Ok(resolved)) = (resolve_path(media_folder), resolve_path(results)) else {
+            return;
+        };
+        if resolved.starts_with(&folder) && resolved != folder {
+            if let Ok(mut state) = self.inner.lock() {
+                state.output_folders.insert(resolved);
+            }
+        }
+    }
+
     pub fn reconcile_outputs(&self, output_directory: &str) {
         if let Ok(mut state) = self.inner.lock() {
             seed_outputs(&mut state, output_directory);
@@ -211,8 +230,7 @@ impl GrantRegistry {
     }
 
     pub fn check_media_input(&self, path: &Path) -> AppResult<PathBuf> {
-        let resolved =
-            resolve_path(path).map_err(|_| AppError::Validation(MEDIA_REFUSAL.into()))?;
+        let resolved = self.resolve_requested(path, MEDIA_REFUSAL)?;
         let allowed = self
             .inner
             .lock()
@@ -233,8 +251,7 @@ impl GrantRegistry {
     }
 
     pub fn check_media_folder(&self, path: &Path) -> AppResult<PathBuf> {
-        let resolved =
-            resolve_path(path).map_err(|_| AppError::Validation(MEDIA_REFUSAL.into()))?;
+        let resolved = self.resolve_requested(path, MEDIA_REFUSAL)?;
         let allowed = self
             .inner
             .lock()
@@ -253,8 +270,7 @@ impl GrantRegistry {
     }
 
     pub fn check_output_folder(&self, path: &Path) -> AppResult<PathBuf> {
-        let resolved =
-            resolve_path(path).map_err(|_| AppError::Validation(OUTPUT_REFUSAL.into()))?;
+        let resolved = self.resolve_requested(path, OUTPUT_REFUSAL)?;
         let allowed = self
             .inner
             .lock()
@@ -274,8 +290,7 @@ impl GrantRegistry {
     }
 
     pub fn check_model_file(&self, path: &Path) -> AppResult<PathBuf> {
-        let resolved =
-            resolve_path(path).map_err(|_| AppError::Validation(MODEL_REFUSAL.into()))?;
+        let resolved = self.resolve_requested(path, MODEL_REFUSAL)?;
         let allowed = self
             .inner
             .lock()
@@ -289,8 +304,7 @@ impl GrantRegistry {
     }
 
     pub fn check_export_file(&self, path: &Path) -> AppResult<PathBuf> {
-        let resolved =
-            resolve_path(path).map_err(|_| AppError::Validation(EXPORT_REFUSAL.into()))?;
+        let resolved = self.resolve_requested(path, EXPORT_REFUSAL)?;
         let allowed = self
             .inner
             .lock()
@@ -301,6 +315,41 @@ impl GrantRegistry {
         } else {
             Err(AppError::Validation(EXPORT_REFUSAL.into()))
         }
+    }
+
+    /// Resolve a path the web view sent. A network share or device path is refused from
+    /// its text alone, before any filesystem call, unless a granted path names that share.
+    fn resolve_requested(&self, path: &Path, refusal: &str) -> AppResult<PathBuf> {
+        if !self.lexically_allowed(path) {
+            return Err(AppError::Validation(refusal.into()));
+        }
+        resolve_path(path).map_err(|_| AppError::Validation(refusal.into()))
+    }
+
+    fn lexically_allowed(&self, path: &Path) -> bool {
+        let wanted = match remote_prefix(&path.to_string_lossy()) {
+            None => return true,
+            Some(Remote::Device) => return false,
+            Some(Remote::Share(share)) => share,
+        };
+        self.inner
+            .lock()
+            .map(|state| {
+                state
+                    .app_owned_roots
+                    .iter()
+                    .chain(&state.default_output)
+                    .chain(&state.media_files)
+                    .chain(&state.media_folders)
+                    .chain(&state.output_folders)
+                    .chain(&state.model_files)
+                    .chain(&state.export_files)
+                    .any(|root| {
+                        remote_prefix(&root.to_string_lossy())
+                            == Some(Remote::Share(wanted.clone()))
+                    })
+            })
+            .unwrap_or(false)
     }
 
     #[cfg(test)]
@@ -322,9 +371,10 @@ impl GrantRegistry {
 
 fn seed_outputs(state: &mut RegistryState, output_directory: &str) {
     let mut next_persisted = HashSet::new();
-    let trimmed = output_directory.trim();
-    if !trimmed.is_empty() {
-        if let Ok(resolved) = resolve_path(Path::new(trimmed)) {
+    // The exact string that was checked when it was saved: a trimmed copy could name
+    // another folder.
+    if !output_directory.is_empty() {
+        if let Ok(resolved) = resolve_path(Path::new(output_directory)) {
             if state.default_output.as_ref() != Some(&resolved) {
                 next_persisted.insert(resolved);
             }
@@ -348,9 +398,8 @@ fn seed_models(state: &mut RegistryState, custom_model_path: &str, recipes: &[Re
             .iter()
             .map(|recipe| recipe.custom_model_path.as_str()),
     ) {
-        let trimmed = raw.trim();
-        if !trimmed.is_empty() {
-            if let Ok(resolved) = resolve_path(Path::new(trimmed)) {
+        if !raw.is_empty() {
+            if let Ok(resolved) = resolve_path(Path::new(raw)) {
                 next_persisted.insert(resolved);
             }
         }
@@ -364,6 +413,41 @@ fn seed_models(state: &mut RegistryState, custom_model_path: &str, recipes: &[Re
         state.model_files.insert(current.clone());
     }
     state.persisted_models = next_persisted;
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Remote {
+    /// `server\share`, lower-cased, of a UNC path in either spelling.
+    Share(String),
+    /// A `\\.\` device path or a verbatim path that is not a drive or a share.
+    Device,
+}
+
+/// What a Windows path names before its first folder, read from the text alone:
+/// a network share, a device, or (None) a local or non-Windows path.
+fn remote_prefix(text: &str) -> Option<Remote> {
+    let text = text.replace('/', "\\");
+    let rest = if let Some(rest) = text.strip_prefix(r"\\?\") {
+        let bytes = rest.as_bytes();
+        if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+            return None;
+        }
+        match rest.get(..4) {
+            Some(unc) if unc.eq_ignore_ascii_case(r"UNC\") => &rest[4..],
+            _ => return Some(Remote::Device),
+        }
+    } else if text.starts_with(r"\\.\") {
+        return Some(Remote::Device);
+    } else {
+        text.strip_prefix(r"\\")?
+    };
+    let mut parts = rest.split('\\');
+    let server = parts.next().unwrap_or_default();
+    let share = parts.next().unwrap_or_default();
+    if server.is_empty() || share.is_empty() {
+        return Some(Remote::Device);
+    }
+    Some(Remote::Share(format!("{server}\\{share}").to_lowercase()))
 }
 
 /// Resolve an absolute path cleanly across existing and not-yet-created suffixes.
@@ -553,5 +637,90 @@ mod tests {
         let results = chosen.join("LocalSR Results");
         assert!(!results.exists());
         assert!(registry.check_output_folder(&results).is_ok());
+    }
+
+    #[test]
+    fn a_results_folder_only_inside_the_media_folder_is_granted() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = test_registry(dir.path());
+        let photos = dir.path().join("photos");
+        fs::create_dir_all(&photos).unwrap();
+        let results = photos.join("LocalSR Results");
+        registry.grant_results_folder(&photos, &results);
+        assert!(registry.check_output_folder(&results).is_ok());
+        assert!(registry.check_output_folder(&photos).is_err());
+
+        #[cfg(unix)]
+        {
+            let album = dir.path().join("album");
+            let private = dir.path().join("private");
+            fs::create_dir_all(&album).unwrap();
+            fs::create_dir_all(&private).unwrap();
+            let link = album.join("LocalSR Results");
+            std::os::unix::fs::symlink(&private, &link).unwrap();
+            registry.grant_results_folder(&album, &link);
+            assert!(registry.check_output_folder(&link).is_err());
+            assert!(registry.check_output_folder(&private).is_err());
+        }
+    }
+
+    #[test]
+    fn persisted_paths_are_granted_exactly_as_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = test_registry(dir.path());
+        let export = dir.path().join("export");
+        let model = dir.path().join("model.pth");
+        fs::create_dir_all(&export).unwrap();
+        fs::write(&model, b"m").unwrap();
+        let spaced = format!("{} ", export.to_string_lossy());
+        registry.reconcile_outputs(&spaced);
+        assert!(registry.check_output_folder(&export).is_err());
+        assert!(registry.check_output_folder(Path::new(&spaced)).is_ok());
+        registry.reconcile_models(&format!(" {}", model.to_string_lossy()), &[]);
+        assert!(registry.check_model_file(&model).is_err());
+    }
+
+    #[test]
+    fn share_and_device_paths_are_read_from_their_text() {
+        let share = |text: &str| Some(Remote::Share(text.into()));
+        assert_eq!(
+            remote_prefix(r"\\Server\Share\a.png"),
+            share(r"server\share")
+        );
+        assert_eq!(
+            remote_prefix("//server/share/a.png"),
+            share(r"server\share")
+        );
+        assert_eq!(
+            remote_prefix(r"\\?\UNC\server\share\a"),
+            share(r"server\share")
+        );
+        assert_eq!(remote_prefix(r"\\.\pipe\x"), Some(Remote::Device));
+        assert_eq!(remote_prefix(r"\\?\GLOBALROOT\x"), Some(Remote::Device));
+        assert_eq!(remote_prefix(r"\\server"), Some(Remote::Device));
+        assert_eq!(remote_prefix(r"\\?\C:\photos"), None);
+        assert_eq!(remote_prefix(r"C:\photos"), None);
+        assert_eq!(remote_prefix("/Users/me/photos"), None);
+    }
+
+    #[test]
+    fn share_paths_and_relative_paths_are_refused_before_the_filesystem() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = test_registry(dir.path());
+        registry
+            .inner
+            .lock()
+            .unwrap()
+            .media_folders
+            .insert(PathBuf::from(r"\\?\UNC\nas\photos\album"));
+        assert!(registry.lexically_allowed(Path::new(r"\\NAS\photos\album\a.png")));
+        assert!(!registry.lexically_allowed(Path::new(r"\\attacker\share\a.png")));
+        assert!(!registry.lexically_allowed(Path::new(r"\\.\pipe\x")));
+        assert!(registry.lexically_allowed(&dir.path().join("local.png")));
+        // A relative path is refused before it is resolved against the working folder.
+        assert!(resolve_path(Path::new("relative/a.png")).is_err());
+        assert!(registry
+            .check_media_input(Path::new(r"\\attacker\share\a.png"))
+            .is_err());
     }
 }

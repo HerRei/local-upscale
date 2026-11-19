@@ -1031,10 +1031,13 @@ fn unrecorded_existing_and_missing_outputs_have_the_same_error() {
 #[test]
 fn a_recorded_output_that_became_a_link_is_not_authorized() {
     let directory = tempfile::tempdir().unwrap();
-    let state =
-        AppState::from_paths(crate::paths::AppPaths::under(&directory.path().join("app"))).unwrap();
-    let output = directory.path().join("result.png");
-    let private = directory.path().join("private.png");
+    let directory_root = std::fs::canonicalize(directory.path()).unwrap();
+    let state = AppState::from_paths(crate::paths::AppPaths::under(
+        &directory_root.as_path().join("app"),
+    ))
+    .unwrap();
+    let output = directory_root.as_path().join("result.png");
+    let private = directory_root.as_path().join("private.png");
     fs::write(&output, b"result").unwrap();
     fs::write(&private, b"private").unwrap();
     {
@@ -1061,10 +1064,13 @@ fn a_recorded_output_that_became_a_link_is_not_authorized() {
 #[test]
 fn playback_and_comparison_refuse_a_result_that_became_a_link() {
     let directory = tempfile::tempdir().unwrap();
-    let state =
-        AppState::from_paths(crate::paths::AppPaths::under(&directory.path().join("app"))).unwrap();
-    let output = directory.path().join("result.png");
-    let private = directory.path().join("private.png");
+    let directory_root = std::fs::canonicalize(directory.path()).unwrap();
+    let state = AppState::from_paths(crate::paths::AppPaths::under(
+        &directory_root.as_path().join("app"),
+    ))
+    .unwrap();
+    let output = directory_root.as_path().join("result.png");
+    let private = directory_root.as_path().join("private.png");
     fs::write(&output, b"result").unwrap();
     fs::write(&private, b"private").unwrap();
     {
@@ -2306,9 +2312,9 @@ fn a_start_that_cannot_be_written_is_refused_before_anything_is_queued() {
 }
 
 fn state_with_result(directory: &Path, file: &str, contents: &[u8]) -> (AppState, PathBuf) {
-    let state =
-        AppState::from_paths(crate::paths::AppPaths::under(&directory.join("app"))).unwrap();
-    let output = directory.join(file);
+    let root = std::fs::canonicalize(directory).unwrap();
+    let state = AppState::from_paths(crate::paths::AppPaths::under(&root.join("app"))).unwrap();
+    let output = root.join(file);
     fs::write(&output, contents).unwrap();
     {
         let database = lock(&state.database).unwrap();
@@ -2326,7 +2332,9 @@ fn state_with_result(directory: &Path, file: &str, contents: &[u8]) -> (AppState
 #[test]
 fn a_result_becomes_one_new_input_and_the_original_stays() {
     let directory = tempfile::tempdir().unwrap();
-    let (state, output) = state_with_result(directory.path(), "photo_upscaled_4x.png", b"png");
+    let directory_root = std::fs::canonicalize(directory.path()).unwrap();
+    let (state, output) =
+        state_with_result(directory_root.as_path(), "photo_upscaled_4x.png", b"png");
     let requested = output.to_string_lossy().into_owned();
     let (id, to_probe) = add_result_as_input(&state, &requested).unwrap();
     let canonical = fs::canonicalize(&output)
@@ -2366,7 +2374,8 @@ fn only_an_authorised_existing_result_becomes_an_input() {
 #[test]
 fn a_result_that_cannot_be_a_source_is_refused() {
     let directory = tempfile::tempdir().unwrap();
-    let (state, output) = state_with_result(directory.path(), "notes.txt", b"text");
+    let directory_root = std::fs::canonicalize(directory.path()).unwrap();
+    let (state, output) = state_with_result(directory_root.as_path(), "notes.txt", b"text");
     let error = add_result_as_input(&state, &output.to_string_lossy()).unwrap_err();
     assert!(error.to_string().contains("cannot be used as an input"));
     assert_eq!(
@@ -2489,6 +2498,15 @@ fn ungranted_paths_are_refused_for_every_path_taking_command() {
     app.manage(state.clone());
 
     let catalog_model_id = lock(&state.catalog).unwrap().models[0].model_id.clone();
+    let ungranted_original = vec![crate::compare::ComparePick::Original {
+        media_id: "ungranted-vid".into(),
+    }];
+    let compare_generation = {
+        let database = lock(&state.database).unwrap();
+        let mut runtime = lock(&state.runtime).unwrap();
+        crate::compare::plan(&database, &mut runtime.compare, &ungranted_original).unwrap();
+        runtime.compare.generation
+    };
 
     type Case = (&'static str, AppResult<()>);
     let cases: Vec<Case> = vec![
@@ -2707,6 +2725,14 @@ fn ungranted_paths_are_refused_for_every_path_taking_command() {
             "prepare_video_comparison",
             resolve_video_comparison_inputs(&state, "ungranted-vid", None, None).map(drop),
         ),
+        (
+            "request_compare",
+            request_compare_checked(&state, &ungranted_original),
+        ),
+        (
+            "request_compare_regions",
+            request_compare_regions_checked(&state, compare_generation, &[None]),
+        ),
     ];
 
     for (name, outcome) in cases {
@@ -2923,12 +2949,13 @@ fn persisted_grants_survive_restart_and_removal_drops_them() {
 #[test]
 fn host_flows_for_drop_launch_folder_import_and_result_reuse_work_end_to_end() {
     let dir = tempfile::tempdir().unwrap();
-    let paths = AppPaths::under(&dir.path().join("app"));
+    let dir_root = std::fs::canonicalize(dir.path()).unwrap();
+    let paths = AppPaths::under(&dir_root.as_path().join("app"));
     let state = AppState::from_paths(paths).unwrap();
 
     // 1. Drag and drop a file and a folder.
-    let dropped_file = dir.path().join("dropped.png");
-    let dropped_folder = dir.path().join("dropped_folder");
+    let dropped_file = dir_root.as_path().join("dropped.png");
+    let dropped_folder = dir_root.as_path().join("dropped_folder");
     fs::create_dir_all(&dropped_folder).unwrap();
     let inside_dropped = dropped_folder.join("clip.mp4");
     fs::write(&dropped_file, b"img").unwrap();
@@ -2947,7 +2974,7 @@ fn host_flows_for_drop_launch_folder_import_and_result_reuse_work_end_to_end() {
     .unwrap();
 
     // 2. Open With / launch intent files.
-    let opened_file = dir.path().join("opened.jpg");
+    let opened_file = dir_root.as_path().join("opened.jpg");
     fs::write(&opened_file, b"jpg").unwrap();
     state
         .grants
@@ -2960,7 +2987,7 @@ fn host_flows_for_drop_launch_folder_import_and_result_reuse_work_end_to_end() {
     .unwrap();
 
     // 3. Add Folder flow (scan + add + LocalSR Results output folder).
-    let scan_dir = dir.path().join("album");
+    let scan_dir = dir_root.as_path().join("album");
     fs::create_dir_all(&scan_dir).unwrap();
     let album_photo = scan_dir.join("a.png");
     fs::write(&album_photo, b"album").unwrap();
@@ -3025,4 +3052,119 @@ fn host_flows_for_drop_launch_folder_import_and_result_reuse_work_end_to_end() {
         ],
     )
     .is_ok());
+}
+
+#[cfg(unix)]
+#[test]
+fn compare_refuses_an_original_that_is_ungranted_or_became_a_link() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(directory.path()).unwrap();
+    let state = AppState::from_paths(AppPaths::under(&root.join("app"))).unwrap();
+    let photo = root.join("photo.png");
+    let stranger = root.join("stranger.png");
+    let private = root.join("private.png");
+    for file in [&photo, &stranger, &private] {
+        fs::write(file, b"png").unwrap();
+    }
+    state.grants.grant_media_file(&photo);
+    *lock(&state.engine).unwrap() = Some(crate::types::EngineInfo {
+        protocol_version: 1,
+        minimum_protocol_version: 1,
+        engine_id: "test".into(),
+        engine_version: "1".into(),
+        features: vec!["compare_regions".into()],
+        model_formats: vec![],
+        video_engines: vec![],
+    });
+    {
+        let database = lock(&state.database).unwrap();
+        database
+            .insert_media("m", photo.to_str().unwrap(), "photo.png", "image")
+            .unwrap();
+        database
+            .insert_media("s", stranger.to_str().unwrap(), "stranger.png", "image")
+            .unwrap();
+    }
+    let original = |id: &str| crate::compare::ComparePick::Original {
+        media_id: id.into(),
+    };
+
+    // Never granted: refused before anything is planned or sent.
+    let error = request_compare_checked(&state, &[original("s")]).unwrap_err();
+    assert!(error.to_string().contains("dialog"), "{error}");
+    assert!(lock(&state.runtime).unwrap().compare.slots.is_empty());
+
+    // Granted, then swapped for a link to a file nobody granted.
+    request_compare_checked(&state, &[original("m")]).unwrap();
+    let generation = lock(&state.runtime).unwrap().compare.generation;
+    fs::remove_file(&photo).unwrap();
+    std::os::unix::fs::symlink(&private, &photo).unwrap();
+    assert!(request_compare_regions_checked(&state, generation, &[None]).is_err());
+    assert!(request_compare_checked(&state, &[original("m")]).is_err());
+    assert_eq!(lock(&state.runtime).unwrap().compare.generation, generation);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_result_below_a_folder_that_became_a_link_is_refused() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(directory.path()).unwrap();
+    let state = AppState::from_paths(AppPaths::under(&root.join("app"))).unwrap();
+    let app = tauri::test::mock_app();
+    let state = Arc::new(state);
+    app.manage(state.clone());
+    let folder = root.join("out");
+    let output = folder.join("result.png");
+    fs::create_dir_all(&folder).unwrap();
+    fs::write(&output, b"result").unwrap();
+    let recorded = output.to_string_lossy().into_owned();
+    {
+        let database = lock(&state.database).unwrap();
+        database
+            .insert_media("m", "/in/photo.png", "photo.png", "image")
+            .unwrap();
+        database.insert_job("j", "m", "{}").unwrap();
+        database
+            .finish_job("j", "completed", &recorded, "")
+            .unwrap();
+    }
+    lock(&state.runtime).unwrap().last_output_path = recorded.clone();
+    assert!(authorized_result(&state, &recorded).is_ok());
+
+    // The folder is moved away and a link to a private folder takes its place.
+    let elsewhere = root.join("private");
+    fs::create_dir_all(&elsewhere).unwrap();
+    fs::write(elsewhere.join("result.png"), b"private").unwrap();
+    fs::rename(&folder, root.join("moved")).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &folder).unwrap();
+
+    assert!(open_result(app.state(), recorded.clone()).is_err());
+    assert!(reveal_result(app.state(), recorded.clone()).is_err());
+    assert!(add_result_as_input(&state, &recorded).is_err());
+    assert!(probe_path_checked(&state, &recorded).is_err());
+    assert_eq!(
+        lock(&state.database).unwrap().list_media().unwrap().len(),
+        1
+    );
+    assert!(state
+        .grants
+        .check_media_input(&elsewhere.join("result.png"))
+        .is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_result_that_became_a_second_name_for_another_file_is_refused() {
+    let directory = tempfile::tempdir().unwrap();
+    let (state, output) = state_with_result(directory.path(), "result.png", b"png");
+    let private = fs::canonicalize(directory.path())
+        .unwrap()
+        .join("private.png");
+    fs::write(&private, b"private").unwrap();
+    fs::remove_file(&output).unwrap();
+    fs::hard_link(&private, &output).unwrap();
+    let recorded = output.to_string_lossy().into_owned();
+    lock(&state.runtime).unwrap().last_output_path = recorded.clone();
+    assert!(add_result_as_input(&state, &recorded).is_err());
+    assert!(probe_path_checked(&state, &recorded).is_err());
 }

@@ -437,9 +437,10 @@ mod tests {
     #[test]
     fn video_picks_use_owned_results_and_the_shared_playback_descriptor() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Database::open(&dir.path().join("queue.db")).unwrap();
-        let original = dir.path().join("source.mp4");
-        let output = dir.path().join("result.mp4");
+        let dir_root = std::fs::canonicalize(dir.path()).unwrap();
+        let db = Database::open(&dir_root.as_path().join("queue.db")).unwrap();
+        let original = dir_root.as_path().join("source.mp4");
+        let output = dir_root.as_path().join("result.mp4");
         std::fs::write(&original, "source").unwrap();
         std::fs::write(&output, "result").unwrap();
         db.insert_media("v", original.to_str().unwrap(), "v", "video")
@@ -516,13 +517,14 @@ mod tests {
     #[test]
     fn four_distinct_completed_videos_are_accepted_but_a_fifth_is_refused() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Database::open(&dir.path().join("queue.db")).unwrap();
+        let dir_root = std::fs::canonicalize(dir.path()).unwrap();
+        let db = Database::open(&dir_root.as_path().join("queue.db")).unwrap();
         let mut picks = Vec::new();
         for index in 0..5 {
             let id = format!("video-{index}");
             let job = format!("job-{index}");
-            let source = dir.path().join(format!("source-{index}.mp4"));
-            let output = dir.path().join(format!("result-{index}.mp4"));
+            let source = dir_root.as_path().join(format!("source-{index}.mp4"));
+            let output = dir_root.as_path().join(format!("result-{index}.mp4"));
             std::fs::write(&source, "source").unwrap();
             std::fs::write(&output, "result").unwrap();
             db.insert_media(&id, source.to_str().unwrap(), &id, "video")
@@ -578,14 +580,15 @@ mod tests {
     #[test]
     fn requests_four_owned_images_in_order_and_rejects_unowned_or_excess_picks() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Database::open(&dir.path().join("queue.db")).unwrap();
-        let original = dir.path().join("original.png");
-        let output = dir.path().join("output.png");
+        let dir_root = std::fs::canonicalize(dir.path()).unwrap();
+        let db = Database::open(&dir_root.as_path().join("queue.db")).unwrap();
+        let original = dir_root.as_path().join("original.png");
+        let output = dir_root.as_path().join("output.png");
         std::fs::write(&original, "original").unwrap();
         std::fs::write(&output, "output").unwrap();
         db.insert_media("a", original.to_str().unwrap(), "a", "image")
             .unwrap();
-        let other = dir.path().join("other.png");
+        let other = dir_root.as_path().join("other.png");
         std::fs::write(&other, "other").unwrap();
         db.insert_media("b", other.to_str().unwrap(), "b", "image")
             .unwrap();
@@ -633,9 +636,10 @@ mod tests {
     #[test]
     fn matches_all_identity_fields_and_invalidates_removed_files_and_jobs() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Database::open(&dir.path().join("queue.db")).unwrap();
-        let original = dir.path().join("original.png");
-        let output = dir.path().join("output.png");
+        let dir_root = std::fs::canonicalize(dir.path()).unwrap();
+        let db = Database::open(&dir_root.as_path().join("queue.db")).unwrap();
+        let original = dir_root.as_path().join("original.png");
+        let output = dir_root.as_path().join("output.png");
         std::fs::write(&original, "original").unwrap();
         std::fs::write(&output, "output").unwrap();
         db.insert_media("a", original.to_str().unwrap(), "a", "image")

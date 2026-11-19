@@ -1402,11 +1402,45 @@ pub fn request_compare(
     app: AppHandle,
     picks: Vec<crate::compare::ComparePick>,
 ) -> AppResult<()> {
+    request_compare_checked(&state, &picks)?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
+/// Refuse a Compare original whose file is not a granted media input (one that became
+/// a link to elsewhere, or was never granted) before anything reads it.
+fn authorize_compare_originals(
+    state: &AppState,
+    picks: &[crate::compare::ComparePick],
+) -> AppResult<()> {
+    let paths = {
+        let database = lock(&state.database)?;
+        let mut paths = Vec::new();
+        for pick in picks {
+            if let crate::compare::ComparePick::Original { media_id } = pick {
+                if let Some(media) = database.get_media(media_id)? {
+                    paths.push(media.path);
+                }
+            }
+        }
+        paths
+    };
+    for path in paths {
+        state.grants.check_media_input(Path::new(&path))?;
+    }
+    Ok(())
+}
+
+pub(crate) fn request_compare_checked(
+    state: &AppState,
+    picks: &[crate::compare::ComparePick],
+) -> AppResult<()> {
     let _scheduler = lock(&state.scheduler)?;
+    authorize_compare_originals(state, picks)?;
     let requests = {
         let database = lock(&state.database)?;
         let mut runtime = lock(&state.runtime)?;
-        crate::compare::plan(&database, &mut runtime.compare, &picks)?
+        crate::compare::plan(&database, &mut runtime.compare, picks)?
     };
     let shortfall = lock(&state.engine)?
         .as_ref()
@@ -1414,7 +1448,7 @@ pub fn request_compare(
     for request in requests {
         let sent = match shortfall {
             Some(reason) => Err(AppError::Worker(reason.into())),
-            None => worker::send(&state, &request),
+            None => worker::send(state, &request),
         };
         if let Err(error) = sent {
             let mut failure = request["data"].clone();
@@ -1424,7 +1458,6 @@ pub fn request_compare(
             crate::compare::apply(&database, &mut runtime.compare, &failure, true)?;
         }
     }
-    emit_state_changed(&app);
     Ok(())
 }
 
@@ -1435,7 +1468,24 @@ pub fn request_compare_regions(
     generation: u64,
     regions: Vec<Option<crate::compare::Region>>,
 ) -> AppResult<()> {
+    request_compare_regions_checked(&state, generation, &regions)?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
+pub(crate) fn request_compare_regions_checked(
+    state: &AppState,
+    generation: u64,
+    regions: &[Option<crate::compare::Region>],
+) -> AppResult<()> {
     let _scheduler = lock(&state.scheduler)?;
+    let picks: Vec<_> = lock(&state.runtime)?
+        .compare
+        .slots
+        .iter()
+        .map(|slot| slot.pick.clone())
+        .collect();
+    authorize_compare_originals(state, &picks)?;
     if !lock(&state.engine)?.as_ref().is_some_and(|engine| {
         engine
             .features
@@ -1450,16 +1500,15 @@ pub fn request_compare_regions(
         if runtime.compare.generation != generation {
             return Ok(());
         }
-        crate::compare::plan_regions(&database, &mut runtime.compare, &regions)?
+        crate::compare::plan_regions(&database, &mut runtime.compare, regions)?
     };
     for request in requests {
-        if worker::send(&state, &request).is_err() {
+        if worker::send(state, &request).is_err() {
             let database = lock(&state.database)?;
             let mut runtime = lock(&state.runtime)?;
             crate::compare::apply_region(&database, &mut runtime.compare, &request["data"], true)?;
         }
     }
-    emit_state_changed(&app);
     Ok(())
 }
 
@@ -2064,11 +2113,11 @@ pub fn probe_path(state: State<'_, Arc<AppState>>, app: AppHandle, path: String)
 
 pub(crate) fn probe_path_checked(state: &AppState, path: &str) -> AppResult<(String, bool, bool)> {
     let last_output = lock(&state.runtime)?.last_output_path.clone();
-    let requested_resolved = crate::grants::resolve_path(Path::new(path))?;
+    // Only the recorded output itself, as the real path of one file: no other spelling,
+    // no link anywhere along it and no second name for another file.
     let is_last_output = !last_output.is_empty()
-        && crate::grants::resolve_path(Path::new(&last_output))
-            .map(|expected| expected == requested_resolved)
-            .unwrap_or(false);
+        && last_output == path
+        && crate::results::ensure_not_linked(Path::new(path)).is_ok();
     if !is_last_output {
         state.grants.check_media_input(Path::new(path))?;
     }
@@ -2394,7 +2443,7 @@ pub async fn choose_media_folder(
         state.grants.grant_media_folder(folder);
         state
             .grants
-            .grant_output_folder(&folder.join("LocalSR Results"));
+            .grant_results_folder(folder, &folder.join("LocalSR Results"));
     }
     Ok(picked.map(|path| path.to_string_lossy().into_owned()))
 }

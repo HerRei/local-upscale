@@ -12,14 +12,26 @@ use serde_json::Value;
 
 use crate::types::CatalogManifest;
 
-/// Refuse a result that is a link. A result is a file the engine wrote; one that has
-/// since become a link could lead anywhere, and resolving it would authorize its
-/// target. A path that does not exist is not a link.
+/// Refuse a result that is a link, or that sits below one. A result is a file the
+/// engine wrote under a resolved output folder, so its recorded path is already its
+/// real path; one that no longer is (the file or a folder above it became a link) could
+/// lead anywhere, and resolving it would authorize its target. A file with a second
+/// name could be another file the engine never wrote. A path that does not exist is
+/// not a link.
 pub fn ensure_not_linked(path: &Path) -> crate::error::AppResult<()> {
-    if std::fs::symlink_metadata(path).is_ok_and(|info| info.file_type().is_symlink()) {
-        return Err(crate::error::AppError::Validation(
-            "output path was not authorized".into(),
-        ));
+    let refused = || crate::error::AppError::Validation("output path was not authorized".into());
+    let Ok(info) = std::fs::symlink_metadata(path) else {
+        return Ok(());
+    };
+    if info.file_type().is_symlink() || std::fs::canonicalize(path).ok().as_deref() != Some(path) {
+        return Err(refused());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if info.is_file() && info.nlink() != 1 {
+            return Err(refused());
+        }
     }
     Ok(())
 }
