@@ -18,6 +18,8 @@ export interface Scenario {
   /** Catalog model ids marked as installed. */
   installed?: string[];
   settings?: Record<string, unknown>;
+  /** Saved recipes the host lists. */
+  recipes?: Record<string, unknown>[];
   worker?: 'ready' | 'unavailable';
   /** The host gave up restarting the engine and offers Try again. */
   engineGivenUp?: boolean;
@@ -191,6 +193,7 @@ function hostScript(scenario: Scenario): void {
       });
     }
     Object.assign(s.settings, { task: scenario.task ?? '' }, scenario.settings ?? {});
+    s.recipes = structuredClone(scenario.recipes ?? []);
     s.runtime.worker = scenario.worker ?? 'unavailable';
     if (scenario.running) {
       const rows = scenario.rows ?? {};
@@ -375,6 +378,9 @@ function hostScript(scenario: Scenario): void {
         return structuredClone(snapshot);
       case 'save_settings':
         snapshot.settings = structuredClone(args.settings);
+        return null;
+      case 'delete_recipe':
+        snapshot.recipes = snapshot.recipes.filter((recipe: Json) => recipe.id !== args.id);
         return null;
       case 'list_all_media_results':
         return histories();

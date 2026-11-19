@@ -2892,8 +2892,16 @@
 
 <svelte:window
   on:click={(event) => {
-    const row = event.target instanceof Element ? event.target.closest('.saved-recipe') : null;
-    if (row?.getAttribute('data-recipe-id') !== deletingRecipeId) deletingRecipeId = null;
+    if (deletingRecipeId === null) return;
+    // The path is fixed when the click starts. The X that opened the question is already
+    // gone from the page when this runs, so its row must not be looked up from the target.
+    const inRow = event
+      .composedPath()
+      .some(
+        (node) =>
+          node instanceof Element && node.getAttribute('data-recipe-id') === deletingRecipeId,
+      );
+    if (!inRow) deletingRecipeId = null;
   }}
   on:keydown={(event) => {
     if (event.key === 'Escape') deletingRecipeId = null;
@@ -3226,8 +3234,11 @@
                       class:confirming={deletingRecipeId === recipe.id}
                     >
                       {#if deletingRecipeId === recipe.id}
-                        <span>Delete {recipe.name}?</span>
+                        <p class="recipe-question">
+                          <b>Delete {recipe.name}?</b><span>This can’t be undone.</span>
+                        </p>
                         <button
+                          class="danger"
                           aria-label={`Confirm delete ${recipe.name}`}
                           on:click={() => {
                             deletingRecipeId = null;
