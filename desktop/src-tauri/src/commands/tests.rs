@@ -313,6 +313,68 @@ fn crash_reports_switch_saves_while_a_job_runs_and_full_save_keeps_it() {
 }
 
 #[test]
+fn setup_choices_save_while_a_job_runs_and_roll_back_on_error() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(directory.path());
+    fs::create_dir_all(&paths.next_root).unwrap();
+    fs::create_dir_all(&paths.model_root).unwrap();
+    let state = AppState::from_paths(paths).unwrap();
+    assert!(!crate::settings::load(&state.paths).0.privacy_choice_made);
+    lock(&state.runtime).unwrap().active_job_id = "running".into();
+
+    assert!(apply_privacy_choice(
+        &state,
+        SetupChoices {
+            appearance: "sepia".into(),
+            colour_blind_palette: false,
+            check_at_launch: true,
+            anonymous_count: false,
+            crash_reports: false,
+        },
+    )
+    .is_err());
+    assert!(!lock(&state.settings).unwrap().privacy_choice_made);
+
+    apply_privacy_choice(
+        &state,
+        SetupChoices {
+            appearance: "light".into(),
+            colour_blind_palette: true,
+            check_at_launch: false,
+            anonymous_count: true,
+            crash_reports: true,
+        },
+    )
+    .unwrap();
+    let saved = crate::settings::load(&state.paths).0;
+    assert!(saved.privacy_choice_made);
+    assert_eq!(saved.appearance, "light");
+    assert!(saved.colour_blind_palette);
+    assert!(!saved.check_updates_at_launch);
+    assert!(saved.anonymous_update_count);
+    assert!(saved.crash_reports);
+
+    fs::write(&state.paths.settings, b"{ not json").unwrap();
+    assert!(apply_privacy_choice(
+        &state,
+        SetupChoices {
+            appearance: "dark".into(),
+            colour_blind_palette: false,
+            check_at_launch: true,
+            anonymous_count: false,
+            crash_reports: false,
+        },
+    )
+    .is_err());
+    let mem = lock(&state.settings).unwrap();
+    assert_eq!(mem.appearance, "light");
+    assert!(mem.colour_blind_palette);
+    assert!(!mem.check_updates_at_launch);
+    assert!(mem.anonymous_update_count);
+    assert!(mem.crash_reports);
+}
+
+#[test]
 fn face_companions_require_the_matching_installed_model_and_explicit_selection() {
     let directory = tempfile::tempdir().unwrap();
     let paths = crate::paths::AppPaths::under(directory.path());

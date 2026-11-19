@@ -428,37 +428,80 @@ pub fn set_update_switch(
     result
 }
 
+struct SetupChoices {
+    appearance: String,
+    colour_blind_palette: bool,
+    check_at_launch: bool,
+    anonymous_count: bool,
+    crash_reports: bool,
+}
+
 /// Save the first-launch choices together, even while processing is active.
 #[tauri::command]
 pub fn set_privacy_choice(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
+    appearance: String,
+    colour_blind_palette: bool,
     check_at_launch: bool,
     anonymous_count: bool,
+    crash_reports: bool,
 ) -> AppResult<()> {
+    apply_privacy_choice(
+        &state,
+        SetupChoices {
+            appearance,
+            colour_blind_palette,
+            check_at_launch,
+            anonymous_count,
+            crash_reports,
+        },
+    )?;
+    refresh_update_switches(&app);
+    Ok(())
+}
+
+fn apply_privacy_choice(state: &AppState, choices: SetupChoices) -> AppResult<()> {
+    if !matches!(choices.appearance.as_str(), "dark" | "light" | "system") {
+        return Err(AppError::Validation("unknown appearance".into()));
+    }
     let _io = lock(&state.settings_io)?;
     let previous = {
         let mut settings = lock(&state.settings)?;
         let previous = (
+            settings.appearance.clone(),
+            settings.colour_blind_palette,
             settings.check_updates_at_launch,
             settings.anonymous_update_count,
+            settings.crash_reports,
             settings.privacy_choice_made,
         );
-        settings.check_updates_at_launch = check_at_launch;
-        settings.anonymous_update_count = anonymous_count;
+        settings.appearance = choices.appearance;
+        settings.colour_blind_palette = choices.colour_blind_palette;
+        settings.check_updates_at_launch = choices.check_at_launch;
+        settings.anonymous_update_count = choices.anonymous_count;
+        settings.crash_reports = choices.crash_reports;
         settings.privacy_choice_made = true;
         previous
     };
     if let Err(error) = state.write_settings() {
-        let mut settings = lock(&state.settings)?;
-        (
-            settings.check_updates_at_launch,
-            settings.anonymous_update_count,
-            settings.privacy_choice_made,
-        ) = previous;
+        if let Ok(mut settings) = lock(&state.settings) {
+            (
+                settings.appearance,
+                settings.colour_blind_palette,
+                settings.check_updates_at_launch,
+                settings.anonymous_update_count,
+                settings.crash_reports,
+                settings.privacy_choice_made,
+            ) = previous;
+        }
         return Err(error);
     }
-    refresh_update_switches(&app);
+    let enabled = lock(&state.settings)?.crash_reports;
+    crate::crash_reports::configure_hook(&state.paths, enabled);
+    if !enabled {
+        crate::crash_reports::delete_all(&state.paths)?;
+    }
     Ok(())
 }
 

@@ -153,8 +153,16 @@ export const setUpdateSwitch = (
   name: 'check_updates_at_launch' | 'anonymous_update_count' | 'crash_reports',
   value: boolean,
 ): Promise<void> => invoke('set_update_switch', { name, value });
-export const setPrivacyChoice = (checkAtLaunch: boolean, anonymousCount: boolean): Promise<void> =>
-  invoke('set_privacy_choice', { checkAtLaunch, anonymousCount });
+export interface SetupChoices {
+  appearance: UiSettings['appearance'];
+  colourBlindPalette: boolean;
+  checkAtLaunch: boolean;
+  anonymousCount: boolean;
+  crashReports: boolean;
+}
+
+export const setPrivacyChoice = (choices: SetupChoices): Promise<void> =>
+  invoke('set_privacy_choice', { ...choices });
 export const startJobs = (input: StartBatchInput): Promise<void> => invoke('start_jobs', { input });
 export const startEdit = (input: StartEditInput): Promise<void> => invoke('start_edit', { input });
 export const openEditLink = (modelId: string, link: 'license' | 'source'): Promise<void> =>

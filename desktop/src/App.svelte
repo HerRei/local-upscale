@@ -43,6 +43,7 @@
   import ModelCredit from './ModelCredit.svelte';
   import UpdateNotice from './UpdateNotice.svelte';
   import UpdatePanel from './UpdatePanel.svelte';
+  import SetupScreen from './SetupScreen.svelte';
   import WelcomeNotice from './WelcomeNotice.svelte';
   import { startUpdateWatcher, updateDialogOpen } from './lib/updates';
   import { redactDiagnostics, reportUrl } from './lib/report';
@@ -394,26 +395,57 @@
       reportMessage = String(error);
     }
   }
-  let privacyCheckAtLaunch = true;
-  let privacyCount = false;
+  let setupAppearance: UiSettings['appearance'] = 'dark';
+  let setupColourBlind = false;
+  let setupCheckAtLaunch = true;
+  let setupAnonymousCount = false;
+  let setupCrashReports = false;
   let privacySaving = false;
   let privacyError = '';
 
-  async function continuePrivacy(): Promise<void> {
+  function previewSetupTheme(
+    appearance: UiSettings['appearance'],
+    colourBlindPalette: boolean,
+  ): void {
+    setupAppearance = appearance;
+    setupColourBlind = colourBlindPalette;
+    themeForRefresh({
+      appearance,
+      colour_blind_palette: colourBlindPalette,
+    });
+  }
+
+  async function continuePrivacy(choices: {
+    appearance: UiSettings['appearance'];
+    colourBlind: boolean;
+    checkAtLaunch: boolean;
+    anonymousCount: boolean;
+    crashReports: boolean;
+  }): Promise<void> {
     privacySaving = true;
     privacyError = '';
     try {
-      await api.setPrivacyChoice(privacyCheckAtLaunch, privacyCount);
+      await api.setPrivacyChoice({
+        appearance: choices.appearance,
+        colourBlindPalette: choices.colourBlind,
+        checkAtLaunch: choices.checkAtLaunch,
+        anonymousCount: choices.anonymousCount,
+        crashReports: choices.crashReports,
+      });
       snapshot = {
         ...snapshot,
         settings: {
           ...snapshot.settings,
+          appearance: choices.appearance,
+          colour_blind_palette: choices.colourBlind,
           privacy_choice_made: true,
-          check_updates_at_launch: privacyCheckAtLaunch,
-          anonymous_update_count: privacyCount,
+          check_updates_at_launch: choices.checkAtLaunch,
+          anonymous_update_count: choices.anonymousCount,
+          crash_reports: choices.crashReports,
         },
       };
-      if (privacyCheckAtLaunch) {
+      themeForRefresh(snapshot.settings);
+      if (choices.checkAtLaunch) {
         const status = await api.updateStatus();
         if (status.configured && !status.managed_by_store && status.stage === 'idle')
           await api.checkUpdateAtLaunch(status.channel).catch(() => undefined);
@@ -1188,7 +1220,9 @@
                 ? 'Choose or download the required models before starting.'
                 : 'The current settings are not ready to start.');
 
-  let themeForRefresh: (settings: UiSettings) => void = () => {};
+  let themeForRefresh: (
+    settings: Pick<UiSettings, 'appearance' | 'colour_blind_palette'>,
+  ) => void = () => {};
 
   onMount(() => {
     const theme = createThemeController(undefined, (value) => {
@@ -1210,6 +1244,11 @@
     void (async () => {
       try {
         snapshot = await api.bootstrap();
+        setupAppearance = snapshot.settings.appearance ?? 'dark';
+        setupColourBlind = snapshot.settings.colour_blind_palette ?? false;
+        setupCheckAtLaunch = snapshot.settings.check_updates_at_launch ?? true;
+        setupAnonymousCount = snapshot.settings.anonymous_update_count ?? false;
+        setupCrashReports = snapshot.settings.crash_reports ?? false;
         if (snapshot.settings.crash_reports) {
           await refreshCrashReports();
           crashNotice = crashReports.length > 0;
@@ -1315,7 +1354,11 @@
       } else if (modalKind === 'performance') {
         void refreshCrashReports();
       }
-      themeForRefresh(latest.settings);
+      themeForRefresh(
+        latest.settings.privacy_choice_made === false
+          ? { appearance: setupAppearance, colour_blind_palette: setupColourBlind }
+          : latest.settings,
+      );
       chooseInitialModel();
       await maybeAutoStart();
     } catch (error) {
@@ -4268,38 +4311,17 @@
 {/if}
 
 {#if !booting && settings.privacy_choice_made === false}
-  <div class="modal-backdrop" role="presentation">
-    <div
-      class="modal"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="privacy-title"
-      tabindex="-1"
-      use:modal
-    >
-      <h2 id="privacy-title">Welcome to LocalSR</h2>
-      <p>
-        Choose how LocalSR checks for updates. You can change these later in the LocalSR or Help
-        menu and the Software Update dialog.
-      </p>
-      <p>
-        <label
-          ><input type="checkbox" bind:checked={privacyCheckAtLaunch} /> Check for updates automatically</label
-        ><br />The update check reads the feed on GitHub Pages.
-      </p>
-      <p>
-        <label
-          ><input type="checkbox" bind:checked={privacyCount} /> Send an anonymous count with each update
-          check</label
-        ><br />When a check happens, this sends the app version, platform and channel to the
-        developer's server, with no ID.
-      </p>
-      {#if privacyError}<p role="alert">{privacyError}</p>{/if}
-      <div class="modal-actions">
-        <button class="button" disabled={privacySaving} on:click={continuePrivacy}>Continue</button>
-      </div>
-    </div>
-  </div>
+  <SetupScreen
+    bind:appearance={setupAppearance}
+    bind:colourBlind={setupColourBlind}
+    bind:checkAtLaunch={setupCheckAtLaunch}
+    bind:anonymousCount={setupAnonymousCount}
+    bind:crashReports={setupCrashReports}
+    saving={privacySaving}
+    error={privacyError}
+    on:preview={(event) => previewSetupTheme(event.detail.appearance, event.detail.colourBlind)}
+    on:continue={(event) => void continuePrivacy(event.detail)}
+  />
 {/if}
 
 {#if modalTitle}

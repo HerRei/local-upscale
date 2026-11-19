@@ -211,6 +211,23 @@
   --rgba-255-255-255-0_1: rgba(255, 255, 255, 0.1);
 }
 
+[data-theme='dark'] {
+  color-scheme: dark;
+  --stage: #0f0f0f;
+  --base: #161616;
+  --panel: #1b1b1b;
+  --chrome: #222222;
+  --raised: #2a2a2a;
+  --hover: #313131;
+  --recess: #141414;
+  --text: #ececec;
+  --secondary: #a3a3a3;
+  --tertiary: #8c8c8c;
+  --border: rgba(255, 255, 255, 0.09);
+  --accent: #b3452a;
+  --preview-canvas-background: #171717;
+}
+
 [data-theme='light'] {
   color-scheme: light;
   --illustration-highlight: #303030;

@@ -81,7 +81,15 @@ const api = vi.hoisted(() => ({
   ),
   deleteCrashReport: vi.fn(async (_id: string) => {}),
   deleteAllCrashReports: vi.fn(async () => {}),
-  setPrivacyChoice: vi.fn(async (_check: boolean, _count: boolean): Promise<void> => undefined),
+  setPrivacyChoice: vi.fn(
+    async (_choices: {
+      appearance: UiSettings['appearance'];
+      colourBlindPalette: boolean;
+      checkAtLaunch: boolean;
+      anonymousCount: boolean;
+      crashReports: boolean;
+    }): Promise<void> => undefined,
+  ),
   startJobs: vi.fn(async () => undefined),
   cancelJobs: vi.fn(async () => undefined),
   retryEngine: vi.fn(async (): Promise<void> => undefined),
@@ -5833,20 +5841,96 @@ it('does not ask for a catalog model under Your own file', async () => {
   ).toBeNull();
 });
 
-describe('first-launch privacy choice', () => {
-  it('shows only when pending and saves both choices together', async () => {
+describe('first-launch setup screen', () => {
+  it('shows defaults, previews appearance live, saves all choices on Continue, and closes', async () => {
     const snapshot = readySnapshot();
     snapshot.settings.privacy_choice_made = false;
     const user = await mountWith(snapshot);
-    expect(await screen.findByRole('dialog', { name: 'Welcome to LocalSR' })).toBeTruthy();
-    await user.click(screen.getByLabelText('Check for updates automatically'));
-    await user.click(screen.getByLabelText('Send an anonymous count with each update check'));
-    await user.click(screen.getByRole('button', { name: 'Continue' }));
-    await waitFor(() => expect(api.setPrivacyChoice).toHaveBeenCalledWith(false, true));
+    const dialog = await screen.findByRole('dialog', { name: 'Welcome to LocalSR' });
+
+    const dark = within(dialog).getByRole('radio', { name: 'Dark' });
+    const light = within(dialog).getByRole('radio', { name: 'Light' });
+    const system = within(dialog).getByRole('radio', { name: 'Match System' });
+    const colourBlind = within(dialog).getByRole('switch', {
+      name: 'Colour-blind friendly colours',
+    }) as HTMLInputElement;
+    const checkUpdates = within(dialog).getByRole('switch', {
+      name: 'Check for updates automatically',
+    }) as HTMLInputElement;
+    const anonymousCount = within(dialog).getByRole('switch', {
+      name: 'Send an anonymous count with each update check',
+    }) as HTMLInputElement;
+    const crashReports = within(dialog).getByRole('switch', {
+      name: 'Offer to report crashes',
+    }) as HTMLInputElement;
+
+    expect(dark.getAttribute('aria-checked')).toBe('true');
+    expect(light.getAttribute('aria-checked')).toBe('false');
+    expect(system.getAttribute('aria-checked')).toBe('false');
+    expect(colourBlind.checked).toBe(false);
+    expect(checkUpdates.checked).toBe(true);
+    expect(anonymousCount.checked).toBe(false);
+    expect(crashReports.checked).toBe(false);
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    expect(document.documentElement.dataset.palette).toBe('default');
+
+    await user.click(light);
+    expect(document.documentElement.dataset.theme).toBe('light');
+    expect(light.getAttribute('aria-checked')).toBe('true');
+
+    await user.click(colourBlind);
+    expect(document.documentElement.dataset.palette).toBe('colour-blind');
+    expect(api.setPrivacyChoice).not.toHaveBeenCalled();
+
+    await user.click(checkUpdates);
+    await user.click(anonymousCount);
+    await user.click(crashReports);
+    await user.click(within(dialog).getByRole('button', { name: 'Continue' }));
+
+    await waitFor(() =>
+      expect(api.setPrivacyChoice).toHaveBeenCalledWith({
+        appearance: 'light',
+        colourBlindPalette: true,
+        checkAtLaunch: false,
+        anonymousCount: true,
+        crashReports: true,
+      }),
+    );
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: 'Welcome to LocalSR' })).toBeNull(),
     );
   });
+
+  it('follows a sensible keyboard focus order and ignores Escape', async () => {
+    const snapshot = readySnapshot();
+    snapshot.settings.privacy_choice_made = false;
+    const user = await mountWith(snapshot);
+    const dialog = await screen.findByRole('dialog', { name: 'Welcome to LocalSR' });
+
+    const expectedOrder = [
+      within(dialog).getByRole('radio', { name: 'Dark' }),
+      within(dialog).getByRole('radio', { name: 'Light' }),
+      within(dialog).getByRole('radio', { name: 'Match System' }),
+      within(dialog).getByRole('switch', { name: 'Colour-blind friendly colours' }),
+      within(dialog).getByRole('switch', { name: 'Check for updates automatically' }),
+      within(dialog).getByRole('switch', {
+        name: 'Send an anonymous count with each update check',
+      }),
+      within(dialog).getByRole('switch', { name: 'Offer to report crashes' }),
+      within(dialog).getByRole('button', { name: 'Continue' }),
+    ];
+
+    for (const control of expectedOrder) {
+      await user.tab();
+      expect(document.activeElement).toBe(control);
+    }
+    await user.tab();
+    expect(document.activeElement).toBe(expectedOrder[0]);
+
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('dialog', { name: 'Welcome to LocalSR' })).toBeTruthy();
+  });
+
   it('does not show after a choice', async () => {
     await mountWith(readySnapshot());
     expect(screen.queryByRole('dialog', { name: 'Welcome to LocalSR' })).toBeNull();

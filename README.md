@@ -111,7 +111,7 @@ details are in [platform support](docs/platforms.md).
 
 ## What leaves your computer
 
-On a fresh install, LocalSR asks whether to check for updates automatically and whether to send an anonymous count. The update check reads a feed on GitHub Pages. If enabled, the count sends the app version, platform and channel to the developer's server without an ID. You can change both choices later in the LocalSR or Help menu and the Software Update dialog.
+On a fresh install, LocalSR shows a short setup screen for appearance (Dark, Light or Match System, plus colour-blind friendly colours), automatic update checks, the optional anonymous update count, and opt-in crash reports. Nothing goes over the network until you choose Continue. The update check reads a feed on GitHub Pages. If enabled, the count sends the app version, platform and channel to the developer's server without an ID. You can change any of these later in the View, LocalSR and Help menus, the Software Update dialog, or Performance & Diagnostics.
 
 Crash reports are off by default. When enabled, they are stored only on your computer and are never sent automatically; you can review a report and choose to open a GitHub issue. A report contains app and system versions, the device kind and running task and model, and redacted error details. Native host crashes such as segmentation faults may not be captured.
 

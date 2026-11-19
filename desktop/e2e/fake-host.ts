@@ -196,6 +196,13 @@ function hostScript(scenario: Scenario): void {
       });
     }
     Object.assign(s.settings, { task: scenario.task ?? '' }, scenario.settings ?? {});
+    if (scenario.privacyPending) s.settings.privacy_choice_made = false;
+    try {
+      const savedSetup = sessionStorage.getItem('localsr.fakeHost.setupSettings');
+      if (savedSetup) Object.assign(s.settings, JSON.parse(savedSetup));
+    } catch {
+      /* sessionStorage unavailable */
+    }
     s.recipes = structuredClone(scenario.recipes ?? []);
     s.runtime.worker = scenario.worker ?? 'unavailable';
     if (scenario.running) {
@@ -376,7 +383,6 @@ function hostScript(scenario: Scenario): void {
   let crashReports = structuredClone(scenario.crashReports ?? []);
   async function handle(command: string, args: Json): Promise<unknown> {
     snapshot ??= await build();
-    if (scenario.privacyPending && !snapshot.settings.privacy_choice_made_test_saved) snapshot.settings.privacy_choice_made = false;
     switch (command) {
       case 'bootstrap':
       case 'get_snapshot':
@@ -397,10 +403,28 @@ function hostScript(scenario: Scenario): void {
         emit('state-changed', null);
         return null;
       case 'set_privacy_choice':
+        snapshot.settings.appearance = args.appearance;
+        snapshot.settings.colour_blind_palette = args.colourBlindPalette;
         snapshot.settings.check_updates_at_launch = args.checkAtLaunch;
         snapshot.settings.anonymous_update_count = args.anonymousCount;
+        snapshot.settings.crash_reports = args.crashReports;
         snapshot.settings.privacy_choice_made = true;
-        snapshot.settings.privacy_choice_made_test_saved = true;
+        if (!args.crashReports) crashReports = [];
+        try {
+          sessionStorage.setItem(
+            'localsr.fakeHost.setupSettings',
+            JSON.stringify({
+              appearance: args.appearance,
+              colour_blind_palette: args.colourBlindPalette,
+              check_updates_at_launch: args.checkAtLaunch,
+              anonymous_update_count: args.anonymousCount,
+              crash_reports: args.crashReports,
+              privacy_choice_made: true,
+            }),
+          );
+        } catch {
+          /* sessionStorage unavailable */
+        }
         return null;
       case 'save_settings':
         snapshot.settings = structuredClone(args.settings);
