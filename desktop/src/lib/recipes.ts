@@ -83,6 +83,7 @@ export function recipeMatches(
     (recipe.task !== 'video' ||
       ((current.video_interpolation || 'off') === (recipe.video_interpolation || 'off') &&
         (current.video_interpolation_order || 'after_upscale') ===
-          (recipe.video_interpolation_order || 'after_upscale')))
+          (recipe.video_interpolation_order || 'after_upscale') &&
+        Boolean(current.video_clean_audio) === Boolean(recipe.video_clean_audio)))
   );
 }

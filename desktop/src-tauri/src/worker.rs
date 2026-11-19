@@ -1393,6 +1393,9 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 &preview,
                 &string(data, "hdr_format"),
                 &string(data, "audio_warning"),
+                data.get("has_audio")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
             )?;
             if lock(&state.database)?.get_media_by_path(&path)?.is_none() && !preview.is_empty() {
                 let mut runtime = lock(&state.runtime)?;
@@ -1591,11 +1594,28 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                     "ETA: measuring first clip…".into()
                 };
                 runtime.status_detail = format!("{steps}{frames}{eta}");
-                if string(data, "stage") == "saving" {
-                    runtime.status_detail = "Finalizing video timing and audio…".into();
+                if string(data, "stage") == "audio_denoise" {
+                    let done = integer(data, "completed");
+                    let total = integer(data, "total");
+                    if total > 0 {
+                        runtime.progress =
+                            ((done as f64) / (total as f64) * 100.0).clamp(0.0, 100.0);
+                    }
+                    let chunks = if total > 0 {
+                        format!("Chunk {done} of {total}")
+                    } else {
+                        "Cleaning speech audio".into()
+                    };
+                    let suffix = eta_suffix(runtime.estimated_remaining_seconds);
+                    runtime.status_detail = format!("{chunks}{suffix}");
+                    runtime.throughput_unit = String::new();
+                } else {
+                    if string(data, "stage") == "saving" {
+                        runtime.status_detail = "Finalizing video timing and audio…".into();
+                    }
+                    runtime.throughput_unit = "frames/s".into();
                 }
                 runtime.elapsed_seconds = seconds(data, "elapsed_seconds");
-                runtime.throughput_unit = "frames/s".into();
             }
         }
         "video_frame_started" => {
@@ -2262,6 +2282,8 @@ fn video_stage_title(stage: &str) -> &'static str {
         "verifying_model" => "Checking model files",
         "external_decode" => "Converting the source with your FFmpeg",
         "external_encode" => "Encoding with your FFmpeg",
+        "loading_audio_denoise" => "Loading audio model",
+        "audio_denoise" => "Audio cleanup",
         "loading_model" => "Loading video model",
         "loading_interpolation" => "Loading frame interpolation",
         "reading_frames" => "Reading video frames",

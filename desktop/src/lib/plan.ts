@@ -130,12 +130,20 @@ export const FIT_LABELS: Record<Fit, string> = {
 };
 
 export interface PlanStage {
-  kind: 'deblock' | 'restore' | 'upscale' | 'face_restore' | 'video' | 'edit' | 'interpolate';
+  kind:
+    | 'deblock'
+    | 'restore'
+    | 'upscale'
+    | 'face_restore'
+    | 'video'
+    | 'edit'
+    | 'interpolate'
+    | 'audio_denoise';
   /**
    * What the row's Change opens: the fix before the upscaler, the main model, or Faces.
-   * Frame interpolation is set under Advanced and has no Change.
+   * Frame interpolation and audio cleanup are set directly and have no Change.
    */
-  role: 'fix' | 'primary' | 'face' | 'interpolate';
+  role: 'fix' | 'primary' | 'face' | 'interpolate' | 'audio_denoise';
   /** The problem this row's model fixes, when it fixes one. */
   fix?: Exclude<FixKind, 'faces'>;
   /** The model is the user's remembered choice for that problem and quality. */
@@ -146,6 +154,7 @@ export interface PlanStage {
   model?: CatalogModel;
   videoModel?: CatalogVideoModel;
   interpolationModel?: CatalogVideoModel;
+  audioModel?: CatalogVideoModel;
   editModel?: EditModel;
   custom?: string;
   installed: boolean;
@@ -170,6 +179,7 @@ export function resolvePlan(
     usingTemporalVideo: boolean;
     selectedVideoModel?: CatalogVideoModel;
     editModel?: EditModel;
+    hasAudio?: boolean;
   },
 ): PlanStage[] {
   const stages: PlanStage[] = [];
@@ -314,6 +324,26 @@ export function resolvePlan(
     if (settings.video_interpolation_order === 'before_upscale') stages.unshift(stage);
     else stages.push(stage);
   }
+
+  // Audio cleanup runs before video processing when the source has an audio track.
+  const audioModel = snapshot.catalog.audio_models?.[0];
+  if (
+    settings.task === 'video' &&
+    settings.video_clean_audio &&
+    options.hasAudio !== false &&
+    audioModel
+  ) {
+    stages.unshift({
+      kind: 'audio_denoise',
+      role: 'audio_denoise',
+      label: 'Clean up audio',
+      audioModel,
+      installed: audioModel.installed,
+      canDownload: !audioModel.installed && audioModel.automated_download_allowed,
+      needsFile: !audioModel.installed && !audioModel.automated_download_allowed,
+      sizeBytes: audioModel.installed ? 0 : audioModel.total_size_bytes,
+    });
+  }
   return stages;
 }
 
@@ -346,8 +376,13 @@ export function frameRateChange(target: Exclude<InterpolationTarget, 'off'>, fps
 export function pendingDownloads(stages: PlanStage[]): { stages: PlanStage[]; bytes: number } {
   const seen = new Set<string>();
   const pending = stages.filter((stage) => {
-    const id = (stage.model ?? stage.videoModel ?? stage.interpolationModel ?? stage.editModel)
-      ?.model_id;
+    const id = (
+      stage.model ??
+      stage.videoModel ??
+      stage.interpolationModel ??
+      stage.audioModel ??
+      stage.editModel
+    )?.model_id;
     if (!stage.canDownload || !id || seen.has(id)) return false;
     seen.add(id);
     return true;

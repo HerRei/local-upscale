@@ -15,6 +15,9 @@ pub struct CatalogManifest {
     // the bundle layout of video models but are never offered as video engines.
     #[serde(default)]
     pub interpolation_models: Vec<CatalogVideoModel>,
+    // Optional speech audio denoising stage (DeepFilterNet3 ONNX bundle).
+    #[serde(default)]
+    pub audio_models: Vec<CatalogVideoModel>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -126,6 +129,8 @@ pub struct MediaItem {
     pub hdr_format: String,
     #[serde(default)]
     pub audio_warning: String,
+    #[serde(default = "default_true")]
+    pub has_audio: bool,
     pub error: String,
     pub selected: bool,
 }
@@ -282,6 +287,8 @@ pub struct Recipe {
     pub video_interpolation: String,
     #[serde(default)]
     pub video_interpolation_order: String,
+    #[serde(default)]
+    pub video_clean_audio: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -352,6 +359,8 @@ pub struct UiSettings {
     pub video_interpolation: String,
     #[serde(default = "default_interpolation_order")]
     pub video_interpolation_order: String,
+    #[serde(default)]
+    pub video_clean_audio: bool,
     // Apple silicon: run supported models through Core ML on the Neural Engine.
     #[serde(default = "default_true")]
     pub neural_engine: bool,
@@ -481,6 +490,7 @@ impl Default for UiSettings {
             video_crf: 18,
             video_interpolation: default_interpolation(),
             video_interpolation_order: default_interpolation_order(),
+            video_clean_audio: false,
             neural_engine: true,
             anonymous_update_count: true,
             completion_sound: false,
@@ -845,6 +855,8 @@ pub struct StartBatchInput {
     pub video_interpolation: String,
     #[serde(default = "default_interpolation_order")]
     pub video_interpolation_order: String,
+    #[serde(default)]
+    pub video_clean_audio: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

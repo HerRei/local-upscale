@@ -11,6 +11,8 @@ export interface Scenario {
   /** Number of photos in the queue; the first one is selected. */
   photos?: number;
   video?: boolean;
+  /** Whether the fake video reports an audio track (defaults to true). */
+  videoHasAudio?: boolean;
   /** Completed 15/60 fps outputs with tiny real playback sources. */
   videoCompare?: boolean;
   /** Populated by installFakeHost only for video Compare. */
@@ -268,7 +270,13 @@ function hostScript(scenario: Scenario): void {
     }
     s.capabilities.system_ram_total = 16 * GIB;
     for (const id of scenario.installed ?? []) {
-      const model = [...s.catalog.models, ...s.edit.models].find((m: Json) => m.model_id === id);
+      const model = [
+        ...s.catalog.models,
+        ...s.catalog.video_models,
+        ...s.catalog.interpolation_models,
+        ...(s.catalog.audio_models ?? []),
+        ...s.edit.models,
+      ].find((m: Json) => m.model_id === id);
       if (!model) throw new Error(`Fixture model ${id} is not in the catalog`);
       model.installed = true;
     }
@@ -286,6 +294,7 @@ function hostScript(scenario: Scenario): void {
         height: 1080,
         fps: 24,
         frame_count: 288,
+        has_audio: scenario.videoHasAudio ?? true,
         duration_seconds: scenario.videoCompare ? 4 : 12,
         ...(scenario.videoCompare ? { selected: false, width: 32, height: 18, fps: 15 } : {}),
       });

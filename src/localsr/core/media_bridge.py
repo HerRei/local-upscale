@@ -232,6 +232,7 @@ def decodable_source(
     progress: Callable[[int], None] | None = None,
     output_container: str = "mkv",
     on_convert: Callable[[], None] | None = None,
+    decode_audio: bool = False,
 ) -> Iterator[tuple[str, str]]:
     """Yield ``(frame_source, audio_source)`` paths the bundled runtime can read.
 
@@ -239,7 +240,7 @@ def decodable_source(
     the user's FFmpeg write a lossless intermediate that is deleted afterwards.
     """
     bridge = as_bridge(ffmpeg)
-    plan = plan_source(path, output_container)
+    plan = plan_source(path, output_container, decode_audio=decode_audio)
     if plan.video_decodable and not plan.audio_needs_conversion:
         yield path, path
         return
@@ -251,6 +252,11 @@ def decodable_source(
     if provider is None:
         if not plan.video_decodable:
             raise UndecodableVideoError(undecodable_message(bridge))
+        if decode_audio and plan.audio_needs_conversion:
+            raise ExternalFFmpegError(
+                "This video's audio uses a format LocalSR does not include, so Clean up audio "
+                "needs macOS codecs or an installed FFmpeg. " + EXTERNAL_FFMPEG_HINT
+            )
         # Keep the enhanced video; the remux step reports the omitted track.
         yield path, path
         return
@@ -263,6 +269,7 @@ def decodable_source(
             progress=progress,
             output_container=output_container,
             on_convert=on_convert,
+            decode_audio=decode_audio,
         ) as sources:
             yield sources
         return
@@ -323,6 +330,20 @@ def external_timing(ffmpeg: MediaBridge | Provider, path: str) -> tuple[float, f
     return provider.timing(path)
 
 
+def external_has_audio(ffmpeg: MediaBridge | Provider, path: str) -> bool:
+    """Whether a file LocalSR's runtime cannot read has an audio track."""
+    bridge = as_bridge(ffmpeg)
+    provider = bridge.source_provider(path) if bridge is not None else None
+    if provider is None:
+        return True
+    if isinstance(provider, ExternalFFmpeg):
+        return user_ffmpeg.external_has_audio(provider, path)
+    try:
+        return bool(provider.probe(path).get("audio"))
+    except SystemCodecsError:
+        return True
+
+
 def transcode_output(
     ffmpeg: MediaBridge | Provider,
     source: Path,
@@ -379,6 +400,7 @@ __all__ = [
     "Provider",
     "as_bridge",
     "decodable_source",
+    "external_has_audio",
     "external_timing",
     "first_frame_source",
     "implicit_user_ffmpeg",

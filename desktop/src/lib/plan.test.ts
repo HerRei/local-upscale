@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { demoSnapshot } from './demo';
-import type { Recipe } from './types';
+import type { Recipe, UiSettings } from './types';
 import { applyWorkerEnvelope } from './workerEvents';
 import { chooseFixModel } from './fixStages';
 import {
@@ -274,6 +274,41 @@ describe('model library resolution', () => {
     expect(frameRateChange('fps60', 23.976)).toBe('23.976 → 60 fps');
     expect(frameRateChange('fps60', 59.94)).toBe('Already 59.94 fps · kept as it is');
     expect(frameRateChange('fps60', 0)).toBe('');
+  });
+
+  it('adds Clean up audio with its pending download only for videos with audio', () => {
+    const snapshot = demoSnapshot();
+    const audioModel = snapshot.catalog.audio_models?.[0];
+    expect(audioModel?.model_id).toBe('deepfilternet3');
+    if (audioModel) audioModel.installed = false;
+    const upscaler = snapshot.catalog.models.find((m) => m.model_id === 'span_photo_x4');
+    if (upscaler) upscaler.installed = true;
+    const settings: UiSettings = {
+      ...snapshot.settings,
+      task: 'video',
+      selected_model_id: 'span_photo_x4',
+      selected_video_model_id: 'frame_by_frame',
+      video_clean_audio: true,
+    };
+    const options = { faceEnabled: false, usingTemporalVideo: false, hasAudio: true };
+
+    const plan = resolvePlan(snapshot, settings, options);
+    expect(plan.map((stage) => stage.kind)).toEqual(['audio_denoise', 'upscale']);
+    const audioStage = plan[0];
+    expect(audioStage.audioModel?.model_id).toBe('deepfilternet3');
+    expect(audioStage.canDownload).toBe(true);
+    expect(audioStage.sizeBytes).toBe(7_983_136);
+    expect(pendingDownloads(plan).stages).toEqual([audioStage]);
+
+    expect(
+      resolvePlan(snapshot, settings, { ...options, hasAudio: false }).map((s) => s.kind),
+    ).toEqual(['upscale']);
+    expect(
+      resolvePlan(snapshot, { ...settings, video_clean_audio: false }, options).map((s) => s.kind),
+    ).toEqual(['upscale']);
+    expect(
+      resolvePlan(snapshot, { ...settings, task: 'upscale' }, options).map((s) => s.kind),
+    ).toEqual(['upscale']);
   });
 
   it('judges hardware fit against the device memory', () => {

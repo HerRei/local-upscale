@@ -70,6 +70,11 @@ fn video_stages_have_titles_including_frame_interpolation() {
         video_stage_title("loading_interpolation"),
         "Loading frame interpolation"
     );
+    assert_eq!(
+        video_stage_title("loading_audio_denoise"),
+        "Loading audio model"
+    );
+    assert_eq!(video_stage_title("audio_denoise"), "Audio cleanup");
     assert_eq!(video_stage_title("saving"), "Saving video");
     assert_eq!(video_stage_title("something_new"), "Processing video");
 }

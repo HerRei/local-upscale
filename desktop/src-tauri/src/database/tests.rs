@@ -422,6 +422,7 @@ fn ui_metadata_leaves_the_timing_profile_alone() {
             "",
             "",
             "",
+            true,
         )
         .unwrap();
     }
@@ -455,8 +456,20 @@ fn trials_estimate_only_measured_matching_requests() {
     let db = Database::open(&directory.path().join("queue.db")).unwrap();
     db.insert_media("m", "/tmp/a.png", "a.png", "image")
         .unwrap();
-    db.update_media_probe("/tmp/a.png", "image", 512, 512, 1, 0.0, 0.0, "", "", "")
-        .unwrap();
+    db.update_media_probe(
+        "/tmp/a.png",
+        "image",
+        512,
+        512,
+        1,
+        0.0,
+        0.0,
+        "",
+        "",
+        "",
+        true,
+    )
+    .unwrap();
     let request = r#"{"type":"job_request","data":{"model_path":"model.pth","device":"cpu","tile_size":256}}"#;
     let media = db.get_media("m").unwrap().unwrap();
     assert!(db
@@ -652,6 +665,7 @@ fn hdr_migration_preserves_old_queue_and_retry_clears_failure() {
             "data:image/jpeg;base64,test",
             "HLG",
             "Standard audio will be kept.",
+            false,
         )
         .unwrap();
     drop(migrated);
@@ -659,6 +673,7 @@ fn hdr_migration_preserves_old_queue_and_retry_clears_failure() {
     let media = reopened.list_media().unwrap().remove(0);
     assert_eq!(media.hdr_format, "HLG");
     assert_eq!(media.audio_warning, "Standard audio will be kept.");
+    assert!(!media.has_audio);
     assert_eq!(media.probe_status, "ready");
     assert_eq!((media.width, media.height), (2160, 3840));
     assert_eq!(
@@ -762,8 +777,20 @@ fn queued_jobs_carry_the_typical_speed_of_their_comparable_runs() {
     let db = Database::open(&directory.path().join("queue.db")).unwrap();
     db.insert_media("m", "/tmp/a.png", "a.png", "image")
         .unwrap();
-    db.update_media_probe("/tmp/a.png", "image", 512, 512, 1, 0.0, 0.0, "", "", "")
-        .unwrap();
+    db.update_media_probe(
+        "/tmp/a.png",
+        "image",
+        512,
+        512,
+        1,
+        0.0,
+        0.0,
+        "",
+        "",
+        "",
+        true,
+    )
+    .unwrap();
     let request = r#"{"type":"job_request","data":{"model_path":"model.pth","device":"cpu","tile_size":256}}"#;
     // The first run loaded the model (340 s for 4 tiles), the others are warm.
     for (id, seconds) in [("first", 340.0), ("second", 4.0), ("third", 4.4)] {

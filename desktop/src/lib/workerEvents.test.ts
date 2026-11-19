@@ -753,3 +753,32 @@ it('tracks multiple active and queued model downloads independently', () => {
   expect(snapshot.runtime.download_model_id).toBe('');
   expect(snapshot.runtime.download_progress).toBe(0);
 });
+
+it('tracks the audio cleanup phase title, chunk progress and ETA', () => {
+  let snapshot = demoSnapshot();
+  snapshot.runtime.active_job_id = 'vid-audio';
+  snapshot = applyWorkerEnvelope(snapshot, {
+    type: 'video_stage_progress',
+    data: { job_id: 'vid-audio', stage: 'loading_audio_denoise', total_frames: 0 },
+  });
+  expect(snapshot.runtime.status_title).toBe('Loading audio model');
+
+  snapshot = applyWorkerEnvelope(snapshot, {
+    type: 'video_stage_progress',
+    data: {
+      job_id: 'vid-audio',
+      stage: 'audio_denoise',
+      completed: 2,
+      total: 4,
+      frames_processed: 0,
+      total_frames: 0,
+      elapsed_seconds: 1.5,
+      estimated_remaining_seconds: 1.5,
+    },
+  });
+  expect(snapshot.runtime.status_title).toBe('Audio cleanup');
+  expect(snapshot.runtime.progress).toBe(50);
+  expect(snapshot.runtime.status_detail).toContain('Chunk 2 of 4');
+  expect(snapshot.runtime.status_detail).toContain('ETA');
+  expect(snapshot.runtime.throughput_unit).toBe('');
+});

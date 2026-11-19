@@ -20,6 +20,7 @@ import numpy as np
 import torch
 from PIL import Image
 
+from .audio_denoise import cleaned_audio_source
 from .disk_space import require_video_room
 from .eta import RemainingTime
 from .face_compositing import blend_tile_outputs, classify_tile
@@ -202,6 +203,10 @@ class VideoJobConfig:
     # "fps60" or "fps120", run before or after the upscale.
     interpolation: str = "off"
     interpolation_order: str = "after_upscale"
+    # Optional speech audio cleanup via DeepFilterNet3 ONNX.
+    audio_denoise: bool = False
+    audio_denoise_bundle_dir: str | None = None
+    audio_denoiser: object | None = None
     # The worker resolves the initial codec before inference; retain retry intent.
     automatic_codec: bool = False
     preprocess_stages: tuple[VideoFixStage, ...] = ()
@@ -229,6 +234,7 @@ def run_video_job(
     warning_callback: Callable[[str], None] | None = None,
     source_frame_cb: Callable[[int, int, np.ndarray], None] | None = None,
     stage_cb: Callable[[str], None] | None = None,
+    audio_progress_cb: Callable[[int, int, float, float | None], None] | None = None,
     synthesizer=None,
 ) -> VideoJobResult:
     """Run a video upscale job end-to-end.
@@ -264,6 +270,7 @@ def run_video_job(
         cancel_event=cancel_event,
         output_container=config.container,
         on_convert=(lambda: stage_cb("external_decode")) if stage_cb else None,
+        decode_audio=bool(config.audio_denoise and config.fps_override is None),
     ) as (frame_source, audio_source):
         return _run_video_job(
             replace(config, video_path=frame_source, audio_path=audio_source),
@@ -278,6 +285,7 @@ def run_video_job(
             warning_callback=warning_callback,
             source_frame_cb=source_frame_cb,
             stage_cb=stage_cb,
+            audio_progress_cb=audio_progress_cb,
             synthesizer=synthesizer,
         )
 
@@ -296,6 +304,7 @@ def _run_video_job(
     warning_callback,
     source_frame_cb,
     stage_cb,
+    audio_progress_cb=None,
     synthesizer=None,
 ) -> VideoJobResult:
     # Python 3.11's Windows monotonic clock can tick more slowly than a tile.
@@ -380,7 +389,94 @@ def _run_video_job(
         master=config.video_codec in EXTERNAL_OUTPUT_CODECS,
     )
 
-    # Load the models once and reuse them for every frame.
+    rate_unchanged = config.fps_override is None
+    raw_audio_source = config.audio_path or config.video_path
+    with cleaned_audio_source(
+        raw_audio_source,
+        enabled=bool(config.audio_denoise and rate_unchanged and probe.has_audio),
+        bundle_dir=config.audio_denoise_bundle_dir,
+        denoiser=config.audio_denoiser,  # type: ignore[arg-type]
+        temporary_directory=config.temporary_directory,
+        output_video_path=config.output_video_path,
+        cancel_event=cancel_event,
+        stage_cb=stage_cb,
+        progress_cb=audio_progress_cb,
+        started_at=job_started_at,
+    ) as (effective_audio_source, reencode_audio):
+        return _run_video_frames(
+            config,
+            engine,
+            cancel_event,
+            probe=probe,
+            preserve_hdr=preserve_hdr,
+            transfer=transfer,
+            precision_str=precision_str,
+            fps=fps,
+            interpolation=interpolation,
+            before_upscale=before_upscale,
+            total_frames=total_frames,
+            remaining_time=remaining_time,
+            model_info=model_info,
+            native_scale=native_scale,
+            output_scale=output_scale,
+            output_width=output_width,
+            output_height=output_height,
+            job_started_at=job_started_at,
+            inference_started_at=inference_started_at,
+            effective_audio_source=effective_audio_source,
+            raw_audio_source=raw_audio_source,
+            reencode_audio=reencode_audio,
+            rate_unchanged=rate_unchanged,
+            frame_started_cb=frame_started_cb,
+            frame_completed_cb=frame_completed_cb,
+            enhanced_frame_cb=enhanced_frame_cb,
+            progress_cb=progress_cb,
+            tile_callback=tile_callback,
+            tile_progress_cb=tile_progress_cb,
+            warning_callback=warning_callback,
+            source_frame_cb=source_frame_cb,
+            stage_cb=stage_cb,
+            synthesizer=synthesizer,
+        )
+
+
+def _run_video_frames(
+    config: VideoJobConfig,
+    engine: InferenceEngine,
+    cancel_event: threading.Event,
+    *,
+    probe,
+    preserve_hdr: bool,
+    transfer: int,
+    precision_str: str,
+    fps: float,
+    interpolation,
+    before_upscale: bool,
+    total_frames: int,
+    remaining_time,
+    model_info,
+    native_scale: int,
+    output_scale: int,
+    output_width: int,
+    output_height: int,
+    job_started_at: float,
+    inference_started_at: float | None,
+    effective_audio_source: str,
+    raw_audio_source: str,
+    reencode_audio: bool,
+    rate_unchanged: bool,
+    frame_started_cb,
+    frame_completed_cb,
+    enhanced_frame_cb,
+    progress_cb,
+    tile_callback,
+    tile_progress_cb,
+    warning_callback,
+    source_frame_cb,
+    stage_cb,
+    synthesizer=None,
+) -> VideoJobResult:
+    # Load the fix models once and reuse them for every frame.
     for stage in config.preprocess_stages:
         engine.load_model(
             stage.model_path,
@@ -388,6 +484,7 @@ def _run_video_job(
             precision_str,
             _SafeModelInfo(stage.model_info, config.safe_memory),
         )
+    # Load the model once and reuse it for every frame.
     engine.load_model(
         config.model_path,
         config.device_str,
@@ -706,7 +803,6 @@ def _run_video_job(
     # subtitle packets are trimmed and shifted onto the enhanced timeline.
     # A deliberate frame-rate override changes video speed, so passthrough
     # streams are omitted rather than silently producing drift.
-    rate_unchanged = config.fps_override is None
     if not rate_unchanged and warning_callback:
         warning_callback(
             "FPS override changes playback speed; source audio and subtitles are omitted."
@@ -722,7 +818,9 @@ def _run_video_job(
         crf=config.crf,
         width=output_width,
         height=output_height,
-        audio_source=(config.audio_path or config.video_path) if rate_unchanged else None,
+        audio_source=effective_audio_source if rate_unchanged else None,
+        subtitle_source=raw_audio_source if rate_unchanged and reencode_audio else None,
+        reencode_audio=reencode_audio,
         preserve_timing=rate_unchanged,
         cancel_event=cancel_event,
         warning_callback=warning_callback,

@@ -813,6 +813,16 @@ pub fn start_jobs(
             "This worker does not support frame interpolation. Update LocalSR or turn interpolation off.".into(),
         ));
     }
+    if input.task == "video"
+        && input.video_clean_audio
+        && !lock(&state.engine)?
+            .as_ref()
+            .is_some_and(|engine| engine.features.iter().any(|f| f == "video_audio_denoise"))
+    {
+        return Err(AppError::Validation(
+            "This worker does not support audio cleanup. Update LocalSR or turn Clean up audio off.".into(),
+        ));
+    }
 
     // Do not hash the complete model library on the UI command path. A
     // SeedVR2 installation alone can exceed 6 GB; refreshing every catalog
@@ -2053,7 +2063,8 @@ pub fn remove_model(
             }
             state.refresh_catalog()?;
         }
-        // Editing bundles live beside the catalog; shared components survive.
+        // Editing and catalog bundles live beside the single-file models; shared files survive.
+        None if remove_catalog_bundle(&state, &model_id)? => {}
         None if !crate::editing::remove_bundle(&state.paths, &model_id)? => {
             return Err(AppError::Validation("unknown model".into()));
         }
@@ -2813,6 +2824,7 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
         allow_unsafe_pickle_model: input.allow_unsafe_pickle_model,
         video_interpolation: input.video_interpolation.clone(),
         video_interpolation_order: input.video_interpolation_order.clone(),
+        video_clean_audio: input.video_clean_audio,
         ..UiSettings::default()
     };
     validate_settings(&settings)?;
@@ -2856,7 +2868,8 @@ enum ModelSelection {
         face_path: Option<String>,
         face_model_id: String,
         native_scale: u32,
-        interpolation: Option<ResolvedInterpolation>,
+        interpolation: Option<ResolvedBundle>,
+        audio_denoise: Option<ResolvedBundle>,
     },
     Temporal {
         model_id: String,
@@ -2864,12 +2877,13 @@ enum ModelSelection {
         bundle_dir: String,
         temporal_window: u32,
         temporal_overlap: u32,
+        audio_denoise: Option<ResolvedBundle>,
     },
 }
 
-/// The downloaded frame-interpolation bundle a video job uses.
+/// A downloaded multi-file bundle used by an optional video pipeline stage.
 #[derive(Clone)]
-struct ResolvedInterpolation {
+struct ResolvedBundle {
     model_id: String,
     bundle_dir: String,
 }
@@ -2917,6 +2931,7 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
             bundle_dir: model.installed_path.clone().unwrap_or_default(),
             temporal_window: model.temporal_window,
             temporal_overlap: model.temporal_overlap,
+            audio_denoise: resolve_audio_denoise(&catalog, input)?,
         });
     }
 
@@ -3051,13 +3066,14 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
             .map(|model| model.native_scale)
             .unwrap_or(input.output_scale),
         interpolation: resolve_interpolation(&catalog, input)?,
+        audio_denoise: resolve_audio_denoise(&catalog, input)?,
     })
 }
 
 fn resolve_interpolation(
     catalog: &crate::types::CatalogManifest,
     input: &StartBatchInput,
-) -> AppResult<Option<ResolvedInterpolation>> {
+) -> AppResult<Option<ResolvedBundle>> {
     if input.task != "video" || input.video_interpolation == "off" {
         return Ok(None);
     }
@@ -3069,7 +3085,29 @@ fn resolve_interpolation(
             "download the frame interpolation model first".into(),
         ));
     }
-    Ok(Some(ResolvedInterpolation {
+    Ok(Some(ResolvedBundle {
+        model_id: model.model_id.clone(),
+        bundle_dir: model.installed_path.clone().unwrap_or_default(),
+    }))
+}
+
+fn resolve_audio_denoise(
+    catalog: &crate::types::CatalogManifest,
+    input: &StartBatchInput,
+) -> AppResult<Option<ResolvedBundle>> {
+    if input.task != "video" || !input.video_clean_audio {
+        return Ok(None);
+    }
+    let model = catalog
+        .audio_models
+        .first()
+        .ok_or_else(|| AppError::Validation("this build has no audio cleanup model".into()))?;
+    if !model.installed {
+        return Err(AppError::Validation(
+            "download the audio cleanup model first".into(),
+        ));
+    }
+    Ok(Some(ResolvedBundle {
         model_id: model.model_id.clone(),
         bundle_dir: model.installed_path.clone().unwrap_or_default(),
     }))
@@ -3152,6 +3190,8 @@ fn build_job_message(
             face_model_id,
             native_scale,
             interpolation,
+            audio_denoise,
+            ..
         } => {
             if interpolation.is_some()
                 && input.video_hdr_mode == "preserve"
@@ -3168,7 +3208,7 @@ fn build_job_message(
             } else {
                 input.output_scale.min(*native_scale).max(1)
             };
-            Ok(json!({
+            let message = json!({
                 "type": "video_job_request",
                 "data": {
                     "job_id": job_id,
@@ -3217,7 +3257,8 @@ fn build_job_message(
                     "interpolation_model_id": interpolation.as_ref().map(|resolved| resolved.model_id.clone()),
                     "interpolation_bundle_dir": interpolation.as_ref().map(|resolved| resolved.bundle_dir.clone())
                 }
-            }))
+            });
+            Ok(with_audio_denoise(message, audio_denoise.as_ref(), media))
         }
         ModelSelection::Temporal {
             model_id,
@@ -3225,6 +3266,7 @@ fn build_job_message(
             bundle_dir,
             temporal_window,
             temporal_overlap,
+            audio_denoise,
         } => {
             let shortest = u64::from(media.width.min(media.height));
             let target = if input.video_target_resolution > 0 {
@@ -3234,7 +3276,7 @@ fn build_job_message(
                     .saturating_mul(u64::from(input.output_scale))
                     .min(u64::from(u32::MAX))
             };
-            Ok(json!({
+            let message = json!({
                 "type": "video_job_request",
                 "data": {
                     "job_id": job_id,
@@ -3273,9 +3315,33 @@ fn build_job_message(
                     "preview_max_dimension": 320,
                     "interpolation": "off"
                 }
-            }))
+            });
+            Ok(with_audio_denoise(message, audio_denoise.as_ref(), media))
         }
     }
+}
+
+fn with_audio_denoise(
+    mut message: serde_json::Value,
+    audio_denoise: Option<&ResolvedBundle>,
+    media: &crate::types::MediaItem,
+) -> serde_json::Value {
+    let active = audio_denoise.filter(|_| media.has_audio);
+    if let Some(data) = message
+        .get_mut("data")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        data.insert("audio_denoise".into(), json!(active.is_some()));
+        data.insert(
+            "audio_denoise_model_id".into(),
+            json!(active.map(|resolved| resolved.model_id.as_str())),
+        );
+        data.insert(
+            "audio_denoise_bundle_dir".into(),
+            json!(active.map(|resolved| resolved.bundle_dir.as_str())),
+        );
+    }
+    message
 }
 
 fn image_pipeline_stages(
@@ -3643,6 +3709,63 @@ fn authorized_result(state: &AppState, requested: &str) -> AppResult<PathBuf> {
     Ok(requested)
 }
 
+fn remove_catalog_bundle(state: &AppState, model_id: &str) -> AppResult<bool> {
+    let target = {
+        let catalog = lock(&state.catalog)?;
+        let bundles: Vec<&crate::types::CatalogVideoModel> = catalog
+            .video_models
+            .iter()
+            .chain(&catalog.interpolation_models)
+            .chain(&catalog.audio_models)
+            .collect();
+        let Some(model) = bundles.iter().find(|item| item.model_id == model_id) else {
+            return Ok(false);
+        };
+        if !model.installed {
+            return Err(AppError::Validation("the model is not installed".into()));
+        }
+        crate::catalog::safe_model_filename(&model.family)?;
+        let shared: Vec<String> = bundles
+            .iter()
+            .filter(|other| {
+                other.installed && other.family == model.family && other.model_id != model.model_id
+            })
+            .flat_map(|other| other.files.iter().map(|file| file.filename.clone()))
+            .collect();
+        let directory = state.paths.model_root.join(&model.family);
+        let files: Vec<PathBuf> = model
+            .files
+            .iter()
+            .filter(|file| !shared.contains(&file.filename))
+            .filter_map(|file| {
+                crate::catalog::safe_model_filename(&file.filename)
+                    .ok()
+                    .map(|name| directory.join(name))
+            })
+            .collect();
+        (directory, files)
+    };
+    let (directory, files) = target;
+    let database = lock(&state.database)?;
+    if database.unfinished_job_needs_model(&directory)?
+        || files
+            .iter()
+            .any(|path| database.unfinished_job_needs_model(path).unwrap_or(false))
+    {
+        return Err(AppError::Validation(
+            "a queued job still needs this model; finish or cancel it first".into(),
+        ));
+    }
+    drop(database);
+    for path in files {
+        if path.is_file() {
+            fs::remove_file(&path)?;
+        }
+    }
+    state.refresh_catalog()?;
+    Ok(true)
+}
+
 #[tauri::command]
 pub fn open_model_license(
     state: State<'_, Arc<AppState>>,
@@ -3650,15 +3773,27 @@ pub fn open_model_license(
     source: Option<bool>,
 ) -> AppResult<()> {
     let catalog = lock(&state.catalog)?;
-    let model = catalog
+    let (license_url, source_url) = if let Some(model) = catalog
         .models
         .iter()
         .find(|model| model.model_id == model_id)
-        .ok_or_else(|| AppError::Validation("Unknown model".into()))?;
-    let url = if source.unwrap_or(false) || model.license_url.is_empty() {
-        &model.source_url
+    {
+        (model.license_url.as_str(), model.source_url.as_str())
+    } else if let Some(model) = catalog
+        .video_models
+        .iter()
+        .chain(&catalog.interpolation_models)
+        .chain(&catalog.audio_models)
+        .find(|model| model.model_id == model_id)
+    {
+        (model.license_url.as_str(), model.source_url.as_str())
     } else {
-        &model.license_url
+        return Err(AppError::Validation("Unknown model".into()));
+    };
+    let url = if source.unwrap_or(false) || license_url.is_empty() {
+        source_url
+    } else {
+        license_url
     };
     if !url.starts_with("https://") {
         return Err(AppError::Validation(

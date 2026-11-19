@@ -667,8 +667,17 @@
             (!customModelNeedsOptIn || settings.allow_unsafe_pickle_model)
           : Boolean(selectedModel?.installed);
   $: faceReady = !faceEnabled || Boolean(faceModel?.installed);
+  $: audioHasSource =
+    settings.task !== 'video'
+      ? false
+      : settings.batch_mode
+        ? runnableMedia.length === 0 || runnableMedia.some((media) => media.has_audio !== false)
+        : selectedMedia?.has_audio !== false;
+  $: audioDisabled = settings.task === 'video' && !audioHasSource;
   $: interpolationStage = plan.find((stage) => stage.kind === 'interpolate');
   $: interpolationReady = !interpolationStage || interpolationStage.installed;
+  $: audioStage = plan.find((stage) => stage.kind === 'audio_denoise');
+  $: audioReady = !audioStage || audioStage.installed;
   $: fixesReady =
     fixPlanSupported &&
     imageFixes.every((selection) => {
@@ -746,6 +755,7 @@
     faceReady &&
     fixesReady &&
     interpolationReady &&
+    audioReady &&
     snapshot.runtime.status_title !== 'Cancelling';
   const allReady = (items: MediaItem[]): boolean =>
     items.length > 0 && items.every((media) => media.probe_status === 'ready');
@@ -1061,6 +1071,7 @@
     usingTemporalVideo,
     selectedVideoModel,
     editModel,
+    hasAudio: audioHasSource,
   });
   $: downloads = pendingDownloads(plan);
   $: planNeedsFile = plan.some((stage) => stage.needsFile);
@@ -1923,7 +1934,7 @@
     libraryOpen = false;
   }
 
-  async function removeModel(model: CatalogModel | EditModel): Promise<void> {
+  async function removeModel(model: CatalogModel | CatalogVideoModel | EditModel): Promise<void> {
     try {
       await api.removeModel(model.model_id);
       await refresh();
@@ -1976,7 +1987,12 @@
   async function prepareAndStart(): Promise<void> {
     if (!canPrepare) return;
     const targets = downloads.stages.map(
-      (stage) => stage.model ?? stage.videoModel ?? stage.editModel ?? stage.interpolationModel,
+      (stage) =>
+        stage.model ??
+        stage.videoModel ??
+        stage.editModel ??
+        stage.interpolationModel ??
+        stage.audioModel,
     );
     if (!(await downloadModels(targets))) return;
     await tick();
@@ -2456,6 +2472,8 @@
           ? (settings.video_interpolation ?? 'off')
           : 'off',
       video_interpolation_order: settings.video_interpolation_order ?? 'after_upscale',
+      video_clean_audio:
+        settings.task === 'video' && !audioDisabled && Boolean(settings.video_clean_audio),
     };
   }
 
@@ -2632,6 +2650,7 @@
       face_fidelity: settings.face_fidelity,
       video_interpolation: settings.video_interpolation ?? 'off',
       video_interpolation_order: settings.video_interpolation_order ?? 'after_upscale',
+      video_clean_audio: Boolean(settings.video_clean_audio),
       quality: activeQuality,
       content: settings.content,
       fixes: settings.fixes,
@@ -2737,6 +2756,7 @@
       // Recipes saved before 0.3.7 carry no interpolation, so they run without it.
       video_interpolation: recipe.video_interpolation || 'off',
       video_interpolation_order: recipe.video_interpolation_order || 'after_upscale',
+      video_clean_audio: recipe.video_clean_audio ?? false,
       enable_face_model:
         !targetRestoring && (recipeFace ? true : (recipe.enable_face_model ?? false)),
       face_fidelity:
@@ -3564,6 +3584,29 @@
             </section>
           {/if}
 
+          {#if settings.task === 'video'}
+            <section class="control-section" aria-label="Audio">
+              <span class="eyebrow">Audio</span>
+              <div class="check-line">
+                <label class="check-row"
+                  ><input
+                    type="checkbox"
+                    disabled={audioDisabled}
+                    checked={!audioDisabled && Boolean(settings.video_clean_audio)}
+                    on:change={(event) =>
+                      updateSettings({ video_clean_audio: event.currentTarget.checked })}
+                  /> Clean up audio</label
+                ><HelpTip
+                  label="Clean up audio"
+                  text="Removes background noise such as hum, wind and hiss from speech. Music may sound worse."
+                />
+              </div>
+              {#if audioDisabled}
+                <p class="model-description">This video has no audio track.</p>
+              {/if}
+            </section>
+          {/if}
+
           {#if settings.task}
             {#if settings.task === 'edit'}
               <section class="control-section" aria-label="Edit prompt">
@@ -3808,7 +3851,11 @@
               >
                 {#each plan as stage (`${stage.role}:${stage.fix ?? stage.kind}`)}
                   {@const target =
-                    stage.model ?? stage.videoModel ?? stage.editModel ?? stage.interpolationModel}
+                    stage.model ??
+                    stage.videoModel ??
+                    stage.editModel ??
+                    stage.interpolationModel ??
+                    stage.audioModel}
                   {@const changeSlot =
                     stage.role === 'fix'
                       ? stage.fix && 'fix'
@@ -3837,11 +3884,13 @@
                       ? stage.videoModel.name
                       : stage.interpolationModel
                         ? stage.interpolationModel.name.split(' — ')[0]
-                        : stage.editModel
-                          ? editFamilyLabel(stage.editModel.family)
-                          : stage.missing
-                            ? 'No model for this fix'
-                            : 'Your checkpoint'}
+                        : stage.audioModel
+                          ? stage.audioModel.name.split(' — ')[0]
+                          : stage.editModel
+                            ? editFamilyLabel(stage.editModel.family)
+                            : stage.missing
+                              ? 'No model for this fix'
+                              : 'Your checkpoint'}
                   <!-- Licenses live in the model library; only exceptions show here. -->
                   {@const meta = stage.editModel
                     ? `${editVariantName(stage.editModel)}${
@@ -3874,7 +3923,9 @@
                             ]
                               .filter(Boolean)
                               .join(' · ')
-                          : ''}
+                          : stage.audioModel
+                            ? 'Speech noise removal'
+                            : ''}
                   {@const warning =
                     stage.model && UNSTABLE_FIX_MODELS.has(stage.model.model_id)
                       ? stage.role === 'fix'
