@@ -285,6 +285,18 @@ function editSnapshot(unifiedGb: number): AppSnapshot {
   return snapshot;
 }
 
+describe('Completion sound switch', () => {
+  it('saves the chosen value', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await chooseMenuItem('app.updates');
+    await user.click(await screen.findByLabelText('Play a sound when a job finishes'));
+    expect(api.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ completion_sound: true }),
+    );
+  });
+});
+
 describe('Update switches', () => {
   it('go to the host on their own, even during a job, and never through a full save', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
@@ -5490,6 +5502,29 @@ describe('Dialogs and refused host calls', () => {
       await shown('Could not show the result');
     });
 
+    it('deletes a saved recipe only after confirmation', async () => {
+      const snapshot = readySnapshot([image('first', true)]);
+      const model = snapshot.catalog.models.find((entry) => entry.native_scale === 4)!;
+      snapshot.recipes = [
+        {
+          id: 'jens67',
+          name: 'Jens67',
+          task: 'upscale',
+          model_id: model.model_id,
+          output_scale: 4,
+          tile_size: 256,
+          halo: 32,
+          precision: 'fp32',
+          safe_memory: true,
+        },
+      ];
+      const user = await mountWith(snapshot);
+      await user.click(screen.getByRole('button', { name: 'Delete Jens67' }));
+      expect(api.deleteRecipe).not.toHaveBeenCalled();
+      await user.click(screen.getByRole('button', { name: 'Confirm delete Jens67' }));
+      expect(api.deleteRecipe).toHaveBeenCalledWith('jens67');
+    });
+
     it('says so for Delete on a saved recipe', async () => {
       const snapshot = readySnapshot([image('first', true)]);
       const model = snapshot.catalog.models.find((entry) => entry.native_scale === 4)!;
@@ -5509,6 +5544,15 @@ describe('Dialogs and refused host calls', () => {
       const user = await mountWith(snapshot);
       api.deleteRecipe.mockRejectedValueOnce(refusal);
       await user.click(screen.getByRole('button', { name: 'Delete Jens67' }));
+      expect(api.deleteRecipe).not.toHaveBeenCalled();
+      await user.click(screen.getByRole('button', { name: 'Cancel deleting Jens67' }));
+      expect(api.deleteRecipe).not.toHaveBeenCalled();
+      await user.click(screen.getByRole('button', { name: 'Delete Jens67' }));
+      await user.keyboard('{Escape}');
+      expect(api.deleteRecipe).not.toHaveBeenCalled();
+      await user.click(screen.getByRole('button', { name: 'Delete Jens67' }));
+      await user.click(screen.getByRole('button', { name: 'Confirm delete Jens67' }));
+      expect(api.deleteRecipe).toHaveBeenCalledWith('jens67');
       await shown('Could not delete the recipe');
     });
   });

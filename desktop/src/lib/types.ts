@@ -323,6 +323,7 @@ export interface UiSettings {
   video_interpolation_order?: InterpolationOrder;
   /** Direct builds send version, platform and channel after an update check. Defaults to true. */
   anonymous_update_count?: boolean;
+  completion_sound?: boolean;
   check_updates_at_launch?: boolean;
   enable_face_model: boolean;
   face_fidelity: number;

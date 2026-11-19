@@ -1252,6 +1252,13 @@ input[type='number'],
   gap: 4px;
   margin: 5px 0;
 }
+.saved-recipe.confirming {
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+}
+.saved-recipe.confirming button {
+  padding: 8px;
+}
 .saved-recipe button {
   border: 1px solid var(--border);
   border-radius: var(--radius);

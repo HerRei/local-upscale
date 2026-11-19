@@ -220,3 +220,20 @@ describe('library fit line', () => {
     expect(fitLine({ ...span, vram_estimate_mb: 0 }, onMps, mac, find(mac, 'mps'))).toBeUndefined();
   });
 });
+
+describe('interpolation hardware label', () => {
+  it('names only a different unit when interpolation is enabled', async () => {
+    const { interpolationHardwareLabel } = await import('./neuralEngine');
+    expect(interpolationHardwareLabel('Neural Engine', 'mps', true)).toBe(
+      'Neural Engine · interpolation on GPU',
+    );
+    expect(interpolationHardwareLabel('Apple GPU (Metal)', 'mps', true)).toBe('Apple GPU (Metal)');
+    expect(interpolationHardwareLabel('Neural Engine', 'mps', false)).toBe('Neural Engine');
+    expect(interpolationHardwareLabel('GPU (DirectML)', 'directml:0', true)).toBe(
+      'GPU (DirectML) · interpolation on CPU',
+    );
+    expect(interpolationHardwareLabel('CPU · unsupported', 'qnn:0', true)).toBe(
+      'CPU · unsupported',
+    );
+  });
+});

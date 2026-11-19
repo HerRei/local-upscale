@@ -88,7 +88,12 @@
   import { formatBytes, formatDuration } from './lib/format';
   import { demoSnapshot } from './lib/demo';
   import { modal } from './lib/modal';
-  import { engineLabel, hardwarePatch, withListedDevice } from './lib/neuralEngine';
+  import {
+    engineLabel,
+    hardwarePatch,
+    interpolationHardwareLabel,
+    withListedDevice,
+  } from './lib/neuralEngine';
   import { cpuHint, deviceLabel } from './lib/hardwareRoutes';
   import type {
     AppSnapshot,
@@ -258,6 +263,7 @@
   }
 
   let recipeEditorOpen = false;
+  let deletingRecipeId: string | null = null;
   let recipeName = '';
   // Model terms are accepted per model: several fixes can each need their own.
   let termsAccepted: Record<string, boolean> = {};
@@ -903,11 +909,15 @@
               ? activeDevice
                 ? deviceLabel(activeDevice)
                 : 'detecting hardware'
-              : engineLabel(
-                  settings,
-                  snapshot.capabilities,
-                  selectedModel?.architecture,
-                  activeDevice ? deviceLabel(activeDevice) : 'detecting hardware',
+              : interpolationHardwareLabel(
+                  engineLabel(
+                    settings,
+                    snapshot.capabilities,
+                    selectedModel?.architecture,
+                    activeDevice ? deviceLabel(activeDevice) : 'detecting hardware',
+                  ),
+                  settings.device_id,
+                  settings.task === 'video' && (settings.video_interpolation ?? 'off') !== 'off',
                 )
         }`
       : '';
@@ -2880,6 +2890,16 @@
   }
 </script>
 
+<svelte:window
+  on:click={(event) => {
+    const row = event.target instanceof Element ? event.target.closest('.saved-recipe') : null;
+    if (row?.getAttribute('data-recipe-id') !== deletingRecipeId) deletingRecipeId = null;
+  }}
+  on:keydown={(event) => {
+    if (event.key === 'Escape') deletingRecipeId = null;
+  }}
+/>
+
 <svelte:head
   ><title>{selectedMedia ? `${selectedMedia.name} — LocalSR` : 'LocalSR'}</title></svelte:head
 >
@@ -2906,6 +2926,8 @@
   <UpdatePanel
     processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
     anonymousUpdateCount={settings.anonymous_update_count ?? true}
+    completionSound={settings.completion_sound ?? false}
+    on:completionsound={(event) => updateSettings({ completion_sound: event.detail })}
     checkAtLaunch={settings.check_updates_at_launch ?? true}
     on:anonymouscount={(event) => setUpdateSwitch('anonymous_update_count', event.detail)}
     on:checkatlaunch={(event) => setUpdateSwitch('check_updates_at_launch', event.detail)}
@@ -3198,36 +3220,54 @@
                 </div>
                 <div class="recipe-tools">
                   {#each snapshot.recipes as recipe (recipe.id)}
-                    <div class="saved-recipe">
-                      <button
-                        class:active={activeRecipeIds.has(recipe.id)}
-                        aria-pressed={activeRecipeIds.has(recipe.id)}
-                        disabled={Boolean(selectedMedia) &&
-                          (recipe.task === 'video') !== (selectedMedia.kind === 'video')}
-                        on:click={() => applyRecipe(recipe)}
-                        ><b>{recipe.name}</b><span
-                          >{recipe.task} · {recipe.output_scale}× · {recipe.precision.toUpperCase()}</span
-                        ></button
-                      ><button
-                        aria-label={`Delete ${recipe.name}`}
-                        on:click={() =>
-                          attempt('Could not delete the recipe', async () => {
-                            await api.deleteRecipe(recipe.id);
-                            await refresh();
-                          })}
-                        ><svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          width="16"
-                          height="16"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2.5"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          ><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg
-                        ></button
-                      >
+                    <div
+                      class="saved-recipe"
+                      data-recipe-id={recipe.id}
+                      class:confirming={deletingRecipeId === recipe.id}
+                    >
+                      {#if deletingRecipeId === recipe.id}
+                        <span>Delete {recipe.name}?</span>
+                        <button
+                          aria-label={`Confirm delete ${recipe.name}`}
+                          on:click={() => {
+                            deletingRecipeId = null;
+                            void attempt('Could not delete the recipe', async () => {
+                              await api.deleteRecipe(recipe.id);
+                              await refresh();
+                            });
+                          }}>Delete</button
+                        >
+                        <button
+                          aria-label={`Cancel deleting ${recipe.name}`}
+                          on:click={() => (deletingRecipeId = null)}>Cancel</button
+                        >
+                      {:else}
+                        <button
+                          class:active={activeRecipeIds.has(recipe.id)}
+                          aria-pressed={activeRecipeIds.has(recipe.id)}
+                          disabled={Boolean(selectedMedia) &&
+                            (recipe.task === 'video') !== (selectedMedia.kind === 'video')}
+                          on:click={() => applyRecipe(recipe)}
+                          ><b>{recipe.name}</b><span
+                            >{recipe.task} · {recipe.output_scale}× · {recipe.precision.toUpperCase()}</span
+                          ></button
+                        ><button
+                          aria-label={`Delete ${recipe.name}`}
+                          on:click={() => (deletingRecipeId = recipe.id)}
+                          ><svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.5"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            ><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg
+                          ></button
+                        >
+                      {/if}
                     </div>
                   {/each}
                   {#if recipeEditorOpen}

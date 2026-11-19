@@ -292,6 +292,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn completion_sound_defaults_off_and_round_trips_in_schema_two() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        fs::create_dir_all(&paths.next_root).unwrap();
+        fs::write(
+            &paths.settings,
+            r#"{"schema_version":2,"ui":{},"recipes":[]}"#,
+        )
+        .unwrap();
+        let (mut settings, recipes) = load(&paths);
+        assert!(!settings.completion_sound);
+        settings.completion_sound = true;
+        save(&paths, &settings, &recipes).unwrap();
+        assert!(load(&paths).0.completion_sound);
+    }
+
+    #[test]
     fn settings_are_read_from_the_previous_copy_when_a_save_stopped_between_its_renames() {
         let directory = tempfile::tempdir().unwrap();
         let paths = AppPaths::under(directory.path());

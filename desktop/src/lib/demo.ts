@@ -52,6 +52,7 @@ export function demoSnapshot(): AppSnapshot {
       video_interpolation: 'off',
       video_interpolation_order: 'after_upscale',
       anonymous_update_count: true,
+      completion_sound: false,
       check_updates_at_launch: true,
       enable_face_model: false,
       face_fidelity: 70,

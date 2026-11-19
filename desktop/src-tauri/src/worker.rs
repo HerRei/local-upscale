@@ -910,21 +910,23 @@ fn handle_worker_envelope(
     match envelope.message_type.as_str() {
         "job_completed" | "video_job_completed" => {
             if let Some(body) = finished_notice(state, &envelope.data) {
-                let _ = app
+                let builder = app
                     .notification()
                     .builder()
                     .title("LocalSR finished")
-                    .body(body)
-                    .show();
+                    .body(body);
+                let builder = with_completion_sound(state, builder);
+                let _ = builder.show();
             }
         }
         "job_failed" => {
-            let _ = app
+            let builder = app
                 .notification()
                 .builder()
                 .title("LocalSR could not finish")
-                .body("Open LocalSR to review the error and diagnostics.")
-                .show();
+                .body("Open LocalSR to review the error and diagnostics.");
+            let builder = with_completion_sound(state, builder);
+            let _ = builder.show();
         }
         _ => {}
     }
@@ -2231,6 +2233,23 @@ pub const RESULT_PREVIEW_MAX_DIMENSION: u32 = 2048;
 
 /// The text of the "finished" notice, or None while more work is queued: the notice says
 /// LocalSR is done, which a photo of a long batch is not.
+/// The system's default notification sound, when the user turned it on.
+fn with_completion_sound<R: tauri::Runtime>(
+    state: &AppState,
+    builder: tauri_plugin_notification::NotificationBuilder<R>,
+) -> tauri_plugin_notification::NotificationBuilder<R> {
+    if !lock(&state.settings).is_ok_and(|settings| settings.completion_sound) {
+        return builder;
+    }
+    builder.sound(if cfg!(target_os = "macos") {
+        "NSUserNotificationDefaultSoundName"
+    } else if cfg!(windows) {
+        "Default"
+    } else {
+        "message-new-instant"
+    })
+}
+
 fn finished_notice(state: &AppState, data: &Value) -> Option<&'static str> {
     let more_work = state
         .database

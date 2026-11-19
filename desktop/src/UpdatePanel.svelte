@@ -5,8 +5,13 @@
   import { updateDialogOpen, updateError, updateState } from './lib/updates';
   export let processing = false;
   export let anonymousUpdateCount = true;
+  export let completionSound = false;
   export let checkAtLaunch = true;
-  const dispatch = createEventDispatcher<{ anonymouscount: boolean; checkatlaunch: boolean }>();
+  const dispatch = createEventDispatcher<{
+    anonymouscount: boolean;
+    checkatlaunch: boolean;
+    completionsound: boolean;
+  }>();
   let channel = 'beta';
   let working = false;
   let recoveryConfirmed = false;
@@ -122,6 +127,14 @@
           >
         {/if}
       {/if}
+      <label class="count"
+        ><input
+          type="checkbox"
+          checked={completionSound}
+          disabled={processing}
+          on:change={(event) => dispatch('completionsound', event.currentTarget.checked)}
+        /> Play a sound when a job finishes</label
+      >
       {#if status.target}<p class="detail">Installed build: {status.target}</p>{/if}
       <p class="detail">
         This software uses libraries from the FFmpeg project under the LGPLv2.1. LocalSR does not

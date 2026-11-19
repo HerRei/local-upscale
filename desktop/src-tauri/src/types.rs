@@ -348,6 +348,7 @@ pub struct UiSettings {
     // Direct builds send version, platform and channel after an update check.
     #[serde(default = "default_true")]
     pub anonymous_update_count: bool,
+    pub completion_sound: bool,
     // Direct builds look for an update once at launch, silently.
     #[serde(default = "default_true")]
     pub check_updates_at_launch: bool,
@@ -441,6 +442,7 @@ impl Default for UiSettings {
             video_interpolation_order: default_interpolation_order(),
             neural_engine: true,
             anonymous_update_count: true,
+            completion_sound: false,
             check_updates_at_launch: true,
             enable_face_model: false,
             face_fidelity: 70,
