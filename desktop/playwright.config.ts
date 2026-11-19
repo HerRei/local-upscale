@@ -3,7 +3,7 @@ import { defineConfig } from '@playwright/test';
 // End-to-end tests drive the real Svelte front end in Chromium and WebKit (the
 // engine behind the macOS app) against the Vite dev server. A scripted fake of
 // the Tauri command bridge stands in for the Rust host, see e2e/fake-host.ts.
-const port = 1430;
+const port = Number(process.env.LOCALSR_E2E_PORT ?? 1430);
 const sizes = { '1024': { width: 1024, height: 700 }, '1440': { width: 1440, height: 900 } };
 const engines = ['chromium', 'webkit'] as const;
 

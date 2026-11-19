@@ -285,6 +285,27 @@ function editSnapshot(unifiedGb: number): AppSnapshot {
   return snapshot;
 }
 
+describe('Appearance from the host', () => {
+  it('applies a saved menu change while processing', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.runtime.active_job_id = 'job-running';
+    await mountWith(snapshot);
+    await waitFor(() => expect(api.listenForStateChange).toHaveBeenCalled());
+    const changed = structuredClone(snapshot);
+    changed.settings.appearance = 'light';
+    changed.settings.colour_blind_palette = true;
+    api.refreshSnapshot.mockResolvedValue(changed);
+    (api.listenForStateChange.mock.calls[0][0] as () => void)();
+    await waitFor(() =>
+      expect(document.documentElement.dataset).toMatchObject({
+        theme: 'light',
+        palette: 'colour-blind',
+      }),
+    );
+    expect(api.saveSettings).not.toHaveBeenCalled();
+  });
+});
+
 describe('Completion sound switch', () => {
   it('saves the chosen value', async () => {
     const snapshot = readySnapshot([image('photo', true)]);

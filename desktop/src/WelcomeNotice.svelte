@@ -74,13 +74,13 @@
     width: min(520px, calc(100vw - 28px));
     padding: 14px;
     transform: translateX(-50%);
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    border: 1px solid var(--rgba-255-255-255-0_12);
     border-radius: var(--radius-surface);
-    background: rgba(35, 35, 37, 0.9);
+    background: var(--rgba-35-35-37-0_9);
     backdrop-filter: blur(22px) saturate(150%);
     box-shadow:
-      inset 0 1px rgba(255, 255, 255, 0.06),
-      0 18px 46px rgba(0, 0, 0, 0.5);
+      inset 0 1px var(--rgba-255-255-255-0_06),
+      0 18px 46px var(--rgba-0-0-0-0_5);
   }
   .text {
     display: grid;
@@ -111,15 +111,15 @@
   }
   .notice-button {
     padding: 6px 11px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid var(--rgba-255-255-255-0_1);
     border-radius: var(--radius);
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--rgba-255-255-255-0_08);
     color: var(--text);
     font-size: calc(12px * var(--ui-scale));
     font-weight: 500;
     white-space: nowrap;
   }
   .notice-button:hover {
-    background: rgba(255, 255, 255, 0.13);
+    background: var(--rgba-255-255-255-0_13);
   }
 </style>

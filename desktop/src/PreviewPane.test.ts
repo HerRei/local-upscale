@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { boundedPreviewSize, canvasTileRect } from './lib/progressive-preview';
 import PreviewPane from './PreviewPane.svelte';
 import type { MediaItem, WorkerEnvelope } from './lib/types';
@@ -353,6 +355,10 @@ it('paints the asynchronous JPEG after empty completion metadata, and rejects an
 });
 
 it('keeps the current source frame below completed tiles and rejects stale source JPEGs', async () => {
+  const style = document.createElement('style');
+  style.textContent = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf8');
+  document.head.append(style);
+  onTestFinished(() => style.remove());
   const drawImage = vi.fn();
   const context = { fillStyle: '', fillRect: vi.fn(), clearRect: vi.fn(), drawImage };
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(

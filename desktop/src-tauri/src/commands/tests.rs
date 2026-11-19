@@ -246,6 +246,29 @@ fn an_update_switch_is_written_at_once_and_rolled_back_when_writing_fails() {
 }
 
 #[test]
+fn appearance_is_saved_during_a_job_and_restored_on_write_failure() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(directory.path());
+    fs::create_dir_all(&paths.next_root).unwrap();
+    fs::create_dir_all(&paths.model_root).unwrap();
+    let state = AppState::from_paths(paths).unwrap();
+    lock(&state.runtime).unwrap().active_job_id = "running".into();
+    apply_appearance(&state, "light").unwrap();
+    apply_appearance(&state, "colour-blind").unwrap();
+    let saved = crate::settings::load(&state.paths).0;
+    assert_eq!(saved.appearance, "light");
+    assert!(saved.colour_blind_palette);
+    let mut stale = UiSettings::default();
+    keep_update_switches(&saved, &mut stale);
+    assert_eq!(stale.appearance, "light");
+    assert!(stale.colour_blind_palette);
+    fs::write(&state.paths.settings, b"{ not json").unwrap();
+    assert!(apply_appearance(&state, "dark").is_err());
+    assert_eq!(lock(&state.settings).unwrap().appearance, "light");
+    assert!(apply_appearance(&state, "unknown").is_err());
+}
+
+#[test]
 fn a_full_settings_save_never_changes_the_update_switches() {
     let current = UiSettings {
         anonymous_update_count: false,

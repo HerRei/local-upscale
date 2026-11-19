@@ -289,6 +289,8 @@ export interface RecipeStage {
 }
 
 export interface UiSettings {
+  appearance: 'dark' | 'light' | 'system';
+  colour_blind_palette: boolean;
   interface_scale: 100 | 110 | 125;
   batch_mode: boolean;
   task: TaskKind | '';

@@ -122,13 +122,13 @@
   .memory-panel {
     margin: 16px 0;
     padding: 14px;
-    background: rgba(136, 136, 136, 0.07);
-    border: 1px solid rgba(136, 136, 136, 0.3);
+    background: var(--memory-fill);
+    border: 1px solid var(--memory-border);
     border-radius: var(--radius);
     font-size: 12px;
   }
   .memory-panel.failed {
-    border-color: #aa5757;
+    border-color: var(--memory-error-border);
   }
   .memory-choice {
     display: flex;
@@ -138,15 +138,15 @@
     font-size: 13px;
   }
   input {
-    accent-color: #909090;
+    accent-color: var(--memory-control);
   }
   p {
-    color: #b1b1b4;
+    color: var(--memory-secondary);
     line-height: 1.5;
     margin: 9px 0 0;
   }
   strong {
-    color: #e5e5e8;
+    color: var(--memory-text);
   }
   .reading-title {
     display: flex;
@@ -155,10 +155,10 @@
     justify-content: space-between;
     padding-top: 13px;
     margin-top: 13px;
-    border-top: 1px solid #3c3c3e;
+    border-top: 1px solid var(--memory-divider);
   }
   .reading-title span {
-    color: #bcbcbc;
+    color: var(--memory-label);
   }
   dl {
     margin: 12px 0 0;
@@ -171,7 +171,7 @@
     margin-top: 7px;
   }
   dt {
-    color: #b1b1b4;
+    color: var(--memory-secondary);
   }
   dd {
     margin: 0;
@@ -181,6 +181,6 @@
     font-size: 11px;
   }
   .recovery {
-    color: #f0b4b4;
+    color: var(--memory-error-text);
   }
 </style>

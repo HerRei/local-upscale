@@ -301,6 +301,12 @@ pub struct FixStageSelection {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct UiSettings {
+    #[serde(
+        default = "default_appearance",
+        deserialize_with = "deserialize_appearance"
+    )]
+    pub appearance: String,
+    pub colour_blind_palette: bool,
     pub interface_scale: u32,
     pub batch_mode: bool,
     pub task: String,
@@ -408,9 +414,26 @@ pub(crate) fn default_video_codec() -> String {
     "auto".into()
 }
 
+fn default_appearance() -> String {
+    "dark".into()
+}
+
+fn deserialize_appearance<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    Ok(if matches!(value.as_str(), "dark" | "light" | "system") {
+        value
+    } else {
+        default_appearance()
+    })
+}
+
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
+            appearance: default_appearance(),
+            colour_blind_palette: false,
             interface_scale: 100,
             batch_mode: false,
             task: String::new(),

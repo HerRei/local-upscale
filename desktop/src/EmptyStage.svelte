@@ -139,10 +139,10 @@
     transition: background 0.25s;
   }
   .well:hover {
-    background: rgba(255, 255, 255, 0.025);
+    background: var(--rgba-255-255-255-0_025);
   }
   .well:hover .edge rect {
-    stroke: rgba(255, 255, 255, 0.26);
+    stroke: var(--rgba-255-255-255-0_26);
   }
   .well:focus-visible {
     outline: 2px solid var(--focus);
@@ -158,7 +158,7 @@
   }
   .edge rect {
     fill: none;
-    stroke: rgba(255, 255, 255, 0.14);
+    stroke: var(--rgba-255-255-255-0_14);
     stroke-width: 1.5;
     stroke-dasharray: 7 7;
     transition: stroke 0.25s;
@@ -179,8 +179,8 @@
     overflow: hidden;
     border-radius: var(--radius-surface);
     box-shadow:
-      0 18px 40px -14px rgba(0, 0, 0, 0.7),
-      0 0 0 1px rgba(255, 255, 255, 0.08);
+      0 18px 40px -14px var(--rgba-0-0-0-0_7),
+      0 0 0 1px var(--rgba-255-255-255-0_08);
     transition: box-shadow 0.25s;
   }
   .shot canvas {
@@ -195,7 +195,7 @@
     bottom: 0;
     width: 2px;
     margin-left: -1px;
-    background: rgba(255, 255, 255, 0.9);
+    background: var(--rgba-255-255-255-0_9);
   }
   .divider::after {
     content: '';
@@ -205,17 +205,17 @@
     width: 20px;
     height: 20px;
     margin: -10px 0 0 -10px;
-    border: 1.5px solid #fff;
+    border: 1.5px solid var(--tone-fff);
     border-radius: 50%;
-    background: rgba(22, 22, 24, 0.9);
+    background: var(--rgba-22-22-24-0_9);
   }
   .chip {
     position: absolute;
     top: 8px;
     padding: 4px 6px;
     border-radius: var(--radius);
-    background: rgba(13, 13, 15, 0.72);
-    color: #e3e3e6;
+    background: var(--rgba-13-13-15-0_72);
+    color: var(--tone-e3e3e6);
     font-size: calc(10px * var(--ui-scale));
     font-weight: 600;
     line-height: 1;
@@ -250,10 +250,10 @@
   .capabilities span + span::before {
     content: '·';
     margin-right: 14px;
-    color: #414143;
+    color: var(--tone-414143);
   }
   .dropping .well {
-    background: rgba(255, 255, 255, 0.039);
+    background: var(--rgba-255-255-255-0_039);
   }
   .dropping .edge rect {
     stroke: var(--accent);
@@ -261,7 +261,7 @@
   }
   .dropping .shot {
     box-shadow:
-      0 18px 40px -14px rgba(0, 0, 0, 0.7),
+      0 18px 40px -14px var(--rgba-0-0-0-0_7),
       0 0 0 2px var(--accent);
   }
   @media (max-height: 520px) {

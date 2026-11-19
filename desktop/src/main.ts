@@ -5,6 +5,7 @@ import './styles.css';
 const target = document.getElementById('app');
 
 function renderStartupFailure(reason: unknown): void {
+  document.documentElement.classList.remove('theme-loading');
   if (!target) return;
   const detail = reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason);
   target.replaceChildren();

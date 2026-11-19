@@ -1,5 +1,6 @@
 <script lang="ts">
   import { detectPlatform } from './lib/platform';
+  import { createThemeController } from './lib/theme';
 
   import { tabFromKey } from './lib/keyboard';
   import { recipeFixStages, recipeMatches } from './lib/recipes';
@@ -1042,7 +1043,17 @@
                 ? 'Choose or download the required models before starting.'
                 : 'The current settings are not ready to start.');
 
+  let themeForRefresh: (settings: UiSettings) => void = () => {};
+
   onMount(() => {
+    const theme = createThemeController(undefined, (value) => {
+      if (api.isTauri()) {
+        void import('@tauri-apps/api/window')
+          .then(({ getCurrentWindow }) => getCurrentWindow().setTheme(value))
+          .catch((error) => console.error('Could not set window theme', error));
+      }
+    });
+    themeForRefresh = theme.apply;
     const unlisteners: (() => void)[] = [];
     let disposed = false;
     async function subscribe(register: () => Promise<() => void>): Promise<void> {
@@ -1054,6 +1065,8 @@
     void (async () => {
       try {
         snapshot = await api.bootstrap();
+        theme.apply(snapshot.settings);
+        document.documentElement.classList.remove('theme-loading');
         await tick();
         if (disposed) return;
         ensureTaskMatchesSelection();
@@ -1083,6 +1096,7 @@
         );
         if (!disposed) await consumeLaunchIntents();
       } catch (error) {
+        document.documentElement.classList.remove('theme-loading');
         if (!disposed) showModal('Could not start LocalSR', String(error));
       } finally {
         booting = false;
@@ -1091,6 +1105,7 @@
 
     return () => {
       disposed = true;
+      theme.dispose();
       if (stateRefresh) clearTimeout(stateRefresh);
       if (runtimePulseTimer) clearTimeout(runtimePulseTimer);
       if (autoStartTimer) clearTimeout(autoStartTimer);
@@ -1142,6 +1157,7 @@
         latest.runtime.result_preview_data_url = snapshot.runtime.result_preview_data_url;
       }
       snapshot = latest;
+      themeForRefresh(latest.settings);
       chooseInitialModel();
       await maybeAutoStart();
     } catch (error) {

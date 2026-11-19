@@ -6,14 +6,18 @@ use tauri::{
 use crate::types::{Recipe, UiSettings};
 
 /// The two update switches the menu shows with a check mark.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Switches {
+    pub appearance: String,
+    pub colour_blind_palette: bool,
     pub check_at_launch: bool,
     pub update_count: bool,
 }
 
 pub fn switches(settings: &UiSettings) -> Switches {
     Switches {
+        appearance: settings.appearance.clone(),
+        colour_blind_palette: settings.colour_blind_palette,
         check_at_launch: settings.check_updates_at_launch,
         update_count: settings.anonymous_update_count,
     }
@@ -184,7 +188,28 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
     let models = MenuItemBuilder::with_id("view.models", "Models…")
         .accelerator("CmdOrCtrl+Shift+M")
         .build(manager)?;
+    let dark = CheckMenuItemBuilder::with_id("view.appearance.dark", "Dark")
+        .checked(switches.appearance == "dark")
+        .build(manager)?;
+    let light = CheckMenuItemBuilder::with_id("view.appearance.light", "Light")
+        .checked(switches.appearance == "light")
+        .build(manager)?;
+    let system = CheckMenuItemBuilder::with_id("view.appearance.system", "Match System")
+        .checked(switches.appearance == "system")
+        .build(manager)?;
+    let appearance = SubmenuBuilder::new(manager, "Appearance")
+        .item(&dark)
+        .item(&light)
+        .item(&system)
+        .build()?;
+    let colour_blind =
+        CheckMenuItemBuilder::with_id("view.colour-blind", "Colour-Blind Friendly Colours")
+            .checked(switches.colour_blind_palette)
+            .build(manager)?;
     let view_menu = SubmenuBuilder::new(manager, "View")
+        .item(&appearance)
+        .item(&colour_blind)
+        .separator()
         .item(&fit)
         .item(&actual)
         .separator()
@@ -303,7 +328,26 @@ pub fn reconcile(app: &AppHandle) {
     });
 }
 
+fn appearance_action(id: &str) -> Option<&'static str> {
+    match id {
+        "view.appearance.dark" => Some("dark"),
+        "view.appearance.light" => Some("light"),
+        "view.appearance.system" => Some("system"),
+        "view.colour-blind" => Some("colour-blind"),
+        _ => None,
+    }
+}
+
 pub fn dispatch(app: &AppHandle, id: &str) {
+    if let Some(action) = appearance_action(id) {
+        let app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            if let Some(state) = app.try_state::<std::sync::Arc<crate::state::AppState>>() {
+                crate::commands::change_appearance(&state, &app, action);
+            }
+        });
+        return;
+    }
     // The update switches are the host's own settings: it flips the saved value, so a
     // window that has not caught up cannot send the opposite.
     if let Some(name) = switch_setting(id) {
@@ -364,6 +408,26 @@ mod tests {
         for id in update_items(true) {
             assert!(*id == "app.updates" || switch_setting(id).is_some());
         }
+    }
+
+    #[test]
+    fn appearance_actions_and_check_marks_follow_settings() {
+        for choice in ["dark", "light", "system"] {
+            assert_eq!(
+                appearance_action(&format!("view.appearance.{choice}")),
+                Some(choice)
+            );
+            let settings = UiSettings {
+                appearance: choice.into(),
+                colour_blind_palette: true,
+                ..UiSettings::default()
+            };
+            let shown = switches(&settings);
+            assert_eq!(shown.appearance, choice);
+            assert!(shown.colour_blind_palette);
+        }
+        assert_eq!(appearance_action("view.colour-blind"), Some("colour-blind"));
+        assert_eq!(appearance_action("view.fit"), None);
     }
 
     #[test]

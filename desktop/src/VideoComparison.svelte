@@ -483,15 +483,15 @@
     gap: 10px;
     padding: 12px 16px;
     border-radius: var(--radius);
-    background: #1e1e1eed;
-    color: #d1d1d1;
+    background: var(--tone-1e1e1eed);
+    color: var(--tone-d1d1d1);
     pointer-events: none;
   }
   .video-loading i {
     width: 16px;
     height: 16px;
-    border: 2px solid #bfbfbf40;
-    border-top-color: #cccccc;
+    border: 2px solid var(--tone-bfbfbf40);
+    border-top-color: var(--tone-cccccc);
     border-radius: 50%;
     animation: loading-spin 1s linear infinite;
   }

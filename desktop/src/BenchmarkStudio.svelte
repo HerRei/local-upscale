@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { themeColor } from './lib/themeColor';
   import { onDestroy, tick } from 'svelte';
   import {
     boundedPreviewSize,
@@ -103,7 +104,7 @@
       const size = boundedPreviewSize({ width, height }, 960);
       canvas.width = size.width;
       canvas.height = size.height;
-      context.fillStyle = '#10141d';
+      context.fillStyle = themeColor('--benchmark-canvas-background');
       context.fillRect(0, 0, canvas.width, canvas.height);
       paintTileGrid(context, tile, canvas);
       visible = true;
@@ -120,7 +121,7 @@
         const rect = canvasTileRect(tile, canvas);
         if (rect) {
           context.drawImage(image, rect.x, rect.y, rect.width, rect.height);
-          context.strokeStyle = '#a1a1a166';
+          context.strokeStyle = themeColor('--benchmark-tile-border');
           context.lineWidth = 1;
           context.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.width - 1, rect.height - 1);
         }
@@ -179,10 +180,10 @@
 <style>
   .render-studio {
     margin: 16px 0;
-    border: 1px solid #424854;
+    border: 1px solid var(--tone-424854);
     border-radius: var(--radius-surface);
     overflow: hidden;
-    background: #1c1c1e;
+    background: var(--tone-1c1c1e);
   }
   header,
   footer {
@@ -195,14 +196,14 @@
   header span,
   footer,
   p {
-    color: #acacac;
+    color: var(--tone-acacac);
   }
   .render-stage {
     position: relative;
     margin: 0 auto;
     width: min(calc(100% - 32px), calc(280px * var(--render-ratio)));
     aspect-ratio: var(--render-ratio);
-    background: #141416;
+    background: var(--tone-141416);
     overflow: hidden;
   }
   canvas,
@@ -218,9 +219,9 @@
   .active-tile {
     position: absolute;
     box-sizing: border-box;
-    border: 2px solid #ababab;
-    background: #9b9b9b18;
-    box-shadow: inset 0 0 20px #9e9e9e30;
+    border: 2px solid var(--tone-ababab);
+    background: var(--tone-9b9b9b18);
+    box-shadow: inset 0 0 20px var(--tone-9e9e9e30);
     animation: pulse 1.2s ease-in-out infinite;
   }
   .waiting {
@@ -231,13 +232,13 @@
     align-items: center;
     justify-content: center;
     font-size: 13px;
-    color: #acacac;
+    color: var(--tone-acacac);
   }
   .working {
     width: 16px;
     height: 16px;
-    border: 2px solid #86868640;
-    border-top-color: #adadad;
+    border: 2px solid var(--tone-86868640);
+    border-top-color: var(--tone-adadad);
     border-radius: 50%;
     animation: spin 1s linear infinite;
   }
@@ -249,8 +250,8 @@
   }
   @keyframes pulse {
     50% {
-      border-color: #e0e0e0;
-      background: #aaaaaa38;
+      border-color: var(--tone-e0e0e0);
+      background: var(--tone-aaaaaa38);
     }
   }
   @keyframes spin {

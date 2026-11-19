@@ -1,3 +1,5 @@
+import { themeColor } from './themeColor';
+
 export interface PixelSize {
   width: number;
   height: number;
@@ -118,6 +120,9 @@ export function paintTileGrid(
     (gridHeight / firstTile.image_height) * canvas.height < 2
   )
     return;
+  const colors = overSource
+    ? [themeColor('--preview-grid-overlay-b'), themeColor('--preview-grid-overlay-a')]
+    : [themeColor('--preview-grid-b'), themeColor('--preview-grid-a')];
   let row = 0;
   for (let y = 0; y < firstTile.image_height; y += gridHeight, row += 1) {
     let column = 0;
@@ -133,13 +138,7 @@ export function paintTileGrid(
         canvas,
       );
       if (!rect) continue;
-      context.fillStyle = overSource
-        ? (row + column) % 2
-          ? '#10172138'
-          : '#10172160'
-        : (row + column) % 2
-          ? '#17202d'
-          : '#101721';
+      context.fillStyle = colors[(row + column) % 2];
       context.fillRect(rect.x, rect.y, rect.width, rect.height);
     }
   }

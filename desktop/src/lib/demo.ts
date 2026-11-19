@@ -51,6 +51,8 @@ export function demoSnapshot(): AppSnapshot {
       video_crf: 18,
       video_interpolation: 'off',
       video_interpolation_order: 'after_upscale',
+      appearance: 'dark',
+      colour_blind_palette: false,
       anonymous_update_count: false,
       completion_sound: false,
       check_updates_at_launch: true,

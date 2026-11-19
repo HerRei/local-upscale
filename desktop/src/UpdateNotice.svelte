@@ -125,13 +125,13 @@
     gap: 12px;
     width: min(440px, calc(100vw - 28px));
     padding: 12px 12px 12px 14px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    border: 1px solid var(--rgba-255-255-255-0_12);
     border-radius: var(--radius-surface);
-    background: rgba(35, 35, 37, 0.86);
+    background: var(--notice-surface);
     backdrop-filter: blur(22px) saturate(150%);
     box-shadow:
-      inset 0 1px rgba(255, 255, 255, 0.06),
-      0 18px 46px rgba(0, 0, 0, 0.5);
+      inset 0 1px var(--rgba-255-255-255-0_06),
+      0 18px 46px var(--rgba-0-0-0-0_5);
     animation: arrive 0.32s cubic-bezier(0.2, 0.9, 0.3, 1.1);
   }
   /* Wide windows keep the Enhance pane beside the preview: stay clear of it. */
@@ -147,13 +147,13 @@
     height: 34px;
     border-radius: var(--radius);
     background: var(--accent);
-    box-shadow: inset 0 1px rgba(255, 255, 255, 0.25);
+    box-shadow: inset 0 1px var(--notice-inset);
   }
   .glyph svg {
     width: 18px;
     height: 18px;
     fill: none;
-    stroke: #fff;
+    stroke: var(--on-accent);
     stroke-width: 2;
     stroke-linecap: round;
     stroke-linejoin: round;
@@ -172,7 +172,7 @@
     font-size: calc(12px * var(--ui-scale));
   }
   .text .error {
-    color: #f0b2aa;
+    color: var(--danger-text-muted);
   }
   .progress {
     display: block;
@@ -180,7 +180,7 @@
     margin-top: 4px;
     overflow: hidden;
     border-radius: 2px;
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--rgba-255-255-255-0_1);
   }
   .progress i {
     display: block;
@@ -201,22 +201,22 @@
   }
   .notice-button {
     padding: 6px 11px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid var(--rgba-255-255-255-0_1);
     border-radius: var(--radius);
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--rgba-255-255-255-0_08);
     color: var(--text);
     font-size: calc(12px * var(--ui-scale));
     font-weight: 500;
     white-space: nowrap;
   }
   .notice-button:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.13);
+    background: var(--rgba-255-255-255-0_13);
   }
   .notice-button.primary {
-    border-color: rgba(0, 0, 0, 0.25);
+    border-color: var(--notice-button-border);
     background: var(--accent);
-    box-shadow: inset 0 1px rgba(255, 255, 255, 0.22);
-    color: #fff;
+    box-shadow: inset 0 1px var(--notice-button-inset);
+    color: var(--on-accent);
   }
   .notice-button:disabled {
     cursor: default;

@@ -309,6 +309,24 @@ mod tests {
     }
 
     #[test]
+    fn appearance_defaults_round_trips_and_rejects_unknown_values() {
+        let defaults: UiSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(defaults.appearance, "dark");
+        assert!(!defaults.colour_blind_palette);
+        let settings = UiSettings {
+            appearance: "system".into(),
+            colour_blind_palette: true,
+            ..defaults
+        };
+        let restored: UiSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.appearance, "system");
+        assert!(restored.colour_blind_palette);
+        let unknown: UiSettings = serde_json::from_str(r#"{"appearance":"sepia"}"#).unwrap();
+        assert_eq!(unknown.appearance, "dark");
+    }
+
+    #[test]
     fn the_anonymous_update_count_is_off_unless_it_was_turned_on() {
         let directory = tempfile::tempdir().unwrap();
         let paths = AppPaths::under(directory.path());

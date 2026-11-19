@@ -377,8 +377,39 @@ fn persist_or_restore(state: &AppState, restore: impl FnOnce(&AppState)) -> AppR
 /// carries the window's copy, which an older refresh may have left behind; it must
 /// never turn an opt-out back on.
 fn keep_update_switches(current: &UiSettings, incoming: &mut UiSettings) {
+    incoming.appearance = current.appearance.clone();
+    incoming.colour_blind_palette = current.colour_blind_palette;
     incoming.check_updates_at_launch = current.check_updates_at_launch;
     incoming.anonymous_update_count = current.anonymous_update_count;
+}
+
+/// Persist menu appearance changes independently of processing settings.
+pub fn change_appearance(state: &AppState, app: &AppHandle, action: &str) {
+    if let Err(error) = apply_appearance(state, action) {
+        eprintln!("LocalSR: could not save appearance: {error}");
+    }
+    refresh_update_switches(app);
+}
+
+fn apply_appearance(state: &AppState, action: &str) -> AppResult<()> {
+    let _io = lock(&state.settings_io)?;
+    let previous = {
+        let mut settings = lock(&state.settings)?;
+        let previous = (settings.appearance.clone(), settings.colour_blind_palette);
+        match action {
+            "dark" | "light" | "system" => settings.appearance = action.into(),
+            "colour-blind" => settings.colour_blind_palette = !settings.colour_blind_palette,
+            _ => return Err(AppError::Validation("unknown appearance".into())),
+        }
+        previous
+    };
+    if let Err(error) = state.write_settings() {
+        let mut settings = lock(&state.settings)?;
+        settings.appearance = previous.0;
+        settings.colour_blind_palette = previous.1;
+        return Err(error);
+    }
+    Ok(())
 }
 
 /// Set one update switch. It may change while jobs run: it does not touch them.
