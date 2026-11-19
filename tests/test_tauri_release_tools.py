@@ -9,7 +9,7 @@ import shutil
 import struct
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import pytest
 
@@ -1465,3 +1465,30 @@ def test_round3_every_key_read_first_checks_the_key_folder_and_the_helper(
     folder.chmod(0o700)
     assert update_signing.load_identity() is None
     assert calls == ["codesign", str(helper)]
+
+
+def test_engine_input_order_is_identical_for_windows_and_posix_paths() -> None:
+    names = ["a/b", "a-b/x", "A/z", "a/10", "a/2", "a/B", "a/b/c"]
+    expected = ["A/z", "a/10", "a/2", "a/B", "a/b", "a/b/c", "a-b/x"]
+    for path_type in (PureWindowsPath, PurePosixPath):
+        root = path_type("root")
+        paths = [root / name for name in names]
+        ordered = sorted(paths, key=lambda path: release_targets._path_sort_key(path, root))
+        assert [path.relative_to(root).as_posix() for path in ordered] == expected
+
+
+def test_sign_retries_missing_timestamp(monkeypatch, tmp_path: Path) -> None:
+    signer = load_script("sign_macos_keychain")
+    calls = []
+
+    def run(command):
+        calls.append(command)
+        if len(calls) == 1:
+            raise subprocess.CalledProcessError(
+                1, command, stderr="A timestamp was expected but was not found"
+            )
+
+    monkeypatch.setattr(signer, "run", run)
+    monkeypatch.setattr(signer.time, "sleep", lambda _: None)
+    signer.sign(tmp_path / "app", "identity")
+    assert len(calls) == 2

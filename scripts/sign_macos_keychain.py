@@ -50,6 +50,7 @@ def sign(path: Path, identity: str, *, worker: bool = False) -> None:
                     "timestamp service",
                     "timestamp server",
                     "timestamps differ",
+                    "a timestamp was expected but was not found",
                     "temporarily unavailable",
                 )
             ):

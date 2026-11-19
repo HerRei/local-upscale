@@ -70,6 +70,10 @@ def platform_key(entry: dict) -> str:
     )
 
 
+def _path_sort_key(file: Path, root: Path) -> tuple[str, ...]:
+    return tuple(file.relative_to(root).as_posix().split("/"))
+
+
 def engine_id(entry: dict, commit: str, *, root: Path = ROOT) -> str:
     """Identity of the engine recipe, independent of the app version/release commit.
 
@@ -116,7 +120,8 @@ def engine_id(entry: dict, commit: str, *, root: Path = ROOT) -> str:
             and "__pycache__" not in file.parts
             and file.suffix != ".pyc"
             and not any(part.startswith(".") for part in file.relative_to(root).parts)
-        }
+        },
+        key=lambda file: _path_sort_key(file, root),
     )
     records = []
     for path in paths:
