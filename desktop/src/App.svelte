@@ -67,9 +67,11 @@
     FIX_LABELS,
     choosePresetModel,
     displayName,
+    effectiveVideoTask,
     fitFor,
     fixesOf,
     frameRateChange,
+    isRestoreTask,
     libraryModelsForTask,
     modelsAvailableBeyondSelection,
     modelsForTask,
@@ -569,7 +571,9 @@
       editPrompt.length <= 4000 &&
       (!editModel?.terms_acceptance_required || termsAccepted[editModel.model_id]));
   $: selectedMedia = snapshot.media.find((media) => media.selected) ?? snapshot.media[0];
-  $: compatibleModels = modelsForTask(snapshot, settings.task);
+  $: videoTask = effectiveVideoTask(settings);
+  $: restoring = isRestoreTask(settings);
+  $: compatibleModels = modelsForTask(snapshot, settings.task, videoTask);
   $: selectedModel = compatibleModels.find(
     (model) => model.model_id === settings.selected_model_id,
   );
@@ -581,17 +585,19 @@
   );
   // The fixes this job runs, in order. In Restore the last one is the model itself.
   $: imageFixes =
-    settings.task === 'upscale' || settings.task === 'denoise' ? settings.fix_stages : [];
+    !usingTemporalVideo && settings.task !== 'edit' && Boolean(settings.task)
+      ? settings.fix_stages
+      : [];
   // Engines without image_multi_fix run one fix at most.
   $: fixPlanSupported =
     imageFixes.length <= 1 || snapshot.engine?.features.includes('image_multi_fix') === true;
   $: faceEngineAvailable = snapshot.engine?.features.includes('face_aware') === true;
-  $: faceEnabled =
-    settings.enable_face_model &&
-    faceEngineAvailable &&
-    !(settings.task === 'video' && settings.selected_video_model_id !== 'frame_by_frame');
   $: usingTemporalVideo =
-    settings.task === 'video' && settings.selected_video_model_id !== 'frame_by_frame';
+    settings.task === 'video' &&
+    !restoring &&
+    settings.selected_video_model_id !== 'frame_by_frame';
+  $: faceEnabled =
+    settings.enable_face_model && faceEngineAvailable && !restoring && !usingTemporalVideo;
   $: temporalUnavailableReason = !snapshot.engine?.video_engines.includes('seedvr2')
     ? 'This installation supports frame-by-frame video. SeedVR2 requires a compatible CUDA, ROCm or Metal engine.'
     : /^(directml|xpu|openvino)(:|$)/.test(settings.device_id)
@@ -669,7 +675,7 @@
       const model = snapshot.catalog.models.find((entry) => entry.model_id === selection.model_id);
       return Boolean(model?.installed && fitsFix(model, selection.fix));
     }) &&
-    (settings.task !== 'denoise' ||
+    (!restoring ||
       imageFixes.length === 0 ||
       imageFixes.at(-1)?.model_id === settings.selected_model_id);
   $: mediaMatchesTask = selectedMedia
@@ -1006,7 +1012,7 @@
   $: outputDimensions = selectedMedia
     ? settings.task === 'edit'
       ? `${editDimensions(selectedMedia.width, selectedMedia.height, Math.min(settings.edit_max_dimension, editSizeAllowed)).join(' × ')} · edited`
-      : settings.task === 'denoise'
+      : restoring
         ? `${selectedMedia.width} × ${selectedMedia.height} · original size`
         : usingTemporalVideo &&
             settings.video_target_resolution &&
@@ -1018,10 +1024,24 @@
   $: currentDownloadTarget =
     settings.task === 'edit' ? editModel : usingTemporalVideo ? selectedVideoModel : selectedModel;
   $: quickModel = settings.task
-    ? choosePresetModel(snapshot, settings.task, 'quick', settings.content, settings.preset_pins)
+    ? choosePresetModel(
+        snapshot,
+        settings.task,
+        'quick',
+        settings.content,
+        settings.preset_pins,
+        videoTask,
+      )
     : undefined;
   $: bestModel = settings.task
-    ? choosePresetModel(snapshot, settings.task, 'best', settings.content, settings.preset_pins)
+    ? choosePresetModel(
+        snapshot,
+        settings.task,
+        'best',
+        settings.content,
+        settings.preset_pins,
+        videoTask,
+      )
     : undefined;
   $: quickDownload = presetDownload('quick', snapshot, settings);
   $: bestDownload = presetDownload('best', snapshot, settings);
@@ -1045,13 +1065,8 @@
   $: downloads = pendingDownloads(plan);
   $: planNeedsFile = plan.some((stage) => stage.needsFile);
   $: planMissing = plan.some((stage) => stage.missing);
-  // Video runs no fixes yet; its frames can still get Faces.
   $: fixChips = (
-    settings.task === 'denoise'
-      ? ['noise', 'blur', 'jpeg']
-      : settings.task === 'video'
-        ? ['faces']
-        : ['noise', 'jpeg', 'blur', 'faces']
+    restoring ? ['noise', 'blur', 'jpeg'] : ['noise', 'jpeg', 'blur', 'faces']
   ) as FixKind[];
   $: prepareReady =
     !snapshot.runtime.active_job_id &&
@@ -1076,7 +1091,9 @@
   $: canPrepareAll = prepareReady && allReady(queueableMedia);
   $: startVerb =
     settings.task === 'video'
-      ? 'start video'
+      ? restoring
+        ? 'restore video'
+        : 'start video'
       : settings.task === 'denoise'
         ? 'restore'
         : settings.task === 'edit'
@@ -1157,7 +1174,7 @@
       : null;
   $: taskCaption = !settings.task
     ? ''
-    : settings.task === 'denoise'
+    : restoring
       ? 'Removes noise, blur and JPEG artifacts at the same size.'
       : settings.task === 'edit'
         ? 'Describe a change in words.'
@@ -1216,9 +1233,9 @@
     : mismatchNote || (canPrepareOne ? `Downloads ${formatBytes(downloads.bytes)} first.` : '');
   $: allTitle = allUnready ? preparingNote(allUnready) : incompatibleNote;
   // What the primary button says it does to all: "Upscale all 52", "Start all 5 videos".
-  $: allPhrase = `${startVerb === 'start video' ? 'start' : startVerb} all ${queueableMedia.length}${
-    settings.task === 'video' ? ' videos' : ''
-  }`;
+  $: allPhrase = `${
+    startVerb === 'start video' ? 'start' : startVerb === 'restore video' ? 'restore' : startVerb
+  } all ${queueableMedia.length}${settings.task === 'video' ? ' videos' : ''}`;
   const lockedTitle = 'Finish or cancel the run to change settings.';
   $: lockReason = cancelling
     ? 'Stopping your queue… Controls unlock when processing has stopped and temporary output is removed.'
@@ -1607,8 +1624,7 @@
 
   // Quick and Best describe the result; the model behind them is named once, under Model.
   function qualityBlurb(quality: 'quick' | 'best'): string {
-    if (settings.task === 'denoise')
-      return quality === 'quick' ? 'Fast clean-up' : 'Most careful, slower';
+    if (restoring) return quality === 'quick' ? 'Fast clean-up' : 'Most careful, slower';
     if (settings.task === 'video')
       return quality === 'quick' ? 'Fast, frame by frame' : 'More detail, slower';
     return quality === 'quick' ? 'Fast, clean result' : 'Finest detail, slower';
@@ -1620,8 +1636,8 @@
    * can chain it after a task or content change within the same tick.
    */
   function resolveRecipe(
-    patch: Partial<Pick<UiSettings, 'quality' | 'content' | 'fixes' | 'fix_stages'>>,
-    options: { keepVideoEngine?: boolean } = {},
+    patch: Partial<Pick<UiSettings, 'quality' | 'content' | 'fixes' | 'fix_stages' | 'video_task'>>,
+    options: { keepVideoEngine?: boolean; keepScale?: boolean } = {},
   ): void {
     const current = { ...snapshot.settings, ...patch };
     const task = current.task;
@@ -1631,17 +1647,23 @@
     const byId = (id: string): CatalogModel | undefined =>
       snapshot.catalog.models.find((model) => model.model_id === id);
     const keepPrimary = current.quality === 'custom';
-    const restoring = task === 'denoise';
+    const currentVideoTask = effectiveVideoTask(current);
+    const isRestoring = isRestoreTask(current);
+    const temporal =
+      task === 'video' &&
+      !isRestoring &&
+      current.selected_video_model_id !== 'frame_by_frame' &&
+      Boolean(options.keepVideoEngine);
     // Quick and Best choose every fix model again; a job set up by hand keeps each one
     // that still fixes its problem.
     const chosen = new Set<Exclude<FixKind, 'faces'>>();
-    const fix_stages = (task === 'video' ? [] : current.fix_stages).map((selection, index, all) => {
+    const fix_stages = (temporal ? [] : current.fix_stages).map((selection, index, all) => {
       const own = byId(selection.model_id);
       if (keepPrimary && own && fitsFix(own, selection.fix)) return selection;
       // A Restore model picked by hand becomes the new last fix when it can do that job.
       const picked = byId(current.selected_model_id);
       if (
-        restoring &&
+        isRestoring &&
         keepPrimary &&
         index === all.length - 1 &&
         !selection.model_id &&
@@ -1660,37 +1682,65 @@
     const patchSettings: Partial<UiSettings> = {
       quality: current.quality || quality,
       content: current.content,
-      fix_stages,
-      // The chips show the fixes that run; Faces waits in Restore for the way back.
-      fixes: [
-        ...fix_stages.map((selection) => selection.fix),
-        ...(wantsFaces ? (['faces'] as FixKind[]) : []),
-      ],
+      ...(temporal
+        ? {}
+        : {
+            fix_stages,
+            // The chips show the fixes that run; Faces waits in Restore for the way back.
+            fixes: [
+              ...fix_stages.map((selection) => selection.fix),
+              ...(wantsFaces ? (['faces'] as FixKind[]) : []),
+            ],
+          }),
     };
-    if (restoring) {
+    if (isRestoring) {
       // Restore's model is its last fix; without a fix it is the preset's or your own.
       const final = fix_stages.at(-1);
       const kept = keepPrimary && (!final || final.model_id === current.selected_model_id);
       if (!kept) {
-        const model = final ? byId(final.model_id) : choosePresetModel(snapshot, task, quality);
+        const model = final
+          ? byId(final.model_id)
+          : choosePresetModel(
+              snapshot,
+              task,
+              quality,
+              current.content,
+              current.preset_pins,
+              currentVideoTask,
+            );
         const id = final ? final.model_id : model?.model_id;
         if (id !== undefined) patchSettings.selected_model_id = id;
         if (model) patchSettings.halo = model.recommended_halo;
         // A pick by hand that cannot fix the problem gives way to the preset's model.
         if (keepPrimary && final && chosen.has(final.fix)) patchSettings.quality = quality;
       }
+      if (task === 'video') patchSettings.selected_video_model_id = 'frame_by_frame';
       patchSettings.output_scale = 1;
       patchSettings.enable_face_model = false;
     } else {
       const primary = keepPrimary
         ? undefined
-        : choosePresetModel(snapshot, task, quality, current.content, current.preset_pins);
+        : choosePresetModel(
+            snapshot,
+            task,
+            quality,
+            current.content,
+            current.preset_pins,
+            currentVideoTask,
+          );
       if (primary) {
         patchSettings.selected_model_id = primary.model_id;
         // Quick and Best are frame-by-frame recipes; a saved SeedVR2 choice
         // survives only the initial resolution and task changes.
         if (!options.keepVideoEngine) patchSettings.selected_video_model_id = 'frame_by_frame';
-        patchSettings.output_scale = primary.native_scale;
+        const minScale = task === 'video' ? 1 : 2;
+        if (
+          !options.keepScale ||
+          current.output_scale < minScale ||
+          current.output_scale > primary.native_scale
+        ) {
+          patchSettings.output_scale = primary.native_scale;
+        }
         patchSettings.halo = primary.recommended_halo;
         patchSettings.safe_memory = quality === 'best' ? current.safe_memory : false;
       }
@@ -1699,7 +1749,8 @@
       const companion = snapshot.catalog.models.find(
         (model) => model.purposes.includes('face') && primaryModel?.pair_with === model.model_id,
       );
-      patchSettings.enable_face_model = wantsFaces && Boolean(companion) && faceEngineAvailable;
+      patchSettings.enable_face_model =
+        !temporal && wantsFaces && Boolean(companion) && faceEngineAvailable;
     }
     updateSettings(patchSettings);
     termsAccepted = {};
@@ -1718,11 +1769,14 @@
       const fixes: FixKind[] = current.includes('faces')
         ? current.filter((item) => item !== 'faces')
         : [...current, 'faces'];
-      resolveRecipe({ fixes, quality: activeQuality });
+      resolveRecipe({ fixes, quality: activeQuality }, { keepScale: true });
       return;
     }
     // Noise, JPEG and blur each run as their own fix before the main model.
-    resolveRecipe({ fix_stages: toggleFixStage(settings.fix_stages, fix), quality: activeQuality });
+    resolveRecipe(
+      { fix_stages: toggleFixStage(settings.fix_stages, fix), quality: activeQuality },
+      { keepScale: true },
+    );
   }
 
   async function moveFix(fix: Exclude<FixKind, 'faces'>, offset: -1 | 1): Promise<void> {
@@ -1739,7 +1793,7 @@
         ...fix_stages.map((selection) => selection.fix),
         ...(settings.fixes.includes('faces') ? (['faces'] as FixKind[]) : []),
       ],
-      ...(settings.task === 'denoise' && final.fix !== settings.fix_stages.at(-1)?.fix
+      ...(restoring && final.fix !== settings.fix_stages.at(-1)?.fix
         ? { selected_model_id: final.model_id, ...(model ? { halo: model.recommended_halo } : {}) }
         : {}),
     });
@@ -1780,8 +1834,7 @@
   ): void {
     // Restore's model is the fix itself, so with a chip on it is chosen like one.
     libraryContext =
-      slot === 'fix' ||
-      ((slot === 'primary' || slot === 'try') && settings.task === 'denoise' && fix)
+      slot === 'fix' || ((slot === 'primary' || slot === 'try') && restoring && fix)
         ? { slot, fix }
         : { slot };
     // Try others… keeps the settings the plan card shows now, whatever the
@@ -1842,7 +1895,7 @@
     updateSettings({
       preset_pins,
       fix_stages,
-      ...(settings.task === 'denoise' && fix_stages.at(-1)?.fix === fix
+      ...(restoring && fix_stages.at(-1)?.fix === fix
         ? {
             selected_model_id: model.model_id,
             output_scale: 1,
@@ -1865,7 +1918,7 @@
     });
     // In Restore the model is the fix itself, so the default replaces a hand-picked one too.
     resolveRecipe({
-      quality: settings.task === 'denoise' ? fixQuality(activeQuality) : activeQuality,
+      quality: restoring ? fixQuality(activeQuality) : activeQuality,
     });
     libraryOpen = false;
   }
@@ -1998,7 +2051,7 @@
       });
   }
 
-  function setTask(task: TaskKind): void {
+  function setTask(task: TaskKind, nextVideoTask?: 'upscale' | 'denoise'): void {
     if (selectedMedia && (task === 'video') !== (selectedMedia.kind === 'video')) return;
     if (task !== 'video') lastImageTask = task;
     if (task === 'edit') {
@@ -2009,7 +2062,10 @@
       ensureEditModel();
       return;
     }
-    const models = modelsForTask(snapshot, task);
+    const targetVideoTask = task === 'video' ? (nextVideoTask ?? videoTask) : undefined;
+    const targetRestoring =
+      task === 'denoise' || (task === 'video' && targetVideoTask === 'denoise');
+    const models = modelsForTask(snapshot, task, targetVideoTask);
     // Keep a manual choice that still fits the task; otherwise the active
     // recipe (Quick until one is chosen) resolves the plan for the new task.
     const kept =
@@ -2018,13 +2074,18 @@
         : undefined;
     updateSettings({
       task,
+      ...(task === 'video' ? { video_task: targetVideoTask } : {}),
+      ...(targetRestoring ? { selected_video_model_id: 'frame_by_frame' } : {}),
       selected_model_id: kept?.model_id ?? '',
-      // Video runs no fixes; Upscale and Restore share theirs and their order.
-      ...(task === 'video' ? { fix_stages: [], fixes: [] } : {}),
-      output_scale:
-        task === 'denoise'
-          ? 1
-          : Math.min(kept?.native_scale ?? 4, Math.max(2, settings.output_scale)),
+      output_scale: targetRestoring
+        ? 1
+        : Math.min(
+            kept?.native_scale ?? 4,
+            Math.max(
+              task === 'video' && settings.task === 'video' && !restoring ? 1 : 2,
+              settings.output_scale,
+            ),
+          ),
       enable_face_model: false,
     });
     termsAccepted = {};
@@ -2033,9 +2094,10 @@
       resolveRecipe(
         {
           quality: activeQuality === 'quick' || activeQuality === 'best' ? activeQuality : 'quick',
-          fixes: task === 'video' ? [] : settings.fixes,
+          fixes: settings.fixes,
+          ...(task === 'video' ? { video_task: targetVideoTask } : {}),
         },
-        { keepVideoEngine: true },
+        { keepVideoEngine: !targetRestoring },
       );
     }
   }
@@ -2240,7 +2302,7 @@
         enable_face_model: false,
         quality: 'custom',
         // In Restore your own checkpoint is the model, not one of the fixes.
-        ...(settings.task === 'denoise'
+        ...(restoring
           ? {
               fix_stages: [],
               fixes: settings.fixes.filter((fix) => fix === 'faces'),
@@ -2263,14 +2325,19 @@
     const model = snapshot.catalog.models.find((candidate) => candidate.model_id === modelId);
     updateSettings({
       selected_model_id: modelId,
-      output_scale: model
-        ? Math.min(model.native_scale, Math.max(2, settings.output_scale))
-        : settings.output_scale,
+      output_scale: restoring
+        ? 1
+        : model
+          ? Math.min(
+              model.native_scale,
+              Math.max(settings.task === 'video' ? 1 : 2, settings.output_scale),
+            )
+          : settings.output_scale,
       // As the presets do: some models need a wider overlap between tiles.
       halo: model ? model.recommended_halo : settings.halo,
       allow_unsafe_pickle_model: false,
       enable_face_model:
-        settings.task !== 'denoise' &&
+        !restoring &&
         settings.fixes.includes('faces') &&
         faceEngineAvailable &&
         snapshot.catalog.models.some(
@@ -2354,9 +2421,10 @@
       },
       batch_mode: batchMode,
       task,
+      video_task: videoTask,
       model_id: settings.selected_model_id,
       video_model_id: settings.selected_video_model_id,
-      fix_stages: imageFixes,
+      fix_stages: usingTemporalVideo ? [] : imageFixes,
       custom_model_path: settings.custom_model_path,
       output_directory: settings.output_directory,
       output_format: settings.output_format,
@@ -2530,14 +2598,15 @@
     if (!settings.task) return;
     // The fixes that run before the model; a fix without a model has nothing to keep.
     const recipeFixPrefix = (
-      settings.task === 'denoise' ? imageFixes.slice(0, -1) : imageFixes
+      usingTemporalVideo ? [] : restoring ? imageFixes.slice(0, -1) : imageFixes
     ).filter((selection) => selection.model_id);
     const recipe: Recipe = {
       id: crypto.randomUUID(),
       name,
       task: settings.task,
+      ...(settings.task === 'video' ? { video_task: videoTask } : {}),
       model_id: settings.selected_model_id,
-      output_scale: settings.output_scale,
+      output_scale: restoring ? 1 : settings.output_scale,
       tile_size: settings.tile_size,
       halo: settings.halo,
       precision: settings.precision,
@@ -2576,20 +2645,17 @@
           fix: selection.fix,
         })),
         {
-          kind:
-            settings.task === 'video'
+          kind: restoring
+            ? ('restore' as const)
+            : settings.task === 'video'
               ? ('video' as const)
-              : settings.task === 'denoise'
-                ? ('restore' as const)
-                : ('upscale' as const),
+              : ('upscale' as const),
           model_id:
             settings.task === 'video' && usingTemporalVideo
               ? settings.selected_video_model_id
               : settings.selected_model_id,
           // Restore's model is its last fix.
-          ...(settings.task === 'denoise' && imageFixes.length
-            ? { fix: imageFixes[imageFixes.length - 1].fix }
-            : {}),
+          ...(restoring && imageFixes.length ? { fix: imageFixes[imageFixes.length - 1].fix } : {}),
         },
         ...(faceEnabled && faceModel
           ? [
@@ -2637,16 +2703,21 @@
     const fix_stages = recipeFixStages(recipe, snapshot.catalog);
     const recipeFace = recipe.stages?.find((stage) => stage.kind === 'face_restore');
     const recipeModel = snapshot.catalog.models.find((model) => model.model_id === recipe.model_id);
+    const targetVideoTask = recipe.video_task === 'denoise' ? 'denoise' : 'upscale';
+    const targetRestoring =
+      recipe.task === 'denoise' || (recipe.task === 'video' && targetVideoTask === 'denoise');
     updateSettings({
       task: recipe.task,
+      ...(recipe.task === 'video' ? { video_task: targetVideoTask } : {}),
       selected_model_id: recipe.model_id,
-      selected_video_model_id: recipe.video_model_id || 'frame_by_frame',
+      selected_video_model_id: targetRestoring
+        ? 'frame_by_frame'
+        : recipe.video_model_id || 'frame_by_frame',
       fix_stages,
       custom_model_path: recipe.custom_model_path ?? '',
-      output_scale:
-        recipe.task === 'denoise'
-          ? 1
-          : Math.min(recipeModel?.native_scale ?? recipe.output_scale, recipe.output_scale),
+      output_scale: targetRestoring
+        ? 1
+        : Math.min(recipeModel?.native_scale ?? recipe.output_scale, recipe.output_scale),
       output_format: recipe.output_format ?? settings.output_format,
       preserve_metadata: recipe.preserve_metadata ?? settings.preserve_metadata,
       jpeg_quality: recipe.jpeg_quality ?? settings.jpeg_quality,
@@ -2666,7 +2737,8 @@
       // Recipes saved before 0.3.7 carry no interpolation, so they run without it.
       video_interpolation: recipe.video_interpolation || 'off',
       video_interpolation_order: recipe.video_interpolation_order || 'after_upscale',
-      enable_face_model: recipeFace ? true : (recipe.enable_face_model ?? false),
+      enable_face_model:
+        !targetRestoring && (recipeFace ? true : (recipe.enable_face_model ?? false)),
       face_fidelity:
         recipeFace?.fidelity === undefined
           ? (recipe.face_fidelity ?? 70)
@@ -3373,7 +3445,7 @@
                 ? editFamilyLabel(editModel.family)
                 : 'Choose a model'
               : settings.task
-                ? `${activeQuality === 'custom' ? 'Custom' : activeQuality === 'best' ? 'Best' : 'Quick'}${settings.task === 'denoise' ? '' : settings.content === 'illustration' ? ' · Illustration' : ' · Photo'}`
+                ? `${activeQuality === 'custom' ? 'Custom' : activeQuality === 'best' ? 'Best' : 'Quick'}${restoring ? '' : settings.content === 'illustration' ? ' · Illustration' : ' · Photo'}`
                 : 'Choose a task'}</span
         >
       </div>
@@ -3396,23 +3468,35 @@
         >
           <section class="control-section">
             <span class="eyebrow">Task</span>
-            <!-- A selected video is upscaled as video, so Upscale stays pressed for it. -->
+            <!-- A selected video runs Upscale or Restore inside the video task. -->
             <div class="seg-inline task-switch" role="group" aria-label="Task">
               <button
-                aria-pressed={settings.task === 'upscale' || settings.task === 'video'}
-                class:active={settings.task === 'upscale' || settings.task === 'video'}
-                on:click={() => setTask(selectedMedia?.kind === 'video' ? 'video' : 'upscale')}
-                >Upscale</button
+                aria-pressed={settings.task === 'upscale' ||
+                  (settings.task === 'video' && !restoring)}
+                class:active={settings.task === 'upscale' ||
+                  (settings.task === 'video' && !restoring)}
+                on:click={() =>
+                  setTask(
+                    selectedMedia?.kind === 'video' || settings.task === 'video'
+                      ? 'video'
+                      : 'upscale',
+                    'upscale',
+                  )}>Upscale</button
               >
               <button
-                aria-pressed={settings.task === 'denoise'}
-                disabled={selectedMedia?.kind === 'video'}
-                class:active={settings.task === 'denoise'}
-                on:click={() => setTask('denoise')}>Restore</button
+                aria-pressed={restoring}
+                class:active={restoring}
+                on:click={() =>
+                  setTask(
+                    selectedMedia?.kind === 'video' || settings.task === 'video'
+                      ? 'video'
+                      : 'denoise',
+                    'denoise',
+                  )}>Restore</button
               >
               <button
                 aria-pressed={settings.task === 'edit'}
-                disabled={selectedMedia?.kind === 'video'}
+                disabled={selectedMedia?.kind === 'video' || settings.task === 'video'}
                 class:active={settings.task === 'edit'}
                 on:click={() => setTask('edit')}>Edit</button
               >
@@ -3556,7 +3640,9 @@
                             (recipe.task === 'video') !== (selectedMedia.kind === 'video')}
                           on:click={() => applyRecipe(recipe)}
                           ><b>{recipe.name}</b><span
-                            >{recipe.task} · {recipe.output_scale}× · {recipe.precision.toUpperCase()}</span
+                            >{recipe.task === 'video' && recipe.video_task === 'denoise'
+                              ? 'video restore'
+                              : recipe.task} · {recipe.output_scale}× · {recipe.precision.toUpperCase()}</span
                           ></button
                         ><button
                           class:active={activeRecipeIds.has(recipe.id)}
@@ -3598,12 +3684,10 @@
             {#if !usingTemporalVideo && settings.task !== 'edit'}
               <section
                 class="control-section"
-                aria-label={settings.task === 'denoise' ? 'What to fix' : 'Your image'}
+                aria-label={restoring ? 'What to fix' : 'Your image'}
               >
-                <span class="eyebrow"
-                  >{settings.task === 'denoise' ? 'What to fix' : 'Your image'}</span
-                >
-                {#if settings.task !== 'denoise'}
+                <span class="eyebrow">{restoring ? 'What to fix' : 'Your image'}</span>
+                {#if !restoring}
                   <div class="field-heading">
                     <span class="field-label" id="content-label">Content</span><HelpTip
                       label="Content"
@@ -3626,19 +3710,17 @@
                       on:click={() => setContent('illustration')}>Illustration</button
                     >
                   </div>
-                  {#if settings.task === 'upscale'}
-                    <div class="field-heading">
-                      <span class="field-label" id="fix-label">Fix first</span><HelpTip
-                        label="Fix first"
-                        text="Each problem you pick gets its own fix, run before the upscaler in the order listed under Model. The ↑ and ↓ buttons change that order; each fix's Change… picks its model, which LocalSR remembers for that problem."
-                      />
-                    </div>
-                  {/if}
+                  <div class="field-heading">
+                    <span class="field-label" id="fix-label">Fix first</span><HelpTip
+                      label="Fix first"
+                      text="Each problem you pick gets its own fix, run before the upscaler in the order listed under Model. The ↑ and ↓ buttons change that order; each fix's Change… picks its model, which LocalSR remembers for that problem."
+                    />
+                  </div>
                 {/if}
                 <div
                   class="chips"
                   role="group"
-                  aria-label={settings.task === 'denoise' ? 'Problems to fix' : 'Fix first'}
+                  aria-label={restoring ? 'Problems to fix' : 'Fix first'}
                 >
                   {#each fixChips as fix (fix)}
                     <button
@@ -3690,7 +3772,7 @@
                     >{/if}
                 </span>
               </div>
-              {#if settings.task === 'video'}
+              {#if settings.task === 'video' && !restoring}
                 <label class="field-label" for="video-engine">Video engine</label>
                 <select
                   id="video-engine"
@@ -3743,6 +3825,7 @@
                             settings.task,
                             settings.content,
                             stage.fix,
+                            videoTask,
                           ),
                           stage.model?.model_id ?? '',
                         )
@@ -3843,7 +3926,7 @@
                             ? `Change the ${FIX_NAMES[stage.fix]} fix model`
                             : changeSlot === 'edit'
                               ? 'Change the edit model'
-                              : settings.task === 'denoise'
+                              : restoring
                                 ? 'Change the restore model'
                                 : 'Change the upscaler'}
                           on:click={() => openLibrary(changeSlot, stage.fix)}>Change…</button
@@ -3864,7 +3947,7 @@
                             ><button
                               class="link-button"
                               type="button"
-                              aria-label={settings.task === 'denoise'
+                              aria-label={restoring
                                 ? 'Try other restoration models on this image'
                                 : 'Try other upscalers on this image'}
                               disabled={!canOpenTrials}
@@ -4266,7 +4349,9 @@
           title={singleHint || undefined}
           on:click={() => start()}
           >{settings.task === 'video'
-            ? 'Start selected video'
+            ? restoring
+              ? 'Restore selected video'
+              : 'Start selected video'
             : settings.task === 'denoise'
               ? 'Restore selected'
               : settings.task === 'edit'
@@ -4284,6 +4369,7 @@
     {settings}
     context={{
       task: settings.task,
+      videoTask,
       content: settings.content,
       quality: activeQuality,
       slot: libraryContext.slot,

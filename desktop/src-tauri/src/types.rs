@@ -229,6 +229,8 @@ pub struct Recipe {
     pub id: String,
     pub name: String,
     pub task: String,
+    #[serde(default)]
+    pub video_task: String,
     pub model_id: String,
     pub output_scale: u32,
     pub tile_size: u32,
@@ -310,6 +312,8 @@ pub struct UiSettings {
     pub interface_scale: u32,
     pub batch_mode: bool,
     pub task: String,
+    #[serde(default = "default_video_task")]
+    pub video_task: String,
     pub selected_model_id: String,
     pub selected_video_model_id: String,
     pub fix_stages: Vec<FixStageSelection>,
@@ -418,6 +422,10 @@ pub(crate) fn default_interpolation_order() -> String {
     "after_upscale".into()
 }
 
+pub(crate) fn default_video_task() -> String {
+    "upscale".into()
+}
+
 pub(crate) fn default_video_codec() -> String {
     // The worker picks the fastest format the computer can write.
     "auto".into()
@@ -446,6 +454,7 @@ impl Default for UiSettings {
             interface_scale: 100,
             batch_mode: false,
             task: String::new(),
+            video_task: default_video_task(),
             selected_model_id: String::new(),
             selected_video_model_id: "frame_by_frame".into(),
             fix_stages: Vec::new(),
@@ -796,6 +805,8 @@ pub struct StartBatchInput {
     pub media_ids: Vec<String>,
     pub batch_mode: bool,
     pub task: String,
+    #[serde(default = "default_video_task")]
+    pub video_task: String,
     pub model_id: String,
     pub video_model_id: String,
     pub fix_stages: Vec<FixStageSelection>,

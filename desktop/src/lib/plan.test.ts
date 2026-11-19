@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { demoSnapshot } from './demo';
+import type { Recipe } from './types';
 import { applyWorkerEnvelope } from './workerEvents';
 import { chooseFixModel } from './fixStages';
 import {
@@ -10,7 +11,9 @@ import {
   interpolationLabel,
   pendingDownloads,
   resolvePlan,
+  supportsHdrPreservation,
 } from './plan';
+import { recipeFixStages, recipeMatches } from './recipes';
 
 describe('model library resolution', () => {
   it('resolves Quick and Best by content and honours a pinned slot', () => {
@@ -297,5 +300,80 @@ describe('model library resolution', () => {
     );
     expect(displayName({ name: 'HAT-L ×4 ImageNet — Large' })).toBe('HAT-L ×4 ImageNet');
     expect(displayName({ name: 'x', display_name: 'Given' })).toBe('Given');
+  });
+
+  it('resolves video restore, video fix-first stages, and video recipes', () => {
+    const snapshot = demoSnapshot();
+    const restoreSettings = {
+      ...snapshot.settings,
+      task: 'video' as const,
+      video_task: 'denoise' as const,
+      selected_video_model_id: 'frame_by_frame',
+      output_scale: 1,
+      halo: 16,
+      precision: 'fp32' as const,
+      safe_memory: true,
+      enable_face_model: false,
+      quality: 'custom' as const,
+      selected_model_id: 'scunet_color_real_psnr',
+      fix_stages: [
+        { fix: 'jpeg' as const, model_id: 'fbcnn_color' },
+        { fix: 'noise' as const, model_id: 'scunet_color_real_psnr' },
+      ],
+      fixes: ['jpeg' as const, 'noise' as const],
+    };
+    const options = { faceEnabled: false, usingTemporalVideo: false };
+    const plan = resolvePlan(snapshot, restoreSettings, options);
+    expect(plan.map((s) => [s.kind, s.role, s.model?.model_id])).toEqual([
+      ['deblock', 'fix', 'fbcnn_color'],
+      ['restore', 'primary', 'scunet_color_real_psnr'],
+    ]);
+    expect(supportsHdrPreservation(restoreSettings, snapshot.catalog)).toBe(false);
+
+    const upscaleWithFixes = {
+      ...snapshot.settings,
+      task: 'video' as const,
+      video_task: 'upscale' as const,
+      selected_model_id: 'span_photo_x4',
+      fix_stages: [{ fix: 'blur' as const, model_id: 'nafnet_gopro_deblur' }],
+      fixes: ['blur' as const],
+      video_interpolation: 'x2' as const,
+      video_interpolation_order: 'after_upscale' as const,
+    };
+    expect(resolvePlan(snapshot, upscaleWithFixes, options).map((s) => s.kind)).toEqual([
+      'restore',
+      'upscale',
+      'interpolate',
+    ]);
+
+    const restoreRecipe: Recipe = {
+      id: 'vr1',
+      name: 'Clean video',
+      task: 'video' as const,
+      video_task: 'denoise' as const,
+      quality: 'custom' as const,
+      model_id: 'scunet_color_real_psnr',
+      video_model_id: 'frame_by_frame',
+      output_scale: 1,
+      tile_size: restoreSettings.tile_size,
+      halo: 16,
+      precision: 'fp32' as const,
+      safe_memory: true,
+      enable_face_model: false,
+      fixes: ['jpeg' as const, 'noise' as const],
+      stages: [
+        { kind: 'deblock', model_id: 'fbcnn_color', fix: 'jpeg' as const },
+        { kind: 'restore', model_id: 'scunet_color_real_psnr', fix: 'noise' as const },
+      ],
+      output_format: 'png',
+    };
+    expect(recipeFixStages(restoreRecipe, snapshot.catalog)).toEqual([
+      { fix: 'jpeg', model_id: 'fbcnn_color' },
+      { fix: 'noise', model_id: 'scunet_color_real_psnr' },
+    ]);
+    expect(recipeMatches(restoreRecipe, restoreSettings, snapshot.catalog)).toBe(true);
+    expect(
+      recipeMatches({ ...restoreRecipe, video_task: 'upscale' }, restoreSettings, snapshot.catalog),
+    ).toBe(false);
   });
 });

@@ -237,6 +237,7 @@ export interface Recipe {
   id: string;
   name: string;
   task: TaskKind;
+  video_task?: 'upscale' | 'denoise' | '';
   model_id: string;
   output_scale: number;
   tile_size: number;
@@ -294,6 +295,7 @@ export interface UiSettings {
   interface_scale: 100 | 110 | 125;
   batch_mode: boolean;
   task: TaskKind | '';
+  video_task?: 'upscale' | 'denoise';
   selected_model_id: string;
   selected_video_model_id: string;
   fix_stages: FixStageSelection[];
@@ -534,6 +536,7 @@ export interface StartBatchInput {
   media_ids: string[];
   batch_mode: boolean;
   task: TaskKind;
+  video_task?: 'upscale' | 'denoise';
   model_id: string;
   video_model_id: string;
   fix_stages: FixStageSelection[];

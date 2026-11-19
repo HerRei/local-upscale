@@ -581,7 +581,10 @@ pub fn save_recipe(
     let _scheduler = lock(&state.scheduler)?;
     crate::updates::ensure_not_installing(&state)?;
     recipe.name = recipe.name.trim().chars().take(60).collect();
-    if recipe.name.is_empty() || !matches!(recipe.task.as_str(), "upscale" | "denoise" | "video") {
+    if recipe.name.is_empty()
+        || !matches!(recipe.task.as_str(), "upscale" | "denoise" | "video")
+        || !matches!(recipe.video_task.as_str(), "" | "upscale" | "denoise")
+    {
         return Err(AppError::Validation(
             "recipe name or task is invalid".into(),
         ));
@@ -720,7 +723,34 @@ fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
                     .all(|kind| matches!(*kind, "restore" | "deblock"))
         }),
         "video" => {
-            matches!(kinds.as_slice(), ["video"] | ["video", "face_restore"])
+            if recipe.video_task == "denoise" {
+                kinds.split_last().is_some_and(|(last, before)| {
+                    *last == "restore"
+                        && before.len() <= 3
+                        && before
+                            .iter()
+                            .all(|kind| matches!(*kind, "restore" | "deblock"))
+                })
+            } else {
+                let primary = kinds
+                    .iter()
+                    .position(|kind| matches!(*kind, "upscale" | "video"));
+                primary.is_some_and(|index| {
+                    kinds
+                        .iter()
+                        .filter(|kind| matches!(**kind, "upscale" | "video"))
+                        .count()
+                        == 1
+                        && index <= 3
+                        && kinds[..index]
+                            .iter()
+                            .all(|kind| matches!(*kind, "deblock" | "restore"))
+                        && kinds[index + 1..]
+                            .iter()
+                            .all(|kind| *kind == "face_restore")
+                        && kinds[index + 1..].len() <= 1
+                })
+            }
         }
         _ => false,
     };
@@ -938,11 +968,12 @@ fn refuse_when_disk_is_short(
         return Ok(());
     };
     let native = u64::from(*native_scale);
-    let saved = if input.task == "denoise" {
-        1
-    } else {
-        u64::from(input.output_scale).min(native).max(1)
-    };
+    let saved =
+        if input.task == "denoise" || (input.task == "video" && input.video_task == "denoise") {
+            1
+        } else {
+            u64::from(input.output_scale).min(native).max(1)
+        };
     let (width, height) = (u64::from(first.width), u64::from(first.height));
     let need = if input.task == "video" {
         crate::disk_room::video_bytes(
@@ -2618,6 +2649,9 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
     {
         return Err(AppError::Validation("unknown task".into()));
     }
+    if !matches!(settings.video_task.as_str(), "" | "upscale" | "denoise") {
+        return Err(AppError::Validation("unknown video task".into()));
+    }
     // Zero steps means the chosen model's own default.
     if !matches!(settings.edit_max_dimension, 512 | 768 | 1024)
         || settings.edit_steps > 60
@@ -2748,6 +2782,7 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
         interface_scale: 100,
         batch_mode: input.batch_mode,
         task: input.task.clone(),
+        video_task: input.video_task.clone(),
         selected_model_id: input.model_id.clone(),
         selected_video_model_id: input.video_model_id.clone(),
         fix_stages: input.fix_stages.clone(),
@@ -2781,6 +2816,14 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
         ..UiSettings::default()
     };
     validate_settings(&settings)?;
+    if input.task == "video"
+        && input.video_task == "denoise"
+        && input.video_model_id != "frame_by_frame"
+    {
+        return Err(AppError::Validation(
+            "Restore uses the Frame-by-frame video engine with 1× restoration models.".into(),
+        ));
+    }
     if input.task == "video"
         && input.video_interpolation != "off"
         && input.video_model_id != "frame_by_frame"
@@ -2841,13 +2884,23 @@ struct ResolvedImageStage {
 
 fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResult<ModelSelection> {
     validate_fix_selections(&input.fix_stages)?;
-    if !input.fix_stages.is_empty() && !matches!(input.task.as_str(), "upscale" | "denoise") {
+    let restoring =
+        input.task == "denoise" || (input.task == "video" && input.video_task == "denoise");
+    if !input.fix_stages.is_empty()
+        && (!matches!(input.task.as_str(), "upscale" | "denoise" | "video")
+            || (input.task == "video" && input.video_model_id != "frame_by_frame"))
+    {
         return Err(AppError::Validation(
-            "fixes run only before an image upscale or restore".into(),
+            "fixes run only before an upscale or restore".into(),
         ));
     }
     let catalog = lock(&state.catalog)?;
     if input.task == "video" && input.video_model_id != "frame_by_frame" {
+        if input.video_task == "denoise" {
+            return Err(AppError::Validation(
+                "Restore uses the Frame-by-frame video engine with 1× restoration models.".into(),
+            ));
+        }
         let model = catalog
             .video_models
             .iter()
@@ -2894,8 +2947,8 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
             .iter()
             .find(|model| model.model_id == input.model_id)
             .ok_or_else(|| AppError::Validation("unknown image model".into()))?;
-        validate_model_for_task(model, &input.task)?;
-        if input.task != "denoise" && input.output_scale > model.native_scale {
+        validate_model_for_task(model, if restoring { "denoise" } else { &input.task })?;
+        if !restoring && input.output_scale > model.native_scale {
             return Err(AppError::Validation(format!(
                 "the selected model supports output scales up to {}×",
                 model.native_scale
@@ -2974,7 +3027,7 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
             path: model.installed_path.clone().unwrap_or_default(),
         });
     }
-    if input.task == "denoise" && !preprocess.is_empty() {
+    if restoring && !preprocess.is_empty() {
         if preprocess
             .last()
             .is_none_or(|stage| stage.model_id != input.model_id)
@@ -3092,10 +3145,13 @@ fn build_job_message(
             }
         })),
         ModelSelection::Image {
+            model_id,
             path,
+            preprocess,
             face_path,
+            face_model_id,
+            native_scale,
             interpolation,
-            ..
         } => {
             if interpolation.is_some()
                 && input.video_hdr_mode == "preserve"
@@ -3106,6 +3162,12 @@ fn build_job_message(
                     media.name
                 )));
             }
+            let restoring = input.video_task == "denoise";
+            let output_scale = if restoring {
+                1
+            } else {
+                input.output_scale.min(*native_scale).max(1)
+            };
             Ok(json!({
                 "type": "video_job_request",
                 "data": {
@@ -3137,7 +3199,15 @@ fn build_job_message(
                     "temporal_window": 0,
                     "temporal_overlap": 0,
                     "target_resolution": 0,
-                    "output_scale": input.output_scale,
+                    "output_scale": output_scale,
+                    "stages": image_pipeline_stages(
+                        preprocess,
+                        model_id,
+                        path,
+                        face_path.as_deref(),
+                        face_model_id,
+                        input,
+                    ),
                     "allow_unverified_checkpoint": input.allow_unsafe_pickle_model,
                     "preview_enabled": input.enable_live_preview,
                     "preview_max_fps": 2.0,
@@ -3226,10 +3296,12 @@ fn image_pipeline_stages(
             "model_path": stage.path,
         }));
     }
+    let restoring =
+        input.task == "denoise" || (input.task == "video" && input.video_task == "denoise");
     stages.push(json!({
-        "kind": if input.task == "denoise" { "restore" } else { "upscale" },
+        "kind": if restoring { "restore" } else { "upscale" },
         "role": "primary",
-        "fix": if input.task == "denoise" { input.fix_stages.last().map(|stage| stage.fix.as_str()) } else { None },
+        "fix": if restoring { input.fix_stages.last().map(|stage| stage.fix.as_str()) } else { None },
         "model_id": model_id,
         "model_path": model_path,
     }));
@@ -3287,6 +3359,7 @@ fn unique_output_path(
 fn output_ending(input: &StartBatchInput) -> (String, &str) {
     let mut suffix = match input.task.as_str() {
         "denoise" => "_denoised".to_owned(),
+        "video" if input.video_task == "denoise" => "_video_restored".to_owned(),
         "video"
             if input.video_model_id != "frame_by_frame" && input.video_target_resolution > 0 =>
         {

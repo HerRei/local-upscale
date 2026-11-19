@@ -94,6 +94,18 @@ export function rankForQuality(models: CatalogModel[], quality: 'quick' | 'best'
 export function presetSlot(task: TaskKind, content: ContentKind, quality: Quality): string {
   return `${task}/${content}/${quality}`;
 }
+
+export function effectiveVideoTask(
+  settings: Pick<UiSettings, 'video_task'>,
+): 'upscale' | 'denoise' {
+  return settings.video_task === 'denoise' ? 'denoise' : 'upscale';
+}
+
+export function isRestoreTask(settings: Pick<UiSettings, 'task' | 'video_task'>): boolean {
+  return (
+    settings.task === 'denoise' || (settings.task === 'video' && settings.video_task === 'denoise')
+  );
+}
 export type Fit = 'runs' | 'heavy' | 'too_heavy' | 'unknown';
 
 /**
@@ -204,8 +216,12 @@ export function resolvePlan(
       sizeBytes: model.installed ? 0 : model.size_bytes,
     };
 
-  const restoring = settings.task === 'denoise';
-  const fixStages = settings.task === 'upscale' || restoring ? settings.fix_stages : [];
+  const restoring = isRestoreTask(settings);
+  const fixStages =
+    !options.usingTemporalVideo &&
+    (settings.task === 'upscale' || settings.task === 'video' || restoring)
+      ? settings.fix_stages
+      : [];
   // Restore's model is its last fix; the ones before it run first, as before an upscale.
   const chip = restoring ? fixStages.at(-1)?.fix : undefined;
   const missingStage = (
@@ -249,9 +265,9 @@ export function resolvePlan(
     });
   } else if (settings.selected_model_id === '__custom__') {
     stages.push({
-      kind: settings.task === 'denoise' ? 'restore' : 'upscale',
+      kind: restoring ? 'restore' : 'upscale',
       role: 'primary',
-      label: settings.task === 'denoise' ? 'Restore' : `Upscale ×${settings.output_scale}`,
+      label: restoring ? 'Restore' : `Upscale ×${settings.output_scale}`,
       custom: settings.custom_model_path,
       installed: Boolean(settings.custom_model_path),
       canDownload: false,
@@ -271,7 +287,7 @@ export function resolvePlan(
     else if (chip) stages.push(missingStage('restore', 'primary', 'Restore', chip));
   }
 
-  if (options.faceEnabled && options.faceModel && settings.task !== 'denoise') {
+  if (options.faceEnabled && options.faceModel && !restoring) {
     const stage = stageFor('face_restore', 'face', 'Faces', options.faceModel);
     if (stage) stages.push(stage);
   }
@@ -339,18 +355,17 @@ export function pendingDownloads(stages: PlanStage[]): { stages: PlanStage[]; by
   return { stages: pending, bytes: pending.reduce((total, stage) => total + stage.sizeBytes, 0) };
 }
 
-export function modelsForTask(snapshot: AppSnapshot, task: TaskKind | ''): CatalogModel[] {
-  if (task === 'upscale') {
-    return snapshot.catalog.models.filter(
-      (model) => model.native_scale > 1 && !model.purposes.includes('face'),
-    );
-  }
-  if (task === 'denoise') {
+export function modelsForTask(
+  snapshot: AppSnapshot,
+  task: TaskKind | '',
+  videoTask: 'upscale' | 'denoise' = 'upscale',
+): CatalogModel[] {
+  if (task === 'denoise' || (task === 'video' && videoTask === 'denoise')) {
     return snapshot.catalog.models.filter(
       (model) => model.native_scale === 1 && !model.purposes.includes('face'),
     );
   }
-  if (task === 'video') {
+  if (task === 'upscale' || task === 'video') {
     return snapshot.catalog.models.filter(
       (model) => model.native_scale > 1 && !model.purposes.includes('face'),
     );
@@ -364,9 +379,10 @@ export function libraryModelsForTask(
   task: TaskKind | '',
   content: ContentKind,
   fix?: Exclude<FixKind, 'faces'>,
+  videoTask: 'upscale' | 'denoise' = 'upscale',
 ): CatalogModel[] {
   // A fix stage always chooses among 1× restoration models, whatever the task around it.
-  if (task === 'denoise' || fix)
+  if (task === 'denoise' || (task === 'video' && videoTask === 'denoise') || fix)
     return models.filter(
       (model) =>
         model.native_scale === 1 &&
@@ -417,16 +433,18 @@ export function choosePresetModel(
   quality: 'quick' | 'best',
   content: ContentKind = 'photo',
   pins: Record<string, string> = {},
+  videoTask: 'upscale' | 'denoise' = 'upscale',
 ): CatalogModel | undefined {
-  const candidates = modelsForTask(snapshot, task);
-  const pinned = candidates.find(
-    (model) => model.model_id === pins[presetSlot(task, content, quality)],
-  );
+  const restoring = task === 'denoise' || (task === 'video' && videoTask === 'denoise');
+  const candidates = modelsForTask(snapshot, task, videoTask);
+  const pinned = restoring
+    ? undefined
+    : candidates.find((model) => model.model_id === pins[presetSlot(task, content, quality)]);
   if (pinned) return pinned;
   const eligible = candidates.filter(
-    (model) => presetMayPick(model) && (task === 'denoise' || contentMatch(model, content) > 0),
+    (model) => presetMayPick(model) && (restoring || contentMatch(model, content) > 0),
   );
-  if (task === 'denoise') return rankForQuality(eligible, quality)[0];
+  if (restoring) return rankForQuality(eligible, quality)[0];
   const ranked = rankForQuality(eligible, quality);
   return ranked.sort(
     (left, right) => contentMatch(right, content) - contentMatch(left, content),
@@ -441,16 +459,18 @@ export function presetDownload(
 ): string {
   const task = ui.task;
   if (!task || task === 'edit') return '';
-  const fixes = (task === 'upscale' || task === 'denoise' ? ui.fix_stages : []).map((selection) =>
-    chooseFixModel(current, selection.fix, quality, ui.preset_pins),
-  );
+  const restoring = isRestoreTask(ui);
+  const temporal =
+    task === 'video' && !restoring && ui.selected_video_model_id !== 'frame_by_frame';
+  const fixes = (
+    !temporal && (task === 'upscale' || task === 'video' || restoring) ? ui.fix_stages : []
+  ).map((selection) => chooseFixModel(current, selection.fix, quality, ui.preset_pins));
   // Restore's model is its last fix; without one it is the preset's own choice.
-  const primary =
-    task === 'denoise'
-      ? fixes.length
-        ? undefined
-        : choosePresetModel(current, task, quality)
-      : choosePresetModel(current, task, quality, ui.content, ui.preset_pins);
+  const primary = restoring
+    ? fixes.length
+      ? undefined
+      : choosePresetModel(current, task, quality, ui.content, ui.preset_pins, ui.video_task)
+    : choosePresetModel(current, task, quality, ui.content, ui.preset_pins, ui.video_task);
   const models = new Map(
     [primary, ...fixes]
       .filter((model): model is CatalogModel => model !== undefined)
@@ -467,6 +487,7 @@ export function supportsHdrPreservation(
   candidate: UiSettings,
   catalog: AppSnapshot['catalog'],
 ): boolean {
+  if (candidate.video_task === 'denoise' || candidate.fix_stages.length > 0) return false;
   return (
     candidate.selected_video_model_id === 'frame_by_frame' &&
     (candidate.selected_model_id === '__custom__' ||

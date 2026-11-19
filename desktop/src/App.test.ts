@@ -91,7 +91,7 @@ const api = vi.hoisted(() => ({
       crashReports: boolean;
     }): Promise<void> => undefined,
   ),
-  startJobs: vi.fn(async () => undefined),
+  startJobs: vi.fn(async (_input: StartBatchInput) => undefined),
   cancelJobs: vi.fn(async () => undefined),
   retryEngine: vi.fn(async (): Promise<void> => undefined),
   startBenchmark: vi.fn(async () => undefined),
@@ -1715,14 +1715,15 @@ describe('LocalSR desktop interface', () => {
 
     cleanup();
     await mountWith(readySnapshot([video('clip', true)]));
-    // A selected video turns Upscale into video upscaling; the image-only tasks step aside.
+    // A selected video turns Upscale into video upscaling, enables Restore, and keeps Edit disabled.
     expect((screen.getByRole('button', { name: 'Upscale' }) as HTMLButtonElement).disabled).toBe(
       false,
     );
     expect(screen.getByText('Enlarges video, SDR or HDR.')).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Restore' }) as HTMLButtonElement).disabled).toBe(
-      true,
+      false,
     );
+    expect((screen.getByRole('button', { name: 'Edit' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it.each([
@@ -2429,7 +2430,10 @@ describe('LocalSR desktop interface', () => {
         '1 video item can be queued with this setup; select the other media type to configure it separately.';
       const start = screen.getByRole('button', { name: 'Start selected video' });
       expect(start.getAttribute('title')).toBe(why);
-      expect(screen.getByRole('button', { name: /^Restore$/ }).hasAttribute('disabled')).toBe(true);
+      expect(screen.getByRole('button', { name: /^Restore$/ }).hasAttribute('disabled')).toBe(
+        false,
+      );
+      expect(screen.getByRole('button', { name: /^Edit$/ }).hasAttribute('disabled')).toBe(true);
       await user.click(start);
       await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
       expect(api.startJobs).toHaveBeenCalledWith(
@@ -4394,18 +4398,19 @@ describe('Several fixes in one pass', () => {
     );
   });
 
-  it('keeps a frame-by-frame video recipe and shows no fixes for video', async () => {
+  it('keeps a frame-by-frame video recipe and offers fixes for frame-by-frame video', async () => {
     const snapshot = readySnapshot([video('clip', true)]);
     Object.assign(snapshot.settings, {
       task: 'video',
+      video_task: 'upscale',
       quality: 'best',
       selected_model_id: 'span_photo_x4',
       selected_video_model_id: 'frame_by_frame',
     });
     const user = await mountWith(snapshot);
-    // Video runs no fixes, so it offers none; Faces stays.
-    expect(screen.queryByRole('button', { name: 'Noise' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Blur' })).toBeNull();
+    // Frame-by-frame video offers fix stages alongside Faces.
+    expect(screen.getByRole('button', { name: 'Noise' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Blur' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Faces' })).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
     await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Clip');
@@ -4416,7 +4421,7 @@ describe('Several fixes in one pass', () => {
     ]);
   });
 
-  it('drops the fixes when the task becomes video', async () => {
+  it('keeps fixes when the task becomes frame-by-frame video', async () => {
     const snapshot = readySnapshot([image('photo', true), video('clip')]);
     Object.assign(snapshot.settings, {
       task: 'upscale',
@@ -4425,13 +4430,18 @@ describe('Several fixes in one pass', () => {
       fixes: ['blur', 'noise'],
       fix_stages: [blur, { fix: 'noise', model_id: 'scunet_color_real_psnr' }],
     });
-    const user = await mountWith(snapshot);
+    await mountWith(snapshot);
     const switched = structuredClone(snapshot);
     switched.media = [image('photo'), video('clip', true)];
     api.refreshSnapshot.mockResolvedValue(switched);
-    await user.click(screen.getByRole('button', { name: /^▶ clip\.mp4/ }));
+    await userEvent.click(screen.getByRole('button', { name: /^▶ clip\.mp4/ }));
     await waitFor(() =>
-      expect(lastSaved()).toMatchObject({ task: 'video', fix_stages: [], fixes: [] }),
+      expect(lastSaved()).toMatchObject({
+        task: 'video',
+        video_task: 'upscale',
+        fix_stages: [blur, { fix: 'noise', model_id: 'scunet_color_real_psnr' }],
+        fixes: ['blur', 'noise'],
+      }),
     );
   });
 
@@ -6223,5 +6233,120 @@ describe('Concurrent model downloads in the Model Library', () => {
     pending.get('span_photo_x4')?.resolve();
     sendWorker({ type: 'download-completed', data: { model_id: 'hat_s_x4' } });
     pending.get('hat_s_x4')?.resolve();
+  });
+});
+
+describe('video restore, 1× output, and fix-first stages', () => {
+  const lastSaved = (): UiSettings => api.saveSettings.mock.calls.at(-1)![0] as UiSettings;
+
+  it('switches a selected video between Upscale and Restore, saves a restore recipe, and starts jobs', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.catalog.models.forEach((m) => (m.installed = true));
+    Object.assign(snapshot.settings, {
+      task: 'video',
+      video_task: 'upscale',
+      selected_video_model_id: 'frame_by_frame',
+      selected_model_id: 'span_photo_x4',
+      output_scale: 4,
+    });
+    const persisted = structuredClone(snapshot);
+    const user = await mountWith(snapshot);
+    // Mirror the real host: saved settings survive addRecipe's refresh().
+    api.saveSettings.mockImplementation(async (next: UiSettings) => {
+      persisted.settings = structuredClone(next);
+    });
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(persisted));
+
+    // Toggle Restore for video
+    await user.click(screen.getByRole('button', { name: /^Restore$/ }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({ task: 'video', video_task: 'denoise' }),
+    );
+
+    // Turn on JPEG artifacts (prefix fix) and Noise (primary restore) for video Restore
+    await user.click(screen.getByRole('button', { name: 'JPEG artifacts' }));
+    await user.click(screen.getByRole('button', { name: 'Noise' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'video',
+        video_task: 'denoise',
+        fixes: ['jpeg', 'noise'],
+      }),
+    );
+
+    // Save recipe as a video restore recipe
+    await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
+    await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Video Restore Fix');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledTimes(1));
+    const savedRecipe = api.saveRecipe.mock.calls.at(-1)![0] as Recipe;
+    expect(savedRecipe).toMatchObject({
+      name: 'Video Restore Fix',
+      task: 'video',
+      video_task: 'denoise',
+      output_scale: 1,
+      fixes: ['jpeg', 'noise'],
+    });
+    expect(savedRecipe.stages).toHaveLength(2);
+    expect(savedRecipe.stages![0]).toMatchObject({
+      kind: 'deblock',
+      fix: 'jpeg',
+    });
+    expect(savedRecipe.stages![1]).toMatchObject({
+      kind: 'restore',
+      fix: 'noise',
+    });
+
+    // Start selected video with restore + prefix fix
+    await user.click(screen.getByRole('button', { name: 'Restore selected video' }));
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+    expect(api.startJobs.mock.calls.at(-1)![0]).toMatchObject({
+      task: 'video',
+      video_task: 'denoise',
+      fix_stages: [
+        expect.objectContaining({ fix: 'jpeg' }),
+        expect.objectContaining({ fix: 'noise' }),
+      ],
+    });
+  });
+
+  it('supports 1× output scale and fix-first stages in video upscale', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.catalog.models.forEach((m) => (m.installed = true));
+    Object.assign(snapshot.settings, {
+      task: 'video',
+      video_task: 'upscale',
+      selected_video_model_id: 'frame_by_frame',
+      selected_model_id: 'span_photo_x4',
+      output_scale: 4,
+    });
+    const user = await mountWith(snapshot);
+
+    // Select 1× in Advanced -> Output scale
+    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    const scaleSelect = screen.getByLabelText('Output scale') as HTMLSelectElement;
+    expect(Array.from(scaleSelect.options).map((o) => o.value)).toEqual(['1', '2', '3', '4']);
+    await user.selectOptions(scaleSelect, '1');
+    await waitFor(() => expect(lastSaved()).toMatchObject({ task: 'video', output_scale: 1 }));
+
+    // Add Blur fix-first stage
+    await user.click(screen.getByRole('button', { name: 'Blur' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'video',
+        video_task: 'upscale',
+        output_scale: 1,
+        fixes: ['blur'],
+      }),
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Start selected video' }));
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+    expect(api.startJobs.mock.calls.at(-1)![0]).toMatchObject({
+      task: 'video',
+      video_task: 'upscale',
+      output_scale: 1,
+      fix_stages: [expect.objectContaining({ fix: 'blur' })],
+    });
   });
 });

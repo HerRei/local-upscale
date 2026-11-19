@@ -154,10 +154,14 @@ fn multi_fix_host_resolves_every_catalog_stage_and_rejects_invalid_choices() {
         "Restore primary must be the final fix"
     );
     options.task = "video".into();
-    for engine in ["frame_by_frame", "seedvr2_3b"] {
-        options.video_model_id = engine.into();
-        assert!(resolve_model_selection(&state, &options).is_err());
+    options.model_id = "hat_s_x4".into();
+    options.video_model_id = "frame_by_frame".into();
+    match resolve_model_selection(&state, &options).unwrap() {
+        ModelSelection::Image { preprocess, .. } => assert_eq!(preprocess.len(), 3),
+        _ => panic!("expected frame-by-frame video plan"),
     }
+    options.video_model_id = "seedvr2_3b".into();
+    assert!(resolve_model_selection(&state, &options).is_err());
 }
 
 #[test]
@@ -479,6 +483,7 @@ fn input(task: &str) -> StartBatchInput {
         media_ids: vec!["media".into()],
         batch_mode: false,
         task: task.into(),
+        video_task: "upscale".into(),
         model_id: "model".into(),
         video_model_id: "frame_by_frame".into(),
         fix_stages: Vec::new(),
@@ -1601,6 +1606,7 @@ fn recipe_stage_validation_accepts_legacy_and_rejects_ambiguous_order() {
         id: "legacy".into(),
         name: "Legacy".into(),
         task: "upscale".into(),
+        video_task: String::new(),
         model_id: "model".into(),
         output_scale: 4,
         tile_size: 256,
@@ -2394,4 +2400,144 @@ fn custom_model_tutorial_url_points_to_the_exact_help_anchor() {
         CUSTOM_MODEL_TUTORIAL_URL,
         "https://herrei.github.io/localsr/help/#custom-model"
     );
+}
+
+#[test]
+fn video_restore_and_fix_first_build_stages_names_and_reject_temporal() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(directory.path());
+    fs::create_dir_all(&paths.next_root).unwrap();
+    fs::create_dir_all(&paths.model_root).unwrap();
+    let state = AppState::from_paths(paths).unwrap();
+    // Mark required models installed in the catalog.
+    {
+        let mut catalog = lock(&state.catalog).unwrap();
+        for id in ["fbcnn_color", "scunet_color_real_psnr", "span_photo_x4"] {
+            let entry = catalog
+                .models
+                .iter_mut()
+                .find(|m| m.model_id == id)
+                .unwrap();
+            entry.installed = true;
+            entry.installed_path = Some(format!("/models/{id}.pth"));
+        }
+    }
+
+    // 1) Video Restore with prefix deblock fix + primary restore at 1x.
+    let mut restore_input = input("video");
+    restore_input.video_task = "denoise".into();
+    restore_input.model_id = "scunet_color_real_psnr".into();
+    restore_input.output_scale = 4; // clamped to 1 for video restore
+    restore_input.fix_stages = vec![
+        crate::types::FixStageSelection {
+            fix: "jpeg".into(),
+            model_id: "fbcnn_color".into(),
+        },
+        crate::types::FixStageSelection {
+            fix: "noise".into(),
+            model_id: "scunet_color_real_psnr".into(),
+        },
+    ];
+    let selection = resolve_model_selection(&state, &restore_input).unwrap();
+    let msg = build_job_message(
+        "vid-restore",
+        &video_media(),
+        Path::new("/output/clip_video_restored.mp4"),
+        Path::new("/app-owned/work"),
+        &restore_input,
+        &selection,
+    )
+    .unwrap();
+    assert_eq!(msg["type"], "video_job_request");
+    assert_eq!(msg["data"]["output_scale"], 1);
+    assert_eq!(msg["data"]["stages"].as_array().unwrap().len(), 2);
+    assert_eq!(msg["data"]["stages"][0]["kind"], "deblock");
+    assert_eq!(msg["data"]["stages"][0]["role"], "fix");
+    assert_eq!(msg["data"]["stages"][1]["kind"], "restore");
+    assert_eq!(msg["data"]["stages"][1]["role"], "primary");
+    assert_eq!(output_ending(&restore_input).0, "_video_restored");
+
+    // 2) Video Upscale at 1x with fix-first stage.
+    let mut upscale_1x = input("video");
+    upscale_1x.video_task = "upscale".into();
+    upscale_1x.model_id = "span_photo_x4".into();
+    upscale_1x.output_scale = 1;
+    upscale_1x.fix_stages = vec![crate::types::FixStageSelection {
+        fix: "jpeg".into(),
+        model_id: "fbcnn_color".into(),
+    }];
+    let selection_1x = resolve_model_selection(&state, &upscale_1x).unwrap();
+    let msg_1x = build_job_message(
+        "vid-1x",
+        &video_media(),
+        Path::new("/output/clip_video_upscaled_1x.mp4"),
+        Path::new("/app-owned/work"),
+        &upscale_1x,
+        &selection_1x,
+    )
+    .unwrap();
+    assert_eq!(msg_1x["data"]["output_scale"], 1);
+    assert_eq!(msg_1x["data"]["stages"].as_array().unwrap().len(), 2);
+    assert_eq!(msg_1x["data"]["stages"][1]["kind"], "upscale");
+    assert_eq!(output_ending(&upscale_1x).0, "_video_1x");
+
+    // 3) Temporal SeedVR2 rejects video_task == "denoise" and rejects fix_stages.
+    let mut bad_restore = restore_input.clone();
+    bad_restore.video_model_id = "seedvr2_3b".into();
+    bad_restore.fix_stages.clear();
+    assert!(resolve_model_selection(&state, &bad_restore).is_err());
+
+    let mut bad_fixes = upscale_1x.clone();
+    bad_fixes.video_model_id = "seedvr2_3b".into();
+    assert!(resolve_model_selection(&state, &bad_fixes).is_err());
+
+    // 4) Video disk check uses 1x for video Restore rather than 4x.
+    let big_video = crate::types::MediaItem {
+        id: "vid".into(),
+        path: "/in/clip.mp4".into(),
+        name: "clip.mp4".into(),
+        kind: "video".into(),
+        width: 1920,
+        height: 1080,
+        frame_count: 10,
+        fps: 24.0,
+        duration_seconds: 0.4,
+        preview_data_url: String::new(),
+        probe_status: "ready".into(),
+        hdr_format: String::new(),
+        audio_warning: String::new(),
+        error: String::new(),
+        selected: true,
+    };
+    let folder = Path::new("/Users/a/Desktop");
+    crate::disk_room::set_test_volume(Some(crate::disk_room::Volume {
+        free: 9_000_000_000,
+        total: 500_000_000_000,
+        system: true,
+    }));
+    // 1x restore passes while 4x upscale requires 16x pixel workspace.
+    assert!(refuse_when_disk_is_short(&restore_input, &selection, &big_video, folder).is_ok());
+    crate::disk_room::set_test_volume(None);
+
+    // 5) Recipe validation accepts video Restore and video Fix-first recipes.
+    let video_restore_recipe: Recipe = serde_json::from_value(serde_json::json!({
+        "id": "vr",
+        "name": "Video Restore",
+        "task": "video",
+        "video_task": "denoise",
+        "model_id": "scunet_color_real_psnr",
+        "video_model_id": "frame_by_frame",
+        "output_scale": 1,
+        "tile_size": 256,
+        "halo": 16,
+        "precision": "fp32",
+        "safe_memory": true,
+        "fixes": ["jpeg"],
+        "stages": [
+            {"kind": "deblock", "model_id": "fbcnn_color", "role": "fix", "fix": "jpeg"},
+            {"kind": "restore", "model_id": "scunet_color_real_psnr", "role": "primary"}
+        ]
+    }))
+    .unwrap();
+    assert!(validate_recipe_stages(&video_restore_recipe).is_ok());
 }

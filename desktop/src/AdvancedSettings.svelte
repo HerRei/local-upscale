@@ -13,6 +13,7 @@
   import { onDestroy } from 'svelte';
   import HelpTip from './HelpTip.svelte';
   import FileName from './FileName.svelte';
+  import { isRestoreTask } from './lib/plan';
   import { hardwareChoices, hardwarePatch, selectedHardware } from './lib/neuralEngine';
   import { groupedHardware, optionLabel } from './lib/hardwareRoutes';
   import type {
@@ -249,19 +250,23 @@
             ? `${editModel.name} is tuned for ${editModel.default_steps} steps.`
             : 'More steps take longer.'} The same seed with the same prompt and image repeats a result.
         </p>
-      {:else if settings.task !== 'denoise' && !(usingTemporalVideo && settings.video_target_resolution)}
+      {:else if !isRestoreTask(settings) && !(usingTemporalVideo && settings.video_target_resolution)}
+        {@const minScale = settings.task === 'video' ? 1 : 2}
+        {@const maxScale = usingTemporalVideo ? 4 : (selectedModel?.native_scale ?? 4)}
         <div class="field-row">
           <span class="label-with-tip"
             ><label for="scale">Output scale</label><HelpTip
               label="Output scale"
-              text={`How many times larger the result is than the original. The model always works at its own ${selectedModel?.native_scale ?? 4}× scale; a smaller choice resizes that result down afterwards, so it saves no time.`}
+              text={usingTemporalVideo
+                ? 'How many times larger the result is than the original when Output resolution is set to match scale.'
+                : `How many times larger the result is than the original. The model always works at its own ${selectedModel?.native_scale ?? 4}× scale; a smaller choice resizes that result down afterwards, so it saves no time.`}
             /></span
           ><select
             id="scale"
             value={settings.output_scale}
             on:change={(event) =>
               updateSettings({ output_scale: Number(event.currentTarget.value) })}
-            >{#each Array.from({ length: Math.max(1, (selectedModel?.native_scale ?? 4) - 1) }, (_, index) => index + 2) as scale}<option
+            >{#each Array.from({ length: Math.max(1, maxScale - minScale + 1) }, (_, index) => index + minScale) as scale}<option
                 value={scale}>{scale}×</option
               >{/each}</select
           >
