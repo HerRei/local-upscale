@@ -150,7 +150,7 @@ export const saveSettings = (settings: UiSettings): Promise<void> =>
 
 /** One update switch, saved by the host on its own: a full settings save never changes it. */
 export const setUpdateSwitch = (
-  name: 'check_updates_at_launch' | 'anonymous_update_count',
+  name: 'check_updates_at_launch' | 'anonymous_update_count' | 'crash_reports',
   value: boolean,
 ): Promise<void> => invoke('set_update_switch', { name, value });
 export const setPrivacyChoice = (checkAtLaunch: boolean, anonymousCount: boolean): Promise<void> =>
@@ -423,3 +423,15 @@ export const requestCompareRegions = (
   regions: (import('./compareRegions').Region | null)[],
 ): Promise<void> => invoke('request_compare_regions', { generation, regions });
 export const clearCompareRegions = (): Promise<void> => invoke('clear_compare_regions');
+
+export interface StoredCrashReport {
+  id: string;
+  report: { message: string; os: string; [key: string]: unknown };
+}
+export const listCrashReports = (): Promise<StoredCrashReport[]> =>
+  isTauri() ? invoke('list_crash_reports') : Promise.resolve([]);
+export const deleteCrashReport = (id: string): Promise<void> =>
+  invoke('delete_crash_report', { id });
+export const deleteAllCrashReports = (): Promise<void> => invoke('delete_all_crash_reports');
+export const recordFrontendError = (message: string, stack: string): Promise<void> =>
+  isTauri() ? invoke('record_frontend_error', { message, stack }) : Promise.resolve();

@@ -328,6 +328,7 @@ export interface UiSettings {
   completion_sound?: boolean;
   check_updates_at_launch?: boolean;
   privacy_choice_made?: boolean;
+  crash_reports?: boolean;
   skipped_update_version?: string;
   enable_face_model: boolean;
   face_fidelity: number;

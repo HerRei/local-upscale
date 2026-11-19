@@ -361,6 +361,8 @@ pub struct UiSettings {
     #[serde(default = "default_true")]
     pub privacy_choice_made: bool,
     #[serde(default)]
+    pub crash_reports: bool,
+    #[serde(default)]
     pub skipped_update_version: String,
     pub enable_face_model: bool,
     pub face_fidelity: u32,
@@ -472,6 +474,7 @@ impl Default for UiSettings {
             completion_sound: false,
             check_updates_at_launch: true,
             privacy_choice_made: false,
+            crash_reports: false,
             skipped_update_version: String::new(),
             enable_face_model: false,
             face_fidelity: 70,

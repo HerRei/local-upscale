@@ -12,6 +12,7 @@ pub struct Switches {
     pub colour_blind_palette: bool,
     pub check_at_launch: bool,
     pub update_count: bool,
+    pub crash_reports: bool,
 }
 
 pub fn switches(settings: &UiSettings) -> Switches {
@@ -20,6 +21,7 @@ pub fn switches(settings: &UiSettings) -> Switches {
         colour_blind_palette: settings.colour_blind_palette,
         check_at_launch: settings.check_updates_at_launch,
         update_count: settings.anonymous_update_count,
+        crash_reports: settings.crash_reports,
     }
 }
 
@@ -47,6 +49,7 @@ fn switch_setting(id: &str) -> Option<&'static str> {
     match id {
         "app.check-updates-at-launch" => Some("check_updates_at_launch"),
         "app.update-count" => Some("anonymous_update_count"),
+        "help.crash-reports" => Some("crash_reports"),
         _ => None,
     }
 }
@@ -228,6 +231,10 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
 
     let guide = MenuItemBuilder::with_id("help.guide", "LocalSR User Guide").build(manager)?;
     let report = MenuItemBuilder::with_id(REPORT_PROBLEM_ID, "Report a problem…").build(manager)?;
+    let crash_reports =
+        CheckMenuItemBuilder::with_id("help.crash-reports", "Offer to Report Crashes")
+            .checked(switches.crash_reports)
+            .build(manager)?;
     let github = MenuItemBuilder::with_id("help.github", "LocalSR on GitHub").build(manager)?;
     let updates = MenuItemBuilder::with_id("app.updates", "Check for Updates…").build(manager)?;
     let check_at_launch =
@@ -251,12 +258,14 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
     let help_menu = SubmenuBuilder::new(manager, "Help")
         .item(&guide)
         .item(&report)
+        .item(&crash_reports)
         .item(&github)
         .build()?;
     #[cfg(not(target_os = "macos"))]
     let help_menu = SubmenuBuilder::new(manager, "Help")
         .item(&guide)
         .item(&report)
+        .item(&crash_reports)
         .item(&github)
         .separator()
         .items(&update_entries)
@@ -414,6 +423,7 @@ mod tests {
             switch_setting("app.update-count"),
             Some("anonymous_update_count")
         );
+        assert_eq!(switch_setting("help.crash-reports"), Some("crash_reports"));
         assert_eq!(switch_setting("app.updates"), None);
         for id in update_items(true) {
             assert!(*id == "app.updates" || switch_setting(id).is_some());

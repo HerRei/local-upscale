@@ -2016,6 +2016,37 @@ input[type='number'],
 .modal.performance-modal {
   width: min(780px, calc(100vw - 40px));
 }
+.crash-reports-panel {
+  margin: 14px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-surface);
+  background: var(--panel);
+}
+.crash-reports-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: calc(13px * var(--ui-scale));
+  font-weight: 600;
+  color: var(--text);
+}
+.crash-reports-panel p {
+  margin: 6px 0 10px;
+}
+.crash-reports-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: calc(12px * var(--ui-scale));
+  color: var(--secondary);
+}
+.crash-reports-actions {
+  display: flex;
+  gap: 8px;
+}
 .benchmark-panel {
   margin: 14px 0 18px;
   padding: 18px;

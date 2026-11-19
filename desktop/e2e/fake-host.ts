@@ -45,6 +45,7 @@ export interface Scenario {
   /** An update the feed offers; without it the feed is not configured. */
   update?: string;
   diagnosticSummary?: string;
+  crashReports?: { id: string; report: { message: string; os: string; [key: string]: unknown } }[];
   /** The outputs also appear as finished jobs, so Reveal and Open are offered for the selected photo. */
   finished?: boolean;
   /** A queue is running: the first photo is processing and the rest wait. */
@@ -372,6 +373,7 @@ function hostScript(scenario: Scenario): void {
     };
   }
 
+  let crashReports = structuredClone(scenario.crashReports ?? []);
   async function handle(command: string, args: Json): Promise<unknown> {
     snapshot ??= await build();
     if (scenario.privacyPending && !snapshot.settings.privacy_choice_made_test_saved) snapshot.settings.privacy_choice_made = false;
@@ -379,6 +381,21 @@ function hostScript(scenario: Scenario): void {
       case 'bootstrap':
       case 'get_snapshot':
         return structuredClone(snapshot);
+      case 'list_crash_reports':
+        return snapshot.settings.crash_reports ? structuredClone(crashReports) : [];
+      case 'delete_crash_report':
+        crashReports = crashReports.filter((report) => report.id !== args.id);
+        return null;
+      case 'delete_all_crash_reports':
+        crashReports = [];
+        return null;
+      case 'record_frontend_error':
+        return null;
+      case 'set_update_switch':
+        snapshot.settings[args.name] = args.value;
+        if (args.name === 'crash_reports' && !args.value) crashReports = [];
+        emit('state-changed', null);
+        return null;
       case 'set_privacy_choice':
         snapshot.settings.check_updates_at_launch = args.checkAtLaunch;
         snapshot.settings.anonymous_update_count = args.anonymousCount;

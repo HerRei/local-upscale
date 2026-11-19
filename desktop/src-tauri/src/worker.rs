@@ -287,6 +287,8 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         reader_drained.store(true, Ordering::SeqCst);
     });
 
+    let last_engine_error = Arc::new(std::sync::Mutex::new(String::new()));
+    let stderr_error = last_engine_error.clone();
     thread::spawn(move || {
         let mut reader = BufReader::new(stderr);
         let mut line = Vec::new();
@@ -302,8 +304,15 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                     }
                 }
             }
+            let text = String::from_utf8_lossy(&line);
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                if let Ok(mut last) = stderr_error.lock() {
+                    *last = trimmed.chars().take(500).collect();
+                }
+            }
             if cfg!(debug_assertions) {
-                eprintln!("LocalSR engine: {}", String::from_utf8_lossy(&line));
+                eprintln!("LocalSR engine: {text}");
             }
         }
     });
@@ -390,6 +399,12 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                 thread::sleep(Duration::from_millis(20));
             }
         }
+        let last_error = last_engine_error
+            .lock()
+            .ok()
+            .map(|s| s.clone())
+            .unwrap_or_default();
+        record_engine_exit_report(&state, &status, stopped_by_app, &last_error);
         if supervisor_should_return(&state.worker, generation) {
             state.worker.pid.store(0, Ordering::SeqCst);
             return;
@@ -2067,7 +2082,67 @@ fn resolve_worker_command(state: &AppState, app: &AppHandle) -> AppResult<Worker
     }
 }
 
+fn record_engine_exit_report(
+    state: &AppState,
+    status: &std::io::Result<std::process::ExitStatus>,
+    stopped_by_app: bool,
+    last_error: &str,
+) {
+    if stopped_by_app || state.worker.shutting_down.load(Ordering::SeqCst) {
+        return;
+    }
+    if status.as_ref().ok().and_then(|exit| exit.code()) == Some(75) {
+        return;
+    }
+    let cancelling = state
+        .worker
+        .cancellation
+        .lock()
+        .map(|c| c.resetting || c.requested_at.is_some())
+        .unwrap_or(false);
+    if cancelling {
+        return;
+    }
+    let (active_job, restarting) = state
+        .runtime
+        .lock()
+        .map(|r| {
+            (
+                !r.active_job_id.is_empty() || !r.active_batch_job_ids.is_empty(),
+                r.worker == "restarting",
+            )
+        })
+        .unwrap_or((false, false));
+    if restarting {
+        return;
+    }
+    let failed_exit = status.as_ref().map(|s| !s.success()).unwrap_or(true);
+    if !active_job && !failed_exit {
+        return;
+    }
+    let mut report =
+        crate::crash_reports::CrashReport::new("engine", "The inference engine ended unexpectedly")
+            .with_job(state);
+    report.exit = Some(match status {
+        Ok(exit) => format!("{exit}"),
+        Err(_) => "Exit status unavailable".into(),
+    });
+    if !last_error.is_empty() {
+        report.last_error = Some(last_error.to_owned());
+    }
+    crate::crash_reports::record(state, report);
+}
+
+fn record_worker_failure_report(state: &AppState, detail: &str) {
+    if state.worker.shutting_down.load(Ordering::SeqCst) {
+        return;
+    }
+    let report = crate::crash_reports::CrashReport::new("engine", detail).with_job(state);
+    crate::crash_reports::record(state, report);
+}
+
 fn set_worker_failure(state: &AppState, app: &AppHandle, detail: String) {
+    record_worker_failure_report(state, &detail);
     if let Ok(mut runtime) = state.runtime.lock() {
         runtime.worker = "failed".into();
         runtime.status_title = "Engine unavailable".into();

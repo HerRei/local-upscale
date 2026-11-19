@@ -2,6 +2,7 @@ mod cancellation;
 mod catalog;
 mod commands;
 mod compare;
+mod crash_reports;
 mod database;
 mod disk_room;
 mod distribution;
@@ -84,6 +85,13 @@ pub fn run() {
         return;
     }
 
+    crash_reports::install_hook();
+    if let Ok(paths) = paths::AppPaths::discover() {
+        let enabled = settings::load(&paths).0.crash_reports;
+        crash_reports::configure_hook(&paths, enabled);
+        crash_reports::cleanup(&paths);
+    }
+
     // A crash during an executable swap is rolled back before anything opens the profile.
     if updates::recover_interrupted_update() {
         return;
@@ -157,6 +165,10 @@ pub fn run() {
             updates::discard_update,
             updates::recover_update_settings,
             commands::open_bug_report,
+            commands::list_crash_reports,
+            commands::delete_crash_report,
+            commands::delete_all_crash_reports,
+            commands::record_frontend_error,
             commands::bootstrap,
             commands::get_snapshot,
             commands::open_model_license,

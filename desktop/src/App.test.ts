@@ -76,6 +76,11 @@ const api = vi.hoisted(() => ({
   clearResults: vi.fn(async () => undefined),
   saveSettings: vi.fn(async (_settings: UiSettings): Promise<void> => undefined),
   setUpdateSwitch: vi.fn(async (_name: string, _value: boolean): Promise<void> => undefined),
+  listCrashReports: vi.fn(
+    async (): Promise<{ id: string; report: { message: string; os: string } }[]> => [],
+  ),
+  deleteCrashReport: vi.fn(async (_id: string) => {}),
+  deleteAllCrashReports: vi.fn(async () => {}),
   setPrivacyChoice: vi.fn(async (_check: boolean, _count: boolean): Promise<void> => undefined),
   startJobs: vi.fn(async () => undefined),
   cancelJobs: vi.fn(async () => undefined),
@@ -560,6 +565,9 @@ beforeEach(() => {
   api.estimateModelTrials.mockReset().mockResolvedValue([]);
   api.cancelJobsForMedia.mockReset().mockResolvedValue(undefined);
   api.retryEngine.mockReset().mockResolvedValue(undefined);
+  api.listCrashReports.mockReset().mockResolvedValue([]);
+  api.deleteCrashReport.mockReset().mockResolvedValue(undefined);
+  api.deleteAllCrashReports.mockReset().mockResolvedValue(undefined);
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
     clearRect: vi.fn(),
     drawImage: vi.fn(),
@@ -5873,7 +5881,7 @@ describe('report a problem', () => {
 
 it('copies long report diagnostics and tells the user to paste them', async () => {
   api.diagnosticSummary.mockResolvedValueOnce(
-    JSON.stringify({ platform: 'linux', detail: 'x'.repeat(8000) }),
+    JSON.stringify({ platform: 'linux', detail: 'detail '.repeat(1600) }),
   );
   const user = await mountWith(readySnapshot());
   const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
@@ -5888,4 +5896,107 @@ it('copies long report diagnostics and tells the user to paste them', async () =
   expect(url.searchParams.get('hardware')).toBe(
     'Diagnostics were copied to your clipboard; paste them here.',
   );
+});
+
+describe('crash reports', () => {
+  const sampleReport = {
+    id: 'c5d9cc41-a9a8-4679-8e7f-a2ca008b9a04',
+    report: {
+      app_version: '0.4.0-beta',
+      build_target: 'aarch64-macos',
+      os: 'macos',
+      os_version: '24.3.0',
+      architecture: 'aarch64',
+      source: 'engine',
+      message: 'The inference engine ended unexpectedly',
+      exit: 'signal: 11',
+      limitation: 'A native host crash such as a segmentation fault may not be captured.',
+    },
+  };
+
+  it('shows the crash notice when enabled, lets the user review and send, then deletes the report', async () => {
+    const snap = readySnapshot();
+    snap.settings.crash_reports = true;
+    api.listCrashReports.mockResolvedValueOnce([sampleReport]).mockResolvedValue([]);
+    const user = await mountWith(snap);
+
+    const notice = await screen.findByRole('dialog', {
+      name: 'LocalSR quit unexpectedly last time.',
+    });
+    await user.click(within(notice).getByRole('button', { name: 'Review report…' }));
+
+    const reportDialog = await screen.findByRole('dialog', { name: 'Report a problem' });
+    expect(
+      (within(reportDialog).getByLabelText('What happened?') as HTMLTextAreaElement).value,
+    ).toBe('Crash: The inference engine ended unexpectedly');
+    const preview = reportDialog.querySelector('textarea[readonly]') as HTMLTextAreaElement;
+    expect(preview.value).toBe(JSON.stringify(sampleReport.report, null, 2));
+
+    await user.click(within(reportDialog).getByRole('button', { name: 'Open GitHub Issue' }));
+    await waitFor(() => expect(api.openBugReport).toHaveBeenCalledTimes(1));
+    expect(api.deleteCrashReport).toHaveBeenCalledWith(sampleReport.id);
+
+    const url = new URL(api.openBugReport.mock.calls[0][0]);
+    expect(url.searchParams.get('title')).toBe('Crash: The inference engine ended unexpectedly');
+    expect(url.searchParams.get('operating-system')).toBe('macOS');
+    expect(url.searchParams.get('hardware')).toContain('signal: 11');
+  });
+
+  it("Don't Send deletes the report without opening an issue", async () => {
+    const snap = readySnapshot();
+    snap.settings.crash_reports = true;
+    api.listCrashReports.mockResolvedValueOnce([sampleReport]).mockResolvedValue([]);
+    const user = await mountWith(snap);
+
+    const notice = await screen.findByRole('dialog', {
+      name: 'LocalSR quit unexpectedly last time.',
+    });
+    await user.click(within(notice).getByRole('button', { name: "Don't Send" }));
+    await waitFor(() => expect(api.deleteCrashReport).toHaveBeenCalledWith(sampleReport.id));
+    expect(api.openBugReport).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole('dialog', { name: 'LocalSR quit unexpectedly last time.' }),
+    ).toBeNull();
+  });
+
+  it('does not show the crash notice when crash reports are off', async () => {
+    const snap = readySnapshot();
+    snap.settings.crash_reports = false;
+    api.listCrashReports.mockResolvedValue([sampleReport]);
+    await mountWith(snap);
+    expect(
+      screen.queryByRole('dialog', { name: 'LocalSR quit unexpectedly last time.' }),
+    ).toBeNull();
+  });
+
+  it('manages crash reports and opt-in toggle from Performance & Diagnostics', async () => {
+    const snap = readySnapshot();
+    snap.settings.crash_reports = true;
+    api.listCrashReports.mockResolvedValue([sampleReport]);
+    const user = await mountWith(snap);
+    const notice = await screen.findByRole('dialog', {
+      name: 'LocalSR quit unexpectedly last time.',
+    });
+    await user.keyboard('{Escape}');
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('dialog', { name: 'LocalSR quit unexpectedly last time.' }),
+      ).toBeNull(),
+    );
+
+    nativeMenu?.('view.performance');
+    const dialog = await screen.findByRole('dialog', { name: 'Performance & Diagnostics' });
+    const section = within(dialog).getByRole('region', { name: 'Crash reports' });
+    expect(
+      within(section).getByText('Turning this off deletes all stored crash reports immediately.'),
+    ).toBeTruthy();
+    expect(within(section).getByText('Stored crash reports: 1')).toBeTruthy();
+
+    await user.click(within(section).getByLabelText('Offer to Report Crashes'));
+    await waitFor(() => expect(api.setUpdateSwitch).toHaveBeenCalledWith('crash_reports', false));
+
+    api.listCrashReports.mockResolvedValueOnce([]).mockResolvedValue([]);
+    await user.click(within(section).getByRole('button', { name: 'Delete All' }));
+    await waitFor(() => expect(api.deleteAllCrashReports).toHaveBeenCalledTimes(1));
+  });
 });

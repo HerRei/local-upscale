@@ -289,11 +289,27 @@ fn a_full_settings_save_never_changes_the_update_switches() {
         .as_object_mut()
         .unwrap()
         .remove("check_updates_at_launch");
-    assert!(
-        serde_json::from_value::<UiSettings>(saved)
-            .unwrap()
-            .check_updates_at_launch
-    );
+    saved.as_object_mut().unwrap().remove("crash_reports");
+    let loaded = serde_json::from_value::<UiSettings>(saved).unwrap();
+    assert!(loaded.check_updates_at_launch);
+    assert!(!loaded.crash_reports);
+}
+
+#[test]
+fn crash_reports_switch_saves_while_a_job_runs_and_full_save_keeps_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(directory.path());
+    fs::create_dir_all(&paths.next_root).unwrap();
+    fs::create_dir_all(&paths.model_root).unwrap();
+    let state = AppState::from_paths(paths).unwrap();
+    assert!(!crate::settings::load(&state.paths).0.crash_reports);
+    lock(&state.runtime).unwrap().active_job_id = "running".into();
+    apply_update_switch(&state, "crash_reports", |_| true).unwrap();
+    let saved = crate::settings::load(&state.paths).0;
+    assert!(saved.crash_reports);
+    let mut stale = UiSettings::default();
+    keep_update_switches(&saved, &mut stale);
+    assert!(stale.crash_reports);
 }
 
 #[test]

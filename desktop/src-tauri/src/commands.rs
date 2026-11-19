@@ -382,6 +382,7 @@ fn keep_update_switches(current: &UiSettings, incoming: &mut UiSettings) {
     incoming.check_updates_at_launch = current.check_updates_at_launch;
     incoming.anonymous_update_count = current.anonymous_update_count;
     incoming.privacy_choice_made = current.privacy_choice_made;
+    incoming.crash_reports = current.crash_reports;
     incoming.skipped_update_version = current.skipped_update_version.clone();
 }
 
@@ -482,6 +483,7 @@ fn apply_update_switch(
         let field = match name {
             "check_updates_at_launch" => &mut settings.check_updates_at_launch,
             "anonymous_update_count" => &mut settings.anonymous_update_count,
+            "crash_reports" => &mut settings.crash_reports,
             _ => {
                 return Err(AppError::Validation(format!(
                     "unknown update switch: {name}"
@@ -497,10 +499,19 @@ fn apply_update_switch(
         if let Ok(mut settings) = lock(&state.settings) {
             match name {
                 "check_updates_at_launch" => settings.check_updates_at_launch = previous,
-                _ => settings.anonymous_update_count = previous,
+                "anonymous_update_count" => settings.anonymous_update_count = previous,
+                "crash_reports" => settings.crash_reports = previous,
+                _ => {}
             }
         }
         return Err(error);
+    }
+    if name == "crash_reports" {
+        let enabled = lock(&state.settings)?.crash_reports;
+        crate::crash_reports::configure_hook(&state.paths, enabled);
+        if !enabled {
+            crate::crash_reports::delete_all(&state.paths)?;
+        }
     }
     Ok(())
 }
@@ -3529,3 +3540,52 @@ pub fn open_model_license(
 
 #[cfg(test)]
 mod tests;
+
+#[tauri::command]
+pub fn list_crash_reports(
+    state: State<'_, Arc<AppState>>,
+) -> Vec<crate::crash_reports::StoredReport> {
+    if state
+        .settings
+        .lock()
+        .map(|s| s.crash_reports)
+        .unwrap_or(false)
+    {
+        crate::crash_reports::list(&state.paths)
+    } else {
+        Vec::new()
+    }
+}
+#[tauri::command]
+pub fn delete_crash_report(state: State<'_, Arc<AppState>>, id: String) -> AppResult<()> {
+    crate::crash_reports::delete(&state.paths, &id)?;
+    Ok(())
+}
+#[tauri::command]
+pub fn delete_all_crash_reports(state: State<'_, Arc<AppState>>) -> AppResult<()> {
+    crate::crash_reports::delete_all(&state.paths)?;
+    Ok(())
+}
+#[tauri::command]
+pub fn record_frontend_error(state: State<'_, Arc<AppState>>, message: String, stack: String) {
+    use std::sync::atomic::Ordering;
+    if !state
+        .settings
+        .lock()
+        .map(|s| s.crash_reports)
+        .unwrap_or(false)
+    {
+        return;
+    }
+    if state.frontend_error_recorded.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let mut report = crate::crash_reports::CrashReport::new("frontend", &message).with_job(&state);
+    report.stack = Some(stack);
+    crate::crash_reports::record(&state, report);
+}
+
+#[cfg(test)]
+pub(crate) fn test_crash_switch(state: &AppState, value: bool) -> AppResult<()> {
+    apply_update_switch(state, "crash_reports", |_| value)
+}

@@ -113,6 +113,8 @@ details are in [platform support](docs/platforms.md).
 
 On a fresh install, LocalSR asks whether to check for updates automatically and whether to send an anonymous count. The update check reads a feed on GitHub Pages. If enabled, the count sends the app version, platform and channel to the developer's server without an ID. You can change both choices later in the LocalSR or Help menu and the Software Update dialog.
 
+Crash reports are off by default. When enabled, they are stored only on your computer and are never sent automatically; you can review a report and choose to open a GitHub issue. A report contains app and system versions, the device kind and running task and model, and redacted error details. Native host crashes such as segmentation faults may not be captured.
+
 There is no account, and your images and videos are never uploaded. When enabled, at launch the
 app reads its update feed on GitHub Pages (for the beta,
 `herrei.github.io/localsr/updates/beta.json`) and can update itself, on the Mac,

@@ -286,9 +286,13 @@
   let reportIncludeDiagnostics = true;
   let reportHappened = '';
   let reportMessage = '';
+  let crashReports: api.StoredCrashReport[] = [];
+  let crashNotice = false;
+  let reviewedCrash: api.StoredCrashReport | null = null;
 
   async function showReport(): Promise<void> {
     if (modalTitle) closeModal();
+    reviewedCrash = null;
     reportOpen = true;
     reportIncludeDiagnostics = true;
     reportHappened = '';
@@ -304,11 +308,57 @@
       reportLoading = false;
     }
   }
+  async function refreshCrashReports(): Promise<void> {
+    crashReports = await api.listCrashReports();
+  }
+  function closeReport(): void {
+    reportOpen = false;
+    reviewedCrash = null;
+  }
+  function crashTitle(crash: api.StoredCrashReport): string {
+    const shortError =
+      crash.report.message.replace(/\s+/g, ' ').trim().slice(0, 120) || 'Unexpected error';
+    return `Crash: ${shortError}`;
+  }
+  function reviewCrash(): void {
+    const crash = crashReports[0];
+    if (!crash) return;
+    if (modalTitle) closeModal();
+    crashNotice = false;
+    reviewedCrash = crash;
+    reportOpen = true;
+    reportIncludeDiagnostics = true;
+    reportHappened = crashTitle(crash);
+    reportDiagnostics = redactDiagnostics(JSON.stringify(crash.report, null, 2));
+    reportMessage = '';
+    reportLoading = false;
+  }
+  async function discardCrash(): Promise<void> {
+    const crash = crashReports[0];
+    if (!crash) return;
+    try {
+      await api.deleteCrashReport(crash.id);
+      await refreshCrashReports();
+      crashNotice = false;
+    } catch (error) {
+      showModal('Could not delete report', String(error));
+    }
+  }
+  async function removeAllCrashes(): Promise<void> {
+    try {
+      await api.deleteAllCrashReports();
+      await refreshCrashReports();
+      crashNotice = false;
+    } catch (error) {
+      showModal('Could not delete reports', String(error));
+    }
+  }
   async function openReport(): Promise<void> {
     try {
       let platform = '';
       try {
-        const value = JSON.parse(reportDiagnostics).platform;
+        const parsed = JSON.parse(reportDiagnostics);
+        const value = parsed.platform ?? parsed.os;
         platform =
           value === 'macos'
             ? 'macOS'
@@ -320,15 +370,26 @@
       } catch {
         /* No diagnostic platform available. */
       }
+      const title = reviewedCrash
+        ? reportHappened.startsWith('Crash:')
+          ? reportHappened
+          : crashTitle(reviewedCrash)
+        : '';
       let body = reportIncludeDiagnostics ? reportDiagnostics : '';
-      let url = reportUrl(reportHappened, snapshot.app_version, platform, body);
+      let url = reportUrl(reportHappened, snapshot.app_version, platform, body, title);
       if (url.length > 7000 && body) {
         await navigator.clipboard.writeText(body);
         body = 'Diagnostics were copied to your clipboard; paste them here.';
         reportMessage = body;
-        url = reportUrl(reportHappened, snapshot.app_version, platform, body);
+        url = reportUrl(reportHappened, snapshot.app_version, platform, body, title);
       }
       await api.openBugReport(url);
+      if (reviewedCrash) {
+        await api.deleteCrashReport(reviewedCrash.id);
+        await refreshCrashReports();
+        reviewedCrash = null;
+        reportOpen = false;
+      }
     } catch (error) {
       reportMessage = String(error);
     }
@@ -1149,6 +1210,10 @@
     void (async () => {
       try {
         snapshot = await api.bootstrap();
+        if (snapshot.settings.crash_reports) {
+          await refreshCrashReports();
+          crashNotice = crashReports.length > 0;
+        }
         theme.apply(snapshot.settings);
         document.documentElement.classList.remove('theme-loading');
         await tick();
@@ -1244,6 +1309,12 @@
         latest.runtime.result_preview_data_url = snapshot.runtime.result_preview_data_url;
       }
       snapshot = latest;
+      if (!latest.settings.crash_reports) {
+        crashReports = [];
+        crashNotice = false;
+      } else if (modalKind === 'performance') {
+        void refreshCrashReports();
+      }
       themeForRefresh(latest.settings);
       chooseInitialModel();
       await maybeAutoStart();
@@ -1828,14 +1899,17 @@
    * The window shows the host's value afterwards, also when saving failed.
    */
   function setUpdateSwitch(
-    name: 'check_updates_at_launch' | 'anonymous_update_count',
+    name: 'check_updates_at_launch' | 'anonymous_update_count' | 'crash_reports',
     value: boolean,
   ): void {
     if (!api.isTauri()) return;
     void api
       .setUpdateSwitch(name, value)
       .catch((error) => showModal('Could not save settings', String(error)))
-      .finally(() => scheduleRefresh());
+      .finally(() => {
+        scheduleRefresh();
+        if (name === 'crash_reports') void refreshCrashReports();
+      });
   }
 
   function setTask(task: TaskKind): void {
@@ -2747,6 +2821,7 @@
   }
 
   function showPerformance(): void {
+    if (settings.crash_reports) void refreshCrashReports();
     if (!benchmarkDevice)
       benchmarkDevice =
         snapshot.capabilities.devices.find((device) => device.id !== 'cpu')?.id ?? 'cpu';
@@ -4133,6 +4208,29 @@
   />
 {/if}
 
+{#if crashNotice && settings.crash_reports && !reportOpen && !booting && settings.privacy_choice_made !== false}
+  <div class="modal-backdrop" role="presentation">
+    <div
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="crash-title"
+      tabindex="-1"
+      use:modal={() => (crashNotice = false)}
+    >
+      <h2 id="crash-title">LocalSR quit unexpectedly last time.</h2>
+      <p>
+        A crash report is stored on this computer. Review it before choosing whether to open an
+        issue.
+      </p>
+      <div class="modal-actions">
+        <button class="button" on:click={discardCrash}>Don't Send</button>
+        <button class="button primary" on:click={reviewCrash}>Review report…</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 {#if reportOpen}
   <div class="modal-backdrop" role="presentation">
     <div
@@ -4141,7 +4239,7 @@
       aria-modal="true"
       aria-labelledby="report-title"
       tabindex="-1"
-      use:modal={() => (reportOpen = false)}
+      use:modal={closeReport}
     >
       <h2 id="report-title">Report a problem</h2>
       <p>
@@ -4153,13 +4251,13 @@
           ><input type="checkbox" bind:checked={reportIncludeDiagnostics} /> Include diagnostics</label
         >
       </p>
-      {#if reportIncludeDiagnostics}<details>
+      {#if reportIncludeDiagnostics}<details open={!!reviewedCrash}>
           <summary>Preview diagnostics</summary><textarea readonly value={reportDiagnostics}
           ></textarea>
         </details>{/if}
       {#if reportMessage}<p role="status">{reportMessage}</p>{/if}
       <div class="modal-actions">
-        <button class="button" on:click={() => (reportOpen = false)}>Cancel</button><button
+        <button class="button" on:click={closeReport}>Cancel</button><button
           class="button"
           disabled={reportLoading}
           on:click={openReport}>Open GitHub Issue</button
@@ -4219,6 +4317,27 @@
       <h2 id="modal-title">{modalTitle}</h2>
       <p class="modal-message">{modalMessage}</p>
       {#if modalKind === 'performance'}
+        <section class="crash-reports-panel" aria-label="Crash reports">
+          <label class="crash-reports-toggle"
+            ><input
+              type="checkbox"
+              checked={settings.crash_reports ?? false}
+              on:change={(event) => setUpdateSwitch('crash_reports', event.currentTarget.checked)}
+            /> Offer to Report Crashes</label
+          >
+          <p>Turning this off deletes all stored crash reports immediately.</p>
+          <div class="crash-reports-row">
+            <span>Stored crash reports: {crashReports.length}</span>
+            <div class="crash-reports-actions">
+              <button class="button" disabled={!crashReports.length} on:click={reviewCrash}
+                >Review</button
+              >
+              <button class="button" disabled={!crashReports.length} on:click={removeAllCrashes}
+                >Delete All</button
+              >
+            </div>
+          </div>
+        </section>
         <section class="benchmark-panel" aria-labelledby="benchmark-title">
           <div class="benchmark-heading">
             <div>
