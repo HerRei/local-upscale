@@ -292,6 +292,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_anonymous_update_count_is_off_unless_it_was_turned_on() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        fs::create_dir_all(&paths.next_root).unwrap();
+        fs::write(
+            &paths.settings,
+            r#"{"schema_version":2,"ui":{},"recipes":[]}"#,
+        )
+        .unwrap();
+        assert!(!load(&paths).0.anonymous_update_count);
+        fs::write(
+            &paths.settings,
+            r#"{"schema_version":2,"ui":{"anonymous_update_count":true},"recipes":[]}"#,
+        )
+        .unwrap();
+        assert!(load(&paths).0.anonymous_update_count);
+        assert!(!UiSettings::default().anonymous_update_count);
+    }
+
+    #[test]
     fn settings_are_read_from_the_previous_copy_when_a_save_stopped_between_its_renames() {
         let directory = tempfile::tempdir().unwrap();
         let paths = AppPaths::under(directory.path());

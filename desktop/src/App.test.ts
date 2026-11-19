@@ -311,16 +311,16 @@ describe('Update switches', () => {
     await chooseMenuItem('app.updates');
     await user.click(
       await screen.findByLabelText(
-        'Send an anonymous update-check count (version, platform, channel)',
+        'After an update check, send an anonymous count: app version, platform and channel only. No install ID, cookies, files or settings.',
       ),
     );
     await user.click(screen.getByLabelText('Check for updates when LocalSR starts'));
     expect(api.setUpdateSwitch.mock.calls).toEqual([
-      ['anonymous_update_count', false],
+      ['anonymous_update_count', true], // off until the user turns it on
       ['check_updates_at_launch', true], // it started off in this test
     ]);
     expect(api.saveSettings).not.toHaveBeenCalledWith(
-      expect.objectContaining({ anonymous_update_count: false }),
+      expect.objectContaining({ anonymous_update_count: true }),
     );
     // The menu's own items are the host's: the window does not act on them.
     await chooseMenuItem('app.update-count');
