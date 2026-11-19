@@ -3263,6 +3263,7 @@
                             >{recipe.task} · {recipe.output_scale}× · {recipe.precision.toUpperCase()}</span
                           ></button
                         ><button
+                          class:active={activeRecipeIds.has(recipe.id)}
                           aria-label={`Delete ${recipe.name}`}
                           on:click={() => (deletingRecipeId = recipe.id)}
                           ><svg

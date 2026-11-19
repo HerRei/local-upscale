@@ -1261,9 +1261,9 @@ input[type='number'],
   padding: 8px 9px;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: var(--radius);
-  background: var(--raised);
+  background: var(--recess);
 }
 .saved-recipe.confirming button {
   padding: 0 12px;
@@ -1274,15 +1274,26 @@ input[type='number'],
   border-color: rgba(229, 72, 77, 0.28);
   background: rgba(229, 72, 77, 0.09);
 }
+/* Same states as the Quick/Best cards above; the X follows its recipe. */
 .saved-recipe button {
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: var(--radius);
-  background: var(--raised);
+  background: var(--recess);
+}
+.saved-recipe button:hover:not(:disabled) {
+  background: var(--hover);
 }
 .saved-recipe button.active {
-  border-color: rgba(255, 255, 255, 0.303);
-  background: rgba(255, 255, 255, 0.072);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.044);
+  border-color: var(--accent-line);
+  background: var(--accent-fill);
+}
+.saved-recipe:not(.confirming) > button:last-child {
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+.saved-recipe:not(.confirming) > button:last-child svg {
+  display: block;
 }
 .saved-recipe button:disabled {
   cursor: not-allowed;
