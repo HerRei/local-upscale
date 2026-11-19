@@ -98,7 +98,7 @@ it('lets direct builds turn off the launch check and the count, even while proce
     },
   });
   const count = await screen.findByLabelText(
-    'Send an anonymous update-check count (version, platform, channel)',
+    'After an update check, send an anonymous count: app version, platform and channel only. No install ID, cookies, files or settings.',
   );
   const launch = screen.getByLabelText('Check for updates when LocalSR starts');
   expect((count as HTMLInputElement).checked).toBe(true);

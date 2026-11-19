@@ -2925,7 +2925,7 @@
 
   <UpdatePanel
     processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
-    anonymousUpdateCount={settings.anonymous_update_count ?? true}
+    anonymousUpdateCount={settings.anonymous_update_count ?? false}
     completionSound={settings.completion_sound ?? false}
     on:completionsound={(event) => updateSettings({ completion_sound: event.detail })}
     checkAtLaunch={settings.check_updates_at_launch ?? true}
@@ -2933,7 +2933,7 @@
     on:checkatlaunch={(event) => setUpdateSwitch('check_updates_at_launch', event.detail)}
   />
   <WelcomeNotice
-    anonymousUpdateCount={settings.anonymous_update_count ?? true}
+    anonymousUpdateCount={settings.anonymous_update_count ?? false}
     checkAtLaunch={settings.check_updates_at_launch ?? true}
   />
 

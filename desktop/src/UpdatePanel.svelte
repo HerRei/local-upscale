@@ -4,7 +4,7 @@
   import { modal } from './lib/modal';
   import { updateDialogOpen, updateError, updateState } from './lib/updates';
   export let processing = false;
-  export let anonymousUpdateCount = true;
+  export let anonymousUpdateCount = false;
   export let completionSound = false;
   export let checkAtLaunch = true;
   const dispatch = createEventDispatcher<{
@@ -123,7 +123,8 @@
                 event.currentTarget.checked = anonymousUpdateCount;
                 dispatch('anonymouscount', wanted);
               }}
-            /> Send an anonymous update-check count (version, platform, channel)</label
+            /> After an update check, send an anonymous count: app version, platform and channel only.
+            No install ID, cookies, files or settings.</label
           >
         {/if}
       {/if}
