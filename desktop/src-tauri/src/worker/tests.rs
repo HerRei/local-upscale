@@ -258,10 +258,11 @@ fn selected_image_comparison_ignores_late_results_while_another_job_runs() {
 fn compare_answers_and_snapshots_revalidate_the_selected_job() {
     use crate::compare::{ComparePick, CompareStatus};
     let directory = tempfile::tempdir().unwrap();
-    let paths = crate::paths::AppPaths::under(directory.path());
+    let directory_root = std::fs::canonicalize(directory.path()).unwrap();
+    let paths = crate::paths::AppPaths::under(directory_root.as_path());
     let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
-    let input = directory.path().join("input.png");
-    let output = directory.path().join("output.png");
+    let input = directory_root.as_path().join("input.png");
+    let output = directory_root.as_path().join("output.png");
     std::fs::write(&input, "input").unwrap();
     std::fs::write(&output, "output").unwrap();
     let request = {
@@ -1841,9 +1842,10 @@ fn the_scratch_folders_made_for_a_dispatch_are_recorded_with_their_jobs() {
 #[test]
 fn a_result_that_is_a_link_gets_no_automatic_preview() {
     let directory = tempfile::tempdir().unwrap();
-    let private = directory.path().join("private.png");
+    let directory_root = std::fs::canonicalize(directory.path()).unwrap();
+    let private = directory_root.as_path().join("private.png");
     std::fs::write(&private, b"private").unwrap();
-    let link = directory.path().join("result.png");
+    let link = directory_root.as_path().join("result.png");
     std::os::unix::fs::symlink(&private, &link).unwrap();
     for kind in ["job_completed", "video_job_completed"] {
         let done = envelope(
@@ -1856,7 +1858,7 @@ fn a_result_that_is_a_link_gets_no_automatic_preview() {
             "{kind}"
         );
     }
-    let plain = directory.path().join("plain.png");
+    let plain = directory_root.as_path().join("plain.png");
     std::fs::write(&plain, b"result").unwrap();
     let done = envelope(
         "job_completed",

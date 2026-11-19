@@ -95,6 +95,8 @@ pub struct AppState {
     pub programs: crate::programs::GrantedPrograms,
     /// The editing runtimes the user picked in the host's own file dialog.
     pub edit_programs: crate::programs::GrantedPrograms,
+    /// The media files, output folders, custom models, and export destinations granted by the host.
+    pub grants: crate::grants::GrantRegistry,
 }
 
 impl AppState {
@@ -134,6 +136,8 @@ impl AppState {
         let latest_benchmark = settings::load_benchmark(&paths);
         let programs = crate::programs::GrantedPrograms::default();
         programs.grant(&settings.external_ffmpeg_path);
+        let media = database.list_media()?;
+        let grants = crate::grants::GrantRegistry::new(&paths, &media, &settings, &recipes);
         Ok(Self {
             video_preview: crate::video_preview::VideoPreviewControl::default(),
             updates: crate::updates::UpdateControl::default(),
@@ -164,6 +168,7 @@ impl AppState {
             startup_notices: Mutex::new(notices),
             programs,
             edit_programs: crate::programs::GrantedPrograms::default(),
+            grants,
         })
     }
 

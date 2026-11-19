@@ -671,8 +671,8 @@ impl Database {
             AppError::Validation("choose a completed result of this image".into())
         })?;
         // A result that was replaced by a link would put its target on screen.
-        let replaced = std::fs::symlink_metadata(&path)
-            .map_or(true, |metadata| metadata.file_type().is_symlink());
+        let replaced = std::fs::symlink_metadata(&path).is_err()
+            || crate::results::ensure_not_linked(Path::new(&path)).is_err();
         if replaced || !Path::new(&path).is_file() {
             return Err(AppError::Validation(
                 "this result's file is no longer available".into(),

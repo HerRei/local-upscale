@@ -624,6 +624,12 @@ function hostScript(scenario: Scenario): void {
       case 'clear_media':
         snapshot.media = [];
         return null;
+      case 'choose_media_files':
+        return [];
+      case 'choose_media_folder':
+      case 'choose_output_directory':
+      case 'choose_custom_model':
+      case 'choose_benchmark_export':
       case 'choose_external_ffmpeg':
       case 'choose_edit_runtime':
         return null;

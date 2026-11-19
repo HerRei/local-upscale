@@ -12,7 +12,7 @@ test.describe('a refused host call', () => {
   });
 
   test('Add Media… names the problem', async ({ page }) => {
-    await answer(page, 'plugin:dialog|open', ['/fixture/photo.heic']);
+    await answer(page, 'choose_media_files', ['/fixture/photo.heic']);
     await refuse(page, 'add_media', 'unsupported media file type');
     await page.getByRole('button', { name: 'Add Media…' }).click();
     await expect(page.getByRole('dialog')).toContainText('Could not add files');
@@ -20,7 +20,7 @@ test.describe('a refused host call', () => {
   });
 
   test('Add Folder… names the problem', async ({ page }) => {
-    await answer(page, 'plugin:dialog|open', '/fixture/folder');
+    await answer(page, 'choose_media_folder', '/fixture/folder');
     await refuse(page, 'scan_media_folder', 'Permission denied (os error 13)');
     await page.getByRole('button', { name: 'Add Folder…' }).click();
     await expect(page.getByRole('dialog')).toContainText('Could not add the folder');
