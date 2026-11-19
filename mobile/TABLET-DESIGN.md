@@ -1,5 +1,7 @@
 # LocalSR tablet: UI design
 
+Status (owner, 2026-11-19): the iOS v1 app is iPhone-only and iPads run the iPhone version; this iPad layout comes later as an update (see `tools/TABLET-MODELS.md`, "Release builds and licences"). Android tablets are unchanged.
+
 Target: iPadOS 27, iPad Pro 13" M5 (1376 × 1032 pt landscape) first, A12Z iPad Pro as the low end; Android tablets through Skip Lite second. Sizes in pt (dp on Android). iOS-only API sits behind `#if !SKIP`. "Phone spec" means the phone UI as built (`DESIGN.md` and `Sources/LocalSR/UI`).
 
 Scope for v1 (owner, 2026-11-15): photos only. **Video is out of scope for v1.** No transformer models, no Edit, no custom checkpoints. All models are bundled; downloading is a pending option (6.5).

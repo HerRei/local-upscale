@@ -11,6 +11,12 @@ final class TabletUITests: XCTestCase {
         if UIDevice.current.userInterfaceIdiom != .pad {
             throw XCTSkip("Tablet UI tests only run on iPad")
         }
+        // v1 is iPhone-only (TARGETED_DEVICE_FAMILY = 1 in LocalSR.xcconfig): iPads run the iPhone
+        // version, so there is no iPad layout to test. Set to true when the iPad build comes back.
+        let iPadLayoutShips = false
+        if !iPadLayoutShips {
+            throw XCTSkip("v1 is iPhone-only; iPads run the iPhone layout (see LocalSRUITests)")
+        }
     }
 
     @MainActor

@@ -319,6 +319,22 @@ final class TabletCoreTests: XCTestCase {
     }
 
     #if !SKIP
+    /// The iPhone-only app's Licences screen: phone models and the font, no tablet models or Apache text.
+    func testNoticeWithoutTabletModels() throws {
+        var url = URL(fileURLWithPath: #filePath)
+        for _ in 0..<3 { url.deleteLastPathComponent() }
+        let notice = try String(contentsOf: url.appendingPathComponent("Models/NOTICE.txt"), encoding: .utf8)
+        let phone = ModelNotice.withoutTabletModels(notice)
+        XCTAssertTrue(phone.count < notice.count)
+        for kept in ["(localsr_photo_pulse48_v1_x4)", "(localsr_photo_span28_v1_x4)", "MIT License", "(IBMPlexSansVar-Roman)", "SIL OPEN FONT LICENSE"] {
+            XCTAssertTrue(phone.contains(kept), "\(kept) missing")
+        }
+        for dropped in ["Tablet models", "(nomos_realplksr)", "(fbcnn)", "(anime_esrgan)", "(span48)", "(apache-2.0)", "END OF TERMS AND CONDITIONS"] {
+            XCTAssertFalse(phone.contains(dropped), "\(dropped) still there")
+        }
+        XCTAssertEqual(ModelNotice.withoutTabletModels("Only\n====\n\ntext"), "Only\n====\n\ntext")
+    }
+
     /// Every bundled model's notice must be in the NOTICE.txt the Licences screen shows.
     func testShippedNoticeCoversEveryModel() throws {
         var url = URL(fileURLWithPath: #filePath)

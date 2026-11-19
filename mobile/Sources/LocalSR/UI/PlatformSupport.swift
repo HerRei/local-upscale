@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import LocalSRCore
 
 #if !SKIP
 import ImageIO
@@ -36,7 +37,8 @@ public enum PlatformSupport {
               let text = try? String(contentsOf: url, encoding: .utf8) else {
             return ""
         }
-        return text
+        // The iPhone-only app doesn't bundle the tablet models, so it doesn't list their notices.
+        return AppleResources.bundlesTabletModels ? text : ModelNotice.withoutTabletModels(text)
         #endif
     }
 

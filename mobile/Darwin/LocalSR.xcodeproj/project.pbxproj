@@ -17,7 +17,6 @@
 		4A10000A2FA500000000B003 /* probe.png in Resources */ = {isa = PBXBuildFile; fileRef = 4A10000A2FA500000000A003 /* probe.png */; };
 		4A10000A2FA500000000B004 /* NOTICE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 4A10000A2FA500000000A004 /* NOTICE.txt */; };
 		4A50000A2FC000000000B001 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 4A50000A2FC000000000A001 /* PrivacyInfo.xcprivacy */; };
-		4A10000A2FA500000000B005 /* ios-tablet in Resources */ = {isa = PBXBuildFile; fileRef = 4A10000A2FA500000000A005 /* ios-tablet */; };
 		4A10000A2FA500000000B006 /* IBMPlexSansVar-Roman.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 4A10000A2FA500000000A006 /* IBMPlexSansVar-Roman.ttf */; };
 		4A20000A2FA600000000B001 /* LocalSRUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A20000A2FA600000000A001 /* LocalSRUITests.swift */; };
 		4A20000A2FA600000000B002 /* TabletUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A20000A2FA600000000A002 /* TabletUITests.swift */; };
@@ -211,7 +210,6 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 499CD4412AC5B799001AE8D8 /* Build configuration list for PBXNativeTarget "LocalSR App" */;
 			buildPhases = (
-				4A60000A2FD000000000D001 /* Check tablet models (Release) */,
 				499CD43A2AC5B799001AE8D8 /* Sources */,
 				499CD43C2AC5B799001AE8D8 /* Frameworks */,
 				499CD43E2AC5B799001AE8D8 /* Resources */,
@@ -331,7 +329,6 @@
 				4A10000A2FA500000000B002 /* localsr_fast.mlmodelc in Resources */,
 				4A10000A2FA500000000B003 /* probe.png in Resources */,
 				4A10000A2FA500000000B004 /* NOTICE.txt in Resources */,
-				4A10000A2FA500000000B005 /* ios-tablet in Resources */,
 				4A10000A2FA500000000B006 /* IBMPlexSansVar-Roman.ttf in Resources */,
 				4A50000A2FC000000000B001 /* PrivacyInfo.xcprivacy in Resources */,
 			);
@@ -354,25 +351,6 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		4A60000A2FD000000000D001 /* Check tablet models (Release) */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			name = "Check tablet models (Release)";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = "/bin/sh -e";
-			shellScript = "if [ \"${CONFIGURATION}\" != \"Release\" ]; then\n  exit 0\nfi\nDIR=\"${SRCROOT}/../Models/ios-tablet\"\nMISSING=\"\"\nfor MODEL in fast best nomos_realplksr denoise_realplksr fbcnn anime_esrgan nomos_span span48; do\n  if [ ! -d \"${DIR}/${MODEL}.mlmodelc\" ] || [ -z \"$(ls -A \"${DIR}/${MODEL}.mlmodelc\" 2>/dev/null)\" ]; then\n    MISSING=\"${MISSING} ${MODEL}.mlmodelc\"\n  fi\ndone\nif [ -n \"${MISSING}\" ]; then\n  echo \"error: mobile/Models/ios-tablet is missing or incomplete (missing:${MISSING}). A Release build must include the tablet models; see mobile/tools/TABLET-MODELS.md to convert them.\"\n  exit 1\nfi\n";
-		};
 		499CD4452AC5B869001AE8D8 /* Run skip gradle */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;

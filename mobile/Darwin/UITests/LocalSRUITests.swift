@@ -347,14 +347,32 @@ final class LocalSRUITests: XCTestCase {
             NSPredicate(format: "identifier == 'PXAssetsCollectionViewCell' OR label CONTAINS[c] 'Photo' OR label CONTAINS ','")
         )
 
+        // Only photos fully on screen: a tap on one under the picker's floating bottom bar selects nothing.
+        func onScreenImages() -> [XCUIElement] {
+            let bottom = app.frame.maxY - 90.0
+            return candidateImages.allElementsBoundByIndex.filter { $0.isHittable && $0.frame.maxY < bottom }
+        }
+        _ = candidateImages.firstMatch.waitForExistence(timeout: 15)
+        var images = onScreenImages()
+        // The iOS 27 picker opens at the newest photos; many 2099 fixtures (seeded more than once)
+        // can fill the whole visible grid, so scroll up to the older photos when needed.
+        let photoGrid = app.scrollViews["photosView_content_scroll_view"]
+        var scrolls = 0
+        while images.count < count && scrolls < 4 && photoGrid.exists {
+            photoGrid.swipeDown()
+            Thread.sleep(forTimeInterval: 0.6)
+            images = onScreenImages()
+            scrolls += 1
+        }
+
         var tapped = 0
-        if candidateImages.firstMatch.waitForExistence(timeout: 15) {
-            let total = candidateImages.count
+        if !images.isEmpty {
+            let total = images.count
             let targetCount = min(count, total)
             let step = (count > 1 && total >= count * 2) ? 2 : 1
             for i in 0..<targetCount {
                 let idx = preferNewest ? max(0, total - 3 - i) : min(i * step, total - 1)
-                candidateImages.element(boundBy: idx).tap()
+                images[idx].tap()
                 tapped += 1
             }
         } else if candidateCells.firstMatch.waitForExistence(timeout: 4) {

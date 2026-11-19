@@ -134,6 +134,36 @@ public enum ModelNotice {
         return own
     }
 
+    /// The notice without the tablet part: from the "Tablet models" title up to the IBM Plex Sans title
+    /// (the tablet model notices and the Apache-2.0 text only they use). For a build that doesn't bundle
+    /// the tablet models (the iPhone-only iOS app). Returns the text unchanged when a title is missing.
+    public static func withoutTabletModels(_ text: String) -> String {
+        let lines = text.components(separatedBy: "\n")
+        var start: Int? = nil
+        var end: Int? = nil
+        var index = 0
+        while index + 1 < lines.count {
+            if isTitle(lines, at: index) {
+                let title = lines[index].trimmingCharacters(in: .whitespacesAndNewlines)
+                if start == nil && title == "Tablet models" {
+                    start = index
+                } else if start != nil && title.contains("(IBMPlexSansVar-Roman)") {
+                    end = index
+                    break
+                }
+            }
+            index += 1
+        }
+        guard let first = start, let last = end else { return text }
+        var kept: [String] = []
+        for line in 0..<lines.count {
+            if line < first || line >= last {
+                kept.append(lines[line])
+            }
+        }
+        return kept.joined(separator: "\n")
+    }
+
     private static func isTitle(_ lines: [String], at index: Int) -> Bool {
         let title = lines[index].trimmingCharacters(in: .whitespacesAndNewlines)
         let rule = lines[index + 1].trimmingCharacters(in: .whitespacesAndNewlines)

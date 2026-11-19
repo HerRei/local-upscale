@@ -32,11 +32,13 @@ SUPPORTS_MACCATALYST = NO
 
 SUPPORTED_PLATFORMS = iphoneos iphonesimulator macosx
 
-// iPhone + iPad
-TARGETED_DEVICE_FAMILY = 1,2
+// iPhone only for v1: iPads run the iPhone version (compatibility mode, phone layout).
+// The iPad layout (TabletUI, Models/ios-tablet) stays in the code for a later update.
+// Going to 1,2 is a one-way step: App Store Connect refuses an update that drops iPad again.
+TARGETED_DEVICE_FAMILY = 1
 
-// iPhone only
-// TARGETED_DEVICE_FAMILY = 1
+// iPhone + iPad (also add Models/ios-tablet back to the app's Resources phase)
+// TARGETED_DEVICE_FAMILY = 1,2
 
 // the name of the product module; this can be anything, but cannot conflict with any Swift module names
 PRODUCT_MODULE_NAME = $(PRODUCT_NAME:c99extidentifier)App

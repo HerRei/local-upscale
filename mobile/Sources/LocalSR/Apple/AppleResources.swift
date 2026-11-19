@@ -51,6 +51,12 @@ public enum AppleResources {
         try find(model.fileName + ".mlmodelc")
     }
 
+    /// Whether the app bundle carries the tablet models (only an iPad build does; v1 is iPhone-only).
+    public static var bundlesTabletModels: Bool {
+        guard let root = Bundle.main.resourceURL else { return false }
+        return FileManager.default.fileExists(atPath: root.appendingPathComponent("ios-tablet", isDirectory: true).path)
+    }
+
     public static func tabletModelURL(_ model: TabletModelID) throws -> URL {
         let name = ModelCatalog.model(model).iosFileName
         var dirs: [URL] = []

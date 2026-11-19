@@ -11,7 +11,8 @@ PRODUCT_NAME = LocalSRShare
 IPHONEOS_DEPLOYMENT_TARGET = 26.0
 SUPPORTED_PLATFORMS = iphoneos iphonesimulator
 SDKROOT = iphoneos
-TARGETED_DEVICE_FAMILY = 1,2
+// Same devices as the app (iPhone only for v1, see LocalSR.xcconfig)
+TARGETED_DEVICE_FAMILY = 1
 
 SWIFT_VERSION = 6
 APPLICATION_EXTENSION_API_ONLY = YES
