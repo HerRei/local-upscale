@@ -180,10 +180,10 @@
 <style>
   .render-studio {
     margin: 16px 0;
-    border: 1px solid var(--tone-424854);
+    border: 1px solid var(--benchmark-stage-border);
     border-radius: var(--radius-surface);
     overflow: hidden;
-    background: var(--tone-1c1c1e);
+    background: var(--benchmark-stage-bg);
   }
   header,
   footer {
@@ -196,14 +196,14 @@
   header span,
   footer,
   p {
-    color: var(--tone-acacac);
+    color: var(--benchmark-muted-text);
   }
   .render-stage {
     position: relative;
     margin: 0 auto;
     width: min(calc(100% - 32px), calc(280px * var(--render-ratio)));
     aspect-ratio: var(--render-ratio);
-    background: var(--tone-141416);
+    background: var(--benchmark-placeholder-bg);
     overflow: hidden;
   }
   canvas,
@@ -219,9 +219,9 @@
   .active-tile {
     position: absolute;
     box-sizing: border-box;
-    border: 2px solid var(--tone-ababab);
-    background: var(--tone-9b9b9b18);
-    box-shadow: inset 0 0 20px var(--tone-9e9e9e30);
+    border: 2px solid var(--benchmark-box-border);
+    background: var(--benchmark-box-fill);
+    box-shadow: inset 0 0 20px var(--benchmark-box-glow);
     animation: pulse 1.2s ease-in-out infinite;
   }
   .waiting {
@@ -232,13 +232,13 @@
     align-items: center;
     justify-content: center;
     font-size: 13px;
-    color: var(--tone-acacac);
+    color: var(--benchmark-muted-text);
   }
   .working {
     width: 16px;
     height: 16px;
-    border: 2px solid var(--tone-86868640);
-    border-top-color: var(--tone-adadad);
+    border: 2px solid var(--benchmark-spinner-track);
+    border-top-color: var(--benchmark-spinner-head);
     border-radius: 50%;
     animation: spin 1s linear infinite;
   }
@@ -250,8 +250,8 @@
   }
   @keyframes pulse {
     50% {
-      border-color: var(--tone-e0e0e0);
-      background: var(--tone-aaaaaa38);
+      border-color: var(--retry-border);
+      background: var(--benchmark-retry-hover-bg);
     }
   }
   @keyframes spin {

@@ -218,7 +218,7 @@
     position: fixed;
     inset: 0;
     z-index: 110;
-    background: var(--tone-000a);
+    background: var(--backdrop-strong);
     display: grid;
     place-items: center;
     padding: 24px;
@@ -228,11 +228,11 @@
     width: min(560px, 100%);
     max-height: 85vh;
     overflow: auto;
-    background: var(--tone-232325);
+    background: var(--dialog-bg);
     padding: 20px;
-    border: 1px solid var(--rgba-255-255-255-0_12);
+    border: 1px solid var(--surface-border);
     border-radius: var(--radius-surface);
-    box-shadow: 0 24px 80px var(--rgba-0-0-0-0_65);
+    box-shadow: 0 24px 80px var(--shadow-modal);
     font-size: calc(13px * var(--ui-scale));
   }
   h2 {
@@ -254,7 +254,7 @@
   }
   .detail {
     font-size: 12px;
-    color: var(--tone-a3a3a6);
+    color: var(--dialog-muted-text);
   }
   .count {
     display: block;
@@ -274,8 +274,8 @@
     min-width: 70px;
   }
   .notice {
-    background: var(--tone-2a2a2c);
-    border: 1px solid var(--tone-4a4a4d);
+    background: var(--button-surface);
+    border: 1px solid var(--button-border);
     padding: 12px;
     border-radius: var(--radius);
   }

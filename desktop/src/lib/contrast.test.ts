@@ -59,20 +59,20 @@ describe.each([
     pairs.push(
       ['--on-accent', '--accent'],
       ['--recipe-button-text', '--accent'],
-      ['--danger-text-warm', '--tone-241514'],
+      ['--danger-text-warm', '--danger-surface'],
       ['--warning-text', '--base'],
       ['--success-strong', '--base'],
     );
     if (light || accessible) {
-      for (const border of ['--rgba-229-72-77-0_28', '--rgba-222-153-53-0_35']) {
+      for (const border of ['--danger-border', '--warning-border']) {
         expect(ratio(rgb(p[border]), rgb(p['--panel'])), border).toBeGreaterThanOrEqual(3);
       }
     }
     const panel = rgb(p['--panel']);
     for (const [foreground, fill] of [
-      ['--danger-text', '--rgba-229-72-77-0_09'],
-      ['--warning-text', '--rgba-222-153-53-0_12'],
-      ['--success-strong', '--rgba-109-176-127-0_1'],
+      ['--danger-text', '--danger-fill'],
+      ['--warning-text', '--warning-fill'],
+      ['--success-strong', '--success-fill'],
     ]) {
       expect(
         ratio(rgb(p[foreground]), rgb(p[fill], panel)),

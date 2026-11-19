@@ -1070,8 +1070,8 @@
     gap: 6px 8px;
     min-height: 36px;
     padding: 5px 16px;
-    border-bottom: 1px solid var(--rgba-255-255-255-0_04);
-    background: var(--tone-1b1b1d);
+    border-bottom: 1px solid var(--hairline-faint);
+    background: var(--header-bg);
     font-size: calc(12px * var(--ui-scale));
   }
   .compare-slot {
@@ -1171,7 +1171,7 @@
     gap: 8px;
     min-width: 0;
     padding: 0 10px;
-    background: var(--tone-1b1b1d);
+    background: var(--header-bg);
     font-size: calc(11px * var(--ui-scale));
   }
   .box-bar strong {

@@ -1113,8 +1113,8 @@
     gap: 12px;
     padding: 12px;
     border-radius: var(--radius);
-    background: var(--tone-1e1e1eed);
-    color: var(--tone-d1d1d1);
+    background: var(--overlay-pill-bg);
+    color: var(--overlay-text);
   }
   .playback-preparation > span:nth-child(2) {
     flex: 1;
@@ -1123,8 +1123,8 @@
     width: 16px;
     height: 16px;
     flex-shrink: 0;
-    border: 2px solid var(--tone-bfbfbf40);
-    border-top-color: var(--tone-cccccc);
+    border: 2px solid var(--spinner-track);
+    border-top-color: var(--spinner-head);
     border-radius: 50%;
     animation: playback-spin 1s linear infinite;
   }
@@ -1135,7 +1135,7 @@
     right: 12px;
     z-index: 8;
     pointer-events: none;
-    background: var(--tone-1e1e1eed);
+    background: var(--overlay-pill-bg);
     padding: 6px 10px;
     font-size: 12px;
   }
@@ -1167,7 +1167,7 @@
     bottom: max(16px, var(--notice-room, 0px));
     padding: 12px;
     border-radius: var(--radius);
-    background: var(--tone-351918);
+    background: var(--danger-banner-bg);
     color: var(--danger-text-warm);
   }
   /* The band is a layer as wide as the picture, moved by transform on the compositor. */
@@ -1189,7 +1189,7 @@
     background: linear-gradient(
       100deg,
       transparent 40%,
-      var(--rgba-204-204-204-0_07) 50%,
+      var(--shimmer-highlight) 50%,
       transparent 60%
     );
     animation: sweep 3.2s linear infinite;
@@ -1223,7 +1223,7 @@
     padding: 6px 10px;
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    background: var(--rgba-24-24-26-0_84);
+    background: var(--preview-hud-bg);
     color: var(--secondary);
     font-size: calc(11px * var(--ui-scale));
     pointer-events: none;
@@ -1234,8 +1234,8 @@
   }
   @keyframes tile-pulse {
     50% {
-      border-color: var(--tone-e0e0e0);
-      background: var(--tone-aaaaaa25);
+      border-color: var(--retry-border);
+      background: var(--retry-hover-bg);
     }
   }
   @media (prefers-reduced-motion: reduce) {

@@ -139,10 +139,10 @@
     transition: background 0.25s;
   }
   .well:hover {
-    background: var(--rgba-255-255-255-0_025);
+    background: var(--dropzone-fill);
   }
   .well:hover .edge rect {
-    stroke: var(--rgba-255-255-255-0_26);
+    stroke: var(--dropzone-stroke);
   }
   .well:focus-visible {
     outline: 2px solid var(--focus);
@@ -158,7 +158,7 @@
   }
   .edge rect {
     fill: none;
-    stroke: var(--rgba-255-255-255-0_14);
+    stroke: var(--dropzone-grid);
     stroke-width: 1.5;
     stroke-dasharray: 7 7;
     transition: stroke 0.25s;
@@ -179,8 +179,8 @@
     overflow: hidden;
     border-radius: var(--radius-surface);
     box-shadow:
-      0 18px 40px -14px var(--rgba-0-0-0-0_7),
-      0 0 0 1px var(--rgba-255-255-255-0_08);
+      0 18px 40px -14px var(--shadow-card-deep),
+      0 0 0 1px var(--tint-subtle);
     transition: box-shadow 0.25s;
   }
   .shot canvas {
@@ -195,7 +195,7 @@
     bottom: 0;
     width: 2px;
     margin-left: -1px;
-    background: var(--rgba-255-255-255-0_9);
+    background: var(--dropzone-badge);
   }
   .divider::after {
     content: '';
@@ -205,17 +205,17 @@
     width: 20px;
     height: 20px;
     margin: -10px 0 0 -10px;
-    border: 1.5px solid var(--tone-fff);
+    border: 1.5px solid var(--dropzone-ring);
     border-radius: 50%;
-    background: var(--rgba-22-22-24-0_9);
+    background: var(--dropzone-pill-bg);
   }
   .chip {
     position: absolute;
     top: 8px;
     padding: 4px 6px;
     border-radius: var(--radius);
-    background: var(--rgba-13-13-15-0_72);
-    color: var(--tone-e3e3e6);
+    background: var(--badge-backdrop);
+    color: var(--badge-text);
     font-size: calc(10px * var(--ui-scale));
     font-weight: 600;
     line-height: 1;
@@ -250,10 +250,10 @@
   .capabilities span + span::before {
     content: '·';
     margin-right: 14px;
-    color: var(--tone-414143);
+    color: var(--sample-muted-text);
   }
   .dropping .well {
-    background: var(--rgba-255-255-255-0_039);
+    background: var(--sample-hover);
   }
   .dropping .edge rect {
     stroke: var(--accent);
@@ -261,7 +261,7 @@
   }
   .dropping .shot {
     box-shadow:
-      0 18px 40px -14px var(--rgba-0-0-0-0_7),
+      0 18px 40px -14px var(--shadow-card-deep),
       0 0 0 2px var(--accent);
   }
   @media (max-height: 520px) {

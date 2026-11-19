@@ -51,7 +51,7 @@
     position: absolute;
     inset: 10% 2%;
     border-radius: 50%;
-    background: radial-gradient(ellipse, var(--tone-ffffff0d), transparent 68%);
+    background: radial-gradient(ellipse, var(--illustration-halo), transparent 68%);
     animation: halo 7s ease-in-out infinite;
   }
   .back-frame {
@@ -60,11 +60,11 @@
     animation: back-float 7s ease-in-out infinite;
   }
   .back-frame rect {
-    fill: var(--tone-313131);
-    stroke: var(--tone-6d6d6d);
+    fill: var(--illustration-back-fill);
+    stroke: var(--illustration-back-stroke);
   }
   .back-frame path {
-    stroke: var(--tone-a4a4a4);
+    stroke: var(--illustration-back-detail);
     stroke-width: 3;
     stroke-linecap: round;
   }
@@ -72,24 +72,24 @@
     animation: float 6s ease-in-out infinite;
   }
   .picture {
-    fill: var(--tone-282828);
-    stroke: var(--tone-939393);
+    fill: var(--illustration-frame-fill);
+    stroke: var(--illustration-frame-stroke);
     stroke-width: 1.5;
   }
   .mountain {
-    fill: var(--tone-515151);
+    fill: var(--illustration-mountain);
   }
   .ridge {
     fill: none;
-    stroke: var(--tone-b7b7b7);
+    stroke: var(--illustration-ridge);
     stroke-width: 2;
     stroke-linejoin: round;
   }
   .sun {
-    fill: var(--tone-c3c3c3);
+    fill: var(--illustration-sun);
   }
   .sun-glow {
-    fill: var(--tone-c3c3c3);
+    fill: var(--illustration-sun);
     opacity: 0.18;
     transform-origin: 172px 77px;
     animation: glow 4s ease-in-out infinite;
@@ -105,13 +105,13 @@
     animation: play-float 5s ease-in-out infinite;
   }
   .play circle:not(.play-ring) {
-    fill: var(--tone-787878);
-    stroke: var(--tone-c5c5c5);
+    fill: var(--illustration-play-fill);
+    stroke: var(--illustration-play-stroke);
     stroke-width: 1.5;
   }
   .play-ring {
     fill: none;
-    stroke: var(--tone-969696);
+    stroke: var(--illustration-play-ring);
     stroke-width: 1.5;
     opacity: 0;
     transform-origin: 213px 134px;
@@ -121,7 +121,7 @@
     fill: var(--illustration-highlight);
   }
   .pixels rect {
-    fill: var(--tone-989898);
+    fill: var(--illustration-pixel);
   }
   .pixel-a {
     animation:
@@ -139,7 +139,7 @@
       breathe 5.5s ease-in-out -3s infinite;
   }
   .spark {
-    stroke: var(--tone-bbbbbb);
+    stroke: var(--illustration-spark);
     stroke-width: 2;
     stroke-linecap: round;
     transform-origin: 231px 31px;
@@ -147,7 +147,7 @@
   }
   .scan {
     opacity: 0;
-    stroke: var(--tone-d1d1d1);
+    stroke: var(--overlay-text);
     stroke-width: 2;
     animation: scan 8s ease-in-out infinite;
   }
