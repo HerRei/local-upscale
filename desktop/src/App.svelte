@@ -398,8 +398,8 @@
   let setupAppearance: UiSettings['appearance'] = 'dark';
   let setupColourBlind = false;
   let setupCheckAtLaunch = true;
-  let setupAnonymousCount = false;
-  let setupCrashReports = false;
+  let setupAnonymousCount = true;
+  let setupCrashReports = true;
   let privacySaving = false;
   let privacyError = '';
 
@@ -1247,8 +1247,8 @@
         setupAppearance = snapshot.settings.appearance ?? 'dark';
         setupColourBlind = snapshot.settings.colour_blind_palette ?? false;
         setupCheckAtLaunch = snapshot.settings.check_updates_at_launch ?? true;
-        setupAnonymousCount = snapshot.settings.anonymous_update_count ?? false;
-        setupCrashReports = snapshot.settings.crash_reports ?? false;
+        setupAnonymousCount = snapshot.settings.anonymous_update_count ?? true;
+        setupCrashReports = snapshot.settings.crash_reports ?? true;
         if (snapshot.settings.crash_reports) {
           await refreshCrashReports();
           crashNotice = crashReports.length > 0;

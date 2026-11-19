@@ -344,23 +344,22 @@ mod tests {
     }
 
     #[test]
-    fn the_anonymous_update_count_is_off_unless_it_was_turned_on() {
+    fn new_installs_start_with_the_count_and_crash_reports_on_and_saved_choices_stay() {
+        assert!(UiSettings::default().anonymous_update_count);
+        assert!(UiSettings::default().crash_reports);
         let directory = tempfile::tempdir().unwrap();
         let paths = AppPaths::under(directory.path());
+        assert!(load(&paths).0.anonymous_update_count);
         fs::create_dir_all(&paths.next_root).unwrap();
         fs::write(
             &paths.settings,
-            r#"{"schema_version":2,"ui":{},"recipes":[]}"#,
+            r#"{"schema_version":2,"ui":{"anonymous_update_count":false},"recipes":[]}"#,
         )
         .unwrap();
-        assert!(!load(&paths).0.anonymous_update_count);
-        fs::write(
-            &paths.settings,
-            r#"{"schema_version":2,"ui":{"anonymous_update_count":true},"recipes":[]}"#,
-        )
-        .unwrap();
-        assert!(load(&paths).0.anonymous_update_count);
-        assert!(!UiSettings::default().anonymous_update_count);
+        let (saved, _) = load(&paths);
+        assert!(!saved.anonymous_update_count);
+        // A settings file from before crash reports existed: its user never saw the choice.
+        assert!(!saved.crash_reports);
     }
 
     #[test]

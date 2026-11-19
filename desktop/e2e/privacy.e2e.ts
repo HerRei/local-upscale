@@ -20,8 +20,11 @@ test('first launch setup previews live, saves choices, and persists across reloa
   await expect(page.locator('html')).toHaveAttribute('data-palette', 'colour-blind');
 
   await setup.getByLabel('Check for updates automatically').uncheck();
-  await setup.getByLabel('Send an anonymous count with each update check').check();
-  await setup.getByLabel('Offer to report crashes').check();
+  // Both start on for a new install; the user can switch them off here.
+  await expect(setup.getByLabel('Send an anonymous count with each update check')).toBeChecked();
+  await expect(setup.getByLabel('Offer to report crashes')).toBeChecked();
+  await setup.getByLabel('Send an anonymous count with each update check').uncheck();
+  await setup.getByLabel('Offer to report crashes').uncheck();
   await setup.getByRole('button', { name: 'Continue' }).click();
 
   await expect(setup).toBeHidden();
@@ -31,8 +34,8 @@ test('first launch setup previews live, saves choices, and persists across reloa
         appearance: 'light',
         colourBlindPalette: true,
         checkAtLaunch: false,
-        anonymousCount: true,
-        crashReports: true,
+        anonymousCount: false,
+        crashReports: false,
       },
     },
   ]);

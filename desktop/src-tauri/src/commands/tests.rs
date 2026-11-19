@@ -302,14 +302,15 @@ fn crash_reports_switch_saves_while_a_job_runs_and_full_save_keeps_it() {
     fs::create_dir_all(&paths.next_root).unwrap();
     fs::create_dir_all(&paths.model_root).unwrap();
     let state = AppState::from_paths(paths).unwrap();
-    assert!(!crate::settings::load(&state.paths).0.crash_reports);
+    // New installs start with crash reports on; turning them off must stick.
+    assert!(crate::settings::load(&state.paths).0.crash_reports);
     lock(&state.runtime).unwrap().active_job_id = "running".into();
-    apply_update_switch(&state, "crash_reports", |_| true).unwrap();
+    apply_update_switch(&state, "crash_reports", |_| false).unwrap();
     let saved = crate::settings::load(&state.paths).0;
-    assert!(saved.crash_reports);
+    assert!(!saved.crash_reports);
     let mut stale = UiSettings::default();
     keep_update_switches(&saved, &mut stale);
-    assert!(stale.crash_reports);
+    assert!(!stale.crash_reports);
 }
 
 #[test]

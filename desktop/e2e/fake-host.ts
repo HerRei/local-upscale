@@ -196,7 +196,13 @@ function hostScript(scenario: Scenario): void {
       });
     }
     Object.assign(s.settings, { task: scenario.task ?? '' }, scenario.settings ?? {});
-    if (scenario.privacyPending) s.settings.privacy_choice_made = false;
+    // A fresh install starts from the host's defaults: count and crash reports on.
+    if (scenario.privacyPending)
+      Object.assign(s.settings, {
+        privacy_choice_made: false,
+        anonymous_update_count: true,
+        crash_reports: true,
+      });
     try {
       const savedSetup = sessionStorage.getItem('localsr.fakeHost.setupSettings');
       if (savedSetup) Object.assign(s.settings, JSON.parse(savedSetup));
@@ -520,13 +526,29 @@ function hostScript(scenario: Scenario): void {
       case 'take_launch_intents':
         return [];
       case 'diagnostic_summary':
-        return scenario.diagnosticSummary ?? JSON.stringify({ platform: 'macos', app_version: '0.4.0-beta' }, null, 2);
+        return (
+          scenario.diagnosticSummary ??
+          JSON.stringify({ platform: 'macos', app_version: '0.4.0-beta' }, null, 2)
+        );
       case 'open_bug_report':
       case 'open_update_discover':
         return null;
       case 'skip_update':
         snapshot.settings.skipped_update_version = scenario.update;
-        return { configured: true, managed_by_store: false, channel: 'beta', target: '', stage: 'available', version: scenario.update, notes: '', skipped_version: scenario.update, size: 58 * 1024 ** 2, downloaded: 0, message: '', settings_recovery: false };
+        return {
+          configured: true,
+          managed_by_store: false,
+          channel: 'beta',
+          target: '',
+          stage: 'available',
+          version: scenario.update,
+          notes: '',
+          skipped_version: scenario.update,
+          size: 58 * 1024 ** 2,
+          downloaded: 0,
+          message: '',
+          settings_recovery: false,
+        };
       case 'update_status':
       case 'check_update':
       case 'check_update_at_launch':

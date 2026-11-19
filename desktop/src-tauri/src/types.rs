@@ -351,8 +351,8 @@ pub struct UiSettings {
     // Apple silicon: run supported models through Core ML on the Neural Engine.
     #[serde(default = "default_true")]
     pub neural_engine: bool,
-    // Direct builds send version, platform and channel after an update check, only when
-    // the user turns it on (off for new installs since 0.4.1; a saved choice is kept).
+    // Direct builds send version, platform and channel after an update check. New installs
+    // start with it on and confirm it in the first-launch setup; a saved choice is kept.
     pub anonymous_update_count: bool,
     pub completion_sound: bool,
     // Direct builds look for an update once at launch, silently.
@@ -360,6 +360,8 @@ pub struct UiSettings {
     pub check_updates_at_launch: bool,
     #[serde(default = "default_true")]
     pub privacy_choice_made: bool,
+    // On for new installs (the first-launch setup shows it); settings files from before
+    // crash reports existed keep it off, since their users never saw the choice.
     #[serde(default)]
     pub crash_reports: bool,
     #[serde(default)]
@@ -470,11 +472,11 @@ impl Default for UiSettings {
             video_interpolation: default_interpolation(),
             video_interpolation_order: default_interpolation_order(),
             neural_engine: true,
-            anonymous_update_count: false,
+            anonymous_update_count: true,
             completion_sound: false,
             check_updates_at_launch: true,
             privacy_choice_made: false,
-            crash_reports: false,
+            crash_reports: true,
             skipped_update_version: String::new(),
             enable_face_model: false,
             face_fidelity: 70,
