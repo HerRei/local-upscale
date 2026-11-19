@@ -223,7 +223,14 @@ function readySnapshot(media: MediaItem[] = []): AppSnapshot {
     minimum_protocol_version: 1,
     engine_id: 'localsr.test',
     engine_version: '0.0.11-alpha',
-    features: ['image', 'image_multi_fix', 'video_frame', 'video_seedvr2', 'video_interpolation'],
+    features: [
+      'image',
+      'image_multi_fix',
+      'video_frame',
+      'video_seedvr2',
+      'video_interpolation',
+      'video_audio_denoise',
+    ],
     model_formats: ['.safetensors'],
     video_engines: ['spandrel_image', 'seedvr2'],
   };
@@ -6082,5 +6089,88 @@ describe('crash reports', () => {
     api.listCrashReports.mockResolvedValueOnce([]).mockResolvedValue([]);
     await user.click(within(section).getByRole('button', { name: 'Delete All' }));
     await waitFor(() => expect(api.deleteAllCrashReports).toHaveBeenCalledTimes(1));
+  });
+
+  it('toggles Clean up audio with help tip, downloads DeepFilterNet3 on start, disables when silent, and saves in recipes', async () => {
+    const media = { ...video('clip', true), has_audio: true };
+    const snap = readySnapshot([media]);
+    snap.settings.task = 'video';
+    snap.settings.selected_model_id = 'span_photo_x4';
+    const df3 = snap.catalog.audio_models?.[0];
+    if (df3) df3.installed = false;
+    const upscaler = snap.catalog.models.find((m) => m.model_id === 'span_photo_x4');
+    if (upscaler) upscaler.installed = true;
+
+    const user = await mountWith(snap);
+    const audioRegion = screen.getByRole('region', { name: 'Audio' });
+    const toggle = within(audioRegion).getByRole('checkbox', {
+      name: 'Clean up audio',
+    }) as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+    expect(toggle.disabled).toBe(false);
+
+    await user.click(within(audioRegion).getByRole('button', { name: 'About Clean up audio' }));
+    expect(
+      await screen.findByText(/Removes background noise such as hum, wind and hiss from speech/i),
+    ).toBeTruthy();
+
+    await user.click(toggle);
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ video_clean_audio: true }),
+      ),
+    );
+    const stages = screen.getByRole('list', { name: 'Stages' });
+    expect(within(stages).getByText('DeepFilterNet3')).toBeTruthy();
+
+    // Save as recipe preserves video_clean_audio.
+    const toggledSnap = structuredClone(snap);
+    toggledSnap.settings.video_clean_audio = true;
+    api.refreshSnapshot.mockResolvedValue(toggledSnap);
+    await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
+    await user.type(screen.getByPlaceholderText('Name this setup'), 'Clean Speech');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(api.saveRecipe).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Clean Speech', video_clean_audio: true }),
+      ),
+    );
+
+    // Download on first use and start when clicking Download & start.
+    const nextSnap = structuredClone(toggledSnap);
+    const nextDf3 = nextSnap.catalog.audio_models?.[0];
+    if (nextDf3) nextDf3.installed = true;
+    api.refreshSnapshot.mockResolvedValue(nextSnap);
+    await user.click(screen.getByRole('button', { name: /Download .* start video/i }));
+    await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith('deepfilternet3', false));
+    await waitFor(() =>
+      expect(api.startJobs).toHaveBeenCalledWith(
+        expect.objectContaining({ task: 'video', video_clean_audio: true }),
+      ),
+    );
+
+    // Open Model Library -> Audio tab shows DeepFilterNet3 details.
+    nativeMenu?.('view.models');
+    const dialog = await screen.findByRole('dialog', { name: 'Model library' });
+    await user.click(within(dialog).getByRole('button', { name: /^Audio/ }));
+    expect(within(dialog).getByRole('heading', { name: 'DeepFilterNet3' })).toBeTruthy();
+    expect(within(dialog).getByText(/about 100 MB/i)).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'MIT OR Apache-2.0 ↗' }));
+    expect(api.openModelLicense).toHaveBeenCalledWith('deepfilternet3');
+    await user.click(within(dialog).getByRole('button', { name: 'Close model library' }));
+
+    // Video without audio disables Clean up audio with a note.
+    const silentSnap = readySnapshot([{ ...video('silent', true), has_audio: false }]);
+    silentSnap.settings.task = 'video';
+    silentSnap.settings.video_clean_audio = true;
+    cleanup();
+    await mountWith(silentSnap);
+    const silentRegion = screen.getByRole('region', { name: 'Audio' });
+    const silentToggle = within(silentRegion).getByRole('checkbox', {
+      name: 'Clean up audio',
+    }) as HTMLInputElement;
+    expect(silentToggle.disabled).toBe(true);
+    expect(silentToggle.checked).toBe(false);
+    expect(within(silentRegion).getByText('This video has no audio track.')).toBeTruthy();
   });
 });

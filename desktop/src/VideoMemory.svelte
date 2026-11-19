@@ -13,6 +13,8 @@
   $: shared = device?.id.startsWith('mps');
   $: separateGpu = device?.id.startsWith('cuda');
   const labels: Record<string, string> = {
+    loading_audio_denoise: 'Loading audio model',
+    audio_denoise: 'Audio cleanup',
     loading_model: 'Loading model',
     reading_frames: 'Reading frames',
     preparing_clip: 'Preparing clip',

@@ -26,6 +26,7 @@ fn bundle_model(catalog: &CatalogManifest, model_id: &str) -> Option<CatalogVide
         .video_models
         .iter()
         .chain(catalog.interpolation_models.iter())
+        .chain(catalog.audio_models.iter())
         .find(|model| model.model_id == model_id)
         .cloned()
 }
@@ -828,6 +829,19 @@ mod tests {
             bundle_model(&manifest, "seedvr2_3b").unwrap().engine_kind,
             "seedvr2"
         );
+        let df3 = bundle_model(&manifest, "deepfilternet3").unwrap();
+        assert_eq!(df3.engine_kind, "deepfilternet3");
+        assert!(df3.automated_download_allowed);
+        assert!(!df3.terms_acceptance_required);
+        for file in &df3.files {
+            assert!(
+                validate_artifact_metadata(&file.download_url, file.size_bytes, &file.sha256)
+                    .is_ok()
+            );
+        }
+        assert!(DownloadTarget::Video(Box::new(df3))
+            .validate_policy(false)
+            .is_ok());
         assert!(bundle_model(&manifest, "span_photo_x4").is_none());
     }
 

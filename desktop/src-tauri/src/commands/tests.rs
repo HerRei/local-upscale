@@ -509,6 +509,7 @@ fn input(task: &str) -> StartBatchInput {
         allow_unsafe_pickle_model: false,
         video_interpolation: "off".into(),
         video_interpolation_order: "after_upscale".into(),
+        video_clean_audio: false,
     }
 }
 
@@ -537,6 +538,7 @@ fn trial_state(
             "preview",
             "",
             "",
+            true,
         )
         .unwrap();
     }
@@ -869,6 +871,7 @@ fn a_pair_decodes_each_result_once_and_never_the_original() {
         "thumb",
         "",
         "",
+        true,
     )
     .unwrap();
     let media = db.get_media("photo").unwrap().unwrap();
@@ -1265,6 +1268,7 @@ fn image_jobs_request_a_bounded_nonblocking_progressive_preview() {
         probe_status: "ready".into(),
         hdr_format: String::new(),
         audio_warning: String::new(),
+        has_audio: true,
         error: String::new(),
         selected: true,
     };
@@ -1276,6 +1280,7 @@ fn image_jobs_request_a_bounded_nonblocking_progressive_preview() {
         face_model_id: String::new(),
         native_scale: 4,
         interpolation: None,
+        audio_denoise: None,
     };
 
     let message = build_job_message(
@@ -1345,6 +1350,7 @@ fn image_jobs_request_a_bounded_nonblocking_progressive_preview() {
         bundle_dir: "/models/seedvr2".into(),
         temporal_window: 9,
         temporal_overlap: 2,
+        audio_denoise: None,
     };
     let temporal_message = build_job_message(
         "temporal-job",
@@ -1421,6 +1427,7 @@ fn image_recipe_serializes_restore_upscale_and_fused_face_in_order() {
         probe_status: "ready".into(),
         hdr_format: String::new(),
         audio_warning: String::new(),
+        has_audio: true,
         error: String::new(),
         selected: true,
     };
@@ -1437,6 +1444,7 @@ fn image_recipe_serializes_restore_upscale_and_fused_face_in_order() {
         face_model_id: "hat_l_x4_face".into(),
         native_scale: 4,
         interpolation: None,
+        audio_denoise: None,
     };
     let mut options = input("upscale");
     options.enable_face_model = true;
@@ -1628,6 +1636,7 @@ fn recipe_stage_validation_accepts_legacy_and_rejects_ambiguous_order() {
         fixes: Vec::new(),
         video_interpolation: String::new(),
         video_interpolation_order: String::new(),
+        video_clean_audio: false,
     };
     assert!(validate_recipe_stages(&legacy).is_ok());
 
@@ -1709,6 +1718,7 @@ fn video_media() -> crate::types::MediaItem {
         probe_status: "ready".into(),
         hdr_format: String::new(),
         audio_warning: String::new(),
+        has_audio: true,
         error: String::new(),
         selected: true,
     }
@@ -1788,6 +1798,69 @@ fn frame_interpolation_reaches_the_worker_with_its_downloaded_model() {
 }
 
 #[test]
+fn audio_denoise_reaches_the_worker_and_skips_videos_without_audio() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(directory.path());
+    fs::create_dir_all(&paths.next_root).unwrap();
+    fs::create_dir_all(&paths.model_root).unwrap();
+    let state = AppState::from_paths(paths).unwrap();
+    {
+        let mut catalog = lock(&state.catalog).unwrap();
+        for model in &mut catalog.models {
+            model.installed = model.model_id == "span_photo_x4";
+            model.installed_path = model.installed.then(|| "/models/span.pth".into());
+        }
+    }
+    let mut options = input("video");
+    options.model_id = "span_photo_x4".into();
+    options.video_clean_audio = true;
+    let missing = resolve_model_selection(&state, &options).err().unwrap();
+    assert!(missing
+        .to_string()
+        .contains("download the audio cleanup model first"));
+    {
+        let mut catalog = lock(&state.catalog).unwrap();
+        let df3 = catalog
+            .audio_models
+            .iter_mut()
+            .find(|model| model.model_id == "deepfilternet3")
+            .unwrap();
+        df3.installed = true;
+        df3.installed_path = Some("/models/deepfilternet3".into());
+    }
+    let selection = resolve_model_selection(&state, &options).unwrap();
+    let work = Path::new("/app-owned/work");
+    let output = Path::new("/output/clip.mp4");
+    let with_audio =
+        build_job_message("job", &video_media(), output, work, &options, &selection).unwrap();
+    assert_eq!(with_audio["data"]["audio_denoise"], true);
+    assert_eq!(
+        with_audio["data"]["audio_denoise_model_id"],
+        "deepfilternet3"
+    );
+    assert_eq!(
+        with_audio["data"]["audio_denoise_bundle_dir"],
+        "/models/deepfilternet3"
+    );
+
+    let mut silent = video_media();
+    silent.has_audio = false;
+    let without_audio =
+        build_job_message("silent", &silent, output, work, &options, &selection).unwrap();
+    assert_eq!(without_audio["data"]["audio_denoise"], false);
+    assert!(without_audio["data"]["audio_denoise_model_id"].is_null());
+    assert!(without_audio["data"]["audio_denoise_bundle_dir"].is_null());
+
+    // Default off when disabled in settings and backward-compatible when omitted.
+    let defaults = UiSettings::default();
+    assert!(!defaults.video_clean_audio);
+    let mut older = serde_json::to_value(&defaults).unwrap();
+    older.as_object_mut().unwrap().remove("video_clean_audio");
+    let parsed: UiSettings = serde_json::from_value(older).unwrap();
+    assert!(!parsed.video_clean_audio);
+}
+
+#[test]
 fn temporal_jobs_always_send_interpolation_off() {
     let temporal = ModelSelection::Temporal {
         model_id: "seedvr2_3b".into(),
@@ -1795,6 +1868,7 @@ fn temporal_jobs_always_send_interpolation_off() {
         bundle_dir: "/models/seedvr2".into(),
         temporal_window: 9,
         temporal_overlap: 2,
+        audio_denoise: None,
     };
     let message = build_job_message(
         "temporal",
@@ -1860,10 +1934,11 @@ fn hdr_preservation_refuses_interpolation_only_for_hdr_sources() {
         face_path: None,
         face_model_id: String::new(),
         native_scale: 4,
-        interpolation: Some(ResolvedInterpolation {
+        interpolation: Some(ResolvedBundle {
             model_id: "rife_4_26".into(),
             bundle_dir: "/models/rife_4_26".into(),
         }),
+        audio_denoise: None,
     };
     let mut options = input("video");
     options.video_interpolation = "x2".into();
@@ -2228,6 +2303,7 @@ fn a_start_that_cannot_be_written_is_refused_before_anything_is_queued() {
         face_model_id: String::new(),
         native_scale: 4,
         interpolation: None,
+        audio_denoise: None,
     };
     let photo = crate::types::MediaItem {
         id: "media".into(),
@@ -2243,6 +2319,7 @@ fn a_start_that_cannot_be_written_is_refused_before_anything_is_queued() {
         probe_status: "ready".into(),
         hdr_format: String::new(),
         audio_warning: String::new(),
+        has_audio: true,
         error: String::new(),
         selected: true,
     };

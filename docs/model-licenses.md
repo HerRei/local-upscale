@@ -247,6 +247,25 @@ No restoration weights are bundled with the application.
   each matched to the official Drive archive. The unofficial "heavy" files were excluded.
   GMFSS was excluded because its forward-warping kernel is academic-use only.
 
+## Audio cleanup
+
+### DeepFilterNet3 (`deepfilternet3`)
+
+- Model: DeepFilterNet3 by Hendrik Schröter ([Rikorose/DeepFilterNet](https://github.com/Rikorose/DeepFilterNet)),
+  described in Schröter et al., INTERSPEECH 2023.
+- Exact upstream asset: `models/DeepFilterNet3_onnx.tar.gz` pinned at commit
+  `7b14b895fe7fc42cab72b4a4c1e49c982bd6404b`.
+- Size: `7,983,136` bytes.
+- SHA-256: `c94d91f70911001c946e0fabb4aa9adc37045f45a03b56008cb0c8244cb63616`.
+- Terms: all code and pretrained model weights in the official repository are dual-licensed under
+  either [MIT](https://github.com/Rikorose/DeepFilterNet/blob/main/LICENSE-MIT) or
+  [Apache-2.0](https://github.com/Rikorose/DeepFilterNet/blob/main/LICENSE-APACHE), at the
+  user's option (`MIT OR Apache-2.0`).
+- Contents & runtime: `enc.onnx`, `erb_dec.onnx`, `df_dec.onnx`, and `config.ini`, executed on
+  CPU via ONNX Runtime (`onnxruntime`).
+- Policy: optional download on first use through the same HTTPS, size, SHA-256, and
+  atomic-install checks as other catalog models; never bundled.
+
 ## Image-editing models
 
 The Edit task's bundles are listed in `src/localsr/core/edit_catalog.json` with the exact

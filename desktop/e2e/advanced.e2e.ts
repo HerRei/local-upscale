@@ -153,3 +153,49 @@ test('chooses the editing runtime through the host and sends that path to Start 
     '/chosen/sd-cli',
   );
 });
+
+test.describe('Video audio cleanup', () => {
+  test('toggles Clean up audio, shows its help tip, and starts the job with it enabled', async ({
+    page,
+  }) => {
+    await openApp(page, {
+      ...video,
+      worker: 'ready',
+      installed: [...(video.installed ?? []), 'deepfilternet3'],
+      settings: { ...video.settings, video_interpolation: 'off' },
+    });
+    await showPane(page, 'enhance');
+    const audio = page.getByRole('region', { name: 'Audio' });
+    const checkbox = audio.getByRole('checkbox', { name: 'Clean up audio' });
+    await expect(checkbox).not.toBeChecked();
+    await expect(checkbox).toBeEnabled();
+
+    await audio.getByRole('button', { name: 'About Clean up audio' }).click();
+    await expect(
+      page.getByText(/Removes background noise such as hum, wind and hiss from speech/i),
+    ).toBeVisible();
+
+    await checkbox.check();
+    await expect.poll(async () => (await lastSaved(page)).video_clean_audio).toBe(true);
+    await expect(page.getByRole('list', { name: 'Stages' })).toContainText('DeepFilterNet3');
+
+    await page.getByRole('button', { name: 'Start selected video' }).click();
+    await expect
+      .poll(
+        async () =>
+          ((await hostCalls(page, 'start_jobs')).at(-1)?.args as {
+            input: { video_clean_audio?: boolean };
+          })?.input.video_clean_audio,
+      )
+      .toBe(true);
+  });
+
+  test('disables Clean up audio with a note when a video has no audio track', async ({ page }) => {
+    await openApp(page, { ...video, videoHasAudio: false });
+    await showPane(page, 'enhance');
+    const audio = page.getByRole('region', { name: 'Audio' });
+    const checkbox = audio.getByRole('checkbox', { name: 'Clean up audio' });
+    await expect(checkbox).toBeDisabled();
+    await expect(audio).toContainText('This video has no audio track.');
+  });
+});

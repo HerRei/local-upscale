@@ -250,6 +250,8 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
         verifying_model: 'Checking model files',
         external_decode: 'Converting the source with your FFmpeg',
         external_encode: 'Encoding with your FFmpeg',
+        loading_audio_denoise: 'Loading audio model',
+        audio_denoise: 'Audio cleanup',
         loading_model: 'Loading video model',
         reading_frames: 'Reading video frames',
         preparing_clip: 'Preparing clip',
@@ -274,10 +276,22 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
           ? `From frame ${Number(data.frame_index ?? 0) + 1} of ${totalFrames} · `
           : '';
       next.runtime.status_detail = `${steps}${frames}${next.runtime.estimated_remaining_seconds > 0 ? `ETA ≈ ${formatDuration(next.runtime.estimated_remaining_seconds)}` : 'ETA: measuring first clip…'}`;
-      if (data.stage === 'saving')
-        next.runtime.status_detail = 'Finalizing video timing and audio…';
+      if (data.stage === 'audio_denoise') {
+        const completed = Number(data.completed ?? 0);
+        if (count > 0 && totalFrames === 0)
+          next.runtime.progress = Math.max(0, Math.min(100, (completed / count) * 100));
+        const chunkText = count > 0 ? `Chunk ${completed} of ${count}` : 'Cleaning speech audio';
+        next.runtime.status_detail =
+          next.runtime.estimated_remaining_seconds > 0
+            ? `${chunkText} · ETA ≈ ${formatDuration(next.runtime.estimated_remaining_seconds)}`
+            : chunkText;
+        next.runtime.throughput_unit = '';
+      } else {
+        if (data.stage === 'saving')
+          next.runtime.status_detail = 'Finalizing video timing and audio…';
+        next.runtime.throughput_unit = 'frames/s';
+      }
       next.runtime.elapsed_seconds = Number(data.elapsed_seconds ?? 0);
-      next.runtime.throughput_unit = 'frames/s';
       break;
     }
     case 'video_frame_started':

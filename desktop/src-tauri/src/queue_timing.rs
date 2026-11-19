@@ -168,6 +168,18 @@ mod tests {
     }
 
     #[test]
+    fn video_audio_denoise_uses_a_separate_work_profile() {
+        let off = json!({"type":"video_job_request","data":{"model_kind":"spandrel_image","tile_size":256,"audio_denoise":false}});
+        let mut on = off.clone();
+        on["data"]["audio_denoise"] = json!(true);
+        on["data"]["audio_denoise_model_id"] = json!("deepfilternet3");
+        let (key_off, units_off) = work_profile(&off.to_string(), 640, 360, 48, "");
+        let (key_on, units_on) = work_profile(&on.to_string(), 640, 360, 48, "");
+        assert_ne!(key_off, key_on);
+        assert_eq!(units_off, units_on);
+    }
+
+    #[test]
     fn video_work_obeys_trim_and_temporal_resolution() {
         let request = json!({"type":"video_job_request","data":{"model_kind":"seedvr2","start_frame":5,"end_frame":20}}).to_string();
         let small = work_profile(&request, 640, 480, 30, "HLG");

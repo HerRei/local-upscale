@@ -36,7 +36,9 @@ from localsr.core.live_preview import LatestPreviewEncoder, PreviewPacket
 from localsr.core.media_codecs import EXTERNAL_OUTPUT_CODECS
 from localsr.core.model_adapter import ModelAdapter
 from localsr.core.model_catalog import (
+    AUDIO_CATALOG_BY_ID,
     CATALOG_BY_ID,
+    DEFAULT_AUDIO_MODEL_ID,
     DEFAULT_INTERPOLATION_MODEL_ID,
     INTERPOLATION_CATALOG_BY_ID,
     VIDEO_CATALOG_BY_ID,
@@ -150,6 +152,7 @@ def _engine_features() -> list[str]:
         "benchmark_v1",
         "image_edit",
         "video_interpolation",
+        "video_audio_denoise",
         "compare_regions",
     ]
     if "seedvr2" in _video_engines():
@@ -495,6 +498,7 @@ class WorkerServer:
                                     jpeg_base64=preview_base64,
                                     hdr_format=probe.hdr_format,
                                     audio_warning=probe.audio_warning,
+                                    has_audio=bool(probe.has_audio),
                                 )
                             )
                         else:
@@ -1040,6 +1044,7 @@ class WorkerServer:
                     on_convert=lambda: send_message(
                         VideoStageProgress(job_id=job_id, stage="external_decode")
                     ),
+                    decode_audio=bool(data.get("audio_denoise")) and data.get("fps") is None,
                 ) as (frame_source, audio_source):
                     return WorkerServer._run_temporal_video_job_impl(
                         self,
@@ -1069,8 +1074,6 @@ class WorkerServer:
         import time as _time
 
         from localsr.core.video_io import (
-            decode_timed_frames,
-            encode_video,
             probe_video,
             selected_frame_count,
         )
@@ -1133,7 +1136,96 @@ class WorkerServer:
                 )
             )
 
-        report("loading_model")
+        from localsr.core.audio_denoise import cleaned_audio_source
+
+        raw_audio_source = data.get("audio_path") or video_path
+        clean_audio = (
+            bool(data.get("audio_denoise")) and data.get("fps") is None and probe.has_audio
+        )
+        audio_denoiser = WorkerServer._audio_denoiser(self, job_id, data) if clean_audio else None
+        with cleaned_audio_source(
+            raw_audio_source,
+            enabled=clean_audio,
+            bundle_dir=data.get("audio_denoise_bundle_dir"),
+            denoiser=audio_denoiser,
+            temporary_directory=data.get("temporary_directory"),
+            output_video_path=output_path,
+            cancel_event=self.cancel_event,
+            stage_cb=lambda stage: report(stage),
+            progress_cb=lambda done, total, elapsed, rem: (
+                memory.phase("audio_denoise"),
+                send_message(
+                    VideoStageProgress(
+                        job_id=job_id,
+                        stage="audio_denoise",
+                        completed=int(done),
+                        total=int(total),
+                        frame_index=0,
+                        total_frames=0,
+                        elapsed_seconds=float(elapsed),
+                        frames_processed=0,
+                        estimated_remaining_seconds=float(rem or 0.0),
+                    )
+                ),
+            ),
+            started_at=started_at,
+        ) as (effective_audio_source, reencode_audio):
+            audio_denoiser = None  # release ONNX sessions before loading SeedVR2
+            report("loading_model")
+            return WorkerServer._run_temporal_video_job_frames(
+                self,
+                job_id,
+                data,
+                engine_factory,
+                memory,
+                video_path=video_path,
+                output_path=output_path,
+                probe=probe,
+                fps=fps,
+                total_frames=total_frames,
+                window=window,
+                overlap=overlap,
+                resolution=resolution,
+                bundle_dir=bundle_dir,
+                started_at=started_at,
+                state=state,
+                export_notes=export_notes,
+                remaining_time=remaining_time,
+                report=report,
+                effective_audio_source=effective_audio_source,
+                raw_audio_source=raw_audio_source,
+                reencode_audio=reencode_audio,
+            )
+
+    def _run_temporal_video_job_frames(
+        self,
+        job_id,
+        data,
+        engine_factory,
+        memory,
+        *,
+        video_path,
+        output_path,
+        probe,
+        fps,
+        total_frames,
+        window,
+        overlap,
+        resolution,
+        bundle_dir,
+        started_at,
+        state,
+        export_notes,
+        remaining_time,
+        report,
+        effective_audio_source,
+        raw_audio_source,
+        reencode_audio,
+    ):
+        import time as _time
+
+        from localsr.core.video_io import decode_timed_frames, encode_video
+
         memory.configure(
             max(2, int(probe.width * resolution / min(probe.width, probe.height)) // 2 * 2),
             max(2, int(probe.height * resolution / min(probe.width, probe.height)) // 2 * 2),
@@ -1331,9 +1423,11 @@ class WorkerServer:
                 crf=int(data.get("crf", 18)),
                 width=int(out_width),
                 height=int(out_height),
-                audio_source=(data.get("audio_path") or video_path)
-                if data.get("fps") is None
-                else None,
+                audio_source=effective_audio_source if data.get("fps") is None else None,
+                subtitle_source=(
+                    raw_audio_source if data.get("fps") is None and reencode_audio else None
+                ),
+                reencode_audio=reencode_audio,
                 external_ffmpeg=data.get("_external_ffmpeg"),
                 stage_callback=lambda stage: report(stage),
                 preserve_timing=data.get("fps") is None,
@@ -1483,6 +1577,45 @@ class WorkerServer:
             ),
         )
 
+    def _audio_denoiser(self, job_id, data):
+        """Verify the catalog DeepFilterNet3 bundle, then load its ONNX sessions."""
+        model_id = str(data.get("audio_denoise_model_id") or DEFAULT_AUDIO_MODEL_ID)
+        model = AUDIO_CATALOG_BY_ID.get(model_id)
+        if model is None:
+            raise ValueError("The audio cleanup model is not in the trusted catalog.")
+        supplied = Path(str(data.get("audio_denoise_bundle_dir") or ""))
+        try:
+            supplied = supplied.resolve(strict=True)
+            expected = self.model_store.bundle_dir_for(model).resolve(strict=True)
+        except OSError as error:
+            raise FileNotFoundError(
+                f"{model.name} is not downloaded. Download it, or turn Clean up audio off."
+            ) from error
+        if supplied != expected:
+            raise ValueError("The audio cleanup model path does not match the catalog.")
+        send_message(VideoStageProgress(job_id=job_id, stage="loading_audio_denoise"))
+        if not self._prepare_bundle(
+            job_id,
+            "Checking the audio cleanup model",
+            BUNDLE_CHECK_SECONDS,
+            "bundle-check",
+            lambda: self.model_store.is_bundle_installed(model),
+        ):
+            raise ValueError(
+                f"{model.name} failed its catalog SHA-256 check. "
+                "LocalSR refused to load it; remove the bundle and download it again."
+            )
+        from localsr.core.audio_denoise import DeepFilterNet3Denoiser
+
+        (archive,) = model.files
+        return self._prepare_bundle(
+            job_id,
+            "Loading the audio cleanup model",
+            BUNDLE_LOAD_SECONDS,
+            "bundle-load",
+            lambda: DeepFilterNet3Denoiser(self.model_store.bundle_file_path(model, archive)),
+        )
+
     def _run_video_job(self, job_id, data):
         # Temporal engines route before the Spandrel inspect: their bundles
         # are not single-image checkpoints. An engine this build cannot
@@ -1538,6 +1671,8 @@ class WorkerServer:
         from localsr.core.media_bridge import load_media_bridge
 
         synthesizer = self._interpolation_synthesizer(job_id, data) if interpolating else None
+        clean_audio = bool(data.get("audio_denoise", False)) and data.get("fps") is None
+        audio_denoiser = self._audio_denoiser(job_id, data) if clean_audio else None
         send_message(LogMessage(level="info", message="Inspecting model for video job..."))
         self.engine.neural_engine_enabled = bool(data.get("neural_engine", True))
         self.engine.status_callback = lambda message: send_message(
@@ -1591,6 +1726,9 @@ class WorkerServer:
             external_ffmpeg=load_media_bridge(data.get("external_ffmpeg")),
             interpolation=str(data.get("interpolation") or "off"),
             interpolation_order=str(data.get("interpolation_order") or "after_upscale"),
+            audio_denoise=clean_audio,
+            audio_denoise_bundle_dir=data.get("audio_denoise_bundle_dir"),
+            audio_denoiser=audio_denoiser,
         )
 
         preview_encoder, source_encoder = WorkerServer._create_video_preview_encoders(
@@ -1727,6 +1865,19 @@ class WorkerServer:
                     LogMessage(level="warning", message=message)
                 ),
                 stage_cb=lambda stage: send_message(VideoStageProgress(job_id=job_id, stage=stage)),
+                audio_progress_cb=lambda done, total, elapsed, remaining: send_message(
+                    VideoStageProgress(
+                        job_id=job_id,
+                        stage="audio_denoise",
+                        completed=int(done),
+                        total=int(total),
+                        frame_index=0,
+                        total_frames=0,
+                        elapsed_seconds=float(elapsed),
+                        frames_processed=0,
+                        estimated_remaining_seconds=float(remaining or 0.0),
+                    )
+                ),
                 synthesizer=synthesizer,
             )
         except InterruptedError:

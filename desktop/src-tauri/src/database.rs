@@ -13,7 +13,7 @@ use crate::{
     types::{JobRecord, MediaItem},
 };
 
-const MEDIA_COLUMNS: &str = "id, path, name, kind, width, height, frame_count, fps, duration_seconds, preview_data_url, probe_status, error, selected, hdr_format, audio_warning";
+const MEDIA_COLUMNS: &str = "id, path, name, kind, width, height, frame_count, fps, duration_seconds, preview_data_url, probe_status, error, selected, hdr_format, audio_warning, has_audio";
 
 /// A job that `admit_jobs` inserts. `ui_json` is host-only metadata.
 #[derive(Clone, Debug)]
@@ -139,6 +139,17 @@ impl Database {
                     [],
                 )?;
             }
+        }
+        let has_audio_col: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('media') WHERE name='has_audio')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_audio_col {
+            connection.execute(
+                "ALTER TABLE media ADD COLUMN has_audio INTEGER NOT NULL DEFAULT 1",
+                [],
+            )?;
         }
         let has_duration: bool = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('jobs') WHERE name='elapsed_seconds')",
@@ -388,9 +399,10 @@ impl Database {
         preview_data_url: &str,
         hdr_format: &str,
         audio_warning: &str,
+        has_audio: bool,
     ) -> AppResult<()> {
         self.connection.execute(
-            "UPDATE media SET kind=?2, width=?3, height=?4, frame_count=?5, fps=?6, duration_seconds=?7, preview_data_url=?8, hdr_format=?9, audio_warning=?10, probe_status='ready', error='' WHERE path=?1",
+            "UPDATE media SET kind=?2, width=?3, height=?4, frame_count=?5, fps=?6, duration_seconds=?7, preview_data_url=?8, hdr_format=?9, audio_warning=?10, has_audio=?11, probe_status='ready', error='' WHERE path=?1",
             params![
                 path,
                 kind,
@@ -401,7 +413,8 @@ impl Database {
                 duration_seconds,
                 preview_data_url,
                 hdr_format,
-                audio_warning
+                audio_warning,
+                i64::from(has_audio)
             ],
         )?;
         Ok(())
@@ -970,6 +983,7 @@ fn media_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
         selected: row.get::<_, i64>(12)? != 0,
         hdr_format: row.get(13)?,
         audio_warning: row.get(14)?,
+        has_audio: row.get::<_, i64>(15)? != 0,
     })
 }
 

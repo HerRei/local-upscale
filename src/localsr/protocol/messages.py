@@ -167,6 +167,10 @@ class VideoJobRequest:
     interpolation_order: str = "after_upscale"
     interpolation_model_id: str | None = None
     interpolation_bundle_dir: str | None = None
+    # Optional speech audio cleanup via DeepFilterNet3.
+    audio_denoise: bool = False
+    audio_denoise_model_id: str | None = None
+    audio_denoise_bundle_dir: str | None = None
     # A temporal job names its catalog model here; the host also gives every video job a
     # folder for its scratch files.
     video_model_id: str | None = None
@@ -340,6 +344,7 @@ class MediaInfo:
 
     hdr_format: str = ""
     audio_warning: str = ""
+    has_audio: bool = True
 
     def to_json(self) -> str:
         return json.dumps({"type": "media_info", "data": asdict(self)})

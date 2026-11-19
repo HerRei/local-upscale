@@ -53,6 +53,7 @@ class VideoProbe:
     duration_seconds: float
     hdr_format: str = ""
     audio_warning: str = ""
+    has_audio: bool = True
 
 
 @dataclass(frozen=True)
@@ -178,6 +179,7 @@ def _video_probe(container, stream, first: av.VideoFrame | None, converter: str 
         duration,
         {16: "PQ", 18: "HLG"}.get(transfer, ""),
         _audio_compatibility_warning(container, converter=converter),
+        any(item.type == "audio" for item in container.streams),
     )
 
 
@@ -276,7 +278,9 @@ def _converter_label(bridge, path: str, *, audio_only: bool = False) -> str:
     return wrapped.converter_label(path, audio_only=audio_only) if wrapped is not None else ""
 
 
-def _source_timing(path: str, converter: str = "your FFmpeg") -> tuple[float, int, float, str]:
+def _source_timing(
+    path: str, converter: str = "your FFmpeg"
+) -> tuple[float, int, float, str, bool]:
     """Timing from the container and stream headers, which need no decoder."""
     with av.open(path) as container:
         stream = next((s for s in container.streams if s.type == "video"), None)
@@ -293,6 +297,7 @@ def _source_timing(path: str, converter: str = "your FFmpeg") -> tuple[float, in
             int(stream.frames or 0),
             duration,
             _audio_compatibility_warning(container, converter=converter),
+            any(item.type == "audio" for item in container.streams),
         )
 
 
@@ -311,17 +316,23 @@ def probe_video_preview(
     report = progress or (lambda _stage: None)
     report("opening")
     if not _source_decodable(path):
-        from .media_bridge import external_timing, first_frame_source, undecodable_message
+        from .media_bridge import (
+            external_has_audio,
+            external_timing,
+            first_frame_source,
+            undecodable_message,
+        )
 
         if external_ffmpeg is None:
             raise UndecodableVideoError(undecodable_message(None))
         try:
-            fps, count, duration, audio_warning = _source_timing(
+            fps, count, duration, audio_warning, has_audio = _source_timing(
                 path, _converter_label(external_ffmpeg, path) or "your FFmpeg"
             )
         except av.FFmpegError:
             (fps, duration), count = external_timing(external_ffmpeg, path), 0
             audio_warning = ""
+            has_audio = external_has_audio(external_ffmpeg, path)
         report("decoding_video")
         with first_frame_source(
             path, ffmpeg=external_ffmpeg, temporary_directory=temporary_directory
@@ -337,6 +348,7 @@ def probe_video_preview(
                 duration_seconds=duration,
                 codec="external",
                 audio_warning=audio_warning,
+                has_audio=has_audio,
             ),
             preview,
         )
@@ -646,6 +658,8 @@ def _encode_video(
     width: int,
     height: int,
     audio_source: str | None = None,
+    subtitle_source: str | None = None,
+    reencode_audio: bool = False,
     source_start_seconds: float = 0.0,
     preserve_timing: bool = True,
     cancel_event: threading.Event | None = None,
@@ -694,6 +708,7 @@ def _encode_video(
             cancel_event=cancel_event,
             temporary_directory=temporary_directory,
             audio_source=audio_source,
+            subtitle_source=subtitle_source,
             source_start_seconds=source_start_seconds,
             preserve_timing=preserve_timing,
             warning_callback=warning_callback,
@@ -815,12 +830,19 @@ def _encode_video(
                 publish_output(temporary, destination, cancel_event)
 
         source = Path(audio_source) if audio_source else None
-        if source is not None and source.is_file():
+        sub_source = Path(subtitle_source) if subtitle_source else None
+        if (source is not None and source.is_file()) or (
+            sub_source is not None and sub_source.is_file()
+        ):
             copied = _remux_source_streams(
                 encoded_temporary,
-                source,
+                source if source is not None and source.is_file() else sub_source,
                 mux_temporary,
                 container_format=container_format,
+                subtitle_source=(
+                    sub_source if sub_source is not None and sub_source != source else None
+                ),
+                reencode_audio=reencode_audio,
                 source_start_seconds=float(source_start_seconds),
                 cancel_event=cancel_event,
                 warning_callback=warning_callback,
@@ -899,6 +921,8 @@ def _remux_source_streams(
     output_path: Path,
     *,
     container_format: str,
+    subtitle_source: Path | None = None,
+    reencode_audio: bool = False,
     source_start_seconds: float = 0.0,
     cancel_event: threading.Event | None = None,
     warning_callback=None,
@@ -906,31 +930,38 @@ def _remux_source_streams(
     """Interleave encoded video and compatible source audio/subtitles."""
     video_container = None
     source_container = None
+    subtitle_container = None
     output_container = None
     try:
         video_container = av.open(str(video_path))
         source_container = av.open(str(source_path))
+        if subtitle_source is not None and subtitle_source.is_file():
+            subtitle_container = av.open(str(subtitle_source))
         video_in = next(
             (stream for stream in video_container.streams if stream.type == "video"), None
         )
         if video_in is None:
             raise VideoStageError("remux", "the enhanced temporary file has no video stream")
 
-        auxiliary_inputs = [
-            stream for stream in source_container.streams if stream.type in {"audio", "subtitle"}
+        audio_inputs = [stream for stream in source_container.streams if stream.type == "audio"]
+        subtitle_inputs = [
+            stream
+            for stream in (subtitle_container or source_container).streams
+            if stream.type == "subtitle"
         ]
-        audio_warning = _audio_compatibility_warning(source_container, container_format)
-        if audio_warning:
-            if warning_callback:
-                warning_callback(audio_warning)
-            else:
-                warnings.warn(audio_warning, stacklevel=2)
-            auxiliary_inputs = [
-                stream
-                for stream in auxiliary_inputs
-                if stream.type != "audio" or _audio_stream_usable(stream, container_format)
-            ]
-        if not auxiliary_inputs:
+        if not reencode_audio:
+            audio_warning = _audio_compatibility_warning(source_container, container_format)
+            if audio_warning:
+                if warning_callback:
+                    warning_callback(audio_warning)
+                else:
+                    warnings.warn(audio_warning, stacklevel=2)
+                audio_inputs = [
+                    stream
+                    for stream in audio_inputs
+                    if _audio_stream_usable(stream, container_format)
+                ]
+        if not audio_inputs and not subtitle_inputs:
             return False
 
         output_container = av.open(
@@ -939,31 +970,51 @@ def _remux_source_streams(
         # Copy the encoded stream's parameters; its decoder name (libdav1d) is not an encoder.
         video_out = output_container.add_stream_from_template(video_in, opaque=True)
         auxiliary_outputs: dict[int, object] = {}
+        subtitle_outputs: dict[int, object] = {}
         converted_audio: dict[int, object] = {}
-        for stream in auxiliary_inputs:
-            if needs_audio_transcode(stream, container_format):
+        for stream in audio_inputs:
+            if needs_audio_transcode(stream, container_format) or (
+                reencode_audio and normalize_container(container_format) != "mkv"
+            ):
                 converted_audio[stream.index] = add_opus_stream(output_container, stream)
                 continue
             try:
                 auxiliary_outputs[stream.index] = output_container.add_stream_from_template(stream)
             except (av.FFmpegError, ValueError, OSError) as error:
-                if stream.type == "subtitle":
-                    # The requested container does not support this subtitle
-                    # codec. The enhanced video remains valid and the stream is
-                    # not falsely advertised as copied.
-                    message = f"Subtitle stream {stream.index} was omitted: incompatible with {container_format}."
-                    if warning_callback:
-                        warning_callback(message)
-                    else:
-                        warnings.warn(message, stacklevel=2)
-                    continue
                 raise VideoStageError(
                     "audio remux",
                     f"{getattr(stream.codec_context, 'name', 'audio')} is incompatible with {container_format}: {error}",
                 ) from error
 
-        selected_aux = [stream for stream in auxiliary_inputs if stream.index in auxiliary_outputs]
-        if not selected_aux and not converted_audio:
+        for stream in subtitle_inputs:
+            try:
+                target_map = (
+                    subtitle_outputs if subtitle_container is not None else auxiliary_outputs
+                )
+                target_map[stream.index] = output_container.add_stream_from_template(stream)
+            except (av.FFmpegError, ValueError, OSError):
+                # The requested container does not support this subtitle
+                # codec. The enhanced video remains valid and the stream is
+                # not falsely advertised as copied.
+                message = f"Subtitle stream {stream.index} was omitted: incompatible with {container_format}."
+                if warning_callback:
+                    warning_callback(message)
+                else:
+                    warnings.warn(message, stacklevel=2)
+
+        selected_aux = [
+            stream
+            for stream in (
+                audio_inputs + ([] if subtitle_container is not None else subtitle_inputs)
+            )
+            if stream.index in auxiliary_outputs
+        ]
+        selected_subs = (
+            [stream for stream in subtitle_inputs if stream.index in subtitle_outputs]
+            if subtitle_container is not None
+            else []
+        )
+        if not selected_aux and not selected_subs and not converted_audio:
             output_container.close()
             output_container = None
             try:
@@ -988,19 +1039,23 @@ def _remux_source_streams(
                     packet.stream = video_out
                     yield packet
 
-        def copied_packets():
-            if not selected_aux:
+        def copied_packets(container, streams, outputs):
+            if not streams:
                 return
-            iterator = source_container.demux(*selected_aux)
+            iterator = container.demux(*streams)
             while (
                 packet := _next_trimmed_packet(
                     iterator, source_start_seconds, source_end_seconds, cancel_event
                 )
             ) is not None:
-                packet.stream = auxiliary_outputs[packet.stream.index]
+                packet.stream = outputs[packet.stream.index]
                 yield packet
 
-        iterators = [video_packets(), copied_packets()]
+        iterators = [
+            video_packets(),
+            copied_packets(source_container, selected_aux, auxiliary_outputs),
+            copied_packets(subtitle_container, selected_subs, subtitle_outputs),
+        ]
         iterators.extend(
             opus_packets(
                 source_path, index, output, source_start_seconds, source_end_seconds, cancel_event
@@ -1031,7 +1086,7 @@ def _remux_source_streams(
     except (av.FFmpegError, ValueError, OSError) as error:
         raise VideoStageError("audio/subtitle remux", str(error)) from error
     finally:
-        for container in (output_container, source_container, video_container):
+        for container in (output_container, subtitle_container, source_container, video_container):
             if container is not None:
                 try:
                     container.close()

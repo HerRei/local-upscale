@@ -172,6 +172,7 @@ pub fn catalog_label(catalog: &CatalogManifest, model_id: &str) -> Option<String
             .video_models
             .iter()
             .chain(&catalog.interpolation_models)
+            .chain(&catalog.audio_models)
             .find(|model| model.model_id == model_id)
             .map(|model| model.name.clone());
     };

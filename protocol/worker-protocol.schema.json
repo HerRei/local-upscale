@@ -302,6 +302,9 @@
                     "interpolation_order": { "enum": ["after_upscale", "before_upscale"], "default": "after_upscale" },
                     "interpolation_model_id": { "type": ["string", "null"] },
                     "interpolation_bundle_dir": { "type": ["string", "null"] },
+                    "audio_denoise": { "type": "boolean", "default": false },
+                    "audio_denoise_model_id": { "type": ["string", "null"] },
+                    "audio_denoise_bundle_dir": { "type": ["string", "null"] },
                     "video_model_id": { "type": ["string", "null"] },
                     "temporary_directory": { "type": ["string", "null"] }
                   }

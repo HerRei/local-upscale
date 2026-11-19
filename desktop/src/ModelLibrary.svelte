@@ -74,13 +74,22 @@
     accepted?: boolean,
   ) => Promise<void>;
   export let importFile: (model: CatalogModel, accepted: boolean) => Promise<void>;
-  export let remove: (model: CatalogModel | EditModel) => Promise<void>;
+  export let remove: (model: CatalogModel | CatalogVideoModel | EditModel) => Promise<void>;
   export let chooseCustom: () => Promise<void>;
   export let openLicense: (modelId: string) => Promise<void>;
   export let openSource: (modelId: string) => Promise<void>;
 
   type GroupId =
-    'job' | 'photos' | 'illustration' | 'faces' | 'fix' | 'video' | 'edit' | 'installed' | 'own';
+    | 'job'
+    | 'photos'
+    | 'illustration'
+    | 'faces'
+    | 'fix'
+    | 'video'
+    | 'audio'
+    | 'edit'
+    | 'installed'
+    | 'own';
 
   let group: GroupId =
     context.slot === 'browse' ? 'photos' : context.slot === 'edit' ? 'edit' : 'job';
@@ -109,10 +118,12 @@
 
   $: models = snapshot.catalog.models;
   $: videoModels = snapshot.catalog.video_models;
+  $: audioModels = snapshot.catalog.audio_models ?? [];
   $: editModels = snapshot.edit.models;
   $: editGpu = editDevice(snapshot.capabilities, settings);
   $: editLimit = editSizeLimit(snapshot.capabilities, editGpu);
   $: editFit = (model: EditModel) => editFitFor(model, snapshot.capabilities, editGpu);
+  $: installedAudioModels = audioModels.filter((model) => model.installed);
   $: installedEditModels = editModels.filter((model) => model.installed);
   // Variants that cannot run here stay out of the way until asked for.
   $: onMac = editGpu?.id === 'mps';
@@ -218,11 +229,17 @@
         .length,
     },
     { id: 'video' as GroupId, label: 'Video (Labs)', count: videoModels.length },
+    ...(audioModels.length
+      ? [{ id: 'audio' as GroupId, label: 'Audio', count: audioModels.length }]
+      : []),
     { id: 'edit' as GroupId, label: 'Edit with a prompt', count: editModels.length },
     {
       id: 'installed' as GroupId,
       label: 'Installed',
-      count: models.filter((model) => model.installed).length + installedEditModels.length,
+      count:
+        models.filter((model) => model.installed).length +
+        installedAudioModels.length +
+        installedEditModels.length,
     },
     // A fix runs a catalog model only; a file of your own replaces the upscaler.
     ...(context.slot === 'fix' ? [] : [{ id: 'own' as GroupId, label: 'Your own file', count: 0 }]),
@@ -261,6 +278,7 @@
     models
       .filter((model) => model.installed)
       .reduce((total, model) => total + model.size_bytes, 0) +
+    installedAudioModels.reduce((total, model) => total + model.total_size_bytes, 0) +
     installedEditModels.reduce((total, model) => total + model.total_size_bytes, 0);
   $: selectedEdit =
     editModels.find((model) => model.model_id === selectedId) ??
@@ -269,10 +287,14 @@
         editFamilies.flatMap((family) => family.fitting)[0] ??
         editModels[0])
       : undefined);
-  $: selected = selectedEdit
-    ? undefined
-    : (models.find((model) => model.model_id === selectedId) ?? rows[0]);
+  $: selectedAudio =
+    audioModels.find((model) => model.model_id === selectedId) ??
+    (group === 'audio' ? audioModels[0] : undefined);
   $: selectedVideo = videoModels.find((model) => model.model_id === selectedId);
+  $: selected =
+    selectedEdit || selectedAudio || selectedVideo
+      ? undefined
+      : (models.find((model) => model.model_id === selectedId) ?? rows[0]);
   // The accelerator the selected hardware will use for a model: the Neural Engine on a Mac,
   // an Intel NPU elsewhere. Memoised per model id: rows and details read it on every render.
   $: accelerator = (model: CatalogModel) =>
@@ -482,6 +504,30 @@
               </div>
             </button>
           {/each}
+        {:else if group === 'audio'}
+          <div class="list-head">Audio · Speech noise removal<span>DeepFilterNet</span></div>
+          {#each audioModels as model (model.model_id)}
+            <button
+              class="row"
+              type="button"
+              class:selected={selectedAudio?.model_id === model.model_id}
+              aria-pressed={selectedAudio?.model_id === model.model_id}
+              on:click={() => selectRow(model)}
+            >
+              <div>
+                <div class="name">{model.name}</div>
+                <div class="role">{model.description}</div>
+                <div class="pills">
+                  <span class="pill">{model.license_name}</span>
+                </div>
+              </div>
+              <div class="right">
+                <b>{formatBytes(model.total_size_bytes)}</b>{#if model.installed}<span class="ok"
+                    >Installed</span
+                  >{:else}<span>Not downloaded</span>{/if}
+              </div>
+            </button>
+          {/each}
         {:else if group === 'edit'}
           {#each editFamilies as family (family.id)}
             {@const shown = showHeavyEdit ? [...family.fitting, ...family.heavy] : family.fitting}
@@ -650,6 +696,27 @@
             {/if}
           {/each}
           {#if group === 'installed'}
+            {#each installedAudioModels as model (model.model_id)}
+              <div
+                class="row installed-row"
+                class:selected={selectedAudio?.model_id === model.model_id}
+              >
+                <button class="row-select" type="button" on:click={() => selectRow(model)}>
+                  <div class="name">{model.name}</div>
+                  <div class="role">Audio · Speech noise removal</div>
+                </button>
+                <div class="right">
+                  <b>{formatBytes(model.total_size_bytes)}</b><span class="ok">Verified</span>
+                </div>
+                <button
+                  class="button compact ghost danger"
+                  type="button"
+                  disabled={busy}
+                  aria-label={`Remove ${model.name}`}
+                  on:click={() => void remove(model)}>Remove</button
+                >
+              </div>
+            {/each}
             {#each installedEditModels as model (model.model_id)}
               <div
                 class="row installed-row"
@@ -753,6 +820,86 @@
               >
             {:else}
               <div class="installed-badge">✓ Installed · integrity checked before use</div>
+            {/if}
+          </div>
+        {:else if selectedAudio && group !== 'own'}
+          <div>
+            <h3>{selectedAudio.name}</h3>
+            <div class="role">{selectedAudio.author} · Speech noise removal</div>
+          </div>
+          <p class="model-description">{selectedAudio.description}</p>
+          <dl class="facts">
+            <div>
+              <dt>Download</dt>
+              <dd>{formatBytes(selectedAudio.total_size_bytes)}</dd>
+            </div>
+            <div>
+              <dt>Memory while running</dt>
+              <dd>about 100 MB</dd>
+            </div>
+            <div>
+              <dt>Runs on</dt>
+              <dd>CPU · ONNX Runtime</dd>
+            </div>
+          </dl>
+          <dl class="kv">
+            <div>
+              <dt>License</dt>
+              <dd>
+                <button
+                  class="link-button"
+                  type="button"
+                  on:click={() => void openLicense(selectedAudio.model_id)}
+                  >{selectedAudio.license_name} ↗</button
+                >
+              </dd>
+            </div>
+            <div>
+              <dt>Source</dt>
+              <dd>
+                <button
+                  class="link-button"
+                  type="button"
+                  title={selectedAudio.source_url}
+                  aria-label={`${selectedAudio.author} · model source`}
+                  on:click={() => void openSource(selectedAudio.model_id)}
+                  ><FileName name={selectedAudio.author} /><span class="source-link"
+                    >{' · model source ↗'}</span
+                  ></button
+                >
+              </dd>
+            </div>
+            <div>
+              <dt>Integrity</dt>
+              <dd>SHA-256 checked before use</dd>
+            </div>
+            <div>
+              <dt>Commercial use</dt>
+              <dd>
+                {selectedAudio.commercial_use_allowed === true ? 'Allowed' : 'See license'}
+              </dd>
+            </div>
+          </dl>
+          <div class="actions">
+            {#if !selectedAudio.installed}
+              <button
+                class="button primary"
+                type="button"
+                disabled={busy ||
+                  (Boolean(activeDownload) && activeDownload !== selectedAudio.model_id)}
+                on:click={() => void download(selectedAudio)}
+                >{activeDownload === selectedAudio.model_id
+                  ? `Downloading ${Math.round(downloadProgress)}% · Cancel`
+                  : `Download ${formatBytes(selectedAudio.total_size_bytes)}`}</button
+              >
+            {:else}
+              <div class="installed-badge">✓ Installed · integrity checked before use</div>
+              <button
+                class="button danger ghost"
+                type="button"
+                disabled={busy}
+                on:click={() => void remove(selectedAudio)}>Remove from this computer</button
+              >
             {/if}
           </div>
         {:else if selectedEdit && group !== 'own'}
