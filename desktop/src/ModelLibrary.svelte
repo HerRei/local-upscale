@@ -46,6 +46,7 @@
   export let settings: UiSettings;
   export let context: {
     task: TaskKind | '';
+    videoTask?: 'upscale' | 'denoise';
     content: Exclude<ContentKind, 'face'>;
     quality: Quality | '';
     slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit' | 'try';
@@ -85,9 +86,11 @@
   let group: GroupId =
     context.slot === 'browse' ? 'photos' : context.slot === 'edit' ? 'edit' : 'job';
   // Choosing the model for one problem: Fix first, or Restore with a chip on.
+  $: restoring =
+    context.task === 'denoise' || (context.task === 'video' && context.videoTask === 'denoise');
   $: fixing =
     context.fix !== undefined &&
-    (context.slot === 'fix' || (context.slot === 'primary' && context.task === 'denoise'))
+    (context.slot === 'fix' || (context.slot === 'primary' && restoring))
       ? context.fix
       : undefined;
   // A fix picker opens on the model the job uses now.
@@ -96,7 +99,9 @@
       ? ''
       : context.slot === 'fix'
         ? (settings.fix_stages.find((selection) => selection.fix === context.fix)?.model_id ?? '')
-        : context.slot === 'primary' && context.task === 'denoise'
+        : context.slot === 'primary' &&
+            (context.task === 'denoise' ||
+              (context.task === 'video' && context.videoTask === 'denoise'))
           ? settings.selected_model_id
           : '';
   let termsAccepted = false;
@@ -134,18 +139,24 @@
       const fix = context.fix;
       return libraryModelsForTask(models, 'denoise', context.content, fix);
     }
-    return libraryModelsForTask(models, context.task, context.content, context.fix);
+    return libraryModelsForTask(
+      models,
+      context.task,
+      context.content,
+      context.fix,
+      context.videoTask,
+    );
   })();
   // Installed models for this job first; the rest say why they cannot join.
   $: trialModels =
     context.slot === 'try'
       ? [
           ...jobModels,
-          ...modelsForTask(snapshot, context.task).filter(
+          ...modelsForTask(snapshot, context.task, context.videoTask).filter(
             (model) =>
               model.installed &&
               !jobModels.includes(model) &&
-              (context.task !== 'denoise' || !context.fix || fixesOf(model).includes(context.fix)),
+              (!restoring || !context.fix || fixesOf(model).includes(context.fix)),
           ),
         ].sort((left, right) => Number(right.installed) - Number(left.installed))
       : [];
@@ -286,14 +297,26 @@
   $: quickId = fixing
     ? chooseFixModel(snapshot, fixing, 'quick', settings.preset_pins)?.model_id
     : context.task
-      ? choosePresetModel(snapshot, context.task, 'quick', context.content, settings.preset_pins)
-          ?.model_id
+      ? choosePresetModel(
+          snapshot,
+          context.task,
+          'quick',
+          context.content,
+          settings.preset_pins,
+          context.videoTask,
+        )?.model_id
       : '';
   $: bestId = fixing
     ? chooseFixModel(snapshot, fixing, 'best', settings.preset_pins)?.model_id
     : context.task
-      ? choosePresetModel(snapshot, context.task, 'best', context.content, settings.preset_pins)
-          ?.model_id
+      ? choosePresetModel(
+          snapshot,
+          context.task,
+          'best',
+          context.content,
+          settings.preset_pins,
+          context.videoTask,
+        )?.model_id
       : '';
   $: rememberedFix = fixing
     ? rememberedFixModel(snapshot, fixing, fixQuality(context.quality), settings.preset_pins)
@@ -303,7 +326,7 @@
     jobModels.some((candidate) => candidate.model_id === model.model_id);
   $: canPin = (model: CatalogModel): boolean =>
     (context.slot === 'primary' || context.slot === 'try') &&
-    context.task !== 'denoise' &&
+    !restoring &&
     canUseForJob(model) &&
     rightsAllowPreset(model);
 
@@ -359,7 +382,7 @@
       <h2 id="library-title">Model library</h2>
       {#if context.slot === 'try'}
         <span class="sheet-context"
-          >Try other {context.task === 'denoise' ? 'restoration models' : 'upscalers'} on {trialMedia?.name ??
+          >Try other {restoring ? 'restoration models' : 'upscalers'} on {trialMedia?.name ??
             'this image'}</span
         >
       {:else if context.slot === 'edit'}
@@ -367,8 +390,10 @@
       {:else if context.slot !== 'browse' && context.task}
         <span class="sheet-context"
           >Choosing for {context.task === 'video'
-            ? 'Video'
-            : context.task === 'denoise'
+            ? restoring
+              ? 'Video · Restore'
+              : 'Video'
+            : restoring
               ? 'Restore'
               : 'Upscale'}{fixing
             ? ` · ${FIX_LABELS[fixing]}`
@@ -376,7 +401,7 @@
               ? ' · fix'
               : context.slot === 'face'
                 ? ' · faces'
-                : ` · ${context.quality === 'quick' ? 'Quick' : context.quality === 'best' ? 'Best' : 'Custom'} · ${context.content === 'illustration' ? 'Illustration' : 'Photo'}`}</span
+                : ` · ${context.quality === 'quick' ? 'Quick' : context.quality === 'best' ? 'Best' : 'Custom'}${restoring ? '' : ` · ${context.content === 'illustration' ? 'Illustration' : 'Photo'}`}`}</span
         >
       {/if}
       <div class="sheet-right">

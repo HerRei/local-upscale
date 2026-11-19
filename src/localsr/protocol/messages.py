@@ -174,6 +174,7 @@ class VideoJobRequest:
 
     hdr_mode: str = "reject"
     neural_engine: bool = True
+    stages: list[dict[str, object]] | None = None
 
     def to_json(self) -> str:
         return json.dumps({"type": "video_job_request", "data": asdict(self)})

@@ -43,12 +43,13 @@ from localsr.core.model_catalog import (
     ModelStore,
 )
 from localsr.core.output_writer import cleanup_stale_work_files
+from localsr.core.pipeline import resolve_image_pipeline
 from localsr.core.preparation import (
     PreparationTimeout,
     abandoned_work_running,
     bounded_preparation,
 )
-from localsr.core.video_pipeline import VideoJobConfig, run_video_job
+from localsr.core.video_pipeline import VideoFixStage, VideoJobConfig, run_video_job
 from localsr.protocol.messages import (
     MIN_PROTOCOL_VERSION,
     PROTOCOL_VERSION,
@@ -1548,10 +1549,48 @@ class WorkerServer:
         self.model_adapter.status_callback = self.engine.status_callback
         self.model_adapter.cancel_event = self.cancel_event
         self.engine.take_notes()
+        pipeline = resolve_image_pipeline(
+            raw_stages=data.get("stages"),
+            model_path=str(data["model_path"]),
+            output_scale=data.get("output_scale"),
+            face_model_path=data.get("face_model_path"),
+            face_fidelity=float(data.get("face_fidelity", 0.7)),
+        )
+        face_model_path = data.get("face_model_path")
+        release_except = getattr(self.engine, "release_models_except", None)
+        if callable(release_except):
+            release_except(
+                {stage.model_path for stage in pipeline.stages}
+                | ({face_model_path} if face_model_path else set())
+            )
+        preprocess_stages: list[VideoFixStage] = []
+        for stage in pipeline.preprocess_stages:
+            stage_info = self.model_adapter.inspect(stage.model_path)
+            if int(getattr(stage_info, "scale", 0)) != 1:
+                raise ValueError(
+                    "A preprocessing restoration checkpoint must have native scale 1×."
+                )
+            if (
+                int(getattr(stage_info, "in_channels", 3)) != 3
+                or int(getattr(stage_info, "out_channels", 3)) != 3
+            ):
+                raise ValueError("A fix must preserve the working frame channels.")
+            catalog_model = CATALOG_BY_ID.get(stage.model_id)
+            preprocess_stages.append(
+                VideoFixStage(
+                    model_path=stage.model_path,
+                    model_info=stage_info,
+                    model_id=stage.model_id,
+                    halo=catalog_model.recommended_halo if catalog_model else 0,
+                    fix=stage.fix,
+                    time_factor=catalog_model.time_factor if catalog_model else 1.0,
+                )
+            )
         info = self.model_adapter.inspect(data["model_path"])
+        primary_catalog = CATALOG_BY_ID.get(pipeline.primary.model_id)
+        primary_time_factor = primary_catalog.time_factor if primary_catalog else 1.0
 
         face_info = None
-        face_model_path = data.get("face_model_path")
         if face_model_path:
             try:
                 face_info = self.model_adapter.inspect(face_model_path)
@@ -1591,6 +1630,8 @@ class WorkerServer:
             external_ffmpeg=load_media_bridge(data.get("external_ffmpeg")),
             interpolation=str(data.get("interpolation") or "off"),
             interpolation_order=str(data.get("interpolation_order") or "after_upscale"),
+            preprocess_stages=tuple(preprocess_stages),
+            primary_time_factor=primary_time_factor,
         )
 
         preview_encoder, source_encoder = WorkerServer._create_video_preview_encoders(

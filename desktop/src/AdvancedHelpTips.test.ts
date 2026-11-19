@@ -98,6 +98,13 @@ const variants: Variant[] = [
     expected: ['Output scale', ...VIDEO, 'De-flicker · Labs', 'Frame rate', ...TAIL, ...GRID],
   },
   {
+    name: 'video restore frame by frame elsewhere',
+    settings: { task: 'video', video_task: 'denoise', video_interpolation: 'off' },
+    capabilities: other,
+    interpolation: true,
+    expected: [...VIDEO, 'De-flicker · Labs', 'Frame rate', ...TAIL, ...GRID],
+  },
+  {
     name: 'video with a temporal model',
     settings: { task: 'video', video_target_resolution: 1080 },
     capabilities: mac,

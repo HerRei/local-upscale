@@ -6,13 +6,14 @@ export function recipeFixStages(
   recipe: Recipe,
   catalog: AppSnapshot['catalog'],
 ): FixStageSelection[] {
-  if (recipe.task !== 'upscale' && recipe.task !== 'denoise') return [];
+  if (recipe.task !== 'upscale' && recipe.task !== 'denoise' && recipe.task !== 'video') return [];
   const stages = recipe.stages ?? [];
   const chip = recipe.fixes?.find((fix): fix is Exclude<FixKind, 'faces'> => fix !== 'faces');
-  const primary =
-    recipe.task === 'denoise'
-      ? stages.length - 1
-      : stages.findIndex((stage) => stage.kind === 'upscale');
+  const restoring =
+    recipe.task === 'denoise' || (recipe.task === 'video' && recipe.video_task === 'denoise');
+  const primary = restoring
+    ? stages.length - 1
+    : stages.findIndex((stage) => stage.kind === 'upscale' || stage.kind === 'video');
   const result: FixStageSelection[] = [];
   stages.forEach((stage, index) => {
     if (stage.kind !== 'restore' && stage.kind !== 'deblock') return;
@@ -55,14 +56,16 @@ export function recipeMatches(
   if (current.task !== recipe.task) return false;
   if (
     recipe.task === 'video' &&
-    (recipe.video_model_id || 'frame_by_frame') !== current.selected_video_model_id
+    ((recipe.video_task || 'upscale') !== (current.video_task || 'upscale') ||
+      (recipe.video_model_id || 'frame_by_frame') !== current.selected_video_model_id)
   )
     return false;
+  const restoring =
+    recipe.task === 'denoise' || (recipe.task === 'video' && recipe.video_task === 'denoise');
   const recipeModel = catalog.models.find((model) => model.model_id === recipe.model_id);
-  const scale =
-    recipe.task === 'denoise'
-      ? 1
-      : Math.min(recipeModel?.native_scale ?? recipe.output_scale, recipe.output_scale);
+  const scale = restoring
+    ? 1
+    : Math.min(recipeModel?.native_scale ?? recipe.output_scale, recipe.output_scale);
   const fixes = recipeFixStages(recipe, catalog);
   const face =
     Boolean(recipe.stages?.some((stage) => stage.kind === 'face_restore')) ||

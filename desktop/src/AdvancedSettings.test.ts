@@ -124,6 +124,22 @@ it('explains when interpolation happens', async () => {
   expect(screen.getByRole('button', { name: 'About Interpolate' })).toBeTruthy();
 });
 
+it('offers 1× output scale for video upscale and hides output scale in video restore', async () => {
+  await open({ task: 'video', video_task: 'upscale', output_scale: 1 }, mac);
+  const scaleSelect = screen.getByLabelText('Output scale') as HTMLSelectElement;
+  expect(Array.from(scaleSelect.options).map((o) => o.value)).toEqual(['1', '2', '3', '4']);
+  expect(scaleSelect.value).toBe('1');
+
+  cleanup();
+  await open({ task: 'video', video_task: 'denoise', output_scale: 4 }, mac);
+  expect(screen.queryByLabelText('Output scale')).toBeNull();
+
+  cleanup();
+  await open({ task: 'upscale', output_scale: 2 }, mac);
+  const imageScale = screen.getByLabelText('Output scale') as HTMLSelectElement;
+  expect(Array.from(imageScale.options).map((o) => o.value)).toEqual(['2', '3', '4']);
+});
+
 describe('Refresh in the memory line', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());

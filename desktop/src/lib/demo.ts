@@ -28,6 +28,7 @@ export function demoSnapshot(): AppSnapshot {
       interface_scale: 100,
       batch_mode: false,
       task: '',
+      video_task: 'upscale',
       selected_model_id: '',
       selected_video_model_id: 'frame_by_frame',
       fix_stages: [],

@@ -449,3 +449,79 @@ def test_a_batch_shares_one_speed_across_its_lanes_and_photos(monkeypatch):
             true = ends - moment
             assert abs(estimate - true) <= 0.25 * true + 1.0
     assert finish > ends
+
+
+def test_video_estimate_weights_fix_stage_time_factors_and_skips_stage_compile(
+    tmp_path, monkeypatch
+):
+    from localsr.core.video_pipeline import VideoFixStage
+
+    clock = Clock()
+    monkeypatch.setattr(video_pipeline, "time", SimpleNamespace(perf_counter=lambda: clock.now))
+    source = make_vfr(tmp_path / "clip.mp4", tuple(index * 40 for index in range(20)))
+    tiles = []
+
+    class MultiStageEngine:
+        active = "fix"
+        first_primary_pending = True
+
+        def load_model(self, path, *_a, **_kw):
+            self.active = path
+            return None
+
+        def switch_model(self, path):
+            self.active = path
+
+        def process_frame(self, img_tensor, model_info, tile_callback=None, **_kwargs):
+            # Fix stage takes 2x slower (4s/frame across 2 tiles) vs primary (2s/frame);
+            # first tile of primary on frame 0 adds 25s model compile spike.
+            is_fix = "fix" in self.active
+            frame_dur = 4.0 if is_fix else 2.0
+            first_primary = (not is_fix) and self.first_primary_pending
+            if first_primary:
+                self.first_primary_pending = False
+            for number in range(1, 3):
+                clock.now += frame_dur / 2
+                if first_primary and number == 1:
+                    clock.now += 25.0
+                if tile_callback is not None:
+                    tile_callback("completed", None, None, number, 2, 16, 16, 64)
+            return (img_tensor * 255).round().byte().numpy()
+
+    info = SimpleNamespace(scale=1, in_channels=3, out_channels=3, architecture="SCUNet")
+    run_video_job(
+        VideoJobConfig(
+            str(source),
+            "primary.pth",
+            str(tmp_path / "out.mp4"),
+            info,
+            "cpu",
+            "fp32",
+            64,
+            4,
+            False,
+            output_scale=1,
+            primary_time_factor=1.0,
+            preprocess_stages=(
+                VideoFixStage(
+                    model_path="fix.pth",
+                    model_info=info,
+                    model_id="fix_model",
+                    halo=8,
+                    fix="noise",
+                    time_factor=2.0,
+                ),
+            ),
+        ),
+        MultiStageEngine(),
+        threading.Event(),
+        tile_progress_cb=lambda frame, total, done, count, elapsed, remaining, size: tiles.append(
+            (clock.now, frame + done / count, remaining)
+        ),
+    )
+    finished = clock.now
+    late = [(t, f, r) for t, f, r in tiles if f >= 3 and r is not None]
+    assert late
+    for time_now, _fraction, remaining in late:
+        true = finished - time_now
+        assert true / 2 <= remaining <= true * 2, f"shown {remaining:.1f}s vs true {true:.1f}s"

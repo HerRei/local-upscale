@@ -26,7 +26,7 @@ from .face_compositing import blend_tile_outputs, classify_tile
 from .face_detection import FaceMask, detect_faces, face_mask_for_tile_core
 from .frame_interpolation import ORDERS, InterpolationTarget, interpolate_frames
 from .hdr import anchor_hdr_detail, tone_map_to_sdr
-from .inference import InferenceEngine
+from .inference import InferenceEngine, UnstableRestorationError
 from .media_codecs import EXTERNAL_OUTPUT_CODECS, validate_output
 from .tiling import generate_tiles
 from .video_io import (
@@ -158,6 +158,16 @@ def _deflicker_frames(
             buffer.popleft()
 
 
+@dataclass(frozen=True)
+class VideoFixStage:
+    model_path: str
+    model_info: object
+    model_id: str = ""
+    halo: int = 0
+    fix: str | None = None
+    time_factor: float = 1.0
+
+
 @dataclass
 class VideoJobConfig:
     video_path: str
@@ -194,6 +204,8 @@ class VideoJobConfig:
     interpolation_order: str = "after_upscale"
     # The worker resolves the initial codec before inference; retain retry intent.
     automatic_codec: bool = False
+    preprocess_stages: tuple[VideoFixStage, ...] = ()
+    primary_time_factor: float = 1.0
 
 
 @dataclass
@@ -300,9 +312,21 @@ def _run_video_job(
         validate_hdr_encoder(config.video_codec, config.external_ffmpeg, config.container)
         if config.deflicker:
             raise ValueError("De-flicker is not yet supported with HDR preservation.")
-        for info in (config.model_info, config.face_model_info):
+        for info in (
+            config.model_info,
+            config.face_model_info,
+            *(stage.model_info for stage in config.preprocess_stages),
+        ):
             if info is not None and str(getattr(info, "architecture", "")).upper() != "HAT":
                 raise ValueError("HDR preservation currently supports HAT models only (Labs).")
+    for stage in config.preprocess_stages:
+        if int(getattr(stage.model_info, "scale", 0)) != 1:
+            raise ValueError("A preprocessing restoration checkpoint must have native scale 1×.")
+        if (
+            int(getattr(stage.model_info, "in_channels", 3)) != 3
+            or int(getattr(stage.model_info, "out_channels", 3)) != 3
+        ):
+            raise ValueError("A fix must preserve the working frame channels.")
     if config.fps_override is not None and (
         not np.isfinite(config.fps_override) or config.fps_override <= 0
     ):
@@ -356,7 +380,14 @@ def _run_video_job(
         master=config.video_codec in EXTERNAL_OUTPUT_CODECS,
     )
 
-    # Load the model once and reuse it for every frame.
+    # Load the models once and reuse them for every frame.
+    for stage in config.preprocess_stages:
+        engine.load_model(
+            stage.model_path,
+            config.device_str,
+            precision_str,
+            _SafeModelInfo(stage.model_info, config.safe_memory),
+        )
     engine.load_model(
         config.model_path,
         config.device_str,
@@ -374,9 +405,22 @@ def _run_video_job(
             _SafeModelInfo(config.face_model_info, config.safe_memory),
         )
 
+    stage_weights = [max(0.05, float(stage.time_factor)) for stage in config.preprocess_stages] + [
+        max(0.05, float(config.primary_time_factor))
+    ]
+    total_stage_weight = sum(stage_weights)
+    stage_offsets: list[float] = []
+    running_weight = 0.0
+    for weight in stage_weights:
+        stage_offsets.append(running_weight / total_stage_weight)
+        running_weight += weight
+    stage_spans = [weight / total_stage_weight for weight in stage_weights]
+    primary_stage_index = len(config.preprocess_stages)
+
     frames_processed = 0
     cached_face_mask: FaceMask | None = None
     frames_since_detection = 0
+    warned_unstable: set[int] = set()
 
     def frame_generator() -> Iterator[TimedVideoFrame]:
         nonlocal inference_started_at
@@ -411,6 +455,19 @@ def _run_video_job(
             tensor = torch.from_numpy(rgb).permute(2, 0, 1) if preserve_hdr else rgb_to_tensor(rgb)
             float_options = {"float_output": True} if preserve_hdr else {}
 
+            def record_tile_eta(frame_index: int, stage_index: int, done: int, count: int) -> None:
+                if remaining_time is None or not count:
+                    return
+                progress_value = (
+                    frame_index
+                    + stage_offsets[stage_index]
+                    + stage_spans[stage_index] * (done / count)
+                )
+                if config.preprocess_stages and frame_index == 0 and done == 1 and stage_index > 0:
+                    remaining_time.skip_warmup(time.perf_counter(), progress_value)
+                else:
+                    remaining_time.update(time.perf_counter(), progress_value)
+
             def observed_tile(
                 phase,
                 tile,
@@ -424,8 +481,8 @@ def _run_video_job(
                 frame_index=output_frame_index,
                 source_rgb=rgb,
             ):
-                if phase == "completed" and remaining_time is not None and count:
-                    remaining_time.update(time.perf_counter(), frame_index + done / count)
+                if phase == "completed":
+                    record_tile_eta(frame_index, primary_stage_index, done, count)
                 if tile_progress_cb is not None:
                     elapsed = time.perf_counter() - job_started_at
                     remaining = remaining_time.remaining() if remaining_time else None
@@ -447,6 +504,61 @@ def _run_video_job(
                 """Tile timing is reported by ``tile_callback``; the engine requires a callback."""
 
             try:
+                for stage_index, stage in enumerate(config.preprocess_stages):
+                    if cancel_event.is_set():
+                        raise InterruptedError("video job cancelled")
+                    engine.switch_model(stage.model_path)
+
+                    def fix_tile_callback(
+                        phase,
+                        _tile,
+                        _pixels,
+                        done,
+                        count,
+                        _image_w,
+                        _image_h,
+                        _size,
+                        *,
+                        frame_index=output_frame_index,
+                        idx=stage_index,
+                    ):
+                        if phase == "completed":
+                            record_tile_eta(frame_index, idx, done, count)
+
+                    try:
+                        fix_chw = engine.process_frame(
+                            img_tensor=tensor,
+                            model_info=stage.model_info,
+                            tile_size=config.tile_size,
+                            halo=max(config.halo, stage.halo),
+                            cancel_event=cancel_event,
+                            progress_callback=tile_progress,
+                            safe_memory=config.safe_memory,
+                            tile_callback=fix_tile_callback,
+                            whole_frame=True,
+                            **float_options,
+                        )
+                    except UnstableRestorationError as error:
+                        if stage_index not in warned_unstable:
+                            warned_unstable.add(stage_index)
+                            label = stage.fix or "restoration"
+                            note = (
+                                f"The {label} fix ({stage.model_id or stage.model_path}) was "
+                                f"skipped for one or more frames because the model became "
+                                f"unstable: {error}"
+                            )
+                            if warning_callback is not None:
+                                warning_callback(note)
+                            add_note = getattr(engine, "add_note", None)
+                            if callable(add_note):
+                                add_note(note)
+                    else:
+                        tensor = (
+                            torch.from_numpy(np.array(fix_chw, copy=True)).float()
+                            if preserve_hdr
+                            else torch.from_numpy(np.array(fix_chw, copy=True)).float().div_(255.0)
+                        )
+
                 if use_face_aware:
                     # Run face detection every N frames and cache the mask.
                     if (
@@ -497,6 +609,8 @@ def _run_video_job(
                             **float_options,
                         )
                 else:
+                    if config.preprocess_stages:
+                        engine.switch_model(config.model_path)
                     out_chw = engine.process_frame(
                         img_tensor=tensor,
                         model_info=model_info,

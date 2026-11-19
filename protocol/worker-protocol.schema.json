@@ -213,6 +213,8 @@
       "required": ["kind", "model_id", "model_path"],
       "properties": {
         "kind": { "enum": ["deblock", "restore", "upscale", "face_restore"] },
+        "role": { "enum": ["fix", "primary", "face"] },
+        "fix": { "enum": ["blur", "jpeg", "noise"] },
         "model_id": { "type": "string", "minLength": 1 },
         "model_path": { "type": "string", "minLength": 1 },
         "fidelity": { "type": "number", "minimum": 0, "maximum": 1 },
@@ -248,7 +250,7 @@
                     "stages": {
                       "type": ["array", "null"],
                       "minItems": 1,
-                      "maxItems": 3,
+                      "maxItems": 5,
                       "items": { "$ref": "#/$defs/pipelineStage" }
                     }
                   }
@@ -303,7 +305,13 @@
                     "interpolation_model_id": { "type": ["string", "null"] },
                     "interpolation_bundle_dir": { "type": ["string", "null"] },
                     "video_model_id": { "type": ["string", "null"] },
-                    "temporary_directory": { "type": ["string", "null"] }
+                    "temporary_directory": { "type": ["string", "null"] },
+                    "stages": {
+                      "type": ["array", "null"],
+                      "minItems": 1,
+                      "maxItems": 5,
+                      "items": { "$ref": "#/$defs/pipelineStage" }
+                    }
                   }
                 }
               ]
