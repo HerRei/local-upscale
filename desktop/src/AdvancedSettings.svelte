@@ -678,7 +678,7 @@
           ><span class="live-setting-label">Run at low priority</span></span
         ><HelpTip
           label="Run at low priority"
-          text="Lets other apps stay responsive while LocalSR works. Jobs may take longer, most of all when they read or write large files. You can switch it during a job. On Linux, switching it off takes full effect the next time the engine starts."
+          text="Lets other apps stay responsive while LocalSR works. Jobs take longer: on a Mac about twice as long, even when nothing else is running. You can switch it during a job. On Linux, switching it off takes full effect the next time the engine starts."
         />
       </div>
       <div class="hardware-card">
