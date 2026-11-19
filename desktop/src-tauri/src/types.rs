@@ -358,6 +358,10 @@ pub struct UiSettings {
     // Direct builds look for an update once at launch, silently.
     #[serde(default = "default_true")]
     pub check_updates_at_launch: bool,
+    #[serde(default = "default_true")]
+    pub privacy_choice_made: bool,
+    #[serde(default)]
+    pub skipped_update_version: String,
     pub enable_face_model: bool,
     pub face_fidelity: u32,
     pub enable_live_preview: bool,
@@ -467,6 +471,8 @@ impl Default for UiSettings {
             anonymous_update_count: false,
             completion_sound: false,
             check_updates_at_launch: true,
+            privacy_choice_made: false,
+            skipped_update_version: String::new(),
             enable_face_model: false,
             face_fidelity: 70,
             enable_live_preview: true,

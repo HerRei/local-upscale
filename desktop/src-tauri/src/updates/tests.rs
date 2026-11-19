@@ -1932,3 +1932,31 @@ fn round3_a_retry_is_not_charged_for_files_it_already_holds() {
         5
     );
 }
+
+#[test]
+fn launch_check_requires_a_choice_and_automatic_checks() {
+    let mut settings = crate::types::UiSettings::default();
+    assert!(!launch_check_allowed(&settings));
+    settings.privacy_choice_made = true;
+    settings.check_updates_at_launch = false;
+    assert!(!launch_check_allowed(&settings));
+    settings.check_updates_at_launch = true;
+    assert!(launch_check_allowed(&settings));
+}
+
+#[test]
+fn skipped_version_is_saved_and_can_be_replaced() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(root.path());
+    let state = AppState::from_paths(paths.clone()).unwrap();
+    store_skipped_version(&state, "99.0.0-beta").unwrap();
+    assert_eq!(
+        crate::settings::load(&paths).0.skipped_update_version,
+        "99.0.0-beta"
+    );
+    store_skipped_version(&state, "99.1.0-beta").unwrap();
+    assert_eq!(
+        crate::settings::load(&paths).0.skipped_update_version,
+        "99.1.0-beta"
+    );
+}

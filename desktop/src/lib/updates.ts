@@ -20,22 +20,12 @@ export const updateState = writable<api.UpdateStatus>(emptyUpdateStatus);
 export const updateDialogOpen = writable(false);
 export const updateError = writable('');
 
-const DISMISSED_KEY = 'localsr.update.dismissed';
-
+let dismissed = '';
 export function dismissedVersion(): string {
-  try {
-    return window.localStorage.getItem(DISMISSED_KEY) ?? '';
-  } catch {
-    return '';
-  }
+  return dismissed;
 }
-
 export function dismissVersion(version: string): void {
-  try {
-    window.localStorage.setItem(DISMISSED_KEY, version);
-  } catch {
-    // Private or restricted storage: the notice simply returns next launch.
-  }
+  dismissed = version;
 }
 
 export async function refreshUpdateStatus(): Promise<api.UpdateStatus> {
@@ -55,7 +45,7 @@ export async function startUpdateWatcher(checkAtLaunch = true): Promise<() => vo
   try {
     const status = await refreshUpdateStatus();
     if (checkAtLaunch && status.configured && !status.managed_by_store && status.stage === 'idle') {
-      updateState.set(await api.checkUpdate(status.channel));
+      updateState.set(await api.checkUpdateAtLaunch(status.channel));
     }
   } catch {
     // Offline or feed unavailable; "Check for Updates…" reports errors explicitly.

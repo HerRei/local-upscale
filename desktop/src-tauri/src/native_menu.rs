@@ -24,6 +24,7 @@ pub fn switches(settings: &UiSettings) -> Switches {
 }
 
 pub const EVENT_NAME: &str = "native-menu-action";
+const REPORT_PROBLEM_ID: &str = "help.report-problem";
 
 /// The update entries in menu order: macOS shows them in the LocalSR menu, Windows and
 /// Linux at the end of Help. The two switches exist only in builds that check a signed
@@ -226,6 +227,7 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
         .build()?;
 
     let guide = MenuItemBuilder::with_id("help.guide", "LocalSR User Guide").build(manager)?;
+    let report = MenuItemBuilder::with_id(REPORT_PROBLEM_ID, "Report a problem…").build(manager)?;
     let github = MenuItemBuilder::with_id("help.github", "LocalSR on GitHub").build(manager)?;
     let updates = MenuItemBuilder::with_id("app.updates", "Check for Updates…").build(manager)?;
     let check_at_launch =
@@ -248,11 +250,13 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
     #[cfg(target_os = "macos")]
     let help_menu = SubmenuBuilder::new(manager, "Help")
         .item(&guide)
+        .item(&report)
         .item(&github)
         .build()?;
     #[cfg(not(target_os = "macos"))]
     let help_menu = SubmenuBuilder::new(manager, "Help")
         .item(&guide)
+        .item(&report)
         .item(&github)
         .separator()
         .items(&update_entries)
@@ -378,6 +382,12 @@ pub fn dispatch(app: &AppHandle, id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn report_problem_has_a_stable_menu_id() {
+        assert_eq!(REPORT_PROBLEM_ID, "help.report-problem");
+        assert_eq!(switch_setting(REPORT_PROBLEM_ID), None);
+    }
 
     #[test]
     fn the_update_switches_follow_the_check_wherever_a_build_checks_its_feed() {

@@ -200,6 +200,8 @@ pub struct UpdateStatus {
     pub stage: String,
     pub version: String,
     pub notes: String,
+    pub discover_url: String,
+    pub skipped_version: String,
     pub size: u64,
     pub downloaded: u64,
     pub message: String,
@@ -397,7 +399,10 @@ fn channel(state: &AppState) -> String {
         .filter(|s| matches!(s.as_str(), "stable" | "beta"))
         .unwrap_or("beta".into())
 }
-fn publish(state: &AppState, app: &AppHandle, status: UpdateStatus) {
+fn publish(state: &AppState, app: &AppHandle, mut status: UpdateStatus) {
+    if let Ok(settings) = state.settings.lock() {
+        status.skipped_version = settings.skipped_update_version.clone();
+    }
     if let Ok(mut stored) = state.updates.status.lock() {
         *stored = status.clone();
     }
@@ -419,6 +424,7 @@ pub fn update_status(state: State<'_, Arc<AppState>>) -> AppResult<UpdateStatus>
     let config = UpdateConfig::load();
     let mut status = lock(&state.updates.status)?.clone();
     status.configured = config.enabled();
+    status.skipped_version = lock(&state.settings)?.skipped_update_version.clone();
     status.settings_recovery = crate::settings::needs_recovery(&state.paths);
     if status.channel.is_empty() {
         status.channel = channel(&state);
@@ -428,6 +434,58 @@ pub fn update_status(state: State<'_, Arc<AppState>>) -> AppResult<UpdateStatus>
     if !config.enabled() {
         status.message = "Updates are not published for this preview yet. This build needs a signed update feed and a matching backend package.".into();
     }
+    Ok(status)
+}
+
+const DISCOVER_URL: &str = "https://herrei.github.io/localsr/whats-new/";
+
+fn validated_discover_url(value: Option<&str>) -> String {
+    value
+        .filter(|value| value.len() <= 2048)
+        .and_then(|value| reqwest::Url::parse(value).ok())
+        .filter(|url| {
+            url.scheme() == "https"
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.port_or_known_default() == Some(443)
+                && (url.host_str() == Some("herrei.github.io")
+                    || (url.host_str() == Some("github.com") && url.path().starts_with("/HerRei/")))
+        })
+        .map(|url| url.to_string())
+        .unwrap_or_else(|| DISCOVER_URL.into())
+}
+
+#[tauri::command]
+pub fn open_update_discover(state: State<'_, Arc<AppState>>) -> AppResult<()> {
+    let status = lock(&state.updates.status)?;
+    open::that_detached(validated_discover_url(Some(&status.discover_url)))?;
+    Ok(())
+}
+
+fn store_skipped_version(state: &AppState, version: &str) -> AppResult<()> {
+    let _io = lock(&state.settings_io)?;
+    let previous = {
+        let mut settings = lock(&state.settings)?;
+        std::mem::replace(&mut settings.skipped_update_version, version.to_string())
+    };
+    if let Err(error) = state.write_settings() {
+        lock(&state.settings)?.skipped_update_version = previous;
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn skip_update(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<UpdateStatus> {
+    let _busy = acquire(&state.updates.busy)?;
+    let mut status = lock(&state.updates.status)?.clone();
+    if status.stage != "available" || semver::Version::parse(&status.version).is_err() {
+        return Err(invalid("No available update to skip"));
+    }
+    store_skipped_version(&state, &status.version)?;
+    status.skipped_version = status.version.clone();
+    publish(&state, &app, status.clone());
+    crate::state::emit_state_changed(&app);
     Ok(status)
 }
 
@@ -446,12 +504,34 @@ pub fn open_store_updates(state: State<'_, Arc<AppState>>) -> AppResult<()> {
     open::that_detached("ms-windows-store://downloadsandupdates")?;
     Ok(())
 }
+fn launch_check_allowed(settings: &crate::types::UiSettings) -> bool {
+    settings.privacy_choice_made && settings.check_updates_at_launch
+}
+
+#[tauri::command]
+pub async fn check_update_at_launch(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    channel: String,
+) -> AppResult<UpdateStatus> {
+    {
+        let settings = lock(&state.settings)?;
+        if !launch_check_allowed(&settings) {
+            return Err(invalid("Automatic update checks are disabled"));
+        }
+    }
+    check_update(state, app, channel).await
+}
+
 #[tauri::command]
 pub async fn check_update(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
     channel: String,
 ) -> AppResult<UpdateStatus> {
+    if !lock(&state.settings)?.privacy_choice_made {
+        return Err(invalid("Choose update privacy settings first"));
+    }
     crate::distribution::require_direct_updates()?;
     let _busy = acquire(&state.updates.busy)?;
     if !matches!(channel.as_str(), "stable" | "beta") {
@@ -526,6 +606,7 @@ pub async fn check_update(
             )?;
             status.version = update.version.clone();
             status.notes = update.body.clone().unwrap_or_default();
+            status.discover_url = validated_discover_url(update.raw_json["discover_url"].as_str());
             status.size = contract.size
                 + contract
                     .engine

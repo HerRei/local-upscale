@@ -111,7 +111,9 @@ details are in [platform support](docs/platforms.md).
 
 ## What leaves your computer
 
-There is no account, and your images and videos are never uploaded. At launch the
+On a fresh install, LocalSR asks whether to check for updates automatically and whether to send an anonymous count. The update check reads a feed on GitHub Pages. If enabled, the count sends the app version, platform and channel to the developer's server without an ID. You can change both choices later in the LocalSR or Help menu and the Software Update dialog.
+
+There is no account, and your images and videos are never uploaded. When enabled, at launch the
 app reads its update feed on GitHub Pages (for the beta,
 `herrei.github.io/localsr/updates/beta.json`) and can update itself, on the Mac,
 on Windows and as a Linux AppImage. After a check it

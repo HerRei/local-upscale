@@ -4,7 +4,7 @@ const api = vi.hoisted(() => ({
   isTauri: vi.fn(() => true),
   updateStatus: vi.fn(),
   listenForUpdates: vi.fn(async () => () => {}),
-  checkUpdate: vi.fn(),
+  checkUpdateAtLaunch: vi.fn(),
 }));
 vi.mock('./api', () => api);
 
@@ -25,17 +25,17 @@ beforeEach(() => {
     message: '',
     settings_recovery: false,
   });
-  api.checkUpdate.mockResolvedValue({ stage: 'idle' });
+  api.checkUpdateAtLaunch.mockResolvedValue({ stage: 'idle' });
 });
 
 it('checks the feed at launch only while the setting is on', async () => {
   await startUpdateWatcher(false);
-  expect(api.checkUpdate).not.toHaveBeenCalled();
+  expect(api.checkUpdateAtLaunch).not.toHaveBeenCalled();
   // It still follows progress, so Check for Updates… keeps working.
   expect(api.listenForUpdates).toHaveBeenCalledTimes(1);
 
   await startUpdateWatcher(true);
-  expect(api.checkUpdate).toHaveBeenCalledWith('beta');
+  expect(api.checkUpdateAtLaunch).toHaveBeenCalledWith('beta');
 });
 
 it.each([
@@ -45,7 +45,7 @@ it.each([
 ])('a %s build follows the launch-check setting as the Mac build does', async (target) => {
   api.updateStatus.mockResolvedValue({ ...(await api.updateStatus()), target });
   await startUpdateWatcher(false);
-  expect(api.checkUpdate).not.toHaveBeenCalled();
+  expect(api.checkUpdateAtLaunch).not.toHaveBeenCalled();
   await startUpdateWatcher(true);
-  expect(api.checkUpdate).toHaveBeenCalledWith('beta');
+  expect(api.checkUpdateAtLaunch).toHaveBeenCalledWith('beta');
 });
