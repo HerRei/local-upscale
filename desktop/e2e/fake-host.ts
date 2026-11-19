@@ -41,8 +41,10 @@ export interface Scenario {
   /** The host takes this long to prepare the preview of a saved result for a pair. */
   pairDelayMs?: number;
   welcome?: boolean;
+  privacyPending?: boolean;
   /** An update the feed offers; without it the feed is not configured. */
   update?: string;
+  diagnosticSummary?: string;
   /** The outputs also appear as finished jobs, so Reveal and Open are offered for the selected photo. */
   finished?: boolean;
   /** A queue is running: the first photo is processing and the rest wait. */
@@ -372,10 +374,17 @@ function hostScript(scenario: Scenario): void {
 
   async function handle(command: string, args: Json): Promise<unknown> {
     snapshot ??= await build();
+    if (scenario.privacyPending && !snapshot.settings.privacy_choice_made_test_saved) snapshot.settings.privacy_choice_made = false;
     switch (command) {
       case 'bootstrap':
       case 'get_snapshot':
         return structuredClone(snapshot);
+      case 'set_privacy_choice':
+        snapshot.settings.check_updates_at_launch = args.checkAtLaunch;
+        snapshot.settings.anonymous_update_count = args.anonymousCount;
+        snapshot.settings.privacy_choice_made = true;
+        snapshot.settings.privacy_choice_made_test_saved = true;
+        return null;
       case 'save_settings':
         snapshot.settings = structuredClone(args.settings);
         return null;
@@ -469,8 +478,17 @@ function hostScript(scenario: Scenario): void {
         return null;
       case 'take_launch_intents':
         return [];
+      case 'diagnostic_summary':
+        return scenario.diagnosticSummary ?? JSON.stringify({ platform: 'macos', app_version: '0.4.0-beta' }, null, 2);
+      case 'open_bug_report':
+      case 'open_update_discover':
+        return null;
+      case 'skip_update':
+        snapshot.settings.skipped_update_version = scenario.update;
+        return { configured: true, managed_by_store: false, channel: 'beta', target: '', stage: 'available', version: scenario.update, notes: '', skipped_version: scenario.update, size: 58 * 1024 ** 2, downloaded: 0, message: '', settings_recovery: false };
       case 'update_status':
       case 'check_update':
+      case 'check_update_at_launch':
         return {
           configured: Boolean(scenario.update),
           managed_by_store: false,
@@ -479,6 +497,7 @@ function hostScript(scenario: Scenario): void {
           stage: scenario.update ? 'available' : 'idle',
           version: scenario.update ?? '',
           notes: '',
+          skipped_version: snapshot.settings.skipped_update_version ?? '',
           size: scenario.update ? 58 * 1024 ** 2 : 0,
           downloaded: 0,
           message: '',

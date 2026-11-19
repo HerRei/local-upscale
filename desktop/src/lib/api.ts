@@ -153,6 +153,8 @@ export const setUpdateSwitch = (
   name: 'check_updates_at_launch' | 'anonymous_update_count',
   value: boolean,
 ): Promise<void> => invoke('set_update_switch', { name, value });
+export const setPrivacyChoice = (checkAtLaunch: boolean, anonymousCount: boolean): Promise<void> =>
+  invoke('set_privacy_choice', { checkAtLaunch, anonymousCount });
 export const startJobs = (input: StartBatchInput): Promise<void> => invoke('start_jobs', { input });
 export const startEdit = (input: StartEditInput): Promise<void> => invoke('start_edit', { input });
 export const openEditLink = (modelId: string, link: 'license' | 'source'): Promise<void> =>
@@ -325,6 +327,7 @@ export const revealResult = (path: string): Promise<void> => invoke('reveal_resu
 /** Adds a finished result as an input and selects it; the host checks the path like Reveal does. */
 export const useResultAsInput = (path: string): Promise<string> =>
   invoke('use_result_as_input', { path });
+export const openBugReport = (url: string): Promise<void> => invoke('open_bug_report', { url });
 export const diagnosticSummary = (): Promise<string> => invoke('diagnostic_summary');
 export const openOutputDirectory = (): Promise<void> => invoke('open_output_directory');
 export const takeLaunchIntents = (): Promise<LaunchIntent[]> => invoke('take_launch_intents');
@@ -392,15 +395,21 @@ export interface UpdateStatus {
   stage: string;
   version: string;
   notes: string;
+  discover_url?: string;
+  skipped_version?: string;
   size: number;
   downloaded: number;
   message: string;
   settings_recovery: boolean;
 }
 export const updateStatus = (): Promise<UpdateStatus> => invoke('update_status');
+export const skipUpdate = (): Promise<UpdateStatus> => invoke('skip_update');
+export const openUpdateDiscover = (): Promise<void> => invoke('open_update_discover');
 export const openStoreUpdates = (): Promise<void> => invoke('open_store_updates');
 export const checkUpdate = (channel: string): Promise<UpdateStatus> =>
   invoke('check_update', { channel });
+export const checkUpdateAtLaunch = (channel: string): Promise<UpdateStatus> =>
+  invoke('check_update_at_launch', { channel });
 export const downloadUpdate = (): Promise<void> => invoke('download_update');
 export const installUpdate = (): Promise<void> => invoke('install_update');
 export const cancelUpdate = (): Promise<void> => invoke('cancel_update');

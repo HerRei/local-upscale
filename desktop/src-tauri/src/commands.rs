@@ -379,6 +379,8 @@ fn persist_or_restore(state: &AppState, restore: impl FnOnce(&AppState)) -> AppR
 fn keep_update_switches(current: &UiSettings, incoming: &mut UiSettings) {
     incoming.check_updates_at_launch = current.check_updates_at_launch;
     incoming.anonymous_update_count = current.anonymous_update_count;
+    incoming.privacy_choice_made = current.privacy_choice_made;
+    incoming.skipped_update_version = current.skipped_update_version.clone();
 }
 
 /// Set one update switch. It may change while jobs run: it does not touch them.
@@ -392,6 +394,40 @@ pub fn set_update_switch(
     let result = apply_update_switch(&state, &name, |_| value);
     refresh_update_switches(&app);
     result
+}
+
+/// Save the first-launch choices together, even while processing is active.
+#[tauri::command]
+pub fn set_privacy_choice(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    check_at_launch: bool,
+    anonymous_count: bool,
+) -> AppResult<()> {
+    let _io = lock(&state.settings_io)?;
+    let previous = {
+        let mut settings = lock(&state.settings)?;
+        let previous = (
+            settings.check_updates_at_launch,
+            settings.anonymous_update_count,
+            settings.privacy_choice_made,
+        );
+        settings.check_updates_at_launch = check_at_launch;
+        settings.anonymous_update_count = anonymous_count;
+        settings.privacy_choice_made = true;
+        previous
+    };
+    if let Err(error) = state.write_settings() {
+        let mut settings = lock(&state.settings)?;
+        (
+            settings.check_updates_at_launch,
+            settings.anonymous_update_count,
+            settings.privacy_choice_made,
+        ) = previous;
+        return Err(error);
+    }
+    refresh_update_switches(&app);
+    Ok(())
 }
 
 /// The menu's own click: flip the saved value, whatever the window shows.
@@ -2098,6 +2134,26 @@ async fn pick_program(app: AppHandle, title: &str, current: &str) -> AppResult<O
         .to_string_lossy()
         .into_owned();
     Ok(Some(path))
+}
+
+#[tauri::command]
+pub fn open_bug_report(url: String) -> AppResult<()> {
+    let parsed =
+        reqwest::Url::parse(&url).map_err(|error| AppError::Validation(error.to_string()))?;
+    if parsed.scheme() != "https"
+        || parsed.host_str() != Some("github.com")
+        || parsed.port_or_known_default() != Some(443)
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.path() != "/HerRei/local-upscale/issues/new"
+        || !parsed
+            .query_pairs()
+            .any(|(key, value)| key == "template" && value == "bug_report.yml")
+    {
+        return Err(AppError::Validation("Invalid report URL".into()));
+    }
+    open::that_detached(url)?;
+    Ok(())
 }
 
 pub(crate) const USER_GUIDE_URL: &str = "https://herrei.github.io/localsr/guide/";

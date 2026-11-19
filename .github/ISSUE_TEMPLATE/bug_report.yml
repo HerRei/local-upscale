@@ -4,23 +4,27 @@ title: "[Bug]: "
 labels: [bug]
 body:
   - type: textarea
+    id: what-happened
     attributes:
       label: What happened?
       description: Include the expected and actual behavior.
     validations:
       required: true
   - type: input
+    id: version
     attributes:
       label: LocalSR version or commit
     validations:
       required: true
   - type: dropdown
+    id: operating-system
     attributes:
       label: Operating system
       options: [Windows, macOS, Linux]
     validations:
       required: true
   - type: textarea
+    id: hardware
     attributes:
       label: Hardware and settings
       description: CPU/GPU, available RAM/VRAM, model, device, tile, halo, and precision.

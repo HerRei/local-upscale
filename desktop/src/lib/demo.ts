@@ -54,6 +54,7 @@ export function demoSnapshot(): AppSnapshot {
       anonymous_update_count: false,
       completion_sound: false,
       check_updates_at_launch: true,
+      privacy_choice_made: true,
       enable_face_model: false,
       face_fidelity: 70,
       enable_live_preview: true,

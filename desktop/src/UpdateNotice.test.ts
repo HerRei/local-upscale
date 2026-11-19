@@ -14,7 +14,9 @@ const api = vi.hoisted(() => ({
   isTauri: vi.fn(() => true),
   updateStatus: vi.fn(),
   listenForUpdates: vi.fn(async () => () => {}),
-  checkUpdate: vi.fn(),
+  checkUpdateAtLaunch: vi.fn(),
+  skipUpdate: vi.fn(),
+  openUpdateDiscover: vi.fn(),
   downloadUpdate: vi.fn(async () => {}),
   installUpdate: vi.fn(async () => {}),
 }));
@@ -39,7 +41,7 @@ beforeEach(() => {
 it('checks the feed once at launch and stays quiet when nothing is configured', async () => {
   api.updateStatus.mockResolvedValue({ ...emptyUpdateStatus, configured: false });
   await startUpdateWatcher();
-  expect(api.checkUpdate).not.toHaveBeenCalled();
+  expect(api.checkUpdateAtLaunch).not.toHaveBeenCalled();
   render(UpdateNotice);
   expect(screen.queryByRole('status')).toBeNull();
 });
@@ -48,13 +50,13 @@ it('announces an available update at launch and updates now', async () => {
   api.updateStatus
     .mockResolvedValueOnce({ ...emptyUpdateStatus, configured: true })
     .mockResolvedValue({ ...available, stage: 'downloaded', downloaded: available.size });
-  api.checkUpdate.mockResolvedValue(available);
+  api.checkUpdateAtLaunch.mockResolvedValue(available);
   await startUpdateWatcher();
-  expect(api.checkUpdate).toHaveBeenCalledWith('beta');
+  expect(api.checkUpdateAtLaunch).toHaveBeenCalledWith('beta');
   const user = userEvent.setup();
   render(UpdateNotice);
   expect(await screen.findByText('LocalSR 0.0.13-beta.2 is available')).toBeTruthy();
-  await user.click(screen.getByRole('button', { name: 'Update Now' }));
+  await user.click(screen.getByRole('button', { name: 'Update' }));
   await waitFor(() => expect(api.installUpdate).toHaveBeenCalledTimes(1));
   expect(api.downloadUpdate).toHaveBeenCalledTimes(1);
 });
@@ -64,7 +66,7 @@ it('downloads during processing and installs once the queue finishes', async () 
   api.updateStatus.mockResolvedValue({ ...available, stage: 'downloaded' });
   const user = userEvent.setup();
   const view = render(UpdateNotice, { processing: true });
-  await user.click(screen.getByRole('button', { name: 'Update Now' }));
+  await user.click(screen.getByRole('button', { name: 'Update' }));
   await waitFor(() => expect(api.downloadUpdate).toHaveBeenCalledTimes(1));
   expect(
     await screen.findByText('It installs as soon as the current queue finishes.'),
@@ -78,8 +80,21 @@ it('hides a dismissed version until a newer one appears', async () => {
   updateState.set(available);
   const user = userEvent.setup();
   render(UpdateNotice);
-  await user.click(screen.getByRole('button', { name: 'Later' }));
+  await user.click(screen.getByRole('button', { name: 'Close update notice' }));
   expect(screen.queryByText('LocalSR 0.0.13-beta.2 is available')).toBeNull();
   updateState.set({ ...available, version: '0.0.13-beta.3' });
   expect(await screen.findByText('LocalSR 0.0.13-beta.3 is available')).toBeTruthy();
+});
+
+it('skips only the selected version and hides behind the update dialog', async () => {
+  updateState.set({ ...available, version: '1.0.0' });
+  api.skipUpdate.mockResolvedValue({ ...available, version: '1.0.0', skipped_version: '1.0.0' });
+  const user = userEvent.setup();
+  render(UpdateNotice);
+  await user.click(screen.getByRole('button', { name: 'Skip This Version' }));
+  await waitFor(() => expect(screen.queryByText('LocalSR 1.0.0 is available')).toBeNull());
+  updateState.set({ ...available, version: '1.1.0', skipped_version: '1.0.0' });
+  expect(await screen.findByText('LocalSR 1.1.0 is available')).toBeTruthy();
+  updateDialogOpen.set(true);
+  await waitFor(() => expect(screen.queryByText('LocalSR 1.1.0 is available')).toBeNull());
 });

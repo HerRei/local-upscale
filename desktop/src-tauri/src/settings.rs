@@ -43,6 +43,9 @@ pub fn load(paths: &AppPaths) -> (UiSettings, Vec<Recipe>) {
         output_directory: paths.default_output.to_string_lossy().into_owned(),
         ..UiSettings::default()
     };
+    if paths.legacy_settings.exists() || effective_document_path(paths).is_some() {
+        settings.privacy_choice_made = true;
+    }
     if let Ok(contents) = fs::read_to_string(&paths.legacy_settings) {
         if let Ok(value) = serde_json::from_str::<Value>(&contents) {
             import_legacy_settings(&mut settings, &value);
@@ -290,6 +293,20 @@ fn replace_settings_file(temporary: &Path, destination: &Path) -> std::io::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn privacy_choice_is_pending_only_for_a_fresh_install() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        assert!(!load(&paths).0.privacy_choice_made);
+        fs::create_dir_all(paths.settings.parent().unwrap()).unwrap();
+        fs::write(
+            &paths.settings,
+            r#"{"schema_version":2,"ui":{},"recipes":[]}"#,
+        )
+        .unwrap();
+        assert!(load(&paths).0.privacy_choice_made);
+    }
 
     #[test]
     fn completion_sound_defaults_off_and_round_trips_in_schema_two() {

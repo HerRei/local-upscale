@@ -126,6 +126,15 @@ input:focus-visible {
   grid-template-rows: 1fr 54px;
   background: var(--base);
 }
+.app-shell:has(> .update-notice) {
+  grid-template-rows: auto 1fr 54px;
+}
+.app-shell.status-extra:has(> .update-notice) {
+  grid-template-rows: auto 1fr minmax(54px, auto);
+}
+.app-shell.queue-timing-visible:has(> .update-notice) {
+  grid-template-rows: auto 1fr minmax(90px, auto);
+}
 .app-shell.booting {
   cursor: progress;
 }
@@ -2211,6 +2220,15 @@ input[type='number'],
   }
   .app-shell.queue-timing-visible {
     grid-template-rows: 52px 1fr minmax(90px, auto);
+  }
+  .app-shell:has(> .update-notice) {
+    grid-template-rows: 52px auto 1fr 54px;
+  }
+  .app-shell.status-extra:has(> .update-notice) {
+    grid-template-rows: 52px auto 1fr minmax(54px, auto);
+  }
+  .app-shell.queue-timing-visible:has(> .update-notice) {
+    grid-template-rows: 52px auto 1fr minmax(90px, auto);
   }
   .toolbar {
     display: flex;

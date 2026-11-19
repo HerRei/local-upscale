@@ -44,6 +44,7 @@
   import UpdatePanel from './UpdatePanel.svelte';
   import WelcomeNotice from './WelcomeNotice.svelte';
   import { startUpdateWatcher, updateDialogOpen } from './lib/updates';
+  import { redactDiagnostics, reportUrl } from './lib/report';
   import BenchmarkStudio from './BenchmarkStudio.svelte';
   import * as api from './lib/api';
   import ModelLibrary from './ModelLibrary.svelte';
@@ -187,7 +188,7 @@
   });
   let mainTabs: HTMLElement | undefined;
   // The update notice docks over the bottom of the stage; what sits there moves up by this.
-  let updateNoticeHeight = 0;
+
   async function mainTabKey(event: KeyboardEvent): Promise<void> {
     const next = tabFromKey(event.key, mainTab === 'preview' ? 0 : 1, 2);
     if (next === null) return;
@@ -278,6 +279,89 @@
   let inspectorScroll: HTMLDivElement | undefined;
   let lastLivePreviewSequence = 0;
   let diagnostics = '';
+  let reportOpen = false;
+  let reportDiagnostics = '';
+  let reportLoading = false;
+  let reportIncludeDiagnostics = true;
+  let reportHappened = '';
+  let reportMessage = '';
+
+  async function showReport(): Promise<void> {
+    if (modalTitle) closeModal();
+    reportOpen = true;
+    reportIncludeDiagnostics = true;
+    reportHappened = '';
+    reportMessage = '';
+    reportDiagnostics = '';
+    reportLoading = true;
+    try {
+      reportDiagnostics = redactDiagnostics(await api.diagnosticSummary());
+    } catch (error) {
+      reportDiagnostics = '';
+      reportMessage = String(error);
+    } finally {
+      reportLoading = false;
+    }
+  }
+  async function openReport(): Promise<void> {
+    try {
+      let platform = '';
+      try {
+        const value = JSON.parse(reportDiagnostics).platform;
+        platform =
+          value === 'macos'
+            ? 'macOS'
+            : value === 'windows'
+              ? 'Windows'
+              : value === 'linux'
+                ? 'Linux'
+                : '';
+      } catch {
+        /* No diagnostic platform available. */
+      }
+      let body = reportIncludeDiagnostics ? reportDiagnostics : '';
+      let url = reportUrl(reportHappened, snapshot.app_version, platform, body);
+      if (url.length > 7000 && body) {
+        await navigator.clipboard.writeText(body);
+        body = 'Diagnostics were copied to your clipboard; paste them here.';
+        reportMessage = body;
+        url = reportUrl(reportHappened, snapshot.app_version, platform, body);
+      }
+      await api.openBugReport(url);
+    } catch (error) {
+      reportMessage = String(error);
+    }
+  }
+  let privacyCheckAtLaunch = true;
+  let privacyCount = false;
+  let privacySaving = false;
+  let privacyError = '';
+
+  async function continuePrivacy(): Promise<void> {
+    privacySaving = true;
+    privacyError = '';
+    try {
+      await api.setPrivacyChoice(privacyCheckAtLaunch, privacyCount);
+      snapshot = {
+        ...snapshot,
+        settings: {
+          ...snapshot.settings,
+          privacy_choice_made: true,
+          check_updates_at_launch: privacyCheckAtLaunch,
+          anonymous_update_count: privacyCount,
+        },
+      };
+      if (privacyCheckAtLaunch) {
+        const status = await api.updateStatus();
+        if (status.configured && !status.managed_by_store && status.stage === 'idle')
+          await api.checkUpdateAtLaunch(status.channel).catch(() => undefined);
+      }
+    } catch (error) {
+      privacyError = String(error);
+    } finally {
+      privacySaving = false;
+    }
+  }
   let integration: IntegrationStatus | null = null;
   let modalKind: 'message' | 'performance' | 'integrations' = 'message';
   let modalTitle = '';
@@ -1073,7 +1157,10 @@
         );
         await subscribe(() => api.listenForLaunchIntent(() => void consumeLaunchIntents()));
         await subscribe(() =>
-          startUpdateWatcher(snapshot.settings.check_updates_at_launch ?? true),
+          startUpdateWatcher(
+            (snapshot.settings.privacy_choice_made ?? true) &&
+              (snapshot.settings.check_updates_at_launch ?? true),
+          ),
         );
         await subscribe(() =>
           api.listenForFileDrops({
@@ -2553,7 +2640,12 @@
   async function handleNativeMenuAction(action: string): Promise<void> {
     // A dialog takes the input until it is answered; only Cancel, which ends work, still acts.
     if (
-      (modalTitle || libraryOpen || ffmpegNotice || $updateDialogOpen) &&
+      (modalTitle ||
+        reportOpen ||
+        settings.privacy_choice_made === false ||
+        libraryOpen ||
+        ffmpegNotice ||
+        $updateDialogOpen) &&
       action !== 'file.cancel'
     )
       return;
@@ -2625,6 +2717,9 @@
           break;
         case 'view.models':
           openLibrary('browse');
+          break;
+        case 'help.report-problem':
+          await showReport();
           break;
         case 'app.updates':
           updateDialogOpen.set(true);
@@ -2918,7 +3013,7 @@
   class:mac={isMac}
   class:queue-timing-visible={Boolean(queueEta)}
   class:status-extra={Boolean(hardwareNote || hardwareHint)}
-  style={`--ui-scale:${settings.interface_scale / 100};--notice-room:${updateNoticeHeight ? updateNoticeHeight + 20 : 0}px`}
+  style={`--ui-scale:${settings.interface_scale / 100}`}
 >
   <!-- Only narrow windows need a bar: it switches between the panes that no longer fit side by side. -->
   <header class="toolbar" data-tauri-drag-region>
@@ -2945,6 +3040,9 @@
     checkAtLaunch={settings.check_updates_at_launch ?? true}
   />
 
+  <UpdateNotice
+    processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
+  />
   <main class="workspace">
     <MediaQueue
       bind:this={mediaQueue}
@@ -3815,11 +3913,6 @@
         </fieldset>
       </div>
     </aside>
-
-    <UpdateNotice
-      bind:height={updateNoticeHeight}
-      processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
-    />
   </main>
 
   <footer class="status-bar">
@@ -4022,6 +4115,77 @@
     onSelected={useExternalFFmpeg}
     onClose={() => (ffmpegNotice = null)}
   />
+{/if}
+
+{#if reportOpen}
+  <div class="modal-backdrop" role="presentation">
+    <div
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="report-title"
+      tabindex="-1"
+      use:modal={() => (reportOpen = false)}
+    >
+      <h2 id="report-title">Report a problem</h2>
+      <p>
+        This opens a new GitHub issue in your browser. Nothing is sent until you submit it there.
+      </p>
+      <label>What happened?<textarea maxlength="400" bind:value={reportHappened}></textarea></label>
+      <p>
+        <label
+          ><input type="checkbox" bind:checked={reportIncludeDiagnostics} /> Include diagnostics</label
+        >
+      </p>
+      {#if reportIncludeDiagnostics}<details>
+          <summary>Preview diagnostics</summary><textarea readonly value={reportDiagnostics}
+          ></textarea>
+        </details>{/if}
+      {#if reportMessage}<p role="status">{reportMessage}</p>{/if}
+      <div class="modal-actions">
+        <button class="button" on:click={() => (reportOpen = false)}>Cancel</button><button
+          class="button"
+          disabled={reportLoading}
+          on:click={openReport}>Open GitHub Issue</button
+        >
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if !booting && settings.privacy_choice_made === false}
+  <div class="modal-backdrop" role="presentation">
+    <div
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="privacy-title"
+      tabindex="-1"
+      use:modal
+    >
+      <h2 id="privacy-title">Welcome to LocalSR</h2>
+      <p>
+        Choose how LocalSR checks for updates. You can change these later in the LocalSR or Help
+        menu and the Software Update dialog.
+      </p>
+      <p>
+        <label
+          ><input type="checkbox" bind:checked={privacyCheckAtLaunch} /> Check for updates automatically</label
+        ><br />The update check reads the feed on GitHub Pages.
+      </p>
+      <p>
+        <label
+          ><input type="checkbox" bind:checked={privacyCount} /> Send an anonymous count with each update
+          check</label
+        ><br />When a check happens, this sends the app version, platform and channel to the
+        developer's server, with no ID.
+      </p>
+      {#if privacyError}<p role="alert">{privacyError}</p>{/if}
+      <div class="modal-actions">
+        <button class="button" disabled={privacySaving} on:click={continuePrivacy}>Continue</button>
+      </div>
+    </div>
+  </div>
 {/if}
 
 {#if modalTitle}
@@ -4505,9 +4669,9 @@
         <textarea readonly>{diagnostics}</textarea>
       {/if}
       <div class="modal-actions">
-        {#if modalKind === 'performance'}<button class="button" on:click={copyDiagnostics}
-            >Copy diagnostics</button
-          >{/if}
+        {#if modalKind === 'performance'}<button class="button" on:click={showReport}
+            >Report a problem…</button
+          ><button class="button" on:click={copyDiagnostics}>Copy diagnostics</button>{/if}
         {#if modalKind === 'integrations' && integration}<button
             class="button"
             class:danger={integration.installed}

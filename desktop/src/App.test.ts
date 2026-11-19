@@ -76,6 +76,7 @@ const api = vi.hoisted(() => ({
   clearResults: vi.fn(async () => undefined),
   saveSettings: vi.fn(async (_settings: UiSettings): Promise<void> => undefined),
   setUpdateSwitch: vi.fn(async (_name: string, _value: boolean): Promise<void> => undefined),
+  setPrivacyChoice: vi.fn(async (_check: boolean, _count: boolean): Promise<void> => undefined),
   startJobs: vi.fn(async () => undefined),
   cancelJobs: vi.fn(async () => undefined),
   retryEngine: vi.fn(async (): Promise<void> => undefined),
@@ -146,6 +147,7 @@ const api = vi.hoisted(() => ({
   useResultAsInput: vi.fn(async (): Promise<string> => 'new-input'),
   revealResult: vi.fn(async () => undefined),
   diagnosticSummary: vi.fn(async () => 'LocalSR diagnostics'),
+  openBugReport: vi.fn(async (_url: string) => undefined),
   openOutputDirectory: vi.fn(async () => undefined),
   takeLaunchIntents: vi.fn(async (): Promise<LaunchIntent[]> => []),
   integrationStatus: vi.fn(async () => ({
@@ -5800,4 +5802,69 @@ it('does not ask for a catalog model under Your own file', async () => {
   expect(
     screen.queryByText('Select a model to see what it is for and where it comes from.'),
   ).toBeNull();
+});
+
+describe('first-launch privacy choice', () => {
+  it('shows only when pending and saves both choices together', async () => {
+    const snapshot = readySnapshot();
+    snapshot.settings.privacy_choice_made = false;
+    const user = await mountWith(snapshot);
+    expect(await screen.findByRole('dialog', { name: 'Welcome to LocalSR' })).toBeTruthy();
+    await user.click(screen.getByLabelText('Check for updates automatically'));
+    await user.click(screen.getByLabelText('Send an anonymous count with each update check'));
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await waitFor(() => expect(api.setPrivacyChoice).toHaveBeenCalledWith(false, true));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Welcome to LocalSR' })).toBeNull(),
+    );
+  });
+  it('does not show after a choice', async () => {
+    await mountWith(readySnapshot());
+    expect(screen.queryByRole('dialog', { name: 'Welcome to LocalSR' })).toBeNull();
+  });
+});
+
+describe('report a problem', () => {
+  it('previews diagnostics and includes them only when selected', async () => {
+    api.diagnosticSummary.mockResolvedValueOnce(
+      JSON.stringify({ platform: 'linux', file: '/home/alice/private.jpg' }),
+    );
+    const user = await mountWith(readySnapshot());
+    nativeMenu?.('help.report-problem');
+    const dialog = await screen.findByRole('dialog', { name: 'Report a problem' });
+    expect(
+      within(dialog).getByText(
+        'This opens a new GitHub issue in your browser. Nothing is sent until you submit it there.',
+      ),
+    ).toBeTruthy();
+    await user.type(within(dialog).getByLabelText('What happened?'), 'It stopped');
+    await user.click(within(dialog).getByRole('button', { name: 'Open GitHub Issue' }));
+    await waitFor(() => expect(api.openBugReport).toHaveBeenCalled());
+    let url = new URL(api.openBugReport.mock.calls.at(-1)![0]);
+    expect(url.searchParams.get('what-happened')).toBe('It stopped');
+    expect(url.searchParams.get('hardware')).not.toContain('alice');
+    await user.click(within(dialog).getByLabelText('Include diagnostics'));
+    await user.click(within(dialog).getByRole('button', { name: 'Open GitHub Issue' }));
+    url = new URL(api.openBugReport.mock.calls.at(-1)![0]);
+    expect(url.searchParams.has('hardware')).toBe(false);
+  });
+});
+
+it('copies long report diagnostics and tells the user to paste them', async () => {
+  api.diagnosticSummary.mockResolvedValueOnce(
+    JSON.stringify({ platform: 'linux', detail: 'x'.repeat(8000) }),
+  );
+  const user = await mountWith(readySnapshot());
+  const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
+  nativeMenu?.('help.report-problem');
+  const dialog = await screen.findByRole('dialog', { name: 'Report a problem' });
+  await user.click(within(dialog).getByRole('button', { name: 'Open GitHub Issue' }));
+  await waitFor(() => expect(writeText).toHaveBeenCalled());
+  expect(
+    await within(dialog).findByText('Diagnostics were copied to your clipboard; paste them here.'),
+  ).toBeTruthy();
+  const url = new URL(api.openBugReport.mock.calls.at(-1)![0]);
+  expect(url.searchParams.get('hardware')).toBe(
+    'Diagnostics were copied to your clipboard; paste them here.',
+  );
 });
