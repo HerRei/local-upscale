@@ -101,8 +101,21 @@ test('video restore, prefix fixes, 1x output scale, and video recipes', async ({
   const scaleSelect = page.getByLabel('Output scale', { exact: true });
   await expect(scaleSelect).toBeVisible();
   await scaleSelect.selectOption('1');
+  const oneXNote = page.getByText(
+    /At 1×, the upscaling model isn’t used\. LocalSR keeps the size/,
+  );
+  await expect(oneXNote).toBeVisible();
+  await expect(stages).not.toContainText('SPAN');
   await page.getByRole('button', { name: 'Blur', exact: true }).click();
   await expect(scaleSelect).toHaveValue('1');
+  await expect(stages).toContainText('Fix blur');
+  await expect(stages).not.toContainText('SPAN');
+
+  await scaleSelect.selectOption('2');
+  await expect(oneXNote).toHaveCount(0);
+  await expect(stages).toContainText('SPAN');
+  await scaleSelect.selectOption('1');
+  await expect(oneXNote).toBeVisible();
 
   await page.getByRole('button', { name: 'Start selected video' }).click();
   await expect.poll(async () => (await hostCalls(page, 'start_jobs')).length).toBe(2);
@@ -126,4 +139,49 @@ test('video restore, prefix fixes, 1x output scale, and video recipes', async ({
     'true',
   );
   await expect(page.getByLabel('Output scale', { exact: true })).toHaveCount(0);
+});
+
+test('1x video upscale disables Start when nothing else is selected and hides the SR stage', async ({
+  page,
+}) => {
+  await openApp(page, {
+    photos: 0,
+    video: true,
+    worker: 'ready',
+    features: ['image_multi_fix', 'video_interpolation'],
+    installed: ['nafnet_gopro_deblur'],
+    settings: {
+      task: 'video',
+      video_task: 'upscale',
+      selected_video_model_id: 'frame_by_frame',
+      selected_model_id: 'span_photo_x4',
+      output_scale: 4,
+    },
+  });
+  await showPane(page, 'enhance');
+  await page.getByRole('button', { name: /Advanced/ }).click();
+
+  const scaleSelect = page.getByLabel('Output scale', { exact: true });
+  const oneXNote = page.getByText(
+    /At 1×, the upscaling model isn’t used\. LocalSR keeps the size/,
+  );
+  const startButton = page.getByRole('button', { name: 'Start selected video' });
+  const stages = page.getByRole('list', { name: 'Stages' });
+
+  await expect(oneXNote).toHaveCount(0);
+  await expect(stages).toContainText('SPAN');
+
+  await scaleSelect.selectOption('1');
+  await expect(oneXNote).toBeVisible();
+  await expect(stages).not.toContainText('SPAN');
+  await expect(startButton).toBeDisabled();
+  await expect(page.getByText(/Nothing to run at 1×/)).toBeVisible();
+
+  await page.getByRole('button', { name: 'Blur', exact: true }).click();
+  await expect(stages).toContainText('Fix blur');
+  await expect(startButton).toBeEnabled();
+
+  await scaleSelect.selectOption('2');
+  await expect(oneXNote).toHaveCount(0);
+  await expect(stages).toContainText('SPAN');
 });

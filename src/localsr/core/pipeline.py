@@ -33,18 +33,20 @@ class ImagePipeline:
     """Validated execution order shared by legacy and staged image requests."""
 
     stages: tuple[PipelineStage, ...]
-    primary_index: int
+    primary_index: int | None
 
     @property
-    def primary(self) -> PipelineStage:
-        return self.stages[self.primary_index]
+    def primary(self) -> PipelineStage | None:
+        return None if self.primary_index is None else self.stages[self.primary_index]
 
     @property
     def preprocess_stages(self) -> tuple[PipelineStage, ...]:
-        return self.stages[: self.primary_index]
+        return self.stages if self.primary_index is None else self.stages[: self.primary_index]
 
     @property
     def face(self) -> PipelineStage | None:
+        if self.primary_index is None or not self.stages:
+            return None
         return self.stages[-1] if self.stages[-1].kind == "face_restore" else None
 
 
@@ -57,6 +59,10 @@ def resolve_image_pipeline(
     face_fidelity: float = 0.7,
 ) -> ImagePipeline:
     """Resolve old requests and check stage paths before loading any model."""
+    if output_scale == 1 and not model_path and _is_fix_only_stages(raw_stages):
+        stages = _parse_fix_only_stages(raw_stages)
+        return ImagePipeline(stages, primary_index=None)
+
     stages = parse_pipeline_stages(raw_stages)
     if not stages:
         stages = (
@@ -78,6 +84,11 @@ def resolve_image_pipeline(
             )
     primary_index = _primary_index(stages)
     pipeline = ImagePipeline(stages, primary_index)
+    assert pipeline.primary is not None
+    if output_scale == 1 and pipeline.primary.kind == "upscale":
+        # At 1× in Upscale, drop the upscaling stage (and any fused face pass)
+        # so the engine never loads or runs an SR model only to resize back.
+        return ImagePipeline(pipeline.preprocess_stages, primary_index=None)
     if Path(pipeline.primary.model_path) != Path(model_path):
         raise ValueError("The primary pipeline stage does not match the authenticated job model.")
     if pipeline.face is not None and (face_model_path or "") != pipeline.face.model_path:
@@ -85,42 +96,65 @@ def resolve_image_pipeline(
     return pipeline
 
 
+def _is_fix_only_stages(raw: object) -> bool:
+    if not isinstance(raw, list):
+        return False
+    return all(
+        isinstance(item, dict)
+        and item.get("kind") in {"deblock", "restore"}
+        and item.get("role") == "fix"
+        for item in raw
+    )
+
+
+def _parse_fix_only_stages(raw: object) -> tuple[PipelineStage, ...]:
+    if not isinstance(raw, list) or not raw:
+        return ()
+    if len(raw) > MAX_FIX_STAGES:
+        raise ValueError("Only three restoration/deblock stages may run.")
+    stages = [_parse_stage_item(item) for item in raw]
+    fixes = [stage.fix for stage in stages if stage.fix is not None]
+    if len(set(fixes)) != len(fixes):
+        raise ValueError("Each fix kind may run only once.")
+    return tuple(stages)
+
+
+def _parse_stage_item(item: object) -> PipelineStage:
+    if not isinstance(item, dict):
+        raise ValueError("Every pipeline stage must be an object.")
+    kind = str(item.get("kind") or "")
+    if kind not in {"deblock", "restore", "upscale", "face_restore"}:
+        raise ValueError(f"Unsupported image pipeline stage: {kind or '<empty>'}")
+    model_id = str(item.get("model_id") or "")
+    model_path = str(item.get("model_path") or "")
+    if not model_id or not model_path:
+        raise ValueError(f"The {kind} stage requires a model ID and model path.")
+    fidelity = item.get("fidelity")
+    parsed_fidelity = None if fidelity is None else float(fidelity)
+    if parsed_fidelity is not None and not 0.0 <= parsed_fidelity <= 1.0:
+        raise ValueError("Face restoration fidelity must be between 0 and 1.")
+    fix = item.get("fix")
+    if fix is not None and (
+        not isinstance(fix, str) or fix not in FIX_KINDS or kind not in {"deblock", "restore"}
+    ):
+        raise ValueError("Only a restoration stage may name a fix: blur, jpeg or noise.")
+    return PipelineStage(
+        kind=kind,
+        model_id=model_id,
+        model_path=model_path,
+        fidelity=parsed_fidelity,
+        execution=str(item.get("execution") or "sequential"),
+        role=str(item.get("role") or ""),
+        fix=fix,
+    )
+
+
 def parse_pipeline_stages(raw: object) -> tuple[PipelineStage, ...]:
     if not isinstance(raw, list) or not raw:
         return ()
     if len(raw) > 5:
         raise ValueError("Image recipes support at most five bounded stages.")
-    stages: list[PipelineStage] = []
-    for item in raw:
-        if not isinstance(item, dict):
-            raise ValueError("Every pipeline stage must be an object.")
-        kind = str(item.get("kind") or "")
-        if kind not in {"deblock", "restore", "upscale", "face_restore"}:
-            raise ValueError(f"Unsupported image pipeline stage: {kind or '<empty>'}")
-        model_id = str(item.get("model_id") or "")
-        model_path = str(item.get("model_path") or "")
-        if not model_id or not model_path:
-            raise ValueError(f"The {kind} stage requires a model ID and model path.")
-        fidelity = item.get("fidelity")
-        parsed_fidelity = None if fidelity is None else float(fidelity)
-        if parsed_fidelity is not None and not 0.0 <= parsed_fidelity <= 1.0:
-            raise ValueError("Face restoration fidelity must be between 0 and 1.")
-        fix = item.get("fix")
-        if fix is not None and (
-            not isinstance(fix, str) or fix not in FIX_KINDS or kind not in {"deblock", "restore"}
-        ):
-            raise ValueError("Only a restoration stage may name a fix: blur, jpeg or noise.")
-        stages.append(
-            PipelineStage(
-                kind=kind,
-                model_id=model_id,
-                model_path=model_path,
-                fidelity=parsed_fidelity,
-                execution=str(item.get("execution") or "sequential"),
-                role=str(item.get("role") or ""),
-                fix=fix,
-            )
-        )
+    stages: list[PipelineStage] = [_parse_stage_item(item) for item in raw]
 
     kinds = [stage.kind for stage in stages]
     if any(stage.role not in {"", "fix", "primary", "face"} for stage in stages):

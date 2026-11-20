@@ -47,6 +47,7 @@ fn multi_fix_serialization_preserves_five_stages_and_restore_primary_role() {
         "/models/main",
         Some("/models/face"),
         "face",
+        false,
         &options,
     );
     assert_eq!(stages.len(), 5);
@@ -61,7 +62,15 @@ fn multi_fix_serialization_preserves_five_stages_and_restore_primary_role() {
     options.task = "denoise".into();
     options.fix_stages =
         serde_json::from_value(json!([{"fix":"noise","model_id":"noise"}])).unwrap();
-    let stages = image_pipeline_stages(&prefix[..2], "noise", "/models/noise", None, "", &options);
+    let stages = image_pipeline_stages(
+        &prefix[..2],
+        "noise",
+        "/models/noise",
+        None,
+        "",
+        false,
+        &options,
+    );
     assert_eq!(stages.len(), 3);
     assert_eq!(stages[2]["role"], "primary");
     assert_eq!(stages[2]["fix"], "noise");
@@ -1321,6 +1330,7 @@ fn image_jobs_request_a_bounded_nonblocking_progressive_preview() {
         face_path: None,
         face_model_id: String::new(),
         native_scale: 4,
+        skip_upscale: false,
         interpolation: None,
         audio_denoise: None,
     };
@@ -1485,6 +1495,7 @@ fn image_recipe_serializes_restore_upscale_and_fused_face_in_order() {
         face_path: Some("/models/face.pth".into()),
         face_model_id: "hat_l_x4_face".into(),
         native_scale: 4,
+        skip_upscale: false,
         interpolation: None,
         audio_denoise: None,
     };
@@ -2031,6 +2042,7 @@ fn hdr_preservation_refuses_interpolation_only_for_hdr_sources() {
         face_path: None,
         face_model_id: String::new(),
         native_scale: 4,
+        skip_upscale: false,
         interpolation: Some(ResolvedBundle {
             model_id: "rife_4_26".into(),
             bundle_dir: "/models/rife_4_26".into(),
@@ -2404,6 +2416,7 @@ fn a_start_that_cannot_be_written_is_refused_before_anything_is_queued() {
         face_path: None,
         face_model_id: String::new(),
         native_scale: 4,
+        skip_upscale: false,
         interpolation: None,
         audio_denoise: None,
     };
@@ -2633,7 +2646,7 @@ fn video_restore_and_fix_first_build_stages_names_and_reject_temporal() {
     assert_eq!(msg["data"]["stages"][1]["role"], "primary");
     assert_eq!(output_ending(&restore_input).0, "_video_restored");
 
-    // 2) Video Upscale at 1x with fix-first stage.
+    // 2) Video Upscale at 1x with fix-first stage skips the SR model stage.
     let mut upscale_1x = input("video");
     upscale_1x.video_task = "upscale".into();
     upscale_1x.model_id = "span_photo_x4".into();
@@ -2653,9 +2666,35 @@ fn video_restore_and_fix_first_build_stages_names_and_reject_temporal() {
     )
     .unwrap();
     assert_eq!(msg_1x["data"]["output_scale"], 1);
-    assert_eq!(msg_1x["data"]["stages"].as_array().unwrap().len(), 2);
-    assert_eq!(msg_1x["data"]["stages"][1]["kind"], "upscale");
+    assert_eq!(msg_1x["data"]["model_path"], "");
+    assert_eq!(msg_1x["data"]["stages"].as_array().unwrap().len(), 1);
+    assert_eq!(msg_1x["data"]["stages"][0]["kind"], "deblock");
     assert_eq!(output_ending(&upscale_1x).0, "_video_1x");
+
+    // 2b) At 1x Upscale, an uninstalled SR model is not required, while empty 1x work is refused.
+    {
+        let mut catalog = lock(&state.catalog).unwrap();
+        let entry = catalog
+            .models
+            .iter_mut()
+            .find(|m| m.model_id == "span_photo_x4")
+            .unwrap();
+        entry.installed = false;
+        entry.installed_path = None;
+    }
+    assert!(resolve_model_selection(&state, &upscale_1x).is_ok());
+    let mut empty_1x = upscale_1x.clone();
+    empty_1x.fix_stages.clear();
+    empty_1x.deflicker = false;
+    empty_1x.video_interpolation = "off".into();
+    empty_1x.video_clean_audio = false;
+    assert!(validate_start_input(&empty_1x, true).is_err());
+
+    // 2c) Temporal engine at Match 1x scale also skips the video model and requires other work.
+    let mut temporal_1x_empty = empty_1x.clone();
+    temporal_1x_empty.video_model_id = "seedvr2_3b".into();
+    temporal_1x_empty.video_target_resolution = 0;
+    assert!(validate_start_input(&temporal_1x_empty, true).is_err());
 
     // 3) Temporal SeedVR2 rejects video_task == "denoise" and rejects fix_stages.
     let mut bad_restore = restore_input.clone();

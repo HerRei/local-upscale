@@ -6470,4 +6470,45 @@ describe('video restore, 1× output, and fix-first stages', () => {
       fix_stages: [expect.objectContaining({ fix: 'blur' })],
     });
   });
+
+  it('at 1× omits the SR model stage/download and disables Start until something else is chosen', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.catalog.models.forEach((m) => (m.installed = false));
+    snapshot.catalog.models.find((m) => m.model_id === 'nafnet_gopro_deblur')!.installed = true;
+    Object.assign(snapshot.settings, {
+      task: 'video',
+      video_task: 'upscale',
+      selected_video_model_id: 'frame_by_frame',
+      selected_model_id: 'span_photo_x4',
+      output_scale: 4,
+      video_clean_audio: false,
+      deflicker: false,
+      video_interpolation: 'off',
+    });
+    const user = await mountWith(snapshot);
+
+    // Select 1× in Advanced -> Output scale: the 1× note appears, SR model disappears from Stages, Start is disabled.
+    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    await user.selectOptions(screen.getByLabelText('Output scale'), '1');
+    await waitFor(() => expect(lastSaved()).toMatchObject({ output_scale: 1 }));
+    expect(screen.getAllByText(/At 1×, the upscaling model isn’t used/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Nothing to run at 1×/)).toBeTruthy();
+    const startBtn = screen.getByRole('button', {
+      name: 'Start selected video',
+    }) as HTMLButtonElement;
+    expect(startBtn.disabled).toBe(true);
+    expect(screen.queryByRole('list', { name: 'Stages' })?.textContent).not.toContain('SPAN');
+
+    // Enabling Blur enables Start without needing span_photo_x4 installed.
+    await user.click(screen.getByRole('button', { name: 'Blur' }));
+    await waitFor(() => expect(startBtn.disabled).toBe(false));
+    expect(screen.getByRole('list', { name: 'Stages' }).textContent).toContain('Fix blur');
+    expect(screen.getByRole('list', { name: 'Stages' }).textContent).not.toContain('SPAN');
+
+    // Switching back to 2× hides the 1× note and brings back the upscaler stage.
+    await user.selectOptions(screen.getByLabelText('Output scale'), '2');
+    await waitFor(() => expect(lastSaved()).toMatchObject({ output_scale: 2 }));
+    expect(screen.queryByText(/At 1×, the upscaling model isn’t used/)).toBeNull();
+    expect(screen.getByRole('list', { name: 'Stages' }).textContent).toContain('SPAN');
+  });
 });

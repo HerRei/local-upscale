@@ -11,6 +11,7 @@ import {
   interpolationLabel,
   pendingDownloads,
   resolvePlan,
+  skipsUpscaleModel,
   supportsHdrPreservation,
 } from './plan';
 import { recipeFixStages, recipeMatches } from './recipes';
@@ -429,5 +430,59 @@ describe('model library resolution', () => {
     expect(
       recipeMatches({ ...restoreRecipe, video_task: 'upscale' }, restoreSettings, snapshot.catalog),
     ).toBe(false);
+  });
+
+  it('omits the upscaling and face stages from the plan and downloads at 1× in Upscale', () => {
+    const snapshot = demoSnapshot();
+    const face = snapshot.catalog.models.find((m) => m.model_id === 'hat_l_x4_face');
+    const settings: UiSettings = {
+      ...snapshot.settings,
+      task: 'video',
+      video_task: 'upscale',
+      selected_video_model_id: 'frame_by_frame',
+      selected_model_id: 'hat_l_x4_imagenet',
+      output_scale: 1,
+      fix_stages: [{ fix: 'blur', model_id: 'nafnet_gopro_deblur' }],
+      fixes: ['blur', 'faces'],
+      enable_face_model: true,
+      video_clean_audio: true,
+    };
+    expect(skipsUpscaleModel(settings)).toBe(true);
+    expect(supportsHdrPreservation(settings, snapshot.catalog)).toBe(false);
+
+    const plan = resolvePlan(snapshot, settings, {
+      faceModel: face,
+      faceEnabled: true,
+      usingTemporalVideo: false,
+      hasAudio: true,
+    });
+    expect(plan.map((stage) => stage.kind)).toEqual(['audio_denoise', 'restore']);
+    expect(pendingDownloads(plan).stages.map((s) => s.kind)).toEqual(['audio_denoise', 'restore']);
+
+    const temporalMatch1x: UiSettings = {
+      ...settings,
+      selected_video_model_id: 'seedvr2_3b',
+      video_target_resolution: 0,
+      fix_stages: [],
+      video_clean_audio: false,
+    };
+    expect(skipsUpscaleModel(temporalMatch1x)).toBe(true);
+    expect(
+      resolvePlan(snapshot, temporalMatch1x, {
+        faceEnabled: false,
+        usingTemporalVideo: true,
+        selectedVideoModel: snapshot.catalog.video_models[0],
+      }),
+    ).toEqual([]);
+
+    const temporalFixedRes: UiSettings = { ...temporalMatch1x, video_target_resolution: 720 };
+    expect(skipsUpscaleModel(temporalFixedRes)).toBe(false);
+    expect(
+      resolvePlan(snapshot, temporalFixedRes, {
+        faceEnabled: false,
+        usingTemporalVideo: true,
+        selectedVideoModel: snapshot.catalog.video_models[0],
+      }).map((s) => s.kind),
+    ).toEqual(['video']);
   });
 });

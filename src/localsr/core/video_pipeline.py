@@ -174,7 +174,7 @@ class VideoJobConfig:
     video_path: str
     model_path: str
     output_video_path: str
-    model_info: object
+    model_info: object | None
     device_str: str
     precision_str: str
     tile_size: int
@@ -321,13 +321,6 @@ def _run_video_job(
         validate_hdr_encoder(config.video_codec, config.external_ffmpeg, config.container)
         if config.deflicker:
             raise ValueError("De-flicker is not yet supported with HDR preservation.")
-        for info in (
-            config.model_info,
-            config.face_model_info,
-            *(stage.model_info for stage in config.preprocess_stages),
-        ):
-            if info is not None and str(getattr(info, "architecture", "")).upper() != "HAT":
-                raise ValueError("HDR preservation currently supports HAT models only (Labs).")
     for stage in config.preprocess_stages:
         if int(getattr(stage.model_info, "scale", 0)) != 1:
             raise ValueError("A preprocessing restoration checkpoint must have native scale 1×.")
@@ -361,12 +354,26 @@ def _run_video_job(
     remaining_time = RemainingTime(total_frames) if total_frames > 0 else None
 
     model_info = config.model_info
-    native_scale = int(getattr(model_info, "scale", 1))
+    native_scale = int(getattr(model_info, "scale", 1)) if model_info is not None else 1
     output_scale = int(config.output_scale or native_scale)
-    if output_scale < 1 or output_scale > native_scale:
-        raise ValueError(
-            f"Video output scale must be between 1 and the model's native {native_scale}× scale."
+    if model_info is not None:
+        if output_scale < 1 or output_scale > native_scale:
+            raise ValueError(
+                f"Video output scale must be between 1 and the model's native {native_scale}× scale."
+            )
+    elif output_scale != 1:
+        raise ValueError("Video output scale must be 1 when no upscaling model is used.")
+    # At 1×, an upscaling model (native scale > 1) or empty model is skipped;
+    # 1× restoration models (Restore task) keep running as usual.
+    skip_primary_sr = output_scale == 1 and (model_info is None or native_scale > 1)
+    if preserve_hdr:
+        checked_infos = (
+            *(stage.model_info for stage in config.preprocess_stages),
+            *(() if skip_primary_sr else (config.model_info, config.face_model_info)),
         )
+        for info in checked_infos:
+            if info is not None and str(getattr(info, "architecture", "")).upper() != "HAT":
+                raise ValueError("HDR preservation currently supports HAT models only (Labs).")
     output_width = probe.width * output_scale
     output_height = probe.height * output_scale
     from .media_bridge import validate_export
@@ -419,6 +426,7 @@ def _run_video_job(
             model_info=model_info,
             native_scale=native_scale,
             output_scale=output_scale,
+            skip_primary_sr=skip_primary_sr,
             output_width=output_width,
             output_height=output_height,
             job_started_at=job_started_at,
@@ -457,6 +465,7 @@ def _run_video_frames(
     model_info,
     native_scale: int,
     output_scale: int,
+    skip_primary_sr: bool,
     output_width: int,
     output_height: int,
     job_started_at: float,
@@ -484,28 +493,30 @@ def _run_video_frames(
             precision_str,
             _SafeModelInfo(stage.model_info, config.safe_memory),
         )
-    # Load the model once and reuse it for every frame.
-    engine.load_model(
-        config.model_path,
-        config.device_str,
-        precision_str,
-        # safe_memory is enforced at the engine level via model_info.
-        _SafeModelInfo(model_info, config.safe_memory),
-    )
-    # If face-aware mode is enabled, also pre-load the face model.
-    use_face_aware = config.face_model_path is not None and config.face_model_info is not None
-    if use_face_aware:
+    use_face_aware = False
+    if not skip_primary_sr:
+        # Load the model once and reuse it for every frame.
         engine.load_model(
-            config.face_model_path,
+            config.model_path,
             config.device_str,
             precision_str,
-            _SafeModelInfo(config.face_model_info, config.safe_memory),
+            # safe_memory is enforced at the engine level via model_info.
+            _SafeModelInfo(model_info, config.safe_memory),
         )
+        # If face-aware mode is enabled, also pre-load the face model.
+        use_face_aware = config.face_model_path is not None and config.face_model_info is not None
+        if use_face_aware:
+            engine.load_model(
+                config.face_model_path,
+                config.device_str,
+                precision_str,
+                _SafeModelInfo(config.face_model_info, config.safe_memory),
+            )
 
-    stage_weights = [max(0.05, float(stage.time_factor)) for stage in config.preprocess_stages] + [
-        max(0.05, float(config.primary_time_factor))
-    ]
-    total_stage_weight = sum(stage_weights)
+    stage_weights = [max(0.05, float(stage.time_factor)) for stage in config.preprocess_stages]
+    if not skip_primary_sr:
+        stage_weights.append(max(0.05, float(config.primary_time_factor)))
+    total_stage_weight = sum(stage_weights) or 1.0
     stage_offsets: list[float] = []
     running_weight = 0.0
     for weight in stage_weights:
@@ -601,26 +612,48 @@ def _run_video_frames(
                 """Tile timing is reported by ``tile_callback``; the engine requires a callback."""
 
             try:
+                last_fix_chw: np.ndarray | None = None
                 for stage_index, stage in enumerate(config.preprocess_stages):
                     if cancel_event.is_set():
                         raise InterruptedError("video job cancelled")
                     engine.switch_model(stage.model_path)
+                    is_final_stage = (
+                        skip_primary_sr and stage_index == len(config.preprocess_stages) - 1
+                    )
 
                     def fix_tile_callback(
                         phase,
-                        _tile,
-                        _pixels,
+                        tile,
+                        pixels,
                         done,
                         count,
-                        _image_w,
-                        _image_h,
-                        _size,
+                        image_w,
+                        image_h,
+                        size,
                         *,
                         frame_index=output_frame_index,
                         idx=stage_index,
+                        final_stage=is_final_stage,
+                        source_rgb=rgb,
                     ):
                         if phase == "completed":
                             record_tile_eta(frame_index, idx, done, count)
+                        if final_stage and tile_progress_cb is not None:
+                            elapsed = time.perf_counter() - job_started_at
+                            remaining = remaining_time.remaining() if remaining_time else None
+                            tile_progress_cb(
+                                frame_index, total_frames, done, count, elapsed, remaining, size
+                            )
+                        if final_stage and tile_callback is not None:
+                            if pixels is not None and preserve_hdr:
+                                core = source_rgb[
+                                    tile.core_y : tile.core_y + tile.core_h,
+                                    tile.core_x : tile.core_x + tile.core_w,
+                                ]
+                                pixels = anchor_hdr_detail(
+                                    core, pixels.transpose(1, 2, 0).copy(), transfer
+                                ).transpose(2, 0, 1)
+                            tile_callback(phase, tile, pixels, done, count, image_w, image_h, size)
 
                     try:
                         fix_chw = engine.process_frame(
@@ -650,13 +683,16 @@ def _run_video_frames(
                             if callable(add_note):
                                 add_note(note)
                     else:
+                        last_fix_chw = fix_chw
                         tensor = (
                             torch.from_numpy(np.array(fix_chw, copy=True)).float()
                             if preserve_hdr
                             else torch.from_numpy(np.array(fix_chw, copy=True)).float().div_(255.0)
                         )
 
-                if use_face_aware:
+                if skip_primary_sr:
+                    out_chw = last_fix_chw
+                elif use_face_aware:
                     # Run face detection every N frames and cache the mask.
                     if (
                         cached_face_mask is None
@@ -723,7 +759,18 @@ def _run_video_frames(
             except InterruptedError:
                 raise
 
-            if preserve_hdr:
+            if skip_primary_sr:
+                if preserve_hdr:
+                    out_rgb = (
+                        tensor.permute(1, 2, 0).clamp(0, 1).numpy().copy()
+                        if out_chw is not None
+                        else rgb
+                    )
+                    if out_chw is not None:
+                        out_rgb = anchor_hdr_detail(rgb, out_rgb, transfer)
+                else:
+                    out_rgb = uint8_chw_to_rgb_hwc(out_chw) if out_chw is not None else rgb
+            elif preserve_hdr:
                 out_rgb = out_chw.transpose(1, 2, 0)
                 if output_scale != native_scale:
                     out_rgb = (

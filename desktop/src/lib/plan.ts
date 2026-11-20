@@ -106,6 +106,23 @@ export function isRestoreTask(settings: Pick<UiSettings, 'task' | 'video_task'>)
     settings.task === 'denoise' || (settings.task === 'video' && settings.video_task === 'denoise')
   );
 }
+
+/** True when the Upscale task is set to 1× and therefore runs no upscaling model. */
+export function skipsUpscaleModel(
+  settings: Pick<
+    UiSettings,
+    'task' | 'video_task' | 'output_scale' | 'selected_video_model_id' | 'video_target_resolution'
+  >,
+): boolean {
+  if (isRestoreTask(settings)) return false;
+  if (settings.task === 'upscale') return settings.output_scale === 1;
+  if (settings.task === 'video') {
+    const temporal = settings.selected_video_model_id !== 'frame_by_frame';
+    if (temporal && (settings.video_target_resolution ?? 0) > 0) return false;
+    return settings.output_scale === 1;
+  }
+  return false;
+}
 export type Fit = 'runs' | 'heavy' | 'too_heavy' | 'unknown';
 
 /**
@@ -227,6 +244,7 @@ export function resolvePlan(
     };
 
   const restoring = isRestoreTask(settings);
+  const skipUpscale = skipsUpscaleModel(settings);
   const fixStages =
     !options.usingTemporalVideo &&
     (settings.task === 'upscale' || settings.task === 'video' || restoring)
@@ -261,7 +279,9 @@ export function resolvePlan(
     );
   }
 
-  if (options.usingTemporalVideo && options.selectedVideoModel) {
+  if (skipUpscale) {
+    // At 1× in Upscale, the upscaling model and fused face pass are not run at all.
+  } else if (options.usingTemporalVideo && options.selectedVideoModel) {
     const video = options.selectedVideoModel;
     stages.push({
       kind: 'video',
@@ -297,7 +317,7 @@ export function resolvePlan(
     else if (chip) stages.push(missingStage('restore', 'primary', 'Restore', chip));
   }
 
-  if (options.faceEnabled && options.faceModel && !restoring) {
+  if (options.faceEnabled && options.faceModel && !restoring && !skipUpscale) {
     const stage = stageFor('face_restore', 'face', 'Faces', options.faceModel);
     if (stage) stages.push(stage);
   }
@@ -535,6 +555,7 @@ export function supportsHdrPreservation(
   catalog: AppSnapshot['catalog'],
 ): boolean {
   if (candidate.video_task === 'denoise' || candidate.fix_stages.length > 0) return false;
+  if (skipsUpscaleModel(candidate)) return false;
   return (
     candidate.selected_video_model_id === 'frame_by_frame' &&
     (candidate.selected_model_id === '__custom__' ||

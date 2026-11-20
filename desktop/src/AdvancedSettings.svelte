@@ -258,8 +258,10 @@
             ><label for="scale">Output scale</label><HelpTip
               label="Output scale"
               text={usingTemporalVideo
-                ? 'How many times larger the result is than the original when Output resolution is set to match scale.'
-                : `How many times larger the result is than the original. The model always works at its own ${selectedModel?.native_scale ?? 4}× scale; a smaller choice resizes that result down afterwards, so it saves no time.`}
+                ? 'How many times larger the result is than the original when Output resolution is set to match scale. At 1×, the video model is not used.'
+                : settings.task === 'video'
+                  ? `How many times larger the result is than the original. At 1×, the upscaling model is not used and the video keeps its size; a 2× or 3× choice on a ${selectedModel?.native_scale ?? 4}× model resizes down afterwards.`
+                  : `How many times larger the result is than the original. The model always works at its own ${selectedModel?.native_scale ?? 4}× scale; a smaller choice resizes that result down afterwards, so it saves no time.`}
             /></span
           ><select
             id="scale"
@@ -271,6 +273,12 @@
               >{/each}</select
           >
         </div>
+        {#if settings.output_scale === 1}
+          <p class="model-description" role="status">
+            At 1×, the upscaling model isn’t used. LocalSR keeps the size and only applies Fix first
+            and audio cleanup.
+          </p>
+        {/if}
       {/if}
       {#if settings.task !== 'video' && settings.task !== 'edit'}
         <div class="field-row">

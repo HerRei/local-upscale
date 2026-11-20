@@ -1698,7 +1698,7 @@ class WorkerServer:
             face_model_path=data.get("face_model_path"),
             face_fidelity=float(data.get("face_fidelity", 0.7)),
         )
-        face_model_path = data.get("face_model_path")
+        face_model_path = None if pipeline.primary is None else data.get("face_model_path")
         release_except = getattr(self.engine, "release_models_except", None)
         if callable(release_except):
             release_except(
@@ -1728,9 +1728,19 @@ class WorkerServer:
                     time_factor=catalog_model.time_factor if catalog_model else 1.0,
                 )
             )
-        info = self.model_adapter.inspect(data["model_path"])
-        primary_catalog = CATALOG_BY_ID.get(pipeline.primary.model_id)
-        primary_time_factor = primary_catalog.time_factor if primary_catalog else 1.0
+        if pipeline.primary is None:
+            info = None
+            primary_time_factor = 0.0
+            model_path = ""
+        else:
+            model_path = str(data["model_path"])
+            info = self.model_adapter.inspect(model_path)
+            if data.get("output_scale") == 1 and int(getattr(info, "scale", 1)) > 1:
+                face_model_path = None
+                primary_time_factor = 0.0
+            else:
+                primary_catalog = CATALOG_BY_ID.get(pipeline.primary.model_id)
+                primary_time_factor = primary_catalog.time_factor if primary_catalog else 1.0
 
         face_info = None
         if face_model_path:
@@ -1746,7 +1756,7 @@ class WorkerServer:
 
         config = VideoJobConfig(
             video_path=data["video_path"],
-            model_path=data["model_path"],
+            model_path=model_path,
             output_video_path=data["output_video_path"],
             model_info=info,
             device_str=data["device"],

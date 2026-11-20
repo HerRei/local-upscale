@@ -348,6 +348,39 @@ def test_a_restore_only_job_still_fails_when_its_model_cannot_process_the_image(
         server._run_job("pipeline-job", data)
 
 
+def test_1x_upscale_image_job_skips_sr_model_and_keeps_dimensions(tmp_path, monkeypatch):
+    from localsr.core.image_io import ImageManager
+
+    data = _job_data(tmp_path)
+    data["output_scale"] = 1
+    server = WorkerServer()
+    server.model_adapter = _Adapter()
+    engine = _PipelineEngine()
+    server.engine = engine
+    monkeypatch.setattr(
+        ImageManager,
+        "load",
+        lambda *_: {
+            "tensor": torch.full((3, 5, 7), 0.5),
+            "safe_exif": {},
+            "icc_profile": None,
+            "alpha_image": None,
+        },
+    )
+    saved = {}
+
+    def save(_self, writer, _path, **kwargs):
+        saved["shape"] = writer.get_array().shape
+        saved.update(kwargs)
+
+    monkeypatch.setattr(ImageManager, "save", save)
+    server._run_job("pipeline-job-1x", data)
+    assert engine.calls == [str(tmp_path / "restore.pth")]
+    assert saved["shape"] == (3, 5, 7)
+    assert saved["scale"] == 1
+    assert saved["output_scale"] == 1
+
+
 @pytest.mark.parametrize(("job_halo", "fix_halo"), [(8, 32), (48, 48)])
 def test_a_fix_runs_with_at_least_the_overlap_its_model_needs(
     tmp_path, monkeypatch, job_halo, fix_halo

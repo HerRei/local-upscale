@@ -303,31 +303,44 @@ class AutomationRunner:
             elapsed = result.elapsed_seconds
         else:
             from localsr.core.image_io import ImageManager
+            from localsr.core.output_writer import OutputWriter
 
             manager = ImageManager()
             image_data = manager.load(str(source))
             writer = None
             try:
-                writer = self.engine.process_image(
-                    img_data=image_data,
-                    model_info=model_info,
-                    model_path=model_path,
-                    device_str=device,
-                    precision_str=precision,
-                    tile_size=tile_size,
-                    halo=halo,
-                    cancel_event=self.cancel_event,
-                    progress_callback=lambda done, total, active: self.reporter.emit(
-                        "progress",
-                        input_path=str(source),
-                        completed=done,
-                        total=total,
-                        percentage=done / max(1, total) * 100.0,
-                        active_tile_size=active,
-                    ),
-                    safe_memory=True,
-                    temporary_directory=str(default_work_directory()),
-                )
+                if output_scale == 1 and native_scale > 1:
+                    pixels = image_data["tensor"].clamp(0, 1).mul(255).round().byte().numpy()
+                    writer = OutputWriter(
+                        pixels.shape,
+                        dtype=pixels.dtype,
+                        temporary_directory=str(default_work_directory()),
+                    )
+                    writer.mmap[:] = pixels
+                    writer.mmap.flush()
+                    save_scale = 1
+                else:
+                    writer = self.engine.process_image(
+                        img_data=image_data,
+                        model_info=model_info,
+                        model_path=model_path,
+                        device_str=device,
+                        precision_str=precision,
+                        tile_size=tile_size,
+                        halo=halo,
+                        cancel_event=self.cancel_event,
+                        progress_callback=lambda done, total, active: self.reporter.emit(
+                            "progress",
+                            input_path=str(source),
+                            completed=done,
+                            total=total,
+                            percentage=done / max(1, total) * 100.0,
+                            active_tile_size=active,
+                        ),
+                        safe_memory=True,
+                        temporary_directory=str(default_work_directory()),
+                    )
+                    save_scale = native_scale
                 if self.cancel_event.is_set():
                     raise InterruptedError("processing cancelled")
                 manager.save(
@@ -338,7 +351,7 @@ class AutomationRunner:
                     preserve_metadata=preserve_metadata,
                     icc_profile=image_data.get("icc_profile"),
                     safe_exif=image_data.get("safe_exif", {}),
-                    scale=native_scale,
+                    scale=save_scale,
                     output_scale=output_scale,
                 )
             finally:

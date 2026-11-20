@@ -103,7 +103,7 @@ class ImageJobRunner:
         )
         # The engine cache otherwise keeps every upscaler used since the engine started. A
         # fix runs alone: the upscaler is loaded after it, not kept beside it.
-        face_path = data.get("face_model_path")
+        face_path = None if pipeline.primary is None else data.get("face_model_path")
         self.engine.release_models_except(
             {pipeline.preprocess_stages[0].model_path}
             if pipeline.preprocess_stages
@@ -247,6 +247,10 @@ class ImageJobRunner:
         resources: ExitStack,
     ) -> tuple[OutputWriter, NormalizedModelInfo]:
         primary, face = pipeline.primary, pipeline.face
+        height, width = image["tensor"].shape[-2:]
+        if primary is None:
+            return self._passthrough_1x(image, data, resources, width, height)
+        assert pipeline.primary_index is not None
         progress.start(pipeline.primary_index, primary, span=1 + int(face is not None))
         if face is not None:
             progress.emit_start(pipeline.primary_index + 1, face)
@@ -257,8 +261,10 @@ class ImageJobRunner:
                 primary,
                 f"Output scale must be between 1 and the model's native {info.scale}× scale.",
             )
+        if data.get("output_scale") == 1 and info.scale > 1:
+            progress.complete(pipeline.primary_index, primary)
+            return self._passthrough_1x(image, data, resources, width, height)
         # Before any memmap exists: a photo that cannot be written must not start.
-        height, width = image["tensor"].shape[-2:]
         require_image_room(data, width, height, info.scale, image.get("alpha_image") is not None)
         face_path = data.get("face_model_path")
         face_info = self._inspect(face_path, face or primary) if face_path else None
@@ -368,6 +374,27 @@ class ImageJobRunner:
         writer.mmap[:] = result
         writer.mmap.flush()
         return writer
+
+    def _passthrough_1x(
+        self,
+        image: dict[str, Any],
+        data: Mapping[str, Any],
+        resources: ExitStack,
+        width: int,
+        height: int,
+    ) -> tuple[OutputWriter, NormalizedModelInfo]:
+        """Package 1× working pixels for atomic save without running an upscaler."""
+        require_image_room(data, width, height, 1, image.get("alpha_image") is not None)
+        pixels = image["tensor"].clamp(0, 1).mul(255).round().byte().numpy()
+        writer = OutputWriter(
+            pixels.shape, dtype=np.uint8, temporary_directory=data.get("scratch_directory")
+        )
+        resources.callback(writer.cleanup)
+        writer.mmap[:] = pixels
+        writer.mmap.flush()
+        channels = int(pixels.shape[0])
+        info = NormalizedModelInfo("Identity", 1, channels, channels, True, False, 1, 1, "", [])
+        return writer, info
 
     def _save(
         self,

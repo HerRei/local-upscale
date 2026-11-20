@@ -117,34 +117,49 @@ pub struct MediaResults {
 /// The primary model of a recorded request: its id and a fallback label.
 pub fn request_model(request: &Value) -> (String, String) {
     let data = &request["data"];
+    let model_path = data["model_path"].as_str().unwrap_or_default();
     let stages = data["stages"].as_array();
     let primary = stages.and_then(|stages| {
         stages
             .iter()
-            .find(|stage| {
-                !data["model_path"].is_null() && stage["model_path"] == data["model_path"]
-            })
+            .find(|stage| !model_path.is_empty() && stage["model_path"] == model_path)
             .or_else(|| {
                 stages
                     .iter()
                     .rev()
                     .find(|stage| matches!(stage["kind"].as_str(), Some("upscale" | "restore")))
             })
+            .or_else(|| stages.last())
     });
     let id = primary
         .and_then(|stage| stage["model_id"].as_str())
         .or_else(|| data["model_id"].as_str())
         // A video engine job names its engine here and carries no image model.
         .or_else(|| data["video_model_id"].as_str())
+        .or_else(|| data["interpolation_model_id"].as_str())
+        .or_else(|| {
+            data["audio_denoise"]
+                .as_bool()
+                .filter(|active| *active)
+                .and_then(|_| data["audio_denoise_model_id"].as_str())
+        })
         .filter(|id| !id.is_empty())
         .unwrap_or_default()
         .to_owned();
     let label = if id.is_empty() || id == "__custom__" {
-        Path::new(data["model_path"].as_str().unwrap_or_default())
+        Path::new(model_path)
             .file_stem()
             .and_then(|name| name.to_str())
             .filter(|name| !name.is_empty())
-            .unwrap_or("Unknown model")
+            .unwrap_or_else(|| {
+                if data["deflicker"].as_bool() == Some(true) {
+                    "De-flicker"
+                } else if data["output_scale"].as_u64() == Some(1) {
+                    "1× video"
+                } else {
+                    "Unknown model"
+                }
+            })
             .to_owned()
     } else {
         id.clone()
@@ -158,11 +173,16 @@ pub fn request_kind(request: &Value) -> &'static str {
         Some("video_job_request") => "video",
         _ => {
             let primary = request_model(request).0;
-            let restores = request["data"]["stages"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .any(|stage| stage["kind"] == "restore" && stage["model_id"] == primary.as_str());
+            let stages = request["data"]["stages"].as_array();
+            let restores =
+                stages.into_iter().flatten().any(|stage| {
+                    stage["kind"] == "restore" && stage["model_id"] == primary.as_str()
+                }) || (request["data"]["output_scale"].as_u64() == Some(1)
+                    && stages.is_some_and(|list| {
+                        list.iter().all(|stage| {
+                            matches!(stage["kind"].as_str(), Some("restore" | "deblock"))
+                        })
+                    }));
             if restores {
                 "restore"
             } else {
