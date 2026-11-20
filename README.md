@@ -62,6 +62,11 @@ Hofmann. The library also has HAT, Real-ESRGAN, SwinIR, NAFNet, SCUNet and
 FBCNN, and each model shows its size, licence and source before you download it.
 [Model guide](docs/models/README.md) · [Model licences](docs/model-licenses.md).
 
+<!-- release-candidate -->
+v0.5.0-beta is in preparation; the downloads below are still v0.4.0-beta.
+[Draft release notes](docs/releases/v0.5.0-beta.md).
+<!-- /release-candidate -->
+
 ## Download
 
 The [download page](https://herrei.github.io/localsr/download/) has the installers

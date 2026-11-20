@@ -23,7 +23,7 @@ const editModels: EditModel[] = rawEditModels.map((model) => ({
 
 export function demoSnapshot(): AppSnapshot {
   return {
-    app_version: '0.4.0-beta',
+    app_version: '0.5.0-beta',
     protocol_version: 1,
     catalog,
     media: [],
