@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.5.0-beta] - Unreleased
+## [0.5.0-beta] - 2026-11-21
 
 - **Light theme and colour-blind friendly colours.** Dark, Light or Match System, and
   an Okabe-Ito palette for every colour that carries meaning. Both are in the View menu
