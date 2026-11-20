@@ -78,6 +78,7 @@
     pendingDownloads,
     presetSlot,
     resolvePlan,
+    skipsUpscaleModel,
   } from './lib/plan';
   import {
     UNSTABLE_FIX_MODELS,
@@ -596,8 +597,13 @@
     settings.task === 'video' &&
     !restoring &&
     settings.selected_video_model_id !== 'frame_by_frame';
+  $: skipUpscale = skipsUpscaleModel(settings);
   $: faceEnabled =
-    settings.enable_face_model && faceEngineAvailable && !restoring && !usingTemporalVideo;
+    settings.enable_face_model &&
+    faceEngineAvailable &&
+    !restoring &&
+    !usingTemporalVideo &&
+    !skipUpscale;
   $: temporalUnavailableReason = !snapshot.engine?.video_engines.includes('seedvr2')
     ? 'This installation supports frame-by-frame video. SeedVR2 requires a compatible CUDA, ROCm or Metal engine.'
     : /^(directml|xpu|openvino)(:|$)/.test(settings.device_id)
@@ -616,6 +622,7 @@
   $: hdrPreservationAvailable = supportsHdrPreservation(settings);
   $: hdrModelCompatible = !preservingHdr || hdrPreservationAvailable;
   $: licenseReviewModel =
+    !skipUpscale &&
     !usingTemporalVideo &&
     selectedModel &&
     ['realplksr_hfa2k_anime_x4', 'realplksr_nomoswebphoto_x4'].includes(selectedModel.model_id)
@@ -657,16 +664,6 @@
     settings.selected_model_id === '__custom__' &&
     Boolean(settings.custom_model_path) &&
     !settings.custom_model_path.toLowerCase().endsWith('.safetensors');
-  $: modelReady =
-    settings.task === 'edit'
-      ? editReady
-      : usingTemporalVideo
-        ? !temporalUnavailableReason && Boolean(selectedVideoModel?.installed)
-        : settings.selected_model_id === '__custom__'
-          ? Boolean(settings.custom_model_path) &&
-            (!customModelNeedsOptIn || settings.allow_unsafe_pickle_model)
-          : Boolean(selectedModel?.installed);
-  $: faceReady = !faceEnabled || Boolean(faceModel?.installed);
   $: audioHasSource =
     settings.task !== 'video'
       ? false
@@ -674,6 +671,32 @@
         ? runnableMedia.length === 0 || runnableMedia.some((media) => media.has_audio !== false)
         : selectedMedia?.has_audio !== false;
   $: audioDisabled = settings.task === 'video' && !audioHasSource;
+  $: interpolationSupported = snapshot.engine?.features.includes('video_interpolation') === true;
+  $: hasWorkAt1x =
+    settings.task === 'video'
+      ? (!usingTemporalVideo &&
+          (settings.fix_stages.length > 0 ||
+            (Boolean(settings.deflicker) && !preservingHdr) ||
+            ((settings.video_interpolation ?? 'off') !== 'off' && interpolationSupported))) ||
+        (Boolean(settings.video_clean_audio) && !audioDisabled)
+      : settings.task === 'upscale'
+        ? settings.fix_stages.length > 0
+        : false;
+  $: hasNothingToDoAt1x = skipUpscale && !hasWorkAt1x;
+  const nothingToDoAt1xReason =
+    'Nothing to run at 1×. Turn on Fix first, a video option or audio cleanup, or choose 2× or higher.';
+  $: modelReady =
+    settings.task === 'edit'
+      ? editReady
+      : skipUpscale
+        ? hasWorkAt1x
+        : usingTemporalVideo
+          ? !temporalUnavailableReason && Boolean(selectedVideoModel?.installed)
+          : settings.selected_model_id === '__custom__'
+            ? Boolean(settings.custom_model_path) &&
+              (!customModelNeedsOptIn || settings.allow_unsafe_pickle_model)
+            : Boolean(selectedModel?.installed);
+  $: faceReady = !faceEnabled || Boolean(faceModel?.installed);
   $: interpolationStage = plan.find((stage) => stage.kind === 'interpolate');
   $: interpolationReady = !interpolationStage || interpolationStage.installed;
   $: audioStage = plan.find((stage) => stage.kind === 'audio_denoise');
@@ -716,9 +739,14 @@
   $: activityModel =
     settings.task === 'edit'
       ? (editModel?.name ?? 'Editing model')
-      : usingTemporalVideo
-        ? (selectedVideoModel?.name ?? 'Video model')
-        : (selectedModel?.name ?? 'Model');
+      : skipUpscale
+        ? (plan.find((s) => s.model || s.interpolationModel || s.audioModel)?.model?.name ??
+          plan.find((s) => s.interpolationModel)?.interpolationModel?.name ??
+          plan.find((s) => s.audioModel)?.audioModel?.name ??
+          (settings.deflicker ? 'De-flicker' : '1× video'))
+        : usingTemporalVideo
+          ? (selectedVideoModel?.name ?? 'Video model')
+          : (selectedModel?.name ?? 'Model');
   $: activityDetail =
     cancelling && snapshot.runtime.active_job_id
       ? stoppingDetail
@@ -1022,7 +1050,7 @@
   $: outputDimensions = selectedMedia
     ? settings.task === 'edit'
       ? `${editDimensions(selectedMedia.width, selectedMedia.height, Math.min(settings.edit_max_dimension, editSizeAllowed)).join(' × ')} · edited`
-      : restoring
+      : restoring || skipUpscale
         ? `${selectedMedia.width} × ${selectedMedia.height} · original size`
         : usingTemporalVideo &&
             settings.video_target_resolution &&
@@ -1085,6 +1113,7 @@
     !preparing &&
     !startingJob &&
     !cancelling &&
+    !hasNothingToDoAt1x &&
     downloads.stages.length > 0 &&
     !planNeedsFile &&
     !planMissing &&
@@ -1224,8 +1253,9 @@
       : '';
   // The lone start button of several inputs says what limits it; with a choice of two
   // buttons each carries its own note.
-  $: singleHint =
-    snapshot.media.length < 2
+  $: singleHint = hasNothingToDoAt1x
+    ? nothingToDoAt1xReason
+    : snapshot.media.length < 2
       ? ''
       : unreadyMedia
         ? preparingNote(unreadyMedia)
@@ -1241,8 +1271,14 @@
   $: allUnready = queueableMedia.find((media) => media.probe_status !== 'ready');
   $: oneTitle = oneUnready
     ? preparingNote(oneUnready)
-    : mismatchNote || (canPrepareOne ? `Downloads ${formatBytes(downloads.bytes)} first.` : '');
-  $: allTitle = allUnready ? preparingNote(allUnready) : incompatibleNote;
+    : hasNothingToDoAt1x
+      ? nothingToDoAt1xReason
+      : mismatchNote || (canPrepareOne ? `Downloads ${formatBytes(downloads.bytes)} first.` : '');
+  $: allTitle = allUnready
+    ? preparingNote(allUnready)
+    : hasNothingToDoAt1x
+      ? nothingToDoAt1xReason
+      : incompatibleNote;
   // What the primary button says it does to all: "Upscale all 52", "Start all 5 videos".
   $: allPhrase = `${
     startVerb === 'start video' ? 'start' : startVerb === 'restore video' ? 'restore' : startVerb
@@ -1261,10 +1297,12 @@
           ? 'Select a compatible item before starting.'
           : unreadyMedia
             ? scopeHint
-            : editBlockReason ||
-              (!modelReady || !faceReady || !fixesReady || !interpolationReady
-                ? 'Choose or download the required models before starting.'
-                : 'The current settings are not ready to start.');
+            : hasNothingToDoAt1x
+              ? nothingToDoAt1xReason
+              : editBlockReason ||
+                (!modelReady || !faceReady || !fixesReady || !interpolationReady
+                  ? 'Choose or download the required models before starting.'
+                  : 'The current settings are not ready to start.');
 
   let themeForRefresh: (
     settings: Pick<UiSettings, 'appearance' | 'colour_blind_palette'>,
@@ -3771,9 +3809,13 @@
                       type="button"
                       class:on={settings.fixes.includes(fix)}
                       aria-pressed={settings.fixes.includes(fix)}
-                      disabled={fix === 'faces' && !faceModel}
-                      title={fix === 'faces' && !faceModel
-                        ? 'Faces need a model with a face companion (HAT-S or HAT-L).'
+                      disabled={fix === 'faces' && (!faceModel || skipUpscale)}
+                      title={fix === 'faces'
+                        ? skipUpscale
+                          ? 'Faces needs upscaling (2× or higher).'
+                          : !faceModel
+                            ? 'Faces need a model with a face companion (HAT-S or HAT-L).'
+                            : ''
                         : ''}
                       on:click={() => toggleFix(fix)}
                       >{#if settings.fixes.includes(fix)}<svg
@@ -3807,7 +3849,7 @@
                       type="button"
                       on:click={() => applyPreset('best')}>Back to Best</button
                     >{/if}
-                  {#if !plan.some((stage) => stage.role === 'primary')}<button
+                  {#if !skipUpscale && !plan.some((stage) => stage.role === 'primary')}<button
                       class="link-button"
                       type="button"
                       on:click={() => openLibrary(settings.task === 'edit' ? 'edit' : 'primary')}
@@ -4114,6 +4156,17 @@
                   </div>
                 {/each}
               </div>
+              {#if hasNothingToDoAt1x}
+                <p class="inline-warning" role="status">{nothingToDoAt1xReason}</p>
+              {:else if skipUpscale && plan.length === 0}
+                <p class="model-note" role="status">
+                  At 1×, the upscaling model isn’t used. De-flicker still runs at the original size.
+                </p>
+              {:else if skipUpscale}
+                <p class="model-note">
+                  At 1×, the upscaling model isn’t used; only the stages above run.
+                </p>
+              {/if}
               {#if !fixPlanSupported && snapshot.engine}<p class="inline-warning" role="status">
                   This engine runs one fix at a time. Update LocalSR to run several.
                 </p>{/if}
@@ -4171,19 +4224,21 @@
                 </p>
               {/if}
               {#if usingTemporalVideo}
-                <VideoMemory
-                  lowMemory={settings.video_low_memory ?? true}
-                  device={snapshot.capabilities.devices.find(
-                    (device) => device.id === settings.device_id,
-                  )}
-                  memory={selectedMemory}
-                  running={Boolean(
-                    selectedMemory && snapshot.runtime.active_job_id === selectedMemory.job_id,
-                  )}
-                  {outputDimensions}
-                  disabled={Boolean(snapshot.runtime.active_job_id)}
-                  on:change={(event) => updateSettings({ video_low_memory: event.detail })}
-                />
+                {#if !skipUpscale}
+                  <VideoMemory
+                    lowMemory={settings.video_low_memory ?? true}
+                    device={snapshot.capabilities.devices.find(
+                      (device) => device.id === settings.device_id,
+                    )}
+                    memory={selectedMemory}
+                    running={Boolean(
+                      selectedMemory && snapshot.runtime.active_job_id === selectedMemory.job_id,
+                    )}
+                    {outputDimensions}
+                    disabled={Boolean(snapshot.runtime.active_job_id)}
+                    on:change={(event) => updateSettings({ video_low_memory: event.detail })}
+                  />
+                {/if}
                 <div class="field-row">
                   <label for="video-resolution">Output resolution</label><select
                     id="video-resolution"
@@ -4234,8 +4289,7 @@
               capabilities={snapshot.capabilities}
               {usingTemporalVideo}
               {preservingHdr}
-              interpolationSupported={snapshot.engine?.features.includes('video_interpolation') ===
-                true}
+              {interpolationSupported}
               {updateSettings}
               setLowPriority={(value) => setUpdateSwitch('low_priority', value)}
               {chooseOutput}

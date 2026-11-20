@@ -28,8 +28,11 @@ loading. Restoration weights are not included in installers.
 | HAT-L Face | 4× | Large face companion · verified import | 165.7 MB | Rights unresolved |
 
 The native scale is the model's trained output scale. A smaller requested output
-can be resampled after inference. A 1× restoration model cleans an image without
-enlarging it and can run before an upscaler.
+(such as 2× or 3× on a 4× model) is resampled after inference. In Video Upscale,
+choosing 1× skips the upscaling model completely so the video keeps its original
+size and only Fix first, video options and audio cleanup run. A 1× restoration
+model in **Restore** cleans an image or video without enlarging it, and can also
+run under **Fix first** before an upscaler.
 
 For photos, **Quick** selects SPAN NomosUni and **Best** selects RealPLKSR
 NomosWebPhoto. For illustrations, **Quick** selects Real-ESRGAN Anime 6B and

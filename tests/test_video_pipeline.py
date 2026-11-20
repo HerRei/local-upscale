@@ -819,7 +819,7 @@ def test_video_fix_first_and_upscale_with_1x_and_interpolation_and_unstable_fall
     adapter = MultiAdapter()
     engine = InferenceEngine(adapter)
 
-    # 1) Fix stage (1x) + 2x primary resized to output_scale=1 + RIFE x2 interpolation + audio
+    # 1) Fix stage (1x) + 2x primary skipped at output_scale=1 + RIFE x2 interpolation + audio
     out_1x = tmp_path / "fix_1x_interp.mp4"
     config_1x = VideoJobConfig(
         video_path=str(source),
@@ -852,6 +852,7 @@ def test_video_fix_first_and_upscale_with_1x_and_interpolation_and_unstable_fall
         cancel_event=threading.Event(),
         synthesizer=RecordingSynthesizer(),
     )
+    assert "upscale2x.pth" not in adapter.loaded
     probe = probe_video(str(out_1x))
     assert (probe.width, probe.height) == (FRAME_WIDTH, FRAME_HEIGHT)
     assert len(list(decode_frames(str(out_1x)))) == 8  # 4 frames x2 interpolated -> 8 frames
@@ -984,7 +985,7 @@ def test_worker_server_runs_video_job_with_stages_payload(tmp_path, monkeypatch)
             "tile_size": 128,
             "halo": 8,
             "safe_memory": False,
-            "output_scale": 1,
+            "output_scale": 2,
             "stages": [
                 {
                     "kind": "restore",
@@ -1011,3 +1012,174 @@ def test_worker_server_runs_video_job_with_stages_payload(tmp_path, monkeypatch)
     assert cfg.primary_time_factor == pytest.approx(2.0)
     assert isinstance(sent[-1], VideoJobCompleted)
     assert sent[-1].output_path == str(out)
+
+
+def test_1x_upscale_video_never_loads_or_calls_sr_model_and_runs_fix_and_audio(tmp_path):
+    from localsr.core.video_pipeline import VideoFixStage
+
+    source = _make_synthetic_video_with_audio(tmp_path / "source_audio.mp4", frames=4, fps=8)
+    info_1x = DummyAdapter(1).model_info
+    info_4x = DummyAdapter(4).model_info
+
+    sr_calls = []
+
+    class FixModel(nn.Module):
+        def forward(self, x):
+            sr_calls.append("fix_forward")
+            return (x + 0.05).clamp(0.0, 1.0)
+
+    class TrackingAdapter:
+        def __init__(self):
+            self.loaded = []
+
+        def load(self, path, device, precision):
+            self.loaded.append(path)
+            if "upscale" in path:
+                raise AssertionError(f"SR model {path} must not be loaded at 1x")
+            return FixModel().to(device).to(precision), info_1x
+
+        def release(self):
+            pass
+
+    class TrackingAudioDenoiser:
+        def __init__(self):
+            self.calls = 0
+
+        def denoise_channels(self, samples, *, cancel_event=None, progress_cb=None):
+            self.calls += 1
+            return samples
+
+    adapter = TrackingAdapter()
+    denoiser = TrackingAudioDenoiser()
+    engine = InferenceEngine(adapter)
+    output = tmp_path / "upscale_1x.mp4"
+    config = VideoJobConfig(
+        video_path=str(source),
+        model_path="upscale_x4.pth",
+        output_video_path=str(output),
+        model_info=info_4x,
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=4,
+        safe_memory=False,
+        output_scale=1,
+        audio_path=str(source),
+        audio_denoise=True,
+        audio_denoiser=denoiser,
+        preprocess_stages=(
+            VideoFixStage(
+                model_path="fix_blur.pth",
+                model_info=info_1x,
+                model_id="nafnet_gopro_deblur",
+                halo=8,
+                fix="blur",
+                time_factor=1.0,
+            ),
+        ),
+    )
+    result = run_video_job(config, engine, threading.Event())
+    assert result.frames_processed == 4
+    assert adapter.loaded == ["fix_blur.pth"]
+    assert sr_calls == ["fix_forward"] * 4
+    assert denoiser.calls > 0
+    probe = probe_video(str(output))
+    assert (probe.width, probe.height) == (FRAME_WIDTH, FRAME_HEIGHT)
+    with av.open(str(output)) as container:
+        assert any(s.type == "audio" for s in container.streams)
+
+
+def test_worker_server_1x_upscale_skips_inspecting_sr_model(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from localsr.core.model_catalog import CatalogModel, ModelPurpose
+    from localsr.worker.server import WorkerServer
+
+    source = _make_synthetic_video(tmp_path / "in.mp4", frames=2, fps=8)
+    fix_file = tmp_path / "fix.pth"
+    fix_file.write_bytes(b"fix")
+
+    fake_catalog = {
+        "fix_model": CatalogModel(
+            model_id="fix_model",
+            name="Fix",
+            filename="fix.pth",
+            description="Fix",
+            size_bytes=3,
+            sha256="0" * 64,
+            download_url="https://example.com/fix.pth",
+            architecture="SCUNet",
+            native_scale=1,
+            purposes=(ModelPurpose.DENOISE,),
+            recommended_halo=8,
+            time_factor=1.5,
+        ),
+    }
+    info_1x = DummyAdapter(1).model_info
+    inspected = []
+
+    class InspectAdapter:
+        def inspect(self, path):
+            inspected.append(path)
+            if "missing_upscaler" in path:
+                raise AssertionError("Unused 4x upscaler must not be inspected at 1x")
+            return info_1x
+
+        def release(self):
+            pass
+
+    captured = {}
+    sent = []
+
+    def fake_run_video_job(config, **_kwargs):
+        captured["config"] = config
+        return SimpleNamespace(
+            output_path=config.output_video_path,
+            frames_processed=2,
+            elapsed_seconds=0.1,
+            inference_seconds=0.1,
+            notes=[],
+        )
+
+    monkeypatch.setattr("localsr.worker.server.run_video_job", fake_run_video_job)
+    monkeypatch.setattr("localsr.worker.server.CATALOG_BY_ID", fake_catalog)
+    monkeypatch.setattr("localsr.worker.server.send_message", sent.append)
+
+    server = WorkerServer()
+    server.model_adapter = InspectAdapter()
+    server.engine = InferenceEngine(server.model_adapter)
+    out = tmp_path / "out_1x.mp4"
+    server._run_video_job(
+        "job-1x",
+        {
+            "video_path": str(source),
+            "model_path": str(tmp_path / "missing_upscaler.pth"),
+            "output_video_path": str(out),
+            "device": "cpu",
+            "precision": "fp32",
+            "tile_size": 128,
+            "halo": 8,
+            "safe_memory": False,
+            "output_scale": 1,
+            "stages": [
+                {
+                    "kind": "restore",
+                    "model_id": "fix_model",
+                    "model_path": str(fix_file),
+                    "role": "fix",
+                    "fix": "noise",
+                },
+                {
+                    "kind": "upscale",
+                    "model_id": "span_photo_x4",
+                    "model_path": str(tmp_path / "missing_upscaler.pth"),
+                    "role": "primary",
+                },
+            ],
+        },
+    )
+    cfg = captured["config"]
+    assert inspected == [str(fix_file)]
+    assert cfg.model_path == ""
+    assert cfg.model_info is None
+    assert len(cfg.preprocess_stages) == 1

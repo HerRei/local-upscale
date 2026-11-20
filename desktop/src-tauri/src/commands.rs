@@ -1007,6 +1007,19 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
             ));
         }
     }
+    if upscale_skips_sr(&input)
+        && input.fix_stages.is_empty()
+        && !(input.task == "video"
+            && input.video_model_id == "frame_by_frame"
+            && (input.deflicker || input.video_interpolation != "off"))
+        && input.task == "video"
+        && input.video_clean_audio
+        && media.iter().all(|item| !item.has_audio)
+    {
+        return Err(AppError::Validation(
+            "Nothing to run at 1×: the selected video has no audio track.".into(),
+        ));
+    }
     refuse_when_disk_is_short(&input, &selection, &media[0], &output_directory)?;
     let ui_json = ui_json(input.ui.as_ref())?;
     let media_ids: Vec<&str> = media.iter().map(|item| item.id.as_str()).collect();
@@ -3208,7 +3221,48 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
     if input.media_ids.is_empty() || input.media_ids.len() > MAX_MEDIA_ITEMS {
         return Err(AppError::Validation("invalid batch size".into()));
     }
+    if upscale_skips_sr(input) && !has_work_at_1x(input) {
+        return Err(AppError::Validation(
+            "Nothing to run at 1×. Turn on Fix first, a video option or audio cleanup, or choose 2× or higher.".into(),
+        ));
+    }
     Ok(())
+}
+
+/// True when the Upscale task is set to 1× and therefore runs no upscaling model.
+fn upscale_skips_sr(input: &StartBatchInput) -> bool {
+    let restoring =
+        input.task == "denoise" || (input.task == "video" && input.video_task == "denoise");
+    if restoring {
+        return false;
+    }
+    match input.task.as_str() {
+        "upscale" => input.output_scale == 1,
+        "video" => {
+            let temporal = input.video_model_id != "frame_by_frame";
+            if temporal && input.video_target_resolution > 0 {
+                return false;
+            }
+            input.output_scale == 1
+        }
+        _ => false,
+    }
+}
+
+fn has_work_at_1x(input: &StartBatchInput) -> bool {
+    let temporal = input.task == "video" && input.video_model_id != "frame_by_frame";
+    if !temporal && !input.fix_stages.is_empty() {
+        return true;
+    }
+    if input.task == "video" {
+        if input.video_clean_audio {
+            return true;
+        }
+        if !temporal && (input.deflicker || input.video_interpolation != "off") {
+            return true;
+        }
+    }
+    false
 }
 
 #[derive(Clone)]
@@ -3220,6 +3274,7 @@ enum ModelSelection {
         face_path: Option<String>,
         face_model_id: String,
         native_scale: u32,
+        skip_upscale: bool,
         interpolation: Option<ResolvedBundle>,
         audio_denoise: Option<ResolvedBundle>,
     },
@@ -3261,7 +3316,8 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
         ));
     }
     let catalog = lock(&state.catalog)?;
-    if input.task == "video" && input.video_model_id != "frame_by_frame" {
+    let skip_upscale = upscale_skips_sr(input);
+    if input.task == "video" && input.video_model_id != "frame_by_frame" && !skip_upscale {
         if input.video_task == "denoise" {
             return Err(AppError::Validation(
                 "Restore uses the Frame-by-frame video engine with 1× restoration models.".into(),
@@ -3287,7 +3343,10 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
         });
     }
 
-    let (path, selected_model) = if input.model_id == "__custom__" {
+    let (path, selected_model) = if skip_upscale {
+        // At 1×, the upscaling model is never loaded or required.
+        (String::new(), None)
+    } else if input.model_id == "__custom__" {
         state
             .grants
             .check_model_file(Path::new(&input.custom_model_path))?;
@@ -3336,7 +3395,7 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
         )
     };
 
-    let face_path = if input.enable_face_model {
+    let face_path = if input.enable_face_model && !skip_upscale {
         let face = selected_model
             .and_then(|model| {
                 catalog.models.iter().find(|candidate| {
@@ -3410,18 +3469,33 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
         }
         preprocess.pop();
     }
+    let temporal_at_1x =
+        skip_upscale && input.task == "video" && input.video_model_id != "frame_by_frame";
     Ok(ModelSelection::Image {
-        model_id: input.model_id.clone(),
+        model_id: if skip_upscale {
+            String::new()
+        } else {
+            input.model_id.clone()
+        },
         path,
         preprocess,
         face_path,
         face_model_id: selected_model
             .map(|model| model.pair_with.clone())
             .unwrap_or_default(),
-        native_scale: selected_model
-            .map(|model| model.native_scale)
-            .unwrap_or(input.output_scale),
-        interpolation: resolve_interpolation(&catalog, input)?,
+        native_scale: if skip_upscale {
+            1
+        } else {
+            selected_model
+                .map(|model| model.native_scale)
+                .unwrap_or(input.output_scale)
+        },
+        skip_upscale,
+        interpolation: if temporal_at_1x {
+            None
+        } else {
+            resolve_interpolation(&catalog, input)?
+        },
         audio_denoise: resolve_audio_denoise(&catalog, input)?,
     })
 }
@@ -3503,6 +3577,7 @@ fn build_job_message(
             face_path,
             face_model_id,
             native_scale,
+            skip_upscale,
             ..
         } if input.task != "video" => Ok(json!({
             "type": "job_request",
@@ -3524,7 +3599,7 @@ fn build_job_message(
                 "preview_enabled": input.enable_live_preview,
                 "preview_max_fps": 2.0,
                 "preview_max_dimension": 320,
-                "output_scale": if input.task == "denoise" { 1 } else { input.output_scale.min(*native_scale).max(1) },
+                "output_scale": if input.task == "denoise" || *skip_upscale { 1 } else { input.output_scale.min(*native_scale).max(1) },
                 "face_model_path": face_path,
                 "face_fidelity": f64::from(input.face_fidelity) / 100.0,
                 "stages": image_pipeline_stages(
@@ -3533,6 +3608,7 @@ fn build_job_message(
                     path,
                     face_path.as_deref(),
                     face_model_id,
+                    *skip_upscale,
                     input,
                 ),
                 "allow_unverified_checkpoint": input.allow_unsafe_pickle_model
@@ -3545,9 +3621,9 @@ fn build_job_message(
             face_path,
             face_model_id,
             native_scale,
+            skip_upscale,
             interpolation,
             audio_denoise,
-            ..
         } => {
             if interpolation.is_some()
                 && input.video_hdr_mode == "preserve"
@@ -3559,7 +3635,8 @@ fn build_job_message(
                 )));
             }
             let restoring = input.video_task == "denoise";
-            let output_scale = if restoring {
+            let temporal_at_1x = *skip_upscale && input.video_model_id != "frame_by_frame";
+            let output_scale = if restoring || *skip_upscale {
                 1
             } else {
                 input.output_scale.min(*native_scale).max(1)
@@ -3569,7 +3646,7 @@ fn build_job_message(
                 "data": {
                     "job_id": job_id,
                     "video_path": media.path,
-                    "hdr_mode": input.video_hdr_mode,
+                    "hdr_mode": if *skip_upscale && input.video_hdr_mode == "preserve" { "tone_map" } else { input.video_hdr_mode.as_str() },
                     "model_path": path,
                     "output_video_path": output,
                     "container": input.video_container,
@@ -3588,7 +3665,7 @@ fn build_job_message(
                     "end_frame": null,
                     "face_model_path": face_path,
                     "face_fidelity": f64::from(input.face_fidelity) / 100.0,
-                    "deflicker": input.deflicker,
+                    "deflicker": if temporal_at_1x { false } else { input.deflicker },
                     "deflicker_window": input.deflicker_window,
                     "model_kind": "spandrel_image",
                     "bundle_dir": null,
@@ -3602,6 +3679,7 @@ fn build_job_message(
                         path,
                         face_path.as_deref(),
                         face_model_id,
+                        *skip_upscale,
                         input,
                     ),
                     "allow_unverified_checkpoint": input.allow_unsafe_pickle_model,
@@ -3706,6 +3784,7 @@ fn image_pipeline_stages(
     model_path: &str,
     face_path: Option<&str>,
     face_model_id: &str,
+    skip_upscale: bool,
     input: &StartBatchInput,
 ) -> Vec<Value> {
     let mut stages = Vec::with_capacity(5);
@@ -3717,6 +3796,9 @@ fn image_pipeline_stages(
             "model_id": stage.model_id,
             "model_path": stage.path,
         }));
+    }
+    if skip_upscale {
+        return stages;
     }
     let restoring =
         input.task == "denoise" || (input.task == "video" && input.video_task == "denoise");

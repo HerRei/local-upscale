@@ -38,8 +38,10 @@ class ImageJobProgress:
         self.emit = emit
         self.preview = preview
         self.clock = clock
-        self.active_index = pipeline.primary_index
-        self.active_stage = pipeline.primary
+        self.active_index = pipeline.primary_index if pipeline.primary_index is not None else 0
+        self.active_stage = pipeline.primary or (
+            pipeline.stages[-1] if pipeline.stages else PipelineStage("restore", "none", "")
+        )
         self.active_span = 1 + int(pipeline.face is not None)
         self.inference_started_at: float | None = None
         self.last_memory_sample_at = 0.0
