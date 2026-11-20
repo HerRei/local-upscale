@@ -1085,8 +1085,9 @@
         videoTask,
       )
     : undefined;
-  $: quickDownload = presetDownload('quick', snapshot, settings);
-  $: bestDownload = presetDownload('best', snapshot, settings);
+  // At 1× no upscaling model runs, so Quick and Best download nothing for this job.
+  $: quickDownload = skipUpscale ? '' : presetDownload('quick', snapshot, settings);
+  $: bestDownload = skipUpscale ? '' : presetDownload('best', snapshot, settings);
   // Settings saved before the model library exist without a quality; infer it
   // from the selection so Quick/Best light up correctly after an update.
   $: activeQuality = ((): Quality => {
@@ -1678,6 +1679,7 @@
   // Quick and Best describe the result; the model behind them is named once, under Model.
   function qualityBlurb(quality: 'quick' | 'best'): string {
     if (restoring) return quality === 'quick' ? 'Fast clean-up' : 'Most careful, slower';
+    if (skipUpscale) return 'Used from 2× up';
     if (settings.task === 'video')
       return quality === 'quick' ? 'Fast, frame by frame' : 'More detail, slower';
     return quality === 'quick' ? 'Fast, clean result' : 'Finest detail, slower';
@@ -3787,9 +3789,19 @@
             {#if !usingTemporalVideo && settings.task !== 'edit'}
               <section
                 class="control-section"
-                aria-label={restoring ? 'What to fix' : 'Your image'}
+                aria-label={restoring
+                  ? 'What to fix'
+                  : settings.task === 'video'
+                    ? 'Your video'
+                    : 'Your image'}
               >
-                <span class="eyebrow">{restoring ? 'What to fix' : 'Your image'}</span>
+                <span class="eyebrow"
+                  >{restoring
+                    ? 'What to fix'
+                    : settings.task === 'video'
+                      ? 'Your video'
+                      : 'Your image'}</span
+                >
                 {#if !restoring}
                   <div class="field-heading">
                     <span class="field-label" id="content-label">Content</span><HelpTip

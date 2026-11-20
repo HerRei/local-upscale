@@ -1003,7 +1003,7 @@
         {#if loading}<div class="pair-loading">
             <PreviewActivity media={selectedMedia} loading={loadingLabel} />
           </div>{/if}
-        {#if selectedMedia?.kind === 'video'}<span class="labs-chip">Video · local upscaling</span
+        {#if selectedMedia?.kind === 'video'}<span class="labs-chip">Video · processed locally</span
           >{/if}
         {#if selectedMedia?.kind !== 'video'}<div
             class="zoom-hud"
