@@ -57,6 +57,7 @@ export function demoSnapshot(): AppSnapshot {
       video_interpolation: 'off',
       video_interpolation_order: 'after_upscale',
       video_clean_audio: false,
+      video_audio_model: '',
       appearance: 'dark',
       colour_blind_palette: false,
       anonymous_update_count: false,

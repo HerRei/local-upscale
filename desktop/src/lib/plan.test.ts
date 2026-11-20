@@ -309,6 +309,25 @@ describe('model library resolution', () => {
     expect(
       resolvePlan(snapshot, { ...settings, task: 'upscale' }, options).map((s) => s.kind),
     ).toEqual(['upscale']);
+
+    // Selecting DPDFNet drives the audio_denoise stage and its pending download.
+    const dpdf = snapshot.catalog.audio_models?.find((m) => m.model_id === 'dpdfnet8_48khz_hr');
+    expect(dpdf).toBeDefined();
+    if (dpdf) dpdf.installed = false;
+    const dpdfPlan = resolvePlan(
+      snapshot,
+      { ...settings, video_audio_model: 'dpdfnet8_48khz_hr' },
+      options,
+    );
+    expect(dpdfPlan[0].audioModel?.model_id).toBe('dpdfnet8_48khz_hr');
+    expect(dpdfPlan[0].sizeBytes).toBe(14_857_107);
+    expect(pendingDownloads(dpdfPlan).stages).toEqual([dpdfPlan[0]]);
+
+    // Unknown ids fall back to the catalog default.
+    expect(
+      resolvePlan(snapshot, { ...settings, video_audio_model: 'unknown_id' }, options)[0].audioModel
+        ?.model_id,
+    ).toBe('deepfilternet3');
   });
 
   it('judges hardware fit against the device memory', () => {

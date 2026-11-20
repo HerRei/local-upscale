@@ -70,6 +70,7 @@ export function recipeMatches(
   const face =
     Boolean(recipe.stages?.some((stage) => stage.kind === 'face_restore')) ||
     (recipe.enable_face_model ?? false);
+  const defaultAudioId = catalog.audio_models?.[0]?.model_id ?? '';
   return (
     current.selected_model_id === recipe.model_id &&
     current.output_scale === scale &&
@@ -84,6 +85,9 @@ export function recipeMatches(
       ((current.video_interpolation || 'off') === (recipe.video_interpolation || 'off') &&
         (current.video_interpolation_order || 'after_upscale') ===
           (recipe.video_interpolation_order || 'after_upscale') &&
-        Boolean(current.video_clean_audio) === Boolean(recipe.video_clean_audio)))
+        Boolean(current.video_clean_audio) === Boolean(recipe.video_clean_audio) &&
+        (!recipe.video_clean_audio ||
+          (current.video_audio_model || defaultAudioId) ===
+            (recipe.video_audio_model || defaultAudioId))))
   );
 }

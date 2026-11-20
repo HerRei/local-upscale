@@ -6135,6 +6135,8 @@ describe('crash reports', () => {
     snap.settings.selected_model_id = 'span_photo_x4';
     const df3 = snap.catalog.audio_models?.[0];
     if (df3) df3.installed = false;
+    const dpdf = snap.catalog.audio_models?.find((m) => m.model_id === 'dpdfnet8_48khz_hr');
+    if (dpdf) dpdf.installed = false;
     const upscaler = snap.catalog.models.find((m) => m.model_id === 'span_photo_x4');
     if (upscaler) upscaler.installed = true;
 
@@ -6145,6 +6147,7 @@ describe('crash reports', () => {
     }) as HTMLInputElement;
     expect(toggle.checked).toBe(false);
     expect(toggle.disabled).toBe(false);
+    expect(within(audioRegion).queryByLabelText('Audio model')).toBeNull();
 
     await user.click(within(audioRegion).getByRole('button', { name: 'About Clean up audio' }));
     expect(
@@ -6157,43 +6160,71 @@ describe('crash reports', () => {
         expect.objectContaining({ video_clean_audio: true }),
       ),
     );
+    const picker = within(audioRegion).getByLabelText('Audio model') as HTMLSelectElement;
+    expect(picker.value).toBe('deepfilternet3');
+    expect(within(audioRegion).getByText('Speech noise removal')).toBeTruthy();
     const stages = screen.getByRole('list', { name: 'Stages' });
     expect(within(stages).getByText('DeepFilterNet3')).toBeTruthy();
 
-    // Save as recipe preserves video_clean_audio.
+    // Switching the picker to DPDFNet saves video_audio_model, updates summary & stages.
+    await user.selectOptions(picker, 'dpdfnet8_48khz_hr');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ video_audio_model: 'dpdfnet8_48khz_hr' }),
+      ),
+    );
+    expect(within(audioRegion).getByText('Stronger speech noise removal')).toBeTruthy();
+    expect(within(stages).getByText('DPDFNet')).toBeTruthy();
+
+    // Save as recipe preserves video_clean_audio and video_audio_model.
     const toggledSnap = structuredClone(snap);
     toggledSnap.settings.video_clean_audio = true;
+    toggledSnap.settings.video_audio_model = 'dpdfnet8_48khz_hr';
     api.refreshSnapshot.mockResolvedValue(toggledSnap);
     await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
     await user.type(screen.getByPlaceholderText('Name this setup'), 'Clean Speech');
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
       expect(api.saveRecipe).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'Clean Speech', video_clean_audio: true }),
+        expect.objectContaining({
+          name: 'Clean Speech',
+          video_clean_audio: true,
+          video_audio_model: 'dpdfnet8_48khz_hr',
+        }),
       ),
     );
 
     // Download on first use and start when clicking Download & start.
     const nextSnap = structuredClone(toggledSnap);
-    const nextDf3 = nextSnap.catalog.audio_models?.[0];
-    if (nextDf3) nextDf3.installed = true;
+    const nextDpdf = nextSnap.catalog.audio_models?.find((m) => m.model_id === 'dpdfnet8_48khz_hr');
+    if (nextDpdf) nextDpdf.installed = true;
     api.refreshSnapshot.mockResolvedValue(nextSnap);
     await user.click(screen.getByRole('button', { name: /Download .* start video/i }));
-    await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith('deepfilternet3', false));
+    await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith('dpdfnet8_48khz_hr', false));
     await waitFor(() =>
       expect(api.startJobs).toHaveBeenCalledWith(
-        expect.objectContaining({ task: 'video', video_clean_audio: true }),
+        expect.objectContaining({
+          task: 'video',
+          video_clean_audio: true,
+          video_audio_model: 'dpdfnet8_48khz_hr',
+        }),
       ),
     );
 
-    // Open Model Library -> Audio tab shows DeepFilterNet3 details.
+    // Open Model Library -> Audio tab lists both models with their licences.
     nativeMenu?.('view.models');
     const dialog = await screen.findByRole('dialog', { name: 'Model library' });
     await user.click(within(dialog).getByRole('button', { name: /^Audio/ }));
     expect(within(dialog).getByRole('heading', { name: 'DeepFilterNet3' })).toBeTruthy();
+    expect(within(dialog).getByText('MIT OR Apache-2.0')).toBeTruthy();
+    expect(within(dialog).getByText('Apache-2.0')).toBeTruthy();
     expect(within(dialog).getByText(/about 100 MB/i)).toBeTruthy();
     await user.click(within(dialog).getByRole('button', { name: 'MIT OR Apache-2.0 ↗' }));
     expect(api.openModelLicense).toHaveBeenCalledWith('deepfilternet3');
+    await user.click(within(dialog).getByRole('button', { name: /^DPDFNet\b/ }));
+    expect(within(dialog).getByRole('heading', { name: 'DPDFNet' })).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'Apache-2.0 ↗' }));
+    expect(api.openModelLicense).toHaveBeenCalledWith('dpdfnet8_48khz_hr');
     await user.click(within(dialog).getByRole('button', { name: 'Close model library' }));
 
     // Video without audio disables Clean up audio with a note.

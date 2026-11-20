@@ -326,7 +326,7 @@ export function resolvePlan(
   }
 
   // Audio cleanup runs before video processing when the source has an audio track.
-  const audioModel = snapshot.catalog.audio_models?.[0];
+  const audioModel = resolveAudioModel(snapshot.catalog.audio_models, settings.video_audio_model);
   if (
     settings.task === 'video' &&
     settings.video_clean_audio &&
@@ -345,6 +345,18 @@ export function resolvePlan(
     });
   }
   return stages;
+}
+
+/** Selected audio cleanup model, falling back to the catalog default for empty or unknown ids. */
+export function resolveAudioModel(
+  audioModels: CatalogVideoModel[] | undefined,
+  modelId?: string,
+): CatalogVideoModel | undefined {
+  if (!audioModels?.length) return undefined;
+  return (
+    (modelId ? audioModels.find((model) => model.model_id === modelId) : undefined) ??
+    audioModels[0]
+  );
 }
 
 const INTERPOLATION_RATES: Record<Exclude<InterpolationTarget, 'off'>, [number, number]> = {

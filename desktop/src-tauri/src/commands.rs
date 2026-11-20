@@ -3177,6 +3177,7 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
         video_interpolation: input.video_interpolation.clone(),
         video_interpolation_order: input.video_interpolation_order.clone(),
         video_clean_audio: input.video_clean_audio,
+        video_audio_model: input.video_audio_model.clone(),
         ..UiSettings::default()
     };
     validate_settings(&settings)?;
@@ -3454,9 +3455,15 @@ fn resolve_audio_denoise(
     if input.task != "video" || !input.video_clean_audio {
         return Ok(None);
     }
-    let model = catalog
-        .audio_models
-        .first()
+    let model = (!input.video_audio_model.is_empty())
+        .then(|| {
+            catalog
+                .audio_models
+                .iter()
+                .find(|model| model.model_id == input.video_audio_model)
+        })
+        .flatten()
+        .or_else(|| catalog.audio_models.first())
         .ok_or_else(|| AppError::Validation("this build has no audio cleanup model".into()))?;
     if !model.installed {
         return Err(AppError::Validation(

@@ -8,6 +8,7 @@
   import { without, mediaNamesFor as mediaNamesForPaths } from './lib/collections';
   import {
     presetDownload,
+    resolveAudioModel,
     supportsHdrPreservation as catalogSupportsHdrPreservation,
   } from './lib/plan';
   import { onMount, tick } from 'svelte';
@@ -674,6 +675,8 @@
         ? runnableMedia.length === 0 || runnableMedia.some((media) => media.has_audio !== false)
         : selectedMedia?.has_audio !== false;
   $: audioDisabled = settings.task === 'video' && !audioHasSource;
+  $: audioModels = snapshot.catalog.audio_models ?? [];
+  $: selectedAudioModel = resolveAudioModel(audioModels, settings.video_audio_model);
   $: interpolationStage = plan.find((stage) => stage.kind === 'interpolate');
   $: interpolationReady = !interpolationStage || interpolationStage.installed;
   $: audioStage = plan.find((stage) => stage.kind === 'audio_denoise');
@@ -2474,6 +2477,7 @@
       video_interpolation_order: settings.video_interpolation_order ?? 'after_upscale',
       video_clean_audio:
         settings.task === 'video' && !audioDisabled && Boolean(settings.video_clean_audio),
+      video_audio_model: settings.video_audio_model ?? '',
     };
   }
 
@@ -2651,6 +2655,7 @@
       video_interpolation: settings.video_interpolation ?? 'off',
       video_interpolation_order: settings.video_interpolation_order ?? 'after_upscale',
       video_clean_audio: Boolean(settings.video_clean_audio),
+      video_audio_model: settings.video_audio_model ?? '',
       quality: activeQuality,
       content: settings.content,
       fixes: settings.fixes,
@@ -2757,6 +2762,7 @@
       video_interpolation: recipe.video_interpolation || 'off',
       video_interpolation_order: recipe.video_interpolation_order || 'after_upscale',
       video_clean_audio: recipe.video_clean_audio ?? false,
+      video_audio_model: recipe.video_audio_model ?? '',
       enable_face_model:
         !targetRestoring && (recipeFace ? true : (recipe.enable_face_model ?? false)),
       face_fidelity:
@@ -3603,6 +3609,21 @@
               </div>
               {#if audioDisabled}
                 <p class="model-description">This video has no audio track.</p>
+              {:else if settings.video_clean_audio && audioModels.length > 0}
+                <label class="field-label" for="audio-model">Audio model</label>
+                <select
+                  id="audio-model"
+                  value={selectedAudioModel?.model_id ?? ''}
+                  on:change={(event) =>
+                    updateSettings({ video_audio_model: event.currentTarget.value })}
+                >
+                  {#each audioModels as model (model.model_id)}
+                    <option value={model.model_id}>{model.name}</option>
+                  {/each}
+                </select>
+                {#if selectedAudioModel?.summary}
+                  <p class="model-description">{selectedAudioModel.summary}</p>
+                {/if}
               {/if}
             </section>
           {/if}
@@ -3924,7 +3945,7 @@
                               .filter(Boolean)
                               .join(' · ')
                           : stage.audioModel
-                            ? 'Speech noise removal'
+                            ? stage.audioModel.summary || 'Audio cleanup'
                             : ''}
                   {@const warning =
                     stage.model && UNSTABLE_FIX_MODELS.has(stage.model.model_id)

@@ -13,14 +13,26 @@ import pytest
 import torch
 from torch import nn
 
-from localsr.core.audio_denoise import DeepFilterNet3Denoiser, denoise_video_audio
+from localsr.core.audio_denoise import (
+    AUDIO_DENOISER_FACTORIES,
+    DeepFilterNet3Denoiser,
+    DPDFNetDenoiser,
+    denoise_video_audio,
+    load_denoiser,
+)
 from localsr.core.inference import InferenceEngine
 from localsr.core.model_adapter import NormalizedModelInfo
+from localsr.core.model_catalog import (
+    AUDIO_CATALOG_BY_ID,
+    AUDIO_MODEL_CATALOG,
+    DEFAULT_AUDIO_MODEL_ID,
+)
 from localsr.core.video_io import probe_video
 from localsr.core.video_pipeline import VideoJobConfig, run_video_job
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DF3_ARCHIVE = REPO_ROOT / ".cache" / "DeepFilterNet3_onnx.tar.gz"
+DPDFNET_MODEL = REPO_ROOT / ".cache" / "dpdfnet8_48khz_hr.onnx"
 
 
 class _DummyModel(nn.Module):
@@ -397,3 +409,103 @@ def test_real_deepfilternet3_onnx_denoises_speech_across_chunks(tmp_path: Path) 
     assert float(np.mean(out_spec[noise_band] ** 2)) < 0.05 * float(
         np.mean(in_spec[noise_band] ** 2)
     )
+
+
+def test_audio_denoiser_registry_dispatches_and_rejects_unknown(
+    tmp_path: Path, monkeypatch
+) -> None:
+    assert AUDIO_DENOISER_FACTORIES["deepfilternet3"] is DeepFilterNet3Denoiser
+    assert AUDIO_DENOISER_FACTORIES["dpdfnet"] is DPDFNetDenoiser
+
+    seen: list[tuple[str, Path]] = []
+
+    def fake_df3(path: Path) -> _ToneKeepingStubDenoiser:
+        seen.append(("deepfilternet3", path))
+        return _ToneKeepingStubDenoiser()
+
+    def fake_dpdf(path: Path) -> _ToneKeepingStubDenoiser:
+        seen.append(("dpdfnet", path))
+        return _ToneKeepingStubDenoiser()
+
+    monkeypatch.setitem(AUDIO_DENOISER_FACTORIES, "deepfilternet3", fake_df3)
+    monkeypatch.setitem(AUDIO_DENOISER_FACTORIES, "dpdfnet", fake_dpdf)
+
+    df3_dir = tmp_path / "df3"
+    df3_dir.mkdir()
+    (df3_dir / "DeepFilterNet3_onnx.tar.gz").write_bytes(b"stub")
+    load_denoiser("deepfilternet3", df3_dir, filenames=["DeepFilterNet3_onnx.tar.gz"])
+
+    dpdf_dir = tmp_path / "dpdf"
+    dpdf_dir.mkdir()
+    (dpdf_dir / "dpdfnet8_48khz_hr.onnx").write_bytes(b"stub")
+    load_denoiser("dpdfnet", dpdf_dir, filenames=["dpdfnet8_48khz_hr.onnx"])
+
+    assert seen == [
+        ("deepfilternet3", df3_dir / "DeepFilterNet3_onnx.tar.gz"),
+        ("dpdfnet", dpdf_dir / "dpdfnet8_48khz_hr.onnx"),
+    ]
+    with pytest.raises(ValueError, match="Unsupported audio cleanup engine"):
+        load_denoiser("unknown_engine", tmp_path)
+
+
+def test_audio_catalog_uniqueness_default_and_export() -> None:
+    import importlib.util
+    import json
+
+    assert DEFAULT_AUDIO_MODEL_ID in AUDIO_CATALOG_BY_ID
+    assert len({m.model_id for m in AUDIO_MODEL_CATALOG}) == len(AUDIO_MODEL_CATALOG)
+    assert len({m.family for m in AUDIO_MODEL_CATALOG}) == len(AUDIO_MODEL_CATALOG)
+    assert all(m.summary for m in AUDIO_MODEL_CATALOG)
+
+    spec = importlib.util.spec_from_file_location(
+        "export_desktop_catalog", REPO_ROOT / "scripts" / "export_desktop_catalog.py"
+    )
+    assert spec and spec.loader
+    exporter = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(exporter)
+
+    manifest = exporter.build_manifest()
+    by_id = {entry["model_id"]: entry for entry in manifest["audio_models"]}
+    assert set(by_id) == {"deepfilternet3", "dpdfnet8_48khz_hr"}
+    assert by_id["deepfilternet3"]["engine_id"] == "localsr.audio.deepfilternet3"
+    assert by_id["dpdfnet8_48khz_hr"]["engine_id"] == "localsr.audio.dpdfnet"
+    assert by_id["dpdfnet8_48khz_hr"]["summary"] == "Stronger speech noise removal"
+    shipped = json.loads(
+        (REPO_ROOT / "desktop" / "src-tauri" / "resources" / "model-catalog.json").read_text()
+    )
+    assert shipped == manifest
+
+
+@pytest.mark.skipif(not DPDFNET_MODEL.is_file(), reason="DPDFNet ONNX model not cached locally")
+def test_real_dpdfnet_onnx_denoises_speech_and_lowers_gap_noise(tmp_path: Path) -> None:
+    bundle = tmp_path / "dpdfnet8_48khz_hr"
+    bundle.mkdir()
+    shutil.copy2(DPDFNET_MODEL, bundle / DPDFNET_MODEL.name)
+
+    sr = 48_000
+    duration_s = 4.0
+    n_samples = int(duration_s * sr)
+    t = np.arange(n_samples, dtype=np.float32) / float(sr)
+    env = 0.5 + 0.5 * np.sin(2.0 * np.pi * 3.2 * t)
+    f0 = 180.0 + 35.0 * np.sin(2.0 * np.pi * 2.1 * t)
+    phase = 2.0 * np.pi * np.cumsum(f0) / float(sr)
+    speech = (
+        0.25 * env * (np.sin(phase) + 0.5 * np.sin(2.0 * phase) + 0.25 * np.sin(3.0 * phase))
+    ).astype(np.float32)
+    # Silent gap in [1.5s, 2.5s] so noise suppression can be measured cleanly without speech.
+    gap_start, gap_end = int(1.5 * sr), int(2.5 * sr)
+    speech[gap_start:gap_end] = 0.0
+    rng = np.random.default_rng(seed=271)
+    noisy = np.clip(speech + rng.normal(0.0, 0.04, size=n_samples).astype(np.float32), -0.98, 0.98)
+
+    denoiser = load_denoiser("dpdfnet", bundle, filenames=[DPDFNET_MODEL.name])
+    out = denoiser.denoise_channels(noisy[None, :])
+
+    assert out.shape == (1, n_samples)
+    assert np.all(np.isfinite(out))
+
+    # Measure inside the interior of the silent gap (avoiding edge transitions).
+    inner = slice(gap_start + 2400, gap_end - 2400)
+    in_gap_energy = float(np.mean(noisy[inner] ** 2))
+    out_gap_energy = float(np.mean(out[0, inner] ** 2))
+    assert out_gap_energy < 0.05 * in_gap_energy

@@ -759,6 +759,7 @@ class CatalogVideoModel:
     min_vram_gb: int
     temporal_window: int
     temporal_overlap: int
+    summary: str = ""
 
     @property
     def total_size_bytes(self) -> int:
@@ -885,6 +886,7 @@ DEFAULT_INTERPOLATION_MODEL_ID = "rife_4_26"
 
 # Audio cleanup models: optional speech-denoising stage for video jobs.
 # Rikorose/DeepFilterNet dual-licenses all code and model weights under MIT OR Apache-2.0.
+# Ceva/DPDFNet licenses its code and model weights under Apache-2.0.
 AUDIO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
     CatalogVideoModel(
         model_id="deepfilternet3",
@@ -893,6 +895,7 @@ AUDIO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
             "Removes background noise such as hum, wind and hiss from speech at 48 kHz. "
             "Runs on CPU via ONNX Runtime; music may sound worse."
         ),
+        summary="Speech noise removal",
         family="deepfilternet3",
         engine_kind="deepfilternet3",
         files=(
@@ -910,6 +913,36 @@ AUDIO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
         license_name="MIT OR Apache-2.0",
         author="Hendrik Schröter · DeepFilterNet",
         source_url="https://github.com/Rikorose/DeepFilterNet",
+        min_unified_memory_gb=1,
+        min_vram_gb=0,
+        temporal_window=0,
+        temporal_overlap=0,
+    ),
+    CatalogVideoModel(
+        model_id="dpdfnet8_48khz_hr",
+        name="DPDFNet",
+        description=(
+            "Stronger speech noise removal at 48 kHz using dual-path recurrent modeling. "
+            "Runs on CPU via ONNX Runtime; music may sound worse."
+        ),
+        summary="Stronger speech noise removal",
+        family="dpdfnet8_48khz_hr",
+        engine_kind="dpdfnet",
+        files=(
+            ModelFile(
+                role="onnx_model",
+                filename="dpdfnet8_48khz_hr.onnx",
+                size_bytes=14_857_107,
+                sha256="7b3afbb260a08fe9af3d16e3bda992971be1e7e951d1dee7c2d235f5c43f5631",
+                download_url=(
+                    "https://huggingface.co/Ceva-IP/DPDFNet/resolve/"
+                    "dd6818d00f50c836fed43a6243ebe49116de5964/onnx/dpdfnet8_48khz_hr.onnx"
+                ),
+            ),
+        ),
+        license_name="Apache-2.0",
+        author="Ceva · DPDFNet",
+        source_url="https://github.com/ceva-ip/DPDFNet",
         min_unified_memory_gb=1,
         min_vram_gb=0,
         temporal_window=0,

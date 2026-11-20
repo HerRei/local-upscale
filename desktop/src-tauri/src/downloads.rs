@@ -1370,6 +1370,19 @@ mod tests {
         assert!(DownloadTarget::Video(Box::new(df3))
             .validate_policy(false)
             .is_ok());
+        let dpdf = bundle_model(&manifest, "dpdfnet8_48khz_hr").unwrap();
+        assert_eq!(dpdf.engine_kind, "dpdfnet");
+        assert!(dpdf.automated_download_allowed);
+        assert!(!dpdf.terms_acceptance_required);
+        for file in &dpdf.files {
+            assert!(
+                validate_artifact_metadata(&file.download_url, file.size_bytes, &file.sha256)
+                    .is_ok()
+            );
+        }
+        assert!(DownloadTarget::Video(Box::new(dpdf))
+            .validate_policy(false)
+            .is_ok());
         assert!(bundle_model(&manifest, "span_photo_x4").is_none());
     }
 

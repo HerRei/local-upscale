@@ -674,7 +674,10 @@
             </button>
           {/each}
         {:else if group === 'audio'}
-          <div class="list-head">Audio · Speech noise removal<span>DeepFilterNet</span></div>
+          <div class="list-head">
+            Audio<span>{audioModels.length === 1 ? '1 model' : `${audioModels.length} models`}</span
+            >
+          </div>
           {#each audioModels as model (model.model_id)}
             <button
               class="row"
@@ -887,7 +890,7 @@
               >
                 <button class="row-select" type="button" on:click={() => selectRow(model)}>
                   <div class="name">{model.name}</div>
-                  <div class="role">Audio · Speech noise removal</div>
+                  <div class="role">{model.summary ? `Audio · ${model.summary}` : 'Audio'}</div>
                 </button>
                 <div class="right">
                   <b>{formatBytes(model.total_size_bytes)}</b><span class="ok">Verified</span>
@@ -1017,7 +1020,9 @@
         {:else if selectedAudio && group !== 'own'}
           <div>
             <h3>{selectedAudio.name}</h3>
-            <div class="role">{selectedAudio.author} · Speech noise removal</div>
+            <div class="role">
+              {[selectedAudio.author, selectedAudio.summary].filter(Boolean).join(' · ')}
+            </div>
           </div>
           <p class="model-description">{selectedAudio.description}</p>
           <dl class="facts">

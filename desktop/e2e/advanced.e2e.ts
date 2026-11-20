@@ -184,7 +184,7 @@ test.describe('Video audio cleanup', () => {
     await openApp(page, {
       ...video,
       worker: 'ready',
-      installed: [...(video.installed ?? []), 'deepfilternet3'],
+      installed: [...(video.installed ?? []), 'deepfilternet3', 'dpdfnet8_48khz_hr'],
       settings: { ...video.settings, video_interpolation: 'off' },
     });
     await showPane(page, 'enhance');
@@ -202,15 +202,49 @@ test.describe('Video audio cleanup', () => {
     await expect.poll(async () => (await lastSaved(page)).video_clean_audio).toBe(true);
     await expect(page.getByRole('list', { name: 'Stages' })).toContainText('DeepFilterNet3');
 
+    const picker = audio.getByLabel('Audio model');
+    await expect(picker).toHaveValue('deepfilternet3');
+    await expect(audio).toContainText('Speech noise removal');
+
+    await picker.selectOption('dpdfnet8_48khz_hr');
+    await expect
+      .poll(async () => (await lastSaved(page)).video_audio_model)
+      .toBe('dpdfnet8_48khz_hr');
+    await expect(audio).toContainText('Stronger speech noise removal');
+    await expect(page.getByRole('list', { name: 'Stages' })).toContainText('DPDFNet');
+
     await page.getByRole('button', { name: 'Start selected video' }).click();
     await expect
       .poll(
         async () =>
           ((await hostCalls(page, 'start_jobs')).at(-1)?.args as {
-            input: { video_clean_audio?: boolean };
-          })?.input.video_clean_audio,
+            input: { video_clean_audio?: boolean; video_audio_model?: string };
+          })?.input,
       )
-      .toBe(true);
+      .toMatchObject({ video_clean_audio: true, video_audio_model: 'dpdfnet8_48khz_hr' });
+  });
+
+  test('downloads the selected audio model on Start when missing', async ({ page }) => {
+    await openApp(page, {
+      ...video,
+      worker: 'ready',
+      installed: [...(video.installed ?? []), 'deepfilternet3'],
+      settings: { ...video.settings, video_interpolation: 'off' },
+    });
+    await showPane(page, 'enhance');
+    const audio = page.getByRole('region', { name: 'Audio' });
+    await audio.getByRole('checkbox', { name: 'Clean up audio' }).check();
+    await audio.getByLabel('Audio model').selectOption('dpdfnet8_48khz_hr');
+
+    await page.getByRole('button', { name: /Download .* start video/i }).click();
+    await expect
+      .poll(
+        async () =>
+          ((await hostCalls(page, 'download_model')).at(-1)?.args as {
+            modelId?: string;
+          })?.modelId,
+      )
+      .toBe('dpdfnet8_48khz_hr');
   });
 
   test('disables Clean up audio with a note when a video has no audio track', async ({ page }) => {

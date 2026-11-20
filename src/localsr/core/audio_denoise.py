@@ -1,7 +1,7 @@
-"""Speech noise suppression for video audio tracks via DeepFilterNet3 ONNX.
+"""Speech noise suppression for video audio tracks via ONNX Runtime.
 
-Runs the official DeepFilterNet3 ONNX export (``enc.onnx``, ``erb_dec.onnx``,
-``df_dec.onnx``, ``config.ini``) through ``onnxruntime`` on CPU. Audio is
+Supports DeepFilterNet3 (``enc.onnx``, ``erb_dec.onnx``, ``df_dec.onnx``,
+``config.ini``) and DPDFNet (streaming single-file ONNX) on CPU. Audio is
 decoded via PyAV (after any system-codec or external-FFmpeg pre-conversion),
 resampled to 48 kHz, denoised in overlapping chunks per channel, resampled
 back to each track's original sample rate, and written to a lossless FLAC
@@ -17,7 +17,7 @@ import tarfile
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from fractions import Fraction
@@ -79,7 +79,7 @@ def _read_bundle_members(bundle_path: Path) -> tuple[DeepFilterParams, dict[str,
             if tar_candidate.is_file():
                 archive_path = tar_candidate
     if not archive_path.is_dir() and len(blobs) < len(needed) and archive_path.is_file():
-        with tarfile.open(archive_path, mode="r:gz") as archive:
+        with tarfile.open(archive_path, mode="r:gz", encoding="utf-8") as archive:
             for member in archive.getmembers():
                 if not member.isfile():
                     continue
@@ -167,18 +167,121 @@ def _calc_norm_alpha(sr: int, hop_size: int, tau: float) -> float:
     return rounded
 
 
-class DeepFilterNet3Denoiser:
+def _import_onnxruntime():
+    try:
+        import onnxruntime as ort
+    except ImportError as error:
+        raise RuntimeError(
+            "Audio cleanup is not available in this build of LocalSR (ONNX Runtime is missing)."
+        ) from error
+    return ort
+
+
+class _ChunkedAudioDenoiser:
+    """Shared 8 s chunking, overlap-crossfade, and per-channel driver at 48 kHz."""
+
+    sample_rate: int = DF3_SAMPLE_RATE
+
+    def _denoise_window(
+        self, audio: np.ndarray, *, cancel_event: threading.Event | None = None
+    ) -> np.ndarray:
+        raise NotImplementedError
+
+    def denoise_mono(
+        self,
+        samples: np.ndarray,
+        *,
+        cancel_event: threading.Event | None = None,
+        progress_cb: Callable[[int, int], None] | None = None,
+    ) -> np.ndarray:
+        """Denoise a 1D float32 mono buffer at 48 kHz in overlapping chunks."""
+        total = len(samples)
+        if total == 0:
+            return samples.astype(np.float32, copy=True)
+
+        step = int(_CHUNK_SECONDS * self.sample_rate)
+        left_ctx = int(_LEFT_OVERLAP_SECONDS * self.sample_rate)
+        right_ctx = int(_RIGHT_OVERLAP_SECONDS * self.sample_rate)
+        xfade = _CROSSFADE_SAMPLES
+        if total <= step + right_ctx:
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("video job cancelled")
+            out = self._denoise_window(samples, cancel_event=cancel_event)
+            if progress_cb is not None:
+                progress_cb(total, total)
+            return out
+
+        out = np.empty(total, dtype=np.float32)
+        pos = 0
+        fade_in = np.linspace(0.0, 1.0, xfade, dtype=np.float32)
+        fade_out = 1.0 - fade_in
+        prev_tail: np.ndarray | None = None
+
+        while pos < total:
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("video job cancelled")
+            win_start = max(0, pos - left_ctx)
+            win_end = min(total, pos + step + right_ctx)
+            enhanced = self._denoise_window(samples[win_start:win_end], cancel_event=cancel_event)
+            local_start = pos - win_start
+            emit_len = min(step, total - pos)
+            valid = enhanced[local_start : local_start + emit_len]
+
+            if prev_tail is not None:
+                overlap = min(len(prev_tail), len(valid))
+                valid[:overlap] = (
+                    prev_tail[:overlap] * fade_out[:overlap] + valid[:overlap] * fade_in[:overlap]
+                )
+
+            is_last = pos + emit_len >= total
+            if not is_last and emit_len > xfade:
+                keep_len = emit_len - xfade
+                out[pos : pos + keep_len] = valid[:keep_len]
+                prev_tail = valid[keep_len:].copy()
+                pos += keep_len
+            else:
+                out[pos : pos + emit_len] = valid
+                prev_tail = None
+                pos += emit_len
+
+            if progress_cb is not None:
+                progress_cb(pos, total)
+
+        return out
+
+    def denoise_channels(
+        self,
+        channels: np.ndarray,
+        *,
+        cancel_event: threading.Event | None = None,
+        progress_cb: Callable[[int, int], None] | None = None,
+    ) -> np.ndarray:
+        """Denoise ``(C, T)`` float32 audio at 48 kHz, processing each channel cleanly."""
+        if channels.ndim != 2:
+            raise ValueError("Expected (channels, samples) float32 array.")
+        n_channels, n_samples = channels.shape
+        out = np.empty_like(channels, dtype=np.float32)
+        total_work = max(1, n_channels * n_samples)
+        for ch_idx in range(n_channels):
+
+            def _report(done: int, _total: int, offset: int = ch_idx * n_samples) -> None:
+                if progress_cb is not None:
+                    progress_cb(offset + done, total_work)
+
+            out[ch_idx] = self.denoise_mono(
+                channels[ch_idx], cancel_event=cancel_event, progress_cb=_report
+            )
+        return out
+
+
+class DeepFilterNet3Denoiser(_ChunkedAudioDenoiser):
     """CPU ONNX Runtime runner for DeepFilterNet3."""
 
     def __init__(self, bundle_path: str | Path) -> None:
         self.bundle_path = Path(bundle_path)
-        try:
-            import onnxruntime as ort
-        except ImportError as error:
-            raise RuntimeError(
-                "Audio cleanup is not available in this build of LocalSR (ONNX Runtime is missing)."
-            ) from error
+        ort = _import_onnxruntime()
         self.params, blobs = _read_bundle_members(self.bundle_path)
+        self.sample_rate = self.params.sr
         opts = ort.SessionOptions()
         opts.log_severity_level = 3
         self._enc = ort.InferenceSession(
@@ -206,8 +309,12 @@ class DeepFilterNet3Denoiser:
         self._mean_init = np.linspace(-60.0, -90.0, p.nb_erb, dtype=np.float32)
         self._unit_init = np.linspace(0.001, 0.0001, p.nb_df, dtype=np.float32)
 
-    def _denoise_window(self, audio: np.ndarray) -> np.ndarray:
+    def _denoise_window(
+        self, audio: np.ndarray, *, cancel_event: threading.Event | None = None
+    ) -> np.ndarray:
         """Denoise one contiguous 1D float32 array at 48 kHz, returning the same length."""
+        if cancel_event is not None and cancel_event.is_set():
+            raise InterruptedError("video job cancelled")
         n = len(audio)
         if n == 0:
             return audio.copy()
@@ -293,91 +400,164 @@ class DeepFilterNet3Denoiser:
         delay = fft_size - hop
         return np.clip(out[delay : delay + n], -1.0, 1.0)
 
-    def denoise_mono(
-        self,
-        samples: np.ndarray,
-        *,
-        cancel_event: threading.Event | None = None,
-        progress_cb: Callable[[int, int], None] | None = None,
-    ) -> np.ndarray:
-        """Denoise a 1D float32 mono buffer at 48 kHz in overlapping chunks."""
-        total = len(samples)
-        if total == 0:
-            return samples.astype(np.float32, copy=True)
 
-        step = int(_CHUNK_SECONDS * self.params.sr)
-        left_ctx = int(_LEFT_OVERLAP_SECONDS * self.params.sr)
-        right_ctx = int(_RIGHT_OVERLAP_SECONDS * self.params.sr)
-        xfade = _CROSSFADE_SAMPLES
-        if total <= step + right_ctx:
-            if cancel_event is not None and cancel_event.is_set():
-                raise InterruptedError("video job cancelled")
-            out = self._denoise_window(samples)
-            if progress_cb is not None:
-                progress_cb(total, total)
-            return out
+def _resolve_onnx_model_file(bundle_path: Path) -> Path:
+    if bundle_path.is_file():
+        return bundle_path
+    if bundle_path.is_dir():
+        candidates = sorted(p for p in bundle_path.glob("*.onnx") if p.is_file())
+        if len(candidates) == 1:
+            return candidates[0]
+        if len(candidates) > 1:
+            raise ValueError(f"Expected one ONNX file in {bundle_path}, found {len(candidates)}.")
+    raise FileNotFoundError(f"DPDFNet ONNX model not found at {bundle_path}.")
 
-        out = np.empty(total, dtype=np.float32)
-        pos = 0
-        fade_in = np.linspace(0.0, 1.0, xfade, dtype=np.float32)
-        fade_out = 1.0 - fade_in
-        prev_tail: np.ndarray | None = None
 
-        while pos < total:
-            if cancel_event is not None and cancel_event.is_set():
-                raise InterruptedError("video job cancelled")
-            win_start = max(0, pos - left_ctx)
-            win_end = min(total, pos + step + right_ctx)
-            enhanced = self._denoise_window(samples[win_start:win_end])
-            local_start = pos - win_start
-            emit_len = min(step, total - pos)
-            valid = enhanced[local_start : local_start + emit_len]
+class DPDFNetDenoiser(_ChunkedAudioDenoiser):
+    """CPU ONNX Runtime runner for streaming DPDFNet models.
 
-            if prev_tail is not None:
-                overlap = min(len(prev_tail), len(valid))
-                valid[:overlap] = (
-                    prev_tail[:overlap] * fade_out[:overlap] + valid[:overlap] * fade_in[:overlap]
-                )
+    STFT / ISTFT and state initialization follow upstream ``ceva-ip/DPDFNet``
+    (commit ``9bd9844a227bb6aa57e55588d8d0e961fcff1c46``:
+    ``onnx_model/infer_dpdfnet_onnx.py`` and
+    ``package/src/dpdfnet/{audio,onnx_backend}.py``):
+    - Vorbis window with ``win_len = (freq_bins - 1) * 2`` (960 at 48 kHz) and
+      ``hop_size = win_len // 2`` (480, 50% overlap, COLA).
+    - Centered reflect-padded STFT (``center=True, pad_mode="reflect"``) and
+      unnormalized ``rfft`` stacked as ``[1, 1, freq_bins, 2]`` float32.
+    - Frame-by-frame streaming ``state_in -> state_out`` initialized from
+      ``custom_metadata_map`` (``erb_norm_init`` and ``spec_norm_init``).
+    - Centered overlap-add ISTFT shifted by ``win_len * 2`` (4 hops = 1920
+      samples) for the model's causal lookahead delay.
+    """
 
-            is_last = pos + emit_len >= total
-            if not is_last and emit_len > xfade:
-                keep_len = emit_len - xfade
-                out[pos : pos + keep_len] = valid[:keep_len]
-                prev_tail = valid[keep_len:].copy()
-                pos += keep_len
-            else:
-                out[pos : pos + emit_len] = valid
-                prev_tail = None
-                pos += emit_len
+    def __init__(self, bundle_path: str | Path) -> None:
+        self.bundle_path = Path(bundle_path)
+        ort = _import_onnxruntime()
+        model_path = _resolve_onnx_model_file(self.bundle_path)
 
-            if progress_cb is not None:
-                progress_cb(pos, total)
+        opts = ort.SessionOptions()
+        opts.log_severity_level = 3
+        opts.intra_op_num_threads = 1
+        opts.inter_op_num_threads = 1
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        self._session = ort.InferenceSession(
+            str(model_path), sess_options=opts, providers=["CPUExecutionProvider"]
+        )
 
-        return out
-
-    def denoise_channels(
-        self,
-        channels: np.ndarray,
-        *,
-        cancel_event: threading.Event | None = None,
-        progress_cb: Callable[[int, int], None] | None = None,
-    ) -> np.ndarray:
-        """Denoise ``(C, T)`` float32 audio at 48 kHz, processing each channel cleanly."""
-        if channels.ndim != 2:
-            raise ValueError("Expected (channels, samples) float32 array.")
-        n_channels, n_samples = channels.shape
-        out = np.empty_like(channels, dtype=np.float32)
-        total_work = max(1, n_channels * n_samples)
-        for ch_idx in range(n_channels):
-
-            def _report(done: int, _total: int, offset: int = ch_idx * n_samples) -> None:
-                if progress_cb is not None:
-                    progress_cb(offset + done, total_work)
-
-            out[ch_idx] = self.denoise_mono(
-                channels[ch_idx], cancel_event=cancel_event, progress_cb=_report
+        inputs = self._session.get_inputs()
+        outputs = self._session.get_outputs()
+        if len(inputs) < 2 or len(outputs) < 2:
+            raise ValueError(
+                f"Expected streaming ONNX model with 2 inputs and 2 outputs, got {len(inputs)}/{len(outputs)}."
             )
-        return out
+        self._in_spec_name = inputs[0].name
+        self._in_state_name = inputs[1].name
+        self._out_spec_name = outputs[0].name
+        self._out_state_name = outputs[1].name
+
+        spec_shape = inputs[0].shape
+        freq_bins = spec_shape[-2] if len(spec_shape) >= 2 else None
+        if not isinstance(freq_bins, int) or freq_bins <= 1:
+            raise ValueError(f"Unsupported DPDFNet spectrum input shape: {spec_shape!r}")
+        self._freq_bins = freq_bins
+        self._win_len = (freq_bins - 1) * 2
+        self._hop_size = self._win_len // 2
+        self._window = _vorbis_window(self._win_len)
+        self._window_sq = self._window * self._window
+
+        meta = self._session.get_modelmeta().custom_metadata_map
+        self.sample_rate = int(meta.get("sample_rate") or DF3_SAMPLE_RATE)
+        state_shape = inputs[1].shape
+        state_dim = (
+            int(meta["state_size"])
+            if "state_size" in meta
+            else (int(state_shape[0]) if state_shape and isinstance(state_shape[0], int) else 0)
+        )
+        if state_dim <= 0:
+            raise ValueError(f"Unsupported DPDFNet state input shape: {state_shape!r}")
+        init_state = np.zeros(state_dim, dtype=np.float32)
+        if "erb_norm_state_size" in meta and "erb_norm_init" in meta:
+            erb_size = int(meta["erb_norm_state_size"])
+            erb_init = np.fromstring(meta["erb_norm_init"], sep=",", dtype=np.float32)
+            init_state[:erb_size] = erb_init[:erb_size]
+            if "spec_norm_state_size" in meta and "spec_norm_init" in meta:
+                spec_size = int(meta["spec_norm_state_size"])
+                spec_init = np.fromstring(meta["spec_norm_init"], sep=",", dtype=np.float32)
+                init_state[erb_size : erb_size + spec_size] = spec_init[:spec_size]
+        self._init_state = np.ascontiguousarray(init_state)
+
+    def _denoise_window(
+        self, audio: np.ndarray, *, cancel_event: threading.Event | None = None
+    ) -> np.ndarray:
+        """Denoise one contiguous 1D float32 array at 48 kHz, returning the same length."""
+        n = len(audio)
+        if n == 0:
+            return audio.copy()
+
+        win_len = self._win_len
+        hop = self._hop_size
+        # Pad 4 hops (win_len * 2) at the tail so the 4-hop alignment shift yields all n samples.
+        padded = np.pad(audio.astype(np.float32, copy=False), (0, win_len * 2), mode="constant")
+        centered = np.pad(padded, hop, mode="reflect")
+        n_frames = 1 + (len(centered) - win_len) // hop
+        frames = np.lib.stride_tricks.sliding_window_view(centered, win_len)[::hop][:n_frames]
+        spec = np.fft.rfft(frames * self._window, n=win_len, axis=-1)
+        spec_ri = np.stack([spec.real, spec.imag], axis=-1).astype(np.float32)
+
+        state = self._init_state.copy()
+        spec_e = np.empty((n_frames, self._freq_bins, 2), dtype=np.float32)
+        io_outputs = [self._out_spec_name, self._out_state_name]
+        for frame_idx in range(n_frames):
+            if (frame_idx & 31) == 0 and cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("video job cancelled")
+            frame_in = np.ascontiguousarray(spec_ri[frame_idx][None, None, :, :])
+            spec_e_t, state = self._session.run(
+                io_outputs,
+                {self._in_spec_name: frame_in, self._in_state_name: state},
+            )
+            spec_e[frame_idx] = spec_e_t[0, 0]
+
+        spec_c = (spec_e[..., 0] + 1j * spec_e[..., 1]).astype(np.complex64, copy=False)
+        time_frames = np.fft.irfft(spec_c, n=win_len, axis=-1).astype(np.float32) * self._window
+        out_full = np.zeros(win_len + hop * (n_frames - 1), dtype=np.float32)
+        window_sum_sq = np.zeros_like(out_full)
+        for frame_idx in range(n_frames):
+            start = frame_idx * hop
+            out_full[start : start + win_len] += time_frames[frame_idx]
+            window_sum_sq[start : start + win_len] += self._window_sq
+        nonzero = window_sum_sq > np.finfo(np.float32).tiny
+        out_full[nonzero] /= window_sum_sq[nonzero]
+
+        # Undo center=True (trim hop on each end) and 4-hop lookahead delay (win_len * 2).
+        trimmed = out_full[hop:-hop]
+        shifted = trimmed[win_len * 2 : win_len * 2 + n]
+        if len(shifted) < n:
+            shifted = np.pad(shifted, (0, n - len(shifted)), mode="constant")
+        return np.clip(shifted, -1.0, 1.0)
+
+
+AUDIO_DENOISER_FACTORIES: dict[str, Callable[[Path], AudioDenoiser]] = {
+    "deepfilternet3": DeepFilterNet3Denoiser,
+    "dpdfnet": DPDFNetDenoiser,
+}
+
+
+def load_denoiser(
+    engine_kind: str,
+    bundle_path: str | Path,
+    *,
+    filenames: Sequence[str] = (),
+) -> AudioDenoiser:
+    """Instantiate the audio denoiser registered for ``engine_kind``."""
+    factory = AUDIO_DENOISER_FACTORIES.get(engine_kind)
+    if factory is None:
+        raise ValueError(f"Unsupported audio cleanup engine: {engine_kind!r}.")
+    target = Path(bundle_path)
+    if target.is_dir() and len(filenames) == 1:
+        candidate = target / filenames[0]
+        if candidate.is_file():
+            target = candidate
+    return factory(target)
 
 
 def _encode_pcm_stream(
@@ -626,6 +806,7 @@ def cleaned_audio_source(
     *,
     enabled: bool,
     bundle_dir: str | None = None,
+    engine_kind: str = "deepfilternet3",
     denoiser: AudioDenoiser | None = None,
     temporary_directory: str | None = None,
     output_video_path: str | None = None,
@@ -641,11 +822,14 @@ def cleaned_audio_source(
     if denoiser is None:
         if not bundle_dir:
             raise FileNotFoundError(
-                "DeepFilterNet3 is not downloaded. Download it, or turn Clean up audio off."
+                "The audio cleanup model is not downloaded. Download it, or turn Clean up audio off."
             )
         candidate = Path(bundle_dir)
         archive = candidate / "DeepFilterNet3_onnx.tar.gz"
-        denoiser = DeepFilterNet3Denoiser(archive if archive.is_file() else candidate)
+        denoiser = load_denoiser(
+            engine_kind,
+            archive if engine_kind == "deepfilternet3" and archive.is_file() else candidate,
+        )
 
     if stage_cb is not None:
         stage_cb("audio_denoise")

@@ -121,6 +121,7 @@ export interface CatalogVideoModel {
   min_vram_gb: number;
   temporal_window: number;
   temporal_overlap: number;
+  summary?: string;
   commercial_use_allowed: boolean | null;
   automated_download_allowed: boolean;
   terms_acceptance_required: boolean;
@@ -138,7 +139,7 @@ export interface CatalogManifest {
   video_models: CatalogVideoModel[];
   /** Optional frame-interpolation stages of a video job; never video engines. */
   interpolation_models: CatalogVideoModel[];
-  /** Optional speech audio denoising stage (DeepFilterNet3). */
+  /** Optional speech audio denoising stages. */
   audio_models?: CatalogVideoModel[];
 }
 
@@ -269,6 +270,7 @@ export interface Recipe {
   video_interpolation?: InterpolationTarget | '';
   video_interpolation_order?: InterpolationOrder | '';
   video_clean_audio?: boolean;
+  video_audio_model?: string;
 }
 
 /** AV1/VP9/FFV1 are bundled and royalty-free; H.264/HEVC use the user's own FFmpeg. */
@@ -330,6 +332,7 @@ export interface UiSettings {
   video_interpolation?: InterpolationTarget;
   video_interpolation_order?: InterpolationOrder;
   video_clean_audio?: boolean;
+  video_audio_model?: string;
   /** Direct builds send version, platform and channel after an update check. Off unless turned on. */
   anonymous_update_count?: boolean;
   completion_sound?: boolean;
@@ -573,6 +576,7 @@ export interface StartBatchInput {
   video_interpolation?: InterpolationTarget;
   video_interpolation_order?: InterpolationOrder;
   video_clean_audio?: boolean;
+  video_audio_model?: string;
 }
 
 /** The plan card's labels when a job was queued; host-only, never sent to the worker. */

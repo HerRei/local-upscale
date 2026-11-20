@@ -515,6 +515,7 @@ fn input(task: &str) -> StartBatchInput {
         video_interpolation: "off".into(),
         video_interpolation_order: "after_upscale".into(),
         video_clean_audio: false,
+        video_audio_model: String::new(),
     }
 }
 
@@ -1679,6 +1680,7 @@ fn recipe_stage_validation_accepts_legacy_and_rejects_ambiguous_order() {
         video_interpolation: String::new(),
         video_interpolation_order: String::new(),
         video_clean_audio: false,
+        video_audio_model: String::new(),
     };
     assert!(validate_recipe_stages(&legacy).is_ok());
 
@@ -1862,13 +1864,10 @@ fn audio_denoise_reaches_the_worker_and_skips_videos_without_audio() {
         .contains("download the audio cleanup model first"));
     {
         let mut catalog = lock(&state.catalog).unwrap();
-        let df3 = catalog
-            .audio_models
-            .iter_mut()
-            .find(|model| model.model_id == "deepfilternet3")
-            .unwrap();
-        df3.installed = true;
-        df3.installed_path = Some("/models/deepfilternet3".into());
+        for model in &mut catalog.audio_models {
+            model.installed = true;
+            model.installed_path = Some(format!("/models/{}", model.family));
+        }
     }
     let selection = resolve_model_selection(&state, &options).unwrap();
     let work = Path::new("/app-owned/work");
@@ -1885,6 +1884,45 @@ fn audio_denoise_reaches_the_worker_and_skips_videos_without_audio() {
         "/models/deepfilternet3"
     );
 
+    // Selecting DPDFNet sends its id and bundle path; unknown id falls back to default.
+    let mut dpdf_options = options.clone();
+    dpdf_options.video_audio_model = "dpdfnet8_48khz_hr".into();
+    let dpdf_selection = resolve_model_selection(&state, &dpdf_options).unwrap();
+    let with_dpdf = build_job_message(
+        "job-dpdf",
+        &video_media(),
+        output,
+        work,
+        &dpdf_options,
+        &dpdf_selection,
+    )
+    .unwrap();
+    assert_eq!(
+        with_dpdf["data"]["audio_denoise_model_id"],
+        "dpdfnet8_48khz_hr"
+    );
+    assert_eq!(
+        with_dpdf["data"]["audio_denoise_bundle_dir"],
+        "/models/dpdfnet8_48khz_hr"
+    );
+
+    let mut unknown_options = options.clone();
+    unknown_options.video_audio_model = "removed_audio_model".into();
+    let fallback_selection = resolve_model_selection(&state, &unknown_options).unwrap();
+    let with_fallback = build_job_message(
+        "job-fallback",
+        &video_media(),
+        output,
+        work,
+        &unknown_options,
+        &fallback_selection,
+    )
+    .unwrap();
+    assert_eq!(
+        with_fallback["data"]["audio_denoise_model_id"],
+        "deepfilternet3"
+    );
+
     let mut silent = video_media();
     silent.has_audio = false;
     let without_audio =
@@ -1896,10 +1934,27 @@ fn audio_denoise_reaches_the_worker_and_skips_videos_without_audio() {
     // Default off when disabled in settings and backward-compatible when omitted.
     let defaults = UiSettings::default();
     assert!(!defaults.video_clean_audio);
+    assert!(defaults.video_audio_model.is_empty());
     let mut older = serde_json::to_value(&defaults).unwrap();
     older.as_object_mut().unwrap().remove("video_clean_audio");
+    older.as_object_mut().unwrap().remove("video_audio_model");
     let parsed: UiSettings = serde_json::from_value(older).unwrap();
     assert!(!parsed.video_clean_audio);
+    assert!(parsed.video_audio_model.is_empty());
+
+    let older_recipe: crate::types::Recipe = serde_json::from_value(serde_json::json!({
+        "id": "r1",
+        "name": "Old video recipe",
+        "task": "video",
+        "model_id": "span_photo_x4",
+        "output_scale": 4,
+        "tile_size": 256,
+        "halo": 32,
+        "precision": "fp32",
+        "safe_memory": false
+    }))
+    .unwrap();
+    assert!(older_recipe.video_audio_model.is_empty());
 }
 
 #[test]

@@ -131,6 +131,19 @@ mod tests {
         {
             assert!(ids.insert(id), "duplicate catalog id: {id}");
         }
+        let mut audio_families = std::collections::HashSet::new();
+        for model in &catalog.audio_models {
+            assert!(
+                audio_families.insert(&model.family),
+                "duplicate audio family: {}",
+                model.family
+            );
+            assert!(
+                !model.summary.is_empty(),
+                "missing audio summary: {}",
+                model.model_id
+            );
+        }
     }
 
     #[test]

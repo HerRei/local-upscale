@@ -1585,7 +1585,7 @@ class WorkerServer:
         )
 
     def _audio_denoiser(self, job_id, data):
-        """Verify the catalog DeepFilterNet3 bundle, then load its ONNX sessions."""
+        """Verify the catalog audio cleanup bundle, then load its ONNX session."""
         model_id = str(data.get("audio_denoise_model_id") or DEFAULT_AUDIO_MODEL_ID)
         model = AUDIO_CATALOG_BY_ID.get(model_id)
         if model is None:
@@ -1612,15 +1612,16 @@ class WorkerServer:
                 f"{model.name} failed its catalog SHA-256 check. "
                 "LocalSR refused to load it; remove the bundle and download it again."
             )
-        from localsr.core.audio_denoise import DeepFilterNet3Denoiser
+        from localsr.core.audio_denoise import load_denoiser
 
-        (archive,) = model.files
+        bundle_dir = self.model_store.bundle_dir_for(model)
+        filenames = [file.filename for file in model.files]
         return self._prepare_bundle(
             job_id,
             "Loading the audio cleanup model",
             BUNDLE_LOAD_SECONDS,
             "bundle-load",
-            lambda: DeepFilterNet3Denoiser(self.model_store.bundle_file_path(model, archive)),
+            lambda: load_denoiser(model.engine_kind, bundle_dir, filenames=filenames),
         )
 
     def _run_video_job(self, job_id, data):

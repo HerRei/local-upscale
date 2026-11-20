@@ -32,6 +32,11 @@ def main() -> None:
         sources = [
             "backend-directml.in" if target["backend"] == "DirectML" else "backend-modern.in"
         ]
+        extra_flags: list[str] = []
+        if target["backend"] == "DirectML":
+            # Both wheels install the `onnxruntime` module; plain onnxruntime would replace
+            # DirectML's build (see tests/test_backend_packaging.py).
+            extra_flags.extend(["--no-emit-package", "onnxruntime"])
         if target["id"] == "linux-x86_64-cpu":
             # Intel GPUs through OpenVINO; the GPU editions bring their own runtime.
             sources.append("backend-openvino.in")
@@ -66,6 +71,7 @@ def main() -> None:
                 "--output-file",
                 str(lock),
                 "--quiet",
+                *extra_flags,
                 *upgrades,
             ],
             cwd=ROOT,

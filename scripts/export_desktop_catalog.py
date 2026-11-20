@@ -104,7 +104,7 @@ def build_manifest() -> dict:
         entry = asdict(model)
         entry["files"] = [asdict(file) for file in model.files]
         entry.update(_license_policy(model.license_name, "allowed"))
-        entry["engine_id"] = "localsr.audio.deepfilternet3"
+        entry["engine_id"] = f"localsr.audio.{model.engine_kind}"
         entry["support_tier"] = "supported"
         audio_models.append(entry)
 
