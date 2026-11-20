@@ -54,7 +54,7 @@
 </script>
 
 {#if visible}
-  <div class="update-notice" role="status" aria-live="polite">
+  <div class="update-notice" role="status" aria-live="polite" data-tauri-drag-region>
     <div class="glyph" aria-hidden="true">
       <svg viewBox="0 0 24 24"
         ><path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5" /><path d="M5 19h14" /></svg
