@@ -135,3 +135,10 @@ ImageBatchRequest  # protocol/messages.py: additive batch envelope built by the 
 
 # Catalog field exported to the desktop catalog with asdict() and read by the host and the front end.
 time_factor
+
+# ONNX Runtime session options, read by onnxruntime itself (core/audio_denoise.py).
+log_severity_level
+inter_op_num_threads
+
+# Protocol field set by the Rust host for the audio cleanup model (protocol/messages.py).
+audio_denoise_model_id
