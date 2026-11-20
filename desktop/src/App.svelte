@@ -1679,7 +1679,6 @@
   // Quick and Best describe the result; the model behind them is named once, under Model.
   function qualityBlurb(quality: 'quick' | 'best'): string {
     if (restoring) return quality === 'quick' ? 'Fast clean-up' : 'Most careful, slower';
-    if (skipUpscale) return 'Used from 2× up';
     if (settings.task === 'video')
       return quality === 'quick' ? 'Fast, frame by frame' : 'More detail, slower';
     return quality === 'quick' ? 'Fast, clean result' : 'Finest detail, slower';
