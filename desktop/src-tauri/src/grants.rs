@@ -688,6 +688,9 @@ mod tests {
         fs::write(&model, b"m").unwrap();
         let spaced = format!("{} ", export.to_string_lossy());
         registry.reconcile_outputs(&spaced);
+        // Windows drops trailing spaces from path names, so there both spellings name the
+        // folder that was chosen; elsewhere they are two different folders.
+        #[cfg(not(windows))]
         assert!(registry.check_output_folder(&export).is_err());
         assert!(registry.check_output_folder(Path::new(&spaced)).is_ok());
         registry.reconcile_models(&format!(" {}", model.to_string_lossy()), &[]);
