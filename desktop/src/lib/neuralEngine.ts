@@ -165,3 +165,18 @@ export function fitLine(
   const accelerator = runsOnAccelerator(settings, capabilities, model.architecture);
   return { fit, text: `${FIT_LABELS[fit]} · ${accelerator ?? used.name}` };
 }
+
+/** Name interpolation only when it runs on a different unit from the upscale. */
+export function interpolationHardwareLabel(
+  label: string,
+  deviceId: string,
+  interpolating: boolean,
+): string {
+  if (!interpolating) return label;
+  // Mirrors torch_device_for in src/localsr/video_models/rife/engine.py.
+  const kind = deviceId.split(':', 1)[0];
+  if (label === 'Neural Engine' && kind === 'mps') return `${label} · interpolation on GPU`;
+  if (['directml', 'openvino', 'qnn'].includes(kind) && !label.startsWith('CPU'))
+    return `${label} · interpolation on CPU`;
+  return label;
+}

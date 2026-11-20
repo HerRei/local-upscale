@@ -84,6 +84,10 @@ def batch_settings(data: Mapping[str, Any]) -> dict[str, Any] | None:
         return None  # The normal runner reports an invalid recipe for each photo.
     if pipeline.preprocess_stages or pipeline.face is not None:
         return None
+    if pipeline.primary is None or (
+        data.get("output_scale") == 1 and pipeline.primary.kind == "upscale"
+    ):
+        return None
     return {key: value for key, value in data.items() if key not in _PHOTO_FIELDS}
 
 

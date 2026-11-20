@@ -52,7 +52,7 @@ interface Variant {
 }
 
 const IMAGE = ['Output scale', 'Format', 'Preserve safe metadata and color profile'];
-const TAIL = ['Save to', 'Hardware', 'Interface text', 'Memory pressure'];
+const TAIL = ['Save to', 'Hardware', 'Interface text', 'Run at low priority', 'Memory pressure'];
 const GRID = ['Tile', 'Halo', 'Precision', 'Safe memory mode'];
 const VIDEO = ['Container', 'Video format', 'External FFmpeg', 'Video quality · CRF'];
 
@@ -96,6 +96,13 @@ const variants: Variant[] = [
     capabilities: other,
     interpolation: true,
     expected: ['Output scale', ...VIDEO, 'De-flicker · Labs', 'Frame rate', ...TAIL, ...GRID],
+  },
+  {
+    name: 'video restore frame by frame elsewhere',
+    settings: { task: 'video', video_task: 'denoise', video_interpolation: 'off' },
+    capabilities: other,
+    interpolation: true,
+    expected: [...VIDEO, 'De-flicker · Labs', 'Frame rate', ...TAIL, ...GRID],
   },
   {
     name: 'video with a temporal model',
@@ -151,6 +158,11 @@ function controls(root: HTMLElement): { label: string; row: Element }[] {
     const label = field.querySelector('small')?.textContent?.trim();
     if (label) found.push({ label, row: field });
   }
+  for (const box of root.querySelectorAll('[role=checkbox]')) {
+    const label = box.textContent?.replace(/\s+/g, ' ').trim();
+    const row = box.closest('.check-line') ?? box;
+    if (label) found.push({ label, row });
+  }
   const memory = root.querySelector('.hardware-card');
   if (memory) found.push({ label: 'Memory pressure', row: memory });
   return found;
@@ -201,10 +213,12 @@ describe('the wording of the help tips', () => {
 });
 
 describe('while a job runs, the whole Advanced section is locked', () => {
-  // Help tips and Refresh stay usable; every other interactive thing must be disabled, so a
-  // control added later that sits outside the locked fieldset fails here.
+  // Help tips, Refresh and Run at low priority stay usable; every other interactive thing must be
+  // disabled, so a control added later that sits outside the locked fieldset fails here.
   const usable = (element: Element) =>
-    element.classList.contains('help-tip') || element.classList.contains('memory-refresh');
+    element.classList.contains('help-tip') ||
+    element.classList.contains('memory-refresh') ||
+    element.classList.contains('live-setting');
 
   for (const variant of variants) {
     it(variant.name, async () => {

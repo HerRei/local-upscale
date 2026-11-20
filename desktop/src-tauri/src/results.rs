@@ -12,14 +12,26 @@ use serde_json::Value;
 
 use crate::types::CatalogManifest;
 
-/// Refuse a result that is a link. A result is a file the engine wrote; one that has
-/// since become a link could lead anywhere, and resolving it would authorize its
-/// target. A path that does not exist is not a link.
+/// Refuse a result that is a link, or that sits below one. A result is a file the
+/// engine wrote under a resolved output folder, so its recorded path is already its
+/// real path; one that no longer is (the file or a folder above it became a link) could
+/// lead anywhere, and resolving it would authorize its target. A file with a second
+/// name could be another file the engine never wrote. A path that does not exist is
+/// not a link.
 pub fn ensure_not_linked(path: &Path) -> crate::error::AppResult<()> {
-    if std::fs::symlink_metadata(path).is_ok_and(|info| info.file_type().is_symlink()) {
-        return Err(crate::error::AppError::Validation(
-            "output path was not authorized".into(),
-        ));
+    let refused = || crate::error::AppError::Validation("output path was not authorized".into());
+    let Ok(info) = std::fs::symlink_metadata(path) else {
+        return Ok(());
+    };
+    if info.file_type().is_symlink() || std::fs::canonicalize(path).ok().as_deref() != Some(path) {
+        return Err(refused());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if info.is_file() && info.nlink() != 1 {
+            return Err(refused());
+        }
     }
     Ok(())
 }
@@ -105,34 +117,49 @@ pub struct MediaResults {
 /// The primary model of a recorded request: its id and a fallback label.
 pub fn request_model(request: &Value) -> (String, String) {
     let data = &request["data"];
+    let model_path = data["model_path"].as_str().unwrap_or_default();
     let stages = data["stages"].as_array();
     let primary = stages.and_then(|stages| {
         stages
             .iter()
-            .find(|stage| {
-                !data["model_path"].is_null() && stage["model_path"] == data["model_path"]
-            })
+            .find(|stage| !model_path.is_empty() && stage["model_path"] == model_path)
             .or_else(|| {
                 stages
                     .iter()
                     .rev()
                     .find(|stage| matches!(stage["kind"].as_str(), Some("upscale" | "restore")))
             })
+            .or_else(|| stages.last())
     });
     let id = primary
         .and_then(|stage| stage["model_id"].as_str())
         .or_else(|| data["model_id"].as_str())
         // A video engine job names its engine here and carries no image model.
         .or_else(|| data["video_model_id"].as_str())
+        .or_else(|| data["interpolation_model_id"].as_str())
+        .or_else(|| {
+            data["audio_denoise"]
+                .as_bool()
+                .filter(|active| *active)
+                .and_then(|_| data["audio_denoise_model_id"].as_str())
+        })
         .filter(|id| !id.is_empty())
         .unwrap_or_default()
         .to_owned();
     let label = if id.is_empty() || id == "__custom__" {
-        Path::new(data["model_path"].as_str().unwrap_or_default())
+        Path::new(model_path)
             .file_stem()
             .and_then(|name| name.to_str())
             .filter(|name| !name.is_empty())
-            .unwrap_or("Unknown model")
+            .unwrap_or_else(|| {
+                if data["deflicker"].as_bool() == Some(true) {
+                    "De-flicker"
+                } else if data["output_scale"].as_u64() == Some(1) {
+                    "1× video"
+                } else {
+                    "Unknown model"
+                }
+            })
             .to_owned()
     } else {
         id.clone()
@@ -146,11 +173,16 @@ pub fn request_kind(request: &Value) -> &'static str {
         Some("video_job_request") => "video",
         _ => {
             let primary = request_model(request).0;
-            let restores = request["data"]["stages"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .any(|stage| stage["kind"] == "restore" && stage["model_id"] == primary.as_str());
+            let stages = request["data"]["stages"].as_array();
+            let restores =
+                stages.into_iter().flatten().any(|stage| {
+                    stage["kind"] == "restore" && stage["model_id"] == primary.as_str()
+                }) || (request["data"]["output_scale"].as_u64() == Some(1)
+                    && stages.is_some_and(|list| {
+                        list.iter().all(|stage| {
+                            matches!(stage["kind"].as_str(), Some("restore" | "deblock"))
+                        })
+                    }));
             if restores {
                 "restore"
             } else {
@@ -172,6 +204,7 @@ pub fn catalog_label(catalog: &CatalogManifest, model_id: &str) -> Option<String
             .video_models
             .iter()
             .chain(&catalog.interpolation_models)
+            .chain(&catalog.audio_models)
             .find(|model| model.model_id == model_id)
             .map(|model| model.name.clone());
     };

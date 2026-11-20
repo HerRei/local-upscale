@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 
 import App from './App.svelte';
 import { demoSnapshot } from './lib/demo';
+import { applyWorkerEnvelope } from './lib/workerEvents';
 import type {
   AppSnapshot,
   DeviceInfo,
@@ -76,7 +77,21 @@ const api = vi.hoisted(() => ({
   clearResults: vi.fn(async () => undefined),
   saveSettings: vi.fn(async (_settings: UiSettings): Promise<void> => undefined),
   setUpdateSwitch: vi.fn(async (_name: string, _value: boolean): Promise<void> => undefined),
-  startJobs: vi.fn(async () => undefined),
+  listCrashReports: vi.fn(
+    async (): Promise<{ id: string; report: { message: string; os: string } }[]> => [],
+  ),
+  deleteCrashReport: vi.fn(async (_id: string) => {}),
+  deleteAllCrashReports: vi.fn(async () => {}),
+  setPrivacyChoice: vi.fn(
+    async (_choices: {
+      appearance: UiSettings['appearance'];
+      colourBlindPalette: boolean;
+      checkAtLaunch: boolean;
+      anonymousCount: boolean;
+      crashReports: boolean;
+    }): Promise<void> => undefined,
+  ),
+  startJobs: vi.fn(async (_input: StartBatchInput) => undefined),
   cancelJobs: vi.fn(async () => undefined),
   retryEngine: vi.fn(async (): Promise<void> => undefined),
   startBenchmark: vi.fn(async () => undefined),
@@ -115,10 +130,11 @@ const api = vi.hoisted(() => ({
   chooseExternalFFmpeg: vi.fn(async (): Promise<string | null> => null),
   openFfmpegDownloadPage: vi.fn(async () => undefined),
   openDownloadPage: vi.fn(async () => undefined),
+  openCustomModelTutorial: vi.fn(async () => undefined),
   ffmpegInstallHint: vi.fn(async () => null),
   openTerminalWithInstallCommand: vi.fn(async () => undefined),
   downloadModel: vi.fn(async (_id: string, _accepted: boolean) => undefined),
-  cancelDownload: vi.fn(async () => undefined),
+  cancelDownload: vi.fn(async (_id: string) => undefined),
   removeModel: vi.fn(async () => undefined),
   importCatalogModel: vi.fn(async () => undefined),
   startEdit: vi.fn(async () => undefined),
@@ -146,6 +162,7 @@ const api = vi.hoisted(() => ({
   useResultAsInput: vi.fn(async (): Promise<string> => 'new-input'),
   revealResult: vi.fn(async () => undefined),
   diagnosticSummary: vi.fn(async () => 'LocalSR diagnostics'),
+  openBugReport: vi.fn(async (_url: string) => undefined),
   openOutputDirectory: vi.fn(async () => undefined),
   takeLaunchIntents: vi.fn(async (): Promise<LaunchIntent[]> => []),
   integrationStatus: vi.fn(async () => ({
@@ -208,7 +225,14 @@ function readySnapshot(media: MediaItem[] = []): AppSnapshot {
     minimum_protocol_version: 1,
     engine_id: 'localsr.test',
     engine_version: '0.0.11-alpha',
-    features: ['image', 'image_multi_fix', 'video_frame', 'video_seedvr2', 'video_interpolation'],
+    features: [
+      'image',
+      'image_multi_fix',
+      'video_frame',
+      'video_seedvr2',
+      'video_interpolation',
+      'video_audio_denoise',
+    ],
     model_formats: ['.safetensors'],
     video_engines: ['spandrel_image', 'seedvr2'],
   };
@@ -284,6 +308,39 @@ function editSnapshot(unifiedGb: number): AppSnapshot {
   snapshot.edit.models.forEach((model) => (model.installed = true));
   return snapshot;
 }
+
+describe('Appearance from the host', () => {
+  it('applies a saved menu change while processing', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.runtime.active_job_id = 'job-running';
+    await mountWith(snapshot);
+    await waitFor(() => expect(api.listenForStateChange).toHaveBeenCalled());
+    const changed = structuredClone(snapshot);
+    changed.settings.appearance = 'light';
+    changed.settings.colour_blind_palette = true;
+    api.refreshSnapshot.mockResolvedValue(changed);
+    (api.listenForStateChange.mock.calls[0][0] as () => void)();
+    await waitFor(() =>
+      expect(document.documentElement.dataset).toMatchObject({
+        theme: 'light',
+        palette: 'colour-blind',
+      }),
+    );
+    expect(api.saveSettings).not.toHaveBeenCalled();
+  });
+});
+
+describe('Completion sound switch', () => {
+  it('saves the chosen value', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await chooseMenuItem('app.updates');
+    await user.click(await screen.findByLabelText('Play a sound when a job finishes'));
+    expect(api.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ completion_sound: true }),
+    );
+  });
+});
 
 describe('Update switches', () => {
   it('go to the host on their own, even during a job, and never through a full save', async () => {
@@ -525,6 +582,9 @@ beforeEach(() => {
   api.estimateModelTrials.mockReset().mockResolvedValue([]);
   api.cancelJobsForMedia.mockReset().mockResolvedValue(undefined);
   api.retryEngine.mockReset().mockResolvedValue(undefined);
+  api.listCrashReports.mockReset().mockResolvedValue([]);
+  api.deleteCrashReport.mockReset().mockResolvedValue(undefined);
+  api.deleteAllCrashReports.mockReset().mockResolvedValue(undefined);
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
     clearRect: vi.fn(),
     drawImage: vi.fn(),
@@ -1662,14 +1722,15 @@ describe('LocalSR desktop interface', () => {
 
     cleanup();
     await mountWith(readySnapshot([video('clip', true)]));
-    // A selected video turns Upscale into video upscaling; the image-only tasks step aside.
+    // A selected video turns Upscale into video upscaling, enables Restore, and keeps Edit disabled.
     expect((screen.getByRole('button', { name: 'Upscale' }) as HTMLButtonElement).disabled).toBe(
       false,
     );
     expect(screen.getByText('Enlarges video, SDR or HDR.')).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Restore' }) as HTMLButtonElement).disabled).toBe(
-      true,
+      false,
     );
+    expect((screen.getByRole('button', { name: 'Edit' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it.each([
@@ -2376,7 +2437,10 @@ describe('LocalSR desktop interface', () => {
         '1 video item can be queued with this setup; select the other media type to configure it separately.';
       const start = screen.getByRole('button', { name: 'Start selected video' });
       expect(start.getAttribute('title')).toBe(why);
-      expect(screen.getByRole('button', { name: /^Restore$/ }).hasAttribute('disabled')).toBe(true);
+      expect(screen.getByRole('button', { name: /^Restore$/ }).hasAttribute('disabled')).toBe(
+        false,
+      );
+      expect(screen.getByRole('button', { name: /^Edit$/ }).hasAttribute('disabled')).toBe(true);
       await user.click(start);
       await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
       expect(api.startJobs).toHaveBeenCalledWith(
@@ -4341,18 +4405,19 @@ describe('Several fixes in one pass', () => {
     );
   });
 
-  it('keeps a frame-by-frame video recipe and shows no fixes for video', async () => {
+  it('keeps a frame-by-frame video recipe and offers fixes for frame-by-frame video', async () => {
     const snapshot = readySnapshot([video('clip', true)]);
     Object.assign(snapshot.settings, {
       task: 'video',
+      video_task: 'upscale',
       quality: 'best',
       selected_model_id: 'span_photo_x4',
       selected_video_model_id: 'frame_by_frame',
     });
     const user = await mountWith(snapshot);
-    // Video runs no fixes, so it offers none; Faces stays.
-    expect(screen.queryByRole('button', { name: 'Noise' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Blur' })).toBeNull();
+    // Frame-by-frame video offers fix stages alongside Faces.
+    expect(screen.getByRole('button', { name: 'Noise' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Blur' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Faces' })).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
     await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Clip');
@@ -4363,7 +4428,7 @@ describe('Several fixes in one pass', () => {
     ]);
   });
 
-  it('drops the fixes when the task becomes video', async () => {
+  it('keeps fixes when the task becomes frame-by-frame video', async () => {
     const snapshot = readySnapshot([image('photo', true), video('clip')]);
     Object.assign(snapshot.settings, {
       task: 'upscale',
@@ -4372,13 +4437,18 @@ describe('Several fixes in one pass', () => {
       fixes: ['blur', 'noise'],
       fix_stages: [blur, { fix: 'noise', model_id: 'scunet_color_real_psnr' }],
     });
-    const user = await mountWith(snapshot);
+    await mountWith(snapshot);
     const switched = structuredClone(snapshot);
     switched.media = [image('photo'), video('clip', true)];
     api.refreshSnapshot.mockResolvedValue(switched);
-    await user.click(screen.getByRole('button', { name: /^▶ clip\.mp4/ }));
+    await userEvent.click(screen.getByRole('button', { name: /^▶ clip\.mp4/ }));
     await waitFor(() =>
-      expect(lastSaved()).toMatchObject({ task: 'video', fix_stages: [], fixes: [] }),
+      expect(lastSaved()).toMatchObject({
+        task: 'video',
+        video_task: 'upscale',
+        fix_stages: [blur, { fix: 'noise', model_id: 'scunet_color_real_psnr' }],
+        fixes: ['blur', 'noise'],
+      }),
     );
   });
 
@@ -4521,7 +4591,7 @@ describe('Several fixes in one pass', () => {
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({ enable_face_model: false, fixes: ['noise', 'faces'] }),
     );
-    await chooseTask(user, /^Upscale/);
+    await chooseTask(user, /^Upscale$/);
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
         task: 'upscale',
@@ -5490,6 +5560,29 @@ describe('Dialogs and refused host calls', () => {
       await shown('Could not show the result');
     });
 
+    it('deletes a saved recipe only after confirmation', async () => {
+      const snapshot = readySnapshot([image('first', true)]);
+      const model = snapshot.catalog.models.find((entry) => entry.native_scale === 4)!;
+      snapshot.recipes = [
+        {
+          id: 'jens67',
+          name: 'Jens67',
+          task: 'upscale',
+          model_id: model.model_id,
+          output_scale: 4,
+          tile_size: 256,
+          halo: 32,
+          precision: 'fp32',
+          safe_memory: true,
+        },
+      ];
+      const user = await mountWith(snapshot);
+      await user.click(screen.getByRole('button', { name: 'Delete Jens67' }));
+      expect(api.deleteRecipe).not.toHaveBeenCalled();
+      await user.click(screen.getByRole('button', { name: 'Confirm delete Jens67' }));
+      expect(api.deleteRecipe).toHaveBeenCalledWith('jens67');
+    });
+
     it('says so for Delete on a saved recipe', async () => {
       const snapshot = readySnapshot([image('first', true)]);
       const model = snapshot.catalog.models.find((entry) => entry.native_scale === 4)!;
@@ -5509,6 +5602,15 @@ describe('Dialogs and refused host calls', () => {
       const user = await mountWith(snapshot);
       api.deleteRecipe.mockRejectedValueOnce(refusal);
       await user.click(screen.getByRole('button', { name: 'Delete Jens67' }));
+      expect(api.deleteRecipe).not.toHaveBeenCalled();
+      await user.click(screen.getByRole('button', { name: 'Cancel deleting Jens67' }));
+      expect(api.deleteRecipe).not.toHaveBeenCalled();
+      await user.click(screen.getByRole('button', { name: 'Delete Jens67' }));
+      await user.keyboard('{Escape}');
+      expect(api.deleteRecipe).not.toHaveBeenCalled();
+      await user.click(screen.getByRole('button', { name: 'Delete Jens67' }));
+      await user.click(screen.getByRole('button', { name: 'Confirm delete Jens67' }));
+      expect(api.deleteRecipe).toHaveBeenCalledWith('jens67');
       await shown('Could not delete the recipe');
     });
   });
@@ -5756,4 +5858,708 @@ it('does not ask for a catalog model under Your own file', async () => {
   expect(
     screen.queryByText('Select a model to see what it is for and where it comes from.'),
   ).toBeNull();
+  await user.click(screen.getByRole('button', { name: 'Watch the tutorial' }));
+  expect(api.openCustomModelTutorial).toHaveBeenCalledTimes(1);
+});
+
+it('saves Run at low priority via setUpdateSwitch even while a job is running', async () => {
+  const snapshot = readySnapshot([image('photo', true)]);
+  snapshot.settings.task = 'upscale';
+  const user = await mountWith(snapshot);
+  await user.click(screen.getByRole('button', { name: /Advanced/ }));
+  // Start a job so processing settings lock.
+  const running = structuredClone(snapshot);
+  running.runtime.active_job_id = 'job-1';
+  api.refreshSnapshot.mockResolvedValue(running);
+  (api.listenForStateChange.mock.calls[0][0] as () => void)();
+  await waitFor(() =>
+    expect(screen.getByRole('group', { name: 'Processing settings' }).matches(':disabled')).toBe(
+      true,
+    ),
+  );
+  // user-event skips any descendant of fieldset[disabled], even non-form spans; fireEvent matches a real browser.
+  await fireEvent.click(screen.getByRole('checkbox', { name: 'Run at low priority' }));
+  expect(api.setUpdateSwitch).toHaveBeenCalledWith('low_priority', true);
+  expect(api.saveSettings).not.toHaveBeenCalledWith(
+    expect.objectContaining({ low_priority: true }),
+  );
+});
+
+describe('first-launch setup screen', () => {
+  it('shows defaults, previews appearance live, saves all choices on Continue, and closes', async () => {
+    const snapshot = readySnapshot();
+    snapshot.settings.privacy_choice_made = false;
+    const user = await mountWith(snapshot);
+    const dialog = await screen.findByRole('dialog', { name: 'Welcome to LocalSR' });
+
+    const dark = within(dialog).getByRole('radio', { name: 'Dark' });
+    const light = within(dialog).getByRole('radio', { name: 'Light' });
+    const system = within(dialog).getByRole('radio', { name: 'Match System' });
+    const colourBlind = within(dialog).getByRole('switch', {
+      name: 'Colour-blind friendly colours',
+    }) as HTMLInputElement;
+    const checkUpdates = within(dialog).getByRole('switch', {
+      name: 'Check for updates automatically',
+    }) as HTMLInputElement;
+    const anonymousCount = within(dialog).getByRole('switch', {
+      name: 'Send an anonymous count with each update check',
+    }) as HTMLInputElement;
+    const crashReports = within(dialog).getByRole('switch', {
+      name: 'Offer to report crashes',
+    }) as HTMLInputElement;
+
+    expect(dark.getAttribute('aria-checked')).toBe('true');
+    expect(light.getAttribute('aria-checked')).toBe('false');
+    expect(system.getAttribute('aria-checked')).toBe('false');
+    expect(colourBlind.checked).toBe(false);
+    expect(checkUpdates.checked).toBe(true);
+    expect(anonymousCount.checked).toBe(false);
+    expect(crashReports.checked).toBe(false);
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    expect(document.documentElement.dataset.palette).toBe('default');
+
+    await user.click(light);
+    expect(document.documentElement.dataset.theme).toBe('light');
+    expect(light.getAttribute('aria-checked')).toBe('true');
+
+    await user.click(colourBlind);
+    expect(document.documentElement.dataset.palette).toBe('colour-blind');
+    expect(api.setPrivacyChoice).not.toHaveBeenCalled();
+
+    await user.click(checkUpdates);
+    await user.click(anonymousCount);
+    await user.click(crashReports);
+    await user.click(within(dialog).getByRole('button', { name: 'Continue' }));
+
+    await waitFor(() =>
+      expect(api.setPrivacyChoice).toHaveBeenCalledWith({
+        appearance: 'light',
+        colourBlindPalette: true,
+        checkAtLaunch: false,
+        anonymousCount: true,
+        crashReports: true,
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Welcome to LocalSR' })).toBeNull(),
+    );
+  });
+
+  it('follows a sensible keyboard focus order and ignores Escape', async () => {
+    const snapshot = readySnapshot();
+    snapshot.settings.privacy_choice_made = false;
+    const user = await mountWith(snapshot);
+    const dialog = await screen.findByRole('dialog', { name: 'Welcome to LocalSR' });
+
+    const expectedOrder = [
+      within(dialog).getByRole('radio', { name: 'Dark' }),
+      within(dialog).getByRole('radio', { name: 'Light' }),
+      within(dialog).getByRole('radio', { name: 'Match System' }),
+      within(dialog).getByRole('switch', { name: 'Colour-blind friendly colours' }),
+      within(dialog).getByRole('switch', { name: 'Check for updates automatically' }),
+      within(dialog).getByRole('switch', {
+        name: 'Send an anonymous count with each update check',
+      }),
+      within(dialog).getByRole('switch', { name: 'Offer to report crashes' }),
+      within(dialog).getByRole('button', { name: 'Continue' }),
+    ];
+
+    for (const control of expectedOrder) {
+      await user.tab();
+      expect(document.activeElement).toBe(control);
+    }
+    await user.tab();
+    expect(document.activeElement).toBe(expectedOrder[0]);
+
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('dialog', { name: 'Welcome to LocalSR' })).toBeTruthy();
+  });
+
+  it('does not show after a choice', async () => {
+    await mountWith(readySnapshot());
+    expect(screen.queryByRole('dialog', { name: 'Welcome to LocalSR' })).toBeNull();
+  });
+});
+
+describe('report a problem', () => {
+  it('previews diagnostics and includes them only when selected', async () => {
+    api.diagnosticSummary.mockResolvedValueOnce(
+      JSON.stringify({ platform: 'linux', file: '/home/alice/private.jpg' }),
+    );
+    const user = await mountWith(readySnapshot());
+    nativeMenu?.('help.report-problem');
+    const dialog = await screen.findByRole('dialog', { name: 'Report a problem' });
+    expect(
+      within(dialog).getByText(
+        'This opens a new GitHub issue in your browser. Nothing is sent until you submit it there.',
+      ),
+    ).toBeTruthy();
+    await user.type(within(dialog).getByLabelText('What happened?'), 'It stopped');
+    await user.click(within(dialog).getByRole('button', { name: 'Open GitHub Issue' }));
+    await waitFor(() => expect(api.openBugReport).toHaveBeenCalled());
+    let url = new URL(api.openBugReport.mock.calls.at(-1)![0]);
+    expect(url.searchParams.get('what-happened')).toBe('It stopped');
+    expect(url.searchParams.get('hardware')).not.toContain('alice');
+    await user.click(within(dialog).getByLabelText('Include diagnostics'));
+    await user.click(within(dialog).getByRole('button', { name: 'Open GitHub Issue' }));
+    url = new URL(api.openBugReport.mock.calls.at(-1)![0]);
+    expect(url.searchParams.has('hardware')).toBe(false);
+  });
+});
+
+it('copies long report diagnostics and tells the user to paste them', async () => {
+  api.diagnosticSummary.mockResolvedValueOnce(
+    JSON.stringify({ platform: 'linux', detail: 'detail '.repeat(1600) }),
+  );
+  const user = await mountWith(readySnapshot());
+  const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
+  nativeMenu?.('help.report-problem');
+  const dialog = await screen.findByRole('dialog', { name: 'Report a problem' });
+  await user.click(within(dialog).getByRole('button', { name: 'Open GitHub Issue' }));
+  await waitFor(() => expect(writeText).toHaveBeenCalled());
+  expect(
+    await within(dialog).findByText('Diagnostics were copied to your clipboard; paste them here.'),
+  ).toBeTruthy();
+  const url = new URL(api.openBugReport.mock.calls.at(-1)![0]);
+  expect(url.searchParams.get('hardware')).toBe(
+    'Diagnostics were copied to your clipboard; paste them here.',
+  );
+});
+
+describe('crash reports', () => {
+  const sampleReport = {
+    id: 'c5d9cc41-a9a8-4679-8e7f-a2ca008b9a04',
+    report: {
+      app_version: '0.4.0-beta',
+      build_target: 'aarch64-macos',
+      os: 'macos',
+      os_version: '24.3.0',
+      architecture: 'aarch64',
+      source: 'engine',
+      message: 'The inference engine ended unexpectedly',
+      exit: 'signal: 11',
+      limitation: 'A native host crash such as a segmentation fault may not be captured.',
+    },
+  };
+
+  it('shows the crash notice when enabled, lets the user review and send, then deletes the report', async () => {
+    const snap = readySnapshot();
+    snap.settings.crash_reports = true;
+    api.listCrashReports.mockResolvedValueOnce([sampleReport]).mockResolvedValue([]);
+    const user = await mountWith(snap);
+
+    const notice = await screen.findByRole('dialog', {
+      name: 'LocalSR quit unexpectedly last time.',
+    });
+    await user.click(within(notice).getByRole('button', { name: 'Review report…' }));
+
+    const reportDialog = await screen.findByRole('dialog', { name: 'Report a problem' });
+    expect(
+      (within(reportDialog).getByLabelText('What happened?') as HTMLTextAreaElement).value,
+    ).toBe('Crash: The inference engine ended unexpectedly');
+    const preview = reportDialog.querySelector('textarea[readonly]') as HTMLTextAreaElement;
+    expect(preview.value).toBe(JSON.stringify(sampleReport.report, null, 2));
+
+    await user.click(within(reportDialog).getByRole('button', { name: 'Open GitHub Issue' }));
+    await waitFor(() => expect(api.openBugReport).toHaveBeenCalledTimes(1));
+    expect(api.deleteCrashReport).toHaveBeenCalledWith(sampleReport.id);
+
+    const url = new URL(api.openBugReport.mock.calls[0][0]);
+    expect(url.searchParams.get('title')).toBe('Crash: The inference engine ended unexpectedly');
+    expect(url.searchParams.get('operating-system')).toBe('macOS');
+    expect(url.searchParams.get('hardware')).toContain('signal: 11');
+  });
+
+  it('redacts paths in the crash summary when reviewing an unredacted report', async () => {
+    const snap = readySnapshot();
+    snap.settings.crash_reports = true;
+    api.listCrashReports.mockResolvedValueOnce([
+      {
+        ...sampleReport,
+        report: {
+          ...sampleReport.report,
+          message: 'Failed while reading /Users/alice/Pictures/vacation.png',
+        },
+      },
+    ]);
+    const user = await mountWith(snap);
+
+    const notice = await screen.findByRole('dialog', {
+      name: 'LocalSR quit unexpectedly last time.',
+    });
+    await user.click(within(notice).getByRole('button', { name: 'Review report…' }));
+
+    const reportDialog = await screen.findByRole('dialog', { name: 'Report a problem' });
+    expect(
+      (within(reportDialog).getByLabelText('What happened?') as HTMLTextAreaElement).value,
+    ).toBe('Crash: Failed while reading ~/<path>');
+  });
+
+  it("Don't Send deletes the report without opening an issue", async () => {
+    const snap = readySnapshot();
+    snap.settings.crash_reports = true;
+    api.listCrashReports.mockResolvedValueOnce([sampleReport]).mockResolvedValue([]);
+    const user = await mountWith(snap);
+
+    const notice = await screen.findByRole('dialog', {
+      name: 'LocalSR quit unexpectedly last time.',
+    });
+    await user.click(within(notice).getByRole('button', { name: "Don't Send" }));
+    await waitFor(() => expect(api.deleteCrashReport).toHaveBeenCalledWith(sampleReport.id));
+    expect(api.openBugReport).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole('dialog', { name: 'LocalSR quit unexpectedly last time.' }),
+    ).toBeNull();
+  });
+
+  it('does not show the crash notice when crash reports are off', async () => {
+    const snap = readySnapshot();
+    snap.settings.crash_reports = false;
+    api.listCrashReports.mockResolvedValue([sampleReport]);
+    await mountWith(snap);
+    expect(
+      screen.queryByRole('dialog', { name: 'LocalSR quit unexpectedly last time.' }),
+    ).toBeNull();
+  });
+
+  it('manages crash reports and opt-in toggle from Performance & Diagnostics', async () => {
+    const snap = readySnapshot();
+    snap.settings.crash_reports = true;
+    api.listCrashReports.mockResolvedValue([sampleReport]);
+    const user = await mountWith(snap);
+    const notice = await screen.findByRole('dialog', {
+      name: 'LocalSR quit unexpectedly last time.',
+    });
+    await user.keyboard('{Escape}');
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('dialog', { name: 'LocalSR quit unexpectedly last time.' }),
+      ).toBeNull(),
+    );
+
+    nativeMenu?.('view.performance');
+    const dialog = await screen.findByRole('dialog', { name: 'Performance & Diagnostics' });
+    const section = within(dialog).getByRole('region', { name: 'Crash reports' });
+    expect(
+      within(section).getByText('Turning this off deletes all stored crash reports immediately.'),
+    ).toBeTruthy();
+    expect(within(section).getByText('Stored crash reports: 1')).toBeTruthy();
+
+    await user.click(within(section).getByLabelText('Offer to Report Crashes'));
+    await waitFor(() => expect(api.setUpdateSwitch).toHaveBeenCalledWith('crash_reports', false));
+
+    api.listCrashReports.mockResolvedValueOnce([]).mockResolvedValue([]);
+    await user.click(within(section).getByRole('button', { name: 'Delete All' }));
+    await waitFor(() => expect(api.deleteAllCrashReports).toHaveBeenCalledTimes(1));
+  });
+
+  it('toggles Clean up audio with help tip, downloads DeepFilterNet3 on start, disables when silent, and saves in recipes', async () => {
+    const media = { ...video('clip', true), has_audio: true };
+    const snap = readySnapshot([media]);
+    snap.settings.task = 'video';
+    snap.settings.selected_model_id = 'span_photo_x4';
+    const df3 = snap.catalog.audio_models?.[0];
+    if (df3) df3.installed = false;
+    const dpdf = snap.catalog.audio_models?.find((m) => m.model_id === 'dpdfnet8_48khz_hr');
+    if (dpdf) dpdf.installed = false;
+    const upscaler = snap.catalog.models.find((m) => m.model_id === 'span_photo_x4');
+    if (upscaler) upscaler.installed = true;
+
+    const user = await mountWith(snap);
+    const audioRegion = screen.getByRole('region', { name: 'Audio' });
+    const toggle = within(audioRegion).getByRole('checkbox', {
+      name: 'Clean up audio',
+    }) as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+    expect(toggle.disabled).toBe(false);
+    expect(within(audioRegion).queryByLabelText('Audio model')).toBeNull();
+
+    await user.click(within(audioRegion).getByRole('button', { name: 'About Clean up audio' }));
+    expect(
+      await screen.findByText(/Removes background noise such as hum, wind and hiss from speech/i),
+    ).toBeTruthy();
+
+    await user.click(toggle);
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ video_clean_audio: true }),
+      ),
+    );
+    const picker = within(audioRegion).getByLabelText('Audio model') as HTMLSelectElement;
+    expect(picker.value).toBe('deepfilternet3');
+    expect(within(audioRegion).getByText('Speech noise removal')).toBeTruthy();
+    const stages = screen.getByRole('list', { name: 'Stages' });
+    expect(within(stages).getByText('DeepFilterNet3')).toBeTruthy();
+
+    // Switching the picker to DPDFNet saves video_audio_model, updates summary & stages.
+    await user.selectOptions(picker, 'dpdfnet8_48khz_hr');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ video_audio_model: 'dpdfnet8_48khz_hr' }),
+      ),
+    );
+    expect(within(audioRegion).getByText('Stronger speech noise removal')).toBeTruthy();
+    expect(within(stages).getByText('DPDFNet')).toBeTruthy();
+
+    // Save as recipe preserves video_clean_audio and video_audio_model.
+    const toggledSnap = structuredClone(snap);
+    toggledSnap.settings.video_clean_audio = true;
+    toggledSnap.settings.video_audio_model = 'dpdfnet8_48khz_hr';
+    api.refreshSnapshot.mockResolvedValue(toggledSnap);
+    await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
+    await user.type(screen.getByPlaceholderText('Name this setup'), 'Clean Speech');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(api.saveRecipe).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Clean Speech',
+          video_clean_audio: true,
+          video_audio_model: 'dpdfnet8_48khz_hr',
+        }),
+      ),
+    );
+
+    // Download on first use and start when clicking Download & start.
+    const nextSnap = structuredClone(toggledSnap);
+    const nextDpdf = nextSnap.catalog.audio_models?.find((m) => m.model_id === 'dpdfnet8_48khz_hr');
+    if (nextDpdf) nextDpdf.installed = true;
+    api.refreshSnapshot.mockResolvedValue(nextSnap);
+    await user.click(screen.getByRole('button', { name: /Download .* start video/i }));
+    await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith('dpdfnet8_48khz_hr', false));
+    await waitFor(() =>
+      expect(api.startJobs).toHaveBeenCalledWith(
+        expect.objectContaining({
+          task: 'video',
+          video_clean_audio: true,
+          video_audio_model: 'dpdfnet8_48khz_hr',
+        }),
+      ),
+    );
+
+    // Open Model Library -> Audio tab lists both models with their licences.
+    nativeMenu?.('view.models');
+    const dialog = await screen.findByRole('dialog', { name: 'Model library' });
+    await user.click(within(dialog).getByRole('button', { name: /^Audio/ }));
+    expect(within(dialog).getByRole('heading', { name: 'DeepFilterNet3' })).toBeTruthy();
+    expect(within(dialog).getByText('MIT OR Apache-2.0')).toBeTruthy();
+    expect(within(dialog).getByText('Apache-2.0')).toBeTruthy();
+    expect(within(dialog).getByText(/about 100 MB/i)).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'MIT OR Apache-2.0 ↗' }));
+    expect(api.openModelLicense).toHaveBeenCalledWith('deepfilternet3');
+    await user.click(within(dialog).getByRole('button', { name: /^DPDFNet\b/ }));
+    expect(within(dialog).getByRole('heading', { name: 'DPDFNet' })).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'Apache-2.0 ↗' }));
+    expect(api.openModelLicense).toHaveBeenCalledWith('dpdfnet8_48khz_hr');
+    await user.click(within(dialog).getByRole('button', { name: 'Close model library' }));
+
+    // Video without audio disables Clean up audio with a note.
+    const silentSnap = readySnapshot([{ ...video('silent', true), has_audio: false }]);
+    silentSnap.settings.task = 'video';
+    silentSnap.settings.video_clean_audio = true;
+    cleanup();
+    await mountWith(silentSnap);
+    const silentRegion = screen.getByRole('region', { name: 'Audio' });
+    const silentToggle = within(silentRegion).getByRole('checkbox', {
+      name: 'Clean up audio',
+    }) as HTMLInputElement;
+    expect(silentToggle.disabled).toBe(true);
+    expect(silentToggle.checked).toBe(false);
+    expect(within(silentRegion).getByText('This video has no audio track.')).toBeTruthy();
+  });
+});
+
+describe('Concurrent model downloads in the Model Library', () => {
+  it('runs multiple downloads with per-model progress, cancel, queue state, and isolated errors', async () => {
+    const snapshot = readySnapshot();
+    const ids = ['span_photo_x4', 'realplksr_nomoswebphoto_x4', 'swinir_m_real_x4_gan', 'hat_s_x4'];
+    for (const model of snapshot.catalog.models) {
+      if (ids.includes(model.model_id)) {
+        model.installed = false;
+        model.terms_acceptance_required = false;
+      }
+    }
+    const pending = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
+    api.downloadModel.mockImplementation(
+      (id: string) =>
+        new Promise<undefined>((resolve, reject) => {
+          pending.set(id, { resolve: () => resolve(undefined), reject });
+        }),
+    );
+    let hostSnapshot = structuredClone(snapshot);
+    const user = await mountWith(snapshot);
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(hostSnapshot));
+    const emitWorker = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+    const sendWorker = (message: WorkerEnvelope) => {
+      hostSnapshot = applyWorkerEnvelope(hostSnapshot, message);
+      emitWorker(message);
+    };
+    api.cancelDownload.mockImplementation(async (id: string) => {
+      sendWorker({ type: 'download-cancelled', data: { model_id: id } });
+      pending.get(id)?.reject(new Error('download cancelled'));
+      pending.delete(id);
+      return undefined;
+    });
+    await chooseMenuItem('view.models');
+    const dialog = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(dialog).getByRole('button', { name: /^Upscale photos/ }));
+
+    const clickRowAndDownload = async (rowPattern: RegExp) => {
+      await user.click(within(dialog).getByRole('button', { name: rowPattern }));
+      const button = within(dialog).getByRole('button', { name: /^Download / });
+      expect((button as HTMLButtonElement).disabled).toBe(false);
+      await user.click(button);
+    };
+
+    await clickRowAndDownload(/SPAN ×4/);
+    sendWorker({ type: 'download-started', data: { model_id: 'span_photo_x4', total_bytes: 100 } });
+    sendWorker({
+      type: 'download-progress',
+      data: { model_id: 'span_photo_x4', downloaded_bytes: 40, total_bytes: 100, progress: 40 },
+    });
+
+    await clickRowAndDownload(/RealPLKSR ×4 NomosWebPhoto/);
+    sendWorker({
+      type: 'download-started',
+      data: { model_id: 'realplksr_nomoswebphoto_x4', total_bytes: 100 },
+    });
+    sendWorker({
+      type: 'download-progress',
+      data: {
+        model_id: 'realplksr_nomoswebphoto_x4',
+        downloaded_bytes: 75,
+        total_bytes: 100,
+        progress: 75,
+      },
+    });
+
+    await clickRowAndDownload(/SwinIR ×4 Real/);
+    sendWorker({
+      type: 'download-started',
+      data: { model_id: 'swinir_m_real_x4_gan', total_bytes: 100 },
+    });
+
+    await clickRowAndDownload(/HAT-S ×4/);
+    sendWorker({ type: 'download-queued', data: { model_id: 'hat_s_x4', total_bytes: 100 } });
+
+    expect(api.downloadModel).toHaveBeenCalledTimes(4);
+
+    const downloadsPanel = () => within(dialog).getByRole('region', { name: 'Model downloads' });
+    await waitFor(() =>
+      expect(downloadsPanel().textContent).toContain('Downloads · 3 active · 1 waiting'),
+    );
+    expect(within(downloadsPanel()).getByText('40%')).toBeTruthy();
+    expect(within(downloadsPanel()).getByText('75%')).toBeTruthy();
+    expect(within(downloadsPanel()).getByText(/Waiting/)).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: 'Waiting in queue · Cancel' })).toBeTruthy();
+
+    // Cancel one active download while others keep running.
+    await user.click(within(downloadsPanel()).getByRole('button', { name: /Cancel .*SwinIR/ }));
+    expect(api.cancelDownload).toHaveBeenCalledWith('swinir_m_real_x4_gan');
+    await waitFor(() => expect(within(downloadsPanel()).queryByText(/SwinIR/)).toBeNull());
+    // No failure modal or error banner when cancelled intentionally.
+    expect(within(dialog).queryByRole('alert')).toBeNull();
+    expect(within(downloadsPanel()).getByText('40%')).toBeTruthy();
+    expect(within(downloadsPanel()).getByText('75%')).toBeTruthy();
+
+    // Fail one download: shows its own inline error without blocking others with a modal.
+    sendWorker({
+      type: 'download-failed',
+      data: { model_id: 'realplksr_nomoswebphoto_x4', error_message: 'download checksum mismatch' },
+    });
+    pending.get('realplksr_nomoswebphoto_x4')?.reject(new Error('download checksum mismatch'));
+    const alert = await within(downloadsPanel()).findByRole('alert');
+    expect(alert.textContent).toContain('download checksum mismatch');
+    expect(screen.queryByRole('dialog', { name: 'Download failed' })).toBeNull();
+    // Dismiss error cleanly.
+    await user.click(within(alert).getByRole('button', { name: /Dismiss/ }));
+    expect(within(downloadsPanel()).queryByRole('alert')).toBeNull();
+
+    // Clean up remaining pending downloads.
+    sendWorker({ type: 'download-completed', data: { model_id: 'span_photo_x4' } });
+    pending.get('span_photo_x4')?.resolve();
+    sendWorker({ type: 'download-completed', data: { model_id: 'hat_s_x4' } });
+    pending.get('hat_s_x4')?.resolve();
+  });
+});
+
+describe('video restore, 1× output, and fix-first stages', () => {
+  const lastSaved = (): UiSettings => api.saveSettings.mock.calls.at(-1)![0] as UiSettings;
+
+  it('switches a selected video between Upscale and Restore, saves a restore recipe, and starts jobs', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.catalog.models.forEach((m) => (m.installed = true));
+    Object.assign(snapshot.settings, {
+      task: 'video',
+      video_task: 'upscale',
+      selected_video_model_id: 'frame_by_frame',
+      selected_model_id: 'span_photo_x4',
+      output_scale: 4,
+    });
+    const persisted = structuredClone(snapshot);
+    const user = await mountWith(snapshot);
+    // Mirror the real host: saved settings survive addRecipe's refresh().
+    api.saveSettings.mockImplementation(async (next: UiSettings) => {
+      persisted.settings = structuredClone(next);
+    });
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(persisted));
+
+    // Toggle Restore for video
+    await user.click(screen.getByRole('button', { name: /^Restore$/ }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({ task: 'video', video_task: 'denoise' }),
+    );
+
+    // Turn on JPEG artifacts (prefix fix) and Noise (primary restore) for video Restore
+    await user.click(screen.getByRole('button', { name: 'JPEG artifacts' }));
+    await user.click(screen.getByRole('button', { name: 'Noise' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'video',
+        video_task: 'denoise',
+        fixes: ['jpeg', 'noise'],
+      }),
+    );
+
+    // Save recipe as a video restore recipe
+    await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
+    await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Video Restore Fix');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledTimes(1));
+    const savedRecipe = api.saveRecipe.mock.calls.at(-1)![0] as Recipe;
+    expect(savedRecipe).toMatchObject({
+      name: 'Video Restore Fix',
+      task: 'video',
+      video_task: 'denoise',
+      output_scale: 1,
+      fixes: ['jpeg', 'noise'],
+    });
+    expect(savedRecipe.stages).toHaveLength(2);
+    expect(savedRecipe.stages![0]).toMatchObject({
+      kind: 'deblock',
+      fix: 'jpeg',
+    });
+    expect(savedRecipe.stages![1]).toMatchObject({
+      kind: 'restore',
+      fix: 'noise',
+    });
+
+    // Start selected video with restore + prefix fix
+    await user.click(screen.getByRole('button', { name: 'Restore selected video' }));
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+    expect(api.startJobs.mock.calls.at(-1)![0]).toMatchObject({
+      task: 'video',
+      video_task: 'denoise',
+      fix_stages: [
+        expect.objectContaining({ fix: 'jpeg' }),
+        expect.objectContaining({ fix: 'noise' }),
+      ],
+    });
+  });
+
+  it('supports 1× output scale and fix-first stages in video upscale', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.catalog.models.forEach((m) => (m.installed = true));
+    Object.assign(snapshot.settings, {
+      task: 'video',
+      video_task: 'upscale',
+      selected_video_model_id: 'frame_by_frame',
+      selected_model_id: 'span_photo_x4',
+      output_scale: 4,
+    });
+    const user = await mountWith(snapshot);
+
+    // Select 1× in Advanced -> Output scale
+    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    const scaleSelect = screen.getByLabelText('Output scale') as HTMLSelectElement;
+    expect(Array.from(scaleSelect.options).map((o) => o.value)).toEqual(['1', '2', '3', '4']);
+    await user.selectOptions(scaleSelect, '1');
+    await waitFor(() => expect(lastSaved()).toMatchObject({ task: 'video', output_scale: 1 }));
+
+    // Add Blur fix-first stage
+    await user.click(screen.getByRole('button', { name: 'Blur' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'video',
+        video_task: 'upscale',
+        output_scale: 1,
+        fixes: ['blur'],
+      }),
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Start selected video' }));
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+    expect(api.startJobs.mock.calls.at(-1)![0]).toMatchObject({
+      task: 'video',
+      video_task: 'upscale',
+      output_scale: 1,
+      fix_stages: [expect.objectContaining({ fix: 'blur' })],
+    });
+  });
+
+  it('keeps 1× when Quick, Best or the content changes', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.catalog.models.forEach((m) => (m.installed = true));
+    Object.assign(snapshot.settings, {
+      task: 'video',
+      video_task: 'upscale',
+      selected_video_model_id: 'frame_by_frame',
+      selected_model_id: 'span_photo_x4',
+      quality: 'quick',
+      output_scale: 1,
+    });
+    const user = await mountWith(snapshot);
+
+    await user.click(screen.getByRole('button', { name: 'Blur' }));
+    await waitFor(() => expect(lastSaved()).toMatchObject({ fixes: ['blur'], output_scale: 1 }));
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
+    await waitFor(() => expect(lastSaved()).toMatchObject({ quality: 'best' }));
+    expect(lastSaved().output_scale).toBe(1);
+    await user.click(screen.getByRole('radio', { name: 'Illustration' }));
+    await waitFor(() => expect(lastSaved()).toMatchObject({ content: 'illustration' }));
+    expect(lastSaved().output_scale).toBe(1);
+  });
+
+  it('at 1× omits the SR model stage/download and disables Start until something else is chosen', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.catalog.models.forEach((m) => (m.installed = false));
+    snapshot.catalog.models.find((m) => m.model_id === 'nafnet_gopro_deblur')!.installed = true;
+    Object.assign(snapshot.settings, {
+      task: 'video',
+      video_task: 'upscale',
+      selected_video_model_id: 'frame_by_frame',
+      selected_model_id: 'span_photo_x4',
+      output_scale: 4,
+      video_clean_audio: false,
+      deflicker: false,
+      video_interpolation: 'off',
+    });
+    const user = await mountWith(snapshot);
+
+    // Select 1× in Advanced -> Output scale: Quality gains its 1× help, SR model disappears from Stages, Start is disabled.
+    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    await user.selectOptions(screen.getByLabelText('Output scale'), '1');
+    await waitFor(() => expect(lastSaved()).toMatchObject({ output_scale: 1 }));
+    expect(screen.getByRole('button', { name: 'About Quality' })).toBeTruthy();
+    expect(screen.getByRole('group', { name: 'Quality' }).textContent).not.toContain('download');
+    expect(screen.getByRole('region', { name: 'Model plan' }).textContent).not.toContain('At 1×');
+    expect(screen.getByText(/Nothing to run at 1×/)).toBeTruthy();
+    const startBtn = screen.getByRole('button', {
+      name: 'Start selected video',
+    }) as HTMLButtonElement;
+    expect(startBtn.disabled).toBe(true);
+    expect(screen.queryByRole('list', { name: 'Stages' })?.textContent).not.toContain('SPAN');
+
+    // Enabling Blur enables Start without needing span_photo_x4 installed.
+    await user.click(screen.getByRole('button', { name: 'Blur' }));
+    await waitFor(() => expect(startBtn.disabled).toBe(false));
+    expect(screen.getByRole('list', { name: 'Stages' }).textContent).toContain('Fix blur');
+    expect(screen.getByRole('list', { name: 'Stages' }).textContent).not.toContain('SPAN');
+
+    // Switching back to 2× removes the 1× help and brings back the upscaler stage.
+    await user.selectOptions(screen.getByLabelText('Output scale'), '2');
+    await waitFor(() => expect(lastSaved()).toMatchObject({ output_scale: 2 }));
+    expect(screen.queryByRole('button', { name: 'About Quality' })).toBeNull();
+    expect(screen.getByRole('group', { name: 'Quality' }).textContent).toContain('download');
+    expect(screen.getByRole('list', { name: 'Stages' }).textContent).toContain('SPAN');
+  });
 });

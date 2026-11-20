@@ -1,8 +1,9 @@
 use std::{
     collections::HashMap,
+    path::PathBuf,
     sync::{
         atomic::{AtomicBool, AtomicU32, AtomicU64},
-        Arc, Mutex, MutexGuard,
+        Arc, Mutex, MutexGuard, Weak,
     },
 };
 
@@ -63,6 +64,7 @@ pub struct AppState {
     #[cfg(target_os = "linux")]
     pub media_server: Mutex<Option<crate::media_server::MediaServer>>,
     pub paths: AppPaths,
+    pub frontend_error_recorded: AtomicBool,
     pub database: Mutex<Database>,
     pub catalog: Mutex<CatalogManifest>,
     pub settings: Mutex<UiSettings>,
@@ -78,7 +80,10 @@ pub struct AppState {
     // One writer of the settings file at a time, from taking the copy to writing it, so an
     // older copy can never land after a newer one.
     pub settings_io: Mutex<()>,
-    pub downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    pub downloads: Mutex<HashMap<String, crate::downloads::DownloadEntry>>,
+    pub download_semaphore: Arc<tokio::sync::Semaphore>,
+    pub download_sequence: AtomicU64,
+    pub download_file_locks: Mutex<HashMap<PathBuf, Weak<tokio::sync::Mutex<()>>>>,
     pub launch_intents: Mutex<Vec<LaunchIntent>>,
     /// Set when no settings file existed at launch: the first device report
     /// then replaces the CPU default with the computer's GPU.
@@ -90,6 +95,8 @@ pub struct AppState {
     pub programs: crate::programs::GrantedPrograms,
     /// The editing runtimes the user picked in the host's own file dialog.
     pub edit_programs: crate::programs::GrantedPrograms,
+    /// The media files, output folders, custom models, and export destinations granted by the host.
+    pub grants: crate::grants::GrantRegistry,
 }
 
 impl AppState {
@@ -129,12 +136,15 @@ impl AppState {
         let latest_benchmark = settings::load_benchmark(&paths);
         let programs = crate::programs::GrantedPrograms::default();
         programs.grant(&settings.external_ffmpeg_path);
+        let media = database.list_media()?;
+        let grants = crate::grants::GrantRegistry::new(&paths, &media, &settings, &recipes);
         Ok(Self {
             video_preview: crate::video_preview::VideoPreviewControl::default(),
             updates: crate::updates::UpdateControl::default(),
             #[cfg(target_os = "linux")]
             media_server: Mutex::new(None),
             paths,
+            frontend_error_recorded: AtomicBool::new(false),
             database: Mutex::new(database),
             catalog: Mutex::new(catalog),
             settings: Mutex::new(settings),
@@ -148,11 +158,17 @@ impl AppState {
             scheduler: Mutex::new(()),
             settings_io: Mutex::new(()),
             downloads: Mutex::new(HashMap::new()),
+            download_semaphore: Arc::new(tokio::sync::Semaphore::new(
+                crate::downloads::MAX_CONCURRENT_DOWNLOADS,
+            )),
+            download_sequence: AtomicU64::new(0),
+            download_file_locks: Mutex::new(HashMap::new()),
             launch_intents: Mutex::new(Vec::new()),
             choose_device: AtomicBool::new(first_run),
             startup_notices: Mutex::new(notices),
             programs,
             edit_programs: crate::programs::GrantedPrograms::default(),
+            grants,
         })
     }
 
@@ -239,7 +255,7 @@ pub fn lock<T>(mutex: &Mutex<T>) -> AppResult<MutexGuard<'_, T>> {
         .map_err(|_| AppError::Config("internal state lock was poisoned".into()))
 }
 
-pub fn emit_state_changed(app: &AppHandle) {
+pub fn emit_state_changed<R: tauri::Runtime>(app: &AppHandle<R>) {
     let _ = app.emit("state-changed", ());
 }
 

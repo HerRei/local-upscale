@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.5.0-beta] - Unreleased
+
+- **Light theme and colour-blind friendly colours.** Dark, Light or Match System, and
+  an Okabe-Ito palette for every colour that carries meaning. Both are in the View menu
+  and apply at once, also during a job (#129).
+- **First-launch setup.** New installs choose the appearance, automatic update checks,
+  the anonymous count and crash reports on one screen. Nothing goes over the network
+  before Continue. Existing installs keep their settings and never see it.
+- **Update notice.** When a newer version is out, a small notice offers Update, Skip
+  This Version and What's New. Installing still waits until jobs have finished (#113).
+- **Report a problem.** In the Help menu and in Performance & Diagnostics. It opens a
+  prefilled GitHub issue in the browser with redacted diagnostics that you see first;
+  the app itself sends nothing.
+- **Crash reports.** If LocalSR or its engine quits unexpectedly, a short redacted
+  report is kept on your computer, and at the next start LocalSR asks whether to open it
+  as a GitHub issue. Nothing is sent automatically. Turn it off in the Help menu.
+- **Video: Restore and Fix first.** Videos can be restored at their own size and run
+  the fixes before upscaling, like photos (#127). Upscale at 1× now runs no upscaling
+  model: the size stays and only the fixes, video options and audio cleanup apply.
+- **Video: audio cleanup.** Removes background noise from speech, with DeepFilterNet3 or
+  the stronger DPDFNet. The chosen model downloads the first time you use it (#137).
+- **Low priority.** Advanced → "Run at low priority" keeps other apps responsive. Jobs
+  take longer, on a Mac about twice as long (#128).
+- **Downloads.** Up to three models download at once; the rest wait in a queue (#121).
+- **File access.** The app reads and writes only the files and folders you chose
+  yourself (#117).
+- **Smaller things.** Confirm before deleting a recipe, saved recipes look like the
+  Quick and Best cards (#124), an optional sound when a job finishes (#125), the
+  interpolation unit is named (#118), a link to the custom-model tutorial, and a more
+  visible delete border in Dark.
+- Dependency updates.
+
 ## [0.4.0-beta] - 2026-11-11
 
 0.4.0-beta is the first public release since 0.3.0-beta. It includes the changes

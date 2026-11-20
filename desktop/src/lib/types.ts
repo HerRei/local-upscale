@@ -121,6 +121,7 @@ export interface CatalogVideoModel {
   min_vram_gb: number;
   temporal_window: number;
   temporal_overlap: number;
+  summary?: string;
   commercial_use_allowed: boolean | null;
   automated_download_allowed: boolean;
   terms_acceptance_required: boolean;
@@ -138,6 +139,8 @@ export interface CatalogManifest {
   video_models: CatalogVideoModel[];
   /** Optional frame-interpolation stages of a video job; never video engines. */
   interpolation_models: CatalogVideoModel[];
+  /** Optional speech audio denoising stages. */
+  audio_models?: CatalogVideoModel[];
 }
 
 export interface MediaItem {
@@ -154,6 +157,7 @@ export interface MediaItem {
   probe_status: 'pending' | 'ready' | 'failed';
   hdr_format?: '' | 'HLG' | 'PQ';
   audio_warning?: string;
+  has_audio?: boolean;
   probe_stage?: string;
   probe_started_at?: number;
   error: string;
@@ -237,6 +241,7 @@ export interface Recipe {
   id: string;
   name: string;
   task: TaskKind;
+  video_task?: 'upscale' | 'denoise' | '';
   model_id: string;
   output_scale: number;
   tile_size: number;
@@ -264,6 +269,8 @@ export interface Recipe {
   fixes?: FixKind[];
   video_interpolation?: InterpolationTarget | '';
   video_interpolation_order?: InterpolationOrder | '';
+  video_clean_audio?: boolean;
+  video_audio_model?: string;
 }
 
 /** AV1/VP9/FFV1 are bundled and royalty-free; H.264/HEVC use the user's own FFmpeg. */
@@ -289,9 +296,12 @@ export interface RecipeStage {
 }
 
 export interface UiSettings {
+  appearance: 'dark' | 'light' | 'system';
+  colour_blind_palette: boolean;
   interface_scale: 100 | 110 | 125;
   batch_mode: boolean;
   task: TaskKind | '';
+  video_task?: 'upscale' | 'denoise';
   selected_model_id: string;
   selected_video_model_id: string;
   fix_stages: FixStageSelection[];
@@ -321,12 +331,19 @@ export interface UiSettings {
   /** Off by default; the host fills both in for settings saved before 0.3.7. */
   video_interpolation?: InterpolationTarget;
   video_interpolation_order?: InterpolationOrder;
+  video_clean_audio?: boolean;
+  video_audio_model?: string;
   /** Direct builds send version, platform and channel after an update check. Off unless turned on. */
   anonymous_update_count?: boolean;
+  completion_sound?: boolean;
   check_updates_at_launch?: boolean;
+  privacy_choice_made?: boolean;
+  crash_reports?: boolean;
+  skipped_update_version?: string;
   enable_face_model: boolean;
   face_fidelity: number;
   enable_live_preview: boolean;
+  low_priority?: boolean;
   allow_unsafe_pickle_model: boolean;
   // Model-library state. `quality` is the active recipe ('' before any choice,
   // 'custom' after a manual pick); `preset_pins` maps a slot such as
@@ -367,6 +384,14 @@ export interface VideoMemoryStatus {
   oom: boolean;
 }
 
+export interface ModelDownloadStatus {
+  model_id: string;
+  status: 'queued' | 'downloading';
+  progress: number;
+  downloaded_bytes?: number;
+  total_bytes?: number;
+}
+
 export interface RuntimeStatus {
   comparison_pair?: ComparisonPair;
   compare?: CompareState;
@@ -387,6 +412,7 @@ export interface RuntimeStatus {
   comparison_error?: string;
   download_model_id: string;
   download_progress: number;
+  downloads?: ModelDownloadStatus[];
   elapsed_seconds: number;
   estimated_remaining_seconds: number;
   throughput: number;
@@ -518,6 +544,7 @@ export interface StartBatchInput {
   media_ids: string[];
   batch_mode: boolean;
   task: TaskKind;
+  video_task?: 'upscale' | 'denoise';
   model_id: string;
   video_model_id: string;
   fix_stages: FixStageSelection[];
@@ -548,6 +575,8 @@ export interface StartBatchInput {
   allow_unsafe_pickle_model: boolean;
   video_interpolation?: InterpolationTarget;
   video_interpolation_order?: InterpolationOrder;
+  video_clean_audio?: boolean;
+  video_audio_model?: string;
 }
 
 /** The plan card's labels when a job was queued; host-only, never sent to the worker. */

@@ -91,6 +91,12 @@ class RemainingTime:
         self._at, self.done = now, done
         self._follow(work)
 
+    def skip_warmup(self, now: float, done: float) -> None:
+        """Advance the baseline past a newly warmed model stage without counting its load time."""
+        if not (math.isfinite(now) and math.isfinite(done)) or done <= self.done:
+            return
+        self._at, self.done = now, done
+
     def restart(self, now: float, total: float) -> None:
         """The work counter began again from zero (for example after a smaller tile size).
 

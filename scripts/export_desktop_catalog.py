@@ -15,6 +15,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from localsr.core.model_catalog import (  # noqa: E402
+    AUDIO_MODEL_CATALOG,
     CATALOG_REVISION,
     INTERPOLATION_MODEL_CATALOG,
     MODEL_CATALOG,
@@ -30,6 +31,7 @@ LICENSE_URLS = {
     "CC-BY-4.0": "https://creativecommons.org/licenses/by/4.0/",
     "CC BY-NC-SA 4.0": "https://creativecommons.org/licenses/by-nc-sa/4.0/",
     "MIT": "https://opensource.org/license/mit",
+    "MIT OR Apache-2.0": "https://opensource.org/license/mit",
 }
 
 
@@ -44,7 +46,7 @@ def _license_policy(name: str, commercial_status: str) -> dict:
         "automated_download_allowed": not unclear,
         "redistribution_allowed": False,
         "commercial_use_allowed": False if noncommercial else None if unclear else True,
-        "attribution_required": normalized not in {"MIT"},
+        "attribution_required": normalized not in {"MIT", "MIT OR Apache-2.0"},
         "terms_acceptance_required": noncommercial or unclear,
     }
 
@@ -97,6 +99,15 @@ def build_manifest() -> dict:
         entry["support_tier"] = "labs"
         interpolation_models.append(entry)
 
+    audio_models = []
+    for model in AUDIO_MODEL_CATALOG:
+        entry = asdict(model)
+        entry["files"] = [asdict(file) for file in model.files]
+        entry.update(_license_policy(model.license_name, "allowed"))
+        entry["engine_id"] = f"localsr.audio.{model.engine_kind}"
+        entry["support_tier"] = "supported"
+        audio_models.append(entry)
+
     return {
         # Schema 2 adds the model-library fields (role, stage, fixes, content,
         # rights_status, display_name); schema 3 adds interpolation_models, the
@@ -107,6 +118,7 @@ def build_manifest() -> dict:
         "models": models,
         "video_models": video_models,
         "interpolation_models": interpolation_models,
+        "audio_models": audio_models,
     }
 
 

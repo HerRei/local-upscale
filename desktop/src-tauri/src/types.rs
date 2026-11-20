@@ -15,6 +15,9 @@ pub struct CatalogManifest {
     // the bundle layout of video models but are never offered as video engines.
     #[serde(default)]
     pub interpolation_models: Vec<CatalogVideoModel>,
+    // Optional speech audio denoising stages (ONNX bundles).
+    #[serde(default)]
+    pub audio_models: Vec<CatalogVideoModel>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -96,6 +99,8 @@ pub struct CatalogVideoModel {
     pub min_vram_gb: u64,
     pub temporal_window: u32,
     pub temporal_overlap: u32,
+    #[serde(default)]
+    pub summary: String,
     pub commercial_use_allowed: Option<bool>,
     pub automated_download_allowed: bool,
     pub terms_acceptance_required: bool,
@@ -126,6 +131,8 @@ pub struct MediaItem {
     pub hdr_format: String,
     #[serde(default)]
     pub audio_warning: String,
+    #[serde(default = "default_true")]
+    pub has_audio: bool,
     pub error: String,
     pub selected: bool,
 }
@@ -229,6 +236,8 @@ pub struct Recipe {
     pub id: String,
     pub name: String,
     pub task: String,
+    #[serde(default)]
+    pub video_task: String,
     pub model_id: String,
     pub output_scale: u32,
     pub tile_size: u32,
@@ -280,6 +289,10 @@ pub struct Recipe {
     pub video_interpolation: String,
     #[serde(default)]
     pub video_interpolation_order: String,
+    #[serde(default)]
+    pub video_clean_audio: bool,
+    #[serde(default)]
+    pub video_audio_model: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -301,9 +314,17 @@ pub struct FixStageSelection {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct UiSettings {
+    #[serde(
+        default = "default_appearance",
+        deserialize_with = "deserialize_appearance"
+    )]
+    pub appearance: String,
+    pub colour_blind_palette: bool,
     pub interface_scale: u32,
     pub batch_mode: bool,
     pub task: String,
+    #[serde(default = "default_video_task")]
+    pub video_task: String,
     pub selected_model_id: String,
     pub selected_video_model_id: String,
     pub fix_stages: Vec<FixStageSelection>,
@@ -342,18 +363,32 @@ pub struct UiSettings {
     pub video_interpolation: String,
     #[serde(default = "default_interpolation_order")]
     pub video_interpolation_order: String,
+    #[serde(default)]
+    pub video_clean_audio: bool,
+    #[serde(default)]
+    pub video_audio_model: String,
     // Apple silicon: run supported models through Core ML on the Neural Engine.
     #[serde(default = "default_true")]
     pub neural_engine: bool,
-    // Direct builds send version, platform and channel after an update check, only when
-    // the user turns it on (off for new installs since 0.4.1; a saved choice is kept).
+    // Direct builds send version, platform and channel after an update check. New installs
+    // start with it on and confirm it in the first-launch setup; a saved choice is kept.
     pub anonymous_update_count: bool,
+    pub completion_sound: bool,
     // Direct builds look for an update once at launch, silently.
     #[serde(default = "default_true")]
     pub check_updates_at_launch: bool,
+    #[serde(default = "default_true")]
+    pub privacy_choice_made: bool,
+    // On for new installs (the first-launch setup shows it); settings files from before
+    // crash reports existed keep it off, since their users never saw the choice.
+    #[serde(default)]
+    pub crash_reports: bool,
+    #[serde(default)]
+    pub skipped_update_version: String,
     pub enable_face_model: bool,
     pub face_fidelity: u32,
     pub enable_live_preview: bool,
+    pub low_priority: bool,
     pub allow_unsafe_pickle_model: bool,
     // Model-library state: which recipe is active ("quick", "best", "custom"
     // or empty), what the image contains, which problems to fix first, and
@@ -402,17 +437,39 @@ pub(crate) fn default_interpolation_order() -> String {
     "after_upscale".into()
 }
 
+pub(crate) fn default_video_task() -> String {
+    "upscale".into()
+}
+
 pub(crate) fn default_video_codec() -> String {
     // The worker picks the fastest format the computer can write.
     "auto".into()
 }
 
+fn default_appearance() -> String {
+    "dark".into()
+}
+
+fn deserialize_appearance<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    Ok(if matches!(value.as_str(), "dark" | "light" | "system") {
+        value
+    } else {
+        default_appearance()
+    })
+}
+
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
+            appearance: default_appearance(),
+            colour_blind_palette: false,
             interface_scale: 100,
             batch_mode: false,
             task: String::new(),
+            video_task: default_video_task(),
             selected_model_id: String::new(),
             selected_video_model_id: "frame_by_frame".into(),
             fix_stages: Vec::new(),
@@ -439,12 +496,19 @@ impl Default for UiSettings {
             video_crf: 18,
             video_interpolation: default_interpolation(),
             video_interpolation_order: default_interpolation_order(),
+            video_clean_audio: false,
+            video_audio_model: String::new(),
             neural_engine: true,
-            anonymous_update_count: false,
+            anonymous_update_count: true,
+            completion_sound: false,
             check_updates_at_launch: true,
+            privacy_choice_made: false,
+            crash_reports: true,
+            skipped_update_version: String::new(),
             enable_face_model: false,
             face_fidelity: 70,
             enable_live_preview: true,
+            low_priority: false,
             allow_unsafe_pickle_model: false,
             quality: String::new(),
             content: "photo".into(),
@@ -456,6 +520,17 @@ impl Default for UiSettings {
             edit_seed: default_edit_seed(),
         }
     }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct ModelDownloadStatus {
+    pub model_id: String,
+    pub status: String,
+    pub progress: f64,
+    #[serde(default)]
+    pub downloaded_bytes: u64,
+    #[serde(default)]
+    pub total_bytes: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -485,6 +560,8 @@ pub struct RuntimeStatus {
     pub comparison_error: String,
     pub download_model_id: String,
     pub download_progress: f64,
+    #[serde(default)]
+    pub downloads: Vec<ModelDownloadStatus>,
     pub elapsed_seconds: f64,
     pub estimated_remaining_seconds: f64,
     pub throughput: f64,
@@ -655,6 +732,7 @@ impl Default for RuntimeStatus {
             comparison_error: String::new(),
             download_model_id: String::new(),
             download_progress: 0.0,
+            downloads: Vec::new(),
             elapsed_seconds: 0.0,
             estimated_remaining_seconds: 0.0,
             throughput: 0.0,
@@ -744,6 +822,8 @@ pub struct StartBatchInput {
     pub media_ids: Vec<String>,
     pub batch_mode: bool,
     pub task: String,
+    #[serde(default = "default_video_task")]
+    pub video_task: String,
     pub model_id: String,
     pub video_model_id: String,
     pub fix_stages: Vec<FixStageSelection>,
@@ -782,6 +862,10 @@ pub struct StartBatchInput {
     pub video_interpolation: String,
     #[serde(default = "default_interpolation_order")]
     pub video_interpolation_order: String,
+    #[serde(default)]
+    pub video_clean_audio: bool,
+    #[serde(default)]
+    pub video_audio_model: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

@@ -45,11 +45,16 @@ impl GrantedPrograms {
 
     /// An empty path (no program) always passes.
     pub fn check(&self, path: &str) -> AppResult<()> {
+        // A share or device path no granted program lives on is refused from its text,
+        // before resolving it touches the network.
         let known = path.is_empty()
             || self
                 .0
                 .lock()
-                .map(|granted| granted.contains(&key(path)))
+                .map(|granted| {
+                    crate::grants::local_or_on_share_of(path, granted.iter().cloned())
+                        && granted.contains(&key(path))
+                })
                 .unwrap_or(false);
         if known {
             Ok(())
@@ -116,6 +121,24 @@ mod tests {
         granted.grant("/tmp/planted-tool");
         assert!(granted.check("/tmp/planted-tool").is_ok());
         assert!(granted.check("/tmp/another-tool").is_err());
+    }
+
+    #[test]
+    fn a_share_or_device_program_is_refused_unless_a_granted_one_is_there() {
+        let granted = GrantedPrograms::default();
+        assert!(granted.check(r"\\attacker\share\ffmpeg.exe").is_err());
+        assert!(granted.check(r"\\.\pipe\ffmpeg").is_err());
+        granted.grant(r"\\?\UNC\nas\tools\ffmpeg.exe");
+        assert!(crate::grants::local_or_on_share_of(
+            r"\\NAS\tools\ffmpeg.exe",
+            [r"\\?\UNC\nas\tools\ffmpeg.exe".to_string()]
+        ));
+        assert!(!crate::grants::local_or_on_share_of(
+            r"\\attacker\share\ffmpeg.exe",
+            [r"\\?\UNC\nas\tools\ffmpeg.exe".to_string()]
+        ));
+        assert!(!crate::grants::is_local(r"\\attacker\share\hint"));
+        assert!(crate::grants::is_local("/Users/me/Pictures"));
     }
 
     #[test]

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { themeColor } from './lib/themeColor';
   import { onMount, tick } from 'svelte';
   import VideoComparison from './VideoComparison.svelte';
   import EmptyStage from './EmptyStage.svelte';
@@ -549,7 +550,7 @@
       progressiveVisible = true;
       return true;
     }
-    context.fillStyle = '#171717';
+    context.fillStyle = themeColor('--preview-canvas-background');
     context.fillRect(0, 0, size.width, size.height);
     try {
       const source = await loadHtmlImage(sourcePreview);
@@ -1002,7 +1003,7 @@
         {#if loading}<div class="pair-loading">
             <PreviewActivity media={selectedMedia} loading={loadingLabel} />
           </div>{/if}
-        {#if selectedMedia?.kind === 'video'}<span class="labs-chip">Video · local upscaling</span
+        {#if selectedMedia?.kind === 'video'}<span class="labs-chip">Video · processed locally</span
           >{/if}
         {#if selectedMedia?.kind !== 'video'}<div
             class="zoom-hud"
@@ -1112,8 +1113,8 @@
     gap: 12px;
     padding: 12px;
     border-radius: var(--radius);
-    background: #1e1e1eed;
-    color: #d1d1d1;
+    background: var(--overlay-pill-bg);
+    color: var(--overlay-text);
   }
   .playback-preparation > span:nth-child(2) {
     flex: 1;
@@ -1122,8 +1123,8 @@
     width: 16px;
     height: 16px;
     flex-shrink: 0;
-    border: 2px solid #bfbfbf40;
-    border-top-color: #cccccc;
+    border: 2px solid var(--spinner-track);
+    border-top-color: var(--spinner-head);
     border-radius: 50%;
     animation: playback-spin 1s linear infinite;
   }
@@ -1134,7 +1135,7 @@
     right: 12px;
     z-index: 8;
     pointer-events: none;
-    background: #1e1e1eed;
+    background: var(--overlay-pill-bg);
     padding: 6px 10px;
     font-size: 12px;
   }
@@ -1166,8 +1167,8 @@
     bottom: max(16px, var(--notice-room, 0px));
     padding: 12px;
     border-radius: var(--radius);
-    background: #351918;
-    color: #ffc6bd;
+    background: var(--danger-banner-bg);
+    color: var(--danger-text-warm);
   }
   /* The band is a layer as wide as the picture, moved by transform on the compositor. */
   .edit-sweep {
@@ -1188,7 +1189,7 @@
     background: linear-gradient(
       100deg,
       transparent 40%,
-      rgba(204, 204, 204, 0.07) 50%,
+      var(--shimmer-highlight) 50%,
       transparent 60%
     );
     animation: sweep 3.2s linear infinite;
@@ -1222,7 +1223,7 @@
     padding: 6px 10px;
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    background: rgba(24, 24, 26, 0.84);
+    background: var(--preview-hud-bg);
     color: var(--secondary);
     font-size: calc(11px * var(--ui-scale));
     pointer-events: none;
@@ -1233,8 +1234,8 @@
   }
   @keyframes tile-pulse {
     50% {
-      border-color: #e0e0e0;
-      background: #aaaaaa25;
+      border-color: var(--retry-border);
+      background: var(--retry-hover-bg);
     }
   }
   @media (prefers-reduced-motion: reduce) {

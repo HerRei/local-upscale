@@ -13,6 +13,7 @@
   import { onDestroy } from 'svelte';
   import HelpTip from './HelpTip.svelte';
   import FileName from './FileName.svelte';
+  import { isRestoreTask } from './lib/plan';
   import { hardwareChoices, hardwarePatch, selectedHardware } from './lib/neuralEngine';
   import { groupedHardware, optionLabel } from './lib/hardwareRoutes';
   import type {
@@ -33,6 +34,8 @@
   export let preservingHdr = false;
   export let interpolationSupported = false;
   export let updateSettings: (patch: Partial<UiSettings>) => void;
+  export let setLowPriority: (value: boolean) => void = (value) =>
+    updateSettings({ low_priority: value });
   export let chooseOutput: () => Promise<void>;
   /** Resolves true when the host took the request, false when it refused (and said so). */
   export let refreshCapabilities: () => Promise<boolean>;
@@ -247,19 +250,25 @@
             ? `${editModel.name} is tuned for ${editModel.default_steps} steps.`
             : 'More steps take longer.'} The same seed with the same prompt and image repeats a result.
         </p>
-      {:else if settings.task !== 'denoise' && !(usingTemporalVideo && settings.video_target_resolution)}
+      {:else if !isRestoreTask(settings) && !(usingTemporalVideo && settings.video_target_resolution)}
+        {@const minScale = settings.task === 'video' ? 1 : 2}
+        {@const maxScale = usingTemporalVideo ? 4 : (selectedModel?.native_scale ?? 4)}
         <div class="field-row">
           <span class="label-with-tip"
             ><label for="scale">Output scale</label><HelpTip
               label="Output scale"
-              text={`How many times larger the result is than the original. The model always works at its own ${selectedModel?.native_scale ?? 4}× scale; a smaller choice resizes that result down afterwards, so it saves no time.`}
+              text={usingTemporalVideo
+                ? 'How many times larger the result is than the original when Output resolution is set to match scale. At 1×, the video model is not used.'
+                : settings.task === 'video'
+                  ? `How many times larger the result is than the original. At 1×, the upscaling model is not used: only Fix first, De-flicker, Frame rate and Clean up audio run. A 2× or 3× choice on a ${selectedModel?.native_scale ?? 4}× model resizes down afterwards.`
+                  : `How many times larger the result is than the original. The model always works at its own ${selectedModel?.native_scale ?? 4}× scale; a smaller choice resizes that result down afterwards, so it saves no time.`}
             /></span
           ><select
             id="scale"
             value={settings.output_scale}
             on:change={(event) =>
               updateSettings({ output_scale: Number(event.currentTarget.value) })}
-            >{#each Array.from({ length: Math.max(1, (selectedModel?.native_scale ?? 4) - 1) }, (_, index) => index + 2) as scale}<option
+            >{#each Array.from({ length: Math.max(1, maxScale - minScale + 1) }, (_, index) => index + minScale) as scale}<option
                 value={scale}>{scale}×</option
               >{/each}</select
           >
@@ -639,6 +648,41 @@
             text="Shows the result in the preview while a job runs, as reduced pictures at most twice a second. They are made on the side, and the job does not wait for them."
           />
         </div>{/if}
+      <!-- Not an <input> or <label>: this stays clickable and full-strength while a job locks the settings above. -->
+      <div class="check-line">
+        <span
+          id="low-priority"
+          role="checkbox"
+          tabindex="0"
+          aria-checked={Boolean(settings.low_priority)}
+          class="check-row live-setting"
+          on:click={() => setLowPriority(!settings.low_priority)}
+          on:keydown={(event) => {
+            if (event.key === ' ' || event.key === 'Enter') {
+              event.preventDefault();
+              setLowPriority(!settings.low_priority);
+            }
+          }}
+          ><span
+            class="live-checkbox"
+            class:checked={Boolean(settings.low_priority)}
+            aria-hidden="true"
+            >{#if settings.low_priority}<svg
+                viewBox="0 0 12 12"
+                width="10"
+                height="10"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"><path d="M2.5 6.2 5 8.7 9.5 3.5" /></svg
+              >{/if}</span
+          ><span class="live-setting-label">Run at low priority</span></span
+        ><HelpTip
+          label="Run at low priority"
+          text="Lets other apps stay responsive while LocalSR works. Jobs take longer: on a Mac about twice as long, even when nothing else is running. You can switch it during a job. On Linux, switching it off takes full effect the next time the engine starts."
+        />
+      </div>
       <div class="hardware-card">
         <span class="label-with-tip"
           >{capabilities.system_memory_pressure_level === 'unknown'

@@ -70,6 +70,11 @@ fn video_stages_have_titles_including_frame_interpolation() {
         video_stage_title("loading_interpolation"),
         "Loading frame interpolation"
     );
+    assert_eq!(
+        video_stage_title("loading_audio_denoise"),
+        "Loading audio model"
+    );
+    assert_eq!(video_stage_title("audio_denoise"), "Audio cleanup");
     assert_eq!(video_stage_title("saving"), "Saving video");
     assert_eq!(video_stage_title("something_new"), "Processing video");
 }
@@ -253,10 +258,11 @@ fn selected_image_comparison_ignores_late_results_while_another_job_runs() {
 fn compare_answers_and_snapshots_revalidate_the_selected_job() {
     use crate::compare::{ComparePick, CompareStatus};
     let directory = tempfile::tempdir().unwrap();
-    let paths = crate::paths::AppPaths::under(directory.path());
+    let directory_root = std::fs::canonicalize(directory.path()).unwrap();
+    let paths = crate::paths::AppPaths::under(directory_root.as_path());
     let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
-    let input = directory.path().join("input.png");
-    let output = directory.path().join("output.png");
+    let input = directory_root.as_path().join("input.png");
+    let output = directory_root.as_path().join("output.png");
     std::fs::write(&input, "input").unwrap();
     std::fs::write(&output, "output").unwrap();
     let request = {
@@ -1836,9 +1842,10 @@ fn the_scratch_folders_made_for_a_dispatch_are_recorded_with_their_jobs() {
 #[test]
 fn a_result_that_is_a_link_gets_no_automatic_preview() {
     let directory = tempfile::tempdir().unwrap();
-    let private = directory.path().join("private.png");
+    let directory_root = std::fs::canonicalize(directory.path()).unwrap();
+    let private = directory_root.as_path().join("private.png");
     std::fs::write(&private, b"private").unwrap();
-    let link = directory.path().join("result.png");
+    let link = directory_root.as_path().join("result.png");
     std::os::unix::fs::symlink(&private, &link).unwrap();
     for kind in ["job_completed", "video_job_completed"] {
         let done = envelope(
@@ -1851,7 +1858,7 @@ fn a_result_that_is_a_link_gets_no_automatic_preview() {
             "{kind}"
         );
     }
-    let plain = directory.path().join("plain.png");
+    let plain = directory_root.as_path().join("plain.png");
     std::fs::write(&plain, b"result").unwrap();
     let done = envelope(
         "job_completed",
@@ -2120,4 +2127,99 @@ fn a_photo_that_finishes_in_the_background_is_listed_at_once_with_its_time() {
             .status,
         "completed"
     );
+}
+
+#[test]
+fn engine_crash_writes_a_redacted_report_but_cancel_and_device_loss_do_not() {
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+    #[cfg(windows)]
+    use std::os::windows::process::ExitStatusExt;
+    use std::process::ExitStatus;
+
+    let directory = tempfile::tempdir().unwrap();
+    let state = AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap();
+    crate::commands::test_crash_switch(&state, true).unwrap();
+    {
+        let mut settings = lock(&state.settings).unwrap();
+        settings.task = "upscale".into();
+        settings.selected_model_id = "span_photo_x4".into();
+        settings.device_id = "mps".into();
+        settings.neural_engine = true;
+    }
+    lock(&state.runtime).unwrap().active_job_id = "job-1".into();
+
+    #[cfg(unix)]
+    let (crash_status, device_loss_status, clean_status) = (
+        ExitStatus::from_raw(1 << 8),
+        ExitStatus::from_raw(75 << 8),
+        ExitStatus::from_raw(0),
+    );
+    #[cfg(windows)]
+    let (crash_status, device_loss_status, clean_status) = (
+        ExitStatus::from_raw(1),
+        ExitStatus::from_raw(75),
+        ExitStatus::from_raw(0),
+    );
+
+    // Cancel (stopped_by_app) writes no report.
+    record_engine_exit_report(&state, &Ok(crash_status), true, "Cancelled");
+    assert!(crate::crash_reports::list(&state.paths).is_empty());
+
+    // Active cancellation writes no report.
+    {
+        let mut cancellation = lock(&state.worker.cancellation).unwrap();
+        let mut req = json!({"type": "benchmark_request", "data": {}});
+        cancellation.prepare("job-1", &mut req).unwrap();
+        cancellation.request("job-1", std::time::Instant::now());
+    }
+    record_engine_exit_report(&state, &Ok(crash_status), false, "Cancelled");
+    assert!(crate::crash_reports::list(&state.paths).is_empty());
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+
+    // Handled device-loss restart (worker == "restarting" or exit 75) writes no report.
+    lock(&state.runtime).unwrap().worker = "restarting".into();
+    record_engine_exit_report(&state, &Ok(crash_status), false, "Device lost");
+    assert!(crate::crash_reports::list(&state.paths).is_empty());
+    lock(&state.runtime).unwrap().worker = "ready".into();
+
+    record_engine_exit_report(&state, &Ok(device_loss_status), false, "Device lost");
+    assert!(crate::crash_reports::list(&state.paths).is_empty());
+
+    // Normal shutdown writes no report.
+    state.worker.shutting_down.store(true, Ordering::SeqCst);
+    record_engine_exit_report(&state, &Ok(crash_status), false, "Shutting down");
+    record_worker_failure_report(&state, "Shutting down");
+    assert!(crate::crash_reports::list(&state.paths).is_empty());
+    state.worker.shutting_down.store(false, Ordering::SeqCst);
+
+    // Unexpected crash during a job writes a redacted report with exit, stderr and job context.
+    record_engine_exit_report(
+        &state,
+        &Ok(crash_status),
+        false,
+        "RuntimeError in /Users/alice/Pictures/holiday.jpg",
+    );
+    let reports = crate::crash_reports::list(&state.paths);
+    assert_eq!(reports.len(), 1);
+    let report = &reports[0].report;
+    assert_eq!(report.source, "engine");
+    assert_eq!(report.task.as_deref(), Some("upscale"));
+    assert_eq!(report.model.as_deref(), Some("span_photo_x4"));
+    assert_eq!(report.device.as_deref(), Some("Neural Engine"));
+    assert!(report.exit.is_some());
+    let last_error = report.last_error.as_deref().unwrap();
+    assert!(!last_error.contains("alice"));
+    assert!(!last_error.contains("holiday"));
+    assert!(last_error.contains("~/<path>"));
+
+    // Clean exit while a job was active also writes a report.
+    crate::crash_reports::delete_all(&state.paths).unwrap();
+    record_engine_exit_report(&state, &Ok(clean_status), false, "");
+    assert_eq!(crate::crash_reports::list(&state.paths).len(), 1);
+
+    // Host-detected worker failure writes a report when not shutting down.
+    crate::crash_reports::delete_all(&state.paths).unwrap();
+    record_worker_failure_report(&state, "inference protocol mismatch");
+    assert_eq!(crate::crash_reports::list(&state.paths).len(), 1);
 }

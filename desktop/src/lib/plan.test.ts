@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { demoSnapshot } from './demo';
+import type { Recipe, UiSettings } from './types';
 import { applyWorkerEnvelope } from './workerEvents';
 import { chooseFixModel } from './fixStages';
 import {
@@ -10,7 +11,10 @@ import {
   interpolationLabel,
   pendingDownloads,
   resolvePlan,
+  skipsUpscaleModel,
+  supportsHdrPreservation,
 } from './plan';
+import { recipeFixStages, recipeMatches } from './recipes';
 
 describe('model library resolution', () => {
   it('resolves Quick and Best by content and honours a pinned slot', () => {
@@ -273,6 +277,60 @@ describe('model library resolution', () => {
     expect(frameRateChange('fps60', 0)).toBe('');
   });
 
+  it('adds Clean up audio with its pending download only for videos with audio', () => {
+    const snapshot = demoSnapshot();
+    const audioModel = snapshot.catalog.audio_models?.[0];
+    expect(audioModel?.model_id).toBe('deepfilternet3');
+    if (audioModel) audioModel.installed = false;
+    const upscaler = snapshot.catalog.models.find((m) => m.model_id === 'span_photo_x4');
+    if (upscaler) upscaler.installed = true;
+    const settings: UiSettings = {
+      ...snapshot.settings,
+      task: 'video',
+      selected_model_id: 'span_photo_x4',
+      selected_video_model_id: 'frame_by_frame',
+      video_clean_audio: true,
+    };
+    const options = { faceEnabled: false, usingTemporalVideo: false, hasAudio: true };
+
+    const plan = resolvePlan(snapshot, settings, options);
+    expect(plan.map((stage) => stage.kind)).toEqual(['audio_denoise', 'upscale']);
+    const audioStage = plan[0];
+    expect(audioStage.audioModel?.model_id).toBe('deepfilternet3');
+    expect(audioStage.canDownload).toBe(true);
+    expect(audioStage.sizeBytes).toBe(7_983_136);
+    expect(pendingDownloads(plan).stages).toEqual([audioStage]);
+
+    expect(
+      resolvePlan(snapshot, settings, { ...options, hasAudio: false }).map((s) => s.kind),
+    ).toEqual(['upscale']);
+    expect(
+      resolvePlan(snapshot, { ...settings, video_clean_audio: false }, options).map((s) => s.kind),
+    ).toEqual(['upscale']);
+    expect(
+      resolvePlan(snapshot, { ...settings, task: 'upscale' }, options).map((s) => s.kind),
+    ).toEqual(['upscale']);
+
+    // Selecting DPDFNet drives the audio_denoise stage and its pending download.
+    const dpdf = snapshot.catalog.audio_models?.find((m) => m.model_id === 'dpdfnet8_48khz_hr');
+    expect(dpdf).toBeDefined();
+    if (dpdf) dpdf.installed = false;
+    const dpdfPlan = resolvePlan(
+      snapshot,
+      { ...settings, video_audio_model: 'dpdfnet8_48khz_hr' },
+      options,
+    );
+    expect(dpdfPlan[0].audioModel?.model_id).toBe('dpdfnet8_48khz_hr');
+    expect(dpdfPlan[0].sizeBytes).toBe(14_857_107);
+    expect(pendingDownloads(dpdfPlan).stages).toEqual([dpdfPlan[0]]);
+
+    // Unknown ids fall back to the catalog default.
+    expect(
+      resolvePlan(snapshot, { ...settings, video_audio_model: 'unknown_id' }, options)[0].audioModel
+        ?.model_id,
+    ).toBe('deepfilternet3');
+  });
+
   it('judges hardware fit against the device memory', () => {
     const device = {
       id: 'mps',
@@ -297,5 +355,134 @@ describe('model library resolution', () => {
     );
     expect(displayName({ name: 'HAT-L ×4 ImageNet — Large' })).toBe('HAT-L ×4 ImageNet');
     expect(displayName({ name: 'x', display_name: 'Given' })).toBe('Given');
+  });
+
+  it('resolves video restore, video fix-first stages, and video recipes', () => {
+    const snapshot = demoSnapshot();
+    const restoreSettings = {
+      ...snapshot.settings,
+      task: 'video' as const,
+      video_task: 'denoise' as const,
+      selected_video_model_id: 'frame_by_frame',
+      output_scale: 1,
+      halo: 16,
+      precision: 'fp32' as const,
+      safe_memory: true,
+      enable_face_model: false,
+      quality: 'custom' as const,
+      selected_model_id: 'scunet_color_real_psnr',
+      fix_stages: [
+        { fix: 'jpeg' as const, model_id: 'fbcnn_color' },
+        { fix: 'noise' as const, model_id: 'scunet_color_real_psnr' },
+      ],
+      fixes: ['jpeg' as const, 'noise' as const],
+    };
+    const options = { faceEnabled: false, usingTemporalVideo: false };
+    const plan = resolvePlan(snapshot, restoreSettings, options);
+    expect(plan.map((s) => [s.kind, s.role, s.model?.model_id])).toEqual([
+      ['deblock', 'fix', 'fbcnn_color'],
+      ['restore', 'primary', 'scunet_color_real_psnr'],
+    ]);
+    expect(supportsHdrPreservation(restoreSettings, snapshot.catalog)).toBe(false);
+
+    const upscaleWithFixes = {
+      ...snapshot.settings,
+      task: 'video' as const,
+      video_task: 'upscale' as const,
+      selected_model_id: 'span_photo_x4',
+      fix_stages: [{ fix: 'blur' as const, model_id: 'nafnet_gopro_deblur' }],
+      fixes: ['blur' as const],
+      video_interpolation: 'x2' as const,
+      video_interpolation_order: 'after_upscale' as const,
+    };
+    expect(resolvePlan(snapshot, upscaleWithFixes, options).map((s) => s.kind)).toEqual([
+      'restore',
+      'upscale',
+      'interpolate',
+    ]);
+
+    const restoreRecipe: Recipe = {
+      id: 'vr1',
+      name: 'Clean video',
+      task: 'video' as const,
+      video_task: 'denoise' as const,
+      quality: 'custom' as const,
+      model_id: 'scunet_color_real_psnr',
+      video_model_id: 'frame_by_frame',
+      output_scale: 1,
+      tile_size: restoreSettings.tile_size,
+      halo: 16,
+      precision: 'fp32' as const,
+      safe_memory: true,
+      enable_face_model: false,
+      fixes: ['jpeg' as const, 'noise' as const],
+      stages: [
+        { kind: 'deblock', model_id: 'fbcnn_color', fix: 'jpeg' as const },
+        { kind: 'restore', model_id: 'scunet_color_real_psnr', fix: 'noise' as const },
+      ],
+      output_format: 'png',
+    };
+    expect(recipeFixStages(restoreRecipe, snapshot.catalog)).toEqual([
+      { fix: 'jpeg', model_id: 'fbcnn_color' },
+      { fix: 'noise', model_id: 'scunet_color_real_psnr' },
+    ]);
+    expect(recipeMatches(restoreRecipe, restoreSettings, snapshot.catalog)).toBe(true);
+    expect(
+      recipeMatches({ ...restoreRecipe, video_task: 'upscale' }, restoreSettings, snapshot.catalog),
+    ).toBe(false);
+  });
+
+  it('omits the upscaling and face stages from the plan and downloads at 1× in Upscale', () => {
+    const snapshot = demoSnapshot();
+    const face = snapshot.catalog.models.find((m) => m.model_id === 'hat_l_x4_face');
+    const settings: UiSettings = {
+      ...snapshot.settings,
+      task: 'video',
+      video_task: 'upscale',
+      selected_video_model_id: 'frame_by_frame',
+      selected_model_id: 'hat_l_x4_imagenet',
+      output_scale: 1,
+      fix_stages: [{ fix: 'blur', model_id: 'nafnet_gopro_deblur' }],
+      fixes: ['blur', 'faces'],
+      enable_face_model: true,
+      video_clean_audio: true,
+    };
+    expect(skipsUpscaleModel(settings)).toBe(true);
+    expect(supportsHdrPreservation(settings, snapshot.catalog)).toBe(false);
+
+    const plan = resolvePlan(snapshot, settings, {
+      faceModel: face,
+      faceEnabled: true,
+      usingTemporalVideo: false,
+      hasAudio: true,
+    });
+    expect(plan.map((stage) => stage.kind)).toEqual(['audio_denoise', 'restore']);
+    expect(pendingDownloads(plan).stages.map((s) => s.kind)).toEqual(['audio_denoise', 'restore']);
+
+    const temporalMatch1x: UiSettings = {
+      ...settings,
+      selected_video_model_id: 'seedvr2_3b',
+      video_target_resolution: 0,
+      fix_stages: [],
+      video_clean_audio: false,
+    };
+    expect(skipsUpscaleModel(temporalMatch1x)).toBe(true);
+    expect(
+      resolvePlan(snapshot, temporalMatch1x, {
+        faceEnabled: false,
+        usingTemporalVideo: true,
+        selectedVideoModel: snapshot.catalog.video_models[0],
+      }),
+    ).toEqual([]);
+
+    const temporalFixedRes: UiSettings = { ...temporalMatch1x, video_target_resolution: 720 };
+    expect(skipsUpscaleModel(temporalFixedRes)).toBe(false);
+    expect(
+      resolvePlan(snapshot, temporalFixedRes, {
+        faceEnabled: false,
+        usingTemporalVideo: true,
+        selectedVideoModel: snapshot.catalog.video_models[0],
+      }).map((s) => s.kind),
+    ).toEqual(['video']);
   });
 });

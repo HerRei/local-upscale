@@ -41,6 +41,7 @@ pub fn refresh_install_state(catalog: &mut CatalogManifest, paths: &AppPaths) {
         .video_models
         .iter_mut()
         .chain(catalog.interpolation_models.iter_mut())
+        .chain(catalog.audio_models.iter_mut())
     {
         model.total_size_bytes = model.files.iter().map(|file| file.size_bytes).sum();
         let bundle = paths.model_root.join(&model.family);
@@ -126,8 +127,22 @@ mod tests {
                     .iter()
                     .map(|model| &model.model_id),
             )
+            .chain(catalog.audio_models.iter().map(|model| &model.model_id))
         {
             assert!(ids.insert(id), "duplicate catalog id: {id}");
+        }
+        let mut audio_families = std::collections::HashSet::new();
+        for model in &catalog.audio_models {
+            assert!(
+                audio_families.insert(&model.family),
+                "duplicate audio family: {}",
+                model.family
+            );
+            assert!(
+                !model.summary.is_empty(),
+                "missing audio summary: {}",
+                model.model_id
+            );
         }
     }
 

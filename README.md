@@ -62,6 +62,11 @@ Hofmann. The library also has HAT, Real-ESRGAN, SwinIR, NAFNet, SCUNet and
 FBCNN, and each model shows its size, licence and source before you download it.
 [Model guide](docs/models/README.md) · [Model licences](docs/model-licenses.md).
 
+<!-- release-candidate -->
+v0.5.0-beta is in preparation; the downloads below are still v0.4.0-beta.
+[Draft release notes](docs/releases/v0.5.0-beta.md).
+<!-- /release-candidate -->
+
 ## Download
 
 The [download page](https://herrei.github.io/localsr/download/) has the installers
@@ -111,21 +116,26 @@ details are in [platform support](docs/platforms.md).
 
 ## What leaves your computer
 
-There is no account, and your images and videos are never uploaded. At launch the
+On a fresh install, LocalSR shows a short setup screen for appearance (Dark, Light or Match System, plus colour-blind friendly colours), automatic update checks, the anonymous update count, and crash reports (all three on by default, and you can switch each off there). Nothing goes over the network until you choose Continue. The update check reads a feed on GitHub Pages. If enabled, the count sends the app version, platform and channel to the developer's server without an ID. You can change any of these later in the View, LocalSR and Help menus, the Software Update dialog, or Performance & Diagnostics.
+
+Crash reports are on by default for new installs and can be turned off in the first-launch setup or later. When enabled, they are stored only on your computer and are never sent automatically; you can review a report and choose to open a GitHub issue. A report contains app and system versions, the device kind and running task and model, and redacted error details. Native host crashes such as segmentation faults may not be captured.
+
+There is no account, and your images and videos are never uploaded. When enabled, at launch the
 app reads its update feed on GitHub Pages (for the beta,
 `herrei.github.io/localsr/updates/beta.json`) and can update itself, on the Mac,
 on Windows and as a Linux AppImage. After a check it
 sends one anonymous count with the app version, platform and channel to my Mac
-mini at `macmini-ci.tail34a4e0.ts.net`, without an install ID or cookies, but only
-if you turn the count on (it is off for new installs since 0.4.1; installs that
-already had it keep their setting). The update check is on by default. Turn either on or off in the LocalSR menu on the Mac, the Help menu
+mini at `macmini-ci.tail34a4e0.ts.net`, without an install ID or cookies. Both are
+on by default; the first launch shows both switches before anything is sent, and
+installs that already chose keep their setting. Turn either on or off in the LocalSR menu on the Mac, the Help menu
 on Windows and Linux, or the Software Update dialog; **Check for Updates…** still
 works when you ask. The Microsoft Store edition does neither.
 
 Updates come from GitHub Releases, and the app checks their signature before it
 replaces anything. Models download from their authors on GitHub or Hugging Face
-when you choose them. That is all, and once your models are downloaded, LocalSR
-works offline. [Privacy details](https://herrei.github.io/localsr/privacy/).
+when you choose them. The face-detection model downloads the first time a
+face-aware job runs. Once your models are downloaded, LocalSR works offline.
+[Privacy details](https://herrei.github.io/localsr/privacy/).
 
 ## FAQ
 

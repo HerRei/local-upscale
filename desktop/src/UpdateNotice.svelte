@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as api from './lib/api';
   import {
     dismissVersion,
     dismissedVersion,
@@ -10,23 +11,6 @@
 
   /** Installing replaces the running engine, so it waits for the queue. */
   export let processing = false;
-  /** The card's height while it shows, 0 otherwise: notes and controls at the bottom of the
-   *  stage move up by it. */
-  export let height = 0;
-
-  function measure(node: HTMLElement): { destroy: () => void } {
-    const report = () => (height = node.offsetHeight);
-    report();
-    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(report) : null;
-    observer?.observe(node);
-    return {
-      destroy() {
-        observer?.disconnect();
-        height = 0;
-      },
-    };
-  }
-
   let dismissed = dismissedVersion();
   let requested = false;
 
@@ -34,8 +18,12 @@
   $: error = $updateError;
   $: percent = status.size ? Math.min(100, Math.round((status.downloaded / status.size) * 100)) : 0;
   $: visible =
+    status.configured &&
+    !$updateDialogOpen &&
     !status.managed_by_store &&
-    ((status.stage === 'available' && status.version !== dismissed) ||
+    ((status.stage === 'available' &&
+      status.version !== dismissed &&
+      status.version !== status.skipped_version) ||
       status.stage === 'downloading' ||
       status.stage === 'downloaded' ||
       status.stage === 'installing');
@@ -50,6 +38,14 @@
     dismissed = status.version;
   }
 
+  async function skip(): Promise<void> {
+    try {
+      updateState.set(await api.skipUpdate());
+    } catch (error) {
+      updateError.set(String(error));
+    }
+  }
+
   function start(): void {
     // While processing, download now and let the reactive block install later.
     requested = processing;
@@ -58,7 +54,7 @@
 </script>
 
 {#if visible}
-  <div class="update-notice" role="status" aria-live="polite" use:measure>
+  <div class="update-notice" role="status" aria-live="polite" data-tauri-drag-region>
     <div class="glyph" aria-hidden="true">
       <svg viewBox="0 0 24 24"
         ><path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5" /><path d="M5 19h14" /></svg
@@ -89,8 +85,20 @@
     </div>
     <div class="buttons">
       {#if status.stage === 'available'}
-        <button class="notice-button" type="button" on:click={later}>Later</button>
-        <button class="notice-button primary" type="button" on:click={start}>Update Now</button>
+        <button class="notice-button primary" type="button" on:click={start}>Update</button>
+        <button class="notice-button" type="button" on:click={skip}>Skip This Version</button>
+        <button
+          class="notice-button"
+          type="button"
+          on:click={() => api.openUpdateDiscover().catch((error) => updateError.set(String(error)))}
+          >What's New</button
+        >
+        <button
+          class="notice-button"
+          type="button"
+          aria-label="Close update notice"
+          on:click={later}>×</button
+        >
       {:else if status.stage === 'downloaded'}
         <button class="notice-button" type="button" on:click={() => updateDialogOpen.set(true)}
           >Details</button
@@ -109,35 +117,19 @@
 {/if}
 
 <style>
-  /* Docked at the bottom right of the centre pane, above the stage and clear of the status
-     bar (the workspace ends where the status bar starts). */
   .update-notice {
-    position: absolute;
-    z-index: 80;
-    top: auto;
-    right: 12px;
-    bottom: 12px;
-    left: auto;
-    height: auto;
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
     gap: 12px;
-    width: min(440px, calc(100vw - 28px));
-    padding: 12px 12px 12px 14px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: var(--radius-surface);
-    background: rgba(35, 35, 37, 0.86);
-    backdrop-filter: blur(22px) saturate(150%);
-    box-shadow:
-      inset 0 1px rgba(255, 255, 255, 0.06),
-      0 18px 46px rgba(0, 0, 0, 0.5);
-    animation: arrive 0.32s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
   }
-  /* Wide windows keep the Enhance pane beside the preview: stay clear of it. */
+  /* In wide macOS windows there is no compact toolbar above it, so the traffic lights sit in top-left. */
   @media (min-width: 1280px) {
-    .update-notice {
-      right: calc(340px + 12px);
+    :global(.app-shell.mac) .update-notice {
+      padding-left: 84px;
     }
   }
   .glyph {
@@ -147,13 +139,12 @@
     height: 34px;
     border-radius: var(--radius);
     background: var(--accent);
-    box-shadow: inset 0 1px rgba(255, 255, 255, 0.25);
   }
   .glyph svg {
     width: 18px;
     height: 18px;
     fill: none;
-    stroke: #fff;
+    stroke: var(--on-accent);
     stroke-width: 2;
     stroke-linecap: round;
     stroke-linejoin: round;
@@ -172,7 +163,7 @@
     font-size: calc(12px * var(--ui-scale));
   }
   .text .error {
-    color: #f0b2aa;
+    color: var(--danger-text-muted);
   }
   .progress {
     display: block;
@@ -180,7 +171,7 @@
     margin-top: 4px;
     overflow: hidden;
     border-radius: 2px;
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--raised);
   }
   .progress i {
     display: block;
@@ -193,6 +184,7 @@
   .buttons {
     display: flex;
     gap: 6px;
+    flex-wrap: wrap;
   }
   .percent {
     color: var(--secondary);
@@ -201,22 +193,21 @@
   }
   .notice-button {
     padding: 6px 11px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid var(--border);
     border-radius: var(--radius);
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--raised);
     color: var(--text);
     font-size: calc(12px * var(--ui-scale));
     font-weight: 500;
     white-space: nowrap;
   }
   .notice-button:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.13);
+    background: var(--panel);
   }
   .notice-button.primary {
-    border-color: rgba(0, 0, 0, 0.25);
+    border-color: var(--border);
     background: var(--accent);
-    box-shadow: inset 0 1px rgba(255, 255, 255, 0.22);
-    color: #fff;
+    color: var(--on-accent);
   }
   .notice-button:disabled {
     cursor: default;

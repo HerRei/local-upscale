@@ -1,4 +1,70 @@
 {
+  "audio_models": [
+    {
+      "attribution_required": false,
+      "author": "Hendrik Schr\u00f6ter \u00b7 DeepFilterNet",
+      "automated_download_allowed": true,
+      "commercial_use_allowed": true,
+      "description": "Removes background noise such as hum, wind and hiss from speech at 48 kHz. Runs on CPU via ONNX Runtime; music may sound worse.",
+      "engine_id": "localsr.audio.deepfilternet3",
+      "engine_kind": "deepfilternet3",
+      "family": "deepfilternet3",
+      "files": [
+        {
+          "download_url": "https://github.com/Rikorose/DeepFilterNet/raw/7b14b895fe7fc42cab72b4a4c1e49c982bd6404b/models/DeepFilterNet3_onnx.tar.gz",
+          "filename": "DeepFilterNet3_onnx.tar.gz",
+          "role": "onnx_archive",
+          "sha256": "c94d91f70911001c946e0fabb4aa9adc37045f45a03b56008cb0c8244cb63616",
+          "size_bytes": 7983136
+        }
+      ],
+      "license_name": "MIT OR Apache-2.0",
+      "license_url": "https://opensource.org/license/mit",
+      "min_unified_memory_gb": 1,
+      "min_vram_gb": 0,
+      "model_id": "deepfilternet3",
+      "name": "DeepFilterNet3",
+      "redistribution_allowed": false,
+      "source_url": "https://github.com/Rikorose/DeepFilterNet",
+      "summary": "Speech noise removal",
+      "support_tier": "supported",
+      "temporal_overlap": 0,
+      "temporal_window": 0,
+      "terms_acceptance_required": false
+    },
+    {
+      "attribution_required": true,
+      "author": "Ceva \u00b7 DPDFNet",
+      "automated_download_allowed": true,
+      "commercial_use_allowed": true,
+      "description": "Stronger speech noise removal at 48 kHz using dual-path recurrent modeling. Runs on CPU via ONNX Runtime; music may sound worse.",
+      "engine_id": "localsr.audio.dpdfnet",
+      "engine_kind": "dpdfnet",
+      "family": "dpdfnet8_48khz_hr",
+      "files": [
+        {
+          "download_url": "https://huggingface.co/Ceva-IP/DPDFNet/resolve/dd6818d00f50c836fed43a6243ebe49116de5964/onnx/dpdfnet8_48khz_hr.onnx",
+          "filename": "dpdfnet8_48khz_hr.onnx",
+          "role": "onnx_model",
+          "sha256": "7b3afbb260a08fe9af3d16e3bda992971be1e7e951d1dee7c2d235f5c43f5631",
+          "size_bytes": 14857107
+        }
+      ],
+      "license_name": "Apache-2.0",
+      "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "min_unified_memory_gb": 1,
+      "min_vram_gb": 0,
+      "model_id": "dpdfnet8_48khz_hr",
+      "name": "DPDFNet",
+      "redistribution_allowed": false,
+      "source_url": "https://github.com/ceva-ip/DPDFNet",
+      "summary": "Stronger speech noise removal",
+      "support_tier": "supported",
+      "temporal_overlap": 0,
+      "temporal_window": 0,
+      "terms_acceptance_required": false
+    }
+  ],
   "catalog_revision": "867e7c0ad519aba5d36b5bb4ef4a4a91781914c4",
   "interpolation_models": [
     {
@@ -27,6 +93,7 @@
       "name": "RIFE 4.26 \u2014 Labs",
       "redistribution_allowed": false,
       "source_url": "https://github.com/hzwer/Practical-RIFE",
+      "summary": "",
       "support_tier": "labs",
       "temporal_overlap": 1,
       "temporal_window": 2,
@@ -873,6 +940,7 @@
       "name": "SeedVR2-3B \u2014 Labs",
       "redistribution_allowed": false,
       "source_url": "https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler",
+      "summary": "",
       "support_tier": "labs",
       "temporal_overlap": 2,
       "temporal_window": 9,
@@ -911,6 +979,7 @@
       "name": "SeedVR2-3B FP8 \u2014 Labs",
       "redistribution_allowed": false,
       "source_url": "https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler",
+      "summary": "",
       "support_tier": "labs",
       "temporal_overlap": 2,
       "temporal_window": 9,

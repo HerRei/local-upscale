@@ -1,5 +1,5 @@
 import { formatDuration } from './format';
-import type { AppSnapshot, WorkerEnvelope } from './types';
+import type { AppSnapshot, ModelDownloadStatus, RuntimeStatus, WorkerEnvelope } from './types';
 export function resultPreviewForSelectedMedia(snapshot: AppSnapshot): string {
   const selected = snapshot.media.find((media) => media.selected) ?? snapshot.media[0];
   if (!selected) return '';
@@ -250,6 +250,8 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
         verifying_model: 'Checking model files',
         external_decode: 'Converting the source with your FFmpeg',
         external_encode: 'Encoding with your FFmpeg',
+        loading_audio_denoise: 'Loading audio model',
+        audio_denoise: 'Audio cleanup',
         loading_model: 'Loading video model',
         reading_frames: 'Reading video frames',
         preparing_clip: 'Preparing clip',
@@ -274,10 +276,22 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
           ? `From frame ${Number(data.frame_index ?? 0) + 1} of ${totalFrames} · `
           : '';
       next.runtime.status_detail = `${steps}${frames}${next.runtime.estimated_remaining_seconds > 0 ? `ETA ≈ ${formatDuration(next.runtime.estimated_remaining_seconds)}` : 'ETA: measuring first clip…'}`;
-      if (data.stage === 'saving')
-        next.runtime.status_detail = 'Finalizing video timing and audio…';
+      if (data.stage === 'audio_denoise') {
+        const completed = Number(data.completed ?? 0);
+        if (count > 0 && totalFrames === 0)
+          next.runtime.progress = Math.max(0, Math.min(100, (completed / count) * 100));
+        const chunkText = count > 0 ? `Chunk ${completed} of ${count}` : 'Cleaning speech audio';
+        next.runtime.status_detail =
+          next.runtime.estimated_remaining_seconds > 0
+            ? `${chunkText} · ETA ≈ ${formatDuration(next.runtime.estimated_remaining_seconds)}`
+            : chunkText;
+        next.runtime.throughput_unit = '';
+      } else {
+        if (data.stage === 'saving')
+          next.runtime.status_detail = 'Finalizing video timing and audio…';
+        next.runtime.throughput_unit = 'frames/s';
+      }
       next.runtime.elapsed_seconds = Number(data.elapsed_seconds ?? 0);
-      next.runtime.throughput_unit = 'frames/s';
       break;
     }
     case 'video_frame_started':
@@ -443,24 +457,100 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       next.runtime.status_title = 'Engine incompatible';
       next.runtime.status_detail = String(data.message ?? 'Worker protocol mismatch.');
       break;
-    case 'download-started':
-      next.runtime.download_model_id = String(data.model_id ?? '');
-      next.runtime.download_progress = 0;
+    case 'download-queued': {
+      const modelId = String(data.model_id ?? '');
+      if (!modelId) break;
+      const totalBytes = Number(data.total_bytes ?? 0);
+      const current = ensureDownloads(next.runtime).filter((item) => item.model_id !== modelId);
+      current.push({
+        model_id: modelId,
+        status: 'queued',
+        progress: 0,
+        downloaded_bytes: 0,
+        total_bytes: Number.isFinite(totalBytes) ? totalBytes : 0,
+      });
+      syncPrimaryDownload(next.runtime, current);
       break;
-    case 'download-progress':
-      next.runtime.download_model_id = String(data.model_id ?? '');
-      next.runtime.download_progress = Number(data.progress ?? 0);
+    }
+    case 'download-started': {
+      const modelId = String(data.model_id ?? '');
+      if (!modelId) break;
+      const totalBytes = Number(data.total_bytes ?? 0);
+      const existing = ensureDownloads(next.runtime);
+      const index = existing.findIndex((item) => item.model_id === modelId);
+      const entry: ModelDownloadStatus = {
+        model_id: modelId,
+        status: 'downloading',
+        progress: 0,
+        downloaded_bytes: 0,
+        total_bytes:
+          Number.isFinite(totalBytes) && totalBytes > 0
+            ? totalBytes
+            : (existing[index]?.total_bytes ?? 0),
+      };
+      const updated =
+        index >= 0 ? existing.map((item, i) => (i === index ? entry : item)) : [...existing, entry];
+      syncPrimaryDownload(next.runtime, updated);
       break;
+    }
+    case 'download-progress': {
+      const modelId = String(data.model_id ?? '');
+      if (!modelId) break;
+      const progress = clampPercent(Number(data.progress ?? 0));
+      const downloadedBytes = Number(data.downloaded_bytes ?? 0);
+      const totalBytes = Number(data.total_bytes ?? 0);
+      const existing = ensureDownloads(next.runtime);
+      const index = existing.findIndex((item) => item.model_id === modelId);
+      const entry: ModelDownloadStatus = {
+        model_id: modelId,
+        status: 'downloading',
+        progress,
+        downloaded_bytes: Number.isFinite(downloadedBytes) ? downloadedBytes : 0,
+        total_bytes:
+          Number.isFinite(totalBytes) && totalBytes > 0
+            ? totalBytes
+            : (existing[index]?.total_bytes ?? 0),
+      };
+      const updated =
+        index >= 0 ? existing.map((item, i) => (i === index ? entry : item)) : [...existing, entry];
+      syncPrimaryDownload(next.runtime, updated);
+      break;
+    }
     case 'download-completed':
     case 'download-cancelled':
-    case 'download-failed':
-      next.runtime.download_model_id = '';
+    case 'download-failed': {
+      const modelId = String(data.model_id ?? '');
+      const remaining = modelId
+        ? ensureDownloads(next.runtime).filter((item) => item.model_id !== modelId)
+        : [];
+      syncPrimaryDownload(next.runtime, remaining);
       break;
+    }
   }
   // A bar is drawn from these as a percentage of its track.
   next.runtime.progress = clampPercent(next.runtime.progress);
   next.runtime.download_progress = clampPercent(next.runtime.download_progress);
   return next;
+}
+
+function ensureDownloads(runtime: RuntimeStatus): ModelDownloadStatus[] {
+  if (runtime.downloads) return runtime.downloads;
+  return runtime.download_model_id
+    ? [
+        {
+          model_id: runtime.download_model_id,
+          status: 'downloading',
+          progress: clampPercent(runtime.download_progress),
+        },
+      ]
+    : [];
+}
+
+function syncPrimaryDownload(runtime: RuntimeStatus, list: ModelDownloadStatus[]): void {
+  runtime.downloads = list;
+  const primary = list.find((item) => item.status === 'downloading') ?? list[0];
+  runtime.download_model_id = primary?.model_id ?? '';
+  runtime.download_progress = primary ? clampPercent(primary.progress) : 0;
 }
 
 function clampPercent(value: number): number {

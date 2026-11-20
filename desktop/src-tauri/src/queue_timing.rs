@@ -34,6 +34,41 @@ pub fn work_profile(
             .get("model_kind")
             .and_then(Value::as_str)
             .is_some_and(|kind| kind != "spandrel_image");
+    let output_scale_one = data.get("output_scale").and_then(Value::as_u64) == Some(1);
+    let skipped_upscale_stage = output_scale_one
+        && data
+            .get("stages")
+            .and_then(Value::as_array)
+            .is_some_and(|stages| stages.iter().any(|stage| stage["kind"] == "upscale"));
+    let skipped_temporal_1x = temporal
+        && output_scale_one
+        && data.get("target_resolution").and_then(Value::as_u64) == Some(0);
+    if skipped_upscale_stage || skipped_temporal_1x {
+        data.insert("model_path".into(), json!(""));
+        data.remove("face_model_path");
+        data.remove("face_fidelity");
+        data.remove("video_model_id");
+        data.remove("bundle_dir");
+        data.insert("model_kind".into(), json!("spandrel_image"));
+        if let Some(stages) = data.get_mut("stages").and_then(Value::as_array_mut) {
+            stages.retain(|stage| {
+                !matches!(stage["kind"].as_str(), Some("upscale" | "face_restore"))
+            });
+        }
+    }
+    let temporal = !skipped_temporal_1x && temporal;
+    let empty_model_path = data
+        .get("model_path")
+        .and_then(Value::as_str)
+        .is_some_and(str::is_empty);
+    let has_stages = data
+        .get("stages")
+        .and_then(Value::as_array)
+        .is_some_and(|stages| !stages.is_empty());
+    // A 1× job with no fix or restore models runs no SR tiles; don't borrow tile estimates.
+    if !temporal && output_scale_one && empty_model_path && !has_stages {
+        return (String::new(), 0.0);
+    }
     let start = data
         .get("start_frame")
         .and_then(Value::as_u64)
@@ -168,6 +203,18 @@ mod tests {
     }
 
     #[test]
+    fn video_audio_denoise_uses_a_separate_work_profile() {
+        let off = json!({"type":"video_job_request","data":{"model_kind":"spandrel_image","tile_size":256,"audio_denoise":false}});
+        let mut on = off.clone();
+        on["data"]["audio_denoise"] = json!(true);
+        on["data"]["audio_denoise_model_id"] = json!("deepfilternet3");
+        let (key_off, units_off) = work_profile(&off.to_string(), 640, 360, 48, "");
+        let (key_on, units_on) = work_profile(&on.to_string(), 640, 360, 48, "");
+        assert_ne!(key_off, key_on);
+        assert_eq!(units_off, units_on);
+    }
+
+    #[test]
     fn video_work_obeys_trim_and_temporal_resolution() {
         let request = json!({"type":"video_job_request","data":{"model_kind":"seedvr2","start_frame":5,"end_frame":20}}).to_string();
         let small = work_profile(&request, 640, 480, 30, "HLG");
@@ -210,6 +257,55 @@ mod tests {
         assert_eq!(
             typical_seconds_per_unit(&[(f64::NAN, 5.0), (10.0, -1.0), (0.0, 3.0), (10.0, 10.0)]),
             None
+        );
+    }
+
+    #[test]
+    fn skipped_upscale_at_1x_does_not_count_sr_timing() {
+        let no_models = json!({
+            "type": "video_job_request",
+            "data": {
+                "model_kind": "spandrel_image",
+                "model_path": "",
+                "output_scale": 1,
+                "tile_size": 256,
+                "deflicker": true,
+                "stages": []
+            }
+        });
+        assert_eq!(
+            work_profile(&no_models.to_string(), 1920, 1080, 48, ""),
+            (String::new(), 0.0)
+        );
+
+        let with_fix_a = json!({
+            "type": "video_job_request",
+            "data": {
+                "model_kind": "spandrel_image",
+                "model_path": "/models/span_x4.pth",
+                "output_scale": 1,
+                "tile_size": 256,
+                "stages": [
+                    {"kind": "deblock", "model_id": "fbcnn_color", "model_path": "/models/fbcnn.pth"},
+                    {"kind": "upscale", "model_id": "span_photo_x4", "model_path": "/models/span_x4.pth"}
+                ]
+            }
+        });
+        let with_fix_b = json!({
+            "type": "video_job_request",
+            "data": {
+                "model_kind": "spandrel_image",
+                "model_path": "",
+                "output_scale": 1,
+                "tile_size": 256,
+                "stages": [
+                    {"kind": "deblock", "model_id": "fbcnn_color", "model_path": "/models/fbcnn.pth"}
+                ]
+            }
+        });
+        assert_eq!(
+            work_profile(&with_fix_a.to_string(), 640, 360, 10, ""),
+            work_profile(&with_fix_b.to_string(), 640, 360, 10, "")
         );
     }
 }

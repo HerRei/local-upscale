@@ -15,6 +15,7 @@
     { "$ref": "#/$defs/videoJobRequest" },
     { "$ref": "#/$defs/benchmarkRequest" },
     { "$ref": "#/$defs/cancelRequest" },
+    { "$ref": "#/$defs/setLowPriorityRequest" },
     { "$ref": "#/$defs/workerReady" },
     { "$ref": "#/$defs/engineInfo" },
     { "$ref": "#/$defs/workerResponse" }
@@ -102,6 +103,24 @@
           "properties": {
             "type": { "enum": ["capabilities_request", "shutdown_request", "region_clear"] },
             "data": { "type": "object", "maxProperties": 0 }
+          }
+        }
+      ]
+    },
+    "setLowPriorityRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        {
+          "properties": {
+            "type": { "const": "set_low_priority" },
+            "data": {
+              "type": "object",
+              "required": ["low_priority"],
+              "properties": {
+                "low_priority": { "type": "boolean" }
+              },
+              "additionalProperties": false
+            }
           }
         }
       ]
@@ -213,6 +232,8 @@
       "required": ["kind", "model_id", "model_path"],
       "properties": {
         "kind": { "enum": ["deblock", "restore", "upscale", "face_restore"] },
+        "role": { "enum": ["fix", "primary", "face"] },
+        "fix": { "enum": ["blur", "jpeg", "noise"] },
         "model_id": { "type": "string", "minLength": 1 },
         "model_path": { "type": "string", "minLength": 1 },
         "fidelity": { "type": "number", "minimum": 0, "maximum": 1 },
@@ -248,7 +269,7 @@
                     "stages": {
                       "type": ["array", "null"],
                       "minItems": 1,
-                      "maxItems": 3,
+                      "maxItems": 5,
                       "items": { "$ref": "#/$defs/pipelineStage" }
                     }
                   }
@@ -302,8 +323,17 @@
                     "interpolation_order": { "enum": ["after_upscale", "before_upscale"], "default": "after_upscale" },
                     "interpolation_model_id": { "type": ["string", "null"] },
                     "interpolation_bundle_dir": { "type": ["string", "null"] },
+                    "audio_denoise": { "type": "boolean", "default": false },
+                    "audio_denoise_model_id": { "type": ["string", "null"] },
+                    "audio_denoise_bundle_dir": { "type": ["string", "null"] },
                     "video_model_id": { "type": ["string", "null"] },
-                    "temporary_directory": { "type": ["string", "null"] }
+                    "temporary_directory": { "type": ["string", "null"] },
+                    "stages": {
+                      "type": ["array", "null"],
+                      "minItems": 1,
+                      "maxItems": 5,
+                      "items": { "$ref": "#/$defs/pipelineStage" }
+                    }
                   }
                 }
               ]

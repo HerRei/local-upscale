@@ -94,6 +94,35 @@ export function rankForQuality(models: CatalogModel[], quality: 'quick' | 'best'
 export function presetSlot(task: TaskKind, content: ContentKind, quality: Quality): string {
   return `${task}/${content}/${quality}`;
 }
+
+export function effectiveVideoTask(
+  settings: Pick<UiSettings, 'video_task'>,
+): 'upscale' | 'denoise' {
+  return settings.video_task === 'denoise' ? 'denoise' : 'upscale';
+}
+
+export function isRestoreTask(settings: Pick<UiSettings, 'task' | 'video_task'>): boolean {
+  return (
+    settings.task === 'denoise' || (settings.task === 'video' && settings.video_task === 'denoise')
+  );
+}
+
+/** True when the Upscale task is set to 1× and therefore runs no upscaling model. */
+export function skipsUpscaleModel(
+  settings: Pick<
+    UiSettings,
+    'task' | 'video_task' | 'output_scale' | 'selected_video_model_id' | 'video_target_resolution'
+  >,
+): boolean {
+  if (isRestoreTask(settings)) return false;
+  if (settings.task === 'upscale') return settings.output_scale === 1;
+  if (settings.task === 'video') {
+    const temporal = settings.selected_video_model_id !== 'frame_by_frame';
+    if (temporal && (settings.video_target_resolution ?? 0) > 0) return false;
+    return settings.output_scale === 1;
+  }
+  return false;
+}
 export type Fit = 'runs' | 'heavy' | 'too_heavy' | 'unknown';
 
 /**
@@ -118,12 +147,20 @@ export const FIT_LABELS: Record<Fit, string> = {
 };
 
 export interface PlanStage {
-  kind: 'deblock' | 'restore' | 'upscale' | 'face_restore' | 'video' | 'edit' | 'interpolate';
+  kind:
+    | 'deblock'
+    | 'restore'
+    | 'upscale'
+    | 'face_restore'
+    | 'video'
+    | 'edit'
+    | 'interpolate'
+    | 'audio_denoise';
   /**
    * What the row's Change opens: the fix before the upscaler, the main model, or Faces.
-   * Frame interpolation is set under Advanced and has no Change.
+   * Frame interpolation and audio cleanup are set directly and have no Change.
    */
-  role: 'fix' | 'primary' | 'face' | 'interpolate';
+  role: 'fix' | 'primary' | 'face' | 'interpolate' | 'audio_denoise';
   /** The problem this row's model fixes, when it fixes one. */
   fix?: Exclude<FixKind, 'faces'>;
   /** The model is the user's remembered choice for that problem and quality. */
@@ -134,6 +171,7 @@ export interface PlanStage {
   model?: CatalogModel;
   videoModel?: CatalogVideoModel;
   interpolationModel?: CatalogVideoModel;
+  audioModel?: CatalogVideoModel;
   editModel?: EditModel;
   custom?: string;
   installed: boolean;
@@ -158,6 +196,7 @@ export function resolvePlan(
     usingTemporalVideo: boolean;
     selectedVideoModel?: CatalogVideoModel;
     editModel?: EditModel;
+    hasAudio?: boolean;
   },
 ): PlanStage[] {
   const stages: PlanStage[] = [];
@@ -204,8 +243,13 @@ export function resolvePlan(
       sizeBytes: model.installed ? 0 : model.size_bytes,
     };
 
-  const restoring = settings.task === 'denoise';
-  const fixStages = settings.task === 'upscale' || restoring ? settings.fix_stages : [];
+  const restoring = isRestoreTask(settings);
+  const skipUpscale = skipsUpscaleModel(settings);
+  const fixStages =
+    !options.usingTemporalVideo &&
+    (settings.task === 'upscale' || settings.task === 'video' || restoring)
+      ? settings.fix_stages
+      : [];
   // Restore's model is its last fix; the ones before it run first, as before an upscale.
   const chip = restoring ? fixStages.at(-1)?.fix : undefined;
   const missingStage = (
@@ -235,7 +279,9 @@ export function resolvePlan(
     );
   }
 
-  if (options.usingTemporalVideo && options.selectedVideoModel) {
+  if (skipUpscale) {
+    // At 1× in Upscale, the upscaling model and fused face pass are not run at all.
+  } else if (options.usingTemporalVideo && options.selectedVideoModel) {
     const video = options.selectedVideoModel;
     stages.push({
       kind: 'video',
@@ -249,9 +295,9 @@ export function resolvePlan(
     });
   } else if (settings.selected_model_id === '__custom__') {
     stages.push({
-      kind: settings.task === 'denoise' ? 'restore' : 'upscale',
+      kind: restoring ? 'restore' : 'upscale',
       role: 'primary',
-      label: settings.task === 'denoise' ? 'Restore' : `Upscale ×${settings.output_scale}`,
+      label: restoring ? 'Restore' : `Upscale ×${settings.output_scale}`,
       custom: settings.custom_model_path,
       installed: Boolean(settings.custom_model_path),
       canDownload: false,
@@ -271,7 +317,7 @@ export function resolvePlan(
     else if (chip) stages.push(missingStage('restore', 'primary', 'Restore', chip));
   }
 
-  if (options.faceEnabled && options.faceModel && settings.task !== 'denoise') {
+  if (options.faceEnabled && options.faceModel && !restoring && !skipUpscale) {
     const stage = stageFor('face_restore', 'face', 'Faces', options.faceModel);
     if (stage) stages.push(stage);
   }
@@ -298,7 +344,39 @@ export function resolvePlan(
     if (settings.video_interpolation_order === 'before_upscale') stages.unshift(stage);
     else stages.push(stage);
   }
+
+  // Audio cleanup runs before video processing when the source has an audio track.
+  const audioModel = resolveAudioModel(snapshot.catalog.audio_models, settings.video_audio_model);
+  if (
+    settings.task === 'video' &&
+    settings.video_clean_audio &&
+    options.hasAudio !== false &&
+    audioModel
+  ) {
+    stages.unshift({
+      kind: 'audio_denoise',
+      role: 'audio_denoise',
+      label: 'Clean up audio',
+      audioModel,
+      installed: audioModel.installed,
+      canDownload: !audioModel.installed && audioModel.automated_download_allowed,
+      needsFile: !audioModel.installed && !audioModel.automated_download_allowed,
+      sizeBytes: audioModel.installed ? 0 : audioModel.total_size_bytes,
+    });
+  }
   return stages;
+}
+
+/** Selected audio cleanup model, falling back to the catalog default for empty or unknown ids. */
+export function resolveAudioModel(
+  audioModels: CatalogVideoModel[] | undefined,
+  modelId?: string,
+): CatalogVideoModel | undefined {
+  if (!audioModels?.length) return undefined;
+  return (
+    (modelId ? audioModels.find((model) => model.model_id === modelId) : undefined) ??
+    audioModels[0]
+  );
 }
 
 const INTERPOLATION_RATES: Record<Exclude<InterpolationTarget, 'off'>, [number, number]> = {
@@ -330,8 +408,13 @@ export function frameRateChange(target: Exclude<InterpolationTarget, 'off'>, fps
 export function pendingDownloads(stages: PlanStage[]): { stages: PlanStage[]; bytes: number } {
   const seen = new Set<string>();
   const pending = stages.filter((stage) => {
-    const id = (stage.model ?? stage.videoModel ?? stage.interpolationModel ?? stage.editModel)
-      ?.model_id;
+    const id = (
+      stage.model ??
+      stage.videoModel ??
+      stage.interpolationModel ??
+      stage.audioModel ??
+      stage.editModel
+    )?.model_id;
     if (!stage.canDownload || !id || seen.has(id)) return false;
     seen.add(id);
     return true;
@@ -339,18 +422,17 @@ export function pendingDownloads(stages: PlanStage[]): { stages: PlanStage[]; by
   return { stages: pending, bytes: pending.reduce((total, stage) => total + stage.sizeBytes, 0) };
 }
 
-export function modelsForTask(snapshot: AppSnapshot, task: TaskKind | ''): CatalogModel[] {
-  if (task === 'upscale') {
-    return snapshot.catalog.models.filter(
-      (model) => model.native_scale > 1 && !model.purposes.includes('face'),
-    );
-  }
-  if (task === 'denoise') {
+export function modelsForTask(
+  snapshot: AppSnapshot,
+  task: TaskKind | '',
+  videoTask: 'upscale' | 'denoise' = 'upscale',
+): CatalogModel[] {
+  if (task === 'denoise' || (task === 'video' && videoTask === 'denoise')) {
     return snapshot.catalog.models.filter(
       (model) => model.native_scale === 1 && !model.purposes.includes('face'),
     );
   }
-  if (task === 'video') {
+  if (task === 'upscale' || task === 'video') {
     return snapshot.catalog.models.filter(
       (model) => model.native_scale > 1 && !model.purposes.includes('face'),
     );
@@ -364,9 +446,10 @@ export function libraryModelsForTask(
   task: TaskKind | '',
   content: ContentKind,
   fix?: Exclude<FixKind, 'faces'>,
+  videoTask: 'upscale' | 'denoise' = 'upscale',
 ): CatalogModel[] {
   // A fix stage always chooses among 1× restoration models, whatever the task around it.
-  if (task === 'denoise' || fix)
+  if (task === 'denoise' || (task === 'video' && videoTask === 'denoise') || fix)
     return models.filter(
       (model) =>
         model.native_scale === 1 &&
@@ -417,16 +500,18 @@ export function choosePresetModel(
   quality: 'quick' | 'best',
   content: ContentKind = 'photo',
   pins: Record<string, string> = {},
+  videoTask: 'upscale' | 'denoise' = 'upscale',
 ): CatalogModel | undefined {
-  const candidates = modelsForTask(snapshot, task);
-  const pinned = candidates.find(
-    (model) => model.model_id === pins[presetSlot(task, content, quality)],
-  );
+  const restoring = task === 'denoise' || (task === 'video' && videoTask === 'denoise');
+  const candidates = modelsForTask(snapshot, task, videoTask);
+  const pinned = restoring
+    ? undefined
+    : candidates.find((model) => model.model_id === pins[presetSlot(task, content, quality)]);
   if (pinned) return pinned;
   const eligible = candidates.filter(
-    (model) => presetMayPick(model) && (task === 'denoise' || contentMatch(model, content) > 0),
+    (model) => presetMayPick(model) && (restoring || contentMatch(model, content) > 0),
   );
-  if (task === 'denoise') return rankForQuality(eligible, quality)[0];
+  if (restoring) return rankForQuality(eligible, quality)[0];
   const ranked = rankForQuality(eligible, quality);
   return ranked.sort(
     (left, right) => contentMatch(right, content) - contentMatch(left, content),
@@ -441,16 +526,18 @@ export function presetDownload(
 ): string {
   const task = ui.task;
   if (!task || task === 'edit') return '';
-  const fixes = (task === 'upscale' || task === 'denoise' ? ui.fix_stages : []).map((selection) =>
-    chooseFixModel(current, selection.fix, quality, ui.preset_pins),
-  );
-  // Restore's model is its last fix; without one it is the preset's own choice.
+  const restoring = isRestoreTask(ui);
+  const temporal =
+    task === 'video' && !restoring && ui.selected_video_model_id !== 'frame_by_frame';
+  const fixes = (
+    !temporal && (task === 'upscale' || task === 'video' || restoring) ? ui.fix_stages : []
+  ).map((selection) => chooseFixModel(current, selection.fix, quality, ui.preset_pins));
+  // Restore's model is its last fix; without one it is the preset's own choice. At 1× no
+  // upscaler runs, so none is counted.
   const primary =
-    task === 'denoise'
-      ? fixes.length
-        ? undefined
-        : choosePresetModel(current, task, quality)
-      : choosePresetModel(current, task, quality, ui.content, ui.preset_pins);
+    (restoring && fixes.length) || skipsUpscaleModel(ui)
+      ? undefined
+      : choosePresetModel(current, task, quality, ui.content, ui.preset_pins, ui.video_task);
   const models = new Map(
     [primary, ...fixes]
       .filter((model): model is CatalogModel => model !== undefined)
@@ -467,6 +554,8 @@ export function supportsHdrPreservation(
   candidate: UiSettings,
   catalog: AppSnapshot['catalog'],
 ): boolean {
+  if (candidate.video_task === 'denoise' || candidate.fix_stages.length > 0) return false;
+  if (skipsUpscaleModel(candidate)) return false;
   return (
     candidate.selected_video_model_id === 'frame_by_frame' &&
     (candidate.selected_model_id === '__custom__' ||

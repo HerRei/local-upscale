@@ -759,6 +759,7 @@ class CatalogVideoModel:
     min_vram_gb: int
     temporal_window: int
     temporal_overlap: int
+    summary: str = ""
 
     @property
     def total_size_bytes(self) -> int:
@@ -882,6 +883,74 @@ INTERPOLATION_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
 )
 INTERPOLATION_CATALOG_BY_ID = {model.model_id: model for model in INTERPOLATION_MODEL_CATALOG}
 DEFAULT_INTERPOLATION_MODEL_ID = "rife_4_26"
+
+# Audio cleanup models: optional speech-denoising stage for video jobs.
+# Rikorose/DeepFilterNet dual-licenses all code and model weights under MIT OR Apache-2.0.
+# Ceva/DPDFNet licenses its code and model weights under Apache-2.0.
+AUDIO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
+    CatalogVideoModel(
+        model_id="deepfilternet3",
+        name="DeepFilterNet3",
+        description=(
+            "Removes background noise such as hum, wind and hiss from speech at 48 kHz. "
+            "Runs on CPU via ONNX Runtime; music may sound worse."
+        ),
+        summary="Speech noise removal",
+        family="deepfilternet3",
+        engine_kind="deepfilternet3",
+        files=(
+            ModelFile(
+                role="onnx_archive",
+                filename="DeepFilterNet3_onnx.tar.gz",
+                size_bytes=7_983_136,
+                sha256="c94d91f70911001c946e0fabb4aa9adc37045f45a03b56008cb0c8244cb63616",
+                download_url=(
+                    "https://github.com/Rikorose/DeepFilterNet/raw/"
+                    "7b14b895fe7fc42cab72b4a4c1e49c982bd6404b/models/DeepFilterNet3_onnx.tar.gz"
+                ),
+            ),
+        ),
+        license_name="MIT OR Apache-2.0",
+        author="Hendrik Schröter · DeepFilterNet",
+        source_url="https://github.com/Rikorose/DeepFilterNet",
+        min_unified_memory_gb=1,
+        min_vram_gb=0,
+        temporal_window=0,
+        temporal_overlap=0,
+    ),
+    CatalogVideoModel(
+        model_id="dpdfnet8_48khz_hr",
+        name="DPDFNet",
+        description=(
+            "Stronger speech noise removal at 48 kHz using dual-path recurrent modeling. "
+            "Runs on CPU via ONNX Runtime; music may sound worse."
+        ),
+        summary="Stronger speech noise removal",
+        family="dpdfnet8_48khz_hr",
+        engine_kind="dpdfnet",
+        files=(
+            ModelFile(
+                role="onnx_model",
+                filename="dpdfnet8_48khz_hr.onnx",
+                size_bytes=14_857_107,
+                sha256="7b3afbb260a08fe9af3d16e3bda992971be1e7e951d1dee7c2d235f5c43f5631",
+                download_url=(
+                    "https://huggingface.co/Ceva-IP/DPDFNet/resolve/"
+                    "dd6818d00f50c836fed43a6243ebe49116de5964/onnx/dpdfnet8_48khz_hr.onnx"
+                ),
+            ),
+        ),
+        license_name="Apache-2.0",
+        author="Ceva · DPDFNet",
+        source_url="https://github.com/ceva-ip/DPDFNet",
+        min_unified_memory_gb=1,
+        min_vram_gb=0,
+        temporal_window=0,
+        temporal_overlap=0,
+    ),
+)
+AUDIO_CATALOG_BY_ID = {model.model_id: model for model in AUDIO_MODEL_CATALOG}
+DEFAULT_AUDIO_MODEL_ID = "deepfilternet3"
 
 
 class ModelStore:

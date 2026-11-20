@@ -62,23 +62,25 @@ for distribution in (
     datas += copy_metadata(distribution, recursive=True)
 onnx_hidden = []
 if find_spec("onnxruntime") is not None:
-    # Runtime graph conversion is part of the Windows DirectML worker. Provider
-    # DLLs are collected by PyInstaller's onnxruntime hook.
-    onnx_datas, onnx_binaries, onnx_hidden = collect_all("onnx")
-    datas += onnx_datas + copy_metadata("onnx", recursive=True)
+    # Runtime graph conversion (DirectML/OpenVINO) needs onnx as well; audio cleanup
+    # only uses onnxruntime.
+    if find_spec("onnx") is not None:
+        onnx_datas, onnx_binaries, onnx_hidden = collect_all("onnx")
+        datas += onnx_datas + copy_metadata("onnx", recursive=True)
+        spandrel_binaries += onnx_binaries
+        onnx_hidden += ["torch.onnx"]
     runtime_notices = collect_data_files(
         "onnxruntime", includes=["LICENSE", "ThirdPartyNotices.txt"]
     )
     if len(runtime_notices) != 2:
         raise RuntimeError("The ONNX Runtime license and third-party notices must be bundled")
     datas += runtime_notices
-    spandrel_binaries += onnx_binaries
     for distribution in ("onnxruntime-directml", "onnxruntime"):
         try:
             datas += copy_metadata(distribution)
         except PackageNotFoundError:
             continue
-    onnx_hidden += ["onnxruntime", "torch.onnx"]
+    onnx_hidden += ["onnxruntime"]
 openvino_package_libraries: set[str] = set()
 if find_spec("onnxruntime_ep_openvino") is not None:
     # Intel GPUs and NPUs: the OpenVINO plugin and its own OpenVINO runtime, loaded by

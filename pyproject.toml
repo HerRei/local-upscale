@@ -1,6 +1,6 @@
 [project]
 name = "localsr"
-version = "0.4.0-beta"
+version = "0.5.0-beta"
 description = "A local-first desktop application for image and video restoration using Tauri, PyTorch, and Spandrel."
 authors = [{name = "Hermes Reisner"}]
 readme = "README.md"
@@ -60,6 +60,9 @@ video = [
     "psutil",
     "tqdm",
     "gguf",
+    # Audio cleanup for videos. Not a base dependency: the DirectML build ships
+    # onnxruntime-directml under another name, and its release check would fail.
+    "onnxruntime>=1.24",
 ]
 package = ["pyinstaller>=6.21.0,<7", "pillow>=10.0.0"]
 # scripts/make_macos_dmg.py: the drag-to-Applications disk image.

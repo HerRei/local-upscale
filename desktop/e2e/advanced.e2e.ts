@@ -153,3 +153,106 @@ test('chooses the editing runtime through the host and sends that path to Start 
     '/chosen/sd-cli',
   );
 });
+
+test('Run at low priority stays clickable while a job runs and uses set_update_switch', async ({
+  page,
+}) => {
+  await openApp(page, { ...upscale, running: true });
+  await showPane(page, 'enhance');
+  await page.evaluate(() => {
+    const fieldset = document.querySelector('fieldset.processing-settings') as HTMLFieldSetElement;
+    fieldset.disabled = false;
+    (document.querySelector('.disclosure') as HTMLButtonElement).click();
+    fieldset.disabled = true;
+  });
+  const lowPriority = page.getByRole('checkbox', { name: 'Run at low priority' });
+  await lowPriority.scrollIntoViewIfNeeded();
+  await expect(lowPriority).not.toBeChecked();
+  await lowPriority.click();
+  await expect(lowPriority).toBeChecked();
+  expect((await hostCalls(page, 'set_update_switch')).at(-1)?.args).toEqual({
+    name: 'low_priority',
+    value: true,
+  });
+  expect((await hostCalls(page, 'save_settings')).length).toBe(0);
+});
+
+test.describe('Video audio cleanup', () => {
+  test('toggles Clean up audio, shows its help tip, and starts the job with it enabled', async ({
+    page,
+  }) => {
+    await openApp(page, {
+      ...video,
+      worker: 'ready',
+      installed: [...(video.installed ?? []), 'deepfilternet3', 'dpdfnet8_48khz_hr'],
+      settings: { ...video.settings, video_interpolation: 'off' },
+    });
+    await showPane(page, 'enhance');
+    const audio = page.getByRole('region', { name: 'Audio' });
+    const checkbox = audio.getByRole('checkbox', { name: 'Clean up audio' });
+    await expect(checkbox).not.toBeChecked();
+    await expect(checkbox).toBeEnabled();
+
+    await audio.getByRole('button', { name: 'About Clean up audio' }).click();
+    await expect(
+      page.getByText(/Removes background noise such as hum, wind and hiss from speech/i),
+    ).toBeVisible();
+
+    await checkbox.check();
+    await expect.poll(async () => (await lastSaved(page)).video_clean_audio).toBe(true);
+    await expect(page.getByRole('list', { name: 'Stages' })).toContainText('DeepFilterNet3');
+
+    const picker = audio.getByLabel('Audio model');
+    await expect(picker).toHaveValue('deepfilternet3');
+    await expect(audio).toContainText('Speech noise removal');
+
+    await picker.selectOption('dpdfnet8_48khz_hr');
+    await expect
+      .poll(async () => (await lastSaved(page)).video_audio_model)
+      .toBe('dpdfnet8_48khz_hr');
+    await expect(audio).toContainText('Stronger speech noise removal');
+    await expect(page.getByRole('list', { name: 'Stages' })).toContainText('DPDFNet');
+
+    await page.getByRole('button', { name: 'Start selected video' }).click();
+    await expect
+      .poll(
+        async () =>
+          ((await hostCalls(page, 'start_jobs')).at(-1)?.args as {
+            input: { video_clean_audio?: boolean; video_audio_model?: string };
+          })?.input,
+      )
+      .toMatchObject({ video_clean_audio: true, video_audio_model: 'dpdfnet8_48khz_hr' });
+  });
+
+  test('downloads the selected audio model on Start when missing', async ({ page }) => {
+    await openApp(page, {
+      ...video,
+      worker: 'ready',
+      installed: [...(video.installed ?? []), 'deepfilternet3'],
+      settings: { ...video.settings, video_interpolation: 'off' },
+    });
+    await showPane(page, 'enhance');
+    const audio = page.getByRole('region', { name: 'Audio' });
+    await audio.getByRole('checkbox', { name: 'Clean up audio' }).check();
+    await audio.getByLabel('Audio model').selectOption('dpdfnet8_48khz_hr');
+
+    await page.getByRole('button', { name: /Download .* start video/i }).click();
+    await expect
+      .poll(
+        async () =>
+          ((await hostCalls(page, 'download_model')).at(-1)?.args as {
+            modelId?: string;
+          })?.modelId,
+      )
+      .toBe('dpdfnet8_48khz_hr');
+  });
+
+  test('disables Clean up audio with a note when a video has no audio track', async ({ page }) => {
+    await openApp(page, { ...video, videoHasAudio: false });
+    await showPane(page, 'enhance');
+    const audio = page.getByRole('region', { name: 'Audio' });
+    const checkbox = audio.getByRole('checkbox', { name: 'Clean up audio' });
+    await expect(checkbox).toBeDisabled();
+    await expect(audio).toContainText('This video has no audio track.');
+  });
+});

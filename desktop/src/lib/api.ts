@@ -1,7 +1,6 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { join } from '@tauri-apps/api/path';
-import { open, save } from '@tauri-apps/plugin-dialog';
 import { demoSnapshot } from './demo';
 import type {
   AppSnapshot,
@@ -33,79 +32,7 @@ export async function refreshSnapshot(): Promise<AppSnapshot> {
 
 export async function chooseMediaFiles(): Promise<string[]> {
   if (!isTauri()) return [];
-  const selection = await open({
-    multiple: true,
-    directory: false,
-    filters: [
-      {
-        name: 'Images and video',
-        extensions: [
-          'png',
-          'jpg',
-          'jpeg',
-          'webp',
-          'bmp',
-          'tif',
-          'tiff',
-          'gif',
-          'avif',
-          'jp2',
-          'j2k',
-          // Decoded by macOS; the host rejects them elsewhere.
-          'heic',
-          'heif',
-          'hif',
-          'jxl',
-          // Camera RAW (LibRaw).
-          'dng',
-          'cr2',
-          'cr3',
-          'nef',
-          'nrw',
-          'arw',
-          'srf',
-          'sr2',
-          'raf',
-          'orf',
-          'rw2',
-          'pef',
-          'srw',
-          '3fr',
-          'iiq',
-          'erf',
-          'rwl',
-          'mrw',
-          'mef',
-          'mos',
-          'dcr',
-          'kdc',
-          'mp4',
-          'mov',
-          'm4v',
-          'avi',
-          'mkv',
-          'webm',
-          'mpg',
-          'mpeg',
-          'mpe',
-          'vob',
-          'ts',
-          'mts',
-          'm2ts',
-          'wmv',
-          'asf',
-          'flv',
-          'f4v',
-          '3gp',
-          '3g2',
-          'ogv',
-          'divx',
-        ],
-      },
-    ],
-  });
-  if (!selection) return [];
-  return Array.isArray(selection) ? selection : [selection];
+  return invoke<string[]>('choose_media_files');
 }
 
 export async function chooseMediaFolder(): Promise<{
@@ -113,30 +40,20 @@ export async function chooseMediaFolder(): Promise<{
   outputDirectory: string;
 } | null> {
   if (!isTauri()) return null;
-  const selection = await open({ multiple: false, directory: true });
-  if (!selection || Array.isArray(selection)) return null;
+  const selection = await invoke<string | null>('choose_media_folder');
+  if (!selection) return null;
   const paths = await invoke<string[]>('scan_media_folder', { path: selection });
   return { paths, outputDirectory: await join(selection, 'LocalSR Results') };
 }
 
 export async function chooseOutputDirectory(current: string): Promise<string | null> {
   if (!isTauri()) return null;
-  const selection = await open({
-    multiple: false,
-    directory: true,
-    defaultPath: current || undefined,
-  });
-  return typeof selection === 'string' ? selection : null;
+  return invoke<string | null>('choose_output_directory', { current });
 }
 
 export async function chooseCustomModel(): Promise<string | null> {
   if (!isTauri()) return null;
-  const selection = await open({
-    multiple: false,
-    directory: false,
-    filters: [{ name: 'Model checkpoints', extensions: ['safetensors', 'pth', 'pt', 'ckpt'] }],
-  });
-  return typeof selection === 'string' ? selection : null;
+  return invoke<string | null>('choose_custom_model');
 }
 
 export const addMedia = (paths: string[], replace: boolean): Promise<void> =>
@@ -150,9 +67,19 @@ export const saveSettings = (settings: UiSettings): Promise<void> =>
 
 /** One update switch, saved by the host on its own: a full settings save never changes it. */
 export const setUpdateSwitch = (
-  name: 'check_updates_at_launch' | 'anonymous_update_count',
+  name: 'check_updates_at_launch' | 'anonymous_update_count' | 'crash_reports' | 'low_priority',
   value: boolean,
 ): Promise<void> => invoke('set_update_switch', { name, value });
+export interface SetupChoices {
+  appearance: UiSettings['appearance'];
+  colourBlindPalette: boolean;
+  checkAtLaunch: boolean;
+  anonymousCount: boolean;
+  crashReports: boolean;
+}
+
+export const setPrivacyChoice = (choices: SetupChoices): Promise<void> =>
+  invoke('set_privacy_choice', { ...choices });
 export const startJobs = (input: StartBatchInput): Promise<void> => invoke('start_jobs', { input });
 export const startEdit = (input: StartEditInput): Promise<void> => invoke('start_edit', { input });
 export const openEditLink = (modelId: string, link: 'license' | 'source'): Promise<void> =>
@@ -168,10 +95,7 @@ export const startBenchmark = (device: string): Promise<void> =>
   invoke('start_benchmark', { input: { device } });
 export const exportBenchmark = async (): Promise<boolean> => {
   if (!isTauri()) return false;
-  const destination = await save({
-    defaultPath: 'localsr-benchmark-v1.json',
-    filters: [{ name: 'JSON', extensions: ['json'] }],
-  });
+  const destination = await invoke<string | null>('choose_benchmark_export');
   if (!destination) return false;
   await invoke('export_benchmark', { destination });
   return true;
@@ -189,6 +113,11 @@ export async function openUserGuide(): Promise<void> {
 /** LocalSR's download page, for the editions that use a GPU this one cannot (CUDA, DirectML, ROCm). */
 export async function openDownloadPage(): Promise<void> {
   if (isTauri()) await invoke('open_download_page');
+}
+
+/** In-app tutorial for loading a custom checkpoint file. */
+export async function openCustomModelTutorial(): Promise<void> {
+  if (isTauri()) await invoke('open_custom_model_tutorial');
 }
 
 /** Open ffmpeg.org's download page; installing FFmpeg stays the user's own action. */
@@ -325,6 +254,7 @@ export const revealResult = (path: string): Promise<void> => invoke('reveal_resu
 /** Adds a finished result as an input and selects it; the host checks the path like Reveal does. */
 export const useResultAsInput = (path: string): Promise<string> =>
   invoke('use_result_as_input', { path });
+export const openBugReport = (url: string): Promise<void> => invoke('open_bug_report', { url });
 export const diagnosticSummary = (): Promise<string> => invoke('diagnostic_summary');
 export const openOutputDirectory = (): Promise<void> => invoke('open_output_directory');
 export const takeLaunchIntents = (): Promise<LaunchIntent[]> => invoke('take_launch_intents');
@@ -392,15 +322,21 @@ export interface UpdateStatus {
   stage: string;
   version: string;
   notes: string;
+  discover_url?: string;
+  skipped_version?: string;
   size: number;
   downloaded: number;
   message: string;
   settings_recovery: boolean;
 }
 export const updateStatus = (): Promise<UpdateStatus> => invoke('update_status');
+export const skipUpdate = (): Promise<UpdateStatus> => invoke('skip_update');
+export const openUpdateDiscover = (): Promise<void> => invoke('open_update_discover');
 export const openStoreUpdates = (): Promise<void> => invoke('open_store_updates');
 export const checkUpdate = (channel: string): Promise<UpdateStatus> =>
   invoke('check_update', { channel });
+export const checkUpdateAtLaunch = (channel: string): Promise<UpdateStatus> =>
+  invoke('check_update_at_launch', { channel });
 export const downloadUpdate = (): Promise<void> => invoke('download_update');
 export const installUpdate = (): Promise<void> => invoke('install_update');
 export const cancelUpdate = (): Promise<void> => invoke('cancel_update');
@@ -414,3 +350,15 @@ export const requestCompareRegions = (
   regions: (import('./compareRegions').Region | null)[],
 ): Promise<void> => invoke('request_compare_regions', { generation, regions });
 export const clearCompareRegions = (): Promise<void> => invoke('clear_compare_regions');
+
+export interface StoredCrashReport {
+  id: string;
+  report: { message: string; os: string; [key: string]: unknown };
+}
+export const listCrashReports = (): Promise<StoredCrashReport[]> =>
+  isTauri() ? invoke('list_crash_reports') : Promise.resolve([]);
+export const deleteCrashReport = (id: string): Promise<void> =>
+  invoke('delete_crash_report', { id });
+export const deleteAllCrashReports = (): Promise<void> => invoke('delete_all_crash_reports');
+export const recordFrontendError = (message: string, stack: string): Promise<void> =>
+  isTauri() ? invoke('record_frontend_error', { message, stack }) : Promise.resolve();

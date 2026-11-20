@@ -124,6 +124,26 @@ it('explains when interpolation happens', async () => {
   expect(screen.getByRole('button', { name: 'About Interpolate' })).toBeTruthy();
 });
 
+it('offers 1× output scale for video upscale and hides output scale in video restore', async () => {
+  await open({ task: 'video', video_task: 'upscale', output_scale: 1 }, mac);
+  const scaleSelect = screen.getByLabelText('Output scale') as HTMLSelectElement;
+  expect(Array.from(scaleSelect.options).map((o) => o.value)).toEqual(['1', '2', '3', '4']);
+  expect(scaleSelect.value).toBe('1');
+  // What 1× does is said once, in the "?" of Output scale.
+  const about1x = screen.getAllByText(/At 1×/);
+  expect(about1x).toHaveLength(1);
+  expect(about1x[0].id).toBe('help-output-scale');
+
+  cleanup();
+  await open({ task: 'video', video_task: 'denoise', output_scale: 4 }, mac);
+  expect(screen.queryByLabelText('Output scale')).toBeNull();
+
+  cleanup();
+  await open({ task: 'upscale', output_scale: 2 }, mac);
+  const imageScale = screen.getByLabelText('Output scale') as HTMLSelectElement;
+  expect(Array.from(imageScale.options).map((o) => o.value)).toEqual(['2', '3', '4']);
+});
+
 describe('Refresh in the memory line', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
@@ -205,6 +225,40 @@ describe('Refresh in the memory line', () => {
     expect(button.matches(':disabled')).toBe(false);
     await fireEvent.click(button);
     expect(call).toHaveBeenCalledTimes(1);
+    fieldset.remove();
+  });
+});
+
+describe('Run at low priority', () => {
+  it('shows its help tip, toggles by click or keyboard, and stays usable inside a disabled fieldset', async () => {
+    const fieldset = document.body.appendChild(document.createElement('fieldset'));
+    const setLowPriority = vi.fn();
+    render(AdvancedSettings, {
+      target: fieldset,
+      props: {
+        settings: { ...demoSnapshot().settings, task: 'upscale', low_priority: false },
+        selectedModel: undefined,
+        capabilities: base,
+        usingTemporalVideo: false,
+        updateSettings: vi.fn(),
+        setLowPriority,
+        chooseOutput: async () => undefined,
+        refreshCapabilities: async () => true,
+      },
+    });
+    await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+    expect(screen.getByRole('button', { name: 'About Run at low priority' })).toBeTruthy();
+
+    fieldset.disabled = true;
+    const checkbox = screen.getByRole('checkbox', { name: 'Run at low priority' });
+    expect(checkbox.getAttribute('aria-checked')).toBe('false');
+    expect(checkbox.matches(':disabled')).toBe(false);
+
+    await fireEvent.click(checkbox);
+    await fireEvent.keyDown(checkbox, { key: ' ' });
+    await fireEvent.keyDown(checkbox, { key: 'Enter' });
+    expect(setLowPriority).toHaveBeenCalledTimes(3);
+    expect(setLowPriority).toHaveBeenNthCalledWith(1, true);
     fieldset.remove();
   });
 });

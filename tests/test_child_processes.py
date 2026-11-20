@@ -227,3 +227,48 @@ def test_the_worker_entry_points_stop_their_programs_on_termination(monkeypatch,
     except SystemExit:
         pass
     assert calls == [1, 2]
+
+
+def test_set_low_priority_updates_self_and_running_children(tmp_path):
+    script, pid_file = stand_in(tmp_path)
+    code = textwrap.dedent(
+        f"""
+        import subprocess, sys, time
+        from pathlib import Path
+        from localsr.core.child_processes import set_low_priority, start, stop
+
+        child = start([{str(script)!r}])
+        pid_file = Path({str(pid_file)!r})
+        for _ in range(200):
+            if pid_file.exists() and pid_file.read_text().strip():
+                break
+            time.sleep(0.02)
+        child_pid = int(pid_file.read_text().strip())
+        # CI runners may start jobs at a non-zero nice value; "back to normal" means
+        # back to whatever the child started with.
+        start_nice = int(subprocess.check_output(["ps", "-o", "nice=", "-p", str(child_pid)], text=True).strip())
+        try:
+            set_low_priority(True)
+            if sys.platform == "linux":
+                for pid in (child_pid,):
+                    nice = int(subprocess.check_output(["ps", "-o", "nice=", "-p", str(pid)], text=True).strip())
+                    assert nice == 10, f"expected nice 10, got {{nice}}"
+            if sys.platform == "darwin":
+                import ctypes
+                libc = ctypes.CDLL("libc.dylib")
+                assert libc.getpriority(4, 0) == 1
+                pri_low = int(subprocess.check_output(["ps", "-o", "pri=", "-p", str(child_pid)], text=True).strip())
+                assert pri_low <= 10, f"expected low pri, got {{pri_low}}"
+                set_low_priority(False)
+                assert libc.getpriority(4, 0) == 0
+                pri_normal = int(subprocess.check_output(["ps", "-o", "pri=", "-p", str(child_pid)], text=True).strip())
+                assert pri_normal > pri_low
+                nice = int(subprocess.check_output(["ps", "-o", "nice=", "-p", str(child_pid)], text=True).strip())
+                assert nice == start_nice, f"normal priority must be fully back, got nice {{nice}}, started at {{start_nice}}"
+        finally:
+            stop(child, grace=1.0)
+        """
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT / "src")
+    subprocess.run([sys.executable, "-c", code], env=env, check=True)

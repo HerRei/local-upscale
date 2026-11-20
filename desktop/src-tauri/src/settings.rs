@@ -43,6 +43,9 @@ pub fn load(paths: &AppPaths) -> (UiSettings, Vec<Recipe>) {
         output_directory: paths.default_output.to_string_lossy().into_owned(),
         ..UiSettings::default()
     };
+    if paths.legacy_settings.exists() || effective_document_path(paths).is_some() {
+        settings.privacy_choice_made = true;
+    }
     if let Ok(contents) = fs::read_to_string(&paths.legacy_settings) {
         if let Ok(value) = serde_json::from_str::<Value>(&contents) {
             import_legacy_settings(&mut settings, &value);
@@ -292,7 +295,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_anonymous_update_count_is_off_unless_it_was_turned_on() {
+    fn privacy_choice_is_pending_only_for_a_fresh_install() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        assert!(!load(&paths).0.privacy_choice_made);
+        fs::create_dir_all(paths.settings.parent().unwrap()).unwrap();
+        fs::write(
+            &paths.settings,
+            r#"{"schema_version":2,"ui":{},"recipes":[]}"#,
+        )
+        .unwrap();
+        assert!(load(&paths).0.privacy_choice_made);
+    }
+
+    #[test]
+    fn completion_sound_defaults_off_and_round_trips_in_schema_two() {
         let directory = tempfile::tempdir().unwrap();
         let paths = AppPaths::under(directory.path());
         fs::create_dir_all(&paths.next_root).unwrap();
@@ -301,14 +318,48 @@ mod tests {
             r#"{"schema_version":2,"ui":{},"recipes":[]}"#,
         )
         .unwrap();
-        assert!(!load(&paths).0.anonymous_update_count);
+        let (mut settings, recipes) = load(&paths);
+        assert!(!settings.completion_sound);
+        settings.completion_sound = true;
+        save(&paths, &settings, &recipes).unwrap();
+        assert!(load(&paths).0.completion_sound);
+    }
+
+    #[test]
+    fn appearance_defaults_round_trips_and_rejects_unknown_values() {
+        let defaults: UiSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(defaults.appearance, "dark");
+        assert!(!defaults.colour_blind_palette);
+        let settings = UiSettings {
+            appearance: "system".into(),
+            colour_blind_palette: true,
+            ..defaults
+        };
+        let restored: UiSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.appearance, "system");
+        assert!(restored.colour_blind_palette);
+        let unknown: UiSettings = serde_json::from_str(r#"{"appearance":"sepia"}"#).unwrap();
+        assert_eq!(unknown.appearance, "dark");
+    }
+
+    #[test]
+    fn new_installs_start_with_the_count_and_crash_reports_on_and_saved_choices_stay() {
+        assert!(UiSettings::default().anonymous_update_count);
+        assert!(UiSettings::default().crash_reports);
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        assert!(load(&paths).0.anonymous_update_count);
+        fs::create_dir_all(&paths.next_root).unwrap();
         fs::write(
             &paths.settings,
-            r#"{"schema_version":2,"ui":{"anonymous_update_count":true},"recipes":[]}"#,
+            r#"{"schema_version":2,"ui":{"anonymous_update_count":false},"recipes":[]}"#,
         )
         .unwrap();
-        assert!(load(&paths).0.anonymous_update_count);
-        assert!(!UiSettings::default().anonymous_update_count);
+        let (saved, _) = load(&paths);
+        assert!(!saved.anonymous_update_count);
+        // A settings file from before crash reports existed: its user never saw the choice.
+        assert!(!saved.crash_reports);
     }
 
     #[test]

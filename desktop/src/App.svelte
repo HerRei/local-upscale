@@ -1,5 +1,6 @@
 <script lang="ts">
   import { detectPlatform } from './lib/platform';
+  import { createThemeController } from './lib/theme';
 
   import { tabFromKey } from './lib/keyboard';
   import { recipeFixStages, recipeMatches } from './lib/recipes';
@@ -7,6 +8,7 @@
   import { without, mediaNamesFor as mediaNamesForPaths } from './lib/collections';
   import {
     presetDownload,
+    resolveAudioModel,
     supportsHdrPreservation as catalogSupportsHdrPreservation,
   } from './lib/plan';
   import { onMount, tick } from 'svelte';
@@ -42,8 +44,10 @@
   import ModelCredit from './ModelCredit.svelte';
   import UpdateNotice from './UpdateNotice.svelte';
   import UpdatePanel from './UpdatePanel.svelte';
+  import SetupScreen from './SetupScreen.svelte';
   import WelcomeNotice from './WelcomeNotice.svelte';
   import { startUpdateWatcher, updateDialogOpen } from './lib/updates';
+  import { redactDiagnostics, redactDiagnosticText, reportUrl } from './lib/report';
   import BenchmarkStudio from './BenchmarkStudio.svelte';
   import * as api from './lib/api';
   import ModelLibrary from './ModelLibrary.svelte';
@@ -64,15 +68,18 @@
     FIX_LABELS,
     choosePresetModel,
     displayName,
+    effectiveVideoTask,
     fitFor,
     fixesOf,
     frameRateChange,
+    isRestoreTask,
     libraryModelsForTask,
     modelsAvailableBeyondSelection,
     modelsForTask,
     pendingDownloads,
     presetSlot,
     resolvePlan,
+    skipsUpscaleModel,
   } from './lib/plan';
   import {
     UNSTABLE_FIX_MODELS,
@@ -88,7 +95,12 @@
   import { formatBytes, formatDuration } from './lib/format';
   import { demoSnapshot } from './lib/demo';
   import { modal } from './lib/modal';
-  import { engineLabel, hardwarePatch, withListedDevice } from './lib/neuralEngine';
+  import {
+    engineLabel,
+    hardwarePatch,
+    interpolationHardwareLabel,
+    withListedDevice,
+  } from './lib/neuralEngine';
   import { cpuHint, deviceLabel } from './lib/hardwareRoutes';
   import type {
     AppSnapshot,
@@ -104,6 +116,7 @@
     LaunchIntent,
     MediaItem,
     MediaResults,
+    ModelDownloadStatus,
     PairChoice,
     Quality,
     Recipe,
@@ -123,6 +136,8 @@
   let benchmarkSetup: 'idle' | 'downloading' | 'starting' = 'idle';
   let benchmarkError = '';
   let benchmarkTile: WorkerEnvelope | undefined;
+  let downloadErrors: Record<string, string> = {};
+  const cancelledDownloads = new Set<string>();
   $: benchmarkScores = snapshot.latest_benchmark?.device_history?.length
     ? snapshot.latest_benchmark.device_history
     : (snapshot.latest_benchmark?.device_results ?? []);
@@ -182,7 +197,7 @@
   });
   let mainTabs: HTMLElement | undefined;
   // The update notice docks over the bottom of the stage; what sits there moves up by this.
-  let updateNoticeHeight = 0;
+
   async function mainTabKey(event: KeyboardEvent): Promise<void> {
     const next = tabFromKey(event.key, mainTab === 'preview' ? 0 : 1, 2);
     if (next === null) return;
@@ -258,6 +273,7 @@
   }
 
   let recipeEditorOpen = false;
+  let deletingRecipeId: string | null = null;
   let recipeName = '';
   // Model terms are accepted per model: several fixes can each need their own.
   let termsAccepted: Record<string, boolean> = {};
@@ -272,6 +288,182 @@
   let inspectorScroll: HTMLDivElement | undefined;
   let lastLivePreviewSequence = 0;
   let diagnostics = '';
+  let reportOpen = false;
+  let reportDiagnostics = '';
+  let reportLoading = false;
+  let reportIncludeDiagnostics = true;
+  let reportHappened = '';
+  let reportMessage = '';
+  let crashReports: api.StoredCrashReport[] = [];
+  let crashNotice = false;
+  let reviewedCrash: api.StoredCrashReport | null = null;
+
+  async function showReport(): Promise<void> {
+    if (modalTitle) closeModal();
+    reviewedCrash = null;
+    reportOpen = true;
+    reportIncludeDiagnostics = true;
+    reportHappened = '';
+    reportMessage = '';
+    reportDiagnostics = '';
+    reportLoading = true;
+    try {
+      reportDiagnostics = redactDiagnostics(await api.diagnosticSummary());
+    } catch (error) {
+      reportDiagnostics = '';
+      reportMessage = String(error);
+    } finally {
+      reportLoading = false;
+    }
+  }
+  async function refreshCrashReports(): Promise<void> {
+    crashReports = await api.listCrashReports();
+  }
+  function closeReport(): void {
+    reportOpen = false;
+    reviewedCrash = null;
+  }
+  function crashTitle(crash: api.StoredCrashReport): string {
+    const shortError =
+      redactDiagnosticText(crash.report.message).replace(/\s+/g, ' ').trim().slice(0, 120) ||
+      'Unexpected error';
+    return `Crash: ${shortError}`;
+  }
+  function reviewCrash(): void {
+    const crash = crashReports[0];
+    if (!crash) return;
+    if (modalTitle) closeModal();
+    crashNotice = false;
+    reviewedCrash = crash;
+    reportOpen = true;
+    reportIncludeDiagnostics = true;
+    reportHappened = crashTitle(crash);
+    reportDiagnostics = redactDiagnostics(JSON.stringify(crash.report, null, 2));
+    reportMessage = '';
+    reportLoading = false;
+  }
+  async function discardCrash(): Promise<void> {
+    const crash = crashReports[0];
+    if (!crash) return;
+    try {
+      await api.deleteCrashReport(crash.id);
+      await refreshCrashReports();
+      crashNotice = false;
+    } catch (error) {
+      showModal('Could not delete report', String(error));
+    }
+  }
+  async function removeAllCrashes(): Promise<void> {
+    try {
+      await api.deleteAllCrashReports();
+      await refreshCrashReports();
+      crashNotice = false;
+    } catch (error) {
+      showModal('Could not delete reports', String(error));
+    }
+  }
+  async function openReport(): Promise<void> {
+    try {
+      let platform = '';
+      try {
+        const parsed = JSON.parse(reportDiagnostics);
+        const value = parsed.platform ?? parsed.os;
+        platform =
+          value === 'macos'
+            ? 'macOS'
+            : value === 'windows'
+              ? 'Windows'
+              : value === 'linux'
+                ? 'Linux'
+                : '';
+      } catch {
+        /* No diagnostic platform available. */
+      }
+      const title = reviewedCrash
+        ? reportHappened.startsWith('Crash:')
+          ? reportHappened
+          : crashTitle(reviewedCrash)
+        : '';
+      let body = reportIncludeDiagnostics ? reportDiagnostics : '';
+      let url = reportUrl(reportHappened, snapshot.app_version, platform, body, title);
+      if (url.length > 7000 && body) {
+        await navigator.clipboard.writeText(body);
+        body = 'Diagnostics were copied to your clipboard; paste them here.';
+        reportMessage = body;
+        url = reportUrl(reportHappened, snapshot.app_version, platform, body, title);
+      }
+      await api.openBugReport(url);
+      if (reviewedCrash) {
+        await api.deleteCrashReport(reviewedCrash.id);
+        await refreshCrashReports();
+        reviewedCrash = null;
+        reportOpen = false;
+      }
+    } catch (error) {
+      reportMessage = String(error);
+    }
+  }
+  let setupAppearance: UiSettings['appearance'] = 'dark';
+  let setupColourBlind = false;
+  let setupCheckAtLaunch = true;
+  let setupAnonymousCount = true;
+  let setupCrashReports = true;
+  let privacySaving = false;
+  let privacyError = '';
+
+  function previewSetupTheme(
+    appearance: UiSettings['appearance'],
+    colourBlindPalette: boolean,
+  ): void {
+    setupAppearance = appearance;
+    setupColourBlind = colourBlindPalette;
+    themeForRefresh({
+      appearance,
+      colour_blind_palette: colourBlindPalette,
+    });
+  }
+
+  async function continuePrivacy(choices: {
+    appearance: UiSettings['appearance'];
+    colourBlind: boolean;
+    checkAtLaunch: boolean;
+    anonymousCount: boolean;
+    crashReports: boolean;
+  }): Promise<void> {
+    privacySaving = true;
+    privacyError = '';
+    try {
+      await api.setPrivacyChoice({
+        appearance: choices.appearance,
+        colourBlindPalette: choices.colourBlind,
+        checkAtLaunch: choices.checkAtLaunch,
+        anonymousCount: choices.anonymousCount,
+        crashReports: choices.crashReports,
+      });
+      snapshot = {
+        ...snapshot,
+        settings: {
+          ...snapshot.settings,
+          appearance: choices.appearance,
+          colour_blind_palette: choices.colourBlind,
+          privacy_choice_made: true,
+          check_updates_at_launch: choices.checkAtLaunch,
+          anonymous_update_count: choices.anonymousCount,
+          crash_reports: choices.crashReports,
+        },
+      };
+      themeForRefresh(snapshot.settings);
+      if (choices.checkAtLaunch) {
+        const status = await api.updateStatus();
+        if (status.configured && !status.managed_by_store && status.stage === 'idle')
+          await api.checkUpdateAtLaunch(status.channel).catch(() => undefined);
+      }
+    } catch (error) {
+      privacyError = String(error);
+    } finally {
+      privacySaving = false;
+    }
+  }
   let integration: IntegrationStatus | null = null;
   let modalKind: 'message' | 'performance' | 'integrations' = 'message';
   let modalTitle = '';
@@ -382,7 +574,9 @@
       editPrompt.length <= 4000 &&
       (!editModel?.terms_acceptance_required || termsAccepted[editModel.model_id]));
   $: selectedMedia = snapshot.media.find((media) => media.selected) ?? snapshot.media[0];
-  $: compatibleModels = modelsForTask(snapshot, settings.task);
+  $: videoTask = effectiveVideoTask(settings);
+  $: restoring = isRestoreTask(settings);
+  $: compatibleModels = modelsForTask(snapshot, settings.task, videoTask);
   $: selectedModel = compatibleModels.find(
     (model) => model.model_id === settings.selected_model_id,
   );
@@ -394,17 +588,24 @@
   );
   // The fixes this job runs, in order. In Restore the last one is the model itself.
   $: imageFixes =
-    settings.task === 'upscale' || settings.task === 'denoise' ? settings.fix_stages : [];
+    !usingTemporalVideo && settings.task !== 'edit' && Boolean(settings.task)
+      ? settings.fix_stages
+      : [];
   // Engines without image_multi_fix run one fix at most.
   $: fixPlanSupported =
     imageFixes.length <= 1 || snapshot.engine?.features.includes('image_multi_fix') === true;
   $: faceEngineAvailable = snapshot.engine?.features.includes('face_aware') === true;
+  $: usingTemporalVideo =
+    settings.task === 'video' &&
+    !restoring &&
+    settings.selected_video_model_id !== 'frame_by_frame';
+  $: skipUpscale = skipsUpscaleModel(settings);
   $: faceEnabled =
     settings.enable_face_model &&
     faceEngineAvailable &&
-    !(settings.task === 'video' && settings.selected_video_model_id !== 'frame_by_frame');
-  $: usingTemporalVideo =
-    settings.task === 'video' && settings.selected_video_model_id !== 'frame_by_frame';
+    !restoring &&
+    !usingTemporalVideo &&
+    !skipUpscale;
   $: temporalUnavailableReason = !snapshot.engine?.video_engines.includes('seedvr2')
     ? 'This installation supports frame-by-frame video. SeedVR2 requires a compatible CUDA, ROCm or Metal engine.'
     : /^(directml|xpu|openvino)(:|$)/.test(settings.device_id)
@@ -423,12 +624,28 @@
   $: hdrPreservationAvailable = supportsHdrPreservation(settings);
   $: hdrModelCompatible = !preservingHdr || hdrPreservationAvailable;
   $: licenseReviewModel =
+    !skipUpscale &&
     !usingTemporalVideo &&
     selectedModel &&
     ['realplksr_hfa2k_anime_x4', 'realplksr_nomoswebphoto_x4'].includes(selectedModel.model_id)
       ? selectedModel
       : undefined;
-  $: activeDownload = snapshot.runtime.download_model_id;
+  $: activeDownloads =
+    snapshot.runtime.downloads && snapshot.runtime.downloads.length > 0
+      ? snapshot.runtime.downloads
+      : snapshot.runtime.download_model_id
+        ? [
+            {
+              model_id: snapshot.runtime.download_model_id,
+              status: 'downloading' as const,
+              progress: snapshot.runtime.download_progress,
+            },
+          ]
+        : [];
+  $: downloadMap = new Map<string, ModelDownloadStatus>(
+    activeDownloads.map((item) => [item.model_id, item]),
+  );
+  $: activeDownload = activeDownloads[0]?.model_id ?? '';
   $: benchmarkRunning = snapshot.runtime.active_job_id.startsWith('benchmark-');
   $: benchmarkModel = snapshot.catalog.models.find((model) => model.model_id === 'span_photo_x4');
   $: benchmarkStartBlockReason =
@@ -449,25 +666,52 @@
     settings.selected_model_id === '__custom__' &&
     Boolean(settings.custom_model_path) &&
     !settings.custom_model_path.toLowerCase().endsWith('.safetensors');
+  $: audioHasSource =
+    settings.task !== 'video'
+      ? false
+      : settings.batch_mode
+        ? runnableMedia.length === 0 || runnableMedia.some((media) => media.has_audio !== false)
+        : selectedMedia?.has_audio !== false;
+  $: audioDisabled = settings.task === 'video' && !audioHasSource;
+  $: audioModels = snapshot.catalog.audio_models ?? [];
+  $: selectedAudioModel = resolveAudioModel(audioModels, settings.video_audio_model);
+  $: interpolationSupported = snapshot.engine?.features.includes('video_interpolation') === true;
+  $: hasWorkAt1x =
+    settings.task === 'video'
+      ? (!usingTemporalVideo &&
+          (settings.fix_stages.length > 0 ||
+            (Boolean(settings.deflicker) && !preservingHdr) ||
+            ((settings.video_interpolation ?? 'off') !== 'off' && interpolationSupported))) ||
+        (Boolean(settings.video_clean_audio) && !audioDisabled)
+      : settings.task === 'upscale'
+        ? settings.fix_stages.length > 0
+        : false;
+  $: hasNothingToDoAt1x = skipUpscale && !hasWorkAt1x;
+  const nothingToDoAt1xReason =
+    'Nothing to run at 1×. Turn on Fix first, a video option or audio cleanup, or choose 2× or higher.';
   $: modelReady =
     settings.task === 'edit'
       ? editReady
-      : usingTemporalVideo
-        ? !temporalUnavailableReason && Boolean(selectedVideoModel?.installed)
-        : settings.selected_model_id === '__custom__'
-          ? Boolean(settings.custom_model_path) &&
-            (!customModelNeedsOptIn || settings.allow_unsafe_pickle_model)
-          : Boolean(selectedModel?.installed);
+      : skipUpscale
+        ? hasWorkAt1x
+        : usingTemporalVideo
+          ? !temporalUnavailableReason && Boolean(selectedVideoModel?.installed)
+          : settings.selected_model_id === '__custom__'
+            ? Boolean(settings.custom_model_path) &&
+              (!customModelNeedsOptIn || settings.allow_unsafe_pickle_model)
+            : Boolean(selectedModel?.installed);
   $: faceReady = !faceEnabled || Boolean(faceModel?.installed);
   $: interpolationStage = plan.find((stage) => stage.kind === 'interpolate');
   $: interpolationReady = !interpolationStage || interpolationStage.installed;
+  $: audioStage = plan.find((stage) => stage.kind === 'audio_denoise');
+  $: audioReady = !audioStage || audioStage.installed;
   $: fixesReady =
     fixPlanSupported &&
     imageFixes.every((selection) => {
       const model = snapshot.catalog.models.find((entry) => entry.model_id === selection.model_id);
       return Boolean(model?.installed && fitsFix(model, selection.fix));
     }) &&
-    (settings.task !== 'denoise' ||
+    (!restoring ||
       imageFixes.length === 0 ||
       imageFixes.at(-1)?.model_id === settings.selected_model_id);
   $: mediaMatchesTask = selectedMedia
@@ -499,9 +743,14 @@
   $: activityModel =
     settings.task === 'edit'
       ? (editModel?.name ?? 'Editing model')
-      : usingTemporalVideo
-        ? (selectedVideoModel?.name ?? 'Video model')
-        : (selectedModel?.name ?? 'Model');
+      : skipUpscale
+        ? (plan.find((s) => s.model || s.interpolationModel || s.audioModel)?.model?.name ??
+          plan.find((s) => s.interpolationModel)?.interpolationModel?.name ??
+          plan.find((s) => s.audioModel)?.audioModel?.name ??
+          (settings.deflicker ? 'De-flicker' : '1× video'))
+        : usingTemporalVideo
+          ? (selectedVideoModel?.name ?? 'Video model')
+          : (selectedModel?.name ?? 'Model');
   $: activityDetail =
     cancelling && snapshot.runtime.active_job_id
       ? stoppingDetail
@@ -538,6 +787,7 @@
     faceReady &&
     fixesReady &&
     interpolationReady &&
+    audioReady &&
     snapshot.runtime.status_title !== 'Cancelling';
   const allReady = (items: MediaItem[]): boolean =>
     items.length > 0 && items.every((media) => media.probe_status === 'ready');
@@ -804,7 +1054,7 @@
   $: outputDimensions = selectedMedia
     ? settings.task === 'edit'
       ? `${editDimensions(selectedMedia.width, selectedMedia.height, Math.min(settings.edit_max_dimension, editSizeAllowed)).join(' × ')} · edited`
-      : settings.task === 'denoise'
+      : restoring || skipUpscale
         ? `${selectedMedia.width} × ${selectedMedia.height} · original size`
         : usingTemporalVideo &&
             settings.video_target_resolution &&
@@ -816,10 +1066,24 @@
   $: currentDownloadTarget =
     settings.task === 'edit' ? editModel : usingTemporalVideo ? selectedVideoModel : selectedModel;
   $: quickModel = settings.task
-    ? choosePresetModel(snapshot, settings.task, 'quick', settings.content, settings.preset_pins)
+    ? choosePresetModel(
+        snapshot,
+        settings.task,
+        'quick',
+        settings.content,
+        settings.preset_pins,
+        videoTask,
+      )
     : undefined;
   $: bestModel = settings.task
-    ? choosePresetModel(snapshot, settings.task, 'best', settings.content, settings.preset_pins)
+    ? choosePresetModel(
+        snapshot,
+        settings.task,
+        'best',
+        settings.content,
+        settings.preset_pins,
+        videoTask,
+      )
     : undefined;
   $: quickDownload = presetDownload('quick', snapshot, settings);
   $: bestDownload = presetDownload('best', snapshot, settings);
@@ -839,17 +1103,13 @@
     usingTemporalVideo,
     selectedVideoModel,
     editModel,
+    hasAudio: audioHasSource,
   });
   $: downloads = pendingDownloads(plan);
   $: planNeedsFile = plan.some((stage) => stage.needsFile);
   $: planMissing = plan.some((stage) => stage.missing);
-  // Video runs no fixes yet; its frames can still get Faces.
   $: fixChips = (
-    settings.task === 'denoise'
-      ? ['noise', 'blur', 'jpeg']
-      : settings.task === 'video'
-        ? ['faces']
-        : ['noise', 'jpeg', 'blur', 'faces']
+    restoring ? ['noise', 'blur', 'jpeg'] : ['noise', 'jpeg', 'blur', 'faces']
   ) as FixKind[];
   $: prepareReady =
     !snapshot.runtime.active_job_id &&
@@ -857,6 +1117,7 @@
     !preparing &&
     !startingJob &&
     !cancelling &&
+    !hasNothingToDoAt1x &&
     downloads.stages.length > 0 &&
     !planNeedsFile &&
     !planMissing &&
@@ -874,7 +1135,9 @@
   $: canPrepareAll = prepareReady && allReady(queueableMedia);
   $: startVerb =
     settings.task === 'video'
-      ? 'start video'
+      ? restoring
+        ? 'restore video'
+        : 'start video'
       : settings.task === 'denoise'
         ? 'restore'
         : settings.task === 'edit'
@@ -903,11 +1166,15 @@
               ? activeDevice
                 ? deviceLabel(activeDevice)
                 : 'detecting hardware'
-              : engineLabel(
-                  settings,
-                  snapshot.capabilities,
-                  selectedModel?.architecture,
-                  activeDevice ? deviceLabel(activeDevice) : 'detecting hardware',
+              : interpolationHardwareLabel(
+                  engineLabel(
+                    settings,
+                    snapshot.capabilities,
+                    selectedModel?.architecture,
+                    activeDevice ? deviceLabel(activeDevice) : 'detecting hardware',
+                  ),
+                  settings.device_id,
+                  settings.task === 'video' && (settings.video_interpolation ?? 'off') !== 'off',
                 )
         }`
       : '';
@@ -951,7 +1218,7 @@
       : null;
   $: taskCaption = !settings.task
     ? ''
-    : settings.task === 'denoise'
+    : restoring
       ? 'Removes noise, blur and JPEG artifacts at the same size.'
       : settings.task === 'edit'
         ? 'Describe a change in words.'
@@ -990,8 +1257,9 @@
       : '';
   // The lone start button of several inputs says what limits it; with a choice of two
   // buttons each carries its own note.
-  $: singleHint =
-    snapshot.media.length < 2
+  $: singleHint = hasNothingToDoAt1x
+    ? nothingToDoAt1xReason
+    : snapshot.media.length < 2
       ? ''
       : unreadyMedia
         ? preparingNote(unreadyMedia)
@@ -1007,12 +1275,18 @@
   $: allUnready = queueableMedia.find((media) => media.probe_status !== 'ready');
   $: oneTitle = oneUnready
     ? preparingNote(oneUnready)
-    : mismatchNote || (canPrepareOne ? `Downloads ${formatBytes(downloads.bytes)} first.` : '');
-  $: allTitle = allUnready ? preparingNote(allUnready) : incompatibleNote;
+    : hasNothingToDoAt1x
+      ? nothingToDoAt1xReason
+      : mismatchNote || (canPrepareOne ? `Downloads ${formatBytes(downloads.bytes)} first.` : '');
+  $: allTitle = allUnready
+    ? preparingNote(allUnready)
+    : hasNothingToDoAt1x
+      ? nothingToDoAt1xReason
+      : incompatibleNote;
   // What the primary button says it does to all: "Upscale all 52", "Start all 5 videos".
-  $: allPhrase = `${startVerb === 'start video' ? 'start' : startVerb} all ${queueableMedia.length}${
-    settings.task === 'video' ? ' videos' : ''
-  }`;
+  $: allPhrase = `${
+    startVerb === 'start video' ? 'start' : startVerb === 'restore video' ? 'restore' : startVerb
+  } all ${queueableMedia.length}${settings.task === 'video' ? ' videos' : ''}`;
   const lockedTitle = 'Finish or cancel the run to change settings.';
   $: lockReason = cancelling
     ? 'Stopping your queue… Controls unlock when processing has stopped and temporary output is removed.'
@@ -1027,12 +1301,26 @@
           ? 'Select a compatible item before starting.'
           : unreadyMedia
             ? scopeHint
-            : editBlockReason ||
-              (!modelReady || !faceReady || !fixesReady || !interpolationReady
-                ? 'Choose or download the required models before starting.'
-                : 'The current settings are not ready to start.');
+            : hasNothingToDoAt1x
+              ? nothingToDoAt1xReason
+              : editBlockReason ||
+                (!modelReady || !faceReady || !fixesReady || !interpolationReady
+                  ? 'Choose or download the required models before starting.'
+                  : 'The current settings are not ready to start.');
+
+  let themeForRefresh: (
+    settings: Pick<UiSettings, 'appearance' | 'colour_blind_palette'>,
+  ) => void = () => {};
 
   onMount(() => {
+    const theme = createThemeController(undefined, (value) => {
+      if (api.isTauri()) {
+        void import('@tauri-apps/api/window')
+          .then(({ getCurrentWindow }) => getCurrentWindow().setTheme(value))
+          .catch((error) => console.error('Could not set window theme', error));
+      }
+    });
+    themeForRefresh = theme.apply;
     const unlisteners: (() => void)[] = [];
     let disposed = false;
     async function subscribe(register: () => Promise<() => void>): Promise<void> {
@@ -1044,6 +1332,17 @@
     void (async () => {
       try {
         snapshot = await api.bootstrap();
+        setupAppearance = snapshot.settings.appearance ?? 'dark';
+        setupColourBlind = snapshot.settings.colour_blind_palette ?? false;
+        setupCheckAtLaunch = snapshot.settings.check_updates_at_launch ?? true;
+        setupAnonymousCount = snapshot.settings.anonymous_update_count ?? true;
+        setupCrashReports = snapshot.settings.crash_reports ?? true;
+        if (snapshot.settings.crash_reports) {
+          await refreshCrashReports();
+          crashNotice = crashReports.length > 0;
+        }
+        theme.apply(snapshot.settings);
+        document.documentElement.classList.remove('theme-loading');
         await tick();
         if (disposed) return;
         ensureTaskMatchesSelection();
@@ -1063,7 +1362,10 @@
         );
         await subscribe(() => api.listenForLaunchIntent(() => void consumeLaunchIntents()));
         await subscribe(() =>
-          startUpdateWatcher(snapshot.settings.check_updates_at_launch ?? true),
+          startUpdateWatcher(
+            (snapshot.settings.privacy_choice_made ?? true) &&
+              (snapshot.settings.check_updates_at_launch ?? true),
+          ),
         );
         await subscribe(() =>
           api.listenForFileDrops({
@@ -1073,6 +1375,7 @@
         );
         if (!disposed) await consumeLaunchIntents();
       } catch (error) {
+        document.documentElement.classList.remove('theme-loading');
         if (!disposed) showModal('Could not start LocalSR', String(error));
       } finally {
         booting = false;
@@ -1081,6 +1384,7 @@
 
     return () => {
       disposed = true;
+      theme.dispose();
       if (stateRefresh) clearTimeout(stateRefresh);
       if (runtimePulseTimer) clearTimeout(runtimePulseTimer);
       if (autoStartTimer) clearTimeout(autoStartTimer);
@@ -1132,6 +1436,17 @@
         latest.runtime.result_preview_data_url = snapshot.runtime.result_preview_data_url;
       }
       snapshot = latest;
+      if (!latest.settings.crash_reports) {
+        crashReports = [];
+        crashNotice = false;
+      } else if (modalKind === 'performance') {
+        void refreshCrashReports();
+      }
+      themeForRefresh(
+        latest.settings.privacy_choice_made === false
+          ? { appearance: setupAppearance, colour_blind_palette: setupColourBlind }
+          : latest.settings,
+      );
       chooseInitialModel();
       await maybeAutoStart();
     } catch (error) {
@@ -1290,6 +1605,28 @@
     if (message.type === 'job_completed' || message.type === 'video_job_completed') {
       scheduleRefresh();
     }
+    if (
+      message.type === 'download-queued' ||
+      message.type === 'download-started' ||
+      message.type === 'download-completed' ||
+      message.type === 'download-cancelled'
+    ) {
+      const id = String(message.data.model_id ?? '');
+      if (id && id in downloadErrors) {
+        const nextErrors = { ...downloadErrors };
+        delete nextErrors[id];
+        downloadErrors = nextErrors;
+      }
+      if (message.type === 'download-completed') scheduleRefresh();
+    } else if (message.type === 'download-failed') {
+      const id = String(message.data.model_id ?? '');
+      if (id) {
+        downloadErrors = {
+          ...downloadErrors,
+          [id]: String(message.data.error_message ?? 'Download failed.'),
+        };
+      }
+    }
   }
 
   function queueRuntimePulse(message: WorkerEnvelope): void {
@@ -1340,8 +1677,7 @@
 
   // Quick and Best describe the result; the model behind them is named once, under Model.
   function qualityBlurb(quality: 'quick' | 'best'): string {
-    if (settings.task === 'denoise')
-      return quality === 'quick' ? 'Fast clean-up' : 'Most careful, slower';
+    if (restoring) return quality === 'quick' ? 'Fast clean-up' : 'Most careful, slower';
     if (settings.task === 'video')
       return quality === 'quick' ? 'Fast, frame by frame' : 'More detail, slower';
     return quality === 'quick' ? 'Fast, clean result' : 'Finest detail, slower';
@@ -1353,8 +1689,8 @@
    * can chain it after a task or content change within the same tick.
    */
   function resolveRecipe(
-    patch: Partial<Pick<UiSettings, 'quality' | 'content' | 'fixes' | 'fix_stages'>>,
-    options: { keepVideoEngine?: boolean } = {},
+    patch: Partial<Pick<UiSettings, 'quality' | 'content' | 'fixes' | 'fix_stages' | 'video_task'>>,
+    options: { keepVideoEngine?: boolean; keepScale?: boolean } = {},
   ): void {
     const current = { ...snapshot.settings, ...patch };
     const task = current.task;
@@ -1364,17 +1700,23 @@
     const byId = (id: string): CatalogModel | undefined =>
       snapshot.catalog.models.find((model) => model.model_id === id);
     const keepPrimary = current.quality === 'custom';
-    const restoring = task === 'denoise';
+    const currentVideoTask = effectiveVideoTask(current);
+    const isRestoring = isRestoreTask(current);
+    const temporal =
+      task === 'video' &&
+      !isRestoring &&
+      current.selected_video_model_id !== 'frame_by_frame' &&
+      Boolean(options.keepVideoEngine);
     // Quick and Best choose every fix model again; a job set up by hand keeps each one
     // that still fixes its problem.
     const chosen = new Set<Exclude<FixKind, 'faces'>>();
-    const fix_stages = (task === 'video' ? [] : current.fix_stages).map((selection, index, all) => {
+    const fix_stages = (temporal ? [] : current.fix_stages).map((selection, index, all) => {
       const own = byId(selection.model_id);
       if (keepPrimary && own && fitsFix(own, selection.fix)) return selection;
       // A Restore model picked by hand becomes the new last fix when it can do that job.
       const picked = byId(current.selected_model_id);
       if (
-        restoring &&
+        isRestoring &&
         keepPrimary &&
         index === all.length - 1 &&
         !selection.model_id &&
@@ -1393,37 +1735,65 @@
     const patchSettings: Partial<UiSettings> = {
       quality: current.quality || quality,
       content: current.content,
-      fix_stages,
-      // The chips show the fixes that run; Faces waits in Restore for the way back.
-      fixes: [
-        ...fix_stages.map((selection) => selection.fix),
-        ...(wantsFaces ? (['faces'] as FixKind[]) : []),
-      ],
+      ...(temporal
+        ? {}
+        : {
+            fix_stages,
+            // The chips show the fixes that run; Faces waits in Restore for the way back.
+            fixes: [
+              ...fix_stages.map((selection) => selection.fix),
+              ...(wantsFaces ? (['faces'] as FixKind[]) : []),
+            ],
+          }),
     };
-    if (restoring) {
+    if (isRestoring) {
       // Restore's model is its last fix; without a fix it is the preset's or your own.
       const final = fix_stages.at(-1);
       const kept = keepPrimary && (!final || final.model_id === current.selected_model_id);
       if (!kept) {
-        const model = final ? byId(final.model_id) : choosePresetModel(snapshot, task, quality);
+        const model = final
+          ? byId(final.model_id)
+          : choosePresetModel(
+              snapshot,
+              task,
+              quality,
+              current.content,
+              current.preset_pins,
+              currentVideoTask,
+            );
         const id = final ? final.model_id : model?.model_id;
         if (id !== undefined) patchSettings.selected_model_id = id;
         if (model) patchSettings.halo = model.recommended_halo;
         // A pick by hand that cannot fix the problem gives way to the preset's model.
         if (keepPrimary && final && chosen.has(final.fix)) patchSettings.quality = quality;
       }
+      if (task === 'video') patchSettings.selected_video_model_id = 'frame_by_frame';
       patchSettings.output_scale = 1;
       patchSettings.enable_face_model = false;
     } else {
       const primary = keepPrimary
         ? undefined
-        : choosePresetModel(snapshot, task, quality, current.content, current.preset_pins);
+        : choosePresetModel(
+            snapshot,
+            task,
+            quality,
+            current.content,
+            current.preset_pins,
+            currentVideoTask,
+          );
       if (primary) {
         patchSettings.selected_model_id = primary.model_id;
         // Quick and Best are frame-by-frame recipes; a saved SeedVR2 choice
         // survives only the initial resolution and task changes.
         if (!options.keepVideoEngine) patchSettings.selected_video_model_id = 'frame_by_frame';
-        patchSettings.output_scale = primary.native_scale;
+        const minScale = task === 'video' ? 1 : 2;
+        if (
+          !options.keepScale ||
+          current.output_scale < minScale ||
+          current.output_scale > primary.native_scale
+        ) {
+          patchSettings.output_scale = primary.native_scale;
+        }
         patchSettings.halo = primary.recommended_halo;
         patchSettings.safe_memory = quality === 'best' ? current.safe_memory : false;
       }
@@ -1432,7 +1802,8 @@
       const companion = snapshot.catalog.models.find(
         (model) => model.purposes.includes('face') && primaryModel?.pair_with === model.model_id,
       );
-      patchSettings.enable_face_model = wantsFaces && Boolean(companion) && faceEngineAvailable;
+      patchSettings.enable_face_model =
+        !temporal && wantsFaces && Boolean(companion) && faceEngineAvailable;
     }
     updateSettings(patchSettings);
     termsAccepted = {};
@@ -1441,7 +1812,7 @@
 
   function setContent(content: UiSettings['content']): void {
     if (settings.content === content) return;
-    resolveRecipe({ content, quality: activeQuality });
+    resolveRecipe({ content, quality: activeQuality }, { keepScale: skipUpscale });
   }
 
   function toggleFix(fix: FixKind): void {
@@ -1451,11 +1822,14 @@
       const fixes: FixKind[] = current.includes('faces')
         ? current.filter((item) => item !== 'faces')
         : [...current, 'faces'];
-      resolveRecipe({ fixes, quality: activeQuality });
+      resolveRecipe({ fixes, quality: activeQuality }, { keepScale: true });
       return;
     }
     // Noise, JPEG and blur each run as their own fix before the main model.
-    resolveRecipe({ fix_stages: toggleFixStage(settings.fix_stages, fix), quality: activeQuality });
+    resolveRecipe(
+      { fix_stages: toggleFixStage(settings.fix_stages, fix), quality: activeQuality },
+      { keepScale: true },
+    );
   }
 
   async function moveFix(fix: Exclude<FixKind, 'faces'>, offset: -1 | 1): Promise<void> {
@@ -1472,7 +1846,7 @@
         ...fix_stages.map((selection) => selection.fix),
         ...(settings.fixes.includes('faces') ? (['faces'] as FixKind[]) : []),
       ],
-      ...(settings.task === 'denoise' && final.fix !== settings.fix_stages.at(-1)?.fix
+      ...(restoring && final.fix !== settings.fix_stages.at(-1)?.fix
         ? { selected_model_id: final.model_id, ...(model ? { halo: model.recommended_halo } : {}) }
         : {}),
     });
@@ -1513,8 +1887,7 @@
   ): void {
     // Restore's model is the fix itself, so with a chip on it is chosen like one.
     libraryContext =
-      slot === 'fix' ||
-      ((slot === 'primary' || slot === 'try') && settings.task === 'denoise' && fix)
+      slot === 'fix' || ((slot === 'primary' || slot === 'try') && restoring && fix)
         ? { slot, fix }
         : { slot };
     // Try others… keeps the settings the plan card shows now, whatever the
@@ -1575,7 +1948,7 @@
     updateSettings({
       preset_pins,
       fix_stages,
-      ...(settings.task === 'denoise' && fix_stages.at(-1)?.fix === fix
+      ...(restoring && fix_stages.at(-1)?.fix === fix
         ? {
             selected_model_id: model.model_id,
             output_scale: 1,
@@ -1598,12 +1971,12 @@
     });
     // In Restore the model is the fix itself, so the default replaces a hand-picked one too.
     resolveRecipe({
-      quality: settings.task === 'denoise' ? fixQuality(activeQuality) : activeQuality,
+      quality: restoring ? fixQuality(activeQuality) : activeQuality,
     });
     libraryOpen = false;
   }
 
-  async function removeModel(model: CatalogModel | EditModel): Promise<void> {
+  async function removeModel(model: CatalogModel | CatalogVideoModel | EditModel): Promise<void> {
     try {
       await api.removeModel(model.model_id);
       await refresh();
@@ -1640,7 +2013,7 @@
     preparingCancelled = true;
     // The host registers a download a moment after Start asks for it.
     for (let attempt = 0; attempt < 30 && preparing; attempt += 1) {
-      const modelId = activeDownload || preparingModelId;
+      const modelId = preparingModelId || activeDownload;
       if (modelId) {
         try {
           await api.cancelDownload(modelId);
@@ -1656,7 +2029,12 @@
   async function prepareAndStart(): Promise<void> {
     if (!canPrepare) return;
     const targets = downloads.stages.map(
-      (stage) => stage.model ?? stage.videoModel ?? stage.editModel ?? stage.interpolationModel,
+      (stage) =>
+        stage.model ??
+        stage.videoModel ??
+        stage.editModel ??
+        stage.interpolationModel ??
+        stage.audioModel,
     );
     if (!(await downloadModels(targets))) return;
     await tick();
@@ -1715,17 +2093,23 @@
    * The window shows the host's value afterwards, also when saving failed.
    */
   function setUpdateSwitch(
-    name: 'check_updates_at_launch' | 'anonymous_update_count',
+    name: 'check_updates_at_launch' | 'anonymous_update_count' | 'crash_reports' | 'low_priority',
     value: boolean,
   ): void {
-    if (!api.isTauri()) return;
+    if (!api.isTauri()) {
+      snapshot = { ...snapshot, settings: { ...snapshot.settings, [name]: value } };
+      return;
+    }
     void api
       .setUpdateSwitch(name, value)
       .catch((error) => showModal('Could not save settings', String(error)))
-      .finally(() => scheduleRefresh());
+      .finally(() => {
+        scheduleRefresh();
+        if (name === 'crash_reports') void refreshCrashReports();
+      });
   }
 
-  function setTask(task: TaskKind): void {
+  function setTask(task: TaskKind, nextVideoTask?: 'upscale' | 'denoise'): void {
     if (selectedMedia && (task === 'video') !== (selectedMedia.kind === 'video')) return;
     if (task !== 'video') lastImageTask = task;
     if (task === 'edit') {
@@ -1736,7 +2120,10 @@
       ensureEditModel();
       return;
     }
-    const models = modelsForTask(snapshot, task);
+    const targetVideoTask = task === 'video' ? (nextVideoTask ?? videoTask) : undefined;
+    const targetRestoring =
+      task === 'denoise' || (task === 'video' && targetVideoTask === 'denoise');
+    const models = modelsForTask(snapshot, task, targetVideoTask);
     // Keep a manual choice that still fits the task; otherwise the active
     // recipe (Quick until one is chosen) resolves the plan for the new task.
     const kept =
@@ -1745,13 +2132,18 @@
         : undefined;
     updateSettings({
       task,
+      ...(task === 'video' ? { video_task: targetVideoTask } : {}),
+      ...(targetRestoring ? { selected_video_model_id: 'frame_by_frame' } : {}),
       selected_model_id: kept?.model_id ?? '',
-      // Video runs no fixes; Upscale and Restore share theirs and their order.
-      ...(task === 'video' ? { fix_stages: [], fixes: [] } : {}),
-      output_scale:
-        task === 'denoise'
-          ? 1
-          : Math.min(kept?.native_scale ?? 4, Math.max(2, settings.output_scale)),
+      output_scale: targetRestoring
+        ? 1
+        : Math.min(
+            kept?.native_scale ?? 4,
+            Math.max(
+              task === 'video' && settings.task === 'video' && !restoring ? 1 : 2,
+              settings.output_scale,
+            ),
+          ),
       enable_face_model: false,
     });
     termsAccepted = {};
@@ -1760,9 +2152,10 @@
       resolveRecipe(
         {
           quality: activeQuality === 'quick' || activeQuality === 'best' ? activeQuality : 'quick',
-          fixes: task === 'video' ? [] : settings.fixes,
+          fixes: settings.fixes,
+          ...(task === 'video' ? { video_task: targetVideoTask } : {}),
         },
-        { keepVideoEngine: true },
+        { keepVideoEngine: !targetRestoring },
       );
     }
   }
@@ -1967,7 +2360,7 @@
         enable_face_model: false,
         quality: 'custom',
         // In Restore your own checkpoint is the model, not one of the fixes.
-        ...(settings.task === 'denoise'
+        ...(restoring
           ? {
               fix_stages: [],
               fixes: settings.fixes.filter((fix) => fix === 'faces'),
@@ -1990,14 +2383,19 @@
     const model = snapshot.catalog.models.find((candidate) => candidate.model_id === modelId);
     updateSettings({
       selected_model_id: modelId,
-      output_scale: model
-        ? Math.min(model.native_scale, Math.max(2, settings.output_scale))
-        : settings.output_scale,
+      output_scale: restoring
+        ? 1
+        : model
+          ? Math.min(
+              model.native_scale,
+              Math.max(settings.task === 'video' ? 1 : 2, settings.output_scale),
+            )
+          : settings.output_scale,
       // As the presets do: some models need a wider overlap between tiles.
       halo: model ? model.recommended_halo : settings.halo,
       allow_unsafe_pickle_model: false,
       enable_face_model:
-        settings.task !== 'denoise' &&
+        !restoring &&
         settings.fixes.includes('faces') &&
         faceEngineAvailable &&
         snapshot.catalog.models.some(
@@ -2014,7 +2412,20 @@
       showModal('Choose a task', 'Select Upscale, Restore or Video before applying a preset.');
       return;
     }
-    resolveRecipe({ quality: kind });
+    // A 1× job stays at 1×: Quick and Best then only swap the fix models.
+    resolveRecipe({ quality: kind }, { keepScale: skipUpscale });
+  }
+
+  function dismissDownloadError(modelId: string): void {
+    if (!(modelId in downloadErrors)) return;
+    const nextErrors = { ...downloadErrors };
+    delete nextErrors[modelId];
+    downloadErrors = nextErrors;
+  }
+
+  async function cancelDownloadById(modelId: string): Promise<void> {
+    cancelledDownloads.add(modelId);
+    await attempt('Could not cancel the download', () => api.cancelDownload(modelId));
   }
 
   async function runDownload(
@@ -2022,8 +2433,8 @@
     accepted?: boolean,
   ): Promise<void> {
     if (!target) return;
-    if (activeDownload === target.model_id) {
-      await attempt('Could not cancel the download', () => api.cancelDownload(target.model_id));
+    if (downloadMap.has(target.model_id)) {
+      await cancelDownloadById(target.model_id);
       return;
     }
     accepted ??= Boolean(termsAccepted[target.model_id]);
@@ -2031,6 +2442,8 @@
       showModal('Review the model terms', 'Confirm the model-specific license before downloading.');
       return;
     }
+    dismissDownloadError(target.model_id);
+    cancelledDownloads.delete(target.model_id);
     try {
       if (!target.automated_download_allowed) {
         const sourcePath = await api.chooseCustomModel();
@@ -2041,10 +2454,17 @@
       }
       await refresh();
     } catch (error) {
-      showModal(
-        target.automated_download_allowed ? 'Download failed' : 'Import failed',
-        String(error),
-      );
+      const message = String(error);
+      const wasCancelled =
+        cancelledDownloads.delete(target.model_id) || message.includes('download cancelled');
+      if (wasCancelled) {
+        await refresh();
+        return;
+      }
+      downloadErrors = { ...downloadErrors, [target.model_id]: message };
+      if (!libraryOpen || !target.automated_download_allowed) {
+        showModal(target.automated_download_allowed ? 'Download failed' : 'Import failed', message);
+      }
     }
   }
 
@@ -2060,9 +2480,10 @@
       },
       batch_mode: batchMode,
       task,
+      video_task: videoTask,
       model_id: settings.selected_model_id,
       video_model_id: settings.selected_video_model_id,
-      fix_stages: imageFixes,
+      fix_stages: usingTemporalVideo ? [] : imageFixes,
       custom_model_path: settings.custom_model_path,
       output_directory: settings.output_directory,
       output_format: settings.output_format,
@@ -2094,6 +2515,9 @@
           ? (settings.video_interpolation ?? 'off')
           : 'off',
       video_interpolation_order: settings.video_interpolation_order ?? 'after_upscale',
+      video_clean_audio:
+        settings.task === 'video' && !audioDisabled && Boolean(settings.video_clean_audio),
+      video_audio_model: settings.video_audio_model ?? '',
     };
   }
 
@@ -2236,14 +2660,15 @@
     if (!settings.task) return;
     // The fixes that run before the model; a fix without a model has nothing to keep.
     const recipeFixPrefix = (
-      settings.task === 'denoise' ? imageFixes.slice(0, -1) : imageFixes
+      usingTemporalVideo ? [] : restoring ? imageFixes.slice(0, -1) : imageFixes
     ).filter((selection) => selection.model_id);
     const recipe: Recipe = {
       id: crypto.randomUUID(),
       name,
       task: settings.task,
+      ...(settings.task === 'video' ? { video_task: videoTask } : {}),
       model_id: settings.selected_model_id,
-      output_scale: settings.output_scale,
+      output_scale: restoring ? 1 : settings.output_scale,
       tile_size: settings.tile_size,
       halo: settings.halo,
       precision: settings.precision,
@@ -2269,6 +2694,8 @@
       face_fidelity: settings.face_fidelity,
       video_interpolation: settings.video_interpolation ?? 'off',
       video_interpolation_order: settings.video_interpolation_order ?? 'after_upscale',
+      video_clean_audio: Boolean(settings.video_clean_audio),
+      video_audio_model: settings.video_audio_model ?? '',
       quality: activeQuality,
       content: settings.content,
       fixes: settings.fixes,
@@ -2282,20 +2709,17 @@
           fix: selection.fix,
         })),
         {
-          kind:
-            settings.task === 'video'
+          kind: restoring
+            ? ('restore' as const)
+            : settings.task === 'video'
               ? ('video' as const)
-              : settings.task === 'denoise'
-                ? ('restore' as const)
-                : ('upscale' as const),
+              : ('upscale' as const),
           model_id:
             settings.task === 'video' && usingTemporalVideo
               ? settings.selected_video_model_id
               : settings.selected_model_id,
           // Restore's model is its last fix.
-          ...(settings.task === 'denoise' && imageFixes.length
-            ? { fix: imageFixes[imageFixes.length - 1].fix }
-            : {}),
+          ...(restoring && imageFixes.length ? { fix: imageFixes[imageFixes.length - 1].fix } : {}),
         },
         ...(faceEnabled && faceModel
           ? [
@@ -2343,16 +2767,21 @@
     const fix_stages = recipeFixStages(recipe, snapshot.catalog);
     const recipeFace = recipe.stages?.find((stage) => stage.kind === 'face_restore');
     const recipeModel = snapshot.catalog.models.find((model) => model.model_id === recipe.model_id);
+    const targetVideoTask = recipe.video_task === 'denoise' ? 'denoise' : 'upscale';
+    const targetRestoring =
+      recipe.task === 'denoise' || (recipe.task === 'video' && targetVideoTask === 'denoise');
     updateSettings({
       task: recipe.task,
+      ...(recipe.task === 'video' ? { video_task: targetVideoTask } : {}),
       selected_model_id: recipe.model_id,
-      selected_video_model_id: recipe.video_model_id || 'frame_by_frame',
+      selected_video_model_id: targetRestoring
+        ? 'frame_by_frame'
+        : recipe.video_model_id || 'frame_by_frame',
       fix_stages,
       custom_model_path: recipe.custom_model_path ?? '',
-      output_scale:
-        recipe.task === 'denoise'
-          ? 1
-          : Math.min(recipeModel?.native_scale ?? recipe.output_scale, recipe.output_scale),
+      output_scale: targetRestoring
+        ? 1
+        : Math.min(recipeModel?.native_scale ?? recipe.output_scale, recipe.output_scale),
       output_format: recipe.output_format ?? settings.output_format,
       preserve_metadata: recipe.preserve_metadata ?? settings.preserve_metadata,
       jpeg_quality: recipe.jpeg_quality ?? settings.jpeg_quality,
@@ -2372,7 +2801,10 @@
       // Recipes saved before 0.3.7 carry no interpolation, so they run without it.
       video_interpolation: recipe.video_interpolation || 'off',
       video_interpolation_order: recipe.video_interpolation_order || 'after_upscale',
-      enable_face_model: recipeFace ? true : (recipe.enable_face_model ?? false),
+      video_clean_audio: recipe.video_clean_audio ?? false,
+      video_audio_model: recipe.video_audio_model ?? '',
+      enable_face_model:
+        !targetRestoring && (recipeFace ? true : (recipe.enable_face_model ?? false)),
       face_fidelity:
         recipeFace?.fidelity === undefined
           ? (recipe.face_fidelity ?? 70)
@@ -2543,7 +2975,12 @@
   async function handleNativeMenuAction(action: string): Promise<void> {
     // A dialog takes the input until it is answered; only Cancel, which ends work, still acts.
     if (
-      (modalTitle || libraryOpen || ffmpegNotice || $updateDialogOpen) &&
+      (modalTitle ||
+        reportOpen ||
+        settings.privacy_choice_made === false ||
+        libraryOpen ||
+        ffmpegNotice ||
+        $updateDialogOpen) &&
       action !== 'file.cancel'
     )
       return;
@@ -2616,6 +3053,9 @@
         case 'view.models':
           openLibrary('browse');
           break;
+        case 'help.report-problem':
+          await showReport();
+          break;
         case 'app.updates':
           updateDialogOpen.set(true);
           break;
@@ -2626,6 +3066,7 @@
   }
 
   function showPerformance(): void {
+    if (settings.crash_reports) void refreshCrashReports();
     if (!benchmarkDevice)
       benchmarkDevice =
         snapshot.capabilities.devices.find((device) => device.id !== 'cpu')?.id ?? 'cpu';
@@ -2880,6 +3321,24 @@
   }
 </script>
 
+<svelte:window
+  on:click={(event) => {
+    if (deletingRecipeId === null) return;
+    // The path is fixed when the click starts. The X that opened the question is already
+    // gone from the page when this runs, so its row must not be looked up from the target.
+    const inRow = event
+      .composedPath()
+      .some(
+        (node) =>
+          node instanceof Element && node.getAttribute('data-recipe-id') === deletingRecipeId,
+      );
+    if (!inRow) deletingRecipeId = null;
+  }}
+  on:keydown={(event) => {
+    if (event.key === 'Escape') deletingRecipeId = null;
+  }}
+/>
+
 <svelte:head
   ><title>{selectedMedia ? `${selectedMedia.name} — LocalSR` : 'LocalSR'}</title></svelte:head
 >
@@ -2890,7 +3349,7 @@
   class:mac={isMac}
   class:queue-timing-visible={Boolean(queueEta)}
   class:status-extra={Boolean(hardwareNote || hardwareHint)}
-  style={`--ui-scale:${settings.interface_scale / 100};--notice-room:${updateNoticeHeight ? updateNoticeHeight + 20 : 0}px`}
+  style={`--ui-scale:${settings.interface_scale / 100}`}
 >
   <!-- Only narrow windows need a bar: it switches between the panes that no longer fit side by side. -->
   <header class="toolbar" data-tauri-drag-region>
@@ -2906,6 +3365,8 @@
   <UpdatePanel
     processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
     anonymousUpdateCount={settings.anonymous_update_count ?? false}
+    completionSound={settings.completion_sound ?? false}
+    on:completionsound={(event) => updateSettings({ completion_sound: event.detail })}
     checkAtLaunch={settings.check_updates_at_launch ?? true}
     on:anonymouscount={(event) => setUpdateSwitch('anonymous_update_count', event.detail)}
     on:checkatlaunch={(event) => setUpdateSwitch('check_updates_at_launch', event.detail)}
@@ -2915,6 +3376,9 @@
     checkAtLaunch={settings.check_updates_at_launch ?? true}
   />
 
+  <UpdateNotice
+    processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
+  />
   <main class="workspace">
     <MediaQueue
       bind:this={mediaQueue}
@@ -3047,7 +3511,7 @@
                 ? editFamilyLabel(editModel.family)
                 : 'Choose a model'
               : settings.task
-                ? `${activeQuality === 'custom' ? 'Custom' : activeQuality === 'best' ? 'Best' : 'Quick'}${settings.task === 'denoise' ? '' : settings.content === 'illustration' ? ' · Illustration' : ' · Photo'}`
+                ? `${activeQuality === 'custom' ? 'Custom' : activeQuality === 'best' ? 'Best' : 'Quick'}${restoring ? '' : settings.content === 'illustration' ? ' · Illustration' : ' · Photo'}`
                 : 'Choose a task'}</span
         >
       </div>
@@ -3070,23 +3534,35 @@
         >
           <section class="control-section">
             <span class="eyebrow">Task</span>
-            <!-- A selected video is upscaled as video, so Upscale stays pressed for it. -->
+            <!-- A selected video runs Upscale or Restore inside the video task. -->
             <div class="seg-inline task-switch" role="group" aria-label="Task">
               <button
-                aria-pressed={settings.task === 'upscale' || settings.task === 'video'}
-                class:active={settings.task === 'upscale' || settings.task === 'video'}
-                on:click={() => setTask(selectedMedia?.kind === 'video' ? 'video' : 'upscale')}
-                >Upscale</button
+                aria-pressed={settings.task === 'upscale' ||
+                  (settings.task === 'video' && !restoring)}
+                class:active={settings.task === 'upscale' ||
+                  (settings.task === 'video' && !restoring)}
+                on:click={() =>
+                  setTask(
+                    selectedMedia?.kind === 'video' || settings.task === 'video'
+                      ? 'video'
+                      : 'upscale',
+                    'upscale',
+                  )}>Upscale</button
               >
               <button
-                aria-pressed={settings.task === 'denoise'}
-                disabled={selectedMedia?.kind === 'video'}
-                class:active={settings.task === 'denoise'}
-                on:click={() => setTask('denoise')}>Restore</button
+                aria-pressed={restoring}
+                class:active={restoring}
+                on:click={() =>
+                  setTask(
+                    selectedMedia?.kind === 'video' || settings.task === 'video'
+                      ? 'video'
+                      : 'denoise',
+                    'denoise',
+                  )}>Restore</button
               >
               <button
                 aria-pressed={settings.task === 'edit'}
-                disabled={selectedMedia?.kind === 'video'}
+                disabled={selectedMedia?.kind === 'video' || settings.task === 'video'}
                 class:active={settings.task === 'edit'}
                 on:click={() => setTask('edit')}>Edit</button
               >
@@ -3154,6 +3630,44 @@
             </section>
           {/if}
 
+          {#if settings.task === 'video'}
+            <section class="control-section" aria-label="Audio">
+              <span class="eyebrow">Audio</span>
+              <div class="check-line">
+                <label class="check-row"
+                  ><input
+                    type="checkbox"
+                    disabled={audioDisabled}
+                    checked={!audioDisabled && Boolean(settings.video_clean_audio)}
+                    on:change={(event) =>
+                      updateSettings({ video_clean_audio: event.currentTarget.checked })}
+                  /> Clean up audio</label
+                ><HelpTip
+                  label="Clean up audio"
+                  text="Removes background noise such as hum, wind and hiss from speech. Music may sound worse."
+                />
+              </div>
+              {#if audioDisabled}
+                <p class="model-description">This video has no audio track.</p>
+              {:else if settings.video_clean_audio && audioModels.length > 0}
+                <label class="field-label" for="audio-model">Audio model</label>
+                <select
+                  id="audio-model"
+                  value={selectedAudioModel?.model_id ?? ''}
+                  on:change={(event) =>
+                    updateSettings({ video_audio_model: event.currentTarget.value })}
+                >
+                  {#each audioModels as model (model.model_id)}
+                    <option value={model.model_id}>{model.name}</option>
+                  {/each}
+                </select>
+                {#if selectedAudioModel?.summary}
+                  <p class="model-description">{selectedAudioModel.summary}</p>
+                {/if}
+              {/if}
+            </section>
+          {/if}
+
           {#if settings.task}
             {#if settings.task === 'edit'}
               <section class="control-section" aria-label="Edit prompt">
@@ -3169,7 +3683,14 @@
             {:else}
               <section class="control-section recipes">
                 <div class="eyebrow eyebrow-row">
-                  <span>Quality</span>
+                  <span class="label-with-tip"
+                    >Quality{#if skipUpscale}<HelpTip
+                        label="Quality"
+                        text={usingTemporalVideo
+                          ? 'Output scale is 1×, so the video model is not used and the size stays the same. To upscale, set Output scale under Advanced to 2× or higher.'
+                          : 'Output scale is 1×, so the upscaling model is not used and the size stays the same. Quick and Best only choose the Fix first models. To upscale, set Output scale under Advanced to 2× or higher.'}
+                      />{/if}</span
+                  >
                   {#if !recipeEditorOpen}<span class="eyebrow-actions"
                       ><button class="link-button" type="button" on:click={openRecipeEditor}
                         >Save as recipe…</button
@@ -3198,36 +3719,60 @@
                 </div>
                 <div class="recipe-tools">
                   {#each snapshot.recipes as recipe (recipe.id)}
-                    <div class="saved-recipe">
-                      <button
-                        class:active={activeRecipeIds.has(recipe.id)}
-                        aria-pressed={activeRecipeIds.has(recipe.id)}
-                        disabled={Boolean(selectedMedia) &&
-                          (recipe.task === 'video') !== (selectedMedia.kind === 'video')}
-                        on:click={() => applyRecipe(recipe)}
-                        ><b>{recipe.name}</b><span
-                          >{recipe.task} · {recipe.output_scale}× · {recipe.precision.toUpperCase()}</span
-                        ></button
-                      ><button
-                        aria-label={`Delete ${recipe.name}`}
-                        on:click={() =>
-                          attempt('Could not delete the recipe', async () => {
-                            await api.deleteRecipe(recipe.id);
-                            await refresh();
-                          })}
-                        ><svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          width="16"
-                          height="16"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2.5"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          ><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg
-                        ></button
-                      >
+                    <div
+                      class="saved-recipe"
+                      data-recipe-id={recipe.id}
+                      class:confirming={deletingRecipeId === recipe.id}
+                    >
+                      {#if deletingRecipeId === recipe.id}
+                        <p class="recipe-question">
+                          <b>Delete {recipe.name}?</b><span>This can’t be undone.</span>
+                        </p>
+                        <button
+                          class="danger"
+                          aria-label={`Confirm delete ${recipe.name}`}
+                          on:click={() => {
+                            deletingRecipeId = null;
+                            void attempt('Could not delete the recipe', async () => {
+                              await api.deleteRecipe(recipe.id);
+                              await refresh();
+                            });
+                          }}>Delete</button
+                        >
+                        <button
+                          aria-label={`Cancel deleting ${recipe.name}`}
+                          on:click={() => (deletingRecipeId = null)}>Cancel</button
+                        >
+                      {:else}
+                        <button
+                          class:active={activeRecipeIds.has(recipe.id)}
+                          aria-pressed={activeRecipeIds.has(recipe.id)}
+                          disabled={Boolean(selectedMedia) &&
+                            (recipe.task === 'video') !== (selectedMedia.kind === 'video')}
+                          on:click={() => applyRecipe(recipe)}
+                          ><b>{recipe.name}</b><span
+                            >{recipe.task === 'video' && recipe.video_task === 'denoise'
+                              ? 'video restore'
+                              : recipe.task} · {recipe.output_scale}× · {recipe.precision.toUpperCase()}</span
+                          ></button
+                        ><button
+                          class:active={activeRecipeIds.has(recipe.id)}
+                          aria-label={`Delete ${recipe.name}`}
+                          on:click={() => (deletingRecipeId = recipe.id)}
+                          ><svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.5"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            ><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg
+                          ></button
+                        >
+                      {/if}
                     </div>
                   {/each}
                   {#if recipeEditorOpen}
@@ -3250,12 +3795,20 @@
             {#if !usingTemporalVideo && settings.task !== 'edit'}
               <section
                 class="control-section"
-                aria-label={settings.task === 'denoise' ? 'What to fix' : 'Your image'}
+                aria-label={restoring
+                  ? 'What to fix'
+                  : settings.task === 'video'
+                    ? 'Your video'
+                    : 'Your image'}
               >
                 <span class="eyebrow"
-                  >{settings.task === 'denoise' ? 'What to fix' : 'Your image'}</span
+                  >{restoring
+                    ? 'What to fix'
+                    : settings.task === 'video'
+                      ? 'Your video'
+                      : 'Your image'}</span
                 >
-                {#if settings.task !== 'denoise'}
+                {#if !restoring}
                   <div class="field-heading">
                     <span class="field-label" id="content-label">Content</span><HelpTip
                       label="Content"
@@ -3278,19 +3831,17 @@
                       on:click={() => setContent('illustration')}>Illustration</button
                     >
                   </div>
-                  {#if settings.task === 'upscale'}
-                    <div class="field-heading">
-                      <span class="field-label" id="fix-label">Fix first</span><HelpTip
-                        label="Fix first"
-                        text="Each problem you pick gets its own fix, run before the upscaler in the order listed under Model. The ↑ and ↓ buttons change that order; each fix's Change… picks its model, which LocalSR remembers for that problem."
-                      />
-                    </div>
-                  {/if}
+                  <div class="field-heading">
+                    <span class="field-label" id="fix-label">Fix first</span><HelpTip
+                      label="Fix first"
+                      text="Each problem you pick gets its own fix, run before the upscaler in the order listed under Model. The ↑ and ↓ buttons change that order; each fix's Change… picks its model, which LocalSR remembers for that problem."
+                    />
+                  </div>
                 {/if}
                 <div
                   class="chips"
                   role="group"
-                  aria-label={settings.task === 'denoise' ? 'Problems to fix' : 'Fix first'}
+                  aria-label={restoring ? 'Problems to fix' : 'Fix first'}
                 >
                   {#each fixChips as fix (fix)}
                     <button
@@ -3298,9 +3849,13 @@
                       type="button"
                       class:on={settings.fixes.includes(fix)}
                       aria-pressed={settings.fixes.includes(fix)}
-                      disabled={fix === 'faces' && !faceModel}
-                      title={fix === 'faces' && !faceModel
-                        ? 'Faces need a model with a face companion (HAT-S or HAT-L).'
+                      disabled={fix === 'faces' && (!faceModel || skipUpscale)}
+                      title={fix === 'faces'
+                        ? skipUpscale
+                          ? 'Faces needs upscaling (2× or higher).'
+                          : !faceModel
+                            ? 'Faces need a model with a face companion (HAT-S or HAT-L).'
+                            : ''
                         : ''}
                       on:click={() => toggleFix(fix)}
                       >{#if settings.fixes.includes(fix)}<svg
@@ -3334,7 +3889,7 @@
                       type="button"
                       on:click={() => applyPreset('best')}>Back to Best</button
                     >{/if}
-                  {#if !plan.some((stage) => stage.role === 'primary')}<button
+                  {#if !skipUpscale && !plan.some((stage) => stage.role === 'primary')}<button
                       class="link-button"
                       type="button"
                       on:click={() => openLibrary(settings.task === 'edit' ? 'edit' : 'primary')}
@@ -3342,7 +3897,7 @@
                     >{/if}
                 </span>
               </div>
-              {#if settings.task === 'video'}
+              {#if settings.task === 'video' && !restoring}
                 <label class="field-label" for="video-engine">Video engine</label>
                 <select
                   id="video-engine"
@@ -3378,7 +3933,11 @@
               >
                 {#each plan as stage (`${stage.role}:${stage.fix ?? stage.kind}`)}
                   {@const target =
-                    stage.model ?? stage.videoModel ?? stage.editModel ?? stage.interpolationModel}
+                    stage.model ??
+                    stage.videoModel ??
+                    stage.editModel ??
+                    stage.interpolationModel ??
+                    stage.audioModel}
                   {@const changeSlot =
                     stage.role === 'fix'
                       ? stage.fix && 'fix'
@@ -3395,6 +3954,7 @@
                             settings.task,
                             settings.content,
                             stage.fix,
+                            videoTask,
                           ),
                           stage.model?.model_id ?? '',
                         )
@@ -3406,11 +3966,13 @@
                       ? stage.videoModel.name
                       : stage.interpolationModel
                         ? stage.interpolationModel.name.split(' — ')[0]
-                        : stage.editModel
-                          ? editFamilyLabel(stage.editModel.family)
-                          : stage.missing
-                            ? 'No model for this fix'
-                            : 'Your checkpoint'}
+                        : stage.audioModel
+                          ? stage.audioModel.name.split(' — ')[0]
+                          : stage.editModel
+                            ? editFamilyLabel(stage.editModel.family)
+                            : stage.missing
+                              ? 'No model for this fix'
+                              : 'Your checkpoint'}
                   <!-- Licenses live in the model library; only exceptions show here. -->
                   {@const meta = stage.editModel
                     ? `${editVariantName(stage.editModel)}${
@@ -3443,7 +4005,9 @@
                             ]
                               .filter(Boolean)
                               .join(' · ')
-                          : ''}
+                          : stage.audioModel
+                            ? stage.audioModel.summary || 'Audio cleanup'
+                            : ''}
                   {@const warning =
                     stage.model && UNSTABLE_FIX_MODELS.has(stage.model.model_id)
                       ? stage.role === 'fix'
@@ -3454,14 +4018,17 @@
                   {@const fixIndex = stage.fix
                     ? imageFixes.findIndex((selection) => selection.fix === stage.fix)
                     : -1}
+                  {@const stageDownload = target ? downloadMap.get(target.model_id) : undefined}
                   <!-- Line 1: role, name, arrows and Change…; line 2 the library links; line 3 the note. -->
                   <div class="plan-row" role="listitem">
                     <span class="stage">{stage.label}</span>
                     <div class="name" title={name}>{name}</div>
                     <div class="plan-end">
                       <span class="state" class:warn={stage.needsFile}
-                        >{activeDownload === target?.model_id
-                          ? `${Math.round(snapshot.runtime.download_progress)}%`
+                        >{stageDownload
+                          ? stageDownload.status === 'queued'
+                            ? 'Waiting'
+                            : `${Math.round(stageDownload.progress)}%`
                           : stage.needsFile && !stage.installed
                             ? 'Needs your file'
                             : ''}</span
@@ -3492,7 +4059,7 @@
                             ? `Change the ${FIX_NAMES[stage.fix]} fix model`
                             : changeSlot === 'edit'
                               ? 'Change the edit model'
-                              : settings.task === 'denoise'
+                              : restoring
                                 ? 'Change the restore model'
                                 : 'Change the upscaler'}
                           on:click={() => openLibrary(changeSlot, stage.fix)}>Change…</button
@@ -3513,7 +4080,7 @@
                             ><button
                               class="link-button"
                               type="button"
-                              aria-label={settings.task === 'denoise'
+                              aria-label={restoring
                                 ? 'Try other restoration models on this image'
                                 : 'Try other upscalers on this image'}
                               disabled={!canOpenTrials}
@@ -3581,12 +4148,12 @@
                           <button
                             class="button full"
                             class:primary={stage.model.automated_download_allowed}
-                            disabled={Boolean(activeDownload) &&
-                              activeDownload !== stage.model.model_id}
                             on:click={() => runDownload(stage.model, faceTermsAccepted)}
                           >
-                            {activeDownload === stage.model.model_id
-                              ? `Downloading ${Math.round(snapshot.runtime.download_progress)}% · Cancel`
+                            {stageDownload
+                              ? stageDownload.status === 'queued'
+                                ? 'Waiting in queue · Cancel'
+                                : `Downloading ${Math.round(stageDownload.progress)}% · Cancel`
                               : stage.model.automated_download_allowed
                                 ? `Download companion · ${formatBytes(stage.model.size_bytes)}`
                                 : 'Choose externally downloaded face checkpoint…'}
@@ -3602,29 +4169,36 @@
                               /> I reviewed the model license and restrictions.</label
                             >
                           {/if}
-                          {#if !stage.canDownload || target.terms_acceptance_required || activeDownload === target.model_id}
+                          {#if !stage.canDownload || target.terms_acceptance_required || Boolean(stageDownload)}
                             <button
                               class="button full"
                               disabled={(stage.videoModel && Boolean(temporalUnavailableReason)) ||
-                                preparing ||
-                                (Boolean(activeDownload) && activeDownload !== target.model_id)}
+                                preparing}
                               on:click={() => runDownload(target)}
                             >
-                              {activeDownload === target.model_id
-                                ? `Downloading ${Math.round(snapshot.runtime.download_progress)}% · Cancel`
+                              {stageDownload
+                                ? stageDownload.status === 'queued'
+                                  ? 'Waiting in queue · Cancel'
+                                  : `Downloading ${Math.round(stageDownload.progress)}% · Cancel`
                                 : stage.canDownload
                                   ? `Download model · ${formatBytes(stage.sizeBytes)}`
                                   : 'Choose externally downloaded checkpoint…'}
                             </button>
                           {/if}
-                          {#if activeDownload === target.model_id}<div class="download-track">
-                              <i style={`width:${snapshot.runtime.download_progress}%`}></i>
-                            </div>{/if}
+                          {#if stageDownload?.status === 'downloading'}<progress
+                              class="download-progress"
+                              value={stageDownload.progress}
+                              max="100"
+                              aria-label={`${name} download progress`}
+                            ></progress>{/if}
                         {/if}
                       </div>{/if}
                   </div>
                 {/each}
               </div>
+              {#if hasNothingToDoAt1x}
+                <p class="inline-warning" role="status">{nothingToDoAt1xReason}</p>
+              {/if}
               {#if !fixPlanSupported && snapshot.engine}<p class="inline-warning" role="status">
                   This engine runs one fix at a time. Update LocalSR to run several.
                 </p>{/if}
@@ -3682,19 +4256,21 @@
                 </p>
               {/if}
               {#if usingTemporalVideo}
-                <VideoMemory
-                  lowMemory={settings.video_low_memory ?? true}
-                  device={snapshot.capabilities.devices.find(
-                    (device) => device.id === settings.device_id,
-                  )}
-                  memory={selectedMemory}
-                  running={Boolean(
-                    selectedMemory && snapshot.runtime.active_job_id === selectedMemory.job_id,
-                  )}
-                  {outputDimensions}
-                  disabled={Boolean(snapshot.runtime.active_job_id)}
-                  on:change={(event) => updateSettings({ video_low_memory: event.detail })}
-                />
+                {#if !skipUpscale}
+                  <VideoMemory
+                    lowMemory={settings.video_low_memory ?? true}
+                    device={snapshot.capabilities.devices.find(
+                      (device) => device.id === settings.device_id,
+                    )}
+                    memory={selectedMemory}
+                    running={Boolean(
+                      selectedMemory && snapshot.runtime.active_job_id === selectedMemory.job_id,
+                    )}
+                    {outputDimensions}
+                    disabled={Boolean(snapshot.runtime.active_job_id)}
+                    on:change={(event) => updateSettings({ video_low_memory: event.detail })}
+                  />
+                {/if}
                 <div class="field-row">
                   <label for="video-resolution">Output resolution</label><select
                     id="video-resolution"
@@ -3745,9 +4321,9 @@
               capabilities={snapshot.capabilities}
               {usingTemporalVideo}
               {preservingHdr}
-              interpolationSupported={snapshot.engine?.features.includes('video_interpolation') ===
-                true}
+              {interpolationSupported}
               {updateSettings}
+              setLowPriority={(value) => setUpdateSwitch('low_priority', value)}
               {chooseOutput}
               refreshCapabilities={async () => {
                 try {
@@ -3763,11 +4339,6 @@
         </fieldset>
       </div>
     </aside>
-
-    <UpdateNotice
-      bind:height={updateNoticeHeight}
-      processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
-    />
   </main>
 
   <footer class="status-bar">
@@ -3915,7 +4486,9 @@
           title={singleHint || undefined}
           on:click={() => start()}
           >{settings.task === 'video'
-            ? 'Start selected video'
+            ? restoring
+              ? 'Restore selected video'
+              : 'Start selected video'
             : settings.task === 'denoise'
               ? 'Restore selected'
               : settings.task === 'edit'
@@ -3933,14 +4506,17 @@
     {settings}
     context={{
       task: settings.task,
+      videoTask,
       content: settings.content,
       quality: activeQuality,
       slot: libraryContext.slot,
       fix: libraryContext.fix,
     }}
     device={activeDevice}
-    {activeDownload}
-    downloadProgress={snapshot.runtime.download_progress}
+    downloads={activeDownloads}
+    {downloadErrors}
+    cancelDownload={cancelDownloadById}
+    {dismissDownloadError}
     busy={settingsLocked || preparing}
     close={closeLibrary}
     {trialMedia}
@@ -3972,6 +4548,79 @@
   />
 {/if}
 
+{#if crashNotice && settings.crash_reports && !reportOpen && !booting && settings.privacy_choice_made !== false}
+  <div class="modal-backdrop" role="presentation">
+    <div
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="crash-title"
+      tabindex="-1"
+      use:modal={() => (crashNotice = false)}
+    >
+      <h2 id="crash-title">LocalSR quit unexpectedly last time.</h2>
+      <p>
+        A crash report is stored on this computer. Review it before choosing whether to open an
+        issue.
+      </p>
+      <div class="modal-actions">
+        <button class="button" on:click={discardCrash}>Don't Send</button>
+        <button class="button primary" on:click={reviewCrash}>Review report…</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if reportOpen}
+  <div class="modal-backdrop" role="presentation">
+    <div
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="report-title"
+      tabindex="-1"
+      use:modal={closeReport}
+    >
+      <h2 id="report-title">Report a problem</h2>
+      <p>
+        This opens a new GitHub issue in your browser. Nothing is sent until you submit it there.
+      </p>
+      <label>What happened?<textarea maxlength="400" bind:value={reportHappened}></textarea></label>
+      <p>
+        <label
+          ><input type="checkbox" bind:checked={reportIncludeDiagnostics} /> Include diagnostics</label
+        >
+      </p>
+      {#if reportIncludeDiagnostics}<details open={!!reviewedCrash}>
+          <summary>Preview diagnostics</summary><textarea readonly value={reportDiagnostics}
+          ></textarea>
+        </details>{/if}
+      {#if reportMessage}<p role="status">{reportMessage}</p>{/if}
+      <div class="modal-actions">
+        <button class="button" on:click={closeReport}>Cancel</button><button
+          class="button"
+          disabled={reportLoading}
+          on:click={openReport}>Open GitHub Issue</button
+        >
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if !booting && settings.privacy_choice_made === false}
+  <SetupScreen
+    bind:appearance={setupAppearance}
+    bind:colourBlind={setupColourBlind}
+    bind:checkAtLaunch={setupCheckAtLaunch}
+    bind:anonymousCount={setupAnonymousCount}
+    bind:crashReports={setupCrashReports}
+    saving={privacySaving}
+    error={privacyError}
+    on:preview={(event) => previewSetupTheme(event.detail.appearance, event.detail.colourBlind)}
+    on:continue={(event) => void continuePrivacy(event.detail)}
+  />
+{/if}
+
 {#if modalTitle}
   <div class="modal-backdrop" role="presentation" on:click={closeFromBackdrop}>
     <div
@@ -3987,6 +4636,27 @@
       <h2 id="modal-title">{modalTitle}</h2>
       <p class="modal-message">{modalMessage}</p>
       {#if modalKind === 'performance'}
+        <section class="crash-reports-panel" aria-label="Crash reports">
+          <label class="crash-reports-toggle"
+            ><input
+              type="checkbox"
+              checked={settings.crash_reports ?? false}
+              on:change={(event) => setUpdateSwitch('crash_reports', event.currentTarget.checked)}
+            /> Offer to Report Crashes</label
+          >
+          <p>Turning this off deletes all stored crash reports immediately.</p>
+          <div class="crash-reports-row">
+            <span>Stored crash reports: {crashReports.length}</span>
+            <div class="crash-reports-actions">
+              <button class="button" disabled={!crashReports.length} on:click={reviewCrash}
+                >Review</button
+              >
+              <button class="button" disabled={!crashReports.length} on:click={removeAllCrashes}
+                >Delete All</button
+              >
+            </div>
+          </div>
+        </section>
         <section class="benchmark-panel" aria-labelledby="benchmark-title">
           <div class="benchmark-heading">
             <div>
@@ -4034,14 +4704,14 @@
                 : benchmarkRunning
                   ? 'Cancel Benchmark'
                   : benchmarkSetup === 'downloading'
-                    ? `Downloading SPAN · ${Math.round(snapshot.runtime.download_progress)}%`
+                    ? `Downloading SPAN · ${Math.round(downloadMap.get('span_photo_x4')?.progress ?? snapshot.runtime.download_progress)}%`
                     : benchmarkSetup === 'starting'
                       ? 'Starting benchmark…'
                       : !benchmarkModel?.installed
                         ? 'Download & run benchmark'
                         : 'Run Benchmark'}</button
             >
-            {#if benchmarkSetup === 'downloading' && activeDownload === 'span_photo_x4'}<button
+            {#if benchmarkSetup === 'downloading' && downloadMap.has('span_photo_x4')}<button
                 class="button"
                 on:click={() =>
                   api
@@ -4453,9 +5123,9 @@
         <textarea readonly>{diagnostics}</textarea>
       {/if}
       <div class="modal-actions">
-        {#if modalKind === 'performance'}<button class="button" on:click={copyDiagnostics}
-            >Copy diagnostics</button
-          >{/if}
+        {#if modalKind === 'performance'}<button class="button" on:click={showReport}
+            >Report a problem…</button
+          ><button class="button" on:click={copyDiagnostics}>Copy diagnostics</button>{/if}
         {#if modalKind === 'integrations' && integration}<button
             class="button"
             class:danger={integration.installed}

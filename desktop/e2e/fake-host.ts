@@ -11,6 +11,8 @@ export interface Scenario {
   /** Number of photos in the queue; the first one is selected. */
   photos?: number;
   video?: boolean;
+  /** Whether the fake video reports an audio track (defaults to true). */
+  videoHasAudio?: boolean;
   /** Completed 15/60 fps outputs with tiny real playback sources. */
   videoCompare?: boolean;
   /** Populated by installFakeHost only for video Compare. */
@@ -18,6 +20,8 @@ export interface Scenario {
   /** Catalog model ids marked as installed. */
   installed?: string[];
   settings?: Record<string, unknown>;
+  /** Saved recipes the host lists. */
+  recipes?: Record<string, unknown>[];
   worker?: 'ready' | 'unavailable';
   /** The host gave up restarting the engine and offers Try again. */
   engineGivenUp?: boolean;
@@ -39,8 +43,11 @@ export interface Scenario {
   /** The host takes this long to prepare the preview of a saved result for a pair. */
   pairDelayMs?: number;
   welcome?: boolean;
+  privacyPending?: boolean;
   /** An update the feed offers; without it the feed is not configured. */
   update?: string;
+  diagnosticSummary?: string;
+  crashReports?: { id: string; report: { message: string; os: string; [key: string]: unknown } }[];
   /** The outputs also appear as finished jobs, so Reveal and Open are offered for the selected photo. */
   finished?: boolean;
   /** A queue is running: the first photo is processing and the rest wait. */
@@ -55,6 +62,8 @@ export interface Scenario {
   selected?: number;
   /** The first photo could not be read: its name and the reason the host gives. */
   unreadable?: { name: string; error: string };
+  /** Simulate up to 3 concurrent model downloads with queue, progress, cancel, and errors. */
+  concurrentDownloads?: boolean;
 }
 
 export interface HostCall {
@@ -124,7 +133,100 @@ function hostScript(scenario: Scenario): void {
       (callbacks.get(id) as (message: unknown) => void)({ event, id: 0, payload });
     }
   };
-  win.__fakeHost = { calls, failures, answers, emit };
+  type DownloadEntry = {
+    modelId: string;
+    status: 'queued' | 'downloading';
+    progress: number;
+    totalBytes: number;
+    resolve: () => void;
+    reject: (error: string) => void;
+  };
+  const activeDownloads: DownloadEntry[] = [];
+  const syncDownloads = () => {
+    if (!snapshot) return;
+    snapshot.runtime.downloads = activeDownloads.map((item) => ({
+      model_id: item.modelId,
+      status: item.status,
+      progress: item.progress,
+      downloaded_bytes: Math.round((item.progress / 100) * item.totalBytes),
+      total_bytes: item.totalBytes,
+    }));
+    const primary =
+      activeDownloads.find((item) => item.status === 'downloading') ?? activeDownloads[0];
+    snapshot.runtime.download_model_id = primary?.modelId ?? '';
+    snapshot.runtime.download_progress = primary?.progress ?? 0;
+  };
+  const promoteDownloads = () => {
+    let running = activeDownloads.filter((item) => item.status === 'downloading').length;
+    for (const item of activeDownloads) {
+      if (running >= 3) break;
+      if (item.status === 'queued') {
+        item.status = 'downloading';
+        running += 1;
+        emit('worker-message', {
+          type: 'download-started',
+          data: { model_id: item.modelId, total_bytes: item.totalBytes },
+        });
+      }
+    }
+  };
+  const finishDownload = (modelId: string) => {
+    const idx = activeDownloads.findIndex((item) => item.modelId === modelId);
+    if (idx < 0) return;
+    const [entry] = activeDownloads.splice(idx, 1);
+    if (snapshot) {
+      for (const m of [
+        ...snapshot.catalog.models,
+        ...snapshot.catalog.video_models,
+        ...snapshot.edit.models,
+      ]) {
+        if (m.model_id === modelId) m.installed = true;
+      }
+    }
+    promoteDownloads();
+    syncDownloads();
+    emit('worker-message', { type: 'download-completed', data: { model_id: modelId } });
+    emit('state-changed', null);
+    entry.resolve();
+  };
+  const failDownload = (modelId: string, errorMessage: string) => {
+    const idx = activeDownloads.findIndex((item) => item.modelId === modelId);
+    if (idx < 0) return;
+    const [entry] = activeDownloads.splice(idx, 1);
+    promoteDownloads();
+    syncDownloads();
+    emit('worker-message', {
+      type: 'download-failed',
+      data: { model_id: modelId, error_message: errorMessage },
+    });
+    emit('state-changed', null);
+    entry.reject(errorMessage);
+  };
+  const progressDownload = (modelId: string, progress: number) => {
+    const entry = activeDownloads.find((item) => item.modelId === modelId);
+    if (!entry) return;
+    entry.progress = progress;
+    syncDownloads();
+    emit('worker-message', {
+      type: 'download-progress',
+      data: {
+        model_id: modelId,
+        downloaded_bytes: Math.round((progress / 100) * entry.totalBytes),
+        total_bytes: entry.totalBytes,
+        progress,
+      },
+    });
+    emit('state-changed', null);
+  };
+  win.__fakeHost = {
+    calls,
+    failures,
+    answers,
+    emit,
+    finishDownload,
+    failDownload,
+    progressDownload,
+  };
 
   async function build(): Promise<Json> {
     const demo = (await import(
@@ -168,7 +270,13 @@ function hostScript(scenario: Scenario): void {
     }
     s.capabilities.system_ram_total = 16 * GIB;
     for (const id of scenario.installed ?? []) {
-      const model = [...s.catalog.models, ...s.edit.models].find((m: Json) => m.model_id === id);
+      const model = [
+        ...s.catalog.models,
+        ...s.catalog.video_models,
+        ...s.catalog.interpolation_models,
+        ...(s.catalog.audio_models ?? []),
+        ...s.edit.models,
+      ].find((m: Json) => m.model_id === id);
       if (!model) throw new Error(`Fixture model ${id} is not in the catalog`);
       model.installed = true;
     }
@@ -186,11 +294,26 @@ function hostScript(scenario: Scenario): void {
         height: 1080,
         fps: 24,
         frame_count: 288,
+        has_audio: scenario.videoHasAudio ?? true,
         duration_seconds: scenario.videoCompare ? 4 : 12,
         ...(scenario.videoCompare ? { selected: false, width: 32, height: 18, fps: 15 } : {}),
       });
     }
     Object.assign(s.settings, { task: scenario.task ?? '' }, scenario.settings ?? {});
+    // A fresh install starts from the host's defaults: count and crash reports on.
+    if (scenario.privacyPending)
+      Object.assign(s.settings, {
+        privacy_choice_made: false,
+        anonymous_update_count: true,
+        crash_reports: true,
+      });
+    try {
+      const savedSetup = sessionStorage.getItem('localsr.fakeHost.setupSettings');
+      if (savedSetup) Object.assign(s.settings, JSON.parse(savedSetup));
+    } catch {
+      /* sessionStorage unavailable */
+    }
+    s.recipes = structuredClone(scenario.recipes ?? []);
     s.runtime.worker = scenario.worker ?? 'unavailable';
     if (scenario.running) {
       const rows = scenario.rows ?? {};
@@ -367,14 +490,57 @@ function hostScript(scenario: Scenario): void {
     };
   }
 
+  let crashReports = structuredClone(scenario.crashReports ?? []);
   async function handle(command: string, args: Json): Promise<unknown> {
     snapshot ??= await build();
     switch (command) {
       case 'bootstrap':
       case 'get_snapshot':
         return structuredClone(snapshot);
+      case 'list_crash_reports':
+        return snapshot.settings.crash_reports ? structuredClone(crashReports) : [];
+      case 'delete_crash_report':
+        crashReports = crashReports.filter((report) => report.id !== args.id);
+        return null;
+      case 'delete_all_crash_reports':
+        crashReports = [];
+        return null;
+      case 'record_frontend_error':
+        return null;
+      case 'set_update_switch':
+        snapshot.settings[args.name] = args.value;
+        if (args.name === 'crash_reports' && !args.value) crashReports = [];
+        emit('state-changed', null);
+        return null;
+      case 'set_privacy_choice':
+        snapshot.settings.appearance = args.appearance;
+        snapshot.settings.colour_blind_palette = args.colourBlindPalette;
+        snapshot.settings.check_updates_at_launch = args.checkAtLaunch;
+        snapshot.settings.anonymous_update_count = args.anonymousCount;
+        snapshot.settings.crash_reports = args.crashReports;
+        snapshot.settings.privacy_choice_made = true;
+        if (!args.crashReports) crashReports = [];
+        try {
+          sessionStorage.setItem(
+            'localsr.fakeHost.setupSettings',
+            JSON.stringify({
+              appearance: args.appearance,
+              colour_blind_palette: args.colourBlindPalette,
+              check_updates_at_launch: args.checkAtLaunch,
+              anonymous_update_count: args.anonymousCount,
+              crash_reports: args.crashReports,
+              privacy_choice_made: true,
+            }),
+          );
+        } catch {
+          /* sessionStorage unavailable */
+        }
+        return null;
       case 'save_settings':
         snapshot.settings = structuredClone(args.settings);
+        return null;
+      case 'delete_recipe':
+        snapshot.recipes = snapshot.recipes.filter((recipe: Json) => recipe.id !== args.id);
         return null;
       case 'list_all_media_results':
         return histories();
@@ -458,13 +624,44 @@ function hostScript(scenario: Scenario): void {
       case 'clear_media':
         snapshot.media = [];
         return null;
+      case 'choose_media_files':
+        return [];
+      case 'choose_media_folder':
+      case 'choose_output_directory':
+      case 'choose_custom_model':
+      case 'choose_benchmark_export':
       case 'choose_external_ffmpeg':
       case 'choose_edit_runtime':
         return null;
       case 'take_launch_intents':
         return [];
+      case 'diagnostic_summary':
+        return (
+          scenario.diagnosticSummary ??
+          JSON.stringify({ platform: 'macos', app_version: '0.4.0-beta' }, null, 2)
+        );
+      case 'open_bug_report':
+      case 'open_update_discover':
+        return null;
+      case 'skip_update':
+        snapshot.settings.skipped_update_version = scenario.update;
+        return {
+          configured: true,
+          managed_by_store: false,
+          channel: 'beta',
+          target: '',
+          stage: 'available',
+          version: scenario.update,
+          notes: '',
+          skipped_version: scenario.update,
+          size: 58 * 1024 ** 2,
+          downloaded: 0,
+          message: '',
+          settings_recovery: false,
+        };
       case 'update_status':
       case 'check_update':
+      case 'check_update_at_launch':
         return {
           configured: Boolean(scenario.update),
           managed_by_store: false,
@@ -473,6 +670,7 @@ function hostScript(scenario: Scenario): void {
           stage: scenario.update ? 'available' : 'idle',
           version: scenario.update ?? '',
           notes: '',
+          skipped_version: snapshot.settings.skipped_update_version ?? '',
           size: scenario.update ? 58 * 1024 ** 2 : 0,
           downloaded: 0,
           message: '',
@@ -489,6 +687,50 @@ function hostScript(scenario: Scenario): void {
         return null;
       case 'diagnostic_summary':
         return 'Fixture host: no inference engine.';
+      case 'download_model': {
+        if (!scenario.concurrentDownloads) return null;
+        const modelId = String(args.modelId ?? '');
+        if (activeDownloads.some((item) => item.modelId === modelId)) {
+          throw 'this model is already downloading';
+        }
+        const model = [
+          ...snapshot.catalog.models,
+          ...snapshot.catalog.video_models,
+          ...snapshot.edit.models,
+        ].find((m: Json) => m.model_id === modelId);
+        const totalBytes = Number(model?.size_bytes ?? model?.total_size_bytes ?? 10_000_000);
+        const runningCount = activeDownloads.filter((item) => item.status === 'downloading').length;
+        const status: 'queued' | 'downloading' = runningCount < 3 ? 'downloading' : 'queued';
+        return new Promise<void>((resolve, reject) => {
+          activeDownloads.push({
+            modelId,
+            status,
+            progress: 0,
+            totalBytes,
+            resolve,
+            reject,
+          });
+          syncDownloads();
+          emit('worker-message', {
+            type: status === 'downloading' ? 'download-started' : 'download-queued',
+            data: { model_id: modelId, total_bytes: totalBytes },
+          });
+          emit('state-changed', null);
+        });
+      }
+      case 'cancel_download': {
+        if (!scenario.concurrentDownloads) return null;
+        const modelId = String(args.modelId ?? '');
+        const idx = activeDownloads.findIndex((item) => item.modelId === modelId);
+        if (idx < 0) throw 'that model is not being downloaded';
+        const [entry] = activeDownloads.splice(idx, 1);
+        promoteDownloads();
+        syncDownloads();
+        emit('worker-message', { type: 'download-cancelled', data: { model_id: modelId } });
+        emit('state-changed', null);
+        entry.reject('download cancelled');
+        return null;
+      }
       case 'plugin:event|listen':
         (listeners[args.event] ??= []).push(args.handler);
         return Math.floor(Math.random() * 1e9);
@@ -549,7 +791,43 @@ type FakeHostControls = {
   failures: Record<string, string>;
   answers: Record<string, unknown>;
   emit: (event: string, payload: unknown) => void;
+  finishDownload: (modelId: string) => void;
+  failDownload: (modelId: string, errorMessage: string) => void;
+  progressDownload: (modelId: string, progress: number) => void;
 };
+
+export async function progressDownload(
+  page: Page,
+  modelId: string,
+  progress: number,
+): Promise<void> {
+  await page.evaluate(
+    ([id, pct]) =>
+      (window as unknown as { __fakeHost: FakeHostControls }).__fakeHost.progressDownload(
+        id as string,
+        pct as number,
+      ),
+    [modelId, progress] as const,
+  );
+}
+
+export async function finishDownload(page: Page, modelId: string): Promise<void> {
+  await page.evaluate(
+    (id) => (window as unknown as { __fakeHost: FakeHostControls }).__fakeHost.finishDownload(id),
+    modelId,
+  );
+}
+
+export async function failDownload(page: Page, modelId: string, message: string): Promise<void> {
+  await page.evaluate(
+    ([id, text]) =>
+      (window as unknown as { __fakeHost: FakeHostControls }).__fakeHost.failDownload(
+        id as string,
+        text as string,
+      ),
+    [modelId, message] as const,
+  );
+}
 /** From now on the host refuses `command` with this message. */
 export async function refuse(page: Page, command: string, message: string): Promise<void> {
   await page.evaluate(

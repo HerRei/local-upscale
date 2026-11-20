@@ -170,8 +170,9 @@ fn job(id: &str, media: &str, request: &str, ui: &str) -> NewJob {
 #[test]
 fn result_outputs_are_authorized_for_their_own_media_only() {
     let directory = tempfile::tempdir().unwrap();
-    let db = Database::open(&directory.path().join("queue.db")).unwrap();
-    let path = directory.path().join("output.png");
+    let directory_root = std::fs::canonicalize(directory.path()).unwrap();
+    let db = Database::open(&directory_root.as_path().join("queue.db")).unwrap();
+    let path = directory_root.as_path().join("output.png");
     std::fs::write(&path, "preview").unwrap();
     let path = path.to_str().unwrap();
     for media in ["m", "other"] {
@@ -210,9 +211,10 @@ fn result_outputs_are_authorized_for_their_own_media_only() {
 #[test]
 fn a_result_replaced_by_a_link_is_no_longer_available() {
     let directory = tempfile::tempdir().unwrap();
-    let db = Database::open(&directory.path().join("queue.db")).unwrap();
-    let output = directory.path().join("output.png");
-    let private = directory.path().join("private.png");
+    let directory_root = std::fs::canonicalize(directory.path()).unwrap();
+    let db = Database::open(&directory_root.as_path().join("queue.db")).unwrap();
+    let output = directory_root.as_path().join("output.png");
+    let private = directory_root.as_path().join("private.png");
     std::fs::write(&output, "result").unwrap();
     std::fs::write(&private, "private").unwrap();
     db.insert_media("m", "/tmp/m.png", "m", "image").unwrap();
@@ -422,6 +424,7 @@ fn ui_metadata_leaves_the_timing_profile_alone() {
             "",
             "",
             "",
+            true,
         )
         .unwrap();
     }
@@ -455,8 +458,20 @@ fn trials_estimate_only_measured_matching_requests() {
     let db = Database::open(&directory.path().join("queue.db")).unwrap();
     db.insert_media("m", "/tmp/a.png", "a.png", "image")
         .unwrap();
-    db.update_media_probe("/tmp/a.png", "image", 512, 512, 1, 0.0, 0.0, "", "", "")
-        .unwrap();
+    db.update_media_probe(
+        "/tmp/a.png",
+        "image",
+        512,
+        512,
+        1,
+        0.0,
+        0.0,
+        "",
+        "",
+        "",
+        true,
+    )
+    .unwrap();
     let request = r#"{"type":"job_request","data":{"model_path":"model.pth","device":"cpu","tile_size":256}}"#;
     let media = db.get_media("m").unwrap().unwrap();
     assert!(db
@@ -652,6 +667,7 @@ fn hdr_migration_preserves_old_queue_and_retry_clears_failure() {
             "data:image/jpeg;base64,test",
             "HLG",
             "Standard audio will be kept.",
+            false,
         )
         .unwrap();
     drop(migrated);
@@ -659,6 +675,7 @@ fn hdr_migration_preserves_old_queue_and_retry_clears_failure() {
     let media = reopened.list_media().unwrap().remove(0);
     assert_eq!(media.hdr_format, "HLG");
     assert_eq!(media.audio_warning, "Standard audio will be kept.");
+    assert!(!media.has_audio);
     assert_eq!(media.probe_status, "ready");
     assert_eq!((media.width, media.height), (2160, 3840));
     assert_eq!(
@@ -762,8 +779,20 @@ fn queued_jobs_carry_the_typical_speed_of_their_comparable_runs() {
     let db = Database::open(&directory.path().join("queue.db")).unwrap();
     db.insert_media("m", "/tmp/a.png", "a.png", "image")
         .unwrap();
-    db.update_media_probe("/tmp/a.png", "image", 512, 512, 1, 0.0, 0.0, "", "", "")
-        .unwrap();
+    db.update_media_probe(
+        "/tmp/a.png",
+        "image",
+        512,
+        512,
+        1,
+        0.0,
+        0.0,
+        "",
+        "",
+        "",
+        true,
+    )
+    .unwrap();
     let request = r#"{"type":"job_request","data":{"model_path":"model.pth","device":"cpu","tile_size":256}}"#;
     // The first run loaded the model (340 s for 4 tiles), the others are warm.
     for (id, seconds) in [("first", 340.0), ("second", 4.0), ("third", 4.4)] {
@@ -1047,9 +1076,10 @@ fn results_are_not_cleared_while_a_picture_is_being_worked_on() {
 #[test]
 fn finished_video_is_in_bulk_history() {
     let directory = tempfile::tempdir().unwrap();
-    let db = Database::open(&directory.path().join("queue.db")).unwrap();
+    let directory_root = std::fs::canonicalize(directory.path()).unwrap();
+    let db = Database::open(&directory_root.as_path().join("queue.db")).unwrap();
     db.insert_media("v", "/tmp/v.mp4", "v", "video").unwrap();
-    let output = directory.path().join("out.mp4");
+    let output = directory_root.as_path().join("out.mp4");
     std::fs::write(&output, "video").unwrap();
     db.insert_job("j", "v", r#"{"type":"video_job_request"}"#)
         .unwrap();

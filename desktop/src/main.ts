@@ -1,10 +1,14 @@
 import { mount } from 'svelte';
 import App from './App.svelte';
 import './styles.css';
+import { captureFrontendErrors } from './lib/frontendErrors';
+
+captureFrontendErrors();
 
 const target = document.getElementById('app');
 
 function renderStartupFailure(reason: unknown): void {
+  document.documentElement.classList.remove('theme-loading');
   if (!target) return;
   const detail = reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason);
   target.replaceChildren();

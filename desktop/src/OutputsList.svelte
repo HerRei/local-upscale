@@ -222,7 +222,7 @@
     padding: 6px 10px;
   }
   .group-toggle:hover {
-    background: rgba(255, 255, 255, 0.035);
+    background: var(--row-hover);
   }
   /* A triangle as tall as the lower-case letters beside it, pointing down when open. */
   .chevron {
@@ -281,7 +281,7 @@
     border-color: var(--secondary);
   }
   .pick-box.on {
-    background: rgba(255, 255, 255, 0.075);
+    background: var(--row-selected);
   }
   .pick-box:disabled {
     opacity: 0.45;

@@ -675,3 +675,110 @@ it('clears preparation notices on progress and hides whole-frame tiles', () => {
   });
   expect(snapshot.runtime.status_detail).toContain('Tile 2 / 8');
 });
+
+it('tracks multiple active and queued model downloads independently', () => {
+  let snapshot = demoSnapshot();
+  snapshot = applyWorkerEnvelope(snapshot, {
+    type: 'download-started',
+    data: { model_id: 'm1', total_bytes: 1000 },
+  });
+  snapshot = applyWorkerEnvelope(snapshot, {
+    type: 'download-started',
+    data: { model_id: 'm2', total_bytes: 2000 },
+  });
+  snapshot = applyWorkerEnvelope(snapshot, {
+    type: 'download-queued',
+    data: { model_id: 'm4', total_bytes: 4000 },
+  });
+  snapshot = applyWorkerEnvelope(snapshot, {
+    type: 'download-progress',
+    data: { model_id: 'm1', downloaded_bytes: 250, total_bytes: 1000, progress: 25 },
+  });
+  snapshot = applyWorkerEnvelope(snapshot, {
+    type: 'download-progress',
+    data: { model_id: 'm2', downloaded_bytes: 1200, total_bytes: 2000, progress: 60 },
+  });
+
+  expect(snapshot.runtime.downloads).toEqual([
+    {
+      model_id: 'm1',
+      status: 'downloading',
+      progress: 25,
+      downloaded_bytes: 250,
+      total_bytes: 1000,
+    },
+    {
+      model_id: 'm2',
+      status: 'downloading',
+      progress: 60,
+      downloaded_bytes: 1200,
+      total_bytes: 2000,
+    },
+    { model_id: 'm4', status: 'queued', progress: 0, downloaded_bytes: 0, total_bytes: 4000 },
+  ]);
+  expect(snapshot.runtime.download_model_id).toBe('m1');
+  expect(snapshot.runtime.download_progress).toBe(25);
+
+  snapshot = applyWorkerEnvelope(snapshot, {
+    type: 'download-cancelled',
+    data: { model_id: 'm1' },
+  });
+  expect(snapshot.runtime.downloads).toEqual([
+    {
+      model_id: 'm2',
+      status: 'downloading',
+      progress: 60,
+      downloaded_bytes: 1200,
+      total_bytes: 2000,
+    },
+    { model_id: 'm4', status: 'queued', progress: 0, downloaded_bytes: 0, total_bytes: 4000 },
+  ]);
+  expect(snapshot.runtime.download_model_id).toBe('m2');
+  expect(snapshot.runtime.download_progress).toBe(60);
+
+  snapshot = applyWorkerEnvelope(snapshot, {
+    type: 'download-failed',
+    data: { model_id: 'm2', error_message: 'checksum mismatch' },
+  });
+  expect(snapshot.runtime.downloads).toEqual([
+    { model_id: 'm4', status: 'queued', progress: 0, downloaded_bytes: 0, total_bytes: 4000 },
+  ]);
+  expect(snapshot.runtime.download_model_id).toBe('m4');
+
+  snapshot = applyWorkerEnvelope(snapshot, {
+    type: 'download-completed',
+    data: { model_id: 'm4' },
+  });
+  expect(snapshot.runtime.downloads).toEqual([]);
+  expect(snapshot.runtime.download_model_id).toBe('');
+  expect(snapshot.runtime.download_progress).toBe(0);
+});
+
+it('tracks the audio cleanup phase title, chunk progress and ETA', () => {
+  let snapshot = demoSnapshot();
+  snapshot.runtime.active_job_id = 'vid-audio';
+  snapshot = applyWorkerEnvelope(snapshot, {
+    type: 'video_stage_progress',
+    data: { job_id: 'vid-audio', stage: 'loading_audio_denoise', total_frames: 0 },
+  });
+  expect(snapshot.runtime.status_title).toBe('Loading audio model');
+
+  snapshot = applyWorkerEnvelope(snapshot, {
+    type: 'video_stage_progress',
+    data: {
+      job_id: 'vid-audio',
+      stage: 'audio_denoise',
+      completed: 2,
+      total: 4,
+      frames_processed: 0,
+      total_frames: 0,
+      elapsed_seconds: 1.5,
+      estimated_remaining_seconds: 1.5,
+    },
+  });
+  expect(snapshot.runtime.status_title).toBe('Audio cleanup');
+  expect(snapshot.runtime.progress).toBe(50);
+  expect(snapshot.runtime.status_detail).toContain('Chunk 2 of 4');
+  expect(snapshot.runtime.status_detail).toContain('ETA');
+  expect(snapshot.runtime.throughput_unit).toBe('');
+});

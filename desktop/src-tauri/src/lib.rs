@@ -2,6 +2,7 @@ mod cancellation;
 mod catalog;
 mod commands;
 mod compare;
+mod crash_reports;
 mod database;
 mod disk_room;
 mod distribution;
@@ -9,6 +10,7 @@ mod downloads;
 mod editing;
 mod engine_payload;
 mod error;
+mod grants;
 mod headless_smoke;
 mod integrations;
 mod launch;
@@ -18,6 +20,7 @@ mod native_menu;
 mod output_names;
 mod paths;
 mod pipe_lines;
+mod process_priority;
 mod process_tree;
 mod programs;
 mod queue_timing;
@@ -84,6 +87,13 @@ pub fn run() {
         return;
     }
 
+    crash_reports::install_hook();
+    if let Ok(paths) = paths::AppPaths::discover() {
+        let enabled = settings::load(&paths).0.crash_reports;
+        crash_reports::configure_hook(&paths, enabled);
+        crash_reports::cleanup(&paths);
+    }
+
     // A crash during an executable swap is rolled back before anything opens the profile.
     if updates::recover_interrupted_update() {
         return;
@@ -109,7 +119,13 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .on_menu_event(|app, event| native_menu::dispatch(app, event.id().as_ref()))
-        .on_window_event(hide_instead_of_close)
+        .on_window_event(|window, event| {
+            grant_dropped_window_paths(window.app_handle(), event);
+            hide_instead_of_close(window, event);
+        })
+        .on_webview_event(|webview, event| {
+            grant_dropped_webview_paths(webview.app_handle(), event);
+        })
         .setup(move |app| {
             let state = Arc::new(AppState::new()?);
             // A Windows installer that finished while LocalSR was closed.
@@ -118,10 +134,14 @@ pub fn run() {
                 &app.package_info().version.to_string(),
             );
             if !initial_intent.is_empty() {
+                state.grants.grant_launch_files(&initial_intent.files);
                 lock(&state.launch_intents)?.push(initial_intent.clone());
             }
             #[cfg(target_os = "macos")]
             if let Ok(mut early) = EARLY_OPEN_INTENTS.lock() {
+                for intent in early.iter() {
+                    state.grants.grant_launch_files(&intent.files);
+                }
                 lock(&state.launch_intents)?.append(&mut early);
             }
             app.manage(state.clone());
@@ -146,25 +166,39 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             updates::update_status,
+            updates::skip_update,
+            updates::open_update_discover,
             updates::open_store_updates,
             updates::check_update,
+            updates::check_update_at_launch,
             updates::download_update,
             updates::install_update,
             updates::cancel_update,
             updates::discard_update,
             updates::recover_update_settings,
+            commands::open_bug_report,
+            commands::list_crash_reports,
+            commands::delete_crash_report,
+            commands::delete_all_crash_reports,
+            commands::record_frontend_error,
             commands::bootstrap,
             commands::get_snapshot,
             commands::open_model_license,
             commands::take_launch_intents,
             commands::scan_media_folder,
             commands::add_media,
+            commands::choose_media_files,
+            commands::choose_media_folder,
+            commands::choose_output_directory,
+            commands::choose_custom_model,
+            commands::choose_benchmark_export,
             commands::select_media,
             commands::remove_media,
             commands::clear_media,
             commands::clear_results,
             commands::save_settings,
             commands::set_update_switch,
+            commands::set_privacy_choice,
             commands::save_recipe,
             commands::delete_recipe,
             commands::start_jobs,
@@ -194,6 +228,7 @@ pub fn run() {
             commands::open_result,
             commands::open_user_guide,
             commands::open_download_page,
+            commands::open_custom_model_tutorial,
             commands::reveal_result,
             commands::use_result_as_input,
             commands::open_output_directory,
@@ -301,6 +336,7 @@ fn enqueue_launch_intent(app: &tauri::AppHandle, intent: LaunchIntent) {
         }
         return;
     };
+    state.grants.grant_launch_files(&intent.files);
     if let Ok(mut pending) = state.launch_intents.lock() {
         pending.push(intent);
     }
@@ -336,6 +372,22 @@ fn fit_main_window(app: &tauri::AppHandle) {
     let left = area.position.x + (area.size.width.saturating_sub(width + frame_width) / 2) as i32;
     let top = area.position.y + (area.size.height.saturating_sub(height + frame_height) / 2) as i32;
     let _ = window.set_position(tauri::PhysicalPosition::new(left, top));
+}
+
+fn grant_dropped_window_paths(app: &tauri::AppHandle, event: &tauri::WindowEvent) {
+    if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+        if let Some(state) = app.try_state::<Arc<AppState>>() {
+            state.grants.grant_dropped_media(paths);
+        }
+    }
+}
+
+fn grant_dropped_webview_paths(app: &tauri::AppHandle, event: &tauri::WebviewEvent) {
+    if let tauri::WebviewEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+        if let Some(state) = app.try_state::<Arc<AppState>>() {
+            state.grants.grant_dropped_media(paths);
+        }
+    }
 }
 
 /// On macOS, closing the window (Command-W or the close button) only hides it, as in other

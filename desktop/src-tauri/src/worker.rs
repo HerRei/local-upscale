@@ -156,18 +156,11 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         return Ok(());
     }
 
+    let low_priority = lock(&state.settings)?.low_priority;
     let specification = resolve_worker_command(&state, &app)?;
     let mut command = Command::new(&specification.program);
     command.args(&specification.arguments);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-
-        // Keep the JSON-lines worker attached to pipes without flashing a
-        // console window behind the desktop application.
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
+    crate::process_priority::configure_command(&mut command, low_priority);
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -287,6 +280,8 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         reader_drained.store(true, Ordering::SeqCst);
     });
 
+    let last_engine_error = Arc::new(std::sync::Mutex::new(String::new()));
+    let stderr_error = last_engine_error.clone();
     thread::spawn(move || {
         let mut reader = BufReader::new(stderr);
         let mut line = Vec::new();
@@ -302,8 +297,15 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                     }
                 }
             }
+            let text = String::from_utf8_lossy(&line);
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                if let Ok(mut last) = stderr_error.lock() {
+                    *last = trimmed.chars().take(500).collect();
+                }
+            }
             if cfg!(debug_assertions) {
-                eprintln!("LocalSR engine: {}", String::from_utf8_lossy(&line));
+                eprintln!("LocalSR engine: {text}");
             }
         }
     });
@@ -390,6 +392,12 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                 thread::sleep(Duration::from_millis(20));
             }
         }
+        let last_error = last_engine_error
+            .lock()
+            .ok()
+            .map(|s| s.clone())
+            .unwrap_or_default();
+        record_engine_exit_report(&state, &status, stopped_by_app, &last_error);
         if supervisor_should_return(&state.worker, generation) {
             state.worker.pid.store(0, Ordering::SeqCst);
             return;
@@ -470,6 +478,21 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
     });
 
     Ok(())
+}
+
+pub fn apply_low_priority(state: &AppState, low_priority: bool) {
+    let pid = state.worker.pid.load(Ordering::SeqCst);
+    if pid != 0 {
+        crate::process_priority::apply_to_pid(pid, low_priority);
+    }
+    state.video_preview.apply_low_priority(low_priority);
+    let _ = send(
+        state,
+        &json!({
+            "type": "set_low_priority",
+            "data": {"low_priority": low_priority}
+        }),
+    );
 }
 
 pub fn send(state: &AppState, message: &Value) -> AppResult<()> {
@@ -910,21 +933,23 @@ fn handle_worker_envelope(
     match envelope.message_type.as_str() {
         "job_completed" | "video_job_completed" => {
             if let Some(body) = finished_notice(state, &envelope.data) {
-                let _ = app
+                let builder = app
                     .notification()
                     .builder()
                     .title("LocalSR finished")
-                    .body(body)
-                    .show();
+                    .body(body);
+                let builder = with_completion_sound(state, builder);
+                let _ = builder.show();
             }
         }
         "job_failed" => {
-            let _ = app
+            let builder = app
                 .notification()
                 .builder()
                 .title("LocalSR could not finish")
-                .body("Open LocalSR to review the error and diagnostics.")
-                .show();
+                .body("Open LocalSR to review the error and diagnostics.");
+            let builder = with_completion_sound(state, builder);
+            let _ = builder.show();
         }
         _ => {}
     }
@@ -1323,6 +1348,10 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 runtime.status_title = "Ready".into();
                 runtime.status_detail = "The isolated inference engine is ready.".into();
             }
+            // Always the current value: the switch may have changed while the
+            // engine was starting, before its pid and pipe existed.
+            let low_priority = lock(&state.settings)?.low_priority;
+            apply_low_priority(state, low_priority);
             send(state, &json!({"type": "capabilities_request", "data": {}}))?;
             for path in lock(&state.database)?.pending_probe_paths()? {
                 send(state, &media_probe_request(state, &path))?;
@@ -1364,6 +1393,9 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 &preview,
                 &string(data, "hdr_format"),
                 &string(data, "audio_warning"),
+                data.get("has_audio")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
             )?;
             if lock(&state.database)?.get_media_by_path(&path)?.is_none() && !preview.is_empty() {
                 let mut runtime = lock(&state.runtime)?;
@@ -1562,11 +1594,28 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                     "ETA: measuring first clip…".into()
                 };
                 runtime.status_detail = format!("{steps}{frames}{eta}");
-                if string(data, "stage") == "saving" {
-                    runtime.status_detail = "Finalizing video timing and audio…".into();
+                if string(data, "stage") == "audio_denoise" {
+                    let done = integer(data, "completed");
+                    let total = integer(data, "total");
+                    if total > 0 {
+                        runtime.progress =
+                            ((done as f64) / (total as f64) * 100.0).clamp(0.0, 100.0);
+                    }
+                    let chunks = if total > 0 {
+                        format!("Chunk {done} of {total}")
+                    } else {
+                        "Cleaning speech audio".into()
+                    };
+                    let suffix = eta_suffix(runtime.estimated_remaining_seconds);
+                    runtime.status_detail = format!("{chunks}{suffix}");
+                    runtime.throughput_unit = String::new();
+                } else {
+                    if string(data, "stage") == "saving" {
+                        runtime.status_detail = "Finalizing video timing and audio…".into();
+                    }
+                    runtime.throughput_unit = "frames/s".into();
                 }
                 runtime.elapsed_seconds = seconds(data, "elapsed_seconds");
-                runtime.throughput_unit = "frames/s".into();
             }
         }
         "video_frame_started" => {
@@ -1919,11 +1968,14 @@ pub(crate) fn codec_helper_command(state: &AppState, app: &AppHandle) -> AppResu
     let specification = resolve_worker_command(state, app)?;
     let mut command = Command::new(specification.program);
     command.args(specification.arguments);
-    if let Ok(settings) = state.settings.lock() {
+    let low_priority = if let Ok(settings) = state.settings.lock() {
         if !settings.external_ffmpeg_path.is_empty() {
             command.env("LOCALSR_EXTERNAL_FFMPEG", &settings.external_ffmpeg_path);
         }
-    }
+        settings.low_priority
+    } else {
+        false
+    };
     if let Some(directory) = specification.working_directory {
         command.current_dir(directory);
     }
@@ -1932,11 +1984,7 @@ pub(crate) fn codec_helper_command(state: &AppState, app: &AppHandle) -> AppResu
         command.env("PYTHONUTF8", "1");
     }
     command.env("PYTHONUNBUFFERED", "1");
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000);
-    }
+    crate::process_priority::configure_command(&mut command, low_priority);
     Ok(command)
 }
 
@@ -2065,7 +2113,67 @@ fn resolve_worker_command(state: &AppState, app: &AppHandle) -> AppResult<Worker
     }
 }
 
+fn record_engine_exit_report(
+    state: &AppState,
+    status: &std::io::Result<std::process::ExitStatus>,
+    stopped_by_app: bool,
+    last_error: &str,
+) {
+    if stopped_by_app || state.worker.shutting_down.load(Ordering::SeqCst) {
+        return;
+    }
+    if status.as_ref().ok().and_then(|exit| exit.code()) == Some(75) {
+        return;
+    }
+    let cancelling = state
+        .worker
+        .cancellation
+        .lock()
+        .map(|c| c.resetting || c.requested_at.is_some())
+        .unwrap_or(false);
+    if cancelling {
+        return;
+    }
+    let (active_job, restarting) = state
+        .runtime
+        .lock()
+        .map(|r| {
+            (
+                !r.active_job_id.is_empty() || !r.active_batch_job_ids.is_empty(),
+                r.worker == "restarting",
+            )
+        })
+        .unwrap_or((false, false));
+    if restarting {
+        return;
+    }
+    let failed_exit = status.as_ref().map(|s| !s.success()).unwrap_or(true);
+    if !active_job && !failed_exit {
+        return;
+    }
+    let mut report =
+        crate::crash_reports::CrashReport::new("engine", "The inference engine ended unexpectedly")
+            .with_job(state);
+    report.exit = Some(match status {
+        Ok(exit) => format!("{exit}"),
+        Err(_) => "Exit status unavailable".into(),
+    });
+    if !last_error.is_empty() {
+        report.last_error = Some(last_error.to_owned());
+    }
+    crate::crash_reports::record(state, report);
+}
+
+fn record_worker_failure_report(state: &AppState, detail: &str) {
+    if state.worker.shutting_down.load(Ordering::SeqCst) {
+        return;
+    }
+    let report = crate::crash_reports::CrashReport::new("engine", detail).with_job(state);
+    crate::crash_reports::record(state, report);
+}
+
 fn set_worker_failure(state: &AppState, app: &AppHandle, detail: String) {
+    record_worker_failure_report(state, &detail);
     if let Ok(mut runtime) = state.runtime.lock() {
         runtime.worker = "failed".into();
         runtime.status_title = "Engine unavailable".into();
@@ -2174,6 +2282,8 @@ fn video_stage_title(stage: &str) -> &'static str {
         "verifying_model" => "Checking model files",
         "external_decode" => "Converting the source with your FFmpeg",
         "external_encode" => "Encoding with your FFmpeg",
+        "loading_audio_denoise" => "Loading audio model",
+        "audio_denoise" => "Audio cleanup",
         "loading_model" => "Loading video model",
         "loading_interpolation" => "Loading frame interpolation",
         "reading_frames" => "Reading video frames",
@@ -2231,6 +2341,23 @@ pub const RESULT_PREVIEW_MAX_DIMENSION: u32 = 2048;
 
 /// The text of the "finished" notice, or None while more work is queued: the notice says
 /// LocalSR is done, which a photo of a long batch is not.
+/// The system's default notification sound, when the user turned it on.
+fn with_completion_sound<R: tauri::Runtime>(
+    state: &AppState,
+    builder: tauri_plugin_notification::NotificationBuilder<R>,
+) -> tauri_plugin_notification::NotificationBuilder<R> {
+    if !lock(&state.settings).is_ok_and(|settings| settings.completion_sound) {
+        return builder;
+    }
+    builder.sound(if cfg!(target_os = "macos") {
+        "NSUserNotificationDefaultSoundName"
+    } else if cfg!(windows) {
+        "Default"
+    } else {
+        "message-new-instant"
+    })
+}
+
 fn finished_notice(state: &AppState, data: &Value) -> Option<&'static str> {
     let more_work = state
         .database
