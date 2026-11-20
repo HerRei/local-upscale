@@ -6070,6 +6070,31 @@ describe('crash reports', () => {
     expect(url.searchParams.get('hardware')).toContain('signal: 11');
   });
 
+  it('redacts paths in the crash summary when reviewing an unredacted report', async () => {
+    const snap = readySnapshot();
+    snap.settings.crash_reports = true;
+    api.listCrashReports.mockResolvedValueOnce([
+      {
+        ...sampleReport,
+        report: {
+          ...sampleReport.report,
+          message: 'Failed while reading /Users/alice/Pictures/vacation.png',
+        },
+      },
+    ]);
+    const user = await mountWith(snap);
+
+    const notice = await screen.findByRole('dialog', {
+      name: 'LocalSR quit unexpectedly last time.',
+    });
+    await user.click(within(notice).getByRole('button', { name: 'Review report…' }));
+
+    const reportDialog = await screen.findByRole('dialog', { name: 'Report a problem' });
+    expect(
+      (within(reportDialog).getByLabelText('What happened?') as HTMLTextAreaElement).value,
+    ).toBe('Crash: Failed while reading ~/<path>');
+  });
+
   it("Don't Send deletes the report without opening an issue", async () => {
     const snap = readySnapshot();
     snap.settings.crash_reports = true;

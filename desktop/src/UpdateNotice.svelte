@@ -126,6 +126,12 @@
     border-bottom: 1px solid var(--border);
     background: var(--panel);
   }
+  /* In wide macOS windows there is no compact toolbar above it, so the traffic lights sit in top-left. */
+  @media (min-width: 1280px) {
+    :global(.app-shell.mac) .update-notice {
+      padding-left: 84px;
+    }
+  }
   .glyph {
     display: grid;
     place-items: center;

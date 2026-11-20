@@ -140,11 +140,16 @@ function redactLine(line: string): string {
   return out;
 }
 
+/** Redact paths, media file names, contacts, URLs and tokens in plain text. */
+export function redactDiagnosticText(text: string): string {
+  return text.split('\n').slice(0, 40).map(redactLine).join('\n');
+}
+
 /** Redact paths, media file names, contacts, URLs and tokens before showing or sending diagnostics. */
 export function redactDiagnostics(text: string): string {
   const redact = (value: unknown): unknown => {
     if (typeof value === 'string') {
-      return value.split('\n').slice(0, 40).map(redactLine).join('\n');
+      return redactDiagnosticText(value);
     }
     if (Array.isArray(value)) return value.map(redact);
     if (value && typeof value === 'object')
