@@ -129,11 +129,10 @@ it('offers 1× output scale for video upscale and hides output scale in video re
   const scaleSelect = screen.getByLabelText('Output scale') as HTMLSelectElement;
   expect(Array.from(scaleSelect.options).map((o) => o.value)).toEqual(['1', '2', '3', '4']);
   expect(scaleSelect.value).toBe('1');
-  expect(screen.getByText(/At 1×, the upscaling model isn’t used/)).toBeTruthy();
-
-  cleanup();
-  await open({ task: 'video', video_task: 'upscale', output_scale: 2 }, mac);
-  expect(screen.queryByText(/At 1×, the upscaling model isn’t used/)).toBeNull();
+  // What 1× does is said once, in the "?" of Output scale.
+  const about1x = screen.getAllByText(/At 1×/);
+  expect(about1x).toHaveLength(1);
+  expect(about1x[0].id).toBe('help-output-scale');
 
   cleanup();
   await open({ task: 'video', video_task: 'denoise', output_scale: 4 }, mac);

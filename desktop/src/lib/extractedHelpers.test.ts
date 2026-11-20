@@ -44,6 +44,28 @@ describe('extracted helpers', () => {
     expect(mediaNamesFor(['/tmp/file.png'], media)).toEqual(['file.png']);
   });
 
+  it('counts no upscaler in a preset download at 1×', () => {
+    const snapshot = demoSnapshot();
+    snapshot.catalog.models.forEach((model) => (model.installed = false));
+    const video = {
+      ...snapshot.settings,
+      task: 'video' as const,
+      video_task: 'upscale' as const,
+      selected_video_model_id: 'frame_by_frame',
+      fix_stages: [],
+    };
+    expect(presetDownload('quick', snapshot, { ...video, output_scale: 2 })).toMatch(/download$/);
+    expect(presetDownload('quick', snapshot, { ...video, output_scale: 1 })).toBe('');
+    // A fix still runs at 1×, so its model still counts.
+    expect(
+      presetDownload('quick', snapshot, {
+        ...video,
+        output_scale: 1,
+        fix_stages: [{ fix: 'blur', model_id: '' }],
+      }),
+    ).toMatch(/download$/);
+  });
+
   it('handles edit preset downloads and HDR capability', () => {
     const snapshot = demoSnapshot();
     expect(presetDownload('quick', snapshot, { ...snapshot.settings, task: 'edit' })).toBe('');

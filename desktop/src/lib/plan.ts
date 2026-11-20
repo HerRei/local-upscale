@@ -532,12 +532,12 @@ export function presetDownload(
   const fixes = (
     !temporal && (task === 'upscale' || task === 'video' || restoring) ? ui.fix_stages : []
   ).map((selection) => chooseFixModel(current, selection.fix, quality, ui.preset_pins));
-  // Restore's model is its last fix; without one it is the preset's own choice.
-  const primary = restoring
-    ? fixes.length
+  // Restore's model is its last fix; without one it is the preset's own choice. At 1× no
+  // upscaler runs, so none is counted.
+  const primary =
+    (restoring && fixes.length) || skipsUpscaleModel(ui)
       ? undefined
-      : choosePresetModel(current, task, quality, ui.content, ui.preset_pins, ui.video_task)
-    : choosePresetModel(current, task, quality, ui.content, ui.preset_pins, ui.video_task);
+      : choosePresetModel(current, task, quality, ui.content, ui.preset_pins, ui.video_task);
   const models = new Map(
     [primary, ...fixes]
       .filter((model): model is CatalogModel => model !== undefined)

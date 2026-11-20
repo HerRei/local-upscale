@@ -1085,9 +1085,8 @@
         videoTask,
       )
     : undefined;
-  // At 1× no upscaling model runs, so Quick and Best download nothing for this job.
-  $: quickDownload = skipUpscale ? '' : presetDownload('quick', snapshot, settings);
-  $: bestDownload = skipUpscale ? '' : presetDownload('best', snapshot, settings);
+  $: quickDownload = presetDownload('quick', snapshot, settings);
+  $: bestDownload = presetDownload('best', snapshot, settings);
   // Settings saved before the model library exist without a quality; infer it
   // from the selection so Quick/Best light up correctly after an update.
   $: activeQuality = ((): Quality => {
@@ -1813,7 +1812,7 @@
 
   function setContent(content: UiSettings['content']): void {
     if (settings.content === content) return;
-    resolveRecipe({ content, quality: activeQuality });
+    resolveRecipe({ content, quality: activeQuality }, { keepScale: skipUpscale });
   }
 
   function toggleFix(fix: FixKind): void {
@@ -2413,7 +2412,8 @@
       showModal('Choose a task', 'Select Upscale, Restore or Video before applying a preset.');
       return;
     }
-    resolveRecipe({ quality: kind });
+    // A 1× job stays at 1×: Quick and Best then only swap the fix models.
+    resolveRecipe({ quality: kind }, { keepScale: skipUpscale });
   }
 
   function dismissDownloadError(modelId: string): void {
@@ -3683,7 +3683,14 @@
             {:else}
               <section class="control-section recipes">
                 <div class="eyebrow eyebrow-row">
-                  <span>Quality</span>
+                  <span class="label-with-tip"
+                    >Quality{#if skipUpscale}<HelpTip
+                        label="Quality"
+                        text={usingTemporalVideo
+                          ? 'Output scale is 1×, so the video model is not used and the size stays the same. To upscale, set Output scale under Advanced to 2× or higher.'
+                          : 'Output scale is 1×, so the upscaling model is not used and the size stays the same. Quick and Best only choose the Fix first models. To upscale, set Output scale under Advanced to 2× or higher.'}
+                      />{/if}</span
+                  >
                   {#if !recipeEditorOpen}<span class="eyebrow-actions"
                       ><button class="link-button" type="button" on:click={openRecipeEditor}
                         >Save as recipe…</button
@@ -4191,14 +4198,6 @@
               </div>
               {#if hasNothingToDoAt1x}
                 <p class="inline-warning" role="status">{nothingToDoAt1xReason}</p>
-              {:else if skipUpscale && plan.length === 0}
-                <p class="model-note" role="status">
-                  At 1×, the upscaling model isn’t used. De-flicker still runs at the original size.
-                </p>
-              {:else if skipUpscale}
-                <p class="model-note">
-                  At 1×, the upscaling model isn’t used; only the stages above run.
-                </p>
               {/if}
               {#if !fixPlanSupported && snapshot.engine}<p class="inline-warning" role="status">
                   This engine runs one fix at a time. Update LocalSR to run several.

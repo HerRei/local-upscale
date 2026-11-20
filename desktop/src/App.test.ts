@@ -6496,6 +6496,29 @@ describe('video restore, 1× output, and fix-first stages', () => {
     });
   });
 
+  it('keeps 1× when Quick, Best or the content changes', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.catalog.models.forEach((m) => (m.installed = true));
+    Object.assign(snapshot.settings, {
+      task: 'video',
+      video_task: 'upscale',
+      selected_video_model_id: 'frame_by_frame',
+      selected_model_id: 'span_photo_x4',
+      quality: 'quick',
+      output_scale: 1,
+    });
+    const user = await mountWith(snapshot);
+
+    await user.click(screen.getByRole('button', { name: 'Blur' }));
+    await waitFor(() => expect(lastSaved()).toMatchObject({ fixes: ['blur'], output_scale: 1 }));
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
+    await waitFor(() => expect(lastSaved()).toMatchObject({ quality: 'best' }));
+    expect(lastSaved().output_scale).toBe(1);
+    await user.click(screen.getByRole('radio', { name: 'Illustration' }));
+    await waitFor(() => expect(lastSaved()).toMatchObject({ content: 'illustration' }));
+    expect(lastSaved().output_scale).toBe(1);
+  });
+
   it('at 1× omits the SR model stage/download and disables Start until something else is chosen', async () => {
     const snapshot = readySnapshot([video('clip', true)]);
     snapshot.catalog.models.forEach((m) => (m.installed = false));
@@ -6512,11 +6535,13 @@ describe('video restore, 1× output, and fix-first stages', () => {
     });
     const user = await mountWith(snapshot);
 
-    // Select 1× in Advanced -> Output scale: the 1× note appears, SR model disappears from Stages, Start is disabled.
+    // Select 1× in Advanced -> Output scale: Quality gains its 1× help, SR model disappears from Stages, Start is disabled.
     await user.click(screen.getByRole('button', { name: /Advanced/ }));
     await user.selectOptions(screen.getByLabelText('Output scale'), '1');
     await waitFor(() => expect(lastSaved()).toMatchObject({ output_scale: 1 }));
-    expect(screen.getAllByText(/At 1×, the upscaling model isn’t used/).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'About Quality' })).toBeTruthy();
+    expect(screen.getByRole('group', { name: 'Quality' }).textContent).not.toContain('download');
+    expect(screen.getByRole('region', { name: 'Model plan' }).textContent).not.toContain('At 1×');
     expect(screen.getByText(/Nothing to run at 1×/)).toBeTruthy();
     const startBtn = screen.getByRole('button', {
       name: 'Start selected video',
@@ -6530,10 +6555,11 @@ describe('video restore, 1× output, and fix-first stages', () => {
     expect(screen.getByRole('list', { name: 'Stages' }).textContent).toContain('Fix blur');
     expect(screen.getByRole('list', { name: 'Stages' }).textContent).not.toContain('SPAN');
 
-    // Switching back to 2× hides the 1× note and brings back the upscaler stage.
+    // Switching back to 2× removes the 1× help and brings back the upscaler stage.
     await user.selectOptions(screen.getByLabelText('Output scale'), '2');
     await waitFor(() => expect(lastSaved()).toMatchObject({ output_scale: 2 }));
-    expect(screen.queryByText(/At 1×, the upscaling model isn’t used/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'About Quality' })).toBeNull();
+    expect(screen.getByRole('group', { name: 'Quality' }).textContent).toContain('download');
     expect(screen.getByRole('list', { name: 'Stages' }).textContent).toContain('SPAN');
   });
 });

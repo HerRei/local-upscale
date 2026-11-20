@@ -101,10 +101,9 @@ test('video restore, prefix fixes, 1x output scale, and video recipes', async ({
   const scaleSelect = page.getByLabel('Output scale', { exact: true });
   await expect(scaleSelect).toBeVisible();
   await scaleSelect.selectOption('1');
-  const oneXNote = page.getByText(
-    /At 1×, the upscaling model isn’t used\. LocalSR keeps the size/,
-  );
-  await expect(oneXNote).toBeVisible();
+  // At 1× the Quality heading carries the "?" that says the upscaler is not used.
+  const oneXHelp = page.getByRole('button', { name: 'About Quality' });
+  await expect(oneXHelp).toBeVisible();
   await expect(stages).not.toContainText('SPAN');
   await page.getByRole('button', { name: 'Blur', exact: true }).click();
   await expect(scaleSelect).toHaveValue('1');
@@ -112,10 +111,10 @@ test('video restore, prefix fixes, 1x output scale, and video recipes', async ({
   await expect(stages).not.toContainText('SPAN');
 
   await scaleSelect.selectOption('2');
-  await expect(oneXNote).toHaveCount(0);
+  await expect(oneXHelp).toHaveCount(0);
   await expect(stages).toContainText('SPAN');
   await scaleSelect.selectOption('1');
-  await expect(oneXNote).toBeVisible();
+  await expect(oneXHelp).toBeVisible();
 
   await page.getByRole('button', { name: 'Start selected video' }).click();
   await expect.poll(async () => (await hostCalls(page, 'start_jobs')).length).toBe(2);
@@ -162,17 +161,16 @@ test('1x video upscale disables Start when nothing else is selected and hides th
   await page.getByRole('button', { name: /Advanced/ }).click();
 
   const scaleSelect = page.getByLabel('Output scale', { exact: true });
-  const oneXNote = page.getByText(
-    /At 1×, the upscaling model isn’t used\. LocalSR keeps the size/,
-  );
+  // At 1× the Quality heading carries the "?" that says the upscaler is not used.
+  const oneXHelp = page.getByRole('button', { name: 'About Quality' });
   const startButton = page.getByRole('button', { name: 'Start selected video' });
   const stages = page.getByRole('list', { name: 'Stages' });
 
-  await expect(oneXNote).toHaveCount(0);
+  await expect(oneXHelp).toHaveCount(0);
   await expect(stages).toContainText('SPAN');
 
   await scaleSelect.selectOption('1');
-  await expect(oneXNote).toBeVisible();
+  await expect(oneXHelp).toBeVisible();
   await expect(stages).not.toContainText('SPAN');
   await expect(startButton).toBeDisabled();
   await expect(page.getByText(/Nothing to run at 1×/)).toBeVisible();
@@ -182,6 +180,6 @@ test('1x video upscale disables Start when nothing else is selected and hides th
   await expect(startButton).toBeEnabled();
 
   await scaleSelect.selectOption('2');
-  await expect(oneXNote).toHaveCount(0);
+  await expect(oneXHelp).toHaveCount(0);
   await expect(stages).toContainText('SPAN');
 });
