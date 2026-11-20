@@ -26,7 +26,6 @@ from typing import Protocol
 
 import av
 import numpy as np
-import onnxruntime as ort
 
 from .eta import RemainingTime
 from .output_publish import owned_temporary
@@ -173,6 +172,12 @@ class DeepFilterNet3Denoiser:
 
     def __init__(self, bundle_path: str | Path) -> None:
         self.bundle_path = Path(bundle_path)
+        try:
+            import onnxruntime as ort
+        except ImportError as error:
+            raise RuntimeError(
+                "Audio cleanup is not available in this build of LocalSR (ONNX Runtime is missing)."
+            ) from error
         self.params, blobs = _read_bundle_members(self.bundle_path)
         opts = ort.SessionOptions()
         opts.log_severity_level = 3
