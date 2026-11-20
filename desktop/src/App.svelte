@@ -47,7 +47,7 @@
   import SetupScreen from './SetupScreen.svelte';
   import WelcomeNotice from './WelcomeNotice.svelte';
   import { startUpdateWatcher, updateDialogOpen } from './lib/updates';
-  import { redactDiagnostics, reportUrl } from './lib/report';
+  import { redactDiagnostics, redactDiagnosticText, reportUrl } from './lib/report';
   import BenchmarkStudio from './BenchmarkStudio.svelte';
   import * as api from './lib/api';
   import ModelLibrary from './ModelLibrary.svelte';
@@ -325,7 +325,8 @@
   }
   function crashTitle(crash: api.StoredCrashReport): string {
     const shortError =
-      crash.report.message.replace(/\s+/g, ' ').trim().slice(0, 120) || 'Unexpected error';
+      redactDiagnosticText(crash.report.message).replace(/\s+/g, ' ').trim().slice(0, 120) ||
+      'Unexpected error';
     return `Crash: ${shortError}`;
   }
   function reviewCrash(): void {

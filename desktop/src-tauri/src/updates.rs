@@ -399,14 +399,18 @@ fn channel(state: &AppState) -> String {
         .filter(|s| matches!(s.as_str(), "stable" | "beta"))
         .unwrap_or("beta".into())
 }
-fn publish(state: &AppState, app: &AppHandle, mut status: UpdateStatus) {
+fn attach_status_metadata(state: &AppState, status: &mut UpdateStatus) {
     if let Ok(settings) = state.settings.lock() {
         status.skipped_version = settings.skipped_update_version.clone();
     }
+    status.settings_recovery = crate::settings::needs_recovery(&state.paths);
+}
+fn publish(state: &AppState, app: &AppHandle, status: &mut UpdateStatus) {
+    attach_status_metadata(state, status);
     if let Ok(mut stored) = state.updates.status.lock() {
         *stored = status.clone();
     }
-    let _ = app.emit("update-status", status);
+    let _ = app.emit("update-status", status.clone());
 }
 #[tauri::command]
 pub fn update_status(state: State<'_, Arc<AppState>>) -> AppResult<UpdateStatus> {
@@ -484,7 +488,7 @@ pub fn skip_update(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult
     }
     store_skipped_version(&state, &status.version)?;
     status.skipped_version = status.version.clone();
-    publish(&state, &app, status.clone());
+    publish(&state, &app, &mut status);
     crate::state::emit_state_changed(&app);
     Ok(status)
 }
@@ -556,7 +560,7 @@ pub async fn check_update(
         stage: "checking".into(),
         ..Default::default()
     };
-    publish(&state, &app, status.clone());
+    publish(&state, &app, &mut status);
     let result = async {
         let builder = app
             .updater_builder()
@@ -585,7 +589,7 @@ pub async fn check_update(
         Err(error) => {
             status.stage = "error".into();
             status.message = error.to_string();
-            publish(&state, &app, status);
+            publish(&state, &app, &mut status);
             return Err(error);
         }
     };
@@ -641,10 +645,10 @@ pub async fn check_update(
     if let Err(error) = validated {
         status.stage = "error".into();
         status.message = error.to_string();
-        publish(&state, &app, status);
+        publish(&state, &app, &mut status);
         return Err(error);
     }
-    publish(&state, &app, status.clone());
+    publish(&state, &app, &mut status);
     Ok(status)
 }
 
@@ -995,11 +999,11 @@ pub async fn download_update(state: State<'_, Arc<AppState>>, app: AppHandle) ->
     require_space(fs2::available_space(&directory)?, needed)?;
     status.stage = "downloading".into();
     status.downloaded = 0;
-    publish(&state, &app, status.clone());
+    publish(&state, &app, &mut status);
     let result = async {
         let mut progress = |count| {
             status.downloaded += count;
-            publish(&state, &app, status.clone());
+            publish(&state, &app, &mut status);
         };
         download_application(
             &file,
@@ -1050,7 +1054,7 @@ pub async fn download_update(state: State<'_, Arc<AppState>>, app: AppHandle) ->
     if result.is_ok() {
         *lock(&state.updates.staged)? = Some(directory);
     }
-    publish(&state, &app, status);
+    publish(&state, &app, &mut status);
     result
 }
 #[tauri::command]
@@ -1211,7 +1215,7 @@ pub async fn install_update(state: State<'_, Arc<AppState>>, app: AppHandle) -> 
             }
             .into();
             status.message = error.to_string();
-            publish(&state, &app, status);
+            publish(&state, &app, &mut status);
         }
         result
     })
@@ -1320,7 +1324,7 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
     let mut status = lock(&state.updates.status)?.clone();
     status.stage = "installing".into();
     status.message = "Backing up data and preparing the verified update…".into();
-    publish(state, app, status.clone());
+    publish(state, app, &mut status);
     let engine_exe =
         prepare_update_engine(config, contract, &directory, &state.paths.next_root, || {
             worker::installed_worker_path(state, app)
@@ -1401,7 +1405,7 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
         }
         .into();
         status.message = format!("Update failed; previous version restored. {error}");
-        publish(state, app, status);
+        publish(state, app, &mut status);
         return Err(error);
     }
     // The new application is in place and this process has stopped its worker and closed

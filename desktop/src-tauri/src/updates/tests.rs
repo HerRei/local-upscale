@@ -1960,3 +1960,20 @@ fn skipped_version_is_saved_and_can_be_replaced() {
         "99.1.0-beta"
     );
 }
+
+#[test]
+fn attach_status_metadata_populates_skipped_version_for_return_values() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(root.path());
+    let state = AppState::from_paths(paths).unwrap();
+    store_skipped_version(&state, "0.5.1-beta").unwrap();
+    let mut status = UpdateStatus {
+        configured: true,
+        stage: "available".into(),
+        version: "0.5.1-beta".into(),
+        ..Default::default()
+    };
+    attach_status_metadata(&state, &mut status);
+    assert_eq!(status.skipped_version, "0.5.1-beta");
+    assert!(!status.settings_recovery);
+}
