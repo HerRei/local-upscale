@@ -1,6 +1,19 @@
 import { expect, test } from '@playwright/test';
 import { answer, hostCalls, installFakeHost } from './fake-host';
 
+// Pixel baselines exist per platform; CI runs without @visual (see ci.yml).
+test('first launch setup screens @visual', async ({ page }) => {
+  await installFakeHost(page, { privacyPending: true });
+  await page.goto('/');
+  const setup = page.getByRole('dialog', { name: 'Welcome to LocalSR' });
+  await expect(setup).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  await expect(page).toHaveScreenshot('setup-dark.png');
+  await setup.getByRole('radio', { name: 'Light' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await expect(page).toHaveScreenshot('setup-light.png');
+});
+
 test('first launch setup previews live, saves choices, and persists across reload', async ({
   page,
 }) => {
@@ -9,12 +22,9 @@ test('first launch setup previews live, saves choices, and persists across reloa
   const setup = page.getByRole('dialog', { name: 'Welcome to LocalSR' });
   await expect(setup).toBeVisible();
   expect(await hostCalls(page, 'check_update_at_launch')).toHaveLength(0);
-  await page.evaluate(() => document.fonts.ready);
-  await expect(page).toHaveScreenshot('setup-dark.png');
 
   await setup.getByRole('radio', { name: 'Light' }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
-  await expect(page).toHaveScreenshot('setup-light.png');
 
   await setup.getByLabel('Colour-blind friendly colours').check();
   await expect(page.locator('html')).toHaveAttribute('data-palette', 'colour-blind');

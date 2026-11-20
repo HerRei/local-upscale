@@ -7,7 +7,7 @@ for (const [name, appearance, colourBlind] of [
   ['dark-colour-blind', 'dark', true],
   ['light-colour-blind', 'light', true],
 ] as const) {
-  test(`appearance ${name}`, async ({ page }) => {
+  test(`appearance ${name} @visual`, async ({ page }) => {
     await openApp(page, {
       ...withOutputs,
       settings: { ...withOutputs.settings, appearance, colour_blind_palette: colourBlind },

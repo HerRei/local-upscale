@@ -244,6 +244,9 @@ def test_set_low_priority_updates_self_and_running_children(tmp_path):
                 break
             time.sleep(0.02)
         child_pid = int(pid_file.read_text().strip())
+        # CI runners may start jobs at a non-zero nice value; "back to normal" means
+        # back to whatever the child started with.
+        start_nice = int(subprocess.check_output(["ps", "-o", "nice=", "-p", str(child_pid)], text=True).strip())
         try:
             set_low_priority(True)
             if sys.platform == "linux":
@@ -261,7 +264,7 @@ def test_set_low_priority_updates_self_and_running_children(tmp_path):
                 pri_normal = int(subprocess.check_output(["ps", "-o", "pri=", "-p", str(child_pid)], text=True).strip())
                 assert pri_normal > pri_low
                 nice = int(subprocess.check_output(["ps", "-o", "nice=", "-p", str(child_pid)], text=True).strip())
-                assert nice == 0, f"normal priority must be fully back, got nice {{nice}}"
+                assert nice == start_nice, f"normal priority must be fully back, got nice {{nice}}, started at {{start_nice}}"
         finally:
             stop(child, grace=1.0)
         """

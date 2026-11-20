@@ -82,13 +82,8 @@ def test_image_extensions_agree_across_python_host_picker_and_associations():
     if sys.platform == "darwin":
         assert image_formats.SYSTEM_IMAGE_EXTENSIONS == MACOS_DECODED_IMAGE_EXTENSIONS
 
-    dialog = _desktop_file("desktop/src/lib/api.ts").split(
-        "export async function chooseMediaFolder"
-    )[0]
-    picker = {
-        "." + value
-        for value in re.findall(r"'([a-z0-9]+)'", dialog.split("extensions: [")[1].split("]")[0])
-    }
+    # The host opens the file dialog, so its filter lives in commands.rs.
+    picker = _rust_extensions(rust, "MEDIA_DIALOG_EXTENSIONS")
     assert (
         picker - image_formats.VIDEO_INPUT_EXTENSIONS
         == python_images | MACOS_DECODED_IMAGE_EXTENSIONS

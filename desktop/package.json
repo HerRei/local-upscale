@@ -19,7 +19,6 @@
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.4",
-    "@tauri-apps/plugin-dialog": "2.8.4",
     "svelte": "5.57.3"
   },
   "devDependencies": {

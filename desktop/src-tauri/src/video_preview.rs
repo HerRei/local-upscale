@@ -237,7 +237,7 @@ fn tree_bytes(work: &Path) -> u64 {
     total
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn run_conversion(
     command: Command,
     work: &Path,
