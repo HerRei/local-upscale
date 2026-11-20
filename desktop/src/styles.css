@@ -587,13 +587,6 @@ input:focus-visible {
 /* Wide windows have no bar and the window buttons sit over the Media pane's top-left.
    The first row is a clear strip with only the add button (and a line like the centre
    header's); the tabs follow in a row of their own, level with the list content. */
-/* Without the bar, the update notice is the window's first row and the window buttons
-   sit over its left end, so it starts after them like the bar does. */
-@media (min-width: 1280px) {
-  .app-shell.mac .update-notice {
-    padding-left: 84px;
-  }
-}
 @media (min-width: 1280px) {
   .mac .media-pane .pane-heading {
     flex: none;
