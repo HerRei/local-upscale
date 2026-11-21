@@ -5,6 +5,16 @@ import UIKit
 #endif
 
 struct ResultView: View {
+    /// Store screenshots come from the simulator, which runs on the CPU/GPU with simulator timings, not what a
+    /// phone shows. Debug builds started with LOCALSR_STORE_SHOTS=1 leave out the chip and time line.
+    static var hidesUnitAndTime: Bool {
+        #if DEBUG && !SKIP
+        return ProcessInfo.processInfo.environment["LOCALSR_STORE_SHOTS"] == "1"
+        #else
+        return false
+        #endif
+    }
+
     let resultID: String
 
     @Environment(AppModel.self) private var appModel
@@ -412,10 +422,12 @@ struct ResultView: View {
                         .foregroundStyle(Color.white)
                         .adaptiveMonospacedDigit()
 
-                    Text(UIFormatting.resultDetailsLine(model: result.model, unit: result.unit, seconds: result.seconds))
-                        .font(.footnote)
-                        .foregroundStyle(Color.white.opacity(0.85))
-                        .adaptiveMonospacedDigit()
+                    if !Self.hidesUnitAndTime {
+                        Text(UIFormatting.resultDetailsLine(model: result.model, unit: result.unit, seconds: result.seconds))
+                            .font(.footnote)
+                            .foregroundStyle(Color.white.opacity(0.85))
+                            .adaptiveMonospacedDigit()
+                    }
 
                     if !scaleNote.isEmpty {
                         Text(scaleNote)

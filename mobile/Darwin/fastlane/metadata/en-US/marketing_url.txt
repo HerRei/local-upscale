@@ -1,1 +1,1 @@
-https://github.com/HerRei/local-upscale
+https://herrei.github.io/localsr/

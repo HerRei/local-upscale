@@ -223,6 +223,99 @@ final class LocalSRUITests: XCTestCase {
         XCTAssertTrue(app.buttons["choosePhotosButton"].waitForExistence(timeout: 4))
     }
 
+    /// App Store screenshots. Runs only with TEST_RUNNER_STORE_SHOTS=1, on a simulator whose library holds just the
+    /// store photos (added in order: the three batch photos first, the main photo last, so it is the newest).
+    /// The app hides the chip/time line (LOCALSR_STORE_SHOTS) because simulator timings are not a phone's.
+    @MainActor
+    func testStoreScreenshots() throws {
+        guard ProcessInfo.processInfo.environment["STORE_SHOTS"] == "1" else {
+            throw XCTSkip("Store screenshots only on request (TEST_RUNNER_STORE_SHOTS=1)")
+        }
+        let app = XCUIApplication()
+        let dir = UITestShots.directory("store")
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        func shot(_ name: String) {
+            let image = XCUIScreen.main.screenshot()
+            try? image.pngRepresentation.write(to: URL(fileURLWithPath: (dir as NSString).appendingPathComponent(name + ".png")))
+            let attachment = XCTAttachment(screenshot: image)
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        /// Taps the photos whose picker label mentions one of `days` (the store photos carry fixed capture dates:
+        /// the main photo 20 November, the batch photos 19 November), then Add.
+        func pick(days: [String], count: Int) -> Bool {
+            let predicate = NSPredicate(format: days.map { _ in "label CONTAINS %@" }.joined(separator: " OR "), argumentArray: days)
+            let images = app.images.matching(predicate)
+            guard images.firstMatch.waitForExistence(timeout: 20) else {
+                shot("debug_picker")
+                print("PICKER DEBUG\n\(app.debugDescription)")
+                return false
+            }
+            Thread.sleep(forTimeInterval: 1.0)
+            let visible = images.allElementsBoundByIndex.filter { $0.isHittable }
+            guard visible.count >= count else {
+                shot("debug_picker")
+                print("PICKER DEBUG visible=\(visible.count)\n\(app.debugDescription)")
+                return false
+            }
+            for image in visible.prefix(count) { image.tap() }
+            let add = app.buttons.matching(NSPredicate(format: "identifier == 'Add' OR label == 'Add' OR label == 'checkmark' OR identifier == 'Done'")).firstMatch
+            guard add.waitForExistence(timeout: 5) else { return false }
+            add.tap()
+            return true
+        }
+        let mainDay = ["November 20", "20 November", "Nov 20", "20. November"]
+        let batchDay = ["November 19", "19 November", "Nov 19", "19. November"]
+
+        app.launchEnvironment["LOCALSR_STORE_SHOTS"] = "1"
+        app.launch()
+        let choose = app.buttons["choosePhotosButton"]
+        XCTAssertTrue(choose.waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["homeEmptyLabel"].waitForExistence(timeout: 5), "Start from an empty library")
+        Thread.sleep(forTimeInterval: 1.0)
+        shot("05_home_empty")
+
+        // 1. The main photo: before/after with the divider, then zoomed in (the caption hides while zoomed).
+        choose.tap()
+        XCTAssertTrue(pick(days: mainDay, count: 1), "Could not pick the main photo")
+        XCTAssertTrue(app.staticTexts["resultSummaryLabel"].waitForExistence(timeout: 600), "Result did not open")
+        Thread.sleep(forTimeInterval: 3.0)
+        let canvas = app.windows.firstMatch
+        let handle = app.descendants(matching: .any)["compareDividerHandle"]
+        XCTAssertTrue(handle.waitForExistence(timeout: 5))
+        handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.05, thenDragTo: canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.42, dy: 0.5)))
+        Thread.sleep(forTimeInterval: 1.0)
+        shot("01_compare")
+        canvas.pinch(withScale: 2.6, velocity: 1.2)
+        Thread.sleep(forTimeInterval: 4.0)
+        shot("02_zoom")
+        canvas.pinch(withScale: 0.2, velocity: -1.0)
+        Thread.sleep(forTimeInterval: 1.5)
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(choose.waitForExistence(timeout: 10))
+
+        // 2. A batch of the three other photos: progress, then the finished list.
+        choose.tap()
+        XCTAssertTrue(pick(days: batchDay, count: 3), "Could not pick the batch photos")
+        if app.staticTexts["batchCountLabel"].waitForExistence(timeout: 30) {
+            Thread.sleep(forTimeInterval: 2.0)
+            shot("03_batch")
+        }
+        let summary = app.descendants(matching: .any)["batchSummaryCard"]
+        _ = summary.waitForExistence(timeout: 1500)
+        Thread.sleep(forTimeInterval: 2.0)
+        shot("04_results")
+        let dismiss = app.buttons["dismissSummaryButton"]
+        if dismiss.exists { dismiss.tap(); Thread.sleep(forTimeInterval: 1.0); shot("04b_results_list") }
+
+        // 3. Settings.
+        app.buttons["settingsButton"].tap()
+        Thread.sleep(forTimeInterval: 1.5)
+        shot("06_settings")
+    }
+
     @MainActor
     func testViewerZoomDividerAndNoDismiss() throws {
         try FileManager.default.createDirectory(atPath: shotDir, withIntermediateDirectories: true)

@@ -1,0 +1,8 @@
+LocalSR upscales photos on the device with two small bundled Core ML models (Best and Fast). It has no account, no network access and no in-app purchases.
+
+How to test:
+1. Tap "Choose Photos" and pick one or more photos. The first run checks once which chip gives correct results fastest (a few seconds).
+2. The result opens with a before/after slider; pinch to zoom. Tap "Save to Photos" (add-only photo access) to keep it.
+3. Share extension: in Photos, select a photo, tap Share and choose "Upscale with LocalSR". LocalSR opens (or the extension asks you to open it) and upscales the photo.
+
+The increased-memory-limit entitlement is used only for the optional "Full 4x" setting, which upscales 12 MP photos to 48 MP on phones with enough memory.
