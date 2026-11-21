@@ -2,7 +2,7 @@
     admin off
     auto_https off
     servers {
-        # Tailscale Funnel proxies from loopback and sets X-Forwarded-For.
+        # The proxy connects from loopback and sets X-Forwarded-For.
         trusted_proxies static 127.0.0.1/32 ::1/128
         client_ip_headers X-Forwarded-For
     }

@@ -26,15 +26,32 @@ from localsr.core.benchmark import (
     WORKLOAD_VERSION,
     run_benchmark,
 )
-from localsr.core.hardware import get_capability_report
+from localsr.core.disk_space import failure_fields, require_video_room
+from localsr.core.eta import RemainingTime
+from localsr.core.hardware import get_capability_report, with_current_memory
 from localsr.core.image_formats import is_video_input
 from localsr.core.image_io import ImageManager
 from localsr.core.inference import InferenceEngine
 from localsr.core.live_preview import LatestPreviewEncoder, PreviewPacket
+from localsr.core.media_codecs import EXTERNAL_OUTPUT_CODECS
 from localsr.core.model_adapter import ModelAdapter
-from localsr.core.model_catalog import CATALOG_BY_ID, VIDEO_CATALOG_BY_ID, ModelStore
+from localsr.core.model_catalog import (
+    AUDIO_CATALOG_BY_ID,
+    CATALOG_BY_ID,
+    DEFAULT_AUDIO_MODEL_ID,
+    DEFAULT_INTERPOLATION_MODEL_ID,
+    INTERPOLATION_CATALOG_BY_ID,
+    VIDEO_CATALOG_BY_ID,
+    ModelStore,
+)
 from localsr.core.output_writer import cleanup_stale_work_files
-from localsr.core.video_pipeline import VideoJobConfig, run_video_job
+from localsr.core.pipeline import resolve_image_pipeline
+from localsr.core.preparation import (
+    PreparationTimeout,
+    abandoned_work_running,
+    bounded_preparation,
+)
+from localsr.core.video_pipeline import VideoFixStage, VideoJobConfig, run_video_job
 from localsr.protocol.messages import (
     MIN_PROTOCOL_VERSION,
     PROTOCOL_VERSION,
@@ -50,7 +67,9 @@ from localsr.protocol.messages import (
     BenchmarkTile,
     CapabilitiesInfo,
     EngineInfo,
+    EngineStatus,
     JobCancelled,
+    JobCompleted,
     JobFailed,
     JobStarted,
     LivePreviewFrame,
@@ -69,9 +88,16 @@ from localsr.protocol.messages import (
     WarningMessage,
     WorkerReady,
 )
+from localsr.worker.request_validation import (
+    InvalidRequest,
+    usable_job_id,
+    validate_image_job,
+    validate_probe,
+    validate_video_job,
+)
 from localsr.worker.result_preview import ResultPreviewService
 
-# Thread-safe writing to stdout
+# Prevent interleaved JSON Lines from concurrent worker threads.
 print_lock = threading.Lock()
 
 
@@ -107,15 +133,28 @@ def _video_engines() -> list[str]:
     return ["spandrel_image"] + (["seedvr2"] if seedvr2_runtime_issue() is None else [])
 
 
+# The most photos one batch request carries; the desktop sends at most this many.
+MAX_BATCH_PHOTOS = 64
+# Reading a model bundle (several GB for SeedVR2) is local disk work that cannot be
+# interrupted; the limits only catch a drive that stopped answering.
+BUNDLE_CHECK_SECONDS = 600.0
+BUNDLE_LOAD_SECONDS = 900.0
+
+
 def _engine_features() -> list[str]:
     features = [
         "image",
+        "image_multi_fix",
+        "image_batch_v1",
         "video_frame",
         "camera_raw",
         "cancellation",
         "progressive_preview",
         "benchmark_v1",
         "image_edit",
+        "video_interpolation",
+        "video_audio_denoise",
+        "compare_regions",
     ]
     if "seedvr2" in _video_engines():
         features.append("video_seedvr2")
@@ -130,19 +169,110 @@ def _engine_features() -> list[str]:
     return features
 
 
+DEVICE_LOST_EXIT_CODE = 75
+
+
+def _accepts(data: object, validate) -> bool:
+    """Check a job request before anything is stored or loaded for it.
+
+    A refusal ends the job with job_failed when the request carries a text job id; one that
+    does not leaves nothing to address, so it is logged.
+    """
+    try:
+        validate(data)
+    except InvalidRequest as error:
+        job_id = usable_job_id(data)
+        if job_id:
+            send_message(JobFailed(job_id=job_id, error_message=str(error)))
+        else:
+            send_message(LogMessage(level="error", message=f"Protocol error: {error}"))
+        return False
+    return True
+
+
+def _device_lost(error: BaseException) -> bool:
+    """Whether a job failed because the graphics driver removed or reset the GPU."""
+    from localsr.core.onnx_runtime import GpuDeviceLost, _is_device_lost
+
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        if isinstance(current, GpuDeviceLost) or _is_device_lost(current):
+            return True
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return False
+
+
 class WorkerServer:
+    def _verify_benchmark_model(self, model_id, data):
+        model = CATALOG_BY_ID[model_id]
+        supplied = Path(str(data.get("model_path") or ""))
+        try:
+            supplied = supplied.resolve(strict=True)
+            expected = self.model_store.path_for(model).resolve(strict=True)
+        except OSError as error:
+            raise FileNotFoundError(
+                "Download and verify the Quick model before benchmarking."
+            ) from error
+        if supplied != expected or not self.model_store.is_installed(model):
+            raise ValueError("The benchmark checkpoint failed its trusted catalog verification.")
+        return model, expected
+
+    def _create_video_preview_encoders(self, job_id, data):
+        preview_encoder = LatestPreviewEncoder(
+            lambda packet: self._emit_live_preview(packet),
+            lambda message: send_message(LivePreviewWarning(job_id=job_id, message=message)),
+            enabled=bool(data.get("preview_enabled", True)),
+            max_fps=float(data.get("preview_max_fps", 2.0)),
+            max_dimension=int(data.get("preview_max_dimension", 320)),
+        )
+        source_encoder = LatestPreviewEncoder(
+            self._emit_live_preview,
+            enabled=bool(data.get("preview_enabled", True)),
+            max_dimension=640,
+        )
+        return preview_encoder, source_encoder
+
     def __init__(self):
         cleanup_stale_work_files()
         self.message_queue = queue.Queue()
         self.cancel_event = threading.Event()
+        # Set once stdin closed or a shutdown was requested; job activation never clears it.
+        self.shutdown_event = threading.Event()
         self.state_lock = threading.Lock()
         self.running = True
         self.active_job_id = None
+        self.active_batch_job_ids: set[str] = set()
         self.pending_cancel_job_ids: set[str] = set()
         self.model_adapter = ModelAdapter()
         self.model_store = ModelStore()
         self.engine = InferenceEngine(self.model_adapter)
         self.result_previews = ResultPreviewService(send_message)
+        from localsr.worker.compare_regions import RegionService
+
+        self.compare_regions = RegionService(send_message)
+        # Set when a job lost its GPU device: only a new process gets a working one.
+        self.restart_after_job = False
+        # The last device report, so a refresh during a job needs no new look at the drivers.
+        self.last_capabilities: dict | None = None
+
+    def _answer_capabilities_during_job(self) -> bool:
+        """Answer a hardware refresh while a job runs; the main loop is busy until it ends.
+
+        The reply carries the earlier device list with fresh memory readings."""
+        with self.state_lock:
+            busy = self.active_job_id is not None
+        report = self.last_capabilities
+        if not busy or report is None:
+            return False
+        # The readings can take a moment on macOS; the reader must stay free for a cancel.
+        threading.Thread(
+            target=lambda: send_message(CapabilitiesInfo(**with_current_memory(report))),
+            name="capabilities-refresh",
+            daemon=True,
+        ).start()
+        return True
 
     def _request_cancel(self, requested_job_id: str) -> None:
         """Remember cancellation even if the matching job is still queued."""
@@ -150,54 +280,131 @@ class WorkerServer:
             return
         with self.state_lock:
             self.pending_cancel_job_ids.add(requested_job_id)
-            if requested_job_id == self.active_job_id:
+            if requested_job_id in self.active_batch_job_ids:
+                # The desktop cancels a whole queue: every photo of the batch,
+                # also those that later run on their own, is cancelled.
+                self.pending_cancel_job_ids |= self.active_batch_job_ids
+                self.cancel_event.set()
+            elif requested_job_id == self.active_job_id:
                 self.cancel_event.set()
 
     def _activate_job(self, job_id: str) -> None:
         with self.state_lock:
+            cancelled = job_id in self.pending_cancel_job_ids
             self.active_job_id = job_id
-            if job_id in self.pending_cancel_job_ids:
+            if cancelled or self.shutdown_event.is_set():
                 self.cancel_event.set()
             else:
                 self.cancel_event.clear()
+
+    def _clear_cancel_unless_shutting_down(self) -> None:
+        if not self.shutdown_event.is_set():
+            self.cancel_event.clear()
 
     def _deactivate_job(self, job_id: str) -> None:
         with self.state_lock:
             self.active_job_id = None
             self.pending_cancel_job_ids.discard(job_id)
-            self.cancel_event.clear()
+            self._clear_cancel_unless_shutting_down()
+
+    def _activate_batch(self, job_ids: list[str]) -> None:
+        with self.state_lock:
+            self.active_batch_job_ids = set(job_ids)
+            if self.shutdown_event.is_set():
+                self.cancel_event.set()
+            elif self.active_batch_job_ids & self.pending_cancel_job_ids:
+                self.pending_cancel_job_ids |= self.active_batch_job_ids
+                self.cancel_event.set()
+            else:
+                self.cancel_event.clear()
+
+    def _deactivate_batch(self, job_ids: list[str]) -> None:
+        with self.state_lock:
+            self.active_job_id = None
+            self.active_batch_job_ids = set()
+            self.pending_cancel_job_ids.difference_update(job_ids)
+            self._clear_cancel_unless_shutting_down()
 
     def reader_thread_func(self):
-        for line in sys.stdin:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                msg = json.loads(line)
-            except json.JSONDecodeError as error:
-                send_message(
-                    LogMessage(level="error", message=f"JSON parse error in worker: {error}")
-                )
-                continue
+        try:
+            # Requests are UTF-8 whatever the console's code page, and a byte that is not
+            # UTF-8 must not end the reader.
+            reconfigure = getattr(sys.stdin, "reconfigure", None)
+            if reconfigure is not None:
+                reconfigure(encoding="utf-8", errors="replace")
+            for line in sys.stdin:
+                try:
+                    self._read_line(line)
+                # One bad line, whatever it raises (RecursionError and a
+                # 5000-digit number included), is reported and then dropped.
+                except Exception as error:  # noqa: BLE001
+                    send_message(
+                        LogMessage(
+                            level="error",
+                            message=f"Protocol error: a request line was refused ({error}).",
+                        )
+                    )
+        finally:
+            # On sys.stdin EOF (pipe closed), push shutdown_request so main loop exits cleanly
+            self.shutdown_event.set()
+            self.cancel_event.set()
+            self.message_queue.put({"type": "shutdown_request"})
 
-            if not isinstance(msg, dict):
-                send_message(LogMessage(level="error", message="Worker request must be an object."))
-                continue
+    def _read_line(self, line: str) -> None:
+        line = line.strip()
+        if not line:
+            return
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError as error:
+            send_message(LogMessage(level="error", message=f"JSON parse error in worker: {error}"))
+            return
 
-            request_type = msg.get("type")
-            if request_type == "preview_request":
-                self.result_previews.submit(msg.get("data", {}))
-                continue
-            self.message_queue.put(msg)
-            if request_type == "shutdown_request":
-                self.cancel_event.set()
-            elif request_type == "cancel_request":
-                requested_job_id = str(msg.get("data", {}).get("job_id") or "")
-                self._request_cancel(requested_job_id)
+        if not isinstance(msg, dict):
+            send_message(LogMessage(level="error", message="Worker request must be an object."))
+            return
 
-        # On sys.stdin EOF (pipe closed), push shutdown_request so main loop exits cleanly
-        self.cancel_event.set()
-        self.message_queue.put({"type": "shutdown_request"})
+        request_type = msg.get("type")
+        data = msg.get("data", {})
+        if request_type == "region_request":
+            self.compare_regions.submit(data)
+            return
+        if request_type == "region_clear":
+            self.compare_regions.clear()
+            return
+        if request_type == "preview_request":
+            self.result_previews.submit(data)
+            return
+        if request_type == "capabilities_request" and self._answer_capabilities_during_job():
+            return
+        if request_type == "set_low_priority":
+            if isinstance(data, dict) and isinstance(data.get("low_priority"), bool):
+                from localsr.core.child_processes import set_low_priority
+
+                set_low_priority(data["low_priority"])
+            return
+        self.message_queue.put(msg)
+        if request_type == "shutdown_request":
+            self.shutdown_event.set()
+            self.cancel_event.set()
+        elif request_type == "cancel_request":
+            requested_job_id = data.get("job_id") if isinstance(data, dict) else None
+            self._request_cancel(requested_job_id if isinstance(requested_job_id, str) else "")
+
+    def _restart_if_required(self) -> None:
+        """After a lost device, exit as soon as the failure is reported. Freeing the sessions
+        of a lost device can hang, and the desktop app restarts a worker that exits."""
+        if not self.restart_after_job:
+            return
+        send_message(
+            LogMessage(
+                level="error",
+                message="The GPU device was lost; restarting the engine to recover it.",
+            )
+        )
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(DEVICE_LOST_EXIT_CODE)
 
     def run(self):
         reader_thread = threading.Thread(target=self.reader_thread_func, daemon=True)
@@ -208,7 +415,6 @@ class WorkerServer:
 
         while self.running:
             try:
-                # Wait for messages
                 msg = self.message_queue.get(timeout=1.0)
                 req_type = msg.get("type")
                 data = msg.get("data", {})
@@ -217,7 +423,16 @@ class WorkerServer:
                     self.running = False
                     break
 
-                elif req_type == "handshake_request":
+                if not isinstance(data, dict):
+                    send_message(
+                        LogMessage(
+                            level="error",
+                            message=f"Protocol error: the {req_type} request has no data object.",
+                        )
+                    )
+                    continue
+
+                if req_type == "handshake_request":
                     requested_version = int(data.get("protocol_version", 0))
                     if not MIN_PROTOCOL_VERSION <= requested_version <= PROTOCOL_VERSION:
                         send_message(
@@ -245,13 +460,22 @@ class WorkerServer:
 
                 elif req_type == "capabilities_request":
                     report = get_capability_report()
+                    self.last_capabilities = report
                     send_message(CapabilitiesInfo(**report))
 
                 elif req_type == "preview_request":
                     self.result_previews.submit(data)
 
                 elif req_type == "media_probe_request":
-                    media_path = str(data.get("media_path", ""))
+                    media_path = data.get("media_path")
+                    media_path = media_path if isinstance(media_path, str) else ""
+                    try:
+                        validate_probe(data)
+                    except InvalidRequest as error:
+                        send_message(
+                            MediaProbeFailed(media_path=media_path, error_message=str(error))
+                        )
+                        continue
                     maximum = int(data.get("max_dimension", 1600))
 
                     def report_probe(stage, path=media_path):
@@ -281,6 +505,7 @@ class WorkerServer:
                                     jpeg_base64=preview_base64,
                                     hdr_format=probe.hdr_format,
                                     audio_warning=probe.audio_warning,
+                                    has_audio=bool(probe.has_audio),
                                 )
                             )
                         else:
@@ -318,7 +543,12 @@ class WorkerServer:
                         if requested_job_id != self.active_job_id:
                             self.pending_cancel_job_ids.discard(requested_job_id)
 
+                elif req_type == "image_batch_request":
+                    self._run_image_batch(data.get("jobs"))
+
                 elif req_type == "job_request":
+                    if not _accepts(data, validate_image_job):
+                        continue
                     if self.active_job_id is not None:
                         send_message(
                             JobFailed(
@@ -326,38 +556,7 @@ class WorkerServer:
                             )
                         )
                         continue
-
-                    job_id = data["job_id"]
-                    self._activate_job(job_id)
-                    previous_checkpoint_policy = getattr(
-                        self.model_adapter, "allow_unverified_checkpoints", False
-                    )
-                    requested_checkpoint_policy = data.get("allow_unverified_checkpoint")
-                    self.model_adapter.allow_unverified_checkpoints = (
-                        previous_checkpoint_policy
-                        if requested_checkpoint_policy is None
-                        else bool(requested_checkpoint_policy)
-                    )
-
-                    try:
-                        send_message(JobStarted(job_id=job_id))
-                        self._run_job(job_id, data)
-                    # The process boundary must turn any inference/I/O failure
-                    # into a job_failed message instead of killing the worker.
-                    except Exception as e:  # noqa: BLE001
-                        # Ensure we always clear up
-                        traceback.print_exc(file=sys.stderr)
-                        send_message(JobFailed(job_id=job_id, error_message=str(e)))
-                    finally:
-                        self._deactivate_job(job_id)
-                        self.model_adapter.release()
-                        self.model_adapter.allow_unverified_checkpoints = previous_checkpoint_policy
-                        # Release the face model from the engine cache if it
-                        # was loaded for this job. The general model stays
-                        # cached for the next image.
-                        face_path = data.get("face_model_path")
-                        if face_path:
-                            self.engine.release_model(face_path)
+                    self._run_image_job(data)
 
                 elif req_type == "edit_job_request":
                     job_id = str(data.get("job_id") or "")
@@ -381,11 +580,17 @@ class WorkerServer:
                         send_message(JobCancelled(job_id=job_id))
                     except Exception as error:  # Process boundary keeps the queue alive.
                         traceback.print_exc(file=sys.stderr)
-                        send_message(JobFailed(job_id=job_id, error_message=str(error)))
+                        send_message(
+                            JobFailed(
+                                job_id=job_id, **failure_fields(error, data.get("output_path"))
+                            )
+                        )
                     finally:
                         self._deactivate_job(job_id)
 
                 elif req_type == "video_job_request":
+                    if not _accepts(data, validate_video_job):
+                        continue
                     if self.active_job_id is not None:
                         send_message(
                             JobFailed(
@@ -395,7 +600,6 @@ class WorkerServer:
                         continue
 
                     job_id = data["job_id"]
-                    self._activate_job(job_id)
                     previous_checkpoint_policy = getattr(
                         self.model_adapter, "allow_unverified_checkpoints", False
                     )
@@ -407,11 +611,20 @@ class WorkerServer:
                     )
 
                     try:
+                        self._activate_job(job_id)
                         send_message(JobStarted(job_id=job_id))
                         self._run_video_job(job_id, data)
                     except Exception as e:  # noqa: BLE001
                         traceback.print_exc(file=sys.stderr)
-                        send_message(JobFailed(job_id=job_id, error_message=str(e)))
+                        self.restart_after_job = _device_lost(e)
+                        send_message(
+                            JobFailed(
+                                job_id=job_id,
+                                restart_required=self.restart_after_job,
+                                **failure_fields(e, data.get("output_video_path")),
+                            )
+                        )
+                        self._restart_if_required()
                     finally:
                         self._deactivate_job(job_id)
                         self.model_adapter.release()
@@ -447,7 +660,15 @@ class WorkerServer:
                         send_message(BenchmarkCancelled(job_id=job_id))
                     except Exception as error:  # noqa: BLE001
                         traceback.print_exc(file=sys.stderr)
-                        send_message(BenchmarkFailed(job_id=job_id, error_message=str(error)))
+                        self.restart_after_job = _device_lost(error)
+                        send_message(
+                            BenchmarkFailed(
+                                job_id=job_id,
+                                error_message=str(error),
+                                restart_required=self.restart_after_job,
+                            )
+                        )
+                        self._restart_if_required()
                     finally:
                         self._deactivate_job(job_id)
                         self.model_adapter.release()
@@ -462,9 +683,14 @@ class WorkerServer:
                 send_message(LogMessage(level="error", message=f"Worker loop error: {e}"))
 
         self.result_previews.close()
+        self.compare_regions.close()
 
     def _run_benchmark(self, job_id: str, data: dict) -> None:
         """Authenticate and execute the fixed, production-path benchmark."""
+        # Benchmark scores describe the PyTorch device path; a first-use Core
+        # ML conversion inside the warm-up would also distort them.
+        self.engine.neural_engine_enabled = False
+        self.engine.status_callback = None
         workload = str(data.get("workload") or "v1")
         if workload == "v2":
             self._run_benchmark_v2(job_id, data)
@@ -475,17 +701,7 @@ class WorkerServer:
             raise ValueError(
                 f"{WORKLOAD_VERSION} requires the trusted {WORKLOAD_MODEL_ID} checkpoint."
             )
-        model = CATALOG_BY_ID[WORKLOAD_MODEL_ID]
-        supplied = Path(str(data.get("model_path") or ""))
-        try:
-            supplied = supplied.resolve(strict=True)
-            expected = self.model_store.path_for(model).resolve(strict=True)
-        except OSError as error:
-            raise FileNotFoundError(
-                "Download and verify the Quick model before benchmarking."
-            ) from error
-        if supplied != expected or not self.model_store.is_installed(model):
-            raise ValueError("The benchmark checkpoint failed its trusted catalog verification.")
+        model, expected = WorkerServer._verify_benchmark_model(self, WORKLOAD_MODEL_ID, data)
 
         send_message(
             BenchmarkStarted(
@@ -541,17 +757,7 @@ class WorkerServer:
             raise ValueError(
                 f"{V2_WORKLOAD_VERSION} requires the trusted {V2_MODEL_ID} checkpoint."
             )
-        model = CATALOG_BY_ID[V2_MODEL_ID]
-        supplied = Path(str(data.get("model_path") or ""))
-        try:
-            supplied = supplied.resolve(strict=True)
-            expected = self.model_store.path_for(model).resolve(strict=True)
-        except OSError as error:
-            raise FileNotFoundError(
-                "Download and verify the Quick model before benchmarking."
-            ) from error
-        if supplied != expected or not self.model_store.is_installed(model):
-            raise ValueError("The benchmark checkpoint failed its trusted catalog verification.")
+        _, expected = WorkerServer._verify_benchmark_model(self, V2_MODEL_ID, data)
 
         devices = get_capability_report()["devices"]
         requested_device = str(data.get("device") or "cpu")
@@ -585,8 +791,7 @@ class WorkerServer:
             ) -> None:
                 stage_index = current_device_index * stages_per_device + update.stage_index
                 percentage = (stage_index + update.fraction) / max(1, total_phases) * 100.0
-                # Keep the original aggregate event for older hosts, then send
-                # the richer v2 envelope understood by current hosts.
+                # Older hosts read this aggregate event; current hosts read the v2 envelope below.
                 send_message(
                     BenchmarkProgress(
                         job_id=job_id,
@@ -659,6 +864,131 @@ class WorkerServer:
         result = aggregate_v2(device_results, time.monotonic() - started_at)
         send_message(BenchmarkCompleted(job_id=job_id, result=result.to_dict()))
 
+    def _run_image_job(self, data, announced: bool = False) -> None:
+        """One image job: its own activation, checkpoint policy and failure boundary.
+
+        ``announced`` is set for a photo whose job_started a batch already sent."""
+        job_id = data["job_id"]
+        previous_checkpoint_policy = getattr(
+            self.model_adapter, "allow_unverified_checkpoints", False
+        )
+        requested_checkpoint_policy = data.get("allow_unverified_checkpoint")
+        self.model_adapter.allow_unverified_checkpoints = (
+            previous_checkpoint_policy
+            if requested_checkpoint_policy is None
+            else bool(requested_checkpoint_policy)
+        )
+
+        try:
+            self._activate_job(job_id)
+            if not announced:
+                send_message(JobStarted(job_id=job_id))
+            self._run_job(job_id, data)
+        # The process boundary must turn any inference/I/O failure
+        # into a job_failed message instead of killing the worker.
+        except Exception as e:  # noqa: BLE001
+            traceback.print_exc(file=sys.stderr)
+            self.restart_after_job = _device_lost(e)
+            send_message(
+                JobFailed(
+                    job_id=job_id,
+                    restart_required=self.restart_after_job,
+                    **failure_fields(e, data.get("output_path")),
+                )
+            )
+            self._restart_if_required()
+        finally:
+            self._deactivate_job(job_id)
+            self.model_adapter.release()
+            self.model_adapter.allow_unverified_checkpoints = previous_checkpoint_policy
+            # Release the face model from the engine cache if it
+            # was loaded for this job. The general model stays
+            # cached for the next image.
+            face_path = data.get("face_model_path")
+            if face_path:
+                self.engine.release_model(face_path)
+
+    def _run_image_batch(self, jobs) -> None:
+        """Photos of one recipe: lanes first, then each photo they hand back on its own.
+
+        Every photo gets exactly one terminal message, as if it were its own job.
+        """
+        from localsr.worker.image_batch import ImageBatchRunner
+
+        jobs = jobs if isinstance(jobs, list) else []
+        named = [job for job in jobs if isinstance(job, dict)]
+        ids = [job_id for job in named if (job_id := usable_job_id(job))]
+        known = set(ids)
+        if len(ids) != len(jobs) or len(known) != len(ids):
+            ids = []
+        if not 2 <= len(ids) <= MAX_BATCH_PHOTOS:
+            for job_id in known:
+                send_message(
+                    JobFailed(job_id=job_id, error_message="The photo batch request is invalid.")
+                )
+            return
+        for job in named:
+            try:
+                validate_image_job(job)
+            except InvalidRequest as error:
+                # The photos share one recipe, so one refusal ends every photo.
+                for job_id in ids:
+                    send_message(JobFailed(job_id=job_id, error_message=str(error)))
+                return
+        terminal: set[str] = set()
+        started: set[str] = set()
+
+        def emit(message) -> None:
+            if isinstance(message, (JobCompleted, JobFailed, JobCancelled)):
+                terminal.add(message.job_id)
+            elif isinstance(message, JobStarted):
+                started.add(message.job_id)
+            send_message(message)
+
+        self._activate_batch(ids)
+        previous_checkpoint_policy = self.model_adapter.allow_unverified_checkpoints
+        requested_checkpoint_policy = jobs[0].get("allow_unverified_checkpoint")
+        if requested_checkpoint_policy is not None:
+            self.model_adapter.allow_unverified_checkpoints = bool(requested_checkpoint_policy)
+        try:
+            returned = ImageBatchRunner(
+                engine=self.engine,
+                model_adapter=self.model_adapter,
+                cancel_event=self.cancel_event,
+                emit=emit,
+                emit_preview=self._emit_live_preview,
+                preview_factory=LatestPreviewEncoder,
+            ).run(jobs)
+        except Exception as error:  # noqa: BLE001 - the process boundary, as for one job
+            traceback.print_exc(file=sys.stderr)
+            self.restart_after_job = _device_lost(error)
+            for job in jobs:
+                job_id = str(job["job_id"])
+                if job_id in started and job_id not in terminal:
+                    send_message(
+                        JobFailed(
+                            job_id=job_id,
+                            restart_required=self.restart_after_job,
+                            **failure_fields(error, job.get("output_path")),
+                        )
+                    )
+            # A photo that never started runs on its own, as it would have in the
+            # queue; after a lost device the desktop sends it to the next engine.
+            returned = [
+                job
+                for job in jobs
+                if str(job["job_id"]) not in started | terminal and not self.restart_after_job
+            ]
+        finally:
+            self.model_adapter.release()
+            self.model_adapter.allow_unverified_checkpoints = previous_checkpoint_policy
+        try:
+            self._restart_if_required()
+            for data in returned:
+                self._run_image_job(data, announced=str(data["job_id"]) in started)
+        finally:
+            self._deactivate_batch(ids)
+
     def _run_job(self, job_id, data):
         from localsr.worker.image_job import ImageJobRunner
 
@@ -721,6 +1051,7 @@ class WorkerServer:
                     on_convert=lambda: send_message(
                         VideoStageProgress(job_id=job_id, stage="external_decode")
                     ),
+                    decode_audio=bool(data.get("audio_denoise")) and data.get("fps") is None,
                 ) as (frame_source, audio_source):
                     return WorkerServer._run_temporal_video_job_impl(
                         self,
@@ -750,8 +1081,6 @@ class WorkerServer:
         import time as _time
 
         from localsr.core.video_io import (
-            decode_timed_frames,
-            encode_video,
             probe_video,
             selected_frame_count,
         )
@@ -778,9 +1107,25 @@ class WorkerServer:
         if resolution <= 0:
             resolution = min(probe.width, probe.height)
         bundle_dir = data.get("bundle_dir") or ""
+        # The engine's output side is the target resolution, in the source's proportions.
+        grown = resolution / max(1, min(probe.width, probe.height))
+        require_video_room(
+            data,
+            round(probe.width * grown),
+            round(probe.height * grown),
+            total_frames,
+            master=data.get("video_codec") in EXTERNAL_OUTPUT_CODECS,
+        )
 
         started_at = _time.monotonic()
         state = {"done": 0, "remaining": 0.0}
+        export_notes: list[str] = []
+        # Whole chunks are the unit of work. The first one carries the model's loading and
+        # warm-up, so the speed comes from the chunks after it; one measured chunk is
+        # enough because a chunk is many frames.
+        remaining_time = (
+            RemainingTime(float(total_frames), min_intervals=1) if total_frames > 0 else None
+        )
 
         def report(stage: str, completed: int = 0, total: int = 0) -> None:
             memory.phase(stage)
@@ -798,14 +1143,110 @@ class WorkerServer:
                 )
             )
 
-        report("loading_model")
+        from localsr.core.audio_denoise import cleaned_audio_source
+
+        raw_audio_source = data.get("audio_path") or video_path
+        clean_audio = (
+            bool(data.get("audio_denoise")) and data.get("fps") is None and probe.has_audio
+        )
+        audio_denoiser = WorkerServer._audio_denoiser(self, job_id, data) if clean_audio else None
+        with cleaned_audio_source(
+            raw_audio_source,
+            enabled=clean_audio,
+            bundle_dir=data.get("audio_denoise_bundle_dir"),
+            denoiser=audio_denoiser,
+            temporary_directory=data.get("temporary_directory"),
+            output_video_path=output_path,
+            cancel_event=self.cancel_event,
+            stage_cb=lambda stage: report(stage),
+            progress_cb=lambda done, total, elapsed, rem: (
+                memory.phase("audio_denoise"),
+                send_message(
+                    VideoStageProgress(
+                        job_id=job_id,
+                        stage="audio_denoise",
+                        completed=int(done),
+                        total=int(total),
+                        frame_index=0,
+                        total_frames=0,
+                        elapsed_seconds=float(elapsed),
+                        frames_processed=0,
+                        estimated_remaining_seconds=float(rem or 0.0),
+                    )
+                ),
+            ),
+            started_at=started_at,
+        ) as (effective_audio_source, reencode_audio):
+            audio_denoiser = None  # release ONNX sessions before loading SeedVR2
+            report("loading_model")
+            return WorkerServer._run_temporal_video_job_frames(
+                self,
+                job_id,
+                data,
+                engine_factory,
+                memory,
+                video_path=video_path,
+                output_path=output_path,
+                probe=probe,
+                fps=fps,
+                total_frames=total_frames,
+                window=window,
+                overlap=overlap,
+                resolution=resolution,
+                bundle_dir=bundle_dir,
+                started_at=started_at,
+                state=state,
+                export_notes=export_notes,
+                remaining_time=remaining_time,
+                report=report,
+                effective_audio_source=effective_audio_source,
+                raw_audio_source=raw_audio_source,
+                reencode_audio=reencode_audio,
+            )
+
+    def _run_temporal_video_job_frames(
+        self,
+        job_id,
+        data,
+        engine_factory,
+        memory,
+        *,
+        video_path,
+        output_path,
+        probe,
+        fps,
+        total_frames,
+        window,
+        overlap,
+        resolution,
+        bundle_dir,
+        started_at,
+        state,
+        export_notes,
+        remaining_time,
+        report,
+        effective_audio_source,
+        raw_audio_source,
+        reencode_audio,
+    ):
+        import time as _time
+
+        from localsr.core.video_io import decode_timed_frames, encode_video
+
         memory.configure(
             max(2, int(probe.width * resolution / min(probe.width, probe.height)) // 2 * 2),
             max(2, int(probe.height * resolution / min(probe.width, probe.height)) // 2 * 2),
             min(window, memory.latest.clip_frames),
         )
-        engine = engine_factory(
-            bundle_dir, str(data.get("device", "cpu")), str(data.get("precision", "fp32"))
+        engine = WorkerServer._prepare_bundle(
+            self,
+            job_id,
+            "Loading the video model",
+            BUNDLE_LOAD_SECONDS,
+            "bundle-load",
+            lambda: engine_factory(
+                bundle_dir, str(data.get("device", "cpu")), str(data.get("precision", "fp32"))
+            ),
         )
         window = min(window, max(1, int(getattr(engine, "max_temporal_window", window))))
         overlap = min(overlap, window - 1)
@@ -818,17 +1259,8 @@ class WorkerServer:
             self.cancel_event,
             hdr_mode=str(data.get("hdr_mode", "reject")),
         )
-        preview_encoder = LatestPreviewEncoder(
-            lambda packet: self._emit_live_preview(packet),
-            lambda message: send_message(LivePreviewWarning(job_id=job_id, message=message)),
-            enabled=bool(data.get("preview_enabled", True)),
-            max_fps=float(data.get("preview_max_fps", 2.0)),
-            max_dimension=int(data.get("preview_max_dimension", 320)),
-        )
-        source_encoder = LatestPreviewEncoder(
-            self._emit_live_preview,
-            enabled=bool(data.get("preview_enabled", True)),
-            max_dimension=640,
+        preview_encoder, source_encoder = WorkerServer._create_video_preview_encoders(
+            self, job_id, data
         )
 
         def read_chunk(count: int) -> list:
@@ -890,9 +1322,12 @@ class WorkerServer:
                 for frame, rgb in zip(chunk, result[len(context) :], strict=True)
             ]
             state["done"] += len(chunk)
-            elapsed = _time.monotonic() - started_at
-            per_frame = elapsed / max(1, state["done"])
-            remaining = per_frame * max(0, int(total_frames) - state["done"])
+            now = _time.monotonic()
+            elapsed = now - started_at
+            remaining = 0.0
+            if remaining_time is not None:
+                remaining_time.update(now, float(state["done"]))
+                remaining = remaining_time.remaining() or 0.0
             state["remaining"] = float(remaining)
             send_message(
                 VideoFrameCompleted(
@@ -926,6 +1361,7 @@ class WorkerServer:
                 )
             )
 
+        published = False
         try:
             first_chunk = read_chunk(window)
             if not first_chunk:
@@ -989,12 +1425,16 @@ class WorkerServer:
                 fps=float(fps),
                 container_format=str(data.get("container", "mp4")),
                 video_codec=str(data.get("video_codec", "av1")),
+                automatic_codec=bool(data.get("_automatic_codec", False)),
+                note_callback=export_notes.append,
                 crf=int(data.get("crf", 18)),
                 width=int(out_width),
                 height=int(out_height),
-                audio_source=(data.get("audio_path") or video_path)
-                if data.get("fps") is None
-                else None,
+                audio_source=effective_audio_source if data.get("fps") is None else None,
+                subtitle_source=(
+                    raw_audio_source if data.get("fps") is None and reencode_audio else None
+                ),
+                reencode_audio=reencode_audio,
                 external_ffmpeg=data.get("_external_ffmpeg"),
                 stage_callback=lambda stage: report(stage),
                 preserve_timing=data.get("fps") is None,
@@ -1005,6 +1445,7 @@ class WorkerServer:
                 sdr_bt709=bool(probe.hdr_format and data.get("hdr_mode") == "tone_map"),
                 temporary_directory=data.get("temporary_directory"),
             )
+            published = True
         except InterruptedError:
             # Report cancellation only after the decoder, encoder and model
             # cleanup below. The host must not start the next job too early.
@@ -1028,7 +1469,8 @@ class WorkerServer:
             except Exception:  # noqa: BLE001
                 pass
 
-        if self.cancel_event.is_set():
+        # A cancel that arrives after the file was published does not undo it.
+        if self.cancel_event.is_set() and not published:
             send_message(JobCancelled(job_id=job_id))
             return
 
@@ -1041,10 +1483,32 @@ class WorkerServer:
                 frames_processed=state["done"],
                 elapsed_seconds=float(elapsed),
                 inference_seconds=float(elapsed),
+                notes=" ".join(export_notes),
             )
         )
 
-    def _verify_temporal_bundle(self, data) -> None:
+    def _prepare_bundle(self, job_id, name, limit, slot, work):
+        """Run a bundle's hash check or load within its limit, cancellable, saying what it does.
+
+        The work cannot be stopped: at the limit or on a cancel it is left to finish on its
+        own thread and the job ends, so the worker stays responsive."""
+        try:
+            return bounded_preparation(
+                name,
+                limit,
+                work,
+                fallback="the job stops",
+                slot=slot,
+                cancel_event=self.cancel_event,
+                status=lambda message: send_message(EngineStatus(job_id=job_id, message=message)),
+            )
+        except PreparationTimeout as error:
+            raise RuntimeError(
+                f"{error}. LocalSR stopped the job; check that the drive holding the models "
+                "is connected, then try again."
+            ) from error
+
+    def _verify_temporal_bundle(self, data, job_id="") -> None:
         """Authenticate a catalog video bundle off the desktop UI thread."""
         model_id = str(data.get("video_model_id") or "")
         model = VIDEO_CATALOG_BY_ID.get(model_id)
@@ -1063,11 +1527,102 @@ class WorkerServer:
         send_message(
             LogMessage(level="info", message="Verifying the temporal model bundle integrity...")
         )
-        if not self.model_store.is_bundle_installed(model):
+        if not self._prepare_bundle(
+            job_id,
+            "Checking the video model files",
+            BUNDLE_CHECK_SECONDS,
+            "bundle-check",
+            lambda: self.model_store.is_bundle_installed(model),
+        ):
             raise ValueError(
                 f"{model.name} failed its catalog SHA-256 check. "
                 "LocalSR refused to load it; remove the bundle and download it again."
             )
+
+    def _interpolation_synthesizer(self, job_id, data):
+        """Verify the catalog RIFE bundle, then load it for this job's device."""
+        model_id = str(data.get("interpolation_model_id") or DEFAULT_INTERPOLATION_MODEL_ID)
+        model = INTERPOLATION_CATALOG_BY_ID.get(model_id)
+        if model is None:
+            raise ValueError("The frame interpolation model is not in the trusted catalog.")
+        supplied = Path(str(data.get("interpolation_bundle_dir") or ""))
+        try:
+            supplied = supplied.resolve(strict=True)
+            expected = self.model_store.bundle_dir_for(model).resolve(strict=True)
+        except OSError as error:
+            raise FileNotFoundError(
+                f"{model.name} is not downloaded. Download it, or turn frame interpolation off."
+            ) from error
+        if supplied != expected:
+            raise ValueError("The frame interpolation model path does not match the catalog.")
+        send_message(VideoStageProgress(job_id=job_id, stage="loading_interpolation"))
+        if not self._prepare_bundle(
+            job_id,
+            "Checking the frame interpolation model",
+            BUNDLE_CHECK_SECONDS,
+            "bundle-check",
+            lambda: self.model_store.is_bundle_installed(model),
+        ):
+            raise ValueError(
+                f"{model.name} failed its catalog SHA-256 check. "
+                "LocalSR refused to load it; remove it and download it again."
+            )
+        from localsr.video_models.rife.engine import RifeSynthesizer
+
+        (checkpoint,) = model.files
+        return self._prepare_bundle(
+            job_id,
+            "Loading the frame interpolation model",
+            BUNDLE_LOAD_SECONDS,
+            "bundle-load",
+            lambda: RifeSynthesizer(
+                self.model_store.bundle_file_path(model, checkpoint),
+                str(data["device"]),
+                status_callback=lambda message: send_message(
+                    EngineStatus(job_id=job_id, message=message)
+                ),
+            ),
+        )
+
+    def _audio_denoiser(self, job_id, data):
+        """Verify the catalog audio cleanup bundle, then load its ONNX session."""
+        model_id = str(data.get("audio_denoise_model_id") or DEFAULT_AUDIO_MODEL_ID)
+        model = AUDIO_CATALOG_BY_ID.get(model_id)
+        if model is None:
+            raise ValueError("The audio cleanup model is not in the trusted catalog.")
+        supplied = Path(str(data.get("audio_denoise_bundle_dir") or ""))
+        try:
+            supplied = supplied.resolve(strict=True)
+            expected = self.model_store.bundle_dir_for(model).resolve(strict=True)
+        except OSError as error:
+            raise FileNotFoundError(
+                f"{model.name} is not downloaded. Download it, or turn Clean up audio off."
+            ) from error
+        if supplied != expected:
+            raise ValueError("The audio cleanup model path does not match the catalog.")
+        send_message(VideoStageProgress(job_id=job_id, stage="loading_audio_denoise"))
+        if not self._prepare_bundle(
+            job_id,
+            "Checking the audio cleanup model",
+            BUNDLE_CHECK_SECONDS,
+            "bundle-check",
+            lambda: self.model_store.is_bundle_installed(model),
+        ):
+            raise ValueError(
+                f"{model.name} failed its catalog SHA-256 check. "
+                "LocalSR refused to load it; remove the bundle and download it again."
+            )
+        from localsr.core.audio_denoise import load_denoiser
+
+        bundle_dir = self.model_store.bundle_dir_for(model)
+        filenames = [file.filename for file in model.files]
+        return self._prepare_bundle(
+            job_id,
+            "Loading the audio cleanup model",
+            BUNDLE_LOAD_SECONDS,
+            "bundle-load",
+            lambda: load_denoiser(model.engine_kind, bundle_dir, filenames=filenames),
+        )
 
     def _run_video_job(self, job_id, data):
         # Temporal engines route before the Spandrel inspect: their bundles
@@ -1076,10 +1631,27 @@ class WorkerServer:
         # stack trace, and frame-by-frame stays available.
         from localsr.core.video_engines import resolve_video_engine, seedvr2_runtime_issue
 
+        if data.get("video_codec") == "auto":
+            from localsr.core.media_bridge import automatic_video_codec, load_media_bridge
+
+            codec = automatic_video_codec(
+                load_media_bridge(data.get("external_ffmpeg")),
+                str(data.get("container", "mp4")),
+                str(data.get("hdr_mode", "reject")),
+            )
+            data = {**data, "video_codec": codec, "_automatic_codec": True}
+            send_message(LogMessage(level="info", message=f"Automatic video format: {codec}"))
         model_kind = str(data.get("model_kind", "spandrel_image"))
+        interpolating = str(data.get("interpolation") or "off") != "off"
+        if interpolating and model_kind != "spandrel_image":
+            raise ValueError(
+                "Frame interpolation works with the frame-by-frame engine in this version. "
+                "Choose Frame-by-frame or turn interpolation off."
+            )
         if model_kind == "seedvr2" and str(data.get("device", "")).split(":", 1)[0] in {
             "directml",
             "xpu",
+            "openvino",
         }:
             raise ValueError(
                 "SeedVR2 does not support this GPU backend. Choose frame-by-frame video "
@@ -1092,7 +1664,7 @@ class WorkerServer:
             if data.get("hdr_mode") == "preserve":
                 raise ValueError("HDR preservation requires the frame-by-frame HAT engine (Labs).")
             send_message(VideoStageProgress(job_id=job_id, stage="verifying_model"))
-            self._verify_temporal_bundle(data)
+            self._verify_temporal_bundle(data, job_id)
             if model_kind == "seedvr2":
                 from functools import partial
 
@@ -1106,11 +1678,71 @@ class WorkerServer:
 
         from localsr.core.media_bridge import load_media_bridge
 
+        synthesizer = self._interpolation_synthesizer(job_id, data) if interpolating else None
+        clean_audio = bool(data.get("audio_denoise", False)) and data.get("fps") is None
+        audio_denoiser = self._audio_denoiser(job_id, data) if clean_audio else None
         send_message(LogMessage(level="info", message="Inspecting model for video job..."))
-        info = self.model_adapter.inspect(data["model_path"])
+        self.engine.neural_engine_enabled = bool(data.get("neural_engine", True))
+        self.engine.status_callback = lambda message: send_message(
+            EngineStatus(job_id=job_id, message=message)
+        )
+        # The checkpoint read and a backend's preparation report and can be cancelled like
+        # an image job's; notes of earlier work are not this video's.
+        self.model_adapter.status_callback = self.engine.status_callback
+        self.model_adapter.cancel_event = self.cancel_event
+        self.engine.take_notes()
+        pipeline = resolve_image_pipeline(
+            raw_stages=data.get("stages"),
+            model_path=str(data["model_path"]),
+            output_scale=data.get("output_scale"),
+            face_model_path=data.get("face_model_path"),
+            face_fidelity=float(data.get("face_fidelity", 0.7)),
+        )
+        face_model_path = None if pipeline.primary is None else data.get("face_model_path")
+        release_except = getattr(self.engine, "release_models_except", None)
+        if callable(release_except):
+            release_except(
+                {stage.model_path for stage in pipeline.stages}
+                | ({face_model_path} if face_model_path else set())
+            )
+        preprocess_stages: list[VideoFixStage] = []
+        for stage in pipeline.preprocess_stages:
+            stage_info = self.model_adapter.inspect(stage.model_path)
+            if int(getattr(stage_info, "scale", 0)) != 1:
+                raise ValueError(
+                    "A preprocessing restoration checkpoint must have native scale 1×."
+                )
+            if (
+                int(getattr(stage_info, "in_channels", 3)) != 3
+                or int(getattr(stage_info, "out_channels", 3)) != 3
+            ):
+                raise ValueError("A fix must preserve the working frame channels.")
+            catalog_model = CATALOG_BY_ID.get(stage.model_id)
+            preprocess_stages.append(
+                VideoFixStage(
+                    model_path=stage.model_path,
+                    model_info=stage_info,
+                    model_id=stage.model_id,
+                    halo=catalog_model.recommended_halo if catalog_model else 0,
+                    fix=stage.fix,
+                    time_factor=catalog_model.time_factor if catalog_model else 1.0,
+                )
+            )
+        if pipeline.primary is None:
+            info = None
+            primary_time_factor = 0.0
+            model_path = ""
+        else:
+            model_path = str(data["model_path"])
+            info = self.model_adapter.inspect(model_path)
+            if data.get("output_scale") == 1 and int(getattr(info, "scale", 1)) > 1:
+                face_model_path = None
+                primary_time_factor = 0.0
+            else:
+                primary_catalog = CATALOG_BY_ID.get(pipeline.primary.model_id)
+                primary_time_factor = primary_catalog.time_factor if primary_catalog else 1.0
 
         face_info = None
-        face_model_path = data.get("face_model_path")
         if face_model_path:
             try:
                 face_info = self.model_adapter.inspect(face_model_path)
@@ -1124,7 +1756,7 @@ class WorkerServer:
 
         config = VideoJobConfig(
             video_path=data["video_path"],
-            model_path=data["model_path"],
+            model_path=model_path,
             output_video_path=data["output_video_path"],
             model_info=info,
             device_str=data["device"],
@@ -1135,6 +1767,7 @@ class WorkerServer:
             temporary_directory=data.get("temporary_directory"),
             container=str(data.get("container", "mp4")),
             video_codec=str(data.get("video_codec", "av1")),
+            automatic_codec=bool(data.get("_automatic_codec", False)),
             crf=int(data.get("crf", 18)),
             start_frame=data.get("start_frame"),
             end_frame=data.get("end_frame"),
@@ -1147,19 +1780,17 @@ class WorkerServer:
             output_scale=data.get("output_scale"),
             hdr_mode=str(data.get("hdr_mode", "reject")),
             external_ffmpeg=load_media_bridge(data.get("external_ffmpeg")),
+            interpolation=str(data.get("interpolation") or "off"),
+            interpolation_order=str(data.get("interpolation_order") or "after_upscale"),
+            preprocess_stages=tuple(preprocess_stages),
+            primary_time_factor=primary_time_factor,
+            audio_denoise=clean_audio,
+            audio_denoise_bundle_dir=data.get("audio_denoise_bundle_dir"),
+            audio_denoiser=audio_denoiser,
         )
 
-        preview_encoder = LatestPreviewEncoder(
-            lambda packet: self._emit_live_preview(packet),
-            lambda message: send_message(LivePreviewWarning(job_id=job_id, message=message)),
-            enabled=bool(data.get("preview_enabled", True)),
-            max_fps=float(data.get("preview_max_fps", 2.0)),
-            max_dimension=int(data.get("preview_max_dimension", 320)),
-        )
-        source_encoder = LatestPreviewEncoder(
-            self._emit_live_preview,
-            enabled=bool(data.get("preview_enabled", True)),
-            max_dimension=640,
+        preview_encoder, source_encoder = WorkerServer._create_video_preview_encoders(
+            self, job_id, data
         )
 
         from localsr.core.hdr import tone_map_to_sdr
@@ -1261,12 +1892,9 @@ class WorkerServer:
                 force=True,
             )
 
-        def progress_cb(frames_done: int, total_frames: int, elapsed: float) -> None:
-            if total_frames > 0:
-                per_frame = elapsed / max(frames_done, 1)
-                remaining = per_frame * max(0, total_frames - frames_done)
-            else:
-                remaining = 0.0
+        def progress_cb(
+            frames_done: int, total_frames: int, elapsed: float, remaining: float | None
+        ) -> None:
             send_message(
                 VideoFrameCompleted(
                     job_id=job_id,
@@ -1274,7 +1902,7 @@ class WorkerServer:
                     total_frames=int(total_frames),
                     frames_processed=int(frames_done),
                     elapsed_seconds=float(elapsed),
-                    estimated_remaining_seconds=float(remaining),
+                    estimated_remaining_seconds=float(remaining or 0.0),
                     jpeg_base64="",
                 )
             )
@@ -1295,6 +1923,20 @@ class WorkerServer:
                     LogMessage(level="warning", message=message)
                 ),
                 stage_cb=lambda stage: send_message(VideoStageProgress(job_id=job_id, stage=stage)),
+                audio_progress_cb=lambda done, total, elapsed, remaining: send_message(
+                    VideoStageProgress(
+                        job_id=job_id,
+                        stage="audio_denoise",
+                        completed=int(done),
+                        total=int(total),
+                        frame_index=0,
+                        total_frames=0,
+                        elapsed_seconds=float(elapsed),
+                        frames_processed=0,
+                        estimated_remaining_seconds=float(remaining or 0.0),
+                    )
+                ),
+                synthesizer=synthesizer,
             )
         except InterruptedError:
             preview_encoder.close()
@@ -1304,10 +1946,8 @@ class WorkerServer:
             preview_encoder.close()
             source_encoder.close()
 
-        if self.cancel_event.is_set():
-            send_message(JobCancelled(job_id=job_id))
-            return
-
+        # run_video_job returns only after the output was published, so a cancel
+        # that arrived during its cleanup does not undo the saved file.
         send_message(
             VideoJobCompleted(
                 job_id=job_id,
@@ -1315,6 +1955,7 @@ class WorkerServer:
                 frames_processed=result.frames_processed,
                 elapsed_seconds=result.elapsed_seconds,
                 inference_seconds=result.inference_seconds,
+                notes=" ".join(self.engine.take_notes()),
             )
         )
 
@@ -1330,10 +1971,18 @@ def main():
         parser.add_argument("--output", type=Path, required=True)
         args = parser.parse_args()
         result = probe(args.backend_probe)
-        args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+        args.output.write_text(
+            json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
         return
     server = WorkerServer()
     server.run()
+    if abandoned_work_running():
+        # A thread stuck in native code (an ONNX export, a driver compile) cannot be stopped,
+        # and Python aborts when it finalizes around one. Everything has been closed by now.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
 
 
 if __name__ == "__main__":

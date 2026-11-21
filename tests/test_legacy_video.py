@@ -193,14 +193,11 @@ def test_video_extension_registration_agrees_across_desktop_entry_points():
     rust = (root / "desktop/src-tauri/src/commands.rs").read_text()
     values = re.search(r"const VIDEO_EXTENSIONS:.*?=\s*&\[(.*?)\];", rust, re.S).group(1)
     assert {"." + value for value in re.findall(r'"([a-z0-9]+)"', values)} == registered
-    dialog = (
-        (root / "desktop/src/lib/api.ts")
-        .read_text()
-        .split("export async function chooseMediaFolder")[0]
-    )
+    # The host opens the file dialog, so its filter lives in commands.rs.
+    dialog = re.search(r"const MEDIA_DIALOG_EXTENSIONS:.*?=\s*&\[(.*?)\];", rust, re.S).group(1)
     explorer = (root / "desktop/src-tauri/src/integrations.rs").read_text()
     for ext in registered:
-        assert f"'{ext[1:]}'" in dialog
+        assert f'"{ext[1:]}"' in dialog
         assert f"System.FileExtension:={ext}" in explorer
         assert is_video_input("holiday" + ext.upper())
 

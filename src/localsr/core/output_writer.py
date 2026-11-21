@@ -104,9 +104,6 @@ class OutputWriter:
     def get_array(self) -> np.ndarray:
         return self.mmap
 
-    def get_path(self) -> str:
-        return self.temp_path
-
     def close(self):
         mmap_array = self.mmap
         self.mmap = None

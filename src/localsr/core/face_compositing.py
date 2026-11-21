@@ -67,11 +67,9 @@ def blend_tile_outputs(
     # Upscale alpha from core resolution to output resolution (core * scale).
     out_h, out_w = face_output.shape[1], face_output.shape[2]
     if alpha.shape != (out_h, out_w):
-        # Nearest-neighbor upscale via numpy repeat.
         scale_y = out_h // alpha.shape[0]
         scale_x = out_w // alpha.shape[1]
         alpha = np.repeat(np.repeat(alpha, scale_y, axis=0), scale_x, axis=1)
-        # Handle any remainder from integer division.
         if alpha.shape[0] < out_h:
             alpha = np.pad(alpha, ((0, out_h - alpha.shape[0]), (0, 0)), mode="edge")
         if alpha.shape[1] < out_w:

@@ -1,10 +1,17 @@
 <script lang="ts">
   import { createEventDispatcher, onMount } from 'svelte';
   import * as api from './lib/api';
+  import { modal } from './lib/modal';
   import { updateDialogOpen, updateError, updateState } from './lib/updates';
   export let processing = false;
-  export let anonymousUpdateCount = true;
-  const dispatch = createEventDispatcher<{ anonymouscount: boolean }>();
+  export let anonymousUpdateCount = false;
+  export let completionSound = false;
+  export let checkAtLaunch = true;
+  const dispatch = createEventDispatcher<{
+    anonymouscount: boolean;
+    checkatlaunch: boolean;
+    completionsound: boolean;
+  }>();
   let channel = 'beta';
   let working = false;
   let recoveryConfirmed = false;
@@ -36,6 +43,10 @@
       unsubscribe?.();
     };
   });
+  // Close is off while an update installs, and so is Escape.
+  function closePanel(): void {
+    if (status.stage !== 'installing') updateDialogOpen.set(false);
+  }
   async function run(action: () => Promise<unknown>) {
     if (working) return;
     working = true;
@@ -68,6 +79,7 @@
       aria-modal="true"
       aria-labelledby="update-title"
       tabindex="-1"
+      use:modal={closePanel}
     >
       <h2 id="update-title">Software Update</h2>
       {#if status.managed_by_store}
@@ -88,15 +100,42 @@
           disabled={inProgress || status.stage === 'downloaded'}
           ><option value="stable">Stable</option><option value="beta">Beta</option></select
         >
-        <label class="count"
-          ><input
-            type="checkbox"
-            checked={anonymousUpdateCount}
-            disabled={processing}
-            on:change={(event) => dispatch('anonymouscount', event.currentTarget.checked)}
-          /> Send an anonymous update-check count (version, platform, channel)</label
-        >
+        {#if status.configured}
+          <!-- Each box shows what LocalSR has saved: a click asks for the change, and the
+               box follows once it is saved, so a failed save never leaves it showing one. -->
+          <label class="count"
+            ><input
+              type="checkbox"
+              checked={checkAtLaunch}
+              on:change={(event) => {
+                const wanted = event.currentTarget.checked;
+                event.currentTarget.checked = checkAtLaunch;
+                dispatch('checkatlaunch', wanted);
+              }}
+            /> Check for updates when LocalSR starts</label
+          >
+          <label class="count"
+            ><input
+              type="checkbox"
+              checked={anonymousUpdateCount}
+              on:change={(event) => {
+                const wanted = event.currentTarget.checked;
+                event.currentTarget.checked = anonymousUpdateCount;
+                dispatch('anonymouscount', wanted);
+              }}
+            /> After an update check, send an anonymous count: app version, platform and channel only.
+            No install ID, cookies, files or settings.</label
+          >
+        {/if}
       {/if}
+      <label class="count"
+        ><input
+          type="checkbox"
+          checked={completionSound}
+          disabled={processing}
+          on:change={(event) => dispatch('completionsound', event.currentTarget.checked)}
+        /> Play a sound when a job finishes</label
+      >
       {#if status.target}<p class="detail">Installed build: {status.target}</p>{/if}
       <p class="detail">
         This software uses libraries from the FFmpeg project under the LGPLv2.1. LocalSR does not
@@ -141,7 +180,8 @@
           >
         {:else if status.stage === 'downloading'}<button
             class="button"
-            on:click={() => api.cancelUpdate()}>Cancel download</button
+            on:click={() => api.cancelUpdate().catch((e) => updateError.set(String(e)))}
+            >Cancel download</button
           >
         {:else if status.stage === 'downloaded'}<button
             class="button"
@@ -178,7 +218,7 @@
     position: fixed;
     inset: 0;
     z-index: 110;
-    background: #000a;
+    background: var(--backdrop-strong);
     display: grid;
     place-items: center;
     padding: 24px;
@@ -188,11 +228,11 @@
     width: min(560px, 100%);
     max-height: 85vh;
     overflow: auto;
-    background: #232325;
+    background: var(--dialog-bg);
     padding: 20px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    border: 1px solid var(--surface-border);
     border-radius: var(--radius-surface);
-    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.65);
+    box-shadow: 0 24px 80px var(--shadow-modal);
     font-size: calc(13px * var(--ui-scale));
   }
   h2 {
@@ -214,7 +254,7 @@
   }
   .detail {
     font-size: 12px;
-    color: #a3a3a6;
+    color: var(--dialog-muted-text);
   }
   .count {
     display: block;
@@ -234,13 +274,13 @@
     min-width: 70px;
   }
   .notice {
-    background: #2a2a2c;
-    border: 1px solid #4a4a4d;
+    background: var(--button-surface);
+    border: 1px solid var(--button-border);
     padding: 12px;
     border-radius: var(--radius);
   }
   .error {
-    color: #f0b2aa;
+    color: var(--danger-text-muted);
   }
   progress {
     width: 100%;

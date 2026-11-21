@@ -8,6 +8,7 @@ path.
 
 from __future__ import annotations
 
+import glob
 import heapq
 import os
 import tempfile
@@ -27,6 +28,7 @@ from .hdr import tone_map_to_sdr
 from .media_codecs import (
     EXTERNAL_FFMPEG_HINT,
     EXTERNAL_OUTPUT_CODECS,
+    SYSTEM_OUTPUT_CODECS,
     UNDECODABLE_VIDEO_MESSAGE,
     UndecodableVideoError,
     encode_spec,
@@ -36,6 +38,7 @@ from .media_codecs import (
     stream_copy_supported,
     validate_output,
 )
+from .output_publish import OutputExistsError, owned_temporary, publish_output
 from .video_audio import add_opus_stream, needs_audio_transcode, opus_packets
 from .video_normalization import display_frames, square_pixel_width
 
@@ -50,6 +53,7 @@ class VideoProbe:
     duration_seconds: float
     hdr_format: str = ""
     audio_warning: str = ""
+    has_audio: bool = True
 
 
 @dataclass(frozen=True)
@@ -74,18 +78,18 @@ def _display_transform(frame: av.VideoFrame) -> tuple[int, bool]:
     our standalone output is rebased to that image's bounds. Keep rejecting
     perspective, scaling and arbitrary rotations instead of changing geometry.
     """
-    for side_data in frame.side_data:
-        if side_data.type.name != "DISPLAYMATRIX":
-            continue
-        matrix = np.frombuffer(side_data, dtype=np.int32).reshape(3, 3)
-        # FFmpeg/ISO BMFF stores [a b u; c d v; x y w]. The bottom-row
-        # x/y values are 16.16 translations, commonly used by iPhone MOVs to
-        # keep a rotated portrait in positive coordinates. They are not
-        # perspective terms (u/v), and do not change its normalized pixels.
-        if matrix[0, 2] or matrix[1, 2] or matrix[2, 2] != 1 << 30:
-            raise ValueError("Video display transform includes unsupported perspective or scale.")
-        return display_turns(matrix[:2, :2].astype(float) / 65536)
-    return 0, False
+    # Look up by name for compatibility across supported PyAV versions.
+    side_data = frame.side_data.get("DISPLAYMATRIX")
+    if side_data is None:
+        return 0, False
+    matrix = np.frombuffer(side_data, dtype=np.int32).reshape(3, 3)
+    # FFmpeg/ISO BMFF stores [a b u; c d v; x y w]. The bottom-row
+    # x/y values are 16.16 translations, commonly used by iPhone MOVs to
+    # keep a rotated portrait in positive coordinates. They are not
+    # perspective terms (u/v), and do not change its normalized pixels.
+    if matrix[0, 2] or matrix[1, 2] or matrix[2, 2] != 1 << 30:
+        raise ValueError("Video display transform includes unsupported perspective or scale.")
+    return display_turns(matrix[:2, :2].astype(float) / 65536)
 
 
 def display_turns(basis: np.ndarray) -> tuple[int, bool]:
@@ -175,6 +179,7 @@ def _video_probe(container, stream, first: av.VideoFrame | None, converter: str 
         duration,
         {16: "PQ", 18: "HLG"}.get(transfer, ""),
         _audio_compatibility_warning(container, converter=converter),
+        any(item.type == "audio" for item in container.streams),
     )
 
 
@@ -273,7 +278,9 @@ def _converter_label(bridge, path: str, *, audio_only: bool = False) -> str:
     return wrapped.converter_label(path, audio_only=audio_only) if wrapped is not None else ""
 
 
-def _source_timing(path: str, converter: str = "your FFmpeg") -> tuple[float, int, float, str]:
+def _source_timing(
+    path: str, converter: str = "your FFmpeg"
+) -> tuple[float, int, float, str, bool]:
     """Timing from the container and stream headers, which need no decoder."""
     with av.open(path) as container:
         stream = next((s for s in container.streams if s.type == "video"), None)
@@ -290,6 +297,7 @@ def _source_timing(path: str, converter: str = "your FFmpeg") -> tuple[float, in
             int(stream.frames or 0),
             duration,
             _audio_compatibility_warning(container, converter=converter),
+            any(item.type == "audio" for item in container.streams),
         )
 
 
@@ -308,17 +316,23 @@ def probe_video_preview(
     report = progress or (lambda _stage: None)
     report("opening")
     if not _source_decodable(path):
-        from .media_bridge import external_timing, first_frame_source, undecodable_message
+        from .media_bridge import (
+            external_has_audio,
+            external_timing,
+            first_frame_source,
+            undecodable_message,
+        )
 
         if external_ffmpeg is None:
             raise UndecodableVideoError(undecodable_message(None))
         try:
-            fps, count, duration, audio_warning = _source_timing(
+            fps, count, duration, audio_warning, has_audio = _source_timing(
                 path, _converter_label(external_ffmpeg, path) or "your FFmpeg"
             )
         except av.FFmpegError:
             (fps, duration), count = external_timing(external_ffmpeg, path), 0
             audio_warning = ""
+            has_audio = external_has_audio(external_ffmpeg, path)
         report("decoding_video")
         with first_frame_source(
             path, ffmpeg=external_ffmpeg, temporary_directory=temporary_directory
@@ -334,6 +348,7 @@ def probe_video_preview(
                 duration_seconds=duration,
                 codec="external",
                 audio_warning=audio_warning,
+                has_audio=has_audio,
             ),
             preview,
         )
@@ -401,10 +416,14 @@ def decode_timed_frames(
             yield pending
 
 
-def validate_hdr_encoder(video_codec: str = "av1", external_ffmpeg=None) -> None:
+def validate_hdr_encoder(
+    video_codec: str = "av1", external_ffmpeg=None, container: str | None = None
+) -> None:
     """Fail before inference if this export cannot carry 10-bit HDR."""
     try:
-        validate_output(video_codec, "mkv" if video_codec == "ffv1" else "mp4", hdr=True)
+        validate_output(
+            video_codec, container or ("mkv" if video_codec == "ffv1" else "mp4"), hdr=True
+        )
         if video_codec in EXTERNAL_OUTPUT_CODECS:
             if external_ffmpeg is None:
                 raise ValueError("HEVC HDR export requires a selected external FFmpeg.")
@@ -414,6 +433,63 @@ def validate_hdr_encoder(video_codec: str = "av1", external_ffmpeg=None) -> None
             require_bundled_encoder(encode_spec(video_codec, hdr=True))
     except (av.FFmpegError, ValueError, RuntimeError) as error:
         raise VideoStageError("HDR encode", str(error)) from error
+
+
+def _system_stream_export(
+    frames,
+    destination: Path,
+    *,
+    system,
+    video_codec: str,
+    container_format: str,
+    crf: int,
+    fps: float,
+    audio_source: str | None,
+    cancel_event: threading.Event | None,
+    temporary_directory: str | None,
+) -> str:
+    """Pipe restored frames to the system encoder while the next ones are restored."""
+    final = _owned_output_temporary(destination, "external", temporary_directory)
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="localsr-media-", dir=destination.parent
+        ) as scratch:
+            wav = (
+                system.source_audio(Path(audio_source), Path(scratch) / "audio.wav", cancel_event)
+                if audio_source
+                else None
+            )
+            system.encode_frames(
+                frames,
+                final,
+                video_codec=video_codec,
+                container=container_format,
+                crf=crf,
+                fps=fps,
+                audio=wav,
+                cancel_event=cancel_event,
+            )
+        publish_output(final, destination, cancel_event)
+        return str(destination)
+    finally:
+        try:
+            final.unlink()
+        except FileNotFoundError:
+            pass
+        _remove_system_sidecars(final)
+
+
+def _remove_system_sidecars(final: Path) -> None:
+    """Remove the copy macOS keeps beside a file the system encoder wrote.
+
+    It is named `<name>.sb-...` and, for ProRes, is a full extra copy. Only the ones
+    of this job's own file go.
+    """
+    for sidecar in final.parent.glob(glob.escape(final.name) + ".sb-*"):
+        try:
+            sidecar.unlink()
+        except OSError:
+            pass
 
 
 def _external_export(
@@ -433,7 +509,39 @@ def _external_export(
     temporary_directory: str | None,
     **master_options,
 ) -> str:
-    """Encode an FFV1 master, then let the user's FFmpeg write H.264/HEVC."""
+    """Encode an FFV1 master, then let the user's FFmpeg write H.264/HEVC.
+
+    With the system's own encoders, a whole untrimmed SDR clip skips the master
+    and streams straight into the hardware encoder instead.
+    """
+    system = getattr(external_ffmpeg, "system", None)
+    if (
+        system is not None
+        and not hdr_format
+        and master_options.get("stream_to_system", False)
+        and width % 2 == 0
+        and height % 2 == 0
+    ):
+        from .system_codecs import SystemCodecsError
+
+        try:
+            system.encoder_for(video_codec, container=container_format)
+        except SystemCodecsError:
+            pass
+        else:
+            return _system_stream_export(
+                frames,
+                destination,
+                system=system,
+                video_codec=video_codec,
+                container_format=container_format,
+                crf=crf,
+                fps=fps,
+                audio_source=master_options.get("audio_source"),
+                cancel_event=cancel_event,
+                temporary_directory=temporary_directory,
+            )
+    master_options.pop("stream_to_system", None)
     if external_ffmpeg is None:
         raise VideoStageError(
             "encode",
@@ -455,6 +563,7 @@ def _external_export(
             cancel_event=cancel_event,
             hdr_format=hdr_format,
             temporary_directory=temporary_directory,
+            replace_existing=True,
             **master_options,
         )
         if stage_callback is not None:
@@ -478,7 +587,7 @@ def _external_export(
             )
         except ExternalFFmpegError as error:
             raise VideoStageError("external encode", str(error)) from error
-        os.replace(final, destination)
+        publish_output(final, destination, cancel_event)
         return str(destination)
     finally:
         for temporary in (master, final):
@@ -486,9 +595,59 @@ def _external_export(
                 temporary.unlink()
             except FileNotFoundError:
                 pass
+        _remove_system_sidecars(final)
 
 
 def encode_video(
+    frames,
+    destination_path: str,
+    *,
+    video_codec: str = "av1",
+    automatic_codec: bool = False,
+    note_callback: Callable[[str], None] | None = None,
+    **options,
+) -> str:
+    """Export video, retaining Automatic's HEVC → AV1 recovery intent."""
+    from .media_bridge import automatic_video_codec
+    from .video_codec_recovery import automatic_export, system_export_failure
+
+    if video_codec == "auto":
+        automatic_codec = True
+        video_codec = automatic_video_codec(
+            options.get("external_ffmpeg"),
+            options.get("container_format", "mp4"),
+            "preserve" if options.get("hdr_format") else "reject",
+        )
+    if (
+        automatic_codec
+        and video_codec == "hevc"
+        and options.get("container_format", "mp4") == "mp4"
+    ):
+        return automatic_export(
+            frames,
+            destination_path,
+            export=lambda replay, codec: _encode_video(
+                replay, destination_path, video_codec=codec, **options
+            ),
+            cancel_event=options.get("cancel_event"),
+            temporary_directory=options.get("temporary_directory"),
+            note_callback=note_callback,
+            warning_callback=options.get("warning_callback"),
+        )
+    try:
+        return _encode_video(frames, destination_path, video_codec=video_codec, **options)
+    except Exception as error:
+        if video_codec in {"h264", "hevc"} and system_export_failure(error):
+            from .system_codecs import SystemCodecsError
+
+            message = f"{error}. Choose Automatic or AV1 under Advanced > Video format."
+            if isinstance(error, SystemCodecsError):
+                raise SystemCodecsError(message) from error
+            raise VideoStageError("encode", message) from error
+        raise
+
+
+def _encode_video(
     frames,
     destination_path: str,
     *,
@@ -499,6 +658,8 @@ def encode_video(
     width: int,
     height: int,
     audio_source: str | None = None,
+    subtitle_source: str | None = None,
+    reencode_audio: bool = False,
     source_start_seconds: float = 0.0,
     preserve_timing: bool = True,
     cancel_event: threading.Event | None = None,
@@ -510,22 +671,28 @@ def encode_video(
     external_ffmpeg=None,
     fast: bool = False,
     stage_callback: Callable[[str], None] | None = None,
+    stream_to_system: bool = False,
+    replace_existing: bool = False,
 ) -> str:
     """Encode an iterable of (rgb_uint8_HxWx3) frames into a video file.
 
     The enhanced picture is encoded to an app-owned temporary container, then
     remuxed with source audio/subtitles. Compatible audio streams are copied;
     audio the container cannot carry is converted to Opus. H.264/HEVC exports
-    are delegated to the user's own FFmpeg from a lossless FFV1 master. The
-    final destination appears only through one atomic replace.
+    are delegated to the user's own FFmpeg from a lossless FFV1 master; with
+    ``stream_to_system`` (a whole, untrimmed clip of timed frames) the system's
+    hardware encoder receives the frames directly. The final destination appears
+    only through one atomic publication that fails if the name is already taken;
+    ``replace_existing`` is for an app-owned temporary destination that is
+    expected to exist.
     """
     container_format = normalize_container(container_format)
     if hdr_format:
         if hdr_format not in {"HLG", "PQ"} or sdr_bt709:
             raise ValueError("HDR output must be HLG or PQ, without SDR conversion.")
-        validate_hdr_encoder(video_codec, external_ffmpeg)
+        validate_hdr_encoder(video_codec, external_ffmpeg, container_format)
     validate_output(video_codec, container_format, hdr=bool(hdr_format))
-    if video_codec in EXTERNAL_OUTPUT_CODECS:
+    if video_codec in EXTERNAL_OUTPUT_CODECS + SYSTEM_OUTPUT_CODECS:
         return _external_export(
             frames,
             Path(destination_path),
@@ -541,11 +708,13 @@ def encode_video(
             cancel_event=cancel_event,
             temporary_directory=temporary_directory,
             audio_source=audio_source,
+            subtitle_source=subtitle_source,
             source_start_seconds=source_start_seconds,
             preserve_timing=preserve_timing,
             warning_callback=warning_callback,
             sdr_bt709=sdr_bt709,
             encoder_threads=encoder_threads,
+            stream_to_system=stream_to_system and preserve_timing,
         )
     spec = encode_spec(
         video_codec, crf=crf, hdr=bool(hdr_format), threads=encoder_threads, fast=fast
@@ -649,34 +818,40 @@ def encode_video(
             for packet in stream.encode(frame):
                 mux(packet)
             frame_count += 1
-        if frame_count == 0:
-            raise ValueError("the inference pipeline produced no frames")
         for packet in stream.encode():
             mux(packet)
         output_container.close()
         output_container = None
 
+        def publish(temporary: Path) -> None:
+            if replace_existing:
+                os.replace(temporary, destination)
+            else:
+                publish_output(temporary, destination, cancel_event)
+
         source = Path(audio_source) if audio_source else None
-        if source is not None and source.is_file():
+        sub_source = Path(subtitle_source) if subtitle_source else None
+        if (source is not None and source.is_file()) or (
+            sub_source is not None and sub_source.is_file()
+        ):
             copied = _remux_source_streams(
                 encoded_temporary,
-                source,
+                source if source is not None and source.is_file() else sub_source,
                 mux_temporary,
                 container_format=container_format,
+                subtitle_source=(
+                    sub_source if sub_source is not None and sub_source != source else None
+                ),
+                reencode_audio=reencode_audio,
                 source_start_seconds=float(source_start_seconds),
                 cancel_event=cancel_event,
                 warning_callback=warning_callback,
             )
-            if copied:
-                os.replace(mux_temporary, destination)
-            else:
-                os.replace(encoded_temporary, destination)
+            publish(mux_temporary if copied else encoded_temporary)
         else:
-            os.replace(encoded_temporary, destination)
+            publish(encoded_temporary)
         return destination_path
-    except InterruptedError:
-        raise
-    except VideoStageError:
+    except (InterruptedError, VideoStageError, OutputExistsError):
         raise
     except BaseException as error:
         raise VideoStageError("encode", str(error)) from error
@@ -695,13 +870,7 @@ def encode_video(
 
 def _owned_output_temporary(destination: Path, phase: str, directory: str | None = None) -> Path:
     """Reserve one unique LocalSR-owned sibling for an atomic final replace."""
-    descriptor, name = tempfile.mkstemp(
-        prefix=f".{destination.name}.localsr-{phase}-",
-        suffix=".tmp",
-        dir=directory or destination.parent,
-    )
-    os.close(descriptor)
-    return Path(name)
+    return owned_temporary(directory or destination.parent, phase)
 
 
 def _packet_time(packet: av.Packet) -> float:
@@ -752,6 +921,8 @@ def _remux_source_streams(
     output_path: Path,
     *,
     container_format: str,
+    subtitle_source: Path | None = None,
+    reencode_audio: bool = False,
     source_start_seconds: float = 0.0,
     cancel_event: threading.Event | None = None,
     warning_callback=None,
@@ -759,31 +930,38 @@ def _remux_source_streams(
     """Interleave encoded video and compatible source audio/subtitles."""
     video_container = None
     source_container = None
+    subtitle_container = None
     output_container = None
     try:
         video_container = av.open(str(video_path))
         source_container = av.open(str(source_path))
+        if subtitle_source is not None and subtitle_source.is_file():
+            subtitle_container = av.open(str(subtitle_source))
         video_in = next(
             (stream for stream in video_container.streams if stream.type == "video"), None
         )
         if video_in is None:
             raise VideoStageError("remux", "the enhanced temporary file has no video stream")
 
-        auxiliary_inputs = [
-            stream for stream in source_container.streams if stream.type in {"audio", "subtitle"}
+        audio_inputs = [stream for stream in source_container.streams if stream.type == "audio"]
+        subtitle_inputs = [
+            stream
+            for stream in (subtitle_container or source_container).streams
+            if stream.type == "subtitle"
         ]
-        audio_warning = _audio_compatibility_warning(source_container, container_format)
-        if audio_warning:
-            if warning_callback:
-                warning_callback(audio_warning)
-            else:
-                warnings.warn(audio_warning, stacklevel=2)
-            auxiliary_inputs = [
-                stream
-                for stream in auxiliary_inputs
-                if stream.type != "audio" or _audio_stream_usable(stream, container_format)
-            ]
-        if not auxiliary_inputs:
+        if not reencode_audio:
+            audio_warning = _audio_compatibility_warning(source_container, container_format)
+            if audio_warning:
+                if warning_callback:
+                    warning_callback(audio_warning)
+                else:
+                    warnings.warn(audio_warning, stacklevel=2)
+                audio_inputs = [
+                    stream
+                    for stream in audio_inputs
+                    if _audio_stream_usable(stream, container_format)
+                ]
+        if not audio_inputs and not subtitle_inputs:
             return False
 
         output_container = av.open(
@@ -792,31 +970,51 @@ def _remux_source_streams(
         # Copy the encoded stream's parameters; its decoder name (libdav1d) is not an encoder.
         video_out = output_container.add_stream_from_template(video_in, opaque=True)
         auxiliary_outputs: dict[int, object] = {}
+        subtitle_outputs: dict[int, object] = {}
         converted_audio: dict[int, object] = {}
-        for stream in auxiliary_inputs:
-            if needs_audio_transcode(stream, container_format):
+        for stream in audio_inputs:
+            if needs_audio_transcode(stream, container_format) or (
+                reencode_audio and normalize_container(container_format) != "mkv"
+            ):
                 converted_audio[stream.index] = add_opus_stream(output_container, stream)
                 continue
             try:
                 auxiliary_outputs[stream.index] = output_container.add_stream_from_template(stream)
             except (av.FFmpegError, ValueError, OSError) as error:
-                if stream.type == "subtitle":
-                    # The requested container does not support this subtitle
-                    # codec. The enhanced video remains valid and the stream is
-                    # not falsely advertised as copied.
-                    message = f"Subtitle stream {stream.index} was omitted: incompatible with {container_format}."
-                    if warning_callback:
-                        warning_callback(message)
-                    else:
-                        warnings.warn(message, stacklevel=2)
-                    continue
                 raise VideoStageError(
                     "audio remux",
                     f"{getattr(stream.codec_context, 'name', 'audio')} is incompatible with {container_format}: {error}",
                 ) from error
 
-        selected_aux = [stream for stream in auxiliary_inputs if stream.index in auxiliary_outputs]
-        if not selected_aux and not converted_audio:
+        for stream in subtitle_inputs:
+            try:
+                target_map = (
+                    subtitle_outputs if subtitle_container is not None else auxiliary_outputs
+                )
+                target_map[stream.index] = output_container.add_stream_from_template(stream)
+            except (av.FFmpegError, ValueError, OSError):
+                # The requested container does not support this subtitle
+                # codec. The enhanced video remains valid and the stream is
+                # not falsely advertised as copied.
+                message = f"Subtitle stream {stream.index} was omitted: incompatible with {container_format}."
+                if warning_callback:
+                    warning_callback(message)
+                else:
+                    warnings.warn(message, stacklevel=2)
+
+        selected_aux = [
+            stream
+            for stream in (
+                audio_inputs + ([] if subtitle_container is not None else subtitle_inputs)
+            )
+            if stream.index in auxiliary_outputs
+        ]
+        selected_subs = (
+            [stream for stream in subtitle_inputs if stream.index in subtitle_outputs]
+            if subtitle_container is not None
+            else []
+        )
+        if not selected_aux and not selected_subs and not converted_audio:
             output_container.close()
             output_container = None
             try:
@@ -841,19 +1039,23 @@ def _remux_source_streams(
                     packet.stream = video_out
                     yield packet
 
-        def copied_packets():
-            if not selected_aux:
+        def copied_packets(container, streams, outputs):
+            if not streams:
                 return
-            iterator = source_container.demux(*selected_aux)
+            iterator = container.demux(*streams)
             while (
                 packet := _next_trimmed_packet(
                     iterator, source_start_seconds, source_end_seconds, cancel_event
                 )
             ) is not None:
-                packet.stream = auxiliary_outputs[packet.stream.index]
+                packet.stream = outputs[packet.stream.index]
                 yield packet
 
-        iterators = [video_packets(), copied_packets()]
+        iterators = [
+            video_packets(),
+            copied_packets(source_container, selected_aux, auxiliary_outputs),
+            copied_packets(subtitle_container, selected_subs, subtitle_outputs),
+        ]
         iterators.extend(
             opus_packets(
                 source_path, index, output, source_start_seconds, source_end_seconds, cancel_event
@@ -883,10 +1085,8 @@ def _remux_source_streams(
         raise
     except (av.FFmpegError, ValueError, OSError) as error:
         raise VideoStageError("audio/subtitle remux", str(error)) from error
-    except BaseException:
-        raise
     finally:
-        for container in (output_container, source_container, video_container):
+        for container in (output_container, subtitle_container, source_container, video_container):
             if container is not None:
                 try:
                     container.close()

@@ -5,6 +5,7 @@
 
   /** Whether the anonymous update-check count is on, so the notice describes it truthfully. */
   export let anonymousUpdateCount = true;
+  export let checkAtLaunch = true;
 
   const SEEN_KEY = 'localsr.welcome.seen';
   // Check for Updates lives in the app menu on macOS and under Help elsewhere.
@@ -39,14 +40,16 @@
     <div class="text">
       <b id="welcome-title"><BrandMark size={16} />Welcome to LocalSR</b>
       <span
-        >Drop photos or videos in the middle, pick Upscale, Restore or Edit on the right, then press
-        the button at the bottom right. The model a task needs downloads the first time you use it.</span
+        >Photos and videos stay on this computer. Models download once, when a task first needs
+        them.</span
       >
       {#if counts}
         <span class="count"
-          >{anonymousUpdateCount
-            ? `At launch LocalSR checks for updates and sends an anonymous count: app version, platform and channel, with no files, names or identifiers. You can turn it off under Check for Updates in the ${updatesMenu} menu.`
-            : 'The anonymous update-check count is off.'}</span
+          >{!checkAtLaunch
+            ? `LocalSR does not check for updates at launch; Check for Updates in the ${updatesMenu} menu still does.`
+            : anonymousUpdateCount
+              ? `At launch LocalSR checks for updates and sends an anonymous count: app version, platform and channel, with no files, names or identifiers. You can turn either off in the ${updatesMenu} menu.`
+              : 'At launch LocalSR checks for updates; the anonymous update-check count is off.'}</span
         >
       {/if}
     </div>
@@ -63,20 +66,21 @@
   .welcome-notice {
     position: fixed;
     z-index: 79;
-    bottom: 78px;
+    /* Above the update notice while that shows at the bottom of the stage (--notice-room). */
+    bottom: max(78px, calc(66px + var(--notice-room, 0px)));
     left: 50%;
     display: grid;
     gap: 10px;
     width: min(520px, calc(100vw - 28px));
     padding: 14px;
     transform: translateX(-50%);
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    border: 1px solid var(--surface-border);
     border-radius: var(--radius-surface);
-    background: rgba(35, 35, 37, 0.9);
+    background: var(--welcome-bg);
     backdrop-filter: blur(22px) saturate(150%);
     box-shadow:
-      inset 0 1px rgba(255, 255, 255, 0.06),
-      0 18px 46px rgba(0, 0, 0, 0.5);
+      inset 0 1px var(--hairline),
+      0 18px 46px var(--shadow-medium);
   }
   .text {
     display: grid;
@@ -93,6 +97,8 @@
     color: var(--secondary);
     font-size: calc(12px * var(--ui-scale));
     line-height: 1.45;
+    /* The short notice would otherwise leave "them." alone on its second line. */
+    text-wrap: pretty;
   }
   .text .count {
     font-size: calc(12px * var(--ui-scale));
@@ -105,15 +111,15 @@
   }
   .notice-button {
     padding: 6px 11px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid var(--notice-outline);
     border-radius: var(--radius);
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--tint-subtle);
     color: var(--text);
     font-size: calc(12px * var(--ui-scale));
     font-weight: 500;
     white-space: nowrap;
   }
   .notice-button:hover {
-    background: rgba(255, 255, 255, 0.13);
+    background: var(--control-hover);
   }
 </style>

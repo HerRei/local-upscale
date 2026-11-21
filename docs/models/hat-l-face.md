@@ -13,38 +13,25 @@ face validation crops. It is **not** a general-purpose upgrade: for clean or non
 HAT-L (`hat_l_x4_imagenet`) remains the better default, and the two models are paired in
 the catalog (`pair_with`) so the UI can present them as alternatives.
 
-## What was trained
+## Training and evaluation
 
-The official HAT-L ×4 ImageNet-pretrained checkpoint (XPixel Group, Apache-2.0 code terms)
-was fine-tuned on a research-only face corpus (60% FFHQ, 20% identity/clip-balanced EFHQ,
-20% general high-resolution replay). The fine-tune deliberately repeated none of the
-mistakes of an earlier failed HAT-S face run (which used GAN + VGG perceptual loss at a high
-learning rate and regressed 5 dB on clean images):
+The official HAT-L ×4 ImageNet-pretrained checkpoint (XPixel Group, Apache-2.0
+code terms) was fine-tuned on a research-only face corpus: 60% FFHQ, 20%
+identity- and clip-balanced EFHQ, and 20% general high-resolution replay. The loss
+was L1 only, without GAN or perceptual loss, at a learning rate of 1e-5 and a
+2.5e-6 refinement pass, with EMA 0.999, gradient clipping 1.0, 15% clean-replay
+batches and a high-order degradation pipeline with Poisson noise and double JPEG.
+L1 does not guarantee accurate detail or preserved identity.
 
-- **Loss:** L1 only — no GAN, no perceptual loss. This does not guarantee accurate
-  reconstruction of missing detail or preservation of identity.
-- **Learning rate:** 1e-5 for the main run, 2.5e-6 for a low-LR refinement pass.
-- **Stabilizers:** EMA 0.999, gradient clipping 1.0, 15% clean-replay batches,
-  high-order degradation pipeline with Poisson noise and double JPEG for damage realism.
-- **Schedule:** three stages — a 250k-iteration "holiday" fidelity run, a 250k-iteration
-  256px continuation (batch 4), and a 299k-iteration refinement run at 1/4 learning rate.
+The fully face-tuned weights gained about 1.0 dB on mildly degraded faces but lost
+about 1.9 dB on clean images. Interpolations with the stock weights were therefore
+compared, accepting a mild-bucket gain with a clean-bucket drop of at most 0.62 dB.
+The selected checkpoint combines 75% stock HAT-L weights with 25% face-tuned
+weights (α = 0.25). α = 0.1 is the conservative alternative (clean −0.03 dB,
+mild +0.19 dB); α of 0.5 and more cost too much on clean images.
 
-## How the selected checkpoint was chosen
-
-Training plateaued: all three runs converged into a ~0.1 dB validation band, so the final
-checkpoint is *not* simply the last or best single run. Fourteen candidates were evaluated
-on 512-image clean/mild/hard recovery buckets (PSNR, SSIM, edge correlation, ArcFace face
-identity) against the stock HAT-L base:
-
-- the final checkpoints and 5-checkpoint uniform "soups" of each run,
-- linear interpolations of the final face-tuned weights with the stock base at
-  α = 0.1/0.25/0.5/0.8/0.9 (α = fraction of face-tuned weights).
-
-The selection tool accepts a positive mild-bucket PSNR gain with a clean-bucket drop of
-at most 0.62 dB by default. It ranks accepted candidates by mild gain, then clean PSNR,
-then hard PSNR; hard improvement is an observed result, not an acceptance requirement. Raw face-tuned checkpoints win big on
-degraded faces (mild +1.0 dB) but regress ~1.9 dB on clean images — unacceptable. The
-selected compromise, **α = 0.25 (75% base + 25% face-tuned)**, measures:
+Evaluation on 512-image clean/mild/hard recovery buckets reported these PSNR
+values against the stock HAT-L base:
 
 | Bucket | base HAT-L | HAT-L Face (α 0.25) | Δ |
 |---|---:|---:|---:|
@@ -52,14 +39,10 @@ selected compromise, **α = 0.25 (75% base + 25% face-tuned)**, measures:
 | mild degradation | 28.69 dB | 29.13 dB | **+0.44 dB** |
 | hard degradation | 25.72 dB | 25.97 dB | **+0.25 dB** |
 
-The values above are from the September 2026 Task 4 report; the original
-`task4/selection.json` and per-bucket aggregates remain on DDP. Deltas were reported
-from unrounded values, so subtracting the displayed clean scores gives −0.20 dB.
+Deltas were reported from unrounded values, so subtracting the displayed clean
+scores gives −0.20 dB.
 These selection-set measurements are not an independent real-world or video benchmark.
 SSIM and ArcFace were evaluated, but numeric results are not reproduced here.
-
-α = 0.1 is the conservative alternative (clean −0.03 dB, mild +0.19 dB) for users who
-prioritize clean fidelity; α ≥ 0.5 was rejected for its clean-image cost.
 
 ## How LocalSR uses it
 
@@ -81,8 +64,7 @@ detector runtime. Face checkpoints are companions, not primary choices.
   import it only where they are independently permitted to use it. See
   [checkpoint license notes](../model-licenses.md).
 - L1-only training tends toward smoother results; fine skin/hair texture and identity
-  can still be wrong. The proposed VGG perceptual detail stage was not launched.
-  Any future stage needs a separate reviewed decision and evaluation.
+  can still be wrong.
 - Like all HAT-L models it is slow and memory-hungry (~6 GB VRAM class); it is the
   large sibling of the lighter HAT-S Face model. These reports do not establish a
   controlled head-to-head comparison between the two variants.

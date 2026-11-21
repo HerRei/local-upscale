@@ -32,6 +32,7 @@ from typing import Callable, Iterable, Literal
 import numpy as np
 import torch
 
+from .benchmark import percentile
 from .inference import InferenceEngine
 
 WORKLOAD_VERSION = "localsr-benchmark-v2.1"
@@ -225,9 +226,7 @@ def _scene_tensor(scene: SceneSpec) -> torch.Tensor:
         plane[:, third : 2 * third] = np.broadcast_to(
             checker[:, third : 2 * third], (height, third)
         )
-        # Full-range independent RGB noise made the reference SPAN model
-        # diverge before its output clamp. Use bounded sensor noise; this
-        # content change is recorded in workload v2.1, not mixed with v2 scores.
+        # Bounded sensor noise avoids divergence before the model output clamp.
         noise_channel = (112 + ((noise + channel * 37) % 256) // 8).astype(np.float32)
         plane[:, 2 * third :] = np.clip(
             noise_channel[:, 2 * third :] * vignette[:, 2 * third :] / 255.0, 0, 255
@@ -245,20 +244,6 @@ def coefficient_of_variation(seconds: list[float]) -> float:
     if mean <= 0:
         return float("inf")
     return statistics.pstdev(seconds) / mean
-
-
-def percentile(values: list[float], percentile_value: float) -> float:
-    """Linearly interpolated percentile, matching the v1 definition."""
-    if not values:
-        raise ValueError("at least one measurement is required")
-    ordered = sorted(float(value) for value in values)
-    position = (len(ordered) - 1) * min(100.0, max(0.0, percentile_value)) / 100.0
-    lower = math.floor(position)
-    upper = math.ceil(position)
-    if lower == upper:
-        return ordered[lower]
-    fraction = position - lower
-    return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
 
 
 def _synchronize(device: torch.device) -> None:
@@ -489,10 +474,13 @@ def run_device_phase(
     expected_type = (
         "privateuseone" if device_id.startswith("directml:") else device_id.split(":", 1)[0]
     )
+    # ONNX Runtime GPU routes stage tiles on the CPU, so torch reports a CPU device.
+    onnx_provider = {"directml": "DmlExecutionProvider", "openvino": "OpenVINOExecutionProvider"}
     onnx_gpu = (
-        device_id.startswith("directml:")
+        device_id.split(":", 1)[0] in onnx_provider
         and getattr(engine, "active_backend_id", None) == device_id
-        and getattr(engine.active_model, "execution_provider", None) == "DmlExecutionProvider"
+        and getattr(engine.active_model, "execution_provider", None)
+        == onnx_provider[device_id.split(":", 1)[0]]
     )
     if torch_device.type != expected_type and not onnx_gpu:
         raise RuntimeError(f"Requested {device_id}, but the engine loaded on {torch_device}.")
@@ -520,6 +508,9 @@ def run_device_phase(
                 )
             )
 
+    if onnx_gpu:
+        # A cached model keeps what earlier jobs did; the benchmark judges only its own tiles.
+        engine.active_model.reset_execution_evidence()
     emit("started", "warmup", 0)
     warmup_iterations = 0
     warm_started = clock()
@@ -566,6 +557,10 @@ def run_device_phase(
         completed_units=warmup_iterations,
         fraction=1.0,
     )
+    if onnx_gpu:
+        # The warm-up may have run its first tiles on the CPU while the GPU was checked;
+        # the score must come from the measured scenes alone.
+        engine.active_model.reset_execution_evidence()
 
     scene_results: list[dict] = []
     all_cvs: list[float] = []
@@ -822,8 +817,7 @@ def _reference_comparison(
 
     Prefer the *closest faster* reference (the smallest ratio >= 1.0), which
     reads as "you are N× as fast as X". If the score beats nothing, fall back
-    to the closest slower reference. GPU and CPU references are never mixed;
-    the caller picks the list matching the score being compared.
+    to the closest slower reference. The bundled table contains accelerator scores.
     """
     if score is None:
         return None, None

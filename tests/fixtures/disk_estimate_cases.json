@@ -1,0 +1,168 @@
+{
+  "images": [
+    {
+      "width": 3024,
+      "height": 4032,
+      "scale": 4,
+      "output_scale": 4,
+      "format": "png",
+      "alpha": false,
+      "scratch": 585252864,
+      "encoded": 588603712
+    },
+    {
+      "width": 3024,
+      "height": 4032,
+      "scale": 4,
+      "output_scale": 2,
+      "format": "png",
+      "alpha": false,
+      "scratch": 585252864,
+      "encoded": 147941392
+    },
+    {
+      "width": 3024,
+      "height": 4032,
+      "scale": 4,
+      "output_scale": 4,
+      "format": "png",
+      "alpha": true,
+      "scratch": 585252864,
+      "encoded": 784450048
+    },
+    {
+      "width": 3024,
+      "height": 4032,
+      "scale": 4,
+      "output_scale": 4,
+      "format": "jpeg",
+      "alpha": false,
+      "scratch": 585252864,
+      "encoded": 391217152
+    },
+    {
+      "width": 3024,
+      "height": 4032,
+      "scale": 4,
+      "output_scale": 4,
+      "format": "webp",
+      "alpha": true,
+      "scratch": 585252864,
+      "encoded": 586301440
+    },
+    {
+      "width": 3024,
+      "height": 4032,
+      "scale": 2,
+      "output_scale": 2,
+      "format": "heic",
+      "alpha": false,
+      "scratch": 146313216,
+      "encoded": 49819648
+    },
+    {
+      "width": 1600,
+      "height": 1067,
+      "scale": 4,
+      "output_scale": 4,
+      "format": "tiff",
+      "alpha": false,
+      "scratch": 81945600,
+      "encoded": 83318544
+    },
+    {
+      "width": 640,
+      "height": 480,
+      "scale": 2,
+      "output_scale": 1,
+      "format": "jpg",
+      "alpha": false,
+      "scratch": 3686400,
+      "encoded": 1662976
+    }
+  ],
+  "reserves": [
+    {
+      "total": 500000000000,
+      "system": true,
+      "reserve": 8000000000
+    },
+    {
+      "total": 60000000000,
+      "system": true,
+      "reserve": 8000000000
+    },
+    {
+      "total": 100000000000,
+      "system": true,
+      "reserve": 8000000000
+    },
+    {
+      "total": 4000000000000,
+      "system": false,
+      "reserve": 1000000000
+    },
+    {
+      "total": 0,
+      "system": false,
+      "reserve": 1000000000
+    }
+  ],
+  "videos": [
+    {
+      "width": 3840,
+      "height": 2160,
+      "frames": 1800,
+      "master": false,
+      "bytes": 1495089152
+    },
+    {
+      "width": 3840,
+      "height": 2160,
+      "frames": 1800,
+      "master": true,
+      "bytes": 14932017152
+    },
+    {
+      "width": 640,
+      "height": 360,
+      "frames": 0,
+      "master": false,
+      "bytes": 2120192
+    }
+  ],
+  "sizes": [
+    {
+      "bytes": 0,
+      "text": "0 KB"
+    },
+    {
+      "bytes": 999,
+      "text": "1 KB"
+    },
+    {
+      "bytes": 1500,
+      "text": "2 KB"
+    },
+    {
+      "bytes": 1000000,
+      "text": "1 MB"
+    },
+    {
+      "bytes": 64000000,
+      "text": "64 MB"
+    },
+    {
+      "bytes": 1173856576,
+      "text": "1.2 GB"
+    },
+    {
+      "bytes": 4700000000,
+      "text": "4.7 GB"
+    },
+    {
+      "bytes": 25000000000,
+      "text": "25.0 GB"
+    }
+  ]
+}

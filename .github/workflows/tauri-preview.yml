@@ -26,12 +26,8 @@ on:
       - "scripts/check_desktop_architecture.py"
       - "scripts/build_tauri_preview.py"
       - "scripts/collect_xpu_runtime.py"
-      - "scripts/install_windows_rust.ps1"
       - "scripts/smoke_tauri_installer.py"
       - "scripts/verify_tauri_release_package.py"
-      - "scripts/verify_macos_tauri_signing.py"
-      - "scripts/verify_windows_tauri_signing.ps1"
-      - "scripts/prepare_tauri_release_assets.py"
       - "packaging/tauri_worker.spec"
       - "tests/test_hardware.py"
       - "tests/test_inference.py"
@@ -40,7 +36,6 @@ on:
       - "tests/test_tauri_installer_smoke.py"
       - "tests/test_tauri_release_tools.py"
       - "pyproject.toml"
-      - ".github/workflows/desktop-release.yml"
       - ".github/workflows/tauri-preview.yml"
   pull_request:
     branches: [main]
@@ -67,12 +62,8 @@ on:
       - "scripts/check_desktop_architecture.py"
       - "scripts/build_tauri_preview.py"
       - "scripts/collect_xpu_runtime.py"
-      - "scripts/install_windows_rust.ps1"
       - "scripts/smoke_tauri_installer.py"
       - "scripts/verify_tauri_release_package.py"
-      - "scripts/verify_macos_tauri_signing.py"
-      - "scripts/verify_windows_tauri_signing.ps1"
-      - "scripts/prepare_tauri_release_assets.py"
       - "packaging/tauri_worker.spec"
       - "tests/test_hardware.py"
       - "tests/test_inference.py"
@@ -81,7 +72,6 @@ on:
       - "tests/test_tauri_installer_smoke.py"
       - "tests/test_tauri_release_tools.py"
       - "pyproject.toml"
-      - ".github/workflows/desktop-release.yml"
       - ".github/workflows/tauri-preview.yml"
   workflow_dispatch:
     inputs:
@@ -97,6 +87,7 @@ permissions:
 
 env:
   PIP_VERSION: "26.2.1"
+  PIP_NO_CACHE_DIR: "1"
   PYTORCH_VERSION: "2.13.0"
   TORCHVISION_VERSION: "0.28.0"
   PYINSTALLER_VERSION: "6.22.2"
@@ -106,72 +97,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  coordinate-heavy-work:
-    name: Wait for CI and release priority
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    timeout-minutes: 190
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - name: Wait without occupying a Mac-mini guest
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          python3 scripts/workflow_coordination.py \
-            --repository "$GITHUB_REPOSITORY" \
-            --current-run-id "$GITHUB_RUN_ID" \
-            --blocked-workflow "Signed Tauri Release"
-          python3 scripts/workflow_coordination.py \
-            --repository "$GITHUB_REPOSITORY" \
-            --current-run-id "$GITHUB_RUN_ID" \
-            --blocked-workflow "CI" \
-            --only-older-runs \
-            --always-block-head-sha "${{ github.event.pull_request.head.sha || github.sha }}"
-          python3 scripts/workflow_coordination.py \
-            --repository "$GITHUB_REPOSITORY" \
-            --current-run-id "$GITHUB_RUN_ID" \
-            --blocked-workflow "Tauri Next Preview" \
-            --only-older-runs
-
   verify:
     name: Verify Next Preview (${{ matrix.platform }})
     timeout-minutes: 150
-    needs: [coordinate-heavy-work]
     env:
-      # actions/checkout removes ignored target directories. Keep the verified
-      # dependency build outside the checkout so small source changes do not
-      # force hour-long cold builds on the constrained self-hosted VMs.
-      CARGO_TARGET_DIR: ${{ github.workspace }}/../.localsr-tauri-target/${{ matrix.cache_key }}
+      # Each hosted job starts cold; keep build output in its own workspace.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/desktop/src-tauri/target
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
       CARGO_BUILD_JOBS: ${{ matrix.cargo_jobs }}
     strategy:
       fail-fast: false
-      # The Linux and Windows guests share one physical Mac mini (macOS runs on a
-      # hosted runner). Keep even the regular preview verification below the
-      # host's thermal and memory contention threshold instead of compiling in
-      # both guests at once.
-      max-parallel: 1
       matrix:
         include:
           - platform: Linux X64
-            cache_key: linux-x64
-            runner: '["self-hosted","Linux","X64"]'
+            runner: '["ubuntu-24.04"]'
             shell: bash
             cargo_jobs: 4
           - platform: Windows X64
-            cache_key: windows-x64
-            runner: '["self-hosted","Windows","X64"]'
-            shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+            runner: '["windows-2022"]'
+            shell: pwsh
             cargo_jobs: 2
-          # Hosted Apple Silicon. The Mac mini's macOS guest is Intel, so it
-          # could only ever verify x86_64 while we ship arm64. A hosted runner
-          # matches the shipped target and frees the guest entirely.
+          # Validate the shipped arm64 target on an arm64 runner.
           - platform: macOS arm64
-            cache_key: macos-arm64
             runner: '["macos-latest"]'
             shell: bash
             cargo_jobs: 3
@@ -183,6 +132,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      # Reclaim disk space for the inference dependencies.
+      - name: Free hosted Linux disk space
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /usr/share/swift /usr/local/share/powershell /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force > /dev/null || true
+          df -h /
+      # Match windows-installers.yml; long Torch wheel paths need a hosted run.
+      - name: Enable Win32 long paths
+        if: runner.os == 'Windows'
+        run: Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name 'LongPathsEnabled' -Value 1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
@@ -191,29 +156,14 @@ jobs:
       - name: Create isolated Linux Python environment
         if: runner.os == 'Linux'
         run: |
-          python3 scripts/storage_preflight.py \
-            --ssd-path /ci-scratch \
-            --skip-hdd \
-            --ssd-min-percent 15 --ssd-peak-gib 5
-          ROOT="/ci-scratch/localsr-tauri/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/verify"
+          ROOT="$RUNNER_TEMP/localsr-tauri/verify"
           VENV="$ROOT/venv"
-          mkdir -p "$ROOT/tmp" /ci-scratch/cache/pip
-          CARGO_CACHE=/mnt/hdd/ci-cache/localsr-tauri-target/linux-x64
-          mkdir -p "$CARGO_CACHE"
+          mkdir -p "$ROOT/tmp"
           export TMPDIR="$ROOT/tmp"
-          "$HOME/.venv-ci/bin/python3.11" -m venv "$VENV"
-          echo "LOCALSR_PREVIEW_ROOT=$ROOT" >> "$GITHUB_ENV"
+          python -m venv "$VENV"
           echo "LOCALSR_PREVIEW_VENV=$VENV" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_DIR=$CARGO_CACHE" >> "$GITHUB_ENV"
           echo "TMPDIR=$TMPDIR" >> "$GITHUB_ENV"
-          echo "PIP_CACHE_DIR=/ci-scratch/cache/pip" >> "$GITHUB_ENV"
           echo "$VENV/bin" >> "$GITHUB_PATH"
-      # The hosted image has no python.org framework build at a fixed path, so
-      # provision the interpreter instead of hardcoding one.
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        if: runner.os == 'macOS'
-        with:
-          python-version: '3.11'
       - name: Create isolated macOS Python environment
         if: runner.os == 'macOS'
         run: |
@@ -226,13 +176,12 @@ jobs:
         run: |
           # Keep this deliberately short: current Torch wheels contain deeply
           # nested license paths that otherwise exceed Win32 MAX_PATH.
-          $root = "C:\lsr-ci\$env:GITHUB_RUN_ID\$env:GITHUB_RUN_ATTEMPT\t\verify"
+          $root = Join-Path $env:RUNNER_TEMP "lsr-verify"
           $venv = Join-Path $root "venv"
           $tmp = Join-Path $root "tmp"
           New-Item -ItemType Directory -Force -Path $tmp | Out-Null
-          py -3.11 -m venv $venv
+          python -m venv $venv
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          "LOCALSR_PREVIEW_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "LOCALSR_PREVIEW_VENV=$venv" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "TEMP=$tmp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "TMP=$tmp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -241,19 +190,13 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils xvfb dbus-x11
-      - name: Expose the persistent Rust toolchain
-        if: runner.os != 'Windows'
-        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils xvfb dbus-x11 squashfs-tools
+      # Use the same hosted Windows/Rust setup as windows-installers.yml.
       - name: Install the stable Rust toolchain
-        if: runner.os != 'Windows'
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
         with:
           toolchain: stable
           components: clippy,rustfmt
-      - name: Install the stable Windows Rust toolchain
-        if: runner.os == 'Windows'
-        run: ./scripts/install_windows_rust.ps1
       - name: Initialize the Windows MSVC build environment
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
@@ -263,50 +206,38 @@ jobs:
         run: python scripts/export_desktop_catalog.py --check
       - name: Enforce the additive desktop architecture boundary
         run: python scripts/check_desktop_architecture.py
+      # One command per step: under pwsh (Windows) only the last command's exit code fails a step.
+      - name: Install the Python desktop tooling test dependencies
+        run: python -m pip install --disable-pip-version-check "pytest==9.1.1" "pytest-timeout==2.4.0"
       - name: Verify Python desktop tooling and the worker contract
         env:
           PYTHONPATH: src
-        run: |
-          python -m pip install --disable-pip-version-check "pytest==9.1.1" "pytest-timeout==2.4.0"
-          python -m pytest tests/test_desktop_architecture.py tests/test_worker_protocol_contract.py tests/test_tauri_build_script.py tests/test_tauri_installer_smoke.py tests/test_tauri_release_tools.py -q
+        run: python -m pytest tests/test_desktop_architecture.py tests/test_worker_protocol_contract.py tests/test_tauri_build_script.py tests/test_tauri_installer_smoke.py tests/test_tauri_release_tools.py -q
       - name: Install locked frontend dependencies
         working-directory: desktop
         run: npm ci
-      - name: Check and test the Svelte interface
+      - name: Type-check the Svelte interface
         working-directory: desktop
-        run: |
-          npm run check
-          npm run knip
-          npm test
-          npm run build
+        run: npm run check
+      - name: Check for unused frontend code
+        working-directory: desktop
+        run: npm run knip
+      - name: Test the Svelte interface
+        working-directory: desktop
+        run: npm test
+      - name: Build the Svelte interface
+        working-directory: desktop
+        run: npm run build
       - name: Check Rust formatting
         if: runner.os == 'Linux'
         working-directory: desktop/src-tauri
         run: cargo fmt --all -- --check
-      - name: Lint and test the native control plane
+      - name: Lint the native control plane
         working-directory: desktop/src-tauri
-        run: |
-          cargo clippy --locked --all-targets -- -D warnings
-          cargo test --locked --all-targets
-      - name: Remove the isolated Python environment
-        if: always() && runner.os != 'Windows'
-        shell: bash
-        run: |
-          if [ -n "${LOCALSR_PREVIEW_ROOT:-}" ]; then
-            echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
-            rm -rf "$LOCALSR_PREVIEW_ROOT"
-          elif [ -n "${LOCALSR_PREVIEW_VENV:-}" ]; then
-            rm -rf "$LOCALSR_PREVIEW_VENV"
-          fi
-      - name: Remove the isolated Windows Python environment
-        if: always() && runner.os == 'Windows'
-        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: |
-          if ($env:LOCALSR_PREVIEW_ROOT -and (Test-Path -LiteralPath $env:LOCALSR_PREVIEW_ROOT)) {
-            Remove-Item -LiteralPath $env:LOCALSR_PREVIEW_ROOT -Recurse -Force
-          } elseif ($env:LOCALSR_PREVIEW_VENV -and (Test-Path -LiteralPath $env:LOCALSR_PREVIEW_VENV)) {
-            Remove-Item -LiteralPath $env:LOCALSR_PREVIEW_VENV -Recurse -Force
-          }
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Test the native control plane
+        working-directory: desktop/src-tauri
+        run: cargo test --locked --all-targets
 
   package-preview:
     name: Package private preview (${{ matrix.os }})
@@ -317,23 +248,17 @@ jobs:
     needs: verify
     strategy:
       fail-fast: false
-      # Private package builds use the same physical host as verification and
-      # release jobs, so they must remain serialized as well.
-      max-parallel: 1
-      # macOS package builds require a native ARM64 runner: the maintained
-      # PyTorch line no longer publishes Intel macOS wheels. The Intel runner
-      # above still verifies the Tauri control plane without reviving 2.2.x.
       matrix:
         include:
           - os: Linux
-            runner: '["self-hosted","Linux","X64"]'
+            runner: '["ubuntu-24.04"]'
             shell: bash
             cargo_jobs: 4
             bundles: appimage
             package_path: desktop/src-tauri/target/release/bundle/appimage/*.AppImage
           - os: Windows
-            runner: '["self-hosted","Windows","X64"]'
-            shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+            runner: '["windows-2022"]'
+            shell: pwsh
             cargo_jobs: 2
             bundles: nsis
             package_path: desktop/src-tauri/target/release/bundle/nsis/*.exe
@@ -345,6 +270,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      # Reclaim disk space for the inference dependencies.
+      - name: Free hosted Linux disk space
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /usr/share/swift /usr/local/share/powershell /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force > /dev/null || true
+          df -h /
+      # Match windows-installers.yml; long Torch wheel paths need a hosted run.
+      - name: Enable Win32 long paths
+        if: runner.os == 'Windows'
+        run: Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name 'LongPathsEnabled' -Value 1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
@@ -353,39 +294,25 @@ jobs:
       - name: Create isolated Linux Python environment
         if: runner.os == 'Linux'
         run: |
-          python3 scripts/storage_preflight.py \
-            --ssd-path /ci-scratch \
-            --skip-hdd \
-            --ssd-min-percent 15 --ssd-peak-gib 5
-          ROOT="/ci-scratch/localsr-tauri/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/package"
+          ROOT="$RUNNER_TEMP/localsr-tauri/package"
           VENV="$ROOT/venv"
-          mkdir -p "$ROOT/tmp" /ci-scratch/cache/pip
+          mkdir -p "$ROOT/tmp"
           export TMPDIR="$ROOT/tmp"
-          "$HOME/.venv-ci/bin/python3.11" -m venv "$VENV"
-          echo "LOCALSR_PREVIEW_ROOT=$ROOT" >> "$GITHUB_ENV"
+          python -m venv "$VENV"
           echo "LOCALSR_PREVIEW_VENV=$VENV" >> "$GITHUB_ENV"
           echo "TMPDIR=$TMPDIR" >> "$GITHUB_ENV"
-          echo "PIP_CACHE_DIR=/ci-scratch/cache/pip" >> "$GITHUB_ENV"
-          echo "$VENV/bin" >> "$GITHUB_PATH"
-      - name: Create isolated macOS Python environment
-        if: runner.os == 'macOS'
-        run: |
-          VENV="$RUNNER_TEMP/localsr-tauri/$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT/package/venv"
-          /Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11 -m venv "$VENV"
-          echo "LOCALSR_PREVIEW_VENV=$VENV" >> "$GITHUB_ENV"
           echo "$VENV/bin" >> "$GITHUB_PATH"
       - name: Create isolated Windows Python environment
         if: runner.os == 'Windows'
         run: |
           # Keep this deliberately short: current Torch wheels contain deeply
           # nested license paths that otherwise exceed Win32 MAX_PATH.
-          $root = "C:\lsr-ci\$env:GITHUB_RUN_ID\$env:GITHUB_RUN_ATTEMPT\t\package"
+          $root = Join-Path $env:RUNNER_TEMP "lsr-package"
           $venv = Join-Path $root "venv"
           $tmp = Join-Path $root "tmp"
           New-Item -ItemType Directory -Force -Path $tmp | Out-Null
-          py -3.11 -m venv $venv
+          python -m venv $venv
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          "LOCALSR_PREVIEW_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "LOCALSR_PREVIEW_VENV=$venv" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "TEMP=$tmp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "TMP=$tmp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -394,16 +321,13 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils xvfb dbus-x11
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils xvfb dbus-x11 squashfs-tools
+      # Use the same hosted Windows/Rust setup as windows-installers.yml.
       - name: Install the stable Rust toolchain
-        if: runner.os != 'Windows'
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
         with:
           toolchain: stable
           components: clippy,rustfmt
-      - name: Install the stable Windows Rust toolchain
-        if: runner.os == 'Windows'
-        run: ./scripts/install_windows_rust.ps1
       - name: Initialize the Windows MSVC build environment
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
@@ -435,13 +359,13 @@ jobs:
         run: |
           sudo apt-get install -y nasm meson ninja-build cmake autoconf automake libtool zlib1g-dev patch
           python packaging/ffmpeg/install_media_runtime.py \
-            --work-dir "$HOME/.cache/localsr-lgpl-media/linux-x86_64" --jobs 4
+            --work-dir "$RUNNER_TEMP/lgpl-media/linux-x86_64" --jobs 4
       - name: Build the additive desktop package
         # The required verify matrix has already run Svelte checks and tests on
         # this exact commit. Avoid starting a second Vitest worker pool after
-        # the memory-intensive PyInstaller build on constrained runner VMs.
-        # Windows has no licensing-clean media runtime yet; its package is a
-        # private acceptance preview only and is never published.
+        # the memory-intensive PyInstaller build on the hosted runner.
+        # This Windows preview uses PyPI media wheels rather than the licensing-clean
+        # runtime built by windows-installers.yml; it remains private and unpublished.
         run: python scripts/build_tauri_preview.py --skip-checks --bundles ${{ matrix.bundles }} ${{ runner.os == 'Windows' && '--private-preview-media' || '' }}
       - name: Install or mount the package and boot its bundled worker
         run: python scripts/smoke_tauri_installer.py --artifact-glob "${{ matrix.package_path }}" --report build/tauri-preview/installer-smoke-${{ runner.os }}.json
@@ -458,22 +382,3 @@ jobs:
       - name: Report unavailable private artifact storage
         if: steps.upload_package.outcome == 'failure'
         run: echo "::warning::The installer passed its real launch smoke test, but GitHub Actions artifact storage is currently unavailable or over quota."
-      - name: Remove the isolated Python environment
-        if: always() && runner.os != 'Windows'
-        shell: bash
-        run: |
-          if [ -n "${LOCALSR_PREVIEW_ROOT:-}" ]; then
-            echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
-            rm -rf "$LOCALSR_PREVIEW_ROOT"
-          elif [ -n "${LOCALSR_PREVIEW_VENV:-}" ]; then
-            rm -rf "$LOCALSR_PREVIEW_VENV"
-          fi
-      - name: Remove the isolated Windows Python environment
-        if: always() && runner.os == 'Windows'
-        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
-        run: |
-          if ($env:LOCALSR_PREVIEW_ROOT -and (Test-Path -LiteralPath $env:LOCALSR_PREVIEW_ROOT)) {
-            Remove-Item -LiteralPath $env:LOCALSR_PREVIEW_ROOT -Recurse -Force
-          } elseif ($env:LOCALSR_PREVIEW_VENV -and (Test-Path -LiteralPath $env:LOCALSR_PREVIEW_VENV)) {
-            Remove-Item -LiteralPath $env:LOCALSR_PREVIEW_VENV -Recurse -Force
-          }

@@ -56,13 +56,14 @@ WINDOWS_REPAIR_REQUIREMENTS = ["delvewheel==1.13.1"]
 MSYS2_ROOT = Path(os.environ.get("LOCALSR_MSYS2_ROOT", r"C:\msys64"))
 # What FFmpeg's DLLs may import on Windows: its own DLLs, Windows system libraries and the
 # Universal CRT, plus the zlib and winpthreads DLLs from MSYS2, which are copied next to
-# FFmpeg (zlib and MIT licences).
+# FFmpeg (zlib and MIT licences). MSYS2's zlib ships its DLL under both names, and its
+# import library has pointed at libz-1.dll since November 2026.
 WINDOWS_SYSTEM_DLL = re.compile(
     r"^(kernel32|user32|gdi32|advapi32|bcrypt|ole32|oleaut32|shell32|shlwapi|ws2_32|secur32"
     r"|psapi|ucrtbase|msvcrt|api-ms-win-[a-z0-9-]+)\.dll$",
     re.IGNORECASE,
 )
-WINDOWS_TOOLCHAIN_DLLS = ("zlib1.dll", "libwinpthread-1.dll")
+WINDOWS_TOOLCHAIN_DLLS = ("zlib1.dll", "libz-1.dll", "libwinpthread-1.dll")
 
 # FFmpeg's buffer/abuffer sources and sinks are part of libavfilter's public API; they are
 # always compiled and registered manually, so configure has no switch for them.
@@ -167,9 +168,7 @@ def run(
     return result.stdout if capture else ""
 
 
-# ---------------------------------------------------------------------------
 # Policy derivation
-# ---------------------------------------------------------------------------
 
 
 def load_policy(path: Path = POLICY_PATH) -> dict:
@@ -301,9 +300,7 @@ def configure_warnings(output: str) -> list[str]:
     return problems
 
 
-# ---------------------------------------------------------------------------
 # Sources
-# ---------------------------------------------------------------------------
 
 
 def fetch_source(entry: dict, cache: Path) -> Path:
@@ -354,9 +351,7 @@ def extract_fresh(archive: Path, destination: Path) -> Path:
     return children[0]
 
 
-# ---------------------------------------------------------------------------
 # Builder
-# ---------------------------------------------------------------------------
 
 
 class Builder:

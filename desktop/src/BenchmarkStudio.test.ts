@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen, waitFor } from '@testing-library/svelte';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import BenchmarkStudio from './BenchmarkStudio.svelte';
 import type { BenchmarkRender, WorkerEnvelope } from './lib/types';
 
@@ -157,4 +157,34 @@ it('uses the actual SPAN tile size when opening on a narrow edge tile', async ()
     },
   });
   await waitFor(() => expect(fillRect).toHaveBeenCalledWith(0, 0, 393, 393));
+});
+
+describe('BenchmarkStudio after a run without output', () => {
+  it('shows the waiting placeholder instead of an empty stage', async () => {
+    const drawImage = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+      fillRect: vi.fn(),
+      drawImage,
+      strokeRect: vi.fn(),
+    } as unknown as CanvasRenderingContext2D);
+    const data = {
+      job_id: 'benchmark-1',
+      device: 'mps',
+      scene_id: 's1-classroom',
+      phase: 'started',
+      output_x: 0,
+      output_y: 0,
+      output_width: 1024,
+      output_height: 1024,
+      image_width: 2048,
+      image_height: 2048,
+      completed_tiles: 0,
+      total_tiles: 4,
+    };
+    const tileMessage: WorkerEnvelope = { type: 'benchmark_tile', data };
+    const view = render(BenchmarkStudio, { running: true, tileMessage });
+    await screen.findByLabelText('Tile currently being rendered');
+    await view.rerender({ running: false, renders: [], tileMessage });
+    expect(screen.queryByText('Run CPU or GPU to see the model render.')).not.toBeNull();
+  });
 });

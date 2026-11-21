@@ -13,9 +13,9 @@ the **Edit with a prompt** group, which groups the bundles by model family and
 lists the sizes that fit this computer, with the memory each needs and the
 largest edit size it starts with. Heavier sizes stay behind **Show … more that
 need more memory than this computer has**.
-The **Edit size** control below the model row offers 512, 768 and 1024 px; sizes
-above this computer's profile are disabled. **Advanced** holds the step count,
-the seed, the output folder and the GPU. When Edit is chosen for the first
+**Advanced** holds the edit size (512, 768 or 1024 px; sizes above this
+computer's profile are disabled, and the photo is scaled down to that longest edge
+before editing), the step count, the seed, the output folder and the GPU. When Edit is chosen for the first
 time, a Mac starts with the best bundle whose estimated peak stays within 35% of
 its unified memory, so macOS and open apps keep the rest: FLUX.2 klein Q4_0 on
 16 GB, Q8_0 on 24–32 GB, then Qwen Q3_K_S (36 GB), Q4_K_M (48 GB), Q6_K (64 GB)
@@ -54,8 +54,9 @@ projector while the prompt and reference are encoded, the transformer while the
 image is sampled. It may segment GPU execution and never converts a GGUF model to
 FP16/BF16 as a loading fallback.
 
-`scripts/refresh_edit_catalog.py` derives the tiers from that phase model, so the
-catalog, the worker's admission check and this table cannot drift apart:
+`scripts/refresh_edit_catalog.py` derives the tiers from that phase model and
+writes the JSON catalog used by the worker's admission check. Update this table
+when regenerating the catalog:
 
 - **Mac (unified memory):** the smallest Apple memory size where the heaviest
   phase plus the reserve fits in about 70% of memory (what an idle Mac has free),
@@ -119,10 +120,12 @@ starting profiles.
   process's memory every 250 ms and names the reason when it stops an edit. On a
   Mac, compressing memory and some swapping are how macOS makes room, and
   "warning" pressure is routine while a model loads, so the edit stops only on
-  critical pressure (two samples in a row), when swap grows by more than 2 GiB,
-  when warning pressure lasts 30 s while swap grows by more than 512 MiB, or
-  when the process outgrows its limit. Beside a dedicated GPU it stops when free
-  host memory falls below the reserve, swap grows by more than 512 MiB, pressure
+  critical pressure (two samples in a row), when swap grows by more than the larger
+  of 4 GiB and half of physical memory (8 GiB on a 16 GB Mac), when swap is growing
+  while the system volume has less free space than the disk reserve (8 GB; swap
+  lives there), when warning pressure has lasted 90 s and swap grew by more than
+  2 GiB within that time, or when the process outgrows its limit. Beside a
+  dedicated GPU it stops when free host memory falls below the reserve, swap grows by more than 512 MiB, pressure
   reaches warning, or the process outgrows its limit. On a Mac the process is
   measured by its physical footprint, since the memory-mapped weights are clean
   pages the system can drop; elsewhere by RSS. The kernel figures are read
@@ -176,13 +179,13 @@ keeps components that another installed size of the same family still uses.
 pinned model revisions using metadata only. Updating a family requires reviewing
 the matching components, runtime support and model license together.
 
-Validation for this implementation uses simulated capacity profiles, tiny fixture
-files and disposable non-model child processes. No Qwen weights were downloaded,
-loaded, or used to probe the development Mac's capacity. Real inference acceptance
-on the Mac/GPU matrix remains a separate validation task.
-
 Upstream references:
 
 - https://huggingface.co/Qwen/Qwen-Image-Edit-2511
 - https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF
 - https://github.com/leejet/stable-diffusion.cpp/blob/3f8527a46c54ecf4cb4ed6003da8e8982283c73c/docs/qwen_image_edit.md
+
+Automated tests use simulated memory profiles and small fixtures, not real
+weights. On real hardware only FLUX.2 klein 4B Q4_0 at 512 px has run so far
+(16 GB M1 Pro); the Qwen bundles and larger sizes are estimates. See
+[Known limitations](../KNOWN_LIMITATIONS.md#image-editing).

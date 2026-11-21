@@ -14,6 +14,15 @@ Dead code is caught by Vulture (Python), Knip (frontend) and the Rust
 `dead_code` lint. GitHub Actions runs the same suite on Linux, Windows and macOS
 for pushes to `main` and pull requests.
 
+CI runs on GitHub-hosted `ubuntu-24.04`, `windows-2022` and Apple Silicon
+`macos-latest`, with lint and platform tests in parallel. Each job uses a fresh
+Python 3.11 venv under `RUNNER_TEMP`. Linux and Windows install CPU PyTorch from
+the PyTorch CPU index before the project extras, and pip caches are disabled to
+limit disk use. Linux tests explicitly install Ubuntu's `ffmpeg` so the external
+FFmpeg and legacy-video cases keep running; platform/codec skips still apply.
+The Linux test and Preview jobs remove unused hosted-image SDKs before work.
+See [ADR 0008](adr/0008-hosted-ci.md).
+
 The Python suite covers the worker protocol, tiled inference geometry, image
 metadata and colour handling, video timing (constant and variable frame rate,
 trims, rotation, audio copying and conversion), HDR conversion and preservation,
@@ -21,6 +30,12 @@ cancellation and recovery through the actual worker loop, the model catalog and
 download verification, the updater (signature, checksum, interrupted transfers,
 disk space, rollback) and the packaging tools. It uses generated fixtures and
 does not download models.
+
+Bounded, fixed-seed property tests add generated cases for interpolation grids,
+grey scaling and ICC neutrality, tile stitching, Compare slot/region/viewport
+invariants, and release-statement validation. Hypothesis, fast-check and proptest
+are development-only dependencies; the properties run a bounded number of cases
+and are reproducible in CI.
 
 Real-model checks are separate: `python scripts/validate_live_models.py`
 downloads every catalog checkpoint, verifies its hash, loads it through

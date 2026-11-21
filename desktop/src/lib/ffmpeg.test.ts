@@ -1,12 +1,8 @@
+import { detectPlatform } from './platform';
 import { describe, expect, it } from 'vitest';
 
 import { demoSnapshot } from './demo';
-import {
-  detectPlatform,
-  exportNeedsExternalFFmpeg,
-  INSTALL_COMMANDS,
-  probeNeedsExternalFFmpeg,
-} from './ffmpeg';
+import { exportNeedsExternalFFmpeg, INSTALL_COMMANDS, probeNeedsExternalFFmpeg } from './ffmpeg';
 
 describe('FFmpeg notice helpers', () => {
   it('recognises the worker reason and falls back to the message text', () => {

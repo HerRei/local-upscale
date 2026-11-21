@@ -159,23 +159,32 @@ def test_backup_keeps_totals_but_not_hashes(tmp_path):
 
 def test_log_stream_end_to_end(tmp_path):
     store = stats.Store(tmp_path / "s.db")
+    recorded = threading.Event()
+    original_record = store.record
+
+    def record(*args, **kwargs):
+        result = original_record(*args, **kwargs)
+        recorded.set()
+        return result
+
+    store.record = record
     server = stats.LogServer(("127.0.0.1", 0), stats.LogHandler)
     server.store = store
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
     try:
         with socket.create_connection(server.server_address) as conn:
             conn.sendall(b"not json\n" + b"x" * (stats.MAX_LINE + 10) + b"\n")
             conn.sendall(json.dumps(entry("/hit?p=/localsr/", ts=time.time())).encode() + b"\n")
-        for _ in range(100):
-            if store.db.execute("SELECT COUNT(*) FROM daily").fetchone()[0]:
-                break
-            time.sleep(0.02)
+        assert recorded.wait(timeout=5)
         assert (
             store.db.execute("SELECT SUM(requests) FROM daily WHERE kind='view'").fetchone()[0] == 1
         )
     finally:
         server.shutdown()
         server.server_close()
+        server_thread.join(timeout=5)
+        assert not server_thread.is_alive()
 
 
 def test_github_downloads_add_only_growth_to_the_daily_totals(tmp_path):

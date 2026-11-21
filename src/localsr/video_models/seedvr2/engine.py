@@ -10,6 +10,7 @@ built once and reused across streamed chunks of one job.
 from __future__ import annotations
 
 import gc
+import os
 import threading
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -22,7 +23,12 @@ from PIL import Image
 from localsr.core.model_catalog import VIDEO_CATALOG_BY_ID
 from localsr.core.video_memory import seed_memory_plan
 
-from .vendor.utils.debug import Debug
+# The vendored optimisation module prints a status report to stdout when it is
+# first imported, unless this flag is set. The worker's stdout carries protocol
+# JSON lines only, so set it before the first vendored import.
+os.environ.setdefault("SEEDVR2_OPTIMIZATIONS_LOGGED", "1")
+
+from .vendor.utils.debug import Debug  # noqa: E402
 
 
 def _generation_utils():

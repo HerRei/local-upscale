@@ -17,8 +17,8 @@ PROFILE=LocalSR-Z2TU844D84-notary
 OUT="$PWD/build/release-$VERSION"
 mkdir -p "$OUT"
 APP_NAME="LocalSR.app"
-# Public downloads go through the Infomaniak VPS to the Mac mini. GitHub is a mirror.
-HOST_BASE="https://downloads.hermesr.duckdns.org/releases/v$VERSION"
+# Public downloads come from GitHub Releases.
+HOST_BASE="https://github.com/HerRei/local-upscale/releases/download/v$VERSION"
 step() { printf '\n==> %s (%s)\n' "$1" "$(date +%H:%M:%S)"; }
 
 test -z "$(git status --porcelain -- src desktop packaging scripts pyproject.toml)" || { echo "uncommitted source changes"; exit 1; }
@@ -38,11 +38,13 @@ COMMIT=$(git rev-parse HEAD)
 export LOCALSR_UPDATE_PUBLIC_KEY="$(tr -d '\n' < packaging/updates/production.pub)"
 export LOCALSR_UPDATE_BACKEND=mps
 export LOCALSR_UPDATE_KIND=native
-export LOCALSR_ENGINE_ID="macos-arm64-mps-${COMMIT:0:12}"
+export LOCALSR_ENGINE_ID="$(python scripts/release_targets.py --update-env macos-arm64-mps --commit "$COMMIT" | sed -n 's/^LOCALSR_ENGINE_ID=//p')"
 echo "commit $COMMIT engine $LOCALSR_ENGINE_ID"
 
 step "verify licensing-clean media runtime"
 python scripts/verify_codec_allowlist.py --python-env "$(command -v python)" > "$OUT/runtime-policy.json"
+# Record the exact environment; the release PR carries its diff against the last release.
+uv pip freeze --python "$(command -v python)" > "$OUT/mac-environment.txt"
 
 step "build worker and app"
 python scripts/build_tauri_preview.py --skip-checks --bundles app > "$OUT/build.log" 2>&1
@@ -192,5 +194,7 @@ json.dump({"version": version, "commit": commit, "engine_id": engine_id,
           open(f"{out}/release.json", "w"), indent=2)
 print("feed entry written")
 PY
+# The app trusts the entry's version, channel and identity only as this signed statement says.
+python scripts/beta_update_signing.py statement "$OUT/beta.json"
 step "done"
 cat "$OUT/SHA256SUMS"

@@ -98,6 +98,8 @@ def _prepare_playback(source, audio_source, destination, *, report, cancel_event
         warning_callback=lambda _message: None,
         sdr_bt709=bool(probe.hdr_format),
         encoder_threads=2,
+        # The disposable playback copy is app-owned; a retry may overwrite it.
+        replace_existing=True,
     )
     report(
         {

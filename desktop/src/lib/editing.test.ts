@@ -10,7 +10,6 @@ import {
   editPeakEstimate,
   editSizeLimit,
   recommendAnyEditModel,
-  recommendEditModel,
 } from './editing';
 import type { DeviceInfo, EditModel } from './types';
 
@@ -27,39 +26,6 @@ const gpu = (id: string, capacity: number): DeviceInfo => ({
 });
 
 describe('Qwen memory recommendations', () => {
-  it.each([
-    [24, 'Q3_K_S'],
-    [26, 'Q3_K_S'],
-    [32, 'Q5_K_M'],
-    [36, 'Q6_K'],
-    [48, 'Q8_0'],
-    [64, 'Q8_0'],
-  ])('recommends %s GiB Mac profile without allocating memory', (capacity, quantization) => {
-    const capabilities = demoSnapshot().capabilities;
-    capabilities.system_ram_total = Number(capacity) * EDIT_GIB;
-    expect(
-      recommendEditModel(models, 'qwen-image-edit-2511', capabilities, gpu('mps', Number(capacity)))
-        ?.quantization,
-    ).toBe(quantization);
-  });
-  it.each([
-    [8, 'Q2_K'],
-    [12, 'Q3_K_S'],
-    [16, 'Q4_K_M'],
-    [20, 'Q6_K'],
-    [24, 'Q8_0'],
-    [32, 'Q8_0'],
-  ])('recommends %s GiB GPU profile despite driver overhead', (capacity, quantization) => {
-    const capabilities = demoSnapshot().capabilities;
-    expect(
-      recommendEditModel(
-        models,
-        'qwen-image-edit-2511',
-        capabilities,
-        gpu('cuda:0', Number(capacity)),
-      )?.quantization,
-    ).toBe(quantization);
-  });
   it('caps the edit resolution on smaller devices', () => {
     const capabilities = demoSnapshot().capabilities;
     capabilities.system_ram_total = 24 * EDIT_GIB;

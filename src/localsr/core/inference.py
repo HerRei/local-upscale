@@ -1,7 +1,7 @@
 import gc
 import logging
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 
 import numpy as np
 import torch
@@ -48,6 +48,15 @@ def _introduced_periodic_signal(output: torch.Tensor, source: torch.Tensor) -> t
     return (phases(output) - phases(source)).amax()
 
 
+def _clear_device_cache(device: torch.device) -> None:
+    if device.type == "mps":
+        torch.mps.empty_cache()
+    elif device.type == "cuda":
+        torch.cuda.empty_cache()
+    elif device.type == "xpu":
+        torch.xpu.empty_cache()
+
+
 def _resolve_torch_device(device_str: str) -> torch.device:
     if device_str.startswith("directml:"):
         try:
@@ -82,16 +91,83 @@ def _resolve_torch_device(device_str: str) -> torch.device:
     return torch.device(device_str)
 
 
+def _fixed_window(
+    img_tensor: torch.Tensor, tile, shape: tuple[int, int]
+) -> tuple[torch.Tensor, int, int] | None:
+    """Cut a fixed (height, width) input around a tile's core from real image pixels.
+
+    Fixed-shape backends (Core ML) would otherwise pad a smaller edge tile with
+    replicated pixels, which large receptive fields notice. The window keeps
+    LocalSR's reflected halo at image borders and fills the rest of the shape
+    with neighbouring pixels; only an image smaller than the window is padded.
+    Returns the window and the core's offset inside it.
+    """
+    halo = tile.core_x - (tile.halo_x - tile.pad_left)
+    _, height, width = img_tensor.shape
+    if tile.core_h + 2 * halo > shape[0] or tile.core_w + 2 * halo > shape[1]:
+        return None
+
+    def axis(length: int, core_start: int, core_size: int, side: int):
+        virtual = length + 2 * halo
+        start = core_start + halo - (side - core_size) // 2
+        start = max(0, min(start, virtual - side))
+        low, high = start - halo, start - halo + side
+        reflect_before = max(0, -low)
+        reflect_after = max(0, min(high, length + halo) - length)
+        replicate_after = max(0, high - (length + halo))
+        return (
+            max(low, 0),
+            min(high, length),
+            reflect_before,
+            reflect_after,
+            replicate_after,
+            core_start + halo - start,
+        )
+
+    y0, y1, top, bottom, extra_bottom, core_top = axis(height, tile.core_y, tile.core_h, shape[0])
+    x0, x1, left, right, extra_right, core_left = axis(width, tile.core_x, tile.core_w, shape[1])
+    window = img_tensor[:, y0:y1, x0:x1]
+    if top or bottom or left or right:
+        mode = (
+            "replicate"
+            if max(left, right) >= window.shape[2] or max(top, bottom) >= window.shape[1]
+            else "reflect"
+        )
+        window = F.pad(window, (left, right, top, bottom), mode=mode)
+    if extra_bottom or extra_right:
+        window = F.pad(window, (0, extra_right, 0, extra_bottom), mode="replicate")
+    return window, core_top, core_left
+
+
+def _integrated_gpu(backend, device: torch.device) -> bool:
+    """Whether the device shares system memory; unknown counts as discrete, as before."""
+    try:
+        properties = backend.get_device_properties(device)
+    except (AttributeError, AssertionError, RuntimeError):
+        return False
+    return bool(getattr(properties, "is_integrated", False)) or bool(
+        getattr(properties, "is_integrated_gpu", False)
+    )
+
+
 def _apply_gpu_memory_limit(device: torch.device, safe_memory: bool) -> float | None:
     """Apply a hard allocator ceiling and return its fraction of device capacity."""
     if device.type in {"cuda", "xpu"}:
         backend = torch.cuda if device.type == "cuda" else torch.xpu
+        if _integrated_gpu(backend, device):
+            # An integrated GPU (an AMD APU under ROCm, say) reports only its BIOS
+            # carve-out here, often 512 MiB, while it really allocates from shared
+            # system memory. A cap against the carve-out would fail every job.
+            return None
         free_memory, total_memory = backend.mem_get_info(device)
         if total_memory <= 0:
             return None
         # Cap against memory that was free immediately before model loading, while
-        # also ensuring LocalSR never owns more than 90% of total visible VRAM.
-        free_share = free_memory / total_memory
+        # also ensuring LocalSR never owns more than 90% of total visible VRAM. Blocks
+        # LocalSR's allocator still holds count as used for the driver, but they are
+        # LocalSR's own: without them the cap shrinks after every emptied model cache.
+        reserved = getattr(backend, "memory_reserved", lambda _device: 0)(device)
+        free_share = min(1.0, (free_memory + reserved) / total_memory)
         headroom = 0.80 if safe_memory else 0.90
         fraction = max(0.01, min(0.90, free_share * headroom))
         backend.set_per_process_memory_fraction(fraction, device)
@@ -109,6 +185,95 @@ def _apply_gpu_memory_limit(device: torch.device, safe_memory: bool) -> float | 
     return None
 
 
+def _onnx_route(device_str: str):
+    """The ONNX Runtime route for a DirectML or OpenVINO device id, or None for PyTorch."""
+    kind, _, key = device_str.partition(":")
+    if kind == "directml":
+        from .onnx_runtime import OnnxRoute, directml_available
+
+        if not directml_available():
+            # Without ONNX Runtime DirectML the legacy torch-directml path decides.
+            return None
+        try:
+            index = int(key)
+        except ValueError as error:
+            raise RuntimeError(f"Invalid DirectML device identifier: {device_str}") from error
+        if index < 0:
+            raise RuntimeError(f"Invalid DirectML device identifier: {device_str}")
+        from .hardware import display_name
+        from .windows_adapters import directml_adapters
+
+        try:
+            adapters = directml_adapters()
+        except (OSError, RuntimeError):
+            adapters = []
+        adapter = next((a for a in adapters if a["index"] == index), None)
+        if adapter is None:
+            return OnnxRoute(
+                "DmlExecutionProvider",
+                index,
+                identity=device_str,
+                label=device_str,
+                persist=False,
+                device=device_str,
+            )
+
+        def describe(entry: dict) -> str:
+            return "|".join(
+                (
+                    entry["name"],
+                    f"{entry['vendor_id']:04x}:{entry.get('device_id', 0):04x}"
+                    f":{entry.get('subsystem_id', 0):08x}",
+                    str(entry.get("driver_version")),
+                )
+            )
+
+        identity = describe(adapter)
+        # Two identical cards cannot be told apart across restarts, so their verdicts
+        # last only for this process.
+        twins = sum(1 for entry in adapters if describe(entry) == identity)
+        return OnnxRoute(
+            "DmlExecutionProvider",
+            index,
+            identity=identity,
+            label=f"{display_name(adapter['name'])} (DirectML)",
+            persist=adapter.get("driver_version") is not None and twins == 1,
+            device=device_str,
+        )
+    if kind == "openvino":
+        from .hardware import display_name
+        from .onnx_runtime import OnnxRoute
+        from .openvino_devices import device_for
+
+        device = device_for(key)
+        if device is None:
+            raise RuntimeError(
+                "The selected Intel GPU or NPU is no longer available through OpenVINO. "
+                "Choose another device in the Hardware settings."
+            )
+        kind = device.get("kind", "GPU")
+        identity = "|".join(
+            (
+                device["key"],
+                device["name"],
+                device["device_id"],
+                device["architecture"],
+                device["plugin_version"],
+                str(device.get("driver")),
+            )
+        )
+        return OnnxRoute(
+            "OpenVINOExecutionProvider",
+            ep_device=device["ep_device"],
+            identity=identity,
+            label=f"{display_name(device['name'])} ({'NPU' if kind == 'NPU' else 'OpenVINO'})",
+            persist=device.get("driver") is not None,
+            device=device_str,
+            kind=kind,
+        )
+    return None
+
+
 class InferenceEngine:
     def __init__(self, model_adapter):
         self.model_adapter = model_adapter
@@ -116,14 +281,26 @@ class InferenceEngine:
         # The active model is the one used by process_frame / process_image.
         # Switching between cached models is instant (no torch reload).
         self._loaded_models: dict[str, tuple[object, torch.device, torch.dtype]] = {}
+        self._memory_cap_safe: dict[str, bool] = {}
         self._loaded_backend_ids: dict[str, str] = {}
         self._active_path: str | None = None
-        # Legacy single-model fields kept for backward compat with
-        # process_image and any external callers.
-        self._loaded_model = None
-        self._loaded_model_path: str | None = None
         self._loaded_device: torch.device | None = None
         self._loaded_precision: torch.dtype | None = None
+        # On Apple silicon, supported architectures run through Core ML on the
+        # Neural Engine. Jobs set this from the user's setting; benchmarks
+        # measure PyTorch and turn it off.
+        self.neural_engine_enabled = True
+        self.status_callback: Callable[[str], None] | None = None
+        # Sentences a backend wants on the finished result (a route it gave up).
+        self.notes: list[str] = []
+
+    def add_note(self, message: str) -> None:
+        if message not in self.notes:
+            self.notes.append(message)
+
+    def take_notes(self) -> list[str]:
+        notes, self.notes = self.notes, []
+        return notes
 
     @property
     def active_model(self):
@@ -134,7 +311,12 @@ class InferenceEngine:
         return entry[0] if entry is not None else None
 
     def load_model(
-        self, model_path: str, device_str: str, precision_str: str, model_info
+        self,
+        model_path: str,
+        device_str: str,
+        precision_str: str,
+        model_info,
+        safe_memory: bool | None = None,
     ) -> tuple[torch.device, torch.dtype]:
         """Load a model and cache it. Switching to an already-cached model
         is instant — no torch reload, no VRAM spike.
@@ -144,83 +326,110 @@ class InferenceEngine:
         desired path. Image pipelines still use process_image(), which
         calls this internally.
         """
-        onnx_device_index = None
-        if device_str.startswith("directml:"):
-            from .onnx_runtime import directml_available
+        onnx_route = _onnx_route(device_str)
+        if onnx_route is not None and onnx_route.kind == "NPU":
+            from .onnx_runtime import NPU_ARCHITECTURES
 
-            if directml_available():
-                try:
-                    onnx_device_index = int(device_str.partition(":")[2])
-                except ValueError as error:
-                    raise RuntimeError(
-                        f"Invalid DirectML device identifier: {device_str}"
-                    ) from error
-                if onnx_device_index < 0:
-                    raise RuntimeError(f"Invalid DirectML device identifier: {device_str}")
+            architecture = str(getattr(model_info, "architecture", ""))
+            if architecture not in NPU_ARCHITECTURES:
+                if self.status_callback is not None:
+                    self.status_callback(
+                        f"{architecture} does not run on {onnx_route.label}, so it runs on the CPU."
+                    )
+                onnx_route = None
+                device_str = "cpu"
+                # The CPU runs FP32 whatever the NPU route was asked for.
+                precision_str = "fp32"
         # ONNX owns the GPU tensors. PyTorch stages tiles and validates returned
         # pixels on CPU; the selected execution backend is tracked separately.
         device = (
-            torch.device("cpu")
-            if onnx_device_index is not None
-            else _resolve_torch_device(device_str)
+            torch.device("cpu") if onnx_route is not None else _resolve_torch_device(device_str)
         )
         precision = (
             torch.float16
-            if precision_str == "fp16" and model_info.half_supported and onnx_device_index is None
+            if precision_str == "fp16" and model_info.half_supported and onnx_route is None
             else torch.float32
         )
+        coreml_units: tuple[str, ...] = ()
+        if onnx_route is None and device.type == "mps" and self.neural_engine_enabled:
+            from .coreml_runtime import coreml_units_for
 
-        # Already cached? Just switch active.
+            coreml_units = coreml_units_for(str(getattr(model_info, "architecture", "")))
+        backend_id = f"{device_str}+coreml" if coreml_units else device_str
+
+        # Apply the memory cap once per device, shared by its cached models, and again
+        # when the safe-memory choice changes, also for a model that is already cached.
+        # Video passes the choice inside model_info.
+        safe = getattr(model_info, "safe_memory", True) if safe_memory is None else safe_memory
+        if (
+            not any(d == device for _, d, _ in self._loaded_models.values())
+            or self._memory_cap_safe.get(str(device)) != safe
+        ):
+            _apply_gpu_memory_limit(device, safe)
+            self._memory_cap_safe[str(device)] = safe
+
         if model_path in self._loaded_models:
             cached_model, cached_device, cached_precision = self._loaded_models[model_path]
             if (
                 cached_device == device
                 and cached_precision == precision
-                and self._loaded_backend_ids.get(model_path) == device_str
+                and self._loaded_backend_ids.get(model_path) == backend_id
             ):
                 self._active_path = model_path
                 self._sync_legacy_fields()
+                self._attach_status(cached_model)
                 return device, precision
-            # Precision/device changed — drop the stale cache entry and reload.
             del self._loaded_models[model_path]
             gc.collect()
 
-        # Load the new model. The GPU memory limit is applied once per
-        # device; subsequent loads on the same device keep the existing cap.
-        if not any(d == device for _, d, _ in self._loaded_models.values()):
-            _apply_gpu_memory_limit(device, getattr(model_info, "safe_memory", True))
-
-        if onnx_device_index is None:
-            model, _ = self.model_adapter.load(model_path, device, precision)
-        else:
+        if onnx_route is not None:
+            model, _ = self.model_adapter.load(model_path, device, precision, onnx_route=onnx_route)
+        elif coreml_units:
             model, _ = self.model_adapter.load(
-                model_path, device, precision, onnx_device_index=onnx_device_index
+                model_path, device, precision, coreml_units=coreml_units
             )
+        else:
+            model, _ = self.model_adapter.load(model_path, device, precision)
         self._loaded_models[model_path] = (model, device, precision)
-        self._loaded_backend_ids[model_path] = device_str
+        self._loaded_backend_ids[model_path] = backend_id
         self._active_path = model_path
         self._sync_legacy_fields()
+        self._attach_status(model)
         return device, precision
+
+    def _attach_status(self, model) -> None:
+        setter = getattr(model, "set_status_callback", None)
+        if callable(setter):
+            setter(self.status_callback)
+        note_setter = getattr(model, "set_note_callback", None)
+        if callable(note_setter):
+            note_setter(self.add_note)
+
+    def prepare_tiles(
+        self,
+        tile_size: int,
+        halo: int,
+        path: str | None = None,
+        frame: tuple[int, int] | None = None,
+    ) -> None:
+        """Tell a fixed-shape backend the largest tile (or whole frame) it will receive."""
+        entry = self._loaded_models.get(path or self._active_path or "")
+        prepare = getattr(entry[0], "prepare_tiles", None) if entry is not None else None
+        if callable(prepare):
+            prepare(tile_size, halo, frame)
 
     @property
     def active_backend_id(self):
         return self._loaded_backend_ids.get(self._active_path)
 
     def _sync_legacy_fields(self) -> None:
-        """Keep _loaded_model / _loaded_model_path etc. in sync with the
-        multi-model cache so process_image and external code that reads
-        those fields continues to work.
-        """
+        """Synchronize active-model fields with the cache."""
         if self._active_path is not None:
             entry = self._loaded_models.get(self._active_path)
             if entry is not None:
-                self._loaded_model = entry[0]
-                self._loaded_model_path = self._active_path
                 self._loaded_device = entry[1]
                 self._loaded_precision = entry[2]
         else:
-            self._loaded_model = None
-            self._loaded_model_path = None
             self._loaded_device = None
             self._loaded_precision = None
 
@@ -229,9 +438,6 @@ class InferenceEngine:
         if path is not None:
             entry = self._loaded_models.pop(path, None)
             self._loaded_backend_ids.pop(path, None)
-            # entry is a (model, device, precision) tuple. The model
-            # reference is dropped by letting it go out of scope; we
-            # don't need to del entry[0] (tuples are immutable).
             del entry
             if self._active_path == path:
                 self._active_path = next(iter(self._loaded_models), None)
@@ -245,6 +451,11 @@ class InferenceEngine:
             self._active_path = None
             self._sync_legacy_fields()
             gc.collect()
+
+    def release_models_except(self, keep: Collection[str]) -> None:
+        """Release every cached model whose path is not in keep."""
+        for path in [path for path in self._loaded_models if path not in keep]:
+            self.release_model(path)
 
     def release_all(self) -> None:
         """Release every cached model. Alias for release_model(path=None)."""
@@ -383,6 +594,23 @@ class InferenceEngine:
         and the face-aware pipeline. It handles halo extraction, padding,
         divisibility, inference, and halo/padding stripping.
         """
+        fixed_shape = getattr(model, "fixed_input_shape", None)
+        if fixed_shape:
+            window = _fixed_window(img_tensor, tile, fixed_shape)
+            if window is not None:
+                tile_input, core_top, core_left = window
+                return self._infer_tile(
+                    tile_input,
+                    tile,
+                    model_info,
+                    device,
+                    precision,
+                    model,
+                    core_top,
+                    core_left,
+                    float_output=float_output,
+                )
+
         tile_input = img_tensor[
             :, tile.halo_y : tile.halo_y + tile.halo_h, tile.halo_x : tile.halo_x + tile.halo_w
         ]
@@ -406,6 +634,36 @@ class InferenceEngine:
                     mode="reflect",
                 )
 
+        return self._infer_tile(
+            tile_input,
+            tile,
+            model_info,
+            device,
+            precision,
+            model,
+            halo,
+            halo,
+            float_output=float_output,
+        )
+
+    def _infer_tile(
+        self,
+        tile_input: torch.Tensor,
+        tile,
+        model_info,
+        device: torch.device,
+        precision: torch.dtype,
+        model,
+        core_top: int,
+        core_left: int,
+        *,
+        float_output: bool = False,
+    ) -> np.ndarray:
+        """Run one prepared tile input and return its core output.
+
+        ``core_top``/``core_left`` locate the tile's core inside the input; the
+        halo on the regular grid, or a larger offset inside a fixed window.
+        """
         mult = model_info.size_requirements_mult
         min_size = model_info.size_requirements_min
         square = getattr(model_info, "size_requirements_square", False)
@@ -423,7 +681,12 @@ class InferenceEngine:
         if pad_w > 0 or pad_h > 0:
             tile_input = F.pad(tile_input, (0, pad_w, 0, pad_h), mode="replicate")
 
-        tile_input_device = tile_input.unsqueeze(0).to(device).to(precision)
+        staging = getattr(model, "input_device", None)
+        if staging is not None:
+            # Core ML reads CPU memory; skip the round trip through the GPU.
+            tile_input_device = tile_input.unsqueeze(0).to(staging, torch.float32)
+        else:
+            tile_input_device = tile_input.unsqueeze(0).to(device).to(precision)
 
         hook = None
         architecture = getattr(model_info, "architecture", "").lower()
@@ -436,8 +699,8 @@ class InferenceEngine:
                 scale = model_info.scale
                 core = output[
                     ...,
-                    halo * scale : (halo + tile.core_h) * scale,
-                    halo * scale : (halo + tile.core_w) * scale,
+                    core_top * scale : (core_top + tile.core_h) * scale,
+                    core_left * scale : (core_left + tile.core_w) * scale,
                 ]
                 if architecture == "span":
                     if _span_output_is_unstable(core):
@@ -445,8 +708,8 @@ class InferenceEngine:
                     return
                 source_core = _args[0][
                     ...,
-                    halo : halo + tile.core_h,
-                    halo : halo + tile.core_w,
+                    core_top : core_top + tile.core_h,
+                    core_left : core_left + tile.core_w,
                 ]
                 # Some unstable crops remain inside the nominal range but
                 # introduce large coloured checker patterns on neutral scans.
@@ -475,7 +738,7 @@ class InferenceEngine:
             if hook is not None:
                 hook.remove()
 
-        if torch.isnan(out_device).any() or torch.isinf(out_device).any():
+        if not torch.isfinite(out_device).all():
             raise ValueError("Model produced NaN or Infinity. Precision might be unsupported.")
 
         out_cpu = out_device.squeeze(0).to(torch.float32).cpu()
@@ -490,14 +753,14 @@ class InferenceEngine:
 
         out_core = out_cpu[
             :,
-            halo * scale : out_cpu.shape[1] - halo * scale,
-            halo * scale : out_cpu.shape[2] - halo * scale,
+            core_top * scale : (core_top + tile.core_h) * scale,
+            core_left * scale : (core_left + tile.core_w) * scale,
         ]
 
         if float_output:
             return out_core.clamp(0, 1).numpy()
         out_core = torch.clamp(out_core, 0, 1) * 255.0
-        return out_core.byte().numpy()
+        return out_core.round().byte().numpy()
 
     def process_frame(
         self,
@@ -512,8 +775,13 @@ class InferenceEngine:
         precision: torch.dtype | None = None,
         tile_callback: Callable[..., None] | None = None,
         float_output: bool = False,
+        whole_frame: bool = False,
     ) -> np.ndarray:
         """Process a single frame using the already-loaded model.
+
+        ``whole_frame`` lets a fixed-shape backend that supports it run the frame
+        in one call instead of tiles; video frames share one size, so a single
+        program serves the whole job.
 
         Returns a uint8 (C, H*scale, W*scale) numpy array. Memory-mapped
         OutputWriter is avoided here because video frames are transient —
@@ -530,17 +798,29 @@ class InferenceEngine:
         _, h, w = img_tensor.shape
         scale = model_info.scale
         out_channels = model_info.out_channels
-        out_shape = (out_channels, h * scale, w * scale)
         output_dtype = np.float32 if float_output else np.uint8
-        out_array = np.zeros(out_shape, dtype=output_dtype)
+
+        def new_output() -> np.ndarray:
+            # A (C, H, W) view of (H, W, C) memory: video encoders want
+            # interleaved pixels, which then need no transposing copy.
+            return np.zeros((h * scale, w * scale, out_channels), dtype=output_dtype).transpose(
+                2, 0, 1
+            )
+
+        out_array = new_output()
 
         current_tile_size = tile_size
-        min_tile_size = 64 if safe_memory else 4
+        min_tile_size = min(tile_size, 64) if safe_memory else 4
+        frame_shape = getattr(model, "whole_frame_shape", None)
+        whole = bool(whole_frame and callable(frame_shape) and frame_shape(h, w, halo))
+        if whole:
+            current_tile_size = max(w, h)
 
         while current_tile_size >= min_tile_size:
             try:
                 tiles = list(generate_tiles(w, h, current_tile_size, halo, scale))
                 total_tiles = len(tiles)
+                self.prepare_tiles(current_tile_size, halo, frame=(h, w) if whole else None)
 
                 for i, t in enumerate(tiles):
                     if cancel_event.is_set():
@@ -589,12 +869,7 @@ class InferenceEngine:
                     progress_callback(i + 1, total_tiles, current_tile_size)
 
                     if safe_memory:
-                        if device.type == "mps":
-                            torch.mps.empty_cache()
-                        elif device.type == "cuda":
-                            torch.cuda.empty_cache()
-                        elif device.type == "xpu":
-                            torch.xpu.empty_cache()
+                        _clear_device_cache(device)
                         gc.collect()
 
                 return out_array
@@ -606,12 +881,7 @@ class InferenceEngine:
                     or "not enough memory" in err_str
                     or "allocate" in err_str
                 ):
-                    if device.type == "mps":
-                        torch.mps.empty_cache()
-                    elif device.type == "cuda":
-                        torch.cuda.empty_cache()
-                    elif device.type == "xpu":
-                        torch.xpu.empty_cache()
+                    _clear_device_cache(device)
                     gc.collect()
 
                     current_tile_size = current_tile_size // 2
@@ -631,8 +901,7 @@ class InferenceEngine:
                             h * scale,
                             current_tile_size,
                         )
-                    # Re-initialize output array cleanly
-                    out_array = np.zeros(out_shape, dtype=output_dtype)
+                    out_array = new_output()
                     continue
                 raise
 
@@ -654,28 +923,29 @@ class InferenceEngine:
         temporary_directory: str | None = None,
     ) -> OutputWriter:
 
-        # load_model applies GPU memory limits and loads the model onto device.
-        device, precision = self.load_model(model_path, device_str, precision_str, model_info)
+        device, precision = self.load_model(
+            model_path, device_str, precision_str, model_info, safe_memory=safe_memory
+        )
         model = self.active_model
 
         img_tensor = img_data["tensor"]
         _, h, w = img_tensor.shape
         scale = model_info.scale
 
+        current_tile_size = tile_size
+        min_tile_size = min(tile_size, 64) if safe_memory else 4
+
         writer = OutputWriter(
             (model_info.out_channels, h * scale, w * scale),
             dtype=np.uint8,
             temporary_directory=temporary_directory,
         )
-
-        current_tile_size = tile_size
-
-        min_tile_size = 64 if safe_memory else 4
         try:
             while current_tile_size >= min_tile_size:
                 try:
                     tiles = list(generate_tiles(w, h, current_tile_size, halo, scale))
                     total_tiles = len(tiles)
+                    self.prepare_tiles(current_tile_size, halo)
 
                     for i, t in enumerate(tiles):
                         if cancel_event.is_set():
@@ -722,30 +992,19 @@ class InferenceEngine:
                         progress_callback(i + 1, total_tiles, current_tile_size)
 
                         if safe_memory:
-                            if device.type == "mps":
-                                torch.mps.empty_cache()
-                            elif device.type == "cuda":
-                                torch.cuda.empty_cache()
-                            elif device.type == "xpu":
-                                torch.xpu.empty_cache()
+                            _clear_device_cache(device)
                             gc.collect()
 
                     return writer
 
                 except RuntimeError as e:
-                    # Check for OOM
                     err_str = str(e).lower()
                     if (
                         "out of memory" in err_str
                         or "not enough memory" in err_str
                         or "allocate" in err_str
                     ):
-                        if device.type == "mps":
-                            torch.mps.empty_cache()
-                        elif device.type == "cuda":
-                            torch.cuda.empty_cache()
-                        elif device.type == "xpu":
-                            torch.xpu.empty_cache()
+                        _clear_device_cache(device)
                         gc.collect()
 
                         current_tile_size = current_tile_size // 2
@@ -767,7 +1026,6 @@ class InferenceEngine:
                                 current_tile_size,
                             )
 
-                        # Re-initialize output writer cleanly
                         writer.cleanup()
                         writer = OutputWriter(
                             (model_info.out_channels, h * scale, w * scale),

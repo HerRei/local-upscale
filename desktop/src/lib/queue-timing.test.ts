@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { demoSnapshot } from './demo';
+import { formatDuration } from './format';
 import type { JobRecord } from './types';
-import { queueTiming } from './queue-timing';
+import { queueTiming, queueModelState } from './queue-timing';
 
 function job(
   id: string,
@@ -63,8 +64,129 @@ describe('whole queue timing', () => {
       unknownItems: 2,
     });
     s.jobs.push({ ...job('previous', 'completed', 6), elapsed_seconds: 30 });
+    // One earlier run may have loaded the model or waited for the Mac to wake: not a speed.
+    expect(queueTiming(s)).toMatchObject({ currentSeconds: null, nextSeconds: null });
+    s.jobs[0].seconds_per_unit = 5;
     expect(queueTiming(s)).toMatchObject({ currentSeconds: 30, nextSeconds: 60, queueSeconds: 90 });
     s.jobs[0].status = 'cancelled';
     expect(queueTiming(s)).toBeNull();
+  });
+
+  it('takes the speed from the typical run, never from the latest one alone', () => {
+    const s = demoSnapshot();
+    s.jobs = [
+      job('next', 'queued', 10),
+      job('active', 'running', 10),
+      // The newest run waited three minutes for the Mac to wake.
+      { ...job('slow', 'completed', 10), elapsed_seconds: 200 },
+      { ...job('fast', 'completed', 10), elapsed_seconds: 20 },
+    ];
+    s.jobs.forEach((j) => (j.seconds_per_unit = 2));
+    s.runtime.active_job_id = 'active';
+    expect(queueTiming(s)).toMatchObject({ currentSeconds: 20, nextSeconds: 20, queueSeconds: 40 });
+  });
+
+  it('measures a staged job by its whole elapsed time, not by its stage-weighted percentage', () => {
+    const s = demoSnapshot();
+    s.jobs = [job('next', 'queued', 10), job('active', 'running', 10)];
+    // A fix that took 10 s is done and the upscale is half through: the bar reads 75 %, the
+    // job has run 60 s and the engine says 40 s remain, so it takes 100 s in all.
+    Object.assign(s.runtime, {
+      active_job_id: 'active',
+      progress: 75,
+      elapsed_seconds: 60,
+      estimated_remaining_seconds: 40,
+    });
+    expect(queueTiming(s)).toMatchObject({ currentSeconds: 40, nextSeconds: 100 });
+  });
+
+  it('keeps an earlier typical speed until the running job has shown enough of its own', () => {
+    const s = demoSnapshot();
+    s.jobs = [
+      { ...job('next', 'queued', 10), seconds_per_unit: 2 },
+      { ...job('active', 'running', 10), seconds_per_unit: 2 },
+    ];
+    Object.assign(s.runtime, {
+      active_job_id: 'active',
+      progress: 5,
+      elapsed_seconds: 45,
+      estimated_remaining_seconds: 300,
+    });
+    expect(queueTiming(s)).toMatchObject({ currentSeconds: 300, nextSeconds: 20 });
+    s.runtime.progress = 40;
+    expect(queueTiming(s)?.nextSeconds).toBeCloseTo(345);
+  });
+
+  it('says nothing, not "≈ —", once the earlier estimate for the running job is used up', () => {
+    const s = demoSnapshot();
+    s.jobs = [
+      { ...job('next', 'queued', 10), seconds_per_unit: 2 },
+      { ...job('active', 'running', 10), seconds_per_unit: 2 },
+    ];
+    Object.assign(s.runtime, { active_job_id: 'active', progress: 99, elapsed_seconds: 25 });
+    expect(queueTiming(s)).toMatchObject({ currentSeconds: null, nextSeconds: 20 });
+  });
+
+  it('names the model of the next run when the queue runs one image more than once', () => {
+    const s = demoSnapshot();
+    const trial = (id: string, status: JobRecord['status'], model: string): JobRecord => ({
+      ...job(id, status, 4),
+      media_id: 'photo',
+      media_name: 'photo.png',
+      model_label: model,
+    });
+    // Newest first, as in a snapshot: SwinIR runs, then HAT, then DAT2.
+    s.jobs = [
+      trial('third', 'queued', 'DAT2'),
+      trial('second', 'queued', 'HAT'),
+      trial('first', 'running', 'SwinIR'),
+    ];
+    s.runtime.active_job_id = 'first';
+    expect(queueTiming(s)?.nextName).toBe('photo.png · HAT');
+    s.jobs = [job('other', 'queued', 4), trial('first', 'running', 'SwinIR')];
+    expect(queueTiming(s)?.nextName).toBe('other.png');
+  });
+});
+
+describe('the queue and Try others', () => {
+  function job(id: string, status: string, model: string): JobRecord {
+    return {
+      id,
+      media_id: 'photo',
+      media_name: 'photo.png',
+      media_kind: 'image',
+      status,
+      progress: 0,
+      output_path: '',
+      error: '',
+      created_at: 0,
+      model_label: model,
+    } as JobRecord;
+  }
+
+  it('names the running model first, then the image runs still queued', () => {
+    const jobs = [
+      job('c', 'queued', 'DAT2'),
+      job('b', 'queued', 'HAT'),
+      job('a', 'running', 'SwinIR'),
+      job('done', 'completed', 'Old'),
+    ];
+    expect(queueModelState(jobs, 'photo', 'a')).toBe('Running SwinIR · 2 queued');
+    expect(queueModelState(jobs.slice(0, 2), 'photo', '')).toBe('2 queued');
+    expect(queueModelState([job('x', 'queued', 'HAT')], 'photo', '')).toBe('queued');
+    expect(queueModelState([job('a', 'cancelling', 'SwinIR')], 'photo', 'a')).toBe(
+      'Cancelling SwinIR',
+    );
+  });
+});
+
+describe('time text', () => {
+  it('never shows 60 in the seconds place, a negative or a not-a-number time', () => {
+    expect(formatDuration(59.6)).toBe('1:00');
+    expect(formatDuration(3599.6)).toBe('1h 0m');
+    expect(formatDuration(86399.6)).toBe('1d 0h');
+    for (const bad of [-5, Number.NaN, Number.POSITIVE_INFINITY, 0]) {
+      expect(formatDuration(bad)).toBe('—');
+    }
   });
 });

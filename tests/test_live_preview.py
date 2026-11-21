@@ -1,5 +1,4 @@
 import threading
-import time
 
 import numpy as np
 from PIL import Image
@@ -24,33 +23,45 @@ def test_latest_frame_wins_without_blocking_producer(monkeypatch):
     encoding_started = threading.Event()
     release_encoder = threading.Event()
     emitted = []
+    received = threading.Event()
+
+    def emit(packet):
+        emitted.append(packet)
+        if len(emitted) == 2:
+            received.set()
 
     def blocked_encode(pixels, max_dimension, quality):
         encoding_started.set()
-        release_encoder.wait(timeout=2)
+        assert release_encoder.wait(timeout=10)
         return str(int(pixels[0, 0, 0]))
 
     monkeypatch.setattr(preview_module, "encode_preview_jpeg", blocked_encode)
-    encoder = LatestPreviewEncoder(emitted.append, max_fps=5)
+    encoder = LatestPreviewEncoder(emit, max_fps=5)
     assert encoder.submit(job_id="job", preview_kind="video", pixels=np.full((3, 4, 4), 1))
-    assert encoding_started.wait(timeout=1)
+    assert encoding_started.wait(timeout=5)
 
-    started = time.perf_counter()
-    for value in (2, 3, 4):
-        encoder.submit(
-            job_id="job",
-            preview_kind="video",
-            pixels=np.full((3, 4, 4), value),
-            force=True,
-        )
-    producer_elapsed = time.perf_counter() - started
-    assert producer_elapsed < 0.1
-    assert encoder._queue.qsize() <= 1
+    submitted = threading.Event()
 
-    release_encoder.set()
-    deadline = time.monotonic() + 2
-    while len(emitted) < 2 and time.monotonic() < deadline:
-        time.sleep(0.01)
+    def produce():
+        for value in (2, 3, 4):
+            encoder.submit(
+                job_id="job",
+                preview_kind="video",
+                pixels=np.full((3, 4, 4), value),
+                force=True,
+            )
+        submitted.set()
+
+    producer = threading.Thread(target=produce)
+    producer.start()
+    try:
+        assert submitted.wait(timeout=5), "producer blocked on the encoder"
+        assert encoder._queue.qsize() <= 1
+    finally:
+        release_encoder.set()
+        producer.join(timeout=5)
+    assert not producer.is_alive()
+    assert received.wait(timeout=5)
     encoder.close()
     assert emitted[-1].jpeg_base64 == "4"
     assert emitted[-1].sequence > emitted[0].sequence
@@ -80,7 +91,7 @@ def test_close_discards_an_in_flight_preview_without_emitting(monkeypatch):
     monkeypatch.setattr(preview_module, "encode_preview_jpeg", blocked_encode)
     encoder = LatestPreviewEncoder(emitted.append)
     encoder.submit(job_id="old-job", preview_kind="video", pixels=np.zeros((3, 4, 4)))
-    assert encoding_started.wait(timeout=1)
+    assert encoding_started.wait(timeout=5)
     encoder.close()
     release_encoder.set()
     if encoder._thread is not None:

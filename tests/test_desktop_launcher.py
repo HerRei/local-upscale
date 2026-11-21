@@ -140,3 +140,10 @@ runpy.run_module('localsr', run_name='__main__')
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "usage:" in result.stdout
+
+
+def test_launcher_has_no_torch_diagnostic_flag():
+    # The launcher must stay light: it forwards to the desktop host and never imports torch.
+    parsed, unknown = __main__._parse_cli_args(["--test-mps", "photo.png"])
+    assert not hasattr(parsed, "test_mps")
+    assert "--test-mps" in unknown

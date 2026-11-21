@@ -291,7 +291,7 @@ class AutomationRunner:
                 ),
                 self.engine,
                 self.cancel_event,
-                progress_cb=lambda done, total, elapsed: self.reporter.emit(
+                progress_cb=lambda done, total, elapsed, _remaining: self.reporter.emit(
                     "progress",
                     input_path=str(source),
                     completed=done,
@@ -303,31 +303,44 @@ class AutomationRunner:
             elapsed = result.elapsed_seconds
         else:
             from localsr.core.image_io import ImageManager
+            from localsr.core.output_writer import OutputWriter
 
             manager = ImageManager()
             image_data = manager.load(str(source))
             writer = None
             try:
-                writer = self.engine.process_image(
-                    img_data=image_data,
-                    model_info=model_info,
-                    model_path=model_path,
-                    device_str=device,
-                    precision_str=precision,
-                    tile_size=tile_size,
-                    halo=halo,
-                    cancel_event=self.cancel_event,
-                    progress_callback=lambda done, total, active: self.reporter.emit(
-                        "progress",
-                        input_path=str(source),
-                        completed=done,
-                        total=total,
-                        percentage=done / max(1, total) * 100.0,
-                        active_tile_size=active,
-                    ),
-                    safe_memory=True,
-                    temporary_directory=str(default_work_directory()),
-                )
+                if output_scale == 1 and native_scale > 1:
+                    pixels = image_data["tensor"].clamp(0, 1).mul(255).round().byte().numpy()
+                    writer = OutputWriter(
+                        pixels.shape,
+                        dtype=pixels.dtype,
+                        temporary_directory=str(default_work_directory()),
+                    )
+                    writer.mmap[:] = pixels
+                    writer.mmap.flush()
+                    save_scale = 1
+                else:
+                    writer = self.engine.process_image(
+                        img_data=image_data,
+                        model_info=model_info,
+                        model_path=model_path,
+                        device_str=device,
+                        precision_str=precision,
+                        tile_size=tile_size,
+                        halo=halo,
+                        cancel_event=self.cancel_event,
+                        progress_callback=lambda done, total, active: self.reporter.emit(
+                            "progress",
+                            input_path=str(source),
+                            completed=done,
+                            total=total,
+                            percentage=done / max(1, total) * 100.0,
+                            active_tile_size=active,
+                        ),
+                        safe_memory=True,
+                        temporary_directory=str(default_work_directory()),
+                    )
+                    save_scale = native_scale
                 if self.cancel_event.is_set():
                     raise InterruptedError("processing cancelled")
                 manager.save(
@@ -338,7 +351,7 @@ class AutomationRunner:
                     preserve_metadata=preserve_metadata,
                     icc_profile=image_data.get("icc_profile"),
                     safe_exif=image_data.get("safe_exif", {}),
-                    scale=native_scale,
+                    scale=save_scale,
                     output_scale=output_scale,
                 )
             finally:
@@ -400,13 +413,14 @@ def _add_processing_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model", default=WORKLOAD_MODEL_ID, choices=sorted(CATALOG_BY_ID))
     parser.add_argument("--device", default="auto", help="auto, cpu, mps, cuda:0, or xpu:0.")
     parser.add_argument("--scale", type=int, default=4)
-    parser.add_argument("--format", choices=["png", "jpg", "tif", "webp"], default="png")
-    parser.add_argument("--video-container", choices=["mp4", "mkv"], default="mp4")
+    parser.add_argument("--format", choices=["png", "jpg", "tif", "webp", "heic"], default="png")
+    parser.add_argument("--video-container", choices=["mp4", "mkv", "mov"], default="mp4")
     parser.add_argument(
         "--video-codec",
-        choices=["av1", "vp9", "ffv1", "h264", "hevc"],
+        choices=["av1", "vp9", "ffv1", "h264", "hevc", "prores"],
         default="av1",
-        help="H.264/HEVC are written by the system codecs (macOS) or an installed FFmpeg.",
+        help="H.264/HEVC are written by the system codecs (macOS) or an installed FFmpeg; "
+        "ProRes, and MOV, by the system codecs only.",
     )
     parser.add_argument(
         "--external-ffmpeg",
@@ -467,17 +481,27 @@ def _watch(
     device: str,
     *,
     clock: Callable[[], float] = time.monotonic,
-    sleeper: Callable[[float], None] = time.sleep,
+    sleeper: Callable[[float], None] | None = None,
 ) -> int:
+    # A signal sets the cancel event; waiting on it ends the poll pause at once, where
+    # time.sleep would resume and finish the whole pause.
+    sleeper = sleeper or runner.cancel_event.wait
     input_directory = args.folder.resolve(strict=True)
     if not input_directory.is_dir():
         raise AutomationError(f"Watch path is not a directory: {input_directory}")
     args.output.mkdir(parents=True, exist_ok=True)
     output_directory = args.output.resolve(strict=True)
+    # LocalSR's own output is never watched, so such a folder would hide every input.
+    if output_directory == input_directory or output_directory in input_directory.parents:
+        raise AutomationError(
+            "The output folder must not be the watched folder or a folder that holds it. "
+            "Choose another folder, or one inside the watched folder."
+        )
     state_file = args.state_file or output_directory / ".localsr-watch-state.json"
     ledger = WatchLedger(state_file)
     observations: dict[Path, StableObservation] = {}
-    failed_once: set[Path] = set()
+    # A file that failed is tried again only once it changes, not on every poll.
+    failed_once: dict[Path, FileFingerprint] = {}
     runner.reporter.emit(
         "watch_started",
         folder=str(input_directory),
@@ -496,6 +520,9 @@ def _watch(
         for path, fingerprint in candidates:
             if runner.cancel_event.is_set():
                 break
+            if failed_once.get(path) == fingerprint:
+                observations.pop(path, None)
+                continue
             try:
                 runner.process(path, output_directory, **_processing_kwargs(args, device))
             except InterruptedError:
@@ -511,7 +538,7 @@ def _watch(
                     "job_failed", input_path=str(path), error=str(error), message=str(error)
                 )
                 observations.pop(path, None)
-                failed_once.add(path)
+                failed_once[path] = fingerprint
                 continue
             ledger.mark_completed(path, fingerprint)
             observations.pop(path, None)
@@ -598,13 +625,20 @@ def _validate_automation_args(args: argparse.Namespace) -> None:
         validate_output(args.video_codec, args.video_container)
     except ValueError as error:
         raise AutomationError(str(error)) from error
-    if args.video_codec in {"h264", "hevc"} and not args.external_ffmpeg:
-        from localsr.core.media_bridge import system_codecs_available
+    if args.format == "heic" and sys.platform != "darwin":
+        raise AutomationError("HEIC output needs macOS, which provides the HEIC encoder.")
+    if args.video_container == "mov" or args.video_codec == "prores":
+        from localsr.core.media_bridge import MACOS_ONLY_MESSAGE, system_codecs_available
 
         if not system_codecs_available():
+            raise AutomationError(MACOS_ONLY_MESSAGE)
+    elif args.video_codec in {"h264", "hevc"} and not args.external_ffmpeg:
+        from localsr.core.media_bridge import implicit_user_ffmpeg, system_codecs_available
+
+        if not system_codecs_available() and implicit_user_ffmpeg() is None:
             raise AutomationError(
-                "H.264/HEVC export uses the system codecs (macOS) or the FFmpeg installed on "
-                "this computer; pass --external-ffmpeg."
+                "No FFmpeg was found on this computer for H.264/HEVC export. Install FFmpeg, "
+                "or pass --external-ffmpeg with the path of one."
             )
     if args.command == "watch":
         if (

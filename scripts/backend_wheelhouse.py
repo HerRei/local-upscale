@@ -128,8 +128,6 @@ def prepare(lock: Path, cache: Path, target: str) -> tuple[Path, dict]:
         for url in index_urls + extra_index_urls:
             if "pytorch.org" in url:
                 args.extend(["--index-url", url])
-            elif "pypi.org" in url:
-                args.extend(["--extra-index-url", url])
             else:
                 args.extend(["--extra-index-url", url])
 

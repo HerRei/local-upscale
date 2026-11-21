@@ -236,7 +236,7 @@ def test_f5_4_real_photograph_500x500_upscaling(hat_checkpoint_path, tmp_path):
         safe_memory=False,
     )
 
-    memmap_path = writer.get_path()
+    memmap_path = writer.temp_path
     assert os.path.exists(memmap_path), f"Memmap file {memmap_path} must exist during processing"
 
     arr = writer.get_array()

@@ -1,6 +1,6 @@
 [project]
 name = "localsr"
-version = "0.2.1-beta"
+version = "0.5.0-beta"
 description = "A local-first desktop application for image and video restoration using Tauri, PyTorch, and Spandrel."
 authors = [{name = "Hermes Reisner"}]
 readme = "README.md"
@@ -28,6 +28,10 @@ dependencies = [
     "tifffile>=2023.0.0",
     "av>=12.0.0",
     "psutil>=7.0.0",
+    # Apple silicon: converts supported checkpoints for Core ML (Neural Engine).
+    "coremltools>=9.0,<10; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    # Runs those programs without holding the GIL, so decoding and encoding overlap.
+    "pyobjc-framework-CoreML>=12.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 requires-python = ">=3.11"
 
@@ -39,21 +43,26 @@ Issues = "https://github.com/HerRei/local-upscale/issues"
 dev = [
     "pytest>=9.1.1",
     "pytest-timeout>=2.4.0",
-    "ruff==0.16.7",
-    "pyright==1.1.411",
-    "vulture==2.14",
+    "hypothesis>=6.125.0",
+    "pytest-random-order>=1.2.0,<2",
+    "ruff==0.17.4",
+    "pyright==1.1.414",
+    "vulture==2.16",
 ]
 video = [
     "omegaconf>=2.3.0",
     # The release that fixes the custom-pipeline RCEs. The older pin that Intel
     # macOS needed is gone with that platform: PyTorch publishes no maintained
     # wheels for it, so no LocalSR package targets it.
-    "diffusers>=0.38.0,<0.39",
+    "diffusers>=0.38.0,<0.43",
     "rotary-embedding-torch>=0.5.3",
     "einops",
     "psutil",
     "tqdm",
     "gguf",
+    # Audio cleanup for videos. Not a base dependency: the DirectML build ships
+    # onnxruntime-directml under another name, and its release check would fail.
+    "onnxruntime>=1.24",
 ]
 package = ["pyinstaller>=6.21.0,<7", "pillow>=10.0.0"]
 # scripts/make_macos_dmg.py: the drag-to-Applications disk image.
@@ -66,7 +75,7 @@ face = [
 ]
 
 [build-system]
-requires = ["setuptools>=83.0.0"]
+requires = ["setuptools>=84.1.0"]
 build-backend = "setuptools.build_meta"
 
 [project.scripts]
@@ -109,6 +118,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "localsr.core" = ["benchmark_references.json", "edit_catalog.json"]
+"localsr.video_models.rife" = ["*.md"]
 "localsr.video_models.seedvr2" = [
     "*.safetensors",
     "*.md",

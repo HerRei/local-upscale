@@ -1,12 +1,12 @@
 # Known limitations
 
-These apply to v0.2.1-beta. Please read them before starting a long job.
+These apply to v0.5.0-beta. Please read them before starting a long job.
 
 ## Platforms
 
-- Published packages: macOS on Apple Silicon (v0.2.1-beta); Windows CPU, DirectML
+- Published packages: macOS on Apple Silicon (v0.5.0-beta); Windows CPU, DirectML
   and NVIDIA CUDA installers and Linux CPU, AMD ROCm and NVIDIA CUDA AppImages
-  (v0.2.1-beta; image editing is Mac only). The CUDA and
+  (v0.5.0-beta; image editing is tested only on the Mac). The CUDA and
   DirectML editions are **untested**: CUDA has never run on an NVIDIA GPU (the app
   labels it Labs), and
   DirectML's NAFNet denoising results still miss the accuracy tolerance. Intel XPU
@@ -16,11 +16,19 @@ These apply to v0.2.1-beta. Please read them before starting a long job.
 - The macOS build is the most tested. The Windows and Linux packages pass the
   codec policy and an automated smoke test of the installed app, but this release
   has not been run through the manual desktop checks on those systems.
-- Only the macOS app updates itself. On Windows and Linux, download new versions
-  from the website. The Windows installers are not code-signed, so SmartScreen warns
-  before it runs; the Microsoft Store edition, when it ships, is signed by the Store.
+- Every direct download updates itself; the Microsoft Store edition, when it ships,
+  updates through the Store. An update downloads the package and its inference
+  engine, so a Linux CUDA or ROCm update is about twice the AppImage's size. The
+  Windows installers are not code-signed, so SmartScreen warns before one runs; the
+  Microsoft Store edition is signed by the Store.
 - A working launch does not prove GPU compatibility. Some operators fall back to
   the CPU (for example `aten::roll` on DirectML), and drivers vary.
+- On Apple Silicon, the first job with a Neural Engine model (Quick photo, Real-ESRGAN,
+  JPEG cleanup, Best photo) and tile size spends up to about a minute preparing it,
+  using up to about 4 GB of memory while it does.
+  Its results differ from the GPU path by FP16 rounding, and only the M1 Pro has
+  been measured; newer Macs choose between the Neural Engine and the GPU on their
+  first tile.
 
 ## Media formats
 
@@ -34,10 +42,11 @@ These apply to v0.2.1-beta. Please read them before starting a long job.
   them; Windows and Linux would need an HEVC decoder LocalSR does not ship.
   Animated GIFs and HEIC bursts use their first image, and camera RAW files
   other than DNG lose their EXIF date and author.
-- The default video export is AV1. Some older players and editors cannot open it;
-  VP9 and lossless FFV1 are built in. H.264/HEVC export uses macOS's encoders
-  (MP4 only) or your FFmpeg, from a temporary lossless copy that needs extra
-  disk space.
+- The default video format, Automatic, writes HEVC with the Mac's hardware encoder
+  for SDR MP4 exports and AV1 everywhere else. Some older players and editors cannot
+  open AV1; VP9 and lossless FFV1 are built in. Choosing H.264/HEVC explicitly uses
+  macOS's encoders (MP4 only) or your FFmpeg, from a temporary lossless copy that
+  needs extra disk space, except whole clips on macOS, which stream straight in.
 - Interlacing is deinterlaced only when the file is tagged; untagged interlacing
   and inverse telecine are not detected. DVD menus, disc images and encrypted
   media are out of scope.
@@ -53,6 +62,14 @@ These apply to v0.2.1-beta. Please read them before starting a long job.
 - Memory use depends on the model, the output size and the clip. 16 GB of GPU
   memory does not guarantee that a SeedVR2 job fits; the FP8 download is smaller,
   but the working memory is not. Try a short clip at a modest output size first.
+- A source image may have at most 178,956,970 pixels (about 179 megapixels), the size
+  Pillow still accepts; a larger one is refused before it is decoded. The output has 16
+  times as many pixels at ×4, so a source far below that limit can already be too large
+  for the memory of the computer.
+- Frame interpolation adds processing and memory costs. Interpolating before the
+  upscale requires upscaling more frames; after the upscale runs interpolation at
+  the larger output size. 1080p and 4K Mac performance and memory use have not
+  yet been validated.
 - Estimates are measured from completed tiles and frames, so they appear only
   after the first results and change with the scene.
 
@@ -60,6 +77,9 @@ These apply to v0.2.1-beta. Please read them before starting a long job.
 
 - AI restoration invents detail. Inspect text, faces and fine structure, and keep
   your originals; LocalSR never overwrites a source file.
+- Interpolated motion can contain artifacts, especially around occlusions, fine
+  detail and cuts. Cut and repeated-frame detection are heuristics and can miss.
+  Interpolation is unavailable with SeedVR2 and HDR preservation.
 - HAT HDR preservation is experimental: the models were trained on SDR, so HDR
   perceptual quality and temporal stability are unverified. SeedVR2 exports SDR.
 - NAFNet can produce unstable results on some scanned documents, and SPAN on
@@ -72,9 +92,10 @@ These apply to v0.2.1-beta. Please read them before starting a long job.
 
 ## Image editing
 
-- Edit is experimental and published for macOS only. One configuration is
-  validated: FLUX.2 klein 4B Q4_0 at 512 px on the 16 GB M1 Pro, about two
-  minutes per edit with other apps open, without swapping. FLUX.2 klein Q8_0,
+- Edit is experimental and tested only on the Mac. CUDA/ROCm packages also
+  include editing support, but it has not been validated on those GPUs. One
+  configuration is validated: FLUX.2 klein 4B Q4_0 at 512 px on the 16 GB M1 Pro,
+  about two minutes per edit with other apps open, without swapping. FLUX.2 klein Q8_0,
   the Qwen bundles and larger edit sizes have not run on real hardware yet; their
   memory profiles are estimates. Up to v0.1.5-beta the memory guard misread free
   memory on Macs and refused edits that fit.
@@ -89,13 +110,19 @@ These apply to v0.2.1-beta. Please read them before starting a long job.
 - No weights are bundled. Each model downloads from its author's release when
   you choose it, so the first use of a model needs a network connection.
 - Custom `.safetensors` checkpoints are accepted. Pickle-based `.pth`, `.pt` and
-  `.ckpt` files can run code when loaded and are refused unless you set
-  `LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1` for files whose publisher you trust.
+  `.ckpt` files can run code when loaded and are refused unless you tick
+  *Allow this pickle-based checkpoint* in the app (on the command line, set
+  `LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1`), only for files whose publisher you trust.
 
 ## Installation and updates
 
-- macOS updates are downloaded and verified in the app. Settings, recipes and
-  the queue are backed up before an update is installed.
+- Updates are downloaded and verified in the app on macOS, Windows and Linux.
+  Settings, recipes and the queue are backed up before an update is installed.
+- An AppImage replaces itself only when it runs as an AppImage from a folder you
+  can write to; an AppImage under `/opt` owned by root has to be updated by hand.
+- The Windows installer cannot roll back an update that fails halfway, for example
+  on a full disk. Run the full installer from the website; settings, recipes, the
+  queue and models are kept.
 - Uninstalling the Store edition can delete its data folder, including settings
   and recipes. Back it up first; downloaded models live in the shared
   `LocalSR/models` folder and survive.

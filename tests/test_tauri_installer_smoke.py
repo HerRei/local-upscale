@@ -5,11 +5,14 @@ import json
 import plistlib
 import struct
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+# The script imports its sibling release_targets, as it does when run directly.
+sys.path.insert(0, str(ROOT / "scripts"))
 SPEC = importlib.util.spec_from_file_location(
     "smoke_tauri_installer", ROOT / "scripts" / "smoke_tauri_installer.py"
 )

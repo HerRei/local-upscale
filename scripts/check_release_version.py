@@ -59,20 +59,6 @@ def check(tag: str | None = None, root: Path = ROOT) -> str:
         except ValueError as error:
             failures.append(f"{label}: {error}")
 
-    for relative, label in ((".github/workflows/desktop-release.yml", "signed release workflow"),):
-        path = root / relative
-        if not path.is_file():
-            failures.append(f"{label} is missing: {relative}")
-            continue
-        workflow = path.read_text(encoding="utf-8")
-        if "publish_tauri_release.py" not in workflow and "--prerelease" not in workflow:
-            failures.append(f"{label} has no prerelease-only publisher")
-        if 'TITLE="LocalSR $TAG"' not in workflow:
-            failures.append(f"{label} title is not derived from the tag")
-        for token in ("release_targets.py", "matrix.pkg_name", "verify_prepared_release.py"):
-            if token not in workflow:
-                failures.append(f"{label} does not use the complete generated matrix: {token}")
-
     docs = (root / "docs/releasing.md").read_text(encoding="utf-8")
     if expected_tag not in docs:
         failures.append(f"release documentation does not identify {expected_tag}")

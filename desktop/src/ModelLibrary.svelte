@@ -1,14 +1,21 @@
 <script lang="ts">
+  import { keptTrialSettings, trialIncompatibility, trialTime } from './lib/modelTrials';
   import {
-    FIT_LABELS,
+    FIX_LABELS,
     choosePresetModel,
     displayName,
     fitFor,
     fixesOf,
-    formatBytes,
+    libraryModelsForTask,
     modelsForTask,
     rightsAllowPreset,
-  } from './lib/state';
+  } from './lib/plan';
+  import { chooseFixModel, fixQuality, rememberedFixModel } from './lib/fixStages';
+  import { formatBytes } from './lib/format';
+  import FileName from './FileName.svelte';
+  import { modal } from './lib/modal';
+  import { fitLine, runsOnAccelerator } from './lib/neuralEngine';
+  import { estimateModelTrials, openCustomModelTutorial } from './lib/api';
   import {
     EDIT_FAMILIES,
     EDIT_FIT_LABELS,
@@ -28,8 +35,11 @@
     DeviceInfo,
     EditModel,
     FixKind,
+    ModelDownloadStatus,
     Quality,
+    StartBatchInput,
     TaskKind,
+    TrialEstimate,
     UiSettings,
   } from './lib/types';
 
@@ -37,44 +47,108 @@
   export let settings: UiSettings;
   export let context: {
     task: TaskKind | '';
+    videoTask?: 'upscale' | 'denoise';
     content: Exclude<ContentKind, 'face'>;
     quality: Quality | '';
-    slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit';
+    slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit' | 'try';
     fix?: Exclude<FixKind, 'faces'>;
   };
   export let device: DeviceInfo | undefined;
-  export let activeDownload = '';
-  export let downloadProgress = 0;
+  export let downloads: ModelDownloadStatus[] = [];
+  export let downloadErrors: Record<string, string> = {};
+  export let cancelDownload: (modelId: string) => Promise<void> = async () => {};
+  export let dismissDownloadError: (modelId: string) => void = () => {};
   export let busy = false;
   export let close: () => void;
   export let useForJob: (model: CatalogModel) => void;
+  /** Remember a model for one problem (Fix first, or Restore with a chip on). */
+  export let rememberFix: (model: CatalogModel, fix: Exclude<FixKind, 'faces'>) => void;
+  export let forgetFix: (fix: Exclude<FixKind, 'faces'>) => void;
   export let useEditModel: (model: EditModel) => void;
   export let pin: (model: CatalogModel, quality: 'quick' | 'best') => void;
+  // "Try others…": the image, the settings frozen when the sheet opened, and
+  // the action that queues one run per ticked model.
+  export let trialMedia: { id: string; name: string } | undefined = undefined;
+  export let trialBase: StartBatchInput | undefined = undefined;
+  export let runTrials: (modelIds: string[]) => Promise<void> = async () => {};
+  /** Trials queue behind other work, so only starting one blocks the sheet. */
+  export let trialBusy = false;
   export let download: (
     model: CatalogModel | CatalogVideoModel | EditModel,
     accepted?: boolean,
   ) => Promise<void>;
   export let importFile: (model: CatalogModel, accepted: boolean) => Promise<void>;
-  export let remove: (model: CatalogModel | EditModel) => Promise<void>;
+  export let remove: (model: CatalogModel | CatalogVideoModel | EditModel) => Promise<void>;
   export let chooseCustom: () => Promise<void>;
   export let openLicense: (modelId: string) => Promise<void>;
   export let openSource: (modelId: string) => Promise<void>;
 
   type GroupId =
-    'job' | 'photos' | 'illustration' | 'faces' | 'fix' | 'video' | 'edit' | 'installed' | 'own';
+    | 'job'
+    | 'photos'
+    | 'illustration'
+    | 'faces'
+    | 'fix'
+    | 'video'
+    | 'audio'
+    | 'edit'
+    | 'installed'
+    | 'own';
 
   let group: GroupId =
     context.slot === 'browse' ? 'photos' : context.slot === 'edit' ? 'edit' : 'job';
-  let selectedId = '';
+  let tutorialNote = '';
+
+  async function openTutorial(): Promise<void> {
+    tutorialNote = '';
+    try {
+      await openCustomModelTutorial();
+    } catch (error) {
+      tutorialNote = String(error);
+    }
+  }
+  // Choosing the model for one problem: Fix first, or Restore with a chip on.
+  $: restoring =
+    context.task === 'denoise' || (context.task === 'video' && context.videoTask === 'denoise');
+  $: fixing =
+    context.fix !== undefined &&
+    (context.slot === 'fix' || (context.slot === 'primary' && restoring))
+      ? context.fix
+      : undefined;
+  // A fix picker opens on the model the job uses now.
+  let selectedId =
+    context.fix === undefined
+      ? ''
+      : context.slot === 'fix'
+        ? (settings.fix_stages.find((selection) => selection.fix === context.fix)?.model_id ?? '')
+        : context.slot === 'primary' &&
+            (context.task === 'denoise' ||
+              (context.task === 'video' && context.videoTask === 'denoise'))
+          ? settings.selected_model_id
+          : '';
   let termsAccepted = false;
   let showHeavyEdit = false;
+  let trialIds: string[] = [];
+  let trialEstimates: TrialEstimate[] = [];
+  let estimateKey = '';
+  let estimateError = '';
+  let runningTrials = false;
 
   $: models = snapshot.catalog.models;
   $: videoModels = snapshot.catalog.video_models;
+  $: audioModels = snapshot.catalog.audio_models ?? [];
   $: editModels = snapshot.edit.models;
+  $: interpolationModels = snapshot.catalog.interpolation_models ?? [];
+  $: downloadMap = new Map(downloads.map((item) => [item.model_id, item]));
+  $: failedEntries = Object.entries(downloadErrors).filter(
+    ([id, message]) => Boolean(message) && !downloadMap.has(id),
+  );
+  $: runningDownloadCount = downloads.filter((item) => item.status === 'downloading').length;
+  $: queuedDownloadCount = downloads.filter((item) => item.status === 'queued').length;
   $: editGpu = editDevice(snapshot.capabilities, settings);
   $: editLimit = editSizeLimit(snapshot.capabilities, editGpu);
   $: editFit = (model: EditModel) => editFitFor(model, snapshot.capabilities, editGpu);
+  $: installedAudioModels = audioModels.filter((model) => model.installed);
   $: installedEditModels = editModels.filter((model) => model.installed);
   // Variants that cannot run here stay out of the way until asked for.
   $: onMac = editGpu?.id === 'mps';
@@ -94,36 +168,61 @@
     if (context.slot === 'face') return models.filter((model) => model.purposes.includes('face'));
     if (context.slot === 'fix') {
       const fix = context.fix;
-      return models.filter(
-        (model) =>
-          model.native_scale === 1 &&
-          !model.purposes.includes('face') &&
-          (!fix || fixesOf(model).includes(fix)),
-      );
+      return libraryModelsForTask(models, 'denoise', context.content, fix);
     }
-    const candidates = modelsForTask(snapshot, context.task);
-    if (context.task === 'denoise') return candidates;
-    const matches = (model: CatalogModel): number =>
-      context.content === 'illustration'
-        ? model.purposes.includes('illustration') || model.purposes.includes('anime')
-          ? 2
-          : model.purposes.includes('general')
-            ? 1
-            : 0
-        : model.purposes.includes('photo')
-          ? 2
-          : model.purposes.includes('general')
-            ? 1
-            : 0;
-    return candidates
-      .filter((model) => matches(model) > 0)
-      .sort(
-        (left, right) =>
-          matches(right) - matches(left) ||
-          right.quality_tier - left.quality_tier ||
-          right.speed_tier - left.speed_tier,
-      );
+    return libraryModelsForTask(
+      models,
+      context.task,
+      context.content,
+      context.fix,
+      context.videoTask,
+    );
   })();
+  // Installed models for this job first; the rest say why they cannot join.
+  $: trialModels =
+    context.slot === 'try'
+      ? [
+          ...jobModels,
+          ...modelsForTask(snapshot, context.task, context.videoTask).filter(
+            (model) =>
+              model.installed &&
+              !jobModels.includes(model) &&
+              (!restoring || !context.fix || fixesOf(model).includes(context.fix)),
+          ),
+        ].sort((left, right) => Number(right.installed) - Number(left.installed))
+      : [];
+  $: trialReason = (model: CatalogModel): string => trialIncompatibility(model, settings, models);
+  $: if (context.slot === 'try' && trialIds.join('|') !== estimateKey)
+    void estimateTrials(trialIds.join('|'));
+
+  async function estimateTrials(key: string): Promise<void> {
+    estimateKey = key;
+    estimateError = '';
+    trialEstimates = [];
+    if (!trialIds.length || !trialBase || !trialMedia) return;
+    const ids = [...trialIds];
+    try {
+      const estimates = await estimateModelTrials(trialMedia.id, ids, trialBase);
+      if (estimateKey === key) trialEstimates = estimates;
+    } catch (error) {
+      if (estimateKey === key) estimateError = String(error);
+    }
+  }
+
+  function toggleTrial(id: string): void {
+    trialIds = trialIds.includes(id) ? trialIds.filter((value) => value !== id) : [...trialIds, id];
+    selectedId = id;
+  }
+
+  async function startTrials(): Promise<void> {
+    runningTrials = true;
+    try {
+      await runTrials([...trialIds]);
+    } finally {
+      runningTrials = false;
+    }
+  }
+
   $: groups = [
     ...(context.slot !== 'browse' &&
     context.slot !== 'edit' &&
@@ -161,13 +260,20 @@
         .length,
     },
     { id: 'video' as GroupId, label: 'Video (Labs)', count: videoModels.length },
+    ...(audioModels.length
+      ? [{ id: 'audio' as GroupId, label: 'Audio', count: audioModels.length }]
+      : []),
     { id: 'edit' as GroupId, label: 'Edit with a prompt', count: editModels.length },
     {
       id: 'installed' as GroupId,
       label: 'Installed',
-      count: models.filter((model) => model.installed).length + installedEditModels.length,
+      count:
+        models.filter((model) => model.installed).length +
+        installedAudioModels.length +
+        installedEditModels.length,
     },
-    { id: 'own' as GroupId, label: 'Your own file', count: 0 },
+    // A fix runs a catalog model only; a file of your own replaces the upscaler.
+    ...(context.slot === 'fix' ? [] : [{ id: 'own' as GroupId, label: 'Your own file', count: 0 }]),
   ];
   $: rows = ((): CatalogModel[] => {
     switch (group) {
@@ -203,6 +309,7 @@
     models
       .filter((model) => model.installed)
       .reduce((total, model) => total + model.size_bytes, 0) +
+    installedAudioModels.reduce((total, model) => total + model.total_size_bytes, 0) +
     installedEditModels.reduce((total, model) => total + model.total_size_bytes, 0);
   $: selectedEdit =
     editModels.find((model) => model.model_id === selectedId) ??
@@ -211,24 +318,57 @@
         editFamilies.flatMap((family) => family.fitting)[0] ??
         editModels[0])
       : undefined);
-  $: selected = selectedEdit
-    ? undefined
-    : (models.find((model) => model.model_id === selectedId) ?? rows[0]);
+  $: selectedAudio =
+    audioModels.find((model) => model.model_id === selectedId) ??
+    (group === 'audio' ? audioModels[0] : undefined);
   $: selectedVideo = videoModels.find((model) => model.model_id === selectedId);
-  $: quickId = context.task
-    ? choosePresetModel(snapshot, context.task, 'quick', context.content, settings.preset_pins)
-        ?.model_id
-    : '';
-  $: bestId = context.task
-    ? choosePresetModel(snapshot, context.task, 'best', context.content, settings.preset_pins)
-        ?.model_id
-    : '';
+  $: selected =
+    selectedEdit || selectedAudio || selectedVideo
+      ? undefined
+      : (models.find((model) => model.model_id === selectedId) ?? rows[0]);
+  // The accelerator the selected hardware will use for a model: the Neural Engine on a Mac,
+  // an Intel NPU elsewhere. Memoised per model id: rows and details read it on every render.
+  $: accelerator = (model: CatalogModel) =>
+    runsOnAccelerator(settings, snapshot.capabilities, model.architecture);
+  $: fitLines = new Map(
+    models.map((model) => [
+      model.model_id,
+      fitLine(model, settings, snapshot.capabilities, device),
+    ]),
+  );
+  $: quickId = fixing
+    ? chooseFixModel(snapshot, fixing, 'quick', settings.preset_pins)?.model_id
+    : context.task
+      ? choosePresetModel(
+          snapshot,
+          context.task,
+          'quick',
+          context.content,
+          settings.preset_pins,
+          context.videoTask,
+        )?.model_id
+      : '';
+  $: bestId = fixing
+    ? chooseFixModel(snapshot, fixing, 'best', settings.preset_pins)?.model_id
+    : context.task
+      ? choosePresetModel(
+          snapshot,
+          context.task,
+          'best',
+          context.content,
+          settings.preset_pins,
+          context.videoTask,
+        )?.model_id
+      : '';
+  $: rememberedFix = fixing
+    ? rememberedFixModel(snapshot, fixing, fixQuality(context.quality), settings.preset_pins)
+    : undefined;
   $: canUseForJob = (model: CatalogModel): boolean =>
     context.slot !== 'browse' &&
     jobModels.some((candidate) => candidate.model_id === model.model_id);
   $: canPin = (model: CatalogModel): boolean =>
-    context.slot === 'primary' &&
-    context.task !== 'denoise' &&
+    (context.slot === 'primary' || context.slot === 'try') &&
+    !restoring &&
     canUseForJob(model) &&
     rightsAllowPreset(model);
 
@@ -241,6 +381,55 @@
     group = next;
     selectedId = '';
     termsAccepted = false;
+  }
+
+  function modelLabel(modelId: string): string {
+    const image = models.find((item) => item.model_id === modelId);
+    if (image) return displayName(image);
+    return (
+      videoModels.find((item) => item.model_id === modelId)?.name ??
+      editModels.find((item) => item.model_id === modelId)?.name ??
+      interpolationModels.find((item) => item.model_id === modelId)?.name ??
+      modelId
+    );
+  }
+
+  function selectByModelId(modelId: string): void {
+    if (videoModels.some((item) => item.model_id === modelId)) {
+      group = 'video';
+      selectedId = modelId;
+      termsAccepted = false;
+      return;
+    }
+    const edit = editModels.find((item) => item.model_id === modelId);
+    if (edit) {
+      group = 'edit';
+      if (editFit(edit) === 'too_heavy') showHeavyEdit = true;
+      selectedId = modelId;
+      termsAccepted = false;
+      return;
+    }
+    const image = models.find((item) => item.model_id === modelId);
+    if (!image) return;
+    if (jobModels.some((item) => item.model_id === modelId)) {
+      group = 'job';
+    } else if (image.purposes.includes('face')) {
+      group = 'faces';
+    } else if (image.native_scale === 1) {
+      group = 'fix';
+    } else if (image.purposes.includes('illustration') || image.purposes.includes('anime')) {
+      group = 'illustration';
+    } else {
+      group = 'photos';
+    }
+    selectedId = modelId;
+    termsAccepted = false;
+  }
+
+  function downloadButtonLabel(entry: ModelDownloadStatus | undefined, sizeBytes: number): string {
+    if (!entry) return `Download ${formatBytes(sizeBytes)}`;
+    if (entry.status === 'queued') return 'Waiting in queue · Cancel';
+    return `Downloading ${Math.round(entry.progress)}% · Cancel`;
   }
 
   function rightsLabel(model: CatalogModel): string {
@@ -269,29 +458,41 @@
       ? `about ${(model.vram_estimate_mb / 1000).toFixed(model.vram_estimate_mb % 1000 ? 1 : 0)} GB`
       : `about ${model.vram_estimate_mb} MB`;
   }
-
-  function onKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') close();
-  }
 </script>
 
-<div class="modal-backdrop library-backdrop" role="presentation" on:keydown={onKeydown}>
-  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="library-title" tabindex="-1">
+<div class="modal-backdrop library-backdrop" role="presentation">
+  <div
+    class="sheet"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="library-title"
+    tabindex="-1"
+    use:modal={close}
+  >
     <div class="sheet-head">
       <h2 id="library-title">Model library</h2>
-      {#if context.slot === 'edit'}
+      {#if context.slot === 'try'}
+        <span class="sheet-context"
+          >Try other {restoring ? 'restoration models' : 'upscalers'} on {trialMedia?.name ??
+            'this image'}</span
+        >
+      {:else if context.slot === 'edit'}
         <span class="sheet-context">Choosing for Edit</span>
       {:else if context.slot !== 'browse' && context.task}
         <span class="sheet-context"
           >Choosing for {context.task === 'video'
-            ? 'Video'
-            : context.task === 'denoise'
+            ? restoring
+              ? 'Video · Restore'
+              : 'Video'
+            : restoring
               ? 'Restore'
-              : 'Upscale'}{context.slot === 'fix'
-            ? ' · fix'
-            : context.slot === 'face'
-              ? ' · faces'
-              : ` · ${context.quality === 'quick' ? 'Quick' : context.quality === 'best' ? 'Best' : 'Custom'} · ${context.content === 'illustration' ? 'Illustration' : 'Photo'}`}</span
+              : 'Upscale'}{fixing
+            ? ` · ${FIX_LABELS[fixing]}`
+            : context.slot === 'fix'
+              ? ' · fix'
+              : context.slot === 'face'
+                ? ' · faces'
+                : ` · ${context.quality === 'quick' ? 'Quick' : context.quality === 'best' ? 'Best' : 'Custom'}${restoring ? '' : ` · ${context.content === 'illustration' ? 'Illustration' : 'Photo'}`}`}</span
         >
       {/if}
       <div class="sheet-right">
@@ -313,9 +514,78 @@
         >
       </div>
     </div>
+    {#if downloads.length > 0 || failedEntries.length > 0}
+      <section class="library-downloads" aria-label="Model downloads">
+        <div class="library-downloads-head">
+          <span class="library-downloads-title">
+            {#if downloads.length > 0}
+              {queuedDownloadCount > 0
+                ? `Downloads · ${runningDownloadCount} active · ${queuedDownloadCount} waiting`
+                : `Downloads · ${runningDownloadCount} active`}
+            {:else}
+              Downloads
+            {/if}
+          </span>
+        </div>
+        <div class="library-downloads-list">
+          {#each downloads as item (item.model_id)}
+            {@const name = modelLabel(item.model_id)}
+            <div class="library-download-item">
+              <div class="library-download-top">
+                <button
+                  class="library-download-name"
+                  type="button"
+                  on:click={() => selectByModelId(item.model_id)}>{name}</button
+                >
+                <span class="library-download-meta">
+                  {#if item.status === 'queued'}
+                    {item.total_bytes ? `Waiting · ${formatBytes(item.total_bytes)}` : 'Waiting'}
+                  {:else}
+                    {Math.round(item.progress)}%
+                  {/if}
+                </span>
+                <button
+                  class="button compact ghost"
+                  type="button"
+                  aria-label={`Cancel ${name} download`}
+                  on:click={() => void cancelDownload(item.model_id)}>Cancel</button
+                >
+              </div>
+              {#if item.status === 'downloading'}
+                <progress
+                  class="download-progress"
+                  value={item.progress}
+                  max="100"
+                  aria-label={`${name} download progress`}
+                ></progress>
+              {/if}
+            </div>
+          {/each}
+          {#each failedEntries as [modelId, message] (modelId)}
+            {@const name = modelLabel(modelId)}
+            <div class="library-download-item is-error" role="alert">
+              <div class="library-download-top">
+                <button
+                  class="library-download-name"
+                  type="button"
+                  on:click={() => selectByModelId(modelId)}>{name}</button
+                >
+                <button
+                  class="button compact ghost"
+                  type="button"
+                  aria-label={`Dismiss ${name} error`}
+                  on:click={() => dismissDownloadError(modelId)}>Dismiss</button
+                >
+              </div>
+              <p class="library-download-error">{message}</p>
+            </div>
+          {/each}
+        </div>
+      </section>
+    {/if}
     <div class="sheet-body">
       <nav class="rail" aria-label="Model groups">
-        {#each groups as item (item.id)}
+        {#each context.slot === 'try' ? groups.filter((item) => item.id === 'job') : groups as item (item.id)}
           <button
             class="rail-item"
             class:active={group === item.id}
@@ -334,9 +604,48 @@
       </nav>
 
       <section class="list" aria-label="Models">
-        {#if group === 'video'}
+        {#if context.slot === 'try'}
+          <div class="list-head">For this job<span>Pick 2 to 4 installed models</span></div>
+          {#each trialModels as model (model.model_id)}
+            {@const reason = trialReason(model)}
+            {@const picked = trialIds.includes(model.model_id)}
+            <label
+              class="row trial-row"
+              class:dimmed={Boolean(reason)}
+              class:selected={selected?.model_id === model.model_id}
+            >
+              <input
+                type="checkbox"
+                checked={picked}
+                disabled={trialBusy || Boolean(reason) || (!picked && trialIds.length >= 4)}
+                on:change={() => toggleTrial(model.model_id)}
+              />
+              <div>
+                <div class="name">{displayName(model)}</div>
+                <div class="role">{reason || model.role || model.description}</div>
+                {#if model.model_id === quickId || model.model_id === bestId || ['heavy', 'too_heavy'].includes(fitFor(model, device))}
+                  <div class="pills">
+                    {#if model.model_id === quickId}<span class="pill quick">Quick</span>{/if}
+                    {#if model.model_id === bestId}<span class="pill best">Best</span>{/if}
+                    {#if fitFor(model, device) === 'heavy'}<span class="pill warn">Heavy here</span
+                      >{:else if fitFor(model, device) === 'too_heavy'}<span class="pill bad"
+                        >Too heavy</span
+                      >{/if}
+                  </div>
+                {/if}
+              </div>
+              <div class="right">
+                <b>{formatBytes(model.size_bytes)}</b>{#if model.installed}<span class="ok"
+                    >Installed</span
+                  >{:else}<span>Not installed</span>{/if}
+              </div>
+            </label>
+          {/each}
+        {:else if group === 'video'}
           <div class="list-head">Video · Labs<span>SeedVR2 engines</span></div>
           {#each videoModels as model (model.model_id)}
+            {@const dl = downloadMap.get(model.model_id)}
+            {@const dlError = downloadErrors[model.model_id]}
             <button
               class="row"
               type="button"
@@ -351,6 +660,37 @@
                 <div class="role">{model.description}</div>
                 <div class="pills">
                   <span class="pill labs">Labs</span><span class="pill">{model.license_name}</span>
+                </div>
+              </div>
+              <div class="right">
+                <b>{formatBytes(model.total_size_bytes)}</b>{#if dl}<span
+                    class:downloading={dl.status === 'downloading'}
+                    >{dl.status === 'queued' ? 'Waiting' : `${Math.round(dl.progress)}%`}</span
+                  >{:else if dlError}<span class="error">Failed</span
+                  >{:else if model.installed}<span class="ok">Installed</span>{:else}<span
+                    >Not downloaded</span
+                  >{/if}
+              </div>
+            </button>
+          {/each}
+        {:else if group === 'audio'}
+          <div class="list-head">
+            Audio<span>{audioModels.length === 1 ? '1 model' : `${audioModels.length} models`}</span
+            >
+          </div>
+          {#each audioModels as model (model.model_id)}
+            <button
+              class="row"
+              type="button"
+              class:selected={selectedAudio?.model_id === model.model_id}
+              aria-pressed={selectedAudio?.model_id === model.model_id}
+              on:click={() => selectRow(model)}
+            >
+              <div>
+                <div class="name">{model.name}</div>
+                <div class="role">{model.description}</div>
+                <div class="pills">
+                  <span class="pill">{model.license_name}</span>
                 </div>
               </div>
               <div class="right">
@@ -369,9 +709,10 @@
               </div>
             {/if}
             {#each shown as model (model.model_id)}
+              {@const dl = downloadMap.get(model.model_id)}
+              {@const dlError = downloadErrors[model.model_id]}
               <button
                 class="row"
-                class:dimmed={editFit(model) === 'too_heavy'}
                 type="button"
                 class:selected={selectedEdit?.model_id === model.model_id}
                 aria-pressed={selectedEdit?.model_id === model.model_id}
@@ -400,9 +741,11 @@
                   {/if}
                 </div>
                 <div class="right">
-                  <b>{formatBytes(model.total_size_bytes)}</b>{#if model.installed}<span class="ok"
-                      >Installed</span
-                    >{/if}
+                  <b>{formatBytes(model.total_size_bytes)}</b>{#if dl}<span
+                      class:downloading={dl.status === 'downloading'}
+                      >{dl.status === 'queued' ? 'Waiting' : `${Math.round(dl.progress)}%`}</span
+                    >{:else if dlError}<span class="error">Failed</span
+                    >{:else if model.installed}<span class="ok">Installed</span>{/if}
                 </div>
               </button>
             {/each}
@@ -426,9 +769,14 @@
               files run the publisher's code inside the inference worker and need an explicit
               confirmation.
             </p>
-            <button class="button" type="button" on:click={() => void chooseCustom()}
-              >Choose checkpoint…</button
-            >
+            <div class="own-actions">
+              <button class="button" type="button" on:click={() => void chooseCustom()}
+                >Choose checkpoint…</button
+              ><button class="link-button" type="button" on:click={() => void openTutorial()}
+                >Watch the tutorial</button
+              >
+            </div>
+            {#if tutorialNote}<p class="own-note">{tutorialNote}</p>{/if}
           </div>
         {:else}
           <div class="list-head">
@@ -475,6 +823,14 @@
                 <div>
                   <div class="name">{displayName(model)}</div>
                   <div class="role">{model.role || model.description}</div>
+                  {#if fitLines.get(model.model_id)}
+                    {@const line = fitLines.get(model.model_id)}
+                    <div class="fit row-fit" title={line?.text}>
+                      <i aria-hidden="true" class:warn={line?.fit !== 'runs'}></i><span
+                        >{line?.text}</span
+                      >
+                    </div>
+                  {/if}
                   <!-- Badges mark exceptions only: a license that limits use, a model that
                        will struggle here. Everything else is in the details. -->
                   {#if model.model_id === quickId || model.model_id === bestId || model.support_tier === 'labs' || model.commercial_use_allowed !== true || ['heavy', 'too_heavy'].includes(fitFor(model, device))}
@@ -493,30 +849,61 @@
                     </div>
                   {/if}
                 </div>
-                <div class="meters" aria-hidden="true">
+                <div class="meters">
                   <div class="meter">
-                    Quality<span class="dots"
+                    Quality<span class="visually-hidden">: {model.quality_tier} out of 4</span><span
+                      class="dots"
+                      aria-hidden="true"
                       >{#each [1, 2, 3, 4] as tier}<i class:f={model.quality_tier >= tier}
                         ></i>{/each}</span
                     >
                   </div>
                   <div class="meter">
-                    Speed<span class="dots"
+                    Speed<span class="visually-hidden"
+                      >: {Math.min(model.speed_tier, 3)} out of 4</span
+                    ><span class="dots" aria-hidden="true"
                       >{#each [1, 2, 3, 4] as tier}<i
-                          class:f={model.speed_tier >= (tier === 4 ? 3 : tier) && tier <= 3}
+                          class:f={model.speed_tier >= tier && tier <= 3}
                         ></i>{/each}</span
                     >
                   </div>
                 </div>
                 <div class="right">
-                  <b>{formatBytes(model.size_bytes)}</b>{#if model.installed}<span class="ok"
-                      >Installed</span
+                  <b>{formatBytes(model.size_bytes)}</b>{#if downloadMap.get(model.model_id)}
+                    {@const dl = downloadMap.get(model.model_id)}<span
+                      class:downloading={dl?.status === 'downloading'}
+                      >{dl?.status === 'queued'
+                        ? 'Waiting'
+                        : `${Math.round(dl?.progress ?? 0)}%`}</span
+                    >{:else if downloadErrors[model.model_id]}<span class="error">Failed</span
+                    >{:else if model.installed}<span class="ok">Installed</span
                     >{:else if !model.automated_download_allowed}<span>Your file</span>{/if}
                 </div>
               </button>
             {/if}
           {/each}
           {#if group === 'installed'}
+            {#each installedAudioModels as model (model.model_id)}
+              <div
+                class="row installed-row"
+                class:selected={selectedAudio?.model_id === model.model_id}
+              >
+                <button class="row-select" type="button" on:click={() => selectRow(model)}>
+                  <div class="name">{model.name}</div>
+                  <div class="role">{model.summary ? `Audio · ${model.summary}` : 'Audio'}</div>
+                </button>
+                <div class="right">
+                  <b>{formatBytes(model.total_size_bytes)}</b><span class="ok">Verified</span>
+                </div>
+                <button
+                  class="button compact ghost danger"
+                  type="button"
+                  disabled={busy}
+                  aria-label={`Remove ${model.name}`}
+                  on:click={() => void remove(model)}>Remove</button
+                >
+              </div>
+            {/each}
             {#each installedEditModels as model (model.model_id)}
               <div
                 class="row installed-row"
@@ -549,6 +936,39 @@
       </section>
 
       <aside class="detail" aria-label="Model details">
+        {#if context.slot === 'try'}
+          <div class="trial-summary" aria-live="polite">
+            <h3>{trialIds.length === 1 ? '1 model picked' : `${trialIds.length} models picked`}</h3>
+            <p>
+              Each runs the full image with your current settings ({keptTrialSettings(
+                settings,
+                Boolean(trialBase?.enable_face_model),
+              )}).
+            </p>
+            {#if trialIds.length && trialEstimates.length === trialIds.length}
+              <p>{trialTime(trialEstimates)}</p>
+            {/if}
+            <p>
+              {trialIds.length || 'No'} new file{trialIds.length === 1 ? '' : 's'} in
+              <span class="path-text"
+                >{trialBase?.output_directory || 'the LocalSR output folder'}</span
+              >, named by model.
+            </p>
+            <button
+              class="button"
+              type="button"
+              disabled={trialBusy || runningTrials || trialIds.length < 2 || trialIds.length > 4}
+              on:click={() => void startTrials()}
+              >{runningTrials
+                ? 'Queueing…'
+                : `Run ${trialIds.length} model${trialIds.length === 1 ? '' : 's'}`}</button
+            >
+            <p>Pick 2 to 4. Results appear under Showing in the preview.</p>
+            {#if estimateError}<p role="status">
+                Run time estimate unavailable: {estimateError}
+              </p>{/if}
+          </div>
+        {/if}
         {#if group === 'video' && selectedVideo}
           <div>
             <h3>{selectedVideo.name}</h3>
@@ -575,18 +995,116 @@
           </dl>
           <div class="actions">
             {#if !selectedVideo.installed}
+              {@const dl = downloadMap.get(selectedVideo.model_id)}
+              {@const dlError = downloadErrors[selectedVideo.model_id]}
+              {#if dlError}<p class="download-error" role="alert">{dlError}</p>{/if}
               <button
                 class="button primary"
                 type="button"
-                disabled={busy ||
-                  (Boolean(activeDownload) && activeDownload !== selectedVideo.model_id)}
+                disabled={busy}
                 on:click={() => void download(selectedVideo)}
-                >{activeDownload === selectedVideo.model_id
-                  ? `Downloading ${Math.round(downloadProgress)}% · Cancel`
-                  : `Download ${formatBytes(selectedVideo.total_size_bytes)}`}</button
+                >{downloadButtonLabel(dl, selectedVideo.total_size_bytes)}</button
               >
+              {#if dl?.status === 'downloading'}
+                <progress
+                  class="download-progress"
+                  value={dl.progress}
+                  max="100"
+                  aria-label={`${selectedVideo.name} download progress`}
+                ></progress>
+              {/if}
             {:else}
               <div class="installed-badge">✓ Installed · integrity checked before use</div>
+            {/if}
+          </div>
+        {:else if selectedAudio && group !== 'own'}
+          <div>
+            <h3>{selectedAudio.name}</h3>
+            <div class="role">
+              {[selectedAudio.author, selectedAudio.summary].filter(Boolean).join(' · ')}
+            </div>
+          </div>
+          <p class="model-description">{selectedAudio.description}</p>
+          <dl class="facts">
+            <div>
+              <dt>Download</dt>
+              <dd>{formatBytes(selectedAudio.total_size_bytes)}</dd>
+            </div>
+            <div>
+              <dt>Memory while running</dt>
+              <dd>about 100 MB</dd>
+            </div>
+            <div>
+              <dt>Runs on</dt>
+              <dd>CPU · ONNX Runtime</dd>
+            </div>
+          </dl>
+          <dl class="kv">
+            <div>
+              <dt>License</dt>
+              <dd>
+                <button
+                  class="link-button"
+                  type="button"
+                  on:click={() => void openLicense(selectedAudio.model_id)}
+                  >{selectedAudio.license_name} ↗</button
+                >
+              </dd>
+            </div>
+            <div>
+              <dt>Source</dt>
+              <dd>
+                <button
+                  class="link-button"
+                  type="button"
+                  title={selectedAudio.source_url}
+                  aria-label={`${selectedAudio.author} · model source`}
+                  on:click={() => void openSource(selectedAudio.model_id)}
+                  ><FileName name={selectedAudio.author} /><span class="source-link"
+                    >{' · model source ↗'}</span
+                  ></button
+                >
+              </dd>
+            </div>
+            <div>
+              <dt>Integrity</dt>
+              <dd>SHA-256 checked before use</dd>
+            </div>
+            <div>
+              <dt>Commercial use</dt>
+              <dd>
+                {selectedAudio.commercial_use_allowed === true ? 'Allowed' : 'See license'}
+              </dd>
+            </div>
+          </dl>
+          <div class="actions">
+            {#if !selectedAudio.installed}
+              {@const dl = downloadMap.get(selectedAudio.model_id)}
+              {@const dlError = downloadErrors[selectedAudio.model_id]}
+              {#if dlError}<p class="download-error" role="alert">{dlError}</p>{/if}
+              <button
+                class="button primary"
+                type="button"
+                disabled={busy}
+                on:click={() => void download(selectedAudio)}
+                >{downloadButtonLabel(dl, selectedAudio.total_size_bytes)}</button
+              >
+              {#if dl?.status === 'downloading'}
+                <progress
+                  class="download-progress"
+                  value={dl.progress}
+                  max="100"
+                  aria-label={`${selectedAudio.name} download progress`}
+                ></progress>
+              {/if}
+            {:else}
+              <div class="installed-badge">✓ Installed · integrity checked before use</div>
+              <button
+                class="button danger ghost"
+                type="button"
+                disabled={busy}
+                on:click={() => void remove(selectedAudio)}>Remove from this computer</button
+              >
             {/if}
           </div>
         {:else if selectedEdit && group !== 'own'}
@@ -675,25 +1193,30 @@
           </dl>
           <div class="actions">
             {#if !selectedEdit.installed}
+              {@const dl = downloadMap.get(selectedEdit.model_id)}
+              {@const dlError = downloadErrors[selectedEdit.model_id]}
               {#if selectedEdit.terms_acceptance_required}
                 <label class="terms"
                   ><input type="checkbox" bind:checked={termsAccepted} /> I reviewed the Qwen Research
                   License and accept its terms.</label
                 >
               {/if}
+              {#if dlError}<p class="download-error" role="alert">{dlError}</p>{/if}
               <button
                 class="button primary"
                 type="button"
-                disabled={busy ||
-                  (Boolean(activeDownload) && activeDownload !== selectedEdit.model_id) ||
-                  (selectedEdit.terms_acceptance_required &&
-                    !termsAccepted &&
-                    activeDownload !== selectedEdit.model_id)}
+                disabled={busy || (selectedEdit.terms_acceptance_required && !termsAccepted && !dl)}
                 on:click={() => void download(selectedEdit, termsAccepted)}
-                >{activeDownload === selectedEdit.model_id
-                  ? `Downloading ${Math.round(downloadProgress)}% · Cancel`
-                  : `Download ${formatBytes(selectedEdit.total_size_bytes)}`}</button
+                >{downloadButtonLabel(dl, selectedEdit.total_size_bytes)}</button
               >
+              {#if dl?.status === 'downloading'}
+                <progress
+                  class="download-progress"
+                  value={dl.progress}
+                  max="100"
+                  aria-label={`${selectedEdit.name} download progress`}
+                ></progress>
+              {/if}
             {:else}
               <div class="installed-badge">✓ Installed · integrity checked before use</div>
             {/if}
@@ -740,12 +1263,17 @@
               <dt>Speed</dt>
               <dd>{speedLabel(selected)}</dd>
             </div>
+            {#if accelerator(selected)}
+              <div>
+                <dt>Runs on</dt>
+                <dd>{accelerator(selected)}</dd>
+              </div>
+            {/if}
           </dl>
-          {#if device && fitFor(selected, device) !== 'unknown'}
+          {#if fitLines.get(selected.model_id)}
+            {@const line = fitLines.get(selected.model_id)}
             <div class="fit">
-              <i class:warn={fitFor(selected, device) !== 'runs'}></i>{FIT_LABELS[
-                fitFor(selected, device)
-              ]} · {device.name}
+              <i aria-hidden="true" class:warn={line?.fit !== 'runs'}></i>{line?.text}
             </div>
           {/if}
           <dl class="kv">
@@ -766,13 +1294,14 @@
                 <button
                   class="link-button"
                   type="button"
-                  on:click={() => void openSource(selected.model_id)}>Model source ↗</button
+                  title={selected.source_url}
+                  aria-label={`${selected.author} · model source`}
+                  on:click={() => void openSource(selected.model_id)}
+                  ><FileName name={selected.author} /><span class="source-link"
+                    >{' · model source ↗'}</span
+                  ></button
                 >
               </dd>
-            </div>
-            <div>
-              <dt>Author</dt>
-              <dd>{selected.author}</dd>
             </div>
             <div>
               <dt>Architecture</dt>
@@ -780,7 +1309,7 @@
             </div>
             <div>
               <dt>File</dt>
-              <dd title={selected.filename}>{selected.filename}</dd>
+              <dd><FileName name={selected.filename} /></dd>
             </div>
             <div>
               <dt>Integrity</dt>
@@ -801,15 +1330,30 @@
           </dl>
           <div class="actions">
             {#if !selected.installed && selected.automated_download_allowed}
+              {@const dl = downloadMap.get(selected.model_id)}
+              {@const dlError = downloadErrors[selected.model_id]}
+              {#if selected.terms_acceptance_required}
+                <label class="terms"
+                  ><input type="checkbox" bind:checked={termsAccepted} /> I reviewed the model license
+                  and restrictions.</label
+                >
+              {/if}
+              {#if dlError}<p class="download-error" role="alert">{dlError}</p>{/if}
               <button
                 class="button primary"
                 type="button"
-                disabled={busy || (Boolean(activeDownload) && activeDownload !== selected.model_id)}
-                on:click={() => void download(selected)}
-                >{activeDownload === selected.model_id
-                  ? `Downloading ${Math.round(downloadProgress)}% · Cancel`
-                  : `Download ${formatBytes(selected.size_bytes)}`}</button
+                disabled={busy || (selected.terms_acceptance_required && !termsAccepted && !dl)}
+                on:click={() => void download(selected, termsAccepted)}
+                >{downloadButtonLabel(dl, selected.size_bytes)}</button
               >
+              {#if dl?.status === 'downloading'}
+                <progress
+                  class="download-progress"
+                  value={dl.progress}
+                  max="100"
+                  aria-label={`${displayName(selected)} download progress`}
+                ></progress>
+              {/if}
             {:else if !selected.installed}
               <label class="terms"
                 ><input type="checkbox" bind:checked={termsAccepted} /> I understand that the checkpoint
@@ -825,7 +1369,32 @@
             {:else}
               <div class="installed-badge">✓ Installed · integrity checked before use</div>
             {/if}
-            {#if canUseForJob(selected)}
+            {#if fixing}
+              {@const problem = fixing}
+              <div class="pair">
+                {#if canUseForJob(selected) && rightsAllowPreset(selected)}
+                  <button
+                    class="button"
+                    type="button"
+                    disabled={busy}
+                    on:click={() => rememberFix(selected, problem)}
+                    >Use for {FIX_LABELS[problem]}{context.quality === 'quick'
+                      ? ' · Quick'
+                      : context.quality === 'best'
+                        ? ' · Best'
+                        : ''}</button
+                  >
+                {/if}
+                {#if rememberedFix}
+                  <button
+                    class="link-button"
+                    type="button"
+                    disabled={busy}
+                    on:click={() => forgetFix(problem)}>Back to the default</button
+                  >
+                {/if}
+              </div>
+            {:else if canUseForJob(selected)}
               <div class="pair">
                 <button
                   class="button"
@@ -862,7 +1431,7 @@
               {/if}
             {/if}
           </div>
-        {:else}
+        {:else if group !== 'own'}
           <p class="model-description">
             Select a model to see what it is for and where it comes from.
           </p>

@@ -16,16 +16,22 @@ from localsr.core.video_pipeline import VideoJobConfig, _deflicker_frames, run_v
 from localsr.worker.server import WorkerServer
 
 
-def make_vfr(path, times=(0, 40, 80, 120, 480, 840, 1200, 1560, 1920, 2280), transfer=2):
+def make_vfr(
+    path,
+    times=(0, 40, 80, 120, 480, 840, 1200, 1560, 1920, 2280),
+    transfer=2,
+    width=48,
+    height=32,
+):
     with av.open(str(path), "w") as container:
         # Lossless VP9 is royalty-free and bundled; no reordering keeps VFR exact.
         stream = container.add_stream("libvpx-vp9", rate=25)
-        stream.width, stream.height, stream.pix_fmt = 48, 32, "yuv420p"
+        stream.width, stream.height, stream.pix_fmt = width, height, "yuv420p"
         stream.codec_context.time_base = Fraction(1, 1000)
         stream.codec_context.color_trc = transfer
         stream.options = {"lossless": "1", "lag-in-frames": "0"}
         for index, stamp in enumerate(times):
-            rgb = np.full((32, 48, 3), index % 10 * 20, dtype=np.uint8)
+            rgb = np.full((height, width, 3), index % 10 * 20, dtype=np.uint8)
             rgb[:12, :16] = [240, 40, 20]
             frame = av.VideoFrame.from_ndarray(rgb, format="rgb24")
             frame.pts, frame.time_base = stamp, Fraction(1, 1000)
@@ -196,7 +202,7 @@ def test_hdr_is_rejected_before_silent_sdr_export(tmp_path, transfer):
     with pytest.raises(RuntimeError, match="HDR.*SDR"):
         run_standard(source, output)
     assert not output.exists()
-    assert not list(tmp_path.glob(".output.mp4.localsr-*.tmp"))
+    assert not list(tmp_path.glob(".localsr-*.tmp"))
 
 
 def ffmpeg(*args):
@@ -248,13 +254,10 @@ def test_display_transform_matches_ffmpeg_autorotate(tmp_path, angle, flip, tran
 def test_display_transform_rejects_perspective_and_scaling(change):
     from localsr.core.video_io import _display_transform
 
-    class MatrixData(bytes):
-        type = SimpleNamespace(name="DISPLAYMATRIX")
-
     matrix = np.diag([1 << 16, 1 << 16, 1 << 30]).astype(np.int32)
     row, col, value = change
     matrix[row, col] = value
-    frame = SimpleNamespace(side_data=[MatrixData(matrix.tobytes())])
+    frame = SimpleNamespace(side_data={"DISPLAYMATRIX": matrix.tobytes()})
     with pytest.raises(ValueError, match="display transform"):
         _display_transform(frame)
 
@@ -385,4 +388,4 @@ def test_cancel_during_remux_preserves_existing_destination(tmp_path):
             cancel_event=cancel,
         )
     assert output.read_bytes() == b"existing user output"
-    assert not list(tmp_path.glob(".out.mp4.localsr-*.tmp"))
+    assert not list(tmp_path.glob(".localsr-*.tmp"))

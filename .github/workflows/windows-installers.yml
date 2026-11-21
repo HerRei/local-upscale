@@ -9,8 +9,11 @@ name: Windows installers
 # as verified parts that sit next to it, and it must pass the NVIDIA redistribution
 # policy. DirectML and CUDA have not been tested on those GPUs (docs/platforms.md).
 # Each installer gets its corresponding source bundle. The installers are not
-# Authenticode-signed. Given a release tag, the verified installers, engine parts and
-# bundles are attached to it.
+# Authenticode-signed. Every installer carries its update identity (updater public key,
+# backend, kind, engine id), so it checks its own feed entry; the installer is its own
+# updater file, and its engine package is written next to it. Their signatures are made
+# on the Mac (scripts/beta_update_signing.py platforms). Given a release tag, the
+# verified installers, engine parts and bundles are attached to it.
 
 on:
   workflow_dispatch:
@@ -113,6 +116,14 @@ jobs:
           python scripts/check_desktop_architecture.py
           python scripts/export_desktop_catalog.py --check
 
+      - name: Give the build its update identity
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          # Compiled into the host: without them it never checks its feed and shows no
+          # update switches.
+          python scripts/release_targets.py --update-env "${{ matrix.id }}" --commit $env:GITHUB_SHA |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Install the locked backend
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
@@ -153,12 +164,22 @@ jobs:
           python scripts/verify_nvidia_redistributables.py build/tauri-preview/worker-dist |
             Out-File -FilePath "$artifact.nvidia.json" -Encoding utf8
           python scripts/smoke_tauri_installer.py --backend "${{ matrix.backend }}" --timeout 1800 `
-            --artifact-glob $artifact --report "$artifact.smoke.json"
+            --artifact-glob $artifact --report "$artifact.smoke.json" `
+            --update-target "${{ matrix.id }}" --commit $env:GITHUB_SHA
           python scripts/verify_tauri_release_package.py $artifact `
             --platform windows --architecture x86_64 --smoke-report "$artifact.smoke.json" `
             --report "$artifact.architecture.json"
           $hash = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $name" | Out-File -FilePath "$artifact.sha256" -Encoding ascii
+          # The updater's engine package, installed as the versioned engine by an update.
+          # CUDA's installer parts already are one; the others package the bundled engine.
+          if ("${{ matrix.backend }}" -eq "CUDA") {
+            python scripts/prepare_engine_payload.py --target "${{ matrix.id }}" --output "$env:LSR\out" `
+              --reuse build\tauri-preview\engine-payload\engine-payload.json
+          } else {
+            python scripts/prepare_engine_payload.py --target "${{ matrix.id }}" --output "$env:LSR\out" `
+              --engine build\tauri-preview\worker-dist\engine
+          }
           # Corresponding source for exactly what the installer's engine contains.
           $extra = @(python scripts/fetch_extra_sources.py --platform windows-x86_64 --destination "$env:LSR\extra-sources")
           $sourceName = "LocalSR-v$version-${{ matrix.source }}"
@@ -214,6 +235,7 @@ jobs:
               files+=("$installer" "$installer.sha256")
             fi
           done
-          files+=(assets/*.engine.tar.gz.part-* assets/*-source-and-notices.tar.gz)
+          files+=(assets/*.engine.tar.gz.part-* assets/*.engine-payload.json \
+            assets/*-source-and-notices.tar.gz)
           test "${#files[@]}" -gt 0
           gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber

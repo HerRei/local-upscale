@@ -1,0 +1,48 @@
+name: Release train
+
+# Daily check whether a release candidate is due (14 days since the last published
+# release, main green, something to ship); if so, opens a `Version X` PR made by
+# scripts/bump_version.py. Building, signing and publishing stay manual
+# (docs/dependency-updates.md, docs/releasing.md). No secrets.
+on:
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Skip the 14-day wait
+        type: boolean
+        default: false
+
+permissions:
+  actions: write # dispatch CI and Preview on main and on the candidate branch
+  contents: write # push the release/vX branch
+  pull-requests: write
+  statuses: read
+
+concurrency:
+  group: release-train
+  cancel-in-progress: false
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+      - name: Open a candidate PR if one is due
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          if [ "$FORCE" = "true" ]; then
+            python scripts/release_train.py --force
+          else
+            python scripts/release_train.py
+          fi

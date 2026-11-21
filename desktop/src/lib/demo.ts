@@ -6,7 +6,11 @@ const catalog = structuredClone(rawCatalog) as unknown as CatalogManifest;
 for (const model of catalog.models) {
   model.installed = false;
 }
-for (const model of catalog.video_models) {
+for (const model of [
+  ...catalog.video_models,
+  ...catalog.interpolation_models,
+  ...(catalog.audio_models ?? []),
+]) {
   model.total_size_bytes = model.files.reduce((total, file) => total + file.size_bytes, 0);
   model.installed = false;
 }
@@ -19,7 +23,7 @@ const editModels: EditModel[] = rawEditModels.map((model) => ({
 
 export function demoSnapshot(): AppSnapshot {
   return {
-    app_version: '0.2.1-beta',
+    app_version: '0.5.0-beta',
     protocol_version: 1,
     catalog,
     media: [],
@@ -28,9 +32,10 @@ export function demoSnapshot(): AppSnapshot {
       interface_scale: 100,
       batch_mode: false,
       task: '',
+      video_task: 'upscale',
       selected_model_id: '',
       selected_video_model_id: 'frame_by_frame',
-      preprocess_model_id: '',
+      fix_stages: [],
       custom_model_path: '',
       output_scale: 4,
       output_directory: '',
@@ -49,10 +54,21 @@ export function demoSnapshot(): AppSnapshot {
       external_ffmpeg_path: '',
       video_hdr_mode: 'tone_map',
       video_crf: 18,
-      anonymous_update_count: true,
+      video_interpolation: 'off',
+      video_interpolation_order: 'after_upscale',
+      video_clean_audio: false,
+      video_audio_model: '',
+      appearance: 'dark',
+      colour_blind_palette: false,
+      anonymous_update_count: false,
+      completion_sound: false,
+      check_updates_at_launch: true,
+      privacy_choice_made: true,
+      crash_reports: false,
       enable_face_model: false,
       face_fidelity: 70,
       enable_live_preview: true,
+      low_priority: false,
       allow_unsafe_pickle_model: false,
       quality: '',
       content: 'photo',
@@ -96,6 +112,7 @@ export function demoSnapshot(): AppSnapshot {
       result_preview_data_url: '',
       download_model_id: '',
       download_progress: 0,
+      downloads: [],
       elapsed_seconds: 0,
       estimated_remaining_seconds: 0,
       throughput: 0,
@@ -106,6 +123,7 @@ export function demoSnapshot(): AppSnapshot {
       live_system_ram_available: 0,
       live_memory_pressure_percent: 0,
       thermal_status: 'Not exposed by this backend',
+      hardware_note: '',
     },
     latest_benchmark: null,
     edit: { models: structuredClone(editModels), runtime_path: '' },

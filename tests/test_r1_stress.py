@@ -44,22 +44,22 @@ def create_srgb_icc():
 
 def test_atomic_rename_formats_and_overwrite(tmp_path, monkeypatch):
     """
-    Stress-tests atomic saving (.tmp -> final path via os.replace) across format types
-    (PNG, JPEG, TIFF) and confirms overwriting existing files works cleanly.
+    Stress-tests atomic saving (.tmp -> final path via a hard link) across format types
+    (PNG, JPEG, TIFF) and confirms an existing file is never overwritten.
     """
     manager = ImageManager()
     mmap_arr = np.zeros((3, 30, 30), dtype=np.uint8)
 
     replace_history = []
-    orig_replace = os.replace
+    orig_link = os.link
 
-    def tracking_replace(src, dst):
+    def tracking_link(src, dst):
         replace_history.append((src, dst))
-        # Ensure .tmp exists right before replacement
-        assert os.path.exists(src), f"Temporary file {src} must exist before os.replace"
-        return orig_replace(src, dst)
+        # Ensure .tmp exists right before publication
+        assert os.path.exists(src), f"Temporary file {src} must exist before os.link"
+        return orig_link(src, dst)
 
-    monkeypatch.setattr(os, "replace", tracking_replace)
+    monkeypatch.setattr(os, "link", tracking_link)
 
     formats = [("png", "out.png"), ("jpg", "out.jpg"), ("tiff", "out.tiff")]
 
@@ -83,35 +83,33 @@ def test_atomic_rename_formats_and_overwrite(tmp_path, monkeypatch):
         # file behind.  Output names are intentionally randomized so LocalSR
         # never adopts or deletes a user's pre-existing ``<output>.tmp`` file.
         assert os.path.exists(dest_path), f"Destination {dest_path} should exist"
-        assert not list(tmp_path.glob(f".{filename}.localsr-image-*.tmp"))
+        assert not list(tmp_path.glob(".localsr-image-*.tmp"))
 
         # Confirm one unique same-directory temporary was atomically replaced.
         assert len(replace_history) == calls_before + 1
         temporary, destination = replace_history[-1]
         assert Path(temporary).parent == tmp_path
-        assert Path(temporary).name.startswith(f".{filename}.localsr-image-")
+        assert Path(temporary).name.startswith(".localsr-image-")
         assert Path(destination) == Path(dest_path)
 
-    # Overwrite test: create an existing file with dummy content first
-    overwrite_target = str(tmp_path / "overwrite_test.png")
-    with open(overwrite_target, "w") as f:
-        f.write("old data")
+    # An existing file is refused, left as it was, and no temporary stays behind.
+    overwrite_target = tmp_path / "overwrite_test.png"
+    overwrite_target.write_text("old data")
 
-    manager.save_from_writer(
-        writer_mmap=mmap_arr,
-        destination_path=overwrite_target,
-        format="png",
-        quality=98,
-        preserve_metadata=False,
-        icc_profile=None,
-        safe_exif={},
-        scale=1,
-    )
+    with pytest.raises(FileExistsError, match="Nothing was replaced"):
+        manager.save_from_writer(
+            writer_mmap=mmap_arr,
+            destination_path=str(overwrite_target),
+            format="png",
+            quality=98,
+            preserve_metadata=False,
+            icc_profile=None,
+            safe_exif={},
+            scale=1,
+        )
 
-    assert os.path.exists(overwrite_target)
-    assert not os.path.exists(overwrite_target + ".tmp")
-    with Image.open(overwrite_target) as img:
-        assert img.size == (30, 30)
+    assert overwrite_target.read_text() == "old data"
+    assert not list(tmp_path.glob(".localsr-image-*.tmp"))
 
 
 def test_orphan_tmp_cleanup_on_save_exception(tmp_path, monkeypatch):
@@ -122,14 +120,14 @@ def test_orphan_tmp_cleanup_on_save_exception(tmp_path, monkeypatch):
     manager = ImageManager()
     mmap_arr = np.zeros((3, 20, 20), dtype=np.uint8)
 
-    # 1. Exception during os.replace
+    # 1. Exception while publishing
     dest_path1 = str(tmp_path / "fail_replace.png")
 
-    def faulty_replace(src, dst):
-        assert os.path.exists(src), ".tmp file must exist when os.replace fails"
+    def faulty_replace(src, dst, *_args):
+        assert os.path.exists(src), ".tmp file must exist when publishing fails"
         raise OSError("Simulated filesystem I/O replace error")
 
-    monkeypatch.setattr(os, "replace", faulty_replace)
+    monkeypatch.setattr("localsr.core.image_io.publish_output", faulty_replace)
 
     with pytest.raises(OSError, match="Simulated filesystem I/O replace error"):
         manager.save_from_writer(
@@ -143,7 +141,7 @@ def test_orphan_tmp_cleanup_on_save_exception(tmp_path, monkeypatch):
             scale=1,
         )
 
-    assert not list(tmp_path.glob(".fail_replace.png.localsr-image-*.tmp")), (
+    assert not list(tmp_path.glob(".localsr-image-*.tmp")), (
         "Orphaned app-owned temporary must be cleaned up on replace failure"
     )
     assert not os.path.exists(dest_path1), "Destination path should not exist on replace failure"
@@ -173,7 +171,7 @@ def test_orphan_tmp_cleanup_on_save_exception(tmp_path, monkeypatch):
             scale=1,
         )
 
-    assert not list(tmp_path.glob(".fail_pil_save.png.localsr-image-*.tmp")), (
+    assert not list(tmp_path.glob(".localsr-image-*.tmp")), (
         "Orphaned app-owned temporary must be cleaned up on PIL save failure"
     )
     assert not os.path.exists(dest_path2), "Destination path should not exist on PIL save failure"
@@ -261,7 +259,7 @@ def test_output_writer_double_cleanup_idempotency():
     Verifies that calling OutputWriter.cleanup() multiple times is safe and idempotent.
     """
     writer = OutputWriter((3, 10, 10), dtype=np.uint8)
-    dat_path = writer.get_path()
+    dat_path = writer.temp_path
     assert os.path.exists(dat_path)
 
     # First cleanup
@@ -284,11 +282,14 @@ def test_worker_run_job_memmap_cleanup_normal_completion(tmp_path, monkeypatch):
 
     # Real OutputWriter creating a real .dat file on disk
     writer = OutputWriter((3, 20, 20), dtype=np.uint8)
-    dat_file_path = writer.get_path()
+    dat_file_path = writer.temp_path
 
     assert os.path.exists(dat_file_path), "Real memmap .dat file must exist initially"
 
     class MockEngine:
+        def release_models_except(self, keep):
+            pass
+
         def process_image(self, **kwargs):
             return writer
 
@@ -333,10 +334,13 @@ def test_worker_run_job_memmap_cleanup_on_cancellation(tmp_path):
     server.model_adapter = StressDummyModelAdapter(scale=2)
 
     writer = OutputWriter((3, 20, 20), dtype=np.uint8)
-    dat_file_path = writer.get_path()
+    dat_file_path = writer.temp_path
     assert os.path.exists(dat_file_path)
 
     class CancellingEngine:
+        def release_models_except(self, keep):
+            pass
+
         def process_image(self, cancel_event, **kwargs):
             cancel_event.set()
             return writer
@@ -379,10 +383,13 @@ def test_worker_run_job_memmap_cleanup_on_forced_exception(tmp_path):
     server.model_adapter = StressDummyModelAdapter(scale=2)
 
     writer = OutputWriter((3, 20, 20), dtype=np.uint8)
-    dat_file_path = writer.get_path()
+    dat_file_path = writer.temp_path
     assert os.path.exists(dat_file_path)
 
     class FailingSaveEngine:
+        def release_models_except(self, keep):
+            pass
+
         def process_image(self, **kwargs):
             return writer
 

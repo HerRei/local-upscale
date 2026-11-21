@@ -57,8 +57,8 @@ def anchor_hdr_detail(source: np.ndarray, enhanced: np.ndarray, transfer: int) -
     Every expanded source pixel retains its mean linear BT.2020 RGB. Remove
     the model's block-average exposure/colour change, then limit the remaining
     detail uniformly across channels to fit the HDR signal range. This does
-    not validate perceptual HDR quality; block-boundary artefacts remain a
-    specific Labs acceptance concern. HLG is anchored in scene light, PQ in
+    not validate perceptual HDR quality; block-boundary artefacts may occur.
+    HLG is anchored in scene light, PQ in
     display light. Only floating-point HDR samples enter or leave this path.
     """
     if source.dtype != np.float32 or enhanced.dtype != np.float32:

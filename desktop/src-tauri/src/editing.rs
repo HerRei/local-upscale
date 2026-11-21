@@ -76,6 +76,15 @@ pub fn catalog(paths: &AppPaths) -> AppResult<Vec<EditModel>> {
     Ok(models)
 }
 
+/// The name of an editing bundle, for labels of recorded Edit jobs.
+pub fn model_name(model_id: &str) -> Option<String> {
+    serde_json::from_str::<Vec<EditModel>>(EDIT_CATALOG)
+        .ok()?
+        .into_iter()
+        .find(|model| model.model_id == model_id)
+        .map(|model| model.name)
+}
+
 /// Delete a bundle's files, keeping components that another installed bundle
 /// of the same family still uses. Returns false for an unknown model.
 pub fn remove_bundle(paths: &AppPaths, model_id: &str) -> AppResult<bool> {
@@ -113,7 +122,7 @@ pub fn runtime_path(app: &AppHandle, paths: &AppPaths) -> String {
     if let Some(path) = std::env::var_os("LOCALSR_EDIT_RUNTIME") {
         candidates.push(path.into());
     }
-    if let Some(engine) = crate::updates::active_engine(paths) {
+    if let Some(engine) = crate::worker::engine_executable(app, paths) {
         if let Some(root) = engine.parent() {
             candidates.push(root.join("_internal/edit").join(name));
             candidates.push(root.join("edit").join(name));
@@ -173,6 +182,16 @@ mod tests {
             let handle = std::fs::File::create(directory.join(&file.filename)).unwrap();
             handle.set_len(file.size_bytes).unwrap();
         }
+    }
+
+    #[test]
+    fn recorded_edit_jobs_are_labelled_with_the_bundle_name() {
+        let models: Vec<EditModel> = serde_json::from_str(EDIT_CATALOG).unwrap();
+        assert_eq!(
+            model_name(&models[0].model_id).as_deref(),
+            Some(models[0].name.as_str())
+        );
+        assert_eq!(model_name("no-such-bundle"), None);
     }
 
     #[test]

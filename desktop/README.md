@@ -49,6 +49,13 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D w
 cargo test --manifest-path src-tauri/Cargo.toml --locked --all-targets
 ```
 
+The UI end-to-end tests (Playwright, Chromium and WebKit, against the Vite dev server
+with a scripted stand-in for the Rust host) live in `e2e/`. Install the browsers once
+with `npx playwright install chromium webkit`, then run `npm run e2e`. The pixel
+baselines in `e2e/__screenshots__` exist for macOS; after a deliberate visual change,
+run `npm run e2e:update` and review the changed images. CI runs the behaviour tests on
+Linux and skips the screenshots (`--grep-invert @visual`).
+
 The repository's [local checks](../docs/development.md) also validate Python,
 worker messages, catalog consistency and packaging inputs.
 

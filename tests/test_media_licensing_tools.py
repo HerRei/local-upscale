@@ -154,6 +154,20 @@ def test_source_bundle_collects_sources_licenses_and_manifest(tmp_path: Path):
     assert report["components"]["python-distribution-licenses"] == 1
 
 
+def test_source_bundle_requires_the_openvino_plugin_notice(tmp_path: Path):
+    inventory = tmp_path / "engine"
+    plugin = inventory / "_internal/onnxruntime_ep_openvino"
+    _touch(plugin / "libonnxruntime_providers_openvino_plugin.so")
+    with pytest.raises(SystemExit, match="third-party-programs.txt"):
+        build_source_bundle.build(_bundle_arguments(inventory, tmp_path / "out"))
+    _touch(plugin / "third-party-programs.txt", "oneTBB, hwloc")
+    output = tmp_path / "out-2"
+    report = build_source_bundle.build(_bundle_arguments(inventory, output))
+    notice = output / "licenses/onnxruntime-ep-openvino/third-party-programs.txt"
+    assert notice.read_text() == "oneTBB, hwloc"
+    assert report["components"]["openvino-plugin-notices"] == str(notice.relative_to(output))
+
+
 def test_source_bundle_requires_ubuntu_sources_for_every_host_library(tmp_path: Path):
     inventory = tmp_path / "LocalSR.AppDir"
     _touch(inventory / "usr/lib/libwebkit2gtk-4.1.so.0")

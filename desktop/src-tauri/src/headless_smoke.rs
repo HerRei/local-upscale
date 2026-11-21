@@ -1,6 +1,6 @@
 use std::{
     env,
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, ExitStatus, Stdio},
     sync::mpsc,
@@ -10,12 +10,19 @@ use std::{
 
 use serde_json::{json, Value};
 
-use crate::types::{EngineInfo, WorkerEnvelope, PROTOCOL_VERSION};
+use crate::{
+    pipe_lines::{read_frame, Frame},
+    process_tree::{lead_own_group, ProcessTree},
+    types::{EngineInfo, WorkerEnvelope, PROTOCOL_VERSION},
+    worker::MAX_ENGINE_LINE_BYTES,
+};
 
 const START_TIMEOUT: Duration = Duration::from_secs(180);
 const MIN_SHUTDOWN_TIMEOUT: u64 = 15;
 const MAX_SHUTDOWN_TIMEOUT: u64 = 120;
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// How much engine stderr is kept for the failure message; the rest is read and dropped.
+const MAX_STDERR_BYTES: usize = 64 * 1024;
 
 pub fn run() -> i32 {
     let timeout = smoke_timeout();
@@ -23,7 +30,7 @@ pub fn run() -> i32 {
     let result = worker_path
         .as_ref()
         .map_err(|error| error.clone())
-        .and_then(|path| run_worker_handshake(path, timeout));
+        .and_then(|path| run_worker_handshake(path, timeout, false));
 
     let (worker, passed, status_title, status_detail, engine) = match result {
         Ok(info) => (
@@ -50,6 +57,8 @@ pub fn run() -> i32 {
         "mode": "headless-installed-host",
         "managed_by_store": crate::distribution::managed_by_store(),
         "package_identity": crate::distribution::package_identity(),
+        // Release CI checks that the package carries its updater key and feed target.
+        "update": crate::updates::identity_report(),
         "worker": worker,
         "worker_path": worker_path.ok().map(|path| path.to_string_lossy().into_owned()),
         "passed": passed,
@@ -74,11 +83,6 @@ pub fn run() -> i32 {
 }
 
 fn packaged_worker_path() -> Result<PathBuf, String> {
-    if let Ok(paths) = crate::paths::AppPaths::discover() {
-        if let Some(path) = crate::updates::active_engine(&paths) {
-            return Ok(path);
-        }
-    }
     let executable = env::current_exe()
         .map_err(|error| format!("could not locate the installed desktop host: {error}"))?;
     let worker_name = if cfg!(windows) {
@@ -91,12 +95,15 @@ fn packaged_worker_path() -> Result<PathBuf, String> {
     // names. Use the same compiled configuration as Tauri's resource resolver.
     let context = crate::compiled_context();
     let product_name = &context.package_info().name;
-    worker_candidates(&executable, worker_name, appdir.as_deref(), product_name)
+    let bundled = worker_candidates(&executable, worker_name, appdir.as_deref(), product_name)
         .into_iter()
-        .find(|path| path.is_file())
-        .ok_or_else(|| {
-            "the installed desktop host is missing its bundled inference engine".to_owned()
-        })
+        .find(|path| path.is_file());
+    let installed = crate::paths::AppPaths::discover()
+        .ok()
+        .and_then(|paths| crate::updates::active_engine(&paths));
+    crate::updates::choose_host_engine(bundled, installed).ok_or_else(|| {
+        "the installed desktop host is missing its bundled inference engine".to_owned()
+    })
 }
 
 fn trusted_appimage_dir(executable: &Path) -> Option<PathBuf> {
@@ -152,7 +159,11 @@ fn worker_candidates(
     candidates
 }
 
-pub(crate) fn run_worker_handshake(path: &Path, timeout: Duration) -> Result<EngineInfo, String> {
+/// The command that starts the engine at `path` with the pipes of the protocol. With
+/// `own_group` the engine leads a process group, so that everything it starts ends with
+/// it. The smoke check of a host passes false: an updater that stops that host kills its
+/// group, and an engine in a group of its own would be left running.
+fn engine_command(path: &Path, own_group: bool) -> Command {
     let mut command = Command::new(path);
     #[cfg(windows)]
     {
@@ -166,13 +177,29 @@ pub(crate) fn run_worker_handshake(path: &Path, timeout: Duration) -> Result<Eng
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("PYTHONUNBUFFERED", "1");
+    if own_group {
+        lead_own_group(&mut command);
+    }
+    command
+}
 
+pub(crate) fn run_worker_handshake(
+    path: &Path,
+    timeout: Duration,
+    own_group: bool,
+) -> Result<EngineInfo, String> {
+    let mut command = engine_command(path, own_group);
     let mut child = command.spawn().map_err(|error| {
         format!(
             "could not start the bundled inference engine at {}: {error}",
             path.display()
         )
     })?;
+    let tree = if own_group {
+        ProcessTree::new(&child)
+    } else {
+        ProcessTree::without_group(&child)
+    };
     let mut stdin = child
         .stdin
         .take()
@@ -188,29 +215,54 @@ pub(crate) fn run_worker_handshake(path: &Path, timeout: Duration) -> Result<Eng
 
     let (sender, receiver) = mpsc::channel::<Result<WorkerEnvelope, String>>();
     let stdout_thread = thread::spawn(move || {
-        for line in BufReader::new(stdout).lines() {
-            let envelope = line
-                .map_err(|error| format!("could not read the inference engine response: {error}"))
-                .and_then(|line| {
-                    serde_json::from_str::<WorkerEnvelope>(&line).map_err(|error| {
+        let mut reader = BufReader::new(stdout);
+        let mut line = Vec::new();
+        loop {
+            let (envelope, last) = match read_frame(&mut reader, MAX_ENGINE_LINE_BYTES, &mut line) {
+                Ok(Frame::Line) => (
+                    serde_json::from_slice::<WorkerEnvelope>(&line).map_err(|error| {
                         format!("the inference engine sent an invalid JSON response: {error}")
-                    })
-                });
-            if sender.send(envelope).is_err() {
+                    }),
+                    false,
+                ),
+                Ok(Frame::End) => break,
+                Ok(Frame::TooLong) => (
+                    Err("the inference engine sent a message that is too long".to_owned()),
+                    true,
+                ),
+                Err(error) => (
+                    Err(format!(
+                        "could not read the inference engine response: {error}"
+                    )),
+                    true,
+                ),
+            };
+            if sender.send(envelope).is_err() || last {
                 break;
             }
         }
     });
     let stderr_thread = thread::spawn(move || {
-        let mut output = String::new();
-        let _ = stderr.read_to_string(&mut output);
-        output
+        // The end of a long diagnostic is what explains a failure.
+        let mut output = Vec::new();
+        let mut chunk = [0_u8; 8192];
+        while let Ok(read) = stderr.read(&mut chunk) {
+            if read == 0 {
+                break;
+            }
+            output.extend_from_slice(&chunk[..read]);
+            if output.len() > 2 * MAX_STDERR_BYTES {
+                output.drain(..output.len() - MAX_STDERR_BYTES);
+            }
+        }
+        String::from_utf8_lossy(&output).into_owned()
     });
 
-    let handshake = wait_for_handshake(&mut child, &mut stdin, &receiver, timeout);
+    let handshake = wait_for_handshake(&mut child, &tree, &mut stdin, &receiver, timeout);
     let shutdown = send_message(&mut stdin, &json!({"type": "shutdown_request", "data": {}}));
     drop(stdin);
-    let exit_status = wait_for_exit(&mut child, shutdown_timeout(timeout));
+    let exit_status = wait_for_exit(&mut child, &tree, shutdown_timeout(timeout));
+    tree.terminate();
     let _ = stdout_thread.join();
     let stderr = stderr_thread.join().unwrap_or_default();
 
@@ -241,6 +293,7 @@ fn shutdown_timeout(smoke_timeout: Duration) -> Duration {
 
 fn wait_for_handshake(
     child: &mut Child,
+    tree: &ProcessTree,
     stdin: &mut ChildStdin,
     receiver: &mpsc::Receiver<Result<WorkerEnvelope, String>>,
     timeout: Duration,
@@ -248,8 +301,8 @@ fn wait_for_handshake(
     let deadline = Instant::now() + timeout;
     let mut requested_handshake = false;
     loop {
-        if let Some(status) = child
-            .try_wait()
+        if let Some(status) = tree
+            .try_wait(child)
             .map_err(|error| format!("could not inspect the inference engine: {error}"))?
         {
             return Err(format!(
@@ -334,18 +387,23 @@ fn send_message(stdin: &mut ChildStdin, message: &Value) -> Result<(), String> {
         .map_err(|error| format!("could not write to the bundled inference engine: {error}"))
 }
 
-fn wait_for_exit(child: &mut Child, timeout: Duration) -> Result<ExitStatus, String> {
+fn wait_for_exit(
+    child: &mut Child,
+    tree: &ProcessTree,
+    timeout: Duration,
+) -> Result<ExitStatus, String> {
     let deadline = Instant::now() + timeout;
     loop {
-        if let Some(status) = child
-            .try_wait()
+        if let Some(status) = tree
+            .try_wait(child)
             .map_err(|error| format!("could not inspect the inference engine: {error}"))?
         {
             return Ok(status);
         }
         if Instant::now() >= deadline {
+            tree.terminate();
             let _ = child.kill();
-            let _ = child.wait();
+            let _ = tree.wait(child);
             return Err(format!(
                 "the bundled inference engine did not stop within {} seconds",
                 timeout.as_secs()
@@ -372,7 +430,7 @@ fn append_stderr(error: String, stderr: &str) -> String {
     format!("{error}. Engine stderr: {tail}")
 }
 
-fn write_report(path: &Path, report: &Value) -> std::io::Result<()> {
+pub(crate) fn write_report(path: &Path, report: &Value) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -459,5 +517,35 @@ mod tests {
             shutdown_timeout(Duration::from_secs(1800)),
             Duration::from_secs(MAX_SHUTDOWN_TIMEOUT)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_smoke_engine_stays_in_the_hosts_group_and_the_updated_engine_leads_its_own() {
+        use std::os::unix::fs::PermissionsExt;
+
+        extern "C" {
+            fn getpgid(pid: i32) -> i32;
+            fn getpgrp() -> i32;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let engine = directory.path().join("engine");
+        std::fs::write(&engine, "#!/bin/sh\nexec sleep 20\n").unwrap();
+        std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let group_of = |own_group: bool| {
+            let mut child = engine_command(&engine, own_group).spawn().unwrap();
+            let pid = i32::try_from(child.id()).unwrap();
+            // SAFETY: plain queries about live processes.
+            let group = unsafe { (getpgid(pid), getpgrp()) };
+            let _ = child.kill();
+            let _ = child.wait();
+            (pid, group)
+        };
+        // The updater ends a smoke host by its group: its engine has to be in it.
+        let (_, (group, own)) = group_of(false);
+        assert_eq!(group, own);
+        let (pid, (group, own)) = group_of(true);
+        assert_eq!(group, pid);
+        assert_ne!(group, own);
     }
 }

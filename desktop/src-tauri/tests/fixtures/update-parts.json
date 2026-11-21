@@ -1,0 +1,21 @@
+{
+  "_comment": "Disposable key; the private key was discarded. Two parts and the whole file they join to, each signed.",
+  "public_key": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ2ODA2RDhGNEVEODg3RjEKUldUeGg5aE9qMjJBUmlYcG45YmdDQU1KVlVHWXVLYlBRZXNrdFU5NkN3enQyN1ptbVJSdTRsQlUK",
+  "whole": {
+    "data": "LocalSR AppImage part one, and part two of the same update\n",
+    "sha256": "f02bd8dd022de2a2ff6091a2556b1126bf04828e0809cd13ff427029a77c200f",
+    "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUeGg5aE9qMjJBUnFrcWNpVVBFSWRGV3lUWldhelc0cmR3a3g5a3ZFNTZRYVVvVVNNNzduUHlJYVFYZmNXU1JuT1IxREtqbjdXbjBIT1hITnJVN2ZaN01POTNDNHZlZVE4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjIxODQ2CWZpbGU6d2hvbGUKWDMvRzRrckNOcXZxK1pjSkFqaVF1QkFlZ2RKTS9KeEREbkZHM2l6SGgrQXE2N21MZC8xdXU3Wk9DSlZSclRTVjNaeUhvalZab3UzVlFzZU1sdStwQ2c9PQo="
+  },
+  "parts": [
+    {
+      "data": "LocalSR AppImage part one, ",
+      "sha256": "8c5b4c5a34050b609fa969bf26ad5b1aaf65d8837019ba62f942f34db494b1f5",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUeGg5aE9qMjJBUmtTZU9FUnd3R1hDa1NsYzNQVnlwOGVSRVA1L1RwWXFRUm9ZN3ZJL0ZaY0MzREwrS3U4dzZHQ1YwUmd4LzdZd3N4Skp5SUEyd3lvZW8vTWVOcFFGbWdjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjIxODQ2CWZpbGU6cGFydDEKN3BCeUJMMUhUNmtWeUx5N25HOGpIdVJtWlFGTXlKVkh3MnUrcHR6NGJPc0xzY2grd0FxNiszZzNBYUJjeFhmRi84cDlxMGMyNHNsa21lYUVRUzBaQ0E9PQo="
+    },
+    {
+      "data": "and part two of the same update\n",
+      "sha256": "5be7f49aac3a2baef51e9baa9667eebbab0aad341fd3d6c9bf06939404cc9b26",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUeGg5aE9qMjJBUmp6cFlRSWJOTEJVWXcvWXRtQTZGQ0FwN2doU1AwRVV4akVIbzdXMzlnY3dxWmRidkNxeDNXeVdYd1RCSDArdzJnUm9vS01rWjJldlhHekozelZYVkF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjIxODQ2CWZpbGU6cGFydDIKUVNrZlhoK25hbDlVMkd1czZYVjhqZWxuNFFkUnlNdWhHNnI2VC9mSzZqNDZSckZ1dEpTQjBXc3lKekxIUG13dGUyRG9MR3A5bkVvdzNXTEdqcXZzRFE9PQo="
+    }
+  ]
+}

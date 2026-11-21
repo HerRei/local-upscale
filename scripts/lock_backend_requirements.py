@@ -12,7 +12,16 @@ from release_targets import ROOT, targets
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", choices=[target["id"] for target in targets()])
+    parser.add_argument(
+        "--upgrade-package",
+        action="append",
+        default=[],
+        metavar="NAME[==VERSION]",
+        help="move one package (and only it) to a newer pin; repeatable. Without it uv keeps "
+        "every existing pin, so a dependency update never reaches the shipped backend locks.",
+    )
     args = parser.parse_args()
+    upgrades = [flag for name in args.upgrade_package for flag in ("--upgrade-package", name)]
     resolver = subprocess.check_output(["uv", "--version"], text=True).strip()
     for target in targets():
         if args.target and target["id"] != args.target:
@@ -20,7 +29,17 @@ def main() -> None:
         if target["platform"] == "macos":
             continue  # macOS builds natively and has no cross-resolved lock.
         lock = ROOT / "requirements/locks" / f"{target['id']}.txt"
-        source = "backend-directml.in" if target["backend"] == "DirectML" else "backend-modern.in"
+        sources = [
+            "backend-directml.in" if target["backend"] == "DirectML" else "backend-modern.in"
+        ]
+        extra_flags: list[str] = []
+        if target["backend"] == "DirectML":
+            # Both wheels install the `onnxruntime` module; plain onnxruntime would replace
+            # DirectML's build (see tests/test_backend_packaging.py).
+            extra_flags.extend(["--no-emit-package", "onnxruntime"])
+        if target["id"] == "linux-x86_64-cpu":
+            # Intel GPUs through OpenVINO; the GPU editions bring their own runtime.
+            sources.append("backend-openvino.in")
         backend = "cpu" if target["backend"] == "DirectML" else target["index"]
         platform = (
             "x86_64-pc-windows-msvc" if target["platform"] == "windows" else "x86_64-manylinux_2_28"
@@ -32,7 +51,7 @@ def main() -> None:
                 "pip",
                 "compile",
                 "pyproject.toml",
-                f"requirements/{source}",
+                *(f"requirements/{source}" for source in sources),
                 "--extra",
                 "package",
                 "--extra",
@@ -52,6 +71,8 @@ def main() -> None:
                 "--output-file",
                 str(lock),
                 "--quiet",
+                *extra_flags,
+                *upgrades,
             ],
             cwd=ROOT,
             check=True,

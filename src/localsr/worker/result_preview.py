@@ -8,17 +8,29 @@ import subprocess
 import sys
 import threading
 import warnings
+from collections import OrderedDict
+from dataclasses import replace
 
 from PIL import Image, ImageCms, ImageOps
 
+from localsr.core.image_formats import is_system_decoded
 from localsr.protocol.messages import PreviewFailed, PreviewReady
+
+
+def open_result_image(path):
+    """Open an export: macOS decodes HEIC; the codec-only child avoids loading the engine."""
+    if is_system_decoded(path):
+        from localsr.core.image_io import open_image
+
+        return open_image(path)
+    return Image.open(path)
 
 
 def render_result_preview(data):
     path = str(data.get("image_path", ""))
     try:
         maximum = max(64, min(2048, int(data.get("max_dimension", 1600))))
-        with Image.open(path) as opened:
+        with open_result_image(path) as opened:
             width, height = opened.size
             if opened.getexif().get(274, 1) in (5, 6, 7, 8):
                 width, height = height, width
@@ -49,6 +61,8 @@ def render_result_preview(data):
                 width=width,
                 height=height,
                 jpeg_base64=base64.b64encode(encoded.getvalue()).decode("ascii"),
+                preview_width=image.width,
+                preview_height=image.height,
             )
     except Image.DecompressionBombError:
         # A normal camera photo enlarged 4× can exceed Pillow's input limit.
@@ -102,8 +116,27 @@ def large_result_main():
     print(message.to_json(), flush=True)
 
 
+# Pending requests are kept per purpose: the two sides of the selected pair,
+# a selection from a host without pair slots, and the automatic preview of a
+# job that just finished. Earlier keys are decoded first.
+_PAIR_SLOTS = ("showing", "against")
+_COMPARE_SLOTS = ("slot1", "slot2", "slot3", "slot4")
+_PENDING_ORDER = (*_COMPARE_SLOTS, *_PAIR_SLOTS, "selected", "automatic")
+# The selected pair plus the automatic preview, which is often one of them.
+_CACHE_SIZE = 5
+# Encoded JPEG bytes retained by the worker, independently of image dimensions.
+_CACHE_BYTES = 16 * 1024 * 1024
+
+
+def _generation(data):
+    try:
+        return max(0, int(data.get("generation", 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
 class ResultPreviewService:
-    """One decoder, at most one pending selection and one automatic preview."""
+    """One decoder, the latest desired pair and an independent completion slot."""
 
     def __init__(self, emit):
         self.emit = emit
@@ -111,8 +144,8 @@ class ResultPreviewService:
         self.pending = {}
         self.closed = False
         self.thread = None
-        self.cached_key = None
-        self.cached_preview = None
+        self.cache = OrderedDict()
+        self.generations = {"pair": 0, "compare": 0}
 
     def submit(self, data):
         if not isinstance(data, dict):
@@ -123,8 +156,24 @@ class ResultPreviewService:
         with self.condition:
             if self.closed:
                 return
-            # Completion previews must not displace a user-selected result.
-            self.pending[bool(data.get("comparison", False))] = dict(data)
+            if not data.get("comparison", False):
+                key = "automatic"
+            elif data.get("slot") in (*_PAIR_SLOTS, *_COMPARE_SLOTS):
+                key = data["slot"]
+                group = "pair" if key in _PAIR_SLOTS else "compare"
+                slots = _PAIR_SLOTS if group == "pair" else _COMPARE_SLOTS
+                generation = _generation(data)
+                # A newer pair replaces both sides of an older one, including
+                # a side the newer pair does not need decoded again.
+                if generation < self.generations[group]:
+                    return
+                if generation > self.generations[group]:
+                    self.generations[group] = generation
+                    for slot in slots:
+                        self.pending.pop(slot, None)
+            else:
+                key = "selected"
+            self.pending[key] = dict(data)
             if self.thread is None:
                 self.thread = threading.Thread(target=self._run, name="result-preview", daemon=True)
                 self.thread.start()
@@ -144,12 +193,12 @@ class ResultPreviewService:
                 self.condition.wait_for(lambda: self.closed or bool(self.pending))
                 if self.closed:
                     return
-                data = self.pending.pop(True if True in self.pending else False)
-            # The host may request a completion and selection preview together.
-            # Keep just the latest result, and invalidate it if the file changes.
+                key = next(key for key in _PENDING_ORDER if key in self.pending)
+                data = self.pending.pop(key)
+            # Invalidate a cached preview when its file changes.
             try:
                 stat = os.stat(str(data.get("image_path", "")))
-                key = (
+                cache_key = (
                     data.get("image_path"),
                     data.get("max_dimension", 1600),
                     stat.st_mtime_ns,
@@ -157,13 +206,28 @@ class ResultPreviewService:
                     stat.st_size,
                 )
             except OSError:
-                key = None
-            if key is not None and key == self.cached_key:
-                message = self.cached_preview
+                cache_key = None
+            if cache_key is not None and cache_key in self.cache:
+                message = self.cache[cache_key]
+                self.cache.move_to_end(cache_key)
             else:
                 message = render_result_preview(data)
-                if isinstance(message, PreviewReady):
-                    self.cached_key, self.cached_preview = key, message
+                if isinstance(message, PreviewReady) and cache_key is not None:
+                    self.cache[cache_key] = message
+                    while (
+                        len(self.cache) > _CACHE_SIZE
+                        or sum(len(item.jpeg_base64) for item in self.cache.values()) > _CACHE_BYTES
+                    ):
+                        self.cache.popitem(last=False)
+            # Every answer, a cache hit and a failure from the large-result
+            # child or its timeout included, names the request it answers.
+            if isinstance(message, (PreviewReady, PreviewFailed)):
+                message = replace(
+                    message,
+                    slot=str(data.get("slot", "")),
+                    generation=_generation(data),
+                    target_id=str(data.get("target_id", "")),
+                )
             with self.condition:
                 if self.closed:
                     return

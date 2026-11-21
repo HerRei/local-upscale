@@ -4,9 +4,6 @@ import gzip
 import hashlib
 import io
 import json
-import os
-import shutil
-import subprocess
 import sys
 import tarfile
 import zipfile
@@ -18,7 +15,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import backend_wheelhouse
 from prepare_engine_payload import prepare
 from release_targets import ROOT, targets, validate_manifest
-from tauri_public_assets import prepare_installer
 
 
 def test_engine_payload_streams_bounded_parts_with_exact_contents(tmp_path: Path):
@@ -44,35 +40,6 @@ def test_engine_payload_streams_bounded_parts_with_exact_contents(tmp_path: Path
     }
     assert manifest["file_count"] == 2
     assert manifest["unpacked_bytes"] == sum(map(len, contents.values()))
-
-
-def test_large_appimage_has_a_verified_reassembly_script(tmp_path: Path):
-    source = tmp_path / "LocalSR.AppImage"
-    source.write_bytes(b"linux-appimage" * 20)
-    output = tmp_path / "output"
-    output.mkdir()
-    records = prepare_installer(source, output, part_bytes=51)
-    assert all(item["size"] <= 51 for item in records[:-1])
-    script = output / records[-1]["filename"]
-    if sys.platform == "win32":
-        return  # The reassembly helper targets Linux, and Windows need not have Bash.
-    bash = shutil.which("bash")
-    assert bash
-    environment = os.environ.copy()
-    if sys.platform == "darwin":
-        # macOS's Perl shasum has the same check interface for this Linux helper.
-        shims = tmp_path / "shims"
-        shims.mkdir()
-        checksum = shims / "sha256sum"
-        checksum.write_text('#!/bin/sh\nexec /usr/bin/shasum -a 256 "$@"\n')
-        checksum.chmod(0o755)
-        environment["PATH"] = str(shims) + os.pathsep + environment["PATH"]
-    subprocess.run([bash, str(script)], check=True, env=environment)
-    assert (output / source.name).read_bytes() == source.read_bytes()
-    (output / source.name).unlink()
-    (output / records[0]["filename"]).write_bytes(b"corrupted")
-    assert subprocess.run([bash, str(script)], env=environment).returncode != 0
-    assert not (output / source.name).exists()
 
 
 def test_wheelhouse_reuse_verifies_files_and_invalidates_changed_locks(tmp_path: Path, monkeypatch):
@@ -148,7 +115,74 @@ def test_backend_locks_have_the_named_torch_flavor_and_native_dependencies():
             assert "onnxruntime-directml==1.24.4" in lock
             assert "onnx==1.22.0" in lock
             assert "torch-directml==" not in lock
+            # Both ONNX Runtime wheels install the same package; plain ORT would replace
+            # DirectML's. The OpenVINO plugin registers into the DirectML build.
+            assert "\nonnxruntime==" not in lock
+            assert "onnxruntime-ep-openvino==1.8.1" in lock
+        if target["id"] == "linux-x86_64-cpu":
+            # ONNX Runtime lists Intel NPUs on Linux only from 1.28 on (/sys/class/accel).
+            assert "onnxruntime==1.31.1" in lock
+            assert "onnxruntime-ep-openvino==1.8.1" in lock
+            assert "onnxruntime-directml" not in lock
+        elif target["backend"] != "DirectML":
+            # The GPU editions keep their own runtimes and size.
+            assert "onnxruntime-ep-openvino" not in lock
         if target["id"] == "linux-x86_64-cuda":
             assert "nvidia-cublas-cu12==" in lock
         if target["id"] == "linux-x86_64-xpu":
             assert "intel-sycl-rt==" in lock
+
+
+def _elf(machine: int = 62, elf_class: int = 2) -> bytes:
+    header = bytearray(20)
+    header[:4] = b"\x7fELF"
+    header[4] = elf_class
+    header[18:20] = machine.to_bytes(2, "little")
+    return bytes(header)
+
+
+def test_the_engine_prefers_a_newer_host_cpp_runtime(tmp_path, monkeypatch):
+    from localsr.worker import host_runtime
+    from localsr.worker.host_runtime import prefer_newer_host_runtime
+
+    # The test process may already hold its own copies; the frozen engine does not.
+    monkeypatch.setattr(host_runtime, "_already_loaded", lambda name: False)
+    bundle, host, legacy = tmp_path / "bundle", tmp_path / "host", tmp_path / "lib32"
+    for directory in (bundle, host, legacy):
+        directory.mkdir()
+    (bundle / "libstdc++.so.6").write_bytes(_elf() + b"\x00GLIBCXX_3.4.29\x00GLIBCXX_3.4.30\x00")
+    (bundle / "libgcc_s.so.1").write_bytes(_elf() + b"\x00GCC_3.0\x00GCC_12.0.0\x00")
+    (host / "libgcc_s.so.1").write_bytes(_elf() + b"\x00GCC_3.0\x00GCC_14.0.0\x00")
+    (host / "libstdc++.so.6").write_bytes(_elf() + b"\x00GLIBCXX_3.4.34\x00")
+    # A 32-bit copy earlier in the search order is passed over, not a reason to give up.
+    (legacy / "libstdc++.so.6").write_bytes(
+        _elf(machine=3, elf_class=1) + b"\x00GLIBCXX_3.4.36\x00"
+    )
+    directories = (str(legacy), str(host))
+    loaded = []
+    assert prefer_newer_host_runtime(bundle, directories, loaded.append) == [
+        str(host / "libgcc_s.so.1"),
+        str(host / "libstdc++.so.6"),
+    ]
+    assert loaded == [str(host / "libgcc_s.so.1"), str(host / "libstdc++.so.6")]
+
+    # A newer host libstdc++ brings the host's libgcc_s along even at the same version.
+    (host / "libstdc++.so.6").write_bytes(_elf() + b"\x00GLIBCXX_3.4.34\x00")
+    (host / "libgcc_s.so.1").write_bytes(_elf() + b"\x00GCC_3.0\x00GCC_12.0.0\x00")
+    loaded.clear()
+    assert prefer_newer_host_runtime(bundle, directories, loaded.append) == [
+        str(host / "libgcc_s.so.1"),
+        str(host / "libstdc++.so.6"),
+    ]
+
+    # An older or equal host runtime leaves the bundled one in place.
+    (host / "libstdc++.so.6").write_bytes(_elf() + b"\x00GLIBCXX_3.4.28\x00")
+    (host / "libgcc_s.so.1").write_bytes(_elf() + b"\x00GCC_12.0.0\x00")
+    loaded.clear()
+    assert prefer_newer_host_runtime(bundle, directories, loaded.append) == []
+    assert loaded == []
+
+
+def test_the_entrypoint_settles_the_cpp_runtime_before_importing_the_engine():
+    source = (ROOT / "packaging" / "worker_entrypoint.py").read_text()
+    assert source.index("prefer_newer_host_runtime()") < source.index("localsr.worker.cli")

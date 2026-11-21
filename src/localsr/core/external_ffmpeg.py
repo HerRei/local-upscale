@@ -23,6 +23,8 @@ from pathlib import Path
 
 import av
 
+from .child_processes import start as start_child
+from .child_processes import stop as stop_child
 from .media_codecs import (
     EXTERNAL_FFMPEG_HINT,
     UNDECODABLE_VIDEO_MESSAGE,
@@ -153,8 +155,8 @@ def _run(
         "-nostats",
         *arguments,
     ]
-    with tempfile.TemporaryFile(mode="w+t") as errors:
-        process = subprocess.Popen(
+    with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as errors:
+        process = start_child(
             command,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -177,14 +179,18 @@ def _run(
                 time.sleep(0.1)
 
         watcher = threading.Thread(target=watch_cancel, daemon=True)
-        watcher.start()
-        for line in stdout:
-            if progress is not None and line.startswith("frame="):
-                try:
-                    progress(int(line.split("=", 1)[1]))
-                except ValueError:
-                    pass
-        code = process.wait()
+        try:
+            watcher.start()
+            for line in stdout:
+                if progress is not None and line.startswith("frame="):
+                    try:
+                        progress(int(line.split("=", 1)[1]))
+                    except ValueError:
+                        pass
+            code = process.wait()
+        finally:
+            # Whatever ended this call, FFmpeg must not keep converting on its own.
+            stop_child(process)
         watcher.join(timeout=1)
         if cancel_event is not None and cancel_event.is_set():
             raise InterruptedError("video job cancelled")
@@ -227,10 +233,12 @@ class SourcePlan:
     audio_needs_conversion: bool
 
 
-def plan_source(path: str, container: str = "mkv") -> SourcePlan:
+def plan_source(path: str, container: str = "mkv", *, decode_audio: bool = False) -> SourcePlan:
     """Inspect which parts of a source LocalSR's bundled runtime can handle.
 
     A container LocalSR cannot even read (for example FLV) needs full conversion.
+    When ``decode_audio`` is true, audio streams without a bundled decoder also
+    require conversion because they cannot be stream-copied directly.
     """
     try:
         source = av.open(path)
@@ -243,7 +251,8 @@ def plan_source(path: str, container: str = "mkv") -> SourcePlan:
         if video is None:
             raise ValueError(f"No video stream found in {path}")
         audio_help = any(
-            stream.codec_context is None and not stream_copy_supported(stream, container)
+            stream.codec_context is None
+            and (decode_audio or not stream_copy_supported(stream, container))
             for stream in source.streams
             if stream.type == "audio"
         )
@@ -324,13 +333,14 @@ def decodable_source(
     progress: Callable[[int], None] | None = None,
     output_container: str = "mkv",
     on_convert: Callable[[], None] | None = None,
+    decode_audio: bool = False,
 ) -> Iterator[tuple[str, str]]:
     """Yield ``(frame_source, audio_source)`` paths that the bundled runtime can read.
 
     The original file is used whenever possible. Otherwise the user's FFmpeg
     creates a lossless FFV1/FLAC intermediate that is deleted afterwards.
     """
-    plan = plan_source(path, output_container)
+    plan = plan_source(path, output_container, decode_audio=decode_audio)
     if plan.video_decodable and not plan.audio_needs_conversion:
         yield path, path
         return
@@ -406,6 +416,18 @@ def external_timing(ffmpeg: ExternalFFmpeg, path: str) -> tuple[float, float]:
         else 0.0
     )
     return (float(fps.group(1)) if fps else 0.0), seconds
+
+
+def external_has_audio(ffmpeg: ExternalFFmpeg, path: str) -> bool:
+    """Whether FFmpeg's input summary lists an audio stream."""
+    result = subprocess.run(
+        [ffmpeg.path, "-hide_banner", "-i", path],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        creationflags=_creation_flags(),
+    )
+    return bool(re.search(r"Stream #.*: Audio:", result.stderr))
 
 
 _HDR_COLOR = {
@@ -495,6 +517,7 @@ __all__ = [
     "decodable_source",
     "discover_candidates",
     "ensure_free_space",
+    "external_has_audio",
     "first_frame_source",
     "load_external_ffmpeg",
     "lossless_size_estimate",

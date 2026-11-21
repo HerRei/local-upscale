@@ -8,7 +8,11 @@
       "backend": "MPS",
       "index": "",
       "suffix": "macOS-arm64.dmg",
-      "signing": "developer-id-notarized"
+      "signing": "developer-id-notarized",
+      "update": {
+        "backend": "mps",
+        "kind": "native"
+      }
     },
     {
       "id": "windows-x86_64-cuda",
@@ -19,7 +23,11 @@
       "suffix": "Windows-CUDA-x86_64.exe",
       "signing": "authenticode-valid",
       "external_engine": true,
-      "scratch_peak_gib": 32
+      "scratch_peak_gib": 32,
+      "update": {
+        "backend": "cuda",
+        "kind": "native"
+      }
     },
     {
       "id": "windows-x86_64-cpu",
@@ -29,7 +37,11 @@
       "index": "cpu",
       "suffix": "Windows-CPU-x86_64.exe",
       "signing": "authenticode-valid",
-      "scratch_peak_gib": 15
+      "scratch_peak_gib": 15,
+      "update": {
+        "backend": "cpu",
+        "kind": "native"
+      }
     },
     {
       "id": "windows-x86_64-directml",
@@ -39,7 +51,11 @@
       "index": "",
       "suffix": "Windows-DirectML-x86_64.exe",
       "signing": "authenticode-valid",
-      "scratch_peak_gib": 20
+      "scratch_peak_gib": 20,
+      "update": {
+        "backend": "directml",
+        "kind": "native"
+      }
     },
     {
       "id": "linux-x86_64-cpu",
@@ -49,7 +65,11 @@
       "index": "cpu",
       "suffix": "Linux-CPU-x86_64.AppImage",
       "signing": "sha256",
-      "scratch_peak_gib": 15
+      "scratch_peak_gib": 15,
+      "update": {
+        "backend": "cpu",
+        "kind": "native"
+      }
     },
     {
       "id": "linux-x86_64-cuda",
@@ -59,7 +79,11 @@
       "index": "cu126",
       "suffix": "Linux-CUDA-x86_64.AppImage",
       "signing": "sha256",
-      "scratch_peak_gib": 45
+      "scratch_peak_gib": 45,
+      "update": {
+        "backend": "cuda",
+        "kind": "native"
+      }
     },
     {
       "id": "linux-x86_64-rocm",
@@ -69,10 +93,13 @@
       "index": "rocm7.2",
       "suffix": "Linux-ROCm-x86_64.AppImage",
       "signing": "sha256",
-      "scratch_peak_gib": 100
+      "scratch_peak_gib": 100,
+      "update": {
+        "backend": "rocm",
+        "kind": "native"
+      }
     }
   ],
-  "legacy_note": "The Slint host is retired. The Tauri matrix retains its existing eight targets.",
   "withheld_targets": [
     {
       "id": "linux-x86_64-xpu",
