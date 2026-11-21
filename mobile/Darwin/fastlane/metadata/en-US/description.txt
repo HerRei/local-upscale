@@ -15,6 +15,6 @@ WHAT YOU GET
 • Keeps the date and location of the original.
 
 HONEST ABOUT WHAT IT DOES
-LocalSR sharpens what is in the photo. It doesn't invent details, and text that can't be read in the photo stays unreadable.
+LocalSR sharpens what is in the photo. It can add fine texture, but it can't bring back detail that isn't there: text that can't be read in the photo stays unreadable.
 
 Free and open source (MIT): github.com/HerRei/local-upscale

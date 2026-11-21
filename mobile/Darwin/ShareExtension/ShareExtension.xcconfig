@@ -8,7 +8,7 @@ PRODUCT_BUNDLE_IDENTIFIER = com.hermesreisner.localsr.share
 PRODUCT_MODULE_NAME = LocalSRShare
 PRODUCT_NAME = LocalSRShare
 
-IPHONEOS_DEPLOYMENT_TARGET = 26.0
+IPHONEOS_DEPLOYMENT_TARGET = 27.0
 SUPPORTED_PLATFORMS = iphoneos iphonesimulator
 SDKROOT = iphoneos
 // Same devices as the app (iPhone only for v1, see LocalSR.xcconfig)
