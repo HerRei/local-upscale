@@ -164,6 +164,9 @@ updates, and a separate Python worker that runs PyTorch and spandrel. Run
 [Worker protocol](protocol/README.md) · [Command line](docs/automation.md) ·
 [Releasing](docs/releasing.md).
 
+The iPhone and Android app is a separate Swift project built with Skip, in
+[mobile/](mobile/README.md).
+
 ## Feedback
 
 Please report bugs on [GitHub Issues](https://github.com/HerRei/local-upscale/issues)

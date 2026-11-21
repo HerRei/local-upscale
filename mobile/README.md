@@ -45,4 +45,11 @@ Run `tools/export_models.py` to export models and `tools/export_models.py --chec
 - The simulator has no NPU. Android NPU use needs vendor runtimes that are not bundled; the check falls back to GPU or CPU.
 - Android output is sRGB JPEG without an HDR gain map. The Android photo picker may strip GPS data.
 - Completed results are restored after process death, but the pending batch queue is not.
-- Real-device NPU and GPU performance has not yet been measured.
+- Measured on real iPhones: both models run on the Neural Engine. A 12 MP photo at Full 4× takes about 1.8 s on an iPhone 17 Pro and 6.6 s on an iPhone 11 Pro. Android has been tested on emulators only.
+
+## Release
+
+- The version and build number are in `Skip.env` (`MARKETING_VERSION`, `CURRENT_PROJECT_VERSION`). Raise the build number for every upload.
+- iOS 1.0.0 is iPhone only, with iOS 27 as the minimum. iPad support can't be removed again after it ships, so it comes in a later version.
+- Store texts, the privacy answers ("Data Not Collected"), the age rating and the review notes are in `Darwin/fastlane/metadata/`; Google Play texts are in `Android/fastlane/metadata/`.
+- To archive: open `Project.xcworkspace`, pick the scheme "LocalSR App" and "Any iOS Device", then Product → Archive. For a command-line Release build, set `SKIP_ACTION=none`, or Skip also tries to build and launch the Android app.
