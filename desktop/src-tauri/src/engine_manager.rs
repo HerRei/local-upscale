@@ -1016,11 +1016,24 @@ pub async fn install_engine(
 ) -> AppResult<()> {
     let config = UpdateConfig::load();
     let version = app.package_info().version.to_string();
-    install_engine_in(&state, Some(&app), &config, &backend, &version, |exe| {
-        crate::headless_smoke::run_worker_handshake(exe, Duration::from_secs(60), true)
+    let work_root = state.paths.work_root.clone();
+    install_engine_in(
+        &state,
+        Some(&app),
+        &config,
+        &backend,
+        &version,
+        move |exe| {
+            crate::headless_smoke::run_worker_handshake(
+                exe,
+                Duration::from_secs(60),
+                true,
+                &work_root,
+            )
             .map(|_| ())
             .map_err(AppError::Worker)
-    })
+        },
+    )
     .await
 }
 
@@ -1114,9 +1127,14 @@ pub async fn use_engine(
             std::env::consts::OS,
             std::env::consts::ARCH,
             |exe| {
-                crate::headless_smoke::run_worker_handshake(exe, Duration::from_secs(60), true)
-                    .map(|_| ())
-                    .map_err(AppError::Worker)
+                crate::headless_smoke::run_worker_handshake(
+                    exe,
+                    Duration::from_secs(60),
+                    true,
+                    &state.paths.work_root,
+                )
+                .map(|_| ())
+                .map_err(AppError::Worker)
             },
         )
     })
@@ -1499,9 +1517,14 @@ pub async fn import_engine(
             std::env::consts::OS,
             std::env::consts::ARCH,
             |exe| {
-                crate::headless_smoke::run_worker_handshake(exe, Duration::from_secs(60), true)
-                    .map(|_| ())
-                    .map_err(AppError::Worker)
+                crate::headless_smoke::run_worker_handshake(
+                    exe,
+                    Duration::from_secs(60),
+                    true,
+                    &state.paths.work_root,
+                )
+                .map(|_| ())
+                .map_err(AppError::Worker)
             },
         )
         .map(|_| ())

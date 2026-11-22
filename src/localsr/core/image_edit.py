@@ -54,6 +54,11 @@ CUSTOM_EDIT_FAMILIES: dict[str, dict] = {
 }
 
 
+PROBE_TIMEOUTS = {"--help": 90, "--list-devices": 120}
+# Runtimes whose --help already passed, keyed by path, size and modification time.
+_CHECKED_RUNTIMES: set[tuple[str, int, int]] = set()
+
+
 def probe_runtime(runtime: Path, option: str):
     command = [str(runtime), option]
     if os.name == "nt" and getattr(sys, "frozen", False):
@@ -63,7 +68,9 @@ def probe_runtime(runtime: Path, option: str):
         command,
         capture_output=True,
         text=True,
-        timeout=30 if option == "--list-devices" else 10,
+        # The first start of a CUDA sd-cli on Windows loads large DLLs that the antivirus
+        # scans, and the frozen worker that wraps it starts cold: allow for that (#160).
+        timeout=PROBE_TIMEOUTS[option],
         env=native_environment(),
         creationflags=0x08000000 if os.name == "nt" else 0,
     )
@@ -298,11 +305,22 @@ def check_runtime(path: str) -> Path:
     runtime = Path(path).resolve(strict=True)
     if not runtime.is_file():
         raise ValueError("Select the native sd-cli editing runtime.")
-    help_result = probe_runtime(runtime, "--help")
+    stat = runtime.stat()
+    key = (str(runtime), stat.st_size, stat.st_mtime_ns)
+    if key in _CHECKED_RUNTIMES:
+        return runtime
+    try:
+        help_result = probe_runtime(runtime, "--help")
+    except subprocess.TimeoutExpired as error:
+        raise ValueError(
+            "The editing runtime did not answer in time. Its first start can take a while "
+            "while the system checks it; try the edit again in a minute."
+        ) from error
     if help_result.returncode != 0 or any(
         flag not in help_result.stdout + help_result.stderr for flag in REQUIRED_FLAGS
     ):
         raise ValueError("The editing runtime is too old. Reinstall LocalSR to restore it.")
+    _CHECKED_RUNTIMES.add(key)
     return runtime
 
 

@@ -334,6 +334,7 @@ def _develop_raw(path: str) -> np.ndarray:
     try:
         with rawpy.imread(path) as raw:
             require_pixel_budget(raw.sizes.width, raw.sizes.height)
+            require_pixel_budget(raw.sizes.raw_width, raw.sizes.raw_height)
             return raw.postprocess(
                 use_camera_wb=True,
                 use_auto_wb=False,

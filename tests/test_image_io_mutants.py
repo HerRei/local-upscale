@@ -264,7 +264,7 @@ def test_a_raw_file_whose_metadata_cannot_be_read_is_still_developed(tmp_path, m
     path.write_bytes(b"not a TIFF")
     raw = SimpleNamespace(
         postprocess=lambda **_kw: np.full((4, 6, 3), 90, dtype=np.uint8),
-        sizes=SimpleNamespace(width=6, height=4, flip=0),
+        sizes=SimpleNamespace(width=6, height=4, raw_width=6, raw_height=4, flip=0),
     )
 
     class Raw:

@@ -1840,9 +1840,14 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
         &state.paths.next_root,
         || worker::installed_worker_path(state, app),
         |exe| {
-            crate::headless_smoke::run_worker_handshake(exe, Duration::from_secs(60), true)
-                .map(|_| ())
-                .map_err(AppError::Worker)
+            crate::headless_smoke::run_worker_handshake(
+                exe,
+                Duration::from_secs(60),
+                true,
+                &state.paths.work_root,
+            )
+            .map(|_| ())
+            .map_err(AppError::Worker)
         },
     )?;
     if (checked.engine_id != config.engine_id

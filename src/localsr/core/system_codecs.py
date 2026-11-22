@@ -32,6 +32,7 @@ import numpy as np
 from .child_processes import start as start_child
 from .external_ffmpeg import ExternalFFmpegError
 from .media_codecs import MOV_CODECS, encode_spec
+from .pixel_budget import require_pixel_budget
 
 ENVIRONMENT_VARIABLE = "LOCALSR_MEDIA_HELPER"
 HELPER_NAME = "localsr-media"
@@ -515,6 +516,9 @@ class SystemCodecs:
         ``video=False`` converts only the soundtrack; ``frames`` limits the video to
         its first frames (a one-frame file serves the preview probe).
         """
+        if video:
+            track = self.probe(path).get("video") or {}
+            require_pixel_budget(int(track.get("width") or 0), int(track.get("height") or 0))
         destination = Path(destination)
         with tempfile.TemporaryDirectory(
             prefix="localsr-media-", dir=destination.parent

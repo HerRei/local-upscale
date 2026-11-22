@@ -21,7 +21,7 @@ class FakeRawDecode:
     def __init__(self, rgb):
         self.rgb = rgb
         self.kwargs = None
-        self.sizes = SimpleNamespace(width=6, height=4, flip=0)
+        self.sizes = SimpleNamespace(width=6, height=4, raw_width=6, raw_height=4, flip=0)
 
     def __enter__(self):
         return self

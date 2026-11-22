@@ -30,7 +30,10 @@ pub fn run() -> i32 {
     let result = worker_path
         .as_ref()
         .map_err(|error| error.clone())
-        .and_then(|path| run_worker_handshake(path, timeout, false));
+        .and_then(|path| {
+            let paths = crate::paths::AppPaths::discover().map_err(|error| error.to_string())?;
+            run_worker_handshake(path, timeout, false, &paths.work_root)
+        });
 
     let (worker, passed, status_title, status_detail, engine) = match result {
         Ok(info) => (
@@ -163,8 +166,9 @@ fn worker_candidates(
 /// `own_group` the engine leads a process group, so that everything it starts ends with
 /// it. The smoke check of a host passes false: an updater that stops that host kills its
 /// group, and an engine in a group of its own would be left running.
-fn engine_command(path: &Path, own_group: bool) -> Command {
+fn engine_command(path: &Path, own_group: bool, work_root: &Path) -> Command {
     let mut command = Command::new(path);
+    command.current_dir(work_root);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -187,8 +191,10 @@ pub(crate) fn run_worker_handshake(
     path: &Path,
     timeout: Duration,
     own_group: bool,
+    work_root: &Path,
 ) -> Result<EngineInfo, String> {
-    let mut command = engine_command(path, own_group);
+    let mut command = engine_command(path, own_group, work_root);
+    crate::worker::set_helper_overrides(&mut command).map_err(|error| error.to_string())?;
     let mut child = command.spawn().map_err(|error| {
         format!(
             "could not start the bundled inference engine at {}: {error}",
@@ -519,6 +525,15 @@ mod tests {
         );
     }
 
+    #[test]
+    fn handshake_uses_app_owned_working_directory() {
+        let work_root = Path::new("/app/work");
+        assert_eq!(
+            engine_command(Path::new("worker"), true, work_root).get_current_dir(),
+            Some(work_root)
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_smoke_engine_stays_in_the_hosts_group_and_the_updated_engine_leads_its_own() {
@@ -533,7 +548,9 @@ mod tests {
         std::fs::write(&engine, "#!/bin/sh\nexec sleep 20\n").unwrap();
         std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o755)).unwrap();
         let group_of = |own_group: bool| {
-            let mut child = engine_command(&engine, own_group).spawn().unwrap();
+            let mut child = engine_command(&engine, own_group, directory.path())
+                .spawn()
+                .unwrap();
             let pid = i32::try_from(child.id()).unwrap();
             // SAFETY: plain queries about live processes.
             let group = unsafe { (getpgid(pid), getpgrp()) };

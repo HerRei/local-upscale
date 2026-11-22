@@ -27,6 +27,25 @@ use crate::{
     },
 };
 
+fn helper_override_path(value: &std::ffi::OsStr, host_directory: &Path) -> PathBuf {
+    let path = PathBuf::from(value);
+    if path.is_absolute() || path.starts_with("~") {
+        path
+    } else {
+        host_directory.join(path)
+    }
+}
+
+pub(crate) fn set_helper_overrides(command: &mut Command) -> std::io::Result<()> {
+    for name in ["LOCALSR_MEDIA_HELPER", "LOCALSR_EXTERNAL_FFMPEG"] {
+        if let Some(value) = env::var_os(name).filter(|value| !value.is_empty()) {
+            let path = helper_override_path(&value, &env::current_dir()?);
+            command.env(name, path);
+        }
+    }
+    Ok(())
+}
+
 struct WorkerCommand {
     program: PathBuf,
     arguments: Vec<String>,
@@ -197,6 +216,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         crate::editing::runtime_path(&state.paths, specification.program.parent());
     let mut command = Command::new(&specification.program);
     command.args(&specification.arguments);
+    set_helper_overrides(&mut command)?;
     crate::process_priority::configure_command(&mut command, low_priority);
     command
         .stdin(Stdio::piped())
@@ -2166,9 +2186,14 @@ pub(crate) fn codec_helper_command(state: &AppState, app: &AppHandle) -> AppResu
     let specification = resolve_worker_command(state, app)?;
     let mut command = Command::new(specification.program);
     command.args(specification.arguments);
+    set_helper_overrides(&mut command)?;
     let low_priority = if let Ok(settings) = state.settings.lock() {
         if !settings.external_ffmpeg_path.is_empty() {
-            command.env("LOCALSR_EXTERNAL_FFMPEG", &settings.external_ffmpeg_path);
+            let path = helper_override_path(
+                std::ffi::OsStr::new(&settings.external_ffmpeg_path),
+                &env::current_dir()?,
+            );
+            command.env("LOCALSR_EXTERNAL_FFMPEG", path);
         }
         settings.low_priority
     } else {

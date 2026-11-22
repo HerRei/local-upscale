@@ -2343,3 +2343,19 @@ fn installed_worker_uses_app_owned_working_directory() {
         Some(work_root.as_path())
     );
 }
+
+#[test]
+fn relative_helper_overrides_resolve_from_host_directory() {
+    assert_eq!(
+        helper_override_path(std::ffi::OsStr::new("tools/helper"), Path::new("/host")),
+        PathBuf::from("/host/tools/helper")
+    );
+    assert_eq!(
+        helper_override_path(std::ffi::OsStr::new("/tools/helper"), Path::new("/host")),
+        PathBuf::from("/tools/helper")
+    );
+    assert_eq!(
+        helper_override_path(std::ffi::OsStr::new("~/tools/helper"), Path::new("/host")),
+        PathBuf::from("~/tools/helper")
+    );
+}

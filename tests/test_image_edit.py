@@ -893,3 +893,36 @@ def test_selected_runtime_requires_current_cli_controls(tmp_path, monkeypatch):
         ),
     )
     assert image_edit.check_runtime(str(runtime)) == runtime.resolve()
+
+
+def test_runtime_probe_runs_once_per_runtime_and_timeouts_are_explained(tmp_path, monkeypatch):
+    # Issue #160: a cold Windows start of the CUDA sd-cli outlived the old 10 s probe.
+    assert image_edit.PROBE_TIMEOUTS["--help"] >= 60
+    assert image_edit.PROBE_TIMEOUTS["--list-devices"] >= 90
+    monkeypatch.setattr(image_edit, "_CHECKED_RUNTIMES", set())
+    runtime = tmp_path / "sd-cli"
+    runtime.write_bytes(b"runtime")
+
+    def slow(path, option):
+        raise subprocess.TimeoutExpired([str(path), option], image_edit.PROBE_TIMEOUTS[option])
+
+    monkeypatch.setattr(image_edit, "probe_runtime", slow)
+    with pytest.raises(ValueError, match="did not answer in time"):
+        image_edit.check_runtime(str(runtime))
+
+    calls = []
+
+    def ok(path, option):
+        calls.append(option)
+        return subprocess.CompletedProcess(
+            [str(path), option], 0, " ".join(image_edit.REQUIRED_FLAGS), ""
+        )
+
+    monkeypatch.setattr(image_edit, "probe_runtime", ok)
+    assert image_edit.check_runtime(str(runtime)) == runtime.resolve()
+    assert image_edit.check_runtime(str(runtime)) == runtime.resolve()
+    assert calls == ["--help"]
+    # A replaced runtime is probed again.
+    runtime.write_bytes(b"runtime, newer build")
+    image_edit.check_runtime(str(runtime))
+    assert calls == ["--help", "--help"]

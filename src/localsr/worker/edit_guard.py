@@ -70,7 +70,8 @@ def probe(args) -> int:
             args,
             env=native_environment(),
             creationflags=0x08000000 if os.name == "nt" else 0,
-            timeout=20 if args[1] == "--list-devices" else 5,
+            # Slightly below the caller's limit in image_edit.PROBE_TIMEOUTS (#160).
+            timeout=110 if args[1] == "--list-devices" else 80,
         ).returncode
     except subprocess.TimeoutExpired:
         return 124

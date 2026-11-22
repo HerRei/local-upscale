@@ -66,7 +66,7 @@ These apply to v0.5.0-beta. Please read them before starting a long job.
   memory does not guarantee that a SeedVR2 job fits; the FP8 download is smaller,
   but the working memory is not. Try a short clip at a modest output size first.
 - A source image, RAW photo or video frame may have at most 178,956,970 pixels
-  (about 179 megapixels). Larger inputs are refused before pixel conversion. The output has 16
+  (about 179 megapixels). The limit also applies to the RAW sensor size and video decoding. Larger inputs are refused before pixel conversion. The output has 16
   times as many pixels at ×4, so a source far below that limit can already be too large
   for the memory of the computer.
 - Frame interpolation adds processing and memory costs. Interpolating before the

@@ -1053,9 +1053,13 @@ exit 0
     )
     .unwrap();
     fs::set_permissions(&good_worker, fs::Permissions::from_mode(0o755)).unwrap();
-    let info =
-        crate::headless_smoke::run_worker_handshake(&good_worker, Duration::from_secs(10), true)
-            .unwrap();
+    let info = crate::headless_smoke::run_worker_handshake(
+        &good_worker,
+        Duration::from_secs(10),
+        true,
+        root.path(),
+    )
+    .unwrap();
     assert_eq!(info.engine_id, "localsr.pytorch-spandrel");
 
     let bad_worker = root.path().join("bad-worker");
@@ -1064,7 +1068,8 @@ exit 0
     assert!(crate::headless_smoke::run_worker_handshake(
         &bad_worker,
         Duration::from_secs(10),
-        true
+        true,
+        root.path()
     )
     .is_err());
 }

@@ -9,6 +9,7 @@ LocalSR's temporary directory, so no code from that program is loaded here.
 
 from __future__ import annotations
 
+import ntpath
 import os
 import re
 import shutil
@@ -32,6 +33,7 @@ from .media_codecs import (
     stream_copy_supported,
     video_stream_decodable,
 )
+from .pixel_budget import MAX_INPUT_PIXELS
 
 ENVIRONMENT_VARIABLE = "LOCALSR_EXTERNAL_FFMPEG"
 _VERSION_PATTERN = re.compile(r"^ffmpeg version (\S+)", re.MULTILINE)
@@ -85,15 +87,35 @@ class ExternalFFmpeg:
 
 def _windows_path_ffmpeg(path: str, current_directory: str) -> str | None:
     """Search absolute PATH entries without Windows' implicit current directory."""
-    current = os.path.normcase(os.path.realpath(current_directory))
-    for directory in path.split(os.pathsep):
-        if not directory or not os.path.isabs(directory):
+    current = ntpath.normcase(ntpath.realpath(current_directory))
+    for entry in path.split(";"):
+        directory = ntpath.expandvars(entry.strip().strip('"'))
+        drive, tail = ntpath.splitdrive(directory)
+        if not drive or not ntpath.isabs(directory):
             continue
-        if os.path.normcase(os.path.realpath(directory)) == current:
+        if drive.startswith("\\\\"):
+            parts = drive[2:].split("\\")
+            if len(parts) < 2 or not parts[0] or not parts[1] or parts[0] == ".":
+                continue
+            if parts[0] == "?":
+                if parts[1].upper() == "UNC":
+                    if len(parts) != 4 or not parts[2] or not parts[3]:
+                        continue
+                elif not (
+                    len(parts) == 2
+                    and len(parts[1]) == 2
+                    and parts[1][0].isascii()
+                    and parts[1][0].isalpha()
+                    and parts[1][1] == ":"
+                    and tail.startswith(("\\", "/"))
+                ):
+                    continue
+        directory = ntpath.realpath(directory)
+        if ntpath.normcase(directory) == current:
             continue
         for suffix in (".exe", ".com", ".bat", ".cmd"):
-            candidate = os.path.join(directory, "ffmpeg" + suffix)
-            if os.path.isfile(candidate):
+            candidate = ntpath.realpath(ntpath.join(directory, "ffmpeg" + suffix))
+            if ntpath.isfile(candidate):
                 return candidate
     return None
 
@@ -260,7 +282,9 @@ def plan_source(path: str, container: str = "mkv", *, decode_audio: bool = False
     require conversion because they cannot be stream-copied directly.
     """
     try:
-        source = av.open(path, options={"protocol_whitelist": "file"})
+        source = av.open(
+            path, options={"protocol_whitelist": "file", "max_pixels": str(MAX_INPUT_PIXELS)}
+        )
     except av.FFmpegError:
         if Path(path).is_file():
             return SourcePlan(False, True)
