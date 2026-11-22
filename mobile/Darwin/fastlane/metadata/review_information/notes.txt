@@ -13,4 +13,4 @@ How to test (no setup needed):
 
 The increased-memory-limit entitlement is used only for the optional "Full 4x" setting, which upscales 12 MP photos to 48 MP on phones with enough memory.
 
-A screen recording on a physical iPhone is attached to our reply in App Review.
+A screen recording on a physical iPhone (iPhone 11 Pro, iOS 27.2.1) is attached. The one-time chip check had already run on that phone, and the recording shows the main flow; the share extension works as described in step 3.
