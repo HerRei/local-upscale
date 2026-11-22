@@ -51,5 +51,6 @@ Run `tools/export_models.py` to export models and `tools/export_models.py --chec
 
 - The version and build number are in `Skip.env` (`MARKETING_VERSION`, `CURRENT_PROJECT_VERSION`). Raise the build number for every upload.
 - iOS 1.0.0 is iPhone only, with iOS 27 as the minimum. iPad support can't be removed again after it ships, so it comes in a later version.
+- The tablet tier (the iPad and Android tablet layout and the larger tablet models in `Models/ios-tablet` and `Models/android-tablet`) is a paused idea: the code stays, but 1.0 builds don't bundle it. On Android, `-PlocalsrTablet=true` bundles the tablet models again; without them a tablet gets the phone layout.
 - Store texts, the privacy answers ("Data Not Collected"), the age rating and the review notes are in `Darwin/fastlane/metadata/`; Google Play texts are in `Android/fastlane/metadata/`.
 - To archive: open `Project.xcworkspace`, pick the scheme "LocalSR App" and "Any iOS Device", then Product → Archive. For a command-line Release build, set `SKIP_ACTION=none`, or Skip also tries to build and launch the Android app.

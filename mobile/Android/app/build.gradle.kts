@@ -12,7 +12,10 @@ skip {
 val modelsDir = projectDir.resolve("../../Models")
 val stageModels = tasks.register<Sync>("stageLocalsrModels") {
     from(modelsDir.resolve("android")) { include("*.tflite") }
-    from(modelsDir.resolve("android-tablet")) { include("*.tflite"); into("tablet") }
+    // The tablet tier (Models/android-tablet) is a paused idea: set -PlocalsrTablet=true to bundle it.
+    if (providers.gradleProperty("localsrTablet").orNull == "true") {
+        from(modelsDir.resolve("android-tablet")) { include("*.tflite"); into("tablet") }
+    }
     from(modelsDir) { include("probe.png", "NOTICE.txt") }
     into(layout.buildDirectory.dir("localsr-assets"))
 }
@@ -20,8 +23,8 @@ val stageModels = tasks.register<Sync>("stageLocalsrModels") {
 tasks.matching { it.name != "stageLocalsrModels" && (it.name == "preBuild" || it.name.contains("Assets") || it.name.contains("lint", ignoreCase = true)) }.configureEach {
     dependsOn(stageModels)
 }
-// A release must include the tablet models; Models/android-tablet is git-ignored, so a fresh clone
-// would otherwise build an APK without them. Debug builds stay possible without the models.
+// With -PlocalsrTablet=true a release must include the tablet models; Models/android-tablet is
+// git-ignored, so a fresh clone would otherwise build a tablet APK without them.
 val checkTabletModels = tasks.register("checkTabletModels") {
     val tabletDir = modelsDir.resolve("android-tablet")
     val expected = listOf("fast", "best", "nomos_realplksr", "denoise_realplksr", "fbcnn", "anime_esrgan", "nomos_span", "span48")
@@ -36,7 +39,7 @@ val checkTabletModels = tasks.register("checkTabletModels") {
         }
     }
 }
-tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+tasks.matching { it.name == "preReleaseBuild" && providers.gradleProperty("localsrTablet").orNull == "true" }.configureEach {
     dependsOn(checkTabletModels)
 }
 

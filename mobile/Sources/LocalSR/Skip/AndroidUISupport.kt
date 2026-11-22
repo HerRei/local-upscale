@@ -283,7 +283,17 @@ object AndroidUISupport {
     }
 
     fun isTablet(context: Context): Boolean {
-        return context.resources.configuration.smallestScreenWidthDp >= 600
+        // The tablet layout needs the tablet models; 1.0 ships for phones only, so a tablet
+        // gets the phone layout unless a build bundles them (assets/tablet).
+        return context.resources.configuration.smallestScreenWidthDp >= 600 && bundlesTabletModels(context)
+    }
+
+    fun bundlesTabletModels(context: Context): Boolean {
+        return try {
+            context.assets.list("tablet")?.any { it.endsWith(".tflite") } == true
+        } catch (e: java.io.IOException) {
+            false
+        }
     }
 
     fun pasteImageUriStrings(context: Context): List<String> {
