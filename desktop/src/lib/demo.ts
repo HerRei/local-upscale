@@ -78,6 +78,13 @@ export function demoSnapshot(): AppSnapshot {
       edit_max_dimension: 512,
       edit_steps: 40,
       edit_seed: 42,
+      custom_edit_model: {
+        family: '',
+        diffusion_path: '',
+        text_encoder_path: '',
+        vision_path: '',
+        vae_path: '',
+      },
     },
     recipes: [],
     capabilities: {
@@ -126,6 +133,6 @@ export function demoSnapshot(): AppSnapshot {
       hardware_note: '',
     },
     latest_benchmark: null,
-    edit: { models: structuredClone(editModels), runtime_path: '' },
+    edit: { models: structuredClone(editModels), runtime_path: '', custom_model: null },
   };
 }

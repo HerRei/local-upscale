@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 import rawModels from '../../../src/localsr/core/edit_catalog.json';
 import { demoSnapshot } from './demo';
 import {
+  CUSTOM_EDIT_FAMILIES,
   EDIT_GIB,
+  customEditFamilySpec,
   editDevice,
   editDimensions,
+  editFamilyLabel,
   editFitFor,
   editHardwareLabel,
   editPeakEstimate,
@@ -92,5 +95,25 @@ describe('Edit helpers', () => {
     expect(editDimensions(4000, 3000, 512)).toEqual([512, 384]);
     expect(editDimensions(300, 200, 512)).toEqual([288, 192]);
     expect(editDimensions(0, 0, 512)).toEqual([32, 32]);
+  });
+
+  it('lists custom edit families with their file roles and default sampler settings', () => {
+    expect(CUSTOM_EDIT_FAMILIES.map((item) => item.id)).toEqual([
+      'qwen-image-edit-2511',
+      'qwen-image-2.1',
+      'flux2-klein',
+    ]);
+    expect(customEditFamilySpec('qwen-image-2.1')).toMatchObject({
+      needsVision: true,
+      defaultSteps: 40,
+      cfgScale: 6,
+    });
+    expect(customEditFamilySpec('flux2-klein')).toMatchObject({
+      needsVision: false,
+      defaultSteps: 4,
+      cfgScale: 1,
+    });
+    expect(editFamilyLabel('qwen-image-2.1')).toBe('Qwen Image 2.1');
+    expect(editFamilyLabel('flux2-klein')).toBe('FLUX.2 klein');
   });
 });

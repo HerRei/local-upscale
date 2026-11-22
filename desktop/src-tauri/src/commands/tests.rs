@@ -3553,3 +3553,116 @@ fn the_target_of_a_last_output_that_became_a_link_is_not_a_result() {
         .is_empty());
     assert!(state.grants.check_media_input(&private).is_err());
 }
+
+#[cfg(unix)]
+#[test]
+fn custom_edit_model_requires_grants_checks_sd_cli_and_persists_paths_in_place() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(directory.path()).unwrap();
+    let paths = AppPaths::under(&root.join("app"));
+    let state = AppState::from_paths(paths.clone()).unwrap();
+
+    let diff = root.join("custom-diff.gguf");
+    let te = root.join("custom-te.gguf");
+    let vae = root.join("custom-vae.safetensors");
+    for file in [&diff, &te, &vae] {
+        fs::write(file, b"gguf").unwrap();
+    }
+    let sd_cli = root.join("sd-cli");
+    fs::write(
+        &sd_cli,
+        "#!/bin/sh\necho '[INFO] Version: Flux.2 klein '\necho '[VERBOSE] model metadata validated'\n",
+    )
+    .unwrap();
+    let mut perms = fs::metadata(&sd_cli).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&sd_cli, perms).unwrap();
+    *lock(&state.edit_runtime).unwrap() = sd_cli.to_string_lossy().into_owned();
+
+    let custom = crate::types::CustomEditModel {
+        family: "flux2-klein".into(),
+        diffusion_path: diff.to_string_lossy().into_owned(),
+        text_encoder_path: te.to_string_lossy().into_owned(),
+        vision_path: String::new(),
+        vae_path: vae.to_string_lossy().into_owned(),
+    };
+
+    // Un-granted files cannot be saved or persisted.
+    assert!(save_custom_edit_model_checked(&state, custom.clone(), "").is_err());
+
+    state.grants.grant_model_file(&diff);
+    state.grants.grant_model_file(&te);
+    state.grants.grant_model_file(&vae);
+    save_custom_edit_model_checked(&state, custom.clone(), "").unwrap();
+
+    let snap = state.snapshot().unwrap();
+    assert_eq!(snap.settings.edit_model_id, "__custom__");
+    assert_eq!(snap.settings.custom_edit_model, custom);
+    assert_eq!(
+        snap.edit.custom_model.as_ref().unwrap().family,
+        "flux2-klein"
+    );
+
+    // Persisted custom edit files remain granted after reload and can queue an edit job.
+    let reloaded = AppState::from_paths(paths).unwrap();
+    *lock(&reloaded.edit_runtime).unwrap() = sd_cli.to_string_lossy().into_owned();
+    lock(&reloaded.runtime).unwrap().worker = "ready".into();
+    *lock(&reloaded.engine).unwrap() = Some(crate::types::EngineInfo {
+        protocol_version: 1,
+        minimum_protocol_version: 1,
+        engine_id: "test".into(),
+        engine_version: "1".into(),
+        features: vec!["image_edit".into()],
+        model_formats: vec![],
+        video_engines: vec![],
+    });
+    lock(&reloaded.capabilities)
+        .unwrap()
+        .devices
+        .push(crate::types::DeviceInfo {
+            id: "mps".into(),
+            device_type: "mps".into(),
+            name: "Apple GPU".into(),
+            ..Default::default()
+        });
+    let photo = root.join("photo.png");
+    fs::write(&photo, b"png").unwrap();
+    reloaded.grants.grant_media_file(&photo);
+    {
+        let db = lock(&reloaded.database).unwrap();
+        db.insert_media("m1", photo.to_str().unwrap(), "photo.png", "image")
+            .unwrap();
+        db.update_media_probe(
+            photo.to_str().unwrap(),
+            "image",
+            512,
+            512,
+            1,
+            0.0,
+            0.0,
+            "",
+            "",
+            "",
+            false,
+        )
+        .unwrap();
+    }
+    start_edit_checked(
+        &reloaded,
+        crate::editing::StartEditInput {
+            media_id: "m1".into(),
+            model_id: "__custom__".into(),
+            prompt: "Add snow".into(),
+            runtime_path: String::new(),
+            device: "mps".into(),
+            max_dimension: 512,
+            steps: 4,
+            seed: 42,
+            accepted_terms: false,
+            output_directory: String::new(),
+        },
+    )
+    .unwrap();
+}

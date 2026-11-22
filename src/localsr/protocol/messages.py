@@ -107,6 +107,8 @@ class EditJobRequest:
     accepted_terms: bool = False
     scratch_directory: str | None = None
     output_temporary_directory: str | None = None
+    family: str = ""
+    custom_files: dict[str, str] | None = None
 
     def to_json(self) -> str:
         return json.dumps({"type": "edit_job_request", "data": asdict(self)})

@@ -23,6 +23,7 @@ it('redacts private paths, media filenames, contacts, URLs and tokens', () => {
       ].join('.'),
     'Could not decode holiday.jpg',
     'Could not open "my vacation.heic"',
+    'Could not load my-private-model.gguf or "secret_vae.safetensors"',
   ];
   const result = redactDiagnostics(JSON.stringify({ lines: cases }));
   for (const secret of [
@@ -37,6 +38,8 @@ it('redacts private paths, media filenames, contacts, URLs and tokens', () => {
     'vacation',
     'photo',
     'video',
+    'my-private-model',
+    'secret_vae',
     'alice@example',
     'secret=',
     'abcdef1234567890',

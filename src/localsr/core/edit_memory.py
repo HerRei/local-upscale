@@ -6,11 +6,14 @@ swapping to discover capacity, or increase of the macOS working-set limit.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from localsr.core.disk_space import format_size
 
 GIB = 1024**3
+MAC_TIERS = (16, 24, 32, 36, 48, 64, 96, 128)
+GPU_TIERS = (8, 12, 16, 20, 24, 32, 48)
 
 
 @dataclass(frozen=True)
@@ -81,6 +84,33 @@ def estimate_edit_memory(model: dict, unified: bool, limit: int) -> int:
     conditioning = sizes.get("text_encoder", 0) + sizes.get("vision", 0)
     sampling = sizes.get("vae", 0) + activations + (sizes["diffusion"] if unified else 0)
     return int(max(conditioning, sampling) * 1.1)
+
+
+def minimum_unified_memory_gb(model: dict) -> int:
+    """Smallest Mac memory size (in GiB) whose idle headroom admits a 512 px edit."""
+    diffusion = next((f["size_bytes"] for f in model["files"] if f["role"] == "diffusion"), 0)
+    vae = next((f["size_bytes"] for f in model["files"] if f["role"] == "vae"), 0)
+    needed = estimate_edit_memory(model, True, 512)
+    sampling = diffusion + vae + activation_memory(True, 512)
+    for tier in MAC_TIERS:
+        if (
+            needed + reserve_for(tier * GIB, True) <= 0.70 * tier * GIB
+            and sampling <= 0.60 * tier * GIB
+        ):
+            return tier
+    return max(
+        MAC_TIERS[-1],
+        math.ceil(max((needed + 2 * GIB) / 0.70, sampling / 0.60, needed / 0.60) / GIB),
+    )
+
+
+def minimum_vram_gb(model: dict) -> int:
+    """Smallest dedicated GPU memory size (in GiB) that holds the diffusion weights."""
+    diffusion = next((f["size_bytes"] for f in model["files"] if f["role"] == "diffusion"), 0)
+    for tier in GPU_TIERS:
+        if diffusion <= 0.87 * tier * GIB:
+            return tier
+    return max(GPU_TIERS[-1], math.ceil(diffusion / (0.87 * GIB)))
 
 
 def _sysctl_int(name: str) -> int | None:
@@ -156,7 +186,10 @@ def plan_edit(model: dict, memory: EditMemory, max_dimension: int = 512) -> Edit
     reserve = reserve_for(memory.total_ram, memory.unified)
     limit = min(1024, max_dimension)
     if memory.unified:
-        if memory.total_ram < model["min_unified_memory_gb"] * GIB:
+        min_unified = model.get("min_unified_memory_gb")
+        if min_unified is None:
+            min_unified = minimum_unified_memory_gb(model)
+        if memory.total_ram < min_unified * GIB:
             raise MemoryError("Choose a smaller editing model for this Mac.")
         if memory.total_ram < 36 * GIB:
             limit = min(limit, 512)
@@ -165,7 +198,10 @@ def plan_edit(model: dict, memory: EditMemory, max_dimension: int = 512) -> Edit
     else:
         # Drivers may report a little less than the card's nominal capacity.
         capacity = memory.gpu_total + 256 * 1024**2
-        if capacity < model["min_vram_gb"] * GIB:
+        min_vram = model.get("min_vram_gb")
+        if min_vram is None:
+            min_vram = minimum_vram_gb(model)
+        if capacity < min_vram * GIB:
             raise MemoryError("Choose a smaller editing model for this GPU.")
         if capacity < 12 * GIB:
             limit = min(limit, 512)

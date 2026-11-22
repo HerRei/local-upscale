@@ -148,6 +148,7 @@ impl CrashReport {
                 }
                 let model = match settings.task.as_str() {
                     "video" => settings.selected_video_model_id.as_str(),
+                    "edit" if settings.edit_model_id == "__custom__" => "custom",
                     "edit" => settings.edit_model_id.as_str(),
                     _ if settings.selected_model_id.is_empty()
                         && !settings.custom_model_path.is_empty() =>
@@ -207,6 +208,11 @@ fn is_media_ext(ext: &str) -> bool {
             | "nef"
             | "cr2"
             | "cr3"
+            | "gguf"
+            | "safetensors"
+            | "pth"
+            | "pt"
+            | "ckpt"
     )
 }
 
@@ -648,6 +654,7 @@ mod tests {
             "bearer SGVsbG8gd29ybGQgdGhpcyBpcyBhIHRlc3Q=",
             jwt.as_str(),
             "Could not decode holiday.jpg",
+            "Could not load my-private-qwen21.gguf or secret_vae.safetensors",
         ] {
             let result = redact(text);
             for secret in [
@@ -661,6 +668,8 @@ mod tests {
                 "holiday",
                 "photo",
                 "video",
+                "private-qwen21",
+                "secret_vae",
                 "alice@example",
                 "secret=",
                 "abcdef1234567890",

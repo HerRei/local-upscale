@@ -3306,6 +3306,61 @@ input[type='number'],
 .list-more:hover {
   color: var(--text);
 }
+.custom-edit-link {
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--row-divider);
+  color: var(--accent-text, var(--text));
+  font-weight: 500;
+  cursor: pointer;
+}
+.modal.custom-edit-modal {
+  width: min(520px, calc(100vw - 40px));
+}
+.custom-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px 0;
+}
+.custom-edit-meta {
+  margin: 0;
+  color: var(--secondary);
+  font-size: calc(11px * var(--ui-scale));
+}
+.custom-edit-files {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.custom-edit-file {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--recess);
+}
+.custom-edit-file-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.custom-edit-role {
+  font-size: calc(12px * var(--ui-scale));
+  font-weight: 500;
+  color: var(--text);
+}
+.custom-edit-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(11px * var(--ui-scale));
+  color: var(--secondary);
+}
 .row .right {
   color: var(--secondary);
   font-size: calc(11px * var(--ui-scale));

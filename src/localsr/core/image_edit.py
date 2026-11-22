@@ -20,13 +20,37 @@ from PIL import Image, ImageOps
 
 from localsr.core.child_processes import native_environment, stop_process, track
 from localsr.core.disk_space import edit_bytes, require_room
-from localsr.core.edit_memory import GIB, plan_edit, read_edit_memory
+from localsr.core.edit_memory import (
+    GIB,
+    minimum_unified_memory_gb,
+    minimum_vram_gb,
+    plan_edit,
+    read_edit_memory,
+)
 from localsr.core.image_io import open_photo
 from localsr.core.output_publish import publish_output, require_output_name
 from localsr.protocol.messages import JobCompleted, ProgressUpdate, StageStarted
 
 CATALOG_PATH = Path(__file__).with_name("edit_catalog.json")
 REQUIRED_FLAGS = ("--max-vram", "--mmap", "--model-args", "--backend", "--vae-tiling")
+CUSTOM_EDIT_MODEL_ID = "__custom__"
+CUSTOM_EDIT_FAMILIES: dict[str, dict] = {
+    "qwen-image-edit-2511": {
+        "roles": ("diffusion", "text_encoder", "vision", "vae"),
+        "default_steps": 40,
+        "cfg_scale": 2.5,
+    },
+    "qwen-image-2.1": {
+        "roles": ("diffusion", "text_encoder", "vision", "vae"),
+        "default_steps": 40,
+        "cfg_scale": 6.0,
+    },
+    "flux2-klein": {
+        "roles": ("diffusion", "text_encoder", "vae"),
+        "default_steps": 4,
+        "cfg_scale": 1.0,
+    },
+}
 
 
 def probe_runtime(runtime: Path, option: str):
@@ -83,8 +107,52 @@ def edit_catalog() -> list[dict]:
     return json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
 
 
+def custom_edit_model(data: dict) -> dict:
+    """Build a model descriptor from the user's local files and their real sizes."""
+    family = str(data.get("family") or "")
+    spec = CUSTOM_EDIT_FAMILIES.get(family)
+    if spec is None:
+        raise ValueError("Unsupported editing model family.")
+    raw_files = data.get("custom_files")
+    if not isinstance(raw_files, dict):
+        raise ValueError("Choose all required editing model files first.")
+    files = []
+    for role in spec["roles"]:
+        raw_path = raw_files.get(role)
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise ValueError("Choose all required editing model files first.")
+        path = Path(raw_path)
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"The custom {role.replace('_', ' ')} file is missing. Choose your edit model files again."
+            )
+        size_bytes = path.stat().st_size
+        if size_bytes <= 0:
+            raise ValueError(f"The custom {role.replace('_', ' ')} file is empty.")
+        files.append(
+            {"role": role, "path": str(path), "filename": path.name, "size_bytes": size_bytes}
+        )
+    model = {
+        "model_id": CUSTOM_EDIT_MODEL_ID,
+        # Never expose custom filenames or paths in job labels or crash reports.
+        "name": "Your edit model",
+        "family": family,
+        "quantization": "Custom",
+        "files": files,
+        "default_steps": spec["default_steps"],
+        "cfg_scale": spec["cfg_scale"],
+        "terms_acceptance_required": False,
+    }
+    model["min_unified_memory_gb"] = minimum_unified_memory_gb(model)
+    model["min_vram_gb"] = minimum_vram_gb(model)
+    return model
+
+
 def validate_request(data: dict) -> dict:
-    model = next((m for m in edit_catalog() if m["model_id"] == data.get("model_id")), None)
+    if data.get("model_id") == CUSTOM_EDIT_MODEL_ID:
+        model = custom_edit_model(data)
+    else:
+        model = next((m for m in edit_catalog() if m["model_id"] == data.get("model_id")), None)
     if model is None:
         raise ValueError("Unknown editing model.")
     prompt = data.get("prompt", "")
@@ -181,6 +249,21 @@ class EditProgress:
         elif self.phase == 5 and total:
             label = f"Finishing the image · part {done} of {total}"
         return percentage, label
+
+
+def verify_custom_files(model: dict, progress=None) -> dict[str, Path]:
+    """Verify the user's own model files stay present in place without copying or catalog hashes."""
+    paths = {}
+    for entry in model["files"]:
+        path = Path(entry["path"])
+        if not path.is_file() or path.stat().st_size <= 0:
+            raise FileNotFoundError(
+                f"The custom {entry['role'].replace('_', ' ')} file is missing. Choose your edit model files again."
+            )
+        paths[entry["role"]] = path
+    if progress is not None:
+        progress(1.0)
+    return paths
 
 
 def verify_bundle(
@@ -296,6 +379,8 @@ def build_edit_command(
     ]
     if model["family"] == "qwen-image-edit-2511":
         args += ["--flow-shift", "3", "--model-args", "qwen_image_zero_cond_t=true"]
+    elif model["family"] == "qwen-image-2.1":
+        args += ["--model-args", "qwen_image_2_1_prefix_cache=false"]
     # FLUX.2 klein is distilled: guidance 1.0, a handful of steps, no model arguments.
     return args
 
@@ -343,7 +428,11 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
         tracker.checked(fraction)
         report()
 
-    files = verify_bundle(model, Path(data["bundle_dir"]), cancel, checked)
+    files = (
+        verify_custom_files(model, checked)
+        if model["model_id"] == CUSTOM_EDIT_MODEL_ID
+        else verify_bundle(model, Path(data["bundle_dir"]), cancel, checked)
+    )
     tracker.enter(1)
     # Re-admit after the potentially long checksum pass, without trusting stale free RAM.
     initial = sampler(device)

@@ -140,6 +140,13 @@ const api = vi.hoisted(() => ({
   startEdit: vi.fn(async () => undefined),
   openEditLink: vi.fn(async () => undefined),
   chooseEditRuntime: vi.fn(async (): Promise<string | null> => null),
+  chooseEditModelFile: vi.fn(
+    async (
+      _role: 'diffusion' | 'text_encoder' | 'vision' | 'vae',
+    ): Promise<{ path: string; size_bytes: number; detected_family?: string | null } | null> =>
+      null,
+  ),
+  saveCustomEditModel: vi.fn(async () => undefined),
   saveRecipe: vi.fn(async (_recipe: Recipe) => undefined),
   deleteRecipe: vi.fn(async () => undefined),
   updateStatus: vi.fn(async () => ({
@@ -529,6 +536,114 @@ describe('Edit task', () => {
     expect(within(dialog).getByText('48 GB memory')).toBeTruthy();
     await user.click(within(dialog).getByRole('button', { name: 'Remove from this computer' }));
     expect(api.removeModel).toHaveBeenCalledWith('qwen_edit_2511_q8_0');
+  });
+
+  it('lets the user configure, check and save their own edit model with family roles and defaults', async () => {
+    const snapshot = editSnapshot(32);
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Edit$/);
+    await user.click(screen.getByRole('button', { name: 'Change the edit model' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: 'Use my own edit model…' }));
+
+    const modal = screen.getByRole('dialog', { name: 'Use your own edit model' });
+    expect(within(modal).getByText(/responsible for the model's licence/i)).toBeTruthy();
+
+    // Switching to FLUX.2 klein hides Vision projector and shows 4 steps / CFG 1.
+    const familySelect = within(modal).getByLabelText('Model family') as HTMLSelectElement;
+    await user.selectOptions(familySelect, 'flux2-klein');
+    expect(within(modal).queryByText('Vision projector')).toBeNull();
+    expect(within(modal).getByText('Defaults: 4 steps, CFG 1')).toBeTruthy();
+
+    // Picking a Qwen 2.1 GGUF auto-detects the family and shows Vision projector + CFG 6.
+    api.chooseEditModelFile
+      .mockResolvedValueOnce({
+        path: '/local/qwen21.gguf',
+        size_bytes: 12 * 1024 ** 3,
+        detected_family: 'qwen-image-2.1',
+      })
+      .mockResolvedValueOnce({ path: '/local/te.gguf', size_bytes: 4 * 1024 ** 3 })
+      .mockResolvedValueOnce({ path: '/local/mmproj.gguf', size_bytes: 1024 ** 3 })
+      .mockResolvedValueOnce({ path: '/local/vae.safetensors', size_bytes: 256 * 1024 ** 2 });
+
+    const chooseButtons = () => within(modal).getAllByRole('button', { name: 'Choose…' });
+    await user.click(chooseButtons()[0]);
+    expect(familySelect.value).toBe('qwen-image-2.1');
+    expect(within(modal).getByText('Detected Qwen Image 2.1 from GGUF metadata.')).toBeTruthy();
+    expect(within(modal).getByText('Vision projector')).toBeTruthy();
+    expect(within(modal).getByText('Defaults: 40 steps, CFG 6')).toBeTruthy();
+
+    // Pick text encoder, vision projector, and VAE.
+    for (let i = 0; i < 3; i += 1) {
+      await user.click(within(modal).getAllByRole('button', { name: 'Choose…' })[0]);
+    }
+
+    // A failed sd-cli load check keeps the dialog open and refuses with a clear error.
+    api.saveCustomEditModel.mockRejectedValueOnce(
+      'sd-cli could not load these model files: invalid VAE',
+    );
+    await user.click(within(modal).getByRole('button', { name: 'Check and save' }));
+    expect(within(modal).getByRole('alert').textContent).toContain('invalid VAE');
+    expect(screen.getByRole('dialog', { name: 'Use your own edit model' })).toBeTruthy();
+
+    // A passing load check saves, refreshes the snapshot, and selects the custom edit model.
+    const savedSnapshot = structuredClone(snapshot);
+    savedSnapshot.settings.task = 'edit';
+    savedSnapshot.settings.edit_model_id = '__custom__';
+    savedSnapshot.settings.edit_steps = 0;
+    savedSnapshot.settings.custom_edit_model = {
+      family: 'qwen-image-2.1',
+      diffusion_path: '/local/qwen21.gguf',
+      text_encoder_path: '/local/te.gguf',
+      vision_path: '/local/mmproj.gguf',
+      vae_path: '/local/vae.safetensors',
+    };
+    savedSnapshot.edit.custom_model = {
+      model_id: '__custom__',
+      name: 'Your edit model',
+      family: 'qwen-image-2.1',
+      quantization: 'Custom',
+      files: [
+        {
+          role: 'diffusion',
+          filename: 'diffusion',
+          size_bytes: 12 * 1024 ** 3,
+          sha256: '',
+          download_url: '',
+        },
+        {
+          role: 'text_encoder',
+          filename: 'text_encoder',
+          size_bytes: 4 * 1024 ** 3,
+          sha256: '',
+          download_url: '',
+        },
+        { role: 'vision', filename: 'vision', size_bytes: 1024 ** 3, sha256: '', download_url: '' },
+        { role: 'vae', filename: 'vae', size_bytes: 256 * 1024 ** 2, sha256: '', download_url: '' },
+      ],
+      min_unified_memory_gb: 32,
+      min_vram_gb: 16,
+      default_steps: 40,
+      cfg_scale: 6,
+      license_name: 'Your own file',
+      license_url: '',
+      source_url: '',
+      terms_acceptance_required: false,
+      automated_download_allowed: false,
+      installed: true,
+      total_size_bytes: 17 * 1024 ** 3 + 256 * 1024 ** 2,
+    };
+    api.saveCustomEditModel.mockResolvedValueOnce(undefined);
+    api.refreshSnapshot.mockResolvedValue(savedSnapshot);
+
+    await user.click(within(modal).getByRole('button', { name: 'Check and save' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Use your own edit model' })).toBeNull(),
+    );
+    expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull();
+    const stages = screen.getByRole('list', { name: 'Stages' });
+    expect(within(stages).getByText('Qwen Image 2.1')).toBeTruthy();
+    expect(within(stages).getByText('Custom')).toBeTruthy();
   });
 });
 

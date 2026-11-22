@@ -632,6 +632,9 @@ function hostScript(scenario: Scenario): void {
       case 'choose_benchmark_export':
       case 'choose_external_ffmpeg':
       case 'choose_edit_runtime':
+      case 'choose_edit_model_file':
+        return null;
+      case 'save_custom_edit_model':
         return null;
       case 'take_launch_intents':
         return [];

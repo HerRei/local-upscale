@@ -1,5 +1,5 @@
 const MEDIA_EXT_RE =
-  /\.(?:jpe?g|png|webp|tiff?|dng|heic|raw|mp4|mov|mkv|avi|webm|gif|bmp|arw|nef|cr2|cr3)$/i;
+  /\.(?:jpe?g|png|webp|tiff?|dng|heic|raw|mp4|mov|mkv|avi|webm|gif|bmp|arw|nef|cr2|cr3|gguf|safetensors|pth|pt|ckpt)$/i;
 
 function isMediaName(text: string): boolean {
   const trimmed = text.replace(/^[^A-Za-z0-9.]+|[^A-Za-z0-9.]+$/g, '');

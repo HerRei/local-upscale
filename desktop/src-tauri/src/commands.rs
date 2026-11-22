@@ -98,10 +98,40 @@ pub(crate) fn start_edit_checked(
             "This worker does not support editing. Update LocalSR.".into(),
         ));
     }
-    let model = crate::editing::catalog(&state.paths)?
-        .into_iter()
-        .find(|model| model.model_id == input.model_id)
-        .ok_or_else(|| AppError::Validation("Unknown editing model.".into()))?;
+    let (model, bundle_dir, custom_files) =
+        if input.model_id == crate::editing::CUSTOM_EDIT_MODEL_ID {
+            let custom = lock(&state.settings)?.custom_edit_model.clone();
+            for path in custom.non_empty_paths() {
+                state.grants.check_model_file(Path::new(path))?;
+            }
+            let model = crate::editing::custom_edit_model(&custom).ok_or_else(|| {
+                AppError::Validation("Choose your custom editing model files first.".into())
+            })?;
+            let mut files = serde_json::Map::new();
+            for file in &model.files {
+                let path = match file.role.as_str() {
+                    "diffusion" => &custom.diffusion_path,
+                    "text_encoder" => &custom.text_encoder_path,
+                    "vision" => &custom.vision_path,
+                    "vae" => &custom.vae_path,
+                    _ => "",
+                };
+                files.insert(file.role.clone(), json!(path));
+            }
+            (model, String::new(), Some(Value::Object(files)))
+        } else {
+            let model = crate::editing::catalog(&state.paths)?
+                .into_iter()
+                .find(|model| model.model_id == input.model_id)
+                .ok_or_else(|| AppError::Validation("Unknown editing model.".into()))?;
+            let bundle_dir = state
+                .paths
+                .model_root
+                .join(&model.family)
+                .to_string_lossy()
+                .into_owned();
+            (model, bundle_dir, None)
+        };
     crate::editing::validate(&input, &model).map_err(AppError::Validation)?;
     if !lock(&state.capabilities)?
         .devices
@@ -129,14 +159,19 @@ pub(crate) fn start_edit_checked(
         .unwrap_or_default()
         .to_string_lossy();
     let output = directory.join(format!("{stem}_localsr_edit_{}.png", &id[..8]));
-    let request = json!({"type": "edit_job_request", "data": {
+    let mut data = json!({
         "job_id": id, "image_path": media.path, "output_path": output.to_string_lossy(),
         "model_id": model.model_id,
-        "bundle_dir": state.paths.model_root.join(&model.family).to_string_lossy(),
+        "bundle_dir": bundle_dir,
         "runtime_path": runtime.to_string_lossy(), "prompt": input.prompt,
         "device": input.device, "max_dimension": input.max_dimension,
         "steps": input.steps, "seed": input.seed, "accepted_terms": input.accepted_terms,
-    }});
+    });
+    if let Some(files) = custom_files {
+        data["family"] = json!(model.family);
+        data["custom_files"] = files;
+    }
+    let request = json!({"type": "edit_job_request", "data": data});
     lock(&state.database)?.insert_job(&id, &media.id, &serde_json::to_string(&request)?)?;
     Ok(())
 }
@@ -416,6 +451,9 @@ pub(crate) fn save_settings_checked(state: &AppState, settings: UiSettings) -> A
             .grants
             .check_model_file(Path::new(&settings.custom_model_path))?;
     }
+    for path in settings.custom_edit_model.non_empty_paths() {
+        state.grants.check_model_file(Path::new(path))?;
+    }
     replace_settings(state, settings)
 }
 
@@ -435,16 +473,19 @@ fn replace_settings(state: &AppState, mut settings: UiSettings) -> AppResult<()>
 }
 
 fn reconcile_persisted_grants(state: &AppState) -> AppResult<()> {
-    let (output_directory, custom_model_path) = {
+    let (output_directory, custom_model_path, custom_edit_model) = {
         let current = lock(&state.settings)?;
         (
             current.output_directory.clone(),
             current.custom_model_path.clone(),
+            current.custom_edit_model.clone(),
         )
     };
     let recipes = lock(&state.recipes)?.clone();
     state.grants.reconcile_outputs(&output_directory);
-    state.grants.reconcile_models(&custom_model_path, &recipes);
+    state
+        .grants
+        .reconcile_models(&custom_model_path, &custom_edit_model, &recipes);
     Ok(())
 }
 
@@ -2547,6 +2588,100 @@ pub async fn choose_custom_model(
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct EditModelFilePick {
+    pub path: String,
+    pub size_bytes: u64,
+    pub detected_family: Option<String>,
+}
+
+/// Let the user pick one component file for a custom editing model.
+#[tauri::command]
+pub async fn choose_edit_model_file(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    role: String,
+) -> AppResult<Option<EditModelFilePick>> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let title = match role.as_str() {
+        "diffusion" => "Choose diffusion model",
+        "text_encoder" => "Choose text encoder",
+        "vision" => "Choose vision projector",
+        "vae" => "Choose VAE",
+        _ => return Err(AppError::Validation("Unknown edit model file role.".into())),
+    };
+    let dialog = app
+        .dialog()
+        .file()
+        .set_title(title)
+        .add_filter("Edit model weights", &["gguf", "safetensors"]);
+    let picked = tauri::async_runtime::spawn_blocking(move || dialog.blocking_pick_file())
+        .await
+        .map_err(|error| AppError::Config(format!("the file dialog failed: {error}")))?;
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|error| AppError::Validation(format!("that is not a file path: {error}")))?;
+    state.grants.grant_model_file(&path);
+    let size_bytes = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    let detected_family = if role == "diffusion" {
+        crate::editing::detect_gguf_edit_family(&path).map(str::to_owned)
+    } else {
+        None
+    };
+    Ok(Some(EditModelFilePick {
+        path: path.to_string_lossy().into_owned(),
+        size_bytes,
+        detected_family,
+    }))
+}
+
+pub(crate) fn save_custom_edit_model_checked(
+    state: &AppState,
+    custom: crate::types::CustomEditModel,
+    runtime_path: &str,
+) -> AppResult<()> {
+    crate::updates::ensure_not_installing(state)?;
+    if !lock(&state.runtime)?.active_job_id.is_empty() {
+        return Err(AppError::Validation(
+            "Finish or cancel the current queue before changing settings.".into(),
+        ));
+    }
+    validate_custom_edit_model(&custom)?;
+    for path in custom.non_empty_paths() {
+        state.grants.check_model_file(Path::new(path))?;
+    }
+    let runtime = edit_runtime(state, runtime_path)?;
+    crate::editing::verify_custom_edit_load(&runtime, &custom).map_err(AppError::Validation)?;
+    let mut updated = lock(&state.settings)?.clone();
+    updated.custom_edit_model = custom;
+    updated.edit_model_id = crate::editing::CUSTOM_EDIT_MODEL_ID.into();
+    updated.edit_steps = 0;
+    replace_settings(state, updated)
+}
+
+/// Verify a custom editing model with sd-cli and save its paths in settings.
+#[tauri::command]
+pub async fn save_custom_edit_model(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    custom: crate::types::CustomEditModel,
+    runtime_path: String,
+) -> AppResult<()> {
+    let state_arc = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _scheduler = lock(&state_arc.scheduler)?;
+        save_custom_edit_model_checked(&state_arc, custom, &runtime_path)
+    })
+    .await
+    .map_err(|error| AppError::Config(format!("the model check failed: {error}")))??;
+    emit_state_changed(&app);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn choose_benchmark_export(
     app: AppHandle,
@@ -3010,6 +3145,27 @@ fn validate_start(input: &StartBatchInput, state: &AppState) -> AppResult<()> {
     validate_system_outputs(input, &media)
 }
 
+fn validate_custom_edit_model(custom: &crate::types::CustomEditModel) -> AppResult<()> {
+    if !custom.family.is_empty() && crate::editing::find_family_spec(&custom.family).is_none() {
+        return Err(AppError::Validation(
+            "unsupported editing model family".into(),
+        ));
+    }
+    for path in [
+        custom.diffusion_path.as_str(),
+        custom.text_encoder_path.as_str(),
+        custom.vision_path.as_str(),
+        custom.vae_path.as_str(),
+    ] {
+        if path.len() > 4096 || path.contains('\0') {
+            return Err(AppError::Validation(
+                "the custom editing model path is invalid".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_settings(settings: &UiSettings) -> AppResult<()> {
     validate_fix_selections(&settings.fix_stages)?;
     if !matches!(settings.interface_scale, 100 | 110 | 125) {
@@ -3038,6 +3194,7 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
             "unsupported edit size, step count, seed or model".into(),
         ));
     }
+    validate_custom_edit_model(&settings.custom_edit_model)?;
     if !matches!(settings.quality.as_str(), "" | "quick" | "best" | "custom")
         || !matches!(settings.content.as_str(), "" | "photo" | "illustration")
         || settings.fixes.len() > 4

@@ -12,6 +12,7 @@ vi.mock('@tauri-apps/api/path', () => ({
 
 import {
   chooseCustomModel,
+  chooseEditModelFile,
   chooseEditRuntime,
   chooseExternalFFmpeg,
   chooseMediaFiles,
@@ -19,6 +20,7 @@ import {
   chooseOutputDirectory,
   exportBenchmark,
   listenForWorker,
+  saveCustomEditModel,
 } from './api';
 
 afterEach(() => {
@@ -61,6 +63,35 @@ it('asks the host to choose and grant the editing runtime', async () => {
   expect(invoke).toHaveBeenCalledWith('choose_edit_runtime');
   invoke.mockResolvedValueOnce(null);
   expect(await chooseEditRuntime()).toBeNull();
+});
+
+it('picks custom edit model files and asks the host to verify and save them', async () => {
+  (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+  invoke.mockResolvedValueOnce({
+    path: '/models/q21.gguf',
+    size_bytes: 1234,
+    detected_family: 'qwen-image-2.1',
+  });
+  expect(await chooseEditModelFile('diffusion')).toEqual({
+    path: '/models/q21.gguf',
+    size_bytes: 1234,
+    detected_family: 'qwen-image-2.1',
+  });
+  expect(invoke).toHaveBeenCalledWith('choose_edit_model_file', { role: 'diffusion' });
+
+  invoke.mockResolvedValueOnce(null);
+  const custom = {
+    family: 'qwen-image-2.1',
+    diffusion_path: '/models/q21.gguf',
+    text_encoder_path: '/models/te.gguf',
+    vision_path: '/models/mmproj.gguf',
+    vae_path: '/models/vae.safetensors',
+  };
+  await saveCustomEditModel(custom, '/engine/sd-cli');
+  expect(invoke).toHaveBeenCalledWith('save_custom_edit_model', {
+    custom,
+    runtimePath: '/engine/sd-cli',
+  });
 });
 
 it('asks the host to pick and grant media, output folders, checkpoints, and exports', async () => {

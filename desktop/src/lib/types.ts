@@ -88,9 +88,18 @@ export interface EditModel {
   total_size_bytes: number;
 }
 
+export interface CustomEditModel {
+  family: string;
+  diffusion_path: string;
+  text_encoder_path: string;
+  vision_path: string;
+  vae_path: string;
+}
+
 export interface EditSetup {
   models: EditModel[];
   runtime_path: string;
+  custom_model?: EditModel | null;
 }
 
 export interface StartEditInput {
@@ -358,6 +367,7 @@ export interface UiSettings {
   edit_max_dimension: number;
   edit_steps: number;
   edit_seed: number;
+  custom_edit_model?: CustomEditModel;
 }
 
 export interface VideoMemoryStatus {
