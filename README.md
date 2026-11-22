@@ -64,6 +64,20 @@ FBCNN, and each model shows its size, licence and source before you download it.
 
 ## Download
 
+### Which file do I need?
+
+| Computer | Download |
+|---|---|
+| Mac (M1 or newer) | `LocalSR-v0.5.0-beta-macOS-arm64.dmg` |
+| Windows, no graphics card or not sure | `LocalSR-v0.5.0-beta-Windows-CPU-x86_64.exe` |
+| Windows, AMD or Intel graphics | `LocalSR-v0.5.0-beta-Windows-DirectML-x86_64.exe` |
+| Windows, NVIDIA | `LocalSR-v0.5.0-beta-Windows-CUDA-x86_64.exe` and all `LocalSR-v0.5.0-beta-Windows-CUDA-x86_64.engine.tar.gz.part-*` files in the same folder |
+| Linux, no graphics card or Intel | `LocalSR-v0.5.0-beta-Linux-CPU-x86_64.AppImage` |
+| Linux, AMD | all `LocalSR-v0.5.0-beta-Linux-ROCm-x86_64.AppImage.part-*` files, joined |
+| Linux, NVIDIA | all `LocalSR-v0.5.0-beta-Linux-CUDA-x86_64.AppImage.part-*` files, joined |
+
+The other files (signatures, checksums, engine-payload.json and source archives) are for checking and updates. You do not need them to install.
+
 The [download page](https://herrei.github.io/localsr/download/) has the installers
 for each platform:
 
@@ -76,6 +90,9 @@ for each platform:
 - **Linux v0.5.0-beta:** x86-64 AppImages for CPU, AMD ROCm and NVIDIA CUDA.
   The CPU AppImage runs Intel graphics through OpenVINO once Intel's compute
   driver (`intel-opencl-icd`) is installed.
+
+The next CUDA edition needs an NVIDIA RTX 20 series or newer and driver 580 or
+newer. On Windows, older NVIDIA cards can use DirectML.
 
 On a Mac you can also install it with [Homebrew](https://brew.sh/):
 

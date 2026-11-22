@@ -22,6 +22,8 @@ Every 14 days `release-train.yml` opens a `Version X` PR made by
 `scripts/bump_version.py` ([dependency-updates.md](dependency-updates.md) has the
 rules). `bump_version.py X.Y.Z-beta` (or `--next`) does the same by hand. After the
 packages are live, `bump_version.py --mark-published` clears the candidate markers.
+Before publishing, use `python scripts/bump_version.py --published-notes` to prepare
+the release body without the candidate notice.
 
 Before building a candidate on the Mac:
 

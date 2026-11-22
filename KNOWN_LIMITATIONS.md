@@ -11,6 +11,8 @@ These apply to v0.5.0-beta. Please read them before starting a long job.
   labels it Labs), and
   DirectML's NAFNet denoising results still miss the accuracy tolerance. Intel XPU
   packages are held back; [Platforms](docs/platforms.md) explains why.
+- The next CUDA edition needs an NVIDIA RTX 20 series or newer and driver 580 or
+  newer. On Windows, older NVIDIA cards can use DirectML.
 - The CUDA and ROCm editions are several gigabytes and come in parts that must be
   downloaded into one folder (see the download page).
 - The macOS build is the most tested. The Windows and Linux packages pass the

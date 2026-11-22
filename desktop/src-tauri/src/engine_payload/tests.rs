@@ -432,9 +432,23 @@ fn rejects_corrupt_or_missing_parts_without_touching_previous_engine() {
         } else {
             fs::write(part, [0u8; 29]).unwrap();
         }
-        assert!(install(&manifest, root.path(), &destination).is_err());
+        let error = install(&manifest, root.path(), &destination).unwrap_err();
+        assert!(error.to_string().contains("cuda.part-0000"), "{error}");
         assert_eq!(fs::read(destination.join("old.exe")).unwrap(), b"keep");
     }
+}
+
+#[test]
+fn reports_all_missing_and_wrong_size_parts() {
+    let root = tempfile::tempdir().unwrap();
+    let manifest = payload(root.path(), false, false);
+    fs::remove_file(root.path().join("cuda.part-0000")).unwrap();
+    fs::write(root.path().join("cuda.part-0001"), b"bad").unwrap();
+    let error = install(&manifest, root.path(), &root.path().join("engine"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("cuda.part-0000"), "{error}");
+    assert!(error.contains("cuda.part-0001"), "{error}");
 }
 
 #[test]
@@ -730,7 +744,7 @@ fn a_part_with_the_right_size_and_the_wrong_checksum_is_refused() {
         serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
     json["parts"][0]["sha256"] = "0".repeat(64).into();
     fs::write(&manifest, serde_json::to_vec(&json).unwrap()).unwrap();
-    assert_refused(&manifest, root.path(), "checksum mismatch");
+    assert_refused(&manifest, root.path(), "checksum mismatch: cuda.part-0000");
 }
 
 /// A part that grows after its size was checked is refused as exceeding the manifest.

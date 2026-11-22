@@ -64,6 +64,14 @@ def check(tag: str | None = None, root: Path = ROOT) -> str:
     public = base64.b64decode((root / plan["update_public_key"]).read_text().strip(), validate=True)
     if not public.startswith(b"untrusted comment: minisign public key"):
         raise ValueError("The beta public update key has an unexpected format")
+    notes = root / f"docs/releases/v{version}.md"
+    if not notes.is_file():
+        raise ValueError("Beta release notes are missing")
+    if (
+        any(t.get("package") == "published" for t in actual)
+        and "Release candidate, not published yet" in notes.read_text()
+    ):
+        raise ValueError("Published release notes still contain the candidate notice")
     for path, token in (
         ("README.md", f"v{version}"),
         ("CHANGELOG.md", f"## [{version}]"),
@@ -71,8 +79,6 @@ def check(tag: str | None = None, root: Path = ROOT) -> str:
     ):
         if token not in (root / path).read_text():
             raise ValueError(f"{path} does not identify the beta candidate")
-    if not (root / f"docs/releases/v{version}.md").is_file():
-        raise ValueError("Beta release notes are missing")
     return version
 
 
