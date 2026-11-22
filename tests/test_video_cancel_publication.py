@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -150,6 +151,8 @@ def test_frame_by_frame_job_cancelled_after_publication_reports_the_saved_output
             frames_processed=3,
             elapsed_seconds=1.0,
             inference_seconds=1.0,
+            partial=False,
+            kept_seconds=0.0,
         )
 
     _server, kinds, messages = _frame_by_frame_server(monkeypatch, tmp_path, run_then_cancel)
@@ -165,3 +168,53 @@ def test_frame_by_frame_job_cancelled_before_publication_is_cancelled(monkeypatc
 
     _server, kinds, _ = _frame_by_frame_server(monkeypatch, tmp_path, interrupted)
     assert "JobCancelled" in kinds and "VideoJobCompleted" not in kinds
+
+
+def test_streamed_system_stop_closes_input_and_publishes_partial(tmp_path, monkeypatch):
+    from fractions import Fraction
+
+    from localsr.core.video_io import TimedVideoFrame, _system_stream_export
+
+    calls = []
+    source = tmp_path / "source.mp4"
+    source.touch()
+
+    class FakeSystem:
+        def encode_frames(self, frames, final, **options):
+            assert options["cancel_event"] is None
+            assert options["audio"] is None
+            calls.append(len(list(frames)))
+            final.write_bytes(b"video")
+
+    def remux(video, audio, output, **options):
+        assert audio == source
+        assert options["force_audio_transcode"]
+        assert options["cut_packet_durations"]
+        output.write_bytes(video.read_bytes() + b"audio")
+        return True
+
+    monkeypatch.setattr(video_io, "_remux_source_streams", remux)
+    rgb = np.zeros((4, 4, 3), dtype=np.uint8)
+
+    def frames():
+        yield TimedVideoFrame(0, rgb, Fraction(0), Fraction(1, 2), Fraction(1, 2))
+        yield TimedVideoFrame(1, rgb, Fraction(1, 2), Fraction(1, 2), Fraction(1, 2))
+        raise InterruptedError("stopped")
+
+    result = _system_stream_export(
+        frames(),
+        tmp_path / "out.mp4",
+        system=FakeSystem(),
+        video_codec="hevc",
+        container_format="mp4",
+        crf=18,
+        fps=2,
+        audio_source=str(source),
+        cancel_event=threading.Event(),
+        temporary_directory=None,
+        keep_partial=True,
+        stage_callback=calls.append,
+    )
+    assert calls == ["partial_finalizing", 2]
+    assert result.endswith("out_partial_0m01s.mp4")
+    assert Path(result).read_bytes() == b"videoaudio"

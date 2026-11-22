@@ -1952,6 +1952,8 @@ class WorkerServer:
             VideoJobCompleted(
                 job_id=job_id,
                 output_path=result.output_path,
+                partial=result.partial,
+                kept_seconds=result.kept_seconds,
                 frames_processed=result.frames_processed,
                 elapsed_seconds=result.elapsed_seconds,
                 inference_seconds=result.inference_seconds,

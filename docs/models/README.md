@@ -90,3 +90,6 @@ TorchScript files are blocked by default. For files whose publisher you trust,
 tick **Allow this pickle-based checkpoint** in the app; on the command line, set
 `LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1`. Check your model's license, architecture,
 scale and colour assumptions before using it.
+If a checkpoint cannot be recognized, LocalSR reports when its keys suggest a
+MoSR or MoESR model that this version cannot load. Other unrecognized models
+show a general unsupported architecture message.

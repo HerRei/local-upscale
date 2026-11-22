@@ -130,3 +130,5 @@ These apply to v0.5.0-beta. Please read them before starting a long job.
 - Uninstalling the Store edition can delete its data folder, including settings
   and recipes. Back it up first; downloaded models live in the shared
   `LocalSR/models` folder and survive.
+
+- Stopping an H.264 or HEVC export that uses an FFV1 master discards the unfinished output. The streamed macOS system encoder can keep a partial file.

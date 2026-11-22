@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::{database::ScratchRecord, error::AppResult};
 
 pub const CANCEL_GRACE: Duration = Duration::from_secs(8);
+const PARTIAL_FINALIZE_GRACE: Duration = Duration::from_secs(600);
 
 /// Remove the scratch folders a killed host recorded for its unfinished jobs: it ended
 /// without cleaning up (a crash, a power loss) and left them with every partial frame.
@@ -82,6 +83,7 @@ pub struct Cancellation {
     /// When the first cancellation still pending was asked for; the engine is stopped
     /// when it does not answer within `CANCEL_GRACE`.
     pub requested_at: Option<Instant>,
+    partial_finalizing_at: Option<Instant>,
     /// The jobs a cancellation was asked for and that have not ended.
     requested: Vec<String>,
     pub resetting: bool,
@@ -98,6 +100,7 @@ impl Cancellation {
         }
         self.job_id = id.into();
         self.requested_at = None;
+        self.partial_finalizing_at = None;
         self.requested.clear();
         self.resetting = false;
         if message["type"] == "image_batch_request" {
@@ -208,7 +211,16 @@ impl Cancellation {
         self.requested.iter().any(|member| member == id)
     }
 
+    pub fn partial_finalizing(&mut self, id: &str, now: Instant) {
+        if self.is_cancelling(id) {
+            self.partial_finalizing_at.get_or_insert(now);
+        }
+    }
+
     pub fn expired(&self, now: Instant) -> bool {
+        if let Some(at) = self.partial_finalizing_at {
+            return now.duration_since(at) >= PARTIAL_FINALIZE_GRACE;
+        }
         !self.job_id.is_empty()
             && self
                 .requested_at
@@ -253,6 +265,21 @@ fn remove_folder(path: &std::path::Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn partial_finalization_has_its_own_bounded_deadline() {
+        let now = Instant::now();
+        let mut control = Cancellation {
+            job_id: "video".into(),
+            job_ids: vec!["video".into()],
+            ..Cancellation::default()
+        };
+        control.request("video", now);
+        control.partial_finalizing("video", now + Duration::from_secs(7));
+        control.partial_finalizing("video", now + Duration::from_secs(100));
+        assert!(!control.expired(now + CANCEL_GRACE));
+        assert!(control.expired(now + Duration::from_secs(607)));
+    }
 
     #[test]
     fn deadline_does_not_extend_on_repeated_cancel_or_target_the_next_job() {

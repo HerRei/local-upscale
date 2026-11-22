@@ -263,7 +263,12 @@ def patched_worker(monkeypatch, tmp_path, *, installed=True):
     def fake_video_job(**kwargs):
         captured.update(kwargs)
         return SimpleNamespace(
-            output_path="output.mp4", frames_processed=1, elapsed_seconds=1.0, inference_seconds=1.0
+            output_path="output.mp4",
+            frames_processed=1,
+            elapsed_seconds=1.0,
+            inference_seconds=1.0,
+            partial=False,
+            kept_seconds=0.0,
         )
 
     monkeypatch.setattr(rife_engine, "RifeSynthesizer", FakeRife)

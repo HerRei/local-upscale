@@ -877,6 +877,11 @@ fn handle_worker_envelope(
             | "benchmark_cancelled"
             | "benchmark_failed"
     );
+    if envelope.message_type == "video_stage_progress"
+        && string(&envelope.data, "stage") == "partial_finalizing"
+    {
+        cancellation.partial_finalizing(&job_id, Instant::now());
+    }
     // Once cancelling, late progress must not restore "Enhancing" or enable
     // controls. Measurements may still update while the GPU drains.
     if cancellation.is_cancelling(&job_id) && !terminal && envelope.message_type != "video_memory" {
@@ -1207,10 +1212,42 @@ fn wrong_output(state: &AppState, envelope: &WorkerEnvelope) -> AppResult<Option
     if requested.as_deref().map(Path::new) == Some(Path::new(&reported)) {
         return Ok(None);
     }
+    if kind == "video_job_completed"
+        && envelope.data.get("partial").and_then(Value::as_bool) == Some(true)
+        && requested
+            .as_deref()
+            .is_some_and(|path| partial_output(Path::new(path), Path::new(&reported)))
+    {
+        return Ok(None);
+    }
     let shown: String = reported.chars().take(256).collect();
     Ok(Some(format!(
         "{kind} for job {id} reports {shown:?}, which is not the output the host requested"
     )))
+}
+
+fn partial_output(requested: &Path, reported: &Path) -> bool {
+    if requested.parent() != reported.parent() || requested.extension() != reported.extension() {
+        return false;
+    }
+    let (Some(stem), Some(name)) = (
+        requested.file_stem().and_then(|s| s.to_str()),
+        reported.file_stem().and_then(|s| s.to_str()),
+    ) else {
+        return false;
+    };
+    let Some(duration) = name.strip_prefix(&format!("{stem}_partial_")) else {
+        return false;
+    };
+    let Some((minutes, seconds)) = duration.strip_suffix('s').and_then(|s| s.split_once('m'))
+    else {
+        return false;
+    };
+    !minutes.is_empty()
+        && minutes.bytes().all(|c| c.is_ascii_digit())
+        && seconds.len() == 2
+        && seconds.bytes().all(|c| c.is_ascii_digit())
+        && seconds.parse::<u8>().is_ok_and(|s| s < 60)
 }
 
 fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppResult<()> {
@@ -1857,7 +1894,24 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             let output = string(data, "output_path");
             // What the user should know about the finished job, such as a skipped fix;
             // kept with the job and on the status line.
-            let notes = string(data, "notes");
+            let mut notes = string(data, "notes");
+            let partial = data
+                .get("partial")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let stopped = if partial {
+                let duration = seconds(data, "kept_seconds").floor() as u64;
+                format!("Stopped, kept {}:{:02}", duration / 60, duration % 60)
+            } else {
+                String::new()
+            };
+            if partial {
+                notes = if notes.is_empty() {
+                    stopped.clone()
+                } else {
+                    format!("{stopped}. {notes}")
+                };
+            }
             lock(&state.database)?.finish_job(&id, "completed", &output, &notes)?;
             lock(&state.database)?.record_job_duration(&id, seconds(data, "elapsed_seconds"))?;
             let mut runtime = lock(&state.runtime)?;
@@ -1868,7 +1922,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             runtime.result_preview_data_url.clear();
             runtime.progress = 100.0;
             runtime.last_output_path = output;
-            runtime.status_title = "Complete".into();
+            runtime.status_title = if partial { stopped } else { "Complete".into() };
             runtime.status_detail = if notes.is_empty() {
                 "The output was written successfully.".into()
             } else {

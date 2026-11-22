@@ -2223,3 +2223,20 @@ fn engine_crash_writes_a_redacted_report_but_cancel_and_device_loss_do_not() {
     record_worker_failure_report(&state, "inference protocol mismatch");
     assert_eq!(crate::crash_reports::list(&state.paths).len(), 1);
 }
+
+#[test]
+fn partial_video_output_must_match_requested_name_and_directory() {
+    let requested = Path::new("/output/video.mp4");
+    assert!(partial_output(
+        requested,
+        Path::new("/output/video_partial_0m42s.mp4")
+    ));
+    for invalid in [
+        "/other/video_partial_0m42s.mp4",
+        "/output/video_partial_0m60s.mp4",
+        "/output/video_partial_0m42s.mkv",
+        "/output/other_partial_0m42s.mp4",
+    ] {
+        assert!(!partial_output(requested, Path::new(invalid)));
+    }
+}

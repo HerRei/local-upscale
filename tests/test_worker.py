@@ -443,7 +443,12 @@ def test_a_video_reports_its_preparation_and_carries_the_route_it_gave_up_in_its
             "Running on the standard path: the faster one was not ready in time."
         )
         return SimpleNamespace(
-            output_path="output.mp4", frames_processed=2, elapsed_seconds=1.0, inference_seconds=1.0
+            output_path="output.mp4",
+            frames_processed=2,
+            elapsed_seconds=1.0,
+            inference_seconds=1.0,
+            partial=False,
+            kept_seconds=0.0,
         )
 
     monkeypatch.setattr(server_module, "run_video_job", fake_video_job)
@@ -503,6 +508,8 @@ def test_video_worker_emits_one_authoritative_progress_event_with_eta(monkeypatc
             frames_processed=10,
             elapsed_seconds=20.0,
             inference_seconds=19.0,
+            partial=False,
+            kept_seconds=0.0,
         )
 
     monkeypatch.setattr(server_module, "LatestPreviewEncoder", FakePreviewEncoder)

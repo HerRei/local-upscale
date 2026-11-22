@@ -347,20 +347,9 @@ def test_run_video_job_cancel_stops_before_encode(synthetic_video, tmp_path):
     )
 
     cancel_event = threading.Event()
-
-    def cancel_after_first_frame(idx, total):
-        if idx >= 1:
-            cancel_event.set()
-
-    # Cancellation propagates through the frame generator so the encoder's
-    # atomic-output guard removes both the partial and the final destination.
+    cancel_event.set()
     with pytest.raises(InterruptedError, match="[Cc]ancelled"):
-        run_video_job(
-            config=config,
-            engine=engine,
-            cancel_event=cancel_event,
-            frame_started_cb=cancel_after_first_frame,
-        )
+        run_video_job(config=config, engine=engine, cancel_event=cancel_event)
     assert not output.exists()
     assert not (tmp_path / "cancelled.mp4.tmp").exists()
 
@@ -961,6 +950,8 @@ def test_worker_server_runs_video_job_with_stages_payload(tmp_path, monkeypatch)
             frames_processed=2,
             elapsed_seconds=0.1,
             inference_seconds=0.1,
+            partial=False,
+            kept_seconds=0.0,
             notes=[],
         )
 
@@ -1138,6 +1129,8 @@ def test_worker_server_1x_upscale_skips_inspecting_sr_model(tmp_path, monkeypatc
             frames_processed=2,
             elapsed_seconds=0.1,
             inference_seconds=0.1,
+            partial=False,
+            kept_seconds=0.0,
             notes=[],
         )
 
@@ -1183,3 +1176,76 @@ def test_worker_server_1x_upscale_skips_inspecting_sr_model(tmp_path, monkeypatc
     assert cfg.model_path == ""
     assert cfg.model_info is None
     assert len(cfg.preprocess_stages) == 1
+
+
+@pytest.mark.parametrize(("codec", "container"), [("av1", "mp4"), ("vp9", "mkv"), ("ffv1", "mkv")])
+@pytest.mark.parametrize("start", [0, 2])
+def test_stopped_encoder_keeps_playable_trimmed_video_and_audio(tmp_path, codec, container, start):
+    source = _make_synthetic_video_with_audio(tmp_path / "source.mp4", frames=16, fps=8)
+    frames = decode_timed_frames(str(source), start_frame=start)
+
+    def interrupted():
+        for index, frame in enumerate(frames):
+            if index == 4:
+                raise InterruptedError("stopped")
+            yield frame
+
+    output = encode_video(
+        interrupted(),
+        str(tmp_path / f"output.{container}"),
+        fps=8,
+        container_format=container,
+        video_codec=codec,
+        width=FRAME_WIDTH,
+        height=FRAME_HEIGHT,
+        audio_source=str(source),
+        keep_partial=True,
+    )
+    assert "_partial_0m00s" in output
+    with av.open(output) as result:
+        video = result.streams.video[0]
+        assert len(list(result.decode(video))) == 4
+    with av.open(output) as result:
+        audio = result.streams.audio[0]
+        samples = sum(frame.samples for frame in result.decode(audio))
+        assert abs(samples / audio.codec_context.sample_rate - 0.5) <= 1 / 8
+
+
+def test_video_job_reports_a_kept_prefix(synthetic_video, tmp_path):
+    adapter = DummyAdapter(2)
+    cancel = threading.Event()
+    config = VideoJobConfig(
+        video_path=str(synthetic_video),
+        model_path="dummy",
+        output_video_path=str(tmp_path / "output.mp4"),
+        model_info=adapter.model_info,
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=4,
+        safe_memory=False,
+    )
+
+    def stop(index, total):
+        if index >= 4:
+            cancel.set()
+
+    result = run_video_job(config, InferenceEngine(adapter), cancel, frame_started_cb=stop)
+    assert result.partial
+    assert result.kept_seconds > 0
+    assert Path(result.output_path).is_file()
+    assert 0 < len(decode_frames(result.output_path)) < FRAME_COUNT
+    assert not Path(config.output_video_path).exists()
+
+
+def test_stopped_subtitle_packet_is_cut_at_both_ends():
+    from localsr.core.video_io import _next_trimmed_packet
+
+    packet = av.Packet(b"caption")
+    packet.time_base = Fraction(1, 1000)
+    packet.pts = packet.dts = 500
+    packet.duration = 2000
+    result = _next_trimmed_packet(iter([packet]), 1.0, 2.0, cut_durations=True)
+    assert result is packet
+    assert packet.pts == 0
+    assert packet.duration == 1000
