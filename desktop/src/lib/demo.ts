@@ -136,7 +136,6 @@ export function demoSnapshot(): AppSnapshot {
     },
     latest_benchmark: null,
     edit: { models: structuredClone(editModels), runtime_path: '', custom_model: null },
-    edit: { models: structuredClone(editModels), runtime_path: '' },
     default_model_directory: '~/Library/Application Support/LocalSR/models',
     model_directory_missing: false,
     gpu_download_notice: null,
