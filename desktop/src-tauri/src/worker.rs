@@ -2282,11 +2282,10 @@ fn resolve_worker_command(state: &AppState, app: &AppHandle) -> AppResult<Worker
     } else {
         let mut failed = lock(&state.worker.failed_engines)?;
         let quick_failed = crate::updates::verify_active_engine_at_start(&state.paths, &mut failed);
-        if quick_failed.is_some() && bundled.is_some() {
-            state
-                .worker
-                .use_bundled_fallback
-                .store(true, Ordering::SeqCst);
+        // A failed copy is now in `failed`, so the normal choice skips it and keeps any
+        // other valid engine; only a fall back to the bundle is reported.
+        let choice = crate::updates::worker_engine_choice(&state.paths, bundled, &failed);
+        if quick_failed.is_some() && matches!(choice, Some((_, None))) {
             if let Ok(mut runtime) = state.runtime.lock() {
                 runtime.status_title = "Switched to bundled engine".into();
                 runtime.status_detail =
@@ -2294,10 +2293,8 @@ fn resolve_worker_command(state: &AppState, app: &AppHandle) -> AppResult<Worker
                         .into();
             }
             emit_state_changed(app);
-            bundled.map(|path| (path, None))
-        } else {
-            crate::updates::worker_engine_choice(&state.paths, bundled, &failed)
         }
+        choice
     };
     if let Some((program, installed_engine_id)) = selected {
         return Ok(installed_worker_command(

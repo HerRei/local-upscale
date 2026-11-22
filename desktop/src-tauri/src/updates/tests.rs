@@ -2048,6 +2048,25 @@ fn failed_installed_compiled_engine_is_not_selected_again() {
 }
 
 #[test]
+fn a_damaged_compiled_copy_keeps_the_valid_selected_engine() {
+    let installed = vec![
+        ("cuda".to_owned(), PathBuf::from("/engines/cuda/worker")),
+        ("compiled".to_owned(), PathBuf::from("/engines/compiled/worker")),
+    ];
+    let failed = HashSet::from(["compiled".to_owned()]);
+    assert_eq!(
+        choose_worker_executable(
+            &installed,
+            Some("cuda"),
+            "compiled",
+            &failed,
+            Some(PathBuf::from("/bundle/worker"))
+        ),
+        Some((PathBuf::from("/engines/cuda/worker"), Some("cuda".to_owned())))
+    );
+}
+
+#[test]
 fn staged_engine_verifies_before_replacing_existing_engine() {
     let root = tempfile::tempdir().unwrap();
     let (engine, public_key) = engine_fixture(root.path());
