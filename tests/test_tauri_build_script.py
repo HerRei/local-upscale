@@ -529,7 +529,7 @@ def test_nsis_editions_default_to_current_user() -> None:
     ):
         text = hook.read_text(encoding="utf-8")
         assert "!define MULTIUSER_INSTALLMODE_DEFAULT_CURRENTUSER" in text
-        assert '!include "common.nsh"' in text
+        assert '!include "${__FILEDIR__}\\common.nsh"' in text
 
 
 def test_nsis_shows_version_launch_and_optional_appdata_removal() -> None:

@@ -153,6 +153,7 @@ def _chip_name() -> str:
     try:
         return subprocess.run(
             ["/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string"],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=5,

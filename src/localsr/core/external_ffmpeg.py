@@ -151,6 +151,7 @@ def load_external_ffmpeg(path: str | None) -> ExternalFFmpeg | None:
     try:
         version = subprocess.run(
             [str(executable), "-hide_banner", "-version"],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=20,
@@ -158,6 +159,7 @@ def load_external_ffmpeg(path: str | None) -> ExternalFFmpeg | None:
         )
         encoders = subprocess.run(
             [str(executable), "-hide_banner", "-encoders"],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=20,
@@ -446,6 +448,7 @@ def external_timing(ffmpeg: ExternalFFmpeg, path: str) -> tuple[float, float]:
     """Read ``(fps, duration_seconds)`` from FFmpeg's input summary."""
     result = subprocess.run(
         [ffmpeg.path, "-hide_banner", "-i", path],
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         timeout=30,
@@ -465,6 +468,7 @@ def external_has_audio(ffmpeg: ExternalFFmpeg, path: str) -> bool:
     """Whether FFmpeg's input summary lists an audio stream."""
     result = subprocess.run(
         [ffmpeg.path, "-hide_banner", "-i", path],
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         timeout=30,

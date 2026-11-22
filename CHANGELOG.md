@@ -47,7 +47,10 @@
 
 ### Fixes
 
-- **Edit on Windows.** The first start of the editing runtime can take a while while the system checks it; LocalSR now waits long enough and checks the runtime only once, instead of failing every edit after 10 seconds (#160).
+- **Edit on Windows.** Every edit failed after 10 seconds. The check of the editing
+  program got stuck because it inherited the connection between the app and its engine,
+  which Windows blocks while the engine waits on it. Programs LocalSR starts, such as
+  the editing program and an external FFmpeg, no longer inherit it (#160).
 - **Engine exit.** Fixed a deadlock that could freeze the app when the engine exited.
   This also affected 0.5.0.
 - **Model folder moves.** Safer handling of links, existing files and interrupted

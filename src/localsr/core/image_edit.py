@@ -71,6 +71,7 @@ def probe_runtime(runtime: Path, option: str):
         command = [sys.executable, "--edit-probe", *command]
     return subprocess.run(
         command,
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         # The first start of a CUDA sd-cli on Windows loads large DLLs that the antivirus
@@ -318,8 +319,8 @@ def check_runtime(path: str) -> Path:
         help_result = probe_runtime(runtime, "--help")
     except subprocess.TimeoutExpired as error:
         raise ValueError(
-            "The editing runtime did not answer in time. Its first start can take a while "
-            "while the system checks it; try the edit again in a minute."
+            "The editing runtime did not answer in time. Try the edit again; if it keeps "
+            "happening, use Help > Report a problem."
         ) from error
     if help_result.returncode != 0 or any(
         flag not in help_result.stdout + help_result.stderr for flag in REQUIRED_FLAGS

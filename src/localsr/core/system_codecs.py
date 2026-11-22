@@ -105,7 +105,12 @@ def helper_candidates() -> list[Path]:
 def _helper_version(path: Path) -> int | None:
     try:
         result = subprocess.run(
-            [str(path), "version"], capture_output=True, text=True, timeout=15, check=False
+            [str(path), "version"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -350,6 +355,7 @@ class SystemCodecs:
         try:
             result = subprocess.run(
                 [self.path, *arguments],
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 timeout=timeout,

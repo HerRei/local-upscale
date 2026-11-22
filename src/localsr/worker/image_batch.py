@@ -125,6 +125,7 @@ def read_ac_power() -> bool:
     try:
         result = subprocess.run(
             ["/usr/bin/pmset", "-g", "batt"],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=2,
