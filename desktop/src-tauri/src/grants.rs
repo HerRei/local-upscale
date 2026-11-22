@@ -25,7 +25,7 @@ use std::{
 use crate::{
     error::{AppError, AppResult},
     paths::AppPaths,
-    types::{MediaItem, Recipe, UiSettings},
+    types::{CustomEditModel, MediaItem, Recipe, UiSettings},
 };
 
 const MEDIA_REFUSAL: &str =
@@ -78,7 +78,12 @@ impl GrantRegistry {
             }
         }
         seed_outputs(&mut state, &settings.output_directory);
-        seed_models(&mut state, &settings.custom_model_path, recipes);
+        seed_models(
+            &mut state,
+            &settings.custom_model_path,
+            &settings.custom_edit_model,
+            recipes,
+        );
         Self {
             inner: Mutex::new(state),
         }
@@ -209,9 +214,14 @@ impl GrantRegistry {
         }
     }
 
-    pub fn reconcile_models(&self, custom_model_path: &str, recipes: &[Recipe]) {
+    pub fn reconcile_models(
+        &self,
+        custom_model_path: &str,
+        custom_edit_model: &CustomEditModel,
+        recipes: &[Recipe],
+    ) {
         if let Ok(mut state) = self.inner.lock() {
-            seed_models(&mut state, custom_model_path, recipes);
+            seed_models(&mut state, custom_model_path, custom_edit_model, recipes);
         }
     }
 
@@ -388,13 +398,21 @@ fn seed_outputs(state: &mut RegistryState, output_directory: &str) {
     state.persisted_outputs = next_persisted;
 }
 
-fn seed_models(state: &mut RegistryState, custom_model_path: &str, recipes: &[Recipe]) {
+fn seed_models(
+    state: &mut RegistryState,
+    custom_model_path: &str,
+    custom_edit_model: &CustomEditModel,
+    recipes: &[Recipe],
+) {
     let mut next_persisted = HashSet::new();
-    for raw in std::iter::once(custom_model_path).chain(
-        recipes
-            .iter()
-            .map(|recipe| recipe.custom_model_path.as_str()),
-    ) {
+    for raw in std::iter::once(custom_model_path)
+        .chain(custom_edit_model.non_empty_paths())
+        .chain(
+            recipes
+                .iter()
+                .map(|recipe| recipe.custom_model_path.as_str()),
+        )
+    {
         if !raw.is_empty() {
             if let Ok(resolved) = resolve_path(Path::new(raw)) {
                 next_persisted.insert(resolved);
@@ -693,7 +711,11 @@ mod tests {
         #[cfg(not(windows))]
         assert!(registry.check_output_folder(&export).is_err());
         assert!(registry.check_output_folder(Path::new(&spaced)).is_ok());
-        registry.reconcile_models(&format!(" {}", model.to_string_lossy()), &[]);
+        registry.reconcile_models(
+            &format!(" {}", model.to_string_lossy()),
+            &CustomEditModel::default(),
+            &[],
+        );
         assert!(registry.check_model_file(&model).is_err());
     }
 

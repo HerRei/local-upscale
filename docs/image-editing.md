@@ -85,12 +85,29 @@ the smallest bundle, says why it cannot start, and the worker refuses to load it
 Each model carries its own step count (40 for the Qwen editors, 4 for FLUX.2
 klein) and guidance; **Steps** under Advanced overrides it for the chosen model
 only. Dimensions are aligned to 32 pixels and the source is resized to the chosen
-longest edge. Qwen Image 2.1 is not offered: its Qwen Research License allows
+longest edge. Qwen Image 2.1 is not offered for download: its Qwen Research License allows
 research and evaluation only. The backend still supports bundles that require
 explicit license acceptance (a checkbox in the library before the download, and
 again under the model row before an edit starts) should one be added. Lower quantizations can reduce edit fidelity; CPU offload also makes
 small-GPU edits slower. No timing or quality guarantee is attached to these
 starting profiles.
+
+### Your own edit model
+
+At the end of the **Edit with a prompt** list in the model library, **Use my own
+edit model…** lets you pick local model files without copying or downloading
+anything. Choose a family supported by the bundled `stable-diffusion.cpp`
+runtime (Qwen Image Edit 2511, Qwen Image 2.1, or FLUX.2 klein; GGUF diffusion
+headers are detected when available) and pick the component files it uses
+(diffusion model, text encoder, vision projector for Qwen families, and VAE).
+Steps and guidance scale default per family (40 steps and CFG 2.5 for Qwen
+Image Edit 2511, 40 steps and CFG 6.0 for Qwen Image 2.1, and 4 steps and CFG
+1.0 for FLUX.2 klein). Before saving, LocalSR runs a quick metadata check with
+`sd-cli` and refuses incompatible or unreadable files. The memory guard
+estimates peak memory from the real sizes of your files on disk, and custom
+paths and file names are omitted from diagnostic summaries and redacted from
+crash reports. You remain responsible for the licence of any model files you
+supply.
 
 ## Memory and lifecycle
 

@@ -21,6 +21,7 @@
     EDIT_FIT_LABELS,
     editDevice,
     editFamilyLabel,
+    editFamilySummary,
     editFitFor,
     editHardwareLabel,
     editRuntimeLabel,
@@ -80,6 +81,7 @@
   export let importFile: (model: CatalogModel, accepted: boolean) => Promise<void>;
   export let remove: (model: CatalogModel | CatalogVideoModel | EditModel) => Promise<void>;
   export let chooseCustom: () => Promise<void>;
+  export let openCustomEdit: () => void = () => {};
   export let openLicense: (modelId: string) => Promise<void>;
   export let openSource: (modelId: string) => Promise<void>;
 
@@ -138,6 +140,7 @@
   $: videoModels = snapshot.catalog.video_models;
   $: audioModels = snapshot.catalog.audio_models ?? [];
   $: editModels = snapshot.edit.models;
+  $: customEdit = snapshot.edit.custom_model ?? undefined;
   $: interpolationModels = snapshot.catalog.interpolation_models ?? [];
   $: downloadMap = new Map(downloads.map((item) => [item.model_id, item]));
   $: failedEntries = Object.entries(downloadErrors).filter(
@@ -312,9 +315,11 @@
     installedAudioModels.reduce((total, model) => total + model.total_size_bytes, 0) +
     installedEditModels.reduce((total, model) => total + model.total_size_bytes, 0);
   $: selectedEdit =
+    (selectedId === '__custom__' ? customEdit : undefined) ??
     editModels.find((model) => model.model_id === selectedId) ??
     (group === 'edit'
-      ? (editModels.find((model) => model.model_id === settings.edit_model_id) ??
+      ? ((settings.edit_model_id === '__custom__' ? customEdit : undefined) ??
+        editModels.find((model) => model.model_id === settings.edit_model_id) ??
         editFamilies.flatMap((family) => family.fitting)[0] ??
         editModels[0])
       : undefined);
@@ -388,6 +393,7 @@
     if (image) return displayName(image);
     return (
       videoModels.find((item) => item.model_id === modelId)?.name ??
+      (modelId === '__custom__' ? customEdit?.name : undefined) ??
       editModels.find((item) => item.model_id === modelId)?.name ??
       interpolationModels.find((item) => item.model_id === modelId)?.name ??
       modelId
@@ -398,6 +404,12 @@
     if (videoModels.some((item) => item.model_id === modelId)) {
       group = 'video';
       selectedId = modelId;
+      termsAccepted = false;
+      return;
+    }
+    if (modelId === '__custom__' && customEdit) {
+      group = 'edit';
+      selectedId = '__custom__';
       termsAccepted = false;
       return;
     }
@@ -761,6 +773,39 @@
                 : `Show ${heavyEditCount} more that need more memory than this computer has`}</button
             >
           {/if}
+          {#if customEdit}
+            <div class="list-head">Your own edit model</div>
+            <button
+              class="row"
+              type="button"
+              class:selected={selectedEdit?.model_id === customEdit.model_id}
+              aria-pressed={selectedEdit?.model_id === customEdit.model_id}
+              on:click={() => selectRow(customEdit)}
+            >
+              <div>
+                <div class="name">
+                  {editFamilyLabel(customEdit.family)}<small class="tech">Custom</small>
+                </div>
+                <div class="role">
+                  {onMac
+                    ? `Needs ${customEdit.min_unified_memory_gb} GB of memory`
+                    : `Needs ${customEdit.min_vram_gb} GB of GPU memory`}
+                </div>
+                {#if settings.edit_model_id === customEdit.model_id}
+                  <div class="pills"><span class="pill quick">Chosen</span></div>
+                {/if}
+              </div>
+              <div class="right">
+                <b>{formatBytes(customEdit.total_size_bytes)}</b>
+                <span class:ok={customEdit.installed} class:error={!customEdit.installed}
+                  >{customEdit.installed ? 'Your files' : 'Missing file'}</span
+                >
+              </div>
+            </button>
+          {/if}
+          <button class="list-more custom-edit-link" type="button" on:click={openCustomEdit}
+            >Use my own edit model…</button
+          >
         {:else if group === 'own'}
           <div class="list-head">Your own file</div>
           <div class="own-file">
@@ -1109,21 +1154,25 @@
           </div>
         {:else if selectedEdit && group !== 'own'}
           {@const fit = editFit(selectedEdit)}
+          {@const isCustomEdit = selectedEdit.model_id === '__custom__'}
           <div>
-            <h3>{selectedEdit.name}</h3>
+            <h3>{isCustomEdit ? editFamilyLabel(selectedEdit.family) : selectedEdit.name}</h3>
             <div class="role">
               {editFamilyLabel(selectedEdit.family)} · {selectedEdit.files.length} components
             </div>
           </div>
           <p class="model-description">
-            {EDIT_FAMILIES.find((family) => family.id === selectedEdit.family)?.summary.split(
-              ' · ',
-            )[0]}. {editVariantName(selectedEdit)} size: smaller sizes download faster and need less memory,
-            but can lose some edit fidelity.
+            {#if isCustomEdit}
+              {editFamilySummary(selectedEdit.family)}. Local files stay where they are, and the
+              memory check uses their real sizes.
+            {:else}
+              {editFamilySummary(selectedEdit.family)}. {editVariantName(selectedEdit)} size: smaller
+              sizes download faster and need less memory, but can lose some edit fidelity.
+            {/if}
           </p>
           <dl class="facts">
             <div>
-              <dt>Download</dt>
+              <dt>{isCustomEdit ? 'Size' : 'Download'}</dt>
               <dd>{formatBytes(selectedEdit.total_size_bytes)}</dd>
             </div>
             <div>
@@ -1149,92 +1198,133 @@
           {/if}
 
           <dl class="kv">
-            <div>
-              <dt>License</dt>
-              <dd>
-                <button
-                  class="link-button"
-                  type="button"
-                  on:click={() => void openLicense(selectedEdit.model_id)}
-                  >{selectedEdit.license_name} ↗</button
-                >
-              </dd>
-            </div>
-            <div>
-              <dt>Source</dt>
-              <dd>
-                <button
-                  class="link-button"
-                  type="button"
-                  on:click={() => void openSource(selectedEdit.model_id)}>Model source ↗</button
-                >
-              </dd>
-            </div>
-            <div>
-              <dt>Format</dt>
-              <dd>GGUF {selectedEdit.quantization} · {selectedEdit.files.length} files</dd>
-            </div>
-            <div>
-              <dt>Runtime</dt>
-              <dd>stable-diffusion.cpp · {editRuntimeLabel(editGpu)}</dd>
-            </div>
-            <div>
-              <dt>Integrity</dt>
-              <dd>SHA-256 checked before use</dd>
-            </div>
-            <div>
-              <dt>Commercial use</dt>
-              <dd>
-                {selectedEdit.terms_acceptance_required
-                  ? 'Research license · review the terms'
-                  : 'Allowed'}
-              </dd>
-            </div>
+            {#if isCustomEdit}
+              <div>
+                <dt>License</dt>
+                <dd>Your own file</dd>
+              </div>
+              <div>
+                <dt>Format</dt>
+                <dd>Custom · {selectedEdit.files.length} files</dd>
+              </div>
+              <div>
+                <dt>Runtime</dt>
+                <dd>stable-diffusion.cpp · {editRuntimeLabel(editGpu)}</dd>
+              </div>
+              <div>
+                <dt>Storage</dt>
+                <dd>Kept in place</dd>
+              </div>
+            {:else}
+              <div>
+                <dt>License</dt>
+                <dd>
+                  <button
+                    class="link-button"
+                    type="button"
+                    on:click={() => void openLicense(selectedEdit.model_id)}
+                    >{selectedEdit.license_name} ↗</button
+                  >
+                </dd>
+              </div>
+              <div>
+                <dt>Source</dt>
+                <dd>
+                  <button
+                    class="link-button"
+                    type="button"
+                    on:click={() => void openSource(selectedEdit.model_id)}>Model source ↗</button
+                  >
+                </dd>
+              </div>
+              <div>
+                <dt>Format</dt>
+                <dd>GGUF {selectedEdit.quantization} · {selectedEdit.files.length} files</dd>
+              </div>
+              <div>
+                <dt>Runtime</dt>
+                <dd>stable-diffusion.cpp · {editRuntimeLabel(editGpu)}</dd>
+              </div>
+              <div>
+                <dt>Integrity</dt>
+                <dd>SHA-256 checked before use</dd>
+              </div>
+              <div>
+                <dt>Commercial use</dt>
+                <dd>
+                  {selectedEdit.terms_acceptance_required
+                    ? 'Research license · review the terms'
+                    : 'Allowed'}
+                </dd>
+              </div>
+            {/if}
           </dl>
           <div class="actions">
-            {#if !selectedEdit.installed}
-              {@const dl = downloadMap.get(selectedEdit.model_id)}
-              {@const dlError = downloadErrors[selectedEdit.model_id]}
-              {#if selectedEdit.terms_acceptance_required}
-                <label class="terms"
-                  ><input type="checkbox" bind:checked={termsAccepted} /> I reviewed the Qwen Research
-                  License and accept its terms.</label
+            {#if isCustomEdit}
+              {#if selectedEdit.installed}
+                <div class="installed-badge">✓ Ready · files stay in place</div>
+              {:else}
+                <p class="download-error" role="alert">
+                  One or more files are missing. Choose them again.
+                </p>
+              {/if}
+              {#if context.slot === 'edit' || context.task === 'edit'}
+                <button
+                  class="button primary"
+                  type="button"
+                  disabled={busy || !selectedEdit.installed || fit === 'too_heavy'}
+                  on:click={() => useEditModel(selectedEdit)}>Use for this job</button
                 >
               {/if}
-              {#if dlError}<p class="download-error" role="alert">{dlError}</p>{/if}
-              <button
-                class="button primary"
-                type="button"
-                disabled={busy || (selectedEdit.terms_acceptance_required && !termsAccepted && !dl)}
-                on:click={() => void download(selectedEdit, termsAccepted)}
-                >{downloadButtonLabel(dl, selectedEdit.total_size_bytes)}</button
+              <button class="button" type="button" disabled={busy} on:click={openCustomEdit}
+                >Choose files…</button
               >
-              {#if dl?.status === 'downloading'}
-                <progress
-                  class="download-progress"
-                  value={dl.progress}
-                  max="100"
-                  aria-label={`${selectedEdit.name} download progress`}
-                ></progress>
-              {/if}
             {:else}
-              <div class="installed-badge">✓ Installed · integrity checked before use</div>
-            {/if}
-            {#if context.slot === 'edit' || context.task === 'edit'}
-              <button
-                class="button"
-                type="button"
-                disabled={busy || fit === 'too_heavy'}
-                on:click={() => useEditModel(selectedEdit)}>Use for this job</button
-              >
-            {/if}
-            {#if selectedEdit.installed}
-              <button
-                class="button danger ghost"
-                type="button"
-                disabled={busy}
-                on:click={() => void remove(selectedEdit)}>Remove from this computer</button
-              >
+              {#if !selectedEdit.installed}
+                {@const dl = downloadMap.get(selectedEdit.model_id)}
+                {@const dlError = downloadErrors[selectedEdit.model_id]}
+                {#if selectedEdit.terms_acceptance_required}
+                  <label class="terms"
+                    ><input type="checkbox" bind:checked={termsAccepted} /> I reviewed the Qwen Research
+                    License and accept its terms.</label
+                  >
+                {/if}
+                {#if dlError}<p class="download-error" role="alert">{dlError}</p>{/if}
+                <button
+                  class="button primary"
+                  type="button"
+                  disabled={busy ||
+                    (selectedEdit.terms_acceptance_required && !termsAccepted && !dl)}
+                  on:click={() => void download(selectedEdit, termsAccepted)}
+                  >{downloadButtonLabel(dl, selectedEdit.total_size_bytes)}</button
+                >
+                {#if dl?.status === 'downloading'}
+                  <progress
+                    class="download-progress"
+                    value={dl.progress}
+                    max="100"
+                    aria-label={`${selectedEdit.name} download progress`}
+                  ></progress>
+                {/if}
+              {:else}
+                <div class="installed-badge">✓ Installed · integrity checked before use</div>
+              {/if}
+              {#if context.slot === 'edit' || context.task === 'edit'}
+                <button
+                  class="button"
+                  type="button"
+                  disabled={busy || fit === 'too_heavy'}
+                  on:click={() => useEditModel(selectedEdit)}>Use for this job</button
+                >
+              {/if}
+              {#if selectedEdit.installed}
+                <button
+                  class="button danger ghost"
+                  type="button"
+                  disabled={busy}
+                  on:click={() => void remove(selectedEdit)}>Remove from this computer</button
+                >
+              {/if}
             {/if}
           </div>
         {:else if group !== 'own' && selected}

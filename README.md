@@ -155,9 +155,12 @@ face-aware job runs. Once your models are downloaded, LocalSR works offline.
 version, no account and no advertising, and the code is MIT licensed.
 
 **Can I use my own models?** Yes, compatible `.safetensors` files work as a
-custom checkpoint. `.pth`, `.pt` and `.ckpt` files can run code when they load,
-so the app only uses one after you tick *Allow this pickle-based checkpoint*.
-Do that only for files from a publisher you trust.
+custom checkpoint for upscaling and restoration. `.pth`, `.pt` and `.ckpt`
+files can run code when they load, so the app only uses one after you tick
+*Allow this pickle-based checkpoint*. Do that only for files from a publisher
+you trust. For editing, **Use my own edit model…** in the model library lets
+you pick local GGUF/safetensors component files for Qwen Image Edit 2511,
+Qwen Image 2.1, or FLUX.2 klein.
 
 **How do I uninstall it?** On a Mac, move LocalSR to the Trash and delete
 `~/Library/Application Support/LocalSR` and `~/Library/Caches/LocalSR`. On

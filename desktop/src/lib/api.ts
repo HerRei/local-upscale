@@ -4,6 +4,7 @@ import { join } from '@tauri-apps/api/path';
 import { demoSnapshot } from './demo';
 import type {
   AppSnapshot,
+  CustomEditModel,
   IntegrationStatus,
   LaunchIntent,
   Recipe,
@@ -89,6 +90,19 @@ export async function chooseEditRuntime(): Promise<string | null> {
   if (!isTauri()) return null;
   return invoke<string | null>('choose_edit_runtime');
 }
+export interface EditModelFilePick {
+  path: string;
+  size_bytes: number;
+  detected_family?: string | null;
+}
+export async function chooseEditModelFile(
+  role: 'diffusion' | 'text_encoder' | 'vision' | 'vae',
+): Promise<EditModelFilePick | null> {
+  if (!isTauri()) return null;
+  return invoke<EditModelFilePick | null>('choose_edit_model_file', { role });
+}
+export const saveCustomEditModel = (custom: CustomEditModel, runtimePath: string): Promise<void> =>
+  invoke('save_custom_edit_model', { custom, runtimePath });
 export const retryEngine = (): Promise<void> => invoke('retry_engine');
 export const cancelJobs = (): Promise<void> => invoke('cancel_jobs');
 export const startBenchmark = (device: string): Promise<void> =>

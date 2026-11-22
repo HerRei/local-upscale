@@ -49,6 +49,7 @@
   import { startUpdateWatcher, updateDialogOpen } from './lib/updates';
   import { redactDiagnostics, redactDiagnosticText, reportUrl } from './lib/report';
   import BenchmarkStudio from './BenchmarkStudio.svelte';
+  import CustomEditModelModal from './CustomEditModelModal.svelte';
   import * as api from './lib/api';
   import ModelLibrary from './ModelLibrary.svelte';
   import {
@@ -131,6 +132,7 @@
   let booting = true;
   let editPrompt = '';
   let editRuntimeOverride = '';
+  let customEditOpen = false;
   let benchmarkRenders: BenchmarkRender[] = [];
   let benchmarkDevice = '';
   let benchmarkSetup: 'idle' | 'downloading' | 'starting' = 'idle';
@@ -547,7 +549,10 @@
   // Editing bundle, device and capacity checks.
   $: editModels = snapshot.edit.models;
   $: editingDevice = editDevice(snapshot.capabilities, settings);
-  $: editModel = editModels.find((model) => model.model_id === settings.edit_model_id);
+  $: editModel =
+    settings.edit_model_id === '__custom__'
+      ? (snapshot.edit.custom_model ?? undefined)
+      : editModels.find((model) => model.model_id === settings.edit_model_id);
   $: editFit = editModel ? editFitFor(editModel, snapshot.capabilities, editingDevice) : 'unknown';
   $: editSizeAllowed = editSizeLimit(snapshot.capabilities, editingDevice);
   $: editRuntime = editRuntimeOverride || snapshot.edit.runtime_path;
@@ -563,9 +568,11 @@
             ? 'The editing runtime is missing from this build.'
             : !editModel
               ? 'Choose an editing model.'
-              : editFit === 'too_heavy'
-                ? `${editModel.name} needs ${editingDevice.id === 'mps' ? `${editModel.min_unified_memory_gb} GB of unified memory` : `a GPU with ${editModel.min_vram_gb} GB`} and ${editHardwareLabel(snapshot.capabilities, editingDevice)}. ${editModels.some((model) => editModelFits(model, snapshot.capabilities, editingDevice)) ? 'Pick a smaller model under Change….' : 'No listed model fits this computer yet.'}`
-                : '';
+              : settings.edit_model_id === '__custom__' && !editModel.installed
+                ? 'Choose your custom edit model files again under Change….'
+                : editFit === 'too_heavy'
+                  ? `${editModel.name} needs ${editingDevice.id === 'mps' ? `${editModel.min_unified_memory_gb} GB of unified memory` : `a GPU with ${editModel.min_vram_gb} GB`} and ${editHardwareLabel(snapshot.capabilities, editingDevice)}. ${editModels.some((model) => editModelFits(model, snapshot.capabilities, editingDevice)) ? 'Pick a smaller model under Change….' : 'No listed model fits this computer yet.'}`
+                  : '';
   $: editReady =
     settings.task !== 'edit' ||
     (!editBlockReason &&
@@ -1651,6 +1658,7 @@
 
   /** Keep a valid bundle chosen: the saved one, or the largest that fits this computer. */
   function ensureEditModel(): void {
+    if (snapshot.settings.edit_model_id === '__custom__' && snapshot.edit.custom_model) return;
     const device = editDevice(snapshot.capabilities, snapshot.settings);
     const current = snapshot.edit.models.find(
       (model) => model.model_id === snapshot.settings.edit_model_id,
@@ -4158,6 +4166,13 @@
                                 ? `Download companion · ${formatBytes(stage.model.size_bytes)}`
                                 : 'Choose externally downloaded face checkpoint…'}
                           </button>
+                        {:else if stage.editModel?.model_id === '__custom__' && !stage.installed}
+                          <button
+                            class="button full"
+                            type="button"
+                            on:click={() => (customEditOpen = true)}
+                            >Choose edit model files…</button
+                          >
                         {:else if target && !stage.installed}
                           <!-- A downloadable model is fetched by the Start button; this row only
                              asks for what Start cannot do on its own. -->
@@ -4532,8 +4547,24 @@
     importFile={(model, accepted) => runDownload(model, accepted)}
     remove={removeModel}
     chooseCustom={chooseCustomModel}
+    openCustomEdit={() => (customEditOpen = true)}
     openLicense={openAnyLicense}
     openSource={openAnySource}
+  />
+{/if}
+
+{#if customEditOpen}
+  <CustomEditModelModal
+    initial={settings.custom_edit_model}
+    {editRuntime}
+    chooseRuntime={chooseEditRuntime}
+    saved={async () => {
+      await refresh();
+      customEditOpen = false;
+      libraryOpen = false;
+      termsAccepted = {};
+    }}
+    close={() => (customEditOpen = false)}
   />
 {/if}
 

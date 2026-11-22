@@ -311,6 +311,33 @@ pub struct FixStageSelection {
     pub model_id: String,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct CustomEditModel {
+    #[serde(default)]
+    pub family: String,
+    #[serde(default)]
+    pub diffusion_path: String,
+    #[serde(default)]
+    pub text_encoder_path: String,
+    #[serde(default)]
+    pub vision_path: String,
+    #[serde(default)]
+    pub vae_path: String,
+}
+
+impl CustomEditModel {
+    pub fn non_empty_paths(&self) -> impl Iterator<Item = &str> {
+        [
+            self.diffusion_path.as_str(),
+            self.text_encoder_path.as_str(),
+            self.vision_path.as_str(),
+            self.vae_path.as_str(),
+        ]
+        .into_iter()
+        .filter(|path| !path.is_empty())
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct UiSettings {
@@ -407,6 +434,8 @@ pub struct UiSettings {
     pub edit_steps: u32,
     #[serde(default = "default_edit_seed")]
     pub edit_seed: u32,
+    #[serde(default)]
+    pub custom_edit_model: CustomEditModel,
 }
 
 fn default_true() -> bool {
@@ -518,6 +547,7 @@ impl Default for UiSettings {
             edit_max_dimension: default_edit_dimension(),
             edit_steps: default_edit_steps(),
             edit_seed: default_edit_seed(),
+            custom_edit_model: CustomEditModel::default(),
         }
     }
 }

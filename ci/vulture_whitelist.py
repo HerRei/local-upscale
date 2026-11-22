@@ -126,6 +126,7 @@ _.media  # protocol/messages.py CapabilitiesInfo
 EditJobRequest  # protocol/messages.py: the edit request shape, built by the desktop app
 runtime_path  # EditJobRequest
 accepted_terms  # EditJobRequest
+custom_files  # EditJobRequest
 
 
 # ctypes structure field written for Windows to read (core/gpu_guard.py job object).

@@ -105,7 +105,9 @@ These apply to v0.5.0-beta. Please read them before starting a long job.
   Edits are limited to 512, 768 or 1024 px on the longest side, one image at a
   time, and the result is a new PNG.
 - The editing models are separate downloads of 5 to 26 GB. Qwen Image 2.1 is
-  not offered because its license allows research and evaluation only.
+  not offered for download because its license allows research and evaluation
+  only, though you can supply your own local files for Qwen Image Edit 2511,
+  Qwen Image 2.1, or FLUX.2 klein under **Use my own edit model…**.
 
 ## Models
 

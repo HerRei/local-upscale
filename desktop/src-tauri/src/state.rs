@@ -212,6 +212,7 @@ impl AppState {
         let edit = crate::editing::EditSetup {
             models: crate::editing::catalog(&self.paths)?,
             runtime_path: lock(&self.edit_runtime)?.clone(),
+            custom_model: crate::editing::custom_edit_model(&settings.custom_edit_model),
         };
 
         Ok(AppSnapshot {

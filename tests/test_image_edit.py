@@ -741,3 +741,135 @@ def test_edit_progress_follows_the_runtime_log_and_never_stands_still():
     now[0] += 20
     assert stuck.snapshot()[0] > first
     assert all(percentage <= 99 for percentage, _ in seen)
+
+
+def test_custom_edit_memory_estimate_uses_real_file_sizes(tmp_path):
+    from localsr.core.edit_memory import (
+        estimate_edit_memory,
+        minimum_unified_memory_gb,
+        minimum_vram_gb,
+    )
+
+    diff = tmp_path / "diff.gguf"
+    te = tmp_path / "te.gguf"
+    vis = tmp_path / "mmproj.gguf"
+    vae = tmp_path / "vae.safetensors"
+    for path, size in (
+        (diff, 12 * GIB),
+        (te, 4 * GIB),
+        (vis, 1 * GIB),
+        (vae, 256 * 1024**2),
+    ):
+        with path.open("wb") as handle:
+            handle.truncate(size)
+
+    model_cfg = image_edit.validate_request(
+        {
+            "model_id": "__custom__",
+            "family": "qwen-image-2.1",
+            "custom_files": {
+                "diffusion": str(diff),
+                "text_encoder": str(te),
+                "vision": str(vis),
+                "vae": str(vae),
+            },
+            "prompt": "Change the sky.",
+        }
+    )
+    assert model_cfg["name"] == "Your edit model"
+    assert model_cfg["cfg_scale"] == 6.0
+    assert model_cfg["default_steps"] == 40
+    expected_mac = int((12 * GIB + 256 * 1024**2 + int(1.5 * GIB)) * 1.1)
+    assert estimate_edit_memory(model_cfg, True, 512) == expected_mac
+    assert minimum_unified_memory_gb(model_cfg) == 32
+    assert minimum_vram_gb(model_cfg) == 16
+
+    # Guard refuses when Mac RAM is below the real custom requirement, and admits when it fits.
+    with pytest.raises(MemoryError, match="smaller"):
+        plan_edit(model_cfg, EditMemory(16 * GIB, 14 * GIB, unified=True))
+    plan = plan_edit(model_cfg, EditMemory(32 * GIB, 24 * GIB, unified=True))
+    assert plan.required_ram == expected_mac
+
+    # FLUX.2 klein custom works without a vision projector and uses 4 steps / CFG 1.
+    with diff.open("wb") as handle:
+        handle.truncate(2 * GIB)
+    klein_cfg = image_edit.validate_request(
+        {
+            "model_id": "__custom__",
+            "family": "flux2-klein",
+            "custom_files": {
+                "diffusion": str(diff),
+                "text_encoder": str(te),
+                "vae": str(vae),
+            },
+            "prompt": "Warm lighting.",
+        }
+    )
+    assert [entry["role"] for entry in klein_cfg["files"]] == ["diffusion", "text_encoder", "vae"]
+    assert klein_cfg["default_steps"] == 4 and klein_cfg["cfg_scale"] == 1.0
+    assert minimum_unified_memory_gb(klein_cfg) == 16
+    assert minimum_vram_gb(klein_cfg) == 8
+
+
+def test_custom_edit_command_and_lifecycle_keep_files_in_place_and_omit_filenames(
+    monkeypatch, tmp_path
+):
+    from PIL import Image
+
+    diff = tmp_path / "secret-qwen21.gguf"
+    te = tmp_path / "secret-te.gguf"
+    vis = tmp_path / "secret-mmproj.gguf"
+    vae = tmp_path / "secret-vae.safetensors"
+    for path in (diff, te, vis, vae):
+        path.write_bytes(b"weights")
+
+    request = {
+        "job_id": "custom-edit-job",
+        "model_id": "__custom__",
+        "family": "qwen-image-2.1",
+        "custom_files": {
+            "diffusion": str(diff),
+            "text_encoder": str(te),
+            "vision": str(vis),
+            "vae": str(vae),
+        },
+        "prompt": "Make it winter.",
+        "device": "mps",
+        "runtime_path": str(tmp_path / "sd-cli"),
+        "bundle_dir": "",
+        "image_path": str(tmp_path / "source.png"),
+        "output_path": str(tmp_path / "output.png"),
+        "scratch_directory": str(tmp_path / "scratch"),
+    }
+    (tmp_path / "scratch").mkdir()
+    Image.new("RGB", (128, 96)).save(request["image_path"])
+    monkeypatch.setattr(image_edit, "check_runtime", lambda _: tmp_path / "sd-cli")
+
+    captured = []
+
+    class FixtureProcess:
+        def __init__(self, command, **_kwargs):
+            native = json.loads(Path(command[-1]).read_text())["command"]
+            captured.append(native)
+            Image.new("RGB", (128, 96), "blue").save(native[native.index("-o") + 1])
+            self.stdin = io.BytesIO()
+            self.stdout = io.BytesIO(b"")
+            self.returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(image_edit.subprocess, "Popen", FixtureProcess)
+    messages = []
+    memory = EditMemory(32 * GIB, 28 * GIB, unified=True)
+    image_edit.run_edit_job(request, threading.Event(), messages.append, sampler=lambda _: memory)
+    assert Path(request["output_path"]).is_file()
+    native = captured[0]
+    assert native[native.index("--diffusion-model") + 1] == str(diff)
+    assert native[native.index("--llm_vision") + 1] == str(vis)
+    assert native[native.index("--cfg-scale") + 1] == "6"
+    assert native[native.index("--steps") + 1] == "40"
+    assert native[native.index("--model-args") + 1] == "qwen_image_2_1_prefix_cache=false"
+    started = json.loads(messages[0].to_json())
+    assert started["data"]["model_id"] == "Your edit model"
+    assert "secret-" not in json.dumps([json.loads(m.to_json()) for m in messages])
