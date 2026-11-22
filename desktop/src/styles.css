@@ -2878,6 +2878,7 @@ input[type='number'],
   margin-block: -5px;
 }
 .plan-row {
+  position: relative;
   display: grid;
   grid-template-columns: 68px minmax(0, 1fr) auto;
   gap: 2px 6px;
@@ -3794,6 +3795,7 @@ input[type='number'],
   width: min(560px, calc(100vw - 40px));
 }
 .engine-intro {
+  position: relative;
   margin: 0 0 12px;
 }
 .engine-status-line {
@@ -3872,6 +3874,9 @@ input[type='number'],
   margin: 5px 0 0;
   color: var(--secondary);
   font-size: calc(11px * var(--ui-scale));
+}
+.engine-item-main .download-error {
+  margin-top: 6px;
 }
 .engine-item-actions {
   display: flex;

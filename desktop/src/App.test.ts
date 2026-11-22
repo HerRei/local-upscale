@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { updateDialogOpen } from './lib/updates';
+import { emptyUpdateStatus, updateDialogOpen, updateState } from './lib/updates';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -16,6 +16,7 @@ import type {
   LaunchIntent,
   MediaItem,
   MediaResults,
+  ModelMoveProgress,
   Recipe,
   ResultSummary,
   StartBatchInput,
@@ -73,7 +74,7 @@ const api = vi.hoisted(() => ({
   chooseModelDirectory: vi.fn(async (): Promise<string | null> => null),
   setModelDirectory: vi.fn(async (_path: string): Promise<void> => undefined),
   resetModelDirectory: vi.fn(async (): Promise<void> => undefined),
-  listenForModelMove: vi.fn(async () => () => {}),
+  listenForModelMove: vi.fn(async (_handler: (progress: ModelMoveProgress) => void) => () => {}),
   dismissGpuDownloadNotice: vi.fn(async (): Promise<void> => undefined),
   refreshEngineCatalog: vi.fn(async () => []),
   installEngine: vi.fn(async (_backend: string): Promise<void> => undefined),
@@ -573,18 +574,24 @@ describe('Edit task', () => {
     await chooseTask(user, /^Edit$/);
     await user.click(screen.getByRole('button', { name: 'Change the edit model' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
-    await user.click(within(library).getByRole('button', { name: 'Use my own edit model…' }));
+    await user.click(within(library).getByRole('button', { name: 'Use your own edit model…' }));
 
     const modal = screen.getByRole('dialog', { name: 'Use your own edit model' });
     expect(within(modal).getByText(/responsible for the model's licence/i)).toBeTruthy();
+    expect(within(modal).queryByText(/^Defaults:/)).toBeNull();
 
-    // Switching to FLUX.2 klein hides Vision projector and shows 4 steps / CFG 1.
+    // Switching to FLUX.2 klein hides Vision projector and updates the Model family HelpTip to 4 steps / CFG 1.
     const familySelect = within(modal).getByLabelText('Model family') as HTMLSelectElement;
     await user.selectOptions(familySelect, 'flux2-klein');
     expect(within(modal).queryByText('Vision projector')).toBeNull();
-    expect(within(modal).getByText('Defaults: 4 steps, CFG 1')).toBeTruthy();
+    expect(within(modal).queryByText(/^Defaults:/)).toBeNull();
+    const familyTipButton = within(modal).getByRole('button', { name: 'About Model family' });
+    await user.click(familyTipButton);
+    expect(within(modal).getByRole('tooltip').textContent).toBe(
+      'Tells LocalSR how to run your files and sets the defaults. For this family: 4 steps, CFG 1.',
+    );
 
-    // Picking a Qwen 2.1 GGUF auto-detects the family and shows Vision projector + CFG 6.
+    // Picking a Qwen 2.1 GGUF auto-detects the family and shows Vision projector + CFG 6 in the HelpTip.
     api.chooseEditModelFile
       .mockResolvedValueOnce({
         path: '/local/qwen21.gguf',
@@ -600,7 +607,10 @@ describe('Edit task', () => {
     expect(familySelect.value).toBe('qwen-image-2.1');
     expect(within(modal).getByText('Detected Qwen Image 2.1 from GGUF metadata.')).toBeTruthy();
     expect(within(modal).getByText('Vision projector')).toBeTruthy();
-    expect(within(modal).getByText('Defaults: 40 steps, CFG 6')).toBeTruthy();
+    await user.click(familyTipButton);
+    expect(within(modal).getByRole('tooltip').textContent).toBe(
+      'Tells LocalSR how to run your files and sets the defaults. For this family: 40 steps, CFG 6.',
+    );
 
     // Pick text encoder, vision projector, and VAE.
     for (let i = 0; i < 3; i += 1) {
@@ -752,6 +762,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  updateState.set(emptyUpdateStatus);
   updateDialogOpen.set(false); // the dialog's store outlives each test's window
   cleanup();
   vi.restoreAllMocks();
@@ -6747,7 +6758,7 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     ).toBeTruthy();
   });
 
-  it('shows a clear missing-folder message in the window and Model library with recovery actions', async () => {
+  it('shows the missing-folder message once with two buttons and recovery actions in Model library', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.settings.task = 'upscale';
     snapshot.settings.quality = 'quick';
@@ -6757,8 +6768,17 @@ describe('Model folder and Windows CPU GPU download notice', () => {
 
     const user = await mountWith(snapshot);
 
-    const alert = screen.getByRole('alert', { name: 'Model folder unavailable' });
-    expect(alert.textContent).toContain('/Volumes/Unplugged/models');
+    // Shown once above Advanced, even after opening Advanced.
+    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    const alerts = screen.getAllByRole('alert', { name: 'Model folder unavailable' });
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].textContent?.replace(/\s+/g, ' ')).toContain(
+      'Model folder not found: /Volumes/Unplugged/models. Reconnect the drive or choose another folder.',
+    );
+    const chooseBtn = within(alerts[0]).getByRole('button', { name: 'Choose folder…' });
+    const defaultBtn = within(alerts[0]).getByRole('button', { name: 'Use default folder' });
+    expect(chooseBtn.classList.contains('button')).toBe(true);
+    expect(defaultBtn.classList.contains('button')).toBe(true);
 
     await chooseMenuItem('view.models');
     const dialog = await screen.findByRole('dialog', { name: 'Model library' });
@@ -6768,31 +6788,92 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     await waitFor(() => expect(api.resetModelDirectory).toHaveBeenCalledTimes(1));
   });
 
+  it('shows moving progress inside the card, sets header to Moving models, and disables Upscale selected', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.quality = 'quick';
+    snapshot.settings.selected_model_id = 'span_photo_x4';
+    snapshot.default_model_directory = '/Users/demo/Library/Application Support/LocalSR/models';
+
+    let moveHandler:
+      | ((p: {
+          moved_bytes: number;
+          total_bytes: number;
+          moved_files: number;
+          total_files: number;
+          progress: number;
+          current_file: string;
+        }) => void)
+      | undefined;
+    api.listenForModelMove.mockImplementationOnce(async (cb) => {
+      moveHandler = cb as typeof moveHandler;
+      return () => undefined;
+    });
+    api.chooseModelDirectory.mockResolvedValueOnce('/Volumes/SSD/models');
+    let resolveMove: () => void = () => undefined;
+    api.setModelDirectory.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveMove = resolve;
+        }),
+    );
+
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    await user.click(screen.getByRole('button', { name: /^Model folder / }));
+
+    moveHandler?.({
+      moved_bytes: 47,
+      total_bytes: 100,
+      moved_files: 7,
+      total_files: 15,
+      progress: 46.8,
+      current_file: 'model.pth',
+    });
+
+    expect(await screen.findByText('Moving 7 of 15 files…')).toBeTruthy();
+    expect(screen.getByText('47%')).toBeTruthy();
+    expect(document.querySelector('progress.download-progress')).toBeTruthy();
+    expect(document.querySelector('.enhance-pane .pane-heading span')?.textContent).toBe(
+      'Moving models',
+    );
+    expect(
+      (screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    resolveMove();
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+  });
+
   it('shows the dismissable GPU download notice, opens the download page, and remembers dismissal', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.gpu_download_notice =
-      'Your AMD Radeon RX 7900 XT can run LocalSR faster with the DirectML download.';
+      'Your AMD Radeon RX 7900 XT can run LocalSR much faster with the DirectML edition.';
 
     const user = await mountWith(snapshot);
     const notice = screen.getByText(
-      'Your AMD Radeon RX 7900 XT can run LocalSR faster with the DirectML download.',
+      'Your AMD Radeon RX 7900 XT can run LocalSR much faster with the DirectML edition.',
     );
     expect(notice).toBeTruthy();
 
     const bar = notice.closest('.gpu-download-notice') as HTMLElement;
-    await user.click(within(bar).getByRole('button', { name: 'Download page' }));
+    await user.click(within(bar).getByRole('button', { name: 'Open download page' }));
     expect(api.openDownloadPage).toHaveBeenCalledTimes(1);
 
-    await user.click(within(bar).getByRole('button', { name: 'Dismiss GPU download notice' }));
+    await user.click(within(bar).getByRole('button', { name: 'Not now' }));
     await waitFor(() => expect(api.dismissGpuDownloadNotice).toHaveBeenCalledTimes(1));
     expect(
       screen.queryByText(
-        'Your AMD Radeon RX 7900 XT can run LocalSR faster with the DirectML download.',
+        'Your AMD Radeon RX 7900 XT can run LocalSR much faster with the DirectML edition.',
       ),
     ).toBeNull();
   });
 
-  it('offers Colour under Fix first and Restore for photos, with one model and HelpTip, and hides it for video', async () => {
+  it('offers Colour under Fix first and Restore for photos, with title, HelpTip, Colour label, and hides it for video', async () => {
     const snapshot = readySnapshot([image('photo', true), video('clip')]);
     const user = await mountWith(snapshot);
     const prevSelect = api.selectMedia.getMockImplementation();
@@ -6811,8 +6892,9 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     });
     api.refreshSnapshot.mockImplementation(async () => structuredClone(snapshot));
 
-    // Upscale offers Colour chip, resolves DDColor-L for Quick and Best, and shows HelpTip.
+    // Upscale offers Colour chip with title, resolves DDColor for Quick and Best, and shows HelpTip.
     const colourChip = screen.getByRole('button', { name: 'Colour', pressed: false });
+    expect(colourChip.getAttribute('title')).toBe('Adds colour to black-and-white photos');
     await user.click(colourChip);
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
@@ -6822,12 +6904,16 @@ describe('Model folder and Windows CPU GPU download notice', () => {
         }),
       ),
     );
-    expect(screen.getByRole('button', { name: 'About Colour' })).toBeTruthy();
+    const colourTip = screen.getByRole('button', { name: 'About Colour' });
+    await user.click(colourTip);
+    expect(screen.getByRole('tooltip').textContent).toBe(
+      "Adds colour to black-and-white photos. The colours are the model's guess. A photo that already has colour is recoloured too.",
+    );
 
     expect(screen.queryByRole('button', { name: 'Change the colour fix model' })).toBeNull();
     expect(screen.getByText('DDColor')).toBeTruthy();
 
-    // Best uses the same model, and Restore at 1x runs it as the Restore model.
+    // Best uses the same model, and Restore at 1x runs it as the Restore model labelled "Colour".
     await user.click(screen.getByRole('button', { name: /^Best/ }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
@@ -6839,6 +6925,9 @@ describe('Model folder and Windows CPU GPU download notice', () => {
 
     await chooseTask(user, /^Restore/);
     expect(screen.getByRole('button', { name: 'Colour', pressed: true })).toBeTruthy();
+    const stages = screen.getByRole('list', { name: 'Stages' });
+    expect(within(stages).getByText('Colour')).toBeTruthy();
+    expect(within(stages).queryByText('Restore')).toBeNull();
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
         expect.objectContaining({
@@ -6879,7 +6968,7 @@ describe('Engine manager UI and recommendation card', () => {
     );
 
     const cardText =
-      'Your NVIDIA GeForce RTX 4070 can run LocalSR much faster. Download the NVIDIA engine (4.3 GB)';
+      'Your NVIDIA GeForce RTX 4070 can run LocalSR much faster with the NVIDIA engine (4.3 GB).';
     const card = (await screen.findByText(cardText)).closest(
       '.engine-recommendation-card',
     ) as HTMLElement;
@@ -6889,13 +6978,57 @@ describe('Engine manager UI and recommendation card', () => {
     await waitFor(() => expect(api.dismissGpuDownloadNotice).toHaveBeenCalledTimes(1));
     expect(screen.queryByText(cardText)).toBeNull();
 
-    // Still reachable via Advanced settings -> Hardware -> Engine -> Change…
+    // Still reachable via Advanced settings -> Engine -> Change…
     await user.click(screen.getByRole('button', { name: /Advanced/ }));
     expect(screen.getByText('Engine')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Change…' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Inference engine' });
+    const dialog = await screen.findByRole('dialog', { name: 'Engine' });
     expect(within(dialog).getByText('NVIDIA CUDA')).toBeTruthy();
     expect(within(dialog).getByText('Recommended')).toBeTruthy();
+  });
+
+  it('hides the engine recommendation card while the update notice is visible', async () => {
+    const snapshot = windowsCpuSnapshot();
+    const user = await mountWith(snapshot);
+    const cardText =
+      'Your NVIDIA GeForce RTX 4070 can run LocalSR much faster with the NVIDIA engine (4.3 GB).';
+    expect(screen.getByText(cardText)).toBeTruthy();
+
+    updateState.set({
+      configured: true,
+      managed_by_store: false,
+      channel: 'beta',
+      target: 'windows-x86_64-cpu-native',
+      stage: 'available',
+      version: '0.6.0-beta',
+      notes: '',
+      size: 250 * 1024 ** 2,
+      downloaded: 0,
+      message: '',
+      settings_recovery: false,
+    });
+    expect(await screen.findByText('LocalSR 0.6.0-beta is available')).toBeTruthy();
+    expect(screen.queryByText(cardText)).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Close update notice' }));
+    expect(await screen.findByText(cardText)).toBeTruthy();
+  });
+
+  it('shows fallback intro with HelpTip when no discrete GPU is recommended', async () => {
+    const snapshot = windowsCpuSnapshot();
+    snapshot.engines!.recommendation = { backend: 'cpu', adapter_name: null };
+
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Engine' });
+    expect(
+      within(dialog).getByText('Choose the engine LocalSR uses on this computer.'),
+    ).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'About Engine' }));
+    expect(within(dialog).getByRole('tooltip').textContent).toBe(
+      'NVIDIA CUDA is fastest on NVIDIA cards. DirectML works with AMD, Intel and NVIDIA cards on Windows. CPU works everywhere and is slowest.',
+    );
   });
 
   it('shows download progress, cancel, and plain-word errors on the recommendation card', async () => {
@@ -6911,7 +7044,7 @@ describe('Engine manager UI and recommendation card', () => {
     const user = await mountWith(snapshot);
     const card = screen
       .getByText(
-        'Your NVIDIA GeForce RTX 4070 can run LocalSR much faster. Download the NVIDIA engine (4.3 GB)',
+        'Your NVIDIA GeForce RTX 4070 can run LocalSR much faster with the NVIDIA engine (4.3 GB).',
       )
       .closest('.engine-recommendation-card') as HTMLElement;
     await user.click(within(card).getByRole('button', { name: 'Download' }));
@@ -6922,7 +7055,7 @@ describe('Engine manager UI and recommendation card', () => {
       backend: 'cuda',
       engine_id: 'windows-x86_64-cuda-demo',
       downloaded: 2_150_000_000,
-      total: 4_300_000_000,
+      total: 4_574_000_000,
       error: null,
     });
     expect(await screen.findByText(/Downloading NVIDIA engine…/)).toBeTruthy();
@@ -6935,7 +7068,7 @@ describe('Engine manager UI and recommendation card', () => {
       backend: 'cuda',
       engine_id: 'windows-x86_64-cuda-demo',
       downloaded: 2_150_000_000,
-      total: 4_300_000_000,
+      total: 4_574_000_000,
       error: 'Engine download cancelled',
     });
     resolveInstall();
@@ -6954,7 +7087,7 @@ describe('Engine manager UI and recommendation card', () => {
     );
   });
 
-  it('supports Download, Use, Remove, Cancel, errors, and Import in the Change dialog', async () => {
+  it('supports Download, Use, Remove, Cancel, error-in-row with Try again, and Import in the Engine dialog', async () => {
     const snapshot = windowsCpuSnapshot();
     snapshot.engines!.installed.push({
       id: 'windows-x86_64-directml-demo',
@@ -6993,20 +7126,34 @@ describe('Engine manager UI and recommendation card', () => {
     await user.click(screen.getByRole('button', { name: /Advanced/ }));
     await user.click(screen.getByRole('button', { name: 'Change…' }));
 
-    const dialog = await screen.findByRole('dialog', { name: 'Inference engine' });
+    const dialog = await screen.findByRole('dialog', { name: 'Engine' });
     const list = within(dialog).getByRole('list', { name: 'Available engines' });
     expect(within(list).getByText('NVIDIA CUDA')).toBeTruthy();
-    expect(within(list).getByText('4.3 GB')).toBeTruthy();
+    expect(within(list).getByText('4.3 GB · Not installed')).toBeTruthy();
     expect(within(list).getByText('DirectML')).toBeTruthy();
+    expect(within(list).getByText('430 MB · Installed')).toBeTruthy();
     expect(within(list).getByText('CPU')).toBeTruthy();
-    expect(within(list).getByText('Recommended')).toBeTruthy();
-    expect(within(list).getByText('Active')).toBeTruthy();
-    expect(within(list).getByText('Installed')).toBeTruthy();
+    expect(within(list).getByText('317 MB · Built in')).toBeTruthy();
+
+    // Only Recommended and Active stay as badges.
+    const badges = [...list.querySelectorAll('.engine-badge')].map((el) => el.textContent);
+    expect(badges).toEqual(['Recommended', 'Active']);
+
+    // Button classes: only recommended Download is primary, Use is plain compact, Remove is compact ghost danger.
+    const cudaRowInitial = within(list).getByText('NVIDIA CUDA').closest('li') as HTMLElement;
+    const directmlRow = within(list).getByText('DirectML').closest('li') as HTMLElement;
+    const cudaDownloadBtn = within(cudaRowInitial).getByRole('button', { name: 'Download' });
+    const directmlUseBtn = within(directmlRow).getByRole('button', { name: 'Use' });
+    const directmlRemoveBtn = within(directmlRow).getByRole('button', { name: 'Remove' });
+    expect(cudaDownloadBtn.classList.contains('primary')).toBe(true);
+    expect(directmlUseBtn.classList.contains('primary')).toBe(false);
+    expect(directmlUseBtn.classList.contains('compact')).toBe(true);
+    expect(directmlRemoveBtn.classList.contains('ghost')).toBe(true);
+    expect(directmlRemoveBtn.classList.contains('danger')).toBe(true);
 
     // Switch to DirectML
     api.refreshSnapshot.mockResolvedValueOnce(structuredClone(afterUse));
-    const directmlRow = within(list).getByText('DirectML').closest('li') as HTMLElement;
-    await user.click(within(directmlRow).getByRole('button', { name: 'Use' }));
+    await user.click(directmlUseBtn);
     await waitFor(() => expect(api.useEngine).toHaveBeenCalledWith('directml'));
     await waitFor(() => expect(within(directmlRow).getByText('Active')).toBeTruthy());
 
@@ -7055,7 +7202,7 @@ describe('Engine manager UI and recommendation card', () => {
     const cudaRow = within(list).getByText('NVIDIA CUDA').closest('li') as HTMLElement;
     await waitFor(() => expect(within(cudaRow).getByText('Active')).toBeTruthy());
 
-    // Error on remove/use displays in plain words
+    // Error on remove displays inside the failing row boxed with .download-error and button reads Try again
     api.removeEngine.mockRejectedValueOnce('Not enough space on disk');
     api.refreshSnapshot.mockResolvedValueOnce(structuredClone(snapshot));
     await waitFor(() =>
@@ -7073,9 +7220,12 @@ describe('Engine manager UI and recommendation card', () => {
       ).toBe(false),
     );
     await user.click(within(updatedDirectmlRow).getByRole('button', { name: 'Remove' }));
-    expect(await within(dialog).findByRole('alert')).toBeTruthy();
+    const removeAlert = await within(updatedDirectmlRow).findByRole('alert');
+    expect(removeAlert.classList.contains('download-error')).toBe(true);
+    expect(removeAlert.textContent).toBe('Not enough space on disk');
+    expect(within(updatedDirectmlRow).getByRole('button', { name: 'Try again' })).toBeTruthy();
 
-    // Download with progress bar and Cancel inside the Change dialog
+    // Download hides size meta during progress, supports Cancel, and renders download error inside row with Try again
     let resolveDialogInstall: () => void = () => undefined;
     api.installEngine.mockImplementationOnce(
       () =>
@@ -7094,11 +7244,13 @@ describe('Engine manager UI and recommendation card', () => {
       stage: 'downloading',
       backend: 'cuda',
       engine_id: 'windows-x86_64-cuda-demo',
-      downloaded: 1_000_000_000,
+      downloaded: 2_150_000_000,
       total: 4_574_000_000,
       error: null,
     });
     expect(await within(cudaRow).findByText(/Downloading…/)).toBeTruthy();
+    expect(within(cudaRow).queryByText('4.3 GB · Not installed')).toBeNull();
+    expect(within(cudaRow).queryByText('4.3 GB')).toBeNull();
     expect(cudaRow.querySelector('progress')).toBeTruthy();
     await user.click(within(cudaRow).getByRole('button', { name: 'Cancel' }));
     expect(api.cancelEngineInstall).toHaveBeenCalledTimes(1);
@@ -7106,7 +7258,7 @@ describe('Engine manager UI and recommendation card', () => {
       stage: 'cancelled',
       backend: 'cuda',
       engine_id: 'windows-x86_64-cuda-demo',
-      downloaded: 1_000_000_000,
+      downloaded: 2_150_000_000,
       total: 4_574_000_000,
       error: 'Engine download cancelled',
     });
@@ -7114,5 +7266,17 @@ describe('Engine manager UI and recommendation card', () => {
     await waitFor(() =>
       expect(within(cudaRow).getByRole('button', { name: 'Download' })).toBeTruthy(),
     );
+
+    // Download error renders inside cudaRow with .download-error and button reads Try again
+    api.installEngine.mockRejectedValueOnce(
+      'network error: error sending request for url (https://example.com)',
+    );
+    await user.click(within(cudaRow).getByRole('button', { name: 'Download' }));
+    const downloadAlert = await within(cudaRow).findByRole('alert');
+    expect(downloadAlert.classList.contains('download-error')).toBe(true);
+    expect(downloadAlert.textContent).toBe(
+      'Could not reach the download server. Check your internet connection and try again.',
+    );
+    expect(within(cudaRow).getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 });

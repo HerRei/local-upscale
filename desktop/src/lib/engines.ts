@@ -89,7 +89,7 @@ export function recommendedEngineOffer(
     adapterName,
     shortName,
     sizeText,
-    message: `Your ${adapterName} can run LocalSR much faster. Download the ${shortName} engine${sizeSuffix}`,
+    message: `Your ${adapterName} can run LocalSR much faster with the ${shortName} engine${sizeSuffix}.`,
   };
 }
 

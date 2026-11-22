@@ -81,6 +81,20 @@ describe('several fixes in one pass', () => {
       ['fix', 'jpeg', 'Fix JPEG'],
       ['primary', 'noise', 'Restore'],
     ]);
+
+    const restoreColour = resolvePlan(
+      snapshot,
+      {
+        ...settings,
+        task: 'denoise',
+        selected_model_id: 'ddcolor_modelscope',
+        fix_stages: [{ fix: 'colour', model_id: 'ddcolor_modelscope' }],
+      },
+      options,
+    );
+    expect(restoreColour.map((stage) => [stage.role, stage.fix, stage.label])).toEqual([
+      ['primary', 'colour', 'Colour'],
+    ]);
   });
 
   it('counts a model used by two stages once', () => {

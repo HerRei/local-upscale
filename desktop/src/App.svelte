@@ -807,6 +807,7 @@
   // Everything a start needs except which items it takes.
   $: queueReady =
     !startingJob &&
+    !movingModels &&
     !cancelling &&
     snapshot.runtime.worker === 'ready' &&
     Boolean(settings.task) &&
@@ -1150,6 +1151,7 @@
     !activeDownload &&
     !preparing &&
     !startingJob &&
+    !movingModels &&
     !cancelling &&
     !hasNothingToDoAt1x &&
     downloads.stages.length > 0 &&
@@ -1333,20 +1335,22 @@
     : 'Finish or cancel the run to change settings.';
   $: startBlockReason = snapshot.runtime.active_job_id
     ? 'Wait for the current job to finish.'
-    : snapshot.runtime.worker !== 'ready'
-      ? 'The processing engine is not ready yet.'
-      : !settings.task
-        ? 'Choose a task before starting.'
-        : !queueSelection.length
-          ? 'Select a compatible item before starting.'
-          : unreadyMedia
-            ? scopeHint
-            : hasNothingToDoAt1x
-              ? nothingToDoAt1xReason
-              : editBlockReason ||
-                (!modelReady || !faceReady || !fixesReady || !interpolationReady
-                  ? 'Choose or download the required models before starting.'
-                  : 'The current settings are not ready to start.');
+    : movingModels
+      ? 'Wait for models to finish moving.'
+      : snapshot.runtime.worker !== 'ready'
+        ? 'The processing engine is not ready yet.'
+        : !settings.task
+          ? 'Choose a task before starting.'
+          : !queueSelection.length
+            ? 'Select a compatible item before starting.'
+            : unreadyMedia
+              ? scopeHint
+              : hasNothingToDoAt1x
+                ? nothingToDoAt1xReason
+                : editBlockReason ||
+                  (!modelReady || !faceReady || !fixesReady || !interpolationReady
+                    ? 'Choose or download the required models before starting.'
+                    : 'The current settings are not ready to start.');
 
   let themeForRefresh: (
     settings: Pick<UiSettings, 'appearance' | 'colour_blind_palette'>,
@@ -2434,10 +2438,13 @@
     }
   }
 
+  let updateNoticeVisible = false;
   let engineDialogOpen = false;
   let engineActionBusy = false;
   let engineRefreshingCatalog = false;
   let engineError = '';
+  let engineErrorBackend = '';
+  let engineErrorAction: 'download' | 'use' | 'remove' | '' = '';
   $: engineOffer = recommendedEngineOffer(snapshot.engines, settings);
 
   function handleEngineStatus(status: EngineDownloadStatus): void {
@@ -2451,10 +2458,16 @@
     };
     if (status.stage === 'error') {
       engineError = status.error ? plainEngineError(status.error) : 'Engine installation failed.';
+      engineErrorBackend = status.backend;
+      engineErrorAction = 'download';
     } else if (status.stage === 'cancelled' || status.stage === 'downloading') {
       engineError = '';
+      engineErrorBackend = '';
+      engineErrorAction = '';
     } else if (status.stage === 'installed') {
       engineError = '';
+      engineErrorBackend = '';
+      engineErrorAction = '';
       void refresh();
     }
   }
@@ -2463,6 +2476,8 @@
     if (engineRefreshingCatalog) return;
     engineRefreshingCatalog = true;
     engineError = '';
+    engineErrorBackend = '';
+    engineErrorAction = '';
     try {
       const catalog = await api.refreshEngineCatalog();
       if (snapshot.engines) {
@@ -2485,6 +2500,8 @@
 
   async function openEngineManager(): Promise<void> {
     engineError = '';
+    engineErrorBackend = '';
+    engineErrorAction = '';
     engineDialogOpen = true;
     if (
       snapshot.engines?.supported &&
@@ -2497,12 +2514,16 @@
 
   async function downloadEngine(backend: string): Promise<void> {
     engineError = '';
+    engineErrorBackend = '';
+    engineErrorAction = '';
     try {
       await api.installEngine(backend);
       await refresh();
     } catch (error) {
       if (snapshot.engines?.download.stage !== 'cancelled' && !/cancelled/i.test(String(error))) {
         engineError = plainEngineError(error);
+        engineErrorBackend = backend;
+        engineErrorAction = 'download';
       }
       await refresh().catch(() => undefined);
     }
@@ -2520,11 +2541,15 @@
     if (engineActionBusy) return;
     engineActionBusy = true;
     engineError = '';
+    engineErrorBackend = '';
+    engineErrorAction = '';
     try {
       await api.useEngine(backend);
       await refresh();
     } catch (error) {
       engineError = plainEngineError(error);
+      engineErrorBackend = backend;
+      engineErrorAction = 'use';
     } finally {
       engineActionBusy = false;
     }
@@ -2532,13 +2557,18 @@
 
   async function deleteEngine(id: string): Promise<void> {
     if (engineActionBusy) return;
+    const targetBackend = snapshot.engines?.installed.find((item) => item.id === id)?.backend ?? '';
     engineActionBusy = true;
     engineError = '';
+    engineErrorBackend = '';
+    engineErrorAction = '';
     try {
       await api.removeEngine(id);
       await refresh();
     } catch (error) {
       engineError = plainEngineError(error);
+      engineErrorBackend = targetBackend;
+      engineErrorAction = 'remove';
     } finally {
       engineActionBusy = false;
     }
@@ -2547,6 +2577,8 @@
   async function importEngineFromFile(): Promise<void> {
     if (engineActionBusy) return;
     engineError = '';
+    engineErrorBackend = '';
+    engineErrorAction = '';
     let path: string | null = null;
     try {
       path = await api.chooseEngineManifest();
@@ -2755,7 +2787,7 @@
   }
 
   async function start(mediaIds?: string[]): Promise<void> {
-    if ((!mediaIds && !canQueue) || !selectedMedia || !settings.task) return;
+    if (movingModels || (!mediaIds && !canQueue) || !selectedMedia || !settings.task) return;
     if (settings.task === 'edit') {
       await startEdit();
       return;
@@ -3611,31 +3643,34 @@
 
   <div class="top-notices">
     <UpdateNotice
+      bind:visible={updateNoticeVisible}
       processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
     />
-    {#if engineOffer}
-      <EngineRecommendationCard
-        offer={engineOffer}
-        download={snapshot.engines?.download ?? {
-          stage: 'idle',
-          backend: '',
-          engine_id: '',
-          downloaded: 0,
-          total: 0,
-        }}
-        processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
-        error={engineError}
-        onDownload={() => void downloadEngine(engineOffer.backend)}
-        onCancel={() => void cancelEngineDownload()}
-        onDismiss={() => void dismissGpuDownloadNotice()}
-      />
-    {:else if settings.privacy_choice_made !== false && snapshot.gpu_download_notice && !settings.gpu_download_notice_dismissed}
-      <GpuDownloadNotice
-        message={snapshot.gpu_download_notice}
-        onOpenDownloadPage={() =>
-          attempt('Could not open the download page', () => api.openDownloadPage())}
-        onDismiss={() => void dismissGpuDownloadNotice()}
-      />
+    {#if !updateNoticeVisible}
+      {#if engineOffer}
+        <EngineRecommendationCard
+          offer={engineOffer}
+          download={snapshot.engines?.download ?? {
+            stage: 'idle',
+            backend: '',
+            engine_id: '',
+            downloaded: 0,
+            total: 0,
+          }}
+          processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
+          error={engineError}
+          onDownload={() => void downloadEngine(engineOffer.backend)}
+          onCancel={() => void cancelEngineDownload()}
+          onDismiss={() => void dismissGpuDownloadNotice()}
+        />
+      {:else if settings.privacy_choice_made !== false && snapshot.gpu_download_notice && !settings.gpu_download_notice_dismissed}
+        <GpuDownloadNotice
+          message={snapshot.gpu_download_notice}
+          onOpenDownloadPage={() =>
+            attempt('Could not open the download page', () => api.openDownloadPage())}
+          onDismiss={() => void dismissGpuDownloadNotice()}
+        />
+      {/if}
     {/if}
   </div>
   <main class="workspace">
@@ -3763,15 +3798,17 @@
       <div class="pane-heading" data-tauri-drag-region>
         <h1 data-tauri-drag-region>Enhance</h1>
         <span data-tauri-drag-region title={settingsLocked ? lockedTitle : undefined}
-          >{settingsLocked
-            ? 'Locked while running'
-            : settings.task === 'edit'
-              ? editModel
-                ? editFamilyLabel(editModel.family)
-                : 'Choose a model'
-              : settings.task
-                ? `${activeQuality === 'custom' ? 'Custom' : activeQuality === 'best' ? 'Best' : 'Quick'}${restoring ? '' : settings.content === 'illustration' ? ' · Illustration' : ' · Photo'}`
-                : 'Choose a task'}</span
+          >{movingModels
+            ? 'Moving models'
+            : settingsLocked
+              ? 'Locked while running'
+              : settings.task === 'edit'
+                ? editModel
+                  ? editFamilyLabel(editModel.family)
+                  : 'Choose a model'
+                : settings.task
+                  ? `${activeQuality === 'custom' ? 'Custom' : activeQuality === 'best' ? 'Best' : 'Quick'}${restoring ? '' : settings.content === 'illustration' ? ' · Illustration' : ' · Photo'}`
+                  : 'Choose a task'}</span
         >
       </div>
       <!-- Locked: the header says so once, and the dimmed controls show the rest. Screen readers
@@ -4115,7 +4152,9 @@
                           : !faceModel
                             ? 'Faces need a model with a face companion (HAT-S or HAT-L).'
                             : ''
-                        : ''}
+                        : fix === 'colour'
+                          ? 'Adds colour to black-and-white photos'
+                          : ''}
                       on:click={() => toggleFix(fix)}
                       >{#if settings.fixes.includes(fix)}<svg
                           xmlns="http://www.w3.org/2000/svg"
@@ -4285,7 +4324,7 @@
                           class="label-with-tip"
                           >{stage.label}<HelpTip
                             label="Colour"
-                            text="Adds colour to black-and-white photos before upscaling (or at 1× in Restore). DDColor-L needs a 912 MB download. Colours are a guess. Already colourful photos still run with a note."
+                            text="Adds colour to black-and-white photos. The colours are the model's guess. A photo that already has colour is recoloured too."
                           /></span
                         >{:else}{stage.label}{/if}</span
                     >
@@ -4595,17 +4634,15 @@
                 aria-label="Model folder unavailable"
               >
                 <p>
-                  Model folder unavailable: {settings.model_directory}. Reconnect the drive, choose
-                  the folder again, or reset to default.
+                  Model folder not found: {settings.model_directory}. Reconnect the drive or choose
+                  another folder.
                 </p>
                 <div class="eyebrow-actions">
-                  <button
-                    type="button"
-                    class="link-button"
-                    on:click={() => void chooseModelFolder()}>Choose folder…</button
+                  <button type="button" class="button" on:click={() => void chooseModelFolder()}
+                    >Choose folder…</button
                   >
-                  <button type="button" class="link-button" on:click={() => void resetModelFolder()}
-                    >Reset to default</button
+                  <button type="button" class="button" on:click={() => void resetModelFolder()}
+                    >Use default folder</button
                   >
                 </div>
               </section>
@@ -4937,9 +4974,13 @@
     actionBusy={engineActionBusy}
     refreshingCatalog={engineRefreshingCatalog}
     errorMessage={engineError}
+    errorBackend={engineErrorBackend}
+    errorAction={engineErrorAction}
     onClose={() => {
       engineDialogOpen = false;
       engineError = '';
+      engineErrorBackend = '';
+      engineErrorAction = '';
     }}
     onRefreshCatalog={() => void refreshEngineCatalogList()}
     onDownload={(backend) => void downloadEngine(backend)}

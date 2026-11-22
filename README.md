@@ -84,7 +84,7 @@ The app offers the faster GPU engine after setup.
 | Linux, AMD | all `LocalSR-v0.5.0-beta-Linux-ROCm-x86_64.AppImage.part-*` files, joined |
 | Linux, NVIDIA | all `LocalSR-v0.5.0-beta-Linux-CUDA-x86_64.AppImage.part-*` files, joined |
 
-To import an engine offline, download the `*.engine-payload.json` manifest, its `.engine.tar.gz.part-*` files and their `.sig` signature files into one folder, then open **Advanced -> Hardware -> Engine -> Change… -> Import engine from file…** and choose the `*.engine-payload.json` file.
+To import an engine offline, download the `*.engine-payload.json` manifest, its `.engine.tar.gz.part-*` files and their `.sig` signature files into one folder, then open **Advanced -> Engine -> Change… -> Import engine from file…** and choose the `*.engine-payload.json` file.
 
 The other files (signatures, checksums and source archives) are for verification and updates.
 
@@ -172,7 +172,7 @@ version, no account and no advertising, and the code is MIT licensed.
 custom checkpoint for upscaling and restoration. `.pth`, `.pt` and `.ckpt`
 files can run code when they load, so the app only uses one after you tick
 *Allow this pickle-based checkpoint*. Do that only for files from a publisher
-you trust. For editing, **Use my own edit model…** in the model library lets
+you trust. For editing, **Use your own edit model…** in the model library lets
 you pick local GGUF/safetensors component files for Qwen Image Edit 2511,
 Qwen Image 2.1, or FLUX.2 klein.
 

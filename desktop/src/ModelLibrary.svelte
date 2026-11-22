@@ -828,7 +828,7 @@
             </button>
           {/if}
           <button class="list-more custom-edit-link" type="button" on:click={openCustomEdit}
-            >Use my own edit model…</button
+            >Use your own edit model…</button
           >
         {:else if group === 'own'}
           <div class="list-head">Your own file</div>

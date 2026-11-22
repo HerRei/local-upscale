@@ -11,6 +11,7 @@
 
   /** Installing replaces the running engine, so it waits for the queue. */
   export let processing = false;
+  export let visible = false;
   let dismissed = dismissedVersion();
   let requested = false;
 

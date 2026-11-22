@@ -310,15 +310,27 @@ export function resolvePlan(
     });
   } else {
     const primary = byId(settings.selected_model_id);
+    const restoreLabel =
+      chip === 'colour' || primary?.purposes.includes('colorize')
+        ? FIX_ROW_LABELS.colour
+        : 'Restore';
     const stage = stageFor(
       restoring ? 'restore' : 'upscale',
       'primary',
-      restoring ? 'Restore' : `Upscale ×${settings.output_scale}`,
+      restoring ? restoreLabel : `Upscale ×${settings.output_scale}`,
       primary,
       restoring && primary && chip && fixesOf(primary).includes(chip) ? chip : undefined,
     );
     if (stage) stages.push(stage);
-    else if (chip) stages.push(missingStage('restore', 'primary', 'Restore', chip));
+    else if (chip)
+      stages.push(
+        missingStage(
+          'restore',
+          'primary',
+          chip === 'colour' ? FIX_ROW_LABELS.colour : 'Restore',
+          chip,
+        ),
+      );
   }
 
   if (options.faceEnabled && options.faceModel && !restoring && !skipUpscale) {

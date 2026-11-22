@@ -156,7 +156,7 @@ engine fails to start. Microsoft Store builds receive both app and engine update
 from the Store and do not support in-app engine switching. On direct Windows and
 Linux builds, LocalSR offers the detected GPU engine after the first-launch setup
 screen and keeps engine switching, download, removal and offline file import in
-**Advanced -> Hardware -> Engine -> Change…**.
+**Advanced -> Engine -> Change…**.
 
 ## Memory guidance
 

@@ -94,7 +94,7 @@ starting profiles.
 
 ### Your own edit model
 
-At the end of the **Edit with a prompt** list in the model library, **Use my own
+At the end of the **Edit with a prompt** list in the model library, **Use your own
 edit model…** lets you pick local model files without copying or downloading
 anything. Choose a family supported by the bundled `stable-diffusion.cpp`
 runtime (Qwen Image Edit 2511, Qwen Image 2.1, or FLUX.2 klein; GGUF diffusion

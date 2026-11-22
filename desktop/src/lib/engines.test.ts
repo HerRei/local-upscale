@@ -24,7 +24,7 @@ describe('engine helpers', () => {
     const offer = recommendedEngineOffer(snapshot.engines, snapshot.settings);
     expect(offer?.backend).toBe('cuda');
     expect(offer?.message).toBe(
-      'Your NVIDIA GeForce RTX 4070 can run LocalSR much faster. Download the NVIDIA engine (4.3 GB)',
+      'Your NVIDIA GeForce RTX 4070 can run LocalSR much faster with the NVIDIA engine (4.3 GB).',
     );
 
     expect(

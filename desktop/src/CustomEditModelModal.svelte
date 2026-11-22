@@ -103,7 +103,7 @@
         <span class="label-with-tip"
           ><label for="custom-edit-family">Model family</label><HelpTip
             label="Model family"
-            text="Chooses the sd-cli options, default step count and guidance scale for your files."
+            text={`Tells LocalSR how to run your files and sets the defaults. For this family: ${spec.defaultSteps} steps, CFG ${spec.cfgScale}.`}
           /></span
         >
         <select
@@ -121,9 +121,6 @@
         </select>
       </div>
       {#if detectedNote}<p class="custom-edit-meta">{detectedNote}</p>{/if}
-      <p class="custom-edit-meta">
-        Defaults: {spec.defaultSteps} steps, CFG {spec.cfgScale}
-      </p>
 
       <div class="custom-edit-files">
         <div class="custom-edit-file">

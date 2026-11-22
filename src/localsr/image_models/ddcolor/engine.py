@@ -18,7 +18,7 @@ from .model import DDColor
 
 DDCOLOR_INPUT_SIZE = (512, 512)
 COLORFUL_INPUT_CHROMA_THRESHOLD = 4.0
-ALREADY_COLORFUL_NOTE = "This photo already had colour; DDColor recoloured it."
+ALREADY_COLORFUL_NOTE = "This photo already had colour. It was recoloured."
 
 
 def _import_cv2():
