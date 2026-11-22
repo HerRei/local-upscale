@@ -20,6 +20,7 @@ from collections.abc import Iterable, Iterator
 from pathlib import Path, PurePath
 
 from release_targets import (
+    UPDATE_ARCH,
     engine_id,
     platform_key,
     targets,
@@ -27,10 +28,12 @@ from release_targets import (
     validate_manifest,
     version,
 )
+from release_targets import (
+    protocol_version as current_protocol_version,
+)
 
 MAX_PUBLIC_ASSET_BYTES = 2 * 1024**3
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
-PROTOCOL_RE = re.compile(r"pub const PROTOCOL_VERSION: u32 = (\d+);")
 ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_KEY = ROOT / "packaging/updates/production.pub"
 
@@ -328,10 +331,29 @@ def _statement(
             raise ValueError(f"{key}: the signed release statement does not match the entry")
 
 
-def _engine_manifest(key: str, contract: dict, engine_parts: list, path: Path) -> None:
+def _engine_manifest(
+    key: str,
+    contract: dict,
+    engine_parts: list,
+    path: Path,
+    *,
+    release_version: str,
+    target: dict,
+    protocol: int,
+    identity: str,
+) -> None:
     """The engine manifest the client will read lists the parts the feed names, and the
     entry reserves room for the engine it unpacks."""
     payload = json.loads(path.read_bytes())
+    if (
+        payload.get("schema_version") != 2
+        or payload.get("version") != release_version
+        or payload.get("os") != target["platform"]
+        or payload.get("arch") != UPDATE_ARCH[target["architecture"]]
+        or payload.get("protocol_version") != protocol
+        or payload.get("engine_id") != identity
+    ):
+        raise ValueError(f"{key}: the engine manifest does not carry matching schema 2 metadata")
     listed = [
         (part.get("filename"), part.get("size"), part.get("sha256"))
         for part in payload.get("parts", [])
@@ -365,8 +387,7 @@ def verify_feed(
     feed = json.loads(feed_path.read_text(encoding="utf-8"))
     if feed.get("version") != release_version:
         raise ValueError(f"the feed is for {feed.get('version')!r}, not {release_version!r}")
-    match = PROTOCOL_RE.search((ROOT / "desktop/src-tauri/src/types.rs").read_text())
-    protocol = int(match.group(1)) if match else None
+    protocol = current_protocol_version()
     channel = "beta" if "-" in release_version else "stable"
     platforms = feed.get("platforms")
     expected = {platform_key(target): target for target in targets()}
@@ -436,7 +457,16 @@ def verify_feed(
             )
         # The shape is right; now the signatures, over the bytes that will be published.
         _statement(key, contract, release_version, channel, public_key)
-        _engine_manifest(key, contract, engine_parts, local(files["engine_manifest"]))
+        _engine_manifest(
+            key,
+            contract,
+            engine_parts,
+            local(files["engine_manifest"]),
+            release_version=release_version,
+            target=target,
+            protocol=protocol,
+            identity=identity,
+        )
         package = [local(part["name"]) for part in parts] if parts else [local(name)]
         _signed_file(
             {"size": size, "sha256": contract["sha256"], "signature": entry.get("signature")},

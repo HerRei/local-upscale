@@ -105,16 +105,9 @@ ENGINE_OUT="$OUT/engine"
 rm -rf "$ENGINE_OUT" && mkdir -p "$ENGINE_OUT"
 ENGINE_PREFIX="LocalSR-v$VERSION-macOS-arm64.engine.tar.gz"
 ENGINE_MANIFEST="LocalSR-v$VERSION-macOS-arm64.engine-payload.json"
-python - "$APP/Contents/Resources/engine" "$ENGINE_OUT" "$ENGINE_PREFIX" "$ENGINE_MANIFEST" <<'PY'
-import sys
-from pathlib import Path
-sys.path.insert(0, "scripts")
-from prepare_engine_payload import prepare
-engine, out, prefix, manifest_name = sys.argv[1:]
-written = prepare(Path(engine), Path(out), prefix, backend="MPS", worker="localsr-worker")
-written.rename(Path(out) / manifest_name)
-print("engine payload written")
-PY
+python scripts/prepare_engine_payload.py --target macos-arm64-mps --output "$ENGINE_OUT" \
+  --engine "$APP/Contents/Resources/engine" --version "$VERSION" --commit "$COMMIT" \
+  --engine-id "$LOCALSR_ENGINE_ID"
 for file in "$ENGINE_OUT/$ENGINE_MANIFEST" "$ENGINE_OUT"/*.part-*; do
   python scripts/beta_update_signing.py sign "$file"
 done

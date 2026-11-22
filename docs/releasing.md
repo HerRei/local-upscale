@@ -132,9 +132,10 @@ GitHub-hosted runners. Both start only by hand, at the release tag or commit
 release; otherwise the files stay run artifacts for 14 days, and
 `attach-release-assets.yml` can copy one reviewed artifact to a release later.
 Each build gets its update identity from `scripts/release_targets.py --update-env`
-and writes its engine package (`<package>.engine-payload.json` and its
-`.engine.tar.gz.part-*` files) next to the package; the updater signatures are made
-on the Mac ([Windows and Linux updates](#windows-and-linux-updates)).
+and writes its schema 2 engine package (`<package>.engine-payload.json` with
+`version`, `os`, `arch`, `protocol_version` and `engine_id`, plus its
+`.engine.tar.gz.part-*` files) next to the package; the updater signatures are
+made on the Mac ([Windows and Linux updates](#windows-and-linux-updates)).
 
 ### Targets
 

@@ -11,7 +11,9 @@ fn write_test_engine_meta(next_root: &Path, id: &str) {
             arch: std::env::consts::ARCH.into(),
             protocol_version: PROTOCOL_VERSION,
             handshake_passed: true,
+            verified_install: true,
             version: String::new(),
+            files: test_engine_files(next_root, id),
         },
     )
     .unwrap();
@@ -193,7 +195,9 @@ fn installed_engine_requires_valid_handshake_metadata_for_every_host() {
             arch: std::env::consts::ARCH.into(),
             protocol_version: PROTOCOL_VERSION,
             handshake_passed: true,
+            verified_install: true,
             version: String::new(),
+            files: test_engine_files(&paths.next_root, id),
         },
     )
     .unwrap();
@@ -1288,7 +1292,9 @@ fn round4_a_missing_versioned_engine_is_fetched_again_not_replaced_by_the_bundle
             arch: std::env::consts::ARCH.into(),
             protocol_version: PROTOCOL_VERSION,
             handshake_passed: true,
+            verified_install: true,
             version: String::new(),
+            files: test_engine_files(root.path(), &id),
         },
     )
     .unwrap();

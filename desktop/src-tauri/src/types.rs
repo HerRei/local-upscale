@@ -821,6 +821,7 @@ pub struct InstalledEngine {
     pub bundled: bool,
     pub active: bool,
     pub path: String,
+    pub needs_reinstall: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

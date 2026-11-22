@@ -546,6 +546,7 @@ export interface InstalledEngine {
   bundled: boolean;
   active: boolean;
   path: string;
+  needs_reinstall?: boolean;
 }
 
 export interface EngineRecommendation {

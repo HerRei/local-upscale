@@ -17,16 +17,36 @@ import argparse
 import gzip
 import hashlib
 import json
+import os
 import re
+import subprocess
 import tarfile
 import zlib
 from pathlib import Path, PurePosixPath
 
-from release_targets import target, update_files, version
+from release_targets import (
+    ROOT,
+    UPDATE_ARCH,
+    target,
+    targets,
+    update_files,
+)
+from release_targets import (
+    engine_id as compute_engine_id,
+)
+from release_targets import (
+    protocol_version as current_protocol_version,
+)
+from release_targets import (
+    version as current_version,
+)
 
 PART_BYTES = 1900 * 1024**2
 # desktop/src-tauri/src/engine_payload.rs accepts the same backend names.
 BACKENDS = {"CUDA", "ROCM", "CPU", "MPS", "DIRECTML"}
+OS_VALUES = {"windows", "linux", "macos"}
+ARCH_VALUES = {"x86_64", "aarch64"}
+ENGINE_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 
 class PartWriter:
@@ -94,6 +114,40 @@ def _engine_files(engine: Path) -> list[Path]:
     return files
 
 
+def _head_commit() -> str:
+    env_sha = os.environ.get("GITHUB_SHA", "").strip()
+    if env_sha:
+        return env_sha
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+
+
+def _resolve_target_for(backend: str, os_name: str, arch: str) -> dict | None:
+    for entry in targets():
+        if (
+            entry["platform"] == os_name
+            and UPDATE_ARCH[entry["architecture"]] == arch
+            and entry["update"]["backend"].upper() == backend
+        ):
+            return entry
+    return None
+
+
+def _default_engine_id(
+    entry: dict | None,
+    *,
+    commit: str | None = None,
+    engine_id: str | None = None,
+) -> str:
+    if engine_id is not None:
+        return engine_id
+    env_id = os.environ.get("LOCALSR_ENGINE_ID", "").strip()
+    if env_id and (entry is None or env_id.startswith(f"{entry['id']}-")):
+        return env_id
+    if entry is not None:
+        return compute_engine_id(entry, commit or _head_commit())
+    raise ValueError("engine_id is required when target metadata cannot be inferred")
+
+
 def prepare(
     engine: Path,
     output: Path,
@@ -102,6 +156,11 @@ def prepare(
     part_bytes: int = PART_BYTES,
     backend: str = "CUDA",
     worker: str = "localsr-worker.exe",
+    version: str | None = None,
+    os_name: str | None = None,
+    arch: str | None = None,
+    protocol_version: int | None = None,
+    engine_id: str | None = None,
 ) -> Path:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", prefix):
         raise ValueError("invalid engine payload prefix")
@@ -109,6 +168,22 @@ def prepare(
         raise ValueError("payload parts must be smaller than 2 GiB")
     if backend not in BACKENDS:
         raise ValueError("unsupported engine payload backend")
+    resolved_os = os_name or (
+        "windows" if worker.endswith(".exe") else ("macos" if backend == "MPS" else "linux")
+    )
+    resolved_arch = arch or ("aarch64" if resolved_os == "macos" else "x86_64")
+    if resolved_os not in OS_VALUES or resolved_arch not in ARCH_VALUES:
+        raise ValueError("unsupported engine payload platform")
+    resolved_version = version or current_version()
+    resolved_protocol = current_protocol_version() if protocol_version is None else protocol_version
+    if not _positive_int(resolved_protocol):
+        raise ValueError("invalid engine payload protocol_version")
+    resolved_engine_id = _default_engine_id(
+        _resolve_target_for(backend, resolved_os, resolved_arch),
+        engine_id=engine_id,
+    )
+    if not ENGINE_ID_RE.fullmatch(resolved_engine_id):
+        raise ValueError("invalid engine payload engine_id")
     if not (engine / worker).is_file():
         raise ValueError("the frozen worker is missing")
     output.mkdir(parents=True, exist_ok=True)
@@ -133,9 +208,14 @@ def prepare(
     finally:
         writer.close_part()
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "format": "tar.gz.parts",
         "backend": backend,
+        "version": resolved_version,
+        "os": resolved_os,
+        "arch": resolved_arch,
+        "protocol_version": resolved_protocol,
+        "engine_id": resolved_engine_id,
         "file_count": len(files),
         "unpacked_bytes": sum(p.stat().st_size for p in files),
         "parts": writer.parts,
@@ -179,7 +259,17 @@ def _positive_int(value: object) -> bool:
 
 
 def validate_payload(
-    manifest: object, directory: Path, prefix: str, backend: str, worker: str
+    manifest: object,
+    directory: Path,
+    prefix: str,
+    backend: str,
+    worker: str,
+    *,
+    expected_version: str | None = None,
+    expected_os: str | None = None,
+    expected_arch: str | None = None,
+    expected_protocol_version: int | None = None,
+    expected_engine_id: str | None = None,
 ) -> list[Path]:
     """Check an engine payload in ``directory`` the way the app's installer will.
 
@@ -189,11 +279,30 @@ def validate_payload(
     all, and the worker at the top. Returns the part paths in order.
     """
     parts = manifest.get("parts") if isinstance(manifest, dict) else None
+    manifest_version = manifest.get("version") if isinstance(manifest, dict) else None
+    manifest_os = manifest.get("os") if isinstance(manifest, dict) else None
+    manifest_arch = manifest.get("arch") if isinstance(manifest, dict) else None
+    manifest_protocol = manifest.get("protocol_version") if isinstance(manifest, dict) else None
+    manifest_engine_id = manifest.get("engine_id") if isinstance(manifest, dict) else None
     if (
         not isinstance(manifest, dict)
-        or manifest.get("schema_version") != 1
+        or manifest.get("schema_version") != 2
         or manifest.get("format") != "tar.gz.parts"
         or manifest.get("backend") != backend
+        or not isinstance(manifest_version, str)
+        or not manifest_version.strip()
+        or manifest_os not in OS_VALUES
+        or manifest_arch not in ARCH_VALUES
+        or not _positive_int(manifest_protocol)
+        or not isinstance(manifest_engine_id, str)
+        or not ENGINE_ID_RE.fullmatch(manifest_engine_id)
+        or (expected_version is not None and manifest_version != expected_version)
+        or (expected_os is not None and manifest_os != expected_os)
+        or (expected_arch is not None and manifest_arch != expected_arch)
+        or (
+            expected_protocol_version is not None and manifest_protocol != expected_protocol_version
+        )
+        or (expected_engine_id is not None and manifest_engine_id != expected_engine_id)
         or not _positive_int(manifest.get("file_count"))
         or not _positive_int(manifest.get("unpacked_bytes"))
         or not isinstance(parts, list)
@@ -261,9 +370,17 @@ def prepare_for_target(
     engine: Path | None = None,
     reuse: Path | None = None,
     release_version: str | None = None,
+    commit: str | None = None,
+    engine_id: str | None = None,
 ) -> Path:
     """Write the updater's engine package of one edition into ``output``."""
-    files = update_files(target(target_id), release_version or version())
+    entry = target(target_id)
+    resolved_version = release_version or current_version()
+    resolved_os = entry["platform"]
+    resolved_arch = UPDATE_ARCH[entry["architecture"]]
+    resolved_protocol = current_protocol_version()
+    resolved_engine_id = _default_engine_id(entry, commit=commit, engine_id=engine_id)
+    files = update_files(entry, resolved_version)
     destination = output / files["engine_manifest"]
     if (engine is None) == (reuse is None):
         raise ValueError("give either the engine directory or the payload to reuse")
@@ -274,6 +391,11 @@ def prepare_for_target(
             files["engine_prefix"],
             backend=files["payload_backend"],
             worker=files["worker"],
+            version=resolved_version,
+            os_name=resolved_os,
+            arch=resolved_arch,
+            protocol_version=resolved_protocol,
+            engine_id=resolved_engine_id,
         )
         written.replace(destination)
         return destination
@@ -285,6 +407,11 @@ def prepare_for_target(
         files["engine_prefix"],
         files["payload_backend"],
         files["worker"],
+        expected_version=resolved_version,
+        expected_os=resolved_os,
+        expected_arch=resolved_arch,
+        expected_protocol_version=resolved_protocol,
+        expected_engine_id=resolved_engine_id,
     )
     destination.write_bytes(data)
     return destination
@@ -294,11 +421,24 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", required=True, help="Release target ID, e.g. linux-x86_64-cpu")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--version", help="Release version (default: pyproject.toml)")
+    parser.add_argument("--commit", help="Release commit SHA for engine_id calculation")
+    parser.add_argument("--engine-id", help="Explicit engine_id override")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--engine", type=Path, help="Frozen engine directory to package")
     source.add_argument("--reuse", type=Path, help="Existing payload manifest to adopt")
     args = parser.parse_args()
-    print(prepare_for_target(args.target, args.output, engine=args.engine, reuse=args.reuse))
+    print(
+        prepare_for_target(
+            args.target,
+            args.output,
+            engine=args.engine,
+            reuse=args.reuse,
+            release_version=args.version,
+            commit=args.commit,
+            engine_id=args.engine_id,
+        )
+    )
     return 0
 
 

@@ -2280,11 +2280,24 @@ fn resolve_worker_command(state: &AppState, app: &AppHandle) -> AppResult<Worker
     let selected = if state.worker.use_bundled_fallback.load(Ordering::SeqCst) {
         bundled.map(|path| (path, None))
     } else {
-        crate::updates::worker_engine_choice(
-            &state.paths,
-            bundled,
-            &*lock(&state.worker.failed_engines)?,
-        )
+        let mut failed = lock(&state.worker.failed_engines)?;
+        let quick_failed = crate::updates::verify_active_engine_at_start(&state.paths, &mut failed);
+        if quick_failed.is_some() && bundled.is_some() {
+            state
+                .worker
+                .use_bundled_fallback
+                .store(true, Ordering::SeqCst);
+            if let Ok(mut runtime) = state.runtime.lock() {
+                runtime.status_title = "Switched to bundled engine".into();
+                runtime.status_detail =
+                    "The installed engine failed verification; using the bundled engine instead."
+                        .into();
+            }
+            emit_state_changed(app);
+            bundled.map(|path| (path, None))
+        } else {
+            crate::updates::worker_engine_choice(&state.paths, bundled, &failed)
+        }
     };
     if let Some((program, installed_engine_id)) = selected {
         return Ok(installed_worker_command(

@@ -183,6 +183,7 @@ pub fn run() {
             engine_manager::install_engine,
             engine_manager::cancel_engine_install,
             engine_manager::use_engine,
+            engine_manager::verify_engine,
             engine_manager::remove_engine,
             engine_manager::choose_engine_manifest,
             engine_manager::import_engine,

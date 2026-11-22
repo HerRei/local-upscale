@@ -16,12 +16,14 @@
   export let refreshingCatalog = false;
   export let errorMessage = '';
   export let errorBackend = '';
-  export let errorAction: 'download' | 'use' | 'remove' | '' = '';
+  export let errorAction: 'download' | 'use' | 'remove' | 'verify' | '' = '';
+  export let verifiedBackend = '';
   export let onClose: () => void;
   export let onRefreshCatalog: () => void;
   export let onDownload: (backend: string) => void;
   export let onCancelDownload: () => void;
   export let onUse: (backend: string) => void;
+  export let onVerify: (id: string) => void = () => {};
   export let onRemove: (id: string) => void;
   export let onImport: () => void;
 
@@ -50,10 +52,19 @@
     ? Math.min(100, Math.round((download.downloaded / download.total) * 100))
     : 0;
 
-  function rowMeta(row: EngineListRow): string {
+  function rowMeta(row: EngineListRow, verified: string): string {
     return [
       row.sizeBytes > 0 ? formatBytes(row.sizeBytes) : '',
-      row.bundled ? 'Built in' : row.installed ? (row.active ? '' : 'Installed') : 'Not installed',
+      row.installedEntry?.needs_reinstall
+        ? 'Needs reinstall'
+        : row.bundled
+          ? 'Built in'
+          : row.installed
+            ? row.active
+              ? ''
+              : 'Installed'
+            : 'Not installed',
+      verified === row.backend && !row.installedEntry?.needs_reinstall ? 'Verified' : '',
     ]
       .filter(Boolean)
       .join(' · ');
@@ -106,7 +117,7 @@
       {#each rows as row (row.backend)}
         {@const rowDownloading = downloadInProgress && download.backend === row.backend}
         {@const rowError = !rowDownloading && failingBackend === row.backend ? activeError : ''}
-        {@const meta = rowMeta(row)}
+        {@const meta = rowMeta(row, rowError ? '' : verifiedBackend)}
         <li class="engine-item" class:active={row.active}>
           <div class="engine-item-main">
             <div class="engine-item-head">
@@ -163,8 +174,22 @@
                   type="button"
                   class="button compact"
                   disabled={busy || processing}
-                  on:click={() => onUse(row.backend)}
+                  on:click={() =>
+                    row.installedEntry?.needs_reinstall
+                      ? onDownload(row.backend)
+                      : onUse(row.backend)}
                   >{rowError && failingAction === 'use' ? 'Try again' : 'Use'}</button
+                >
+              {/if}
+              {#if row.installedEntry && !row.bundled && !row.installedEntry.needs_reinstall}
+                {@const verifyId = row.installedEntry.id}
+                <button
+                  type="button"
+                  class="button compact ghost"
+                  aria-label={`Verify ${row.label}`}
+                  disabled={busy || processing}
+                  on:click={() => onVerify(verifyId)}
+                  >{rowError && failingAction === 'verify' ? 'Try again' : 'Verify'}</button
                 >
               {/if}
               {#if row.removable && row.installedEntry}

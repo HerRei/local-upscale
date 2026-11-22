@@ -107,11 +107,16 @@ export function engineListRows(engines: EngineManagerSnapshot): EngineListRow[] 
 
   return sorted.map((backend) => {
     const installedEntry =
+      engines.installed.find(
+        (item) => item.backend === backend && !item.bundled && !item.needs_reinstall,
+      ) ??
       engines.installed.find((item) => item.backend === backend && !item.bundled) ??
       engines.installed.find((item) => item.backend === backend);
     const catalogEntry = engines.catalog.find((entry) => entry.backend === backend);
     const installed = Boolean(installedEntry || catalogEntry?.installed);
-    const active = engines.active_backend === backend || Boolean(installedEntry?.active);
+    const active =
+      !installedEntry?.needs_reinstall &&
+      (engines.active_backend === backend || Boolean(installedEntry?.active));
     const bundled = Boolean(installedEntry?.bundled);
     return {
       backend,

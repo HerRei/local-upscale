@@ -1,6 +1,69 @@
 use super::*;
+use crate::updates::worker_executable_name;
 use base64::Engine;
 use std::io::Read;
+
+#[test]
+fn use_rejects_engine_without_verified_install_metadata() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let (mut config, ..) = fixture_engine_files("http://127.0.0.1:1");
+    config.engine_id.clear();
+    let executable = paths
+        .next_root
+        .join("engines/linux-x86_64-rocm-test/engine")
+        .join(worker_executable_name());
+    fs::create_dir_all(executable.parent().unwrap()).unwrap();
+    fs::write(&executable, b"unverified").unwrap();
+    let installed = list_installed_engines_for(&paths, &config, None, "linux", "x86_64");
+    assert!(installed
+        .iter()
+        .any(|engine| engine.backend == "rocm" && engine.needs_reinstall));
+    let result = use_engine_for(&state, None, &config, "rocm", "linux", "x86_64", |_| {
+        panic!("an unverified worker must never be launched")
+    });
+    assert!(result.is_err());
+    assert!(!paths.next_root.join("active-engine.txt").exists());
+}
+
+#[test]
+fn restoring_backup_invalidates_metadata_for_replaced_engine() {
+    let root = tempfile::tempdir().unwrap();
+    let engine_root = root.path().join("engines/example");
+    let backup = engine_root.join(".backup-123e4567-e89b-42d3-a456-426614174000");
+    fs::create_dir_all(&backup).unwrap();
+    fs::write(backup.join(worker_executable_name()), b"old worker").unwrap();
+    fs::write(engine_root.join("meta.json"), b"metadata for replacement").unwrap();
+    recover_interrupted_reimport(root.path(), "example").unwrap();
+    assert!(engine_root.join("engine").is_dir());
+    assert!(!engine_root.join("meta.json").exists());
+}
+
+#[test]
+fn legacy_handshake_metadata_does_not_authorize_engine() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let id = "linux-x86_64-rocm-old";
+    let engine = paths.next_root.join("engines").join(id);
+    fs::create_dir_all(engine.join("engine")).unwrap();
+    fs::write(
+        engine.join("engine").join(worker_executable_name()),
+        b"worker",
+    )
+    .unwrap();
+    fs::write(
+        engine.join("meta.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "id": id, "backend": "rocm", "os": "linux", "arch": "x86_64",
+            "protocol_version": PROTOCOL_VERSION, "handshake_passed": true, "version": "0.5.1-beta"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(paths.next_root.join("active-engine.txt"), id).unwrap();
+    assert!(updates::active_engine_for_host(&paths, false, id, "linux", "x86_64").is_none());
+}
 
 fn release_fixture() -> serde_json::Value {
     serde_json::from_str(include_str!("../../tests/fixtures/update-release.json")).unwrap()
@@ -285,7 +348,9 @@ fn host_runs_active_installed_engine_with_different_id_when_os_arch_and_handshak
         arch: "x86_64".into(),
         protocol_version: PROTOCOL_VERSION,
         handshake_passed: true,
+        verified_install: true,
         version: "0.5.0-beta".into(),
+        files: updates::test_engine_files(&paths.next_root, id),
     };
     write_engine_meta(&paths.next_root, &meta).unwrap();
     assert_eq!(
@@ -693,7 +758,9 @@ fn use_engine_and_remove_engine_switch_protect_active_and_remove_inactive() {
             arch: "x86_64".into(),
             protocol_version: PROTOCOL_VERSION,
             handshake_passed: true,
+            verified_install: true,
             version: "0.5.0-beta".into(),
+            files: updates::test_engine_files(&paths.next_root, rocm_id),
         },
     )
     .unwrap();
@@ -753,6 +820,7 @@ fn import_engine_verifies_signatures_reuses_install_manifest_and_enforces_grants
         None,
         &config,
         &manifest_path,
+        "0.5.1-beta",
         "windows",
         "x86_64",
         |_| Ok(())
@@ -765,6 +833,7 @@ fn import_engine_verifies_signatures_reuses_install_manifest_and_enforces_grants
         None,
         &config,
         &manifest_path,
+        "0.5.1-beta",
         "linux",
         "x86_64",
         |exe| {
@@ -786,6 +855,7 @@ fn import_engine_verifies_signatures_reuses_install_manifest_and_enforces_grants
         None,
         &config,
         &manifest_path,
+        "0.5.1-beta",
         "linux",
         "x86_64",
         |_| Ok(())
@@ -798,6 +868,7 @@ fn import_engine_verifies_signatures_reuses_install_manifest_and_enforces_grants
         None,
         &config,
         &manifest_path,
+        "0.5.1-beta",
         "linux",
         "x86_64",
         |_| Ok(())
@@ -908,9 +979,16 @@ fn reimport_handshake_failure_preserves_active_engine() {
         &engine.parts[0].signature,
     )
     .unwrap();
-    let meta = import_engine_for(&state, None, &config, &manifest, "linux", "x86_64", |_| {
-        Ok(())
-    })
+    let meta = import_engine_for(
+        &state,
+        None,
+        &config,
+        &manifest,
+        "0.5.1-beta",
+        "linux",
+        "x86_64",
+        |_| Ok(()),
+    )
     .unwrap();
     let exe = paths
         .next_root
@@ -923,6 +1001,7 @@ fn reimport_handshake_failure_preserves_active_engine() {
         None,
         &config,
         &manifest,
+        "0.5.1-beta",
         "linux",
         "x86_64",
         |_| Err(AppError::Worker("failed".into()))
@@ -936,9 +1015,16 @@ fn reimport_handshake_failure_preserves_active_engine() {
     lock(&state.worker.failed_engines)
         .unwrap()
         .insert(meta.id.clone());
-    import_engine_for(&state, None, &config, &manifest, "linux", "x86_64", |_| {
-        Ok(())
-    })
+    import_engine_for(
+        &state,
+        None,
+        &config,
+        &manifest,
+        "0.5.1-beta",
+        "linux",
+        "x86_64",
+        |_| Ok(()),
+    )
     .unwrap();
     assert!(!lock(&state.worker.failed_engines)
         .unwrap()
@@ -971,7 +1057,9 @@ fn app_updates_keep_the_users_chosen_backend() {
             arch: "x86_64".into(),
             protocol_version: PROTOCOL_VERSION,
             handshake_passed: true,
+            verified_install: true,
             version: "0.3.6-beta".into(),
+            files: updates::test_engine_files(&paths.next_root, old_rocm),
         },
     )
     .unwrap();
@@ -1154,7 +1242,9 @@ fn explicit_use_allows_previously_failed_engine() {
             arch: "x86_64".into(),
             protocol_version: PROTOCOL_VERSION,
             handshake_passed: true,
+            verified_install: true,
             version: String::new(),
+            files: updates::test_engine_files(&paths.next_root, id),
         },
     )
     .unwrap();
@@ -1190,9 +1280,16 @@ fn interrupted_reimport_restores_active_engine_at_startup_and_retry() {
         &engine.parts[0].signature,
     )
     .unwrap();
-    let meta = import_engine_for(&state, None, &config, &manifest, "linux", "x86_64", |_| {
-        Ok(())
-    })
+    let meta = import_engine_for(
+        &state,
+        None,
+        &config,
+        &manifest,
+        "0.5.1-beta",
+        "linux",
+        "x86_64",
+        |_| Ok(()),
+    )
     .unwrap();
     let engine_root = paths.next_root.join("engines").join(&meta.id);
     let engine_dir = engine_root.join("engine");
@@ -1217,6 +1314,7 @@ fn interrupted_reimport_restores_active_engine_at_startup_and_retry() {
         None,
         &config,
         &manifest,
+        "0.5.1-beta",
         "linux",
         "x86_64",
         |_| Err(AppError::Worker("handshake failed".into()))
@@ -1254,7 +1352,9 @@ fn snapshot_reports_worker_choice_when_active_id_is_excluded() {
             arch: std::env::consts::ARCH.into(),
             protocol_version: PROTOCOL_VERSION,
             handshake_passed: true,
+            verified_install: true,
             version: String::new(),
+            files: updates::test_engine_files(&paths.next_root, id),
         },
     )
     .unwrap();
@@ -1327,4 +1427,336 @@ fn reimport_recovery_keeps_ambiguous_backups_and_removes_obsolete_ones() {
     fs::create_dir_all(&second).unwrap();
     assert!(recover_interrupted_reimport(root.path(), "example").is_err());
     assert!(first.is_dir() && second.is_dir());
+}
+
+fn schema2_fixture() -> serde_json::Value {
+    serde_json::from_str(include_str!("../../tests/fixtures/engine-schema2.json")).unwrap()
+}
+
+fn write_schema2_case(dir: &Path, fixture: &serde_json::Value, case: &str) -> PathBuf {
+    let part = &fixture["part"];
+    let part_name = part["name"].as_str().unwrap();
+    let part_bytes = base64::engine::general_purpose::STANDARD
+        .decode(part["data"].as_str().unwrap())
+        .unwrap();
+    let manifest_path = dir.join(format!("{case}.engine-payload.json"));
+    let entry = &fixture["cases"][case];
+    fs::write(
+        &manifest_path,
+        entry["manifest"].as_str().unwrap().as_bytes(),
+    )
+    .unwrap();
+    fs::write(
+        dir.join(format!("{case}.engine-payload.json.sig")),
+        entry["manifest_signature"].as_str().unwrap(),
+    )
+    .unwrap();
+    fs::write(dir.join(part_name), part_bytes).unwrap();
+    fs::write(
+        dir.join(format!("{part_name}.sig")),
+        part["signature"].as_str().unwrap(),
+    )
+    .unwrap();
+    manifest_path
+}
+
+#[test]
+fn import_schema2_checks_os_arch_protocol_and_refuses_older_versions() {
+    let fixture = schema2_fixture();
+    let (mut config, ..) = fixture_engine_files("http://127.0.0.1:1");
+    config.public_key = fixture["public_key"].as_str().unwrap().to_owned();
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let import_dir = root.path().join("import");
+    fs::create_dir_all(&import_dir).unwrap();
+
+    // Wrong OS, arch, and protocol are refused.
+    for case in ["wrong_os", "wrong_arch", "wrong_protocol"] {
+        let manifest = write_schema2_case(&import_dir, &fixture, case);
+        assert!(
+            import_engine_for(
+                &state,
+                None,
+                &config,
+                &manifest,
+                "0.5.1-beta",
+                "linux",
+                "x86_64",
+                |_| Ok(()),
+            )
+            .is_err(),
+            "expected {case} to be refused"
+        );
+    }
+
+    // Importing an engine older than the bundled CPU version is refused.
+    let old_cpu = write_schema2_case(&import_dir, &fixture, "cpu_051");
+    assert!(import_engine_for(
+        &state,
+        None,
+        &config,
+        &old_cpu,
+        "0.5.2-beta",
+        "linux",
+        "x86_64",
+        |_| Ok(()),
+    )
+    .is_err());
+
+    // Valid schema 2 import succeeds, sets version/id/files, and rejects older 0.5.1-beta.
+    let v2_manifest = write_schema2_case(&import_dir, &fixture, "rocm_052");
+    let meta = import_engine_for(
+        &state,
+        None,
+        &config,
+        &v2_manifest,
+        "0.5.2-beta",
+        "linux",
+        "x86_64",
+        |_| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(meta.id, "linux-x86_64-rocm-v2");
+    assert_eq!(meta.version, "0.5.2-beta");
+    assert!(!meta.files.is_empty());
+
+    let older_rocm = write_schema2_case(&import_dir, &fixture, "rocm_051");
+    assert!(import_engine_for(
+        &state,
+        None,
+        &config,
+        &older_rocm,
+        "0.5.2-beta",
+        "linux",
+        "x86_64",
+        |_| Ok(()),
+    )
+    .is_err());
+
+    // Same version (0.5.2-beta) and newer version (0.5.3-beta) are allowed.
+    let meta_same = import_engine_for(
+        &state,
+        None,
+        &config,
+        &v2_manifest,
+        "0.5.2-beta",
+        "linux",
+        "x86_64",
+        |_| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(meta_same.version, "0.5.2-beta");
+    let newer_rocm = write_schema2_case(&import_dir, &fixture, "rocm_053");
+    let meta_newer = import_engine_for(
+        &state,
+        None,
+        &config,
+        &newer_rocm,
+        "0.5.2-beta",
+        "linux",
+        "x86_64",
+        |_| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(meta_newer.version, "0.5.3-beta");
+}
+
+#[test]
+fn recorded_file_list_catches_size_change_at_start_and_hash_change_on_verify() {
+    let (config, _, manifest_bytes, part_name, part_bytes, engine, _) =
+        fixture_engine_files("http://127.0.0.1:1");
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let import_dir = root.path().join("import");
+    fs::create_dir_all(&import_dir).unwrap();
+    let manifest = import_dir.join("payload.json");
+    fs::write(&manifest, &manifest_bytes).unwrap();
+    fs::write(
+        import_dir.join("payload.json.sig"),
+        &engine.manifest.signature,
+    )
+    .unwrap();
+    fs::write(import_dir.join(&part_name), &part_bytes).unwrap();
+    fs::write(
+        import_dir.join(format!("{part_name}.sig")),
+        &engine.parts[0].signature,
+    )
+    .unwrap();
+    let meta = import_engine_for(
+        &state,
+        None,
+        &config,
+        &manifest,
+        "0.5.2-beta",
+        "linux",
+        "x86_64",
+        |_| Ok(()),
+    )
+    .unwrap();
+    assert!(meta
+        .files
+        .iter()
+        .any(|f| f.path == worker_executable_name()));
+
+    // Clean full verification passes.
+    verify_engine_for(&state, None, &config, &meta.id, "linux", "x86_64").unwrap();
+
+    // Same-size byte corruption passes quick size check, but fails full verify_engine_for,
+    // marks the engine needs_reinstall, deactivates it, and falls back to bundled.
+    let worker_file = paths
+        .next_root
+        .join("engines")
+        .join(&meta.id)
+        .join("engine")
+        .join(worker_executable_name());
+    let original = fs::read(&worker_file).unwrap();
+    let mut tampered = original.clone();
+    tampered[0] ^= 0xff;
+    assert_eq!(tampered.len(), original.len());
+    fs::write(&worker_file, &tampered).unwrap();
+    assert!(verify_engine_for(&state, None, &config, &meta.id, "linux", "x86_64").is_err());
+    assert!(!paths.next_root.join("active-engine.txt").exists());
+    assert!(state.worker.use_bundled_fallback.load(Ordering::SeqCst));
+    let listed = list_installed_engines_for(&paths, &config, None, "linux", "x86_64");
+    assert!(listed
+        .iter()
+        .any(|item| item.id == meta.id && item.needs_reinstall && !item.active));
+    assert!(listed.iter().any(|item| item.bundled && item.active));
+
+    // Reimport restores valid files, then changing file size is caught at worker start quick check.
+    state
+        .worker
+        .use_bundled_fallback
+        .store(false, Ordering::SeqCst);
+    import_engine_for(
+        &state,
+        None,
+        &config,
+        &manifest,
+        "0.5.2-beta",
+        "linux",
+        "x86_64",
+        |_| Ok(()),
+    )
+    .unwrap();
+    fs::write(&worker_file, b"short").unwrap();
+    let mut failed = lock(&state.worker.failed_engines).unwrap();
+    let quick_failed =
+        updates::verify_active_engine_at_start_for(&paths, &mut failed, "linux", "x86_64");
+    drop(failed);
+    assert_eq!(quick_failed.as_deref(), Some(meta.id.as_str()));
+    assert!(!paths.next_root.join("active-engine.txt").exists());
+    let listed_after_quick = list_installed_engines_for(&paths, &config, None, "linux", "x86_64");
+    assert!(listed_after_quick
+        .iter()
+        .any(|item| item.id == meta.id && item.needs_reinstall && !item.active));
+    let bundled = root.path().join("bundled-worker");
+    fs::write(&bundled, b"bundled").unwrap();
+    let choice = updates::worker_engine_choice(
+        &paths,
+        Some(bundled.clone()),
+        &lock(&state.worker.failed_engines).unwrap(),
+    );
+    assert_eq!(choice, Some((bundled, None)));
+}
+
+#[test]
+fn same_id_reinstall_keeps_backup_until_activation_and_holds_scheduler_lock() {
+    let (config, _, manifest_bytes, part_name, part_bytes, _, contract) =
+        fixture_engine_files("http://127.0.0.1:1");
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    lock(&state.settings).unwrap().privacy_choice_made = true;
+    let entries = parse_feed_engines_for(
+        &feed_json_with_rocm("0.3.7-beta", &contract),
+        &config,
+        "beta",
+        "0.3.7-beta",
+        "linux",
+        "x86_64",
+    )
+    .unwrap();
+    let id = entries[0].engine_id.clone();
+    let cache = paths.next_root.join("updates/engine-cache").join(&id);
+    fs::create_dir_all(&cache).unwrap();
+    fs::write(cache.join("engine-payload.json"), &manifest_bytes).unwrap();
+    fs::write(cache.join(&part_name), &part_bytes).unwrap();
+    *lock(&state.engines.catalog).unwrap() = entries.clone();
+
+    // Install initial copy of `id`, then replace its worker bytes with a sentinel.
+    tauri::async_runtime::block_on(install_engine_for(
+        &state,
+        None,
+        &config,
+        "rocm",
+        "0.3.7-beta",
+        "linux",
+        "x86_64",
+        |_| Ok(()),
+    ))
+    .unwrap();
+    let engine_root = paths.next_root.join("engines").join(&id);
+    let worker_file = engine_root.join("engine").join(worker_executable_name());
+    fs::write(&worker_file, b"previous-copy").unwrap();
+    let mut old_meta = read_engine_meta(&paths.next_root, &id).unwrap();
+    old_meta.version = "0.3.6-beta".into();
+    old_meta.files = updates::test_engine_files(&paths.next_root, &id);
+    write_engine_meta(&paths.next_root, &old_meta).unwrap();
+
+    // Repopulate cache and block activation by making meta.json a directory.
+    // The backup must keep and restore the previous copy when activation fails.
+    fs::create_dir_all(&cache).unwrap();
+    fs::write(cache.join("engine-payload.json"), &manifest_bytes).unwrap();
+    fs::write(cache.join(&part_name), &part_bytes).unwrap();
+    let meta_path = engine_root.join("meta.json");
+    fs::remove_file(&meta_path).unwrap();
+    fs::create_dir(&meta_path).unwrap();
+    let failed = tauri::async_runtime::block_on(install_engine_for(
+        &state,
+        None,
+        &config,
+        "rocm",
+        "0.3.7-beta",
+        "linux",
+        "x86_64",
+        |_| Ok(()),
+    ));
+    assert!(failed.is_err());
+    assert_eq!(fs::read(&worker_file).unwrap(), b"previous-copy");
+    assert_eq!(
+        fs::read_to_string(paths.next_root.join("active-engine.txt")).unwrap(),
+        id
+    );
+    fs::remove_dir(&meta_path).unwrap();
+    write_engine_meta(&paths.next_root, &old_meta).unwrap();
+
+    // A job starting while the scheduler lock is held cannot race mid-swap; if a job
+    // becomes active before swap starts, reinstall aborts and leaves the previous copy intact.
+    fs::create_dir_all(&cache).unwrap();
+    fs::write(cache.join("engine-payload.json"), &manifest_bytes).unwrap();
+    fs::write(cache.join(&part_name), &part_bytes).unwrap();
+    let state_for_job = state.clone();
+    let during_handshake_res = tauri::async_runtime::block_on(install_engine_for(
+        &state,
+        None,
+        &config,
+        "rocm",
+        "0.3.7-beta",
+        "linux",
+        "x86_64",
+        move |_| {
+            let _scheduler = lock(&state_for_job.scheduler)?;
+            lock(&state_for_job.runtime)?.active_job_id = "job-1".into();
+            Ok(())
+        },
+    ));
+    assert!(during_handshake_res.is_err());
+    assert_eq!(fs::read(&worker_file).unwrap(), b"previous-copy");
+    assert_eq!(
+        read_engine_meta(&paths.next_root, &id).unwrap().version,
+        "0.3.6-beta"
+    );
 }

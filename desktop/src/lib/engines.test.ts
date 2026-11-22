@@ -111,4 +111,22 @@ describe('engine helpers', () => {
       'Not enough free disk space',
     );
   });
+
+  it('prefers a verified engine when an older install also needs reinstall', () => {
+    const engines = structuredClone(demoSnapshot().engines!);
+    engines.installed.push(
+      {
+        id: 'old',
+        backend: 'cuda',
+        bundled: false,
+        active: false,
+        path: '',
+        needs_reinstall: true,
+      },
+      { id: 'new', backend: 'cuda', bundled: false, active: true, path: '' },
+    );
+    expect(engineListRows(engines).find((row) => row.backend === 'cuda')?.installedEntry?.id).toBe(
+      'new',
+    );
+  });
 });
