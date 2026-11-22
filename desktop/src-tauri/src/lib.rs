@@ -151,7 +151,6 @@ pub fn run() {
             if !smoke_test {
                 show_startup_notices(app.handle(), &state);
             }
-            *lock(&state.edit_runtime)? = editing::runtime_path(app.handle(), &state.paths);
             *lock(&state.bundled_engine_path)? = worker::bundled_engine_executable(app.handle());
             let switches = native_menu::switches(&*lock(&state.settings)?);
             native_menu::install(app, &lock(&state.recipes)?, switches)?;

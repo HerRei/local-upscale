@@ -9,7 +9,6 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
 
 use crate::{
     error::AppResult,
@@ -658,38 +657,68 @@ pub fn remove_bundle_in(model_root: &Path, model_id: &str) -> AppResult<bool> {
     Ok(true)
 }
 
-pub fn runtime_path(app: &AppHandle, paths: &AppPaths) -> String {
+fn resolve_runtime_path(
+    explicit: Option<&Path>,
+    engine_root: Option<&Path>,
+    development: Option<&Path>,
+    available: &[PathBuf],
+    name: &str,
+) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(path) = explicit {
+        candidates.push(path.to_path_buf());
+    }
+    if let Some(root) = engine_root {
+        candidates.push(root.join("_internal/edit").join(name));
+        candidates.push(root.join("edit").join(name));
+    }
+    if let Some(root) = development {
+        candidates.push(root.join(name));
+    }
+    candidates.into_iter().find(|path| available.contains(path))
+}
+
+pub fn runtime_path(paths: &AppPaths, engine_root: Option<&Path>) -> String {
     let name = if cfg!(windows) {
         "sd-cli.exe"
     } else {
         "sd-cli"
     };
-    let mut candidates = Vec::<PathBuf>::new();
-    if let Some(path) = std::env::var_os("LOCALSR_EDIT_RUNTIME") {
-        candidates.push(path.into());
-    }
-    if let Some(engine) = crate::worker::engine_executable(app, paths) {
-        if let Some(root) = engine.parent() {
-            candidates.push(root.join("_internal/edit").join(name));
-            candidates.push(root.join("edit").join(name));
-        }
-    }
-    if let Ok(root) = app.path().resource_dir() {
-        candidates.push(root.join("engine/_internal/edit").join(name));
-        candidates.push(root.join("engine/edit").join(name));
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(root) = exe.parent() {
-            candidates.push(root.join("engine/_internal/edit").join(name));
-        }
-    }
+    let explicit = std::env::var_os("LOCALSR_EDIT_RUNTIME").map(PathBuf::from);
     #[cfg(debug_assertions)]
-    candidates.push(paths.repo_root.join(".cache/edit-runtime").join(name));
-    candidates
-        .into_iter()
-        .find(|path| path.is_file())
-        .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_default()
+    let development = Some(paths.repo_root.join(".cache/edit-runtime"));
+    #[cfg(not(debug_assertions))]
+    let development: Option<PathBuf> = {
+        let _ = paths;
+        None
+    };
+    let mut available = Vec::new();
+    if let Some(path) = explicit.as_ref().filter(|path| path.is_file()) {
+        available.push(path.clone());
+    }
+    if let Some(root) = engine_root {
+        for directory in ["_internal/edit", "edit"] {
+            let path = root.join(directory).join(name);
+            if path.is_file() {
+                available.push(path);
+            }
+        }
+    }
+    if let Some(root) = development.as_ref() {
+        let path = root.join(name);
+        if path.is_file() {
+            available.push(path);
+        }
+    }
+    resolve_runtime_path(
+        explicit.as_deref(),
+        engine_root,
+        development.as_deref(),
+        &available,
+        name,
+    )
+    .map(|path| path.to_string_lossy().into_owned())
+    .unwrap_or_default()
 }
 
 pub fn validate(input: &StartEditInput, model: &EditModel) -> Result<(), String> {
@@ -719,6 +748,33 @@ pub fn validate(input: &StartEditInput, model: &EditModel) -> Result<(), String>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn runtime_follows_engine_and_explicit_choice_wins() {
+        use super::*;
+        let cpu = Path::new("/engines/cpu");
+        let cuda = Path::new("/engines/cuda");
+        let old = cpu.join("_internal/edit/sd-cli");
+        let new = cuda.join("_internal/edit/sd-cli");
+        let chosen = PathBuf::from("/chosen/sd-cli");
+        let available = vec![old.clone(), new.clone(), chosen.clone()];
+        assert_eq!(
+            resolve_runtime_path(None, Some(cpu), None, &available, "sd-cli"),
+            Some(old.clone())
+        );
+        assert_eq!(
+            resolve_runtime_path(None, Some(cuda), None, &available, "sd-cli"),
+            Some(new.clone())
+        );
+        assert_eq!(
+            resolve_runtime_path(None, Some(cuda), None, &[old], "sd-cli"),
+            None
+        );
+        assert_eq!(
+            resolve_runtime_path(Some(&chosen), Some(cuda), None, &available, "sd-cli"),
+            Some(chosen)
+        );
+    }
+
     use super::*;
 
     fn install(paths: &AppPaths, model: &EditModel) {

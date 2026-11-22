@@ -432,13 +432,30 @@ pub(crate) fn snapshot_for(
         .lock()
         .ok()
         .and_then(|guard| guard.clone());
-    let installed = list_installed_engines_for(
+    let mut installed = list_installed_engines_for(
         &state.paths,
         config,
         bundled_path.as_deref(),
         std::env::consts::OS,
         std::env::consts::ARCH,
     );
+    if state.worker.use_bundled_fallback.load(Ordering::SeqCst) {
+        for engine in &mut installed {
+            engine.active = engine.bundled;
+        }
+        if !installed.iter().any(|engine| engine.bundled) {
+            installed.push(InstalledEngine {
+                id: "bundled".into(),
+                backend: effective_bundled_backend(config),
+                bundled: true,
+                active: true,
+                path: bundled_path
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            });
+        }
+    }
     let bundled_backend = effective_bundled_backend(config);
     let (active_backend, active_engine_id) = installed
         .iter()
@@ -835,61 +852,174 @@ pub(crate) async fn install_engine_for(
     };
     publish_engine_status(state, app, &status);
 
-    let download_result = async {
-        let mut last_emit = std::time::Instant::now();
-        let mut on_progress = |delta: i64| {
-            if delta >= 0 {
-                status.downloaded = status.downloaded.saturating_add(delta as u64).min(total);
-            } else {
-                status.downloaded = status.downloaded.saturating_sub((-delta) as u64);
-            }
-            if last_emit.elapsed() >= Duration::from_millis(100) || status.downloaded >= total {
-                publish_engine_status(state, app, &status);
-                last_emit = std::time::Instant::now();
-            }
-        };
+    let result = async {
+        let download_result = async {
+            let mut last_emit = std::time::Instant::now();
+            let mut on_progress = |delta: i64| {
+                if delta >= 0 {
+                    status.downloaded = status.downloaded.saturating_add(delta as u64).min(total);
+                } else {
+                    status.downloaded = status.downloaded.saturating_sub((-delta) as u64);
+                }
+                if last_emit.elapsed() >= Duration::from_millis(100) || status.downloaded >= total {
+                    publish_engine_status(state, app, &status);
+                    last_emit = std::time::Instant::now();
+                }
+            };
 
-        download_file_resumable(
-            &engine.manifest,
-            &cache_dir,
-            config,
-            &state.engines.cancel,
-            &mut on_progress,
-        )
-        .await?;
-        let manifest_bytes = updates::read_verified(
-            &cache_dir.join(&engine.manifest.name),
-            &engine.manifest,
-            &config.public_key,
-        )?;
-        let parsed_manifest = engine_payload::parse_manifest(&manifest_bytes)?;
-        let parts_remaining = engine
-            .parts
-            .iter()
-            .map(|p| p.size.saturating_sub(file_on_disk_progress(&cache_dir, p)))
-            .sum::<u64>();
-        require_space(
-            available_space(&state.paths.next_root)?,
-            parts_remaining
-                .checked_add(parsed_manifest.unpacked_bytes)
-                .and_then(|s| s.checked_add(256 * 1024 * 1024))
-                .ok_or_else(|| invalid("Engine unpacked size overflow"))?,
-        )?;
-        for part in &engine.parts {
             download_file_resumable(
-                part,
+                &engine.manifest,
                 &cache_dir,
                 config,
                 &state.engines.cancel,
                 &mut on_progress,
             )
             .await?;
+            let manifest_bytes = updates::read_verified(
+                &cache_dir.join(&engine.manifest.name),
+                &engine.manifest,
+                &config.public_key,
+            )?;
+            let parsed_manifest = engine_payload::parse_manifest(&manifest_bytes)?;
+            let parts_remaining = engine
+                .parts
+                .iter()
+                .map(|p| p.size.saturating_sub(file_on_disk_progress(&cache_dir, p)))
+                .sum::<u64>();
+            require_space(
+                available_space(&state.paths.next_root)?,
+                parts_remaining
+                    .checked_add(parsed_manifest.unpacked_bytes)
+                    .and_then(|s| s.checked_add(256 * 1024 * 1024))
+                    .ok_or_else(|| invalid("Engine unpacked size overflow"))?,
+            )?;
+            for part in &engine.parts {
+                download_file_resumable(
+                    part,
+                    &cache_dir,
+                    config,
+                    &state.engines.cancel,
+                    &mut on_progress,
+                )
+                .await?;
+            }
+            Ok::<_, AppError>(())
         }
-        Ok::<_, AppError>(())
+        .await;
+
+        if let Err(error) = download_result {
+            status.stage = if state.engines.cancel.load(Ordering::SeqCst) {
+                "cancelled".into()
+            } else {
+                "error".into()
+            };
+            status.error = Some(error.to_string());
+            publish_engine_status(state, app, &status);
+            return Err(error);
+        }
+
+        status.stage = "installing".into();
+        status.downloaded = total;
+        publish_engine_status(state, app, &status);
+
+        let engine_root = state.paths.next_root.join("engines").join(&engine_id);
+        let engine_dir = engine_root.join("engine");
+        let cache_dir_clone = cache_dir.clone();
+        let engine_dir_clone = engine_dir.clone();
+        let engine_clone = engine.clone();
+        let public_key = config.public_key.clone();
+        let install_result = tauri::async_runtime::spawn_blocking(move || -> AppResult<PathBuf> {
+            fs::create_dir_all(
+                engine_dir_clone
+                    .parent()
+                    .ok_or_else(|| invalid("Invalid engine directory"))?,
+            )?;
+            if !engine_dir_clone.exists() {
+                install_engine_package(
+                    &cache_dir_clone,
+                    &engine_clone,
+                    &public_key,
+                    &engine_dir_clone,
+                )?;
+            }
+            let exe = engine_dir_clone.join(worker_executable_name());
+            if !exe.is_file() {
+                return Err(invalid("Installed engine is missing its worker executable"));
+            }
+            Ok(exe)
+        })
+        .await
+        .map_err(|e| invalid(e.to_string()))?;
+
+        let engine_exe = match install_result {
+            Ok(exe) => exe,
+            Err(error) => {
+                status.stage = "error".into();
+                status.error = Some(error.to_string());
+                publish_engine_status(state, app, &status);
+                return Err(error);
+            }
+        };
+
+        status.stage = "handshaking".into();
+        publish_engine_status(state, app, &status);
+
+        let exe_for_handshake = engine_exe.clone();
+        let handshake_result =
+            tauri::async_runtime::spawn_blocking(move || handshake(&exe_for_handshake))
+                .await
+                .map_err(|e| invalid(e.to_string()))?;
+
+        if let Err(error) = handshake_result {
+            let _ = fs::remove_dir_all(&engine_root);
+            status.stage = "error".into();
+            status.error = Some(error.to_string());
+            publish_engine_status(state, app, &status);
+            return Err(error);
+        }
+
+        write_engine_meta(
+            &state.paths.next_root,
+            &EngineMeta {
+                id: engine_id.clone(),
+                backend: backend.to_string(),
+                os: os.to_string(),
+                arch: arch.to_string(),
+                protocol_version: PROTOCOL_VERSION,
+                handshake_passed: true,
+                version: entry.version,
+            },
+        )?;
+
+        let _ = fs::remove_dir_all(&cache_dir);
+
+        {
+            let _scheduler = lock(&state.scheduler)?;
+            ensure_no_running_jobs(state)?;
+            update_storage::write_atomic(
+                &state.paths.next_root.join("active-engine.txt"),
+                engine_id.as_bytes(),
+            )?;
+        }
+
+        if backend != "cpu" {
+            state.choose_device.store(true, Ordering::SeqCst);
+        }
+
+        if let Some(app) = app {
+            worker::restart_for_engine_switch(state, app)?;
+        }
+
+        status.stage = "installed".into();
+        status.error = None;
+        publish_engine_status(state, app, &status);
+        if let Some(app) = app {
+            emit_state_changed(app);
+        }
+        Ok::<(), AppError>(())
     }
     .await;
-
-    if let Err(error) = download_result {
+    if let Err(error) = &result {
         status.stage = if state.engines.cancel.load(Ordering::SeqCst) {
             "cancelled".into()
         } else {
@@ -897,108 +1027,8 @@ pub(crate) async fn install_engine_for(
         };
         status.error = Some(error.to_string());
         publish_engine_status(state, app, &status);
-        return Err(error);
     }
-
-    status.stage = "installing".into();
-    status.downloaded = total;
-    publish_engine_status(state, app, &status);
-
-    let engine_root = state.paths.next_root.join("engines").join(&engine_id);
-    let engine_dir = engine_root.join("engine");
-    let cache_dir_clone = cache_dir.clone();
-    let engine_dir_clone = engine_dir.clone();
-    let engine_clone = engine.clone();
-    let public_key = config.public_key.clone();
-    let install_result = tauri::async_runtime::spawn_blocking(move || -> AppResult<PathBuf> {
-        fs::create_dir_all(
-            engine_dir_clone
-                .parent()
-                .ok_or_else(|| invalid("Invalid engine directory"))?,
-        )?;
-        if !engine_dir_clone.exists() {
-            install_engine_package(
-                &cache_dir_clone,
-                &engine_clone,
-                &public_key,
-                &engine_dir_clone,
-            )?;
-        }
-        let exe = engine_dir_clone.join(worker_executable_name());
-        if !exe.is_file() {
-            return Err(invalid("Installed engine is missing its worker executable"));
-        }
-        Ok(exe)
-    })
-    .await
-    .map_err(|e| invalid(e.to_string()))?;
-
-    let engine_exe = match install_result {
-        Ok(exe) => exe,
-        Err(error) => {
-            status.stage = "error".into();
-            status.error = Some(error.to_string());
-            publish_engine_status(state, app, &status);
-            return Err(error);
-        }
-    };
-
-    status.stage = "handshaking".into();
-    publish_engine_status(state, app, &status);
-
-    let exe_for_handshake = engine_exe.clone();
-    let handshake_result =
-        tauri::async_runtime::spawn_blocking(move || handshake(&exe_for_handshake))
-            .await
-            .map_err(|e| invalid(e.to_string()))?;
-
-    if let Err(error) = handshake_result {
-        let _ = fs::remove_dir_all(&engine_root);
-        status.stage = "error".into();
-        status.error = Some(error.to_string());
-        publish_engine_status(state, app, &status);
-        return Err(error);
-    }
-
-    write_engine_meta(
-        &state.paths.next_root,
-        &EngineMeta {
-            id: engine_id.clone(),
-            backend: backend.to_string(),
-            os: os.to_string(),
-            arch: arch.to_string(),
-            protocol_version: PROTOCOL_VERSION,
-            handshake_passed: true,
-            version: entry.version,
-        },
-    )?;
-
-    let _ = fs::remove_dir_all(&cache_dir);
-
-    {
-        let _scheduler = lock(&state.scheduler)?;
-        ensure_no_running_jobs(state)?;
-        update_storage::write_atomic(
-            &state.paths.next_root.join("active-engine.txt"),
-            engine_id.as_bytes(),
-        )?;
-    }
-
-    if backend != "cpu" {
-        state.choose_device.store(true, Ordering::SeqCst);
-    }
-
-    if let Some(app) = app {
-        worker::restart_for_engine_switch(state, app)?;
-    }
-
-    status.stage = "installed".into();
-    status.error = None;
-    publish_engine_status(state, app, &status);
-    if let Some(app) = app {
-        emit_state_changed(app);
-    }
-    Ok(())
+    result
 }
 
 #[tauri::command]
@@ -1134,13 +1164,14 @@ pub(crate) fn remove_engine_in(
         .ok()
         .map(|s| s.trim().to_owned());
     if active_file_id.as_deref() == Some(id)
-        || active_engine_id(
-            &state.paths,
-            crate::distribution::managed_by_store(),
-            &config.engine_id,
-        )
-        .as_deref()
-            == Some(id)
+        || (!state.worker.use_bundled_fallback.load(Ordering::SeqCst)
+            && active_engine_id(
+                &state.paths,
+                crate::distribution::managed_by_store(),
+                &config.engine_id,
+            )
+            .as_deref()
+                == Some(id))
     {
         return Err(invalid(
             "Cannot remove the currently active engine. Switch to another engine first.",
@@ -1353,51 +1384,87 @@ pub(crate) fn import_engine_for(
     let engine_root = state.paths.next_root.join("engines").join(&engine_id);
     fs::create_dir_all(&engine_root)?;
     let engine_dir = engine_root.join("engine");
-    if let Err(error) = engine_payload::install_manifest(&manifest_bytes, source_dir, &engine_dir) {
-        if !engine_dir.exists() {
-            let _ = fs::remove_dir_all(&engine_root);
+    let staging_root = engine_root.join(format!(".import-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&staging_root)?;
+    let staged = staging_root.join("engine");
+    let backup = engine_root.join(format!(".backup-{}", uuid::Uuid::new_v4()));
+    let result = (|| -> AppResult<EngineMeta> {
+        engine_payload::install_manifest(&manifest_bytes, source_dir, &staged)
+            .map_err(|error| invalid(error.to_string()))?;
+        let engine_exe = staged.join(worker_executable_name());
+        if !engine_exe.is_file() {
+            return Err(invalid("Imported engine is missing its worker executable"));
         }
-        return Err(invalid(error.to_string()));
-    }
-    let engine_exe = engine_dir.join(worker_executable_name());
-    if !engine_exe.is_file() {
-        let _ = fs::remove_dir_all(&engine_root);
-        return Err(invalid("Imported engine is missing its worker executable"));
-    }
-    if let Err(error) = handshake(&engine_exe) {
-        let _ = fs::remove_dir_all(&engine_root);
-        return Err(error);
-    }
+        handshake(&engine_exe)?;
 
-    let meta = EngineMeta {
-        id: engine_id.clone(),
-        backend: backend.clone(),
-        os: os.to_string(),
-        arch: arch.to_string(),
-        protocol_version: PROTOCOL_VERSION,
-        handshake_passed: true,
-        version: String::new(),
-    };
-    write_engine_meta(&state.paths.next_root, &meta)?;
-
-    {
-        let _scheduler = lock(&state.scheduler)?;
+        let meta = EngineMeta {
+            id: engine_id.clone(),
+            backend: backend.clone(),
+            os: os.to_string(),
+            arch: arch.to_string(),
+            protocol_version: PROTOCOL_VERSION,
+            handshake_passed: true,
+            version: String::new(),
+        };
+        let scheduler = lock(&state.scheduler)?;
         ensure_no_running_jobs(state)?;
-        update_storage::write_atomic(
-            &state.paths.next_root.join("active-engine.txt"),
-            engine_id.as_bytes(),
-        )?;
+        let pointer = state.paths.next_root.join("active-engine.txt");
+        let old_pointer = fs::read(&pointer).ok();
+        let metadata = engine_root.join("meta.json");
+        let old_metadata = fs::read(&metadata).ok();
+        let existed = engine_dir.exists();
+        if existed {
+            fs::rename(&engine_dir, &backup)?;
+        }
+        if let Err(error) = fs::rename(&staged, &engine_dir) {
+            if existed {
+                let _ = fs::rename(&backup, &engine_dir);
+            }
+            return Err(error.into());
+        }
+        let activation = (|| -> AppResult<()> {
+            write_engine_meta(&state.paths.next_root, &meta)?;
+            update_storage::write_atomic(
+                &state.paths.next_root.join("active-engine.txt"),
+                engine_id.as_bytes(),
+            )?;
+            Ok(())
+        })();
+        drop(scheduler);
+        let activation = activation.and_then(|()| {
+            if let Some(app) = app {
+                worker::restart_for_engine_switch(state, app)?;
+            }
+            Ok(())
+        });
+        if let Err(error) = activation {
+            for (path, previous) in [(&pointer, old_pointer), (&metadata, old_metadata)] {
+                if let Some(bytes) = previous {
+                    let _ = update_storage::write_atomic(path, &bytes);
+                } else {
+                    let _ = fs::remove_file(path);
+                }
+            }
+            let _ = fs::remove_dir_all(&engine_dir);
+            if existed {
+                let _ = fs::rename(&backup, &engine_dir);
+            }
+            return Err(error);
+        }
+        let _ = fs::remove_dir_all(&backup);
+        if backend != "cpu" {
+            state.choose_device.store(true, Ordering::SeqCst);
+        }
+        if let Some(app) = app {
+            emit_state_changed(app);
+        }
+        Ok(meta)
+    })();
+    let _ = fs::remove_dir_all(&staging_root);
+    if result.is_err() && !engine_dir.exists() {
+        let _ = fs::remove_dir(&engine_root);
     }
-
-    if backend != "cpu" {
-        state.choose_device.store(true, Ordering::SeqCst);
-    }
-
-    if let Some(app) = app {
-        worker::restart_for_engine_switch(state, app)?;
-        emit_state_changed(app);
-    }
-    Ok(meta)
+    result
 }
 
 #[tauri::command]

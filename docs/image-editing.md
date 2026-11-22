@@ -107,7 +107,9 @@ Image Edit 2511, 40 steps and CFG 6.0 for Qwen Image 2.1, and 4 steps and CFG
 estimates peak memory from the real sizes of your files on disk, and custom
 paths and file names are omitted from diagnostic summaries and redacted from
 crash reports. You remain responsible for the licence of any model files you
-supply.
+supply. If a custom edit model uses a downloaded component, LocalSR updates that
+component's path when you move the model folder. Other custom files stay where
+you put them.
 
 ## Memory and lifecycle
 
@@ -185,7 +187,8 @@ To build the development Metal executable without model inference:
 python scripts/build_edit_runtime.py --backend MPS
 ```
 
-The desktop discovers `.cache/edit-runtime/sd-cli` in development and
+The desktop refreshes the editing runtime when the active engine changes. A runtime
+chosen by the user stays selected. The desktop discovers `.cache/edit-runtime/sd-cli` in development and
 `engine/_internal/edit/sd-cli` (`sd-cli.exe` on Windows) in packaged builds.
 `LOCALSR_EDIT_RUNTIME` or **Choose runtime…** (shown under the model row when
 no runtime is found) can supply a current native executable. The backend checks

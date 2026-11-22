@@ -1977,3 +1977,26 @@ fn attach_status_metadata_populates_skipped_version_for_return_values() {
     assert_eq!(status.skipped_version, "0.5.1-beta");
     assert!(!status.settings_recovery);
 }
+
+#[test]
+fn failed_installed_compiled_engine_is_not_selected_again() {
+    let installed = vec![("compiled".to_owned(), PathBuf::from("/installed/worker"))];
+    let failed = HashSet::from(["compiled".to_owned()]);
+    assert_eq!(
+        choose_installed_engine(&installed, Some("compiled"), "compiled", &failed),
+        None
+    );
+    assert_eq!(
+        choose_installed_engine(&installed, None, "compiled", &failed),
+        None
+    );
+    let bundled = PathBuf::from("/bundle/worker");
+    assert_eq!(
+        choose_worker_executable(&installed, None, "compiled", &failed, Some(bundled.clone())),
+        Some((bundled, None))
+    );
+    assert_eq!(
+        choose_worker_executable(&installed, Some("compiled"), "compiled", &failed, None),
+        None
+    );
+}
