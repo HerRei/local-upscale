@@ -4,6 +4,12 @@ import sys
 
 
 def main():
+    if sys.argv[1:2] == ["--check-cuda-arch"]:
+        import torch
+
+        architectures = torch.cuda.get_arch_list()
+        print("CUDA architectures:", ", ".join(architectures))
+        raise SystemExit(0 if "sm_120" in architectures else 1)
     if sys.argv[1:2] == ["--large-result-preview"]:
         from localsr.worker.result_preview import large_result_main
 

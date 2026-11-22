@@ -37,7 +37,9 @@ one. The CUDA and ROCm downloads exceed GitHub's 2 GB file limit and come in par
 
 ## What is untested or withheld
 
-- **CUDA (Windows and Linux)** is published untested. It contains only the NVIDIA
+- **CUDA (Windows and Linux)** is published untested. The next CUDA edition needs
+  an NVIDIA RTX 20 series or newer and driver 580 or newer. On Windows, older
+  NVIDIA cards can use DirectML. It contains only the NVIDIA
   libraries that NVIDIA's CUDA Toolkit EULA and cuDNN supplement identify as
   distributable (`packaging/nvidia/redistributables.json`, checked on every build);
   files the license does not list are left out. The Windows engine ships as verified parts next to

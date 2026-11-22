@@ -19,7 +19,7 @@ own terms; this file is a distribution notice, not a replacement for their licen
   worker are protobuf (BSD-3-Clause), attrs and cattrs (MIT) and pyaml (WTFPL), and their
   license files are included in the frozen worker. The converted programs run through
   PyObjC (pyobjc-core, pyobjc-framework-Cocoa and pyobjc-framework-CoreML, MIT).
-- **NVIDIA CUDA packages** — contain the NVIDIA libraries PyTorch's CUDA 12.6 build uses (CUDA
+- **NVIDIA CUDA packages** — contain the NVIDIA libraries PyTorch's CUDA 13.0 build uses (CUDA
   Runtime, cuBLAS, cuFFT, cuRAND, cuSOLVER, cuSPARSE, cuSPARSELt, NVRTC, nvJitLink, CUPTI, NVTX,
   cuFile, nvJPEG and cuDNN). They are NVIDIA's software, included as the portions its
   [CUDA Toolkit EULA](https://docs.nvidia.com/cuda/eula/index.html) and

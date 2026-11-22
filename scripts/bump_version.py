@@ -24,7 +24,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-from release_targets import artifact_entries
+from release_targets import artifact_entries, download_table
 
 ROOT = Path(__file__).resolve().parents[1]
 BETA = re.compile(r"(\d+)\.(\d+)\.(\d+)-beta(?:\.(\d+))?")
@@ -205,13 +205,16 @@ def bump(root: Path, new: str, notes: str, today: dt.date) -> str:
             f"# Changelog\n\n## [{new}] - Unreleased\n\n{notes.strip()}\n\n",
         )
     (root / f"docs/releases/v{new}.md").write_text(
-        f"# LocalSR v{new}\n\n"
-        f"Release candidate, not published yet (prepared {today.isoformat()}).\n\n"
-        f"## What changed\n\n{notes.strip()}\n",
+        f"# LocalSR v{new}\n\n{download_table(new)}\n## What changed\n\n{notes.strip()}\n",
         encoding="utf-8",
         newline="\n",
     )
     return current
+
+
+def published_notes(text: str) -> str:
+    """Prepare the release body before publishing the packages."""
+    return re.sub(r"(?m)^Release candidate, not published yet[^\n]*\n\n", "", text)
 
 
 def mark_published(root: Path, today: dt.date) -> list[str]:
@@ -237,8 +240,9 @@ def mark_published(root: Path, today: dt.date) -> list[str]:
         f"Current release: **v{version}**",
     )
     set_readme_notice(root, None)
-    sub(
-        root, f"docs/releases/v{version}.md", r"^Release candidate, not published yet[^\n]*\n\n", ""
+    notes = root / f"docs/releases/v{version}.md"
+    notes.write_text(
+        published_notes(notes.read_text(encoding="utf-8")), encoding="utf-8", newline="\n"
     )
     # README must still name the version for check_public_beta; the downloads prose does.
     return [
@@ -256,10 +260,19 @@ def main() -> int:
     group.add_argument("version", nargs="?", help="new version, e.g. 0.3.1-beta")
     group.add_argument("--next", action="store_true", help="next patch version")
     group.add_argument("--mark-published", action="store_true")
+    group.add_argument(
+        "--published-notes",
+        action="store_true",
+        help="Print the release body without the candidate notice",
+    )
     parser.add_argument("--notes-file", type=Path, help="Markdown bullets for CHANGELOG and notes")
     parser.add_argument("--root", type=Path, default=ROOT, help=argparse.SUPPRESS)
     args = parser.parse_args()
     today = dt.date.today()
+    if args.published_notes:
+        notes = args.root / f"docs/releases/v{current_version(args.root)}.md"
+        print(published_notes(notes.read_text(encoding="utf-8")), end="")
+        return
     if args.mark_published:
         stale = mark_published(args.root, today)
         print(f"Marked v{current_version(args.root)} published.")

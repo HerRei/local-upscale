@@ -4,7 +4,7 @@
 use std::{
     collections::HashSet,
     fs::{self, File},
-    io::{self, Read},
+    io::{self, Read, Seek, SeekFrom},
     path::{Component, Path},
 };
 
@@ -71,7 +71,10 @@ impl Read for VerifiedPart {
         self.digest.update(&buffer[..count]);
         self.bytes += count as u64;
         if self.bytes > self.expected.size {
-            return Err(invalid("engine payload exceeds its manifest"));
+            return Err(invalid(format!(
+                "engine payload exceeds its manifest: {}",
+                self.expected.filename
+            )));
         }
         if count == 0 {
             let actual: String = self
@@ -82,9 +85,10 @@ impl Read for VerifiedPart {
                 .map(|byte| format!("{byte:02x}"))
                 .collect();
             if self.bytes != self.expected.size || actual != self.expected.sha256 {
-                return Err(invalid(
-                    "engine payload checksum mismatch during extraction",
-                ));
+                return Err(invalid(format!(
+                    "engine payload checksum mismatch: {}",
+                    self.expected.filename
+                )));
             }
         }
         Ok(count)
@@ -247,6 +251,7 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
     }
     let mut names = HashSet::new();
     let mut files = Vec::new();
+    let mut problems = Vec::new();
     for part in &manifest.parts {
         let name = Path::new(&part.filename);
         if !safe_relative(name)
@@ -263,11 +268,39 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
         {
             return Err(invalid("invalid or duplicate engine payload part"));
         }
-        println!("Verifying {}", part.filename);
-        let file = File::open(source.join(name))?;
+        let mut file = match File::open(source.join(name)) {
+            Ok(file) => file,
+            Err(error) => {
+                problems.push(format!("{}: {error}", part.filename));
+                continue;
+            }
+        };
         if file.metadata()?.len() != part.size {
-            return Err(invalid(format!("incomplete payload: {}", part.filename)));
+            problems.push(format!("incomplete payload: {}", part.filename));
+            continue;
         }
+        let mut digest = Sha256::new();
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            let count = file.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            digest.update(&buffer[..count]);
+        }
+        let actual: String = digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        if actual != part.sha256 {
+            problems.push(format!(
+                "engine payload checksum mismatch: {}",
+                part.filename
+            ));
+            continue;
+        }
+        file.seek(SeekFrom::Start(0))?;
         files.push(VerifiedPart {
             file,
             expected: Part {
@@ -278,6 +311,9 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
             digest: Sha256::new(),
             bytes: 0,
         });
+    }
+    if !problems.is_empty() {
+        return Err(invalid(problems.join("; ")));
     }
     #[cfg(test)]
     AFTER_PART_VERIFICATION.with(|hook| {
