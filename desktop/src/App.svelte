@@ -4653,7 +4653,6 @@
             {/if}
             <AdvancedSettings
               {settings}
-              appVersion={snapshot.app_version}
               {selectedModel}
               {editModel}
               capabilities={snapshot.capabilities}

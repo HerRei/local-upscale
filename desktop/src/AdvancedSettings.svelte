@@ -30,7 +30,6 @@
   } from './lib/types';
 
   export let settings: UiSettings;
-  export let appVersion = '';
   export let selectedModel: CatalogModel | undefined;
   export let editModel: EditModel | undefined = undefined;
   export let capabilities: CapabilityInfo;
@@ -794,5 +793,4 @@
       </div>
     </div>
   {/if}
-  {#if appVersion}<p class="app-version">LocalSR {appVersion}</p>{/if}
 </section>
