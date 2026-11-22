@@ -468,6 +468,10 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
             .and_then(|mut cancellation| cancellation.finish())
             .err();
         let mut requested_restart = false;
+        // Jobs to settle in the database once `runtime` is released: `snapshot()`
+        // locks `database` before `runtime`, so taking both here in the other
+        // order could deadlock.
+        let mut to_settle = None;
         if let Ok(mut runtime) = state.runtime.lock() {
             // The killed or crashed engine's job ends here, its route note with it.
             let active = runtime.take_active_job();
@@ -507,8 +511,11 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                 "Work stopped; temporary output removed. Restarting engine…".into()
             };
             runtime.estimated_remaining_seconds = 0.0;
+            to_settle = Some((active_ids, forced_jobs.clone(), interruption));
+        }
+        if let Some((active_ids, forced, interruption)) = to_settle {
             if let Ok(database) = state.database.lock() {
-                settle_stopped_jobs(&database, &active_ids, &forced_jobs, &interruption);
+                settle_stopped_jobs(&database, &active_ids, &forced, &interruption);
             }
         }
         emit_state_changed(&app);

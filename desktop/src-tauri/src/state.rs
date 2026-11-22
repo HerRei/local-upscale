@@ -120,6 +120,9 @@ impl AppState {
 
     pub(crate) fn from_paths(paths: AppPaths) -> AppResult<Self> {
         let mut notices = Vec::new();
+        if let Ok(id) = std::fs::read_to_string(paths.next_root.join("active-engine.txt")) {
+            crate::engine_manager::recover_interrupted_reimport(&paths.next_root, id.trim())?;
+        }
         // The safety copy is a convenience: a full disk or a damaged queue must not keep
         // the app from starting. No update step depends on it.
         if let Err(error) =

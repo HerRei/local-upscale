@@ -414,7 +414,8 @@ or AppImage:
   signatures). Both verify minisign signatures and SHA-256 digests, unpack the
   engine, run the worker protocol handshake, write host metadata (`meta.json`),
   and activate `active-engine.txt` only after the handshake passes. An import
-  tests a staged engine before replacing an existing one. If a job starts during
+  tests a staged engine before replacing an existing one. An interrupted replacement
+  restores its backup at startup or on the next import. If a job starts during
   a download, activation fails with an error and can be retried once the job ends.
   Network fetches are refused before `privacy_choice_made`, in Store editions,
   while jobs run, or when free disk space is insufficient.
@@ -422,8 +423,8 @@ or AppImage:
   engines and the bundled CPU fallback; `remove_engine` deletes an inactive engine
   folder. If an active installed engine fails to start, the host clears
   `active-engine.txt` and falls back to the bundled engine. Failed installed engines
-  are excluded for the session, and the restart limit also applies to the bundled
-  engine. App updates keep the
+  are excluded until the user selects Use or reimports them, and the restart limit
+  also applies to the bundled engine. App updates keep the
   user's chosen backend and update that backend's engine alongside the host.
 - **Interface.** After the first-launch setup screen's Continue, if the recommended
   GPU engine is not installed, LocalSR offers one dismissable card to download it

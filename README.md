@@ -117,8 +117,8 @@ The Mac app takes about 1.2 GB, because it brings its own Python and PyTorch.
 Models download when you choose them: Quick is 4.5 MB, most others are under
 500 MB, and the editing models are 5 to 26 GB. You can change the model folder
 under Advanced settings to store models on another drive. Matching files already in
-the new folder are reused. Different files or links back to files being moved stop
-the move. I test upscaling on a Mac with 16 GB of memory.
+the new folder are reused. Different files, model file symlinks, or links back to files being moved stop
+the move. Replace model file symlinks with the files before moving. I test upscaling on a Mac with 16 GB of memory.
 
 LocalSR is only published on
 [GitHub Releases](https://github.com/HerRei/local-upscale/releases), on

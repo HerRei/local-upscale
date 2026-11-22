@@ -2420,6 +2420,7 @@
     } finally {
       movingModels = false;
       modelMoveProgress = null;
+      await maybeAutoStart();
     }
   }
 
@@ -2435,6 +2436,7 @@
     } finally {
       movingModels = false;
       modelMoveProgress = null;
+      await maybeAutoStart();
     }
   }
 
@@ -3180,7 +3182,7 @@
 
   async function maybeAutoStart(): Promise<void> {
     await tick();
-    if (!pendingAutoStartIds.length) return;
+    if (!pendingAutoStartIds.length || movingModels) return;
     if (
       snapshot.capabilities.system_ram_total === 0 &&
       !snapshot.capabilities.devices.some((device) => device.id === snapshot.settings.device_id)
