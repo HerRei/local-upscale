@@ -1571,10 +1571,8 @@ describe('LocalSR desktop interface', () => {
     expect(within(hardware).getByRole('option', { name: 'CPU' })).toBeTruthy();
 
     // Faces need a primary model with a companion; the default Best (RealPLKSR)
-    // has none, so the chip is disabled until such a model is chosen.
-    expect(
-      (screen.getByRole('button', { name: 'Faces', pressed: false }) as HTMLButtonElement).disabled,
-    ).toBe(true);
+    // has none, so the chip is not offered until such a model is chosen.
+    expect(screen.queryByRole('button', { name: 'Faces' })).toBeNull();
   });
 
   it.each([
@@ -4584,10 +4582,10 @@ describe('Several fixes in one pass', () => {
       selected_video_model_id: 'frame_by_frame',
     });
     const user = await mountWith(snapshot);
-    // Frame-by-frame video offers fix stages alongside Faces.
+    // Frame-by-frame video offers fix stages; Faces only with a HAT model.
     expect(screen.getByRole('button', { name: 'Noise' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Blur' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Faces' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Faces' })).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
     await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Clip');
     await user.click(screen.getByRole('button', { name: 'Save' }));

@@ -3904,3 +3904,9 @@ input[type='number'],
   align-items: center;
   gap: 6px;
 }
+
+.app-version {
+  margin: 16px 0 0;
+  color: var(--secondary);
+  font-size: 12px;
+}

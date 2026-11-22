@@ -443,3 +443,23 @@ describe('Engine row above Hardware', () => {
     expect(screen.queryByText('Engine')).toBeNull();
   });
 });
+
+describe('app version line', () => {
+  it('shows the running version at the bottom of Advanced settings', async () => {
+    const { render, screen } = await import('@testing-library/svelte');
+    const { default: AdvancedSettings } = await import('./AdvancedSettings.svelte');
+    const { demoSnapshot } = await import('./lib/demo');
+    const snapshot = demoSnapshot();
+    render(AdvancedSettings, {
+      props: {
+        settings: snapshot.settings,
+        selectedModel: undefined,
+        capabilities: snapshot.capabilities,
+        usingTemporalVideo: false,
+        appVersion: '0.5.1-beta',
+        updateSettings: () => {},
+      },
+    });
+    expect(screen.getByText('LocalSR 0.5.1-beta')).toBeTruthy();
+  });
+});

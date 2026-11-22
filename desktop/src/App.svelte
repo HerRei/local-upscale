@@ -1137,14 +1137,16 @@
   $: downloads = pendingDownloads(plan);
   $: planNeedsFile = plan.some((stage) => stage.needsFile);
   $: planMissing = plan.some((stage) => stage.missing);
+  // Faces only works with a primary model that has a face companion (HAT); with any
+  // other model the chip could only ever show greyed out, so it is left out.
   $: fixChips = (
     settings.task === 'video'
       ? restoring
         ? ['noise', 'blur', 'jpeg']
-        : ['noise', 'jpeg', 'blur', 'faces']
+        : ['noise', 'jpeg', 'blur', ...(faceModel ? ['faces'] : [])]
       : restoring
         ? ['noise', 'blur', 'jpeg', 'colour']
-        : ['noise', 'jpeg', 'blur', 'colour', 'faces']
+        : ['noise', 'jpeg', 'blur', 'colour', ...(faceModel ? ['faces'] : [])]
   ) as FixKind[];
   $: prepareReady =
     !snapshot.runtime.active_job_id &&
@@ -4651,6 +4653,7 @@
             {/if}
             <AdvancedSettings
               {settings}
+              appVersion={snapshot.app_version}
               {selectedModel}
               {editModel}
               capabilities={snapshot.capabilities}
