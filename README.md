@@ -95,6 +95,20 @@ Homebrew cask, which all use the same files. Each file has a SHA-256 next to it.
 The Mac app is signed as `Developer ID Application: Hermes Reisner (Z2TU844D84)`;
 `spctl -a -vv /Applications/LocalSR.app` shows it.
 
+### Phone app
+
+LocalSR also exists as a small app for phones, with its own version numbers
+(1.0.0 first). It upscales photos 4× on the phone itself, with two built-in models
+and no network access.
+
+- **iPhone:** iOS 27 or later, on the App Store (in review).
+- **Android:** an APK on [GitHub Releases](https://github.com/HerRei/local-upscale/releases)
+  under the `mobile-v…` tags. Install it by opening the file on the phone and
+  allowing the install once.
+
+The source is in [mobile/](mobile/README.md), and its changes are in
+[mobile/CHANGELOG.md](mobile/CHANGELOG.md).
+
 ## Limits
 
 - Upscaling reconstructs detail. Faces, text and fine patterns can look sharp
@@ -163,6 +177,9 @@ updates, and a separate Python worker that runs PyTorch and spandrel. Run
 `./local-ci.sh` for the local checks. [Desktop guide](desktop/README.md) ·
 [Worker protocol](protocol/README.md) · [Command line](docs/automation.md) ·
 [Releasing](docs/releasing.md).
+
+The iPhone and Android app is a separate Swift project built with Skip, in
+[mobile/](mobile/README.md).
 
 ## Feedback
 

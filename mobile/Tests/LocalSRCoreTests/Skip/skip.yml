@@ -1,0 +1,4 @@
+# Skip configuration for LocalSRCoreTests module
+
+#build:
+#  contents:
