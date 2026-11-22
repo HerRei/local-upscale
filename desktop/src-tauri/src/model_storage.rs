@@ -129,7 +129,7 @@ pub(crate) async fn change_model_directory_with_env<R: tauri::Runtime>(
     let old_root = state.model_root();
 
     if old_root.is_dir() && same_canonical_path(&old_root, &dest_root) {
-        apply_setting_and_refresh(state, setting_value)?;
+        apply_setting_and_refresh(state, setting_value, &[])?;
         if let Some(handle) = app {
             emit_state_changed(handle);
         }
@@ -137,7 +137,8 @@ pub(crate) async fn change_model_directory_with_env<R: tauri::Runtime>(
     }
 
     if !old_root.is_dir() {
-        apply_setting_and_refresh(state, setting_value)?;
+        apply_setting_and_refresh(state, setting_value, &[])?;
+        crate::worker::restart_for_model_directory(state);
         if let Some(handle) = app {
             emit_state_changed(handle);
         }
@@ -146,13 +147,52 @@ pub(crate) async fn change_model_directory_with_env<R: tauri::Runtime>(
 
     let entries = collect_entries(state, &old_root, &dest_root)?;
     if entries.is_empty() {
-        apply_setting_and_refresh(state, setting_value)?;
+        apply_setting_and_refresh(state, setting_value, &[])?;
+        crate::worker::restart_for_model_directory(state);
         if let Some(handle) = app {
             emit_state_changed(handle);
         }
         return Ok(());
     }
 
+    let mut mappings: Vec<_> = entries
+        .iter()
+        .map(|entry| {
+            (
+                entry.source.clone(),
+                fs::canonicalize(&entry.source).ok(),
+                entry.destination.clone(),
+            )
+        })
+        .collect();
+    let references: Vec<String> = {
+        let settings = lock(&state.settings)?;
+        let recipes = lock(&state.recipes)?;
+        std::iter::once(settings.custom_model_path.clone())
+            .chain(
+                settings
+                    .custom_edit_model
+                    .non_empty_paths()
+                    .map(str::to_owned),
+            )
+            .chain(
+                recipes
+                    .iter()
+                    .map(|recipe| recipe.custom_model_path.clone()),
+            )
+            .collect()
+    };
+    for reference in references {
+        let Ok(resolved) = fs::canonicalize(&reference) else {
+            continue;
+        };
+        if let Some((_, _, destination)) = mappings
+            .iter()
+            .find(|(_, canonical, _)| canonical.as_ref() == Some(&resolved))
+        {
+            mappings.push((PathBuf::from(reference), None, destination.clone()));
+        }
+    }
     let total_bytes: u64 = entries.iter().map(|entry| entry.size_bytes).sum();
     let total_files = entries.len();
     let use_copy = env.force_copy_path() || !same_volume(&old_root, &dest_root);
@@ -198,7 +238,7 @@ pub(crate) async fn change_model_directory_with_env<R: tauri::Runtime>(
         }
     };
 
-    if let Err(error) = apply_setting_and_refresh(state, setting_value) {
+    if let Err(error) = apply_setting_and_refresh(state, setting_value, &mappings) {
         // Persist failed before old files were removed (copy path) or while they can
         // still be put back (rename path).
         execution.rollback(&old_root);
@@ -361,6 +401,7 @@ fn collect_entries(
 enum MoveExecution {
     Renamed {
         moved_pairs: Vec<(PathBuf, PathBuf)>,
+        source_files: Vec<PathBuf>,
         created_dirs: Vec<PathBuf>,
         families: HashSet<String>,
     },
@@ -407,8 +448,12 @@ impl MoveExecution {
 
     fn finalize_old_files(self, old_root: &Path) {
         let families = match self {
-            Self::Renamed { families, .. } => families,
-            Self::Copied {
+            Self::Renamed {
+                source_files,
+                families,
+                ..
+            }
+            | Self::Copied {
                 source_files,
                 families,
                 ..
@@ -437,6 +482,20 @@ fn execute_move(
         .iter()
         .filter_map(|entry| entry.bundle_family.clone())
         .collect();
+
+    // A destination that resolves to a source would disappear during cleanup.
+    let sources: HashSet<PathBuf> = entries
+        .iter()
+        .map(|entry| fs::canonicalize(&entry.source))
+        .collect::<Result<_, _>>()?;
+    for entry in entries {
+        if entry.destination.exists() && sources.contains(&fs::canonicalize(&entry.destination)?) {
+            return Err(AppError::Validation(format!(
+                "The destination aliases a source file: {}",
+                entry.relative.display()
+            )));
+        }
+    }
 
     // Check existing destinations before changing anything on disk.
     let mut already_present = vec![false; entries.len()];
@@ -570,12 +629,9 @@ fn try_rename_all(
         .filter(|(index, _)| already_present[*index])
         .map(|(_, entry)| entry.source.clone())
         .collect();
-    for source in source_to_remove {
-        let _ = fs::remove_file(source);
-    }
-
     Ok(MoveExecution::Renamed {
         moved_pairs,
+        source_files: source_to_remove,
         created_dirs,
         families: families.clone(),
     })
@@ -765,10 +821,7 @@ fn destination_matches_source(entry: &MoveEntry) -> AppResult<bool> {
         return Ok(false);
     }
     let dest_hash = sha256_file(&entry.destination)?;
-    let expected = match &entry.expected_sha256 {
-        Some(hash) => hash.clone(),
-        None => sha256_file(&entry.source)?,
-    };
+    let expected = sha256_file(&entry.source)?;
     Ok(dest_hash.eq_ignore_ascii_case(&expected))
 }
 
@@ -813,23 +866,51 @@ fn emit_progress(
     });
 }
 
-fn apply_setting_and_refresh(state: &AppState, new_model_directory: String) -> AppResult<()> {
+fn apply_setting_and_refresh(
+    state: &AppState,
+    new_model_directory: String,
+    mappings: &[(PathBuf, Option<PathBuf>, PathBuf)],
+) -> AppResult<()> {
+    let rewrite = |path: &mut String| {
+        if let Some((_, _, destination)) = mappings.iter().find(|(source, canonical, _)| {
+            Path::new(path) == source || canonical.as_deref() == Some(Path::new(path))
+        }) {
+            *path = destination.to_string_lossy().into_owned();
+        }
+    };
     {
         let _io = lock(&state.settings_io)?;
-        let previous = {
+        let previous_settings = lock(&state.settings)?.clone();
+        let previous_recipes = lock(&state.recipes)?.clone();
+        {
             let mut settings = lock(&state.settings)?;
-            let prev = settings.model_directory.clone();
             settings.model_directory = new_model_directory.clone();
-            prev
-        };
+            rewrite(&mut settings.custom_model_path);
+            let edit = &mut settings.custom_edit_model;
+            rewrite(&mut edit.diffusion_path);
+            rewrite(&mut edit.text_encoder_path);
+            rewrite(&mut edit.vision_path);
+            rewrite(&mut edit.vae_path);
+        }
+        for recipe in lock(&state.recipes)?.iter_mut() {
+            rewrite(&mut recipe.custom_model_path);
+        }
         if let Err(error) = state.write_settings() {
-            if let Ok(mut settings) = lock(&state.settings) {
-                settings.model_directory = previous;
-            }
+            *lock(&state.settings)? = previous_settings;
+            *lock(&state.recipes)? = previous_recipes;
             return Err(error);
         }
     }
     state.grants.reconcile_model_root(&new_model_directory);
+    let settings = lock(&state.settings)?;
+    let recipes = lock(&state.recipes)?;
+    state.grants.reconcile_models(
+        &settings.custom_model_path,
+        &settings.custom_edit_model,
+        &recipes,
+    );
+    drop(recipes);
+    drop(settings);
     state.refresh_catalog()?;
     Ok(())
 }
@@ -995,6 +1076,226 @@ mod tests {
         state.refresh_catalog().unwrap();
 
         (state, img_bytes, bundle_a, bundle_b)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn move_rejects_destination_symlink_to_source_family() {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, _, ba, _) = test_state_with_catalog(dir.path());
+        let dest = dir.path().join("dest");
+        fs::create_dir_all(&dest).unwrap();
+        std::os::unix::fs::symlink(
+            state.paths.model_root.join("test_family"),
+            dest.join("test_family"),
+        )
+        .unwrap();
+        let entries = collect_entries(&state, &state.paths.model_root, &dest).unwrap();
+        assert!(execute_move(&dest, &entries, false, 0, MoveEnv::default(), |_| {}).is_err());
+        assert_eq!(fs::read(dest.join("test_family/weights.bin")).unwrap(), ba);
+    }
+
+    #[test]
+    fn move_rejects_catalog_destination_when_source_differs() {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, img, _, _) = test_state_with_catalog(dir.path());
+        let dest = dir.path().join("dest");
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(dest.join("test_img.pth"), &img).unwrap();
+        let modified = vec![b'x'; img.len()];
+        fs::write(state.paths.model_root.join("test_img.pth"), &modified).unwrap();
+        let entries = collect_entries(&state, &state.paths.model_root, &dest).unwrap();
+        assert!(execute_move(&dest, &entries, false, 0, MoveEnv::default(), |_| {}).is_err());
+        assert_eq!(
+            fs::read(state.paths.model_root.join("test_img.pth")).unwrap(),
+            modified
+        );
+    }
+
+    #[test]
+    fn rename_rollback_preserves_duplicate_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, img, _, _) = test_state_with_catalog(dir.path());
+        let dest = dir.path().join("dest");
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(dest.join("test_img.pth"), &img).unwrap();
+        let entries = collect_entries(&state, &state.paths.model_root, &dest).unwrap();
+        let execution =
+            execute_move(&dest, &entries, false, 0, MoveEnv::default(), |_| {}).unwrap();
+        execution.rollback(&state.paths.model_root);
+        assert_eq!(
+            fs::read(state.paths.model_root.join("test_img.pth")).unwrap(),
+            img
+        );
+    }
+
+    #[test]
+    fn empty_or_missing_model_folder_change_restarts_worker() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            for missing in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let paths = AppPaths::under(dir.path());
+                let state = Arc::new(AppState::from_paths(paths).unwrap());
+                if missing {
+                    state.settings.lock().unwrap().model_directory = dir
+                        .path()
+                        .join("missing/models")
+                        .to_string_lossy()
+                        .into_owned();
+                } else {
+                    fs::create_dir_all(&state.paths.model_root).unwrap();
+                }
+                let dest = dir.path().join("dest");
+                fs::create_dir_all(&dest).unwrap();
+                state.grants.grant_model_folder(&dest);
+                let (sender, receiver) = std::sync::mpsc::channel();
+                *state.worker.sender.lock().unwrap() = Some(sender);
+                state.runtime.lock().unwrap().worker = "ready".into();
+                change_model_directory_with_env::<tauri::Wry>(
+                    &state,
+                    None,
+                    Some(&dest.to_string_lossy()),
+                    MoveEnv::default(),
+                )
+                .await
+                .unwrap();
+                assert!(receiver.try_recv().unwrap().contains("shutdown_request"));
+            }
+        });
+    }
+
+    #[test]
+    fn move_rewrites_custom_references_to_moved_catalog_files() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (state, _, _, _) = test_state_with_catalog(dir.path());
+            let source = state.paths.model_root.join("test_family/weights.bin");
+            let dest = dir.path().join("dest");
+            fs::create_dir_all(&dest).unwrap();
+            state.grants.grant_model_folder(&dest);
+            state
+                .settings
+                .lock()
+                .unwrap()
+                .custom_edit_model
+                .text_encoder_path = source.to_string_lossy().into_owned();
+            state.settings.lock().unwrap().custom_model_path =
+                source.to_string_lossy().into_owned();
+            let recipe: crate::types::Recipe = serde_json::from_value(serde_json::json!({
+                "id":"r", "name":"r", "task":"upscale", "model_id":"m", "output_scale":2,
+                "tile_size":256, "halo":16, "precision":"fp32", "safe_memory":false,
+                "custom_model_path": source.to_string_lossy()
+            }))
+            .unwrap();
+            state.recipes.lock().unwrap().push(recipe);
+            change_model_directory_with_env::<tauri::Wry>(
+                &state,
+                None,
+                Some(&dest.to_string_lossy()),
+                MoveEnv::default(),
+            )
+            .await
+            .unwrap();
+            let expected = dest
+                .join("test_family/weights.bin")
+                .to_string_lossy()
+                .into_owned();
+            assert_eq!(
+                state
+                    .settings
+                    .lock()
+                    .unwrap()
+                    .custom_edit_model
+                    .text_encoder_path,
+                expected
+            );
+            assert_eq!(state.settings.lock().unwrap().custom_model_path, expected);
+            assert_eq!(state.recipes.lock().unwrap()[0].custom_model_path, expected);
+            assert!(state.grants.check_model_file(Path::new(&expected)).is_ok());
+            let (saved, recipes) = crate::settings::load(&state.paths);
+            assert_eq!(saved.custom_edit_model.text_encoder_path, expected);
+            assert_eq!(recipes[0].custom_model_path, expected);
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn move_rewrites_custom_reference_through_symlink() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (state, _, _, _) = test_state_with_catalog(dir.path());
+            let alias = dir.path().join("alias");
+            std::os::unix::fs::symlink(state.paths.model_root.join("test_family"), &alias).unwrap();
+            state
+                .settings
+                .lock()
+                .unwrap()
+                .custom_edit_model
+                .text_encoder_path = alias.join("weights.bin").to_string_lossy().into_owned();
+            let dest = dir.path().join("dest");
+            fs::create_dir_all(&dest).unwrap();
+            state.grants.grant_model_folder(&dest);
+            change_model_directory_with_env::<tauri::Wry>(
+                &state,
+                None,
+                Some(&dest.to_string_lossy()),
+                MoveEnv::default(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                state
+                    .settings
+                    .lock()
+                    .unwrap()
+                    .custom_edit_model
+                    .text_encoder_path,
+                dest.join("test_family/weights.bin").to_string_lossy()
+            );
+        });
+    }
+
+    #[test]
+    fn failed_settings_save_restores_files_and_custom_references() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let (state, img, _, _) = test_state_with_catalog(dir.path());
+            let source = state.paths.model_root.join("test_img.pth");
+            let dest = dir.path().join("dest");
+            fs::create_dir_all(&dest).unwrap();
+            fs::write(dest.join("test_img.pth"), &img).unwrap();
+            state.grants.grant_model_folder(&dest);
+            state.settings.lock().unwrap().custom_model_path =
+                source.to_string_lossy().into_owned();
+            fs::write(
+                &state.paths.settings,
+                r#"{"schema_version":999,"ui":{},"recipes":[]}"#,
+            )
+            .unwrap();
+            assert!(change_model_directory_with_env::<tauri::Wry>(
+                &state,
+                None,
+                Some(&dest.to_string_lossy()),
+                MoveEnv::default()
+            )
+            .await
+            .is_err());
+            assert_eq!(fs::read(&source).unwrap(), img);
+            assert_eq!(
+                state.settings.lock().unwrap().custom_model_path,
+                source.to_string_lossy()
+            );
+            assert!(state.settings.lock().unwrap().model_directory.is_empty());
+            assert!(state
+                .paths
+                .model_root
+                .join("test_family/weights.bin")
+                .is_file());
+        });
     }
 
     #[test]

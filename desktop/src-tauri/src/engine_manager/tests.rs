@@ -782,6 +782,118 @@ fn import_engine_verifies_signatures_reuses_install_manifest_and_enforces_grants
     .is_err());
 }
 
+fn check_install_failure_status(failure: &'static str) {
+    let (config, _, manifest_bytes, part_name, part_bytes, _, contract) =
+        fixture_engine_files("http://127.0.0.1:1");
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    lock(&state.settings).unwrap().privacy_choice_made = true;
+    let entries = parse_feed_engines_for(
+        &feed_json_with_rocm("0.3.7-beta", &contract),
+        &config,
+        "beta",
+        "0.3.7-beta",
+        "linux",
+        "x86_64",
+    )
+    .unwrap();
+    let meta_path = paths
+        .next_root
+        .join("engines")
+        .join(&entries[0].engine_id)
+        .join("meta.json");
+    let cache = paths
+        .next_root
+        .join("updates/engine-cache")
+        .join(&entries[0].engine_id);
+    fs::create_dir_all(&cache).unwrap();
+    fs::write(cache.join("engine-payload.json"), manifest_bytes).unwrap();
+    fs::write(cache.join(part_name), part_bytes).unwrap();
+    *lock(&state.engines.catalog).unwrap() = entries;
+    let during = state.clone();
+    let result = tauri::async_runtime::block_on(install_engine_for(
+        &state,
+        None,
+        &config,
+        "rocm",
+        "0.3.7-beta",
+        "linux",
+        "x86_64",
+        move |_| {
+            match failure {
+                "job" => lock(&during.runtime).unwrap().active_job_id = "job".into(),
+                "metadata" => fs::create_dir(meta_path).unwrap(),
+                "panic" => panic!("handshake task failed"),
+                _ => unreachable!(),
+            }
+            Ok(())
+        },
+    ));
+    assert!(result.is_err());
+    assert_eq!(state.engines.snapshot_status().stage, "error");
+}
+
+#[test]
+fn install_reports_error_when_job_starts_during_handshake() {
+    check_install_failure_status("job");
+}
+
+#[test]
+fn install_reports_metadata_and_handshake_task_errors() {
+    check_install_failure_status("metadata");
+    check_install_failure_status("panic");
+}
+
+#[test]
+fn reimport_handshake_failure_preserves_active_engine() {
+    let (config, _, manifest_bytes, part_name, part_bytes, engine, _) =
+        fixture_engine_files("http://127.0.0.1:1");
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let import_dir = root.path().join("import");
+    fs::create_dir_all(&import_dir).unwrap();
+    let manifest = import_dir.join("payload.json");
+    fs::write(&manifest, &manifest_bytes).unwrap();
+    fs::write(
+        import_dir.join("payload.json.sig"),
+        &engine.manifest.signature,
+    )
+    .unwrap();
+    fs::write(import_dir.join(&part_name), &part_bytes).unwrap();
+    fs::write(
+        import_dir.join(format!("{part_name}.sig")),
+        &engine.parts[0].signature,
+    )
+    .unwrap();
+    let meta = import_engine_for(&state, None, &config, &manifest, "linux", "x86_64", |_| {
+        Ok(())
+    })
+    .unwrap();
+    let exe = paths
+        .next_root
+        .join("engines")
+        .join(&meta.id)
+        .join("engine")
+        .join(worker_executable_name());
+    assert!(import_engine_for(
+        &state,
+        None,
+        &config,
+        &manifest,
+        "linux",
+        "x86_64",
+        |_| Err(AppError::Worker("failed".into()))
+    )
+    .is_err());
+    assert_eq!(fs::read(exe).unwrap(), b"worker");
+    assert_eq!(
+        fs::read_to_string(paths.next_root.join("active-engine.txt")).unwrap(),
+        meta.id
+    );
+}
+
 #[test]
 fn app_updates_keep_the_users_chosen_backend() {
     let (config, _, _, _, _, _, rocm_contract) = fixture_engine_files("http://127.0.0.1:1");

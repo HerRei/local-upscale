@@ -411,11 +411,13 @@ or AppImage:
   HTTP Range `.part` files so interrupted or cancelled downloads resume across
   restarts. `import_engine` installs a downloaded `*.engine-payload.json` and its
   parts from disk using companion `.sig` files (or matching verified catalog
-  signatures). Both verify minisign signatures and SHA-256 digests, unpack into
-  `LocalSR/next/engines/<id>/engine`, run the worker protocol handshake, write host
-  metadata (`meta.json`), and activate `active-engine.txt` only after the handshake
-  passes. Network fetches are refused before `privacy_choice_made`, in Store
-  editions, while jobs run, or when free disk space is insufficient.
+  signatures). Both verify minisign signatures and SHA-256 digests, unpack the
+  engine, run the worker protocol handshake, write host metadata (`meta.json`),
+  and activate `active-engine.txt` only after the handshake passes. An import
+  tests a staged engine before replacing an existing one. If a job starts during
+  a download, activation fails with an error and can be retried once the job ends.
+  Network fetches are refused before `privacy_choice_made`, in Store editions,
+  while jobs run, or when free disk space is insufficient.
 - **Switching, fallback and app updates.** `use_engine` switches between installed
   engines and the bundled CPU fallback; `remove_engine` deletes an inactive engine
   folder. If an active installed engine fails to start, the host clears
