@@ -519,16 +519,18 @@ def test_nsis_installer_uses_localsr_icons() -> None:
         assert (config_path.parent / nsis[name]).is_file()
 
 
-def test_nsis_editions_default_to_current_user() -> None:
+def test_nsis_editions_install_for_the_current_user() -> None:
+    # "both" pulls in NSIS MultiUser, which replaces a silent /D= folder with its own
+    # default; per-user installs keep /D= and need no administrator rights.
     config_path = ROOT / "desktop/src-tauri/tauri.conf.json"
     nsis = json.loads(config_path.read_text(encoding="utf-8"))["bundle"]["windows"]["nsis"]
-    assert nsis["installMode"] == "both"
+    assert nsis["installMode"] == "currentUser"
     for hook in (
         config_path.parent / nsis["installerHooks"],
         ROOT / "packaging/windows/engine-payload.nsh",
     ):
         text = hook.read_text(encoding="utf-8")
-        assert "!define MULTIUSER_INSTALLMODE_DEFAULT_CURRENTUSER" in text
+        assert "MULTIUSER" not in text
         assert '!include "${__FILEDIR__}\\common.nsh"' in text
 
 

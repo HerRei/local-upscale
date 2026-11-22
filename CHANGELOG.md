@@ -30,8 +30,8 @@
   drop it.
 - **Mage-Flow edit model.** A fast edit model (MIT licence, 4 steps). On Macs it runs
   on the CPU, about 1.5 minutes at 512 px; on NVIDIA and AMD graphics it uses the GPU.
-- **Windows installer.** Installs for you alone by default, with an option for all
-  users. You can choose the folder, get a Start menu entry and an optional desktop
+- **Windows installer.** Installs for your account without administrator rights.
+  You can choose the folder, get a Start menu entry and an optional desktop
   shortcut, and start LocalSR from the last page. Uninstalling keeps your downloaded
   models and settings unless you tick the box to remove them.
 - **Linux menu entry.** After the first-launch setup, the AppImage offers once to add
