@@ -903,6 +903,8 @@ mod tests {
         assert!(appimage_container(&current, None, None).is_none());
     }
 
+    // The menu entry is a Linux feature; Windows paths do not fit the Exec line.
+    #[cfg(not(windows))]
     #[test]
     fn linux_menu_writes_desktop_file_and_icon_under_xdg_data_and_removes_them_cleanly() {
         let temporary = tempfile::tempdir().unwrap();

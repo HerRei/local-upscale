@@ -1251,6 +1251,10 @@ fn round2_install_space_is_authenticated() {
     .is_err());
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "the signed test engine carries a Linux worker without .exe"
+)]
 #[test]
 fn round4_a_missing_versioned_engine_is_fetched_again_not_replaced_by_the_bundle() {
     let (mut config, contract) = statement_contract();
@@ -2072,6 +2076,10 @@ fn a_damaged_compiled_copy_keeps_the_valid_selected_engine() {
     );
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "the signed test engine carries a Linux worker without .exe"
+)]
 #[test]
 fn staged_engine_verifies_before_replacing_existing_engine() {
     let root = tempfile::tempdir().unwrap();

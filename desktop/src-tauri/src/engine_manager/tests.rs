@@ -418,6 +418,10 @@ fn host_runs_active_installed_engine_with_different_id_when_os_arch_and_handshak
     assert!(!paths.next_root.join("active-engine.txt").exists());
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "the signed test engine carries a Linux worker without .exe"
+)]
 #[test]
 fn install_engine_resumes_from_partial_file_verifies_signature_and_activates() {
     let (_, _, manifest_bytes, part_name, part_bytes, _, mut contract) =
@@ -624,6 +628,10 @@ fn download_file_resumable_refuses_wrong_hash_and_preserves_partial_on_cancel() 
     assert_eq!(fs::read(&partial).unwrap(), &part_bytes[..40]);
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "the signed test engine carries a Linux worker without .exe"
+)]
 #[test]
 fn install_engine_refuses_privacy_unset_running_job_low_space_and_failed_handshake() {
     let (mut config, _, manifest_bytes, part_name, part_bytes, _, mut contract) =
@@ -789,6 +797,10 @@ fn use_engine_and_remove_engine_switch_protect_active_and_remove_inactive() {
     assert!(!paths.next_root.join("engines").join(rocm_id).exists());
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "the signed test engine carries a Linux worker without .exe"
+)]
 #[test]
 fn import_engine_verifies_signatures_reuses_install_manifest_and_enforces_grants() {
     let (config, _, manifest_bytes, part_name, part_bytes, engine, _) =
@@ -952,11 +964,19 @@ fn install_reports_metadata_and_handshake_task_errors() {
     check_install_failure_status("panic");
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "the signed test engine carries a Linux worker without .exe"
+)]
 #[test]
 fn late_cancel_does_not_reclassify_handshake_failure() {
     check_install_failure_status("late_cancel");
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "the signed test engine carries a Linux worker without .exe"
+)]
 #[test]
 fn reimport_handshake_failure_preserves_active_engine() {
     let (config, _, manifest_bytes, part_name, part_bytes, engine, _) =
@@ -1258,6 +1278,10 @@ fn explicit_use_allows_previously_failed_engine() {
     assert!(!lock(&state.worker.failed_engines).unwrap().contains(id));
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "the signed test engine carries a Linux worker without .exe"
+)]
 #[test]
 fn interrupted_reimport_restores_active_engine_at_startup_and_retry() {
     let (config, _, manifest_bytes, part_name, part_bytes, engine, _) =
@@ -1460,6 +1484,10 @@ fn write_schema2_case(dir: &Path, fixture: &serde_json::Value, case: &str) -> Pa
     manifest_path
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "the signed test engine carries a Linux worker without .exe"
+)]
 #[test]
 fn import_schema2_checks_os_arch_protocol_and_refuses_older_versions() {
     let fixture = schema2_fixture();
@@ -1562,6 +1590,10 @@ fn import_schema2_checks_os_arch_protocol_and_refuses_older_versions() {
     assert_eq!(meta_newer.version, "0.5.3-beta");
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "the signed test engine carries a Linux worker without .exe"
+)]
 #[test]
 fn recorded_file_list_catches_size_change_at_start_and_hash_change_on_verify() {
     let (config, _, manifest_bytes, part_name, part_bytes, engine, _) =
@@ -1662,6 +1694,10 @@ fn recorded_file_list_catches_size_change_at_start_and_hash_change_on_verify() {
     assert_eq!(choice, Some((bundled, None)));
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "the signed test engine carries a Linux worker without .exe"
+)]
 #[test]
 fn same_id_reinstall_keeps_backup_until_activation_and_holds_scheduler_lock() {
     let (config, _, manifest_bytes, part_name, part_bytes, _, contract) =

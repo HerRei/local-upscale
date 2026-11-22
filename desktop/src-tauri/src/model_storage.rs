@@ -1290,7 +1290,8 @@ mod tests {
             .await
             .unwrap();
             let expected = dest
-                .join("test_family/weights.bin")
+                .join("test_family")
+                .join("weights.bin")
                 .to_string_lossy()
                 .into_owned();
             assert_eq!(
