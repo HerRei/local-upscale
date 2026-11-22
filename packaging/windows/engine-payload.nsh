@@ -1,6 +1,6 @@
 ; Match the standard installer default for a new installation.
 !define MULTIUSER_INSTALLMODE_DEFAULT_CURRENTUSER
-!include "common.nsh"
+!include "${__FILEDIR__}\common.nsh"
 ; The small manifest is embedded in the installer. Payload hashes are therefore
 ; covered by the installer's signature when production signing is enabled.
 !include "FileFunc.nsh"
