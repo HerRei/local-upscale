@@ -51,6 +51,11 @@ CUSTOM_EDIT_FAMILIES: dict[str, dict] = {
         "default_steps": 4,
         "cfg_scale": 1.0,
     },
+    "mage-flow-edit-turbo": {
+        "roles": ("diffusion", "text_encoder", "vision", "vae"),
+        "default_steps": 4,
+        "cfg_scale": 1.0,
+    },
 }
 
 
@@ -352,6 +357,10 @@ def build_edit_command(
     gpu = gpu_override or (
         "MTL0" if device == "mps" else f"{gpu_kind}{device.partition(':')[2] or '0'}"
     )
+    # The pinned Metal backend produces blank white output for Mage-Flow's
+    # diffusion transformer on Apple Silicon, whereas full CPU with default
+    # physical-core threading finishes a 512 px edit in ~96 s.
+    use_cpu = model["family"] == "mage-flow-edit-turbo" and device == "mps"
     width, height = dimensions
     args = [
         str(runtime),
@@ -385,12 +394,11 @@ def build_edit_command(
         "--vae-tiling",
         "--vae-tile-size",
         "256",
-        "--threads",
-        "2",
+        *([] if use_cpu else ["--threads", "2"]),
         "--conditioning-cache-size",
         "0",
         "--backend",
-        f"diffusion={gpu},te=cpu,vae=cpu",
+        "cpu" if use_cpu else f"diffusion={gpu},te=cpu,vae=cpu",
         "--max-vram",
         f"{plan.gpu_budget / GIB:.2f}",
         "--cfg-scale",

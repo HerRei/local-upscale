@@ -53,6 +53,7 @@ def test_mac_tiers_are_sensible_for_the_bigger_models():
     assert tiers["qwen_edit_2511_q8_0"] <= 48, "a 48 GB Mac holds the 26 GiB Q8 bundle"
     assert tiers["qwen_edit_2511_q4_k_m"] <= 32, "common 32 GB Macs get a Q4 editor"
     assert tiers["flux2_klein_4b_q8_0"] == 16
+    assert tiers["mage_flow_edit_turbo_q6_k"] == 16
     assert tiers["qwen_edit_2511_q2_k"] > 16, "the 20B editor stays off 16 GB Macs"
 
 
@@ -302,6 +303,8 @@ def test_bundle_verification_is_streamed_and_rejects_corruption(tmp_path):
         ("qwen-image-edit-2511", "Q4_K_M", "cuda:0", "CUDA"),
         ("qwen-image-edit-2511", "Q2_K", "cuda:1", "VULKAN"),
         ("flux2-klein-4b", "Q4_0", "mps", "MPS"),
+        ("mage-flow-edit-turbo", "Q6_K", "mps", "MPS"),
+        ("mage-flow-edit-turbo", "Q6_K", "cuda:0", "CUDA"),
     ],
 )
 def test_native_command_preserves_quantization_and_model_specific_configuration(
@@ -329,12 +332,24 @@ def test_native_command_preserves_quantization_and_model_specific_configuration(
     assert "--type" not in command  # Never expand a GGUF bundle into float weights.
     assert "--disable-prefetch" in command and "--mmap" in command
     assert command[command.index("--max-vram") + 1] == "6.00"
-    assert command[command.index("--backend") + 1].startswith(
-        {"MPS": "diffusion=MTL0", "CUDA": "diffusion=CUDA0", "VULKAN": "diffusion=Vulkan1"}[backend]
-    )
+    if family == "mage-flow-edit-turbo" and backend == "MPS":
+        assert command[command.index("--backend") + 1] == "cpu"
+        assert "--threads" not in command
+    else:
+        assert command[command.index("--backend") + 1].startswith(
+            {"MPS": "diffusion=MTL0", "CUDA": "diffusion=CUDA0", "VULKAN": "diffusion=Vulkan1"}[
+                backend
+            ]
+        )
+        assert command[command.index("--threads") + 1] == "2"
     if family == "flux2-klein-4b":
         # Distilled: guidance 1, no vision projector, no model arguments.
         assert "--model-args" not in command and "--llm_vision" not in command
+        assert command[command.index("--cfg-scale") + 1] == "1"
+        assert selected["default_steps"] == 4
+    elif family == "mage-flow-edit-turbo":
+        # Distilled 4-step editor with Qwen3-VL vision conditioning and automatic preset.
+        assert "--llm_vision" in command and "--model-args" not in command
         assert command[command.index("--cfg-scale") + 1] == "1"
         assert selected["default_steps"] == 4
     else:
@@ -586,7 +601,7 @@ def test_edit_refuses_an_output_name_the_file_system_cannot_hold_before_any_work
 
 
 def test_catalog_offers_only_openly_licensed_bundles():
-    assert {m["license_name"] for m in image_edit.edit_catalog()} == {"Apache-2.0"}
+    assert {m["license_name"] for m in image_edit.edit_catalog()} == {"Apache-2.0", "MIT"}
     assert not any(m["terms_acceptance_required"] for m in image_edit.edit_catalog())
 
 

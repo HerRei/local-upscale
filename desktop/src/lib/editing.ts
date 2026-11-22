@@ -15,6 +15,11 @@ export const EDIT_FAMILIES: { id: string; label: string; summary: string }[] = [
     label: 'FLUX.2 klein 4B',
     summary: 'Fast 4-step editor for 16 GB computers · Apache-2.0',
   },
+  {
+    id: 'mage-flow-edit-turbo',
+    label: 'Mage-Flow-Edit-Turbo',
+    summary: '4-step editor (CPU on Mac) · MIT',
+  },
 ];
 
 export interface CustomEditFamilySpec {
@@ -49,6 +54,14 @@ export const CUSTOM_EDIT_FAMILIES: CustomEditFamilySpec[] = [
     label: 'FLUX.2 klein',
     summary: 'Fast 4-step editor',
     needsVision: false,
+    defaultSteps: 4,
+    cfgScale: 1.0,
+  },
+  {
+    id: 'mage-flow-edit-turbo',
+    label: 'Mage-Flow-Edit-Turbo',
+    summary: '4-step editor',
+    needsVision: true,
     defaultSteps: 4,
     cfgScale: 1.0,
   },

@@ -43,8 +43,9 @@ at the moment), and the app shows you each licence before it downloads anything.
   original.
 - Enhance video frame by frame, with the source timing, rotation and audio kept.
 - Process a whole folder or a queue, and save a setup as a recipe.
-- Edit with a prompt, with FLUX.2 klein or Qwen Image Edit. This is
-  experimental, and so far only FLUX.2 klein has been tested, on a 16 GB Mac.
+- Edit with a prompt, with FLUX.2 klein, Mage-Flow-Edit-Turbo or Qwen Image Edit.
+  This is experimental, and so far FLUX.2 klein and Mage-Flow-Edit-Turbo (CPU on Mac)
+  have been tested on a 16 GB Mac.
   [About editing](docs/image-editing.md).
 
 LocalSR also has a built-in benchmark. It times a real upscaling model on fixed
@@ -177,7 +178,7 @@ files can run code when they load, so the app only uses one after you tick
 *Allow this pickle-based checkpoint*. Do that only for files from a publisher
 you trust. For editing, **Use your own edit model…** in the model library lets
 you pick local GGUF/safetensors component files for Qwen Image Edit 2511,
-Qwen Image 2.1, or FLUX.2 klein.
+Qwen Image 2.1, FLUX.2 klein, or Mage-Flow-Edit-Turbo.
 
 **How do I uninstall it?** On a Mac, move LocalSR to the Trash and delete
 `~/Library/Application Support/LocalSR` and `~/Library/Caches/LocalSR`. On

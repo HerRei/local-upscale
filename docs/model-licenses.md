@@ -308,6 +308,15 @@ describes the bundles and what they need.
 - **FLUX.2 klein 4B** — [Black Forest Labs](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B),
   Apache-2.0, with GGUF diffusion quantizations by leejet, the Qwen3-4B text encoder (Qwen,
   Apache-2.0, GGUF by Unsloth) and the FLUX.2 autoencoder as published by Comfy-Org (Apache-2.0).
+- **Mage-Flow-Edit-Turbo** - [Microsoft Mage](https://github.com/microsoft/Mage), MIT. The
+  original `microsoft/Mage-Flow` and `microsoft/Mage-Flow-Edit-Turbo` Hugging Face repositories are
+  not publicly accessible, so LocalSR pins the public MIT repack by Comfy-Org
+  ([Comfy-Org/Mage-Flow](https://huggingface.co/Comfy-Org/Mage-Flow), VAE) and the community
+  Q6_K diffusion GGUF by johnsor
+  ([johnsor/Mage-Flow-Edit-Turbo-GGUF](https://huggingface.co/johnsor/Mage-Flow-Edit-Turbo-GGUF),
+  MIT), paired with Qwen3-VL-4B-Instruct text and vision encoders
+  ([Qwen/Qwen3-VL-4B-Instruct-GGUF](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF),
+  Apache-2.0).
 - **Qwen Image 2.1** is not offered: its Qwen Research License permits research and evaluation
   only.
 

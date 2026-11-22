@@ -58,6 +58,14 @@ pub const CUSTOM_EDIT_FAMILIES: &[EditFamilySpec] = &[
         cfg_scale: 1.0,
         expected_sd_version: "Flux.2 klein",
     },
+    EditFamilySpec {
+        id: "mage-flow-edit-turbo",
+        label: "Mage-Flow-Edit-Turbo",
+        needs_vision: true,
+        default_steps: 4,
+        cfg_scale: 1.0,
+        expected_sd_version: "Mage Flow",
+    },
 ];
 
 pub fn find_family_spec(id: &str) -> Option<&'static EditFamilySpec> {
@@ -405,6 +413,8 @@ pub fn detect_gguf_edit_family(path: &Path) -> Option<&'static str> {
                 || value.contains("flux2-klein")
             {
                 meta_hint = Some("flux2-klein");
+            } else if value.contains("mage-flow") || value.contains("mage_flow") {
+                meta_hint = Some("mage-flow-edit-turbo");
             }
         } else {
             skip_gguf_value(&mut reader, value_type, 0).ok()?;
@@ -412,6 +422,8 @@ pub fn detect_gguf_edit_family(path: &Path) -> Option<&'static str> {
     }
     let mut has_qwen21 = false;
     let mut has_qwen = false;
+    let mut has_block_11 = false;
+    let mut has_block_12 = false;
     let mut has_flux2 = false;
     let mut has_flux2_dev = false;
     for _ in 0..tensor_count {
@@ -431,6 +443,10 @@ pub fn detect_gguf_edit_family(path: &Path) -> Option<&'static str> {
             has_qwen21 = true;
         } else if name.contains("transformer_blocks.0.img_mod.1.weight") {
             has_qwen = true;
+        } else if name.contains("transformer_blocks.11.") {
+            has_block_11 = true;
+        } else if name.contains("transformer_blocks.12.") {
+            has_block_12 = true;
         } else if name.contains("double_stream_modulation_img.lin.weight") {
             has_flux2 = true;
         } else if name.contains("single_blocks.47.") {
@@ -439,6 +455,8 @@ pub fn detect_gguf_edit_family(path: &Path) -> Option<&'static str> {
     }
     if has_qwen21 {
         Some("qwen-image-2.1")
+    } else if has_qwen && has_block_11 && !has_block_12 {
+        Some("mage-flow-edit-turbo")
     } else if has_qwen {
         Some("qwen-image-edit-2511")
     } else if has_flux2 && !has_flux2_dev {
@@ -832,9 +850,9 @@ mod tests {
     #[test]
     fn all_edit_bundles_pin_each_component_under_an_open_license() {
         let models: Vec<EditModel> = serde_json::from_str(EDIT_CATALOG).unwrap();
-        assert_eq!(models.len(), 8);
+        assert_eq!(models.len(), 9);
         for model in models {
-            // Qwen bundles carry a vision projector; FLUX.2 klein edits without one.
+            // Qwen and Mage-Flow bundles carry a vision projector; FLUX.2 klein edits without one.
             assert_eq!(
                 model.files.len(),
                 if model.family.starts_with("flux2") {
@@ -850,7 +868,7 @@ mod tests {
                 assert!(!file.download_url.contains("/resolve/main/"));
             }
             // Only openly licensed bundles are offered.
-            assert_eq!(model.license_name, "Apache-2.0");
+            assert!(matches!(model.license_name.as_str(), "Apache-2.0" | "MIT"));
             assert!(!model.terms_acceptance_required);
         }
     }
@@ -961,6 +979,18 @@ mod tests {
         assert_eq!(klein.files.len(), 3);
         assert_eq!(klein.default_steps, 4);
         assert_eq!(klein.cfg_scale, 1.0);
+
+        let mage = custom_edit_model(&CustomEditModel {
+            family: "mage-flow-edit-turbo".into(),
+            diffusion_path: diff.to_string_lossy().into_owned(),
+            text_encoder_path: te.to_string_lossy().into_owned(),
+            vision_path: vis.to_string_lossy().into_owned(),
+            vae_path: vis.to_string_lossy().into_owned(),
+        })
+        .unwrap();
+        assert_eq!(mage.files.len(), 4);
+        assert_eq!(mage.default_steps, 4);
+        assert_eq!(mage.cfg_scale, 1.0);
     }
 
     #[test]
@@ -984,6 +1014,17 @@ mod tests {
             detect_gguf_edit_family(&q2511),
             Some("qwen-image-edit-2511")
         );
+
+        let mage = dir.path().join("mage.gguf");
+        write_gguf_header(
+            &mage,
+            &[
+                "model.diffusion_model.transformer_blocks.0.img_mod.1.weight",
+                "model.diffusion_model.transformer_blocks.11.img_mod.1.weight",
+            ],
+            None,
+        );
+        assert_eq!(detect_gguf_edit_family(&mage), Some("mage-flow-edit-turbo"));
 
         let klein = dir.path().join("klein.gguf");
         write_gguf_header(

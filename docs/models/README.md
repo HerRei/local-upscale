@@ -105,3 +105,12 @@ scale and colour assumptions before using it.
 If a checkpoint cannot be recognized, LocalSR reports when its keys suggest a
 MoSR or MoESR model that this version cannot load. Other unrecognized models
 show a general unsupported architecture message.
+
+## Image editing
+
+Prompt-based editing downloads optional multi-file bundles from
+`src/localsr/core/edit_catalog.json` (Qwen Image Edit 2511 under Apache-2.0,
+FLUX.2 klein 4B under Apache-2.0, and Mage-Flow-Edit-Turbo under MIT with a
+Qwen3-VL-4B-Instruct Apache-2.0 encoder). See [image editing](../image-editing.md)
+for memory profiles and [model licenses](../model-licenses.md#image-editing-models)
+for provenance.

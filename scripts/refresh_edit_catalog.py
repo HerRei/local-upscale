@@ -56,6 +56,9 @@ REVISIONS = {
     "leejet/FLUX.2-klein-4B-GGUF": "3b1f5a9dc3abb32238b053aeb3d823c30afdacbd",
     "unsloth/Qwen3-4B-GGUF": "22c9fc8a8c7700b76a1789366280a6a5a1ad1120",
     "Comfy-Org/vae-text-encorder-for-flux-klein-4b": "5f526678002e43af5551dadb73ce2e8c91b43afe",
+    "johnsor/Mage-Flow-Edit-Turbo-GGUF": "93a5c5ca0cab9021d5c251e36168725681f0c45f",
+    "Qwen/Qwen3-VL-4B-Instruct-GGUF": "1cd86afb9a95c410a6038ab3b40d8b578c892266",
+    "Comfy-Org/Mage-Flow": "6ff68fbf3c667325e961d551691b246791d5eec0",
 }
 
 
@@ -150,6 +153,46 @@ def main():
                 "automated_download_allowed": True,
             }
         )
+    # Mage-Flow-Edit-Turbo: 4B, 4-step editor (MIT via Comfy-Org repack and community
+    # Q6_K GGUF; Q5_K and lower produce lattice artifacts). Uses Qwen3-VL-4B-Instruct
+    # (Apache-2.0) for text and reference image conditioning.
+    models.append(
+        {
+            "model_id": "mage_flow_edit_turbo_q6_k",
+            "name": "Mage-Flow-Edit-Turbo · Q6_K",
+            "family": "mage-flow-edit-turbo",
+            "quantization": "Q6_K",
+            "files": [
+                file(
+                    "diffusion",
+                    "johnsor/Mage-Flow-Edit-Turbo-GGUF",
+                    "mage-flow-edit-turbo-Q6_K.gguf",
+                ),
+                file(
+                    "text_encoder",
+                    "Qwen/Qwen3-VL-4B-Instruct-GGUF",
+                    "Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+                ),
+                file(
+                    "vision",
+                    "Qwen/Qwen3-VL-4B-Instruct-GGUF",
+                    "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf",
+                ),
+                file(
+                    "vae",
+                    "Comfy-Org/Mage-Flow",
+                    "vae/mage_flow_vae_bf16.safetensors",
+                ),
+            ],
+            "default_steps": 4,
+            "cfg_scale": 1.0,
+            "license_name": "MIT",
+            "license_url": "https://github.com/microsoft/Mage/blob/main/LICENSE",
+            "source_url": "https://github.com/microsoft/Mage",
+            "terms_acceptance_required": False,
+            "automated_download_allowed": True,
+        }
+    )
     for model in models:
         model["min_unified_memory_gb"] = unified_tier(model)
         model["min_vram_gb"] = gpu_tier(model)

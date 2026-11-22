@@ -129,6 +129,12 @@ commercial workflow.
   Qwen Image 2.1 is not offered: its Qwen Research License permits research and
   evaluation only.
   Source: https://huggingface.co/black-forest-labs/FLUX.2-klein-4B.
+- **Mage-Flow-Edit-Turbo** - Microsoft (MIT, via `https://github.com/microsoft/Mage`),
+  using the public Comfy-Org repack (`https://huggingface.co/Comfy-Org/Mage-Flow`, MIT)
+  and johnsor Q6_K GGUF (`https://huggingface.co/johnsor/Mage-Flow-Edit-Turbo-GGUF`, MIT),
+  with Qwen3-VL-4B-Instruct text and vision encoders (Qwen, Apache-2.0,
+  `https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF`). The original Microsoft
+  Hugging Face repositories are not publicly accessible.
   Editing weights are separate, optional, checksum-pinned downloads and are never
   included in installers. Exact revisions and component digests are in
   `src/localsr/core/edit_catalog.json`.
