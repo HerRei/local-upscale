@@ -211,6 +211,20 @@ describe('desktop state', () => {
     expect(snapshot.runtime.result_preview_data_url).toBe('');
   });
 
+  it('shows that a stopped video kept a result', () => {
+    const snapshot = applyWorkerEnvelope(demoSnapshot(), {
+      type: 'video_job_completed',
+      data: {
+        job_id: 'job-1',
+        output_path: '/output/result_partial_0m42s.mp4',
+        partial: true,
+        kept_seconds: 42.5,
+      },
+    });
+    expect(snapshot.runtime.status_title).toBe('Stopped, kept 0:42');
+    expect(snapshot.runtime.last_output_path).toBe('/output/result_partial_0m42s.mp4');
+  });
+
   it('shows which engine runs the active job', () => {
     let snapshot = demoSnapshot();
     snapshot = applyWorkerEnvelope(snapshot, { type: 'job_started', data: { job_id: 'job-1' } });

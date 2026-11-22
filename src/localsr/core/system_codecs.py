@@ -668,6 +668,8 @@ class SystemCodecs:
             "--quality",
             f"{_quality(crf):.3f}",
         ]
+        if video_codec != "prores":
+            arguments.append("--no-reordering")
         if audio is not None:
             arguments += ["--audio", str(audio)]
         with self._process(arguments, stdin=True) as process:
