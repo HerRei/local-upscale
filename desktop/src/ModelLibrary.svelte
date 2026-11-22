@@ -89,16 +89,7 @@
   export let resetModelFolder: () => Promise<void> = async () => undefined;
 
   type GroupId =
-    | 'job'
-    | 'photos'
-    | 'illustration'
-    | 'faces'
-    | 'fix'
-    | 'video'
-    | 'audio'
-    | 'edit'
-    | 'installed'
-    | 'own';
+    'job' | 'photos' | 'illustration' | 'fix' | 'video' | 'audio' | 'edit' | 'installed' | 'own';
 
   let group: GroupId =
     context.slot === 'browse' ? 'photos' : context.slot === 'edit' ? 'edit' : 'job';
@@ -294,8 +285,6 @@
             isUpscaler(model) &&
             (model.purposes.includes('illustration') || model.purposes.includes('anime')),
         );
-      case 'faces':
-        return models.filter((model) => model.purposes.includes('face'));
       case 'fix':
         return models.filter(
           (model) => model.native_scale === 1 && !model.purposes.includes('face'),

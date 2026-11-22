@@ -546,6 +546,14 @@ describe('Edit task', () => {
     expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull();
   });
 
+  it('offers no Faces group in the model library', async () => {
+    await mountWith(readySnapshot([image('photo', true)]));
+    await chooseMenuItem('view.models');
+    const dialog = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(dialog).getByRole('button', { name: /^Edit with a prompt/ })).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: /^Faces/ })).toBeNull();
+  });
+
   it('shows Mac and Windows/Linux memory needs in the library and removes a bundle', async () => {
     const user = await mountWith(editSnapshot(26));
     await chooseMenuItem('view.models');
