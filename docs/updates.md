@@ -429,4 +429,4 @@ or AppImage:
   GPU engine is not installed, LocalSR offers one dismissable card to download it
   (remembered via `gpu_download_notice_dismissed`). The same engines, progress,
   removal and offline `.engine-payload.json` import remain reachable under
-  **Advanced -> Hardware -> Engine -> Change…** on direct Windows and Linux builds.
+  **Advanced -> Engine -> Change…** on direct Windows and Linux builds.

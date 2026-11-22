@@ -219,7 +219,7 @@ def download_table(release_version: str) -> str:
         + "".join(f"| {computer} | {download} |\n" for computer, download in offline_rows)
         + "\nTo import an engine offline, download the `*.engine-payload.json` manifest, "
         + "its `.engine.tar.gz.part-*` files and their `.sig` signature files into one folder, "
-        + "then open **Advanced -> Hardware -> Engine -> Change… -> Import engine from file…** "
+        + "then open **Advanced -> Engine -> Change… -> Import engine from file…** "
         + "and choose the `*.engine-payload.json` file.\n\n"
         + "The other files (signatures, checksums and source archives) "
         + "are for verification and updates.\n"

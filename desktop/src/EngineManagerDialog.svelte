@@ -1,6 +1,11 @@
 <script lang="ts">
   import HelpTip from './HelpTip.svelte';
-  import { engineListRows, isGpuBackend, plainEngineError } from './lib/engines';
+  import {
+    engineListRows,
+    isGpuBackend,
+    plainEngineError,
+    type EngineListRow,
+  } from './lib/engines';
   import { formatBytes } from './lib/format';
   import { modal } from './lib/modal';
   import type { EngineManagerSnapshot } from './lib/types';
@@ -10,6 +15,8 @@
   export let actionBusy = false;
   export let refreshingCatalog = false;
   export let errorMessage = '';
+  export let errorBackend = '';
+  export let errorAction: 'download' | 'use' | 'remove' | '' = '';
   export let onClose: () => void;
   export let onRefreshCatalog: () => void;
   export let onDownload: (backend: string) => void;
@@ -29,9 +36,30 @@
   $: activeError =
     errorMessage ||
     (download.stage === 'error' && download.error ? plainEngineError(download.error) : '');
+  $: failingBackend =
+    download.stage === 'error' && download.error
+      ? download.backend || errorBackend
+      : errorMessage
+        ? errorBackend
+        : '';
+  $: failingAction =
+    download.stage === 'error' && download.error ? 'download' : errorAction || 'download';
+  $: rowMatchedError = Boolean(
+    activeError && failingBackend && rows.some((row) => row.backend === failingBackend),
+  );
+  $: dialogError = activeError && !rowMatchedError ? activeError : '';
   $: percent = download.total
     ? Math.min(100, Math.round((download.downloaded / download.total) * 100))
     : 0;
+
+  function rowMeta(row: EngineListRow): string {
+    return [
+      row.sizeBytes > 0 ? formatBytes(row.sizeBytes) : '',
+      row.bundled ? 'Built in' : row.installed ? (row.active ? '' : 'Installed') : 'Not installed',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+  }
 
   function handleClose(): void {
     if (!lockClose) onClose();
@@ -51,13 +79,17 @@
     tabindex="-1"
     use:modal={handleClose}
   >
-    <h2 id="engine-dialog-title">Inference engine</h2>
+    <h2 id="engine-dialog-title">Engine</h2>
     <p class="engine-intro">
       {#if engines.recommendation.adapter_name && isGpuBackend(engines.recommendation.backend)}
         Detected graphics card: {engines.recommendation.adapter_name}.
       {:else}
-        Choose which inference engine LocalSR uses on this computer.
+        Choose the engine LocalSR uses on this computer.
       {/if}
+      <HelpTip
+        label="Engine"
+        text="NVIDIA CUDA is fastest on NVIDIA cards. DirectML works with AMD, Intel and NVIDIA cards on Windows. CPU works everywhere and is slowest."
+      />
     </p>
 
     {#if processing}
@@ -75,6 +107,8 @@
     <ul class="engine-list" aria-label="Available engines">
       {#each rows as row (row.backend)}
         {@const rowDownloading = downloadInProgress && download.backend === row.backend}
+        {@const rowError = !rowDownloading && failingBackend === row.backend ? activeError : ''}
+        {@const meta = rowMeta(row)}
         <li class="engine-item" class:active={row.active}>
           <div class="engine-item-main">
             <div class="engine-item-head">
@@ -84,21 +118,13 @@
               {/if}
               {#if row.active}
                 <span class="engine-badge active">Active</span>
-              {:else if row.installed}
-                <span class="engine-badge">Installed</span>
-              {/if}
-              {#if row.bundled}
-                <span class="engine-badge">Bundled</span>
               {/if}
             </div>
-            <div class="engine-item-meta">
-              {#if row.sizeBytes > 0}
-                <span>{formatBytes(row.sizeBytes)}</span>
-              {/if}
-              {#if !row.installed && !rowDownloading}
-                <span>Not installed</span>
-              {/if}
-            </div>
+            {#if !rowDownloading && meta}
+              <div class="engine-item-meta">
+                <span>{meta}</span>
+              </div>
+            {/if}
             {#if rowDownloading}
               <progress
                 class="download-progress"
@@ -114,6 +140,8 @@
                   Checking engine startup…
                 {/if}
               </p>
+            {:else if rowError}
+              <p class="download-error" role="alert">{rowError}</p>
             {/if}
           </div>
           <div class="engine-item-actions">
@@ -126,26 +154,29 @@
             {:else if !row.installed}
               <button
                 type="button"
-                class="button primary compact"
+                class={row.recommended ? 'button primary compact' : 'button compact'}
                 disabled={busy || processing || (!engines.configured && !row.catalogEntry)}
-                on:click={() => onDownload(row.backend)}>Download</button
+                on:click={() => onDownload(row.backend)}
+                >{rowError ? 'Try again' : 'Download'}</button
               >
             {:else}
               {#if !row.active}
                 <button
                   type="button"
-                  class="button primary compact"
+                  class="button compact"
                   disabled={busy || processing}
-                  on:click={() => onUse(row.backend)}>Use</button
+                  on:click={() => onUse(row.backend)}
+                  >{rowError && failingAction === 'use' ? 'Try again' : 'Use'}</button
                 >
               {/if}
               {#if row.removable && row.installedEntry}
                 {@const removeId = row.installedEntry.id}
                 <button
                   type="button"
-                  class="button danger compact"
+                  class="button compact ghost danger"
                   disabled={busy || processing}
-                  on:click={() => onRemove(removeId)}>Remove</button
+                  on:click={() => onRemove(removeId)}
+                  >{rowError && failingAction === 'remove' ? 'Try again' : 'Remove'}</button
                 >
               {/if}
             {/if}
@@ -162,8 +193,8 @@
       </div>
     {/if}
 
-    {#if activeError}
-      <p class="engine-error" role="alert">{activeError}</p>
+    {#if dialogError}
+      <p class="engine-error" role="alert">{dialogError}</p>
     {/if}
 
     <div class="engine-dialog-footer">

@@ -553,38 +553,53 @@
             /></span
           ><span
             class="directory-path"
-            title={settings.model_directory || defaultModelDirectory || 'Default folder'}
-            >{settings.model_directory || defaultModelDirectory || 'Default folder'}</span
+            title={movingModels
+              ? modelMoveProgress
+                ? `Moving ${modelMoveProgress.moved_files} of ${modelMoveProgress.total_files} files…`
+                : 'Moving files…'
+              : settings.model_directory || defaultModelDirectory || 'Default folder'}
+            >{movingModels
+              ? modelMoveProgress
+                ? `Moving ${modelMoveProgress.moved_files} of ${modelMoveProgress.total_files} files…`
+                : 'Moving files…'
+              : settings.model_directory || defaultModelDirectory || 'Default folder'}</span
           >
         </div>
-        <b>{movingModels ? 'Moving…' : 'Choose…'}</b>
+        <b
+          >{movingModels
+            ? modelMoveProgress
+              ? `${Math.round(modelMoveProgress.progress)}%`
+              : '0%'
+            : 'Choose…'}</b
+        >
       </div>
       {#if movingModels}
-        <p class="model-description" role="status">
-          Moving models… {modelMoveProgress
-            ? `${Math.round(modelMoveProgress.progress)}% (${modelMoveProgress.moved_files} of ${modelMoveProgress.total_files})`
-            : ''}
-        </p>
-      {:else if modelDirectoryMissing}
-        <div class="notice" role="alert">
-          <p>
-            Model folder unavailable: {settings.model_directory}. Reconnect the drive, choose the
-            folder again, or reset to default.
-          </p>
-          <div class="eyebrow-actions">
-            <button type="button" class="link-button" on:click={chooseModelFolder}
-              >Choose folder…</button
-            >
-            <button type="button" class="link-button" on:click={resetModelFolder}
-              >Reset to default</button
-            >
-          </div>
-        </div>
-      {:else if settings.model_directory}
+        <progress
+          class="download-progress"
+          max="100"
+          value={modelMoveProgress?.progress ?? 0}
+          aria-label="Moving models"
+        ></progress>
+      {:else if !modelDirectoryMissing && settings.model_directory}
         <div class="eyebrow-actions">
           <button type="button" class="link-button" on:click={resetModelFolder}
             >Reset to default</button
           >
+        </div>
+      {/if}
+      {#if engines?.supported && !engines.managed_by_store}
+        <div class="field-row engine-row">
+          <span class="label-with-tip"
+            ><span class="field-label">Engine</span><HelpTip
+              label="Engine"
+              text="The inference runtime LocalSR uses on this computer. Switch to a GPU engine for faster processing, or import an offline engine file."
+            /></span
+          >
+          <div class="engine-value">
+            <span class="engine-active-label">{engineDisplayName(engines.active_backend)}</span>
+            <button type="button" class="link-button" on:click={onOpenEngineManager}>Change…</button
+            >
+          </div>
         </div>
       {/if}
       <div class="field-row" class:stacked={hardwareStacked}>
@@ -624,22 +639,6 @@
           compiles a model once for the NPU, which can take a minute, and checks once that its
           result matches the CPU's.
         </p>
-      {/if}
-      {#if engines?.supported && !engines.managed_by_store}
-        <div class="field-row engine-row">
-          <span class="label-with-tip"
-            ><span class="field-label">Engine</span><HelpTip
-              label="Engine"
-              text="The inference runtime LocalSR uses on this computer. Switch to a GPU engine for faster processing, or import an offline engine file."
-            /></span
-          >
-          <div class="engine-value">
-            <span class="engine-active-label">{engineDisplayName(engines.active_backend)}</span>
-            <button type="button" class="button compact" on:click={onOpenEngineManager}
-              >Change…</button
-            >
-          </div>
-        </div>
       {/if}
       <div class="field-row">
         <span class="label-with-tip"

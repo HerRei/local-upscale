@@ -338,7 +338,12 @@ describe('Model folder setting', () => {
       resetModelFolder,
       refreshCapabilities: async () => true,
     });
-    expect(screen.getByText(/Moving models… 50% \(1 of 2\)/)).toBeTruthy();
+    expect(screen.getByText('Moving 1 of 2 files…')).toBeTruthy();
+    expect(screen.getByText('50%')).toBeTruthy();
+    expect(screen.queryByText(/Moving models…/)).toBeNull();
+    const progress = document.querySelector('progress.download-progress') as HTMLProgressElement;
+    expect(progress).toBeTruthy();
+    expect(progress.value).toBe(50);
     expect(
       (screen.getByRole('button', { name: /^Model folder / }) as HTMLButtonElement).disabled,
     ).toBe(true);
@@ -362,18 +367,12 @@ describe('Model folder setting', () => {
       resetModelFolder,
       refreshCapabilities: async () => true,
     });
-    expect(screen.getByRole('alert').textContent).toContain(
-      'Model folder unavailable: /Volumes/Missing/models',
-    );
-    await fireEvent.click(screen.getByRole('button', { name: 'Choose folder…' }));
-    expect(chooseModelFolder).toHaveBeenCalledTimes(2);
-    await fireEvent.click(screen.getByRole('button', { name: 'Reset to default' }));
-    expect(resetModelFolder).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });
 
-describe('Engine row under Hardware', () => {
-  it('shows the active engine and Change button on supported builds, and hides on Mac or Store', async () => {
+describe('Engine row above Hardware', () => {
+  it('shows the active engine and link-button Change… above Hardware on supported builds, and hides on Mac or Store', async () => {
     const onOpenEngineManager = vi.fn();
     const engines = structuredClone(demoSnapshot().engines!);
     const view = render(AdvancedSettings, {
@@ -390,7 +389,18 @@ describe('Engine row under Hardware', () => {
     await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
     expect(screen.getByText('Engine')).toBeTruthy();
     expect(screen.getByText('CPU')).toBeTruthy();
-    await fireEvent.click(screen.getByRole('button', { name: 'Change…' }));
+    const changeBtn = screen.getByRole('button', { name: 'Change…' });
+    expect(changeBtn.classList.contains('link-button')).toBe(true);
+    expect(changeBtn.classList.contains('compact')).toBe(false);
+
+    // Engine row precedes Hardware row in DOM order.
+    const engineRow = document.querySelector('.engine-row') as HTMLElement;
+    const hardwareRow = screen.getByLabelText('Hardware').closest('.field-row') as HTMLElement;
+    expect(
+      engineRow.compareDocumentPosition(hardwareRow) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    await fireEvent.click(changeBtn);
     expect(onOpenEngineManager).toHaveBeenCalledTimes(1);
 
     await view.rerender({

@@ -16,14 +16,9 @@
   </div>
   <div class="buttons">
     <button class="notice-button primary" type="button" on:click={onOpenDownloadPage}
-      >Download page</button
+      >Open download page</button
     >
-    <button
-      class="notice-button"
-      type="button"
-      aria-label="Dismiss GPU download notice"
-      on:click={onDismiss}>×</button
-    >
+    <button class="notice-button" type="button" on:click={onDismiss}>Not now</button>
   </div>
 </div>
 

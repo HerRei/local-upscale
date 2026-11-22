@@ -84,7 +84,7 @@ pub fn download_notice_for_adapters(adapters: &[DxgiAdapter]) -> Option<String> 
         GpuVendor::Other(_) => return None,
     };
     Some(format!(
-        "Your {name} can run LocalSR faster with the {download} download."
+        "Your {name} can run LocalSR much faster with the {download} edition."
     ))
 }
 
@@ -614,7 +614,9 @@ mod tests {
         )];
         assert_eq!(
             download_notice_for_adapters(&amd).as_deref(),
-            Some("Your AMD Radeon RX 7900 XT can run LocalSR faster with the DirectML download.")
+            Some(
+                "Your AMD Radeon RX 7900 XT can run LocalSR much faster with the DirectML edition."
+            )
         );
 
         let intel = [adapter(
@@ -626,7 +628,7 @@ mod tests {
         )];
         assert_eq!(
             download_notice_for_adapters(&intel).as_deref(),
-            Some("Your Intel UHD Graphics 620 can run LocalSR faster with the DirectML download.")
+            Some("Your Intel UHD Graphics 620 can run LocalSR much faster with the DirectML edition.")
         );
 
         let nvidia = [adapter(
@@ -638,7 +640,7 @@ mod tests {
         )];
         assert_eq!(
             download_notice_for_adapters(&nvidia).as_deref(),
-            Some("Your NVIDIA GeForce RTX 4070 can run LocalSR faster with the CUDA download.")
+            Some("Your NVIDIA GeForce RTX 4070 can run LocalSR much faster with the CUDA edition.")
         );
     }
 
@@ -662,7 +664,7 @@ mod tests {
         ];
         assert_eq!(
             download_notice_for_adapters(&hybrid_nvidia).as_deref(),
-            Some("Your NVIDIA GeForce RTX 4060 Laptop GPU can run LocalSR faster with the CUDA download.")
+            Some("Your NVIDIA GeForce RTX 4060 Laptop GPU can run LocalSR much faster with the CUDA edition.")
         );
 
         let hybrid_amd = [
@@ -677,7 +679,9 @@ mod tests {
         ];
         assert_eq!(
             download_notice_for_adapters(&hybrid_amd).as_deref(),
-            Some("Your AMD Radeon RX 7800 XT can run LocalSR faster with the DirectML download.")
+            Some(
+                "Your AMD Radeon RX 7800 XT can run LocalSR much faster with the DirectML edition."
+            )
         );
 
         let tie = [
