@@ -44,7 +44,7 @@ describe('extracted helpers', () => {
     expect(mediaNamesFor(['/tmp/file.png'], media)).toEqual(['file.png']);
   });
 
-  it('counts no upscaler in a preset download at 1×', () => {
+  it('counts no restore model in a video Restore preset download without a chip', () => {
     const snapshot = demoSnapshot();
     snapshot.catalog.models.forEach((model) => (model.installed = false));
     const video = {
@@ -55,12 +55,12 @@ describe('extracted helpers', () => {
       fix_stages: [],
     };
     expect(presetDownload('quick', snapshot, { ...video, output_scale: 2 })).toMatch(/download$/);
-    expect(presetDownload('quick', snapshot, { ...video, output_scale: 1 })).toBe('');
-    // A fix still runs at 1×, so its model still counts.
+    expect(presetDownload('quick', snapshot, { ...video, video_task: 'denoise' })).toBe('');
+    // A fix chip in video Restore still counts its model.
     expect(
       presetDownload('quick', snapshot, {
         ...video,
-        output_scale: 1,
+        video_task: 'denoise',
         fix_stages: [{ fix: 'blur', model_id: '' }],
       }),
     ).toMatch(/download$/);

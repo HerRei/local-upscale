@@ -109,20 +109,13 @@ export function isRestoreTask(settings: Pick<UiSettings, 'task' | 'video_task'>)
   );
 }
 
-/** True when the Upscale task is set to 1× and therefore runs no upscaling model. */
+/** Upscale always starts at 2×; kept for caller compatibility. */
 export function skipsUpscaleModel(
-  settings: Pick<
+  _settings: Pick<
     UiSettings,
     'task' | 'video_task' | 'output_scale' | 'selected_video_model_id' | 'video_target_resolution'
   >,
 ): boolean {
-  if (isRestoreTask(settings)) return false;
-  if (settings.task === 'upscale') return settings.output_scale === 1;
-  if (settings.task === 'video') {
-    const temporal = settings.selected_video_model_id !== 'frame_by_frame';
-    if (temporal && (settings.video_target_resolution ?? 0) > 0) return false;
-    return settings.output_scale === 1;
-  }
   return false;
 }
 export type Fit = 'runs' | 'heavy' | 'too_heavy' | 'unknown';
@@ -246,7 +239,6 @@ export function resolvePlan(
     };
 
   const restoring = isRestoreTask(settings);
-  const skipUpscale = skipsUpscaleModel(settings);
   const fixStages =
     !options.usingTemporalVideo &&
     (settings.task === 'upscale' || settings.task === 'video' || restoring)
@@ -256,6 +248,8 @@ export function resolvePlan(
       : [];
   // Restore's model is its last fix; the ones before it run first, as before an upscale.
   const chip = restoring ? fixStages.at(-1)?.fix : undefined;
+  const noVideoRestoreModel =
+    settings.task === 'video' && restoring && !chip && settings.selected_model_id !== '__custom__';
   const missingStage = (
     kind: PlanStage['kind'],
     role: PlanStage['role'],
@@ -283,8 +277,8 @@ export function resolvePlan(
     );
   }
 
-  if (skipUpscale) {
-    // At 1× in Upscale, the upscaling model and fused face pass are not run at all.
+  if (noVideoRestoreModel) {
+    // Video Restore with no chip selected runs only De-flicker, Frame rate and Clean up audio.
   } else if (options.usingTemporalVideo && options.selectedVideoModel) {
     const video = options.selectedVideoModel;
     stages.push({
@@ -333,7 +327,7 @@ export function resolvePlan(
       );
   }
 
-  if (options.faceEnabled && options.faceModel && !restoring && !skipUpscale) {
+  if (options.faceEnabled && options.faceModel && !restoring && !noVideoRestoreModel) {
     const stage = stageFor('face_restore', 'face', 'Faces', options.faceModel);
     if (stage) stages.push(stage);
   }
@@ -533,6 +527,7 @@ export function choosePresetModel(
       presetMayPick(model) &&
       (restoring ? !model.purposes.includes('colorize') : contentMatch(model, content) > 0),
   );
+  if (task === 'video' && videoTask === 'denoise') return undefined;
   if (restoring) return rankForQuality(eligible, quality)[0];
   const ranked = rankForQuality(eligible, quality);
   return ranked.sort(

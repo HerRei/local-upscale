@@ -192,7 +192,11 @@
         ><path d={advanced ? 'M3 7.5 6 4.5 9 7.5' : 'M3 4.5 6 7.5 9 4.5'} /></svg
       ></b
     ><small
-      >{settings.task === 'edit' ? 'Size, steps, seed, hardware' : 'Scale, format, hardware'}</small
+      >{settings.task === 'edit'
+        ? 'Size, steps, seed, hardware'
+        : isRestoreTask(settings)
+          ? 'Format, hardware'
+          : 'Scale, format, hardware'}</small
     ></button
   >
   {#if advanced}
@@ -262,17 +266,17 @@
             : 'More steps take longer.'} The same seed with the same prompt and image repeats a result.
         </p>
       {:else if !isRestoreTask(settings) && !(usingTemporalVideo && settings.video_target_resolution)}
-        {@const minScale = settings.task === 'video' ? 1 : 2}
+        {@const minScale = 2}
         {@const maxScale = usingTemporalVideo ? 4 : (selectedModel?.native_scale ?? 4)}
         <div class="field-row">
           <span class="label-with-tip"
             ><label for="scale">Output scale</label><HelpTip
               label="Output scale"
               text={usingTemporalVideo
-                ? 'How many times larger the result is than the original when Output resolution is set to match scale. At 1×, the video model is not used.'
+                ? 'How many times larger the result is than the original when Output resolution is set to match scale.'
                 : settings.task === 'video'
-                  ? `How many times larger the result is than the original. At 1×, the upscaling model is not used: only Fix first, De-flicker, Frame rate and Clean up audio run. A 2× or 3× choice on a ${selectedModel?.native_scale ?? 4}× model resizes down afterwards.`
-                  : `How many times larger the result is than the original. The model always works at its own ${selectedModel?.native_scale ?? 4}× scale; a smaller choice resizes that result down afterwards, so it saves no time.`}
+                  ? `How many times larger the result is than the original. A 2× or 3× choice on a ${selectedModel?.native_scale ?? 4}× model resizes down afterwards. To keep the size, use Restore.`
+                  : `How many times larger the result is than the original. The model always works at its own ${selectedModel?.native_scale ?? 4}× scale; a smaller choice resizes that result down afterwards, so it saves no time. To keep the size, use Restore.`}
             /></span
           ><select
             id="scale"

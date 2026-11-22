@@ -155,7 +155,7 @@ pub fn request_model(request: &Value) -> (String, String) {
                 if data["deflicker"].as_bool() == Some(true) {
                     "De-flicker"
                 } else if data["output_scale"].as_u64() == Some(1) {
-                    "1× video"
+                    "Video"
                 } else {
                     "Unknown model"
                 }

@@ -29,11 +29,11 @@ loading. Restoration weights are not included in installers.
 | HAT-L Face | 4× | Large face companion · verified import | 165.7 MB | Rights unresolved |
 
 The native scale is the model's trained output scale. A smaller requested output
-(such as 2× or 3× on a 4× model) is resampled after inference. In Video Upscale,
-choosing 1× skips the upscaling model completely so the video keeps its original
-size and only Fix first, video options and audio cleanup run. A 1× restoration
-model in **Restore** cleans an image or video without enlarging it, and can also
-run under **Fix first** before an upscaler.
+(such as 2× or 3× on a 4× model) is resampled after inference. To keep the original
+size, choose **Restore**. A 1× restoration model in **Restore** cleans an image
+or video without enlarging it, and can also run under **Restore first** before an
+upscaler. In Video **Restore** with no problem selected, only video and audio
+options run.
 
 For photos, **Quick** selects SPAN NomosUni and **Best** selects RealPLKSR
 NomosWebPhoto. For illustrations, **Quick** selects Real-ESRGAN Anime 6B and
@@ -50,12 +50,12 @@ processing a large folder.
 
 ## Photo colorization (DDColor)
 
-Under **Fix first** (and **Restore** at 1×), the **Colour** option adds colour to
+Under **Restore first** (and **Restore** at 1×), the **Colour** option adds colour to
 black-and-white photos using DDColor-L (911.9 MB). Colours are a guess. LocalSR converts the photo to Lab, runs
 DDColor on the luminance channel of the photo resized to 512×512, resizes the predicted colour
 channels back, and combines them with the original full-resolution luminance so
 sharpness and fine detail stay intact. Already colourful photos still run with a
-note in the job details. Colour is for still photos only; video Fix first does
+note in the job details. Colour is for still photos only; video Restore first does
 not offer it. On DirectML, OpenVINO, and the Apple Neural Engine route, DDColor
 runs on the CPU or PyTorch Apple GPU instead.
 

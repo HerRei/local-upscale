@@ -2875,6 +2875,34 @@ fn video_restore_and_fix_first_build_stages_names_and_reject_temporal() {
     }))
     .unwrap();
     assert!(validate_recipe_stages(&video_restore_recipe).is_ok());
+
+    // 6) No-chip video Restore runs only video/audio options and rejects when nothing is on.
+    let mut no_chip_restore = input("video");
+    no_chip_restore.video_task = "denoise".into();
+    no_chip_restore.model_id.clear();
+    no_chip_restore.fix_stages.clear();
+    no_chip_restore.output_scale = 1;
+    no_chip_restore.deflicker = false;
+    no_chip_restore.video_interpolation = "off".into();
+    no_chip_restore.video_clean_audio = false;
+    assert!(validate_start_input(&no_chip_restore, true).is_err());
+
+    no_chip_restore.deflicker = true;
+    assert!(validate_start_input(&no_chip_restore, true).is_ok());
+    let no_chip_selection = resolve_model_selection(&state, &no_chip_restore).unwrap();
+    let no_chip_msg = build_job_message(
+        "vid-restore-deflicker",
+        &video_media(),
+        Path::new("/output/clip_video_restored.mp4"),
+        Path::new("/app-owned/work"),
+        &no_chip_restore,
+        &no_chip_selection,
+    )
+    .unwrap();
+    assert_eq!(no_chip_msg["data"]["model_path"], "");
+    assert_eq!(no_chip_msg["data"]["output_scale"], 1);
+    assert_eq!(no_chip_msg["data"]["stages"], serde_json::json!([]));
+    assert_eq!(no_chip_msg["data"]["deflicker"], true);
 }
 
 #[test]

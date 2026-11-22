@@ -1575,43 +1575,23 @@ describe('LocalSR desktop interface', () => {
     expect(screen.queryByRole('button', { name: 'Faces' })).toBeNull();
   });
 
-  it.each([
-    ['hat_s_x4', 'hat_s_x4_face'],
-    ['hat_l_x4_imagenet', 'hat_l_x4_face'],
-  ])(
-    'imports the matching face companion for %s without downloading',
-    async (primaryId, faceId) => {
+  it.each([['hat_s_x4'], ['hat_l_x4_imagenet']])(
+    'does not offer the Faces chip or companion UI for %s',
+    async (primaryId) => {
       const snapshot = readySnapshot([image('portrait', true)]);
       snapshot.engine!.features.push('face_aware');
-      const face = snapshot.catalog.models.find((model) => model.model_id === faceId)!;
-      face.installed = false;
-      api.chooseCustomModel.mockResolvedValueOnce(`/models/${face.filename}` as never);
       snapshot.settings.task = 'upscale';
       snapshot.settings.selected_model_id = primaryId;
       snapshot.settings.quality = 'custom';
-      const user = await mountWith(snapshot);
-      await user.click(screen.getByRole('button', { name: 'Faces', pressed: false }));
-      expect(screen.getByRole('button', { name: 'Faces', pressed: true })).toBeTruthy();
-      expect(screen.getByText('Needs your file')).toBeTruthy();
+      await mountWith(snapshot);
+      expect(screen.queryByRole('button', { name: 'Faces' })).toBeNull();
+      expect(
+        screen.queryByRole('button', { name: 'Choose externally downloaded face checkpoint…' }),
+      ).toBeNull();
+      expect(screen.queryByLabelText(/Face fidelity/)).toBeNull();
       expect(
         screen.getByRole('button', { name: 'Upscale selected' }).hasAttribute('disabled'),
-      ).toBe(true);
-      await user.click(
-        screen.getByRole('checkbox', {
-          name: /I understand that the checkpoint rights are unresolved/i,
-        }),
-      );
-      await user.click(
-        screen.getByRole('button', { name: 'Choose externally downloaded face checkpoint…' }),
-      );
-      await waitFor(() =>
-        expect(api.importCatalogModel).toHaveBeenCalledWith(
-          faceId,
-          `/models/${face.filename}`,
-          true,
-        ),
-      );
-      expect(api.downloadModel).not.toHaveBeenCalled();
+      ).toBe(false);
     },
   );
 
@@ -1642,10 +1622,10 @@ describe('LocalSR desktop interface', () => {
         task: 'video',
         quality: 'custom',
         selected_model_id: 'hat_l_x4_imagenet',
-        fixes: ['faces'],
+        fixes: [],
         deflicker,
         video_interpolation: 'x2',
-        enable_face_model: true,
+        enable_face_model: false,
       });
       const user = await mountWith(snapshot);
       await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
@@ -1657,7 +1637,7 @@ describe('LocalSR desktop interface', () => {
       ).toBe(deflicker);
       expect((screen.getByLabelText('Frame rate') as HTMLSelectElement).value).toBe('x2');
       expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ deflicker, video_interpolation: 'x2', enable_face_model: true }),
+        expect.objectContaining({ deflicker, video_interpolation: 'x2', enable_face_model: false }),
       );
     },
   );
@@ -3834,7 +3814,7 @@ describe('LocalSR desktop interface', () => {
         'Can add artifacts to sharp pictures and line art. Skipped if the result is unstable.',
       ),
     ).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'About Fix first' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'About Restore first' })).toBeTruthy();
   });
 
   it('names the fix of a recipe saved before fix chips existed', async () => {
@@ -3871,7 +3851,7 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByRole('button', { name: 'JPEG artifacts', pressed: true })).toBeTruthy();
   });
 
-  it('keeps Faces on when the newly picked upscaler has a face companion', async () => {
+  it('switches between HAT upscalers without offering Faces', async () => {
     const snapshot = readySnapshot([image('portrait', true)]);
     snapshot.engine!.features.push('face_aware');
     const user = await mountWith(snapshot);
@@ -3879,17 +3859,17 @@ describe('LocalSR desktop interface', () => {
     let library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }));
     await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
-    await user.click(screen.getByRole('button', { name: 'Faces', pressed: false }));
+    expect(screen.queryByRole('button', { name: 'Faces' })).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /HAT-S ×4/ }));
     await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ selected_model_id: 'hat_s_x4', enable_face_model: true }),
+        expect.objectContaining({ selected_model_id: 'hat_s_x4', enable_face_model: false }),
       ),
     );
-    expect(screen.getByRole('button', { name: 'Faces', pressed: true })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Faces' })).toBeNull();
   });
 
   it('names in the library which models run on the Neural Engine or an NPU', async () => {
@@ -4542,7 +4522,7 @@ describe('Several fixes in one pass', () => {
         ],
       },
       fix_stages: [{ fix: 'noise', model_id: 'scunet_color_real_psnr' }],
-      fixes: ['noise', 'faces'],
+      fixes: ['noise'],
     },
   ])('applies a 0.3.5 recipe: $name', async ({ recipe, fix_stages, fixes }) => {
     const snapshot = readySnapshot([image('photo', true)]);
@@ -4740,30 +4720,31 @@ describe('Several fixes in one pass', () => {
     );
   });
 
-  it('keeps Faces for the way back from Restore', async () => {
+  it('drops saved Faces quietly on load and across Restore and Upscale', async () => {
     const snapshot = readySnapshot([image('portrait', true)]);
     snapshot.engine!.features.push('face_aware');
     Object.assign(snapshot.settings, {
       task: 'upscale',
       quality: 'best',
       selected_model_id: 'hat_l_x4_imagenet',
-      // Best brings HAT-L back, whose face companion Faces needs.
       preset_pins: { 'upscale/photo/best': 'hat_l_x4_imagenet' },
       fixes: ['faces'],
       enable_face_model: true,
     });
     const user = await mountWith(snapshot);
+    await waitFor(() => expect(lastSaved()).toMatchObject({ enable_face_model: false, fixes: [] }));
+    expect(screen.queryByRole('button', { name: 'Faces' })).toBeNull();
     await chooseTask(user, /^Restore/);
     await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
     await waitFor(() =>
-      expect(lastSaved()).toMatchObject({ enable_face_model: false, fixes: ['noise', 'faces'] }),
+      expect(lastSaved()).toMatchObject({ enable_face_model: false, fixes: ['noise'] }),
     );
     await chooseTask(user, /^Upscale$/);
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
         task: 'upscale',
-        enable_face_model: true,
-        fixes: ['noise', 'faces'],
+        enable_face_model: false,
+        fixes: ['noise'],
       }),
     );
   });
@@ -6549,10 +6530,10 @@ describe('Concurrent model downloads in the Model Library', () => {
   });
 });
 
-describe('video restore, 1× output, and fix-first stages', () => {
+describe('video restore, Restore first, and 1× removal', () => {
   const lastSaved = (): UiSettings => api.saveSettings.mock.calls.at(-1)![0] as UiSettings;
 
-  it('switches a selected video between Upscale and Restore, saves a restore recipe, and starts jobs', async () => {
+  it('switches a selected video to Restore with Noise on, saves a restore recipe, and starts jobs', async () => {
     const snapshot = readySnapshot([video('clip', true)]);
     snapshot.catalog.models.forEach((m) => (m.installed = true));
     Object.assign(snapshot.settings, {
@@ -6570,15 +6551,18 @@ describe('video restore, 1× output, and fix-first stages', () => {
     });
     api.refreshSnapshot.mockImplementation(async () => structuredClone(persisted));
 
-    // Toggle Restore for video
+    // Toggle Restore for video: turns Noise on when nothing is picked
     await user.click(screen.getByRole('button', { name: /^Restore$/ }));
     await waitFor(() =>
-      expect(lastSaved()).toMatchObject({ task: 'video', video_task: 'denoise' }),
+      expect(lastSaved()).toMatchObject({
+        task: 'video',
+        video_task: 'denoise',
+        fixes: ['noise'],
+      }),
     );
 
-    // Turn on JPEG artifacts (prefix fix) and Noise (primary restore) for video Restore
+    // Turn on JPEG artifacts (prefix fix) before Noise (primary restore) for video Restore
     await user.click(screen.getByRole('button', { name: 'JPEG artifacts' }));
-    await user.click(screen.getByRole('button', { name: 'Noise' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
         task: 'video',
@@ -6623,73 +6607,9 @@ describe('video restore, 1× output, and fix-first stages', () => {
     });
   });
 
-  it('supports 1× output scale and fix-first stages in video upscale', async () => {
+  it('removes 1× from video Upscale and runs video Restore options-only without a chip', async () => {
     const snapshot = readySnapshot([video('clip', true)]);
     snapshot.catalog.models.forEach((m) => (m.installed = true));
-    Object.assign(snapshot.settings, {
-      task: 'video',
-      video_task: 'upscale',
-      selected_video_model_id: 'frame_by_frame',
-      selected_model_id: 'span_photo_x4',
-      output_scale: 4,
-    });
-    const user = await mountWith(snapshot);
-
-    // Select 1× in Advanced -> Output scale
-    await user.click(screen.getByRole('button', { name: /Advanced/ }));
-    const scaleSelect = screen.getByLabelText('Output scale') as HTMLSelectElement;
-    expect(Array.from(scaleSelect.options).map((o) => o.value)).toEqual(['1', '2', '3', '4']);
-    await user.selectOptions(scaleSelect, '1');
-    await waitFor(() => expect(lastSaved()).toMatchObject({ task: 'video', output_scale: 1 }));
-
-    // Add Blur fix-first stage
-    await user.click(screen.getByRole('button', { name: 'Blur' }));
-    await waitFor(() =>
-      expect(lastSaved()).toMatchObject({
-        task: 'video',
-        video_task: 'upscale',
-        output_scale: 1,
-        fixes: ['blur'],
-      }),
-    );
-
-    await user.click(screen.getByRole('button', { name: 'Start selected video' }));
-    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
-    expect(api.startJobs.mock.calls.at(-1)![0]).toMatchObject({
-      task: 'video',
-      video_task: 'upscale',
-      output_scale: 1,
-      fix_stages: [expect.objectContaining({ fix: 'blur' })],
-    });
-  });
-
-  it('keeps 1× when Quick, Best or the content changes', async () => {
-    const snapshot = readySnapshot([video('clip', true)]);
-    snapshot.catalog.models.forEach((m) => (m.installed = true));
-    Object.assign(snapshot.settings, {
-      task: 'video',
-      video_task: 'upscale',
-      selected_video_model_id: 'frame_by_frame',
-      selected_model_id: 'span_photo_x4',
-      quality: 'quick',
-      output_scale: 1,
-    });
-    const user = await mountWith(snapshot);
-
-    await user.click(screen.getByRole('button', { name: 'Blur' }));
-    await waitFor(() => expect(lastSaved()).toMatchObject({ fixes: ['blur'], output_scale: 1 }));
-    await user.click(screen.getByRole('button', { name: /^Best/ }));
-    await waitFor(() => expect(lastSaved()).toMatchObject({ quality: 'best' }));
-    expect(lastSaved().output_scale).toBe(1);
-    await user.click(screen.getByRole('radio', { name: 'Illustration' }));
-    await waitFor(() => expect(lastSaved()).toMatchObject({ content: 'illustration' }));
-    expect(lastSaved().output_scale).toBe(1);
-  });
-
-  it('at 1× omits the SR model stage/download and disables Start until something else is chosen', async () => {
-    const snapshot = readySnapshot([video('clip', true)]);
-    snapshot.catalog.models.forEach((m) => (m.installed = false));
-    snapshot.catalog.models.find((m) => m.model_id === 'nafnet_gopro_deblur')!.installed = true;
     Object.assign(snapshot.settings, {
       task: 'video',
       video_task: 'upscale',
@@ -6702,32 +6622,190 @@ describe('video restore, 1× output, and fix-first stages', () => {
     });
     const user = await mountWith(snapshot);
 
-    // Select 1× in Advanced -> Output scale: Quality gains its 1× help, SR model disappears from Stages, Start is disabled.
+    // Output scale in video Upscale starts at 2×; Quality has no 1× HelpTip.
     await user.click(screen.getByRole('button', { name: /Advanced/ }));
-    await user.selectOptions(screen.getByLabelText('Output scale'), '1');
-    await waitFor(() => expect(lastSaved()).toMatchObject({ output_scale: 1 }));
-    expect(screen.getByRole('button', { name: 'About Quality' })).toBeTruthy();
-    expect(screen.getByRole('group', { name: 'Quality' }).textContent).not.toContain('download');
-    expect(screen.getByRole('region', { name: 'Model plan' }).textContent).not.toContain('At 1×');
-    expect(screen.getByText(/Nothing to run at 1×/)).toBeTruthy();
+    const scaleSelect = screen.getByLabelText('Output scale') as HTMLSelectElement;
+    expect(Array.from(scaleSelect.options).map((o) => o.value)).toEqual(['2', '3', '4']);
+    expect(screen.queryByRole('button', { name: 'About Quality' })).toBeNull();
+
+    // Switch to video Restore: Noise starts on, Output scale hides, Advanced says Format, hardware.
+    await user.click(screen.getByRole('button', { name: /^Restore$/ }));
+    expect(screen.queryByLabelText('Output scale')).toBeNull();
+    expect(screen.getByText('Format, hardware')).toBeTruthy();
+
+    // Untick Noise: no restore model runs, Start is disabled with "Nothing to run..."
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: true }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'video',
+        video_task: 'denoise',
+        fixes: [],
+        selected_model_id: '',
+      }),
+    );
+    expect(
+      screen.getByText(
+        'Nothing to run. Pick what to fix, or turn on De-flicker, Frame rate or Clean up audio.',
+      ),
+    ).toBeTruthy();
     const startBtn = screen.getByRole('button', {
-      name: 'Start selected video',
+      name: 'Restore selected video',
     }) as HTMLButtonElement;
     expect(startBtn.disabled).toBe(true);
-    expect(screen.queryByRole('list', { name: 'Stages' })?.textContent).not.toContain('SPAN');
+    expect(screen.queryByRole('list', { name: 'Stages' })?.textContent?.trim()).toBe('');
 
-    // Enabling Blur enables Start without needing span_photo_x4 installed.
-    await user.click(screen.getByRole('button', { name: 'Blur' }));
+    // Turning on De-flicker enables Start with no restore model.
+    await user.click(screen.getByRole('checkbox', { name: /De-flicker · Labs/i }));
     await waitFor(() => expect(startBtn.disabled).toBe(false));
-    expect(screen.getByRole('list', { name: 'Stages' }).textContent).toContain('Fix blur');
-    expect(screen.getByRole('list', { name: 'Stages' }).textContent).not.toContain('SPAN');
+    await user.click(startBtn);
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+    expect(api.startJobs.mock.calls.at(-1)![0]).toMatchObject({
+      task: 'video',
+      video_task: 'denoise',
+      model_id: '',
+      fix_stages: [],
+      deflicker: true,
+    });
+  });
 
-    // Switching back to 2× removes the 1× help and brings back the upscaler stage.
-    await user.selectOptions(screen.getByLabelText('Output scale'), '2');
-    await waitFor(() => expect(lastSaved()).toMatchObject({ output_scale: 2 }));
-    expect(screen.queryByRole('button', { name: 'About Quality' })).toBeNull();
-    expect(screen.getByRole('group', { name: 'Quality' }).textContent).toContain('download');
-    expect(screen.getByRole('list', { name: 'Stages' }).textContent).toContain('SPAN');
+  it('migrates saved Upscale 1× and no-chip video Restore states on load and keeps Restore first chip order and HelpTips', async () => {
+    // 1) Saved photo Upscale 1× loads as Restore with the same fixes and last fix as model.
+    const photo1x = readySnapshot([image('photo', true)]);
+    Object.assign(photo1x.settings, {
+      task: 'upscale',
+      output_scale: 1,
+      selected_model_id: 'span_photo_x4',
+      fixes: ['blur', 'faces'],
+      fix_stages: [{ fix: 'blur', model_id: 'nafnet_gopro_deblur' }],
+      enable_face_model: true,
+    });
+    const user1 = await mountWith(photo1x);
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'denoise',
+        output_scale: 1,
+        selected_model_id: 'nafnet_gopro_deblur',
+        fixes: ['blur'],
+        enable_face_model: false,
+      }),
+    );
+    expect(
+      screen.getByText('Removes noise, blur and JPEG artifacts or adds colour, at the same size.'),
+    ).toBeTruthy();
+    const restoreChips = Array.from(
+      screen.getByRole('group', { name: 'What to fix' }).querySelectorAll('button'),
+    ).map((b) => b.textContent?.trim());
+    expect(restoreChips).toEqual(['Noise', 'Blur', 'JPEG artifacts', 'Colour']);
+    await user1.click(screen.getByRole('button', { name: 'About What to fix' }));
+    expect(screen.getByRole('tooltip').textContent).toBe(
+      'Each problem you pick gets its own fix, in the order listed under Model. The size stays the same. To enlarge the picture as well, use Upscale and pick the same problems under Restore first.',
+    );
+
+    // Upscale uses the exact same chip order (without Colour for video).
+    await user1.click(screen.getByRole('button', { name: /^Upscale$/ }));
+    const upscaleChips = Array.from(
+      screen.getByRole('group', { name: 'Restore first' }).querySelectorAll('button'),
+    ).map((b) => b.textContent?.trim());
+    expect(upscaleChips).toEqual(['Noise', 'Blur', 'JPEG artifacts', 'Colour']);
+    await user1.click(screen.getByRole('button', { name: 'About Restore first' }));
+    expect(screen.getByRole('tooltip').textContent).toContain(
+      'Runs the Restore task before upscaling.',
+    );
+    expect(screen.getByRole('tooltip').textContent).toContain(
+      'Colour adds colour to black-and-white photos.',
+    );
+    cleanup();
+
+    // 2) Saved video Upscale 1× loads as video Restore, and recipes at 1× display "restore"/"video restore" without scale.
+    const video1x = readySnapshot([video('clip', true)]);
+    Object.assign(video1x.settings, {
+      task: 'video',
+      video_task: 'upscale',
+      output_scale: 1,
+      selected_model_id: 'span_photo_x4',
+      fixes: ['jpeg'],
+      fix_stages: [{ fix: 'jpeg', model_id: 'fbcnn_color' }],
+    });
+    video1x.recipes = [
+      {
+        id: 'old-photo-1x',
+        name: 'Old photo 1x',
+        task: 'upscale',
+        model_id: 'span_photo_x4',
+        output_scale: 1,
+        tile_size: 256,
+        halo: 16,
+        precision: 'fp32',
+        safe_memory: true,
+        fixes: ['blur'],
+        stages: [
+          { kind: 'restore', model_id: 'nafnet_gopro_deblur', fix: 'blur' },
+          { kind: 'upscale', model_id: 'span_photo_x4' },
+        ],
+      },
+      {
+        id: 'old-vid-1x',
+        name: 'Old video 1x',
+        task: 'video',
+        video_task: 'upscale',
+        model_id: 'span_photo_x4',
+        output_scale: 1,
+        tile_size: 256,
+        halo: 16,
+        precision: 'fp16',
+        safe_memory: true,
+        fixes: ['jpeg'],
+        stages: [
+          { kind: 'deblock', model_id: 'fbcnn_color', fix: 'jpeg' },
+          { kind: 'video', model_id: 'span_photo_x4' },
+        ],
+      },
+    ];
+    const user2 = await mountWith(video1x);
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'video',
+        video_task: 'denoise',
+        output_scale: 1,
+        selected_model_id: 'fbcnn_color',
+        fixes: ['jpeg'],
+      }),
+    );
+    const oldPhotoBtn = screen.getByRole('button', { name: /^Old photo 1x/ });
+    expect(oldPhotoBtn.textContent).toContain('restore · FP32');
+    expect(oldPhotoBtn.textContent).not.toContain('1×');
+    const oldVidBtn = screen.getByRole('button', { name: /^Old video 1x/ });
+    expect(oldVidBtn.textContent).toContain('video restore · FP16');
+    expect(oldVidBtn.textContent).not.toContain('1×');
+    expect(oldVidBtn.getAttribute('aria-pressed')).toBe('false');
+    await user2.click(oldVidBtn);
+    await waitFor(() => expect(oldVidBtn.getAttribute('aria-pressed')).toBe('true'));
+    await user2.click(screen.getByRole('button', { name: 'About What to fix' }));
+    expect(screen.getByRole('tooltip').textContent).toContain(
+      'With nothing picked, only De-flicker, Frame rate and Clean up audio run.',
+    );
+    cleanup();
+
+    // 3) Saved no-chip video Restore gets the chip its model fits, else Noise.
+    const noChipVideo = readySnapshot([video('clip', true)]);
+    Object.assign(noChipVideo.settings, {
+      task: 'video',
+      video_task: 'denoise',
+      output_scale: 1,
+      selected_model_id: 'fbcnn_color',
+      fixes: [],
+      fix_stages: [],
+    });
+    await mountWith(noChipVideo);
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'video',
+        video_task: 'denoise',
+        selected_model_id: 'fbcnn_color',
+        fixes: ['jpeg'],
+        fix_stages: [{ fix: 'jpeg', model_id: 'fbcnn_color' }],
+      }),
+    );
   });
 });
 

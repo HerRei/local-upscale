@@ -124,24 +124,35 @@ it('explains when interpolation happens', async () => {
   expect(screen.getByRole('button', { name: 'About Interpolate' })).toBeTruthy();
 });
 
-it('offers 1× output scale for video upscale and hides output scale in video restore', async () => {
-  await open({ task: 'video', video_task: 'upscale', output_scale: 1 }, mac);
+it('starts output scale at 2× for both photo and video upscale and hides it in restore', async () => {
+  await open({ task: 'video', video_task: 'upscale', output_scale: 2 }, mac);
   const scaleSelect = screen.getByLabelText('Output scale') as HTMLSelectElement;
-  expect(Array.from(scaleSelect.options).map((o) => o.value)).toEqual(['1', '2', '3', '4']);
-  expect(scaleSelect.value).toBe('1');
-  // What 1× does is said once, in the "?" of Output scale.
-  const about1x = screen.getAllByText(/At 1×/);
-  expect(about1x).toHaveLength(1);
-  expect(about1x[0].id).toBe('help-output-scale');
+  expect(Array.from(scaleSelect.options).map((o) => o.value)).toEqual(['2', '3', '4']);
+  expect(scaleSelect.value).toBe('2');
+  expect(screen.getByText('Scale, format, hardware')).toBeTruthy();
+  await fireEvent.click(screen.getByRole('button', { name: 'About Output scale' }));
+  expect(screen.getByRole('tooltip').textContent).toBe(
+    'How many times larger the result is than the original. A 2× or 3× choice on a 4× model resizes down afterwards. To keep the size, use Restore.',
+  );
 
   cleanup();
   await open({ task: 'video', video_task: 'denoise', output_scale: 4 }, mac);
   expect(screen.queryByLabelText('Output scale')).toBeNull();
+  expect(screen.getByText('Format, hardware')).toBeTruthy();
+
+  cleanup();
+  await open({ task: 'denoise', output_scale: 1 }, mac);
+  expect(screen.queryByLabelText('Output scale')).toBeNull();
+  expect(screen.getByText('Format, hardware')).toBeTruthy();
 
   cleanup();
   await open({ task: 'upscale', output_scale: 2 }, mac);
   const imageScale = screen.getByLabelText('Output scale') as HTMLSelectElement;
   expect(Array.from(imageScale.options).map((o) => o.value)).toEqual(['2', '3', '4']);
+  await fireEvent.click(screen.getByRole('button', { name: 'About Output scale' }));
+  expect(screen.getByRole('tooltip').textContent).toBe(
+    'How many times larger the result is than the original. The model always works at its own 4× scale; a smaller choice resizes that result down afterwards, so it saves no time. To keep the size, use Restore.',
+  );
 });
 
 describe('Refresh in the memory line', () => {

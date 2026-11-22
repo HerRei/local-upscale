@@ -3,7 +3,7 @@
   import { createThemeController } from './lib/theme';
 
   import { tabFromKey } from './lib/keyboard';
-  import { recipeFixStages, recipeMatches } from './lib/recipes';
+  import { isRestoreRecipe, recipeFixStages, recipeMatches } from './lib/recipes';
   import { benchmarkDeviceBarWidth, benchmarkSceneLabel } from './lib/benchmark';
   import { without, mediaNamesFor as mediaNamesForPaths } from './lib/collections';
   import {
@@ -293,7 +293,6 @@
     noise: 'noise',
     colour: 'colour',
   };
-  let faceTermsAccepted = false;
   let previewPane: PreviewPane | undefined;
   let inspectorScroll: HTMLDivElement | undefined;
   let lastLivePreviewSequence = 0;
@@ -609,9 +608,6 @@
   $: selectedVideoModel = snapshot.catalog.video_models.find(
     (model) => model.model_id === settings.selected_video_model_id,
   );
-  $: faceModel = snapshot.catalog.models.find(
-    (model) => model.model_id === selectedModel?.pair_with && model.purposes.includes('face'),
-  );
   // The fixes this job runs, in order. In Restore the last one is the model itself.
   $: imageFixes =
     !usingTemporalVideo && settings.task !== 'edit' && Boolean(settings.task)
@@ -619,21 +615,19 @@
         ? settings.fix_stages.filter((selection) => selection.fix !== 'colour')
         : settings.fix_stages
       : [];
-  // Engines without image_multi_fix run one fix at most.
+  // Engines without image_multi_fix run one fix at a time.
   $: fixPlanSupported =
     imageFixes.length <= 1 || snapshot.engine?.features.includes('image_multi_fix') === true;
-  $: faceEngineAvailable = snapshot.engine?.features.includes('face_aware') === true;
   $: usingTemporalVideo =
     settings.task === 'video' &&
     !restoring &&
     settings.selected_video_model_id !== 'frame_by_frame';
   $: skipUpscale = skipsUpscaleModel(settings);
-  $: faceEnabled =
-    settings.enable_face_model &&
-    faceEngineAvailable &&
-    !restoring &&
-    !usingTemporalVideo &&
-    !skipUpscale;
+  $: noVideoRestoreModel =
+    settings.task === 'video' &&
+    restoring &&
+    imageFixes.length === 0 &&
+    settings.selected_model_id !== '__custom__';
   $: temporalUnavailableReason = !snapshot.engine?.video_engines.includes('seedvr2')
     ? 'This installation supports frame-by-frame video. SeedVR2 requires a compatible CUDA, ROCm or Metal engine.'
     : /^(directml|xpu|openvino)(:|$)/.test(settings.device_id)
@@ -704,31 +698,25 @@
   $: audioModels = snapshot.catalog.audio_models ?? [];
   $: selectedAudioModel = resolveAudioModel(audioModels, settings.video_audio_model);
   $: interpolationSupported = snapshot.engine?.features.includes('video_interpolation') === true;
-  $: hasWorkAt1x =
-    settings.task === 'video'
-      ? (!usingTemporalVideo &&
-          (imageFixes.length > 0 ||
-            (Boolean(settings.deflicker) && !preservingHdr) ||
-            ((settings.video_interpolation ?? 'off') !== 'off' && interpolationSupported))) ||
-        (Boolean(settings.video_clean_audio) && !audioDisabled)
-      : settings.task === 'upscale'
-        ? settings.fix_stages.length > 0
-        : false;
-  $: hasNothingToDoAt1x = skipUpscale && !hasWorkAt1x;
-  const nothingToDoAt1xReason =
-    'Nothing to run at 1×. Turn on Fix first, a video option or audio cleanup, or choose 2× or higher.';
+  $: hasVideoOnlyWork =
+    settings.task === 'video' &&
+    ((Boolean(settings.deflicker) && !preservingHdr) ||
+      ((settings.video_interpolation ?? 'off') !== 'off' && interpolationSupported) ||
+      (Boolean(settings.video_clean_audio) && !audioDisabled));
+  $: hasNothingToRun = noVideoRestoreModel && !hasVideoOnlyWork;
+  const nothingToRunReason =
+    'Nothing to run. Pick what to fix, or turn on De-flicker, Frame rate or Clean up audio.';
   $: modelReady =
     settings.task === 'edit'
       ? editReady
-      : skipUpscale
-        ? hasWorkAt1x
+      : noVideoRestoreModel
+        ? hasVideoOnlyWork
         : usingTemporalVideo
           ? !temporalUnavailableReason && Boolean(selectedVideoModel?.installed)
           : settings.selected_model_id === '__custom__'
             ? Boolean(settings.custom_model_path) &&
               (!customModelNeedsOptIn || settings.allow_unsafe_pickle_model)
             : Boolean(selectedModel?.installed);
-  $: faceReady = !faceEnabled || Boolean(faceModel?.installed);
   $: interpolationStage = plan.find((stage) => stage.kind === 'interpolate');
   $: interpolationReady = !interpolationStage || interpolationStage.installed;
   $: audioStage = plan.find((stage) => stage.kind === 'audio_denoise');
@@ -771,11 +759,10 @@
   $: activityModel =
     settings.task === 'edit'
       ? (editModel?.name ?? 'Editing model')
-      : skipUpscale
-        ? (plan.find((s) => s.model || s.interpolationModel || s.audioModel)?.model?.name ??
-          plan.find((s) => s.interpolationModel)?.interpolationModel?.name ??
+      : noVideoRestoreModel
+        ? (plan.find((s) => s.interpolationModel)?.interpolationModel?.name ??
           plan.find((s) => s.audioModel)?.audioModel?.name ??
-          (settings.deflicker ? 'De-flicker' : '1× video'))
+          (settings.deflicker ? 'De-flicker' : 'Video'))
         : usingTemporalVideo
           ? (selectedVideoModel?.name ?? 'Video model')
           : (selectedModel?.name ?? 'Model');
@@ -813,7 +800,6 @@
     Boolean(settings.task) &&
     modelReady &&
     hdrModelCompatible &&
-    faceReady &&
     fixesReady &&
     interpolationReady &&
     audioReady &&
@@ -1121,14 +1107,13 @@
   $: activeQuality = ((): Quality => {
     if (settings.quality) return settings.quality;
     if (usingTemporalVideo || settings.selected_model_id === '__custom__') return 'custom';
-    if (settings.fix_stages.length || settings.enable_face_model) return 'custom';
+    if (settings.fix_stages.length) return 'custom';
     if (bestModel && settings.selected_model_id === bestModel.model_id) return 'best';
     if (quickModel && settings.selected_model_id === quickModel.model_id) return 'quick';
     return 'custom';
   })();
   $: plan = resolvePlan(snapshot, settings, {
-    faceModel,
-    faceEnabled,
+    faceEnabled: false,
     usingTemporalVideo,
     selectedVideoModel,
     editModel,
@@ -1137,16 +1122,8 @@
   $: downloads = pendingDownloads(plan);
   $: planNeedsFile = plan.some((stage) => stage.needsFile);
   $: planMissing = plan.some((stage) => stage.missing);
-  // Faces only works with a primary model that has a face companion (HAT); with any
-  // other model the chip could only ever show greyed out, so it is left out.
   $: fixChips = (
-    settings.task === 'video'
-      ? restoring
-        ? ['noise', 'blur', 'jpeg']
-        : ['noise', 'jpeg', 'blur', ...(faceModel ? ['faces'] : [])]
-      : restoring
-        ? ['noise', 'blur', 'jpeg', 'colour']
-        : ['noise', 'jpeg', 'blur', 'colour', ...(faceModel ? ['faces'] : [])]
+    settings.task === 'video' ? ['noise', 'blur', 'jpeg'] : ['noise', 'blur', 'jpeg', 'colour']
   ) as FixKind[];
   $: prepareReady =
     !snapshot.runtime.active_job_id &&
@@ -1155,7 +1132,7 @@
     !startingJob &&
     !movingModels &&
     !cancelling &&
-    !hasNothingToDoAt1x &&
+    !hasNothingToRun &&
     downloads.stages.length > 0 &&
     !planNeedsFile &&
     !planMissing &&
@@ -1263,7 +1240,9 @@
   $: taskCaption = !settings.task
     ? ''
     : restoring
-      ? 'Removes noise, blur and JPEG artifacts at the same size.'
+      ? settings.task === 'video'
+        ? 'Removes noise, blur and JPEG artifacts at the same size.'
+        : 'Removes noise, blur and JPEG artifacts or adds colour, at the same size.'
       : settings.task === 'edit'
         ? 'Describe a change in words.'
         : selectedMedia?.kind === 'video' || settings.task === 'video'
@@ -1301,8 +1280,8 @@
       : '';
   // The lone start button of several inputs says what limits it; with a choice of two
   // buttons each carries its own note.
-  $: singleHint = hasNothingToDoAt1x
-    ? nothingToDoAt1xReason
+  $: singleHint = hasNothingToRun
+    ? nothingToRunReason
     : snapshot.media.length < 2
       ? ''
       : unreadyMedia
@@ -1319,13 +1298,13 @@
   $: allUnready = queueableMedia.find((media) => media.probe_status !== 'ready');
   $: oneTitle = oneUnready
     ? preparingNote(oneUnready)
-    : hasNothingToDoAt1x
-      ? nothingToDoAt1xReason
+    : hasNothingToRun
+      ? nothingToRunReason
       : mismatchNote || (canPrepareOne ? `Downloads ${formatBytes(downloads.bytes)} first.` : '');
   $: allTitle = allUnready
     ? preparingNote(allUnready)
-    : hasNothingToDoAt1x
-      ? nothingToDoAt1xReason
+    : hasNothingToRun
+      ? nothingToRunReason
       : incompatibleNote;
   // What the primary button says it does to all: "Upscale all 52", "Start all 5 videos".
   $: allPhrase = `${
@@ -1347,10 +1326,10 @@
             ? 'Select a compatible item before starting.'
             : unreadyMedia
               ? scopeHint
-              : hasNothingToDoAt1x
-                ? nothingToDoAt1xReason
+              : hasNothingToRun
+                ? nothingToRunReason
                 : editBlockReason ||
-                  (!modelReady || !faceReady || !fixesReady || !interpolationReady
+                  (!modelReady || !fixesReady || !interpolationReady
                     ? 'Choose or download the required models before starting.'
                     : 'The current settings are not ready to start.');
 
@@ -1378,6 +1357,7 @@
     void (async () => {
       try {
         snapshot = await api.bootstrap();
+        normalizeLoadedSettings();
         setupAppearance = snapshot.settings.appearance ?? 'dark';
         setupColourBlind = snapshot.settings.colour_blind_palette ?? false;
         setupCheckAtLaunch = snapshot.settings.check_updates_at_launch ?? true;
@@ -1726,6 +1706,129 @@
       updateSettings({ edit_model_id: model.model_id, edit_steps: 0 });
   }
 
+  /** Migrate loaded Upscale 1×, no-chip video Restore, and Faces settings. */
+  function normalizeLoadedSettings(): void {
+    const current = snapshot.settings;
+    const byId = (id: string): CatalogModel | undefined =>
+      snapshot.catalog.models.find((model) => model.model_id === id);
+    const quality: 'quick' | 'best' =
+      current.quality === 'quick' || current.quality === 'best' ? current.quality : 'best';
+    const patch: Partial<UiSettings> = {};
+    let changed = false;
+
+    const cleanFixes = current.fixes.filter((fix) => fix !== 'faces');
+    if (cleanFixes.length !== current.fixes.length) {
+      patch.fixes = cleanFixes;
+      changed = true;
+    }
+    if (current.enable_face_model) {
+      patch.enable_face_model = false;
+      changed = true;
+    }
+
+    const videoUpscale1x =
+      current.task === 'video' &&
+      (current.video_task || 'upscale') !== 'denoise' &&
+      current.output_scale === 1 &&
+      (current.selected_video_model_id === 'frame_by_frame' ||
+        !(current.video_target_resolution ?? 0));
+    const photoUpscale1x = current.task === 'upscale' && current.output_scale === 1;
+
+    if (photoUpscale1x) {
+      patch.task = 'denoise';
+      patch.output_scale = 1;
+      patch.enable_face_model = false;
+      const stages = current.fix_stages.map((selection) => {
+        const own = byId(selection.model_id);
+        if (own && fitsFix(own, selection.fix)) return selection;
+        return {
+          ...selection,
+          model_id:
+            chooseFixModel(snapshot, selection.fix, quality, current.preset_pins)?.model_id ?? '',
+        };
+      });
+      patch.fix_stages = stages;
+      patch.fixes = stages.map((selection) => selection.fix);
+      const last = stages.at(-1);
+      if (last) {
+        patch.selected_model_id = last.model_id;
+        const lastModel = byId(last.model_id);
+        if (lastModel) patch.halo = lastModel.recommended_halo;
+      } else {
+        const currentModel = byId(current.selected_model_id);
+        if (!currentModel || currentModel.native_scale !== 1) {
+          const fallback = choosePresetModel(
+            snapshot,
+            'denoise',
+            quality,
+            current.content,
+            current.preset_pins,
+          );
+          if (fallback) {
+            patch.selected_model_id = fallback.model_id;
+            patch.halo = fallback.recommended_halo;
+          }
+        }
+      }
+      changed = true;
+    } else if (videoUpscale1x) {
+      patch.video_task = 'denoise';
+      patch.selected_video_model_id = 'frame_by_frame';
+      patch.output_scale = 1;
+      patch.enable_face_model = false;
+      const stages = current.fix_stages
+        .filter((selection) => selection.fix !== 'colour')
+        .map((selection) => {
+          const own = byId(selection.model_id);
+          if (own && fitsFix(own, selection.fix)) return selection;
+          return {
+            ...selection,
+            model_id:
+              chooseFixModel(snapshot, selection.fix, quality, current.preset_pins)?.model_id ?? '',
+          };
+        });
+      patch.fix_stages = stages;
+      patch.fixes = stages.map((selection) => selection.fix);
+      const last = stages.at(-1);
+      patch.selected_model_id = last ? last.model_id : '';
+      if (last) {
+        const lastModel = byId(last.model_id);
+        if (lastModel) patch.halo = lastModel.recommended_halo;
+      }
+      changed = true;
+    } else if (current.task === 'video' && current.video_task === 'denoise') {
+      const videoStages = current.fix_stages.filter((selection) => selection.fix !== 'colour');
+      const hasVideoOption =
+        Boolean(current.deflicker) ||
+        (current.video_interpolation ?? 'off') !== 'off' ||
+        Boolean(current.video_clean_audio);
+      if (
+        videoStages.length === 0 &&
+        current.selected_model_id !== '__custom__' &&
+        (current.selected_model_id || !hasVideoOption)
+      ) {
+        const picked = byId(current.selected_model_id);
+        const fit = picked
+          ? (['noise', 'blur', 'jpeg'] as const).find((fix) => fitsFix(picked, fix))
+          : undefined;
+        if (fit && picked) {
+          patch.fix_stages = [{ fix: fit, model_id: picked.model_id }];
+          patch.fixes = [fit];
+          patch.halo = picked.recommended_halo;
+        } else {
+          const noiseModel = chooseFixModel(snapshot, 'noise', quality, current.preset_pins);
+          patch.fix_stages = [{ fix: 'noise', model_id: noiseModel?.model_id ?? '' }];
+          patch.fixes = ['noise'];
+          patch.selected_model_id = noiseModel?.model_id ?? '';
+          if (noiseModel) patch.halo = noiseModel.recommended_halo;
+        }
+        changed = true;
+      }
+    }
+
+    if (changed) updateSettings(patch);
+  }
+
   function chooseInitialModel(): void {
     const task = snapshot.settings.task;
     if (task === 'edit') {
@@ -1733,6 +1836,7 @@
       return;
     }
     if (!task || snapshot.settings.selected_model_id) return;
+    if (task === 'video' && snapshot.settings.video_task === 'denoise') return;
     resolveRecipe({ quality: snapshot.settings.quality || 'quick' }, { keepVideoEngine: true });
   }
 
@@ -1792,7 +1896,6 @@
           chooseFixModel(snapshot, selection.fix, quality, current.preset_pins)?.model_id ?? '',
       };
     });
-    const wantsFaces = current.fixes.includes('faces');
     const patchSettings: Partial<UiSettings> = {
       quality: current.quality || quality,
       content: current.content,
@@ -1800,17 +1903,17 @@
         ? {}
         : {
             fix_stages,
-            // The chips show the fixes that run; Faces waits in Restore for the way back.
-            fixes: [
-              ...fix_stages.map((selection) => selection.fix),
-              ...(wantsFaces ? (['faces'] as FixKind[]) : []),
-            ],
+            fixes: fix_stages.map((selection) => selection.fix),
           }),
     };
     if (isRestoring) {
-      // Restore's model is its last fix; without a fix it is the preset's or your own.
+      // Restore's model is its last fix; for photos without a fix it is the preset's or your own.
       const final = fix_stages.at(-1);
-      const kept = keepPrimary && (!final || final.model_id === current.selected_model_id);
+      const kept =
+        keepPrimary &&
+        (final
+          ? final.model_id === current.selected_model_id
+          : task !== 'video' || !current.selected_model_id);
       if (!kept) {
         const model = final
           ? byId(final.model_id)
@@ -1822,8 +1925,8 @@
               current.preset_pins,
               currentVideoTask,
             );
-        const id = final ? final.model_id : model?.model_id;
-        if (id !== undefined) patchSettings.selected_model_id = id;
+        const id = final ? final.model_id : (model?.model_id ?? '');
+        patchSettings.selected_model_id = id;
         if (model) patchSettings.halo = model.recommended_halo;
         // A pick by hand that cannot fix the problem gives way to the preset's model.
         if (keepPrimary && final && chosen.has(final.fix)) patchSettings.quality = quality;
@@ -1847,7 +1950,7 @@
         // Quick and Best are frame-by-frame recipes; a saved SeedVR2 choice
         // survives only the initial resolution and task changes.
         if (!options.keepVideoEngine) patchSettings.selected_video_model_id = 'frame_by_frame';
-        const minScale = task === 'video' ? 1 : 2;
+        const minScale = 2;
         if (
           !options.keepScale ||
           current.output_scale < minScale ||
@@ -1858,17 +1961,10 @@
         patchSettings.halo = primary.recommended_halo;
         patchSettings.safe_memory = quality === 'best' ? current.safe_memory : false;
       }
-      const primaryId = patchSettings.selected_model_id ?? current.selected_model_id;
-      const primaryModel = byId(primaryId);
-      const companion = snapshot.catalog.models.find(
-        (model) => model.purposes.includes('face') && primaryModel?.pair_with === model.model_id,
-      );
-      patchSettings.enable_face_model =
-        !temporal && wantsFaces && Boolean(companion) && faceEngineAvailable;
+      patchSettings.enable_face_model = false;
     }
     updateSettings(patchSettings);
     termsAccepted = {};
-    faceTermsAccepted = false;
   }
 
   function setContent(content: UiSettings['content']): void {
@@ -1877,15 +1973,7 @@
   }
 
   function toggleFix(fix: FixKind): void {
-    if (fix === 'faces') {
-      const current = settings.fixes;
-      if (!faceModel && !current.includes('faces')) return;
-      const fixes: FixKind[] = current.includes('faces')
-        ? current.filter((item) => item !== 'faces')
-        : [...current, 'faces'];
-      resolveRecipe({ fixes, quality: activeQuality }, { keepScale: true });
-      return;
-    }
+    if (fix === 'faces') return;
     // Noise, JPEG and blur each run as their own fix before the main model.
     resolveRecipe(
       { fix_stages: toggleFixStage(settings.fix_stages, fix), quality: activeQuality },
@@ -1903,10 +1991,7 @@
     const model = snapshot.catalog.models.find((entry) => entry.model_id === final.model_id);
     updateSettings({
       fix_stages,
-      fixes: [
-        ...fix_stages.map((selection) => selection.fix),
-        ...(settings.fixes.includes('faces') ? (['faces'] as FixKind[]) : []),
-      ],
+      fixes: fix_stages.map((selection) => selection.fix),
       ...(restoring && final.fix !== settings.fix_stages.at(-1)?.fix
         ? { selected_model_id: final.model_id, ...(model ? { halo: model.recommended_halo } : {}) }
         : {}),
@@ -2177,13 +2262,16 @@
       // Editing leaves the upscale and restore setup untouched for when you switch back.
       updateSettings({ task, enable_face_model: false });
       termsAccepted = {};
-      faceTermsAccepted = false;
       ensureEditModel();
       return;
     }
     const targetVideoTask = task === 'video' ? (nextVideoTask ?? videoTask) : undefined;
     const targetRestoring =
       task === 'denoise' || (task === 'video' && targetVideoTask === 'denoise');
+    const switchingToVideoRestore =
+      targetRestoring && task === 'video' && !(settings.task === 'video' && restoring);
+    const videoFixes = settings.fix_stages.filter((selection) => selection.fix !== 'colour');
+    const needsDefaultNoise = switchingToVideoRestore && videoFixes.length === 0;
     const models = modelsForTask(snapshot, task, targetVideoTask);
     // Keep a manual choice that still fits the task; otherwise the active
     // recipe (Quick until one is chosen) resolves the plan for the new task.
@@ -2198,22 +2286,24 @@
       selected_model_id: kept?.model_id ?? '',
       output_scale: targetRestoring
         ? 1
-        : Math.min(
-            kept?.native_scale ?? 4,
-            Math.max(
-              task === 'video' && settings.task === 'video' && !restoring ? 1 : 2,
-              settings.output_scale,
-            ),
-          ),
+        : Math.min(kept?.native_scale ?? 4, Math.max(2, settings.output_scale)),
       enable_face_model: false,
     });
     termsAccepted = {};
-    faceTermsAccepted = false;
-    if (!kept) {
+    if (!kept || needsDefaultNoise) {
+      const nextFixStages: FixStageSelection[] = needsDefaultNoise
+        ? [
+            {
+              fix: 'noise',
+              model_id: kept && fitsFix(kept, 'noise') ? kept.model_id : '',
+            },
+          ]
+        : settings.fix_stages;
       resolveRecipe(
         {
           quality: activeQuality === 'quick' || activeQuality === 'best' ? activeQuality : 'quick',
-          fixes: settings.fixes,
+          fix_stages: nextFixStages,
+          fixes: nextFixStages.map((selection) => selection.fix),
           ...(task === 'video' ? { video_task: targetVideoTask } : {}),
         },
         { keepVideoEngine: !targetRestoring },
@@ -2631,20 +2721,18 @@
         ...(restoring
           ? {
               fix_stages: [],
-              fixes: settings.fixes.filter((fix) => fix === 'faces'),
+              fixes: [],
             }
           : {}),
       });
       libraryOpen = false;
       termsAccepted = {};
-      faceTermsAccepted = false;
     }
   }
 
   function selectVideoEngine(modelId: string): void {
     updateSettings({ selected_video_model_id: modelId });
     termsAccepted = {};
-    faceTermsAccepted = false;
   }
 
   function selectPrimaryModel(modelId: string): void {
@@ -2654,25 +2742,15 @@
       output_scale: restoring
         ? 1
         : model
-          ? Math.min(
-              model.native_scale,
-              Math.max(settings.task === 'video' ? 1 : 2, settings.output_scale),
-            )
+          ? Math.min(model.native_scale, Math.max(2, settings.output_scale))
           : settings.output_scale,
       // As the presets do: some models need a wider overlap between tiles.
       halo: model ? model.recommended_halo : settings.halo,
       allow_unsafe_pickle_model: false,
-      enable_face_model:
-        !restoring &&
-        settings.fixes.includes('faces') &&
-        faceEngineAvailable &&
-        snapshot.catalog.models.some(
-          (entry) => entry.purposes.includes('face') && entry.model_id === model?.pair_with,
-        ),
+      enable_face_model: false,
       quality: 'custom',
     });
     termsAccepted = {};
-    faceTermsAccepted = false;
   }
 
   function applyPreset(kind: 'quick' | 'best'): void {
@@ -2750,7 +2828,7 @@
       batch_mode: batchMode,
       task,
       video_task: videoTask,
-      model_id: settings.selected_model_id,
+      model_id: noVideoRestoreModel ? '' : settings.selected_model_id,
       video_model_id: settings.selected_video_model_id,
       fix_stages: usingTemporalVideo ? [] : imageFixes,
       custom_model_path: settings.custom_model_path,
@@ -2774,7 +2852,7 @@
       video_target_resolution: settings.video_target_resolution ?? 0,
       video_low_memory: settings.video_low_memory ?? true,
       video_crf: settings.video_crf,
-      enable_face_model: faceEnabled,
+      enable_face_model: false,
       face_fidelity: settings.face_fidelity,
       enable_live_preview: settings.enable_live_preview,
       allow_unsafe_pickle_model: settings.allow_unsafe_pickle_model,
@@ -2959,7 +3037,7 @@
       video_target_resolution: settings.video_target_resolution ?? 0,
       video_low_memory: settings.video_low_memory ?? true,
       video_crf: settings.video_crf,
-      enable_face_model: faceEnabled,
+      enable_face_model: false,
       face_fidelity: settings.face_fidelity,
       video_interpolation: settings.video_interpolation ?? 'off',
       video_interpolation_order: settings.video_interpolation_order ?? 'after_upscale',
@@ -2967,39 +3045,34 @@
       video_audio_model: settings.video_audio_model ?? '',
       quality: activeQuality,
       content: settings.content,
-      fixes: settings.fixes,
-      stages: [
-        ...recipeFixPrefix.map((selection) => ({
-          kind: fixStageKind(
-            snapshot.catalog.models.find((model) => model.model_id === selection.model_id),
-            selection.fix,
-          ),
-          model_id: selection.model_id,
-          fix: selection.fix,
-        })),
-        {
-          kind: restoring
-            ? ('restore' as const)
-            : settings.task === 'video'
-              ? ('video' as const)
-              : ('upscale' as const),
-          model_id:
-            settings.task === 'video' && usingTemporalVideo
-              ? settings.selected_video_model_id
-              : settings.selected_model_id,
-          // Restore's model is its last fix.
-          ...(restoring && imageFixes.length ? { fix: imageFixes[imageFixes.length - 1].fix } : {}),
-        },
-        ...(faceEnabled && faceModel
-          ? [
-              {
-                kind: 'face_restore' as const,
-                model_id: faceModel.model_id,
-                fidelity: settings.face_fidelity / 100,
-              },
-            ]
-          : []),
-      ],
+      fixes: settings.fixes.filter((fix) => fix !== 'faces'),
+      stages: noVideoRestoreModel
+        ? []
+        : [
+            ...recipeFixPrefix.map((selection) => ({
+              kind: fixStageKind(
+                snapshot.catalog.models.find((model) => model.model_id === selection.model_id),
+                selection.fix,
+              ),
+              model_id: selection.model_id,
+              fix: selection.fix,
+            })),
+            {
+              kind: restoring
+                ? ('restore' as const)
+                : settings.task === 'video'
+                  ? ('video' as const)
+                  : ('upscale' as const),
+              model_id:
+                settings.task === 'video' && usingTemporalVideo
+                  ? settings.selected_video_model_id
+                  : settings.selected_model_id,
+              // Restore's model is its last fix.
+              ...(restoring && imageFixes.length
+                ? { fix: imageFixes[imageFixes.length - 1].fix }
+                : {}),
+            },
+          ],
     };
     try {
       await api.saveRecipe(recipe);
@@ -3032,17 +3105,38 @@
       );
       return;
     }
-    if (recipe.task !== 'video') lastImageTask = recipe.task;
     const fix_stages = recipeFixStages(recipe, snapshot.catalog);
-    const recipeFace = recipe.stages?.find((stage) => stage.kind === 'face_restore');
     const recipeModel = snapshot.catalog.models.find((model) => model.model_id === recipe.model_id);
-    const targetVideoTask = recipe.video_task === 'denoise' ? 'denoise' : 'upscale';
-    const targetRestoring =
-      recipe.task === 'denoise' || (recipe.task === 'video' && targetVideoTask === 'denoise');
+    const targetRestoring = isRestoreRecipe(recipe);
+    const targetTask: TaskKind =
+      recipe.task === 'upscale' && targetRestoring ? 'denoise' : recipe.task;
+    const targetVideoTask =
+      targetTask === 'video' ? (targetRestoring ? 'denoise' : 'upscale') : 'upscale';
+    if (targetTask !== 'video') lastImageTask = targetTask;
+    const migratedFromUpscale1x =
+      targetRestoring &&
+      recipe.task !== 'denoise' &&
+      !(recipe.task === 'video' && recipe.video_task === 'denoise');
+    const recipeQuality: 'quick' | 'best' =
+      recipe.quality === 'quick' || recipe.quality === 'best' ? recipe.quality : 'best';
+    const targetModelId = migratedFromUpscale1x
+      ? (fix_stages.at(-1)?.model_id ??
+        (targetTask === 'video'
+          ? ''
+          : recipeModel?.native_scale === 1
+            ? recipe.model_id
+            : (choosePresetModel(
+                snapshot,
+                'denoise',
+                recipeQuality,
+                recipe.content || settings.content,
+                settings.preset_pins,
+              )?.model_id ?? '')))
+      : recipe.model_id;
     updateSettings({
-      task: recipe.task,
-      ...(recipe.task === 'video' ? { video_task: targetVideoTask } : {}),
-      selected_model_id: recipe.model_id,
+      task: targetTask,
+      ...(targetTask === 'video' ? { video_task: targetVideoTask } : {}),
+      selected_model_id: targetModelId,
       selected_video_model_id: targetRestoring
         ? 'frame_by_frame'
         : recipe.video_model_id || 'frame_by_frame',
@@ -3072,22 +3166,14 @@
       video_interpolation_order: recipe.video_interpolation_order || 'after_upscale',
       video_clean_audio: recipe.video_clean_audio ?? false,
       video_audio_model: recipe.video_audio_model ?? '',
-      enable_face_model:
-        !targetRestoring && (recipeFace ? true : (recipe.enable_face_model ?? false)),
-      face_fidelity:
-        recipeFace?.fidelity === undefined
-          ? (recipe.face_fidelity ?? 70)
-          : Math.round(recipeFace.fidelity * 100),
+      enable_face_model: false,
+      face_fidelity: recipe.face_fidelity ?? settings.face_fidelity,
       allow_unsafe_pickle_model: false,
       quality: recipe.quality || 'custom',
       content: recipe.content || settings.content,
-      fixes: [
-        ...fix_stages.map((selection) => selection.fix),
-        ...(recipeFace || recipe.fixes?.includes('faces') ? (['faces'] as FixKind[]) : []),
-      ],
+      fixes: fix_stages.map((selection) => selection.fix),
     });
     termsAccepted = {};
-    faceTermsAccepted = false;
   }
 
   async function consumeLaunchIntents(): Promise<void> {
@@ -3226,7 +3312,6 @@
       Boolean(settings.task) &&
       modelReady &&
       hdrModelCompatible &&
-      faceReady &&
       fixesReady &&
       interpolationReady;
     if (!ready) return;
@@ -3983,14 +4068,7 @@
             {:else}
               <section class="control-section recipes">
                 <div class="eyebrow eyebrow-row">
-                  <span class="label-with-tip"
-                    >Quality{#if skipUpscale}<HelpTip
-                        label="Quality"
-                        text={usingTemporalVideo
-                          ? 'Output scale is 1×, so the video model is not used and the size stays the same. To upscale, set Output scale under Advanced to 2× or higher.'
-                          : 'Output scale is 1×, so the upscaling model is not used and the size stays the same. Quick and Best only choose the Fix first models. To upscale, set Output scale under Advanced to 2× or higher.'}
-                      />{/if}</span
-                  >
+                  <span>Quality</span>
                   {#if !recipeEditorOpen}<span class="eyebrow-actions"
                       ><button class="link-button" type="button" on:click={openRecipeEditor}
                         >Save as recipe…</button
@@ -4051,9 +4129,11 @@
                             (recipe.task === 'video') !== (selectedMedia.kind === 'video')}
                           on:click={() => applyRecipe(recipe)}
                           ><b>{recipe.name}</b><span
-                            >{recipe.task === 'video' && recipe.video_task === 'denoise'
-                              ? 'video restore'
-                              : recipe.task} · {recipe.output_scale}× · {recipe.precision.toUpperCase()}</span
+                            >{isRestoreRecipe(recipe)
+                              ? recipe.task === 'video'
+                                ? 'video restore'
+                                : 'restore'
+                              : `${recipe.task} · ${recipe.output_scale}×`} · {recipe.precision.toUpperCase()}</span
                           ></button
                         ><button
                           class:active={activeRecipeIds.has(recipe.id)}
@@ -4101,14 +4181,21 @@
                     ? 'Your video'
                     : 'Your image'}
               >
-                <span class="eyebrow"
-                  >{restoring
-                    ? 'What to fix'
-                    : settings.task === 'video'
-                      ? 'Your video'
-                      : 'Your image'}</span
-                >
-                {#if !restoring}
+                {#if restoring}
+                  <div class="eyebrow eyebrow-row">
+                    <span class="label-with-tip"
+                      >What to fix<HelpTip
+                        label="What to fix"
+                        text={settings.task === 'video'
+                          ? 'Each problem you pick gets its own fix, in the order listed under Model. The size stays the same. With nothing picked, only De-flicker, Frame rate and Clean up audio run. To enlarge the video as well, use Upscale and pick the same problems under Restore first.'
+                          : 'Each problem you pick gets its own fix, in the order listed under Model. The size stays the same. To enlarge the picture as well, use Upscale and pick the same problems under Restore first.'}
+                      /></span
+                    >
+                  </div>
+                {:else}
+                  <span class="eyebrow"
+                    >{settings.task === 'video' ? 'Your video' : 'Your image'}</span
+                  >
                   <div class="field-heading">
                     <span class="field-label" id="content-label">Content</span><HelpTip
                       label="Content"
@@ -4132,16 +4219,18 @@
                     >
                   </div>
                   <div class="field-heading">
-                    <span class="field-label" id="fix-label">Fix first</span><HelpTip
-                      label="Fix first"
-                      text="Each problem you pick gets its own fix, run before the upscaler in the order listed under Model. The ↑ and ↓ buttons change that order; each fix's Change… picks its model, which LocalSR remembers for that problem. Colour adds colour to black-and-white photos."
+                    <span class="field-label" id="fix-label">Restore first</span><HelpTip
+                      label="Restore first"
+                      text={settings.task === 'video'
+                        ? "Runs the Restore task before upscaling. Each problem you pick is fixed at the original size, in the order listed under Model, then the result is enlarged. ↑ and ↓ change the order; a fix's Change… picks its model, which LocalSR remembers for that problem."
+                        : "Runs the Restore task before upscaling. Each problem you pick is fixed at the original size, in the order listed under Model, then the result is enlarged. ↑ and ↓ change the order; a fix's Change… picks its model, which LocalSR remembers for that problem. Colour adds colour to black-and-white photos."}
                     />
                   </div>
                 {/if}
                 <div
                   class="chips"
                   role="group"
-                  aria-label={restoring ? 'Problems to fix' : 'Fix first'}
+                  aria-label={restoring ? 'What to fix' : 'Restore first'}
                 >
                   {#each fixChips as fix (fix)}
                     <button
@@ -4149,16 +4238,7 @@
                       type="button"
                       class:on={settings.fixes.includes(fix)}
                       aria-pressed={settings.fixes.includes(fix)}
-                      disabled={fix === 'faces' && (!faceModel || skipUpscale)}
-                      title={fix === 'faces'
-                        ? skipUpscale
-                          ? 'Faces needs upscaling (2× or higher).'
-                          : !faceModel
-                            ? 'Faces need a model with a face companion (HAT-S or HAT-L).'
-                            : ''
-                        : fix === 'colour'
-                          ? 'Adds colour to black-and-white photos'
-                          : ''}
+                      title={fix === 'colour' ? 'Adds colour to black-and-white photos' : ''}
                       on:click={() => toggleFix(fix)}
                       >{#if settings.fixes.includes(fix)}<svg
                           xmlns="http://www.w3.org/2000/svg"
@@ -4186,12 +4266,12 @@
                     : 'Model'}</span
                 >
                 <span class="eyebrow-actions">
-                  {#if activeQuality === 'custom' && bestModel && settings.task !== 'edit'}<button
+                  {#if activeQuality === 'custom' && (bestModel || (settings.task === 'video' && restoring && imageFixes.length > 0)) && settings.task !== 'edit'}<button
                       class="link-button"
                       type="button"
                       on:click={() => applyPreset('best')}>Back to Best</button
                     >{/if}
-                  {#if !skipUpscale && !plan.some((stage) => stage.role === 'primary')}<button
+                  {#if !noVideoRestoreModel && !plan.some((stage) => stage.role === 'primary')}<button
                       class="link-button"
                       type="button"
                       on:click={() => openLibrary(settings.task === 'edit' ? 'edit' : 'primary')}
@@ -4442,32 +4522,6 @@
                             openLicense={() => openAnyLicense(stage.model!.model_id)}
                             openSource={() => openAnySource(stage.model!.model_id)}
                           />
-                        {:else if stage.kind === 'face_restore' && stage.model && !stage.installed}
-                          <p class="model-description">
-                            Optional companion pass for faces. The exact checkpoint's redistribution
-                            and training-data rights are not verified, so LocalSR only accepts a
-                            matching user-supplied copy.
-                          </p>
-                          {#if stage.model.terms_acceptance_required}
-                            <label class="terms"
-                              ><input type="checkbox" bind:checked={faceTermsAccepted} /> I understand
-                              that the checkpoint rights are unresolved and will provide a copy I am permitted
-                              to use.</label
-                            >
-                          {/if}
-                          <button
-                            class="button full"
-                            class:primary={stage.model.automated_download_allowed}
-                            on:click={() => runDownload(stage.model, faceTermsAccepted)}
-                          >
-                            {stageDownload
-                              ? stageDownload.status === 'queued'
-                                ? 'Waiting in queue · Cancel'
-                                : `Downloading ${Math.round(stageDownload.progress)}% · Cancel`
-                              : stage.model.automated_download_allowed
-                                ? `Download companion · ${formatBytes(stage.model.size_bytes)}`
-                                : 'Choose externally downloaded face checkpoint…'}
-                          </button>
                         {:else if stage.editModel?.model_id === '__custom__' && !stage.installed}
                           <button
                             class="button full"
@@ -4513,8 +4567,8 @@
                   </div>
                 {/each}
               </div>
-              {#if hasNothingToDoAt1x}
-                <p class="inline-warning" role="status">{nothingToDoAt1xReason}</p>
+              {#if hasNothingToRun}
+                <p class="inline-warning" role="status">{nothingToRunReason}</p>
               {/if}
               {#if !fixPlanSupported && snapshot.engine}<p class="inline-warning" role="status">
                   This engine runs one fix at a time. Update LocalSR to run several.
@@ -4536,31 +4590,6 @@
                       >{/if}
                   </p>
                 {/if}
-              {/if}
-              {#if faceEnabled && faceModel}
-                <div class="range-row">
-                  <label for="face-fidelity"
-                    >Face fidelity <b>{settings.face_fidelity}% restored</b></label
-                  ><input
-                    id="face-fidelity"
-                    type="range"
-                    min="0"
-                    max="100"
-                    step="5"
-                    value={settings.face_fidelity}
-                    on:input={(event) =>
-                      updateSettings({ face_fidelity: Number(event.currentTarget.value) })}
-                  /><small
-                    >0% retains the resampled original face; 100% applies the strongest restoration.
-                    Non-face regions keep the primary result.</small
-                  >
-                </div>
-              {/if}
-              {#if settings.fixes.includes('faces') && faceModel && !faceEngineAvailable}
-                <p class="inline-warning" role="status">
-                  Face-aware processing stays off: the local face detector is not packaged for this
-                  platform. The normal model still works.
-                </p>
               {/if}
               {#if activeQuality === 'custom' && settings.task !== 'edit'}
                 <p class="model-note">Chosen by you. Pick Quick or Best to go back.</p>

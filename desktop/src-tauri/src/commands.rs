@@ -1083,7 +1083,7 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
             ));
         }
     }
-    if upscale_skips_sr(&input)
+    if (upscale_skips_sr(&input) || no_video_restore_model(&input))
         && input.fix_stages.is_empty()
         && !(input.task == "video"
             && input.video_model_id == "frame_by_frame"
@@ -1093,7 +1093,7 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
         && media.iter().all(|item| !item.has_audio)
     {
         return Err(AppError::Validation(
-            "Nothing to run at 1×: the selected video has no audio track.".into(),
+            "Nothing to run: the selected video has no audio track.".into(),
         ));
     }
     refuse_when_disk_is_short(&input, &selection, &media[0], &output_directory)?;
@@ -3485,12 +3485,25 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
     if input.media_ids.is_empty() || input.media_ids.len() > MAX_MEDIA_ITEMS {
         return Err(AppError::Validation("invalid batch size".into()));
     }
+    if no_video_restore_model(input) && !has_work_at_1x(input) {
+        return Err(AppError::Validation(
+            "Nothing to run. Pick what to fix, or turn on De-flicker, Frame rate or Clean up audio.".into(),
+        ));
+    }
     if upscale_skips_sr(input) && !has_work_at_1x(input) {
         return Err(AppError::Validation(
-            "Nothing to run at 1×. Turn on Fix first, a video option or audio cleanup, or choose 2× or higher.".into(),
+            "Nothing to run at 1×. Turn on Restore first, a video option or audio cleanup, or choose 2× or higher.".into(),
         ));
     }
     Ok(())
+}
+
+/// True when video Restore has no fix selected and runs only video/audio options.
+fn no_video_restore_model(input: &StartBatchInput) -> bool {
+    input.task == "video"
+        && input.video_task == "denoise"
+        && input.fix_stages.is_empty()
+        && input.model_id.is_empty()
 }
 
 /// True when the Upscale task is set to 1× and therefore runs no upscaling model.
@@ -3585,7 +3598,7 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
         ));
     }
     let catalog = lock(&state.catalog)?;
-    let skip_upscale = upscale_skips_sr(input);
+    let skip_upscale = upscale_skips_sr(input) || no_video_restore_model(input);
     if input.task == "video" && input.video_model_id != "frame_by_frame" && !skip_upscale {
         if input.video_task == "denoise" {
             return Err(AppError::Validation(

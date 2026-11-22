@@ -736,6 +736,49 @@ def test_face_aware_video_runs_frames_without_a_face_on_the_general_model(
     assert [mean > 128 for mean in means] == expected, means
 
 
+def test_video_restore_without_fix_stages_runs_only_video_options(tmp_path):
+    from test_frame_interpolation import RecordingSynthesizer
+
+    source = _make_synthetic_video_with_audio(tmp_path / "source_audio.mp4", frames=4, fps=8)
+
+    class FailOnLoadAdapter:
+        def load(self, path, device, precision):
+            raise AssertionError(f"Unexpected model load: {path}")
+
+        def release(self):
+            pass
+
+    engine = InferenceEngine(FailOnLoadAdapter())
+    output = tmp_path / "restore_options_only.mp4"
+    config = VideoJobConfig(
+        video_path=str(source),
+        model_path="",
+        output_video_path=str(output),
+        model_info=None,
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=4,
+        safe_memory=False,
+        output_scale=1,
+        audio_path=str(source),
+        deflicker=True,
+        interpolation="x2",
+        interpolation_order="after_upscale",
+        preprocess_stages=(),
+    )
+    result = run_video_job(
+        config=config,
+        engine=engine,
+        cancel_event=threading.Event(),
+        synthesizer=RecordingSynthesizer(),
+    )
+    assert result.frames_processed == 4
+    probe = probe_video(str(output))
+    assert (probe.width, probe.height) == (FRAME_WIDTH, FRAME_HEIGHT)
+    assert len(list(decode_frames(str(output)))) == 8
+
+
 def test_video_restore_at_1x_preserves_dimensions_frames_timing_and_audio(tmp_path):
     source = _make_synthetic_video_with_audio(tmp_path / "source_audio.mp4", frames=8, fps=8)
     adapter = DummyAdapter(scale=1)

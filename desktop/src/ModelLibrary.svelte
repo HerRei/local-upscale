@@ -62,7 +62,7 @@
   export let busy = false;
   export let close: () => void;
   export let useForJob: (model: CatalogModel) => void;
-  /** Remember a model for one problem (Fix first, or Restore with a chip on). */
+  /** Remember a model for one problem (Restore first, or Restore with a chip on). */
   export let rememberFix: (model: CatalogModel, fix: Exclude<FixKind, 'faces'>) => void;
   export let forgetFix: (fix: Exclude<FixKind, 'faces'>) => void;
   export let useEditModel: (model: EditModel) => void;
@@ -112,7 +112,7 @@
       tutorialNote = String(error);
     }
   }
-  // Choosing the model for one problem: Fix first, or Restore with a chip on.
+  // Choosing the model for one problem: Restore first, or Restore with a chip on.
   $: restoring =
     context.task === 'denoise' || (context.task === 'video' && context.videoTask === 'denoise');
   $: fixing =

@@ -119,9 +119,9 @@ completed tiles or put an earlier frame beneath a newer frame's output.
 
 ## Optional processing
 
-### Output scale 1× (no upscaling)
+### Video Restore (no upscaling)
 
-In **Video → Upscale**, **Output scale** offers **1×** alongside 2×–4×. At 1×, the upscaling model is not downloaded or run: frames keep their original dimensions, and only **Fix first** (noise, blur or JPEG fixes), frame-by-frame video options (de-flicker, frame interpolation) and **Clean up audio** run before encoding. If nothing else is selected at 1×, **Start** stays disabled. To run a dedicated 1× restoration checkpoint as the main stage, choose the **Restore** task instead.
+To keep the original video size, choose **Restore** instead of **Upscale**. **What to fix** runs 1× fixes (noise, blur or JPEG artifacts) before encoding. With nothing picked under **What to fix**, no restoration model runs: only frame-by-frame video options (de-flicker, frame interpolation) and **Clean up audio** run. If nothing is turned on there either, **Start** stays disabled. **Upscale** starts at 2× for both photos and videos.
 
 ### Frame interpolation · Labs
 
