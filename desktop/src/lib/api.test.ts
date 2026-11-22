@@ -22,9 +22,11 @@ import {
   chooseModelDirectory,
   chooseOutputDirectory,
   dismissGpuDownloadNotice,
+  dismissLinuxMenuPrompt,
   exportBenchmark,
   importEngine,
   installEngine,
+  installLinuxMenu,
   listenForEngineStatus,
   listenForModelMove,
   listenForWorker,
@@ -33,6 +35,7 @@ import {
   saveCustomEditModel,
   resetModelDirectory,
   setModelDirectory,
+  uninstallLinuxMenu,
   useEngine,
 } from './api';
 
@@ -176,6 +179,18 @@ it('forwards model folder commands, move progress events, and GPU notice dismiss
   invoke.mockResolvedValueOnce(undefined);
   await dismissGpuDownloadNotice();
   expect(invoke).toHaveBeenCalledWith('dismiss_gpu_download_notice');
+
+  invoke.mockResolvedValueOnce(undefined);
+  await dismissLinuxMenuPrompt();
+  expect(invoke).toHaveBeenCalledWith('dismiss_linux_menu_prompt');
+
+  invoke.mockResolvedValueOnce(undefined);
+  await installLinuxMenu();
+  expect(invoke).toHaveBeenCalledWith('install_linux_menu');
+
+  invoke.mockResolvedValueOnce(undefined);
+  await uninstallLinuxMenu();
+  expect(invoke).toHaveBeenCalledWith('uninstall_linux_menu');
 
   let deliver: (event: { payload: unknown }) => void = () => {};
   listen.mockImplementation(async (_name: string, handler: typeof deliver) => {

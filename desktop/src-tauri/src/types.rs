@@ -439,6 +439,8 @@ pub struct UiSettings {
     pub model_directory: String,
     #[serde(default)]
     pub gpu_download_notice_dismissed: bool,
+    #[serde(default)]
+    pub linux_menu_prompt_dismissed: bool,
 }
 
 fn default_true() -> bool {
@@ -553,6 +555,7 @@ impl Default for UiSettings {
             custom_edit_model: CustomEditModel::default(),
             model_directory: String::new(),
             gpu_download_notice_dismissed: false,
+            linux_menu_prompt_dismissed: false,
         }
     }
 }
@@ -890,6 +893,10 @@ pub struct AppSnapshot {
     pub model_directory_missing: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpu_download_notice: Option<String>,
+    #[serde(default)]
+    pub linux_menu_offer: bool,
+    #[serde(default)]
+    pub linux_menu_installed: bool,
     #[serde(default)]
     pub engines: EngineManagerSnapshot,
 }

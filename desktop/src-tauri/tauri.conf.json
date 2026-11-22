@@ -103,6 +103,18 @@
         "rank": "Alternate"
       }
     ],
+    "windows": {
+      "nsis": {
+        "installMode": "both",
+        "installerHooks": "../../packaging/windows/installer.nsh",
+        "installerIcon": "../../packaging/icons/LocalSR.ico",
+        "uninstallerIcon": "../../packaging/icons/LocalSR.ico",
+        "languages": ["English"],
+        "customLanguageFiles": {
+          "English": "../../packaging/windows/English.nsh"
+        }
+      }
+    },
     "macOS": {
       "minimumSystemVersion": "12.0"
     },

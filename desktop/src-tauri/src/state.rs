@@ -241,6 +241,9 @@ impl AppState {
             custom_model: crate::editing::custom_edit_model(&settings.custom_edit_model),
         };
         let gpu_download_notice = self.gpu_download_notice(&settings, &capabilities);
+        let linux_menu_offer =
+            crate::integrations::offer_linux_menu(settings.linux_menu_prompt_dismissed);
+        let linux_menu_installed = crate::integrations::linux_menu_installed();
         let engines = crate::engine_manager::snapshot_for(
             self,
             &crate::updates::UpdateConfig::load(),
@@ -263,6 +266,8 @@ impl AppState {
             default_model_directory: self.paths.model_root.to_string_lossy().into_owned(),
             model_directory_missing,
             gpu_download_notice,
+            linux_menu_offer,
+            linux_menu_installed,
             engines,
         })
     }

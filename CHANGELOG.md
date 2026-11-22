@@ -2,20 +2,20 @@
 
 ## [0.5.2-beta] - unreleased
 
-- Require verified-install metadata when selecting downloaded engines. Older or
-  interrupted installs need a signed reinstall.
-- Add schema 2 engine manifests with signed `version`, `os`, `arch`,
-  `protocol_version` and `engine_id` fields; offline imports refuse older
-  versions of an installed backend or packages for another OS, architecture or
-  protocol (#159).
-- Record every extracted engine file's size and SHA-256 digest during verified
-  installation, check file presence and sizes when starting a worker, and add a
-  Verify button in the Engine dialog for an on-demand full checksum check. A
-  failed check marks the engine as needing reinstall and falls back to the
-  bundled engine.
-- Hold the job lock across same-ID engine swaps and activation, keeping the
-  backup until both succeed.
-- Update Rust and Python dependencies with available security fixes.
+- **Windows installer.** Installs for you alone by default, with an option for all
+  users. You can choose the folder, get a Start menu entry and an optional desktop
+  shortcut, and start LocalSR from the last page. Uninstalling keeps your downloaded
+  models and settings unless you tick the box to remove them.
+- **Linux menu entry.** After the first-launch setup, the AppImage offers once to add
+  LocalSR to your applications menu. The Help menu removes it again.
+- **GPU engines are checked more strictly.** LocalSR only lists and starts engines from
+  a verified install, and checks their files at each start. Engine Manager has a
+  Verify button for a full check. An engine that fails is marked for reinstall, and
+  LocalSR falls back to the built-in engine. Older or interrupted installs need one
+  reinstall (#159).
+- **Offline engine packages** are now signed with their version, system and
+  architecture, and LocalSR refuses older ones or ones for another system (#159).
+- Updated Rust and Python dependencies with security fixes.
 
 ## [0.5.1-beta] - Unreleased
 

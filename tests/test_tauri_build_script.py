@@ -508,3 +508,65 @@ def test_round2_recovery_uses_the_systemd_restart_path() -> None:
     )[0]
     assert "restart_service(" in recovery
     assert "restart_service(" in source.split("fn restart_application", 1)[1]
+
+
+def test_nsis_installer_uses_localsr_icons() -> None:
+    config_path = ROOT / "desktop/src-tauri/tauri.conf.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    nsis = config["bundle"]["windows"]["nsis"]
+    for name in ("installerIcon", "uninstallerIcon"):
+        assert (config_path.parent / nsis[name]).resolve() == ROOT / "packaging/icons/LocalSR.ico"
+        assert (config_path.parent / nsis[name]).is_file()
+
+
+def test_nsis_editions_default_to_current_user() -> None:
+    config_path = ROOT / "desktop/src-tauri/tauri.conf.json"
+    nsis = json.loads(config_path.read_text(encoding="utf-8"))["bundle"]["windows"]["nsis"]
+    assert nsis["installMode"] == "both"
+    for hook in (
+        config_path.parent / nsis["installerHooks"],
+        ROOT / "packaging/windows/engine-payload.nsh",
+    ):
+        text = hook.read_text(encoding="utf-8")
+        assert "!define MULTIUSER_INSTALLMODE_DEFAULT_CURRENTUSER" in text
+        assert '!include "common.nsh"' in text
+
+
+def test_nsis_shows_version_launch_and_optional_appdata_removal() -> None:
+    config_path = ROOT / "desktop/src-tauri/tauri.conf.json"
+    nsis = json.loads(config_path.read_text(encoding="utf-8"))["bundle"]["windows"]["nsis"]
+    assert nsis["languages"] == ["English"]
+    english_path = (config_path.parent / nsis["customLanguageFiles"]["English"]).resolve()
+    assert english_path == ROOT / "packaging/windows/English.nsh"
+    english = english_path.read_text(encoding="utf-8")
+    assert "{{product_name}}" not in english
+    assert (
+        'LangString deleteAppData ${LANG_ENGLISH} "Remove downloaded models and settings"'
+        in english
+    )
+
+    common = (ROOT / "packaging/windows/common.nsh").read_text(encoding="utf-8")
+    assert 'MUI_WELCOMEPAGE_TITLE "Welcome to ${PRODUCTNAME} ${VERSION} Setup"' in common
+    assert 'MUI_FINISHPAGE_TITLE "Completing ${PRODUCTNAME} ${VERSION} Setup"' in common
+    assert 'MUI_FINISHPAGE_RUN_TEXT "Launch ${PRODUCTNAME}"' in common
+    assert "MUI_UNCONFIRMPAGE_TEXT_TOP" in common
+    assert "${VERSION}" in common
+    assert "!macro NSIS_HOOK_POSTUNINSTALL" in common
+    assert 'RMDir /r "$LOCALAPPDATA\\LocalSR"' in common
+    assert "$DeleteAppDataCheckboxState = 1" in common
+    assert "$UpdateMode <> 1" in common
+
+
+def test_cuda_overlay_keeps_payload_hook(monkeypatch, tmp_path: Path) -> None:
+    config = _isolated_bundle_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(build.sys, "platform", "win32")
+    payload = tmp_path / "engine-payload.json"
+    payload.write_text("{}", encoding="utf-8")
+
+    build.write_bundle_overlay(payload=payload)
+
+    bundle = json.loads(config.read_text(encoding="utf-8"))["bundle"]
+    assert bundle["windows"]["nsis"]["installerHooks"] == str(
+        build.ROOT / "packaging/windows/engine-payload.nsh"
+    )
+    assert bundle["resources"][str(payload)] == "engine-payload.json"

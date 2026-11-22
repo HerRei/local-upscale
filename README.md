@@ -102,10 +102,13 @@ for each platform:
   Macs are not supported. Signed and notarized, and it updates itself.
 - **Windows v0.5.0-beta:** Windows 10 or 11 on x86-64. Choose CPU, DirectML
   or CUDA above. The installers are unsigned, so SmartScreen warns first: choose
-  **More info**, then **Run anyway**.
+  **More info**, then **Run anyway**. Setup defaults to your account (with an
+  all-users option), lets you choose a folder, add a desktop shortcut and launch
+  LocalSR when done; uninstall keeps downloaded models and settings by default.
 - **Linux v0.5.0-beta:** x86-64 AppImage. Choose CPU, CUDA or ROCm above. The CPU
   AppImage runs Intel graphics through OpenVINO once Intel's compute driver
-  (`intel-opencl-icd`) is installed.
+  (`intel-opencl-icd`) is installed. After first setup, it offers once to add
+  LocalSR to your applications menu, removable later from the Help menu.
 
 The next CUDA edition needs an NVIDIA RTX 20 series or newer and driver 580 or
 newer. On Windows, older NVIDIA cards can use DirectML.

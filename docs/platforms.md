@@ -142,6 +142,13 @@ one. The CUDA and ROCm downloads exceed GitHub's 2 GB file limit and come in par
   DirectX 12 graphics card (AMD, Intel, or NVIDIA) and shows a dismissable
   notice with a link to the DirectML or CUDA download page.
 
+The Windows installer defaults to your account (with an all-users option; Windows
+requests administrator permission for either), lets you choose a folder, add a
+desktop shortcut and launch LocalSR when done, and keeps downloaded models and
+settings by default on uninstall. SmartScreen warns because the installers are
+unsigned. On Linux, the AppImage offers once after setup to add LocalSR to your
+applications menu (removable from the Help menu).
+
 ## In-app engine switching (Windows and Linux)
 
 Direct builds can also install and switch engines inside the app instead of

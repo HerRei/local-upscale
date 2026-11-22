@@ -14,7 +14,7 @@ const DISPLAY_NAME: &str = "LocalSR";
 /// Betas up to 0.1.2 installed their file-manager actions under this name.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 const LEGACY_DISPLAY_NAME: &str = "LocalSR Next Preview";
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 const LINUX_ICON_PNG: &[u8] = include_bytes!("../../../packaging/icons/LocalSR.png");
 
 #[derive(Clone, Debug, Serialize)]
@@ -71,27 +71,133 @@ fn integration_executable() -> AppResult<PathBuf> {
 }
 
 #[cfg(any(target_os = "linux", test))]
+fn appimage_container(
+    current: &Path,
+    appimage: Option<&std::ffi::OsStr>,
+    appdir: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
+    let appimage = fs::canonicalize(PathBuf::from(appimage?)).ok()?;
+    let appdir = fs::canonicalize(PathBuf::from(appdir?)).ok()?;
+    (appimage.is_file() && current.starts_with(&appdir)).then_some(appimage)
+}
+
+#[cfg(any(target_os = "linux", test))]
 fn resolve_linux_executable(
     current: PathBuf,
     appimage: Option<std::ffi::OsString>,
     appdir: Option<std::ffi::OsString>,
 ) -> PathBuf {
-    let Some(appimage) = appimage.map(PathBuf::from) else {
-        return current;
+    appimage_container(&current, appimage.as_deref(), appdir.as_deref()).unwrap_or(current)
+}
+
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn linux_menu_paths(data_dir: &Path) -> (PathBuf, PathBuf) {
+    (
+        data_dir.join("applications/localsr-next.desktop"),
+        data_dir.join("icons/hicolor/1024x1024/apps/localsr-next.png"),
+    )
+}
+
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn linux_menu_installed_in(data_dir: &Path) -> bool {
+    linux_menu_paths(data_dir).0.is_file()
+}
+
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn install_linux_menu_in(data_dir: &Path, executable: &Path) -> AppResult<()> {
+    let (desktop, icon) = linux_menu_paths(data_dir);
+    write_atomic(&icon, LINUX_ICON_PNG)?;
+    write_atomic(&desktop, linux_desktop_entry(executable).as_bytes())
+}
+
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn uninstall_linux_menu_in(data_dir: &Path) -> AppResult<()> {
+    let (desktop, icon) = linux_menu_paths(data_dir);
+    remove_exact_file(&desktop)?;
+    remove_exact_file(&icon)
+}
+
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn should_offer_linux_menu(
+    is_linux: bool,
+    is_appimage: bool,
+    installed: bool,
+    dismissed: bool,
+) -> bool {
+    is_linux && is_appimage && !installed && !dismissed
+}
+
+#[cfg(target_os = "linux")]
+pub fn running_in_appimage() -> bool {
+    let Ok(current) = env::current_exe().and_then(fs::canonicalize) else {
+        return false;
     };
-    let Some(appdir) = appdir.map(PathBuf::from) else {
-        return current;
-    };
-    let Ok(appimage) = fs::canonicalize(appimage) else {
-        return current;
-    };
-    let Ok(appdir) = fs::canonicalize(appdir) else {
-        return current;
-    };
-    if appimage.is_file() && current.starts_with(appdir) {
-        appimage
-    } else {
-        current
+    appimage_container(
+        &current,
+        env::var_os("APPIMAGE").as_deref(),
+        env::var_os("APPDIR").as_deref(),
+    )
+    .is_some()
+}
+
+pub fn linux_menu_installed() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        base_dirs()
+            .map(|base| linux_menu_installed_in(base.data_local_dir()))
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+pub fn offer_linux_menu(dismissed: bool) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        should_offer_linux_menu(
+            true,
+            running_in_appimage(),
+            linux_menu_installed(),
+            dismissed,
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = dismissed;
+        false
+    }
+}
+
+pub fn install_linux_menu() -> AppResult<()> {
+    #[cfg(target_os = "linux")]
+    {
+        let executable = integration_executable()?;
+        let data = base_dirs()?.data_local_dir().to_path_buf();
+        install_linux_menu_in(&data, &executable)?;
+        refresh_desktop_database(&data);
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err(AppError::Config(
+            "applications menu entry is only supported on Linux".into(),
+        ))
+    }
+}
+
+pub fn uninstall_linux_menu() -> AppResult<()> {
+    #[cfg(target_os = "linux")]
+    {
+        let data = base_dirs()?.data_local_dir().to_path_buf();
+        uninstall_linux_menu_in(&data)?;
+        refresh_desktop_database(&data);
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Ok(())
     }
 }
 
@@ -132,7 +238,7 @@ fn platform_marker() -> AppResult<PathBuf> {
 fn platform_marker() -> AppResult<PathBuf> {
     Ok(base_dirs()?
         .data_local_dir()
-        .join("applications/localsr-next.desktop"))
+        .join("localsr-next/scripts/recipe_picker.sh"))
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
@@ -253,12 +359,7 @@ fn install_platform(executable: &Path) -> AppResult<()> {
     write_atomic(&picker, linux_recipe_picker(executable).as_bytes())?;
     fs::set_permissions(&picker, fs::Permissions::from_mode(0o755))?;
 
-    let application = data.join("applications/localsr-next.desktop");
-    write_atomic(
-        &data.join("icons/hicolor/1024x1024/apps/localsr-next.png"),
-        LINUX_ICON_PNG,
-    )?;
-    write_atomic(&application, linux_desktop_entry(executable).as_bytes())?;
+    install_linux_menu_in(data, executable)?;
     for directory in [
         data.join("kservices5/ServiceMenus"),
         data.join("kio/servicemenus"),
@@ -275,10 +376,15 @@ fn install_platform(executable: &Path) -> AppResult<()> {
     write_atomic(&nautilus, linux_nautilus_script(&picker).as_bytes())?;
     fs::set_permissions(&nautilus, fs::Permissions::from_mode(0o755))?;
 
+    refresh_desktop_database(data);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn refresh_desktop_database(data: &Path) {
     let _ = Command::new("update-desktop-database")
         .arg(data.join("applications"))
         .status();
-    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -286,17 +392,18 @@ fn uninstall_platform() -> AppResult<()> {
     let base = base_dirs()?;
     remove_owned_symlink(&base.home_dir().join(".local/bin/localsr-next"))?;
     let data = base.data_local_dir();
+    uninstall_linux_menu_in(data)?;
     for file in [
-        data.join("applications/localsr-next.desktop"),
         data.join("kservices5/ServiceMenus/localsr-next.desktop"),
         data.join("kio/servicemenus/localsr-next.desktop"),
         data.join(format!("nautilus/scripts/Enhance with {DISPLAY_NAME}")),
         legacy_platform_marker()?,
-        data.join("icons/hicolor/1024x1024/apps/localsr-next.png"),
     ] {
         remove_exact_file(&file)?;
     }
-    remove_exact_tree(&data.join("localsr-next"))
+    remove_exact_tree(&data.join("localsr-next"))?;
+    refresh_desktop_database(data);
+    Ok(())
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
@@ -793,5 +900,48 @@ mod tests {
             ),
             current
         );
+        assert!(appimage_container(&current, None, None).is_none());
+    }
+
+    #[test]
+    fn linux_menu_writes_desktop_file_and_icon_under_xdg_data_and_removes_them_cleanly() {
+        let temporary = tempfile::tempdir().unwrap();
+        let data_dir = temporary.path().join(".local/share");
+        let appimage = temporary.path().join("Applications/LocalSR 0.5.2.AppImage");
+        let (desktop_path, icon_path) = linux_menu_paths(&data_dir);
+        assert_eq!(
+            desktop_path,
+            data_dir.join("applications/localsr-next.desktop")
+        );
+        assert_eq!(
+            icon_path,
+            data_dir.join("icons/hicolor/1024x1024/apps/localsr-next.png")
+        );
+        assert!(!linux_menu_installed_in(&data_dir));
+
+        install_linux_menu_in(&data_dir, &appimage).unwrap();
+        assert!(linux_menu_installed_in(&data_dir));
+        let desktop = fs::read_to_string(&desktop_path).unwrap();
+        assert!(desktop.starts_with("[Desktop Entry]\n"));
+        assert!(desktop.contains("Name=LocalSR\n"));
+        assert!(desktop.contains(&format!("Exec=\"{}\" %F\n", appimage.display())));
+        assert!(desktop.contains("Icon=localsr-next\n"));
+        assert!(desktop.contains("Terminal=false\n"));
+        assert!(desktop.contains("StartupWMClass=LocalSR\n"));
+        assert_eq!(fs::read(&icon_path).unwrap(), LINUX_ICON_PNG);
+
+        uninstall_linux_menu_in(&data_dir).unwrap();
+        assert!(!linux_menu_installed_in(&data_dir));
+        assert!(!desktop_path.exists());
+        assert!(!icon_path.exists());
+    }
+
+    #[test]
+    fn linux_menu_offer_requires_linux_appimage_uninstalled_and_not_dismissed() {
+        assert!(should_offer_linux_menu(true, true, false, false));
+        assert!(!should_offer_linux_menu(false, true, false, false));
+        assert!(!should_offer_linux_menu(true, false, false, false));
+        assert!(!should_offer_linux_menu(true, true, true, false));
+        assert!(!should_offer_linux_menu(true, true, false, true));
     }
 }

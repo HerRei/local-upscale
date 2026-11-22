@@ -44,6 +44,7 @@
   import ModelCredit from './ModelCredit.svelte';
   import UpdateNotice from './UpdateNotice.svelte';
   import GpuDownloadNotice from './GpuDownloadNotice.svelte';
+  import LinuxMenuNotice from './LinuxMenuNotice.svelte';
   import EngineRecommendationCard from './EngineRecommendationCard.svelte';
   import EngineManagerDialog from './EngineManagerDialog.svelte';
   import UpdatePanel from './UpdatePanel.svelte';
@@ -2718,6 +2719,39 @@
     }
   }
 
+  let linuxMenuBusy = false;
+
+  async function acceptLinuxMenu(): Promise<void> {
+    if (linuxMenuBusy) return;
+    linuxMenuBusy = true;
+    try {
+      await api.installLinuxMenu();
+      snapshot = {
+        ...snapshot,
+        linux_menu_offer: false,
+        linux_menu_installed: true,
+        settings: { ...snapshot.settings, linux_menu_prompt_dismissed: true },
+      };
+    } catch (error) {
+      showModal('Could not add to applications menu', String(error));
+    } finally {
+      linuxMenuBusy = false;
+    }
+  }
+
+  async function dismissLinuxMenu(): Promise<void> {
+    snapshot = {
+      ...snapshot,
+      linux_menu_offer: false,
+      settings: { ...snapshot.settings, linux_menu_prompt_dismissed: true },
+    };
+    if (api.isTauri()) {
+      await api
+        .dismissLinuxMenuPrompt()
+        .catch((error) => showModal('Could not save settings', String(error)));
+    }
+  }
+
   async function dismissGpuDownloadNotice(): Promise<void> {
     snapshot = {
       ...snapshot,
@@ -3436,6 +3470,14 @@
         case 'help.report-problem':
           await showReport();
           break;
+        case 'help.add-desktop-menu':
+          await api.installLinuxMenu();
+          await refresh();
+          break;
+        case 'help.remove-desktop-menu':
+          await api.uninstallLinuxMenu();
+          await refresh();
+          break;
         case 'app.updates':
           updateDialogOpen.set(true);
           break;
@@ -3784,6 +3826,13 @@
           onOpenDownloadPage={() =>
             attempt('Could not open the download page', () => api.openDownloadPage())}
           onDismiss={() => void dismissGpuDownloadNotice()}
+        />
+      {/if}
+      {#if settings.privacy_choice_made !== false && snapshot.linux_menu_offer && !settings.linux_menu_prompt_dismissed}
+        <LinuxMenuNotice
+          busy={linuxMenuBusy}
+          onAdd={() => void acceptLinuxMenu()}
+          onDismiss={() => void dismissLinuxMenu()}
         />
       {/if}
     {/if}

@@ -76,6 +76,9 @@ const api = vi.hoisted(() => ({
   resetModelDirectory: vi.fn(async (): Promise<void> => undefined),
   listenForModelMove: vi.fn(async (_handler: (progress: ModelMoveProgress) => void) => () => {}),
   dismissGpuDownloadNotice: vi.fn(async (): Promise<void> => undefined),
+  dismissLinuxMenuPrompt: vi.fn(async (): Promise<void> => undefined),
+  installLinuxMenu: vi.fn(async (): Promise<void> => undefined),
+  uninstallLinuxMenu: vi.fn(async (): Promise<void> => undefined),
   refreshEngineCatalog: vi.fn(async () => []),
   installEngine: vi.fn(async (_backend: string): Promise<void> => undefined),
   cancelEngineInstall: vi.fn(async (): Promise<void> => undefined),
@@ -7398,5 +7401,52 @@ describe('Engine manager UI and recommendation card', () => {
       'Could not reach the download server. Check your internet connection and try again.',
     );
     expect(within(cudaRow).getByRole('button', { name: 'Try again' })).toBeTruthy();
+  });
+});
+
+describe('Linux AppImage menu prompt', () => {
+  it('offers to add LocalSR to the applications menu only after setup Continue, and remembers Not now', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.privacy_choice_made = false;
+    snapshot.linux_menu_offer = true;
+
+    const user = await mountWith(snapshot);
+    expect(screen.getByRole('dialog', { name: 'Welcome to LocalSR' })).toBeTruthy();
+    expect(screen.queryByText('Add LocalSR to your applications menu?')).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Welcome to LocalSR' })).toBeNull(),
+    );
+
+    const promptText = await screen.findByText('Add LocalSR to your applications menu?');
+    const banner = promptText.closest('.linux-menu-notice') as HTMLElement;
+    await user.click(within(banner).getByRole('button', { name: 'Not now' }));
+
+    await waitFor(() => expect(api.dismissLinuxMenuPrompt).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText('Add LocalSR to your applications menu?')).toBeNull();
+  });
+
+  it('installs the applications menu entry when accepted and supports Help menu removal', async () => {
+    let menuHandler: ((action: string) => void) | undefined;
+    api.listenForNativeMenu.mockImplementationOnce(async (handler) => {
+      menuHandler = handler;
+      return () => undefined;
+    });
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.linux_menu_offer = true;
+    api.refreshSnapshot.mockResolvedValueOnce(structuredClone(snapshot));
+
+    const user = await mountWith(snapshot);
+    const banner = screen
+      .getByText('Add LocalSR to your applications menu?')
+      .closest('.linux-menu-notice') as HTMLElement;
+    await user.click(within(banner).getByRole('button', { name: 'Add to menu' }));
+
+    await waitFor(() => expect(api.installLinuxMenu).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText('Add LocalSR to your applications menu?')).toBeNull();
+
+    menuHandler?.('help.remove-desktop-menu');
+    await waitFor(() => expect(api.uninstallLinuxMenu).toHaveBeenCalledTimes(1));
   });
 });
