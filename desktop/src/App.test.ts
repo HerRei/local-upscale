@@ -11,6 +11,7 @@ import { applyWorkerEnvelope } from './lib/workerEvents';
 import type {
   AppSnapshot,
   DeviceInfo,
+  EngineDownloadStatus,
   JobRecord,
   LaunchIntent,
   MediaItem,
@@ -74,6 +75,18 @@ const api = vi.hoisted(() => ({
   resetModelDirectory: vi.fn(async (): Promise<void> => undefined),
   listenForModelMove: vi.fn(async () => () => {}),
   dismissGpuDownloadNotice: vi.fn(async (): Promise<void> => undefined),
+  refreshEngineCatalog: vi.fn(async () => []),
+  installEngine: vi.fn(async (_backend: string): Promise<void> => undefined),
+  cancelEngineInstall: vi.fn(async (): Promise<void> => undefined),
+  useEngine: vi.fn(async (_backend: string): Promise<void> => undefined),
+  removeEngine: vi.fn(async (_id: string): Promise<void> => undefined),
+  chooseEngineManifest: vi.fn(async (): Promise<string | null> => null),
+  importEngine: vi.fn(async (_path: string): Promise<void> => undefined),
+  listenForEngineStatus: vi.fn(
+    async (_handler: (status: EngineDownloadStatus) => void): Promise<() => void> =>
+      () =>
+        undefined,
+  ),
   chooseCustomModel: vi.fn(async () => null),
   addMedia: vi.fn(async (_paths: string[], _replace: boolean): Promise<void> => undefined),
   selectMedia: vi.fn(async (_id: string): Promise<void> => undefined),
@@ -254,6 +267,16 @@ function readySnapshot(media: MediaItem[] = []): AppSnapshot {
     status_title: 'Ready',
     status_detail: 'The isolated inference engine is ready.',
   };
+  snapshot.engines = {
+    ...snapshot.engines!,
+    supported: false,
+    active_backend: 'mps',
+    active_engine_id: 'bundled',
+    bundled_backend: 'mps',
+    installed: [{ id: 'bundled', backend: 'mps', bundled: true, active: true, path: '' }],
+    recommendation: { backend: 'mps', adapter_name: null },
+    catalog: [],
+  };
   return snapshot;
 }
 
@@ -299,6 +322,7 @@ async function mountWith(snapshot: AppSnapshot): Promise<ReturnType<typeof userE
 }
 
 let nativeMenu: ((action: string) => void) | undefined;
+let engineStatusHandler: ((status: EngineDownloadStatus) => void) | undefined;
 
 /** Models and Performance live in the native menu bar; tests send its actions directly. */
 async function chooseMenuItem(action: string): Promise<void> {
@@ -686,10 +710,24 @@ beforeEach(() => {
   api.listenForWorker.mockResolvedValue(() => undefined);
   api.listenForStateChange.mockResolvedValue(() => undefined);
   nativeMenu = undefined;
+  engineStatusHandler = undefined;
   api.listenForNativeMenu.mockImplementation(async (handler) => {
     nativeMenu = handler;
     return () => undefined;
   });
+  api.listenForEngineStatus.mockImplementation(
+    async (handler: (status: EngineDownloadStatus) => void) => {
+      engineStatusHandler = handler;
+      return () => undefined;
+    },
+  );
+  api.refreshEngineCatalog.mockReset().mockResolvedValue([]);
+  api.installEngine.mockReset().mockResolvedValue(undefined);
+  api.cancelEngineInstall.mockReset().mockResolvedValue(undefined);
+  api.useEngine.mockReset().mockResolvedValue(undefined);
+  api.removeEngine.mockReset().mockResolvedValue(undefined);
+  api.chooseEngineManifest.mockReset().mockResolvedValue(null);
+  api.importEngine.mockReset().mockResolvedValue(undefined);
   api.listenForLaunchIntent.mockResolvedValue(() => undefined);
   api.listenForFileDrops.mockResolvedValue(() => undefined);
   api.takeLaunchIntents.mockResolvedValue([]);
@@ -6816,5 +6854,265 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Colour' })).toBeNull());
     await user.click(screen.getByRole('button', { name: /^Upscale/ }));
     expect(screen.queryByRole('button', { name: 'Colour' })).toBeNull();
+  });
+});
+
+describe('Engine manager UI and recommendation card', () => {
+  function windowsCpuSnapshot(): AppSnapshot {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const demoEngines = structuredClone(demoSnapshot().engines!);
+    snapshot.engines = demoEngines;
+    return snapshot;
+  }
+
+  it('shows the GPU engine recommendation card only after first-launch setup Continue, and remembers Not now', async () => {
+    const snapshot = windowsCpuSnapshot();
+    snapshot.settings.privacy_choice_made = false;
+
+    const user = await mountWith(snapshot);
+    expect(screen.getByRole('dialog', { name: 'Welcome to LocalSR' })).toBeTruthy();
+    expect(screen.queryByText(/can run LocalSR much faster/)).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Welcome to LocalSR' })).toBeNull(),
+    );
+
+    const cardText =
+      'Your NVIDIA GeForce RTX 4070 can run LocalSR much faster. Download the NVIDIA engine (4.3 GB)';
+    const card = (await screen.findByText(cardText)).closest(
+      '.engine-recommendation-card',
+    ) as HTMLElement;
+    expect(within(card).getByRole('button', { name: 'Download' })).toBeTruthy();
+    await user.click(within(card).getByRole('button', { name: 'Not now' }));
+
+    await waitFor(() => expect(api.dismissGpuDownloadNotice).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(cardText)).toBeNull();
+
+    // Still reachable via Advanced settings -> Hardware -> Engine -> Change…
+    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    expect(screen.getByText('Engine')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Inference engine' });
+    expect(within(dialog).getByText('NVIDIA CUDA')).toBeTruthy();
+    expect(within(dialog).getByText('Recommended')).toBeTruthy();
+  });
+
+  it('shows download progress, cancel, and plain-word errors on the recommendation card', async () => {
+    const snapshot = windowsCpuSnapshot();
+    let resolveInstall: () => void = () => undefined;
+    api.installEngine.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveInstall = resolve;
+        }),
+    );
+
+    const user = await mountWith(snapshot);
+    const card = screen
+      .getByText(
+        'Your NVIDIA GeForce RTX 4070 can run LocalSR much faster. Download the NVIDIA engine (4.3 GB)',
+      )
+      .closest('.engine-recommendation-card') as HTMLElement;
+    await user.click(within(card).getByRole('button', { name: 'Download' }));
+    expect(api.installEngine).toHaveBeenCalledWith('cuda');
+
+    engineStatusHandler?.({
+      stage: 'downloading',
+      backend: 'cuda',
+      engine_id: 'windows-x86_64-cuda-demo',
+      downloaded: 2_150_000_000,
+      total: 4_300_000_000,
+      error: null,
+    });
+    expect(await screen.findByText(/Downloading NVIDIA engine…/)).toBeTruthy();
+    expect(card.querySelector('progress')).toBeTruthy();
+
+    await user.click(within(card).getByRole('button', { name: 'Cancel' }));
+    expect(api.cancelEngineInstall).toHaveBeenCalledTimes(1);
+    engineStatusHandler?.({
+      stage: 'cancelled',
+      backend: 'cuda',
+      engine_id: 'windows-x86_64-cuda-demo',
+      downloaded: 2_150_000_000,
+      total: 4_300_000_000,
+      error: 'Engine download cancelled',
+    });
+    resolveInstall();
+    await waitFor(() =>
+      expect(within(card).getByRole('button', { name: 'Download' })).toBeTruthy(),
+    );
+
+    // Error state shows plain message and allows retry.
+    api.installEngine.mockRejectedValueOnce(
+      'network error: error sending request for url (https://example.com)',
+    );
+    await user.click(within(card).getByRole('button', { name: 'Download' }));
+    const alert = await within(card).findByRole('alert');
+    expect(alert.textContent).toBe(
+      'Could not reach the download server. Check your internet connection and try again.',
+    );
+  });
+
+  it('supports Download, Use, Remove, Cancel, errors, and Import in the Change dialog', async () => {
+    const snapshot = windowsCpuSnapshot();
+    snapshot.engines!.installed.push({
+      id: 'windows-x86_64-directml-demo',
+      backend: 'directml',
+      bundled: false,
+      active: false,
+      path: '/engines/directml',
+    });
+    snapshot.engines!.catalog[1].installed = true;
+
+    const afterUse = structuredClone(snapshot);
+    afterUse.engines!.active_backend = 'directml';
+    afterUse.engines!.installed[0].active = false;
+    afterUse.engines!.installed[1].active = true;
+    afterUse.engines!.catalog[1].active = true;
+    afterUse.engines!.catalog[2].active = false;
+
+    const afterRemove = structuredClone(snapshot);
+    afterRemove.engines!.installed = [snapshot.engines!.installed[0]];
+    afterRemove.engines!.catalog[1].installed = false;
+
+    const afterImport = structuredClone(snapshot);
+    afterImport.engines!.installed.push({
+      id: 'windows-x86_64-cuda-imported',
+      backend: 'cuda',
+      bundled: false,
+      active: true,
+      path: '/engines/cuda',
+    });
+    afterImport.engines!.active_backend = 'cuda';
+    afterImport.engines!.installed[0].active = false;
+    afterImport.engines!.catalog[0].installed = true;
+    afterImport.engines!.catalog[0].active = true;
+
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    await user.click(screen.getByRole('button', { name: 'Change…' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Inference engine' });
+    const list = within(dialog).getByRole('list', { name: 'Available engines' });
+    expect(within(list).getByText('NVIDIA CUDA')).toBeTruthy();
+    expect(within(list).getByText('4.3 GB')).toBeTruthy();
+    expect(within(list).getByText('DirectML')).toBeTruthy();
+    expect(within(list).getByText('CPU')).toBeTruthy();
+    expect(within(list).getByText('Recommended')).toBeTruthy();
+    expect(within(list).getByText('Active')).toBeTruthy();
+    expect(within(list).getByText('Installed')).toBeTruthy();
+
+    // Switch to DirectML
+    api.refreshSnapshot.mockResolvedValueOnce(structuredClone(afterUse));
+    const directmlRow = within(list).getByText('DirectML').closest('li') as HTMLElement;
+    await user.click(within(directmlRow).getByRole('button', { name: 'Use' }));
+    await waitFor(() => expect(api.useEngine).toHaveBeenCalledWith('directml'));
+    await waitFor(() => expect(within(directmlRow).getByText('Active')).toBeTruthy());
+
+    // Switch back to CPU, then Remove DirectML
+    api.refreshSnapshot.mockResolvedValueOnce(structuredClone(snapshot));
+    const cpuRow = within(list).getByText('CPU').closest('li') as HTMLElement;
+    await waitFor(() =>
+      expect(
+        (within(cpuRow).getByRole('button', { name: 'Use' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    await user.click(within(cpuRow).getByRole('button', { name: 'Use' }));
+    await waitFor(() => expect(api.useEngine).toHaveBeenCalledWith('cpu'));
+
+    api.refreshSnapshot.mockResolvedValueOnce(structuredClone(afterRemove));
+    await waitFor(() =>
+      expect(
+        (within(directmlRow).getByRole('button', { name: 'Remove' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    await user.click(within(directmlRow).getByRole('button', { name: 'Remove' }));
+    await waitFor(() =>
+      expect(api.removeEngine).toHaveBeenCalledWith('windows-x86_64-directml-demo'),
+    );
+
+    // Import from file: cancel file picker does nothing, then valid pick imports and activates
+    api.chooseEngineManifest.mockResolvedValueOnce(null);
+    await waitFor(() =>
+      expect(
+        (
+          within(dialog).getByRole('button', {
+            name: 'Import engine from file…',
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(false),
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Import engine from file…' }));
+    expect(api.importEngine).not.toHaveBeenCalled();
+
+    api.chooseEngineManifest.mockResolvedValueOnce('/downloads/cuda.engine-payload.json');
+    api.refreshSnapshot.mockResolvedValueOnce(structuredClone(afterImport));
+    await user.click(within(dialog).getByRole('button', { name: 'Import engine from file…' }));
+    await waitFor(() =>
+      expect(api.importEngine).toHaveBeenCalledWith('/downloads/cuda.engine-payload.json'),
+    );
+    const cudaRow = within(list).getByText('NVIDIA CUDA').closest('li') as HTMLElement;
+    await waitFor(() => expect(within(cudaRow).getByText('Active')).toBeTruthy());
+
+    // Error on remove/use displays in plain words
+    api.removeEngine.mockRejectedValueOnce('Not enough space on disk');
+    api.refreshSnapshot.mockResolvedValueOnce(structuredClone(snapshot));
+    await waitFor(() =>
+      expect(
+        (within(cpuRow).getByRole('button', { name: 'Use' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    await user.click(within(cpuRow).getByRole('button', { name: 'Use' }));
+    await waitFor(() => expect(api.useEngine).toHaveBeenCalledTimes(3));
+    const updatedDirectmlRow = within(list).getByText('DirectML').closest('li') as HTMLElement;
+    await waitFor(() =>
+      expect(
+        (within(updatedDirectmlRow).getByRole('button', { name: 'Remove' }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(false),
+    );
+    await user.click(within(updatedDirectmlRow).getByRole('button', { name: 'Remove' }));
+    expect(await within(dialog).findByRole('alert')).toBeTruthy();
+
+    // Download with progress bar and Cancel inside the Change dialog
+    let resolveDialogInstall: () => void = () => undefined;
+    api.installEngine.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDialogInstall = resolve;
+        }),
+    );
+    await waitFor(() =>
+      expect(
+        (within(cudaRow).getByRole('button', { name: 'Download' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    await user.click(within(cudaRow).getByRole('button', { name: 'Download' }));
+    expect(api.installEngine).toHaveBeenCalledWith('cuda');
+    engineStatusHandler?.({
+      stage: 'downloading',
+      backend: 'cuda',
+      engine_id: 'windows-x86_64-cuda-demo',
+      downloaded: 1_000_000_000,
+      total: 4_574_000_000,
+      error: null,
+    });
+    expect(await within(cudaRow).findByText(/Downloading…/)).toBeTruthy();
+    expect(cudaRow.querySelector('progress')).toBeTruthy();
+    await user.click(within(cudaRow).getByRole('button', { name: 'Cancel' }));
+    expect(api.cancelEngineInstall).toHaveBeenCalledTimes(1);
+    engineStatusHandler?.({
+      stage: 'cancelled',
+      backend: 'cuda',
+      engine_id: 'windows-x86_64-cuda-demo',
+      downloaded: 1_000_000_000,
+      total: 4_574_000_000,
+      error: 'Engine download cancelled',
+    });
+    resolveDialogInstall();
+    await waitFor(() =>
+      expect(within(cudaRow).getByRole('button', { name: 'Download' })).toBeTruthy(),
+    );
   });
 });

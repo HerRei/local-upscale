@@ -40,6 +40,8 @@ pub struct WorkerControl {
     /// The queue was stopped because the disk is full; it ends when the next job is sent.
     /// One stop covers every failure that follows it.
     pub disk_stop: AtomicBool,
+    pub using_installed_engine: AtomicBool,
+    pub engine_ready_seen: AtomicBool,
 }
 
 impl Default for WorkerControl {
@@ -54,6 +56,8 @@ impl Default for WorkerControl {
             shutting_down: AtomicBool::new(false),
             crashed_engine: AtomicU32::new(0),
             disk_stop: AtomicBool::new(false),
+            using_installed_engine: AtomicBool::new(false),
+            engine_ready_seen: AtomicBool::new(false),
         }
     }
 }
@@ -61,6 +65,7 @@ impl Default for WorkerControl {
 pub struct AppState {
     pub video_preview: crate::video_preview::VideoPreviewControl,
     pub updates: crate::updates::UpdateControl,
+    pub engines: crate::engine_manager::EngineControl,
     #[cfg(target_os = "linux")]
     pub media_server: Mutex<Option<crate::media_server::MediaServer>>,
     pub paths: AppPaths,
@@ -75,6 +80,7 @@ pub struct AppState {
     pub latest_benchmark: Mutex<Option<BenchmarkResult>>,
     /// The native editing executable found at startup, or empty.
     pub edit_runtime: Mutex<String>,
+    pub bundled_engine_path: Mutex<Option<PathBuf>>,
     pub worker: WorkerControl,
     pub scheduler: Mutex<()>,
     // One writer of the settings file at a time, from taking the copy to writing it, so an
@@ -100,6 +106,7 @@ pub struct AppState {
     pub moving_models: AtomicBool,
     /// Cached result of Windows DXGI GPU probing so `snapshot()` enumerates at most once.
     gpu_download_notice_cache: Mutex<Option<Option<String>>>,
+    engine_recommendation_cache: Mutex<Option<crate::types::EngineRecommendation>>,
 }
 
 impl AppState {
@@ -145,6 +152,7 @@ impl AppState {
         Ok(Self {
             video_preview: crate::video_preview::VideoPreviewControl::default(),
             updates: crate::updates::UpdateControl::default(),
+            engines: crate::engine_manager::EngineControl::default(),
             #[cfg(target_os = "linux")]
             media_server: Mutex::new(None),
             paths,
@@ -158,6 +166,7 @@ impl AppState {
             runtime: Mutex::new(RuntimeStatus::default()),
             latest_benchmark: Mutex::new(latest_benchmark),
             edit_runtime: Mutex::new(String::new()),
+            bundled_engine_path: Mutex::new(None),
             worker,
             scheduler: Mutex::new(()),
             settings_io: Mutex::new(()),
@@ -175,6 +184,7 @@ impl AppState {
             grants,
             moving_models: AtomicBool::new(false),
             gpu_download_notice_cache: Mutex::new(None),
+            engine_recommendation_cache: Mutex::new(None),
         })
     }
 
@@ -224,6 +234,11 @@ impl AppState {
             custom_model: crate::editing::custom_edit_model(&settings.custom_edit_model),
         };
         let gpu_download_notice = self.gpu_download_notice(&settings, &capabilities);
+        let engines = crate::engine_manager::snapshot_for(
+            self,
+            &crate::updates::UpdateConfig::load(),
+            self.engine_recommendation(),
+        );
 
         Ok(AppSnapshot {
             app_version: APP_VERSION.into(),
@@ -241,7 +256,21 @@ impl AppState {
             default_model_directory: self.paths.model_root.to_string_lossy().into_owned(),
             model_directory_missing,
             gpu_download_notice,
+            engines,
         })
+    }
+
+    fn engine_recommendation(&self) -> crate::types::EngineRecommendation {
+        let mut cached = self
+            .engine_recommendation_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(recommendation) = cached.as_ref() {
+            return recommendation.clone();
+        }
+        let detected = crate::gpu_notice::detect_engine_recommendation();
+        *cached = Some(detected.clone());
+        detected
     }
 
     pub fn model_root(&self) -> PathBuf {

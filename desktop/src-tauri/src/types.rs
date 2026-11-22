@@ -814,6 +814,61 @@ pub struct ComparisonSlot {
     pub preview_height: u32,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct InstalledEngine {
+    pub id: String,
+    pub backend: String,
+    pub bundled: bool,
+    pub active: bool,
+    pub path: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct EngineRecommendation {
+    pub backend: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter_name: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct EngineCatalogEntry {
+    pub backend: String,
+    pub engine_id: String,
+    pub version: String,
+    pub size: u64,
+    pub manifest_url: String,
+    pub parts_count: usize,
+    pub installed: bool,
+    pub active: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct EngineDownloadStatus {
+    pub stage: String,
+    pub backend: String,
+    pub engine_id: String,
+    pub downloaded: u64,
+    pub total: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct EngineManagerSnapshot {
+    pub supported: bool,
+    pub managed_by_store: bool,
+    pub configured: bool,
+    pub active_backend: String,
+    pub active_engine_id: String,
+    pub bundled_backend: String,
+    pub installed: Vec<InstalledEngine>,
+    pub recommendation: EngineRecommendation,
+    pub catalog: Vec<EngineCatalogEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_error: Option<String>,
+    pub download: EngineDownloadStatus,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AppSnapshot {
     pub app_version: String,
@@ -834,6 +889,8 @@ pub struct AppSnapshot {
     pub model_directory_missing: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpu_download_notice: Option<String>,
+    #[serde(default)]
+    pub engines: EngineManagerSnapshot,
 }
 
 #[derive(Clone, Debug, Deserialize)]

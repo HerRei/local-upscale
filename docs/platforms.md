@@ -142,6 +142,22 @@ one. The CUDA and ROCm downloads exceed GitHub's 2 GB file limit and come in par
   DirectX 12 graphics card (AMD, Intel, or NVIDIA) and shows a dismissable
   notice with a link to the DirectML or CUDA download page.
 
+## In-app engine switching (Windows and Linux)
+
+Direct builds can also install and switch engines inside the app instead of
+downloading a separate edition:
+
+- **Windows (x86-64):** `cpu`, `directml` and `cuda`.
+- **Linux (x86-64):** `cpu`, `cuda` and `rocm`.
+- **macOS (Apple Silicon):** `mps` only (unchanged).
+
+The bundled CPU engine stays installed as a fallback if a downloaded or imported
+engine fails to start. Microsoft Store builds receive both app and engine updates
+from the Store and do not support in-app engine switching. On direct Windows and
+Linux builds, LocalSR offers the detected GPU engine after the first-launch setup
+screen and keeps engine switching, download, removal and offline file import in
+**Advanced -> Hardware -> Engine -> Change…**.
+
 ## Memory guidance
 
 | Model | Memory while running (catalog estimate) |

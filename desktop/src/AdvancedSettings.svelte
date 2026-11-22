@@ -14,12 +14,14 @@
   import HelpTip from './HelpTip.svelte';
   import FileName from './FileName.svelte';
   import { isRestoreTask } from './lib/plan';
+  import { engineDisplayName } from './lib/engines';
   import { hardwareChoices, hardwarePatch, selectedHardware } from './lib/neuralEngine';
   import { groupedHardware, optionLabel } from './lib/hardwareRoutes';
   import type {
     CapabilityInfo,
     CatalogModel,
     EditModel,
+    EngineManagerSnapshot,
     InterpolationOrder,
     InterpolationTarget,
     ModelMoveProgress,
@@ -31,6 +33,7 @@
   export let selectedModel: CatalogModel | undefined;
   export let editModel: EditModel | undefined = undefined;
   export let capabilities: CapabilityInfo;
+  export let engines: EngineManagerSnapshot | undefined = undefined;
   export let usingTemporalVideo: boolean;
   export let preservingHdr = false;
   export let interpolationSupported = false;
@@ -44,6 +47,7 @@
   export let chooseOutput: () => Promise<void>;
   export let chooseModelFolder: () => Promise<void> = async () => undefined;
   export let resetModelFolder: () => Promise<void> = async () => undefined;
+  export let onOpenEngineManager: () => void = () => undefined;
   /** Resolves true when the host took the request, false when it refused (and said so). */
   export let refreshCapabilities: () => Promise<boolean>;
 
@@ -620,6 +624,22 @@
           compiles a model once for the NPU, which can take a minute, and checks once that its
           result matches the CPU's.
         </p>
+      {/if}
+      {#if engines?.supported && !engines.managed_by_store}
+        <div class="field-row engine-row">
+          <span class="label-with-tip"
+            ><span class="field-label">Engine</span><HelpTip
+              label="Engine"
+              text="The inference runtime LocalSR uses on this computer. Switch to a GPU engine for faster processing, or import an offline engine file."
+            /></span
+          >
+          <div class="engine-value">
+            <span class="engine-active-label">{engineDisplayName(engines.active_backend)}</span>
+            <button type="button" class="button compact" on:click={onOpenEngineManager}
+              >Change…</button
+            >
+          </div>
+        </div>
       {/if}
       <div class="field-row">
         <span class="label-with-tip"

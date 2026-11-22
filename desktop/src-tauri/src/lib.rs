@@ -8,6 +8,7 @@ mod disk_room;
 mod distribution;
 mod downloads;
 mod editing;
+mod engine_manager;
 mod engine_payload;
 mod error;
 mod gpu_notice;
@@ -151,6 +152,7 @@ pub fn run() {
                 show_startup_notices(app.handle(), &state);
             }
             *lock(&state.edit_runtime)? = editing::runtime_path(app.handle(), &state.paths);
+            *lock(&state.bundled_engine_path)? = worker::bundled_engine_executable(app.handle());
             let switches = native_menu::switches(&*lock(&state.settings)?);
             native_menu::install(app, &lock(&state.recipes)?, switches)?;
             fit_main_window(app.handle());
@@ -178,6 +180,13 @@ pub fn run() {
             updates::cancel_update,
             updates::discard_update,
             updates::recover_update_settings,
+            engine_manager::refresh_engine_catalog,
+            engine_manager::install_engine,
+            engine_manager::cancel_engine_install,
+            engine_manager::use_engine,
+            engine_manager::remove_engine,
+            engine_manager::choose_engine_manifest,
+            engine_manager::import_engine,
             commands::open_bug_report,
             commands::list_crash_reports,
             commands::delete_crash_report,

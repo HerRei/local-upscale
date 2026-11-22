@@ -70,28 +70,39 @@ and DDColor, and each model shows its size, licence and source before you downlo
 | Computer | Download |
 |---|---|
 | Mac (M1 or newer) | `LocalSR-v0.5.0-beta-macOS-arm64.dmg` |
-| Windows, no graphics card or not sure | `LocalSR-v0.5.0-beta-Windows-CPU-x86_64.exe` |
+| Windows | `LocalSR-v0.5.0-beta-Windows-CPU-x86_64.exe` |
+| Linux | `LocalSR-v0.5.0-beta-Linux-CPU-x86_64.AppImage` |
+
+The app offers the faster GPU engine after setup.
+
+### Offline and advanced downloads
+
+| Computer | Download |
+|---|---|
 | Windows, AMD or Intel graphics | `LocalSR-v0.5.0-beta-Windows-DirectML-x86_64.exe` |
 | Windows, NVIDIA | `LocalSR-v0.5.0-beta-Windows-CUDA-x86_64.exe` and all `LocalSR-v0.5.0-beta-Windows-CUDA-x86_64.engine.tar.gz.part-*` files in the same folder |
-| Linux, no graphics card or Intel | `LocalSR-v0.5.0-beta-Linux-CPU-x86_64.AppImage` |
 | Linux, AMD | all `LocalSR-v0.5.0-beta-Linux-ROCm-x86_64.AppImage.part-*` files, joined |
 | Linux, NVIDIA | all `LocalSR-v0.5.0-beta-Linux-CUDA-x86_64.AppImage.part-*` files, joined |
 
-The other files (signatures, checksums, engine-payload.json and source archives) are for checking and updates. You do not need them to install.
+To import an engine offline, download the `*.engine-payload.json` manifest, its `.engine.tar.gz.part-*` files and their `.sig` signature files into one folder, then open **Advanced -> Hardware -> Engine -> Change… -> Import engine from file…** and choose the `*.engine-payload.json` file.
+
+The other files (signatures, checksums and source archives) are for verification and updates.
 
 The [download page](https://herrei.github.io/localsr/download/) has the installers
 for each platform:
 
 - **macOS v0.5.0-beta:** Apple Silicon (M1 or newer) and macOS 14 or later. Intel
   Macs are not supported. Signed and notarized, and it updates itself.
-- **Windows v0.5.0-beta:** Windows 10 or 11 on x86-64. Choose CUDA for NVIDIA
-  graphics, DirectML for AMD or Intel graphics (including built-in graphics), or
-  CPU if you do not have a supported GPU. Intel NPUs work on Windows and Linux.
-  The installers are unsigned, so SmartScreen warns first: choose **More info**,
-  then **Run anyway**.
-- **Linux v0.5.0-beta:** x86-64 AppImages for CPU, AMD ROCm and NVIDIA CUDA.
-  The CPU AppImage runs Intel graphics through OpenVINO once Intel's compute
-  driver (`intel-opencl-icd`) is installed.
+- **Windows v0.5.0-beta:** Windows 10 or 11 on x86-64. Start with the main CPU
+  installer; after setup, LocalSR offers to download DirectML (AMD or Intel
+  graphics) or NVIDIA CUDA inside the app, or you can switch later in Advanced
+  settings. Intel NPUs work on Windows and Linux. The installers are unsigned, so
+  SmartScreen warns first: choose **More info**, then **Run anyway**.
+- **Linux v0.5.0-beta:** x86-64 AppImage. Start with the main CPU AppImage;
+  after setup, LocalSR offers to download NVIDIA CUDA or AMD ROCm inside the app,
+  or you can switch later in Advanced settings. The CPU AppImage runs Intel
+  graphics through OpenVINO once Intel's compute driver (`intel-opencl-icd`) is
+  installed.
 
 The next CUDA edition needs an NVIDIA RTX 20 series or newer and driver 580 or
 newer. On Windows, older NVIDIA cards can use DirectML.

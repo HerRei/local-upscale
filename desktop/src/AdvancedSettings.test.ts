@@ -362,11 +362,74 @@ describe('Model folder setting', () => {
       resetModelFolder,
       refreshCapabilities: async () => true,
     });
-    const alert = screen.getByRole('alert');
-    expect(alert.textContent).toContain('Model folder unavailable: /Volumes/Missing/models');
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Model folder unavailable: /Volumes/Missing/models',
+    );
     await fireEvent.click(screen.getByRole('button', { name: 'Choose folder…' }));
     expect(chooseModelFolder).toHaveBeenCalledTimes(2);
     await fireEvent.click(screen.getByRole('button', { name: 'Reset to default' }));
     expect(resetModelFolder).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('Engine row under Hardware', () => {
+  it('shows the active engine and Change button on supported builds, and hides on Mac or Store', async () => {
+    const onOpenEngineManager = vi.fn();
+    const engines = structuredClone(demoSnapshot().engines!);
+    const view = render(AdvancedSettings, {
+      settings: { ...demoSnapshot().settings, task: 'upscale' },
+      selectedModel: undefined,
+      capabilities: base,
+      engines,
+      usingTemporalVideo: false,
+      updateSettings: vi.fn(),
+      chooseOutput: async () => undefined,
+      onOpenEngineManager,
+      refreshCapabilities: async () => true,
+    });
+    await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+    expect(screen.getByText('Engine')).toBeTruthy();
+    expect(screen.getByText('CPU')).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: 'Change…' }));
+    expect(onOpenEngineManager).toHaveBeenCalledTimes(1);
+
+    await view.rerender({
+      settings: { ...demoSnapshot().settings, task: 'upscale' },
+      selectedModel: undefined,
+      capabilities: base,
+      engines: { ...engines, active_backend: 'rocm' },
+      usingTemporalVideo: false,
+      updateSettings: vi.fn(),
+      chooseOutput: async () => undefined,
+      onOpenEngineManager,
+      refreshCapabilities: async () => true,
+    });
+    expect(screen.getByText('AMD ROCm')).toBeTruthy();
+
+    await view.rerender({
+      settings: { ...demoSnapshot().settings, task: 'upscale' },
+      selectedModel: undefined,
+      capabilities: base,
+      engines: { ...engines, supported: false },
+      usingTemporalVideo: false,
+      updateSettings: vi.fn(),
+      chooseOutput: async () => undefined,
+      onOpenEngineManager,
+      refreshCapabilities: async () => true,
+    });
+    expect(screen.queryByText('Engine')).toBeNull();
+
+    await view.rerender({
+      settings: { ...demoSnapshot().settings, task: 'upscale' },
+      selectedModel: undefined,
+      capabilities: base,
+      engines: { ...engines, supported: true, managed_by_store: true },
+      usingTemporalVideo: false,
+      updateSettings: vi.fn(),
+      chooseOutput: async () => undefined,
+      onOpenEngineManager,
+      refreshCapabilities: async () => true,
+    });
+    expect(screen.queryByText('Engine')).toBeNull();
   });
 });

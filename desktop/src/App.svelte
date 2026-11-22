@@ -44,6 +44,8 @@
   import ModelCredit from './ModelCredit.svelte';
   import UpdateNotice from './UpdateNotice.svelte';
   import GpuDownloadNotice from './GpuDownloadNotice.svelte';
+  import EngineRecommendationCard from './EngineRecommendationCard.svelte';
+  import EngineManagerDialog from './EngineManagerDialog.svelte';
   import UpdatePanel from './UpdatePanel.svelte';
   import SetupScreen from './SetupScreen.svelte';
   import WelcomeNotice from './WelcomeNotice.svelte';
@@ -95,6 +97,7 @@
   } from './lib/fixStages';
   import { applyWorkerEnvelope, resultPreviewForSelectedMedia } from './lib/workerEvents';
   import { formatBytes, formatDuration } from './lib/format';
+  import { plainEngineError, recommendedEngineOffer } from './lib/engines';
   import { demoSnapshot } from './lib/demo';
   import { modal } from './lib/modal';
   import {
@@ -113,6 +116,7 @@
     CatalogModel,
     CatalogVideoModel,
     EditModel,
+    EngineDownloadStatus,
     FixKind,
     FixStageSelection,
     IntegrationStatus,
@@ -461,8 +465,16 @@
       themeForRefresh(snapshot.settings);
       if (choices.checkAtLaunch) {
         const status = await api.updateStatus();
-        if (status.configured && !status.managed_by_store && status.stage === 'idle')
+        if (status.configured && !status.managed_by_store && status.stage === 'idle') {
           await api.checkUpdateAtLaunch(status.channel).catch(() => undefined);
+          if (
+            snapshot.engines?.supported &&
+            !snapshot.engines.managed_by_store &&
+            !snapshot.engines.catalog.length
+          ) {
+            await refresh();
+          }
+        }
       }
     } catch (error) {
       privacyError = String(error);
@@ -1390,11 +1402,24 @@
         );
         await subscribe(() => api.listenForLaunchIntent(() => void consumeLaunchIntents()));
         await subscribe(() => api.listenForModelMove((progress) => (modelMoveProgress = progress)));
+        await subscribe(() => api.listenForEngineStatus(handleEngineStatus));
         await subscribe(() =>
           startUpdateWatcher(
             (snapshot.settings.privacy_choice_made ?? true) &&
               (snapshot.settings.check_updates_at_launch ?? true),
-          ),
+          ).then((stop) => {
+            if (
+              !disposed &&
+              (snapshot.settings.privacy_choice_made ?? true) &&
+              (snapshot.settings.check_updates_at_launch ?? true) &&
+              snapshot.engines?.supported &&
+              !snapshot.engines.managed_by_store &&
+              !snapshot.engines.catalog.length
+            ) {
+              void refresh();
+            }
+            return stop;
+          }),
         );
         await subscribe(() =>
           api.listenForFileDrops({
@@ -2406,6 +2431,138 @@
     } finally {
       movingModels = false;
       modelMoveProgress = null;
+    }
+  }
+
+  let engineDialogOpen = false;
+  let engineActionBusy = false;
+  let engineRefreshingCatalog = false;
+  let engineError = '';
+  $: engineOffer = recommendedEngineOffer(snapshot.engines, settings);
+
+  function handleEngineStatus(status: EngineDownloadStatus): void {
+    if (!snapshot.engines) return;
+    snapshot = {
+      ...snapshot,
+      engines: {
+        ...snapshot.engines,
+        download: status,
+      },
+    };
+    if (status.stage === 'error') {
+      engineError = status.error ? plainEngineError(status.error) : 'Engine installation failed.';
+    } else if (status.stage === 'cancelled' || status.stage === 'downloading') {
+      engineError = '';
+    } else if (status.stage === 'installed') {
+      engineError = '';
+      void refresh();
+    }
+  }
+
+  async function refreshEngineCatalogList(): Promise<void> {
+    if (engineRefreshingCatalog) return;
+    engineRefreshingCatalog = true;
+    engineError = '';
+    try {
+      const catalog = await api.refreshEngineCatalog();
+      if (snapshot.engines) {
+        snapshot = {
+          ...snapshot,
+          engines: {
+            ...snapshot.engines,
+            catalog,
+            catalog_error: null,
+          },
+        };
+      }
+      await refresh();
+    } catch (error) {
+      engineError = plainEngineError(error);
+    } finally {
+      engineRefreshingCatalog = false;
+    }
+  }
+
+  async function openEngineManager(): Promise<void> {
+    engineError = '';
+    engineDialogOpen = true;
+    if (
+      snapshot.engines?.supported &&
+      snapshot.engines.configured &&
+      !snapshot.engines.catalog.length
+    ) {
+      await refreshEngineCatalogList();
+    }
+  }
+
+  async function downloadEngine(backend: string): Promise<void> {
+    engineError = '';
+    try {
+      await api.installEngine(backend);
+      await refresh();
+    } catch (error) {
+      if (snapshot.engines?.download.stage !== 'cancelled' && !/cancelled/i.test(String(error))) {
+        engineError = plainEngineError(error);
+      }
+      await refresh().catch(() => undefined);
+    }
+  }
+
+  async function cancelEngineDownload(): Promise<void> {
+    try {
+      await api.cancelEngineInstall();
+    } catch (error) {
+      engineError = plainEngineError(error);
+    }
+  }
+
+  async function activateEngine(backend: string): Promise<void> {
+    if (engineActionBusy) return;
+    engineActionBusy = true;
+    engineError = '';
+    try {
+      await api.useEngine(backend);
+      await refresh();
+    } catch (error) {
+      engineError = plainEngineError(error);
+    } finally {
+      engineActionBusy = false;
+    }
+  }
+
+  async function deleteEngine(id: string): Promise<void> {
+    if (engineActionBusy) return;
+    engineActionBusy = true;
+    engineError = '';
+    try {
+      await api.removeEngine(id);
+      await refresh();
+    } catch (error) {
+      engineError = plainEngineError(error);
+    } finally {
+      engineActionBusy = false;
+    }
+  }
+
+  async function importEngineFromFile(): Promise<void> {
+    if (engineActionBusy) return;
+    engineError = '';
+    let path: string | null = null;
+    try {
+      path = await api.chooseEngineManifest();
+    } catch (error) {
+      engineError = plainEngineError(error);
+      return;
+    }
+    if (!path) return;
+    engineActionBusy = true;
+    try {
+      await api.importEngine(path);
+      await refresh();
+    } catch (error) {
+      engineError = plainEngineError(error);
+    } finally {
+      engineActionBusy = false;
     }
   }
 
@@ -3456,7 +3613,23 @@
     <UpdateNotice
       processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
     />
-    {#if snapshot.gpu_download_notice && !settings.gpu_download_notice_dismissed}
+    {#if engineOffer}
+      <EngineRecommendationCard
+        offer={engineOffer}
+        download={snapshot.engines?.download ?? {
+          stage: 'idle',
+          backend: '',
+          engine_id: '',
+          downloaded: 0,
+          total: 0,
+        }}
+        processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
+        error={engineError}
+        onDownload={() => void downloadEngine(engineOffer.backend)}
+        onCancel={() => void cancelEngineDownload()}
+        onDismiss={() => void dismissGpuDownloadNotice()}
+      />
+    {:else if settings.privacy_choice_made !== false && snapshot.gpu_download_notice && !settings.gpu_download_notice_dismissed}
       <GpuDownloadNotice
         message={snapshot.gpu_download_notice}
         onOpenDownloadPage={() =>
@@ -4442,6 +4615,7 @@
               {selectedModel}
               {editModel}
               capabilities={snapshot.capabilities}
+              engines={snapshot.engines}
               {usingTemporalVideo}
               {preservingHdr}
               {interpolationSupported}
@@ -4454,6 +4628,7 @@
               {chooseOutput}
               {chooseModelFolder}
               {resetModelFolder}
+              onOpenEngineManager={() => void openEngineManager()}
               refreshCapabilities={async () => {
                 try {
                   await api.refreshCapabilities();
@@ -4753,6 +4928,26 @@
       </div>
     </div>
   </div>
+{/if}
+
+{#if engineDialogOpen && snapshot.engines?.supported && !snapshot.engines.managed_by_store}
+  <EngineManagerDialog
+    engines={snapshot.engines}
+    processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
+    actionBusy={engineActionBusy}
+    refreshingCatalog={engineRefreshingCatalog}
+    errorMessage={engineError}
+    onClose={() => {
+      engineDialogOpen = false;
+      engineError = '';
+    }}
+    onRefreshCatalog={() => void refreshEngineCatalogList()}
+    onDownload={(backend) => void downloadEngine(backend)}
+    onCancelDownload={() => void cancelEngineDownload()}
+    onUse={(backend) => void activateEngine(backend)}
+    onRemove={(id) => void deleteEngine(id)}
+    onImport={() => void importEngineFromFile()}
+  />
 {/if}
 
 {#if !booting && settings.privacy_choice_made === false}
