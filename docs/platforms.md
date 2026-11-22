@@ -101,8 +101,10 @@ one. The CUDA and ROCm downloads exceed GitHub's 2 GB file limit and come in par
   intermediate. No Apple chip encodes AV1 in hardware. Measured on the M1 Pro with
   a 15-second 720×1280 iPhone clip upscaled 4× with SPAN (461 frames): 1.58 frames
   per second with tiles and AV1 before, 3.6 now (2 minutes 8 seconds).
-- **DirectML.** Any DXGI adapter with D3D12 support can be selected; only the
-  UHD 620 has been run. Some graph nodes execute on the CPU. SeedVR2 has no
+- **DirectML.** A new installation selects a DirectML adapter automatically,
+  preferring discrete graphics and then the most memory. An existing installation
+  keeps its hardware choice. Any DXGI adapter with D3D12 support can be selected;
+  only the UHD 620 has been run. Some graph nodes execute on the CPU. SeedVR2 has no
   DirectML implementation.
 - **The GPU check (DirectML and OpenVINO, from v0.3.2-beta).** These routes run the
   model as an ONNX graph in FP32. The first time a model runs on a GPU, at each tile

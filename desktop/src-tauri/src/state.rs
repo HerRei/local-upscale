@@ -131,7 +131,7 @@ impl AppState {
             ));
         }
         let catalog = load_catalog(&paths)?;
-        let first_run = !paths.settings.exists() && !paths.legacy_settings.exists();
+        let first_run = !settings::has_existing_settings(&paths);
         let (settings, recipes) = settings::load(&paths);
         let latest_benchmark = settings::load_benchmark(&paths);
         let programs = crate::programs::GrantedPrograms::default();

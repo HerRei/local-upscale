@@ -2217,6 +2217,12 @@ pub fn remove_model(
     app: AppHandle,
     model_id: String,
 ) -> AppResult<()> {
+    remove_model_checked(&state, &model_id)?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
+fn remove_model_checked(state: &AppState, model_id: &str) -> AppResult<()> {
     let _scheduler = lock(&state.scheduler)?;
     if !lock(&state.runtime)?.active_job_id.is_empty() {
         return Err(AppError::Validation(
@@ -2260,13 +2266,12 @@ pub fn remove_model(
             state.refresh_catalog()?;
         }
         // Editing and catalog bundles live beside the single-file models; shared files survive.
-        None if remove_catalog_bundle(&state, &model_id)? => {}
-        None if !crate::editing::remove_bundle(&state.paths, &model_id)? => {
+        None if remove_catalog_bundle(state, model_id)? => {}
+        None if !crate::editing::remove_bundle(&state.paths, model_id)? => {
             return Err(AppError::Validation("unknown model".into()));
         }
         None => {}
     }
-    emit_state_changed(&app);
     Ok(())
 }
 

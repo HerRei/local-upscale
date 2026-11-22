@@ -2397,12 +2397,18 @@ fn completion_preview_request(state: &AppState, envelope: &WorkerEnvelope) -> Op
     }
 }
 
-/// The device a new installation starts on: Apple's GPU or a CUDA/ROCm card.
-/// DirectML stays opt-in because it is untested.
+/// The device a new installation starts on. DirectML adapters are ranked by
+/// dedicated memory, preferring discrete cards over integrated graphics.
 fn first_run_device(devices: &[DeviceInfo]) -> Option<String> {
     devices
         .iter()
         .find(|device| device.id == "mps" || device.id == "cuda" || device.id.starts_with("cuda:"))
+        .or_else(|| {
+            devices
+                .iter()
+                .filter(|device| device.id.starts_with("directml:"))
+                .max_by_key(|device| (!device.is_integrated, device.total_memory))
+        })
         .map(|device| device.id.clone())
 }
 
