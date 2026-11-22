@@ -458,6 +458,8 @@ describe('app version line', () => {
         usingTemporalVideo: false,
         appVersion: '0.5.1-beta',
         updateSettings: () => {},
+        chooseOutput: async () => {},
+        refreshCapabilities: async () => true,
       },
     });
     expect(screen.getByText('LocalSR 0.5.1-beta')).toBeTruthy();
