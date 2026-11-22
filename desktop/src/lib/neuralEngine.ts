@@ -116,6 +116,8 @@ export function engineLabel(
 ): string {
   if (isNpu(capabilities, settings.device_id) && !npuRuns(architecture))
     return 'CPU · this model does not run on the NPU';
+  if (architecture === 'DDColor' && /^(directml|openvino|qnn)(:|$)/.test(settings.device_id))
+    return 'CPU · DDColor runs on the CPU';
   if (selectedHardware(settings, capabilities) !== NEURAL_ENGINE_ID) return fallback;
   if (!architecture) return 'Neural Engine where supported';
   if (NEURAL_ENGINE_ARCHITECTURES.has(architecture)) return 'Neural Engine';
@@ -155,11 +157,14 @@ export function fitLine(
   capabilities: CapabilityInfo,
   device: DeviceInfo | undefined,
 ): FitLine | undefined {
-  // An NPU that does not run this model leaves it to the CPU.
-  const used =
-    device && isNpu(capabilities, device.id) && !npuRuns(model.architecture)
-      ? (capabilities.devices.find((entry) => entry.id === 'cpu') ?? device)
-      : device;
+  // An NPU or ONNX route that does not run this model leaves it to the CPU.
+  const cpuFallback =
+    device &&
+    ((isNpu(capabilities, device.id) && !npuRuns(model.architecture)) ||
+      (model.architecture === 'DDColor' && /^(directml|openvino|qnn)(:|$)/.test(device.id)));
+  const used = cpuFallback
+    ? (capabilities.devices.find((entry) => entry.id === 'cpu') ?? device)
+    : device;
   const fit = fitFor(model, used);
   if (fit === 'unknown' || !used) return undefined;
   const accelerator = runsOnAccelerator(settings, capabilities, model.architecture);
@@ -178,5 +183,19 @@ export function interpolationHardwareLabel(
   if (label === 'Neural Engine' && kind === 'mps') return `${label} · interpolation on GPU`;
   if (['directml', 'openvino', 'qnn'].includes(kind) && !label.startsWith('CPU'))
     return `${label} · interpolation on CPU`;
+  return label;
+}
+
+/** Name DDColor only when it runs on a different unit from the primary model. */
+export function colourHardwareLabel(
+  label: string,
+  deviceId: string,
+  hasColourFix: boolean,
+): string {
+  if (!hasColourFix) return label;
+  const kind = deviceId.split(':', 1)[0];
+  if (label === 'Neural Engine' && kind === 'mps') return `${label} · colour on GPU`;
+  if (['directml', 'openvino', 'qnn'].includes(kind) && !label.startsWith('CPU'))
+    return `${label} · colour on CPU`;
   return label;
 }

@@ -903,6 +903,52 @@
       "terms_acceptance_required": false,
       "time_factor": 1.9,
       "vram_estimate_mb": 4000
+    },
+    {
+      "architecture": "DDColor",
+      "attribution_required": true,
+      "author": "Xiaoyang Kang et al. \u00b7 DDColor",
+      "automated_download_allowed": true,
+      "commercial_use_allowed": true,
+      "commercial_use_status": "allowed",
+      "content": [
+        "photo"
+      ],
+      "description": "DDColor-L model for adding natural colour to black-and-white photos. Trained on ImageNet; runs on the luminance channel at 512\u00d7512 and keeps the original detail.",
+      "display_name": "DDColor",
+      "download_url": "https://huggingface.co/piddnad/ddcolor_modelscope/resolve/060f67494e31883a4b13cb27f889f3154847ada4/pytorch_model.bin?download=true",
+      "engine_id": "localsr.pytorch-spandrel",
+      "filename": "ddcolor_modelscope.pth",
+      "fixes": [
+        "colour"
+      ],
+      "license_name": "Apache-2.0",
+      "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "memory_factor": 1.1,
+      "model_id": "ddcolor_modelscope",
+      "name": "DDColor \u2014 DDColor-L",
+      "native_scale": 1,
+      "pair_with": "",
+      "preset_eligible": true,
+      "purposes": [
+        "colorize",
+        "photo"
+      ],
+      "quality_tier": 3,
+      "recommended_halo": 0,
+      "redistribution_allowed": false,
+      "rights_status": "verified",
+      "role": "Photo colorization (DDColor-L); large download",
+      "sha256": "d81711971ec59200da26d5e8a1afae8dd3778d495ea8ad7a7dadc769f403f7e7",
+      "size_bytes": 911914869,
+      "source_url": "https://huggingface.co/piddnad/ddcolor_modelscope",
+      "speed_factor": 0.55,
+      "speed_tier": 2,
+      "stage": "restore",
+      "support_tier": "supported",
+      "terms_acceptance_required": false,
+      "time_factor": 0.75,
+      "vram_estimate_mb": 2000
     }
   ],
   "schema_version": 3,

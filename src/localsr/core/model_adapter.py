@@ -110,8 +110,18 @@ class ModelAdapter:
             except spandrel.UnsupportedModelError as error:
                 try:
                     state_dict = self.loader.load_state_dict_from_file(path)
-                    message = _unsupported_model_message(state_dict)
                 except Exception:
+                    state_dict = None
+                if state_dict is not None:
+                    from localsr.image_models.ddcolor import (
+                        is_ddcolor_state_dict,
+                        load_ddcolor_descriptor,
+                    )
+
+                    if is_ddcolor_state_dict(state_dict):
+                        return trust, load_ddcolor_descriptor(state_dict)
+                    message = _unsupported_model_message(state_dict)
+                else:
                     message = "This checkpoint's architecture could not be recognized and is not supported."
                 raise RuntimeError(message) from error
 
@@ -173,8 +183,8 @@ class ModelAdapter:
 
         # Spandrel 0.4 does not expose a tiling capability flag. LocalSR tiles
         # ImageModelDescriptor inputs itself and applies the descriptor's size
-        # requirements to every tile.
-        tiling_supported = True
+        # requirements to every tile; DDColor runs whole-image at its input size.
+        tiling_supported = arch != "DDColor"
 
         half_supported = getattr(self.parsed, "supports_half", False)
 

@@ -37,7 +37,8 @@ at the moment), and the app shows you each licence before it downloads anything.
 
 - Enlarge photos and artwork by 2×, 3× or 4×. Quick is a good start, and Best
   spends more time on photo detail.
-- Clean up noise, blur and JPEG artifacts first, then enlarge.
+- Clean up noise, blur and JPEG artifacts first, or add colour to black-and-white
+  photos, then enlarge.
 - Compare the original and the result with a slider, or hold M to see the
   original.
 - Enhance video frame by frame, with the source timing, rotation and audio kept.
@@ -58,8 +59,8 @@ also HEIC. Videos can be MP4, MOV, MKV, WebM and other common formats, and are
 saved as AV1, VP9 or FFV1, or on the Mac also as HEVC or ProRes. [Video support](docs/video-support.md).
 
 Quick uses SPAN NomosUni and Best uses RealPLKSR NomosWebPhoto, both by Philip
-Hofmann. The library also has HAT, Real-ESRGAN, SwinIR, NAFNet, SCUNet and
-FBCNN, and each model shows its size, licence and source before you download it.
+Hofmann. The library also has HAT, Real-ESRGAN, SwinIR, NAFNet, SCUNet, FBCNN
+and DDColor, and each model shows its size, licence and source before you download it.
 [Model guide](docs/models/README.md) · [Model licences](docs/model-licenses.md).
 
 ## Download

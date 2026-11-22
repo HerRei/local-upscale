@@ -17,7 +17,7 @@ class PipelineStage:
     fix: str | None = None
 
 
-FIX_KINDS = frozenset({"blur", "jpeg", "noise"})
+FIX_KINDS = frozenset({"blur", "jpeg", "noise", "colour"})
 # Up to one fix per kind runs before the main model.
 MAX_FIX_STAGES = len(FIX_KINDS)
 
@@ -111,7 +111,7 @@ def _parse_fix_only_stages(raw: object) -> tuple[PipelineStage, ...]:
     if not isinstance(raw, list) or not raw:
         return ()
     if len(raw) > MAX_FIX_STAGES:
-        raise ValueError("Only three restoration/deblock stages may run.")
+        raise ValueError(f"Only {MAX_FIX_STAGES} restoration/deblock stages may run.")
     stages = [_parse_stage_item(item) for item in raw]
     fixes = [stage.fix for stage in stages if stage.fix is not None]
     if len(set(fixes)) != len(fixes):
@@ -137,7 +137,7 @@ def _parse_stage_item(item: object) -> PipelineStage:
     if fix is not None and (
         not isinstance(fix, str) or fix not in FIX_KINDS or kind not in {"deblock", "restore"}
     ):
-        raise ValueError("Only a restoration stage may name a fix: blur, jpeg or noise.")
+        raise ValueError("Only a restoration stage may name a fix: blur, jpeg, noise or colour.")
     return PipelineStage(
         kind=kind,
         model_id=model_id,
@@ -152,8 +152,8 @@ def _parse_stage_item(item: object) -> PipelineStage:
 def parse_pipeline_stages(raw: object) -> tuple[PipelineStage, ...]:
     if not isinstance(raw, list) or not raw:
         return ()
-    if len(raw) > 5:
-        raise ValueError("Image recipes support at most five bounded stages.")
+    if len(raw) > MAX_FIX_STAGES + 2:
+        raise ValueError(f"Image recipes support at most {MAX_FIX_STAGES + 2} bounded stages.")
     stages: list[PipelineStage] = [_parse_stage_item(item) for item in raw]
 
     kinds = [stage.kind for stage in stages]
@@ -161,7 +161,9 @@ def parse_pipeline_stages(raw: object) -> tuple[PipelineStage, ...]:
         raise ValueError("Unknown pipeline stage role.")
     primary_index = _primary_index(stages)
     if primary_index > MAX_FIX_STAGES:
-        raise ValueError("Only three restoration/deblock stages may precede the primary stage.")
+        raise ValueError(
+            f"Only {MAX_FIX_STAGES} restoration/deblock stages may precede the primary stage."
+        )
     if any(kind not in {"deblock", "restore"} for kind in kinds[:primary_index]):
         raise ValueError("Only restoration or deblock may precede the primary stage.")
     fixes = [stage.fix for stage in stages if stage.fix is not None]

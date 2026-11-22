@@ -261,7 +261,7 @@
     },
     {
       id: 'fix' as GroupId,
-      label: 'Fix noise, blur, JPEG',
+      label: 'Fix noise, blur, JPEG, colour',
       count: models.filter((model) => model.native_scale === 1 && !model.purposes.includes('face'))
         .length,
     },

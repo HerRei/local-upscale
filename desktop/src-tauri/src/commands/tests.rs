@@ -3785,3 +3785,64 @@ fn custom_edit_model_requires_grants_checks_sd_cli_and_persists_paths_in_place()
     )
     .unwrap();
 }
+
+#[test]
+fn colour_fix_is_resolved_for_photos_and_rejected_for_video() {
+    use crate::types::FixStageSelection;
+
+    let directory = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(directory.path());
+    fs::create_dir_all(&paths.next_root).unwrap();
+    fs::create_dir_all(&paths.model_root).unwrap();
+    let state = AppState::from_paths(paths).unwrap();
+    {
+        let mut catalog = lock(&state.catalog).unwrap();
+        for model in &mut catalog.models {
+            model.installed = true;
+            model.installed_path = Some(format!("/models/{}", model.filename));
+        }
+    }
+
+    let mut photo_upscale = input("upscale");
+    photo_upscale.model_id = "span_photo_x4".into();
+    photo_upscale.fix_stages = vec![FixStageSelection {
+        fix: "colour".into(),
+        model_id: "ddcolor_modelscope".into(),
+    }];
+    match resolve_model_selection(&state, &photo_upscale).unwrap() {
+        ModelSelection::Image { preprocess, .. } => {
+            assert_eq!(preprocess.len(), 1);
+            assert_eq!(preprocess[0].fix, "colour");
+            assert_eq!(preprocess[0].model_id, "ddcolor_modelscope");
+        }
+        _ => panic!("expected photo upscale plan with colour fix"),
+    }
+
+    let mut photo_restore = input("denoise");
+    photo_restore.output_scale = 1;
+    photo_restore.model_id = "ddcolor_modelscope".into();
+    photo_restore.fix_stages = vec![FixStageSelection {
+        fix: "colour".into(),
+        model_id: "ddcolor_modelscope".into(),
+    }];
+    match resolve_model_selection(&state, &photo_restore).unwrap() {
+        ModelSelection::Image {
+            model_id,
+            preprocess,
+            ..
+        } => {
+            assert_eq!(model_id, "ddcolor_modelscope");
+            assert!(preprocess.is_empty());
+        }
+        _ => panic!("expected photo restore plan with ddcolor"),
+    }
+
+    let mut video_job = input("video");
+    video_job.model_id = "span_photo_x4".into();
+    video_job.video_model_id = "frame_by_frame".into();
+    video_job.fix_stages = vec![FixStageSelection {
+        fix: "colour".into(),
+        model_id: "ddcolor_modelscope".into(),
+    }];
+    assert!(resolve_model_selection(&state, &video_job).is_err());
+}

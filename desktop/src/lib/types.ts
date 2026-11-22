@@ -57,7 +57,7 @@ export interface CatalogModel {
 
 export type Quality = 'quick' | 'best' | 'custom';
 export type ContentKind = 'photo' | 'illustration' | 'face';
-export type FixKind = 'noise' | 'jpeg' | 'blur' | 'faces';
+export type FixKind = 'noise' | 'jpeg' | 'blur' | 'colour' | 'faces';
 export type StageKind = 'upscale' | 'deblock' | 'restore' | 'face_restore';
 export type RightsStatus = 'verified' | 'attribution' | 'unresolved' | 'non_commercial';
 

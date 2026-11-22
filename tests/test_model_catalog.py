@@ -72,14 +72,15 @@ def test_catalog_has_all_curated_models():
         "scunet_color_real_psnr",
         "bhi_dat2_real_x4",
         "realwebphoto_v4_dat2_x4",
+        "ddcolor_modelscope",
     ]
     catalog_ids = [model.model_id for model in MODEL_CATALOG]
     assert catalog_ids == expected_ids
-    assert len(MODEL_CATALOG) == 18
+    assert len(MODEL_CATALOG) == 19
 
     # Verify uniqueness of IDs and filenames
-    assert len({model.model_id for model in MODEL_CATALOG}) == 18
-    assert len({model.filename for model in MODEL_CATALOG}) == 18
+    assert len({model.model_id for model in MODEL_CATALOG}) == 19
+    assert len({model.filename for model in MODEL_CATALOG}) == 19
 
 
 def test_recent_same_size_rewrite_cannot_reuse_a_checksum_verdict(tmp_path, monkeypatch):
@@ -247,6 +248,7 @@ def test_model_purpose_enum():
     assert ModelPurpose.ILLUSTRATION == "illustration"
     assert ModelPurpose.DENOISE == "denoise"
     assert ModelPurpose.DEBLUR == "deblur"
+    assert ModelPurpose.COLORIZE == "colorize"
     assert ModelPurpose.RESTORATION == "restoration"
     assert ModelPurpose.FACE == "face"
     assert ModelPurpose.VIDEO == "video"

@@ -24,6 +24,7 @@ loading. Restoration weights are not included in installers.
 | SCUNet Color (PSNR) | 1× | Blind real-photo denoising | 72.0 MB | Apache-2.0 |
 | DAT2 BHI Real | 4× | Lettering, buildings and clean photos · very slow | 140.2 MB | CC BY 4.0 |
 | DAT2 RealWebPhoto v4 | 4× | Noisy, compressed web and phone photos · very slow | 140.3 MB | CC BY 4.0 |
+| DDColor (DDColor-L) | 1× | Photo colorization | 911.9 MB | Apache-2.0 |
 | HAT-S Face | 4× | Face companion · verified import | 40.5 MB | Rights unresolved |
 | HAT-L Face | 4× | Large face companion · verified import | 165.7 MB | Rights unresolved |
 
@@ -46,6 +47,17 @@ the photos they suit. Keep the tile size at 256 for them where memory allows: at
 tile borders differ more from a whole-image run than Best's. Model choice
 changes speed, memory use and visual results; compare a representative crop before
 processing a large folder.
+
+## Photo colorization (DDColor)
+
+Under **Fix first** (and **Restore** at 1×), the **Colour** option adds colour to
+black-and-white photos using DDColor-L (911.9 MB). Colours are a guess. LocalSR converts the photo to Lab, runs
+DDColor on the luminance channel of the photo resized to 512×512, resizes the predicted colour
+channels back, and combines them with the original full-resolution luminance so
+sharpness and fine detail stay intact. Already colourful photos still run with a
+note in the job details. Colour is for still photos only; video Fix first does
+not offer it. On DirectML, OpenVINO, and the Apple Neural Engine route, DDColor
+runs on the CPU or PyTorch Apple GPU instead.
 
 ## Author credit and checkpoint terms
 
