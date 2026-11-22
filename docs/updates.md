@@ -393,3 +393,36 @@ layout), so a crash between the two renames of an installation does not leave th
 application without an engine until the next installation. Two installations of the
 same engine folder at once are not supported (the application runs once, and the
 Windows installer is one wizard); recovery assumes none runs.
+
+## In-app engine manager
+
+Direct Windows and Linux builds can install, switch, import and remove inference
+engines of their own OS and architecture without downloading a separate installer
+or AppImage:
+
+- **Catalog and GPU recommendation.** The host reads all signed engine entries for
+  its OS, architecture and package kind from the verified update feed (including
+  entries for backends other than the compiled one, and for the current release
+  version). Windows detects DXGI adapters (`NVIDIA` maps to `cuda`, `AMD` or
+  `Intel` to `directml`, otherwise `cpu`); Linux parses `lspci -nn` vendor IDs
+  (`10de` for `cuda`, `1002` for `rocm`) and `nvidia-smi` when available.
+- **On-demand install and offline import.** `install_engine` downloads the signed
+  engine manifest and parts into `LocalSR/next/updates/engine-cache/<id>` using
+  HTTP Range `.part` files so interrupted or cancelled downloads resume across
+  restarts. `import_engine` installs a downloaded `*.engine-payload.json` and its
+  parts from disk using companion `.sig` files (or matching verified catalog
+  signatures). Both verify minisign signatures and SHA-256 digests, unpack into
+  `LocalSR/next/engines/<id>/engine`, run the worker protocol handshake, write host
+  metadata (`meta.json`), and activate `active-engine.txt` only after the handshake
+  passes. Network fetches are refused before `privacy_choice_made`, in Store
+  editions, while jobs run, or when free disk space is insufficient.
+- **Switching, fallback and app updates.** `use_engine` switches between installed
+  engines and the bundled CPU fallback; `remove_engine` deletes an inactive engine
+  folder. If an active installed engine fails to start, the host clears
+  `active-engine.txt` and falls back to the bundled engine. App updates keep the
+  user's chosen backend and update that backend's engine alongside the host.
+- **Interface.** After the first-launch setup screen's Continue, if the recommended
+  GPU engine is not installed, LocalSR offers one dismissable card to download it
+  (remembered via `gpu_download_notice_dismissed`). The same engines, progress,
+  removal and offline `.engine-payload.json` import remain reachable under
+  **Advanced -> Hardware -> Engine -> Change…** on direct Windows and Linux builds.

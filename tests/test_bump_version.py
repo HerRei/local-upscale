@@ -246,10 +246,19 @@ def test_download_table_uses_registered_suffixes():
     registry = json.loads((ROOT / "ci/tauri-targets.json").read_text())
     for target in registry["targets"]:
         assert f"LocalSR-v1.2.3-beta-{target['suffix']}" in table
+    main_section, offline_section = table.split("## Offline and advanced downloads", 1)
+    assert "The app offers the faster GPU engine after setup." in main_section
+    assert "LocalSR-v1.2.3-beta-macOS-arm64.dmg" in main_section
+    assert "LocalSR-v1.2.3-beta-Windows-CPU-x86_64.exe" in main_section
+    assert "LocalSR-v1.2.3-beta-Linux-CPU-x86_64.AppImage" in main_section
+    assert "Windows-CUDA-x86_64.exe" not in main_section
+    assert "Import engine from file…" in offline_section
 
 
 def test_readme_download_table_matches_registry():
-    assert (
-        bump_version.download_table(VERSION).replace("## Which file", "### Which file", 1)
-        in (ROOT / "README.md").read_text()
+    expected = (
+        bump_version.download_table(VERSION)
+        .replace("## Which file", "### Which file", 1)
+        .replace("## Offline and advanced downloads", "### Offline and advanced downloads", 1)
     )
+    assert expected in (ROOT / "README.md").read_text()

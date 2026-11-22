@@ -33,7 +33,7 @@ pub struct UpdateConfig {
     pub kind: String,
 }
 impl UpdateConfig {
-    fn load() -> Self {
+    pub(crate) fn load() -> Self {
         #[cfg(debug_assertions)]
         if let Ok(path) = std::env::var("LOCALSR_TEST_UPDATE_CONFIG") {
             if let Ok(bytes) = fs::read(path) {
@@ -58,7 +58,7 @@ impl UpdateConfig {
                 .into(),
         }
     }
-    fn target(&self) -> String {
+    pub(crate) fn target(&self) -> String {
         platform_key(
             std::env::consts::OS,
             std::env::consts::ARCH,
@@ -66,7 +66,7 @@ impl UpdateConfig {
             &self.kind,
         )
     }
-    fn enabled(&self) -> bool {
+    pub(crate) fn enabled(&self) -> bool {
         !self.public_key.is_empty() && !self.backend.is_empty() && !self.engine_id.is_empty()
     }
 }
@@ -74,7 +74,7 @@ impl UpdateConfig {
 /// The feed's platform key, `<os>-<arch>-<backend>-<kind>`, with "darwin" for macOS:
 /// `windows-x86_64-cuda-native`, `linux-x86_64-rocm-native`, `darwin-aarch64-mps-native`.
 /// scripts/release_targets.py writes the feed entries under the same keys.
-fn platform_key(os: &str, arch: &str, backend: &str, kind: &str) -> String {
+pub(crate) fn platform_key(os: &str, arch: &str, backend: &str, kind: &str) -> String {
     let os = if os == "macos" { "darwin" } else { os };
     format!("{os}-{arch}-{backend}-{kind}")
 }
@@ -110,7 +110,7 @@ fn identity(config: &UpdateConfig, managed_by_store: bool) -> serde_json::Value 
         "engine_id": config.engine_id,
     })
 }
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DownloadFile {
     pub name: String,
     pub url: String,
@@ -118,7 +118,7 @@ pub struct DownloadFile {
     pub sha256: String,
     pub signature: String,
 }
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct EngineUpdate {
     pub id: String,
     pub manifest: DownloadFile,
@@ -211,6 +211,10 @@ struct CheckedUpdate {
     update: tauri_plugin_updater::Update,
     contract: ReleaseContract,
     config: UpdateConfig,
+    engine_backend: String,
+    engine_id: String,
+    engine_package: Option<EngineUpdate>,
+    engine_unpacked_size: u64,
 }
 #[derive(Default)]
 pub struct UpdateControl {
@@ -221,21 +225,21 @@ pub struct UpdateControl {
     status: std::sync::Mutex<UpdateStatus>,
     staged: std::sync::Mutex<Option<PathBuf>>,
 }
-struct Busy<'a>(&'a AtomicBool);
+pub(crate) struct Busy<'a>(&'a AtomicBool);
 impl Drop for Busy<'_> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::SeqCst);
     }
 }
-fn acquire(flag: &AtomicBool) -> AppResult<Busy<'_>> {
+pub(crate) fn acquire(flag: &AtomicBool) -> AppResult<Busy<'_>> {
     flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .map_err(|_| invalid("An update operation is already running"))?;
     Ok(Busy(flag))
 }
-fn invalid(message: impl Into<String>) -> AppError {
+pub(crate) fn invalid(message: impl Into<String>) -> AppError {
     AppError::Validation(message.into())
 }
-fn key(value: &str) -> AppResult<minisign_verify::PublicKey> {
+pub(crate) fn key(value: &str) -> AppResult<minisign_verify::PublicKey> {
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(value)
         .map_err(|e| invalid(e.to_string()))?;
@@ -244,7 +248,7 @@ fn key(value: &str) -> AppResult<minisign_verify::PublicKey> {
     )
     .map_err(|e| invalid(e.to_string()))
 }
-fn signature(value: &str) -> AppResult<minisign_verify::Signature> {
+pub(crate) fn signature(value: &str) -> AppResult<minisign_verify::Signature> {
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(value)
         .map_err(|e| invalid(e.to_string()))?;
@@ -259,11 +263,26 @@ pub fn validate_contract(
     version: &str,
     contract: &ReleaseContract,
 ) -> AppResult<()> {
+    validate_contract_for_backend(config, &config.backend, channel, version, contract, false)?;
+    if contract.engine_id != config.engine_id && contract.engine.is_none() {
+        return Err(invalid("This release needs a different inference engine but supplies no compatible engine package"));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_contract_for_backend(
+    config: &UpdateConfig,
+    expected_backend: &str,
+    channel: &str,
+    version: &str,
+    contract: &ReleaseContract,
+    require_engine_package: bool,
+) -> AppResult<()> {
     let version = semver::Version::parse(version).map_err(|e| invalid(e.to_string()))?;
     if !matches!(channel, "stable" | "beta")
         || contract.channel != channel
         || channel == "stable" && !version.pre.is_empty()
-        || contract.backend != config.backend
+        || contract.backend != expected_backend
         || contract.kind != config.kind
         || contract.protocol != PROTOCOL_VERSION
         || contract.engine_id.is_empty()
@@ -318,6 +337,7 @@ pub fn validate_contract(
                 .any(|file| {
                     !safe_file_name(&file.name)
                         || file.name.ends_with(".partial")
+                        || file.name.ends_with(".part")
                         || !names.insert(file.name.as_str())
                 })
             || engine
@@ -327,6 +347,8 @@ pub fn validate_contract(
         {
             return Err(invalid("Invalid split engine package"));
         }
+    } else if require_engine_package {
+        return Err(invalid("This release supplies no engine package"));
     }
     if contract
         .engine
@@ -336,9 +358,6 @@ pub fn validate_contract(
         return Err(invalid(
             "The engine package does not carry the release's engine id",
         ));
-    }
-    if contract.engine_id != config.engine_id && contract.engine.is_none() {
-        return Err(invalid("This release needs a different inference engine but supplies no compatible engine package"));
     }
     Ok(())
 }
@@ -351,6 +370,29 @@ fn verify_statement(
     version: &str,
     installed: &str,
     contract: &ReleaseContract,
+) -> AppResult<()> {
+    verify_statement_for_entry(
+        config,
+        target,
+        &config.backend,
+        channel,
+        version,
+        installed,
+        contract,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn verify_statement_for_entry(
+    config: &UpdateConfig,
+    target: &str,
+    expected_backend: &str,
+    channel: &str,
+    version: &str,
+    installed: &str,
+    contract: &ReleaseContract,
+    require_strictly_newer: bool,
 ) -> AppResult<()> {
     let unsigned = || invalid("This release has no valid signed release statement");
     let bytes = base64::engine::general_purpose::STANDARD
@@ -365,7 +407,7 @@ fn verify_statement(
         version: version.into(),
         channel: channel.into(),
         target: target.into(),
-        backend: config.backend.clone(),
+        backend: expected_backend.into(),
         kind: config.kind.clone(),
         protocol: PROTOCOL_VERSION,
         engine_id: contract.engine_id.clone(),
@@ -384,16 +426,21 @@ fn verify_statement(
             "The signed release statement does not match this update or this build",
         ));
     }
-    let newer = semver::Version::parse(version).map_err(|e| invalid(e.to_string()))?
-        > semver::Version::parse(installed).map_err(|e| invalid(e.to_string()))?;
-    if !newer {
+    let parsed_version = semver::Version::parse(version).map_err(|e| invalid(e.to_string()))?;
+    let parsed_installed = semver::Version::parse(installed).map_err(|e| invalid(e.to_string()))?;
+    let valid_version = if require_strictly_newer {
+        parsed_version > parsed_installed
+    } else {
+        parsed_version >= parsed_installed
+    };
+    if !valid_version {
         return Err(invalid(
             "This release is not newer than the installed version",
         ));
     }
     Ok(())
 }
-fn channel(state: &AppState) -> String {
+pub(crate) fn channel(state: &AppState) -> String {
     fs::read_to_string(state.paths.next_root.join("update-channel.json"))
         .ok()
         .filter(|s| matches!(s.as_str(), "stable" | "beta"))
@@ -594,28 +641,53 @@ pub async fn check_update(
         }
     };
     *lock(&state.updates.checked)? = None;
+    let catalog_config = config.clone();
     let validated = (|| -> AppResult<()> {
         if let Some(update) = update {
             let contract: ReleaseContract = serde_json::from_value(
                 update.raw_json["platforms"][config.target()]["localsr"].clone(),
             )?;
             validate_contract(&config, &channel, &update.version, &contract)?;
+            let installed_version = app.package_info().version.to_string();
             verify_statement(
                 &config,
                 &config.target(),
                 &channel,
                 &update.version,
-                &app.package_info().version.to_string(),
+                &installed_version,
                 &contract,
             )?;
+            let resolved_engine = resolve_update_engine_for_backend(
+                &update.raw_json,
+                &config,
+                &contract,
+                &channel,
+                &update.version,
+                &installed_version,
+                &state.paths,
+            )?;
+            crate::engine_manager::update_catalog_from_feed(
+                &state,
+                &update.raw_json,
+                &config,
+                &channel,
+                &installed_version,
+            );
             status.version = update.version.clone();
             status.notes = update.body.clone().unwrap_or_default();
             status.discover_url = validated_discover_url(update.raw_json["discover_url"].as_str());
             status.size = contract.size
-                + contract
+                + resolved_engine
                     .engine
                     .as_ref()
-                    .filter(|e| engine_needs_package(&state.paths.next_root, &config, &e.id))
+                    .filter(|e| {
+                        engine_needs_package_for(
+                            &state.paths.next_root,
+                            &config,
+                            &e.id,
+                            &resolved_engine.backend,
+                        )
+                    })
                     .map_or(0, |e| {
                         e.manifest.size + e.parts.iter().map(|p| p.size).sum::<u64>()
                     });
@@ -631,6 +703,10 @@ pub async fn check_update(
                 update,
                 contract,
                 config,
+                engine_backend: resolved_engine.backend,
+                engine_id: resolved_engine.engine_id,
+                engine_package: resolved_engine.engine,
+                engine_unpacked_size: resolved_engine.unpacked_size,
             });
         } else {
             status.stage = "current".into();
@@ -647,6 +723,19 @@ pub async fn check_update(
         status.message = error.to_string();
         publish(&state, &app, &mut status);
         return Err(error);
+    }
+    if status.stage == "current" {
+        if let Ok(feed_json) =
+            crate::engine_manager::fetch_feed_json(&catalog_config, &channel).await
+        {
+            crate::engine_manager::update_catalog_from_feed(
+                &state,
+                &feed_json,
+                &catalog_config,
+                &channel,
+                &app.package_info().version.to_string(),
+            );
+        }
     }
     publish(&state, &app, &mut status);
     Ok(status)
@@ -739,7 +828,7 @@ pub fn verify_file(path: &Path, file: &DownloadFile, public_key: &str) -> AppRes
 /// The downloaded application package, whether it came as one file or as parts.
 const APPLICATION_FILE: &str = "application.update";
 
-fn safe_file_name(name: &str) -> bool {
+pub(crate) fn safe_file_name(name: &str) -> bool {
     !name.is_empty()
         && Path::new(name).components().count() == 1
         && !name.contains(['/', '\\', ':'])
@@ -760,7 +849,11 @@ fn verify_bytes(bytes: &[u8], file: &DownloadFile, public_key: &str) -> AppResul
 }
 
 /// Read a downloaded file and verify those bytes: they are what gets installed.
-fn read_verified(path: &Path, file: &DownloadFile, public_key: &str) -> AppResult<Vec<u8>> {
+pub(crate) fn read_verified(
+    path: &Path,
+    file: &DownloadFile,
+    public_key: &str,
+) -> AppResult<Vec<u8>> {
     if fs::metadata(path)?.len() != file.size {
         return Err(invalid("Update size or checksum verification failed"));
     }
@@ -787,7 +880,7 @@ fn stage_verified(
 
 /// Install an engine package from the manifest bytes that were verified; the engine
 /// installer hashes every part against that manifest on the handles it unpacks from.
-fn install_engine_package(
+pub(crate) fn install_engine_package(
     directory: &Path,
     engine: &EngineUpdate,
     public_key: &str,
@@ -952,9 +1045,12 @@ async fn download_application(
 #[tauri::command]
 pub async fn download_update(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
     crate::distribution::require_direct_updates()?;
+    if state.engines.busy.load(Ordering::SeqCst) {
+        return Err(invalid("An engine installation is already running"));
+    }
     let _busy = acquire(&state.updates.busy)?;
     state.updates.cancel.store(false, Ordering::SeqCst);
-    let (file, config, contract) = {
+    let (file, config, contract, engine_backend, engine_package, engine_unpacked_size) = {
         let checked = lock(&state.updates.checked)?;
         let checked = checked
             .as_ref()
@@ -969,6 +1065,9 @@ pub async fn download_update(state: State<'_, Arc<AppState>>, app: AppHandle) ->
             },
             checked.config.clone(),
             checked.contract.clone(),
+            checked.engine_backend.clone(),
+            checked.engine_package.clone(),
+            checked.engine_unpacked_size,
         )
     };
     let directory = state.paths.next_root.join("updates");
@@ -983,16 +1082,18 @@ pub async fn download_update(state: State<'_, Arc<AppState>>, app: AppHandle) ->
         .unwrap_or(0);
     // Files an earlier attempt left complete are on the disk already: the free space
     // measured now no longer includes them.
-    let engine_files = contract
-        .engine
+    let engine_files = engine_package
         .iter()
-        .filter(|engine| engine_needs_package(&state.paths.next_root, &config, &engine.id))
+        .filter(|engine| {
+            engine_needs_package_for(&state.paths.next_root, &config, &engine.id, &engine_backend)
+        })
         .flat_map(|engine| std::iter::once(&engine.manifest).chain(&engine.parts));
     let present = already_downloaded(&directory, std::iter::once(&file).chain(engine_files));
+    let unpacked_need = contract.unpacked_size.max(engine_unpacked_size);
     let needed = status
         .size
         .saturating_sub(present)
-        .checked_add(contract.unpacked_size)
+        .checked_add(unpacked_need)
         .and_then(|s| s.checked_add(joining))
         .and_then(|s| s.checked_add(256 * 1024 * 1024))
         .ok_or_else(|| invalid("Update size overflow"))?;
@@ -1014,10 +1115,9 @@ pub async fn download_update(state: State<'_, Arc<AppState>>, app: AppHandle) ->
             &mut progress,
         )
         .await?;
-        if let Some(engine) = contract
-            .engine
-            .filter(|e| engine_needs_package(&state.paths.next_root, &config, &e.id))
-        {
+        if let Some(engine) = engine_package.filter(|e| {
+            engine_needs_package_for(&state.paths.next_root, &config, &e.id, &engine_backend)
+        }) {
             download_file(
                 &engine.manifest,
                 &directory,
@@ -1064,10 +1164,24 @@ pub fn cancel_update(state: State<'_, Arc<AppState>>) {
 #[tauri::command]
 pub fn discard_update(state: State<'_, Arc<AppState>>) -> AppResult<()> {
     crate::distribution::require_direct_updates()?;
+    if state.engines.busy.load(Ordering::SeqCst) {
+        return Err(invalid("An engine installation is already running"));
+    }
     let _busy = acquire(&state.updates.busy)?;
     let directory = state.paths.next_root.join("updates");
     if directory.exists() {
-        fs::remove_dir_all(directory)?;
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            if entry.file_name() == "engine-cache" {
+                continue;
+            }
+            let path = entry.path();
+            if fs::symlink_metadata(&path)?.file_type().is_dir() {
+                fs::remove_dir_all(&path)?;
+            } else {
+                fs::remove_file(&path)?;
+            }
+        }
     }
     *lock(&state.updates.staged)? = None;
     *lock(&state.updates.checked)? = None;
@@ -1116,7 +1230,7 @@ fn already_downloaded<'a>(directory: &Path, files: impl Iterator<Item = &'a Down
         .map(|file| file.size)
         .sum()
 }
-fn require_space(available: u64, needed: u64) -> AppResult<()> {
+pub(crate) fn require_space(available: u64, needed: u64) -> AppResult<()> {
     if available < needed {
         return Err(invalid(
             "Not enough free disk space to download and install this update",
@@ -1124,13 +1238,116 @@ fn require_space(available: u64, needed: u64) -> AppResult<()> {
     }
     Ok(())
 }
-fn safe_id(id: &str) -> bool {
+pub(crate) fn safe_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
         && id
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
 }
+
+pub(crate) fn worker_executable_name() -> &'static str {
+    if cfg!(windows) {
+        "localsr-worker.exe"
+    } else {
+        "localsr-worker"
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub(crate) struct EngineMeta {
+    pub id: String,
+    pub backend: String,
+    pub os: String,
+    pub arch: String,
+    pub protocol_version: u32,
+    pub handshake_passed: bool,
+    #[serde(default)]
+    pub version: String,
+}
+
+pub(crate) fn read_engine_meta(next_root: &Path, id: &str) -> Option<EngineMeta> {
+    if !safe_id(id) {
+        return None;
+    }
+    let bytes = fs::read(next_root.join("engines").join(id).join("meta.json")).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+pub(crate) fn write_engine_meta(next_root: &Path, meta: &EngineMeta) -> AppResult<()> {
+    if !safe_id(&meta.id) {
+        return Err(invalid("Invalid engine identity"));
+    }
+    let root = next_root.join("engines").join(&meta.id);
+    fs::create_dir_all(&root)?;
+    update_storage::write_atomic(&root.join("meta.json"), &serde_json::to_vec_pretty(meta)?)
+}
+
+pub(crate) fn engine_meta_valid_for_host(meta: &EngineMeta, os: &str, arch: &str) -> bool {
+    meta.handshake_passed
+        && meta.os == os
+        && meta.arch == arch
+        && meta.protocol_version == PROTOCOL_VERSION
+        && safe_id(&meta.id)
+}
+
+pub(crate) fn engine_executable_path(next_root: &Path, id: &str) -> Option<PathBuf> {
+    if !safe_id(id) {
+        return None;
+    }
+    let executable = next_root
+        .join("engines")
+        .join(id)
+        .join("engine")
+        .join(worker_executable_name());
+    executable.is_file().then_some(executable)
+}
+
+pub(crate) fn deactivate_active_engine(paths: &crate::paths::AppPaths) -> AppResult<()> {
+    match fs::remove_file(paths.next_root.join("active-engine.txt")) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+pub(crate) fn active_engine_id(
+    paths: &crate::paths::AppPaths,
+    managed_by_store: bool,
+    bundled_engine_id: &str,
+) -> Option<String> {
+    active_engine_entry(
+        paths,
+        managed_by_store,
+        bundled_engine_id,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    )
+    .map(|(id, _)| id)
+}
+
+pub(crate) fn chosen_backend_for(
+    paths: &crate::paths::AppPaths,
+    config: &UpdateConfig,
+    os: &str,
+    arch: &str,
+) -> String {
+    if let Some((id, _)) = active_engine_entry(
+        paths,
+        crate::distribution::managed_by_store(),
+        &config.engine_id,
+        os,
+        arch,
+    ) {
+        if let Some(meta) = read_engine_meta(&paths.next_root, &id) {
+            if engine_meta_valid_for_host(&meta, os, arch) && !meta.backend.is_empty() {
+                return meta.backend;
+            }
+        }
+    }
+    config.backend.clone()
+}
+
 pub fn active_engine(paths: &crate::paths::AppPaths) -> Option<PathBuf> {
     active_engine_for_distribution(
         paths,
@@ -1163,46 +1380,80 @@ pub fn choose_host_engine(bundled: Option<PathBuf>, installed: Option<PathBuf>) 
     )
 }
 
-/// The engine an in-app update installed, if this host was built for it.
+fn active_engine_entry(
+    paths: &crate::paths::AppPaths,
+    managed_by_store: bool,
+    bundled_engine_id: &str,
+    os: &str,
+    arch: &str,
+) -> Option<(String, PathBuf)> {
+    if managed_by_store {
+        return None;
+    }
+    if let Ok(raw) = fs::read_to_string(paths.next_root.join("active-engine.txt")) {
+        let id = raw.trim().to_owned();
+        if safe_id(&id) {
+            if let Some(executable) = engine_executable_path(&paths.next_root, &id) {
+                if let Some(meta) = read_engine_meta(&paths.next_root, &id) {
+                    if engine_meta_valid_for_host(&meta, os, arch) && meta.id == id {
+                        return Some((id, executable));
+                    }
+                } else if bundled_engine_id.is_empty() || id == bundled_engine_id {
+                    return Some((id, executable));
+                }
+            }
+        }
+    }
+    if !bundled_engine_id.is_empty() && safe_id(bundled_engine_id) {
+        if let Some(executable) = engine_executable_path(&paths.next_root, bundled_engine_id) {
+            if let Some(meta) = read_engine_meta(&paths.next_root, bundled_engine_id) {
+                if engine_meta_valid_for_host(&meta, os, arch) && meta.id == bundled_engine_id {
+                    return Some((bundled_engine_id.to_owned(), executable));
+                }
+            } else {
+                return Some((bundled_engine_id.to_owned(), executable));
+            }
+        }
+    }
+    None
+}
+
+/// The engine an in-app update or engine manager installed, if valid for this host.
 ///
-/// A host with a compiled engine id selects only the matching installed engine.
-/// A host without one reads the active engine id from storage.
-fn active_engine_for_distribution(
+/// An installed engine with verified host metadata (same OS/arch and passed handshake)
+/// is used even when its id differs from `bundled_engine_id`. Without metadata, a host
+/// with a compiled engine id selects only the matching installed engine.
+pub(crate) fn active_engine_for_distribution(
     paths: &crate::paths::AppPaths,
     managed_by_store: bool,
     bundled_engine_id: &str,
 ) -> Option<PathBuf> {
-    if managed_by_store {
-        return None;
-    }
-    // A host compiled for an engine id runs exactly that id's engine: the shared
-    // active-engine.txt may already name the engine of an installer that was cancelled.
-    let id = if bundled_engine_id.is_empty() {
-        fs::read_to_string(paths.next_root.join("active-engine.txt"))
-            .ok()?
-            .trim()
-            .to_owned()
-    } else {
-        bundled_engine_id.to_string()
-    };
-    if !safe_id(&id) {
-        return None;
-    }
-    let executable = paths
-        .next_root
-        .join("engines")
-        .join(id)
-        .join("engine")
-        .join(if cfg!(windows) {
-            "localsr-worker.exe"
-        } else {
-            "localsr-worker"
-        });
-    executable.is_file().then_some(executable)
+    active_engine_entry(
+        paths,
+        managed_by_store,
+        bundled_engine_id,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    )
+    .map(|(_, path)| path)
+}
+
+#[cfg(test)]
+pub(crate) fn active_engine_for_host(
+    paths: &crate::paths::AppPaths,
+    managed_by_store: bool,
+    bundled_engine_id: &str,
+    os: &str,
+    arch: &str,
+) -> Option<PathBuf> {
+    active_engine_entry(paths, managed_by_store, bundled_engine_id, os, arch).map(|(_, path)| path)
 }
 #[tauri::command]
 pub async fn install_update(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
     crate::distribution::require_direct_updates()?;
+    if state.engines.busy.load(Ordering::SeqCst) {
+        return Err(invalid("An engine installation is already running"));
+    }
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         // A second request while one runs must not rewrite the first one's status.
@@ -1224,29 +1475,146 @@ pub async fn install_update(state: State<'_, Arc<AppState>>, app: AppHandle) -> 
     .await
     .map_err(|e| invalid(e.to_string()))?
 }
+
+pub(crate) struct ResolvedUpdateEngine {
+    pub backend: String,
+    pub engine_id: String,
+    pub engine: Option<EngineUpdate>,
+    pub unpacked_size: u64,
+}
+
+pub(crate) fn resolve_update_engine_for_backend(
+    raw_json: &serde_json::Value,
+    config: &UpdateConfig,
+    base_contract: &ReleaseContract,
+    channel: &str,
+    version: &str,
+    installed_version: &str,
+    paths: &crate::paths::AppPaths,
+) -> AppResult<ResolvedUpdateEngine> {
+    resolve_update_engine_for_backend_on(
+        raw_json,
+        config,
+        base_contract,
+        channel,
+        version,
+        installed_version,
+        paths,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_update_engine_for_backend_on(
+    raw_json: &serde_json::Value,
+    config: &UpdateConfig,
+    base_contract: &ReleaseContract,
+    channel: &str,
+    version: &str,
+    installed_version: &str,
+    paths: &crate::paths::AppPaths,
+    os: &str,
+    arch: &str,
+) -> AppResult<ResolvedUpdateEngine> {
+    let chosen = chosen_backend_for(paths, config, os, arch);
+    if chosen.is_empty() || chosen == config.backend {
+        return Ok(ResolvedUpdateEngine {
+            backend: config.backend.clone(),
+            engine_id: base_contract.engine_id.clone(),
+            engine: base_contract.engine.clone(),
+            unpacked_size: base_contract.unpacked_size,
+        });
+    }
+    let target = platform_key(os, arch, &chosen, &config.kind);
+    let chosen_value = &raw_json["platforms"][&target]["localsr"];
+    if chosen_value.is_null() {
+        return Err(invalid(format!(
+            "This release does not include the {chosen} engine for this platform"
+        )));
+    }
+    let chosen_contract: ReleaseContract = serde_json::from_value(chosen_value.clone())?;
+    validate_contract_for_backend(config, &chosen, channel, version, &chosen_contract, false)?;
+    verify_statement_for_entry(
+        config,
+        &target,
+        &chosen,
+        channel,
+        version,
+        installed_version,
+        &chosen_contract,
+        true,
+    )?;
+    if engine_needs_package_for_host(
+        &paths.next_root,
+        config,
+        &chosen_contract.engine_id,
+        &chosen,
+        os,
+        arch,
+    ) && chosen_contract.engine.is_none()
+    {
+        return Err(invalid(format!(
+            "The {chosen} release entry supplies no compatible engine package"
+        )));
+    }
+    Ok(ResolvedUpdateEngine {
+        backend: chosen,
+        engine_id: chosen_contract.engine_id,
+        engine: chosen_contract.engine,
+        unpacked_size: base_contract
+            .unpacked_size
+            .max(chosen_contract.unpacked_size),
+    })
+}
+
 /// Whether the update must bring the engine package. A different engine id always does.
 /// The same id does not, unless an earlier update delivered this engine as a versioned
 /// engine (`active-engine.txt` names it) and that engine is gone: the bundle may then
 /// still hold the older engine, which the handshake cannot tell apart.
+#[cfg(test)]
 fn engine_needs_package(next_root: &Path, config: &UpdateConfig, engine_id: &str) -> bool {
+    engine_needs_package_for(next_root, config, engine_id, &config.backend)
+}
+
+fn engine_needs_package_for(
+    next_root: &Path,
+    config: &UpdateConfig,
+    engine_id: &str,
+    engine_backend: &str,
+) -> bool {
+    engine_needs_package_for_host(
+        next_root,
+        config,
+        engine_id,
+        engine_backend,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    )
+}
+
+fn engine_needs_package_for_host(
+    next_root: &Path,
+    config: &UpdateConfig,
+    engine_id: &str,
+    engine_backend: &str,
+    os: &str,
+    arch: &str,
+) -> bool {
+    if !engine_backend.is_empty() && engine_backend != config.backend {
+        return engine_executable_path(next_root, engine_id).is_none()
+            || read_engine_meta(next_root, engine_id)
+                .is_none_or(|meta| !engine_meta_valid_for_host(&meta, os, arch));
+    }
     if engine_id != config.engine_id {
         return true;
     }
     let delivered = fs::read_to_string(next_root.join("active-engine.txt"))
         .is_ok_and(|active| active.trim() == engine_id);
-    delivered
-        && !next_root
-            .join("engines")
-            .join(engine_id)
-            .join("engine")
-            .join(if cfg!(windows) {
-                "localsr-worker.exe"
-            } else {
-                "localsr-worker"
-            })
-            .is_file()
+    delivered && engine_executable_path(next_root, engine_id).is_none()
 }
 
+#[cfg(test)]
 fn prepare_update_engine(
     config: &UpdateConfig,
     contract: &ReleaseContract,
@@ -1254,26 +1622,44 @@ fn prepare_update_engine(
     next_root: &Path,
     installed_worker: impl FnOnce() -> AppResult<PathBuf>,
 ) -> AppResult<PathBuf> {
-    if !engine_needs_package(next_root, config, &contract.engine_id) {
+    prepare_update_engine_for(
+        config,
+        &contract.engine_id,
+        &contract.backend,
+        contract.engine.as_ref(),
+        directory,
+        next_root,
+        installed_worker,
+    )
+}
+
+fn prepare_update_engine_for(
+    config: &UpdateConfig,
+    engine_id: &str,
+    engine_backend: &str,
+    engine_package: Option<&EngineUpdate>,
+    directory: &Path,
+    next_root: &Path,
+    installed_worker: impl FnOnce() -> AppResult<PathBuf>,
+) -> AppResult<PathBuf> {
+    if !engine_needs_package_for(next_root, config, engine_id, engine_backend) {
+        if engine_backend != config.backend && !engine_backend.is_empty() {
+            if let Some(executable) = engine_executable_path(next_root, engine_id) {
+                return Ok(executable);
+            }
+        }
         // The new application carries the same engine. Keep the existing versioned
         // engine, or use the bundle; no payload, adoption or activation is needed.
         return installed_worker();
     }
-    let engine = contract
-        .engine
-        .as_ref()
-        .ok_or_else(|| invalid("The changed engine has no package"))?;
-    let engine_root = next_root.join("engines").join(&contract.engine_id);
+    let engine = engine_package.ok_or_else(|| invalid("The changed engine has no package"))?;
+    let engine_root = next_root.join("engines").join(engine_id);
     fs::create_dir_all(&engine_root)?;
     let engine_dir = engine_root.join("engine");
     if !engine_dir.exists() {
         install_engine_package(directory, engine, &config.public_key, &engine_dir)?;
     }
-    let engine_exe = engine_dir.join(if cfg!(windows) {
-        "localsr-worker.exe"
-    } else {
-        "localsr-worker"
-    });
+    let engine_exe = engine_dir.join(worker_executable_name());
     Ok(engine_exe)
 }
 
@@ -1319,7 +1705,7 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
     verify_file(&directory.join(&file.name), &file, &config.public_key)?;
     require_space(
         fs2::available_space(&directory)?,
-        contract.unpacked_size + 256 * 1024 * 1024,
+        contract.unpacked_size.max(checked.engine_unpacked_size) + 256 * 1024 * 1024,
     )?;
     state.persist_settings()?;
     let backup = update_storage::backup_profile(&state.paths, "before-install")?;
@@ -1327,12 +1713,33 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
     status.stage = "installing".into();
     status.message = "Backing up data and preparing the verified update…".into();
     publish(state, app, &mut status);
-    let engine_exe =
-        prepare_update_engine(config, contract, &directory, &state.paths.next_root, || {
-            worker::installed_worker_path(state, app)
-        })?;
+    let engine_exe = prepare_update_engine_for(
+        config,
+        &checked.engine_id,
+        &checked.engine_backend,
+        checked.engine_package.as_ref(),
+        &directory,
+        &state.paths.next_root,
+        || worker::installed_worker_path(state, app),
+    )?;
     crate::headless_smoke::run_worker_handshake(&engine_exe, Duration::from_secs(60), true)
         .map_err(AppError::Worker)?;
+    if (checked.engine_id != config.engine_id || checked.engine_backend != config.backend)
+        && engine_executable_path(&state.paths.next_root, &checked.engine_id).is_some()
+    {
+        write_engine_meta(
+            &state.paths.next_root,
+            &EngineMeta {
+                id: checked.engine_id.clone(),
+                backend: checked.engine_backend.clone(),
+                os: std::env::consts::OS.into(),
+                arch: std::env::consts::ARCH.into(),
+                protocol_version: PROTOCOL_VERSION,
+                handshake_passed: true,
+                version: checked.update.version.clone(),
+            },
+        )?;
+    }
     let active_file = state.paths.next_root.join("active-engine.txt");
     let previous_engine = fs::read(&active_file).ok();
     let result = (|| -> AppResult<()> {
@@ -1347,8 +1754,8 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
             std::thread::sleep(Duration::from_millis(100));
         }
         lock(&state.database)?.close_for_update()?;
-        if contract.engine_id != config.engine_id {
-            update_storage::write_atomic(&active_file, contract.engine_id.as_bytes())?;
+        if checked.engine_id != config.engine_id || checked.engine_backend != config.backend {
+            update_storage::write_atomic(&active_file, checked.engine_id.as_bytes())?;
         }
         if config.kind == "portable" && cfg!(target_os = "linux") {
             // Unpack only a copy of our own that was verified after it was made.

@@ -32,6 +32,7 @@ struct WorkerCommand {
     arguments: Vec<String>,
     working_directory: Option<PathBuf>,
     python_path: Option<PathBuf>,
+    is_installed_engine: bool,
 }
 
 #[derive(Default)]
@@ -158,6 +159,14 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
 
     let low_priority = lock(&state.settings)?.low_priority;
     let specification = resolve_worker_command(&state, &app)?;
+    state
+        .worker
+        .using_installed_engine
+        .store(specification.is_installed_engine, Ordering::SeqCst);
+    state
+        .worker
+        .engine_ready_seen
+        .store(false, Ordering::SeqCst);
     let mut command = Command::new(&specification.program);
     command.args(&specification.arguments);
     crate::process_priority::configure_command(&mut command, low_priority);
@@ -182,18 +191,36 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         command.env("LOCALSR_CRASHED_ENGINE", crashed_engine.to_string());
     }
 
-    let mut child = command.spawn().map_err(|error| {
-        // The next attempt still has to tell its engine which one crashed.
-        if crashed_engine != 0 {
-            state
-                .worker
-                .crashed_engine
-                .store(crashed_engine, Ordering::SeqCst);
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            // The next attempt still has to tell its engine which one crashed.
+            if crashed_engine != 0 {
+                state
+                    .worker
+                    .crashed_engine
+                    .store(crashed_engine, Ordering::SeqCst);
+            }
+            if specification.is_installed_engine && bundled_engine_executable(&app).is_some() {
+                let _ = crate::updates::deactivate_active_engine(&state.paths);
+                state
+                    .worker
+                    .using_installed_engine
+                    .store(false, Ordering::SeqCst);
+                if let Ok(mut runtime) = state.runtime.lock() {
+                    runtime.status_title = "Switched to bundled engine".into();
+                    runtime.status_detail =
+                        "The installed engine failed to start; using the bundled engine instead."
+                            .into();
+                }
+                emit_state_changed(&app);
+                return start_worker(state, app);
+            }
+            return Err(AppError::Worker(format!(
+                "could not start the LocalSR inference engine: {error}"
+            )));
         }
-        AppError::Worker(format!(
-            "could not start the LocalSR inference engine: {error}"
-        ))
-    })?;
+    };
     state.worker.pid.store(child.id(), Ordering::SeqCst);
     let tree = ProcessTree::new(&child);
     let stdin = child
@@ -466,6 +493,26 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
             failed,
         ) {
             thread::sleep(delay);
+            if let Err(error) = start_worker(state.clone(), app.clone()) {
+                give_up_on_engine(&state, &app, error.to_string());
+            }
+        } else if state.worker.using_installed_engine.load(Ordering::SeqCst)
+            && !state.worker.engine_ready_seen.load(Ordering::SeqCst)
+            && bundled_engine_executable(&app).is_some()
+        {
+            let _ = crate::updates::deactivate_active_engine(&state.paths);
+            state.worker.restart_count.store(0, Ordering::SeqCst);
+            state
+                .worker
+                .using_installed_engine
+                .store(false, Ordering::SeqCst);
+            if let Ok(mut runtime) = state.runtime.lock() {
+                runtime.status_title = "Switched to bundled engine".into();
+                runtime.status_detail =
+                    "The installed engine failed to start; using the bundled engine instead."
+                        .into();
+            }
+            emit_state_changed(&app);
             if let Err(error) = start_worker(state.clone(), app.clone()) {
                 give_up_on_engine(&state, &app, error.to_string());
             }
@@ -853,6 +900,25 @@ pub fn shutdown(state: &AppState) {
     if let Ok(mut sender) = state.worker.sender.lock() {
         *sender = None;
     }
+}
+
+/// Stop the running worker and start a new one after switching engines.
+pub fn restart_for_engine_switch(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
+    shutdown(state);
+    let start = Instant::now();
+    while state.worker.pid.load(Ordering::SeqCst) != 0 {
+        if start.elapsed() > Duration::from_secs(10) {
+            return Err(AppError::Worker(
+                "The inference worker did not stop in time to switch engines.".into(),
+            ));
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    state.worker.shutting_down.store(false, Ordering::SeqCst);
+    state.worker.restart_count.store(0, Ordering::SeqCst);
+    *lock(&state.engine)? = None;
+    *lock(&state.capabilities)? = CapabilityInfo::detecting();
+    start_worker(state.clone(), app.clone())
 }
 
 /// Ask a running worker to exit and respawn so it picks up the new `LOCALSR_MODEL_DIR`.
@@ -1400,6 +1466,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                     PROTOCOL_VERSION, info.minimum_protocol_version, info.protocol_version
                 )));
             }
+            state.worker.engine_ready_seen.store(true, Ordering::SeqCst);
             *lock(&state.engine)? = Some(info);
             {
                 let mut runtime = lock(&state.runtime)?;
@@ -1418,15 +1485,24 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
         }
         "capabilities_info" => {
             let capabilities = serde_json::from_value::<CapabilityInfo>(data.clone())?;
-            if state.choose_device.swap(false, Ordering::SeqCst) {
-                if let Some(device) = first_run_device(&capabilities.devices) {
-                    let mut settings = lock(&state.settings)?;
-                    if settings.device_id == "cpu" {
-                        settings.device_id = device;
-                        drop(settings);
-                        if let Err(error) = state.persist_settings() {
-                            eprintln!("Could not save the first-run device: {error}");
-                        }
+            let choose = state.choose_device.swap(false, Ordering::SeqCst);
+            let current_missing = {
+                let settings = lock(&state.settings)?;
+                settings.device_id != "cpu"
+                    && !capabilities
+                        .devices
+                        .iter()
+                        .any(|device| device.id == settings.device_id)
+            };
+            if choose || current_missing {
+                let replacement =
+                    first_run_device(&capabilities.devices).unwrap_or_else(|| "cpu".into());
+                let mut settings = lock(&state.settings)?;
+                if (choose && settings.device_id == "cpu") || current_missing {
+                    settings.device_id = replacement;
+                    drop(settings);
+                    if let Err(error) = state.persist_settings() {
+                        eprintln!("Could not save the selected device: {error}");
                     }
                 }
             }
@@ -2068,12 +2144,7 @@ pub fn installed_worker_path(state: &AppState, app: &AppHandle) -> AppResult<Pat
     Ok(resolve_worker_command(state, app)?.program)
 }
 
-/// The engine program this host runs: the one it ships beside itself, or the one an
-/// update installed (`updates::choose_engine` says which wins).
-pub(crate) fn engine_executable(
-    app: &AppHandle,
-    paths: &crate::paths::AppPaths,
-) -> Option<PathBuf> {
+pub(crate) fn bundled_engine_executable(app: &AppHandle) -> Option<PathBuf> {
     let executable_name = if cfg!(windows) {
         "localsr-worker.exe"
     } else {
@@ -2090,8 +2161,17 @@ pub(crate) fn engine_executable(
             candidates.push(parent.join(executable_name));
         }
     }
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+/// The engine program this host runs: the one it ships beside itself, or the one an
+/// update installed (`updates::choose_engine` says which wins).
+pub(crate) fn engine_executable(
+    app: &AppHandle,
+    paths: &crate::paths::AppPaths,
+) -> Option<PathBuf> {
     crate::updates::choose_host_engine(
-        candidates.into_iter().find(|path| path.is_file()),
+        bundled_engine_executable(app),
         crate::updates::active_engine(paths),
     )
 }
@@ -2109,6 +2189,7 @@ fn resolve_worker_command(state: &AppState, app: &AppHandle) -> AppResult<Worker
                     arguments: Vec::new(),
                     working_directory: None,
                     python_path: None,
+                    is_installed_engine: false,
                 });
             }
             return Err(AppError::Worker(
@@ -2118,12 +2199,17 @@ fn resolve_worker_command(state: &AppState, app: &AppHandle) -> AppResult<Worker
     }
     // After any explicit development worker, the engine this host runs (see
     // `engine_executable`); otherwise Python sources.
-    if let Some(path) = engine_executable(app, &state.paths) {
+    let bundled = bundled_engine_executable(app);
+    let installed = crate::updates::active_engine(&state.paths);
+    if let Some(path) = crate::updates::choose_host_engine(bundled.clone(), installed.clone()) {
+        let is_installed_engine =
+            installed.as_ref() == Some(&path) && bundled.as_ref() != Some(&path);
         return Ok(WorkerCommand {
             program: path,
             arguments: Vec::new(),
             working_directory: None,
             python_path: None,
+            is_installed_engine,
         });
     }
 
@@ -2185,6 +2271,7 @@ fn resolve_worker_command(state: &AppState, app: &AppHandle) -> AppResult<Worker
             arguments: vec!["-u".into(), "-m".into(), "localsr.worker".into()],
             working_directory: Some(state.paths.repo_root.clone()),
             python_path: Some(source),
+            is_installed_engine: false,
         })
     }
 }

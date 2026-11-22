@@ -13,23 +13,63 @@ use flate2::read::GzDecoder;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Part {
-    filename: String,
-    size: u64,
-    sha256: String,
+pub struct ManifestPart {
+    pub filename: String,
+    pub size: u64,
+    pub sha256: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Manifest {
-    schema_version: u32,
-    format: String,
-    backend: String,
-    file_count: u64,
-    unpacked_bytes: u64,
-    parts: Vec<Part>,
+pub struct ParsedManifest {
+    pub schema_version: u32,
+    pub format: String,
+    pub backend: String,
+    pub file_count: u64,
+    pub unpacked_bytes: u64,
+    pub parts: Vec<ManifestPart>,
+}
+
+pub fn parse_manifest(manifest: &[u8]) -> io::Result<ParsedManifest> {
+    let manifest: ParsedManifest =
+        serde_json::from_slice(manifest).map_err(|error| invalid(error.to_string()))?;
+    if manifest.schema_version != 1
+        || manifest.format != "tar.gz.parts"
+        // scripts/prepare_engine_payload.py BACKENDS: one per edition's engine.
+        || !matches!(
+            manifest.backend.as_str(),
+            "CUDA" | "ROCM" | "CPU" | "MPS" | "DIRECTML"
+        )
+        || manifest.parts.is_empty()
+        || manifest.parts.len() > 64
+        || manifest.file_count == 0
+        || manifest.file_count > 100_000
+        || manifest.unpacked_bytes == 0
+        || manifest.unpacked_bytes > 100 * 1024u64.pow(3)
+    {
+        return Err(invalid("unsupported or invalid engine payload manifest"));
+    }
+    let mut names = HashSet::new();
+    for part in &manifest.parts {
+        let name = Path::new(&part.filename);
+        if !safe_relative(name)
+            || name.components().count() != 1
+            // Case-insensitive volumes read two spellings as one file.
+            || !names.insert(part.filename.to_lowercase())
+            || part.size == 0
+            || part.size >= 2 * 1024u64.pow(3)
+            || part.sha256.len() != 64
+            || !part
+                .sha256
+                .bytes()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        {
+            return Err(invalid("invalid or duplicate engine payload part"));
+        }
+    }
+    Ok(manifest)
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -58,7 +98,7 @@ fn safe_relative(path: &Path) -> bool {
 // publishing extraction. An open descriptor alone does not stop in-place writes.
 struct VerifiedPart {
     file: File,
-    expected: Part,
+    expected: ManifestPart,
     digest: Sha256,
     bytes: u64,
 }
@@ -222,24 +262,7 @@ pub fn install(manifest_path: &Path, source: &Path, destination: &Path) -> io::R
 /// Install from manifest bytes the caller has verified, so a manifest file replaced
 /// after verification is never read.
 pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> io::Result<()> {
-    let manifest: Manifest =
-        serde_json::from_slice(manifest).map_err(|error| invalid(error.to_string()))?;
-    if manifest.schema_version != 1
-        || manifest.format != "tar.gz.parts"
-        // scripts/prepare_engine_payload.py BACKENDS: one per edition's engine.
-        || !matches!(
-            manifest.backend.as_str(),
-            "CUDA" | "ROCM" | "CPU" | "MPS" | "DIRECTML"
-        )
-        || manifest.parts.is_empty()
-        || manifest.parts.len() > 64
-        || manifest.file_count == 0
-        || manifest.file_count > 100_000
-        || manifest.unpacked_bytes == 0
-        || manifest.unpacked_bytes > 100 * 1024u64.pow(3)
-    {
-        return Err(invalid("unsupported or invalid engine payload manifest"));
-    }
+    let manifest = parse_manifest(manifest)?;
     let parent = parent_folder(destination).ok_or_else(|| invalid("missing engine parent"))?;
     if destination.file_name().is_none_or(|name| name != "engine") {
         return Err(invalid("engine destination must be an engine directory"));
@@ -249,25 +272,10 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
             "not enough free space to install the inference engine",
         ));
     }
-    let mut names = HashSet::new();
     let mut files = Vec::new();
     let mut problems = Vec::new();
     for part in &manifest.parts {
         let name = Path::new(&part.filename);
-        if !safe_relative(name)
-            || name.components().count() != 1
-            // Case-insensitive volumes read two spellings as one file.
-            || !names.insert(part.filename.to_lowercase())
-            || part.size == 0
-            || part.size >= 2 * 1024u64.pow(3)
-            || part.sha256.len() != 64
-            || !part
-                .sha256
-                .bytes()
-                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
-        {
-            return Err(invalid("invalid or duplicate engine payload part"));
-        }
         let mut file = match File::open(source.join(name)) {
             Ok(file) => file,
             Err(error) => {
@@ -303,7 +311,7 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
         file.seek(SeekFrom::Start(0))?;
         files.push(VerifiedPart {
             file,
-            expected: Part {
+            expected: ManifestPart {
                 filename: part.filename.clone(),
                 size: part.size,
                 sha256: part.sha256.clone(),

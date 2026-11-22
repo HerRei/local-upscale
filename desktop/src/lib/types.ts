@@ -540,6 +540,53 @@ export interface VideoComparisonSources {
   enhanced_url: string;
 }
 
+export interface InstalledEngine {
+  id: string;
+  backend: string;
+  bundled: boolean;
+  active: boolean;
+  path: string;
+}
+
+export interface EngineRecommendation {
+  backend: string;
+  adapter_name?: string | null;
+}
+
+export interface EngineCatalogEntry {
+  backend: string;
+  engine_id: string;
+  version: string;
+  size: number;
+  manifest_url: string;
+  parts_count: number;
+  installed: boolean;
+  active: boolean;
+}
+
+export interface EngineDownloadStatus {
+  stage: string;
+  backend: string;
+  engine_id: string;
+  downloaded: number;
+  total: number;
+  error?: string | null;
+}
+
+export interface EngineManagerSnapshot {
+  supported: boolean;
+  managed_by_store: boolean;
+  configured: boolean;
+  active_backend: string;
+  active_engine_id: string;
+  bundled_backend: string;
+  installed: InstalledEngine[];
+  recommendation: EngineRecommendation;
+  catalog: EngineCatalogEntry[];
+  catalog_error?: string | null;
+  download: EngineDownloadStatus;
+}
+
 export interface AppSnapshot {
   app_version: string;
   protocol_version: number;
@@ -556,6 +603,7 @@ export interface AppSnapshot {
   default_model_directory?: string;
   model_directory_missing?: boolean;
   gpu_download_notice?: string | null;
+  engines?: EngineManagerSnapshot;
 }
 
 export interface WorkerEnvelope {

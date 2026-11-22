@@ -11,9 +11,11 @@ vi.mock('@tauri-apps/api/path', () => ({
 }));
 
 import {
+  cancelEngineInstall,
   chooseCustomModel,
   chooseEditModelFile,
   chooseEditRuntime,
+  chooseEngineManifest,
   chooseExternalFFmpeg,
   chooseMediaFiles,
   chooseMediaFolder,
@@ -21,11 +23,17 @@ import {
   chooseOutputDirectory,
   dismissGpuDownloadNotice,
   exportBenchmark,
+  importEngine,
+  installEngine,
+  listenForEngineStatus,
   listenForModelMove,
   listenForWorker,
+  refreshEngineCatalog,
+  removeEngine,
   saveCustomEditModel,
   resetModelDirectory,
   setModelDirectory,
+  useEngine,
 } from './api';
 
 afterEach(() => {
@@ -187,4 +195,54 @@ it('forwards model folder commands, move progress events, and GPU notice dismiss
     },
   });
   expect(updates).toHaveLength(1);
+});
+
+it('forwards engine manager commands and status events', async () => {
+  (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+  invoke.mockResolvedValueOnce([]);
+  await refreshEngineCatalog('beta');
+  expect(invoke).toHaveBeenCalledWith('refresh_engine_catalog', { channel: 'beta' });
+
+  invoke.mockResolvedValueOnce(undefined);
+  await installEngine('cuda');
+  expect(invoke).toHaveBeenCalledWith('install_engine', { backend: 'cuda' });
+
+  invoke.mockResolvedValueOnce(undefined);
+  await cancelEngineInstall();
+  expect(invoke).toHaveBeenCalledWith('cancel_engine_install');
+
+  invoke.mockResolvedValueOnce(undefined);
+  await useEngine('directml');
+  expect(invoke).toHaveBeenCalledWith('use_engine', { backend: 'directml' });
+
+  invoke.mockResolvedValueOnce(undefined);
+  await removeEngine('windows-x86_64-directml-1');
+  expect(invoke).toHaveBeenCalledWith('remove_engine', { id: 'windows-x86_64-directml-1' });
+
+  invoke.mockResolvedValueOnce('/tmp/win.engine-payload.json');
+  expect(await chooseEngineManifest()).toBe('/tmp/win.engine-payload.json');
+  expect(invoke).toHaveBeenCalledWith('choose_engine_manifest');
+
+  invoke.mockResolvedValueOnce(undefined);
+  await importEngine('/tmp/win.engine-payload.json');
+  expect(invoke).toHaveBeenCalledWith('import_engine', { path: '/tmp/win.engine-payload.json' });
+
+  let deliver: (event: { payload: unknown }) => void = () => {};
+  listen.mockImplementation(async (_name: string, handler: typeof deliver) => {
+    deliver = handler;
+    return () => {};
+  });
+  const statuses: unknown[] = [];
+  await listenForEngineStatus((status) => statuses.push(status));
+  deliver({
+    payload: {
+      stage: 'downloading',
+      backend: 'cuda',
+      engine_id: 'windows-x86_64-cuda-1',
+      downloaded: 100,
+      total: 1000,
+      error: null,
+    },
+  });
+  expect(statuses).toHaveLength(1);
 });

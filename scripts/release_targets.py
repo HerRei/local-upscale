@@ -195,24 +195,34 @@ def download_table(release_version: str) -> str:
     def package(target_id: str) -> str:
         return update_files(entries[target_id], release_version)["package"]
 
-    rows = [
+    main_rows = [
         ("Mac (M1 or newer)", f"`{package('macos-arm64-mps')}`"),
-        ("Windows, no graphics card or not sure", f"`{package('windows-x86_64-cpu')}`"),
+        ("Windows", f"`{package('windows-x86_64-cpu')}`"),
+        ("Linux", f"`{package('linux-x86_64-cpu')}`"),
+    ]
+    offline_rows = [
         ("Windows, AMD or Intel graphics", f"`{package('windows-x86_64-directml')}`"),
         (
             "Windows, NVIDIA",
             f"`{package('windows-x86_64-cuda')}` and all "
             f"`{update_files(entries['windows-x86_64-cuda'], release_version)['engine_prefix']}.part-*` files in the same folder",
         ),
-        ("Linux, no graphics card or Intel", f"`{package('linux-x86_64-cpu')}`"),
         ("Linux, AMD", f"all `{package('linux-x86_64-rocm')}.part-*` files, joined"),
         ("Linux, NVIDIA", f"all `{package('linux-x86_64-cuda')}.part-*` files, joined"),
     ]
     return (
         "## Which file do I need?\n\n| Computer | Download |\n|---|---|\n"
-        + "".join(f"| {computer} | {download} |\n" for computer, download in rows)
-        + "\nThe other files (signatures, checksums, engine-payload.json and source archives) "
-        "are for checking and updates. You do not need them to install.\n"
+        + "".join(f"| {computer} | {download} |\n" for computer, download in main_rows)
+        + "\nThe app offers the faster GPU engine after setup.\n\n"
+        + "## Offline and advanced downloads\n\n"
+        + "| Computer | Download |\n|---|---|\n"
+        + "".join(f"| {computer} | {download} |\n" for computer, download in offline_rows)
+        + "\nTo import an engine offline, download the `*.engine-payload.json` manifest, "
+        + "its `.engine.tar.gz.part-*` files and their `.sig` signature files into one folder, "
+        + "then open **Advanced -> Hardware -> Engine -> Change… -> Import engine from file…** "
+        + "and choose the `*.engine-payload.json` file.\n\n"
+        + "The other files (signatures, checksums and source archives) "
+        + "are for verification and updates.\n"
     )
 
 

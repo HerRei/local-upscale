@@ -5,6 +5,8 @@ import { demoSnapshot } from './demo';
 import type {
   AppSnapshot,
   CustomEditModel,
+  EngineCatalogEntry,
+  EngineDownloadStatus,
   IntegrationStatus,
   LaunchIntent,
   ModelMoveProgress,
@@ -72,6 +74,34 @@ export async function listenForModelMove(
 
 export async function dismissGpuDownloadNotice(): Promise<void> {
   if (isTauri()) await invoke('dismiss_gpu_download_notice');
+}
+
+export async function refreshEngineCatalog(channel?: string | null): Promise<EngineCatalogEntry[]> {
+  if (!isTauri()) return [];
+  return invoke<EngineCatalogEntry[]>('refresh_engine_catalog', { channel: channel ?? null });
+}
+
+export const installEngine = (backend: string): Promise<void> =>
+  invoke('install_engine', { backend });
+
+export const cancelEngineInstall = (): Promise<void> => invoke('cancel_engine_install');
+
+export const useEngine = (backend: string): Promise<void> => invoke('use_engine', { backend });
+
+export const removeEngine = (id: string): Promise<void> => invoke('remove_engine', { id });
+
+export async function chooseEngineManifest(): Promise<string | null> {
+  if (!isTauri()) return null;
+  return invoke<string | null>('choose_engine_manifest');
+}
+
+export const importEngine = (path: string): Promise<void> => invoke('import_engine', { path });
+
+export async function listenForEngineStatus(
+  handler: (status: EngineDownloadStatus) => void,
+): Promise<UnlistenFn> {
+  if (!isTauri()) return () => {};
+  return listen<EngineDownloadStatus>('engine-status', (event) => handler(event.payload));
 }
 
 export async function chooseCustomModel(): Promise<string | null> {

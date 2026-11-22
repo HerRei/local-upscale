@@ -38,6 +38,8 @@ const MODEL_FOLDER_REFUSAL: &str =
     "LocalSR can only store models in its default folder or a folder you chose. Choose the model folder again.";
 const EXPORT_REFUSAL: &str =
     "LocalSR can only export to a destination you chose in its save dialog. Choose the destination again.";
+const ENGINE_MANIFEST_REFUSAL: &str =
+    "LocalSR can only import an engine manifest that you chose in its file dialog.";
 
 #[derive(Default)]
 pub struct GrantRegistry {
@@ -59,6 +61,7 @@ struct RegistryState {
     model_files: HashSet<PathBuf>,
     persisted_models: HashSet<PathBuf>,
     export_files: HashSet<PathBuf>,
+    engine_manifests: HashSet<PathBuf>,
 }
 
 impl GrantRegistry {
@@ -282,6 +285,29 @@ impl GrantRegistry {
         }
     }
 
+    pub fn grant_engine_manifest(&self, path: &Path) {
+        let Ok(resolved) = resolve_path(path) else {
+            return;
+        };
+        if let Ok(mut state) = self.inner.lock() {
+            state.engine_manifests.insert(resolved);
+        }
+    }
+
+    pub fn check_engine_manifest(&self, path: &Path) -> AppResult<PathBuf> {
+        let resolved = self.resolve_requested(path, ENGINE_MANIFEST_REFUSAL)?;
+        let allowed = self
+            .inner
+            .lock()
+            .map(|state| state.engine_manifests.contains(&resolved))
+            .unwrap_or(false);
+        if allowed {
+            Ok(resolved)
+        } else {
+            Err(AppError::Validation(ENGINE_MANIFEST_REFUSAL.into()))
+        }
+    }
+
     pub fn check_media_input(&self, path: &Path) -> AppResult<PathBuf> {
         let resolved = self.resolve_requested(path, MEDIA_REFUSAL)?;
         let allowed = self
@@ -393,6 +419,7 @@ impl GrantRegistry {
                     .chain(&state.model_folders)
                     .chain(&state.model_files)
                     .chain(&state.export_files)
+                    .chain(&state.engine_manifests)
                     .map(|root| root.to_string_lossy().into_owned());
                 local_or_on_share_of(&path.to_string_lossy(), roots)
             })
