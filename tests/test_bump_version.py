@@ -261,4 +261,4 @@ def test_readme_download_table_matches_registry():
         .replace("## Which file", "### Which file", 1)
         .replace("## Offline and advanced downloads", "### Offline and advanced downloads", 1)
     )
-    assert expected in (ROOT / "README.md").read_text()
+    assert expected in (ROOT / "README.md").read_text(encoding="utf-8")

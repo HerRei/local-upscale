@@ -204,6 +204,8 @@ def test_windows_path_search_accepts_quoted_expanded_absolute_directories(monkey
     import ntpath
 
     monkeypatch.setenv("LOCALSR_TEST_FFMPEG_DIR", r"C:\Tools")
+    # The folder does not exist; on Windows the real realpath may change its case.
+    monkeypatch.setattr(ntpath, "realpath", lambda path: path)
     monkeypatch.setattr(
         ntpath, "isfile", lambda path: ntpath.normcase(path) == r"c:\tools\ffmpeg.exe"
     )
