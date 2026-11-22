@@ -101,19 +101,21 @@ These apply to v0.5.0-beta. Please read them before starting a long job.
 ## Image editing
 
 - Edit is experimental and tested only on the Mac. CUDA/ROCm packages also
-  include editing support, but it has not been validated on those GPUs. One
-  configuration is validated: FLUX.2 klein 4B Q4_0 at 512 px on the 16 GB M1 Pro,
-  about two minutes per edit with other apps open, without swapping. FLUX.2 klein Q8_0,
+  include editing support, but it has not been validated on those GPUs. Two
+  configurations are validated at 512 px on the 16 GB M1 Pro: FLUX.2 klein 4B
+  Q4_0 (about two minutes per edit with other apps open, without swapping) and
+  Mage-Flow-Edit-Turbo Q6_K (about 96 s on the CPU backend because Metal
+  produces blank white output for its diffusion transformer). FLUX.2 klein Q8_0,
   the Qwen bundles and larger edit sizes have not run on real hardware yet; their
   memory profiles are estimates. Up to v0.1.5-beta the memory guard misread free
   memory on Macs and refused edits that fit.
-- A 16 GB Mac can use FLUX.2 klein 4B; Qwen Image Edit 2511 needs 24 GB or more.
+- A 16 GB Mac can use FLUX.2 klein 4B or Mage-Flow-Edit-Turbo; Qwen Image Edit 2511 needs 24 GB or more.
   Edits are limited to 512, 768 or 1024 px on the longest side, one image at a
   time, and the result is a new PNG.
 - The editing models are separate downloads of 5 to 26 GB. Qwen Image 2.1 is
   not offered for download because its license allows research and evaluation
   only, though you can supply your own local files for Qwen Image Edit 2511,
-  Qwen Image 2.1, or FLUX.2 klein under **Use your own edit model…**.
+  Qwen Image 2.1, FLUX.2 klein, or Mage-Flow-Edit-Turbo under **Use your own edit model…**.
 
 ## Models
 

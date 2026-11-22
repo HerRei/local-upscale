@@ -102,6 +102,7 @@ describe('Edit helpers', () => {
       'qwen-image-edit-2511',
       'qwen-image-2.1',
       'flux2-klein',
+      'mage-flow-edit-turbo',
     ]);
     expect(customEditFamilySpec('qwen-image-2.1')).toMatchObject({
       needsVision: true,
@@ -113,7 +114,25 @@ describe('Edit helpers', () => {
       defaultSteps: 4,
       cfgScale: 1,
     });
+    expect(customEditFamilySpec('mage-flow-edit-turbo')).toMatchObject({
+      needsVision: true,
+      defaultSteps: 4,
+      cfgScale: 1,
+    });
     expect(editFamilyLabel('qwen-image-2.1')).toBe('Qwen Image 2.1');
     expect(editFamilyLabel('flux2-klein')).toBe('FLUX.2 klein');
+    expect(editFamilyLabel('mage-flow-edit-turbo')).toBe('Mage-Flow-Edit-Turbo');
+  });
+
+  it('keeps FLUX.2 klein as the Mac default while offering Mage-Flow-Edit-Turbo on 16 GB', () => {
+    const capabilities = demoSnapshot().capabilities;
+    capabilities.system_ram_total = 16 * EDIT_GIB;
+    const mage = models.find((model) => model.model_id === 'mage_flow_edit_turbo_q6_k')!;
+    expect(mage).toBeDefined();
+    expect(editFitFor(mage, capabilities, gpu('mps', 16))).toBe('runs');
+    expect(editFitFor(mage, capabilities, gpu('cuda:0', 8))).toBe('runs');
+    expect(recommendAnyEditModel(models, capabilities, gpu('mps', 16))?.model_id).toBe(
+      'flux2_klein_4b_q4_0',
+    );
   });
 });
