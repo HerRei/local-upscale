@@ -98,6 +98,7 @@
   import { demoSnapshot } from './lib/demo';
   import { modal } from './lib/modal';
   import {
+    colourHardwareLabel,
     engineLabel,
     hardwarePatch,
     interpolationHardwareLabel,
@@ -286,6 +287,7 @@
     blur: 'blur',
     jpeg: 'JPEG',
     noise: 'noise',
+    colour: 'colour',
   };
   let faceTermsAccepted = false;
   let previewPane: PreviewPane | undefined;
@@ -601,7 +603,9 @@
   // The fixes this job runs, in order. In Restore the last one is the model itself.
   $: imageFixes =
     !usingTemporalVideo && settings.task !== 'edit' && Boolean(settings.task)
-      ? settings.fix_stages
+      ? settings.task === 'video'
+        ? settings.fix_stages.filter((selection) => selection.fix !== 'colour')
+        : settings.fix_stages
       : [];
   // Engines without image_multi_fix run one fix at most.
   $: fixPlanSupported =
@@ -691,7 +695,7 @@
   $: hasWorkAt1x =
     settings.task === 'video'
       ? (!usingTemporalVideo &&
-          (settings.fix_stages.length > 0 ||
+          (imageFixes.length > 0 ||
             (Boolean(settings.deflicker) && !preservingHdr) ||
             ((settings.video_interpolation ?? 'off') !== 'off' && interpolationSupported))) ||
         (Boolean(settings.video_clean_audio) && !audioDisabled)
@@ -1121,7 +1125,13 @@
   $: planNeedsFile = plan.some((stage) => stage.needsFile);
   $: planMissing = plan.some((stage) => stage.missing);
   $: fixChips = (
-    restoring ? ['noise', 'blur', 'jpeg'] : ['noise', 'jpeg', 'blur', 'faces']
+    settings.task === 'video'
+      ? restoring
+        ? ['noise', 'blur', 'jpeg']
+        : ['noise', 'jpeg', 'blur', 'faces']
+      : restoring
+        ? ['noise', 'blur', 'jpeg', 'colour']
+        : ['noise', 'jpeg', 'blur', 'colour', 'faces']
   ) as FixKind[];
   $: prepareReady =
     !snapshot.runtime.active_job_id &&
@@ -1178,15 +1188,21 @@
               ? activeDevice
                 ? deviceLabel(activeDevice)
                 : 'detecting hardware'
-              : interpolationHardwareLabel(
-                  engineLabel(
-                    settings,
-                    snapshot.capabilities,
-                    selectedModel?.architecture,
-                    activeDevice ? deviceLabel(activeDevice) : 'detecting hardware',
+              : colourHardwareLabel(
+                  interpolationHardwareLabel(
+                    engineLabel(
+                      settings,
+                      snapshot.capabilities,
+                      selectedModel?.architecture,
+                      activeDevice ? deviceLabel(activeDevice) : 'detecting hardware',
+                    ),
+                    settings.device_id,
+                    settings.task === 'video' && (settings.video_interpolation ?? 'off') !== 'off',
                   ),
                   settings.device_id,
-                  settings.task === 'video' && (settings.video_interpolation ?? 'off') !== 'off',
+                  !skipUpscale &&
+                    selectedModel?.architecture !== 'DDColor' &&
+                    imageFixes.some((selection) => selection.fix === 'colour'),
                 )
         }`
       : '';
@@ -2535,7 +2551,8 @@
         quality: settings.quality,
         content: settings.content,
         recipe_name: snapshot.recipes.find((recipe) => activeRecipeIds.has(recipe.id))?.name ?? '',
-        fixes: [...settings.fixes],
+        fixes:
+          task === 'video' ? settings.fixes.filter((fix) => fix !== 'colour') : [...settings.fixes],
       },
       batch_mode: batchMode,
       task,
@@ -3903,7 +3920,7 @@
                   <div class="field-heading">
                     <span class="field-label" id="fix-label">Fix first</span><HelpTip
                       label="Fix first"
-                      text="Each problem you pick gets its own fix, run before the upscaler in the order listed under Model. The ↑ and ↓ buttons change that order; each fix's Change… picks its model, which LocalSR remembers for that problem."
+                      text="Each problem you pick gets its own fix, run before the upscaler in the order listed under Model. The ↑ and ↓ buttons change that order; each fix's Change… picks its model, which LocalSR remembers for that problem. Colour adds colour to black-and-white photos."
                     />
                   </div>
                 {/if}
@@ -4009,7 +4026,7 @@
                     stage.audioModel}
                   {@const changeSlot =
                     stage.role === 'fix'
-                      ? stage.fix && 'fix'
+                      ? stage.fix !== 'colour' && stage.fix && 'fix'
                       : stage.role === 'primary' && !stage.videoModel
                         ? stage.editModel
                           ? 'edit'
@@ -4090,7 +4107,15 @@
                   {@const stageDownload = target ? downloadMap.get(target.model_id) : undefined}
                   <!-- Line 1: role, name, arrows and Change…; line 2 the library links; line 3 the note. -->
                   <div class="plan-row" role="listitem">
-                    <span class="stage">{stage.label}</span>
+                    <span class="stage"
+                      >{#if stage.fix === 'colour' || stage.model?.purposes.includes('colorize')}<span
+                          class="label-with-tip"
+                          >{stage.label}<HelpTip
+                            label="Colour"
+                            text="Adds colour to black-and-white photos before upscaling (or at 1× in Restore). DDColor-L needs a 912 MB download. Colours are a guess. Already colourful photos still run with a note."
+                          /></span
+                        >{:else}{stage.label}{/if}</span
+                    >
                     <div class="name" title={name}>{name}</div>
                     <div class="plan-end">
                       <span class="state" class:warn={stage.needsFile}

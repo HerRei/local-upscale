@@ -122,4 +122,37 @@ describe('several fixes in one pass', () => {
     // A one-stage job reads as before.
     expect(title(0, 1)).toBe('Enhancing');
   });
+
+  it('adds colour as a photo-only fix stage and excludes it from video plans', () => {
+    const snapshot = demoSnapshot();
+    const withColour = toggleFixStage([], 'colour');
+    expect(withColour).toEqual([{ fix: 'colour', model_id: '' }]);
+
+    const photoPlan = resolvePlan(
+      snapshot,
+      {
+        ...snapshot.settings,
+        task: 'upscale',
+        selected_model_id: 'span_photo_x4',
+        fix_stages: [{ fix: 'colour', model_id: 'ddcolor_modelscope' }],
+      },
+      { faceEnabled: false, usingTemporalVideo: false },
+    );
+    expect(photoPlan.map((stage) => [stage.role, stage.fix, stage.model?.model_id])).toEqual([
+      ['fix', 'colour', 'ddcolor_modelscope'],
+      ['primary', undefined, 'span_photo_x4'],
+    ]);
+
+    const videoPlan = resolvePlan(
+      snapshot,
+      {
+        ...snapshot.settings,
+        task: 'video',
+        selected_model_id: 'span_photo_x4',
+        fix_stages: [{ fix: 'colour', model_id: 'ddcolor_modelscope' }],
+      },
+      { faceEnabled: false, usingTemporalVideo: false },
+    );
+    expect(videoPlan.map((stage) => stage.fix)).toEqual([undefined]);
+  });
 });

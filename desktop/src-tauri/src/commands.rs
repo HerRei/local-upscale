@@ -826,7 +826,7 @@ fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
         // The frontend reconstructs recipes without stages from their top-level fields.
         return Ok(());
     }
-    if recipe.stages.len() > 5
+    if recipe.stages.len() > 6
         || recipe.stages.iter().any(|stage| {
             stage.model_id.trim().is_empty()
                 || !matches!(
@@ -847,13 +847,23 @@ fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
     let mut fixes = HashSet::new();
     if recipe.stages.iter().any(|stage| {
         stage.fix.as_deref().is_some_and(|fix| {
-            !matches!(fix, "blur" | "jpeg" | "noise")
+            !matches!(fix, "blur" | "jpeg" | "noise" | "colour")
                 || !matches!(stage.kind.as_str(), "deblock" | "restore")
                 || !fixes.insert(fix)
         })
     }) {
         return Err(AppError::Validation(
             "recipe fix kinds must be known, unique and on restoration stages".into(),
+        ));
+    }
+    if recipe.task == "video"
+        && recipe
+            .stages
+            .iter()
+            .any(|stage| stage.fix.as_deref() == Some("colour"))
+    {
+        return Err(AppError::Validation(
+            "Colour is only available for photos, not video.".into(),
         ));
     }
     let kinds: Vec<&str> = recipe
@@ -866,7 +876,7 @@ fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
             let upscale = kinds.iter().position(|kind| *kind == "upscale");
             upscale.is_some_and(|index| {
                 kinds.iter().filter(|kind| **kind == "upscale").count() == 1
-                    && index <= 3
+                    && index <= 4
                     && kinds[..index]
                         .iter()
                         .all(|kind| matches!(*kind, "deblock" | "restore"))
@@ -1257,6 +1267,9 @@ fn model_fixes(model: &CatalogModel) -> Vec<String> {
     }
     if has("deblur") {
         found.push("blur".to_owned());
+    }
+    if has("colorize") {
+        found.push("colour".to_owned());
     }
     if has("restoration") && found.is_empty() {
         found.push("jpeg".to_owned());
@@ -3290,11 +3303,11 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
     validate_custom_edit_model(&settings.custom_edit_model)?;
     if !matches!(settings.quality.as_str(), "" | "quick" | "best" | "custom")
         || !matches!(settings.content.as_str(), "" | "photo" | "illustration")
-        || settings.fixes.len() > 4
+        || settings.fixes.len() > 5
         || !settings
             .fixes
             .iter()
-            .all(|fix| matches!(fix.as_str(), "noise" | "jpeg" | "blur" | "faces"))
+            .all(|fix| matches!(fix.as_str(), "noise" | "jpeg" | "blur" | "colour" | "faces"))
         || settings.preset_pins.len() > 64
         || !settings
             .preset_pins
@@ -3383,15 +3396,15 @@ fn validate_fix_engine(
 
 fn validate_fix_selections(stages: &[crate::types::FixStageSelection]) -> AppResult<()> {
     let mut fixes = HashSet::new();
-    if stages.len() > 3
+    if stages.len() > 4
         || stages.iter().any(|stage| {
-            !matches!(stage.fix.as_str(), "blur" | "jpeg" | "noise")
+            !matches!(stage.fix.as_str(), "blur" | "jpeg" | "noise" | "colour")
                 || !fixes.insert(&stage.fix)
                 || stage.model_id.len() > 64
         })
     {
         return Err(AppError::Validation(
-            "choose up to three different fixes: blur, JPEG or noise".into(),
+            "choose up to four different fixes: blur, JPEG, noise or colour".into(),
         ));
     }
     Ok(())
@@ -3556,6 +3569,11 @@ struct ResolvedImageStage {
 
 fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResult<ModelSelection> {
     validate_fix_selections(&input.fix_stages)?;
+    if input.task == "video" && input.fix_stages.iter().any(|stage| stage.fix == "colour") {
+        return Err(AppError::Validation(
+            "Colour is only available for photos, not video.".into(),
+        ));
+    }
     let restoring =
         input.task == "denoise" || (input.task == "video" && input.video_task == "denoise");
     if !input.fix_stages.is_empty()
@@ -3629,6 +3647,11 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
             .find(|model| model.model_id == input.model_id)
             .ok_or_else(|| AppError::Validation("unknown image model".into()))?;
         validate_model_for_task(model, if restoring { "denoise" } else { &input.task })?;
+        if input.task == "video" && model.purposes.iter().any(|purpose| purpose == "colorize") {
+            return Err(AppError::Validation(
+                "Colour is only available for photos, not video.".into(),
+            ));
+        }
         if !restoring && input.output_scale > model.native_scale {
             return Err(AppError::Validation(format!(
                 "the selected model supports output scales up to {}×",

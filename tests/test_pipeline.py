@@ -577,8 +577,8 @@ def test_multi_fix_rejects_duplicate_semantics_and_primary_roles():
             _stage("upscale", "main", "main", role="primary"),
         ],
         [_stage("restore", "a", "a", fix="unknown"), _stage("upscale", "main", "main")],
-        [_stage("restore", str(i), str(i)) for i in range(4)] + [_stage("upscale", "main", "main")],
         [_stage("restore", str(i), str(i)) for i in range(5)] + [_stage("upscale", "main", "main")],
+        [_stage("restore", str(i), str(i)) for i in range(6)] + [_stage("upscale", "main", "main")],
     ):
         with pytest.raises(ValueError):
             parse_pipeline_stages(stages)

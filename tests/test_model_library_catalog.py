@@ -34,6 +34,7 @@ def test_fix_chips_map_to_the_expected_checkpoints() -> None:
     assert CATALOG_BY_ID.get("nafnet_gopro_deblur").fixes == ("blur",)
     assert CATALOG_BY_ID.get("denoise_realplksr_1x").fixes == ("noise",)
     assert CATALOG_BY_ID.get("nafnet_sidd_width64").fixes == ("noise",)
+    assert CATALOG_BY_ID.get("ddcolor_modelscope").fixes == ("colour",)
     assert CATALOG_BY_ID.get("span_photo_x4").fixes == ()
 
 
@@ -57,7 +58,7 @@ def test_rights_status_is_separate_from_support_tier() -> None:
         assert "4x" not in entry["display_name"]
         assert entry["role"]
         assert entry["stage"] in {"upscale", "deblock", "restore", "face_restore"}
-        assert set(entry["fixes"]) <= {"noise", "jpeg", "blur"}
+        assert set(entry["fixes"]) <= {"noise", "jpeg", "blur", "colour"}
         assert set(entry["content"]) <= {"photo", "illustration", "face"}
         assert entry["rights_status"] in {"verified", "attribution", "unresolved", "non_commercial"}
 

@@ -27,6 +27,7 @@ class ModelPurpose(StrEnum):
     ILLUSTRATION = "illustration"
     DENOISE = "denoise"
     DEBLUR = "deblur"
+    COLORIZE = "colorize"
     RESTORATION = "restoration"
     FACE = "face"
     VIDEO = "video"
@@ -103,6 +104,8 @@ class CatalogModel:
             found.append("noise")
         if ModelPurpose.DEBLUR in self.purposes:
             found.append("blur")
+        if ModelPurpose.COLORIZE in self.purposes:
+            found.append("colour")
         if ModelPurpose.RESTORATION in self.purposes and not found:
             found.append("jpeg")
         return tuple(found)
@@ -704,6 +707,38 @@ MODEL_CATALOG = (
         vram_estimate_mb=4000,
         commercial_use_status="allowed",
         preset_eligible=False,
+    ),
+    CatalogModel(
+        model_id="ddcolor_modelscope",
+        role="Photo colorization (DDColor-L); large download",
+        stage="restore",
+        name="DDColor — DDColor-L",
+        filename="ddcolor_modelscope.pth",
+        description=(
+            "DDColor-L model for adding natural colour to black-and-white photos. "
+            "Trained on ImageNet; runs on the luminance channel at 512×512 and keeps "
+            "the original detail."
+        ),
+        size_bytes=911_914_869,
+        sha256="d81711971ec59200da26d5e8a1afae8dd3778d495ea8ad7a7dadc769f403f7e7",
+        download_url=(
+            "https://huggingface.co/piddnad/ddcolor_modelscope/resolve/"
+            "060f67494e31883a4b13cb27f889f3154847ada4/pytorch_model.bin?download=true"
+        ),
+        architecture="DDColor",
+        native_scale=1,
+        purposes=(ModelPurpose.COLORIZE, ModelPurpose.PHOTO),
+        quality_tier=QualityTier.MAXIMUM,
+        speed_tier=SpeedTier.MEDIUM,
+        recommended_halo=0,
+        source_url="https://huggingface.co/piddnad/ddcolor_modelscope",
+        license_name="Apache-2.0",
+        author="Xiaoyang Kang et al. · DDColor",
+        memory_factor=1.1,
+        time_factor=0.75,
+        speed_factor=0.55,
+        vram_estimate_mb=2000,
+        commercial_use_status="allowed",
     ),
 )
 

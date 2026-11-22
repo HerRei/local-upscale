@@ -238,7 +238,7 @@
       "properties": {
         "kind": { "enum": ["deblock", "restore", "upscale", "face_restore"] },
         "role": { "enum": ["fix", "primary", "face"] },
-        "fix": { "enum": ["blur", "jpeg", "noise"] },
+        "fix": { "enum": ["blur", "jpeg", "noise", "colour"] },
         "model_id": { "type": "string", "minLength": 1 },
         "model_path": { "type": "string", "minLength": 1 },
         "fidelity": { "type": "number", "minimum": 0, "maximum": 1 },

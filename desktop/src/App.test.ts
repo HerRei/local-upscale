@@ -6753,4 +6753,68 @@ describe('Model folder and Windows CPU GPU download notice', () => {
       ),
     ).toBeNull();
   });
+
+  it('offers Colour under Fix first and Restore for photos, with one model and HelpTip, and hides it for video', async () => {
+    const snapshot = readySnapshot([image('photo', true), video('clip')]);
+    const user = await mountWith(snapshot);
+    const prevSelect = api.selectMedia.getMockImplementation();
+    const prevSave = api.saveSettings.getMockImplementation();
+    const prevRefresh = api.refreshSnapshot.getMockImplementation();
+    onTestFinished(() => {
+      if (prevSelect) api.selectMedia.mockImplementation(prevSelect);
+      if (prevSave) api.saveSettings.mockImplementation(prevSave);
+      if (prevRefresh) api.refreshSnapshot.mockImplementation(prevRefresh);
+    });
+    api.saveSettings.mockImplementation(async (next) => {
+      snapshot.settings = structuredClone(next);
+    });
+    api.selectMedia.mockImplementation(async (id) => {
+      snapshot.media = snapshot.media.map((m) => ({ ...m, selected: m.id === id }));
+    });
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(snapshot));
+
+    // Upscale offers Colour chip, resolves DDColor-L for Quick and Best, and shows HelpTip.
+    const colourChip = screen.getByRole('button', { name: 'Colour', pressed: false });
+    await user.click(colourChip);
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          fixes: ['colour'],
+          fix_stages: [{ fix: 'colour', model_id: 'ddcolor_modelscope' }],
+        }),
+      ),
+    );
+    expect(screen.getByRole('button', { name: 'About Colour' })).toBeTruthy();
+
+    expect(screen.queryByRole('button', { name: 'Change the colour fix model' })).toBeNull();
+    expect(screen.getByText('DDColor')).toBeTruthy();
+
+    // Best uses the same model, and Restore at 1x runs it as the Restore model.
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          fix_stages: [{ fix: 'colour', model_id: 'ddcolor_modelscope' }],
+        }),
+      ),
+    );
+
+    await chooseTask(user, /^Restore/);
+    expect(screen.getByRole('button', { name: 'Colour', pressed: true })).toBeTruthy();
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          task: 'denoise',
+          output_scale: 1,
+          selected_model_id: 'ddcolor_modelscope',
+        }),
+      ),
+    );
+
+    // Switching to a video does not offer Colour in Fix first (Upscale or Restore).
+    await user.click(screen.getByRole('button', { name: /▶\s*clip\.mp4/ }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Colour' })).toBeNull());
+    await user.click(screen.getByRole('button', { name: /^Upscale/ }));
+    expect(screen.queryByRole('button', { name: 'Colour' })).toBeNull();
+  });
 });

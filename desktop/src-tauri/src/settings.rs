@@ -103,7 +103,7 @@ fn migrate_v1(value: &mut Value) -> Option<()> {
                 fixes
                     .iter()
                     .filter_map(Value::as_str)
-                    .filter(|fix| matches!(*fix, "noise" | "jpeg" | "blur"))
+                    .filter(|fix| matches!(*fix, "noise" | "jpeg" | "blur" | "colour"))
                     .map(str::to_owned)
                     .collect()
             })

@@ -24,6 +24,7 @@ export const FIX_LABELS: Record<FixKind, string> = {
   noise: 'Noise',
   jpeg: 'JPEG artifacts',
   blur: 'Blur',
+  colour: 'Colour',
   faces: 'Faces',
 };
 
@@ -44,6 +45,7 @@ export function fixesOf(model: CatalogModel): FixKind[] {
   const found: FixKind[] = [];
   if (model.purposes.includes('denoise')) found.push('noise');
   if (model.purposes.includes('deblur')) found.push('blur');
+  if (model.purposes.includes('colorize')) found.push('colour');
   if (model.purposes.includes('restoration') && !found.length) found.push('jpeg');
   return found;
 }
@@ -248,7 +250,9 @@ export function resolvePlan(
   const fixStages =
     !options.usingTemporalVideo &&
     (settings.task === 'upscale' || settings.task === 'video' || restoring)
-      ? settings.fix_stages
+      ? settings.task === 'video'
+        ? settings.fix_stages.filter((selection) => selection.fix !== 'colour')
+        : settings.fix_stages
       : [];
   // Restore's model is its last fix; the ones before it run first, as before an upscale.
   const chip = restoring ? fixStages.at(-1)?.fix : undefined;
@@ -429,7 +433,10 @@ export function modelsForTask(
 ): CatalogModel[] {
   if (task === 'denoise' || (task === 'video' && videoTask === 'denoise')) {
     return snapshot.catalog.models.filter(
-      (model) => model.native_scale === 1 && !model.purposes.includes('face'),
+      (model) =>
+        model.native_scale === 1 &&
+        !model.purposes.includes('face') &&
+        (task !== 'video' || !model.purposes.includes('colorize')),
     );
   }
   if (task === 'upscale' || task === 'video') {
@@ -454,6 +461,7 @@ export function libraryModelsForTask(
       (model) =>
         model.native_scale === 1 &&
         !model.purposes.includes('face') &&
+        (task !== 'video' || !model.purposes.includes('colorize')) &&
         (!fix || fixesOf(model).includes(fix)),
     );
   if (task !== 'upscale' && task !== 'video') return [];
@@ -509,7 +517,9 @@ export function choosePresetModel(
     : candidates.find((model) => model.model_id === pins[presetSlot(task, content, quality)]);
   if (pinned) return pinned;
   const eligible = candidates.filter(
-    (model) => presetMayPick(model) && (restoring || contentMatch(model, content) > 0),
+    (model) =>
+      presetMayPick(model) &&
+      (restoring ? !model.purposes.includes('colorize') : contentMatch(model, content) > 0),
   );
   if (restoring) return rankForQuality(eligible, quality)[0];
   const ranked = rankForQuality(eligible, quality);
@@ -530,7 +540,11 @@ export function presetDownload(
   const temporal =
     task === 'video' && !restoring && ui.selected_video_model_id !== 'frame_by_frame';
   const fixes = (
-    !temporal && (task === 'upscale' || task === 'video' || restoring) ? ui.fix_stages : []
+    !temporal && (task === 'upscale' || task === 'video' || restoring)
+      ? task === 'video'
+        ? ui.fix_stages.filter((selection) => selection.fix !== 'colour')
+        : ui.fix_stages
+      : []
   ).map((selection) => chooseFixModel(current, selection.fix, quality, ui.preset_pins));
   // Restore's model is its last fix; without one it is the preset's own choice. At 1× no
   // upscaler runs, so none is counted.

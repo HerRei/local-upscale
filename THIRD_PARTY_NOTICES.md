@@ -92,6 +92,11 @@ own terms; this file is a distribution notice, not a replacement for their licen
   2021 hzwer), with the license text in `src/localsr/video_models/rife/NOTICE.md`. The RIFE 4.26
   checkpoint (MIT, per the Practical-RIFE README) is an optional, checksum-pinned download and is
   not included in installers.
+- **DDColor photo colorization**: the DDColor inference network from piddnad/DDColor (Apache-2.0,
+  with ConvNeXt under Meta Platforms, Inc. copyright and DETR positional encoding under Facebook,
+  Inc. copyright), with the license text and modifications listed in
+  `src/localsr/image_models/ddcolor/NOTICE.md`. The DDColor checkpoint (`ddcolor_modelscope`, Apache-2.0) is an optional, checksum-pinned download and is not included
+  in installers. Source: https://github.com/piddnad/DDColor.
 - **Curated checkpoints** — each catalog entry shows its author, source, and license before
   download. CC-BY checkpoints require attribution. The official Real-ESRGAN ×2 project/asset is
   recorded as BSD-3-Clause and the official FBCNN project/model-zoo asset as Apache-2.0. The HAT-S
