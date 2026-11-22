@@ -63,15 +63,21 @@ Hofmann. The library also has HAT, Real-ESRGAN, SwinIR, NAFNet, SCUNet, FBCNN
 and DDColor, and each model shows its size, licence and source before you download it.
 [Model guide](docs/models/README.md) · [Model licences](docs/model-licenses.md).
 
+<!-- release-candidate -->
+v0.5.1-beta is in preparation; the table below describes the candidate.
+For the published v0.5.0-beta downloads, see the [0.5.0 release notes](docs/releases/v0.5.0-beta.md).
+[Draft release notes](docs/releases/v0.5.1-beta.md).
+<!-- /release-candidate -->
+
 ## Download
 
 ### Which file do I need?
 
 | Computer | Download |
 |---|---|
-| Mac (M1 or newer) | `LocalSR-v0.5.0-beta-macOS-arm64.dmg` |
-| Windows | `LocalSR-v0.5.0-beta-Windows-CPU-x86_64.exe` |
-| Linux | `LocalSR-v0.5.0-beta-Linux-CPU-x86_64.AppImage` |
+| Mac (M1 or newer) | `LocalSR-v0.5.1-beta-macOS-arm64.dmg` |
+| Windows | `LocalSR-v0.5.1-beta-Windows-CPU-x86_64.exe` |
+| Linux | `LocalSR-v0.5.1-beta-Linux-CPU-x86_64.AppImage` |
 
 The app offers the faster GPU engine after setup.
 
@@ -79,10 +85,10 @@ The app offers the faster GPU engine after setup.
 
 | Computer | Download |
 |---|---|
-| Windows, AMD or Intel graphics | `LocalSR-v0.5.0-beta-Windows-DirectML-x86_64.exe` |
-| Windows, NVIDIA | `LocalSR-v0.5.0-beta-Windows-CUDA-x86_64.exe` and all `LocalSR-v0.5.0-beta-Windows-CUDA-x86_64.engine.tar.gz.part-*` files in the same folder |
-| Linux, AMD | all `LocalSR-v0.5.0-beta-Linux-ROCm-x86_64.AppImage.part-*` files, joined |
-| Linux, NVIDIA | all `LocalSR-v0.5.0-beta-Linux-CUDA-x86_64.AppImage.part-*` files, joined |
+| Windows, AMD or Intel graphics | `LocalSR-v0.5.1-beta-Windows-DirectML-x86_64.exe` |
+| Windows, NVIDIA | `LocalSR-v0.5.1-beta-Windows-CUDA-x86_64.exe` and all `LocalSR-v0.5.1-beta-Windows-CUDA-x86_64.engine.tar.gz.part-*` files in the same folder |
+| Linux, AMD | all `LocalSR-v0.5.1-beta-Linux-ROCm-x86_64.AppImage.part-*` files, joined |
+| Linux, NVIDIA | all `LocalSR-v0.5.1-beta-Linux-CUDA-x86_64.AppImage.part-*` files, joined |
 
 To import an engine offline, download the `*.engine-payload.json` manifest, its `.engine.tar.gz.part-*` files and their `.sig` signature files into one folder, then open **Advanced -> Engine -> Change… -> Import engine from file…** and choose the `*.engine-payload.json` file.
 
@@ -93,16 +99,12 @@ for each platform:
 
 - **macOS v0.5.0-beta:** Apple Silicon (M1 or newer) and macOS 14 or later. Intel
   Macs are not supported. Signed and notarized, and it updates itself.
-- **Windows v0.5.0-beta:** Windows 10 or 11 on x86-64. Start with the main CPU
-  installer; after setup, LocalSR offers to download DirectML (AMD or Intel
-  graphics) or NVIDIA CUDA inside the app, or you can switch later in Advanced
-  settings. Intel NPUs work on Windows and Linux. The installers are unsigned, so
-  SmartScreen warns first: choose **More info**, then **Run anyway**.
-- **Linux v0.5.0-beta:** x86-64 AppImage. Start with the main CPU AppImage;
-  after setup, LocalSR offers to download NVIDIA CUDA or AMD ROCm inside the app,
-  or you can switch later in Advanced settings. The CPU AppImage runs Intel
-  graphics through OpenVINO once Intel's compute driver (`intel-opencl-icd`) is
-  installed.
+- **Windows v0.5.0-beta:** Windows 10 or 11 on x86-64. Choose CPU, DirectML
+  or CUDA above. The installers are unsigned, so SmartScreen warns first: choose
+  **More info**, then **Run anyway**.
+- **Linux v0.5.0-beta:** x86-64 AppImage. Choose CPU, CUDA or ROCm above. The CPU
+  AppImage runs Intel graphics through OpenVINO once Intel's compute driver
+  (`intel-opencl-icd`) is installed.
 
 The next CUDA edition needs an NVIDIA RTX 20 series or newer and driver 580 or
 newer. On Windows, older NVIDIA cards can use DirectML.

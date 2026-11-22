@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.5.1-beta] - Unreleased
+
+- **Engine manager.** One main download per OS starts LocalSR. After setup, the app
+  can recommend and download a GPU engine. Change, remove or import an engine from
+  a file in Advanced settings; the bundled engine remains available (#148, #150, #157).
+- **Colour.** Colour black-and-white photos with DDColor before upscaling, or with
+  Restore at 1x (#153).
+- **Your own edit models.** Choose GGUF files for a supported edit model family.
+  LocalSR checks the model before saving it and leaves your files in place (#152).
+- **Model folder.** Choose where downloaded models live and move them safely.
+  If the folder is missing, choose it again or return to the default (#151).
+- **Stopped videos.** Keep the finished part as a playable video, with audio and
+  subtitles cut to match. FFV1-master conversions still discard unfinished files (#147).
+- **RTX 50 and CUDA 13.** CUDA now supports RTX 50 cards and needs NVIDIA driver
+  580 or newer. GTX 10 and older use DirectML on Windows or CPU on Linux (#149).
+- **Windows graphics.** LocalSR recommends a GPU engine for supported graphics cards;
+  new DirectML installs select the best available adapter (#150).
+- **Downloads and installers.** The download table shows the main file for each OS.
+  Offline GPU packages remain available, and the CUDA installer names missing or
+  invalid engine parts (#155, #156, #157).
+- **Unsupported models.** A checkpoint that cannot be loaded now shows its likely
+  architecture and links to the issue for newer architectures (#154).
+
+### Fixes
+
+- **Engine exit.** Fixed a deadlock that could freeze the app when the engine exited.
+  This also affected 0.5.0.
+- **Model folder moves.** Safer handling of links, existing files and interrupted
+  moves, including custom edit model paths.
+- **Engine fallback.** Failed engines fall back to the bundled engine without endless
+  restarts. Interrupted imports can be recovered.
+
+GPU engine downloads on Windows and Linux have not been tested on real hardware.
+
 ## [0.5.0-beta] - 2026-11-21
 
 - **Light theme and colour-blind friendly colours.** Dark, Light or Match System, and
