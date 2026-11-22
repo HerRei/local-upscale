@@ -27,6 +27,7 @@ from localsr.core.edit_memory import (
     plan_edit,
     read_edit_memory,
 )
+from localsr.core.image_formats import PILLOW_INPUT_FORMATS
 from localsr.core.image_io import open_photo
 from localsr.core.output_publish import publish_output, require_output_name
 from localsr.protocol.messages import JobCompleted, ProgressUpdate, StageStarted
@@ -540,7 +541,7 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
                 raise RuntimeError(f"Editing stopped (exit {process.returncode}). {detail}")
             if not result.is_file():
                 raise RuntimeError("The editing runtime returned no image.")
-            with Image.open(result) as image:
+            with Image.open(result, formats=PILLOW_INPUT_FORMATS) as image:
                 image.verify()
             # Publish without overwriting an existing result, even in a filename race.
             publish_output(result, output, cancel)

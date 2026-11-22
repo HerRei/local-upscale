@@ -1,6 +1,22 @@
 use super::*;
 use proptest::prelude::*;
 
+fn write_test_engine_meta(next_root: &Path, id: &str) {
+    write_engine_meta(
+        next_root,
+        &EngineMeta {
+            id: id.into(),
+            backend: "cpu".into(),
+            os: std::env::consts::OS.into(),
+            arch: std::env::consts::ARCH.into(),
+            protocol_version: PROTOCOL_VERSION,
+            handshake_passed: true,
+            version: String::new(),
+        },
+    )
+    .unwrap();
+}
+
 fn arbitrary_json() -> impl Strategy<Value = serde_json::Value> {
     let leaf = prop_oneof![
         Just(serde_json::Value::Null),
@@ -135,6 +151,7 @@ fn store_install_ignores_a_previous_direct_install_engine() {
         });
     fs::create_dir_all(engine.parent().unwrap()).unwrap();
     fs::write(&engine, b"previous engine").unwrap();
+    write_test_engine_meta(&paths.next_root, "previous");
     fs::write(paths.next_root.join("active-engine.txt"), b"previous").unwrap();
     assert_eq!(
         active_engine_for_distribution(&paths, false, "previous"),
@@ -148,37 +165,44 @@ fn store_install_ignores_a_previous_direct_install_engine() {
 }
 
 #[test]
-fn a_host_from_another_release_ignores_the_engine_an_update_left_active() {
+fn installed_engine_requires_valid_handshake_metadata_for_every_host() {
     let root = tempfile::tempdir().unwrap();
     let paths = crate::paths::AppPaths::under(root.path());
+    let id = "macos-arm64-mps-old";
     let engine = paths
         .next_root
-        .join("engines/macos-arm64-mps-old/engine")
-        .join(if cfg!(windows) {
-            "localsr-worker.exe"
-        } else {
-            "localsr-worker"
-        });
+        .join("engines")
+        .join(id)
+        .join("engine")
+        .join(worker_executable_name());
     fs::create_dir_all(engine.parent().unwrap()).unwrap();
     fs::write(&engine, b"old engine").unwrap();
-    fs::write(
-        paths.next_root.join("active-engine.txt"),
-        b"macos-arm64-mps-old",
+    fs::write(paths.next_root.join("active-engine.txt"), id).unwrap();
+    for bundled_id in ["macos-arm64-mps-new", id, ""] {
+        assert_eq!(
+            active_engine_for_distribution(&paths, false, bundled_id),
+            None
+        );
+    }
+    write_engine_meta(
+        &paths.next_root,
+        &EngineMeta {
+            id: id.into(),
+            backend: "mps".into(),
+            os: std::env::consts::OS.into(),
+            arch: std::env::consts::ARCH.into(),
+            protocol_version: PROTOCOL_VERSION,
+            handshake_passed: true,
+            version: String::new(),
+        },
     )
     .unwrap();
-    assert_eq!(
-        active_engine_for_distribution(&paths, false, "macos-arm64-mps-new"),
-        None
-    );
-    assert_eq!(
-        active_engine_for_distribution(&paths, false, "macos-arm64-mps-old"),
-        Some(engine.clone())
-    );
-    // Development builds carry no engine id and keep using the installed engine.
-    assert_eq!(
-        active_engine_for_distribution(&paths, false, ""),
-        Some(engine)
-    );
+    for bundled_id in ["macos-arm64-mps-new", id, ""] {
+        assert_eq!(
+            active_engine_for_distribution(&paths, false, bundled_id),
+            Some(engine.clone())
+        );
+    }
 }
 
 #[test]
@@ -1253,7 +1277,21 @@ fn round4_a_missing_versioned_engine_is_fetched_again_not_replaced_by_the_bundle
     fs::rename(worker.with_file_name("localsr-worker"), &worker).unwrap();
     assert_eq!(fs::read(&worker).unwrap(), b"worker");
     assert!(worker.starts_with(root.path().join("engines").join(&id)));
-    // Present again, or never delivered: the host's own engine is reused.
+    // An extracted directory without verified metadata is not trusted.
+    assert!(engine_needs_package(root.path(), &config, &id));
+    write_engine_meta(
+        root.path(),
+        &EngineMeta {
+            id: id.clone(),
+            backend: config.backend.clone(),
+            os: std::env::consts::OS.into(),
+            arch: std::env::consts::ARCH.into(),
+            protocol_version: PROTOCOL_VERSION,
+            handshake_passed: true,
+            version: String::new(),
+        },
+    )
+    .unwrap();
     assert!(!engine_needs_package(root.path(), &config, &id));
     fs::remove_file(&worker).unwrap();
     fs::remove_file(root.path().join("active-engine.txt")).unwrap();
@@ -1712,6 +1750,7 @@ fn round3_a_cancelled_update_does_not_hide_the_engine_this_host_was_built_for() 
         path
     };
     let current = worker("windows-x86_64-cuda-e2");
+    write_test_engine_meta(&paths.next_root, "windows-x86_64-cuda-e2");
     fs::write(
         paths.next_root.join("active-engine.txt"),
         b"windows-x86_64-cuda-e3",
@@ -1854,6 +1893,7 @@ fn the_active_engine_is_found_when_its_file_ends_with_a_line_break() {
         });
     fs::create_dir_all(engine.parent().unwrap()).unwrap();
     fs::write(&engine, b"engine").unwrap();
+    write_test_engine_meta(&paths.next_root, "edited");
     fs::write(paths.next_root.join("active-engine.txt"), b"edited\r\n").unwrap();
     assert_eq!(
         active_engine_for_distribution(&paths, false, ""),
@@ -1999,4 +2039,42 @@ fn failed_installed_compiled_engine_is_not_selected_again() {
         choose_worker_executable(&installed, Some("compiled"), "compiled", &failed, None),
         None
     );
+}
+
+#[test]
+fn staged_engine_verifies_before_replacing_existing_engine() {
+    let root = tempfile::tempdir().unwrap();
+    let (engine, public_key) = engine_fixture(root.path());
+    let existing = root.path().join("engines").join(&engine.id).join("engine");
+    fs::create_dir_all(&existing).unwrap();
+    fs::write(existing.join("old"), b"previous").unwrap();
+    let failed = install_verified_engine(
+        root.path(),
+        &engine.id,
+        root.path(),
+        &engine,
+        &public_key,
+        |exe| {
+            assert_eq!(fs::read(exe).unwrap(), b"worker");
+            assert_eq!(fs::read(existing.join("old")).unwrap(), b"previous");
+            Err(invalid("handshake failed"))
+        },
+    );
+    assert!(failed.is_err());
+    assert_eq!(fs::read(existing.join("old")).unwrap(), b"previous");
+    let installed = install_verified_engine(
+        root.path(),
+        &engine.id,
+        root.path(),
+        &engine,
+        &public_key,
+        |exe| {
+            assert_eq!(fs::read(exe).unwrap(), b"worker");
+            assert_eq!(fs::read(existing.join("old")).unwrap(), b"previous");
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(fs::read(installed).unwrap(), b"worker");
+    assert!(!existing.join("old").exists());
 }

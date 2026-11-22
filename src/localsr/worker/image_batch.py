@@ -36,6 +36,7 @@ from localsr.core.disk_space import (
     require_room,
 )
 from localsr.core.eta import RemainingTime
+from localsr.core.image_formats import PILLOW_INPUT_FORMATS
 from localsr.core.image_io import ImageManager
 from localsr.core.inference import InferenceEngine, _fixed_window, _span_output_is_unstable
 from localsr.core.live_preview import LatestPreviewEncoder, PreviewPacket
@@ -426,7 +427,7 @@ class ImageBatchRunner:
         largest = None
         for data in jobs:
             try:
-                with Image.open(data["image_path"]) as header:
+                with Image.open(data["image_path"], formats=PILLOW_INPUT_FORMATS) as header:
                     size, alpha = header.size, "A" in header.mode
             except Exception:  # noqa: BLE001 - that photo fails on its own when it is decoded
                 continue

@@ -44,7 +44,7 @@ def opus_packets(source, stream_index, output, start_seconds, end_seconds, cance
     start = Fraction(str(start_seconds))
     end = Fraction(str(end_seconds)) if end_seconds != float("inf") else None
     layout = output.layout.name
-    with av.open(str(source)) as container:
+    with av.open(str(source), options={"protocol_whitelist": "file"}) as container:
         stream = container.streams[stream_index]
         # libopus accepts interleaved samples; PyAV rechunks frames to 20 ms.
         resampler = av.AudioResampler(format="flt", layout=layout, rate=rate)
