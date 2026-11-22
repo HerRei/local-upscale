@@ -569,4 +569,4 @@ def test_cuda_overlay_keeps_payload_hook(monkeypatch, tmp_path: Path) -> None:
     assert bundle["windows"]["nsis"]["installerHooks"] == str(
         build.ROOT / "packaging/windows/engine-payload.nsh"
     )
-    assert bundle["resources"][str(payload)] == "engine-payload.json"
+    assert bundle["resources"][payload.as_posix()] == "engine-payload.json"

@@ -281,6 +281,7 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
         )
         .map(|(id, label)| MenuItemBuilder::with_id(id, label).build(manager))
         .transpose()?;
+        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
         let mut builder = SubmenuBuilder::new(manager, "Help")
             .item(&guide)
             .item(&report)

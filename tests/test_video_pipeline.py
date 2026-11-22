@@ -78,7 +78,7 @@ def _make_synthetic_video_with_audio(path: Path, *, frames: int = 8, fps: int = 
     audio = container.add_stream("libopus", rate=48_000)
     samples_per_frame = 48_000 // fps
     for index in range(frames):
-        rgb = np.full((FRAME_HEIGHT, FRAME_WIDTH, 3), index * 25, dtype=np.uint8)
+        rgb = np.full((FRAME_HEIGHT, FRAME_WIDTH, 3), (index * 25) % 256, dtype=np.uint8)
         for packet in video.encode(av.VideoFrame.from_ndarray(rgb, format="rgb24")):
             container.mux(packet)
         phase = np.linspace(0, 2 * np.pi, samples_per_frame, endpoint=False)
