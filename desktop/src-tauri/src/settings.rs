@@ -30,6 +30,10 @@ fn effective_document_path(paths: &AppPaths) -> Option<std::path::PathBuf> {
         .find(|path| path.exists())
 }
 
+pub fn has_existing_settings(paths: &AppPaths) -> bool {
+    effective_document_path(paths).is_some() || paths.legacy_settings.exists()
+}
+
 pub fn load(paths: &AppPaths) -> (UiSettings, Vec<Recipe>) {
     // A save that stopped between its two renames leaves no settings file but the
     // previous copy, which holds the last complete settings.

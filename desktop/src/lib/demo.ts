@@ -85,6 +85,8 @@ export function demoSnapshot(): AppSnapshot {
         vision_path: '',
         vae_path: '',
       },
+      model_directory: '',
+      gpu_download_notice_dismissed: false,
     },
     recipes: [],
     capabilities: {
@@ -134,5 +136,9 @@ export function demoSnapshot(): AppSnapshot {
     },
     latest_benchmark: null,
     edit: { models: structuredClone(editModels), runtime_path: '', custom_model: null },
+    edit: { models: structuredClone(editModels), runtime_path: '' },
+    default_model_directory: '~/Library/Application Support/LocalSR/models',
+    model_directory_missing: false,
+    gpu_download_notice: null,
   };
 }

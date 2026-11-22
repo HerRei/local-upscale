@@ -83,9 +83,10 @@ for each platform:
 
 - **macOS v0.5.0-beta:** Apple Silicon (M1 or newer) and macOS 14 or later. Intel
   Macs are not supported. Signed and notarized, and it updates itself.
-- **Windows v0.5.0-beta:** Windows 10 or 11 on x86-64, as CPU, DirectML and
-  NVIDIA CUDA editions. DirectML also runs on AMD and Intel graphics, built-in ones
-  included, and Intel NPUs work on Windows and Linux. The installers are unsigned, so SmartScreen warns first: choose **More info**,
+- **Windows v0.5.0-beta:** Windows 10 or 11 on x86-64. Choose CUDA for NVIDIA
+  graphics, DirectML for AMD or Intel graphics (including built-in graphics), or
+  CPU if you do not have a supported GPU. Intel NPUs work on Windows and Linux.
+  The installers are unsigned, so SmartScreen warns first: choose **More info**,
   then **Run anyway**.
 - **Linux v0.5.0-beta:** x86-64 AppImages for CPU, AMD ROCm and NVIDIA CUDA.
   The CPU AppImage runs Intel graphics through OpenVINO once Intel's compute
@@ -102,7 +103,8 @@ brew install --cask herrei/tap/localsr
 
 The Mac app takes about 1.2 GB, because it brings its own Python and PyTorch.
 Models download when you choose them: Quick is 4.5 MB, most others are under
-500 MB, and the editing models are 5 to 26 GB. I test upscaling on a Mac with
+500 MB, and the editing models are 5 to 26 GB. You can change the model folder
+under Advanced settings to store models on another drive. I test upscaling on a Mac with
 16 GB of memory.
 
 LocalSR is only published on

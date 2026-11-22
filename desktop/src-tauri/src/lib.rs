@@ -10,12 +10,14 @@ mod downloads;
 mod editing;
 mod engine_payload;
 mod error;
+mod gpu_notice;
 mod grants;
 mod headless_smoke;
 mod integrations;
 mod launch;
 #[cfg(any(target_os = "linux", test))]
 mod media_server;
+mod model_storage;
 mod native_menu;
 mod output_names;
 mod paths;
@@ -190,6 +192,10 @@ pub fn run() {
             commands::choose_media_files,
             commands::choose_media_folder,
             commands::choose_output_directory,
+            commands::choose_model_directory,
+            commands::set_model_directory,
+            commands::reset_model_directory,
+            commands::dismiss_gpu_download_notice,
             commands::choose_custom_model,
             commands::choose_benchmark_export,
             commands::select_media,

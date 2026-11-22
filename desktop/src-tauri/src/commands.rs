@@ -53,7 +53,7 @@ pub fn open_edit_link(
     model_id: String,
     link: String,
 ) -> AppResult<()> {
-    let model = crate::editing::catalog(&state.paths)?
+    let model = crate::editing::catalog_in(&state.model_root())?
         .into_iter()
         .find(|m| m.model_id == model_id)
         .ok_or_else(|| AppError::Validation("Unknown editing model.".into()))?;
@@ -120,13 +120,12 @@ pub(crate) fn start_edit_checked(
             }
             (model, String::new(), Some(Value::Object(files)))
         } else {
-            let model = crate::editing::catalog(&state.paths)?
+            let model = crate::editing::catalog_in(&state.model_root())?
                 .into_iter()
                 .find(|model| model.model_id == input.model_id)
                 .ok_or_else(|| AppError::Validation("Unknown editing model.".into()))?;
             let bundle_dir = state
-                .paths
-                .model_root
+                .model_root()
                 .join(&model.family)
                 .to_string_lossy()
                 .into_owned();
@@ -511,6 +510,32 @@ fn keep_update_switches(current: &UiSettings, incoming: &mut UiSettings) {
     incoming.crash_reports = current.crash_reports;
     incoming.low_priority = current.low_priority;
     incoming.skipped_update_version = current.skipped_update_version.clone();
+    incoming.model_directory = current.model_directory.clone();
+    incoming.gpu_download_notice_dismissed = current.gpu_download_notice_dismissed;
+}
+
+#[tauri::command]
+pub fn dismiss_gpu_download_notice(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+) -> AppResult<()> {
+    {
+        let _io = lock(&state.settings_io)?;
+        let previous = {
+            let mut settings = lock(&state.settings)?;
+            let prev = settings.gpu_download_notice_dismissed;
+            settings.gpu_download_notice_dismissed = true;
+            prev
+        };
+        if let Err(error) = state.write_settings() {
+            if let Ok(mut settings) = lock(&state.settings) {
+                settings.gpu_download_notice_dismissed = previous;
+            }
+            return Err(error);
+        }
+    }
+    emit_state_changed(&app);
+    Ok(())
 }
 
 /// Persist menu appearance changes independently of processing settings.
@@ -2258,7 +2283,15 @@ pub fn remove_model(
     app: AppHandle,
     model_id: String,
 ) -> AppResult<()> {
+    remove_model_checked(&state, &model_id)?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
+fn remove_model_checked(state: &AppState, model_id: &str) -> AppResult<()> {
     let _scheduler = lock(&state.scheduler)?;
+    ensure_not_moving_models(state)?;
+    ensure_not_missing_model_root(state)?;
     if !lock(&state.runtime)?.active_job_id.is_empty() {
         return Err(AppError::Validation(
             "finish or cancel processing before removing a model".into(),
@@ -2269,6 +2302,7 @@ pub fn remove_model(
             "wait for the current download to finish before removing a model".into(),
         ));
     }
+    let model_root = state.model_root();
     let path = {
         let catalog = lock(&state.catalog)?;
         match catalog
@@ -2279,12 +2313,9 @@ pub fn remove_model(
             Some(model) if !model.installed => {
                 return Err(AppError::Validation("the model is not installed".into()));
             }
-            Some(model) => Some(
-                state
-                    .paths
-                    .model_root
-                    .join(crate::catalog::safe_model_filename(&model.filename)?),
-            ),
+            Some(model) => {
+                Some(model_root.join(crate::catalog::safe_model_filename(&model.filename)?))
+            }
             None => None,
         }
     };
@@ -2301,13 +2332,12 @@ pub fn remove_model(
             state.refresh_catalog()?;
         }
         // Editing and catalog bundles live beside the single-file models; shared files survive.
-        None if remove_catalog_bundle(&state, &model_id)? => {}
-        None if !crate::editing::remove_bundle(&state.paths, &model_id)? => {
+        None if remove_catalog_bundle(state, model_id)? => {}
+        None if !crate::editing::remove_bundle_in(&model_root, model_id)? => {
             return Err(AppError::Validation("unknown model".into()));
         }
         None => {}
     }
-    emit_state_changed(&app);
     Ok(())
 }
 
@@ -2338,6 +2368,8 @@ pub(crate) fn import_catalog_model_checked(
     accepted_terms: bool,
 ) -> AppResult<()> {
     crate::updates::ensure_not_installing(state)?;
+    ensure_not_moving_models(state)?;
+    ensure_not_missing_model_root(state)?;
     let (filename, size_bytes, sha256, terms_required) = {
         let catalog = lock(&state.catalog)?;
         let model = catalog
@@ -2366,8 +2398,9 @@ pub(crate) fn import_catalog_model_checked(
             "the selected file does not match the catalog size and SHA-256 digest".into(),
         ));
     }
-    fs::create_dir_all(&state.paths.model_root)?;
-    let destination = state.paths.model_root.join(filename);
+    let model_root = state.model_root();
+    fs::create_dir_all(&model_root)?;
+    let destination = model_root.join(filename);
     import_verified_catalog_file(&source, &destination, size_bytes, &sha256)?;
     state.refresh_catalog()
 }
@@ -2561,6 +2594,41 @@ pub async fn choose_output_directory(
         state.grants.grant_output_folder(folder);
     }
     Ok(picked.map(|path| path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+pub async fn choose_model_directory(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    current: String,
+) -> AppResult<Option<String>> {
+    let hint = if current.trim().is_empty() {
+        state.model_root().to_string_lossy().into_owned()
+    } else {
+        current
+    };
+    let picked = pick_folder(app, "Choose model folder", &hint).await?;
+    if let Some(folder) = &picked {
+        state.grants.grant_model_folder(folder);
+    }
+    Ok(picked.map(|path| path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+pub async fn set_model_directory(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    path: String,
+) -> AppResult<()> {
+    crate::model_storage::change_model_directory(&state, Some(&app), Some(&path)).await
+}
+
+#[tauri::command]
+pub async fn reset_model_directory(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> AppResult<()> {
+    crate::model_storage::change_model_directory(&state, Some(&app), None).await
 }
 
 #[tauri::command]
@@ -3033,7 +3101,32 @@ pub fn diagnostic_summary(state: State<'_, Arc<AppState>>) -> AppResult<String> 
     Ok(serde_json::to_string_pretty(&summary)?)
 }
 
+fn ensure_not_moving_models(state: &AppState) -> AppResult<()> {
+    if state
+        .moving_models
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        Err(AppError::Validation(
+            "Wait for the model folder move to finish first.".into(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_not_missing_model_root(state: &AppState) -> AppResult<()> {
+    if state.model_root_missing() {
+        Err(AppError::Validation(
+            "The model folder is unavailable. Reconnect the drive, choose another folder, or reset to default."
+                .into(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 fn ensure_queue_idle(state: &AppState) -> AppResult<()> {
+    ensure_not_moving_models(state)?;
     if lock(&state.database)?.has_inflight_jobs()? {
         Err(AppError::Validation(
             "the processing queue is already active; cancel it before starting another batch"
@@ -4338,7 +4431,7 @@ fn remove_catalog_bundle(state: &AppState, model_id: &str) -> AppResult<bool> {
             })
             .flat_map(|other| other.files.iter().map(|file| file.filename.clone()))
             .collect();
-        let directory = state.paths.model_root.join(&model.family);
+        let directory = state.model_root().join(&model.family);
         let files: Vec<PathBuf> = model
             .files
             .iter()

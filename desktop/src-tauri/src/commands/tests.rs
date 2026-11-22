@@ -9,6 +9,125 @@ fn the_download_page_is_the_one_the_release_publishes() {
     assert_eq!(release["download_page"], DOWNLOAD_PAGE_URL);
 }
 
+#[cfg(unix)]
+#[test]
+fn catalog_models_can_be_found_and_removed_through_a_linked_model_folder() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempfile::tempdir().unwrap();
+    let mut paths = AppPaths::under(directory.path());
+    let target = directory.path().join("other-volume-models");
+    fs::create_dir_all(&target).unwrap();
+    fs::create_dir_all(&paths.next_root).unwrap();
+    symlink(&target, &paths.model_root).unwrap();
+
+    let model = crate::catalog::bundled_catalog().unwrap().models[0].clone();
+    let checkpoint = target.join(&model.filename);
+    fs::File::create(&checkpoint)
+        .unwrap()
+        .set_len(model.size_bytes)
+        .unwrap();
+    let unrelated = target.join("my-own-file");
+    fs::write(&unrelated, b"keep").unwrap();
+
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    assert!(lock(&state.catalog).unwrap().models[0].installed);
+    assert!(state.grants.is_app_owned(&checkpoint).unwrap());
+    remove_model_checked(&state, &model.model_id).unwrap();
+    assert!(!checkpoint.exists());
+    assert_eq!(fs::read(&unrelated).unwrap(), b"keep");
+    assert!(fs::symlink_metadata(&paths.model_root)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert!(!lock(&state.catalog).unwrap().models[0].installed);
+
+    let bundle = lock(&state.catalog).unwrap().interpolation_models[0].clone();
+    let bundle_dir = target.join(&bundle.family);
+    fs::create_dir_all(&bundle_dir).unwrap();
+    for file in &bundle.files {
+        fs::File::create(bundle_dir.join(&file.filename))
+            .unwrap()
+            .set_len(file.size_bytes)
+            .unwrap();
+    }
+    state.refresh_catalog().unwrap();
+    assert!(remove_catalog_bundle(&state, &bundle.model_id).unwrap());
+    for file in &bundle.files {
+        assert!(!bundle_dir.join(&file.filename).exists());
+    }
+    assert!(unrelated.is_file());
+
+    // A direct custom root has the same catalog and grant behavior.
+    fs::File::create(&checkpoint)
+        .unwrap()
+        .set_len(model.size_bytes)
+        .unwrap();
+    paths.model_root = target.clone();
+    let state = AppState::from_paths(paths.clone()).unwrap();
+    assert!(lock(&state.catalog).unwrap().models[0].installed);
+    assert!(state.grants.is_app_owned(&unrelated).unwrap());
+    remove_model_checked(&state, &model.model_id).unwrap();
+    assert!(!checkpoint.exists());
+    assert!(unrelated.is_file());
+
+    // Configured via settings.model_directory (both direct and symlinked) behaves identically.
+    let link_setting = directory.path().join("settings-link");
+    symlink(&target, &link_setting).unwrap();
+    fs::File::create(&checkpoint)
+        .unwrap()
+        .set_len(model.size_bytes)
+        .unwrap();
+    let paths = AppPaths::under(&directory.path().join("settings-profile"));
+    fs::create_dir_all(&paths.model_root).unwrap();
+    crate::settings::save(
+        &paths,
+        &UiSettings {
+            model_directory: link_setting.to_string_lossy().into_owned(),
+            ..UiSettings::default()
+        },
+        &[],
+    )
+    .unwrap();
+    let state = AppState::from_paths(paths).unwrap();
+    assert!(lock(&state.catalog).unwrap().models[0].installed);
+    assert!(state.grants.is_app_owned(&checkpoint).unwrap());
+    remove_model_checked(&state, &model.model_id).unwrap();
+    assert!(!checkpoint.exists());
+    assert!(unrelated.is_file());
+}
+
+#[test]
+fn save_settings_keeps_host_managed_model_directory_and_gpu_notice_dismissal() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(dir.path());
+    let custom = dir.path().join("custom-models");
+    fs::create_dir_all(&custom).unwrap();
+    let initial = UiSettings {
+        model_directory: custom.to_string_lossy().into_owned(),
+        gpu_download_notice_dismissed: true,
+        ..UiSettings::default()
+    };
+    crate::settings::save(&paths, &initial, &[]).unwrap();
+
+    let state = AppState::from_paths(paths.clone()).unwrap();
+    save_settings_checked(
+        &state,
+        UiSettings {
+            model_directory: "/tmp/should-not-overwrite".into(),
+            gpu_download_notice_dismissed: false,
+            output_scale: 2,
+            ..UiSettings::default()
+        },
+    )
+    .unwrap();
+
+    let saved = lock(&state.settings).unwrap().clone();
+    assert_eq!(saved.model_directory, custom.to_string_lossy());
+    assert!(saved.gpu_download_notice_dismissed);
+    assert_eq!(saved.output_scale, 2);
+}
+
 #[test]
 fn multi_fix_requires_a_capable_engine_before_queueing() {
     let mut options = input("upscale");

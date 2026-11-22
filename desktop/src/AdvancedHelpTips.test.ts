@@ -52,7 +52,14 @@ interface Variant {
 }
 
 const IMAGE = ['Output scale', 'Format', 'Preserve safe metadata and color profile'];
-const TAIL = ['Save to', 'Hardware', 'Interface text', 'Run at low priority', 'Memory pressure'];
+const TAIL = [
+  'Save to',
+  'Model folder',
+  'Hardware',
+  'Interface text',
+  'Run at low priority',
+  'Memory pressure',
+];
 const GRID = ['Tile', 'Halo', 'Precision', 'Safe memory mode'];
 const VIDEO = ['Container', 'Video format', 'External FFmpeg', 'Video quality · CRF'];
 

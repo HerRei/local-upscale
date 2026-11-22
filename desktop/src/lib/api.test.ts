@@ -17,10 +17,15 @@ import {
   chooseExternalFFmpeg,
   chooseMediaFiles,
   chooseMediaFolder,
+  chooseModelDirectory,
   chooseOutputDirectory,
+  dismissGpuDownloadNotice,
   exportBenchmark,
+  listenForModelMove,
   listenForWorker,
   saveCustomEditModel,
+  resetModelDirectory,
+  setModelDirectory,
 } from './api';
 
 afterEach(() => {
@@ -144,4 +149,42 @@ it('resolves a Compare slot through the single-video descriptor route using only
     compareGeneration: 7,
     compareSlot: 2,
   });
+});
+
+it('forwards model folder commands, move progress events, and GPU notice dismissal', async () => {
+  (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+  invoke.mockResolvedValueOnce('/Volumes/SSD/models');
+  expect(await chooseModelDirectory('/old/models')).toBe('/Volumes/SSD/models');
+  expect(invoke).toHaveBeenCalledWith('choose_model_directory', { current: '/old/models' });
+
+  invoke.mockResolvedValueOnce(undefined);
+  await setModelDirectory('/Volumes/SSD/models');
+  expect(invoke).toHaveBeenCalledWith('set_model_directory', { path: '/Volumes/SSD/models' });
+
+  invoke.mockResolvedValueOnce(undefined);
+  await resetModelDirectory();
+  expect(invoke).toHaveBeenCalledWith('reset_model_directory');
+
+  invoke.mockResolvedValueOnce(undefined);
+  await dismissGpuDownloadNotice();
+  expect(invoke).toHaveBeenCalledWith('dismiss_gpu_download_notice');
+
+  let deliver: (event: { payload: unknown }) => void = () => {};
+  listen.mockImplementation(async (_name: string, handler: typeof deliver) => {
+    deliver = handler;
+    return () => {};
+  });
+  const updates: unknown[] = [];
+  await listenForModelMove((progress) => updates.push(progress));
+  deliver({
+    payload: {
+      moved_bytes: 50,
+      total_bytes: 100,
+      moved_files: 1,
+      total_files: 2,
+      progress: 50,
+      current_file: 'm.pth',
+    },
+  });
+  expect(updates).toHaveLength(1);
 });

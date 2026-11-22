@@ -45,7 +45,7 @@ fn the_apple_gpu_reports_whether_the_neural_engine_is_available() {
 }
 
 #[test]
-fn a_new_installation_starts_on_the_gpu_but_not_on_directml() {
+fn a_new_installation_starts_on_the_gpu_and_ranks_directml_adapters() {
     let device = |id: &str| DeviceInfo {
         id: id.into(),
         ..DeviceInfo::default()
@@ -59,9 +59,62 @@ fn a_new_installation_starts_on_the_gpu_but_not_on_directml() {
         Some("cuda:0")
     );
     assert_eq!(
-        first_run_device(&[device("cpu"), device("directml:0")]),
-        None
+        first_run_device(&[device("cpu"), device("directml:0")]).as_deref(),
+        Some("directml:0")
     );
+    let adapter = |id: &str, integrated, total_memory| DeviceInfo {
+        id: id.into(),
+        is_integrated: integrated,
+        total_memory,
+        ..DeviceInfo::default()
+    };
+    assert_eq!(
+        first_run_device(&[
+            adapter("directml:0", true, 64),
+            adapter("directml:1", false, 8),
+            adapter("directml:2", false, 16),
+        ])
+        .as_deref(),
+        Some("directml:2")
+    );
+    assert_eq!(first_run_device(&[device("cpu")]), None);
+}
+
+#[test]
+fn directml_is_selected_only_on_the_first_installation() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(directory.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let capabilities = CapabilityInfo {
+        devices: vec![DeviceInfo {
+            id: "directml:1".into(),
+            ..DeviceInfo::default()
+        }],
+        ..CapabilityInfo::default()
+    };
+    let report = envelope(
+        "capabilities_info",
+        serde_json::to_value(capabilities).unwrap(),
+    );
+    apply_worker_envelope(&state, &report).unwrap();
+    assert_eq!(lock(&state.settings).unwrap().device_id, "directml:1");
+    assert_eq!(crate::settings::load(&paths).0.device_id, "directml:1");
+
+    lock(&state.settings).unwrap().device_id = "cpu".into();
+    state.persist_settings().unwrap();
+    let restarted = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    apply_worker_envelope(&restarted, &report).unwrap();
+    assert_eq!(lock(&restarted.settings).unwrap().device_id, "cpu");
+
+    // A Windows save interrupted between renames leaves the previous copy only.
+    std::fs::rename(
+        &paths.settings,
+        paths.settings.with_extension("json.previous"),
+    )
+    .unwrap();
+    let recovered = Arc::new(AppState::from_paths(paths).unwrap());
+    apply_worker_envelope(&recovered, &report).unwrap();
+    assert_eq!(lock(&recovered.settings).unwrap().device_id, "cpu");
 }
 
 #[test]

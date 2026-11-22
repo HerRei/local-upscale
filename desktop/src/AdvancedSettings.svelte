@@ -22,6 +22,7 @@
     EditModel,
     InterpolationOrder,
     InterpolationTarget,
+    ModelMoveProgress,
     UiSettings,
     VideoCodec,
   } from './lib/types';
@@ -33,10 +34,16 @@
   export let usingTemporalVideo: boolean;
   export let preservingHdr = false;
   export let interpolationSupported = false;
+  export let defaultModelDirectory = '';
+  export let modelDirectoryMissing = false;
+  export let movingModels = false;
+  export let modelMoveProgress: ModelMoveProgress | null = null;
   export let updateSettings: (patch: Partial<UiSettings>) => void;
   export let setLowPriority: (value: boolean) => void = (value) =>
     updateSettings({ low_priority: value });
   export let chooseOutput: () => Promise<void>;
+  export let chooseModelFolder: () => Promise<void> = async () => undefined;
+  export let resetModelFolder: () => Promise<void> = async () => undefined;
   /** Resolves true when the host took the request, false when it refused (and said so). */
   export let refreshCapabilities: () => Promise<boolean>;
 
@@ -526,6 +533,56 @@
         </div>
         <b>Choose…</b>
       </div>
+      <div class="directory-field">
+        <button
+          type="button"
+          class="directory-hit"
+          disabled={movingModels}
+          aria-label={`Model folder ${settings.model_directory || defaultModelDirectory || 'Default folder'}`}
+          on:click={chooseModelFolder}
+        ></button>
+        <div class="directory-text">
+          <span class="label-with-tip"
+            ><small>Model folder</small><HelpTip
+              label="Model folder"
+              text="Where downloaded models and bundles are stored. Changing it checks free space and moves installed models there. Engine and temporary work files stay in the app folder."
+            /></span
+          ><span
+            class="directory-path"
+            title={settings.model_directory || defaultModelDirectory || 'Default folder'}
+            >{settings.model_directory || defaultModelDirectory || 'Default folder'}</span
+          >
+        </div>
+        <b>{movingModels ? 'Moving…' : 'Choose…'}</b>
+      </div>
+      {#if movingModels}
+        <p class="model-description" role="status">
+          Moving models… {modelMoveProgress
+            ? `${Math.round(modelMoveProgress.progress)}% (${modelMoveProgress.moved_files} of ${modelMoveProgress.total_files})`
+            : ''}
+        </p>
+      {:else if modelDirectoryMissing}
+        <div class="notice" role="alert">
+          <p>
+            Model folder unavailable: {settings.model_directory}. Reconnect the drive, choose the
+            folder again, or reset to default.
+          </p>
+          <div class="eyebrow-actions">
+            <button type="button" class="link-button" on:click={chooseModelFolder}
+              >Choose folder…</button
+            >
+            <button type="button" class="link-button" on:click={resetModelFolder}
+              >Reset to default</button
+            >
+          </div>
+        </div>
+      {:else if settings.model_directory}
+        <div class="eyebrow-actions">
+          <button type="button" class="link-button" on:click={resetModelFolder}
+            >Reset to default</button
+          >
+        </div>
+      {/if}
       <div class="field-row" class:stacked={hardwareStacked}>
         <span class="label-with-tip"
           ><label for="device">Hardware</label><HelpTip
