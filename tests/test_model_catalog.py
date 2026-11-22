@@ -617,10 +617,15 @@ def test_model_store_is_installed(tmp_path: Path):
     assert not store.is_installed(model)
 
 
-def test_default_model_directory():
+def test_default_model_directory(monkeypatch, tmp_path):
+    monkeypatch.delenv("LOCALSR_MODEL_DIR", raising=False)
     dir_path = default_model_directory()
     assert isinstance(dir_path, Path)
     assert dir_path.name == "models"
+
+    custom = tmp_path / "external-models"
+    monkeypatch.setenv("LOCALSR_MODEL_DIR", str(custom))
+    assert default_model_directory() == custom
 
 
 def test_specialist_models_stay_out_of_the_presets():

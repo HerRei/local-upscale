@@ -78,6 +78,8 @@ export function demoSnapshot(): AppSnapshot {
       edit_max_dimension: 512,
       edit_steps: 40,
       edit_seed: 42,
+      model_directory: '',
+      gpu_download_notice_dismissed: false,
     },
     recipes: [],
     capabilities: {
@@ -127,5 +129,8 @@ export function demoSnapshot(): AppSnapshot {
     },
     latest_benchmark: null,
     edit: { models: structuredClone(editModels), runtime_path: '' },
+    default_model_directory: '~/Library/Application Support/LocalSR/models',
+    model_directory_missing: false,
+    gpu_download_notice: null,
   };
 }

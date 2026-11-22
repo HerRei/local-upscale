@@ -262,3 +262,111 @@ describe('Run at low priority', () => {
     fieldset.remove();
   });
 });
+
+describe('Model folder setting', () => {
+  it('shows default folder, custom reset action, moving progress, and missing folder options', async () => {
+    const chooseModelFolder = vi.fn(async () => undefined);
+    const resetModelFolder = vi.fn(async () => undefined);
+    const view = render(AdvancedSettings, {
+      settings: { ...demoSnapshot().settings, task: 'upscale', model_directory: '' },
+      selectedModel: undefined,
+      capabilities: base,
+      usingTemporalVideo: false,
+      defaultModelDirectory: '/Users/demo/Library/Application Support/LocalSR/models',
+      modelDirectoryMissing: false,
+      movingModels: false,
+      modelMoveProgress: null,
+      updateSettings: vi.fn(),
+      chooseOutput: async () => undefined,
+      chooseModelFolder,
+      resetModelFolder,
+      refreshCapabilities: async () => true,
+    });
+    await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+    expect(screen.getByText('/Users/demo/Library/Application Support/LocalSR/models')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Reset to default' })).toBeNull();
+
+    await fireEvent.click(screen.getByRole('button', { name: /^Model folder / }));
+    expect(chooseModelFolder).toHaveBeenCalledTimes(1);
+
+    await view.rerender({
+      settings: {
+        ...demoSnapshot().settings,
+        task: 'upscale',
+        model_directory: '/Volumes/SSD/models',
+      },
+      selectedModel: undefined,
+      capabilities: base,
+      usingTemporalVideo: false,
+      defaultModelDirectory: '/Users/demo/Library/Application Support/LocalSR/models',
+      modelDirectoryMissing: false,
+      movingModels: false,
+      modelMoveProgress: null,
+      updateSettings: vi.fn(),
+      chooseOutput: async () => undefined,
+      chooseModelFolder,
+      resetModelFolder,
+      refreshCapabilities: async () => true,
+    });
+    expect(screen.getByText('/Volumes/SSD/models')).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: 'Reset to default' }));
+    expect(resetModelFolder).toHaveBeenCalledTimes(1);
+
+    await view.rerender({
+      settings: {
+        ...demoSnapshot().settings,
+        task: 'upscale',
+        model_directory: '/Volumes/SSD/models',
+      },
+      selectedModel: undefined,
+      capabilities: base,
+      usingTemporalVideo: false,
+      defaultModelDirectory: '/Users/demo/Library/Application Support/LocalSR/models',
+      modelDirectoryMissing: false,
+      movingModels: true,
+      modelMoveProgress: {
+        moved_bytes: 50,
+        total_bytes: 100,
+        moved_files: 1,
+        total_files: 2,
+        progress: 50,
+        current_file: 'a.pth',
+      },
+      updateSettings: vi.fn(),
+      chooseOutput: async () => undefined,
+      chooseModelFolder,
+      resetModelFolder,
+      refreshCapabilities: async () => true,
+    });
+    expect(screen.getByText(/Moving models… 50% \(1 of 2\)/)).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: /^Model folder / }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    await view.rerender({
+      settings: {
+        ...demoSnapshot().settings,
+        task: 'upscale',
+        model_directory: '/Volumes/Missing/models',
+      },
+      selectedModel: undefined,
+      capabilities: base,
+      usingTemporalVideo: false,
+      defaultModelDirectory: '/Users/demo/Library/Application Support/LocalSR/models',
+      modelDirectoryMissing: true,
+      movingModels: false,
+      modelMoveProgress: null,
+      updateSettings: vi.fn(),
+      chooseOutput: async () => undefined,
+      chooseModelFolder,
+      resetModelFolder,
+      refreshCapabilities: async () => true,
+    });
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('Model folder unavailable: /Volumes/Missing/models');
+    await fireEvent.click(screen.getByRole('button', { name: 'Choose folder…' }));
+    expect(chooseModelFolder).toHaveBeenCalledTimes(2);
+    await fireEvent.click(screen.getByRole('button', { name: 'Reset to default' }));
+    expect(resetModelFolder).toHaveBeenCalledTimes(2);
+  });
+});

@@ -176,6 +176,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         command.env("PYTHONUTF8", "1");
     }
     command.env("PYTHONUNBUFFERED", "1");
+    command.env("LOCALSR_MODEL_DIR", state.model_root());
     let crashed_engine = state.worker.crashed_engine.swap(0, Ordering::SeqCst);
     if crashed_engine != 0 {
         command.env("LOCALSR_CRASHED_ENGINE", crashed_engine.to_string());
@@ -852,6 +853,27 @@ pub fn shutdown(state: &AppState) {
     if let Ok(mut sender) = state.worker.sender.lock() {
         *sender = None;
     }
+}
+
+/// Ask a running worker to exit and respawn so it picks up the new `LOCALSR_MODEL_DIR`.
+pub fn restart_for_model_directory(state: &AppState) {
+    let has_sender = state
+        .worker
+        .sender
+        .lock()
+        .map(|guard| guard.is_some())
+        .unwrap_or(false);
+    if !has_sender {
+        return;
+    }
+    if let Ok(mut runtime) = state.runtime.lock() {
+        if runtime.worker == "unavailable" || runtime.worker == "failed" {
+            return;
+        }
+        runtime.worker = "restarting".into();
+        runtime.status_detail = "Reloading engine for the new model folder…".into();
+    }
+    let _ = send(state, &json!({"type": "shutdown_request", "data": {}}));
 }
 
 fn handle_worker_envelope(

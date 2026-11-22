@@ -407,6 +407,10 @@ pub struct UiSettings {
     pub edit_steps: u32,
     #[serde(default = "default_edit_seed")]
     pub edit_seed: u32,
+    #[serde(default)]
+    pub model_directory: String,
+    #[serde(default)]
+    pub gpu_download_notice_dismissed: bool,
 }
 
 fn default_true() -> bool {
@@ -518,6 +522,8 @@ impl Default for UiSettings {
             edit_max_dimension: default_edit_dimension(),
             edit_steps: default_edit_steps(),
             edit_seed: default_edit_seed(),
+            model_directory: String::new(),
+            gpu_download_notice_dismissed: false,
         }
     }
 }
@@ -793,6 +799,12 @@ pub struct AppSnapshot {
     pub runtime: RuntimeStatus,
     pub latest_benchmark: Option<BenchmarkResult>,
     pub edit: crate::editing::EditSetup,
+    #[serde(default)]
+    pub default_model_directory: String,
+    #[serde(default)]
+    pub model_directory_missing: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_download_notice: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

@@ -358,6 +358,17 @@ export interface UiSettings {
   edit_max_dimension: number;
   edit_steps: number;
   edit_seed: number;
+  model_directory?: string;
+  gpu_download_notice_dismissed?: boolean;
+}
+
+export interface ModelMoveProgress {
+  moved_bytes: number;
+  total_bytes: number;
+  moved_files: number;
+  total_files: number;
+  progress: number;
+  current_file: string;
 }
 
 export interface VideoMemoryStatus {
@@ -532,6 +543,9 @@ export interface AppSnapshot {
   runtime: RuntimeStatus;
   latest_benchmark: BenchmarkResult | null;
   edit: EditSetup;
+  default_model_directory?: string;
+  model_directory_missing?: boolean;
+  gpu_download_notice?: string | null;
 }
 
 export interface WorkerEnvelope {

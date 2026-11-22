@@ -543,30 +543,21 @@ input:focus-visible {
   min-width: 820px;
   min-height: 620px;
   display: grid;
-  grid-template-rows: 1fr 54px;
-  background: var(--base);
-}
-.app-shell:has(> .update-notice) {
   grid-template-rows: auto 1fr 54px;
-}
-.app-shell.status-extra:has(> .update-notice) {
-  grid-template-rows: auto 1fr minmax(54px, auto);
-}
-.app-shell.queue-timing-visible:has(> .update-notice) {
-  grid-template-rows: auto 1fr minmax(90px, auto);
+  background: var(--base);
 }
 .app-shell.booting {
   cursor: progress;
 }
 /* A route note or a hardware hint adds a status line; the bar grows to hold it. */
 .app-shell.status-extra {
-  grid-template-rows: 1fr minmax(54px, auto);
+  grid-template-rows: auto 1fr minmax(54px, auto);
 }
 .app-shell.status-extra .status-bar {
   padding-block: 7px;
 }
 .app-shell.queue-timing-visible {
-  grid-template-rows: 1fr minmax(90px, auto);
+  grid-template-rows: auto 1fr minmax(90px, auto);
 }
 .status-copy .queue-eta {
   color: var(--text);
@@ -2719,21 +2710,12 @@ input[type='number'],
 
 @media (max-width: 1279px) {
   .app-shell {
-    grid-template-rows: 52px 1fr 54px;
-  }
-  .app-shell.status-extra {
-    grid-template-rows: 52px 1fr minmax(54px, auto);
-  }
-  .app-shell.queue-timing-visible {
-    grid-template-rows: 52px 1fr minmax(90px, auto);
-  }
-  .app-shell:has(> .update-notice) {
     grid-template-rows: 52px auto 1fr 54px;
   }
-  .app-shell.status-extra:has(> .update-notice) {
+  .app-shell.status-extra {
     grid-template-rows: 52px auto 1fr minmax(54px, auto);
   }
-  .app-shell.queue-timing-visible:has(> .update-notice) {
+  .app-shell.queue-timing-visible {
     grid-template-rows: 52px auto 1fr minmax(90px, auto);
   }
   .toolbar {

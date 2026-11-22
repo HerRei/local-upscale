@@ -136,7 +136,9 @@ one. The CUDA and ROCm downloads exceed GitHub's 2 GB file limit and come in par
   which corrupted colour conversion; LocalSR uses per-channel arithmetic there
   instead (mean absolute error below 1e-6 against the CPU).
 - **CPU.** Every package can run on the CPU. On the i7-8550U the CPU benchmark
-  was faster than the integrated GPU.
+  was faster than the integrated GPU. On Windows, the CPU edition checks for a
+  DirectX 12 graphics card (AMD, Intel, or NVIDIA) and shows a dismissable
+  notice with a link to the DirectML or CUDA download page.
 
 ## Memory guidance
 

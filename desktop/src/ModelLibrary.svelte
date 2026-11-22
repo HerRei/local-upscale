@@ -82,6 +82,9 @@
   export let chooseCustom: () => Promise<void>;
   export let openLicense: (modelId: string) => Promise<void>;
   export let openSource: (modelId: string) => Promise<void>;
+  export let modelDirectoryMissing = false;
+  export let chooseModelFolder: () => Promise<void> = async () => undefined;
+  export let resetModelFolder: () => Promise<void> = async () => undefined;
 
   type GroupId =
     | 'job'
@@ -514,6 +517,27 @@
         >
       </div>
     </div>
+    {#if modelDirectoryMissing}
+      <section class="library-downloads" role="alert" aria-label="Model folder unavailable">
+        <div class="library-downloads-head">
+          <span class="library-downloads-title">
+            Model folder unavailable: {settings.model_directory}. Reconnect the drive, choose the
+            folder again, or reset to default.
+          </span>
+          <div class="pair">
+            <button
+              class="button compact"
+              type="button"
+              disabled={busy}
+              on:click={chooseModelFolder}>Choose folder…</button
+            >
+            <button class="button compact" type="button" disabled={busy} on:click={resetModelFolder}
+              >Reset to default</button
+            >
+          </div>
+        </div>
+      </section>
+    {/if}
     {#if downloads.length > 0 || failedEntries.length > 0}
       <section class="library-downloads" aria-label="Model downloads">
         <div class="library-downloads-head">

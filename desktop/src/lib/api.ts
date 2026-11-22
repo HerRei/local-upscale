@@ -6,6 +6,7 @@ import type {
   AppSnapshot,
   IntegrationStatus,
   LaunchIntent,
+  ModelMoveProgress,
   Recipe,
   StartBatchInput,
   UiSettings,
@@ -49,6 +50,27 @@ export async function chooseMediaFolder(): Promise<{
 export async function chooseOutputDirectory(current: string): Promise<string | null> {
   if (!isTauri()) return null;
   return invoke<string | null>('choose_output_directory', { current });
+}
+
+export async function chooseModelDirectory(current: string): Promise<string | null> {
+  if (!isTauri()) return null;
+  return invoke<string | null>('choose_model_directory', { current });
+}
+
+export const setModelDirectory = (path: string): Promise<void> =>
+  invoke('set_model_directory', { path });
+
+export const resetModelDirectory = (): Promise<void> => invoke('reset_model_directory');
+
+export async function listenForModelMove(
+  handler: (progress: ModelMoveProgress) => void,
+): Promise<UnlistenFn> {
+  if (!isTauri()) return () => {};
+  return listen<ModelMoveProgress>('model-move-progress', (event) => handler(event.payload));
+}
+
+export async function dismissGpuDownloadNotice(): Promise<void> {
+  if (isTauri()) await invoke('dismiss_gpu_download_notice');
 }
 
 export async function chooseCustomModel(): Promise<string | null> {

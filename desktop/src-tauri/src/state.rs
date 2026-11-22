@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU32, AtomicU64},
         Arc, Mutex, MutexGuard, Weak,
@@ -10,7 +10,7 @@ use std::{
 use tauri::{AppHandle, Emitter};
 
 use crate::{
-    catalog::{load_catalog, refresh_install_state},
+    catalog::{load_catalog_in, refresh_install_state_in},
     database::Database,
     error::{AppError, AppResult},
     launch::LaunchIntent,
@@ -97,6 +97,9 @@ pub struct AppState {
     pub edit_programs: crate::programs::GrantedPrograms,
     /// The media files, output folders, custom models, and export destinations granted by the host.
     pub grants: crate::grants::GrantRegistry,
+    pub moving_models: AtomicBool,
+    /// Cached result of Windows DXGI GPU probing so `snapshot()` enumerates at most once.
+    gpu_download_notice_cache: Mutex<Option<Option<String>>>,
 }
 
 impl AppState {
@@ -130,9 +133,10 @@ impl AppState {
                 moved.display()
             ));
         }
-        let catalog = load_catalog(&paths)?;
         let first_run = !settings::has_existing_settings(&paths);
         let (settings, recipes) = settings::load(&paths);
+        let model_root = effective_model_root(&paths, &settings);
+        let catalog = load_catalog_in(&model_root)?;
         let latest_benchmark = settings::load_benchmark(&paths);
         let programs = crate::programs::GrantedPrograms::default();
         programs.grant(&settings.external_ffmpeg_path);
@@ -169,6 +173,8 @@ impl AppState {
             programs,
             edit_programs: crate::programs::GrantedPrograms::default(),
             grants,
+            moving_models: AtomicBool::new(false),
+            gpu_download_notice_cache: Mutex::new(None),
         })
     }
 
@@ -209,10 +215,14 @@ impl AppState {
         let capabilities = lock(&self.capabilities)?.clone();
         let engine = lock(&self.engine)?.clone();
         let latest_benchmark = lock(&self.latest_benchmark)?.clone();
+        let model_root = effective_model_root(&self.paths, &settings);
+        let model_directory_missing =
+            !settings.model_directory.trim().is_empty() && !model_root.is_dir();
         let edit = crate::editing::EditSetup {
-            models: crate::editing::catalog(&self.paths)?,
+            models: crate::editing::catalog_in(&model_root)?,
             runtime_path: lock(&self.edit_runtime)?.clone(),
         };
+        let gpu_download_notice = self.gpu_download_notice(&settings, &capabilities);
 
         Ok(AppSnapshot {
             app_version: APP_VERSION.into(),
@@ -227,7 +237,55 @@ impl AppState {
             runtime,
             latest_benchmark,
             edit,
+            default_model_directory: self.paths.model_root.to_string_lossy().into_owned(),
+            model_directory_missing,
+            gpu_download_notice,
         })
+    }
+
+    pub fn model_root(&self) -> PathBuf {
+        self.settings
+            .lock()
+            .map(|settings| effective_model_root(&self.paths, &settings))
+            .unwrap_or_else(|_| self.paths.model_root.clone())
+    }
+
+    pub fn model_root_missing(&self) -> bool {
+        self.settings
+            .lock()
+            .map(|settings| {
+                !settings.model_directory.trim().is_empty()
+                    && !Path::new(&settings.model_directory).is_dir()
+            })
+            .unwrap_or(false)
+    }
+
+    fn gpu_download_notice(
+        &self,
+        settings: &UiSettings,
+        capabilities: &CapabilityInfo,
+    ) -> Option<String> {
+        let backend = option_env!("LOCALSR_UPDATE_BACKEND").unwrap_or("");
+        if !crate::gpu_notice::should_show_windows_cpu_notice(
+            cfg!(windows),
+            backend,
+            capabilities,
+            settings.gpu_download_notice_dismissed,
+        ) {
+            return None;
+        }
+        let mut cached = self
+            .gpu_download_notice_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(notice) = cached.as_ref() {
+            return notice.clone();
+        }
+        let detected = crate::gpu_notice::download_notice_for_adapters(
+            &crate::gpu_notice::detect_dxgi_adapters(),
+        );
+        *cached = Some(detected.clone());
+        detected
     }
 
     pub fn persist_settings(&self) -> AppResult<()> {
@@ -243,9 +301,19 @@ impl AppState {
     }
 
     pub fn refresh_catalog(&self) -> AppResult<()> {
+        let model_root = self.model_root();
         let mut catalog = lock(&self.catalog)?;
-        refresh_install_state(&mut catalog, &self.paths);
+        refresh_install_state_in(&mut catalog, &model_root);
         Ok(())
+    }
+}
+
+fn effective_model_root(paths: &AppPaths, settings: &UiSettings) -> PathBuf {
+    let custom = settings.model_directory.trim();
+    if custom.is_empty() {
+        paths.model_root.clone()
+    } else {
+        PathBuf::from(&settings.model_directory)
     }
 }
 

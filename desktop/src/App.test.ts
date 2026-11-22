@@ -69,6 +69,11 @@ const api = vi.hoisted(() => ({
     async (): Promise<{ paths: string[]; outputDirectory: string } | null> => null,
   ),
   chooseOutputDirectory: vi.fn(async () => null),
+  chooseModelDirectory: vi.fn(async (): Promise<string | null> => null),
+  setModelDirectory: vi.fn(async (_path: string): Promise<void> => undefined),
+  resetModelDirectory: vi.fn(async (): Promise<void> => undefined),
+  listenForModelMove: vi.fn(async () => () => {}),
+  dismissGpuDownloadNotice: vi.fn(async (): Promise<void> => undefined),
   chooseCustomModel: vi.fn(async () => null),
   addMedia: vi.fn(async (_paths: string[], _replace: boolean): Promise<void> => undefined),
   selectMedia: vi.fn(async (_id: string): Promise<void> => undefined),
@@ -6561,5 +6566,76 @@ describe('video restore, 1× output, and fix-first stages', () => {
     expect(screen.queryByRole('button', { name: 'About Quality' })).toBeNull();
     expect(screen.getByRole('group', { name: 'Quality' }).textContent).toContain('download');
     expect(screen.getByRole('list', { name: 'Stages' }).textContent).toContain('SPAN');
+  });
+});
+
+describe('Model folder and Windows CPU GPU download notice', () => {
+  it('chooses and resets the model folder from Advanced settings', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.task = 'upscale';
+    snapshot.default_model_directory = '/Users/demo/Library/Application Support/LocalSR/models';
+    const moved = structuredClone(snapshot);
+    moved.settings.model_directory = '/Volumes/SSD/models';
+
+    const user = await mountWith(snapshot);
+    api.chooseModelDirectory.mockResolvedValueOnce('/Volumes/SSD/models');
+    api.refreshSnapshot.mockResolvedValueOnce(moved).mockResolvedValueOnce(snapshot);
+
+    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+
+    await user.click(screen.getByRole('button', { name: /^Model folder / }));
+    await waitFor(() => expect(api.setModelDirectory).toHaveBeenCalledWith('/Volumes/SSD/models'));
+    expect(await screen.findByText('/Volumes/SSD/models')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Reset to default' }));
+    await waitFor(() => expect(api.resetModelDirectory).toHaveBeenCalledTimes(1));
+    expect(
+      await screen.findByText('/Users/demo/Library/Application Support/LocalSR/models'),
+    ).toBeTruthy();
+  });
+
+  it('shows a clear missing-folder message in the window and Model library with recovery actions', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.quality = 'quick';
+    snapshot.settings.selected_model_id = 'span_photo_x4';
+    snapshot.settings.model_directory = '/Volumes/Unplugged/models';
+    snapshot.model_directory_missing = true;
+
+    const user = await mountWith(snapshot);
+
+    const alert = screen.getByRole('alert', { name: 'Model folder unavailable' });
+    expect(alert.textContent).toContain('/Volumes/Unplugged/models');
+
+    await chooseMenuItem('view.models');
+    const dialog = await screen.findByRole('dialog', { name: 'Model library' });
+    const libraryAlert = within(dialog).getByRole('alert', { name: 'Model folder unavailable' });
+    expect(libraryAlert.textContent).toContain('Reconnect the drive');
+    await within(libraryAlert).getByRole('button', { name: 'Reset to default' }).click();
+    await waitFor(() => expect(api.resetModelDirectory).toHaveBeenCalledTimes(1));
+  });
+
+  it('shows the dismissable GPU download notice, opens the download page, and remembers dismissal', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.gpu_download_notice =
+      'Your AMD Radeon RX 7900 XT can run LocalSR faster with the DirectML download.';
+
+    const user = await mountWith(snapshot);
+    const notice = screen.getByText(
+      'Your AMD Radeon RX 7900 XT can run LocalSR faster with the DirectML download.',
+    );
+    expect(notice).toBeTruthy();
+
+    const bar = notice.closest('.gpu-download-notice') as HTMLElement;
+    await user.click(within(bar).getByRole('button', { name: 'Download page' }));
+    expect(api.openDownloadPage).toHaveBeenCalledTimes(1);
+
+    await user.click(within(bar).getByRole('button', { name: 'Dismiss GPU download notice' }));
+    await waitFor(() => expect(api.dismissGpuDownloadNotice).toHaveBeenCalledTimes(1));
+    expect(
+      screen.queryByText(
+        'Your AMD Radeon RX 7900 XT can run LocalSR faster with the DirectML download.',
+      ),
+    ).toBeNull();
   });
 });

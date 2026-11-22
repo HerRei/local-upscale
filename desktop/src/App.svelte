@@ -43,6 +43,7 @@
   import VideoMemory from './VideoMemory.svelte';
   import ModelCredit from './ModelCredit.svelte';
   import UpdateNotice from './UpdateNotice.svelte';
+  import GpuDownloadNotice from './GpuDownloadNotice.svelte';
   import UpdatePanel from './UpdatePanel.svelte';
   import SetupScreen from './SetupScreen.svelte';
   import WelcomeNotice from './WelcomeNotice.svelte';
@@ -117,6 +118,7 @@
     MediaItem,
     MediaResults,
     ModelDownloadStatus,
+    ModelMoveProgress,
     PairChoice,
     Quality,
     Recipe,
@@ -507,10 +509,13 @@
   } = { slot: 'browse' };
   let startingJob = false;
   let requestingCancel = false;
+  let movingModels = false;
+  let modelMoveProgress: ModelMoveProgress | null = null;
   // Between two jobs of a queue the host already runs the next one while the window still
   // shows none: its row is queued or starting until the next refresh brings it up.
   $: settingsLocked =
     startingJob ||
+    movingModels ||
     Boolean(snapshot.runtime.active_job_id) ||
     snapshot.jobs.some((job) => job.status === 'queued' || job.status === 'starting');
   $: cancelling =
@@ -1361,6 +1366,7 @@
           api.listenForNativeMenu((action) => void handleNativeMenuAction(action)),
         );
         await subscribe(() => api.listenForLaunchIntent(() => void consumeLaunchIntents()));
+        await subscribe(() => api.listenForModelMove((progress) => (modelMoveProgress = progress)));
         await subscribe(() =>
           startUpdateWatcher(
             (snapshot.settings.privacy_choice_made ?? true) &&
@@ -2344,6 +2350,51 @@
       if (path) updateSettings({ output_directory: path });
     } catch (error) {
       showModal('Could not choose the folder', String(error));
+    }
+  }
+
+  async function chooseModelFolder(): Promise<void> {
+    if (movingModels || settingsLocked || Boolean(activeDownload)) return;
+    try {
+      const path = await api.chooseModelDirectory(settings.model_directory ?? '');
+      if (!path) return;
+      movingModels = true;
+      modelMoveProgress = null;
+      await api.setModelDirectory(path);
+      await refresh();
+    } catch (error) {
+      showModal('Could not move the model folder', String(error));
+    } finally {
+      movingModels = false;
+      modelMoveProgress = null;
+    }
+  }
+
+  async function resetModelFolder(): Promise<void> {
+    if (movingModels || settingsLocked || Boolean(activeDownload)) return;
+    try {
+      movingModels = true;
+      modelMoveProgress = null;
+      await api.resetModelDirectory();
+      await refresh();
+    } catch (error) {
+      showModal('Could not reset the model folder', String(error));
+    } finally {
+      movingModels = false;
+      modelMoveProgress = null;
+    }
+  }
+
+  async function dismissGpuDownloadNotice(): Promise<void> {
+    snapshot = {
+      ...snapshot,
+      settings: { ...snapshot.settings, gpu_download_notice_dismissed: true },
+      gpu_download_notice: null,
+    };
+    if (api.isTauri()) {
+      await api
+        .dismissGpuDownloadNotice()
+        .catch((error) => showModal('Could not save settings', String(error)));
     }
   }
 
@@ -3376,9 +3427,19 @@
     checkAtLaunch={settings.check_updates_at_launch ?? true}
   />
 
-  <UpdateNotice
-    processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
-  />
+  <div class="top-notices">
+    <UpdateNotice
+      processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
+    />
+    {#if snapshot.gpu_download_notice && !settings.gpu_download_notice_dismissed}
+      <GpuDownloadNotice
+        message={snapshot.gpu_download_notice}
+        onOpenDownloadPage={() =>
+          attempt('Could not open the download page', () => api.openDownloadPage())}
+        onDismiss={() => void dismissGpuDownloadNotice()}
+      />
+    {/if}
+  </div>
   <main class="workspace">
     <MediaQueue
       bind:this={mediaQueue}
@@ -4314,6 +4375,28 @@
                 {/if}
               </section>
             {/if}
+            {#if snapshot.model_directory_missing}
+              <section
+                class="control-section failure-note"
+                role="alert"
+                aria-label="Model folder unavailable"
+              >
+                <p>
+                  Model folder unavailable: {settings.model_directory}. Reconnect the drive, choose
+                  the folder again, or reset to default.
+                </p>
+                <div class="eyebrow-actions">
+                  <button
+                    type="button"
+                    class="link-button"
+                    on:click={() => void chooseModelFolder()}>Choose folder…</button
+                  >
+                  <button type="button" class="link-button" on:click={() => void resetModelFolder()}
+                    >Reset to default</button
+                  >
+                </div>
+              </section>
+            {/if}
             <AdvancedSettings
               {settings}
               {selectedModel}
@@ -4322,9 +4405,15 @@
               {usingTemporalVideo}
               {preservingHdr}
               {interpolationSupported}
+              defaultModelDirectory={snapshot.default_model_directory ?? ''}
+              modelDirectoryMissing={Boolean(snapshot.model_directory_missing)}
+              {movingModels}
+              {modelMoveProgress}
               {updateSettings}
               setLowPriority={(value) => setUpdateSwitch('low_priority', value)}
               {chooseOutput}
+              {chooseModelFolder}
+              {resetModelFolder}
               refreshCapabilities={async () => {
                 try {
                   await api.refreshCapabilities();
@@ -4518,6 +4607,9 @@
     cancelDownload={cancelDownloadById}
     {dismissDownloadError}
     busy={settingsLocked || preparing}
+    modelDirectoryMissing={Boolean(snapshot.model_directory_missing)}
+    {chooseModelFolder}
+    {resetModelFolder}
     close={closeLibrary}
     {trialMedia}
     {trialBase}

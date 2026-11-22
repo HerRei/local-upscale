@@ -712,6 +712,9 @@ CATALOG_BY_FILENAME = {model.filename: model for model in MODEL_CATALOG}
 
 
 def default_model_directory() -> Path:
+    override = os.environ.get("LOCALSR_MODEL_DIR", "").strip()
+    if override:
+        return Path(override)
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "LocalSR" / "models"
     if sys.platform == "win32":

@@ -108,7 +108,10 @@ These apply to v0.5.0-beta. Please read them before starting a long job.
 ## Models
 
 - No weights are bundled. Each model downloads from its author's release when
-  you choose it, so the first use of a model needs a network connection.
+  you choose it, so the first use of a model needs a network connection. By
+  default, models are stored in `LocalSR/models`; you can move the model folder
+  to another drive under Advanced settings (engine and temporary work files stay
+  in the app folder).
 - Custom `.safetensors` checkpoints are accepted. Pickle-based `.pth`, `.pt` and
   `.ckpt` files can run code when loaded and are refused unless you tick
   *Allow this pickle-based checkpoint* in the app (on the command line, set

@@ -63,13 +63,69 @@ fn catalog_models_can_be_found_and_removed_through_a_linked_model_folder() {
         .unwrap()
         .set_len(model.size_bytes)
         .unwrap();
-    paths.model_root = target;
-    let state = AppState::from_paths(paths).unwrap();
+    paths.model_root = target.clone();
+    let state = AppState::from_paths(paths.clone()).unwrap();
     assert!(lock(&state.catalog).unwrap().models[0].installed);
     assert!(state.grants.is_app_owned(&unrelated).unwrap());
     remove_model_checked(&state, &model.model_id).unwrap();
     assert!(!checkpoint.exists());
     assert!(unrelated.is_file());
+
+    // Configured via settings.model_directory (both direct and symlinked) behaves identically.
+    let link_setting = directory.path().join("settings-link");
+    symlink(&target, &link_setting).unwrap();
+    fs::File::create(&checkpoint)
+        .unwrap()
+        .set_len(model.size_bytes)
+        .unwrap();
+    let paths = AppPaths::under(&directory.path().join("settings-profile"));
+    fs::create_dir_all(&paths.model_root).unwrap();
+    crate::settings::save(
+        &paths,
+        &UiSettings {
+            model_directory: link_setting.to_string_lossy().into_owned(),
+            ..UiSettings::default()
+        },
+        &[],
+    )
+    .unwrap();
+    let state = AppState::from_paths(paths).unwrap();
+    assert!(lock(&state.catalog).unwrap().models[0].installed);
+    assert!(state.grants.is_app_owned(&checkpoint).unwrap());
+    remove_model_checked(&state, &model.model_id).unwrap();
+    assert!(!checkpoint.exists());
+    assert!(unrelated.is_file());
+}
+
+#[test]
+fn save_settings_keeps_host_managed_model_directory_and_gpu_notice_dismissal() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(dir.path());
+    let custom = dir.path().join("custom-models");
+    fs::create_dir_all(&custom).unwrap();
+    let initial = UiSettings {
+        model_directory: custom.to_string_lossy().into_owned(),
+        gpu_download_notice_dismissed: true,
+        ..UiSettings::default()
+    };
+    crate::settings::save(&paths, &initial, &[]).unwrap();
+
+    let state = AppState::from_paths(paths.clone()).unwrap();
+    save_settings_checked(
+        &state,
+        UiSettings {
+            model_directory: "/tmp/should-not-overwrite".into(),
+            gpu_download_notice_dismissed: false,
+            output_scale: 2,
+            ..UiSettings::default()
+        },
+    )
+    .unwrap();
+
+    let saved = lock(&state.settings).unwrap().clone();
+    assert_eq!(saved.model_directory, custom.to_string_lossy());
+    assert!(saved.gpu_download_notice_dismissed);
+    assert_eq!(saved.output_scale, 2);
 }
 
 #[test]

@@ -1,5 +1,5 @@
 //! Editing bundles share the normal verified downloader and single worker queue.
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -60,18 +60,24 @@ pub struct StartEditInput {
     pub output_directory: String,
 }
 
+#[cfg(test)]
 pub fn catalog(paths: &AppPaths) -> AppResult<Vec<EditModel>> {
+    catalog_in(&paths.model_root)
+}
+
+pub fn catalog_in(model_root: &Path) -> AppResult<Vec<EditModel>> {
     let mut models: Vec<EditModel> = serde_json::from_str(EDIT_CATALOG)?;
+    let root_present = model_root.is_dir();
     for model in &mut models {
         model.total_size_bytes = model.files.iter().map(|file| file.size_bytes).sum();
-        model.installed = model.files.iter().all(|file| {
-            paths
-                .model_root
-                .join(&model.family)
-                .join(&file.filename)
-                .metadata()
-                .is_ok_and(|info| info.is_file() && info.len() == file.size_bytes)
-        });
+        model.installed = root_present
+            && model.files.iter().all(|file| {
+                model_root
+                    .join(&model.family)
+                    .join(&file.filename)
+                    .metadata()
+                    .is_ok_and(|info| info.is_file() && info.len() == file.size_bytes)
+            });
     }
     Ok(models)
 }
@@ -87,8 +93,13 @@ pub fn model_name(model_id: &str) -> Option<String> {
 
 /// Delete a bundle's files, keeping components that another installed bundle
 /// of the same family still uses. Returns false for an unknown model.
+#[cfg(test)]
 pub fn remove_bundle(paths: &AppPaths, model_id: &str) -> AppResult<bool> {
-    let models = catalog(paths)?;
+    remove_bundle_in(&paths.model_root, model_id)
+}
+
+pub fn remove_bundle_in(model_root: &Path, model_id: &str) -> AppResult<bool> {
+    let models = catalog_in(model_root)?;
     let Some(model) = models.iter().find(|model| model.model_id == model_id) else {
         return Ok(false);
     };
@@ -99,7 +110,7 @@ pub fn remove_bundle(paths: &AppPaths, model_id: &str) -> AppResult<bool> {
         })
         .flat_map(|other| other.files.iter().map(|file| file.filename.as_str()))
         .collect();
-    let directory = paths.model_root.join(&model.family);
+    let directory = model_root.join(&model.family);
     for file in &model.files {
         if shared.contains(&file.filename.as_str()) {
             continue;
