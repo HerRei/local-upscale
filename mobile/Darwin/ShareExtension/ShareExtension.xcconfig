@@ -1,0 +1,25 @@
+#include "../../Skip.env"
+
+INFOPLIST_FILE = ShareExtension/Info.plist
+GENERATE_INFOPLIST_FILE = YES
+INFOPLIST_KEY_CFBundleDisplayName = Upscale with LocalSR
+
+PRODUCT_BUNDLE_IDENTIFIER = com.hermesreisner.localsr.share
+PRODUCT_MODULE_NAME = LocalSRShare
+PRODUCT_NAME = LocalSRShare
+
+IPHONEOS_DEPLOYMENT_TARGET = 27.0
+SUPPORTED_PLATFORMS = iphoneos iphonesimulator
+SDKROOT = iphoneos
+// Same devices as the app (iPhone only for v1, see LocalSR.xcconfig)
+TARGETED_DEVICE_FAMILY = 1
+
+SWIFT_VERSION = 6
+APPLICATION_EXTENSION_API_ONLY = YES
+SKIP_INSTALL = YES
+
+CODE_SIGNING_REQUIRED = NO
+CODE_SIGN_STYLE = Automatic
+CODE_SIGN_ENTITLEMENTS = ShareExtension/ShareExtension.entitlements
+
+LD_RUNPATH_SEARCH_PATHS = $(inherited) @executable_path/Frameworks @executable_path/../../Frameworks

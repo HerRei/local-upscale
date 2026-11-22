@@ -1,0 +1,15 @@
+-keeppackagenames **
+-keep class skip.** { *; }
+-keep class tools.skip.** { *; }
+-keep class kotlin.jvm.functions.** {*;}
+-keep interface kotlinx.coroutines.Job { void cancel(java.util.concurrent.CancellationException); }
+-keep class com.sun.jna.** { *; }
+-dontwarn java.awt.**
+-keep class * implements com.sun.jna.** { *; }
+-keep class * implements skip.bridge.** { *; }
+-keep class **._ModuleBundleAccessor_* { *; }
+-keep class local.sr.** { *; }
+# LiteRT: JNI looks classes up by name
+-keep class com.google.ai.edge.litert.** { *; }
+-dontwarn com.google.ai.edge.litert.**
+-dontwarn com.google.android.play.**

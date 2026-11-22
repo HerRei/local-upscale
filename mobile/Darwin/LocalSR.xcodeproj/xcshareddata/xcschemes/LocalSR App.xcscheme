@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Scheme
+   LastUpgradeVersion = "1630"
+   version = "1.7">
+   <BuildAction
+      parallelizeBuildables = "YES"
+      buildImplicitDependencies = "YES"
+      buildArchitectures = "Automatic">
+      <BuildActionEntries>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "499CD4382AC5B799001AE8D8"
+               BuildableName = "LocalSR.app"
+               BlueprintName = "LocalSR App"
+               ReferencedContainer = "container:LocalSR.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+      </BuildActionEntries>
+   </BuildAction>
+   <TestAction
+      buildConfiguration = "Debug"
+      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      shouldUseLaunchSchemeArgsEnv = "YES">
+      <PreActions>
+         <ExecutionAction
+            ActionType = "Xcode.IDEStandardExecutionActionsCore.ExecutionActionType.ShellScriptAction">
+            <ActionContent
+               title = "Seed Simulator Photos Library"
+               scriptText = "FIXTURES=&quot;${PROJECT_DIR}/UITests/Fixtures&quot;&#10;UDID=&quot;${TARGET_DEVICE_IDENTIFIER:-}&quot;&#10;if [ -z &quot;$UDID&quot; ]; then&#10;  UDID=$(xcrun simctl list devices booted | sed -n &apos;s/.*(\([0-9A-F-]\{36\}\)) (Booted).*/\1/p&apos; | head -n 1)&#10;fi&#10;if [ -n &quot;$UDID&quot; ]; then&#10;  DCIM=&quot;$HOME/Library/Developer/CoreSimulator/Devices/$UDID/data/Media/DCIM&quot;&#10;  COUNT=0&#10;  if [ -d &quot;$DCIM&quot; ]; then&#10;    COUNT=$(find &quot;$DCIM&quot; -type f \( -iname &apos;*.jpg&apos; -o -iname &apos;*.jpeg&apos; -o -iname &apos;*.png&apos; -o -iname &apos;*.heic&apos; \) | wc -l | tr -d &apos; &apos;)&#10;  fi&#10;  if [ &quot;$COUNT&quot; -lt 4 ]; then&#10;    xcrun simctl boot &quot;$UDID&quot; 2&gt;/dev/null || true&#10;    xcrun simctl bootstatus &quot;$UDID&quot; -b 2&gt;/dev/null || true&#10;    xcrun simctl addmedia &quot;$UDID&quot; &quot;$FIXTURES&quot;/fixture_[1-4].jpg&#10;  fi&#10;  xcrun simctl addmedia &quot;$UDID&quot; &quot;$FIXTURES/fixture_detailed.jpg&quot;&#10;fi&#10;">
+               <EnvironmentBuildable>
+                  <BuildableReference
+                     BuildableIdentifier = "primary"
+                     BlueprintIdentifier = "499CD4382AC5B799001AE8D8"
+                     BuildableName = "LocalSR.app"
+                     BlueprintName = "LocalSR App"
+                     ReferencedContainer = "container:LocalSR.xcodeproj">
+                  </BuildableReference>
+               </EnvironmentBuildable>
+            </ActionContent>
+         </ExecutionAction>
+      </PreActions>
+      <Testables>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "4A20000A2FA600000000D001"
+               BuildableName = "LocalSRUITests.xctest"
+               BlueprintName = "LocalSRUITests"
+               ReferencedContainer = "container:LocalSR.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+      </Testables>
+   </TestAction>
+   <LaunchAction
+      buildConfiguration = "Debug"
+      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      launchStyle = "0"
+      useCustomWorkingDirectory = "NO"
+      ignoresPersistentStateOnLaunch = "NO"
+      debugDocumentVersioning = "YES"
+      debugServiceExtension = "internal"
+      allowLocationSimulation = "YES">
+      <BuildableProductRunnable
+         runnableDebuggingMode = "0">
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "499CD4382AC5B799001AE8D8"
+            BuildableName = "LocalSR.app"
+            BlueprintName = "LocalSR App"
+            ReferencedContainer = "container:LocalSR.xcodeproj">
+         </BuildableReference>
+      </BuildableProductRunnable>
+   </LaunchAction>
+   <ProfileAction
+      buildConfiguration = "Release"
+      shouldUseLaunchSchemeArgsEnv = "YES"
+      savedToolIdentifier = ""
+      useCustomWorkingDirectory = "NO"
+      debugDocumentVersioning = "YES">
+      <BuildableProductRunnable
+         runnableDebuggingMode = "0">
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "499CD4382AC5B799001AE8D8"
+            BuildableName = "LocalSR.app"
+            BlueprintName = "LocalSR App"
+            ReferencedContainer = "container:LocalSR.xcodeproj">
+         </BuildableReference>
+      </BuildableProductRunnable>
+   </ProfileAction>
+   <AnalyzeAction
+      buildConfiguration = "Debug">
+   </AnalyzeAction>
+   <ArchiveAction
+      buildConfiguration = "Release"
+      revealArchiveInOrganizer = "YES">
+   </ArchiveAction>
+</Scheme>

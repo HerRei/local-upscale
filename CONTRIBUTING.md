@@ -50,7 +50,8 @@ when its replacement is verified rather than leaving both. Vendored third-party
 code keeps its provenance and formatting.
 
 Do not commit checkpoints, media, runtime profiles, signing material, virtual
-environments or local test artifacts.
+environments or local test artifacts. The one exception are the two small models
+the mobile app bundles in `mobile/Models/`; it can't build without them.
 
 ## Reports and proposals
 

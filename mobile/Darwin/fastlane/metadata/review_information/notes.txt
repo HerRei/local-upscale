@@ -1,0 +1,16 @@
+LocalSR upscales photos on the iPhone itself. It is for people who want to enlarge or sharpen their own photos (old phone photos, crops, small images) without uploading them to a website. Everything runs on the device with two small bundled Core ML models (Best and Fast). The app has no account, no login, no in-app purchases, no ads and no user-generated content.
+
+External services: none. The app makes no network requests at all; the models are part of the app bundle and run on the Neural Engine, GPU or CPU. No AI service, data provider or analytics is used.
+
+Regions: the app works the same in all regions. It is free and open source (MIT): github.com/HerRei/local-upscale
+
+Regulated content: none. Both models were trained for LocalSR; their notices are in the app under Settings > Licences.
+
+How to test (no setup needed):
+1. Tap "Choose Photos" and pick one or more photos. The first run checks once which chip gives correct results fastest (a few seconds).
+2. The result opens with a before/after slider; pinch to zoom. Tap "Save to Photos" (add-only photo access) to keep it.
+3. Share extension: in Photos, select a photo, tap Share and choose "Upscale with LocalSR".
+
+The increased-memory-limit entitlement is used only for the optional "Full 4x" setting, which upscales 12 MP photos to 48 MP on phones with enough memory.
+
+A screen recording on a physical iPhone (iPhone 11 Pro, iOS 27.2.1) is attached. The one-time chip check had already run on that phone, and the recording shows the main flow; the share extension works as described in step 3.

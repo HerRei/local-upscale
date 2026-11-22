@@ -4,7 +4,11 @@ LocalSR is a free desktop app for upscaling photos, cleaning up noise and blur,
 and enhancing video. Choose an image, pick Quick or Best, and compare the result
 with your original. The models run on your computer, and your photos stay there too.
 
+There is also a small [phone app](#phone-app) for Android and iPhone that upscales
+photos on the phone itself.
+
 [Download](https://herrei.github.io/localsr/download/) ·
+[Phone app](https://herrei.github.io/localsr/phone/) ·
 [Try it in your browser](https://herrei.github.io/localsr/demo/) ·
 [Website](https://herrei.github.io/localsr/) ·
 [User guide](https://herrei.github.io/localsr/guide/) ·
@@ -133,6 +137,23 @@ Homebrew cask, which all use the same files. Each file has a SHA-256 next to it.
 The Mac app is signed as `Developer ID Application: Hermes Reisner (Z2TU844D84)`;
 `spctl -a -vv /Applications/LocalSR.app` shows it.
 
+## Phone app
+
+LocalSR also exists as a small app for phones, with its own version numbers
+(1.0.0 first). It upscales photos 4× on the phone itself, with two built-in models
+and no network access. Videos, Restore and the larger models stay in the desktop app.
+
+- **Android:** Android 10 or later.
+  [Download the APK](https://github.com/HerRei/local-upscale/releases/download/mobile-v1.0.0/LocalSR-mobile-1.0.0-android.apk)
+  (28 MB, [release notes and checksum](https://github.com/HerRei/local-upscale/releases/tag/mobile-v1.0.0)),
+  also on [itch.io](https://herrei.itch.io/localsr). Open the file on the phone and
+  allow the install once.
+- **iPhone:** iOS 27 or later, on the App Store (in review).
+
+More on the [phone app page](https://herrei.github.io/localsr/phone/). The source
+is in [mobile/](mobile/README.md), and its changes are in
+[mobile/CHANGELOG.md](mobile/CHANGELOG.md).
+
 ## Limits
 
 - Upscaling reconstructs detail. Faces, text and fine patterns can look sharp
@@ -204,6 +225,9 @@ updates, and a separate Python worker that runs PyTorch and spandrel. Run
 `./local-ci.sh` for the local checks. [Desktop guide](desktop/README.md) ·
 [Worker protocol](protocol/README.md) · [Command line](docs/automation.md) ·
 [Releasing](docs/releasing.md).
+
+The iPhone and Android app is a separate Swift project built with Skip, in
+[mobile/](mobile/README.md).
 
 ## Feedback
 

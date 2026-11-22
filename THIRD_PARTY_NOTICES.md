@@ -3,6 +3,8 @@
 LocalSR application source is MIT licensed. Dependencies and optional model downloads retain their
 own terms; this file is a distribution notice, not a replacement for their license texts.
 
+- **Mobile app** — the iPhone and Android app in `mobile/` keeps its own notices: `mobile/Models/NOTICE.txt`
+  for its two bundled models and `mobile/tools/NOTICE-third-party.txt` for its dependencies.
 - **Desktop host** — Tauri 2 is MIT/Apache-2.0 and Svelte is MIT. Transitive
   components retain their upstream permissive or file-level terms (including Apache, BSD, ISC,
   MIT, MPL, Unicode, and Zlib terms), while their versions are locked by Cargo and npm. macOS uses WKWebView and Windows uses WebView2. The Linux AppImages bundle

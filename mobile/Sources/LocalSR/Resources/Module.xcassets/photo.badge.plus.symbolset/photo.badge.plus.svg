@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+ <g id="Guides">
+  <line id="Baseline-S" x1="0" x2="24" y1="20.455" y2="20.455"/>
+  <line id="Capline-S" x1="0" x2="24" y1="3.545" y2="3.545"/>
+  <line id="Baseline-M" x1="0" x2="24" y1="20.455" y2="20.455"/>
+  <line id="Capline-M" x1="0" x2="24" y1="3.545" y2="3.545"/>
+  <line id="Baseline-L" x1="0" x2="24" y1="20.455" y2="20.455"/>
+  <line id="Capline-L" x1="0" x2="24" y1="3.545" y2="3.545"/>
+ </g>
+ <g id="Symbols">
+  <g id="Regular-M">
+   <path class="monochrome-0" d="M19 7v2.99s-1.99.01-2 0V7h-3s.01-1.99 0-2h3V2h2v3h3v2h-3zm-3 4V8h-3V5H5c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-8h-3zM5 19l3-4 2 3 3-4 4 5H5z"/>
+  </g>
+ </g>
+</svg>

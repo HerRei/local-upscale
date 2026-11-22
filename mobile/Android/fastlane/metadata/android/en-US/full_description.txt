@@ -1,0 +1,18 @@
+LocalSR makes small, blurry and blocky photos sharper, right on your phone.
+
+Pick a photo, or share it to LocalSR from your gallery or any other app. LocalSR enlarges it up to 4× and cleans up blur and JPEG blocks, then saves a new photo to Pictures/LocalSR. Your original isn't changed.
+
+EVERYTHING STAYS ON YOUR PHONE
+• No account, no sign-up, no uploads. LocalSR has no internet permission.
+• On first use, LocalSR checks which chip of your phone (GPU or CPU, or the NPU where the phone provides one) gives correct results fastest and uses it.
+
+WHAT YOU GET
+• Up to 3 MP: 4×. Up to 12 MP: 2×. Larger photos are reduced to 12 MP first.
+• Two models: Best for the most detail, Fast for many photos at once.
+• Compare before and after with a slider and zoom in to check the details.
+• "Upscale with LocalSR" in the share menu, for one photo or many, with a progress notification while it works.
+
+HONEST ABOUT WHAT IT DOES
+LocalSR sharpens what is in the photo. It can add fine texture, but it can't bring back detail that isn't there: text that can't be read in the photo stays unreadable.
+
+Free and open source (MIT): github.com/HerRei/local-upscale

@@ -1,0 +1,621 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		491F27822DA55B72004926EE /* LocalSR in Frameworks */ = {isa = PBXBuildFile; productRef = 491F27812DA55B72004926EE /* LocalSR */; };
+		491F27832DA55B72004926EE /* LocalSR in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 491F27812DA55B72004926EE /* LocalSR */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		496BDBEE2B8A7E9C00C09264 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 496BDBED2B8A7E9C00C09264 /* Localizable.xcstrings */; };
+		499CD43B2AC5B799001AE8D8 /* Main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49F90C2B2A52156200F06D93 /* Main.swift */; };
+		499CD4402AC5B799001AE8D8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 49F90C2F2A52156300F06D93 /* Assets.xcassets */; };
+		4A10000A2FA500000000B001 /* localsr_best.mlmodelc in Resources */ = {isa = PBXBuildFile; fileRef = 4A10000A2FA500000000A001 /* localsr_best.mlmodelc */; };
+		4A10000A2FA500000000B002 /* localsr_fast.mlmodelc in Resources */ = {isa = PBXBuildFile; fileRef = 4A10000A2FA500000000A002 /* localsr_fast.mlmodelc */; };
+		4A10000A2FA500000000B003 /* probe.png in Resources */ = {isa = PBXBuildFile; fileRef = 4A10000A2FA500000000A003 /* probe.png */; };
+		4A10000A2FA500000000B004 /* NOTICE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 4A10000A2FA500000000A004 /* NOTICE.txt */; };
+		4A50000A2FC000000000B001 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 4A50000A2FC000000000A001 /* PrivacyInfo.xcprivacy */; };
+		4A10000A2FA500000000B006 /* IBMPlexSansVar-Roman.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 4A10000A2FA500000000A006 /* IBMPlexSansVar-Roman.ttf */; };
+		4A20000A2FA600000000B001 /* LocalSRUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A20000A2FA600000000A001 /* LocalSRUITests.swift */; };
+		4A20000A2FA600000000B002 /* TabletUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A20000A2FA600000000A002 /* TabletUITests.swift */; };
+		4A30000A2FB000000000B001 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A30000A2FB000000000A001 /* ShareViewController.swift */; };
+		4A30000A2FB000000000B002 /* LocalSRShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 4A30000A2FB000000000E001 /* LocalSRShare.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		4A20000A2FA600000000D009 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 49F90C202A52156200F06D93 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 499CD4382AC5B799001AE8D8;
+			remoteInfo = "LocalSR App";
+		};
+		4A30000A2FB000000000D009 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 49F90C202A52156200F06D93 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4A30000A2FB000000000D001;
+			remoteInfo = "LocalSR Share";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		499CD44A2AC5B9C6001AE8D8 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				491F27832DA55B72004926EE /* LocalSR in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4A30000A2FB000000000D010 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				4A30000A2FB000000000B002 /* LocalSRShare.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		4900101C2BACEA710000DE33 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		493609562A6B7EAE00C401E2 /* LocalSR */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = LocalSR; path = ..; sourceTree = "<group>"; };
+		496BDBEB2B89A47800C09264 /* LocalSR.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LocalSR.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		496BDBED2B8A7E9C00C09264 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; name = Localizable.xcstrings; path = ../Sources/LocalSR/Resources/Localizable.xcstrings; sourceTree = "<group>"; };
+		496EB72F2A6AE4DE00C1253A /* Skip.env */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Skip.env; path = ../Skip.env; sourceTree = "<group>"; };
+		496EB72F2A6AE4DE00C1253B /* LocalSR.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = LocalSR.xcconfig; sourceTree = "<group>"; };
+		496EB72F2A6AE4DE00C1253C /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; name = README.md; path = ../README.md; sourceTree = "<group>"; };
+		4971EFA92FA4FEA50002D3F7 /* InfoPlist.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = InfoPlist.xcstrings; sourceTree = "<group>"; };
+		499AB9082B0581F4005E8330 /* plugins */ = {isa = PBXFileReference; lastKnownFileType = folder; name = plugins; path = ../../Intermediates.noindex/BuildToolPluginIntermediates; sourceTree = BUILT_PRODUCTS_DIR; };
+		49F90C2B2A52156200F06D93 /* Main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Main.swift; path = Sources/Main.swift; sourceTree = SOURCE_ROOT; };
+		49F90C2F2A52156300F06D93 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		49F90C312A52156300F06D93 /* Entitlements.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Entitlements.plist; sourceTree = "<group>"; };
+		4A10000A2FA500000000A001 /* localsr_best.mlmodelc */ = {isa = PBXFileReference; lastKnownFileType = folder; name = localsr_best.mlmodelc; path = ../Models/ios/localsr_best.mlmodelc; sourceTree = "<group>"; };
+		4A10000A2FA500000000A002 /* localsr_fast.mlmodelc */ = {isa = PBXFileReference; lastKnownFileType = folder; name = localsr_fast.mlmodelc; path = ../Models/ios/localsr_fast.mlmodelc; sourceTree = "<group>"; };
+		4A10000A2FA500000000A003 /* probe.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = probe.png; path = ../Models/probe.png; sourceTree = "<group>"; };
+		4A50000A2FC000000000A001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		4A10000A2FA500000000A004 /* NOTICE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; name = NOTICE.txt; path = ../Models/NOTICE.txt; sourceTree = "<group>"; };
+		4A10000A2FA500000000A005 /* ios-tablet */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "ios-tablet"; path = "../Models/ios-tablet"; sourceTree = "<group>"; };
+		4A10000A2FA500000000A006 /* IBMPlexSansVar-Roman.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; name = "IBMPlexSansVar-Roman.ttf"; path = "Fonts/IBMPlexSansVar-Roman.ttf"; sourceTree = "<group>"; };
+		4A20000A2FA600000000A001 /* LocalSRUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalSRUITests.swift; sourceTree = "<group>"; };
+		4A20000A2FA600000000A002 /* TabletUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabletUITests.swift; sourceTree = "<group>"; };
+		4A20000A2FA600000000E001 /* LocalSRUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LocalSRUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		4A30000A2FB000000000A001 /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
+		4A30000A2FB000000000A002 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		4A30000A2FB000000000A003 /* ShareExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ShareExtension.entitlements; sourceTree = "<group>"; };
+		4A30000A2FB000000000A004 /* ShareExtension.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = ShareExtension.xcconfig; sourceTree = "<group>"; };
+		4A30000A2FB000000000E001 /* LocalSRShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = LocalSRShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		499CD43C2AC5B799001AE8D8 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				491F27822DA55B72004926EE /* LocalSR in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4A20000A2FA600000000D003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4A30000A2FB000000000D003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		496BDBEC2B89A47800C09264 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				496BDBEB2B89A47800C09264 /* LocalSR.app */,
+				4A20000A2FA600000000E001 /* LocalSRUITests.xctest */,
+				4A30000A2FB000000000E001 /* LocalSRShare.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		49AB54462B066A7E007B79B2 /* SkipStone */ = {
+			isa = PBXGroup;
+			children = (
+				499AB9082B0581F4005E8330 /* plugins */,
+			);
+			name = SkipStone;
+			sourceTree = "<group>";
+		};
+		49F90C1F2A52156200F06D93 = {
+			isa = PBXGroup;
+			children = (
+				496EB72F2A6AE4DE00C1253C /* README.md */,
+				496EB72F2A6AE4DE00C1253A /* Skip.env */,
+				496EB72F2A6AE4DE00C1253B /* LocalSR.xcconfig */,
+				496BDBED2B8A7E9C00C09264 /* Localizable.xcstrings */,
+				493609562A6B7EAE00C401E2 /* LocalSR */,
+				49F90C2A2A52156200F06D93 /* App */,
+				4A30000A2FB000000000C001 /* ShareExtension */,
+				4A20000A2FA600000000C001 /* UITests */,
+				4A10000A2FA500000000C001 /* Models (iOS only) */,
+				49AB54462B066A7E007B79B2 /* SkipStone */,
+				496BDBEC2B89A47800C09264 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		49F90C2A2A52156200F06D93 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				49F90C2B2A52156200F06D93 /* Main.swift */,
+				49F90C2F2A52156300F06D93 /* Assets.xcassets */,
+				49F90C312A52156300F06D93 /* Entitlements.plist */,
+				4900101C2BACEA710000DE33 /* Info.plist */,
+				4971EFA92FA4FEA50002D3F7 /* InfoPlist.xcstrings */,
+				4A50000A2FC000000000A001 /* PrivacyInfo.xcprivacy */,
+				4A10000A2FA500000000A006 /* IBMPlexSansVar-Roman.ttf */,
+			);
+			name = App;
+			sourceTree = "<group>";
+		};
+		4A10000A2FA500000000C001 /* Models (iOS only) */ = {
+			isa = PBXGroup;
+			children = (
+				4A10000A2FA500000000A001 /* localsr_best.mlmodelc */,
+				4A10000A2FA500000000A002 /* localsr_fast.mlmodelc */,
+				4A10000A2FA500000000A003 /* probe.png */,
+				4A10000A2FA500000000A004 /* NOTICE.txt */,
+				4A10000A2FA500000000A005 /* ios-tablet */,
+			);
+			name = "Models (iOS only)";
+			sourceTree = "<group>";
+		};
+		4A20000A2FA600000000C001 /* UITests */ = {
+			isa = PBXGroup;
+			children = (
+				4A20000A2FA600000000A001 /* LocalSRUITests.swift */,
+				4A20000A2FA600000000A002 /* TabletUITests.swift */,
+			);
+			path = UITests;
+			sourceTree = "<group>";
+		};
+		4A30000A2FB000000000C001 /* ShareExtension */ = {
+			isa = PBXGroup;
+			children = (
+				4A30000A2FB000000000A001 /* ShareViewController.swift */,
+				4A30000A2FB000000000A002 /* Info.plist */,
+				4A30000A2FB000000000A003 /* ShareExtension.entitlements */,
+				4A30000A2FB000000000A004 /* ShareExtension.xcconfig */,
+			);
+			path = ShareExtension;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		499CD4382AC5B799001AE8D8 /* LocalSR App */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 499CD4412AC5B799001AE8D8 /* Build configuration list for PBXNativeTarget "LocalSR App" */;
+			buildPhases = (
+				499CD43A2AC5B799001AE8D8 /* Sources */,
+				499CD43C2AC5B799001AE8D8 /* Frameworks */,
+				499CD43E2AC5B799001AE8D8 /* Resources */,
+				499CD4452AC5B869001AE8D8 /* Run skip gradle */,
+				499CD44A2AC5B9C6001AE8D8 /* Embed Frameworks */,
+				4A30000A2FB000000000D010 /* Embed Foundation Extensions */,
+				4A30000A2FB000000000D021 /* Ad-hoc sign entitlements (unsigned simulator) */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				4A30000A2FB000000000D008 /* PBXTargetDependency */,
+			);
+			name = "LocalSR App";
+			packageProductDependencies = (
+				491F27812DA55B72004926EE /* LocalSR */,
+			);
+			productName = App;
+			productReference = 496BDBEB2B89A47800C09264 /* LocalSR.app */;
+			productType = "com.apple.product-type.application";
+		};
+		4A20000A2FA600000000D001 /* LocalSRUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4A20000A2FA600000000D005 /* Build configuration list for PBXNativeTarget "LocalSRUITests" */;
+			buildPhases = (
+				4A20000A2FA600000000D002 /* Sources */,
+				4A20000A2FA600000000D003 /* Frameworks */,
+				4A20000A2FA600000000D004 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				4A20000A2FA600000000D008 /* PBXTargetDependency */,
+			);
+			name = LocalSRUITests;
+			productName = LocalSRUITests;
+			productReference = 4A20000A2FA600000000E001 /* LocalSRUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		4A30000A2FB000000000D001 /* LocalSR Share */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4A30000A2FB000000000D005 /* Build configuration list for PBXNativeTarget "LocalSR Share" */;
+			buildPhases = (
+				4A30000A2FB000000000D002 /* Sources */,
+				4A30000A2FB000000000D003 /* Frameworks */,
+				4A30000A2FB000000000D004 /* Resources */,
+				4A30000A2FB000000000D020 /* Ad-hoc sign entitlements (unsigned simulator) */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "LocalSR Share";
+			productName = LocalSRShare;
+			productReference = 4A30000A2FB000000000E001 /* LocalSRShare.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		49F90C202A52156200F06D93 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1430;
+				LastUpgradeCheck = 1630;
+				TargetAttributes = {
+					499CD4382AC5B799001AE8D8 = {
+						SystemCapabilities = {
+							com.apple.ApplicationGroups.iOS = {
+								enabled = 1;
+							};
+						};
+					};
+					4A30000A2FB000000000D001 = {
+						SystemCapabilities = {
+							com.apple.ApplicationGroups.iOS = {
+								enabled = 1;
+							};
+						};
+					};
+				};
+			};
+			buildConfigurationList = 49F90C232A52156200F06D93 /* Build configuration list for PBXProject "LocalSR" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+				es,
+				ja,
+				"zh-Hans",
+			);
+			mainGroup = 49F90C1F2A52156200F06D93;
+			packageReferences = (
+			);
+			productRefGroup = 496BDBEC2B89A47800C09264 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				499CD4382AC5B799001AE8D8 /* LocalSR App */,
+				4A30000A2FB000000000D001 /* LocalSR Share */,
+				4A20000A2FA600000000D001 /* LocalSRUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		499CD43E2AC5B799001AE8D8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				499CD4402AC5B799001AE8D8 /* Assets.xcassets in Resources */,
+				496BDBEE2B8A7E9C00C09264 /* Localizable.xcstrings in Resources */,
+				4A10000A2FA500000000B001 /* localsr_best.mlmodelc in Resources */,
+				4A10000A2FA500000000B002 /* localsr_fast.mlmodelc in Resources */,
+				4A10000A2FA500000000B003 /* probe.png in Resources */,
+				4A10000A2FA500000000B004 /* NOTICE.txt in Resources */,
+				4A10000A2FA500000000B006 /* IBMPlexSansVar-Roman.ttf in Resources */,
+				4A50000A2FC000000000B001 /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4A20000A2FA600000000D004 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4A30000A2FB000000000D004 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		499CD4452AC5B869001AE8D8 /* Run skip gradle */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Run skip gradle";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = "/bin/sh -e";
+			shellScript = "if [ \"${SKIP_ZERO}\" != \"\" ]; then\n  echo \"note: skipping skip due to SKIP_ZERO\"\n  exit 0\nelif [ \"${ENABLE_PREVIEWS}\" = \"YES\" ]; then\n  echo \"note: skipping skip due to ENABLE_PREVIEWS\"\n  exit 0\nelif [ \"${ACTION}\" = \"install\" ]; then\n  echo \"note: skipping skip due to archive install\"\n  exit 0\nelif [ \"${SKIP_ACTION}\" = \"none\" ]; then\n  echo \"note: skipping skip due to SKIP_ACTION none\"\n  exit 0\nelse\n  SKIP_ACTION=\"${SKIP_ACTION:-launch}\"\nfi\nPATH=${BUILD_ROOT}/Release:${BUILD_ROOT}/Debug:${BUILD_ROOT}/../../SourcePackages/artifacts/skip/skip/skip.artifactbundle/macos:${PATH}:${HOMEBREW_PREFIX:-/opt/homebrew}/bin\necho \"note: running gradle build with: $(which skip) gradle -p ${PWD}/../Android ${SKIP_ACTION:-launch}${CONFIGURATION:-Debug}\"\nskip gradle -p ../Android ${SKIP_ACTION:-launch}${CONFIGURATION:-Debug}\n";
+		};
+		4A30000A2FB000000000D020 /* Ad-hoc sign entitlements (unsigned simulator) */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Ad-hoc sign entitlements (unsigned simulator)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = "/bin/sh -e";
+			shellScript = "if [ \"${CODE_SIGNING_ALLOWED}\" = \"NO\" ] && [ \"${PLATFORM_NAME}\" = \"iphonesimulator\" ] && [ -n \"${CODE_SIGN_ENTITLEMENTS}\" ]; then\n  ENT_PATH=\"${CODE_SIGN_ENTITLEMENTS}\"\n  case \"${ENT_PATH}\" in\n    /*) ;;\n    *) ENT_PATH=\"${SRCROOT}/${ENT_PATH}\" ;;\n  esac\n  if [ -f \"${ENT_PATH}\" ]; then\n    SIM_ENT=\"${TARGET_TEMP_DIR}/sim-entitlements.plist\"\n    cp \"${ENT_PATH}\" \"${SIM_ENT}\"\n    /usr/libexec/PlistBuddy -c \"Delete :com.apple.developer.kernel.increased-memory-limit\" \"${SIM_ENT}\" 2>/dev/null || true\n    /usr/bin/codesign --force --sign - --entitlements \"${SIM_ENT}\" --generate-entitlement-der --timestamp=none \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n  fi\nfi\n";
+		};
+		4A30000A2FB000000000D021 /* Ad-hoc sign entitlements (unsigned simulator) */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Ad-hoc sign entitlements (unsigned simulator)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = "/bin/sh -e";
+			shellScript = "if [ \"${CODE_SIGNING_ALLOWED}\" = \"NO\" ] && [ \"${PLATFORM_NAME}\" = \"iphonesimulator\" ] && [ -n \"${CODE_SIGN_ENTITLEMENTS}\" ]; then\n  ENT_PATH=\"${CODE_SIGN_ENTITLEMENTS}\"\n  case \"${ENT_PATH}\" in\n    /*) ;;\n    *) ENT_PATH=\"${SRCROOT}/${ENT_PATH}\" ;;\n  esac\n  if [ -f \"${ENT_PATH}\" ]; then\n    SIM_ENT=\"${TARGET_TEMP_DIR}/sim-entitlements.plist\"\n    cp \"${ENT_PATH}\" \"${SIM_ENT}\"\n    /usr/libexec/PlistBuddy -c \"Delete :com.apple.developer.kernel.increased-memory-limit\" \"${SIM_ENT}\" 2>/dev/null || true\n    /usr/bin/codesign --force --sign - --entitlements \"${SIM_ENT}\" --generate-entitlement-der --timestamp=none \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n  fi\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		499CD43A2AC5B799001AE8D8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				499CD43B2AC5B799001AE8D8 /* Main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4A20000A2FA600000000D002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4A20000A2FA600000000B001 /* LocalSRUITests.swift in Sources */,
+				4A20000A2FA600000000B002 /* TabletUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4A30000A2FB000000000D002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4A30000A2FB000000000B001 /* ShareViewController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		4A20000A2FA600000000D008 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 499CD4382AC5B799001AE8D8 /* LocalSR App */;
+			targetProxy = 4A20000A2FA600000000D009 /* PBXContainerItemProxy */;
+		};
+		4A30000A2FB000000000D008 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			platformFilter = ios;
+			target = 4A30000A2FB000000000D001 /* LocalSR Share */;
+			targetProxy = 4A30000A2FB000000000D009 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		499CD4422AC5B799001AE8D8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 496EB72F2A6AE4DE00C1253B /* LocalSR.xcconfig */;
+			buildSettings = {
+				DEVELOPMENT_TEAM = Z2TU844D84;
+				ENABLE_PREVIEWS = YES;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+			};
+			name = Debug;
+		};
+		499CD4432AC5B799001AE8D8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 496EB72F2A6AE4DE00C1253B /* LocalSR.xcconfig */;
+			buildSettings = {
+				DEVELOPMENT_TEAM = Z2TU844D84;
+				ENABLE_PREVIEWS = YES;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+			};
+			name = Release;
+		};
+		49F90C4B2A52156300F06D93 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		49F90C4C2A52156300F06D93 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Release;
+		};
+		4A20000A2FA600000000D006 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = Z2TU844D84;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.hermesreisner.localsr.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = "LocalSR App";
+			};
+			name = Debug;
+		};
+		4A20000A2FA600000000D007 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = Z2TU844D84;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.hermesreisner.localsr.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = "LocalSR App";
+			};
+			name = Release;
+		};
+		4A30000A2FB000000000D006 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4A30000A2FB000000000A004 /* ShareExtension.xcconfig */;
+			buildSettings = {
+				DEVELOPMENT_TEAM = Z2TU844D84;
+			};
+			name = Debug;
+		};
+		4A30000A2FB000000000D007 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4A30000A2FB000000000A004 /* ShareExtension.xcconfig */;
+			buildSettings = {
+				DEVELOPMENT_TEAM = Z2TU844D84;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		499CD4412AC5B799001AE8D8 /* Build configuration list for PBXNativeTarget "LocalSR App" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				499CD4422AC5B799001AE8D8 /* Debug */,
+				499CD4432AC5B799001AE8D8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		49F90C232A52156200F06D93 /* Build configuration list for PBXProject "LocalSR" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				49F90C4B2A52156300F06D93 /* Debug */,
+				49F90C4C2A52156300F06D93 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		4A20000A2FA600000000D005 /* Build configuration list for PBXNativeTarget "LocalSRUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4A20000A2FA600000000D006 /* Debug */,
+				4A20000A2FA600000000D007 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		4A30000A2FB000000000D005 /* Build configuration list for PBXNativeTarget "LocalSR Share" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4A30000A2FB000000000D006 /* Debug */,
+				4A30000A2FB000000000D007 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		491F27812DA55B72004926EE /* LocalSR */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = LocalSR;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 49F90C202A52156200F06D93 /* Project object */;
+}
