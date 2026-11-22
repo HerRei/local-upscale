@@ -187,7 +187,8 @@ To build the development Metal executable without model inference:
 python scripts/build_edit_runtime.py --backend MPS
 ```
 
-The desktop discovers `.cache/edit-runtime/sd-cli` in development and
+The desktop refreshes the editing runtime when the active engine changes. A runtime
+chosen by the user stays selected. The desktop discovers `.cache/edit-runtime/sd-cli` in development and
 `engine/_internal/edit/sd-cli` (`sd-cli.exe` on Windows) in packaged builds.
 `LOCALSR_EDIT_RUNTIME` or **Choose runtime…** (shown under the model row when
 no runtime is found) can supply a current native executable. The backend checks

@@ -2293,3 +2293,43 @@ fn partial_video_output_must_match_requested_name_and_directory() {
         assert!(!partial_output(requested, Path::new(invalid)));
     }
 }
+
+#[test]
+fn bundled_failure_cannot_fallback_again() {
+    assert_eq!(
+        bundled_fallback_id(Some("installed"), true),
+        Some("installed")
+    );
+    assert!(spawn_failure_fallback(None, true, "spawn failed").is_err());
+    assert_eq!(
+        spawn_failure_fallback(Some("installed"), true, "spawn failed").unwrap(),
+        "installed"
+    );
+    assert_eq!(bundled_fallback_id(Some("installed"), false), None);
+}
+
+#[test]
+fn fallback_keeps_restart_count() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap();
+    state
+        .worker
+        .restart_count
+        .store(MAX_FAILED_STARTS + 1, Ordering::SeqCst);
+    activate_bundled_fallback(&state, "installed").unwrap();
+    assert!(state
+        .worker
+        .failed_engines
+        .lock()
+        .unwrap()
+        .contains("installed"));
+    assert!(state.worker.use_bundled_fallback.load(Ordering::SeqCst));
+    assert_eq!(
+        state.worker.restart_count.load(Ordering::SeqCst),
+        MAX_FAILED_STARTS + 1
+    );
+    assert_eq!(
+        restart_delay(&state.worker.restart_count, Duration::ZERO, false, true),
+        None
+    );
+}

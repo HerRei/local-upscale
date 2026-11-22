@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU32, AtomicU64},
@@ -41,6 +41,8 @@ pub struct WorkerControl {
     /// One stop covers every failure that follows it.
     pub disk_stop: AtomicBool,
     pub using_installed_engine: AtomicBool,
+    pub failed_engines: Mutex<HashSet<String>>,
+    pub use_bundled_fallback: AtomicBool,
     pub engine_ready_seen: AtomicBool,
 }
 
@@ -57,6 +59,8 @@ impl Default for WorkerControl {
             crashed_engine: AtomicU32::new(0),
             disk_stop: AtomicBool::new(false),
             using_installed_engine: AtomicBool::new(false),
+            failed_engines: Mutex::new(HashSet::new()),
+            use_bundled_fallback: AtomicBool::new(false),
             engine_ready_seen: AtomicBool::new(false),
         }
     }
@@ -78,7 +82,7 @@ pub struct AppState {
     pub engine: Mutex<Option<EngineInfo>>,
     pub runtime: Mutex<RuntimeStatus>,
     pub latest_benchmark: Mutex<Option<BenchmarkResult>>,
-    /// The native editing executable found at startup, or empty.
+    /// The native editing executable for the current engine, or empty.
     pub edit_runtime: Mutex<String>,
     pub bundled_engine_path: Mutex<Option<PathBuf>>,
     pub worker: WorkerControl,

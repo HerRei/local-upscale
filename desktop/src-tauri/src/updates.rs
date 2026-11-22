@@ -12,6 +12,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashSet,
     fs,
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -1380,6 +1381,76 @@ pub fn choose_host_engine(bundled: Option<PathBuf>, installed: Option<PathBuf>) 
     )
 }
 
+/// Choose from already validated installed engines, excluding failures in this session.
+fn choose_installed_engine(
+    installed: &[(String, PathBuf)],
+    active: Option<&str>,
+    compiled_id: &str,
+    failed: &HashSet<String>,
+) -> Option<(String, PathBuf)> {
+    [active, (!compiled_id.is_empty()).then_some(compiled_id)]
+        .into_iter()
+        .flatten()
+        .filter(|id| !failed.contains(*id))
+        .find_map(|id| {
+            installed
+                .iter()
+                .find(|(candidate, _)| candidate == id)
+                .cloned()
+        })
+}
+
+fn installed_engine_candidates(
+    paths: &crate::paths::AppPaths,
+    managed_by_store: bool,
+    bundled_engine_id: &str,
+    os: &str,
+    arch: &str,
+) -> (Vec<(String, PathBuf)>, Option<String>) {
+    if managed_by_store {
+        return (Vec::new(), None);
+    }
+    let active = fs::read_to_string(paths.next_root.join("active-engine.txt"))
+        .ok()
+        .map(|raw| raw.trim().to_owned());
+    let mut installed = Vec::new();
+    for id in [active.as_deref(), Some(bundled_engine_id)]
+        .into_iter()
+        .flatten()
+    {
+        if !safe_id(id) {
+            continue;
+        }
+        if let Some(executable) = engine_executable_path(&paths.next_root, id) {
+            let valid = match read_engine_meta(&paths.next_root, id) {
+                Some(meta) => engine_meta_valid_for_host(&meta, os, arch) && meta.id == id,
+                None => bundled_engine_id.is_empty() || id == bundled_engine_id,
+            };
+            if valid {
+                installed.push((id.to_owned(), executable));
+            }
+        }
+    }
+    (installed, active)
+}
+
+/// Select a worker from validated installed engines and the bundled executable.
+fn choose_worker_executable(
+    installed: &[(String, PathBuf)],
+    active: Option<&str>,
+    compiled_id: &str,
+    failed: &HashSet<String>,
+    bundled: Option<PathBuf>,
+) -> Option<(PathBuf, Option<String>)> {
+    let selected = choose_installed_engine(installed, active, compiled_id, failed);
+    let selected_path = selected.as_ref().map(|(_, path)| path.clone());
+    let path = choose_engine(compiled_id, bundled.clone(), selected_path)?;
+    let id = selected
+        .filter(|(_, candidate)| *candidate == path && bundled.as_ref() != Some(&path))
+        .map(|(id, _)| id);
+    Some((path, id))
+}
+
 fn active_engine_entry(
     paths: &crate::paths::AppPaths,
     managed_by_store: bool,
@@ -1387,35 +1458,30 @@ fn active_engine_entry(
     os: &str,
     arch: &str,
 ) -> Option<(String, PathBuf)> {
-    if managed_by_store {
-        return None;
-    }
-    if let Ok(raw) = fs::read_to_string(paths.next_root.join("active-engine.txt")) {
-        let id = raw.trim().to_owned();
-        if safe_id(&id) {
-            if let Some(executable) = engine_executable_path(&paths.next_root, &id) {
-                if let Some(meta) = read_engine_meta(&paths.next_root, &id) {
-                    if engine_meta_valid_for_host(&meta, os, arch) && meta.id == id {
-                        return Some((id, executable));
-                    }
-                } else if bundled_engine_id.is_empty() || id == bundled_engine_id {
-                    return Some((id, executable));
-                }
-            }
-        }
-    }
-    if !bundled_engine_id.is_empty() && safe_id(bundled_engine_id) {
-        if let Some(executable) = engine_executable_path(&paths.next_root, bundled_engine_id) {
-            if let Some(meta) = read_engine_meta(&paths.next_root, bundled_engine_id) {
-                if engine_meta_valid_for_host(&meta, os, arch) && meta.id == bundled_engine_id {
-                    return Some((bundled_engine_id.to_owned(), executable));
-                }
-            } else {
-                return Some((bundled_engine_id.to_owned(), executable));
-            }
-        }
-    }
-    None
+    let (installed, active) =
+        installed_engine_candidates(paths, managed_by_store, bundled_engine_id, os, arch);
+    choose_installed_engine(
+        &installed,
+        active.as_deref(),
+        bundled_engine_id,
+        &HashSet::new(),
+    )
+}
+
+pub(crate) fn worker_engine_choice(
+    paths: &crate::paths::AppPaths,
+    bundled: Option<PathBuf>,
+    failed: &HashSet<String>,
+) -> Option<(PathBuf, Option<String>)> {
+    let compiled_id = option_env!("LOCALSR_ENGINE_ID").unwrap_or("");
+    let (installed, active) = installed_engine_candidates(
+        paths,
+        crate::distribution::managed_by_store(),
+        compiled_id,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    );
+    choose_worker_executable(&installed, active.as_deref(), compiled_id, failed, bundled)
 }
 
 /// The engine an in-app update or engine manager installed, if valid for this host.

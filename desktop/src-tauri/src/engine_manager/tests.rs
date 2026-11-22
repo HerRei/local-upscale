@@ -124,6 +124,7 @@ fn serve_with_ranges(
                 }
                 Err(error) => panic!("{error}"),
             };
+            socket.set_nonblocking(false).unwrap();
             handled += 1;
             let mut request = Vec::new();
             let mut buffer = [0u8; 2048];
@@ -380,6 +381,7 @@ fn install_engine_resumes_from_partial_file_verifies_signature_and_activates() {
                 }
                 Err(e) => panic!("{e}"),
             };
+            socket.set_nonblocking(false).unwrap();
             handled += 1;
             let mut req = Vec::new();
             let mut buf = [0u8; 2048];
@@ -1042,4 +1044,34 @@ fn snapshot_exposes_engine_manager_state_with_snake_case_wire_names() {
     }
     assert!(engines["recommendation"].get("backend").is_some());
     assert_eq!(engines["download"]["stage"], "idle");
+}
+
+#[test]
+fn fallback_marks_bundled_active_and_allows_removing_failed_compiled_engine() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let state = AppState::from_paths(paths.clone()).unwrap();
+    let (mut config, ..) = fixture_engine_files("http://127.0.0.1:1");
+    config.engine_id = "compiled".into();
+    let worker = paths
+        .next_root
+        .join("engines/compiled/engine")
+        .join(worker_executable_name());
+    fs::create_dir_all(worker.parent().unwrap()).unwrap();
+    fs::write(&worker, b"worker").unwrap();
+    state
+        .worker
+        .use_bundled_fallback
+        .store(true, Ordering::SeqCst);
+    let snapshot = snapshot_for(&state, &config, EngineRecommendation::default());
+    assert!(snapshot
+        .installed
+        .iter()
+        .any(|engine| engine.id == "compiled" && !engine.active));
+    assert!(snapshot
+        .installed
+        .iter()
+        .any(|engine| engine.bundled && engine.active));
+    remove_engine_in(&state, None, &config, "compiled").unwrap();
+    assert!(!worker.exists());
 }

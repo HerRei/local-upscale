@@ -432,13 +432,30 @@ pub(crate) fn snapshot_for(
         .lock()
         .ok()
         .and_then(|guard| guard.clone());
-    let installed = list_installed_engines_for(
+    let mut installed = list_installed_engines_for(
         &state.paths,
         config,
         bundled_path.as_deref(),
         std::env::consts::OS,
         std::env::consts::ARCH,
     );
+    if state.worker.use_bundled_fallback.load(Ordering::SeqCst) {
+        for engine in &mut installed {
+            engine.active = engine.bundled;
+        }
+        if !installed.iter().any(|engine| engine.bundled) {
+            installed.push(InstalledEngine {
+                id: "bundled".into(),
+                backend: effective_bundled_backend(config),
+                bundled: true,
+                active: true,
+                path: bundled_path
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            });
+        }
+    }
     let bundled_backend = effective_bundled_backend(config);
     let (active_backend, active_engine_id) = installed
         .iter()
@@ -1147,13 +1164,14 @@ pub(crate) fn remove_engine_in(
         .ok()
         .map(|s| s.trim().to_owned());
     if active_file_id.as_deref() == Some(id)
-        || active_engine_id(
-            &state.paths,
-            crate::distribution::managed_by_store(),
-            &config.engine_id,
-        )
-        .as_deref()
-            == Some(id)
+        || (!state.worker.use_bundled_fallback.load(Ordering::SeqCst)
+            && active_engine_id(
+                &state.paths,
+                crate::distribution::managed_by_store(),
+                &config.engine_id,
+            )
+            .as_deref()
+                == Some(id))
     {
         return Err(invalid(
             "Cannot remove the currently active engine. Switch to another engine first.",

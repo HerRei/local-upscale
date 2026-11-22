@@ -421,7 +421,9 @@ or AppImage:
 - **Switching, fallback and app updates.** `use_engine` switches between installed
   engines and the bundled CPU fallback; `remove_engine` deletes an inactive engine
   folder. If an active installed engine fails to start, the host clears
-  `active-engine.txt` and falls back to the bundled engine. App updates keep the
+  `active-engine.txt` and falls back to the bundled engine. Failed installed engines
+  are excluded for the session, and the restart limit also applies to the bundled
+  engine. App updates keep the
   user's chosen backend and update that backend's engine alongside the host.
 - **Interface.** After the first-launch setup screen's Continue, if the recommended
   GPU engine is not installed, LocalSR offers one dismissable card to download it
