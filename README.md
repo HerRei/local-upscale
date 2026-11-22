@@ -65,9 +65,9 @@ and DDColor, and each model shows its size, licence and source before you downlo
 [Model guide](docs/models/README.md) · [Model licences](docs/model-licenses.md).
 
 <!-- release-candidate -->
-v0.5.1-beta is in preparation; the table below describes the candidate.
+v0.5.2-beta is in preparation; the table below describes the candidate.
 For the published v0.5.0-beta downloads, see the [0.5.0 release notes](docs/releases/v0.5.0-beta.md).
-[Draft release notes](docs/releases/v0.5.1-beta.md).
+[Draft release notes](docs/releases/v0.5.2-beta.md).
 <!-- /release-candidate -->
 
 ## Download
@@ -76,9 +76,9 @@ For the published v0.5.0-beta downloads, see the [0.5.0 release notes](docs/rele
 
 | Computer | Download |
 |---|---|
-| Mac (M1 or newer) | `LocalSR-v0.5.1-beta-macOS-arm64.dmg` |
-| Windows | `LocalSR-v0.5.1-beta-Windows-CPU-x86_64.exe` |
-| Linux | `LocalSR-v0.5.1-beta-Linux-CPU-x86_64.AppImage` |
+| Mac (M1 or newer) | `LocalSR-v0.5.2-beta-macOS-arm64.dmg` |
+| Windows | `LocalSR-v0.5.2-beta-Windows-CPU-x86_64.exe` |
+| Linux | `LocalSR-v0.5.2-beta-Linux-CPU-x86_64.AppImage` |
 
 The app offers the faster GPU engine after setup.
 
@@ -86,10 +86,10 @@ The app offers the faster GPU engine after setup.
 
 | Computer | Download |
 |---|---|
-| Windows, AMD or Intel graphics | `LocalSR-v0.5.1-beta-Windows-DirectML-x86_64.exe` |
-| Windows, NVIDIA | `LocalSR-v0.5.1-beta-Windows-CUDA-x86_64.exe` and all `LocalSR-v0.5.1-beta-Windows-CUDA-x86_64.engine.tar.gz.part-*` files in the same folder |
-| Linux, AMD | all `LocalSR-v0.5.1-beta-Linux-ROCm-x86_64.AppImage.part-*` files, joined |
-| Linux, NVIDIA | all `LocalSR-v0.5.1-beta-Linux-CUDA-x86_64.AppImage.part-*` files, joined |
+| Windows, AMD or Intel graphics | `LocalSR-v0.5.2-beta-Windows-DirectML-x86_64.exe` |
+| Windows, NVIDIA | `LocalSR-v0.5.2-beta-Windows-CUDA-x86_64.exe` and all `LocalSR-v0.5.2-beta-Windows-CUDA-x86_64.engine.tar.gz.part-*` files in the same folder |
+| Linux, AMD | all `LocalSR-v0.5.2-beta-Linux-ROCm-x86_64.AppImage.part-*` files, joined |
+| Linux, NVIDIA | all `LocalSR-v0.5.2-beta-Linux-CUDA-x86_64.AppImage.part-*` files, joined |
 
 To import an engine offline, download the `*.engine-payload.json` manifest, its `.engine.tar.gz.part-*` files and their `.sig` signature files into one folder, then open **Advanced -> Engine -> Change… -> Import engine from file…** and choose the `*.engine-payload.json` file.
 

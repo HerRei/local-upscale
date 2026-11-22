@@ -1,29 +1,12 @@
 # Changelog
 
-## [0.5.2-beta] - unreleased
-
-- **Windows installer.** Installs for you alone by default, with an option for all
-  users. You can choose the folder, get a Start menu entry and an optional desktop
-  shortcut, and start LocalSR from the last page. Uninstalling keeps your downloaded
-  models and settings unless you tick the box to remove them.
-- **Linux menu entry.** After the first-launch setup, the AppImage offers once to add
-  LocalSR to your applications menu. The Help menu removes it again.
-- **GPU engines are checked more strictly.** LocalSR only lists and starts engines from
-  a verified install, and checks their files at each start. Engine Manager has a
-  Verify button for a full check. An engine that fails is marked for reinstall, and
-  LocalSR falls back to the built-in engine. Older or interrupted installs need one
-  reinstall (#159).
-- **Offline engine packages** are now signed with their version, system and
-  architecture, and LocalSR refuses older ones or ones for another system (#159).
-- Updated Rust and Python dependencies with security fixes.
-
-## [0.5.1-beta] - Unreleased
+## [0.5.2-beta] - Unreleased
 
 - **Engine manager.** One main download per OS starts LocalSR. After setup, the app
   can recommend and download a GPU engine. Change, remove or import an engine from
   a file in Advanced settings; the bundled engine remains available (#148, #150, #157).
 - **Colour.** Colour black-and-white photos with DDColor before upscaling, or with
-  Restore at 1x (#153).
+  Restore (#153).
 - **Your own edit models.** Choose GGUF files for a supported edit model family.
   LocalSR checks the model before saving it and leaves your files in place (#152).
 - **Model folder.** Choose where downloaded models live and move them safely.
@@ -39,6 +22,28 @@
   invalid engine parts (#155, #156, #157).
 - **Unsupported models.** A checkpoint that cannot be loaded now shows its likely
   architecture and links to the issue for newer architectures (#154).
+- **Restore first.** Fix first is now called Restore first and uses the same problems,
+  in the same order, as Restore. Upscale starts at 2x; to keep the size, use Restore.
+  Settings saved at 1x open as Restore. Video Restore with nothing picked runs only
+  De-flicker, Frame rate and Clean up audio.
+- **Faces removed.** The Faces option is gone from the problem list; saved settings
+  drop it.
+- **Mage-Flow edit model.** A fast edit model (MIT licence, 4 steps). On Macs it runs
+  on the CPU, about 1.5 minutes at 512 px; on NVIDIA and AMD graphics it uses the GPU.
+- **Windows installer.** Installs for you alone by default, with an option for all
+  users. You can choose the folder, get a Start menu entry and an optional desktop
+  shortcut, and start LocalSR from the last page. Uninstalling keeps your downloaded
+  models and settings unless you tick the box to remove them.
+- **Linux menu entry.** After the first-launch setup, the AppImage offers once to add
+  LocalSR to your applications menu. The Help menu removes it again.
+- **GPU engines are checked more strictly.** LocalSR only lists and starts engines from
+  a verified install, and checks their files at each start. Engine Manager has a
+  Verify button for a full check. An engine that fails is marked for reinstall, and
+  LocalSR falls back to the built-in engine. Older or interrupted installs need one
+  reinstall (#159).
+- **Offline engine packages** are now signed with their version, system and
+  architecture, and LocalSR refuses older ones or ones for another system (#159).
+- Updated Rust and Python dependencies with security fixes.
 
 ### Fixes
 
@@ -50,7 +55,8 @@
 - **Engine fallback.** Failed engines fall back to the bundled engine without endless
   restarts. Interrupted imports can be recovered.
 
-GPU engine downloads on Windows and Linux have not been tested on real hardware.
+GPU engine downloads on Windows and Linux, and Mage-Flow on NVIDIA and AMD graphics,
+have not been tested on real hardware.
 
 ## [0.5.0-beta] - 2026-11-21
 
