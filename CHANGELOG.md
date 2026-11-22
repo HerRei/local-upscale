@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.2-beta] - unreleased
+
+- **Windows installer.** Defaults to per-user with an all-users option, adds a
+  folder choice page, Start menu entry, optional desktop shortcut, and a Launch
+  LocalSR finish option, shows the LocalSR icon and version, and offers on
+  uninstall to keep or remove downloaded models and settings (kept by default).
+- **Linux AppImage menu entry.** After first-launch setup, offers once to add
+  LocalSR to your applications menu under `~/.local/share`, with a remove option
+  in the Help menu.
+
 ## [0.5.1-beta] - Unreleased
 
 - **Engine manager.** One main download per OS starts LocalSR. After setup, the app

@@ -76,6 +76,18 @@ export async function dismissGpuDownloadNotice(): Promise<void> {
   if (isTauri()) await invoke('dismiss_gpu_download_notice');
 }
 
+export async function dismissLinuxMenuPrompt(): Promise<void> {
+  if (isTauri()) await invoke('dismiss_linux_menu_prompt');
+}
+
+export async function installLinuxMenu(): Promise<void> {
+  if (isTauri()) await invoke('install_linux_menu');
+}
+
+export async function uninstallLinuxMenu(): Promise<void> {
+  if (isTauri()) await invoke('uninstall_linux_menu');
+}
+
 export async function refreshEngineCatalog(channel?: string | null): Promise<EngineCatalogEntry[]> {
   if (!isTauri()) return [];
   return invoke<EngineCatalogEntry[]>('refresh_engine_catalog', { channel: channel ?? null });

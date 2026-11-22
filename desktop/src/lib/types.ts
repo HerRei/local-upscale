@@ -370,6 +370,7 @@ export interface UiSettings {
   custom_edit_model?: CustomEditModel;
   model_directory?: string;
   gpu_download_notice_dismissed?: boolean;
+  linux_menu_prompt_dismissed?: boolean;
 }
 
 export interface ModelMoveProgress {
@@ -603,6 +604,8 @@ export interface AppSnapshot {
   default_model_directory?: string;
   model_directory_missing?: boolean;
   gpu_download_notice?: string | null;
+  linux_menu_offer?: boolean;
+  linux_menu_installed?: boolean;
   engines?: EngineManagerSnapshot;
 }
 

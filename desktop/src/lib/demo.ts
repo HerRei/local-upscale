@@ -87,6 +87,7 @@ export function demoSnapshot(): AppSnapshot {
       },
       model_directory: '',
       gpu_download_notice_dismissed: false,
+      linux_menu_prompt_dismissed: false,
     },
     recipes: [],
     capabilities: {
@@ -139,6 +140,8 @@ export function demoSnapshot(): AppSnapshot {
     default_model_directory: '~/Library/Application Support/LocalSR/models',
     model_directory_missing: false,
     gpu_download_notice: null,
+    linux_menu_offer: false,
+    linux_menu_installed: false,
     engines: {
       supported: true,
       managed_by_store: false,

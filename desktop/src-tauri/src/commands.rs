@@ -512,6 +512,30 @@ fn keep_update_switches(current: &UiSettings, incoming: &mut UiSettings) {
     incoming.skipped_update_version = current.skipped_update_version.clone();
     incoming.model_directory = current.model_directory.clone();
     incoming.gpu_download_notice_dismissed = current.gpu_download_notice_dismissed;
+    incoming.linux_menu_prompt_dismissed = current.linux_menu_prompt_dismissed;
+}
+
+fn persist_host_flag(
+    state: &AppState,
+    app: &AppHandle,
+    mutate: impl FnOnce(&mut UiSettings) -> bool,
+    restore: impl FnOnce(&mut UiSettings, bool),
+) -> AppResult<()> {
+    {
+        let _io = lock(&state.settings_io)?;
+        let previous = {
+            let mut settings = lock(&state.settings)?;
+            mutate(&mut settings)
+        };
+        if let Err(error) = state.write_settings() {
+            if let Ok(mut settings) = lock(&state.settings) {
+                restore(&mut settings, previous);
+            }
+            return Err(error);
+        }
+    }
+    emit_state_changed(app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -519,22 +543,47 @@ pub fn dismiss_gpu_download_notice(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
 ) -> AppResult<()> {
-    {
-        let _io = lock(&state.settings_io)?;
-        let previous = {
-            let mut settings = lock(&state.settings)?;
-            let prev = settings.gpu_download_notice_dismissed;
-            settings.gpu_download_notice_dismissed = true;
-            prev
-        };
-        if let Err(error) = state.write_settings() {
-            if let Ok(mut settings) = lock(&state.settings) {
-                settings.gpu_download_notice_dismissed = previous;
-            }
-            return Err(error);
-        }
-    }
-    emit_state_changed(&app);
+    persist_host_flag(
+        &state,
+        &app,
+        |settings| std::mem::replace(&mut settings.gpu_download_notice_dismissed, true),
+        |settings, previous| settings.gpu_download_notice_dismissed = previous,
+    )
+}
+
+#[tauri::command]
+pub fn dismiss_linux_menu_prompt(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
+    persist_host_flag(
+        &state,
+        &app,
+        |settings| std::mem::replace(&mut settings.linux_menu_prompt_dismissed, true),
+        |settings, previous| settings.linux_menu_prompt_dismissed = previous,
+    )
+}
+
+#[tauri::command]
+pub fn install_linux_menu(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
+    integrations::install_linux_menu()?;
+    persist_host_flag(
+        &state,
+        &app,
+        |settings| std::mem::replace(&mut settings.linux_menu_prompt_dismissed, true),
+        |settings, previous| settings.linux_menu_prompt_dismissed = previous,
+    )?;
+    native_menu::reconcile(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn uninstall_linux_menu(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
+    integrations::uninstall_linux_menu()?;
+    persist_host_flag(
+        &state,
+        &app,
+        |settings| std::mem::replace(&mut settings.linux_menu_prompt_dismissed, true),
+        |settings, previous| settings.linux_menu_prompt_dismissed = previous,
+    )?;
+    native_menu::reconcile(&app);
     Ok(())
 }
 
