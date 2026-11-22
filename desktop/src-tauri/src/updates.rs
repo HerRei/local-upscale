@@ -1422,10 +1422,8 @@ fn installed_engine_candidates(
             continue;
         }
         if let Some(executable) = engine_executable_path(&paths.next_root, id) {
-            let valid = match read_engine_meta(&paths.next_root, id) {
-                Some(meta) => engine_meta_valid_for_host(&meta, os, arch) && meta.id == id,
-                None => bundled_engine_id.is_empty() || id == bundled_engine_id,
-            };
+            let valid = read_engine_meta(&paths.next_root, id)
+                .is_some_and(|meta| engine_meta_valid_for_host(&meta, os, arch) && meta.id == id);
             if valid {
                 installed.push((id.to_owned(), executable));
             }
@@ -1669,15 +1667,20 @@ fn engine_needs_package_for_host(
 ) -> bool {
     if !engine_backend.is_empty() && engine_backend != config.backend {
         return engine_executable_path(next_root, engine_id).is_none()
-            || read_engine_meta(next_root, engine_id)
-                .is_none_or(|meta| !engine_meta_valid_for_host(&meta, os, arch));
+            || read_engine_meta(next_root, engine_id).is_none_or(|meta| {
+                meta.id != engine_id || !engine_meta_valid_for_host(&meta, os, arch)
+            });
     }
     if engine_id != config.engine_id {
         return true;
     }
     let delivered = fs::read_to_string(next_root.join("active-engine.txt"))
         .is_ok_and(|active| active.trim() == engine_id);
-    delivered && engine_executable_path(next_root, engine_id).is_none()
+    delivered
+        && (engine_executable_path(next_root, engine_id).is_none()
+            || read_engine_meta(next_root, engine_id).is_none_or(|meta| {
+                meta.id != engine_id || !engine_meta_valid_for_host(&meta, os, arch)
+            }))
 }
 
 #[cfg(test)]
@@ -1696,9 +1699,54 @@ fn prepare_update_engine(
         directory,
         next_root,
         installed_worker,
+        |_| Ok(()),
     )
 }
 
+pub(crate) fn install_verified_engine(
+    next_root: &Path,
+    engine_id: &str,
+    directory: &Path,
+    engine: &EngineUpdate,
+    public_key: &str,
+    handshake: impl FnOnce(&Path) -> AppResult<()>,
+) -> AppResult<PathBuf> {
+    crate::engine_manager::recover_interrupted_reimport(next_root, engine_id)?;
+    let root = next_root.join("engines").join(engine_id);
+    fs::create_dir_all(&root)?;
+    let staging = root.join(format!(".import-{}", uuid::Uuid::new_v4()));
+    let staged = staging.join("engine");
+    let target = root.join("engine");
+    let backup = root.join(format!(".backup-{}", uuid::Uuid::new_v4()));
+    let result = (|| -> AppResult<PathBuf> {
+        fs::create_dir_all(&staging)?;
+        install_engine_package(directory, engine, public_key, &staged)?;
+        let executable = staged.join(worker_executable_name());
+        if !executable.is_file() {
+            return Err(invalid("Installed engine is missing its worker executable"));
+        }
+        handshake(&executable)?;
+        let existed = target.exists();
+        if existed {
+            fs::rename(&target, &backup)?;
+        }
+        if let Err(error) = fs::rename(&staged, &target) {
+            if existed {
+                let _ = fs::rename(&backup, &target);
+            }
+            return Err(error.into());
+        }
+        let _ = fs::remove_dir_all(&backup);
+        Ok(target.join(worker_executable_name()))
+    })();
+    let _ = fs::remove_dir_all(staging);
+    if result.is_err() && !target.exists() {
+        let _ = fs::remove_dir(&root);
+    }
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
 fn prepare_update_engine_for(
     config: &UpdateConfig,
     engine_id: &str,
@@ -1707,26 +1755,30 @@ fn prepare_update_engine_for(
     directory: &Path,
     next_root: &Path,
     installed_worker: impl FnOnce() -> AppResult<PathBuf>,
+    handshake: impl FnOnce(&Path) -> AppResult<()>,
 ) -> AppResult<PathBuf> {
     if !engine_needs_package_for(next_root, config, engine_id, engine_backend) {
         if engine_backend != config.backend && !engine_backend.is_empty() {
             if let Some(executable) = engine_executable_path(next_root, engine_id) {
+                handshake(&executable)?;
                 return Ok(executable);
             }
         }
         // The new application carries the same engine. Keep the existing versioned
         // engine, or use the bundle; no payload, adoption or activation is needed.
-        return installed_worker();
+        let executable = installed_worker()?;
+        handshake(&executable)?;
+        return Ok(executable);
     }
     let engine = engine_package.ok_or_else(|| invalid("The changed engine has no package"))?;
-    let engine_root = next_root.join("engines").join(engine_id);
-    fs::create_dir_all(&engine_root)?;
-    let engine_dir = engine_root.join("engine");
-    if !engine_dir.exists() {
-        install_engine_package(directory, engine, &config.public_key, &engine_dir)?;
-    }
-    let engine_exe = engine_dir.join(worker_executable_name());
-    Ok(engine_exe)
+    install_verified_engine(
+        next_root,
+        engine_id,
+        directory,
+        engine,
+        &config.public_key,
+        handshake,
+    )
 }
 
 /// The caller holds `updates.busy`.
@@ -1779,7 +1831,7 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
     status.stage = "installing".into();
     status.message = "Backing up data and preparing the verified update…".into();
     publish(state, app, &mut status);
-    let engine_exe = prepare_update_engine_for(
+    let _engine_exe = prepare_update_engine_for(
         config,
         &checked.engine_id,
         &checked.engine_backend,
@@ -1787,10 +1839,16 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
         &directory,
         &state.paths.next_root,
         || worker::installed_worker_path(state, app),
+        |exe| {
+            crate::headless_smoke::run_worker_handshake(exe, Duration::from_secs(60), true)
+                .map(|_| ())
+                .map_err(AppError::Worker)
+        },
     )?;
-    crate::headless_smoke::run_worker_handshake(&engine_exe, Duration::from_secs(60), true)
-        .map_err(AppError::Worker)?;
-    if (checked.engine_id != config.engine_id || checked.engine_backend != config.backend)
+    if (checked.engine_id != config.engine_id
+        || checked.engine_backend != config.backend
+        || fs::read_to_string(state.paths.next_root.join("active-engine.txt"))
+            .is_ok_and(|active| active.trim() == checked.engine_id))
         && engine_executable_path(&state.paths.next_root, &checked.engine_id).is_some()
     {
         write_engine_meta(

@@ -2333,3 +2333,13 @@ fn fallback_keeps_restart_count() {
         None
     );
 }
+
+#[test]
+fn installed_worker_uses_app_owned_working_directory() {
+    let work_root = PathBuf::from("app-owned-work");
+    let command = installed_worker_command(PathBuf::from("worker"), None, &work_root);
+    assert_eq!(
+        command.working_directory.as_deref(),
+        Some(work_root.as_path())
+    );
+}

@@ -740,7 +740,7 @@ requires-dist = [
     { name = "omegaconf", marker = "extra == 'video'", specifier = ">=2.3.0" },
     { name = "onnxruntime", marker = "extra == 'video'", specifier = ">=1.24" },
     { name = "opencv-python-headless", marker = "extra == 'face'", specifier = "==4.10.0.84" },
-    { name = "pillow", specifier = ">=10.0.0" },
+    { name = "pillow", specifier = ">=13.0.0" },
     { name = "pillow", marker = "extra == 'package'", specifier = ">=10.0.0" },
     { name = "psutil", specifier = ">=7.0.0" },
     { name = "psutil", marker = "extra == 'video'" },

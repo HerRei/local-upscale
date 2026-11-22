@@ -31,10 +31,10 @@ use crate::{
     update_storage,
     updates::{
         self, acquire, active_engine_id, channel, engine_executable_path,
-        engine_meta_valid_for_host, install_engine_package, invalid, key, read_engine_meta,
-        require_space, safe_file_name, safe_id, signature, validate_contract_for_backend,
-        verify_file, verify_statement_for_entry, worker_executable_name, write_engine_meta,
-        DownloadFile, EngineMeta, EngineUpdate, ReleaseContract, UpdateConfig,
+        engine_meta_valid_for_host, invalid, key, read_engine_meta, require_space, safe_file_name,
+        safe_id, signature, validate_contract_for_backend, verify_file, verify_statement_for_entry,
+        worker_executable_name, write_engine_meta, DownloadFile, EngineMeta, EngineUpdate,
+        ReleaseContract, UpdateConfig,
     },
     worker,
 };
@@ -934,50 +934,25 @@ pub(crate) async fn install_engine_for(
         status.downloaded = total;
         publish_engine_status(state, app, &status);
 
-        let engine_root = state.paths.next_root.join("engines").join(&engine_id);
-        let engine_dir = engine_root.join("engine");
-        let cache_dir_clone = cache_dir.clone();
-        let engine_dir_clone = engine_dir.clone();
-        let engine_clone = engine.clone();
-        let public_key = config.public_key.clone();
-        let install_result = tauri::async_runtime::spawn_blocking(move || -> AppResult<PathBuf> {
-            fs::create_dir_all(
-                engine_dir_clone
-                    .parent()
-                    .ok_or_else(|| invalid("Invalid engine directory"))?,
-            )?;
-            if !engine_dir_clone.exists() {
-                install_engine_package(
-                    &cache_dir_clone,
-                    &engine_clone,
-                    &public_key,
-                    &engine_dir_clone,
-                )?;
-            }
-            let exe = engine_dir_clone.join(worker_executable_name());
-            if !exe.is_file() {
-                return Err(invalid("Installed engine is missing its worker executable"));
-            }
-            Ok(exe)
-        })
-        .await
-        .map_err(|e| invalid(e.to_string()))?;
-
-        let engine_exe = install_result?;
-
         status.stage = "handshaking".into();
         publish_engine_status(state, app, &status);
-
-        let exe_for_handshake = engine_exe.clone();
-        let handshake_result =
-            tauri::async_runtime::spawn_blocking(move || handshake(&exe_for_handshake))
-                .await
-                .map_err(|e| invalid(e.to_string()))?;
-
-        if let Err(error) = handshake_result {
-            let _ = fs::remove_dir_all(&engine_root);
-            return Err(error);
-        }
+        let next_root = state.paths.next_root.clone();
+        let engine_id_for_install = engine_id.clone();
+        let cache_dir_clone = cache_dir.clone();
+        let engine_clone = engine.clone();
+        let public_key = config.public_key.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            updates::install_verified_engine(
+                &next_root,
+                &engine_id_for_install,
+                &cache_dir_clone,
+                &engine_clone,
+                &public_key,
+                handshake,
+            )
+        })
+        .await
+        .map_err(|e| invalid(e.to_string()))??;
 
         write_engine_meta(
             &state.paths.next_root,

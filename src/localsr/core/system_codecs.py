@@ -289,7 +289,7 @@ class _IntermediateAudio:
 
     def __init__(self, container, audio: dict) -> None:
         self.container = container
-        self.source = av.open(str(audio["path"]))
+        self.source = av.open(str(audio["path"]), options={"protocol_whitelist": "file"})
         source_stream = self.source.streams.audio[0]
         self.rate = int(audio.get("sample_rate") or source_stream.rate)
         self.stream = container.add_stream("flac", rate=self.rate)
@@ -598,7 +598,10 @@ class SystemCodecs:
                 arguments += ["--hdr", hdr_format]
             if wav is not None:
                 arguments += ["--audio", str(wav)]
-            with av.open(str(source)) as master, self._process(arguments, stdin=True) as process:
+            with (
+                av.open(str(source), options={"protocol_whitelist": "file"}) as master,
+                self._process(arguments, stdin=True) as process,
+            ):
                 stdin = process.stdin
                 assert stdin is not None
                 stream = master.streams.video[0]
@@ -724,7 +727,7 @@ class SystemCodecs:
     @staticmethod
     def _master_audio(source: Path, wav: Path, cancel_event: threading.Event | None) -> Path | None:
         """Decode the master's audio to 16-bit PCM WAV, aligned to the video's start."""
-        with av.open(str(source)) as master:
+        with av.open(str(source), options={"protocol_whitelist": "file"}) as master:
             audio = next((stream for stream in master.streams if stream.type == "audio"), None)
             if audio is None:
                 return None

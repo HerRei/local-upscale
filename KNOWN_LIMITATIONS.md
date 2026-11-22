@@ -49,6 +49,7 @@ These apply to v0.5.0-beta. Please read them before starting a long job.
   open AV1; VP9 and lossless FFV1 are built in. Choosing H.264/HEVC explicitly uses
   macOS's encoders (MP4 only) or your FFmpeg, from a temporary lossless copy that
   needs extra disk space, except whole clips on macOS, which stream straight in.
+- The built-in video decoder opens local files only; it does not fetch network playlist segments.
 - Interlacing is deinterlaced only when the file is tagged; untagged interlacing
   and inverse telecine are not detected. DVD menus, disc images and encrypted
   media are out of scope.
@@ -64,8 +65,8 @@ These apply to v0.5.0-beta. Please read them before starting a long job.
 - Memory use depends on the model, the output size and the clip. 16 GB of GPU
   memory does not guarantee that a SeedVR2 job fits; the FP8 download is smaller,
   but the working memory is not. Try a short clip at a modest output size first.
-- A source image may have at most 178,956,970 pixels (about 179 megapixels), the size
-  Pillow still accepts; a larger one is refused before it is decoded. The output has 16
+- A source image, RAW photo or video frame may have at most 178,956,970 pixels
+  (about 179 megapixels). Larger inputs are refused before pixel conversion. The output has 16
   times as many pixels at ×4, so a source far below that limit can already be too large
   for the memory of the computer.
 - Frame interpolation adds processing and memory costs. Interpolating before the

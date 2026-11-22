@@ -83,10 +83,29 @@ class ExternalFFmpeg:
         )
 
 
+def _windows_path_ffmpeg(path: str, current_directory: str) -> str | None:
+    """Search absolute PATH entries without Windows' implicit current directory."""
+    current = os.path.normcase(os.path.realpath(current_directory))
+    for directory in path.split(os.pathsep):
+        if not directory or not os.path.isabs(directory):
+            continue
+        if os.path.normcase(os.path.realpath(directory)) == current:
+            continue
+        for suffix in (".exe", ".com", ".bat", ".cmd"):
+            candidate = os.path.join(directory, "ffmpeg" + suffix)
+            if os.path.isfile(candidate):
+                return candidate
+    return None
+
+
 def discover_candidates() -> list[str]:
     """Return plausible installed FFmpeg executables, without running them."""
     found: list[str] = []
-    which = shutil.which("ffmpeg")
+    which = (
+        _windows_path_ffmpeg(os.environ.get("PATH", ""), os.getcwd())
+        if os.name == "nt"
+        else shutil.which("ffmpeg")
+    )
     for candidate in ([which] if which else []) + list(_COMMON_LOCATIONS):
         if candidate and Path(candidate).is_file() and candidate not in found:
             found.append(candidate)
@@ -241,7 +260,7 @@ def plan_source(path: str, container: str = "mkv", *, decode_audio: bool = False
     require conversion because they cannot be stream-copied directly.
     """
     try:
-        source = av.open(path)
+        source = av.open(path, options={"protocol_whitelist": "file"})
     except av.FFmpegError:
         if Path(path).is_file():
             return SourcePlan(False, True)

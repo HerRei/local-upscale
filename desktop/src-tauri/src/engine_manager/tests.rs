@@ -271,6 +271,12 @@ fn host_runs_active_installed_engine_with_different_id_when_os_arch_and_handshak
         None
     );
 
+    // Even an id matching the bundle cannot make an unverified directory trusted.
+    assert_eq!(
+        updates::active_engine_for_host(&paths, false, id, "windows", "x86_64"),
+        None
+    );
+
     // Once handshake metadata confirms same OS/arch and protocol, the host runs it.
     let mut meta = EngineMeta {
         id: id.into(),
@@ -453,6 +459,17 @@ fn install_engine_resumes_from_partial_file_verifies_signature_and_activates() {
     )
     .unwrap();
 
+    let previous = paths
+        .next_root
+        .join("engines/linux-x86_64-rocm-0123456789ab/engine");
+    fs::create_dir_all(&previous).unwrap();
+    fs::write(
+        previous.join(worker_executable_name()),
+        b"unverified leftover",
+    )
+    .unwrap();
+    let previous_during_handshake = previous.clone();
+
     tauri::async_runtime::block_on(install_engine_for(
         &state,
         None,
@@ -461,8 +478,12 @@ fn install_engine_resumes_from_partial_file_verifies_signature_and_activates() {
         "0.3.7-beta",
         "linux",
         "x86_64",
-        |exe| {
-            assert!(exe.is_file());
+        move |exe| {
+            assert_eq!(fs::read(exe).unwrap(), b"worker");
+            assert_eq!(
+                fs::read(previous_during_handshake.join(worker_executable_name())).unwrap(),
+                b"unverified leftover"
+            );
             Ok(())
         },
     ))

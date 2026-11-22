@@ -242,7 +242,8 @@ and per-part checksums. Every part and the manifest are downloaded and
 signature-checked individually; extraction verifies checksums, paths, file counts
 and free disk space. Parts must stay below 2 GiB. `unpacked_size` reserves room
 for the app and the engine together, and a protocol handshake must pass before the
-new engine is activated. On Windows the NSIS hook accepts the updater's
+new engine is activated. Downloads and app updates unpack into a fresh staging
+folder and keep the previous engine until the handshake passes. On Windows the NSIS hook accepts the updater's
 managed-engine flag, so a CUDA update never asks the user to locate payload parts
 by hand.
 
@@ -413,8 +414,9 @@ or AppImage:
   parts from disk using companion `.sig` files (or matching verified catalog
   signatures). Both verify minisign signatures and SHA-256 digests, unpack the
   engine, run the worker protocol handshake, write host metadata (`meta.json`),
-  and activate `active-engine.txt` only after the handshake passes. An import
-  tests a staged engine before replacing an existing one. An interrupted replacement
+  and activate `active-engine.txt` only after the handshake passes. Both test a
+  staged engine before replacing an existing one. Installed engine folders also
+  need host metadata from a passed handshake before they can be selected. An interrupted replacement
   restores its backup at startup or on the next import. If a job starts during
   a download, activation fails with an error and can be retried once the job ends.
   Network fetches are refused before `privacy_choice_made`, in Store editions,

@@ -39,6 +39,7 @@ from .media_codecs import (
     validate_output,
 )
 from .output_publish import OutputExistsError, owned_temporary, publish_output
+from .pixel_budget import require_pixel_budget
 from .video_audio import add_opus_stream, needs_audio_transcode, opus_packets
 from .video_normalization import display_frames, square_pixel_width
 
@@ -139,12 +140,13 @@ class VideoStageError(RuntimeError):
 
 @contextmanager
 def _video_decoder(path: str, *, frame_threads: bool = False, thread_count: int = 0):
-    with av.open(path) as container:
+    with av.open(path, options={"protocol_whitelist": "file"}) as container:
         stream = next((s for s in container.streams if s.type == "video"), None)
         if stream is None:
             raise ValueError(f"No video stream found in {path}")
         if stream.codec_context is None:
             raise UndecodableVideoError(UNDECODABLE_VIDEO_MESSAGE)
+        require_pixel_budget(int(stream.width or 0), int(stream.height or 0))
         stream.codec_context.thread_count = max(0, min(8, thread_count))
         if frame_threads:
             try:
@@ -216,7 +218,7 @@ def _audio_compatibility_warning(
 
 def _source_decodable(path: str) -> bool:
     try:
-        container = av.open(path)
+        container = av.open(path, options={"protocol_whitelist": "file"})
     except av.FFmpegError:
         if Path(path).is_file():
             return False
@@ -239,6 +241,8 @@ def probe_video(
 def _frame_rgb(stream, frame: av.VideoFrame, hdr_mode: str) -> np.ndarray:
     turns, flipped = _display_transform(frame)
     width = square_pixel_width(stream, frame.width)
+    require_pixel_budget(frame.width, frame.height)
+    require_pixel_budget(width, frame.height)
     if width != frame.width:
         frame = frame.reformat(width=width, height=frame.height, interpolation="BICUBIC")
     transfer = int(getattr(frame, "color_trc", stream.codec_context.color_trc))
@@ -282,7 +286,7 @@ def _source_timing(
     path: str, converter: str = "your FFmpeg"
 ) -> tuple[float, int, float, str, bool]:
     """Timing from the container and stream headers, which need no decoder."""
-    with av.open(path) as container:
+    with av.open(path, options={"protocol_whitelist": "file"}) as container:
         stream = next((s for s in container.streams if s.type == "video"), None)
         if stream is None:
             raise ValueError(f"No video stream found in {path}")
@@ -1031,10 +1035,12 @@ def _remux_source_streams(
     subtitle_container = None
     output_container = None
     try:
-        video_container = av.open(str(video_path))
-        source_container = av.open(str(source_path))
+        video_container = av.open(str(video_path), options={"protocol_whitelist": "file"})
+        source_container = av.open(str(source_path), options={"protocol_whitelist": "file"})
         if subtitle_source is not None and subtitle_source.is_file():
-            subtitle_container = av.open(str(subtitle_source))
+            subtitle_container = av.open(
+                str(subtitle_source), options={"protocol_whitelist": "file"}
+            )
         video_in = next(
             (stream for stream in video_container.streams if stream.type == "video"), None
         )

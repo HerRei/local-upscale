@@ -2210,6 +2210,20 @@ pub(crate) fn bundled_engine_executable(app: &AppHandle) -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.is_file())
 }
 
+fn installed_worker_command(
+    program: PathBuf,
+    installed_engine_id: Option<String>,
+    work_root: &Path,
+) -> WorkerCommand {
+    WorkerCommand {
+        program,
+        arguments: Vec::new(),
+        working_directory: Some(work_root.to_path_buf()),
+        python_path: None,
+        installed_engine_id,
+    }
+}
+
 fn resolve_worker_command(state: &AppState, app: &AppHandle) -> AppResult<WorkerCommand> {
     #[cfg(debug_assertions)]
     {
@@ -2248,13 +2262,11 @@ fn resolve_worker_command(state: &AppState, app: &AppHandle) -> AppResult<Worker
         )
     };
     if let Some((program, installed_engine_id)) = selected {
-        return Ok(WorkerCommand {
+        return Ok(installed_worker_command(
             program,
-            arguments: Vec::new(),
-            working_directory: None,
-            python_path: None,
             installed_engine_id,
-        });
+            &state.paths.work_root,
+        ));
     }
 
     #[cfg(not(debug_assertions))]

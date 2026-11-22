@@ -15,21 +15,14 @@ import torch
 from PIL import Image, ImageCms, ImageOps, TiffImagePlugin, UnidentifiedImageError
 
 from localsr.core.image_formats import (
+    PILLOW_INPUT_FORMATS,
     is_raw_input,
     is_system_decoded,
     require_ordinary_source,
 )
 from localsr.core.output_publish import owned_temporary, publish_output
-
-# The most pixels a source image may have: what Pillow accepts before it refuses an image
-# as a decompression bomb (twice its 89 megapixel warning threshold). Everything up to
-# here opens, medium-format and stitched files included; the warning for the upper half
-# is silenced because accepting that range is intended.
-MAX_INPUT_PIXELS = 2 * 89_478_485
-TOO_LARGE_MESSAGE = (
-    f"This image has more than {round(MAX_INPUT_PIXELS / 1_000_000)} megapixels, which is more "
-    "than LocalSR opens. Reduce its size first."
-)
+from localsr.core.pixel_budget import MAX_INPUT_PIXELS as MAX_INPUT_PIXELS
+from localsr.core.pixel_budget import TOO_LARGE_MESSAGE, require_pixel_budget
 
 
 class UnreadableImageError(OSError):
@@ -151,12 +144,6 @@ def _png_scanline_bytes(path: str | Path) -> tuple[int, int] | None:
         return None
 
 
-def require_pixel_budget(width: int, height: int) -> None:
-    """Refuse an image that has more pixels than LocalSR reads, before decoding any."""
-    if width * height > MAX_INPUT_PIXELS:
-        raise ValueError(TOO_LARGE_MESSAGE)
-
-
 def _float_grey_to_16_bit(image: Image.Image) -> tuple[Image.Image, int | None]:
     """Take a 32-bit float grey image to 16 bits, and say which range it was read as.
 
@@ -235,7 +222,15 @@ def _decode_with_macos(path: str) -> Image.Image:
         target = Path(work) / "decoded.tiff"
         try:
             result = subprocess.run(
-                ["/usr/bin/sips", "-s", "format", "tiff", str(path), "--out", str(target)],
+                [
+                    "/usr/bin/sips",
+                    "-s",
+                    "format",
+                    "tiff",
+                    str(Path(path).resolve()),
+                    "--out",
+                    str(target),
+                ],
                 capture_output=True,
                 text=True,
                 timeout=300,
@@ -256,7 +251,7 @@ def _decode_with_macos(path: str) -> Image.Image:
                 + (f": {detail[-1][:200]}" if detail else ".")
             )
         try:
-            image = Image.open(io.BytesIO(target.read_bytes()))
+            image = Image.open(io.BytesIO(target.read_bytes()), formats=("TIFF",))
             image.load()
         except (OSError, SyntaxError, EOFError, ValueError) as error:
             # sips reports success for some truncated files and writes a broken TIFF.
@@ -321,7 +316,7 @@ def open_image(path: str | Path) -> Image.Image:
     """Open a still image: through macOS for HEIC/HEIF and JPEG XL, else Pillow."""
     if is_system_decoded(path):
         return _decode_with_macos(str(path))
-    return Image.open(path)
+    return Image.open(path, formats=PILLOW_INPUT_FORMATS)
 
 
 def open_photo(path: str | Path) -> Image.Image:
@@ -338,6 +333,7 @@ def _develop_raw(path: str) -> np.ndarray:
 
     try:
         with rawpy.imread(path) as raw:
+            require_pixel_budget(raw.sizes.width, raw.sizes.height)
             return raw.postprocess(
                 use_camera_wb=True,
                 use_auto_wb=False,

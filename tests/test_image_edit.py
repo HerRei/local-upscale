@@ -873,3 +873,23 @@ def test_custom_edit_command_and_lifecycle_keep_files_in_place_and_omit_filename
     started = json.loads(messages[0].to_json())
     assert started["data"]["model_id"] == "Your edit model"
     assert "secret-" not in json.dumps([json.loads(m.to_json()) for m in messages])
+
+
+def test_selected_runtime_requires_current_cli_controls(tmp_path, monkeypatch):
+    runtime = tmp_path / "sd-cli"
+    runtime.touch()
+    monkeypatch.setattr(
+        image_edit,
+        "probe_runtime",
+        lambda path, option: subprocess.CompletedProcess([str(path), option], 0, "old runtime", ""),
+    )
+    with pytest.raises(ValueError, match="too old"):
+        image_edit.check_runtime(str(runtime))
+    monkeypatch.setattr(
+        image_edit,
+        "probe_runtime",
+        lambda path, option: subprocess.CompletedProcess(
+            [str(path), option], 0, " ".join(image_edit.REQUIRED_FLAGS), ""
+        ),
+    )
+    assert image_edit.check_runtime(str(runtime)) == runtime.resolve()

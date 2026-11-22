@@ -20,7 +20,7 @@ dependencies = [
     "torch>=2.0.0",
     "torchvision>=0.15.0",
     "spandrel>=0.4.0",
-    "Pillow>=10.0.0",
+    "Pillow>=13.0.0",
     "rawpy>=0.25.1",
     # Current macOS Intel PyTorch wheels use the NumPy 1.x C API. NumPy 2.x
     # imports but leaves torch.from_numpy()/Tensor.numpy() unavailable.
