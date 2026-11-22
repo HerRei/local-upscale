@@ -33,8 +33,7 @@ use crate::{
         self, acquire, active_engine_id, channel, engine_executable_path,
         engine_meta_valid_for_host, invalid, key, read_engine_meta, require_space, safe_file_name,
         safe_id, signature, validate_contract_for_backend, verify_file, verify_statement_for_entry,
-        worker_executable_name, write_engine_meta, DownloadFile, EngineMeta, EngineUpdate,
-        ReleaseContract, UpdateConfig,
+        write_engine_meta, DownloadFile, EngineMeta, EngineUpdate, ReleaseContract, UpdateConfig,
     },
     worker,
 };
@@ -372,27 +371,29 @@ pub(crate) fn list_installed_engines_for(
             if !safe_id(&id) {
                 continue;
             }
-            let Some(executable) = engine_executable_path(&paths.next_root, &id) else {
-                continue;
-            };
-            let backend = if let Some(meta) = read_engine_meta(&paths.next_root, &id) {
-                if !engine_meta_valid_for_host(&meta, os, arch) || meta.id != id {
-                    continue;
-                }
-                meta.backend
-            } else if !config.engine_id.is_empty() && id == config.engine_id {
-                config.backend.clone()
-            } else if config.engine_id.is_empty() {
-                infer_backend_from_id(&id).unwrap_or_else(|| "cpu".into())
-            } else {
-                continue;
-            };
+            let executable = engine_executable_path(&paths.next_root, &id);
+            let meta = read_engine_meta(&paths.next_root, &id);
+            let verified = executable.is_some()
+                && meta.as_ref().is_some_and(|meta| {
+                    engine_meta_valid_for_host(meta, os, arch)
+                        && meta.id == id
+                        && updates::quick_verify_engine_files(&paths.next_root, &id, meta)
+                });
+            let backend = meta
+                .filter(|meta| meta.id == id)
+                .map(|meta| meta.backend)
+                .or_else(|| (id == config.engine_id).then(|| config.backend.clone()))
+                .or_else(|| infer_backend_from_id(&id));
+            let Some(backend) = backend else { continue };
             installed.push(InstalledEngine {
-                active: active_id.as_deref() == Some(id.as_str()),
+                active: verified && active_id.as_deref() == Some(id.as_str()),
                 id,
                 backend,
                 bundled: false,
-                path: executable.to_string_lossy().into_owned(),
+                path: executable
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                needs_reinstall: !verified,
             });
         }
     }
@@ -403,12 +404,15 @@ pub(crate) fn list_installed_engines_for(
     };
     let has_bundled_binary = bundled_path.is_some();
     if (has_bundled_binary || cfg!(debug_assertions))
-        && !installed.iter().any(|item| item.id == bundled_id)
+        && !installed
+            .iter()
+            .any(|item| item.id == bundled_id && !item.needs_reinstall)
     {
         installed.push(InstalledEngine {
             id: bundled_id,
             backend: bundled_backend,
             bundled: true,
+            needs_reinstall: false,
             active: active_id.is_none(),
             path: bundled_path
                 .map(|path| path.to_string_lossy().into_owned())
@@ -460,6 +464,7 @@ pub(crate) fn snapshot_for(
                 id: "bundled".into(),
                 backend: effective_bundled_backend(config),
                 bundled: true,
+                needs_reinstall: false,
                 active: true,
                 path: bundled_path
                     .as_ref()
@@ -497,7 +502,9 @@ pub(crate) fn snapshot_for(
                     size: entry.size,
                     manifest_url: entry.manifest_url.clone(),
                     parts_count: entry.engine.parts.len(),
-                    installed: installed.iter().any(|item| item.id == entry.engine_id),
+                    installed: installed
+                        .iter()
+                        .any(|item| item.id == entry.engine_id && !item.needs_reinstall),
                     active: active_engine_id == entry.engine_id,
                 })
                 .collect()
@@ -902,6 +909,17 @@ pub(crate) async fn install_engine_for(
                 &config.public_key,
             )?;
             let parsed_manifest = engine_payload::parse_manifest(&manifest_bytes)?;
+            if parsed_manifest.schema_version == 2
+                && (normalized_manifest_backend(&parsed_manifest.backend)? != backend
+                    || parsed_manifest.os.as_deref() != Some(os)
+                    || parsed_manifest.arch.as_deref() != Some(arch)
+                    || parsed_manifest.protocol_version != Some(PROTOCOL_VERSION)
+                    || parsed_manifest.engine_id.as_deref() != Some(engine_id.as_str()))
+            {
+                return Err(invalid(
+                    "Engine payload manifest metadata does not match this platform or engine",
+                ));
+            }
             let parts_remaining = engine
                 .parts
                 .iter()
@@ -936,54 +954,48 @@ pub(crate) async fn install_engine_for(
 
         status.stage = "handshaking".into();
         publish_engine_status(state, app, &status);
+        let state_for_commit = state.clone();
+        let app_for_commit = app.cloned();
         let next_root = state.paths.next_root.clone();
         let engine_id_for_install = engine_id.clone();
         let cache_dir_clone = cache_dir.clone();
         let engine_clone = engine.clone();
         let public_key = config.public_key.clone();
-        tauri::async_runtime::spawn_blocking(move || {
-            updates::install_verified_engine(
+        let backend_owned = backend.to_string();
+        let os_owned = os.to_string();
+        let arch_owned = arch.to_string();
+        let version_owned = entry.version;
+        tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
+            let staged = updates::stage_verified_engine(
                 &next_root,
                 &engine_id_for_install,
                 &cache_dir_clone,
                 &engine_clone,
                 &public_key,
+                &os_owned,
+                &arch_owned,
                 handshake,
-            )
+            )?;
+            let meta = EngineMeta {
+                id: engine_id_for_install,
+                backend: backend_owned,
+                os: os_owned,
+                arch: arch_owned,
+                protocol_version: PROTOCOL_VERSION,
+                handshake_passed: true,
+                verified_install: true,
+                version: version_owned,
+                files: staged.files.clone(),
+            };
+            commit_installed_engine(&state_for_commit, app_for_commit.as_ref(), staged, &meta)
         })
         .await
         .map_err(|e| invalid(e.to_string()))??;
 
-        write_engine_meta(
-            &state.paths.next_root,
-            &EngineMeta {
-                id: engine_id.clone(),
-                backend: backend.to_string(),
-                os: os.to_string(),
-                arch: arch.to_string(),
-                protocol_version: PROTOCOL_VERSION,
-                handshake_passed: true,
-                version: entry.version,
-            },
-        )?;
-
         let _ = fs::remove_dir_all(&cache_dir);
-
-        {
-            let _scheduler = lock(&state.scheduler)?;
-            ensure_no_running_jobs(state)?;
-            update_storage::write_atomic(
-                &state.paths.next_root.join("active-engine.txt"),
-                engine_id.as_bytes(),
-            )?;
-        }
 
         if backend != "cpu" {
             state.choose_device.store(true, Ordering::SeqCst);
-        }
-
-        if let Some(app) = app {
-            worker::restart_for_engine_switch(state, app)?;
         }
 
         status.stage = "installed".into();
@@ -1049,7 +1061,7 @@ pub(crate) fn use_engine_for(
     backend: &str,
     os: &str,
     arch: &str,
-    handshake: impl FnOnce(&Path) -> AppResult<()>,
+    _handshake: impl FnOnce(&Path) -> AppResult<()>,
 ) -> AppResult<()> {
     ensure_not_managed_or_busy(state)?;
     let _busy = acquire(&state.engines.busy)?;
@@ -1066,32 +1078,17 @@ pub(crate) fn use_engine_for(
 
     let chosen = installed
         .iter()
-        .find(|item| item.backend == backend && !item.bundled)
-        .or_else(|| installed.iter().find(|item| item.backend == backend))
+        .find(|item| item.backend == backend && !item.bundled && !item.needs_reinstall)
+        .or_else(|| {
+            installed
+                .iter()
+                .find(|item| item.backend == backend && !item.needs_reinstall)
+        })
         .ok_or_else(|| invalid(format!("The {backend} engine is not installed")))?;
 
     if chosen.bundled {
         updates::deactivate_active_engine(&state.paths)?;
     } else {
-        let exe = engine_executable_path(&state.paths.next_root, &chosen.id)
-            .ok_or_else(|| invalid("The selected engine executable is missing"))?;
-        let needs_handshake = read_engine_meta(&state.paths.next_root, &chosen.id)
-            .is_none_or(|meta| !engine_meta_valid_for_host(&meta, os, arch));
-        if needs_handshake {
-            handshake(&exe)?;
-            write_engine_meta(
-                &state.paths.next_root,
-                &EngineMeta {
-                    id: chosen.id.clone(),
-                    backend: chosen.backend.clone(),
-                    os: os.to_string(),
-                    arch: arch.to_string(),
-                    protocol_version: PROTOCOL_VERSION,
-                    handshake_passed: true,
-                    version: String::new(),
-                },
-            )?;
-        }
         update_storage::write_atomic(
             &state.paths.next_root.join("active-engine.txt"),
             chosen.id.as_bytes(),
@@ -1199,6 +1196,91 @@ pub(crate) fn remove_engine_in(
 pub fn remove_engine(state: State<'_, Arc<AppState>>, app: AppHandle, id: String) -> AppResult<()> {
     let config = UpdateConfig::load();
     remove_engine_in(&state, Some(&app), &config, &id)
+}
+
+pub(crate) fn verify_engine_for(
+    state: &Arc<AppState>,
+    app: Option<&AppHandle>,
+    config: &UpdateConfig,
+    id: &str,
+    os: &str,
+    arch: &str,
+) -> AppResult<()> {
+    ensure_not_managed_or_busy(state)?;
+    let _busy = acquire(&state.engines.busy)?;
+    let _scheduler = lock(&state.scheduler)?;
+    ensure_no_running_jobs(state)?;
+    if id == "bundled" || !safe_id(id) {
+        return Err(invalid("Cannot verify the bundled or invalid engine"));
+    }
+    let active_file_id = fs::read_to_string(state.paths.next_root.join("active-engine.txt"))
+        .ok()
+        .map(|s| s.trim().to_owned());
+    let was_active = active_file_id.as_deref() == Some(id)
+        || (!state.worker.use_bundled_fallback.load(Ordering::SeqCst)
+            && active_engine_id(
+                &state.paths,
+                crate::distribution::managed_by_store(),
+                &config.engine_id,
+            )
+            .as_deref()
+                == Some(id));
+    let verification = match read_engine_meta(&state.paths.next_root, id) {
+        Some(meta) if engine_meta_valid_for_host(&meta, os, arch) && meta.id == id => {
+            updates::full_verify_engine_files(&state.paths.next_root, id, &meta)
+        }
+        _ => Err(invalid(
+            "Engine verification metadata is missing or invalid",
+        )),
+    };
+    if let Err(error) = verification {
+        updates::mark_engine_needs_reinstall(&state.paths.next_root, id);
+        if was_active {
+            updates::deactivate_active_engine(&state.paths)?;
+            lock(&state.worker.failed_engines)?.insert(id.to_owned());
+            if let Some(app) = app {
+                if let Ok(mut runtime) = state.runtime.lock() {
+                    runtime.status_title = "Switched to bundled engine".into();
+                    runtime.status_detail =
+                        "The installed engine failed verification; using the bundled engine instead."
+                            .into();
+                }
+                let _ = worker::restart_for_engine_switch(state, app);
+            } else {
+                state
+                    .worker
+                    .use_bundled_fallback
+                    .store(true, Ordering::SeqCst);
+            }
+        }
+        if let Some(app) = app {
+            emit_state_changed(app);
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn verify_engine(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    id: String,
+) -> AppResult<()> {
+    let state = state.inner().clone();
+    let config = UpdateConfig::load();
+    tauri::async_runtime::spawn_blocking(move || {
+        verify_engine_for(
+            &state,
+            Some(&app),
+            &config,
+            &id,
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+        )
+    })
+    .await
+    .map_err(|e| invalid(e.to_string()))?
 }
 
 #[tauri::command]
@@ -1348,6 +1430,15 @@ pub(crate) fn recover_interrupted_reimport(next_root: &Path, id: &str) -> AppRes
         }
     }
     let engine = root.join("engine");
+    // A crash can leave metadata for either side of the swap. Neither copy may
+    // be trusted until a verified reinstall has written new metadata.
+    if !backups.is_empty() {
+        match fs::remove_file(root.join("meta.json")) {
+            Ok(()) => (),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error.into()),
+        }
+    }
     if engine.exists() {
         for backup in backups {
             fs::remove_dir_all(backup)?;
@@ -1360,12 +1451,91 @@ pub(crate) fn recover_interrupted_reimport(next_root: &Path, id: &str) -> AppRes
     Ok(())
 }
 
+fn commit_installed_engine(
+    state: &Arc<AppState>,
+    app: Option<&AppHandle>,
+    staged: updates::StagedEngine,
+    meta: &EngineMeta,
+) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    ensure_no_running_jobs(state)?;
+    let pointer = state.paths.next_root.join("active-engine.txt");
+    let old_pointer = fs::read(&pointer).ok();
+    let metadata = state
+        .paths
+        .next_root
+        .join("engines")
+        .join(&meta.id)
+        .join("meta.json");
+    let old_metadata = fs::read(&metadata).ok();
+    staged.commit_with(|_| {
+        let result = (|| -> AppResult<()> {
+            write_engine_meta(&state.paths.next_root, meta)?;
+            update_storage::write_atomic(&pointer, meta.id.as_bytes())?;
+            lock(&state.worker.failed_engines)?.remove(&meta.id);
+            if let Some(app) = app {
+                worker::restart_for_engine_switch(state, app)?;
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            for (path, previous) in [(&pointer, old_pointer), (&metadata, old_metadata)] {
+                if let Some(bytes) = previous {
+                    let _ = update_storage::write_atomic(path, &bytes);
+                } else {
+                    let _ = fs::remove_file(path);
+                }
+            }
+        }
+        result
+    })?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ensure_import_not_older(
+    paths: &AppPaths,
+    config: &UpdateConfig,
+    bundled_path: Option<&Path>,
+    backend: &str,
+    os: &str,
+    arch: &str,
+    imported: &semver::Version,
+    installed_app_version: &str,
+) -> AppResult<()> {
+    let installed = list_installed_engines_for(paths, config, bundled_path, os, arch);
+    for item in installed {
+        if item.backend != backend || item.needs_reinstall {
+            continue;
+        }
+        let current_version = if item.bundled {
+            if bundled_path.is_none() && config.engine_id.is_empty() {
+                continue;
+            }
+            installed_app_version.to_owned()
+        } else {
+            read_engine_meta(&paths.next_root, &item.id)
+                .map(|meta| meta.version)
+                .unwrap_or_default()
+        };
+        if let Ok(current) = semver::Version::parse(current_version.trim()) {
+            if imported < &current {
+                return Err(invalid(format!(
+                    "Cannot import {backend} engine {imported}: version {current} is already installed"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn import_engine_for(
     state: &Arc<AppState>,
     app: Option<&AppHandle>,
     config: &UpdateConfig,
     manifest_path: &Path,
+    installed_version: &str,
     os: &str,
     arch: &str,
     handshake: impl FnOnce(&Path) -> AppResult<()>,
@@ -1394,6 +1564,45 @@ pub(crate) fn import_engine_for(
             "The {backend} engine payload is not supported on {os}"
         )));
     }
+    if parsed.schema_version == 2 {
+        let manifest_os = parsed.os.as_deref().unwrap_or("");
+        if manifest_os != os {
+            return Err(invalid(format!(
+                "This engine package is for {manifest_os}, not {os}"
+            )));
+        }
+        let manifest_arch = parsed.arch.as_deref().unwrap_or("");
+        if manifest_arch != arch {
+            return Err(invalid(format!(
+                "This engine package is for {manifest_arch}, not {arch}"
+            )));
+        }
+        if parsed.protocol_version != Some(PROTOCOL_VERSION) {
+            return Err(invalid(
+                "This engine package uses an incompatible worker protocol version",
+            ));
+        }
+        let imported_version = parsed
+            .version
+            .as_deref()
+            .ok_or_else(|| invalid("Engine payload manifest is missing a version"))
+            .and_then(|v| semver::Version::parse(v).map_err(|e| invalid(e.to_string())))?;
+        let bundled_path = state
+            .bundled_engine_path
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone());
+        ensure_import_not_older(
+            &state.paths,
+            config,
+            bundled_path.as_deref(),
+            &backend,
+            os,
+            arch,
+            &imported_version,
+            installed_version,
+        )?;
+    }
     let catalog_snapshot = lock(&state.engines.catalog)?.clone();
     let catalog_id = verify_imported_files(
         manifest_path,
@@ -1404,99 +1613,71 @@ pub(crate) fn import_engine_for(
         &catalog_snapshot,
         &backend,
     )?;
+    if parsed.schema_version == 2 {
+        if let (Some(cid), Some(mid)) = (&catalog_id, &parsed.engine_id) {
+            if cid != mid {
+                return Err(invalid(
+                    "Engine manifest id does not match the signed catalog entry",
+                ));
+            }
+        }
+    }
     let os_key = if os == "macos" { "darwin" } else { os };
-    let engine_id = catalog_id
+    let engine_id = parsed
+        .engine_id
+        .clone()
+        .or_else(|| catalog_id.clone())
         .unwrap_or_else(|| format!("{os_key}-{arch}-{backend}-{}", sha256_hex(&manifest_bytes)));
     if !safe_id(&engine_id) {
         return Err(invalid("Derived engine identity is invalid"));
     }
+    let version_str = parsed
+        .version
+        .clone()
+        .or_else(|| {
+            catalog_id.as_ref().and_then(|cid| {
+                catalog_snapshot
+                    .iter()
+                    .find(|entry| entry.engine_id == *cid)
+                    .map(|entry| entry.version.clone())
+            })
+        })
+        .unwrap_or_default();
 
-    recover_interrupted_reimport(&state.paths.next_root, &engine_id)?;
-    let engine_root = state.paths.next_root.join("engines").join(&engine_id);
-    fs::create_dir_all(&engine_root)?;
-    let engine_dir = engine_root.join("engine");
-    let staging_root = engine_root.join(format!(".import-{}", uuid::Uuid::new_v4()));
-    fs::create_dir_all(&staging_root)?;
-    let staged = staging_root.join("engine");
-    let backup = engine_root.join(format!(".backup-{}", uuid::Uuid::new_v4()));
-    let result = (|| -> AppResult<EngineMeta> {
-        engine_payload::install_manifest(&manifest_bytes, source_dir, &staged)
-            .map_err(|error| invalid(error.to_string()))?;
-        let engine_exe = staged.join(worker_executable_name());
-        if !engine_exe.is_file() {
-            return Err(invalid("Imported engine is missing its worker executable"));
-        }
-        handshake(&engine_exe)?;
-
-        let meta = EngineMeta {
-            id: engine_id.clone(),
-            backend: backend.clone(),
-            os: os.to_string(),
-            arch: arch.to_string(),
-            protocol_version: PROTOCOL_VERSION,
-            handshake_passed: true,
-            version: String::new(),
-        };
-        let scheduler = lock(&state.scheduler)?;
-        ensure_no_running_jobs(state)?;
-        let pointer = state.paths.next_root.join("active-engine.txt");
-        let old_pointer = fs::read(&pointer).ok();
-        let metadata = engine_root.join("meta.json");
-        let old_metadata = fs::read(&metadata).ok();
-        let existed = engine_dir.exists();
-        if existed {
-            fs::rename(&engine_dir, &backup)?;
-        }
-        if let Err(error) = fs::rename(&staged, &engine_dir) {
-            if existed {
-                let _ = fs::rename(&backup, &engine_dir);
-            }
-            return Err(error.into());
-        }
-        let activation = (|| -> AppResult<()> {
-            write_engine_meta(&state.paths.next_root, &meta)?;
-            update_storage::write_atomic(
-                &state.paths.next_root.join("active-engine.txt"),
-                engine_id.as_bytes(),
-            )?;
-            Ok(())
-        })();
-        drop(scheduler);
-        let activation = activation.and_then(|()| {
-            lock(&state.worker.failed_engines)?.remove(&engine_id);
-            if let Some(app) = app {
-                worker::restart_for_engine_switch(state, app)?;
-            }
-            Ok(())
-        });
-        if let Err(error) = activation {
-            for (path, previous) in [(&pointer, old_pointer), (&metadata, old_metadata)] {
-                if let Some(bytes) = previous {
-                    let _ = update_storage::write_atomic(path, &bytes);
-                } else {
-                    let _ = fs::remove_file(path);
-                }
-            }
-            let _ = fs::remove_dir_all(&engine_dir);
-            if existed {
-                let _ = fs::rename(&backup, &engine_dir);
-            }
-            return Err(error);
-        }
-        let _ = fs::remove_dir_all(&backup);
-        if backend != "cpu" {
-            state.choose_device.store(true, Ordering::SeqCst);
-        }
-        if let Some(app) = app {
-            emit_state_changed(app);
-        }
-        Ok(meta)
-    })();
-    let _ = fs::remove_dir_all(&staging_root);
-    if result.is_err() && !engine_dir.exists() {
-        let _ = fs::remove_dir(&engine_root);
+    let source_dir_owned = source_dir.to_path_buf();
+    let manifest_bytes_owned = manifest_bytes;
+    let staged = updates::stage_engine_with(
+        &state.paths.next_root,
+        &engine_id,
+        |staged| {
+            engine_payload::install_manifest_with_files(
+                &manifest_bytes_owned,
+                &source_dir_owned,
+                staged,
+            )
+            .map_err(|error| invalid(error.to_string()))
+        },
+        handshake,
+    )?;
+    let meta = EngineMeta {
+        id: engine_id,
+        backend: backend.clone(),
+        os: os.to_string(),
+        arch: arch.to_string(),
+        protocol_version: PROTOCOL_VERSION,
+        handshake_passed: true,
+        verified_install: true,
+        version: version_str,
+        files: staged.files.clone(),
+    };
+    commit_installed_engine(state, app, staged, &meta)?;
+    if backend != "cpu" {
+        state.choose_device.store(true, Ordering::SeqCst);
     }
-    result
+    if let Some(app) = app {
+        emit_state_changed(app);
+    }
+    Ok(meta)
 }
 
 #[tauri::command]
@@ -1508,12 +1689,14 @@ pub async fn import_engine(
     let granted = state.grants.check_engine_manifest(Path::new(&path))?;
     let state = state.inner().clone();
     let config = UpdateConfig::load();
+    let version = app.package_info().version.to_string();
     tauri::async_runtime::spawn_blocking(move || {
         import_engine_for(
             &state,
             Some(&app),
             &config,
             &granted,
+            &version,
             std::env::consts::OS,
             std::env::consts::ARCH,
             |exe| {

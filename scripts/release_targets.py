@@ -231,6 +231,14 @@ def version(root: Path = ROOT) -> str:
         return tomllib.load(stream)["project"]["version"]
 
 
+def protocol_version(root: Path = ROOT) -> int:
+    source = (root / "desktop/src-tauri/src/types.rs").read_text(encoding="utf-8")
+    match = re.search(r"pub const PROTOCOL_VERSION: u32 = (\d+);", source)
+    if not match:
+        raise ValueError("the worker protocol version is missing from types.rs")
+    return int(match.group(1))
+
+
 def artifact_entries(release_version: str) -> list[dict]:
     return [
         {

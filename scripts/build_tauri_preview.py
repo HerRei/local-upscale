@@ -980,11 +980,37 @@ def main() -> int:
         if os.name != "nt" or args.bundles != "nsis":
             parser.error("external engine payloads require a Windows NSIS build")
         from prepare_engine_payload import prepare
+        from release_targets import (
+            engine_id as compute_engine_id,
+        )
+        from release_targets import (
+            protocol_version,
+        )
+        from release_targets import (
+            target as release_target,
+        )
+        from release_targets import (
+            version as release_version,
+        )
 
         output = BUILD_ROOT / "engine-payload"
         if output.exists():
             shutil.rmtree(output)
-        payload = prepare(ENGINE_DIR, output, args.external_engine_prefix)
+        eid = os.environ.get("LOCALSR_ENGINE_ID") or compute_engine_id(
+            release_target("windows-x86_64-cuda"),
+            os.environ.get("GITHUB_SHA")
+            or subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+        )
+        payload = prepare(
+            ENGINE_DIR,
+            output,
+            args.external_engine_prefix,
+            version=release_version(),
+            os_name="windows",
+            arch="x86_64",
+            protocol_version=protocol_version(),
+            engine_id=eid,
+        )
     write_bundle_overlay(require_signing=args.require_signing, payload=payload)
 
     if not (DESKTOP / "node_modules").is_dir():

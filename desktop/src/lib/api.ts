@@ -88,6 +88,8 @@ export const cancelEngineInstall = (): Promise<void> => invoke('cancel_engine_in
 
 export const useEngine = (backend: string): Promise<void> => invoke('use_engine', { backend });
 
+export const verifyEngine = (id: string): Promise<void> => invoke('verify_engine', { id });
+
 export const removeEngine = (id: string): Promise<void> => invoke('remove_engine', { id });
 
 export async function chooseEngineManifest(): Promise<string | null> {

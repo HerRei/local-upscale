@@ -1,0 +1,46 @@
+{
+  "public_key": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZDNkY2MzYxNkM3MzcyMzEKUldSc2IyTmhiSE55TVlxSTQ5MTBDZkdWL1ZMYkxUeTZYWExLWndtL0haUVNHL04waUFHMEQyOWMK",
+  "part": {
+    "name": "LocalSR-test.engine.tar.gz.part-0001",
+    "data": "H4sIAAAAAAAE/+3TSw7CIBCAYdaeohfQ0BbxPFWJNqIkUNPrS23sgoW7WTT9ZwMMCY9vMj5cOp/ifgzx4aISCZ3DGqOmMUc55pT95eb9Wtu2UZUWeU1x6DsNXczXF+mtLCXrvhXDNf/zGa7OH879S/ATU1P/7f+66H99OraG/hcsyXL0t/7V6PrbfUi7Jc0EAQQQQAABBBBAAAEEEEAAAQQQQAABBBBAAAEEEEAAAQQQQAABBBBAYCUCHzY9GVIAKAAA",
+    "sha256": "5757302c668d826505738be735ff6a29d6c2ca604dbcda568e66a5e5c6e74418",
+    "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSc2IyTmhiSE55TVduYTcvRG5EU08vZUd2a28zbWZlc3hxZlBNUURWaTE2TzY5YkF4cEY5YjBTM3o1K3RpblRSa1oxeWduRXErOC8wYWlZOFdoU0t5alA3cWVaWS80WUFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDowCWZpbGU6ZmlsZQprU1V2YUkrTGZjNnZJMFNJME1PT2tkdzVXekdleEw4MnIrUGYxYTZLcFB3cHk4Qkg0TkZ5VUF0VzVsZHczRGhZa1I0RFY0SHBBQTJNelVaMktUR3lBdz09Cg=="
+  },
+  "cases": {
+    "rocm_052": {
+      "manifest": "{\n  \"arch\": \"x86_64\",\n  \"backend\": \"ROCM\",\n  \"engine_id\": \"linux-x86_64-rocm-v2\",\n  \"file_count\": 2,\n  \"format\": \"tar.gz.parts\",\n  \"os\": \"linux\",\n  \"parts\": [\n    {\n      \"filename\": \"LocalSR-test.engine.tar.gz.part-0001\",\n      \"sha256\": \"5757302c668d826505738be735ff6a29d6c2ca604dbcda568e66a5e5c6e74418\",\n      \"size\": 195\n    }\n  ],\n  \"protocol_version\": 1,\n  \"schema_version\": 2,\n  \"unpacked_bytes\": 20,\n  \"version\": \"0.5.2-beta\"\n}\n",
+      "manifest_sha256": "cc806f60a7a0295b4131d6cec1732b4a2960ce4738c0a5ed34b0539fc78cf573",
+      "manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSc2IyTmhiSE55TWFaZkd1WDdidFBtM0RiNnpTa0kvcG5qbkYrRFg0UngyOVdIN25WRHpRSWxYNEVJaC9HWFV4QW1DQTRQM1BWMEZZNEhBQnJkTmRQeS8rV3ZWejF2aWdzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDowCWZpbGU6cm9jbV8wNTIuZW5naW5lLXBheWxvYWQuanNvbgpFdE1TK2MxR0JUY0thekJud01yMmtWbkJlblZ4QjduZlJhRldQUVNvbER3MUFScmtGdllpcUJiU0IySHdnRU1jY3B4NzlCU2FBQUNWamtCUm1VZG1CUT09Cg=="
+    },
+    "rocm_051": {
+      "manifest": "{\n  \"arch\": \"x86_64\",\n  \"backend\": \"ROCM\",\n  \"engine_id\": \"linux-x86_64-rocm-v1\",\n  \"file_count\": 2,\n  \"format\": \"tar.gz.parts\",\n  \"os\": \"linux\",\n  \"parts\": [\n    {\n      \"filename\": \"LocalSR-test.engine.tar.gz.part-0001\",\n      \"sha256\": \"5757302c668d826505738be735ff6a29d6c2ca604dbcda568e66a5e5c6e74418\",\n      \"size\": 195\n    }\n  ],\n  \"protocol_version\": 1,\n  \"schema_version\": 2,\n  \"unpacked_bytes\": 20,\n  \"version\": \"0.5.1-beta\"\n}\n",
+      "manifest_sha256": "fbb8a8a357e4fe4e66233d005d272209dc2fab3d261b5014dfe099bb99065741",
+      "manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSc2IyTmhiSE55TVFRa0VBTDNkVGl2WWxRbFlIZEJyRy9tNWxxNUhhQ3pKd1E2THhFSkRXTVRUQkZlUG4zN3JiUmx3MjlYTDN5R2txRXhGbkU1WXRXNUlsVEV6R04rRUFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDowCWZpbGU6cm9jbV8wNTEuZW5naW5lLXBheWxvYWQuanNvbgpCczhsbHhWbzRXa1J2NE1KZWF3cjlkRkNUby9UWDVpL2dWU3dkNWZScHVBUFc1Ym85V2pocEFHNEFkUFVHS25yRkxwendEQ3RkN0Z2UU9VS1JFTTNEZz09Cg=="
+    },
+    "rocm_053": {
+      "manifest": "{\n  \"arch\": \"x86_64\",\n  \"backend\": \"ROCM\",\n  \"engine_id\": \"linux-x86_64-rocm-v3\",\n  \"file_count\": 2,\n  \"format\": \"tar.gz.parts\",\n  \"os\": \"linux\",\n  \"parts\": [\n    {\n      \"filename\": \"LocalSR-test.engine.tar.gz.part-0001\",\n      \"sha256\": \"5757302c668d826505738be735ff6a29d6c2ca604dbcda568e66a5e5c6e74418\",\n      \"size\": 195\n    }\n  ],\n  \"protocol_version\": 1,\n  \"schema_version\": 2,\n  \"unpacked_bytes\": 20,\n  \"version\": \"0.5.3-beta\"\n}\n",
+      "manifest_sha256": "57eb74ab5b244e19c627d442516bea44201b44d41db14b573380308403e70b24",
+      "manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSc2IyTmhiSE55TVhvS1B5cDJTeTJNcTZSL0V0aThXWE9xNkhlTUVOTzJvbUtNNjZSVG9rNjFSM0FBdmlnZTErdGx4V1ZZNFM5eFB0a3J5VTk0Rkw4WTA0SzdnZVVHTkEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDowCWZpbGU6cm9jbV8wNTMuZW5naW5lLXBheWxvYWQuanNvbgpDWVZ3N29WVk4xVHhvcDJHaHNYRSs2VjVrNVRma014TmZXd0ZHaStzSHpoRnlVL2tudUM3K3N6ek1XYXIxOGU5WTNlQW4yZTJ6MlhZclF5M1g2Q1NBQT09Cg=="
+    },
+    "cpu_051": {
+      "manifest": "{\n  \"arch\": \"x86_64\",\n  \"backend\": \"CPU\",\n  \"engine_id\": \"linux-x86_64-cpu-v1\",\n  \"file_count\": 2,\n  \"format\": \"tar.gz.parts\",\n  \"os\": \"linux\",\n  \"parts\": [\n    {\n      \"filename\": \"LocalSR-test.engine.tar.gz.part-0001\",\n      \"sha256\": \"5757302c668d826505738be735ff6a29d6c2ca604dbcda568e66a5e5c6e74418\",\n      \"size\": 195\n    }\n  ],\n  \"protocol_version\": 1,\n  \"schema_version\": 2,\n  \"unpacked_bytes\": 20,\n  \"version\": \"0.5.1-beta\"\n}\n",
+      "manifest_sha256": "26d075f19f79116c770d024a036925eb2e881a27dc153af8f99c73c0e03e35f8",
+      "manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSc2IyTmhiSE55TVd1aDlCbVJuM2VrTXJmaU4yb3JwNUpyaUxRdm9TQXhGTWFWY1J4clNRWmxkNDNmQ3ZEOUw4Z2YwU0dEVHhCbWY2bmY2YlFOM2dWOWVlQmNhZFdLNlFRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDowCWZpbGU6Y3B1XzA1MS5lbmdpbmUtcGF5bG9hZC5qc29uCjJCc3c3OGpQeVFDWi9WVm8wVWJOZnpERUFaMGdEZDNLMFZKSys2VmI4SkZUZGtFcmliQUcyVzJDM0hNWGhDVDR1TEZ0Nm9BY0RZQ0dCTTRqaWdLSUNnPT0K"
+    },
+    "wrong_os": {
+      "manifest": "{\n  \"arch\": \"x86_64\",\n  \"backend\": \"ROCM\",\n  \"engine_id\": \"windows-x86_64-rocm-v2\",\n  \"file_count\": 2,\n  \"format\": \"tar.gz.parts\",\n  \"os\": \"windows\",\n  \"parts\": [\n    {\n      \"filename\": \"LocalSR-test.engine.tar.gz.part-0001\",\n      \"sha256\": \"5757302c668d826505738be735ff6a29d6c2ca604dbcda568e66a5e5c6e74418\",\n      \"size\": 195\n    }\n  ],\n  \"protocol_version\": 1,\n  \"schema_version\": 2,\n  \"unpacked_bytes\": 20,\n  \"version\": \"0.5.2-beta\"\n}\n",
+      "manifest_sha256": "e7e32a34d44a3882f869e89189b0c95b2dfe6a1086a570991567bdf2ff029a6b",
+      "manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSc2IyTmhiSE55TWU3SnZYdG1NSWw4VzVNMVB5UDhKNDNSSy85djhXY2k2NzgvNEFWbTBCQjNTYVpEZExxYlZ1endRRGFlV0M0L2FLNEc2YU80NmpvYlp6NTIrT3FITmdNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDowCWZpbGU6d3Jvbmdfb3MuZW5naW5lLXBheWxvYWQuanNvbgowbm5PZmFwMThyaFhZVUxQR1JsMFBkT2JVUWpEYlNtcVAvdUxTbFlxVjVsOUlSeVAwVng3M2pOVCtCbzNMTXBzVEZHOTExNS9aU1hJWkJTU0tSbTJCQT09Cg=="
+    },
+    "wrong_arch": {
+      "manifest": "{\n  \"arch\": \"aarch64\",\n  \"backend\": \"ROCM\",\n  \"engine_id\": \"linux-aarch64-rocm-v2\",\n  \"file_count\": 2,\n  \"format\": \"tar.gz.parts\",\n  \"os\": \"linux\",\n  \"parts\": [\n    {\n      \"filename\": \"LocalSR-test.engine.tar.gz.part-0001\",\n      \"sha256\": \"5757302c668d826505738be735ff6a29d6c2ca604dbcda568e66a5e5c6e74418\",\n      \"size\": 195\n    }\n  ],\n  \"protocol_version\": 1,\n  \"schema_version\": 2,\n  \"unpacked_bytes\": 20,\n  \"version\": \"0.5.2-beta\"\n}\n",
+      "manifest_sha256": "7acbd1a7a694ad25523f7577582dd5b6a5d313d89a66fba92e64c41a51519918",
+      "manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSc2IyTmhiSE55TVNEaFJNNStpZGJqS2dNbGpvbW5CNllnbE5XZHFPWVFqbVJQM29qazl3ZlhYOXIrTHY4dnBvb3NnemRUeENWbmNjR3FqZzM4UEcxd3VwZ1pkVVdZc2dZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDowCWZpbGU6d3JvbmdfYXJjaC5lbmdpbmUtcGF5bG9hZC5qc29uCisxeGYxNGlObzJTL1FyY3JCVHJoaGlneTA5QThlTUNIMktVWEpzQmV5NWFuMU5ZN1VkT0FqTVZpS2N1UWNoSEtLY1ZYR1A0RE00bGd2azh5UHRVT0FnPT0K"
+    },
+    "wrong_protocol": {
+      "manifest": "{\n  \"arch\": \"x86_64\",\n  \"backend\": \"ROCM\",\n  \"engine_id\": \"linux-x86_64-rocm-p2\",\n  \"file_count\": 2,\n  \"format\": \"tar.gz.parts\",\n  \"os\": \"linux\",\n  \"parts\": [\n    {\n      \"filename\": \"LocalSR-test.engine.tar.gz.part-0001\",\n      \"sha256\": \"5757302c668d826505738be735ff6a29d6c2ca604dbcda568e66a5e5c6e74418\",\n      \"size\": 195\n    }\n  ],\n  \"protocol_version\": 2,\n  \"schema_version\": 2,\n  \"unpacked_bytes\": 20,\n  \"version\": \"0.5.2-beta\"\n}\n",
+      "manifest_sha256": "ea478233aecbb6c0d523a6f12dace56cee1ceac36d822807a4e1c551f9f46b16",
+      "manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSc2IyTmhiSE55TWVsZzBVU1F1VUxjNnpqUkpRa292N096M0VHaW5qWlB5SzU4WGNxK0Zzd3BMNktXL1VOZzd2Qytvbm5IOVB0ZlBaTkd1TG5pNGxwSStwSERyaGZXUXdNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDowCWZpbGU6d3JvbmdfcHJvdG9jb2wuZW5naW5lLXBheWxvYWQuanNvbgp4amJHNXVxY2lyQ2JBR3d0dDNYWnAzRUswakdhSHYrQVV0Y3NtUDViZGVPbCtzZ0VHc21KOG1SR2xJaHdvT3pYQjRmVU1kK21ZUmxubVhwazdHdXBBUT09Cg=="
+    }
+  }
+}

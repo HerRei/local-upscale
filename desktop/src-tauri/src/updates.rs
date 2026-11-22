@@ -881,22 +881,55 @@ fn stage_verified(
 
 /// Install an engine package from the manifest bytes that were verified; the engine
 /// installer hashes every part against that manifest on the handles it unpacks from.
+pub(crate) fn install_engine_package_for(
+    directory: &Path,
+    engine: &EngineUpdate,
+    public_key: &str,
+    engine_dir: &Path,
+    expected_os: &str,
+    expected_arch: &str,
+) -> AppResult<Vec<crate::engine_payload::InstalledEngineFile>> {
+    let manifest = read_verified(
+        &directory.join(&engine.manifest.name),
+        &engine.manifest,
+        public_key,
+    )?;
+    let parsed = crate::engine_payload::parse_manifest(&manifest)
+        .map_err(|error| invalid(error.to_string()))?;
+    if parsed.schema_version == 2
+        && (parsed.os.as_deref() != Some(expected_os)
+            || parsed.arch.as_deref() != Some(expected_arch)
+            || parsed.protocol_version != Some(PROTOCOL_VERSION)
+            || parsed.engine_id.as_deref() != Some(engine.id.as_str()))
+    {
+        return Err(invalid(
+            "Engine package manifest metadata does not match this host or update entry",
+        ));
+    }
+    for part in &engine.parts {
+        verify_file(&directory.join(&part.name), part, public_key)?;
+    }
+    Ok(crate::engine_payload::install_manifest_with_files(
+        &manifest, directory, engine_dir,
+    )?)
+}
+
+#[cfg(test)]
 pub(crate) fn install_engine_package(
     directory: &Path,
     engine: &EngineUpdate,
     public_key: &str,
     engine_dir: &Path,
 ) -> AppResult<()> {
-    let manifest = read_verified(
-        &directory.join(&engine.manifest.name),
-        &engine.manifest,
+    install_engine_package_for(
+        directory,
+        engine,
         public_key,
-    )?;
-    for part in &engine.parts {
-        verify_file(&directory.join(&part.name), part, public_key)?;
-    }
-    crate::engine_payload::install_manifest(&manifest, directory, engine_dir)?;
-    Ok(())
+        engine_dir,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    )
+    .map(|_| ())
 }
 
 /// A temporary file of our own: a leftover (or a planted link) is removed, never followed.
@@ -1264,7 +1297,11 @@ pub(crate) struct EngineMeta {
     pub protocol_version: u32,
     pub handshake_passed: bool,
     #[serde(default)]
+    pub verified_install: bool,
+    #[serde(default)]
     pub version: String,
+    #[serde(default)]
+    pub files: Vec<crate::engine_payload::InstalledEngineFile>,
 }
 
 pub(crate) fn read_engine_meta(next_root: &Path, id: &str) -> Option<EngineMeta> {
@@ -1284,12 +1321,158 @@ pub(crate) fn write_engine_meta(next_root: &Path, meta: &EngineMeta) -> AppResul
     update_storage::write_atomic(&root.join("meta.json"), &serde_json::to_vec_pretty(meta)?)
 }
 
+pub(crate) fn mark_engine_needs_reinstall(next_root: &Path, id: &str) {
+    if let Some(mut meta) = read_engine_meta(next_root, id) {
+        if meta.verified_install {
+            meta.verified_install = false;
+            let _ = write_engine_meta(next_root, &meta);
+        }
+    }
+}
+
+fn valid_engine_file_list(files: &[crate::engine_payload::InstalledEngineFile]) -> bool {
+    if files.is_empty() {
+        return false;
+    }
+    let worker_name = worker_executable_name();
+    let mut seen = HashSet::new();
+    let mut has_worker = false;
+    for entry in files {
+        let path = Path::new(&entry.path);
+        if !crate::engine_payload::safe_relative(path)
+            || entry.path != crate::engine_payload::canonical_relative_path(path)
+            || entry.sha256.len() != 64
+            || !entry
+                .sha256
+                .bytes()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+            || !seen.insert(entry.path.to_lowercase())
+        {
+            return false;
+        }
+        if entry.path == worker_name {
+            has_worker = true;
+        }
+    }
+    has_worker
+}
+
+fn safe_engine_file_path(engine_dir: &Path, relative: &str) -> Option<PathBuf> {
+    let path = Path::new(relative);
+    if !crate::engine_payload::safe_relative(path) {
+        return None;
+    }
+    let root_meta = fs::symlink_metadata(engine_dir).ok()?;
+    if root_meta.file_type().is_symlink() || !root_meta.file_type().is_dir() {
+        return None;
+    }
+    let mut current = engine_dir.to_path_buf();
+    let components: Vec<_> = path.components().collect();
+    for (index, component) in components.iter().enumerate() {
+        current.push(component.as_os_str());
+        let meta = fs::symlink_metadata(&current).ok()?;
+        if meta.file_type().is_symlink() {
+            return None;
+        }
+        let is_last = index + 1 == components.len();
+        if is_last {
+            if !meta.file_type().is_file() {
+                return None;
+            }
+        } else if !meta.file_type().is_dir() {
+            return None;
+        }
+    }
+    Some(current)
+}
+
+pub(crate) fn quick_verify_engine_files(next_root: &Path, id: &str, meta: &EngineMeta) -> bool {
+    if !safe_id(id) || !valid_engine_file_list(&meta.files) {
+        return false;
+    }
+    let engine_dir = next_root.join("engines").join(id).join("engine");
+    for entry in &meta.files {
+        let Some(path) = safe_engine_file_path(&engine_dir, &entry.path) else {
+            return false;
+        };
+        let Ok(stat) = fs::symlink_metadata(&path) else {
+            return false;
+        };
+        if stat.file_type().is_symlink() || !stat.file_type().is_file() || stat.len() != entry.size
+        {
+            return false;
+        }
+    }
+    true
+}
+
+pub(crate) fn full_verify_engine_files(
+    next_root: &Path,
+    id: &str,
+    meta: &EngineMeta,
+) -> AppResult<()> {
+    if !safe_id(id) || !valid_engine_file_list(&meta.files) {
+        return Err(invalid(
+            "Engine verification metadata is missing or invalid",
+        ));
+    }
+    let engine_dir = next_root.join("engines").join(id).join("engine");
+    for entry in &meta.files {
+        let path = safe_engine_file_path(&engine_dir, &entry.path)
+            .ok_or_else(|| invalid(format!("Engine file is missing or invalid: {}", entry.path)))?;
+        let (size, digest) = crate::engine_payload::sha256_file(&path)?;
+        if size != entry.size || digest != entry.sha256 {
+            return Err(invalid(format!(
+                "Engine file failed checksum verification: {}",
+                entry.path
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn engine_meta_valid_for_host(meta: &EngineMeta, os: &str, arch: &str) -> bool {
     meta.handshake_passed
+        && meta.verified_install
         && meta.os == os
         && meta.arch == arch
         && meta.protocol_version == PROTOCOL_VERSION
         && safe_id(&meta.id)
+        && valid_engine_file_list(&meta.files)
+}
+
+#[cfg(test)]
+pub(crate) fn test_engine_files(
+    next_root: &Path,
+    id: &str,
+) -> Vec<crate::engine_payload::InstalledEngineFile> {
+    fn walk(root: &Path, dir: &Path, out: &mut Vec<crate::engine_payload::InstalledEngineFile>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(root, &path, out);
+            } else if path.is_file() {
+                if let (Ok(rel), Ok((size, sha256))) = (
+                    path.strip_prefix(root),
+                    crate::engine_payload::sha256_file(&path),
+                ) {
+                    out.push(crate::engine_payload::InstalledEngineFile {
+                        path: crate::engine_payload::canonical_relative_path(rel),
+                        size,
+                        sha256,
+                    });
+                }
+            }
+        }
+    }
+    let engine_dir = next_root.join("engines").join(id).join("engine");
+    let mut files = Vec::new();
+    walk(&engine_dir, &engine_dir, &mut files);
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    files
 }
 
 pub(crate) fn engine_executable_path(next_root: &Path, id: &str) -> Option<PathBuf> {
@@ -1422,8 +1605,11 @@ fn installed_engine_candidates(
             continue;
         }
         if let Some(executable) = engine_executable_path(&paths.next_root, id) {
-            let valid = read_engine_meta(&paths.next_root, id)
-                .is_some_and(|meta| engine_meta_valid_for_host(&meta, os, arch) && meta.id == id);
+            let valid = read_engine_meta(&paths.next_root, id).is_some_and(|meta| {
+                engine_meta_valid_for_host(&meta, os, arch)
+                    && meta.id == id
+                    && quick_verify_engine_files(&paths.next_root, id, &meta)
+            });
             if valid {
                 installed.push((id.to_owned(), executable));
             }
@@ -1480,6 +1666,61 @@ pub(crate) fn worker_engine_choice(
         std::env::consts::ARCH,
     );
     choose_worker_executable(&installed, active.as_deref(), compiled_id, failed, bundled)
+}
+
+/// Check the candidate engine that would run at worker start. If its metadata is
+/// valid for this host but the quick file check (presence and sizes) fails, mark it
+/// needing reinstall, deactivate `active-engine.txt` if it pointed there, and record
+/// it as failed so the caller falls back to the bundled engine.
+pub(crate) fn verify_active_engine_at_start(
+    paths: &crate::paths::AppPaths,
+    failed: &mut HashSet<String>,
+) -> Option<String> {
+    verify_active_engine_at_start_for(paths, failed, std::env::consts::OS, std::env::consts::ARCH)
+}
+
+pub(crate) fn verify_active_engine_at_start_for(
+    paths: &crate::paths::AppPaths,
+    failed: &mut HashSet<String>,
+    os: &str,
+    arch: &str,
+) -> Option<String> {
+    if crate::distribution::managed_by_store() {
+        return None;
+    }
+    let compiled_id = option_env!("LOCALSR_ENGINE_ID").unwrap_or("");
+    let active = fs::read_to_string(paths.next_root.join("active-engine.txt"))
+        .ok()
+        .map(|raw| raw.trim().to_owned());
+    let mut failed_id = None;
+    for id in [
+        active.as_deref(),
+        (!compiled_id.is_empty()).then_some(compiled_id),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !safe_id(id) || failed.contains(id) {
+            continue;
+        }
+        let Some(meta) = read_engine_meta(&paths.next_root, id) else {
+            continue;
+        };
+        if !engine_meta_valid_for_host(&meta, os, arch) || meta.id != id {
+            continue;
+        }
+        if !quick_verify_engine_files(&paths.next_root, id, &meta) {
+            mark_engine_needs_reinstall(&paths.next_root, id);
+            if active.as_deref() == Some(id) {
+                let _ = deactivate_active_engine(paths);
+            }
+            failed.insert(id.to_owned());
+            if failed_id.is_none() {
+                failed_id = Some(id.to_owned());
+            }
+        }
+    }
+    failed_id
 }
 
 /// The engine an in-app update or engine manager installed, if valid for this host.
@@ -1665,22 +1906,23 @@ fn engine_needs_package_for_host(
     os: &str,
     arch: &str,
 ) -> bool {
+    let installed_ok = |id: &str| {
+        engine_executable_path(next_root, id).is_some()
+            && read_engine_meta(next_root, id).is_some_and(|meta| {
+                meta.id == id
+                    && engine_meta_valid_for_host(&meta, os, arch)
+                    && quick_verify_engine_files(next_root, id, &meta)
+            })
+    };
     if !engine_backend.is_empty() && engine_backend != config.backend {
-        return engine_executable_path(next_root, engine_id).is_none()
-            || read_engine_meta(next_root, engine_id).is_none_or(|meta| {
-                meta.id != engine_id || !engine_meta_valid_for_host(&meta, os, arch)
-            });
+        return !installed_ok(engine_id);
     }
     if engine_id != config.engine_id {
         return true;
     }
     let delivered = fs::read_to_string(next_root.join("active-engine.txt"))
         .is_ok_and(|active| active.trim() == engine_id);
-    delivered
-        && (engine_executable_path(next_root, engine_id).is_none()
-            || read_engine_meta(next_root, engine_id).is_none_or(|meta| {
-                meta.id != engine_id || !engine_meta_valid_for_host(&meta, os, arch)
-            }))
+    delivered && !installed_ok(engine_id)
 }
 
 #[cfg(test)]
@@ -1700,9 +1942,122 @@ fn prepare_update_engine(
         next_root,
         installed_worker,
         |_| Ok(()),
+        |_| Ok(()),
     )
 }
 
+pub(crate) struct StagedEngine {
+    root: PathBuf,
+    staging: PathBuf,
+    staged: PathBuf,
+    target: PathBuf,
+    backup: PathBuf,
+    pub files: Vec<crate::engine_payload::InstalledEngineFile>,
+    committed: bool,
+}
+
+impl Drop for StagedEngine {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.staging);
+        if !self.committed && !self.target.exists() {
+            let _ = fs::remove_dir(&self.root);
+        }
+    }
+}
+
+impl StagedEngine {
+    /// Swap the staged engine into place, run `activate`, and only delete the backup
+    /// once activation succeeds. Rolls back to the backup if activation fails.
+    pub(crate) fn commit_with(
+        mut self,
+        activate: impl FnOnce(&[crate::engine_payload::InstalledEngineFile]) -> AppResult<()>,
+    ) -> AppResult<PathBuf> {
+        let existed = self.target.exists();
+        if existed {
+            fs::rename(&self.target, &self.backup)?;
+        }
+        if let Err(error) = fs::rename(&self.staged, &self.target) {
+            if existed {
+                let _ = fs::rename(&self.backup, &self.target);
+            }
+            return Err(error.into());
+        }
+        if let Err(error) = activate(&self.files) {
+            let _ = fs::remove_dir_all(&self.target);
+            if existed {
+                let _ = fs::rename(&self.backup, &self.target);
+            }
+            return Err(error);
+        }
+        self.committed = true;
+        let _ = fs::remove_dir_all(&self.backup);
+        Ok(self.target.join(worker_executable_name()))
+    }
+}
+
+pub(crate) fn stage_engine_with(
+    next_root: &Path,
+    engine_id: &str,
+    unpack: impl FnOnce(&Path) -> AppResult<Vec<crate::engine_payload::InstalledEngineFile>>,
+    handshake: impl FnOnce(&Path) -> AppResult<()>,
+) -> AppResult<StagedEngine> {
+    crate::engine_manager::recover_interrupted_reimport(next_root, engine_id)?;
+    let root = next_root.join("engines").join(engine_id);
+    fs::create_dir_all(&root)?;
+    let staging = root.join(format!(".import-{}", uuid::Uuid::new_v4()));
+    let staged = staging.join("engine");
+    let target = root.join("engine");
+    let backup = root.join(format!(".backup-{}", uuid::Uuid::new_v4()));
+    let files = (|| -> AppResult<Vec<crate::engine_payload::InstalledEngineFile>> {
+        fs::create_dir_all(&staging)?;
+        let files = unpack(&staged)?;
+        let executable = staged.join(worker_executable_name());
+        if !executable.is_file() {
+            return Err(invalid("Installed engine is missing its worker executable"));
+        }
+        handshake(&executable)?;
+        Ok(files)
+    })();
+    match files {
+        Ok(files) => Ok(StagedEngine {
+            root,
+            staging,
+            staged,
+            target,
+            backup,
+            files,
+            committed: false,
+        }),
+        Err(error) => {
+            let _ = fs::remove_dir_all(&staging);
+            if !target.exists() {
+                let _ = fs::remove_dir(&root);
+            }
+            Err(error)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn stage_verified_engine(
+    next_root: &Path,
+    engine_id: &str,
+    directory: &Path,
+    engine: &EngineUpdate,
+    public_key: &str,
+    os: &str,
+    arch: &str,
+    handshake: impl FnOnce(&Path) -> AppResult<()>,
+) -> AppResult<StagedEngine> {
+    stage_engine_with(
+        next_root,
+        engine_id,
+        |staged| install_engine_package_for(directory, engine, public_key, staged, os, arch),
+        handshake,
+    )
+}
+
+#[cfg(test)]
 pub(crate) fn install_verified_engine(
     next_root: &Path,
     engine_id: &str,
@@ -1711,39 +2066,17 @@ pub(crate) fn install_verified_engine(
     public_key: &str,
     handshake: impl FnOnce(&Path) -> AppResult<()>,
 ) -> AppResult<PathBuf> {
-    crate::engine_manager::recover_interrupted_reimport(next_root, engine_id)?;
-    let root = next_root.join("engines").join(engine_id);
-    fs::create_dir_all(&root)?;
-    let staging = root.join(format!(".import-{}", uuid::Uuid::new_v4()));
-    let staged = staging.join("engine");
-    let target = root.join("engine");
-    let backup = root.join(format!(".backup-{}", uuid::Uuid::new_v4()));
-    let result = (|| -> AppResult<PathBuf> {
-        fs::create_dir_all(&staging)?;
-        install_engine_package(directory, engine, public_key, &staged)?;
-        let executable = staged.join(worker_executable_name());
-        if !executable.is_file() {
-            return Err(invalid("Installed engine is missing its worker executable"));
-        }
-        handshake(&executable)?;
-        let existed = target.exists();
-        if existed {
-            fs::rename(&target, &backup)?;
-        }
-        if let Err(error) = fs::rename(&staged, &target) {
-            if existed {
-                let _ = fs::rename(&backup, &target);
-            }
-            return Err(error.into());
-        }
-        let _ = fs::remove_dir_all(&backup);
-        Ok(target.join(worker_executable_name()))
-    })();
-    let _ = fs::remove_dir_all(staging);
-    if result.is_err() && !target.exists() {
-        let _ = fs::remove_dir(&root);
-    }
-    result
+    stage_verified_engine(
+        next_root,
+        engine_id,
+        directory,
+        engine,
+        public_key,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        handshake,
+    )?
+    .commit_with(|_| Ok(()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1756,6 +2089,7 @@ fn prepare_update_engine_for(
     next_root: &Path,
     installed_worker: impl FnOnce() -> AppResult<PathBuf>,
     handshake: impl FnOnce(&Path) -> AppResult<()>,
+    on_installed: impl FnOnce(&[crate::engine_payload::InstalledEngineFile]) -> AppResult<()>,
 ) -> AppResult<PathBuf> {
     if !engine_needs_package_for(next_root, config, engine_id, engine_backend) {
         if engine_backend != config.backend && !engine_backend.is_empty() {
@@ -1771,14 +2105,17 @@ fn prepare_update_engine_for(
         return Ok(executable);
     }
     let engine = engine_package.ok_or_else(|| invalid("The changed engine has no package"))?;
-    install_verified_engine(
+    stage_verified_engine(
         next_root,
         engine_id,
         directory,
         engine,
         &config.public_key,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
         handshake,
-    )
+    )?
+    .commit_with(on_installed)
 }
 
 /// The caller holds `updates.busy`.
@@ -1831,6 +2168,12 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
     status.stage = "installing".into();
     status.message = "Backing up data and preparing the verified update…".into();
     publish(state, app, &mut status);
+    let engine_package_needed = engine_needs_package_for(
+        &state.paths.next_root,
+        config,
+        &checked.engine_id,
+        &checked.engine_backend,
+    );
     let _engine_exe = prepare_update_engine_for(
         config,
         &checked.engine_id,
@@ -1849,26 +2192,26 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
             .map(|_| ())
             .map_err(AppError::Worker)
         },
+        |files| {
+            if engine_package_needed {
+                write_engine_meta(
+                    &state.paths.next_root,
+                    &EngineMeta {
+                        id: checked.engine_id.clone(),
+                        backend: checked.engine_backend.clone(),
+                        os: std::env::consts::OS.into(),
+                        arch: std::env::consts::ARCH.into(),
+                        protocol_version: PROTOCOL_VERSION,
+                        handshake_passed: true,
+                        verified_install: true,
+                        version: checked.update.version.clone(),
+                        files: files.to_vec(),
+                    },
+                )?;
+            }
+            Ok(())
+        },
     )?;
-    if (checked.engine_id != config.engine_id
-        || checked.engine_backend != config.backend
-        || fs::read_to_string(state.paths.next_root.join("active-engine.txt"))
-            .is_ok_and(|active| active.trim() == checked.engine_id))
-        && engine_executable_path(&state.paths.next_root, &checked.engine_id).is_some()
-    {
-        write_engine_meta(
-            &state.paths.next_root,
-            &EngineMeta {
-                id: checked.engine_id.clone(),
-                backend: checked.engine_backend.clone(),
-                os: std::env::consts::OS.into(),
-                arch: std::env::consts::ARCH.into(),
-                protocol_version: PROTOCOL_VERSION,
-                handshake_passed: true,
-                version: checked.update.version.clone(),
-            },
-        )?;
-    }
     let active_file = state.paths.next_root.join("active-engine.txt");
     let previous_engine = fs::read(&active_file).ok();
     let result = (|| -> AppResult<()> {

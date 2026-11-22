@@ -32,7 +32,15 @@ from collections.abc import Callable
 from pathlib import Path
 
 from prepare_engine_payload import validate_payload
-from release_targets import engine_id, expected_update_identity, targets, update_files, version
+from release_targets import (
+    UPDATE_ARCH,
+    engine_id,
+    expected_update_identity,
+    protocol_version,
+    targets,
+    update_files,
+    version,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
@@ -191,14 +199,6 @@ PART_RE = re.compile(r"\.part-(\d{4})$")
 CHUNK = 4 * 1024 * 1024
 
 
-def protocol_version() -> int:
-    source = (ROOT / "desktop/src-tauri/src/types.rs").read_text(encoding="utf-8")
-    match = re.search(r"pub const PROTOCOL_VERSION: u32 = (\d+);", source)
-    if not match:
-        raise ValueError("the worker protocol version is missing from types.rs")
-    return int(match.group(1))
-
-
 def _sha256(paths: list[Path]) -> tuple[str, int]:
     digest = hashlib.sha256()
     size = 0
@@ -278,8 +278,18 @@ def _check_target(downloads: Path, target: dict, release_version: str, commit: s
     manifest_path = _regular(directory / files["engine_manifest"])
     manifest_bytes = manifest_path.read_bytes()
     manifest = json.loads(manifest_bytes)
+    identity = engine_id(target, commit)
     engine_parts = validate_payload(
-        manifest, directory, files["engine_prefix"], files["payload_backend"], files["worker"]
+        manifest,
+        directory,
+        files["engine_prefix"],
+        files["payload_backend"],
+        files["worker"],
+        expected_version=release_version,
+        expected_os=target["platform"],
+        expected_arch=UPDATE_ARCH[target["architecture"]],
+        expected_protocol_version=protocol_version(),
+        expected_engine_id=identity,
     )
     # Where the smoke test installed the engine manifest (Windows CUDA), the published
     # engine package must be that one, not merely a valid one.

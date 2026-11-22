@@ -2448,7 +2448,8 @@
   let engineRefreshingCatalog = false;
   let engineError = '';
   let engineErrorBackend = '';
-  let engineErrorAction: 'download' | 'use' | 'remove' | '' = '';
+  let engineErrorAction: 'download' | 'use' | 'remove' | 'verify' | '' = '';
+  let engineVerifiedBackend = '';
   $: engineOffer = recommendedEngineOffer(snapshot.engines, settings);
 
   function handleEngineStatus(status: EngineDownloadStatus): void {
@@ -2506,6 +2507,7 @@
     engineError = '';
     engineErrorBackend = '';
     engineErrorAction = '';
+    engineVerifiedBackend = '';
     engineDialogOpen = true;
     if (
       snapshot.engines?.supported &&
@@ -2547,6 +2549,7 @@
     engineError = '';
     engineErrorBackend = '';
     engineErrorAction = '';
+    engineVerifiedBackend = '';
     try {
       await api.useEngine(backend);
       await refresh();
@@ -2559,6 +2562,28 @@
     }
   }
 
+  async function verifyInstalledEngine(id: string): Promise<void> {
+    if (engineActionBusy) return;
+    const targetBackend = snapshot.engines?.installed.find((item) => item.id === id)?.backend ?? '';
+    engineActionBusy = true;
+    engineError = '';
+    engineErrorBackend = '';
+    engineErrorAction = '';
+    engineVerifiedBackend = '';
+    try {
+      await api.verifyEngine(id);
+      engineVerifiedBackend = targetBackend;
+      await refresh();
+    } catch (error) {
+      engineError = plainEngineError(error);
+      engineErrorBackend = targetBackend;
+      engineErrorAction = 'verify';
+      await refresh().catch(() => undefined);
+    } finally {
+      engineActionBusy = false;
+    }
+  }
+
   async function deleteEngine(id: string): Promise<void> {
     if (engineActionBusy) return;
     const targetBackend = snapshot.engines?.installed.find((item) => item.id === id)?.backend ?? '';
@@ -2566,6 +2591,7 @@
     engineError = '';
     engineErrorBackend = '';
     engineErrorAction = '';
+    engineVerifiedBackend = '';
     try {
       await api.removeEngine(id);
       await refresh();
@@ -4980,16 +5006,19 @@
     errorMessage={engineError}
     errorBackend={engineErrorBackend}
     errorAction={engineErrorAction}
+    verifiedBackend={engineVerifiedBackend}
     onClose={() => {
       engineDialogOpen = false;
       engineError = '';
       engineErrorBackend = '';
       engineErrorAction = '';
+      engineVerifiedBackend = '';
     }}
     onRefreshCatalog={() => void refreshEngineCatalogList()}
     onDownload={(backend) => void downloadEngine(backend)}
     onCancelDownload={() => void cancelEngineDownload()}
     onUse={(backend) => void activateEngine(backend)}
+    onVerify={(id) => void verifyInstalledEngine(id)}
     onRemove={(id) => void deleteEngine(id)}
     onImport={() => void importEngineFromFile()}
   />

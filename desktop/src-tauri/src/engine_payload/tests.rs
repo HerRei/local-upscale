@@ -577,6 +577,7 @@ fn a_manifest_that_breaks_one_rule_is_refused_before_anything_is_touched() {
     let gib = 1024u64.pow(3);
     let breaks: Vec<(&str, serde_json::Value, bool)> = vec![
         ("schema_version", 2.into(), true),
+        ("schema_version", 3.into(), true),
         ("schema_version", 0.into(), true),
         ("format", "zip".into(), true),
         ("backend", "XPU".into(), true),
@@ -915,4 +916,71 @@ fn the_install_command_checks_its_arguments() {
         fs::read(destination.join("localsr-worker.exe")).unwrap(),
         b"exe"
     );
+}
+
+#[test]
+fn parses_schema_1_and_2_manifests_and_records_installed_file_digests() {
+    let root = tempfile::tempdir().unwrap();
+    let base = payload_files(
+        root.path(),
+        &[("localsr-worker.exe", b"worker"), ("lib/data.bin", b"data")],
+    );
+    let mut json: serde_json::Value = serde_json::from_slice(&fs::read(&base).unwrap()).unwrap();
+    // Schema 1 parses cleanly without schema 2 fields, but refuses extra schema 2 fields.
+    assert_eq!(
+        parse_manifest(&fs::read(&base).unwrap())
+            .unwrap()
+            .schema_version,
+        1
+    );
+    let mut mixed = json.clone();
+    mixed["version"] = "0.5.2-beta".into();
+    assert!(parse_manifest(&serde_json::to_vec(&mixed).unwrap()).is_err());
+
+    // Schema 2 requires all five fields and valid values.
+    json["schema_version"] = 2.into();
+    json["version"] = "0.5.2-beta".into();
+    json["os"] = "windows".into();
+    json["arch"] = "x86_64".into();
+    json["protocol_version"] = 1.into();
+    json["engine_id"] = "windows-x86_64-cuda-test".into();
+    let v2_bytes = serde_json::to_vec(&json).unwrap();
+    let parsed = parse_manifest(&v2_bytes).unwrap();
+    assert_eq!(parsed.schema_version, 2);
+    assert_eq!(parsed.version.as_deref(), Some("0.5.2-beta"));
+    assert_eq!(parsed.os.as_deref(), Some("windows"));
+    assert_eq!(parsed.arch.as_deref(), Some("x86_64"));
+    assert_eq!(parsed.protocol_version, Some(1));
+    assert_eq!(
+        parsed.engine_id.as_deref(),
+        Some("windows-x86_64-cuda-test")
+    );
+
+    for (field, bad) in [
+        ("version", serde_json::json!("not-semver")),
+        ("os", serde_json::json!("plan9")),
+        ("arch", serde_json::json!("")),
+        ("protocol_version", serde_json::json!(0)),
+        ("engine_id", serde_json::json!("../escape")),
+    ] {
+        let mut invalid = json.clone();
+        invalid[field] = bad;
+        assert!(
+            parse_manifest(&serde_json::to_vec(&invalid).unwrap()).is_err(),
+            "expected {field} rejection"
+        );
+    }
+
+    let destination = root.path().join("engine");
+    let files = install_manifest_with_files(&v2_bytes, root.path(), &destination).unwrap();
+    assert_eq!(files.len(), 2);
+    assert_eq!(files[0].path, "lib/data.bin");
+    assert_eq!(files[0].size, 4);
+    assert_eq!(files[1].path, "localsr-worker.exe");
+    assert_eq!(files[1].size, 6);
+    let expected_worker_sha: String = Sha256::digest(b"worker")
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(files[1].sha256, expected_worker_sha);
 }

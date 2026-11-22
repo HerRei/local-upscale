@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.5.2-beta] - unreleased
+
+- Require verified-install metadata when selecting downloaded engines. Older or
+  interrupted installs need a signed reinstall.
+- Add schema 2 engine manifests with signed `version`, `os`, `arch`,
+  `protocol_version` and `engine_id` fields; offline imports refuse older
+  versions of an installed backend or packages for another OS, architecture or
+  protocol (#159).
+- Record every extracted engine file's size and SHA-256 digest during verified
+  installation, check file presence and sizes when starting a worker, and add a
+  Verify button in the Engine dialog for an on-demand full checksum check. A
+  failed check marks the engine as needing reinstall and falls back to the
+  bundled engine.
+- Hold the job lock across same-ID engine swaps and activation, keeping the
+  backup until both succeed.
+- Update Rust and Python dependencies with available security fixes.
+
 ## [0.5.1-beta] - Unreleased
 
 - **Engine manager.** One main download per OS starts LocalSR. After setup, the app
