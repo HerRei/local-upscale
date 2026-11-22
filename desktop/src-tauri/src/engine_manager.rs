@@ -56,6 +56,8 @@ pub struct EngineControl {
     status: Mutex<EngineDownloadStatus>,
     catalog: Mutex<Vec<VerifiedCatalogEntry>>,
     catalog_error: Mutex<Option<String>>,
+    #[cfg(test)]
+    terminal_events: Mutex<Vec<EngineDownloadStatus>>,
 }
 
 impl EngineControl {
@@ -439,7 +441,17 @@ pub(crate) fn snapshot_for(
         std::env::consts::OS,
         std::env::consts::ARCH,
     );
-    if state.worker.use_bundled_fallback.load(Ordering::SeqCst) {
+    let worker_choice = state.worker.failed_engines.lock().ok().and_then(|failed| {
+        updates::worker_engine_choice(&state.paths, bundled_path.clone(), &failed)
+    });
+    if let Some((_, Some(id))) = &worker_choice {
+        for engine in &mut installed {
+            engine.active = !engine.bundled && engine.id == *id;
+        }
+    }
+    if state.worker.use_bundled_fallback.load(Ordering::SeqCst)
+        || matches!(worker_choice, Some((_, None)))
+    {
         for engine in &mut installed {
             engine.active = engine.bundled;
         }
@@ -513,6 +525,15 @@ pub(crate) fn snapshot_for(
 }
 
 fn publish_engine_status(state: &AppState, app: Option<&AppHandle>, status: &EngineDownloadStatus) {
+    #[cfg(test)]
+    if matches!(status.stage.as_str(), "error" | "cancelled" | "installed") {
+        state
+            .engines
+            .terminal_events
+            .lock()
+            .unwrap()
+            .push(status.clone());
+    }
     if let Ok(mut stored) = state.engines.status.lock() {
         *stored = status.clone();
     }
@@ -907,16 +928,7 @@ pub(crate) async fn install_engine_for(
         }
         .await;
 
-        if let Err(error) = download_result {
-            status.stage = if state.engines.cancel.load(Ordering::SeqCst) {
-                "cancelled".into()
-            } else {
-                "error".into()
-            };
-            status.error = Some(error.to_string());
-            publish_engine_status(state, app, &status);
-            return Err(error);
-        }
+        download_result?;
 
         status.stage = "installing".into();
         status.downloaded = total;
@@ -951,15 +963,7 @@ pub(crate) async fn install_engine_for(
         .await
         .map_err(|e| invalid(e.to_string()))?;
 
-        let engine_exe = match install_result {
-            Ok(exe) => exe,
-            Err(error) => {
-                status.stage = "error".into();
-                status.error = Some(error.to_string());
-                publish_engine_status(state, app, &status);
-                return Err(error);
-            }
-        };
+        let engine_exe = install_result?;
 
         status.stage = "handshaking".into();
         publish_engine_status(state, app, &status);
@@ -972,9 +976,6 @@ pub(crate) async fn install_engine_for(
 
         if let Err(error) = handshake_result {
             let _ = fs::remove_dir_all(&engine_root);
-            status.stage = "error".into();
-            status.error = Some(error.to_string());
-            publish_engine_status(state, app, &status);
             return Err(error);
         }
 
@@ -1020,7 +1021,8 @@ pub(crate) async fn install_engine_for(
     }
     .await;
     if let Err(error) = &result {
-        status.stage = if state.engines.cancel.load(Ordering::SeqCst) {
+        status.stage = if matches!(error, AppError::Validation(message) if message == "Engine download cancelled")
+        {
             "cancelled".into()
         } else {
             "error".into()
@@ -1108,6 +1110,7 @@ pub(crate) fn use_engine_for(
         )?;
     }
 
+    lock(&state.worker.failed_engines)?.remove(&chosen.id);
     if backend != "cpu" {
         state.choose_device.store(true, Ordering::SeqCst);
     }
@@ -1330,6 +1333,40 @@ fn verify_imported_files(
     Ok(Some(entry.engine_id.clone()))
 }
 
+pub(crate) fn recover_interrupted_reimport(next_root: &Path, id: &str) -> AppResult<()> {
+    if !safe_id(id) {
+        return Ok(());
+    }
+    let root = next_root.join("engines").join(id);
+    if !root.is_dir() {
+        return Ok(());
+    }
+    let mut backups = Vec::new();
+    for entry in fs::read_dir(&root)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name
+            .strip_prefix(".backup-")
+            .is_some_and(|suffix| uuid::Uuid::parse_str(suffix).is_ok())
+            && entry.file_type()?.is_dir()
+        {
+            backups.push(entry.path());
+        }
+    }
+    let engine = root.join("engine");
+    if engine.exists() {
+        for backup in backups {
+            fs::remove_dir_all(backup)?;
+        }
+    } else if backups.len() == 1 {
+        fs::rename(&backups[0], engine)?;
+    } else if backups.len() > 1 {
+        return Err(invalid("Multiple engine backups need manual recovery"));
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn import_engine_for(
     state: &Arc<AppState>,
@@ -1381,6 +1418,7 @@ pub(crate) fn import_engine_for(
         return Err(invalid("Derived engine identity is invalid"));
     }
 
+    recover_interrupted_reimport(&state.paths.next_root, &engine_id)?;
     let engine_root = state.paths.next_root.join("engines").join(&engine_id);
     fs::create_dir_all(&engine_root)?;
     let engine_dir = engine_root.join("engine");
@@ -1432,6 +1470,7 @@ pub(crate) fn import_engine_for(
         })();
         drop(scheduler);
         let activation = activation.and_then(|()| {
+            lock(&state.worker.failed_engines)?.remove(&engine_id);
             if let Some(app) = app {
                 worker::restart_for_engine_switch(state, app)?;
             }

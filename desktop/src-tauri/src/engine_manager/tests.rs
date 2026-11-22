@@ -827,13 +827,26 @@ fn check_install_failure_status(failure: &'static str) {
                 "job" => lock(&during.runtime).unwrap().active_job_id = "job".into(),
                 "metadata" => fs::create_dir(meta_path).unwrap(),
                 "panic" => panic!("handshake task failed"),
+                "late_cancel" => {
+                    during.engines.cancel.store(true, Ordering::SeqCst);
+                    return Err(AppError::Worker("injected handshake failure".into()));
+                }
                 _ => unreachable!(),
             }
             Ok(())
         },
     ));
     assert!(result.is_err());
-    assert_eq!(state.engines.snapshot_status().stage, "error");
+    let events = lock(&state.engines.terminal_events).unwrap();
+    assert_eq!(events.len(), 1, "expected one terminal event for {failure}");
+    assert_eq!(events[0].stage, "error");
+    if failure == "late_cancel" {
+        assert!(events[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("injected handshake failure"));
+    }
 }
 
 #[test]
@@ -845,6 +858,11 @@ fn install_reports_error_when_job_starts_during_handshake() {
 fn install_reports_metadata_and_handshake_task_errors() {
     check_install_failure_status("metadata");
     check_install_failure_status("panic");
+}
+
+#[test]
+fn late_cancel_does_not_reclassify_handshake_failure() {
+    check_install_failure_status("late_cancel");
 }
 
 #[test]
@@ -894,6 +912,16 @@ fn reimport_handshake_failure_preserves_active_engine() {
         fs::read_to_string(paths.next_root.join("active-engine.txt")).unwrap(),
         meta.id
     );
+    lock(&state.worker.failed_engines)
+        .unwrap()
+        .insert(meta.id.clone());
+    import_engine_for(&state, None, &config, &manifest, "linux", "x86_64", |_| {
+        Ok(())
+    })
+    .unwrap();
+    assert!(!lock(&state.worker.failed_engines)
+        .unwrap()
+        .contains(&meta.id));
 }
 
 #[test]
@@ -1074,4 +1102,203 @@ fn fallback_marks_bundled_active_and_allows_removing_failed_compiled_engine() {
         .any(|engine| engine.bundled && engine.active));
     remove_engine_in(&state, None, &config, "compiled").unwrap();
     assert!(!worker.exists());
+}
+
+#[test]
+fn explicit_use_allows_previously_failed_engine() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let (config, ..) = fixture_engine_files("http://127.0.0.1:1");
+    let id = "windows-x86_64-cuda-repaired";
+    let exe = paths
+        .next_root
+        .join("engines")
+        .join(id)
+        .join("engine")
+        .join(worker_executable_name());
+    fs::create_dir_all(exe.parent().unwrap()).unwrap();
+    fs::write(&exe, b"worker").unwrap();
+    write_engine_meta(
+        &paths.next_root,
+        &EngineMeta {
+            id: id.into(),
+            backend: "cuda".into(),
+            os: "windows".into(),
+            arch: "x86_64".into(),
+            protocol_version: PROTOCOL_VERSION,
+            handshake_passed: true,
+            version: String::new(),
+        },
+    )
+    .unwrap();
+    lock(&state.worker.failed_engines)
+        .unwrap()
+        .insert(id.into());
+    use_engine_for(&state, None, &config, "cuda", "windows", "x86_64", |_| {
+        Ok(())
+    })
+    .unwrap();
+    assert!(!lock(&state.worker.failed_engines).unwrap().contains(id));
+}
+
+#[test]
+fn interrupted_reimport_restores_active_engine_at_startup_and_retry() {
+    let (config, _, manifest_bytes, part_name, part_bytes, engine, _) =
+        fixture_engine_files("http://127.0.0.1:1");
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let import_dir = root.path().join("import");
+    fs::create_dir_all(&import_dir).unwrap();
+    let manifest = import_dir.join("payload.json");
+    fs::write(&manifest, &manifest_bytes).unwrap();
+    fs::write(
+        import_dir.join("payload.json.sig"),
+        &engine.manifest.signature,
+    )
+    .unwrap();
+    fs::write(import_dir.join(&part_name), &part_bytes).unwrap();
+    fs::write(
+        import_dir.join(format!("{part_name}.sig")),
+        &engine.parts[0].signature,
+    )
+    .unwrap();
+    let meta = import_engine_for(&state, None, &config, &manifest, "linux", "x86_64", |_| {
+        Ok(())
+    })
+    .unwrap();
+    let engine_root = paths.next_root.join("engines").join(&meta.id);
+    let engine_dir = engine_root.join("engine");
+    fs::rename(
+        &engine_dir,
+        engine_root.join(".backup-123e4567-e89b-42d3-a456-426614174000"),
+    )
+    .unwrap();
+    drop(state);
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    assert_eq!(
+        fs::read(engine_dir.join(worker_executable_name())).unwrap(),
+        b"worker"
+    );
+    fs::rename(
+        &engine_dir,
+        engine_root.join(".backup-123e4567-e89b-42d3-a456-426614174000"),
+    )
+    .unwrap();
+    assert!(import_engine_for(
+        &state,
+        None,
+        &config,
+        &manifest,
+        "linux",
+        "x86_64",
+        |_| Err(AppError::Worker("handshake failed".into()))
+    )
+    .is_err());
+    assert_eq!(
+        fs::read(engine_dir.join(worker_executable_name())).unwrap(),
+        b"worker"
+    );
+}
+
+#[test]
+fn snapshot_reports_worker_choice_when_active_id_is_excluded() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let (mut config, ..) = fixture_engine_files("http://127.0.0.1:1");
+    config.engine_id.clear();
+    config.backend = "cpu".into();
+    let id = "failed-engine";
+    let exe = paths
+        .next_root
+        .join("engines")
+        .join(id)
+        .join("engine")
+        .join(worker_executable_name());
+    fs::create_dir_all(exe.parent().unwrap()).unwrap();
+    fs::write(&exe, b"worker").unwrap();
+    write_engine_meta(
+        &paths.next_root,
+        &EngineMeta {
+            id: id.into(),
+            backend: "cuda".into(),
+            os: std::env::consts::OS.into(),
+            arch: std::env::consts::ARCH.into(),
+            protocol_version: PROTOCOL_VERSION,
+            handshake_passed: true,
+            version: String::new(),
+        },
+    )
+    .unwrap();
+    fs::write(paths.next_root.join("active-engine.txt"), id).unwrap();
+    let bundled = root.path().join("bundled-worker");
+    fs::write(&bundled, b"bundled").unwrap();
+    *lock(&state.bundled_engine_path).unwrap() = Some(bundled.clone());
+    lock(&state.worker.failed_engines)
+        .unwrap()
+        .insert(id.into());
+    let selected = updates::worker_engine_choice(
+        &paths,
+        Some(bundled.clone()),
+        &lock(&state.worker.failed_engines).unwrap(),
+    )
+    .unwrap();
+    assert!(selected.1.is_none());
+    let snapshot = snapshot_for(&state, &config, EngineRecommendation::default());
+    assert_eq!(snapshot.active_backend, "cpu");
+    assert!(snapshot
+        .installed
+        .iter()
+        .any(|engine| engine.bundled && engine.active));
+    use_engine_for(
+        &state,
+        None,
+        &config,
+        "cuda",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        |_| Ok(()),
+    )
+    .unwrap();
+    let selected = updates::worker_engine_choice(
+        &paths,
+        Some(bundled),
+        &lock(&state.worker.failed_engines).unwrap(),
+    )
+    .unwrap();
+    let expected_backend = if selected.1.is_some() { "cuda" } else { "cpu" };
+    assert_eq!(
+        snapshot_for(&state, &config, EngineRecommendation::default()).active_backend,
+        expected_backend
+    );
+    *lock(&state.bundled_engine_path).unwrap() = None;
+    let selected =
+        updates::worker_engine_choice(&paths, None, &lock(&state.worker.failed_engines).unwrap())
+            .unwrap();
+    assert_eq!(selected.1.as_deref(), Some(id));
+    assert_eq!(
+        snapshot_for(&state, &config, EngineRecommendation::default()).active_engine_id,
+        id
+    );
+}
+
+#[test]
+fn reimport_recovery_keeps_ambiguous_backups_and_removes_obsolete_ones() {
+    let root = tempfile::tempdir().unwrap();
+    let engine_root = root.path().join("engines/example");
+    let engine = engine_root.join("engine");
+    let first = engine_root.join(".backup-123e4567-e89b-42d3-a456-426614174000");
+    let second = engine_root.join(".backup-123e4567-e89b-42d3-a456-426614174001");
+    fs::create_dir_all(&engine).unwrap();
+    fs::create_dir_all(&first).unwrap();
+    recover_interrupted_reimport(root.path(), "example").unwrap();
+    assert!(engine.is_dir());
+    assert!(!first.exists());
+    fs::remove_dir(&engine).unwrap();
+    fs::create_dir_all(&first).unwrap();
+    fs::create_dir_all(&second).unwrap();
+    assert!(recover_interrupted_reimport(root.path(), "example").is_err());
+    assert!(first.is_dir() && second.is_dir());
 }

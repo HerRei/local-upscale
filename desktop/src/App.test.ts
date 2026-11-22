@@ -6734,6 +6734,50 @@ describe('video restore, 1× output, and fix-first stages', () => {
 });
 
 describe('Model folder and Windows CPU GPU download notice', () => {
+  it('starts a ready launch after a model folder move finishes', async () => {
+    const current = readySnapshot();
+    current.settings.task = 'upscale';
+    current.settings.selected_model_id = current.catalog.models.find(
+      (model) => model.native_scale > 1 && !model.purposes.includes('face'),
+    )!.model_id;
+    let listener: () => void = () => {};
+    api.listenForLaunchIntent.mockImplementation(async (cb) => {
+      listener = cb;
+      return () => undefined;
+    });
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+    api.addMedia.mockImplementation(async () => {
+      current.media.push(image('photo', true));
+    });
+    api.selectMedia.mockImplementation(async (id) => {
+      current.media.forEach((item) => (item.selected = item.id === id));
+    });
+    api.chooseModelDirectory.mockResolvedValueOnce('/Volumes/SSD/models');
+    let finishMove: () => void = () => {};
+    api.setModelDirectory.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishMove = resolve;
+        }),
+    );
+    const user = await mountWith(current);
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    await user.click(screen.getByRole('button', { name: /^Model folder / }));
+    await waitFor(() => expect(api.setModelDirectory).toHaveBeenCalled());
+    api.takeLaunchIntents
+      .mockResolvedValueOnce([
+        { files: ['/private/photo.png'], preset: null, recipe: null, auto_start: true },
+      ])
+      .mockResolvedValueOnce([]);
+    listener();
+    await waitFor(() => expect(api.addMedia).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(api.startJobs).not.toHaveBeenCalled();
+    finishMove();
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1), { timeout: 3000 });
+  });
+
   it('chooses and resets the model folder from Advanced settings', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.settings.task = 'upscale';

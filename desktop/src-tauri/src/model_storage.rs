@@ -130,6 +130,9 @@ pub(crate) async fn change_model_directory_with_env<R: tauri::Runtime>(
 
     if old_root.is_dir() && same_canonical_path(&old_root, &dest_root) {
         apply_setting_and_refresh(state, setting_value, &[])?;
+        if old_root != dest_root {
+            crate::worker::restart_for_model_directory(state);
+        }
         if let Some(handle) = app {
             emit_state_changed(handle);
         }
@@ -482,6 +485,19 @@ fn execute_move(
         .iter()
         .filter_map(|entry| entry.bundle_family.clone())
         .collect();
+
+    // Moving a relative file symlink can change its target.
+    for entry in entries {
+        if fs::symlink_metadata(&entry.source)?
+            .file_type()
+            .is_symlink()
+        {
+            return Err(AppError::Validation(format!(
+                "The model file is a symlink: {}. Replace it with the file before moving.",
+                entry.relative.display()
+            )));
+        }
+    }
 
     // A destination that resolves to a source would disappear during cleanup.
     let sources: HashSet<PathBuf> = entries
@@ -1093,6 +1109,81 @@ mod tests {
         let entries = collect_entries(&state, &state.paths.model_root, &dest).unwrap();
         assert!(execute_move(&dest, &entries, false, 0, MoveEnv::default(), |_| {}).is_err());
         assert_eq!(fs::read(dest.join("test_family/weights.bin")).unwrap(), ba);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn move_rejects_relative_source_file_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, _, _, _) = test_state_with_catalog(dir.path());
+        let source = state.paths.model_root.join("test_img.pth");
+        let shared = state.paths.model_root.parent().unwrap().join("shared");
+        fs::create_dir_all(&shared).unwrap();
+        fs::rename(&source, shared.join("weights")).unwrap();
+        std::os::unix::fs::symlink("../shared/weights", &source).unwrap();
+        let dest = state.paths.model_root.join("new");
+        fs::create_dir_all(&dest).unwrap();
+        let entries = collect_entries(&state, &state.paths.model_root, &dest).unwrap();
+        assert!(execute_move(&dest, &entries, false, 0, MoveEnv::default(), |_| {}).is_err());
+        assert!(source.is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn changing_from_model_alias_to_real_path_restarts_worker() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let state = Arc::new(AppState::from_paths(AppPaths::under(dir.path())).unwrap());
+            let real = dir.path().join("real");
+            let alias = dir.path().join("alias");
+            fs::create_dir_all(&real).unwrap();
+            std::os::unix::fs::symlink(&real, &alias).unwrap();
+            state.settings.lock().unwrap().model_directory = alias.to_string_lossy().into_owned();
+            state.grants.grant_model_folder(&real);
+            let (sender, receiver) = std::sync::mpsc::channel();
+            *state.worker.sender.lock().unwrap() = Some(sender);
+            state.runtime.lock().unwrap().worker = "ready".into();
+            change_model_directory_with_env::<tauri::Wry>(
+                &state,
+                None,
+                Some(&real.to_string_lossy()),
+                MoveEnv::default(),
+            )
+            .await
+            .unwrap();
+            assert!(receiver.try_recv().unwrap().contains("shutdown_request"));
+        });
+    }
+
+    #[test]
+    fn case_variant_model_path_updates_worker_when_filesystem_ignores_case() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let state = Arc::new(AppState::from_paths(AppPaths::under(dir.path())).unwrap());
+            let real = dir.path().join("ModelFolder");
+            let variant = dir.path().join("modelfolder");
+            fs::create_dir_all(&real).unwrap();
+            if !variant.is_dir() {
+                assert!(!same_canonical_path(&real, &variant));
+                return;
+            }
+            state.settings.lock().unwrap().model_directory = variant.to_string_lossy().into_owned();
+            state.grants.grant_model_folder(&real);
+            let (sender, receiver) = std::sync::mpsc::channel();
+            *state.worker.sender.lock().unwrap() = Some(sender);
+            state.runtime.lock().unwrap().worker = "ready".into();
+            change_model_directory_with_env::<tauri::Wry>(
+                &state,
+                None,
+                Some(&real.to_string_lossy()),
+                MoveEnv::default(),
+            )
+            .await
+            .unwrap();
+            assert!(receiver.try_recv().unwrap().contains("shutdown_request"));
+        });
     }
 
     #[test]

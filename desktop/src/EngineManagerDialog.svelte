@@ -36,14 +36,12 @@
   $: activeError =
     errorMessage ||
     (download.stage === 'error' && download.error ? plainEngineError(download.error) : '');
-  $: failingBackend =
-    download.stage === 'error' && download.error
-      ? download.backend || errorBackend
-      : errorMessage
-        ? errorBackend
-        : '';
-  $: failingAction =
-    download.stage === 'error' && download.error ? 'download' : errorAction || 'download';
+  $: failingBackend = errorMessage
+    ? errorBackend
+    : download.stage === 'error' && download.error
+      ? download.backend
+      : '';
+  $: failingAction = errorMessage ? errorAction || 'download' : 'download';
   $: rowMatchedError = Boolean(
     activeError && failingBackend && rows.some((row) => row.backend === failingBackend),
   );

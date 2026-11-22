@@ -152,7 +152,8 @@ downloading a separate edition:
 - **macOS (Apple Silicon):** `mps` only (unchanged).
 
 The bundled CPU engine stays installed as a fallback if a downloaded or imported
-engine fails to start. Microsoft Store builds receive both app and engine updates
+engine fails to start. After fixing the cause, select Use or reimport the engine
+to try it again. Microsoft Store builds receive both app and engine updates
 from the Store and do not support in-app engine switching. On direct Windows and
 Linux builds, LocalSR offers the detected GPU engine after the first-launch setup
 screen and keeps engine switching, download, removal and offline file import in
