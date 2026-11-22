@@ -255,11 +255,6 @@
       ).length,
     },
     {
-      id: 'faces' as GroupId,
-      label: 'Faces',
-      count: models.filter((model) => model.purposes.includes('face')).length,
-    },
-    {
       id: 'fix' as GroupId,
       label: 'Fix noise, blur, JPEG, colour',
       count: models.filter((model) => model.native_scale === 1 && !model.purposes.includes('face'))
@@ -429,7 +424,8 @@
     if (jobModels.some((item) => item.model_id === modelId)) {
       group = 'job';
     } else if (image.purposes.includes('face')) {
-      group = 'faces';
+      // Face models have no group of their own any more; installed ones stay removable.
+      group = 'installed';
     } else if (image.native_scale === 1) {
       group = 'fix';
     } else if (image.purposes.includes('illustration') || image.purposes.includes('anime')) {
@@ -642,6 +638,12 @@
       <section class="list" aria-label="Models">
         {#if context.slot === 'try'}
           <div class="list-head">For this job<span>Pick 2 to 4 installed models</span></div>
+          {#if trialModels.filter((model) => model.installed && !trialReason(model)).length < 2}
+            <p class="trial-hint" role="status">
+              Comparing needs at least 2 installed models. Select a model, then use Download on the
+              right.
+            </p>
+          {/if}
           {#each trialModels as model (model.model_id)}
             {@const reason = trialReason(model)}
             {@const picked = trialIds.includes(model.model_id)}

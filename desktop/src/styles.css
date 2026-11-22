@@ -3196,6 +3196,13 @@ input[type='number'],
   font-weight: 500;
   letter-spacing: 0;
 }
+.trial-hint {
+  margin: 0;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--section-divider);
+  color: var(--text);
+  font-size: calc(12px * var(--ui-scale));
+}
 .row {
   position: relative;
   /* The scrolling list is a flex column; rows keep their content height

@@ -5456,6 +5456,19 @@ describe('Comparing saved results', () => {
     expect(screen.getByRole('button', { name: 'Cancel queue' })).toBeTruthy();
   });
 
+  it('tells you to download models when fewer than 2 can be compared', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.batch_mode = false;
+    snapshot.catalog.models.forEach((model) => (model.installed = false));
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Upscale$/);
+    await user.click(
+      await screen.findByRole('button', { name: 'Try other upscalers on this image' }),
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(dialog).getByText(/Comparing needs at least 2 installed models/)).toBeTruthy();
+  });
+
   it('runs 2 to 4 installed models from Try others with the settings the plan card showed', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.settings.batch_mode = false;
