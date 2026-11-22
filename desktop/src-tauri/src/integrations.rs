@@ -903,8 +903,6 @@ mod tests {
         assert!(appimage_container(&current, None, None).is_none());
     }
 
-    // The menu entry is a Linux feature; Windows paths do not fit the Exec line.
-    #[cfg(not(windows))]
     #[test]
     fn linux_menu_writes_desktop_file_and_icon_under_xdg_data_and_removes_them_cleanly() {
         let temporary = tempfile::tempdir().unwrap();
@@ -926,7 +924,10 @@ mod tests {
         let desktop = fs::read_to_string(&desktop_path).unwrap();
         assert!(desktop.starts_with("[Desktop Entry]\n"));
         assert!(desktop.contains("Name=LocalSR\n"));
-        assert!(desktop.contains(&format!("Exec=\"{}\" %F\n", appimage.display())));
+        // The temporary folder differs per platform (and Windows backslashes are
+        // escaped in desktop files), so check the quoted AppImage at the end.
+        assert!(desktop.contains("\nExec=\""));
+        assert!(desktop.contains("LocalSR 0.5.2.AppImage\" %F\n"));
         assert!(desktop.contains("Icon=localsr-next\n"));
         assert!(desktop.contains("Terminal=false\n"));
         assert!(desktop.contains("StartupWMClass=LocalSR\n"));
