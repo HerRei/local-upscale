@@ -110,6 +110,8 @@ const api = vi.hoisted(() => ({
         | boolean
         | UiSettings['appearance']
         | UiSettings['interface_scale']
+        | NonNullable<UiSettings['contrast']>
+        | NonNullable<UiSettings['viewer_background']>
         | UiSettings['stopped_job_result'],
     ): Promise<void> => undefined,
   ),
@@ -389,6 +391,39 @@ describe('Appearance from the host', () => {
       }),
     );
     expect(api.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it('updates viewer background from the zoom swatch and high contrast from Settings', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+
+    await user.click(screen.getByRole('button', { name: 'Viewer background: Checkerboard' }));
+    await waitFor(() =>
+      expect(api.setPreference).toHaveBeenCalledWith('viewer_background', 'black'),
+    );
+    expect(document.documentElement.dataset.viewerBg).toBe('black');
+
+    await chooseMenuItem('app.settings');
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(dialog).getByRole('tab', { name: 'Appearance' }));
+    await user.click(within(dialog).getByRole('switch', { name: 'High contrast' }));
+    await waitFor(() => expect(api.setPreference).toHaveBeenCalledWith('contrast', 'high'));
+    expect(document.documentElement.dataset.contrast).toBe('high');
+  });
+
+  it('keeps saved contrast and viewer background during first-run theme preview', async () => {
+    const snapshot = readySnapshot();
+    snapshot.settings.privacy_choice_made = false;
+    snapshot.settings.contrast = 'high';
+    snapshot.settings.viewer_background = 'grey';
+    const user = await mountWith(snapshot);
+    const dialog = await screen.findByRole('dialog', { name: 'Welcome to LocalSR' });
+    await user.click(within(dialog).getByRole('radio', { name: 'Light' }));
+    expect(document.documentElement.dataset).toMatchObject({
+      theme: 'light',
+      contrast: 'high',
+      viewerBg: 'grey',
+    });
   });
 });
 

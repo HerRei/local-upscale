@@ -155,6 +155,8 @@ export type PreferenceName =
   | 'completion_sound'
   | 'menu_bar_icon_monochrome'
   | 'colour_blind_palette'
+  | 'contrast'
+  | 'viewer_background'
   | 'auto_cache_cleanup'
   | 'stopped_job_result'
   | 'appearance'
@@ -167,6 +169,8 @@ export const setPreference = (
     | boolean
     | UiSettings['appearance']
     | UiSettings['interface_scale']
+    | NonNullable<UiSettings['contrast']>
+    | NonNullable<UiSettings['viewer_background']>
     | NonNullable<UiSettings['stopped_job_result']>,
 ): Promise<void> => invoke('set_preference', { name, value });
 export interface SetupChoices {

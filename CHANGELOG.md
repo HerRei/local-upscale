@@ -9,6 +9,12 @@
   for this session only, and low priority covers the running job and the whole queue.
   After a GPU failure, Retry on CPU runs that job on the CPU without changing the
   default.
+- **High contrast.** Settings > Appearance > High contrast gives the dark and the light
+  theme stronger text, borders and focus outlines. It also turns on when the computer
+  asks for more contrast.
+- **Viewer background.** The picture can sit on a checkerboard, black, neutral grey or
+  white: Settings > Appearance, or the swatch beside the zoom controls. Preview, Compare
+  and video use it.
 - **Colour for video.** Black-and-white videos can be coloured under Restore and
   Restore first. Colours are carried from frame to frame, so they stay steady. A video
   that already has colour skips the step, and a Colour choice made for photos is not

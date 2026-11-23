@@ -393,6 +393,26 @@ mod tests {
     }
 
     #[test]
+    fn contrast_and_viewer_background_default_round_trip_and_reject_unknown_values() {
+        let defaults: UiSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(defaults.contrast, "system");
+        assert_eq!(defaults.viewer_background, "checker");
+        let settings = UiSettings {
+            contrast: "high".into(),
+            viewer_background: "grey".into(),
+            ..defaults
+        };
+        let restored: UiSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.contrast, "high");
+        assert_eq!(restored.viewer_background, "grey");
+        let unknown: UiSettings =
+            serde_json::from_str(r#"{"contrast":"max","viewer_background":"pink"}"#).unwrap();
+        assert_eq!(unknown.contrast, "system");
+        assert_eq!(unknown.viewer_background, "checker");
+    }
+
+    #[test]
     fn new_installs_start_with_the_count_and_crash_reports_on_and_saved_choices_stay() {
         assert!(UiSettings::default().anonymous_update_count);
         assert!(UiSettings::default().crash_reports);

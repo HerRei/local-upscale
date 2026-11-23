@@ -3,6 +3,7 @@
   import FileName from './FileName.svelte';
   import HelpTip from './HelpTip.svelte';
   import ThemePicker from './ThemePicker.svelte';
+  import { VIEWER_BACKGROUNDS, type ViewerBackground } from './lib/viewerBackground';
   import * as api from './lib/api';
   import { engineDisplayName } from './lib/engines';
   import { detectedFfmpeg, systemCodecs } from './lib/ffmpeg';
@@ -44,6 +45,8 @@
       | boolean
       | UiSettings['appearance']
       | UiSettings['interface_scale']
+      | NonNullable<UiSettings['contrast']>
+      | NonNullable<UiSettings['viewer_background']>
       | NonNullable<UiSettings['stopped_job_result']>,
   ) => void;
   export let updateSettings: (patch: Partial<UiSettings>) => void;
@@ -451,6 +454,26 @@
 
           <div class="setting-row">
             <div class="setting-copy">
+              <label class="setting-label" for="settings-contrast">High contrast</label>
+              <p class="setting-desc" id="settings-contrast-desc">
+                Stronger text, borders and focus outlines. Also turns on when your computer asks for
+                more contrast.
+              </p>
+            </div>
+            <input
+              id="settings-contrast"
+              class="switch"
+              type="checkbox"
+              role="switch"
+              aria-describedby="settings-contrast-desc"
+              checked={settings.contrast === 'high'}
+              on:change={(event) =>
+                setPreference('contrast', event.currentTarget.checked ? 'high' : 'system')}
+            />
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-copy">
               <label class="setting-label" for="settings-interface-scale">Interface text</label>
               <p class="setting-desc" id="settings-interface-scale-desc">
                 Enlarges the app's text and controls. Your pictures are not affected.
@@ -470,6 +493,32 @@
                 <option value="100">100%</option>
                 <option value="110">110%</option>
                 <option value="125">125%</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-copy">
+              <span class="label-with-tip">
+                <label class="setting-label" for="settings-viewer-background"
+                  >Viewer background</label
+                >
+                <HelpTip
+                  label="Viewer background"
+                  text="What is shown behind the picture in the viewer and in Compare. Grey is the neutral 18 % grey used to judge brightness and colour. Black and White show how edges and transparent areas hold up. Checkerboard shows where a picture is transparent. Saved files are not changed."
+                />
+              </span>
+            </div>
+            <div class="setting-control">
+              <select
+                id="settings-viewer-background"
+                value={settings.viewer_background ?? 'checker'}
+                on:change={(event) =>
+                  setPreference('viewer_background', event.currentTarget.value as ViewerBackground)}
+              >
+                {#each VIEWER_BACKGROUNDS as option}
+                  <option value={option.id}>{option.label}</option>
+                {/each}
               </select>
             </div>
           </div>

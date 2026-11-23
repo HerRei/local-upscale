@@ -2,6 +2,8 @@
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   const dispatch = createEventDispatcher<{ compatibilityneeded: void }>();
   import { comparisonFromKey, comparisonFromPointer } from './lib/comparison';
+  import BackgroundSwitch from './BackgroundSwitch.svelte';
+  import type { ViewerBackground } from './lib/viewerBackground';
   import VideoTransport from './VideoTransport.svelte';
   import { commonDuration, synchronizationDecision } from './lib/video-sync';
   import {
@@ -27,6 +29,8 @@
   /** What a stopped job kept, as the host measured it in the file: frames and seconds. */
   export let keptFrames = 0;
   export let keptSeconds = 0;
+  export let viewerBackground: ViewerBackground = 'checker';
+  export let setViewerBackground: (value: ViewerBackground) => void = () => {};
 
   const RATES = [0.5, 1, 1.5, 2];
 
@@ -490,6 +494,7 @@
         title="One source pixel per screen pixel"
         on:click={actualSize}>1:1</button
       >
+      <BackgroundSwitch value={viewerBackground} set={setViewerBackground} />
     </div>
   </div>
   {#if playbackError}

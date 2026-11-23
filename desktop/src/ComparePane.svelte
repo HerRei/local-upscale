@@ -9,6 +9,8 @@
   import type { VideoComparisonSources } from './lib/types';
   import { CompareVideoSync } from './lib/compare-video-sync';
   import VideoTransport from './VideoTransport.svelte';
+  import BackgroundSwitch from './BackgroundSwitch.svelte';
+  import type { ViewerBackground } from './lib/viewerBackground';
   import FileName from './FileName.svelte';
   import HelpTip from './HelpTip.svelte';
   import UnfinishedTiles from './UnfinishedTiles.svelte';
@@ -43,6 +45,8 @@
   /** As a tab of the main area there is no Done: the tabs are the way out. */
   export let asTab = false;
   export let compactHidden = false;
+  export let viewerBackground: ViewerBackground = 'checker';
+  export let setViewerBackground: (value: ViewerBackground) => void = () => {};
 
   const BAR = 26;
   let well: HTMLDivElement | undefined;
@@ -1067,6 +1071,7 @@
             on:click={() => setZoom(zoom * 1.25)}>+</button
           >
           <button class:active={Math.abs(zoom - 1) < 0.001} on:click={() => setZoom(1)}>Fit</button>
+          <BackgroundSwitch value={viewerBackground} set={setViewerBackground} />
         </div>
       {/if}
     </div>
@@ -1122,6 +1127,7 @@
             on:click={() => setZoom(zoom * 1.25)}>+</button
           >
           <button class:active={Math.abs(zoom - 1) < 0.001} on:click={() => setZoom(1)}>Fit</button>
+          <BackgroundSwitch value={viewerBackground} set={setViewerBackground} />
         </div>
       </div>
       {#if limited}<span class="compare-slots-note" role="status"
@@ -1489,7 +1495,7 @@
     min-height: 0;
     display: grid;
     grid-template-rows: 26px 1fr;
-    background: var(--stage);
+    background: var(--viewer-bg, var(--stage));
   }
   .box-bar {
     display: flex;

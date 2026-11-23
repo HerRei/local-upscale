@@ -8,6 +8,8 @@
   import PreviewActivity from './PreviewActivity.svelte';
   import SplitComparison from './SplitComparison.svelte';
   import UnfinishedTiles from './UnfinishedTiles.svelte';
+  import BackgroundSwitch from './BackgroundSwitch.svelte';
+  import type { ViewerBackground } from './lib/viewerBackground';
   import type { PaneUnfinished } from './lib/unfinished';
   import type { ComparisonSide } from './lib/results';
   import * as api from './lib/api';
@@ -65,6 +67,8 @@
   export let completedVideoOutput: string;
   export let videoResultId = '';
   export let compactHidden = false;
+  export let viewerBackground: ViewerBackground = 'checker';
+  export let setViewerBackground: (value: ViewerBackground) => void = () => {};
   // The status bar reports the job; the pane only says which live frame it shows.
   export let liveFrame = -1;
   $: liveFrame = progressiveFrame;
@@ -980,6 +984,8 @@
             keptSeconds={videoComparison.enhanced_url ? (showingUnfinished?.seconds ?? 0) : 0}
             bind:compare
             view={shownView}
+            {viewerBackground}
+            {setViewerBackground}
             on:compatibilityneeded={compatiblePlayback}
           />
         {/key}
@@ -1076,6 +1082,7 @@
               title="One source pixel per screen pixel"
               on:click={() => setZoom(actualPixelZoom)}>1:1</button
             >
+            <BackgroundSwitch value={viewerBackground} set={setViewerBackground} />
           </div>{/if}
       {:else}
         {#if deferredPreview}
