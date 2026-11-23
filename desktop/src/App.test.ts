@@ -3686,7 +3686,7 @@ describe('LocalSR desktop interface', () => {
         expect.objectContaining({
           quality: 'best',
           content: 'illustration',
-          model_id: 'realplksr_hfa2k_anime_x4',
+          model_id: 'esrgan_hfa2k_x4',
         }),
       ),
     );
@@ -4196,7 +4196,7 @@ describe('LocalSR desktop interface', () => {
         expect.objectContaining({
           quality: 'best',
           content: 'illustration',
-          selected_model_id: 'realplksr_hfa2k_anime_x4',
+          selected_model_id: 'esrgan_hfa2k_x4',
         }),
       ),
     );

@@ -218,6 +218,22 @@ checkpoint licence above is verified; clearance of every training image is not.
 Both are library models: no preset picks them on its own (`preset_eligible=False`), because
 they take about ten times as long as Best. A model pinned to Best by the user is still used.
 
+### ESRGAN HFA2k (`esrgan_hfa2k_x4`)
+
+- Exact asset: `4xHFA2k.pth` from Philip Hofmann's
+  [`4xHFA2k` GitHub release](https://github.com/Phhofm/models/releases/tag/4xHFA2k)
+  (also indexed on [OpenModelDB](https://openmodeldb.info/models/4x-HFA2k)).
+- Size: `33,676,982` bytes.
+- SHA-256: `74fa66be8d316a7db40292e9c1dd13ffced8e838bd4351284dc0d7422e1a0743`.
+- Terms: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), declared directly in both the
+  GitHub release notes (`License: CC BY 4.0`) and the OpenModelDB entry (`CC-BY-4.0`). The RRDBNet
+  (ESRGAN) base checkpoint is `RealESRGAN_x4plus.pth` (BSD-3-Clause).
+- Selection evidence (23 November 2026): downloaded from that release, hashed, loaded by Spandrel
+  0.4.2 as `ESRGAN`, and evaluated on MPS against the synthetic illustration suite
+  (`tests/fixtures/illustration/`): mean colour error `0.71` / `0.74` CIEDE2000 (PNG / JPEG q75),
+  saturation change `+0.20%` / `+0.05%` (HSV) and `-0.28%` / `+0.17%` (Lab), and `100%` QR module
+  correctness from 1 to 6 px/module.
+
 ### DDColor (`ddcolor_modelscope`)
 
 - Exact upstream asset: `pytorch_model.bin` from

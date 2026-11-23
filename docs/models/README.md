@@ -12,6 +12,7 @@ loading. Restoration weights are not included in installers.
 | HAT-S | 4× | General photo upscaling | 81.1 MB | Apache-2.0 |
 | HAT-L ImageNet | 4× | Larger general photo model | 165.8 MB | Apache-2.0 |
 | RealPLKSR NomosWebPhoto | 4× | Degraded web photos | 29.7 MB | CC BY 4.0 |
+| ESRGAN HFA2k | 4× | Best anime and illustration | 33.7 MB | CC BY 4.0 |
 | RealPLKSR HFA2k | 4× | Anime video frames · Labs | 29.7 MB | CC BY 4.0 |
 | Real-ESRGAN x2plus | 2× | Native 2× upscaling | 67.1 MB | BSD-3-Clause |
 | RealPLKSR Denoise | 1× | Fast photo denoising | 29.6 MB | CC BY 4.0 |
@@ -37,8 +38,10 @@ options run.
 
 For photos, **Quick** selects SPAN NomosUni and **Best** selects RealPLKSR
 NomosWebPhoto. For illustrations, **Quick** selects Real-ESRGAN Anime 6B and
-**Best** selects RealPLKSR HFA2k, which can soften fine lines and screentones,
-darken white paper and reduce colour saturation on some manga and comic scans.
+**Best** selects ESRGAN HFA2k, which preserves flat colours, white paper, QR codes
+and fine line art. RealPLKSR HFA2k stays in the library; it can soften fine lines
+and screentones, darken white paper and reduce colour saturation on some manga and
+comic scans.
 Photo models remain a choice in the library. HAT-S is
 the smaller stock HAT option. No preset picks the two DAT2 models on its own: on an M1
 Pro they take about ten times as long as Best (around 73 seconds per input megapixel;
@@ -61,11 +64,12 @@ runs on the CPU or PyTorch Apple GPU instead.
 
 ## Author credit and checkpoint terms
 
-SPAN NomosUni, RealPLKSR Denoise, NomosWebPhoto and HFA2k are models by
-**Philip Hofmann (Phips / Phhofm)**. NomosWebPhoto and HFA2k explicitly declare
+SPAN NomosUni, RealPLKSR Denoise, NomosWebPhoto, ESRGAN HFA2k and RealPLKSR HFA2k are models by
+**Philip Hofmann (Phips / Phhofm)**. NomosWebPhoto, ESRGAN HFA2k and RealPLKSR HFA2k explicitly declare
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) on their
-[model](https://huggingface.co/Phips/4xNomosWebPhoto_RealPLKSR)
-[cards](https://huggingface.co/Phips/4xHFA2k_ludvae_realplksr_dysample).
+[NomosWebPhoto](https://huggingface.co/Phips/4xNomosWebPhoto_RealPLKSR),
+[ESRGAN HFA2k](https://github.com/Phhofm/models/releases/tag/4xHFA2k) and
+[RealPLKSR HFA2k](https://huggingface.co/Phips/4xHFA2k_ludvae_realplksr_dysample) pages.
 The license permits sharing and commercial use with attribution and its other
 conditions. LocalSR downloads the publisher's checkpoint files unchanged.
 

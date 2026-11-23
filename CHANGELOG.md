@@ -2,6 +2,10 @@
 
 ## [0.6.0-beta] - Unreleased
 
+- **Illustration Best.** Best for illustrations now selects ESRGAN ×4 HFA2k instead of
+  RealPLKSR HFA2k, keeping flat colours, white backgrounds, QR patterns and fine line art
+  intact. RealPLKSR HFA2k stays available in the model library (#122).
+
 - **Menu bar.** An icon in the menu bar or system tray shows what is running, how
   many files wait and the progress, with Pause and Resume, and a notification for
   each finished file. New installs choose it in the first-launch setup; Advanced

@@ -348,6 +348,35 @@ MODEL_CATALOG = (
         vram_estimate_mb=4000,
     ),
     CatalogModel(
+        model_id="esrgan_hfa2k_x4",
+        role="Best anime and illustration; keeps colours and fine lines",
+        stage="upscale",
+        name="ESRGAN 4x HFA2k — Best",
+        filename="4xHFA2k.pth",
+        description=(
+            "23-block ESRGAN ×4 upscaler trained on high-frequency anime frames (HFA2k) with "
+            "light JPEG and blur degradations. Keeps flat colours, paper whites, QR codes, and "
+            "crisp line art."
+        ),
+        size_bytes=33_676_982,
+        sha256="74fa66be8d316a7db40292e9c1dd13ffced8e838bd4351284dc0d7422e1a0743",
+        download_url="https://github.com/Phhofm/models/releases/download/4xHFA2k/4xHFA2k.pth",
+        architecture="ESRGAN",
+        native_scale=4,
+        purposes=(ModelPurpose.ILLUSTRATION, ModelPurpose.ANIME),
+        quality_tier=QualityTier.MAXIMUM,
+        speed_tier=SpeedTier.MEDIUM,
+        recommended_halo=16,
+        source_url="https://github.com/Phhofm/models/releases/tag/4xHFA2k",
+        license_name="CC BY 4.0",
+        author="Philip Hofmann",
+        memory_factor=1.05,
+        time_factor=1.0,
+        speed_factor=0.55,
+        vram_estimate_mb=1800,
+        commercial_use_status="allowed",
+    ),
+    CatalogModel(
         model_id="realplksr_hfa2k_anime_x4",
         role="Anime and illustration · high quality",
         stage="upscale",

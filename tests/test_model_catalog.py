@@ -60,6 +60,7 @@ def test_catalog_has_all_curated_models():
         "hat_l_x4_face",
         "denoise_realplksr_1x",
         "nafnet_sidd_width64",
+        "esrgan_hfa2k_x4",
         "realplksr_hfa2k_anime_x4",
         "span_photo_x4",
         "realplksr_nomoswebphoto_x4",
@@ -76,11 +77,11 @@ def test_catalog_has_all_curated_models():
     ]
     catalog_ids = [model.model_id for model in MODEL_CATALOG]
     assert catalog_ids == expected_ids
-    assert len(MODEL_CATALOG) == 19
+    assert len(MODEL_CATALOG) == 20
 
     # Verify uniqueness of IDs and filenames
-    assert len({model.model_id for model in MODEL_CATALOG}) == 19
-    assert len({model.filename for model in MODEL_CATALOG}) == 19
+    assert len({model.model_id for model in MODEL_CATALOG}) == 20
+    assert len({model.filename for model in MODEL_CATALOG}) == 20
 
 
 def test_recent_same_size_rewrite_cannot_reuse_a_checksum_verdict(tmp_path, monkeypatch):
@@ -183,6 +184,19 @@ def test_catalog_attributes_and_integrity():
 
 
 def test_spandrel_compatible_models_metadata():
+    esrgan_hfa2k = CATALOG_BY_ID.get("esrgan_hfa2k_x4")
+    assert esrgan_hfa2k is not None
+    assert esrgan_hfa2k.name == "ESRGAN 4x HFA2k — Best"
+    assert esrgan_hfa2k.architecture == "ESRGAN"
+    assert esrgan_hfa2k.scale == 4
+    assert ModelPurpose.ILLUSTRATION in esrgan_hfa2k.purposes
+    assert "4xHFA2k/4xHFA2k.pth" in esrgan_hfa2k.download_url
+    assert esrgan_hfa2k.quality_tier == QualityTier.MAXIMUM
+    assert esrgan_hfa2k.speed_tier == SpeedTier.MEDIUM
+    assert esrgan_hfa2k.license_name == "CC BY 4.0"
+    assert esrgan_hfa2k.commercial_use_status == "allowed"
+    assert esrgan_hfa2k.preset_eligible
+
     # 1. RealPLKSR Anime
     anime = CATALOG_BY_ID.get("realplksr_hfa2k_anime_x4")
     assert anime is not None

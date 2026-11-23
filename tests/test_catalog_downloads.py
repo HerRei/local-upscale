@@ -34,6 +34,7 @@ def test_catalog_has_pinned_optional_downloads():
         "hat_l_x4_face",
         "denoise_realplksr_1x",
         "nafnet_sidd_width64",
+        "esrgan_hfa2k_x4",
         "realplksr_hfa2k_anime_x4",
         "span_photo_x4",
         "realplksr_nomoswebphoto_x4",
@@ -48,7 +49,7 @@ def test_catalog_has_pinned_optional_downloads():
         "realwebphoto_v4_dat2_x4",
         "ddcolor_modelscope",
     ]
-    assert len({model.filename for model in MODEL_CATALOG}) == 19
+    assert len({model.filename for model in MODEL_CATALOG}) == 20
     upstream_hat = [
         model
         for model in MODEL_CATALOG
