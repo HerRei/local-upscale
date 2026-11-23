@@ -3,6 +3,26 @@
 Design spec for two additions to Settings → Appearance in 0.6.0 (`w/060-view-options`).
 Line numbers refer to commit `a25312b8`.
 
+## Amendment: a switch, not a select (Hermes, 2026-11-23)
+
+Hermes: "just have it be a switch where you can also do colour blind and dark or bright
+mode, and i think you can go with the standart taste choices". This overrides the Contrast
+select described below:
+
+- High contrast is a **switch row exactly like "Colour-blind friendly colours"**, placed
+  directly under it (same `.setting-row`, `input.switch role="switch"`, label + description).
+- Label: `High contrast`. Description (`id="settings-contrast-desc"`): `Stronger text,
+  borders and focus outlines. Also turns on when your computer asks for more contrast.`
+  No `?` tip on this row.
+- The stored field stays `contrast` with the same defaults and fallbacks, but the switch
+  only writes two values: on → `"high"`, off → `"system"` (off still follows the system, as
+  Match System did). `"standard"` remains a valid stored value (it loads and behaves as
+  specified) but the UI never writes it. The switch shows on only when the stored value is
+  `"high"`.
+- Everything else in this spec stands, including the taste calls: the light terracotta
+  Start button in dark high contrast, the zoom-bar background swatch, and Match System
+  following the system after the update.
+
 ## Decisions
 
 1. **Contrast** is a third, independent axis next to Theme (dark/light) and the
@@ -97,10 +117,12 @@ Match System follows your computer's light or dark mode.
 │ ▓▓▓▓▓▓▓▓▓▓ │ │ ░░░░░░░░░░ │ │ ▓▓▓▓▓░░░░░ │
 │ ● Dark     │ │ ○ Light    │ │ ○ Match Sy…│
 └────────────┘ └────────────┘ └────────────┘
-+ Contrast (?)                        [ Match System ▾ ]
-
 Colour-blind friendly colours                      (●─)
 Uses colours that stay distinct with colour vision deficiencies.
+
++ High contrast                                    (─●)
++ Stronger text, borders and focus outlines. Also turns on when your computer asks for
++ more contrast.
 
 Interface text                               [ 100% ▾ ]
 Enlarges the app's text and controls. Your pictures are not affected.
