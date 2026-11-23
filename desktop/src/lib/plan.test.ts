@@ -438,6 +438,33 @@ describe('model library resolution', () => {
       'interpolate',
     ]);
 
+    const videoModel = snapshot.catalog.video_models.find((m) => m.model_id === 'flashvsr_v11')!;
+    const temporalSettings = {
+      ...snapshot.settings,
+      task: 'video' as const,
+      video_task: 'upscale' as const,
+      selected_video_model_id: videoModel.model_id,
+      output_scale: 4,
+      video_target_resolution: 0,
+      fix_stages: [{ fix: 'blur' as const, model_id: 'nafnet_gopro_deblur' }],
+      fixes: ['blur' as const],
+    };
+    const temporalPlan = resolvePlan(snapshot, temporalSettings, {
+      faceEnabled: false,
+      usingTemporalVideo: true,
+      selectedVideoModel: videoModel,
+    });
+    expect(temporalPlan.map((s) => [s.kind, s.role, s.label])).toEqual([
+      ['video', 'primary', 'Upscale ×4'],
+    ]);
+    expect(
+      resolvePlan(
+        snapshot,
+        { ...temporalSettings, video_target_resolution: 720 },
+        { faceEnabled: false, usingTemporalVideo: true, selectedVideoModel: videoModel },
+      ).map((s) => [s.kind, s.role, s.label]),
+    ).toEqual([['video', 'primary', 'Upscale']]);
+
     const restoreRecipe: Recipe = {
       id: 'vr1',
       name: 'Clean video',

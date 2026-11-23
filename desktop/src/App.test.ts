@@ -1513,6 +1513,17 @@ describe('LocalSR desktop interface', () => {
     ).toBe(false);
   });
 
+  async function pickUpscalerInLibrary(
+    user: ReturnType<typeof userEvent.setup>,
+    rowName: RegExp,
+  ): Promise<void> {
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: rowName }));
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
+  }
+
   it('switches SeedVR2 to SDR, preserves the custom HDR option, and submits the chosen resolution', async () => {
     const media = { ...video('hdr', true), width: 2160, height: 3840, hdr_format: 'HLG' as const };
     const snapshot = readySnapshot([media]);
@@ -1532,7 +1543,7 @@ describe('LocalSR desktop interface', () => {
     const user = await mountWith(snapshot);
     const hdr = screen.getByLabelText('Colour output') as HTMLSelectElement;
     expect(hdr.value).toBe('preserve');
-    await user.selectOptions(screen.getByLabelText('Video engine'), 'seedvr2_3b');
+    await pickUpscalerInLibrary(user, /^SeedVR2-3B — Labs/);
     expect(hdr.value).toBe('tone_map');
     expect(hdr.querySelector<HTMLOptionElement>('option[value="preserve"]')!.disabled).toBe(true);
     expect(screen.getByText('SDR output selected. This model cannot preserve HDR.')).toBeTruthy();
@@ -1551,7 +1562,7 @@ describe('LocalSR desktop interface', () => {
         video_low_memory: false,
       }),
     );
-    await user.selectOptions(screen.getByLabelText('Video engine'), 'frame_by_frame');
+    await pickUpscalerInLibrary(user, /^HAT-S ×4/);
     expect(hdr.value).toBe('preserve');
     api.chooseCustomModel.mockResolvedValueOnce('/models/mine.safetensors' as never);
     await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
@@ -1661,20 +1672,33 @@ describe('LocalSR desktop interface', () => {
     },
   );
 
-  it('labels experimental engines separately from standard video', async () => {
-    const user = await mountWith(readySnapshot([video('clip', true)]));
+  it('chooses temporal video models from the library and keeps frame-by-frame options hidden', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    const user = await mountWith(snapshot);
     await chooseTask(user, /^Upscale$/);
 
-    const engine = screen.getByLabelText('Video engine');
-    expect(within(engine).getByRole('option', { name: /Frame-by-frame/i })).toBeTruthy();
-    expect(within(engine).getByRole('option', { name: /SeedVR2-3B — Labs/i })).toBeTruthy();
+    expect(screen.queryByLabelText('Video engine')).toBeNull();
+    expect(document.querySelectorAll('.model-output-note')).toHaveLength(0);
+    const oldModelId = (api.saveSettings.mock.calls.at(-1)?.[0] as UiSettings).selected_model_id;
 
     await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
     expect(screen.getByLabelText('Container')).toBeTruthy();
     expect(screen.getByLabelText(/Video quality · CRF/i)).toBeTruthy();
     expect(screen.getByRole('checkbox', { name: /De-flicker · Labs/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Start selected video' })).toBeTruthy();
-    await user.selectOptions(engine, 'seedvr2_3b');
+
+    await pickUpscalerInLibrary(user, /^SeedVR2-3B — Labs/);
+    expect(api.saveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        selected_video_model_id: 'seedvr2_3b',
+        quality: 'custom',
+        selected_model_id: oldModelId,
+      }),
+    );
+    const stages = screen.getByRole('list', { name: 'Stages' });
+    expect(within(stages).getByText('SeedVR2-3B')).toBeTruthy();
+    expect(within(stages).getByText('Labs · several frames at once')).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Your video' })).toBeNull();
     expect(screen.queryByRole('checkbox', { name: /De-flicker · Labs/i })).toBeNull();
     expect(screen.queryByRole('checkbox', { name: /Safe memory mode/i })).toBeNull();
   });
@@ -1695,15 +1719,26 @@ describe('LocalSR desktop interface', () => {
       });
       const user = await mountWith(snapshot);
       await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
-      const engine = screen.getByLabelText('Video engine');
-      await user.selectOptions(engine, 'seedvr2_3b');
-      await user.selectOptions(engine, 'frame_by_frame');
+      await pickUpscalerInLibrary(user, /^SeedVR2-3B — Labs/);
+      await pickUpscalerInLibrary(user, /^HAT-L ×4 ImageNet/);
       expect(
         (screen.getByRole('checkbox', { name: /De-flicker · Labs/i }) as HTMLInputElement).checked,
       ).toBe(deflicker);
       expect((screen.getByLabelText('Frame rate') as HTMLSelectElement).value).toBe('x2');
       expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ deflicker, video_interpolation: 'x2', enable_face_model: false }),
+        expect.objectContaining({
+          selected_video_model_id: 'frame_by_frame',
+          deflicker,
+          video_interpolation: 'x2',
+          enable_face_model: false,
+        }),
+      );
+      await user.click(screen.getByRole('button', { name: /^Quick/ }));
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ selected_video_model_id: 'frame_by_frame' }),
+      );
+      expect(screen.getByRole('button', { name: /^Quick/ }).getAttribute('aria-pressed')).toBe(
+        'true',
       );
     },
   );
@@ -1844,7 +1879,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.video_interpolation = 'x2';
     snapshot.catalog.interpolation_models.forEach((model) => (model.installed = true));
     const user = await mountWith(snapshot);
-    await user.selectOptions(screen.getByLabelText('Video engine'), 'seedvr2_3b');
+    await pickUpscalerInLibrary(user, /^SeedVR2-3B — Labs/);
     await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
     expect(screen.queryByLabelText('Frame rate')).toBeNull();
     expect(screen.queryByText('Interpolate 2×')).toBeNull();
@@ -1874,13 +1909,12 @@ describe('LocalSR desktop interface', () => {
         model.installed = false;
       });
       const user = await mountWith(snapshot);
-      const option = screen.getByRole('option', { name: /SeedVR2-3B — Labs.*Unavailable/ });
-      expect((option as HTMLOptionElement).disabled).toBe(true);
+      expect(document.querySelector('.inline-warning')?.textContent).toMatch(/SeedVR2/);
       expect(
         screen.getByRole('button', { name: 'Start selected video' }).matches(':disabled'),
       ).toBe(true);
       expect(screen.queryByRole('button', { name: /^Download / })).toBeNull();
-      await user.selectOptions(screen.getByLabelText('Video engine'), 'frame_by_frame');
+      await pickUpscalerInLibrary(user, /^SPAN ×4/);
       expect(
         screen.getByRole('button', { name: 'Start selected video' }).matches(':disabled'),
       ).toBe(false);
@@ -1899,12 +1933,18 @@ describe('LocalSR desktop interface', () => {
 
   it('runs FlashVSR on the Apple GPU of a 16 GB Mac and describes it in its own terms', async () => {
     const user = await mountWith(flashSnapshot(16));
-    const engine = screen.getByLabelText('Video engine');
-    const option = within(engine).getByRole('option', { name: 'FlashVSR v1.1 — Labs · Installed' });
-    expect((option as HTMLOptionElement).disabled).toBe(false);
     expect(document.querySelectorAll('.model-output-note')).toHaveLength(0);
 
-    await user.selectOptions(engine, 'flashvsr_v11');
+    await user.click(await screen.findByRole('button', { name: 'Change the upscaler' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ }));
+    expect(
+      (within(library).getByRole('button', { name: 'Use for this job' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
+
     const memory = screen.getByLabelText('FlashVSR memory');
     expect(memory.textContent).toMatch(
       /windows of 41 frames; each starts with 8\s+frames of run-up/,
@@ -1918,17 +1958,24 @@ describe('LocalSR desktop interface', () => {
     expect(screen.queryByText(/^SeedVR2 · Labs/)).toBeNull();
     expect(screen.queryByRole('checkbox', { name: /De-flicker · Labs/i })).toBeNull();
 
-    await user.click(screen.getByRole('button', { name: 'Start selected video' }));
-    expect(api.startJobs).toHaveBeenCalledWith(
-      expect.objectContaining({ video_model_id: 'flashvsr_v11', video_hdr_mode: 'tone_map' }),
-    );
-
     // SeedVR2 keeps its own panel and note.
-    await user.selectOptions(engine, 'seedvr2_3b');
+    await pickUpscalerInLibrary(user, /^SeedVR2-3B — Labs/);
     expect(screen.getByLabelText('SeedVR2 memory').textContent).toMatch(
       /Up to 5 frames per clip · 128 px VAE tiles\./,
     );
     expect(screen.getByText(/^SeedVR2 · Labs\. Uses its own temporal processing/)).toBeTruthy();
+
+    await pickUpscalerInLibrary(user, /^FlashVSR v1\.1 — Labs/);
+    await user.click(screen.getByRole('button', { name: 'Start selected video' }));
+    expect(api.startJobs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        video_model_id: 'flashvsr_v11',
+        fix_stages: [],
+        deflicker: false,
+        video_interpolation: 'off',
+        video_hdr_mode: 'tone_map',
+      }),
+    );
   });
 
   it.each([
@@ -1959,32 +2006,111 @@ describe('LocalSR desktop interface', () => {
       snapshot.settings.device_id = deviceId;
       snapshot.settings.selected_video_model_id = 'flashvsr_v11';
       const user = await mountWith(snapshot);
-      const engine = screen.getByLabelText('Video engine');
-      const flash = within(engine).getByRole('option', { name: `FlashVSR v1.1 — Labs · ${tag}` });
-      expect((flash as HTMLOptionElement).disabled).toBe(true);
-      const seed = within(engine).getByRole('option', { name: 'SeedVR2-3B — Labs · Installed' });
-      expect((seed as HTMLOptionElement).disabled).toBe(false);
-      const notes = () =>
-        [...document.querySelectorAll('.model-output-note')].map((note) =>
-          note.textContent?.trim(),
-        );
       // A saved FlashVSR choice cannot start and says why; the panel that describes this Mac
       // stays away.
-      expect(notes()).toHaveLength(1);
-      expect(notes()[0]).toMatch(reason);
+      const warning = document.querySelector('.inline-warning');
+      expect(warning?.textContent?.trim()).toMatch(reason);
       expect(
         screen.getByRole('button', { name: 'Start selected video' }).matches(':disabled'),
       ).toBe(true);
       expect(screen.queryByLabelText('FlashVSR memory')).toBeNull();
-      await user.selectOptions(engine, 'seedvr2_3b');
+
+      await user.click(await screen.findByRole('button', { name: 'Change the upscaler' }));
+      const library = screen.getByRole('dialog', { name: 'Model library' });
+      const flashRow = within(library).getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ });
+      expect(within(flashRow).getByText(tag)).toBeTruthy();
+      expect(within(library).getByText(reason)).toBeTruthy();
+      expect(
+        (within(library).getByRole('button', { name: 'Use for this job' }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(true);
+
+      await user.click(within(library).getByRole('button', { name: /^SeedVR2-3B — Labs/ }));
+      const useButton = within(library).getByRole('button', {
+        name: 'Use for this job',
+      }) as HTMLButtonElement;
+      expect(useButton.disabled).toBe(false);
+      await user.click(useButton);
+      await waitFor(() =>
+        expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull(),
+      );
       expect(
         screen.getByRole('button', { name: 'Start selected video' }).matches(':disabled'),
       ).toBe(false);
-      // With another engine chosen, the menu's own words are enough; only an unexpected
-      // state keeps its line.
-      expect(notes()).toHaveLength(tag === 'Unavailable' ? 1 : 0);
+      expect(document.querySelector('.inline-warning')).toBeNull();
     },
   );
+
+  it('shows old temporal settings with quality quick as Custom', async () => {
+    const oldSettingsSnapshot = flashSnapshot(16);
+    oldSettingsSnapshot.settings.quality = 'quick';
+    oldSettingsSnapshot.settings.selected_video_model_id = 'seedvr2_3b';
+    await mountWith(oldSettingsSnapshot);
+    expect(document.querySelector('.enhance-pane .pane-heading span')?.textContent).toBe('Custom');
+    expect(screen.getByRole('button', { name: /^Quick/ }).getAttribute('aria-pressed')).toBe(
+      'false',
+    );
+    expect(
+      within(screen.getByRole('list', { name: 'Stages' })).getByText('SeedVR2-3B'),
+    ).toBeTruthy();
+  });
+
+  it('selects the active video model and marks it Chosen when opening the library', async () => {
+    const flashJob = flashSnapshot(16);
+    flashJob.settings.selected_video_model_id = 'flashvsr_v11';
+    const user = await mountWith(flashJob);
+    await user.click(await screen.findByRole('button', { name: 'Change the upscaler' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    const flashRow = within(library).getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ });
+    expect(flashRow.getAttribute('aria-pressed')).toBe('true');
+    expect(within(flashRow).getByText('Chosen')).toBeTruthy();
+    await user.click(within(library).getByRole('button', { name: 'Close model library' }));
+
+    // Video Restore has no video rows in For this job and no Use for this job in Video (Labs).
+    await user.click(screen.getByRole('button', { name: 'Restore' }));
+    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    const restoreLib = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(restoreLib).queryByText('Several frames at once · Labs')).toBeNull();
+    await user.click(within(restoreLib).getByRole('button', { name: /Video \(Labs\)/ }));
+    await user.click(within(restoreLib).getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ }));
+    expect(within(restoreLib).queryByRole('button', { name: 'Use for this job' })).toBeNull();
+  });
+
+  it('omits video rows from For this job and Use for this job in Photo upscale', async () => {
+    const photoSnap = readySnapshot([image('photo', true)]);
+    photoSnap.settings.task = 'upscale';
+    const photoUser = await mountWith(photoSnap);
+    await photoUser.click(await screen.findByRole('button', { name: 'Change the upscaler' }));
+    const photoLib = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(photoLib).queryByText('Several frames at once · Labs')).toBeNull();
+    await photoUser.click(within(photoLib).getByRole('button', { name: /Video \(Labs\)/ }));
+    await photoUser.click(within(photoLib).getByRole('button', { name: /^SeedVR2-3B — Labs/ }));
+    expect(within(photoLib).queryByRole('button', { name: 'Use for this job' })).toBeNull();
+  });
+
+  it('counts runnable video models in N more models under the plan row', async () => {
+    const seedOnlyMac = readySnapshot([video('clip', true)]);
+    seedOnlyMac.settings.task = 'video';
+    seedOnlyMac.capabilities.system_ram_total = 16 * 1024 ** 3;
+    const user = await mountWith(seedOnlyMac);
+    const seedOnlyButton = await screen.findByRole('button', {
+      name: /\d+ more models? in the library/,
+    });
+    const seedOnlyCount = Number(seedOnlyButton.textContent!.match(/(\d+)/)![1]);
+
+    // When FlashVSR becomes runnable on this Mac, the count grows by 1.
+    const switched = structuredClone(seedOnlyMac);
+    switched.engine!.video_engines.push('flashvsr');
+    api.refreshSnapshot.mockResolvedValue(switched);
+    (api.listenForStateChange.mock.calls[0][0] as () => void)();
+    await waitFor(() => {
+      const text = screen.getByRole('button', {
+        name: /\d+ more models? in the library/,
+      }).textContent!;
+      expect(Number(text.match(/(\d+)/)![1])).toBe(seedOnlyCount + 1);
+    });
+    void user;
+  });
 
   it('marks an unavailable video model in the library and says why', async () => {
     const snapshot = flashSnapshot(8);
@@ -3034,6 +3160,7 @@ describe('LocalSR desktop interface', () => {
   it('keeps controls locked through cancellation and unlocks after the worker stops', async () => {
     const current = readySnapshot([video('clip', true)]);
     current.settings.task = 'video';
+    current.settings.selected_model_id = 'span_photo_x4';
     current.runtime.active_job_id = 'running-video';
     api.bootstrap.mockResolvedValue(structuredClone(current));
     api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
@@ -3045,13 +3172,17 @@ describe('LocalSR desktop interface', () => {
     const cancel = await screen.findByRole('button', { name: 'Cancel' });
     await user.click(cancel);
     expect(screen.getByRole('button', { name: 'Stopping…' }).matches(':disabled')).toBe(true);
-    expect(screen.getByLabelText('Video engine').matches(':disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Change the upscaler' }).matches(':disabled')).toBe(
+      true,
+    );
     current.runtime.active_job_id = '';
     current.runtime.status_title = 'Cancelled';
     const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;
     refresh();
     await waitFor(() =>
-      expect(screen.getByLabelText('Video engine').matches(':disabled')).toBe(false),
+      expect(screen.getByRole('button', { name: 'Change the upscaler' }).matches(':disabled')).toBe(
+        false,
+      ),
     );
     expect(api.cancelJobs).toHaveBeenCalledTimes(1);
   });

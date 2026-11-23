@@ -16,7 +16,12 @@
   import FileName from './FileName.svelte';
   import { modal } from './lib/modal';
   import { fitLine, runsOnAccelerator } from './lib/neuralEngine';
-  import { videoAvailability, videoEngineName } from './lib/videoEngines';
+  import {
+    videoAvailability,
+    videoEngineName,
+    videoModelSummary,
+    videoModelsForJob,
+  } from './lib/videoEngines';
   import { estimateModelTrials, openCustomModelTutorial } from './lib/api';
   import {
     EDIT_FAMILIES,
@@ -64,6 +69,7 @@
   export let busy = false;
   export let close: () => void;
   export let useForJob: (model: CatalogModel) => void;
+  export let useVideoForJob: (model: CatalogVideoModel) => void = () => {};
   /** Remember a model for one problem (Restore first, or Restore with a chip on). */
   export let rememberFix: (model: CatalogModel, fix: Exclude<FixKind, 'faces'>) => void;
   export let forgetFix: (fix: Exclude<FixKind, 'faces'>) => void;
@@ -117,17 +123,22 @@
     (context.slot === 'fix' || (context.slot === 'primary' && restoring))
       ? context.fix
       : undefined;
-  // A fix picker opens on the model the job uses now.
+  // A fix or temporal video picker opens on the model the job uses now.
   let selectedId =
-    context.fix === undefined
-      ? ''
-      : context.slot === 'fix'
-        ? (settings.fix_stages.find((selection) => selection.fix === context.fix)?.model_id ?? '')
-        : context.slot === 'primary' &&
-            (context.task === 'denoise' ||
-              (context.task === 'video' && context.videoTask === 'denoise'))
-          ? settings.selected_model_id
-          : '';
+    context.slot === 'primary' &&
+    context.task === 'video' &&
+    context.videoTask !== 'denoise' &&
+    settings.selected_video_model_id !== 'frame_by_frame'
+      ? settings.selected_video_model_id
+      : context.fix === undefined
+        ? ''
+        : context.slot === 'fix'
+          ? (settings.fix_stages.find((selection) => selection.fix === context.fix)?.model_id ?? '')
+          : context.slot === 'primary' &&
+              (context.task === 'denoise' ||
+                (context.task === 'video' && context.videoTask === 'denoise'))
+            ? settings.selected_model_id
+            : '';
   let termsAccepted = false;
   let showHeavyEdit = false;
   let trialIds: string[] = [];
@@ -143,7 +154,11 @@
     snapshot.engine,
     snapshot.capabilities,
     settings.device_id,
-  ).unavailable;
+  );
+  $: jobVideoModels =
+    context.slot === 'primary'
+      ? videoModelsForJob(snapshot.catalog, context.task, context.videoTask)
+      : [];
   $: audioModels = snapshot.catalog.audio_models ?? [];
   $: editModels = snapshot.edit.models;
   $: customEdit = snapshot.edit.custom_model ?? undefined;
@@ -237,7 +252,13 @@
     context.slot !== 'edit' &&
     context.task &&
     context.task !== 'edit'
-      ? [{ id: 'job' as GroupId, label: 'For this job', count: jobModels.length }]
+      ? [
+          {
+            id: 'job' as GroupId,
+            label: 'For this job',
+            count: jobModels.length + jobVideoModels.length,
+          },
+        ]
       : []),
     {
       id: 'photos' as GroupId,
@@ -637,6 +658,41 @@
       </nav>
 
       <section class="list" aria-label="Models">
+        {#snippet videoRow(model: CatalogVideoModel)}
+          {@const dl = downloadMap.get(model.model_id)}
+          {@const dlError = downloadErrors[model.model_id]}
+          {@const chosen =
+            context.task === 'video' &&
+            !restoring &&
+            settings.selected_video_model_id === model.model_id}
+          <button
+            class="row"
+            type="button"
+            class:selected={selectedId === model.model_id}
+            aria-pressed={selectedId === model.model_id}
+            on:click={() => selectRow(model)}
+          >
+            <div>
+              <div class="name">{model.name}</div>
+              <div class="role">{videoModelSummary(model)}</div>
+              <div class="pills">
+                <span class="pill labs">Labs</span><span class="pill">{model.license_name}</span
+                >{#if chosen}<span class="pill quick">Chosen</span
+                  >{/if}{#if videoUnavailable[model.model_id]}<span class="pill bad"
+                    >{videoUnavailable[model.model_id]?.tag}</span
+                  >{/if}
+              </div>
+            </div>
+            <div class="right">
+              <b>{formatBytes(model.total_size_bytes)}</b>{#if dl}<span
+                  class:downloading={dl.status === 'downloading'}
+                  >{dl.status === 'queued' ? 'Waiting' : `${Math.round(dl.progress)}%`}</span
+                >{:else if dlError}<span class="error">Failed</span>{:else if model.installed}<span
+                  class="ok">Installed</span
+                >{:else}<span>Not downloaded</span>{/if}
+            </div>
+          </button>
+        {/snippet}
         {#if context.slot === 'try'}
           <div class="list-head">For this job<span>Pick 2 to 4 installed models</span></div>
           {#if trialModels.filter((model) => model.installed && !trialReason(model)).length < 2}
@@ -687,37 +743,7 @@
             >
           </div>
           {#each videoModels as model (model.model_id)}
-            {@const dl = downloadMap.get(model.model_id)}
-            {@const dlError = downloadErrors[model.model_id]}
-            <button
-              class="row"
-              type="button"
-              class:selected={selectedId === model.model_id}
-              aria-pressed={selectedId === model.model_id}
-              on:click={() => {
-                selectedId = model.model_id;
-              }}
-            >
-              <div>
-                <div class="name">{model.name}</div>
-                <div class="role">{model.description}</div>
-                <div class="pills">
-                  <span class="pill labs">Labs</span><span class="pill">{model.license_name}</span
-                  >{#if videoUnavailable[model.model_id]}<span class="pill bad"
-                      >{videoUnavailable[model.model_id]?.tag}</span
-                    >{/if}
-                </div>
-              </div>
-              <div class="right">
-                <b>{formatBytes(model.total_size_bytes)}</b>{#if dl}<span
-                    class:downloading={dl.status === 'downloading'}
-                    >{dl.status === 'queued' ? 'Waiting' : `${Math.round(dl.progress)}%`}</span
-                  >{:else if dlError}<span class="error">Failed</span
-                  >{:else if model.installed}<span class="ok">Installed</span>{:else}<span
-                    >Not downloaded</span
-                  >{/if}
-              </div>
-            </button>
+            {@render videoRow(model)}
           {/each}
         {:else if group === 'audio'}
           <div class="list-head">
@@ -895,7 +921,9 @@
         {:else}
           <div class="list-head">
             {group === 'job'
-              ? 'For this job'
+              ? jobVideoModels.length
+                ? 'Frame by frame'
+                : 'For this job'
               : group === 'installed'
                 ? `INSTALLED · ${formatBytes(installedBytes)}`
                 : groups.find((item) => item.id === group)?.label}<span
@@ -996,6 +1024,14 @@
               </button>
             {/if}
           {/each}
+          {#if group === 'job' && jobVideoModels.length}
+            <div class="list-head">
+              Several frames at once · Labs<span>use neighbouring frames · much slower</span>
+            </div>
+            {#each jobVideoModels as model (model.model_id)}
+              {@render videoRow(model)}
+            {/each}
+          {/if}
           {#if group === 'installed'}
             {#each installedAudioModels as model (model.model_id)}
               <div
@@ -1040,7 +1076,7 @@
               </div>
             {/each}
           {/if}
-          {#if !rows.length && !(group === 'installed' && installedEditModels.length)}
+          {#if !rows.length && !(group === 'job' && jobVideoModels.length) && !(group === 'installed' && installedEditModels.length)}
             <p class="library-empty">
               Nothing verified is listed here yet. Import your own file, or suggest a model on the
               project page.
@@ -1083,7 +1119,7 @@
               </p>{/if}
           </div>
         {/if}
-        {#if group === 'video' && selectedVideo}
+        {#if selectedVideo && group !== 'own'}
           <div>
             <h3>{selectedVideo.name}</h3>
             <div class="role">{selectedVideo.author} · {selectedVideo.license_name}</div>
@@ -1103,8 +1139,8 @@
               <dd>{videoEngineName(selectedVideo.engine_kind)}</dd>
             </div>
             <div>
-              <dt>Window</dt>
-              <dd>{selectedVideo.temporal_window} frames</dd>
+              <dt>Works on</dt>
+              <dd>{selectedVideo.temporal_window} frames at once</dd>
             </div>
           </dl>
           {#if videoUnavailable[selectedVideo.model_id]}
@@ -1135,6 +1171,14 @@
               {/if}
             {:else}
               <div class="installed-badge">✓ Installed · integrity checked before use</div>
+            {/if}
+            {#if context.slot === 'primary' && context.task === 'video' && !restoring}
+              <button
+                class="button"
+                type="button"
+                disabled={busy || Boolean(videoUnavailable[selectedVideo.model_id])}
+                on:click={() => useVideoForJob(selectedVideo)}>Use for this job</button
+              >
             {/if}
           </div>
         {:else if selectedAudio && group !== 'own'}

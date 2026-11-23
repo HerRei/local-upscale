@@ -104,7 +104,7 @@
   import { applyWorkerEnvelope, resultPreviewForSelectedMedia } from './lib/workerEvents';
   import { formatBytes, formatDuration, formatVideoClock } from './lib/format';
   import { plainEngineError, recommendedEngineOffer } from './lib/engines';
-  import { videoAvailability } from './lib/videoEngines';
+  import { videoAvailability, videoModelShortName, videoModelsForJob } from './lib/videoEngines';
   import { demoSnapshot } from './lib/demo';
   import { modal } from './lib/modal';
   import {
@@ -750,10 +750,9 @@
     snapshot.engine,
     snapshot.capabilities,
     settings.device_id,
-    usingTemporalVideo ? settings.selected_video_model_id : '',
   );
   $: temporalUnavailableReason =
-    (selectedVideoModel && videoAvailable.unavailable[selectedVideoModel.model_id]?.reason) ?? '';
+    (selectedVideoModel && videoAvailable[selectedVideoModel.model_id]?.reason) ?? '';
   $: flashVideo = usingTemporalVideo && selectedVideoModel?.engine_kind === 'flashvsr';
   $: videoMemory = snapshot.runtime.video_memory;
   $: videoMemoryJob = snapshot.jobs.find((job) => job.id === videoMemory?.job_id);
@@ -1270,8 +1269,9 @@
   // Settings saved before the model library exist without a quality; infer it
   // from the selection so Quick/Best light up correctly after an update.
   $: activeQuality = ((): Quality => {
+    if (usingTemporalVideo) return 'custom';
     if (settings.quality) return settings.quality;
-    if (usingTemporalVideo || settings.selected_model_id === '__custom__') return 'custom';
+    if (settings.selected_model_id === '__custom__') return 'custom';
     if (settings.fix_stages.length) return 'custom';
     if (bestModel && settings.selected_model_id === bestModel.model_id) return 'best';
     if (quickModel && settings.selected_model_id === quickModel.model_id) return 'quick';
@@ -3082,6 +3082,9 @@
     }
     updateSettings({
       selected_model_id: '__custom__',
+      ...(settings.task === 'video' && settings.selected_video_model_id !== 'frame_by_frame'
+        ? { selected_video_model_id: 'frame_by_frame' }
+        : {}),
       custom_model_path: path,
       custom_models: models,
       allow_unsafe_pickle_model: false,
@@ -3112,15 +3115,25 @@
     if (path) selectCustomModel(path);
   }
 
-  function selectVideoEngine(modelId: string): void {
-    updateSettings({ selected_video_model_id: modelId });
+  function useVideoModelForJob(model: CatalogVideoModel | undefined): void {
+    if (!model) return;
+    updateSettings({
+      selected_video_model_id: model.model_id,
+      quality: 'custom',
+      output_scale: Math.min(4, Math.max(2, settings.output_scale)),
+      enable_face_model: false,
+    });
     termsAccepted = {};
+    libraryOpen = false;
   }
 
   function selectPrimaryModel(modelId: string): void {
     const model = snapshot.catalog.models.find((candidate) => candidate.model_id === modelId);
     updateSettings({
       selected_model_id: modelId,
+      ...(settings.task === 'video' && settings.selected_video_model_id !== 'frame_by_frame'
+        ? { selected_video_model_id: 'frame_by_frame' }
+        : {}),
       output_scale: restoring
         ? 1
         : model
@@ -4389,7 +4402,7 @@
                   ? editFamilyLabel(editModel.family)
                   : 'Choose a model'
                 : settings.task
-                  ? `${activeQuality === 'custom' ? 'Custom' : activeQuality === 'best' ? 'Best' : 'Quick'}${restoring ? '' : settings.content === 'illustration' ? ' · Illustration' : ' · Photo'}`
+                  ? `${activeQuality === 'custom' ? 'Custom' : activeQuality === 'best' ? 'Best' : 'Quick'}${restoring || usingTemporalVideo ? '' : settings.content === 'illustration' ? ' · Illustration' : ' · Photo'}`
                   : 'Choose a task'}</span
         >
       </div>
@@ -4484,7 +4497,7 @@
                   video is preserved.
                 </p>
                 {#if !hdrModelCompatible}<p class="inline-warning">
-                    Select Frame-by-frame and a HAT model for HDR preservation.
+                    Choose a HAT model for HDR preservation.
                   </p>{/if}
               {:else}
                 <p class="model-description">
@@ -4774,37 +4787,6 @@
                     >{/if}
                 </span>
               </div>
-              {#if settings.task === 'video' && !restoring}
-                <label class="field-label" for="video-engine">Video engine</label>
-                <select
-                  id="video-engine"
-                  value={settings.selected_video_model_id}
-                  on:change={(event) => selectVideoEngine(event.currentTarget.value)}
-                >
-                  <option value="frame_by_frame">Frame-by-frame · compatible</option>
-                  {#each snapshot.catalog.video_models as model}
-                    {@const unavailable = videoAvailable.unavailable[model.model_id]}
-                    <option value={model.model_id} disabled={Boolean(unavailable)}
-                      >{model.name}{unavailable
-                        ? ` · ${unavailable.tag}`
-                        : model.installed
-                          ? ' · Installed'
-                          : ''}</option
-                    >{/each}
-                </select>
-                {#each videoAvailable.notes as note (note)}<p
-                    class="model-output-note"
-                    role="status"
-                  >
-                    {note}
-                  </p>{/each}
-                {#if selectedMedia?.hdr_format && !hdrPreservationAvailable}
-                  <p class="model-output-note" role="status">
-                    SDR output selected. This model cannot preserve HDR.
-                  </p>
-                {/if}
-              {/if}
-
               <div
                 class="plan"
                 class:movable={imageFixes.length > 1}
@@ -4821,11 +4803,19 @@
                   {@const changeSlot =
                     stage.role === 'fix'
                       ? stage.fix !== 'colour' && stage.fix && 'fix'
-                      : stage.role === 'primary' && !stage.videoModel
+                      : stage.role === 'primary'
                         ? stage.editModel
                           ? 'edit'
                           : 'primary'
                         : undefined}
+                  {@const moreVideoCount =
+                    changeSlot === 'primary'
+                      ? videoModelsForJob(snapshot.catalog, settings.task, videoTask).filter(
+                          (model) =>
+                            !videoAvailable[model.model_id] &&
+                            model.model_id !== stage.videoModel?.model_id,
+                        ).length
+                      : 0}
                   {@const moreModelCount =
                     changeSlot && settings.task !== 'edit'
                       ? modelsAvailableBeyondSelection(
@@ -4837,13 +4827,13 @@
                             videoTask,
                           ),
                           stage.model?.model_id ?? '',
-                        )
+                        ) + moreVideoCount
                       : 0}
                   {@const tryOthers = stage.role === 'primary' && canTryOthers}
                   {@const name = stage.model
                     ? displayName(stage.model)
                     : stage.videoModel
-                      ? stage.videoModel.name
+                      ? videoModelShortName(stage.videoModel)
                       : stage.interpolationModel
                         ? stage.interpolationModel.name.split(' — ')[0]
                         : stage.audioModel
@@ -4874,7 +4864,7 @@
                           .filter(Boolean)
                           .join(' · ')
                       : stage.videoModel
-                        ? 'Labs'
+                        ? 'Labs · several frames at once'
                         : stage.interpolationModel
                           ? [
                               settings.video_interpolation && settings.video_interpolation !== 'off'
@@ -5094,6 +5084,14 @@
               {#if hasNothingToRun}
                 <p class="inline-warning" role="status">{nothingToRunReason}</p>
               {/if}
+              {#if usingTemporalVideo && temporalUnavailableReason}
+                <p class="inline-warning" role="status">{temporalUnavailableReason}</p>
+              {/if}
+              {#if settings.task === 'video' && !restoring && selectedMedia?.hdr_format && !hdrPreservationAvailable}
+                <p class="model-output-note" role="status">
+                  SDR output selected. This model cannot preserve HDR.
+                </p>
+              {/if}
               {#if !fixPlanSupported && snapshot.engine}<p class="inline-warning" role="status">
                   This engine runs one fix at a time. Update LocalSR to run several.
                 </p>{/if}
@@ -5116,7 +5114,11 @@
                 {/if}
               {/if}
               {#if activeQuality === 'custom' && settings.task !== 'edit'}
-                <p class="model-note">Chosen by you. Pick Quick or Best to go back.</p>
+                <p class="model-note">
+                  {usingTemporalVideo
+                    ? 'Chosen by you. Restore first, De-flicker and Frame rate need a frame-by-frame model: pick Quick or Best to go back.'
+                    : 'Chosen by you. Pick Quick or Best to go back.'}
+                </p>
               {:else if downloads.stages.length}
                 <p class="model-note">
                   Models download once when you start and stay on this computer. Your {settings.task ===
@@ -5449,6 +5451,7 @@
     trialBusy={startingJob || preparing}
     {runTrials}
     useForJob={useModelForJob}
+    useVideoForJob={useVideoModelForJob}
     rememberFix={rememberFixModel}
     forgetFix={forgetFixModel}
     {useEditModel}

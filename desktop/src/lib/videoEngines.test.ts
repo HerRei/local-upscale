@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import rawCatalog from '../../src-tauri/resources/model-catalog.json';
-import type { DeviceInfo } from './types';
-import { videoAvailability, videoEngineName, videoModelUnavailable } from './videoEngines';
+import type { CatalogManifest, DeviceInfo } from './types';
+import {
+  videoAvailability,
+  videoEngineName,
+  videoModelShortName,
+  videoModelSummary,
+  videoModelUnavailable,
+  videoModelsForJob,
+} from './videoEngines';
 
 const GIB = 1024 ** 3;
 const flash = { model_id: 'flashvsr_v11', engine_kind: 'flashvsr', min_unified_memory_gb: 16 };
@@ -38,9 +45,8 @@ describe('FlashVSR availability', () => {
 
   it('does not run on the CPU', () => {
     expect(videoModelUnavailable(flash, macEngine, mac(16), 'cpu')).toEqual({
-      reason: 'FlashVSR cannot run on this device. Choose frame-by-frame video or the Apple GPU.',
+      reason: 'FlashVSR cannot run on this device. Choose a frame-by-frame model or the Apple GPU.',
       tag: 'Apple GPU only',
-      quiet: true,
     });
   });
 
@@ -55,7 +61,6 @@ describe('FlashVSR availability', () => {
     const small = {
       reason: 'FlashVSR needs 16 GB of memory. This Mac has 8 GB.',
       tag: 'Needs 16 GB',
-      quiet: true,
     };
     expect(videoModelUnavailable(flash, macEngine, mac(8), 'mps')).toEqual(small);
     expect(videoModelUnavailable(flash, macEngine, mac(8), 'cpu')).toEqual(small);
@@ -78,13 +83,11 @@ describe('FlashVSR availability', () => {
     expect(videoModelUnavailable(flash, seedOnly, pc, 'cuda:0')).toEqual({
       reason: 'FlashVSR needs an Apple silicon Mac with 16 GB of memory.',
       tag: 'Apple silicon only',
-      quiet: true,
     });
     // On a Mac that should run it, a missing engine is unexpected and says so.
     expect(videoModelUnavailable(flash, seedOnly, mac(16), 'mps')).toEqual({
       reason: 'FlashVSR needs the MLX runtime, which this installation does not have.',
       tag: 'Unavailable',
-      quiet: false,
     });
   });
 
@@ -93,16 +96,15 @@ describe('FlashVSR availability', () => {
       expect(videoModelUnavailable(flash, engine, mac(16), 'mps')).toEqual({
         reason: 'FlashVSR is unavailable until the engine has started.',
         tag: 'Unavailable',
-        quiet: true,
       });
   });
 });
 
 describe('SeedVR2 availability', () => {
   const notListed =
-    'This installation supports frame-by-frame video. SeedVR2 requires a compatible CUDA, ROCm or Metal engine.';
+    'This installation supports frame-by-frame models. SeedVR2 requires a compatible CUDA, ROCm or Metal engine.';
   const wrongDevice =
-    'SeedVR2 cannot run on this device. Choose frame-by-frame video or a compatible CUDA, ROCm or Metal device.';
+    'SeedVR2 cannot run on this device. Choose a frame-by-frame model or a compatible CUDA, ROCm or Metal device.';
 
   it.each(['mps', 'cpu', 'cuda', 'cuda:0', 'cuda:1'])('runs on %s when listed', (id) => {
     expect(videoModelUnavailable(seed, seedOnly, pc, id)).toBeUndefined();
@@ -112,13 +114,12 @@ describe('SeedVR2 availability', () => {
     expect(videoModelUnavailable(seed, seedOnly, pc, id)).toEqual({
       reason: wrongDevice,
       tag: 'Unavailable',
-      quiet: false,
     });
   });
 
   it('is unavailable when the engine does not list it, or has not started', () => {
     const others = { video_engines: ['spandrel_image', 'flashvsr'] };
-    const state = { reason: notListed, tag: 'Unavailable', quiet: false };
+    const state = { reason: notListed, tag: 'Unavailable' };
     expect(videoModelUnavailable(seed, others, pc, 'cuda:0')).toEqual(state);
     expect(videoModelUnavailable(seed, null, pc, 'cuda:0')).toEqual(state);
   });
@@ -128,38 +129,18 @@ describe('SeedVR2 availability', () => {
   });
 });
 
-describe('the engine menu', () => {
+describe('per-model availability and library helpers', () => {
   const models = [seed, seedFp8, flash];
   const ids = (state: ReturnType<typeof videoAvailability>) =>
-    Object.keys(state.unavailable).filter((id) => state.unavailable[id]);
+    Object.keys(state).filter((id) => state[id]);
 
   it('judges each model by its own engine', () => {
     const onMac = videoAvailability(models, macEngine, mac(16), 'mps');
     expect(ids(onMac)).toEqual([]);
-    expect(onMac.notes).toEqual([]);
 
     const onPc = videoAvailability(models, seedOnly, pc, 'cuda:0');
     expect(ids(onPc)).toEqual(['flashvsr_v11']);
-    expect(onPc.unavailable.flashvsr_v11?.tag).toBe('Apple silicon only');
-  });
-
-  it('keeps a reason its tag already gives out of the notes, unless that model is chosen', () => {
-    expect(videoAvailability(models, seedOnly, pc, 'cuda:0').notes).toEqual([]);
-    expect(videoAvailability(models, seedOnly, pc, 'cuda:0', 'seedvr2_3b').notes).toEqual([]);
-    expect(videoAvailability(models, seedOnly, pc, 'cuda:0', 'flashvsr_v11').notes).toEqual([
-      'FlashVSR needs an Apple silicon Mac with 16 GB of memory.',
-    ]);
-    expect(videoAvailability(models, macEngine, mac(8), 'mps', 'flashvsr_v11').notes).toEqual([
-      'FlashVSR needs 16 GB of memory. This Mac has 8 GB.',
-    ]);
-  });
-
-  it('says a shared reason once, however many models it covers', () => {
-    const cpuOnly = { video_engines: ['spandrel_image'] };
-    const state = videoAvailability(models, cpuOnly, pc, 'cpu');
-    expect(ids(state)).toEqual(['seedvr2_3b', 'seedvr2_3b_fp8', 'flashvsr_v11']);
-    expect(state.notes).toHaveLength(1);
-    expect(state.notes[0]).toMatch(/^This installation supports frame-by-frame video\. SeedVR2/);
+    expect(onPc.flashvsr_v11?.tag).toBe('Apple silicon only');
   });
 
   it('covers every video model of the shipped catalog', () => {
@@ -169,7 +150,7 @@ describe('the engine menu', () => {
       new Set(['seedvr2', 'flashvsr']),
     );
     const state = videoAvailability(shipped, macEngine, mac(16), 'mps');
-    expect(Object.keys(state.unavailable)).toContain('flashvsr_v11');
+    expect(Object.keys(state)).toContain('flashvsr_v11');
     expect(ids(state)).toEqual([]);
   });
 
@@ -183,5 +164,30 @@ describe('the engine menu', () => {
     );
     expect(videoEngineName('seedvr2')).toBe('SeedVR2');
     expect(videoEngineName('flashvsr')).toBe('FlashVSR');
+  });
+
+  it('lists video models only for video Upscale', () => {
+    const catalog = rawCatalog as unknown as CatalogManifest;
+    expect(videoModelsForJob(catalog, 'video', 'upscale')).toHaveLength(3);
+    expect(videoModelsForJob(catalog, 'video', 'denoise')).toEqual([]);
+    expect(videoModelsForJob(catalog, 'upscale')).toEqual([]);
+    expect(videoModelsForJob(catalog, 'denoise')).toEqual([]);
+    expect(videoModelsForJob(catalog, 'edit')).toEqual([]);
+    expect(videoModelsForJob(catalog, '')).toEqual([]);
+  });
+
+  it('derives short names and row summaries for catalog video models', () => {
+    expect(videoModelShortName({ name: 'FlashVSR v1.1 — Labs' })).toBe('FlashVSR v1.1');
+    expect(videoModelShortName({ name: 'SeedVR2-3B FP8 — Labs' })).toBe('SeedVR2-3B FP8');
+    expect(videoModelSummary({ summary: 'Given summary', description: 'Ignored. More.' })).toBe(
+      'Given summary',
+    );
+    expect(
+      videoModelSummary({
+        summary: '',
+        description:
+          'Experimental one-step diffusion video upscaling (Tiny pipeline). Runs on MLX.',
+      }),
+    ).toBe('Experimental one-step diffusion video upscaling (Tiny pipeline).');
   });
 });

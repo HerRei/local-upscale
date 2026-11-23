@@ -282,7 +282,7 @@ export function resolvePlan(
     stages.push({
       kind: 'video',
       role: 'primary',
-      label: 'Video',
+      label: settings.video_target_resolution ? 'Upscale' : `Upscale ×${settings.output_scale}`,
       videoModel: video,
       installed: video.installed,
       canDownload: !video.installed && video.automated_download_allowed,
