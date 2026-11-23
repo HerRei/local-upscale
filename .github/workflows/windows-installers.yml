@@ -222,8 +222,10 @@ jobs:
           $version = python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
           $artifact = Join-Path "$env:LSR\out" "LocalSR-v$version-${{ matrix.suffix }}"
           $user = "lsrstandard"
-          $password = "Lsr-" + [guid]::NewGuid().ToString("N") + "-9a!"
-          $secure = ConvertTo-SecureString $password -AsPlainText -Force
+          # A throwaway credential for this run only, from the system random generator.
+          $bytes = New-Object byte[] 24
+          [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+          $secure = ConvertTo-SecureString ([Convert]::ToBase64String($bytes) + "Aa1+") -AsPlainText -Force
           New-LocalUser -Name $user -Password $secure -PasswordNeverExpires | Out-Null
           if ((Get-LocalGroupMember -Group Administrators).Name -match "\\$user$") { throw "$user must not be an administrator" }
           $credential = New-Object System.Management.Automation.PSCredential(".\$user", $secure)
