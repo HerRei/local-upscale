@@ -146,7 +146,8 @@ and no network access. Videos, Restore and the larger models stay in the desktop
   (28 MB, [release notes and checksum](https://github.com/HerRei/local-upscale/releases/tag/mobile-v1.0.0)),
   also on [itch.io](https://herrei.itch.io/localsr). Open the file on the phone and
   allow the install once.
-- **iPhone:** iOS 27 or later, on the App Store (in review).
+- **iPhone:** iOS 27 or later,
+  [on the App Store](https://apps.apple.com/app/id6837801876).
 
 More on the [phone app page](https://herrei.github.io/localsr/phone/). The source
 is in [mobile/](mobile/README.md), and its changes are in
