@@ -22,6 +22,9 @@
   export fails (#115).
 - **Release process.** Files can be attached to a draft release, and signing needs
   less temporary disk space (#114).
+- **Windows installer.** Offers **Just me** (default, no administrator rights needed)
+  and **Everyone on this computer** (UAC prompt), while still honouring `/D=` in both
+  modes.
 
 ## [0.5.2-beta] - 2026-11-23
 

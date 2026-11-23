@@ -643,6 +643,20 @@ fn release_fixture() -> serde_json::Value {
     serde_json::from_str(include_str!("../../tests/fixtures/update-release.json")).unwrap()
 }
 
+fn host_release_fixture() -> serde_json::Value {
+    #[cfg(windows)]
+    {
+        serde_json::from_str(include_str!(
+            "../../tests/fixtures/update-release-windows.json"
+        ))
+        .unwrap()
+    }
+    #[cfg(not(windows))]
+    {
+        release_fixture()
+    }
+}
+
 fn signed_package() -> (Vec<u8>, DownloadFile, String) {
     let value = release_fixture();
     let data = value["package"]["data"]
@@ -787,8 +801,11 @@ fn windows_and_macos_install_the_bytes_they_verified() {
     assert!(read_verified(&path, &file, &public_key).is_err());
 }
 
-fn engine_fixture(directory: &Path) -> (EngineUpdate, String) {
-    let value = release_fixture();
+fn engine_fixture_from(
+    value: &serde_json::Value,
+    id: &str,
+    directory: &Path,
+) -> (EngineUpdate, String) {
     let engine = &value["engine"];
     let manifest = engine["manifest"].as_str().unwrap();
     fs::write(directory.join("engine-payload.json"), manifest).unwrap();
@@ -808,7 +825,7 @@ fn engine_fixture(directory: &Path) -> (EngineUpdate, String) {
         });
     }
     let update = EngineUpdate {
-        id: "linux-x86_64-rocm-0123456789ab".into(),
+        id: id.into(),
         manifest: DownloadFile {
             name: "engine-payload.json".into(),
             url: "https://example.test/engine-payload.json".into(),
@@ -821,6 +838,16 @@ fn engine_fixture(directory: &Path) -> (EngineUpdate, String) {
     (update, value["public_key"].as_str().unwrap().into())
 }
 
+fn engine_fixture(directory: &Path) -> (EngineUpdate, String) {
+    let value = host_release_fixture();
+    let id = if cfg!(windows) {
+        "windows-x86_64-cuda-0123456789ab"
+    } else {
+        "linux-x86_64-rocm-0123456789ab"
+    };
+    engine_fixture_from(&value, id, directory)
+}
+
 #[test]
 fn an_engine_package_is_installed_from_the_manifest_bytes_that_were_verified() {
     let root = tempfile::tempdir().unwrap();
@@ -829,7 +856,7 @@ fn an_engine_package_is_installed_from_the_manifest_bytes_that_were_verified() {
     fs::create_dir_all(destination.parent().unwrap()).unwrap();
     install_engine_package(root.path(), &engine, &public_key, &destination).unwrap();
     assert_eq!(
-        fs::read(destination.join("localsr-worker")).unwrap(),
+        fs::read(destination.join(worker_executable_name())).unwrap(),
         b"worker"
     );
 
@@ -1251,10 +1278,6 @@ fn round2_install_space_is_authenticated() {
     .is_err());
 }
 
-#[cfg_attr(
-    windows,
-    ignore = "the signed test engine carries a Linux worker without .exe"
-)]
 #[test]
 fn round4_a_missing_versioned_engine_is_fetched_again_not_replaced_by_the_bundle() {
     let (mut config, contract) = statement_contract();
@@ -1279,10 +1302,6 @@ fn round4_a_missing_versioned_engine_is_fetched_again_not_replaced_by_the_bundle
         panic!("the bundled engine must not stand in for the delivered one")
     })
     .unwrap();
-    // The signed fixture is a Linux package. Adapt its extracted filename to the
-    // host so the rest of this test exercises Windows engine discovery as well.
-    #[cfg(windows)]
-    fs::rename(worker.with_file_name("localsr-worker"), &worker).unwrap();
     assert_eq!(fs::read(&worker).unwrap(), b"worker");
     assert!(worker.starts_with(root.path().join("engines").join(&id)));
     // An extracted directory without verified metadata is not trusted.
@@ -1341,7 +1360,7 @@ fn statement_contract() -> (UpdateConfig, ReleaseContract) {
         kind: "native".into(),
     };
     let root = tempfile::tempdir().unwrap();
-    let (engine, _) = engine_fixture(root.path());
+    let (engine, _) = engine_fixture_from(&value, "linux-x86_64-rocm-0123456789ab", root.path());
     let contract = ReleaseContract {
         channel: "beta".into(),
         backend: "rocm".into(),
@@ -2144,10 +2163,6 @@ fn a_damaged_compiled_copy_keeps_the_valid_selected_engine() {
     );
 }
 
-#[cfg_attr(
-    windows,
-    ignore = "the signed test engine carries a Linux worker without .exe"
-)]
 #[test]
 fn staged_engine_verifies_before_replacing_existing_engine() {
     let root = tempfile::tempdir().unwrap();
@@ -2184,4 +2199,108 @@ fn staged_engine_verifies_before_replacing_existing_engine() {
     .unwrap();
     assert_eq!(fs::read(installed).unwrap(), b"worker");
     assert!(!existing.join("old").exists());
+}
+
+#[test]
+fn app_update_replacing_running_same_id_engine_stops_worker_before_moving_its_folder() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(root.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let downloads = root.path().join("downloads");
+    fs::create_dir_all(&downloads).unwrap();
+    let (engine, public_key) = engine_fixture(&downloads);
+    let id = engine.id.clone();
+    let backend = if cfg!(windows) { "cuda" } else { "rocm" };
+    let config = UpdateConfig {
+        public_key,
+        feed: "https://herrei.github.io/localsr/updates".into(),
+        backend: backend.into(),
+        engine_id: id.clone(),
+        kind: "native".into(),
+    };
+    let worker = paths
+        .next_root
+        .join("engines")
+        .join(&id)
+        .join("engine")
+        .join(worker_executable_name());
+    fs::create_dir_all(worker.parent().unwrap()).unwrap();
+    fs::write(&worker, b"old").unwrap();
+    write_engine_meta(
+        &paths.next_root,
+        &EngineMeta {
+            id: id.clone(),
+            backend: backend.into(),
+            os: std::env::consts::OS.into(),
+            arch: std::env::consts::ARCH.into(),
+            protocol_version: PROTOCOL_VERSION,
+            handshake_passed: true,
+            verified_install: true,
+            version: "0.3.6-beta".into(),
+            files: test_engine_files(&paths.next_root, &id),
+        },
+    )
+    .unwrap();
+    // Corrupt the size of the installed file while keeping it active so the same-id
+    // update must replace `engines/<id>` while the worker is still running from it.
+    fs::write(&worker, b"old-corrupt").unwrap();
+    fs::write(paths.next_root.join("active-engine.txt"), &id).unwrap();
+    *lock(&state.worker.verified_run).unwrap() = Some(worker::VerifiedRun::for_test(
+        worker.clone(),
+        Some(id.clone()),
+        None,
+    ));
+    state.worker.pid.store(4242, Ordering::SeqCst);
+
+    let observer = {
+        let state = state.clone();
+        let worker = worker.clone();
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !state.worker.shutting_down.load(Ordering::SeqCst) {
+                if std::time::Instant::now() > deadline {
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            // The old folder is still in place when the running worker is asked to stop.
+            let seen = fs::read(&worker).ok();
+            state.worker.pid.store(0, Ordering::SeqCst);
+            seen
+        })
+    };
+
+    let _engine_files = lock(&state.worker.engine_files).unwrap();
+    let mut stopped_for_engine = false;
+    let (_, swap) = prepare_update_engine_for(
+        &config,
+        &id,
+        backend,
+        Some(&engine),
+        &downloads,
+        &paths.next_root,
+        || panic!("damaged active same-id engine must be replaced from the update package"),
+        |_| Ok(()),
+        |files| {
+            Some(EngineMeta {
+                id: id.clone(),
+                backend: backend.into(),
+                os: std::env::consts::OS.into(),
+                arch: std::env::consts::ARCH.into(),
+                protocol_version: PROTOCOL_VERSION,
+                handshake_passed: true,
+                verified_install: true,
+                version: "0.3.7-beta".into(),
+                files: files.to_vec(),
+            })
+        },
+        Some("0.3.7-beta"),
+        || stop_running_engine_for_publish(&state, &id, &mut stopped_for_engine),
+    )
+    .unwrap();
+    assert!(stopped_for_engine);
+    assert_eq!(observer.join().unwrap(), Some(b"old-corrupt".to_vec()));
+    assert_eq!(fs::read(&worker).unwrap(), b"worker");
+    swap.unwrap().rollback().unwrap();
+    assert_eq!(fs::read(&worker).unwrap(), b"old-corrupt");
 }

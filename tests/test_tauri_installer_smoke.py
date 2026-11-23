@@ -111,11 +111,12 @@ def test_windows_smoke_uses_installed_host_without_starting_webview(
 
     def fake_run(command, **_kwargs):
         calls.append(command)
-        if "/S" in command:
+        if "/S" in command and any(value.startswith("/D=") for value in command):
             install_argument = next(value for value in command if value.startswith("/D="))
             install_dir = Path(install_argument.removeprefix("/D="))
             install_dir.mkdir(parents=True)
             write_pe(install_dir / "LocalSR.exe", 0x8664)
+            write_pe(install_dir / "uninstall.exe", 0x014C)
             worker = install_dir / "engine" / "localsr-worker.exe"
             write_pe(worker, 0x8664)
         elif command[1:] == ["--headless-smoke-test"]:
@@ -129,7 +130,17 @@ def test_windows_smoke_uses_installed_host_without_starting_webview(
     monkeypatch.setattr(smoke, "run", fake_run)
     smoke.smoke_windows(artifact, report, {}, 240)
 
-    assert calls[1][1:] == ["--headless-smoke-test"]
+    install_calls = [c for c in calls if "/S" in c and any(v.startswith("/D=") for v in c)]
+    assert len(install_calls) == 2
+    assert "/AllUsers" not in install_calls[0]
+    assert "/AllUsers" in install_calls[1]
+    assert [c[1:] for c in calls if c[1:] == ["--headless-smoke-test"]] == [
+        ["--headless-smoke-test"],
+        ["--headless-smoke-test"],
+    ]
+    uninstall_calls = [c for c in calls if Path(c[0]).name == "uninstall.exe"]
+    assert len(uninstall_calls) == 2
+    assert all(c[1] == "/S" and c[2].startswith("_?=") for c in uninstall_calls)
     evidence = json.loads(report.read_text(encoding="utf-8"))["package_architecture"]
     assert evidence["container"]["architecture"] == "x86"
     assert {item["architecture"] for item in evidence["native_payloads"]} == {"x86_64"}

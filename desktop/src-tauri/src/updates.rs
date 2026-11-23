@@ -2142,6 +2142,7 @@ fn prepare_update_engine(
         |_| Ok(()),
         |_| None,
         None,
+        || Ok(()),
     )
     .map(|(executable, _)| executable)
 }
@@ -2552,6 +2553,18 @@ pub(crate) fn install_verified_engine(
     .map(|swap| swap.executable())
 }
 
+fn stop_running_engine_for_publish(
+    state: &AppState,
+    engine_id: &str,
+    stopped: &mut bool,
+) -> AppResult<()> {
+    if !*stopped && worker::last_run_engine_id(state).as_deref() == Some(engine_id) {
+        *stopped = true;
+        worker::stop_for_engine_switch(state)?;
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn prepare_update_engine_for(
     config: &UpdateConfig,
@@ -2564,6 +2577,7 @@ fn prepare_update_engine_for(
     handshake: impl FnOnce(&Path) -> AppResult<()>,
     installed_meta: impl FnOnce(&[crate::engine_payload::InstalledEngineFile]) -> Option<EngineMeta>,
     app_version: Option<&str>,
+    mut stop_before_publish: impl FnMut() -> AppResult<()>,
 ) -> AppResult<(PathBuf, Option<EngineSwap>)> {
     if !engine_needs_package_for(next_root, config, engine_id, engine_backend) {
         if engine_backend != config.backend && !engine_backend.is_empty() {
@@ -2585,7 +2599,11 @@ fn prepare_update_engine_for(
         return Ok((executable, None));
     }
     let engine = engine_package.ok_or_else(|| invalid("The changed engine has no package"))?;
-    // The caller holds `engine_files`.
+    // The caller holds `engine_files`. If a backup needs restoration over the target
+    // folder, stop any worker running from it first so Windows does not lock it.
+    if engine_directory_exists(&engine_backup_path(&next_root.join("engines"), engine_id))? {
+        stop_before_publish()?;
+    }
     crate::engine_manager::recover_interrupted_reimport(next_root, engine_id)?;
     let staged = stage_verified_engine(
         next_root,
@@ -2597,6 +2615,7 @@ fn prepare_update_engine_for(
         std::env::consts::ARCH,
         handshake,
     )?;
+    stop_before_publish()?;
     let meta = installed_meta(&staged.files);
     let swap = staged.publish(meta.as_ref(), app_version)?;
     Ok((swap.executable(), Some(swap)))
@@ -2653,7 +2672,8 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
     status.message = "Backing up data and preparing the verified update…".into();
     publish(state, app, &mut status);
     let engine_files = lock(&state.worker.engine_files)?;
-    let (_, engine_swap) = prepare_update_engine_for(
+    let mut stopped_for_engine = false;
+    let prepared = prepare_update_engine_for(
         config,
         &checked.engine_id,
         &checked.engine_backend,
@@ -2685,7 +2705,24 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
             })
         },
         Some(&checked.update.version),
-    )?;
+        || stop_running_engine_for_publish(state, &checked.engine_id, &mut stopped_for_engine),
+    );
+    let (_, engine_swap) = match prepared {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            drop(engine_files);
+            if stopped_for_engine {
+                if let Err(resume) = resume_after_failed_install(
+                    state,
+                    || Ok(()),
+                    || worker::start_worker(state.clone(), app.clone()),
+                ) {
+                    eprintln!("LocalSR: could not resume after the failed update: {resume}");
+                }
+            }
+            return Err(error);
+        }
+    };
     let active_file = state.paths.next_root.join("active-engine.txt");
     let previous_engine = fs::read(&active_file).ok();
     let result = (|| -> AppResult<()> {

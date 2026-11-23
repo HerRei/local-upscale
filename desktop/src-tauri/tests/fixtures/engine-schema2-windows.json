@@ -1,0 +1,46 @@
+{
+  "public_key": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZDNkY2MzYxNkM3MzcyMzEKUldSc2IyTmhiSE55TVlxSTQ5MTBDZkdWL1ZMYkxUeTZYWExLWndtL0haUVNHL04waUFHMEQyOWMK",
+  "part": {
+    "name": "LocalSR-test.engine.tar.gz.part-0001",
+    "data": "H4sIAAAAAAACE+3TMQ7CMAyFYc+cohdoldAA5ylgQdVApKSoHJ8AC+rCApWq/t9iyx48WM+HQ+NTLIcQO42V3lV+zmRb5141G9fn9qPPc2udXUthZAK31Dcxn5dlev9dsFCXcFRf7dvrH298zb8d5d/sNrUj/5P9vxi0PZ37tCIPAAAAAAAAAAAAAAAAc/MA8RcTewAoAAA=",
+    "sha256": "023a930cbce1601c35347b848a2f855b55daaa8e71daea9f72745260f2fccf7e",
+    "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSc2IyTmhiSE55TWFCNHYva1RKbStWa3ZaK0lzc2FwMXVhenZNU0NRbC94OHI1czFpOG5nU1MyaTZNV2Z6bndNMHJYMVk4dU5iRFlkTUMyK3JYaGd1K2krOGJJeERSVUFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDowCWZpbGU6ZmlsZQpMbFlGWFNqaHNRZElUZkpLaFU2UTBQOTFiTWlRL092dGZrYk1jVGZFVk1Fb2pmRmZUOXVFcVpNb1oxN3NUeDNJMEdPUkM4dEhzSGJJenEyb2kxaU5EQT09Cg=="
+  },
+  "cases": {
+    "cuda_052": {
+      "manifest": "{\n  \"arch\": \"x86_64\",\n  \"backend\": \"CUDA\",\n  \"engine_id\": \"windows-x86_64-cuda-v2\",\n  \"file_count\": 2,\n  \"format\": \"tar.gz.parts\",\n  \"os\": \"windows\",\n  \"parts\": [\n    {\n      \"filename\": \"LocalSR-test.engine.tar.gz.part-0001\",\n      \"sha256\": \"023a930cbce1601c35347b848a2f855b55daaa8e71daea9f72745260f2fccf7e\",\n      \"size\": 152\n    }\n  ],\n  \"protocol_version\": 1,\n  \"schema_version\": 2,\n  \"unpacked_bytes\": 20,\n  \"version\": \"0.5.2-beta\"\n}\n",
+      "manifest_sha256": "f27e400fec1c0ab2d72febc2b5e7f855fbe39072371dce44da7007118c85cd61",
+      "manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSc2IyTmhiSE55TVVNQktvWFV0cTdYei9HcHBDWGFJOUpsRXVFZUEwUk8raFJBRFdnSk81bGNLOGFVMWMxS2ZScThWdlBLSVdFRENnMDE2UGdDWTBrU1ZWalVIOHJNbkFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDowCWZpbGU6Y3VkYV8wNTIuZW5naW5lLXBheWxvYWQuanNvbgo3MlkyNjVuWUNRS2t5WGJrOUM4V2FaaUd2OGRxc0F0VGVkZml5bnNYVUZGQ1ZiV0EzYjRsWlI4NWpDK0s1aXBqY0xyWWY4alpaV3Jyeng5d1h6TWxDQT09Cg=="
+    },
+    "cuda_051": {
+      "manifest": "{\n  \"arch\": \"x86_64\",\n  \"backend\": \"CUDA\",\n  \"engine_id\": \"windows-x86_64-cuda-v1\",\n  \"file_count\": 2,\n  \"format\": \"tar.gz.parts\",\n  \"os\": \"windows\",\n  \"parts\": [\n    {\n      \"filename\": \"LocalSR-test.engine.tar.gz.part-0001\",\n      \"sha256\": \"023a930cbce1601c35347b848a2f855b55daaa8e71daea9f72745260f2fccf7e\",\n      \"size\": 152\n    }\n  ],\n  \"protocol_version\": 1,\n  \"schema_version\": 2,\n  \"unpacked_bytes\": 20,\n  \"version\": \"0.5.1-beta\"\n}\n",
+      "manifest_sha256": "fd71a04fd320fb1bf3e275294753f6fdde932695eefb288fa41240288a619a31",
+      "manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSc2IyTmhiSE55TWNSWmNKU3ozT1RBb3UvSzRmMVg5SnFWdXc2SW4yUjVtZUl3R3dvZ00vbHNzaFRyajdad3lCRHlXdTdqYVY4THlkRDJDYTdTNDJWc0FZQWRVSUQzclFRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDowCWZpbGU6Y3VkYV8wNTEuZW5naW5lLXBheWxvYWQuanNvbgpNZHpBZnhCWm91bU9wcTJXV2EwWUNRM004Sm9OejJMR0ZYSEhzczEwS3R2RXpyczVaZ2hSWldHVzBPUFJTbk1Cc2JId0xXNEpxMENMZjNhRWFUbjBEQT09Cg=="
+    },
+    "cuda_053": {
+      "manifest": "{\n  \"arch\": \"x86_64\",\n  \"backend\": \"CUDA\",\n  \"engine_id\": \"windows-x86_64-cuda-v3\",\n  \"file_count\": 2,\n  \"format\": \"tar.gz.parts\",\n  \"os\": \"windows\",\n  \"parts\": [\n    {\n      \"filename\": \"LocalSR-test.engine.tar.gz.part-0001\",\n      \"sha256\": \"023a930cbce1601c35347b848a2f855b55daaa8e71daea9f72745260f2fccf7e\",\n      \"size\": 152\n    }\n  ],\n  \"protocol_version\": 1,\n  \"schema_version\": 2,\n  \"unpacked_bytes\": 20,\n  \"version\": \"0.5.3-beta\"\n}\n",
+      "manifest_sha256": "faeb6a75a2075315d9474e9adc95ea601377f6a8ee9584ee33d3871dd25c8d13",
+      "manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSc2IyTmhiSE55TVRJNDJNQnBRQTlRTUZQZWFCZWU3QmpKSlNGQTZYc1hvUVI4dFVPeTBRN2ZMSkJuYWMyWlc5emZtYS85YlJvTGltd3hOWlFLa05adHliOWVzRG9pNEF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDowCWZpbGU6Y3VkYV8wNTMuZW5naW5lLXBheWxvYWQuanNvbgo1K1ZVbThUK28xcGFuQ1ZFSStrQTA3Qk5tQmg0eWFBQ3JlL0dVQnFpOEEzNG1CQ2NVVHJwZkxtWDBRZUJIVW8wWk5CaFJMRnlkQkZEaVNBQWtKYlhBQT09Cg=="
+    },
+    "cpu_051": {
+      "manifest": "{\n  \"arch\": \"x86_64\",\n  \"backend\": \"CPU\",\n  \"engine_id\": \"windows-x86_64-cpu-v1\",\n  \"file_count\": 2,\n  \"format\": \"tar.gz.parts\",\n  \"os\": \"windows\",\n  \"parts\": [\n    {\n      \"filename\": \"LocalSR-test.engine.tar.gz.part-0001\",\n      \"sha256\": \"023a930cbce1601c35347b848a2f855b55daaa8e71daea9f72745260f2fccf7e\",\n      \"size\": 152\n    }\n  ],\n  \"protocol_version\": 1,\n  \"schema_version\": 2,\n  \"unpacked_bytes\": 20,\n  \"version\": \"0.5.1-beta\"\n}\n",
+      "manifest_sha256": "065825a7a6ff34b660c088fe2806dd67a05090f83464d89b5ea9c54577385bcf",
+      "manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSc2IyTmhiSE55TVQwdHhUeWU5NGhtenZTc3FZanc3L2ROWWo4SDk1K3E4cm5uMHB4bEhpS25sNzlmOFk2MjcvYU1qTk1rZVpZK0Z6TytiZDFkQ2JscXJrVG15MWsyQ3dnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDowCWZpbGU6Y3B1XzA1MS5lbmdpbmUtcGF5bG9hZC5qc29uCklpNi9zWUREcWlpV0JVRmJzMjF1dTV5U1BjaVB0NXczRUZtejRNZ0RKd1RHL0VCdldaYWJabXJjbURBVFRSTUtnU1ZtVFJub3dsVzk3eVNVeXZrckNRPT0K"
+    },
+    "wrong_os": {
+      "manifest": "{\n  \"arch\": \"x86_64\",\n  \"backend\": \"CUDA\",\n  \"engine_id\": \"linux-x86_64-cuda-v2\",\n  \"file_count\": 2,\n  \"format\": \"tar.gz.parts\",\n  \"os\": \"linux\",\n  \"parts\": [\n    {\n      \"filename\": \"LocalSR-test.engine.tar.gz.part-0001\",\n      \"sha256\": \"023a930cbce1601c35347b848a2f855b55daaa8e71daea9f72745260f2fccf7e\",\n      \"size\": 152\n    }\n  ],\n  \"protocol_version\": 1,\n  \"schema_version\": 2,\n  \"unpacked_bytes\": 20,\n  \"version\": \"0.5.2-beta\"\n}\n",
+      "manifest_sha256": "89883cc0d2be8c790469811455fe41767afe887f1a9e8ff45bac33302bb08094",
+      "manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSc2IyTmhiSE55TVpQQTU2RVF6MEVkSng5bjg1aDVtWFF0TjhYNkRQS3d0WXFxUTl1VWZ4YnA1ajhBYW5DdERZM2xNSEVOaFYzUzlaYXFzZk5OVFBCWkY2aFQ1YXJMd0EwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDowCWZpbGU6d3Jvbmdfb3MuZW5naW5lLXBheWxvYWQuanNvbgpwRDdQUFBnRUplOWZZaUQxSE0xQUFOZ3FXeTY3MkFGVHRxMS9BaE8yVFNoZ2NjZDM2SEx5L1FZdUlqNThjd01SMW90MnRwRStCdzBTNXdVb1ZiRjBBdz09Cg=="
+    },
+    "wrong_arch": {
+      "manifest": "{\n  \"arch\": \"aarch64\",\n  \"backend\": \"CUDA\",\n  \"engine_id\": \"windows-aarch64-cuda-v2\",\n  \"file_count\": 2,\n  \"format\": \"tar.gz.parts\",\n  \"os\": \"windows\",\n  \"parts\": [\n    {\n      \"filename\": \"LocalSR-test.engine.tar.gz.part-0001\",\n      \"sha256\": \"023a930cbce1601c35347b848a2f855b55daaa8e71daea9f72745260f2fccf7e\",\n      \"size\": 152\n    }\n  ],\n  \"protocol_version\": 1,\n  \"schema_version\": 2,\n  \"unpacked_bytes\": 20,\n  \"version\": \"0.5.2-beta\"\n}\n",
+      "manifest_sha256": "cc8ccaf0ce78cc5f8a1355a56c1a3d4201a1ed123d99774ede4a25920c2886dc",
+      "manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSc2IyTmhiSE55TVdsbTc5cXBtMWhRbXczQ0hTeUFHMTdVTFkyNDFEamg3UFhWbkF2RlhIdUpvU25OL1NGRzJnajJoT0QxWDlhVG12M2puTmhoeEk1LzgzZHhSSUF0bGdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDowCWZpbGU6d3JvbmdfYXJjaC5lbmdpbmUtcGF5bG9hZC5qc29uCm1DZDQrTTVITUZ2QWgya0FJMVhudk02U3I2L3haMFM4TmV2TnVualYweVFFV2pWeFlnVUN1OXd6OHZJU2tIRmxPOTk3djkyOGlEazFIQXQ0ZFFvdUFBPT0K"
+    },
+    "wrong_protocol": {
+      "manifest": "{\n  \"arch\": \"x86_64\",\n  \"backend\": \"CUDA\",\n  \"engine_id\": \"windows-x86_64-cuda-p2\",\n  \"file_count\": 2,\n  \"format\": \"tar.gz.parts\",\n  \"os\": \"windows\",\n  \"parts\": [\n    {\n      \"filename\": \"LocalSR-test.engine.tar.gz.part-0001\",\n      \"sha256\": \"023a930cbce1601c35347b848a2f855b55daaa8e71daea9f72745260f2fccf7e\",\n      \"size\": 152\n    }\n  ],\n  \"protocol_version\": 2,\n  \"schema_version\": 2,\n  \"unpacked_bytes\": 20,\n  \"version\": \"0.5.2-beta\"\n}\n",
+      "manifest_sha256": "3f03670283d9c5997ffaeef6bfdab7153306c0958fdcf2ba1a3cfa050e3ad087",
+      "manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSc2IyTmhiSE55TVJRbkNzSE9aL2poREFFcFRrR3FGZGpuV2lURUJnTkQ3aEx3MHphNlBzV2FUL2tzSC9UUndHRStKRTBYdEhHdFJxeGdHNUg2Ryt3TUpCamo0U09BR0E4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDowCWZpbGU6d3JvbmdfcHJvdG9jb2wuZW5naW5lLXBheWxvYWQuanNvbgp3RTZtd0MzWWYyZ2ZYcWdmOTc3cW9qU2lGZGFMdnNSNmdJWUJXVXpyNXlLM1pIMWhXT1pJckdpSjFrNUJyeCsrdEkzYlhqZE9DWmZGdENVRk9JSlhCdz09Cg=="
+    }
+  }
+}

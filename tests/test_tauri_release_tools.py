@@ -1123,13 +1123,19 @@ def test_add_statements_signs_both_formats_and_fills_in_what_an_older_feed_lacks
 RUST_FIXTURE = ROOT / "desktop/src-tauri/tests/fixtures/update-release.json"
 
 
-def rust_fixture_statements(fixture: dict) -> dict:
+def rust_fixture_statements(
+    fixture: dict,
+    *,
+    target_key: str = "linux-x86_64-rocm-native",
+    backend: str = "rocm",
+    engine_id: str = "linux-x86_64-rocm-0123456789ab",
+) -> dict:
     def file(name: str, size: int, digest: str) -> dict:
         return {"name": name, "url": f"https://example.test/{name}", "size": size, "sha256": digest}
 
     manifest = fixture["engine"]["manifest"].encode()
     engine = {
-        "id": "linux-x86_64-rocm-0123456789ab",
+        "id": engine_id,
         "manifest": file(
             "engine-payload.json", len(manifest), hashlib.sha256(manifest).hexdigest()
         ),
@@ -1144,7 +1150,7 @@ def rust_fixture_statements(fixture: dict) -> dict:
     }
     contract = {
         "channel": "beta",
-        "backend": "rocm",
+        "backend": backend,
         "kind": "native",
         "protocol": 1,
         "engine_id": engine["id"],
@@ -1156,16 +1162,15 @@ def rust_fixture_statements(fixture: dict) -> dict:
     split = {**contract, "parts": [dict(part) for part in fixture["split"]["parts"]]}
     out = {}
     for name, entry in (("single", contract), ("split", split)):
-        data = update_signing.release_statement_v2("0.3.7-beta", "linux-x86_64-rocm-native", entry)
+        data = update_signing.release_statement_v2("0.3.7-beta", target_key, entry)
         out[name] = (
             base64.b64encode(data).decode(),
-            TEST_KEY.signature(data, "linux-x86_64-rocm-native.statement-v2.json"),
+            TEST_KEY.signature(data, f"{target_key}.statement-v2.json"),
         )
     # Signed by the right key but not format 2: the client must refuse them on their content.
-    key = "linux-x86_64-rocm-native"
-    version_2 = json.loads(update_signing.release_statement_v2("0.3.7-beta", key, contract))
+    version_2 = json.loads(update_signing.release_statement_v2("0.3.7-beta", target_key, contract))
     for name, data in (
-        ("format_1", update_signing.release_statement("0.3.7-beta", key, contract)),
+        ("format_1", update_signing.release_statement("0.3.7-beta", target_key, contract)),
         ("extra_field", update_signing._statement_bytes({**version_2, "extra": 1})),
         (
             "missing_parts",
@@ -1177,32 +1182,48 @@ def rust_fixture_statements(fixture: dict) -> dict:
 
 
 def test_the_updater_fixture_holds_the_statements_this_signer_writes() -> None:
-    fixture = json.loads(RUST_FIXTURE.read_text())
-    assert fixture["public_key"] == TEST_KEY.public_key
-    signed = rust_fixture_statements(fixture)
-    assert (fixture["statement_v2"], fixture["statement_v2_signature"]) == signed["single"]
-    assert (fixture["split"]["statement_v2"], fixture["split"]["statement_v2_signature"]) == signed[
-        "split"
-    ]
-    for name in ("format_1", "extra_field", "missing_parts"):
+    for path, target_key, backend, engine_id in (
+        (
+            RUST_FIXTURE,
+            "linux-x86_64-rocm-native",
+            "rocm",
+            "linux-x86_64-rocm-0123456789ab",
+        ),
+        (
+            ROOT / "desktop/src-tauri/tests/fixtures/update-release-windows.json",
+            "windows-x86_64-cuda-native",
+            "cuda",
+            "windows-x86_64-cuda-0123456789ab",
+        ),
+    ):
+        fixture = json.loads(path.read_text())
+        assert fixture["public_key"] == TEST_KEY.public_key
+        signed = rust_fixture_statements(
+            fixture, target_key=target_key, backend=backend, engine_id=engine_id
+        )
+        assert (fixture["statement_v2"], fixture["statement_v2_signature"]) == signed["single"]
         assert (
-            fixture["rejected"][name]["statement"],
-            fixture["rejected"][name]["signature"],
-        ) == signed[name]
-    assert verify_prepared.minisign_verify(
-        fixture["public_key"],
-        fixture["statement_v2_signature"],
-        [base64.b64decode(fixture["statement_v2"])],
-    )
-    schema2_fixture = json.loads(
-        (ROOT / "desktop/src-tauri/tests/fixtures/engine-schema2.json").read_text()
-    )
-    assert schema2_fixture["public_key"] == TEST_KEY.public_key
-    for case, entry in schema2_fixture["cases"].items():
-        manifest = entry["manifest"].encode()
+            fixture["split"]["statement_v2"],
+            fixture["split"]["statement_v2_signature"],
+        ) == signed["split"]
+        for name in ("format_1", "extra_field", "missing_parts"):
+            assert (
+                fixture["rejected"][name]["statement"],
+                fixture["rejected"][name]["signature"],
+            ) == signed[name]
         assert verify_prepared.minisign_verify(
-            TEST_KEY.public_key, entry["manifest_signature"], [manifest]
-        ), case
+            fixture["public_key"],
+            fixture["statement_v2_signature"],
+            [base64.b64decode(fixture["statement_v2"])],
+        )
+    for name in ("engine-schema2.json", "engine-schema2-windows.json"):
+        schema2_fixture = json.loads((ROOT / "desktop/src-tauri/tests/fixtures" / name).read_text())
+        assert schema2_fixture["public_key"] == TEST_KEY.public_key
+        for case, entry in schema2_fixture["cases"].items():
+            manifest = entry["manifest"].encode()
+            assert verify_prepared.minisign_verify(
+                TEST_KEY.public_key, entry["manifest_signature"], [manifest]
+            ), (name, case)
 
 
 def test_release_tools_reject_schema_1_or_mismatched_schema_2_engine_manifests(
