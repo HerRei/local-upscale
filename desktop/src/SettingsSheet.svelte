@@ -423,20 +423,22 @@
                 Enlarges the app's text and controls. Your pictures are not affected.
               </p>
             </div>
-            <select
-              id="settings-interface-scale"
-              aria-describedby="settings-interface-scale-desc"
-              value={String(settings.interface_scale)}
-              on:change={(event) =>
-                setPreference(
-                  'interface_scale',
-                  Number(event.currentTarget.value) as UiSettings['interface_scale'],
-                )}
-            >
-              <option value="100">100%</option>
-              <option value="110">110%</option>
-              <option value="125">125%</option>
-            </select>
+            <div class="setting-control">
+              <select
+                id="settings-interface-scale"
+                aria-describedby="settings-interface-scale-desc"
+                value={String(settings.interface_scale)}
+                on:change={(event) =>
+                  setPreference(
+                    'interface_scale',
+                    Number(event.currentTarget.value) as UiSettings['interface_scale'],
+                  )}
+              >
+                <option value="100">100%</option>
+                <option value="110">110%</option>
+                <option value="125">125%</option>
+              </select>
+            </div>
           </div>
         {:else if section === 'performance'}
           <h3 class="settings-section-heading">Performance</h3>
@@ -562,7 +564,6 @@
                 on:click={() => void chooseModelFolder()}
               ></button>
               <div class="directory-text">
-                <small>Model folder</small>
                 <span
                   class="directory-path"
                   title={movingModels
@@ -630,7 +631,6 @@
                 on:click={() => void pickFFmpeg()}
               ></button>
               <div class="directory-text">
-                <small>External FFmpeg</small>
                 <span class="directory-path"
                   ><FileName
                     name={settings.external_ffmpeg_path ||
@@ -643,7 +643,7 @@
             <div class="eyebrow-actions">
               <button
                 type="button"
-                class="link-button"
+                class="button"
                 disabled={settingsLocked}
                 on:click={() => void findFFmpeg()}>Find installed</button
               >
@@ -758,7 +758,7 @@
                   >Software update</span
                 >
                 <p class="setting-desc" id="settings-software-update-desc">
-                  The release channel is chosen there.
+                  Opens the updater, where you also choose the release channel.
                 </p>
               </div>
               <button
