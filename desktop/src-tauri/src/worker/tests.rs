@@ -2470,3 +2470,31 @@ fn codec_helper_reuses_the_verified_worker_run_and_never_changes_engine_state() 
     assert!(codec_helper_specification(&state).is_err());
     unchanged(b"short!");
 }
+
+#[test]
+fn a_video_step_without_frame_counts_does_not_keep_the_last_step_at_100_percent() {
+    // Audio cleanup ends at 100 %; loading the video model next must not look like saving.
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    lock(&state.runtime).unwrap().active_job_id = "a".into();
+    apply_worker_envelope(
+        &state,
+        &envelope(
+            "video_stage_progress",
+            json!({"job_id": "a", "stage": "audio_denoise", "frames_processed": 10, "total_frames": 10}),
+        ),
+    )
+    .unwrap();
+    assert_eq!(lock(&state.runtime).unwrap().progress, 100.0);
+    apply_worker_envelope(
+        &state,
+        &envelope(
+            "video_stage_progress",
+            json!({"job_id": "a", "stage": "loading_model"}),
+        ),
+    )
+    .unwrap();
+    let runtime = lock(&state.runtime).unwrap();
+    assert_eq!(runtime.status_title, "Loading video model");
+    assert_eq!(runtime.progress, 0.0);
+}

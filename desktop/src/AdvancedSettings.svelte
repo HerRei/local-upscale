@@ -608,12 +608,17 @@
         </div>
       {/if}
       <div class="field-row">
-        <span
-          >Model cache: {cacheSize === null
-            ? 'Unavailable'
-            : cacheSize === 0
-              ? '0 B'
-              : formatBytes(cacheSize)}</span
+        <span class="label-with-tip"
+          ><span class="field-label"
+            >Model cache · {cacheSize === null
+              ? 'unavailable'
+              : cacheSize === 0
+                ? '0 B'
+                : formatBytes(cacheSize)}</span
+          ><HelpTip
+            label="Model cache"
+            text="Compiled copies of models that make later runs start faster. Clearing them is safe: they are rebuilt the next time a model runs, which makes that first run slower. Unused entries are removed after 30 days."
+          /></span
         >
         <button
           type="button"
@@ -622,7 +627,6 @@
           on:click={() => void clearCache()}>Clear cache</button
         >
       </div>
-      <p>Model caches are rebuilt the next time a model runs, which makes that first run slower.</p>
       {#if engines?.supported && !engines.managed_by_store}
         <div class="field-row engine-row">
           <span class="label-with-tip"

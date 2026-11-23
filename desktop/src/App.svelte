@@ -1,5 +1,6 @@
 <script lang="ts">
   import { detectPlatform } from './lib/platform';
+  import { downloadSummary } from './lib/downloadSummary';
   import { createThemeController } from './lib/theme';
 
   import { tabFromKey } from './lib/keyboard';
@@ -697,6 +698,18 @@
     activeDownloads.map((item) => [item.model_id, item]),
   );
   $: activeDownload = activeDownloads[0]?.model_id ?? '';
+  // Downloads own the status line while no job runs: one title, one bar for all of them.
+  $: downloadStatus = snapshot.runtime.active_job_id
+    ? null
+    : downloadSummary(activeDownloads, (id) => {
+        const model = snapshot.catalog.models.find((item) => item.model_id === id);
+        if (model) return { name: model.name, size: model.size_bytes };
+        const other = [
+          ...snapshot.catalog.video_models,
+          ...(snapshot.catalog.audio_models ?? []),
+        ].find((item) => item.model_id === id);
+        return other ? { name: other.name, size: other.total_size_bytes } : undefined;
+      });
   $: benchmarkRunning = snapshot.runtime.active_job_id.startsWith('benchmark-');
   $: benchmarkModel = snapshot.catalog.models.find((model) => model.model_id === 'span_photo_x4');
   $: benchmarkStartBlockReason =
@@ -4884,7 +4897,9 @@
               ? 'Stopping…'
               : saving
                 ? 'Saving the result'
-                : snapshot.runtime.status_title}{snapshot.runtime.active_job_id &&
+                : downloadStatus
+                  ? `${downloadStatus.title} · ${Math.round(downloadStatus.percent)}%`
+                  : snapshot.runtime.status_title}{snapshot.runtime.active_job_id &&
           snapshot.runtime.progress > 0 &&
           !saving &&
           !cancelling
@@ -4898,7 +4913,12 @@
             : activityDetail || stoppedNote || idleSummary || runningStatusDetail}
           >{booting
             ? 'Opening the trusted desktop control plane.'
-            : activityDetail || stoppedNote || idleSummary || runningStatusDetail}</span
+            : activityDetail ||
+              (downloadStatus
+                ? activeDownloads.length > 1
+                  ? downloadStatus.names
+                  : 'Checked against its pinned checksum before use.'
+                : stoppedNote || idleSummary || runningStatusDetail)}</span
         >
         {#if hardwareNote}<span class="status-note" title={hardwareNote}>{hardwareNote}</span>{/if}
         {#if hardwareHint}<span class="status-note" title={hardwareHint.text}
@@ -4938,6 +4958,15 @@
         aria-valuenow={Math.round(snapshot.runtime.progress)}
       >
         <i style={`width:${snapshot.runtime.progress}%`}></i>
+      </div>{:else if downloadStatus}<div
+        class="progress"
+        role="progressbar"
+        aria-label="Download progress"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow={Math.round(downloadStatus.percent)}
+      >
+        <i style={`width:${downloadStatus.percent}%`}></i>
       </div>{/if}
     <div class="status-actions">
       {#if snapshot.runtime.engine_retry}<button

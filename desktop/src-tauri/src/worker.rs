@@ -1876,6 +1876,10 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 let frames_total = number(data, "total_frames");
                 if frames_total > 0.0 {
                     runtime.progress = (frames_done / frames_total * 100.0).clamp(0.0, 100.0);
+                } else {
+                    // A step without frame counts (loading a model, reading frames) starts
+                    // fresh; the last step's 100 % would otherwise read as saving.
+                    runtime.progress = 0.0;
                 }
                 runtime.estimated_remaining_seconds = seconds(data, "estimated_remaining_seconds");
                 let steps = if integer(data, "total") > 0 {

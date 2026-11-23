@@ -322,9 +322,14 @@ async function mountWith(snapshot: AppSnapshot): Promise<ReturnType<typeof userE
   api.bootstrap.mockResolvedValue(structuredClone(snapshot));
   api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
   render(App);
-  // While idle the status bar shows what Start will produce, so wait for the title.
+  // While idle the status bar shows what Start will produce, or the running downloads.
   await waitFor(() =>
-    expect(document.querySelector('.status-copy strong')?.textContent ?? '').toMatch(/^Ready/),
+    expect(document.querySelector('.status-copy strong')?.textContent ?? '').toMatch(
+      snapshot.runtime.active_job_id ||
+        !(snapshot.runtime.downloads?.length || snapshot.runtime.download_model_id)
+        ? /^Ready/
+        : /^Downloading /,
+    ),
   );
   return userEvent.setup();
 }
@@ -1163,6 +1168,33 @@ describe('LocalSR desktop interface', () => {
     await user.click(dialog.getByRole('button', { name: 'Download & run benchmark' }));
     await waitFor(() => expect(api.startBenchmark).toHaveBeenCalledWith('mps'));
     expect(dialog.queryByRole('alert')).toBeNull();
+  });
+
+  it('shows one title and one progress bar for all model downloads', async () => {
+    const snapshot = demoSnapshot();
+    const [first, second] = snapshot.catalog.models;
+    snapshot.runtime.downloads = [
+      {
+        model_id: first.model_id,
+        status: 'downloading',
+        progress: 50,
+        downloaded_bytes: first.size_bytes / 2,
+        total_bytes: first.size_bytes,
+      },
+      { model_id: second.model_id, status: 'queued', progress: 0 },
+    ];
+    await mountWith(snapshot);
+    const expected = Math.round(
+      (first.size_bytes / 2 / (first.size_bytes + second.size_bytes)) * 100,
+    );
+    expect(document.querySelector('.status-copy strong')?.textContent).toBe(
+      `Downloading 2 models · ${expected}%`,
+    );
+    expect(document.querySelector('.status-detail')?.textContent).toBe(
+      `${first.name}, ${second.name}`,
+    );
+    const bar = screen.getByRole('progressbar', { name: 'Download progress' });
+    expect(bar.getAttribute('aria-valuenow')).toBe(String(expected));
   });
 
   it('explains why benchmark startup waits for another model download', async () => {
