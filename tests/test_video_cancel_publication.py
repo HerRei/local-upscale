@@ -321,3 +321,45 @@ def test_a_kept_part_with_the_name_of_an_earlier_one_gets_a_number(tmp_path):
         "clip_video_4x_partial_0m00s-2.mkv",
     ]
     assert all(Path(name).is_file() for name in names)
+
+
+@pytest.mark.parametrize("keep", [True, False])
+def test_frame_by_frame_deflicker_stop_honours_keep_and_discard(tmp_path, keep):
+    from localsr.core.video_pipeline import VideoJobConfig, run_video_job
+
+    source = make_vfr(tmp_path / "source.mp4")
+    output = tmp_path / "out.mp4"
+    cancel = threading.Event()
+
+    class StopAfterSixEngine(IdentityEngine):
+        def process_frame(self, *, img_tensor, **kwargs):
+            self.calls = getattr(self, "calls", 0) + 1
+            if self.calls == 6:
+                cancel.set()
+            return super().process_frame(img_tensor=img_tensor, **kwargs)
+
+    config = VideoJobConfig(
+        video_path=str(source),
+        model_path="identity.pth",
+        output_video_path=str(output),
+        model_info=SimpleNamespace(scale=1),
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=4,
+        safe_memory=False,
+        deflicker=True,
+        keep_partial=keep,
+    )
+    if not keep:
+        with pytest.raises(InterruptedError):
+            run_video_job(config=config, engine=StopAfterSixEngine(), cancel_event=cancel)
+        assert not output.exists()
+        assert not list(tmp_path.glob("out_partial_*"))
+        return
+
+    result = run_video_job(config=config, engine=StopAfterSixEngine(), cancel_event=cancel)
+    assert result.partial
+    assert Path(result.output_path).is_file()
+    assert result.kept_frames == 6
+    assert not output.exists()

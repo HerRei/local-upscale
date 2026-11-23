@@ -387,27 +387,31 @@ def test_video_job_protocol_messages_include_video_specific_types():
 
 
 def test_deflicker_reduces_low_amplitude_static_flicker():
-    """Reduce subtle static flicker without treating hard cuts as outliers."""
+    """Reduce subtle output shimmer on a static source without breaking cuts."""
     from localsr.core.video_pipeline import _deflicker_frames
 
-    # Five frames where the middle one is a bright outlier.
-    frame_base = np.full((4, 4, 3), 50, dtype=np.uint8)
-    frame_outlier = np.full((4, 4, 3), 60, dtype=np.uint8)
-    frames = [
-        frame_base.copy(),
-        frame_base.copy(),
-        frame_outlier,
-        frame_base.copy(),
-        frame_base.copy(),
+    rng = np.random.default_rng(17)
+    src = np.full((24, 24, 3), 100, dtype=np.uint8)
+    raw = [
+        np.clip(100.0 + rng.normal(0.0, 6.0, (24, 24, 3)), 0, 255).round().astype(np.uint8)
+        for _ in range(10)
     ]
     cancel = threading.Event()
-    result = list(_deflicker_frames(iter(frames), window=3, cancel_event=cancel))
-    assert len(result) == 5
-    assert 50 < result[2].mean() < 60
+    result = list(
+        _deflicker_frames(zip(raw, [src] * 10, strict=True), window=3, cancel_event=cancel)
+    )
+    assert len(result) == 10
+    raw_diff = float(
+        np.mean([np.abs(raw[i].astype(np.float32) - raw[i - 1]).mean() for i in range(1, 10)])
+    )
+    out_diff = float(
+        np.mean([np.abs(result[i].astype(np.float32) - result[i - 1]).mean() for i in range(1, 10)])
+    )
+    assert out_diff < raw_diff * 0.65
 
 
 def test_deflicker_preserves_genuine_motion():
-    """When a value changes and stays changed, the median should track it."""
+    """When a value steps and stays changed, deflicker preserves the step."""
     from localsr.core.video_pipeline import _deflicker_frames
 
     frames = [
@@ -425,17 +429,16 @@ def test_deflicker_preserves_genuine_motion():
     assert result[-1].mean() > 80
 
 
-def test_deflicker_window_one_is_passthrough():
-    """A window of 1 means no de-flicker — frames pass through unchanged."""
+def test_deflicker_window_is_accepted_for_compatibility():
+    """``window`` stays accepted for request compatibility and does not alter output."""
     from localsr.core.video_pipeline import _deflicker_frames
 
-    frames = [np.full((4, 4, 3), v, dtype=np.uint8) for v in (10, 50, 200)]
-    cancel = threading.Event()
-    result = list(_deflicker_frames(iter(frames), window=1, cancel_event=cancel))
-    assert len(result) == 3
-    assert result[0].mean() == 10
-    assert result[1].mean() == 50
-    assert result[2].mean() == 200
+    frames = [np.full((16, 16, 3), 40, dtype=np.uint8) for _ in range(5)]
+    out_one = list(_deflicker_frames(iter(frames), window=1, cancel_event=threading.Event()))
+    out_nine = list(_deflicker_frames(iter(frames), window=9, cancel_event=threading.Event()))
+    assert len(out_one) == len(out_nine) == 5
+    for a, b in zip(out_one, out_nine, strict=True):
+        np.testing.assert_array_equal(a, b)
 
 
 def test_deflicker_keeps_only_a_bounded_streaming_window():
@@ -1752,4 +1755,4 @@ def test_deflicker_hands_on_its_held_back_frame_when_a_stop_keeps_the_finished_p
     with pytest.raises(InterruptedError):
         for frame in _deflicker_frames(upstream(), 3, cancel, keep=lambda: False):
             discarded.append(frame)
-    assert len(discarded) == 4  # the held-back frame goes with the discarded job
+    assert len(discarded) == 2  # the 3 held-back look-ahead frames go with the discarded job
