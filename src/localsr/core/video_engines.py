@@ -9,6 +9,8 @@ the status bar, so an engine missing from a build degrades gracefully.
 
 from __future__ import annotations
 
+import platform
+import sys
 from importlib.metadata import PackageNotFoundError, version
 
 SPANDREL_IMAGE_KIND = "spandrel_image"
@@ -36,6 +38,22 @@ def seedvr2_runtime_issue() -> str | None:
     return None
 
 
+def flashvsr_runtime_issue() -> str | None:
+    """FlashVSR runs on Apple Silicon via MLX."""
+    if sys.platform != "darwin" or platform.machine().lower() != "arm64":
+        return (
+            "FlashVSR requires Apple Silicon (macOS arm64). Frame-by-frame video remains available."
+        )
+    try:
+        import mlx.core  # noqa: F401
+    except (ImportError, OSError):
+        return (
+            "FlashVSR requires MLX on Apple Silicon, which is not installed in this build. "
+            "Frame-by-frame video remains available."
+        )
+    return None
+
+
 def resolve_video_engine(kind: str):
     """Return the engine factory for a temporal model kind.
 
@@ -53,6 +71,17 @@ def resolve_video_engine(kind: str):
                 "Frame-by-frame video upscaling remains available."
             ) from error
         return SeedVR2Engine
+    if kind == "flashvsr":
+        if issue := flashvsr_runtime_issue():
+            raise TemporalEngineUnavailable(issue)
+        try:
+            from localsr.video_models.flashvsr.engine import FlashVSREngine
+        except ImportError as error:
+            raise TemporalEngineUnavailable(
+                "The FlashVSR temporal engine is not installed in this build. "
+                "Frame-by-frame video upscaling remains available."
+            ) from error
+        return FlashVSREngine
     raise TemporalEngineUnavailable(
         f"Unknown video engine '{kind}'. Frame-by-frame video upscaling remains available."
     )

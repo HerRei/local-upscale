@@ -88,7 +88,7 @@ VIDEO_JOB_FIELDS = _JOB_FIELDS + (
     Field("end_frame", "int", nullable=True, minimum=0),
     Field("deflicker", "bool"),
     Field("deflicker_window", "int", minimum=1, maximum=9),
-    Field("model_kind", "choice", choices=("spandrel_image", "seedvr2")),
+    Field("model_kind", "choice", choices=("spandrel_image", "seedvr2", "flashvsr")),
     Field("bundle_dir", "str", nullable=True),
     Field("temporal_window", "int", minimum=0),
     Field("temporal_overlap", "int", minimum=0),

@@ -128,9 +128,14 @@ def _encode_chw_jpeg(image, max_dimension: int, quality: int = 78) -> str:
 
 
 def _video_engines() -> list[str]:
-    from localsr.core.video_engines import seedvr2_runtime_issue
+    from localsr.core.video_engines import flashvsr_runtime_issue, seedvr2_runtime_issue
 
-    return ["spandrel_image"] + (["seedvr2"] if seedvr2_runtime_issue() is None else [])
+    engines = ["spandrel_image"]
+    if seedvr2_runtime_issue() is None:
+        engines.append("seedvr2")
+    if flashvsr_runtime_issue() is None:
+        engines.append("flashvsr")
+    return engines
 
 
 # The most photos one batch request carries; the desktop sends at most this many.
@@ -159,6 +164,8 @@ def _engine_features() -> list[str]:
     ]
     if "seedvr2" in _video_engines():
         features.append("video_seedvr2")
+    if "flashvsr" in _video_engines():
+        features.append("video_flashvsr")
     if importlib.util.find_spec("cv2") is not None:
         try:
             cv2 = importlib.import_module("cv2")
@@ -1179,18 +1186,37 @@ class WorkerServer:
         total_frames = selected_frame_count(
             probe.frame_count, data.get("start_frame"), data.get("end_frame")
         )
-        window = max(1, int(data.get("temporal_window") or 9))
-        overlap = max(0, min(int(data.get("temporal_overlap", 2)), window - 1))
-        resolution = int(data.get("target_resolution") or 0)
-        if resolution <= 0:
-            resolution = min(probe.width, probe.height)
+        model_kind = str(data.get("model_kind") or "")
+        if model_kind == "flashvsr":
+            raw_window = int(data.get("temporal_window") or 0)
+            window = max(1, raw_window if raw_window > 0 else 37)
+            raw_overlap = data.get("temporal_overlap")
+            overlap_val = (
+                int(raw_overlap)
+                if raw_overlap is not None and (raw_window > 0 or int(raw_overlap) > 0)
+                else 8
+            )
+            overlap = max(0, min(overlap_val, window - 1))
+            resolution = int(data.get("target_resolution") or 0)
+            if resolution <= 0:
+                resolution = min(probe.width, probe.height)
+            est_out_width = probe.width * 4
+            est_out_height = probe.height * 4
+        else:
+            window = max(1, int(data.get("temporal_window") or 9))
+            overlap = max(0, min(int(data.get("temporal_overlap", 2)), window - 1))
+            resolution = int(data.get("target_resolution") or 0)
+            if resolution <= 0:
+                resolution = min(probe.width, probe.height)
+            # The engine's output side is the target resolution, in the source's proportions.
+            grown = resolution / max(1, min(probe.width, probe.height))
+            est_out_width = round(probe.width * grown)
+            est_out_height = round(probe.height * grown)
         bundle_dir = data.get("bundle_dir") or ""
-        # The engine's output side is the target resolution, in the source's proportions.
-        grown = resolution / max(1, min(probe.width, probe.height))
         require_video_room(
             data,
-            round(probe.width * grown),
-            round(probe.height * grown),
+            est_out_width,
+            est_out_height,
             total_frames,
             master=data.get("video_codec") in EXTERNAL_OUTPUT_CODECS,
         )
@@ -1311,9 +1337,19 @@ class WorkerServer:
 
         from localsr.core.video_io import decode_timed_frames, encode_video
 
+        if str(data.get("model_kind") or "") == "flashvsr":
+            est_width = probe.width * 4
+            est_height = probe.height * 4
+        else:
+            est_width = max(
+                2, int(probe.width * resolution / min(probe.width, probe.height)) // 2 * 2
+            )
+            est_height = max(
+                2, int(probe.height * resolution / min(probe.width, probe.height)) // 2 * 2
+            )
         memory.configure(
-            max(2, int(probe.width * resolution / min(probe.width, probe.height)) // 2 * 2),
-            max(2, int(probe.height * resolution / min(probe.width, probe.height)) // 2 * 2),
+            est_width,
+            est_height,
             min(window, memory.latest.clip_frames),
         )
         engine = WorkerServer._prepare_bundle(
@@ -1326,6 +1362,10 @@ class WorkerServer:
                 bundle_dir, str(data.get("device", "cpu")), str(data.get("precision", "fp32"))
             ),
         )
+        if not data.get("temporal_window") and hasattr(engine, "default_temporal_window"):
+            window = max(1, int(engine.default_temporal_window))
+        if not data.get("temporal_window") and hasattr(engine, "default_temporal_overlap"):
+            overlap = max(0, int(engine.default_temporal_overlap))
         window = min(window, max(1, int(getattr(engine, "max_temporal_window", window))))
         overlap = min(overlap, window - 1)
         memory.configure(memory.latest.output_width, memory.latest.output_height, window)
@@ -1537,6 +1577,11 @@ class WorkerServer:
             decode_iter.close()
             preview_encoder.close()
             source_encoder.close()
+            if engine is not None and hasattr(engine, "close"):
+                try:
+                    engine.close()
+                except Exception:  # noqa: BLE001
+                    pass
             engine = None  # noqa: F841 — releases the models
             try:
                 import torch
@@ -1721,7 +1766,11 @@ class WorkerServer:
         # are not single-image checkpoints. An engine this build cannot
         # serve fails the job with a status-bar-ready message instead of a
         # stack trace, and frame-by-frame stays available.
-        from localsr.core.video_engines import resolve_video_engine, seedvr2_runtime_issue
+        from localsr.core.video_engines import (
+            flashvsr_runtime_issue,
+            resolve_video_engine,
+            seedvr2_runtime_issue,
+        )
 
         if data.get("video_codec") == "auto":
             from localsr.core.media_bridge import automatic_video_codec, load_media_bridge
@@ -1750,6 +1799,16 @@ class WorkerServer:
                 "for Intel/DirectML, or a compatible CUDA, ROCm or Metal engine for SeedVR2."
             )
         if model_kind == "seedvr2" and (issue := seedvr2_runtime_issue()):
+            raise ValueError(issue)
+        if model_kind == "flashvsr" and str(data.get("device", "")).split(":", 1)[0] not in {
+            "mps",
+            "auto",
+        }:
+            raise ValueError(
+                "FlashVSR runs on Apple Silicon GPU (mps) only. Choose frame-by-frame video "
+                "for CPU or other backends."
+            )
+        if model_kind == "flashvsr" and (issue := flashvsr_runtime_issue()):
             raise ValueError(issue)
         engine_factory = resolve_video_engine(model_kind)
         if engine_factory is not None:

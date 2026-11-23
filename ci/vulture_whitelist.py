@@ -148,3 +148,12 @@ audio_denoise_model_id
 # Fields of a kept photo's job_completed, read by the host from the JSON (protocol/messages.py).
 finished_tiles
 total_tiles
+
+# Vendored mlx_flashvsr symbols kept unmodified for parity with the upstream port.
+compatibility_mode
+return_KV
+_cross_kv_initialized
+clear_cross_kv
+timesteps
+last_lq_cur_idx
+DecoderResult
