@@ -406,7 +406,7 @@
               /> De-flicker · Labs</label
             ><HelpTip
               label="De-flicker"
-              text="For clips whose still areas shimmer from frame to frame. Where nothing moves, each frame is blended halfway with the median of itself and its two neighbors."
+              text="For clips whose still areas shimmer from frame to frame. Where nothing moves, each frame is blended halfway with the median of itself and its two neighbors. Computationally expensive: it runs on the CPU at the output size and adds about a second per 4K frame on an M1 Pro. Off by default."
             />
           </div>
           <p class="model-description">
