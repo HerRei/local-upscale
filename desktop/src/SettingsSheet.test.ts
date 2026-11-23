@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   updateStatus: vi.fn(async () => ({
     configured: true,
     managed_by_store: false,
+    managed_by_package_manager: false,
     channel: 'beta',
     target: 'darwin-aarch64-mps-native',
     stage: 'idle',
@@ -82,6 +83,7 @@ function renderSheet(overrides: Record<string, unknown> = {}) {
     updateStatus: {
       configured: true,
       managed_by_store: false,
+      managed_by_package_manager: false,
       channel: 'beta',
       target: 'darwin-aarch64-mps-native',
       stage: 'idle',
@@ -315,6 +317,7 @@ describe('SettingsSheet', () => {
       updateStatus: {
         configured: false,
         managed_by_store: true,
+        managed_by_package_manager: false,
         channel: '',
         target: '',
         stage: 'store',
@@ -346,6 +349,7 @@ describe('SettingsSheet', () => {
       updateStatus: {
         configured: false,
         managed_by_store: false,
+        managed_by_package_manager: false,
         channel: '',
         target: '',
         stage: 'idle',
