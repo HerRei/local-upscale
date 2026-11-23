@@ -48,7 +48,9 @@ CORE_ML_GPU = "CPU_AND_GPU"
 # Engine's compiler did not finish loading the 400x400 program in over 10 minutes
 # (M1 Pro, macOS 27.2), so its Core ML route uses the GPU, which loads it in 3 s.
 # HAT, SwinIR and NAFNet produce broken fp16 output and SCUNet does not convert,
-# so every other architecture keeps PyTorch.
+# so every other architecture keeps PyTorch. NERVE and HEART (own checkpoints, #154)
+# were not verified on Core ML or the Neural Engine, so they run on the Apple GPU
+# through PyTorch too.
 COMPUTE_UNITS = {
     "SPAN": (NEURAL_ENGINE, CORE_ML_GPU),
     "ESRGAN": (NEURAL_ENGINE, CORE_ML_GPU),

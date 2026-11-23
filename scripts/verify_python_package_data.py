@@ -16,6 +16,8 @@ REQUIRED_SUFFIXES = (
     "localsr/video_models/seedvr2/pos_emb.safetensors",
     "localsr/video_models/seedvr2/NOTICE.md",
     "localsr/image_models/ddcolor/NOTICE.md",
+    "localsr/image_models/heart/NOTICE.md",
+    "localsr/image_models/nerve/NOTICE.md",
     "localsr/video_models/rife/NOTICE.md",
     "localsr/video_models/seedvr2/src/models/video_vae_v3/s8_c16_t4_inflation_sd3.yaml",
     "localsr/video_models/seedvr2/vendor/LICENSE",

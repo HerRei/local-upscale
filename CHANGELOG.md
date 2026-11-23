@@ -13,6 +13,7 @@
 - **Your own models.** Own checkpoints get a name you can change and their own group
   in the model picker. A .pth, .pt or .ckpt file is confirmed once per file, not
   per job (#146).
+- **Newer upscaler architectures.** Own NERVE and HEART checkpoints load (#154).
 - **Cache.** Advanced settings show the size of the compiled model caches with a
   Clear cache button; entries unused for 30 days, or beyond 5 GB, are removed at
   start (#126).

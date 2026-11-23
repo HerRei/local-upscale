@@ -45,6 +45,14 @@ datas = spandrel_datas + [
         "localsr/image_models/ddcolor",
     ),
     (
+        str(SOURCE / "localsr" / "image_models" / "heart" / "NOTICE.md"),
+        "localsr/image_models/heart",
+    ),
+    (
+        str(SOURCE / "localsr" / "image_models" / "nerve" / "NOTICE.md"),
+        "localsr/image_models/nerve",
+    ),
+    (
         str(SOURCE / "localsr" / "video_models" / "rife" / "NOTICE.md"),
         "localsr/video_models/rife",
     ),
