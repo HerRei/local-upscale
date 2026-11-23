@@ -652,7 +652,12 @@
   }
   $: if (snapshot.runtime.active_job_id && !cancelling) stoppedNote = '';
 
-  $: settings = withListedDevice(snapshot.settings, snapshot.capabilities);
+  /** Hardware and low priority chosen in Advanced for this session; Settings saves the
+   * defaults. A new default in Settings ends the session choice for that setting. */
+  let sessionChoice: Partial<Pick<UiSettings, 'device_id' | 'neural_engine' | 'low_priority'>> = {};
+  const sessionKeys = ['device_id', 'neural_engine', 'low_priority'] as const;
+  $: defaultSettings = withListedDevice(snapshot.settings, snapshot.capabilities);
+  $: settings = withListedDevice({ ...snapshot.settings, ...sessionChoice }, snapshot.capabilities);
   // Editing bundle, device and capacity checks.
   $: editModels = snapshot.edit.models;
   $: editingDevice = editDevice(snapshot.capabilities, settings);
@@ -1748,8 +1753,6 @@
     if (message.type === 'job_completed' || message.type === 'video_job_completed') {
       scheduleRefresh();
     }
-    // The host decides at the start whether the finished part of this job can be kept.
-    if (message.type === 'job_started') scheduleRefresh();
     if (
       message.type === 'download-queued' ||
       message.type === 'download-started' ||
@@ -2345,6 +2348,51 @@
    * App-wide preferences are saved by the host on its own and may change during a job.
    * The window shows the host's value afterwards, also when saving failed.
    */
+  /** Advanced: hardware and low priority hold for this session, the rest is saved. */
+  function chooseInAdvanced(patch: Partial<UiSettings>): void {
+    const rest: Partial<UiSettings> = { ...patch };
+    let next = { ...sessionChoice };
+    for (const key of sessionKeys) {
+      if (!(key in patch)) continue;
+      delete rest[key];
+      if (patch[key] === snapshot.settings[key]) {
+        const { [key]: _dropped, ...kept } = next;
+        next = kept;
+      } else {
+        next = { ...next, [key]: patch[key] };
+      }
+    }
+    if ('low_priority' in patch) {
+      void api
+        .setRunLowPriority(Boolean(patch.low_priority))
+        .catch((error) => showModal('Could not change the priority', String(error)));
+    }
+    sessionChoice = next;
+    if (Object.keys(rest).length) updateSettings(rest);
+  }
+
+  function useDefaultsForSession(): void {
+    if ('low_priority' in sessionChoice) {
+      void api
+        .setRunLowPriority(Boolean(snapshot.settings.low_priority))
+        .catch((error) => showModal('Could not change the priority', String(error)));
+    }
+    sessionChoice = {};
+  }
+
+  /** Settings: a new default also replaces the session choice for that setting. */
+  function updateDefaults(patch: Partial<UiSettings>): void {
+    let next = { ...sessionChoice };
+    for (const key of sessionKeys) {
+      if (key in patch) {
+        const { [key]: _dropped, ...kept } = next;
+        next = kept;
+      }
+    }
+    sessionChoice = next;
+    updateSettings(patch);
+  }
+
   async function setPreference(
     name: api.PreferenceName,
     value:
@@ -2362,6 +2410,10 @@
     }
     try {
       await api.setPreference(name, value);
+      if (name === 'low_priority') {
+        const { low_priority: _ended, ...kept } = sessionChoice;
+        sessionChoice = kept;
+      }
       snapshot = { ...snapshot, settings: { ...snapshot.settings, [name]: value } };
       if (name === 'appearance' || name === 'colour_blind_palette') {
         themeForRefresh(snapshot.settings);
@@ -5069,9 +5121,10 @@
               {usingTemporalVideo}
               {preservingHdr}
               {interpolationSupported}
-              {updateSettings}
+              updateSettings={chooseInAdvanced}
+              defaults={defaultSettings}
+              onUseDefaults={useDefaultsForSession}
               {chooseOutput}
-              onOpenHardwareSettings={() => openSettings('performance', 'hardware')}
               onOpenFfmpegSettings={() => openSettings('storage', 'ffmpeg')}
               refreshCapabilities={async () => {
                 try {
@@ -5313,7 +5366,7 @@
 
 {#if settingsOpen}
   <SettingsSheet
-    {settings}
+    settings={defaultSettings}
     capabilities={snapshot.capabilities}
     engines={snapshot.engines}
     section={settingsSection}
@@ -5333,7 +5386,7 @@
     linuxMenuInstalled={Boolean(snapshot.linux_menu_installed)}
     {linuxMenuBusy}
     setPreference={(name, value) => void setPreference(name, value)}
-    {updateSettings}
+    updateSettings={updateDefaults}
     {chooseModelFolder}
     {resetModelFolder}
     clearCache={askClearCache}

@@ -796,3 +796,38 @@ it('tracks the audio cleanup phase title, chunk progress and ETA', () => {
   expect(snapshot.runtime.status_detail).toContain('ETA');
   expect(snapshot.runtime.throughput_unit).toBe('');
 });
+
+describe('stopping a video', () => {
+  it('takes the host decision about keeping from job_started and counts frames before the current one', () => {
+    let snapshot = demoSnapshot();
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'job_started',
+      data: { job_id: 'v1', can_keep_partial: false },
+    });
+    expect(snapshot.runtime.can_keep_partial).toBe(false);
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'video_frame_started',
+      data: { job_id: 'v1', frame_index: 4, total_frames: 10 },
+    });
+    expect(snapshot.runtime.frames_processed).toBe(4);
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'job_started',
+      data: { job_id: 'v2', can_keep_partial: true },
+    });
+    expect(snapshot.runtime.can_keep_partial).toBe(true);
+    expect(snapshot.runtime.frames_processed).toBe(0);
+  });
+
+  it('names de-flickering and keeps the progress', () => {
+    let snapshot = demoSnapshot();
+    snapshot = applyWorkerEnvelope(snapshot, { type: 'job_started', data: { job_id: 'v1' } });
+    snapshot.runtime.progress = 40;
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'video_stage_progress',
+      data: { job_id: 'v1', stage: 'deflickering', completed: 6, total: 52 },
+    });
+    expect(snapshot.runtime.status_title).toBe('De-flickering');
+    expect(snapshot.runtime.status_detail).toContain('Frame 6 of 52');
+    expect(snapshot.runtime.progress).toBe(40);
+  });
+});

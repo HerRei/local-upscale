@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { editDevice, editSizeLimit } from './lib/editing';
+  import { editDevice, editSizeLimit, editingDevices } from './lib/editing';
   import { detectedFfmpeg, systemCodecs } from './lib/ffmpeg';
   import {
     codecPatch,
@@ -12,8 +12,8 @@
   import { onDestroy } from 'svelte';
   import HelpTip from './HelpTip.svelte';
   import { isRestoreTask } from './lib/plan';
-  import { engineLabel, selectedHardware } from './lib/neuralEngine';
-  import { deviceLabel } from './lib/hardwareRoutes';
+  import { hardwareChoices, hardwarePatch, selectedHardware } from './lib/neuralEngine';
+  import { groupedHardware, optionLabel } from './lib/hardwareRoutes';
   import type {
     CapabilityInfo,
     CatalogModel,
@@ -33,7 +33,9 @@
   export let interpolationSupported = false;
   export let updateSettings: (patch: Partial<UiSettings>) => void;
   export let chooseOutput: () => Promise<void>;
-  export let onOpenHardwareSettings: () => void = () => undefined;
+  /** The saved defaults from Settings; hardware and low priority here apply to this session. */
+  export let defaults: UiSettings | undefined = undefined;
+  export let onUseDefaults: () => void = () => undefined;
   export let onOpenFfmpegSettings: () => void = () => undefined;
   /** Resolves true when the host took the request, false when it refused (and said so). */
   export let refreshCapabilities: () => Promise<boolean>;
@@ -49,23 +51,35 @@
   $: npuRunning =
     npuSelected &&
     selectedHardware(settings, capabilities, selectedModel?.architecture) === settings.device_id;
-  $: activeDevice = capabilities.devices.find((device) => device.id === settings.device_id);
-  $: editingDevice = editDevice(capabilities, settings);
-  $: hardwareDisplay =
-    settings.task === 'edit'
-      ? editingDevice
-        ? deviceLabel(editingDevice)
-        : 'No supported GPU'
+  function hardwareGroupsFor(choice: UiSettings) {
+    return groupedHardware(
+      choice.task === 'edit'
+        ? editingDevices(capabilities)
+        : usingTemporalVideo
+          ? capabilities.devices
+          : hardwareChoices(capabilities, selectedModel?.architecture),
+    );
+  }
+  function hardwareValueFor(choice: UiSettings): string {
+    return choice.task === 'edit'
+      ? (editDevice(capabilities, choice)?.id ?? '')
       : usingTemporalVideo
-        ? activeDevice
-          ? deviceLabel(activeDevice)
-          : 'Detecting hardware'
-        : engineLabel(
-            settings,
-            capabilities,
-            selectedModel?.architecture,
-            activeDevice ? deviceLabel(activeDevice) : 'Detecting hardware',
-          );
+        ? choice.device_id
+        : selectedHardware(choice, capabilities, selectedModel?.architecture);
+  }
+  $: hardwareGroups = hardwareGroupsFor(settings);
+  $: hardwareValue = hardwareValueFor(settings);
+  // A long entry (a GPU with its route) takes the row's full width, so the closed menu shows
+  // the whole name and route instead of cutting them.
+  $: hardwareStacked = hardwareGroups.some((group) =>
+    group.options.some((option) => option.label.length > 22),
+  );
+  $: defaultHardware = defaults
+    ? optionLabel(hardwareGroups, hardwareValueFor(defaults)) || hardwareValueFor(defaults)
+    : '';
+  $: hardwareDiffers = Boolean(defaults) && hardwareValueFor(defaults!) !== hardwareValue;
+  $: priorityDiffers =
+    Boolean(defaults) && Boolean(defaults!.low_priority) !== Boolean(settings.low_priority);
   let advanced = false;
   let refreshing = false;
   let refreshed = false;
@@ -473,23 +487,74 @@
         </div>
         <b>Choose…</b>
       </div>
-      <div class="field-row engine-row">
+      <div class="field-row" class:stacked={hardwareStacked}>
         <span class="label-with-tip"
-          ><span class="field-label">Hardware</span><HelpTip
+          ><label for="device">Hardware</label><HelpTip
             label="Hardware"
             text="Which processor runs the model. A GPU is much faster than the CPU. On a Mac, Neural Engine runs the models it supports, such as Quick, on Apple's AI chip; for other models only the Apple GPU and the CPU are listed, and your choice is kept for the next model that supports it."
           /></span
+        ><select
+          id="device"
+          title={optionLabel(hardwareGroups, hardwareValue) || undefined}
+          value={hardwareValue}
+          on:change={(event) =>
+            updateSettings(
+              settings.task === 'edit' || usingTemporalVideo
+                ? { device_id: event.currentTarget.value }
+                : hardwarePatch(event.currentTarget.value, selectedModel?.architecture),
+            )}
+          >{#each hardwareGroups as group}{#if group.options.length > 1}<optgroup label={group.name}
+                >{#each group.options as option}<option value={option.id}>{option.label}</option
+                  >{/each}</optgroup
+              >{:else}<option value={group.options[0].id}>{group.name}</option>{/if}{/each}</select
         >
-        <div class="engine-value">
-          <span class="engine-active-label" title={hardwareDisplay}>{hardwareDisplay}</span>
-          <button
-            id="advanced-hardware-change"
-            type="button"
-            class="link-button"
-            on:click={onOpenHardwareSettings}>Change…</button
-          >
-        </div>
       </div>
+      <!-- Not an <input> or <label>: this stays clickable and full-strength while a job locks the settings above. -->
+      <div class="check-line">
+        <span
+          id="low-priority"
+          role="checkbox"
+          tabindex="0"
+          aria-checked={Boolean(settings.low_priority)}
+          class="check-row live-setting"
+          on:click={() => updateSettings({ low_priority: !settings.low_priority })}
+          on:keydown={(event) => {
+            if (event.key === ' ' || event.key === 'Enter') {
+              event.preventDefault();
+              updateSettings({ low_priority: !settings.low_priority });
+            }
+          }}
+          ><span
+            class="live-checkbox"
+            class:checked={Boolean(settings.low_priority)}
+            aria-hidden="true"
+            >{#if settings.low_priority}<svg
+                viewBox="0 0 12 12"
+                width="10"
+                height="10"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"><path d="M2.5 6.2 5 8.7 9.5 3.5" /></svg
+              >{/if}</span
+          ><span class="live-setting-label">Run at low priority</span></span
+        ><HelpTip
+          label="Run at low priority"
+          text="Keeps other apps responsive while LocalSR works. Jobs take longer, on a Mac about twice as long. It applies to the running job and the whole queue, and you can switch it during a job. Settings holds the default for the next start of LocalSR."
+        />
+      </div>
+      {#if hardwareDiffers || priorityDiffers}
+        <p class="model-description" id="advanced-session-choice">
+          For this session only. Default in Settings: {[
+            hardwareDiffers ? defaultHardware : '',
+            priorityDiffers ? (defaults?.low_priority ? 'low priority' : 'normal priority') : '',
+          ]
+            .filter(Boolean)
+            .join(', ')}.
+          <button type="button" class="link-button" on:click={onUseDefaults}>Use default</button>
+        </p>
+      {/if}
       {#if !usingTemporalVideo && settings.task !== 'edit'}
         <div class="field-grid">
           <div>

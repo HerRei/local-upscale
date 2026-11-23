@@ -233,6 +233,7 @@ pub fn run() {
             commands::clear_results,
             commands::save_settings,
             commands::set_preference,
+            commands::set_run_low_priority,
             commands::set_privacy_choice,
             commands::save_recipe,
             commands::delete_recipe,

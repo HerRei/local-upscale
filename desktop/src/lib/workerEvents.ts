@@ -168,6 +168,9 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
         next.runtime.total_frames = 0;
         next.runtime.can_keep_partial = undefined;
       }
+      // The host adds its decision about keeping a stopped job's finished part.
+      if (typeof data.can_keep_partial === 'boolean')
+        next.runtime.can_keep_partial = data.can_keep_partial;
       next.runtime.active_job_id = String(data.job_id ?? '');
       next.runtime.video_memory = undefined;
       next.runtime.status_title = 'Processing';

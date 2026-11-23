@@ -754,10 +754,32 @@ fn apply_preference(state: &AppState, name: &str, value: &Value) -> AppResult<()
         let enabled = lock(&state.settings)?.crash_reports;
         crate::crash_reports::configure_hook(&state.paths, enabled);
     } else if name == "low_priority" {
+        // A new default also ends the choice made in Advanced for this session.
+        *lock(&state.run_low_priority)? = None;
         let enabled = lock(&state.settings)?.low_priority;
         crate::worker::apply_low_priority(state, enabled);
     }
     Ok(())
+}
+
+/// Low priority for the work of this session, running and waiting jobs alike, without
+/// changing the saved default.
+#[tauri::command]
+pub fn set_run_low_priority(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    enabled: bool,
+) -> AppResult<()> {
+    set_run_low_priority_checked(&state, enabled);
+    emit_state_changed(&app);
+    Ok(())
+}
+
+pub(crate) fn set_run_low_priority_checked(state: &AppState, enabled: bool) {
+    if let Ok(mut choice) = state.run_low_priority.lock() {
+        *choice = Some(enabled);
+    }
+    crate::worker::apply_low_priority(state, enabled);
 }
 
 #[tauri::command]

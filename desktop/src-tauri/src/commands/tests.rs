@@ -4345,3 +4345,18 @@ fn retry_on_cpu_rechecks_the_approval_of_an_own_checkpoint() {
     flag_only["data"]["allow_unverified_checkpoint"] = json!(true);
     assert!(check_retry_checkpoint_consent(&state, &flag_only).is_err());
 }
+
+#[test]
+fn low_priority_from_advanced_lasts_for_the_session_and_a_new_default_ends_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = AppState::from_paths(AppPaths::under(&dir.path().join("app"))).unwrap();
+    assert!(!crate::worker::effective_low_priority(&state));
+    set_run_low_priority_checked(&state, true);
+    assert!(crate::worker::effective_low_priority(&state));
+    // The saved default is untouched.
+    assert!(!lock(&state.settings).unwrap().low_priority);
+    // Choosing a default in Settings ends the session choice.
+    apply_preference(&state, "low_priority", &json!(false)).unwrap();
+    assert!(lock(&state.run_low_priority).unwrap().is_none());
+    assert!(!crate::worker::effective_low_priority(&state));
+}

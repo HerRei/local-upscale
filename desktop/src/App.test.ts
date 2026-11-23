@@ -69,6 +69,7 @@ const api = vi.hoisted(() => ({
   refreshSnapshot: vi.fn(),
   getCacheSize: vi.fn(async () => 0),
   clearCache: vi.fn(async () => 0),
+  setRunLowPriority: vi.fn(async () => undefined),
   chooseMediaFiles: vi.fn(async (): Promise<string[]> => []),
   chooseMediaFolder: vi.fn(
     async (): Promise<{ paths: string[]; outputDirectory: string } | null> => null,
@@ -1631,12 +1632,9 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByRole('button', { name: 'Change the upscaler' })).toBeTruthy();
 
     await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
-    await user.click(screen.getByRole('button', { name: 'Change…' }));
-    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
-    const hardware = within(settingsDialog).getByLabelText('Hardware');
+    const hardware = screen.getByLabelText('Hardware');
     expect(within(hardware).getByRole('option', { name: 'Apple GPU (Metal)' })).toBeTruthy();
     expect(within(hardware).getByRole('option', { name: 'CPU' })).toBeTruthy();
-    await user.click(within(settingsDialog).getByRole('button', { name: 'Done' }));
 
     // Faces need a primary model with a companion; the default Best (RealPLKSR)
     // has none, so the chip is not offered until such a model is chosen.
@@ -4045,8 +4043,9 @@ describe('LocalSR desktop interface', () => {
     const user = await mountWith(snapshot);
     await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
     expect((screen.getByLabelText('Precision') as HTMLSelectElement).value).toBe('fp16');
-    await user.click(document.getElementById('advanced-hardware-change') as HTMLElement);
+    await chooseMenuItem('app.settings');
     const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Performance' }));
     expect(within(settingsDialog).getByText(/compiles a model once for the NPU/)).toBeTruthy();
     cleanup();
 
@@ -7882,6 +7881,43 @@ describe('Settings sheet', () => {
       expect(screen.queryByRole('dialog', { name: 'System Integrations' })).toBeNull(),
     );
     expect(screen.getByRole('dialog', { name: 'Settings' })).toBeTruthy();
+  });
+});
+
+describe('Hardware and low priority in Advanced', () => {
+  it('apply to this session and the next start without changing the defaults in Settings', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.device_id = 'mps';
+    snapshot.settings.low_priority = false;
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'cpu');
+    await user.click(screen.getByRole('checkbox', { name: 'Run at low priority' }));
+    expect(api.setRunLowPriority).toHaveBeenCalledWith(true);
+    expect(api.saveSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({ device_id: 'cpu' }),
+    );
+    expect(api.setPreference).not.toHaveBeenCalledWith('low_priority', true);
+    expect(document.getElementById('advanced-session-choice')?.textContent).toContain(
+      'For this session only',
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Upscale selected' }));
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalled());
+    const input = api.startJobs.mock.calls.at(-1)?.[0] as { device: string };
+    expect(input.device).toBe('cpu');
+
+    // Settings still shows the defaults.
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Performance' }));
+    expect(
+      (
+        within(settingsDialog).getByRole('switch', {
+          name: 'Run at low priority',
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(false);
   });
 });
 

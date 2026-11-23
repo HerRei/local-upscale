@@ -6,11 +6,10 @@ import { upscale, video, windows } from './fixtures';
 async function openAdvanced(page: Page): Promise<void> {
   await showPane(page, 'enhance');
   await page.getByRole('button', { name: /^Advanced/ }).click();
-  await expect(page.locator('#advanced-hardware-change')).toBeVisible();
+  await expect(page.locator('#device')).toBeVisible();
 }
 
-// Hardware is an app-wide setting: Advanced shows it read-only with a shortcut that
-// opens Settings at Performance.
+// Settings holds the default hardware; Advanced chooses it for this session.
 // External FFmpeg is app-wide too: its Advanced row opens Settings at Storage.
 async function openFfmpegSettings(page: Page): Promise<void> {
   await openAdvanced(page);
@@ -23,7 +22,11 @@ async function openFfmpegSettings(page: Page): Promise<void> {
 
 async function openHardwareSettings(page: Page): Promise<void> {
   await openAdvanced(page);
-  await page.locator('#advanced-hardware-change').click();
+  await emit(page, 'native-menu-action', 'app.settings');
+  await page
+    .getByRole('dialog', { name: 'Settings' })
+    .getByRole('tab', { name: 'Performance' })
+    .click();
   await expect(page.locator('#settings-device')).toBeVisible();
 }
 

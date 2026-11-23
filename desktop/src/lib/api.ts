@@ -204,6 +204,10 @@ export const saveCustomEditModel = (custom: CustomEditModel, runtimePath: string
 export const retryEngine = (): Promise<void> => invoke('retry_engine');
 export const retryJobOnCpu = (jobId: string): Promise<void> =>
   invoke('retry_job_on_cpu', { jobId });
+/** Low priority for this session's work, without changing the saved default. */
+export const setRunLowPriority = (enabled: boolean): Promise<void> =>
+  invoke('set_run_low_priority', { enabled });
+
 export const cancelJobs = (keepPartial = false): Promise<void> =>
   invoke('cancel_jobs', { keepPartial });
 export const startBenchmark = (device: string): Promise<void> =>

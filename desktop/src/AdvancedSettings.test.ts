@@ -253,22 +253,22 @@ describe('Refresh in the memory line', () => {
   });
 });
 
-describe('Read-only Hardware shortcut row', () => {
-  it('shows the effective hardware label and opens Settings at Performance on Change…', async () => {
-    const onOpenHardwareSettings = vi.fn();
-    render(AdvancedSettings, {
-      settings: { ...demoSnapshot().settings, task: 'upscale', device_id: 'openvino:80d1' },
-      selectedModel: {
-        ...demoSnapshot().catalog.models[0],
-        architecture: 'SwinIR',
-      },
+describe('Hardware and low priority for this session', () => {
+  it('changes hardware and low priority through updateSettings and offers the default back', async () => {
+    const updateSettings = vi.fn();
+    const onUseDefaults = vi.fn();
+    const settings = { ...demoSnapshot().settings, task: 'upscale' as const, device_id: 'cpu' };
+    const props = {
+      settings,
+      defaults: { ...settings, device_id: 'openvino:80d1', low_priority: false },
+      selectedModel: { ...demoSnapshot().catalog.models[0], architecture: 'SPAN' },
       capabilities: {
         ...base,
         devices: [
           ...base.devices,
           {
             id: 'openvino:80d1',
-            type: 'npu',
+            type: 'npu' as const,
             name: 'Intel(R) AI Boost (NPU)',
             total_memory: 8 * 1024 ** 3,
             free_memory: 6 * 1024 ** 3,
@@ -279,16 +279,41 @@ describe('Read-only Hardware shortcut row', () => {
         ],
       },
       usingTemporalVideo: false,
+      updateSettings,
+      onUseDefaults,
+      chooseOutput: async () => undefined,
+      refreshCapabilities: async () => true,
+    };
+    render(AdvancedSettings, props);
+    await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+    const select = screen.getByLabelText('Hardware') as HTMLSelectElement;
+    expect(select.value).toBe('cpu');
+    await fireEvent.change(select, { target: { value: 'openvino:80d1' } });
+    expect(updateSettings).toHaveBeenCalledWith({ device_id: 'openvino:80d1' });
+
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'Run at low priority' }));
+    expect(updateSettings).toHaveBeenCalledWith({ low_priority: true });
+
+    const note = document.getElementById('advanced-session-choice') as HTMLElement;
+    expect(note.textContent).toContain('For this session only. Default in Settings:');
+    expect(note.textContent).toContain('NPU');
+    await fireEvent.click(screen.getByRole('button', { name: 'Use default' }));
+    expect(onUseDefaults).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows no session note while the choices match the defaults', async () => {
+    const settings = { ...demoSnapshot().settings, task: 'upscale' as const };
+    render(AdvancedSettings, {
+      settings,
+      defaults: settings,
+      selectedModel: demoSnapshot().catalog.models[0],
+      capabilities: base,
+      usingTemporalVideo: false,
       updateSettings: vi.fn(),
       chooseOutput: async () => undefined,
-      onOpenHardwareSettings,
       refreshCapabilities: async () => true,
     });
     await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
-    expect(screen.getByText('CPU · this model does not run on the NPU')).toBeTruthy();
-    const changeBtn = screen.getByRole('button', { name: 'Change…' });
-    expect(changeBtn.classList.contains('link-button')).toBe(true);
-    await fireEvent.click(changeBtn);
-    expect(onOpenHardwareSettings).toHaveBeenCalledTimes(1);
+    expect(document.getElementById('advanced-session-choice')).toBeNull();
   });
 });

@@ -201,7 +201,6 @@ describe('every labelled control in Advanced has a help tip or a reason not to',
       'Model cache',
       'Interface text',
       'Show sampled enhanced previews (max 2 fps)',
-      'Run at low priority',
       'Show in menu bar',
       'Monochrome menu bar icon',
       'Notify when a file finishes',
@@ -233,10 +232,12 @@ describe('the wording of the help tips', () => {
 });
 
 describe('while a job runs, the whole Advanced section is locked', () => {
-  // Help tips and Refresh stay usable; every other interactive thing must be
-  // disabled, so a control added later that sits outside the locked fieldset fails here.
+  // Help tips, Refresh and Run at low priority stay usable; every other interactive thing must
+  // be disabled, so a control added later that sits outside the locked fieldset fails here.
   const usable = (element: Element) =>
-    element.classList.contains('help-tip') || element.classList.contains('memory-refresh');
+    element.classList.contains('help-tip') ||
+    element.classList.contains('memory-refresh') ||
+    element.classList.contains('live-setting');
 
   for (const variant of variants) {
     it(variant.name, async () => {

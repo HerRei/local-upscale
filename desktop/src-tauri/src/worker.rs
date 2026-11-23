@@ -242,7 +242,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         return Ok(());
     }
 
-    let low_priority = lock(&state.settings)?.low_priority;
+    let low_priority = effective_low_priority(&state);
     *lock(&state.edit_runtime)? = String::new();
     let specification = resolve_worker_command(&state, &app)?;
     let pending_start = specification.installed_engine_id.as_ref().and_then(|id| {
@@ -677,6 +677,22 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
     });
 
     Ok(())
+}
+
+/// The priority the engine runs at now: the choice made in Advanced, else the default.
+pub fn effective_low_priority(state: &AppState) -> bool {
+    let chosen = state
+        .run_low_priority
+        .lock()
+        .ok()
+        .and_then(|choice| *choice);
+    chosen.unwrap_or_else(|| {
+        state
+            .settings
+            .lock()
+            .map(|settings| settings.low_priority)
+            .unwrap_or(false)
+    })
 }
 
 pub fn apply_low_priority(state: &AppState, low_priority: bool) {
@@ -1262,6 +1278,19 @@ fn handle_worker_envelope(
         return;
     }
     stop_if_disk_full(state, &envelope);
+    // The window learns with the start whether this job's finished part can be kept;
+    // the host decided that when it sent the job.
+    let mut envelope = envelope;
+    if envelope.message_type == "job_started" {
+        let keep = state
+            .runtime
+            .lock()
+            .ok()
+            .and_then(|runtime| runtime.can_keep_partial);
+        if let (Some(keep), Some(data)) = (keep, envelope.data.as_object_mut()) {
+            data.insert("can_keep_partial".into(), Value::Bool(keep));
+        }
+    }
     // Apply native state first so a frontend callback can immediately issue a
     // command against the state represented by this envelope.
     let _ = app.emit("worker-message", envelope.clone());
@@ -1721,8 +1750,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             }
             // Always the current value: the switch may have changed while the
             // engine was starting, before its pid and pipe existed.
-            let low_priority = lock(&state.settings)?.low_priority;
-            apply_low_priority(state, low_priority);
+            apply_low_priority(state, effective_low_priority(state));
             send(state, &json!({"type": "capabilities_request", "data": {}}))?;
             for path in lock(&state.database)?.pending_probe_paths()? {
                 send(state, &media_probe_request(state, &path))?;
@@ -2424,7 +2452,12 @@ pub(crate) fn codec_helper_command(state: &AppState, _app: &AppHandle) -> AppRes
             );
             command.env("LOCALSR_EXTERNAL_FFMPEG", path);
         }
-        settings.low_priority
+        let chosen = state
+            .run_low_priority
+            .lock()
+            .ok()
+            .and_then(|choice| *choice);
+        chosen.unwrap_or(settings.low_priority)
     } else {
         false
     };

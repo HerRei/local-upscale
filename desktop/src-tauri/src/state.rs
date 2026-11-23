@@ -120,6 +120,9 @@ pub struct AppState {
     gpu_download_notice_cache: Mutex<Option<Option<String>>>,
     engine_recommendation_cache: Mutex<Option<crate::types::EngineRecommendation>>,
     pub tray_state: Mutex<Option<crate::tray::TraySnapshot>>,
+    /// Low priority chosen in Advanced for the work of this session; the saved setting
+    /// is only the default. None follows the default.
+    pub run_low_priority: Mutex<Option<bool>>,
 }
 
 impl AppState {
@@ -202,6 +205,7 @@ impl AppState {
             gpu_download_notice_cache: Mutex::new(None),
             engine_recommendation_cache: Mutex::new(None),
             tray_state: Mutex::new(None),
+            run_low_priority: Mutex::new(None),
         })
     }
 
