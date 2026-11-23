@@ -1180,8 +1180,11 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
 
 /// "Try again" after the host gave up restarting the inference engine.
 #[tauri::command]
-pub fn retry_engine(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
-    worker::retry_engine(&state, &app)
+pub async fn retry_engine(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || worker::retry_engine(&state, &app))
+        .await
+        .map_err(|error| AppError::Worker(error.to_string()))?
 }
 
 #[tauri::command]

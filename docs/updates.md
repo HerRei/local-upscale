@@ -414,33 +414,46 @@ or AppImage:
   restarts. `import_engine` installs a downloaded `*.engine-payload.json` and its
   parts from disk using companion `.sig` files (or matching verified catalog
   signatures). Both verify minisign signatures and SHA-256 digests, unpack the
-  engine, run the worker protocol handshake, hold the job lock while swapping the
-  engine and activating `active-engine.txt`, write host metadata (`meta.json`)
-  including every extracted file's relative path, size and SHA-256 digest, and
-  keep the previous backup until activation succeeds. For schema 2 manifests,
+  engine and run its protocol handshake in a staging folder. Under the job lock,
+  LocalSR renames the payload and its `meta.json` together and activates the
+  engine through `active-engine.txt`. The metadata records every extracted file's
+  relative path, size and SHA-256 digest. For a same-ID replacement, LocalSR keeps
+  the previous payload and metadata until the replacement completes its first
+  normal worker handshake. A start that finds an incomplete or invalid replacement
+  can restore the previous copy after verifying it. An app-update rollback also
+  restores the previous engine when the update replaced it. For schema 2 manifests,
   `import_engine` also refuses packages for another OS, architecture or protocol
   version, or a version older than the installed version of that backend. Both
   test a staged engine before replacing an existing one. Installed engine folders
   need metadata from a verified install before they can be selected. Older
-  metadata from a handshake alone is not enough. These engines show **Needs
-  reinstall**; choose **Use** to download and install the signed engine again. An
-  interrupted replacement restores its backup at startup or on the next import
-  and discards ambiguous metadata, so that engine needs reinstall too. If a job
+  metadata from a handshake alone is insufficient. These engines show **Needs
+  reinstall**. Choose **Use** to download and install the signed engine again.
+  Recovery also handles older backups that contain only a payload. LocalSR can
+  start a recovered payload when the remaining metadata verifies it. If a job
   starts during a download or handshake, the swap is refused before replacing the
   active engine and can be retried once the job ends. Network fetches are refused
   before `privacy_choice_made`, in Store editions, while jobs run, or when free
   disk space is insufficient.
 - **Switching, verification, fallback and app updates.** `use_engine` switches
   between installed engines and the bundled CPU fallback; `remove_engine`
-  deletes an inactive engine folder. At worker start, LocalSR runs a quick check
-  that every recorded engine file is present at its recorded size. The **Verify**
-  button in the Engine dialog runs `verify_engine` for a full SHA-256 check of
-  every recorded file. If either check fails, the engine is marked **Needs
-  reinstall**, `active-engine.txt` is cleared if it was active, and LocalSR
+  deletes an inactive engine folder. Listing, starting, verifying, staging and
+  removing engines require real directories under `engines/`. LocalSR refuses
+  symbolic links and Windows reparse points, including junctions. At every worker
+  start, LocalSR checks file sizes and hashes the worker executable, native
+  libraries, Python code and archives such as `base_library.zip`, and the native
+  editing helper. It rejects code files missing from the recorded file list.
+  Startup verification runs in the background with the bundled engine available
+  as fallback. The **Verify** button runs a full SHA-256 check of every recorded
+  file. If verification fails and no previous copy can be recovered at startup,
+  LocalSR marks the engine **Needs reinstall**, clears its active selection and
   falls back to the bundled engine. Failed installed engines are excluded until
-  the user selects Use or reimports them, and the restart limit also applies to
-  the bundled engine. App updates keep the user's chosen backend and update that
-  backend's engine alongside the host.
+  the user selects Use or reimports them. App updates keep the user's chosen backend
+  and update that backend's engine alongside the host.
+
+  The publisher signs the payload manifest and archive parts. LocalSR derives the
+  per-file hashes during verified extraction and saves them in app data. Later
+  checks compare the engine files with that local record. Authenticating the record
+  independently would require a signed file list or a trust anchor outside app data.
 - **Interface.** After the first-launch setup screen's Continue, if the recommended
   GPU engine is not installed, LocalSR offers one dismissable card to download it
   (remembered via `gpu_download_notice_dismissed`). The same engines, progress,

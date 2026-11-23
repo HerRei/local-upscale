@@ -2359,3 +2359,114 @@ fn relative_helper_overrides_resolve_from_host_directory() {
         PathBuf::from("~/tools/helper")
     );
 }
+
+fn write_installed_engine(
+    next_root: &std::path::Path,
+    id: &str,
+    content: &[u8],
+) -> crate::updates::EngineMeta {
+    let engine = next_root.join("engines").join(id).join("engine");
+    std::fs::create_dir_all(&engine).unwrap();
+    std::fs::write(
+        engine.join(crate::updates::worker_executable_name()),
+        content,
+    )
+    .unwrap();
+    let meta = crate::updates::EngineMeta {
+        id: id.into(),
+        backend: "rocm".into(),
+        os: std::env::consts::OS.into(),
+        arch: std::env::consts::ARCH.into(),
+        protocol_version: crate::types::PROTOCOL_VERSION,
+        handshake_passed: true,
+        verified_install: true,
+        version: String::from_utf8(content.to_vec()).unwrap(),
+        files: crate::updates::test_engine_files(next_root, id),
+    };
+    crate::updates::write_engine_meta(next_root, &meta).unwrap();
+    meta
+}
+
+#[test]
+fn codec_helper_reuses_the_verified_worker_run_and_never_changes_engine_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(directory.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let id = "gpu";
+    write_installed_engine(&paths.next_root, id, b"old");
+    let source = tempfile::tempdir().unwrap();
+    let new = write_installed_engine(source.path(), id, b"new");
+    let files = new.files.clone();
+    crate::updates::stage_engine_with(
+        &paths.next_root,
+        id,
+        |destination| {
+            std::fs::create_dir(destination)?;
+            std::fs::write(
+                destination.join(crate::updates::worker_executable_name()),
+                b"new",
+            )?;
+            Ok(files)
+        },
+        |_| Ok(()),
+    )
+    .unwrap()
+    .publish(Some(&new), None)
+    .unwrap();
+    let pointer = paths.next_root.join("active-engine.txt");
+    std::fs::write(&pointer, id).unwrap();
+    let token = crate::updates::pending_engine_token(&paths.next_root, id).unwrap();
+    let worker = paths
+        .next_root
+        .join("engines")
+        .join(id)
+        .join("engine")
+        .join(crate::updates::worker_executable_name());
+    let backup = paths.next_root.join("engines/.previous-gpu");
+    let unchanged = |content: &[u8]| {
+        assert_eq!(std::fs::read(&worker).unwrap(), content);
+        assert!(backup.is_dir());
+        assert!(
+            crate::updates::read_engine_meta(&paths.next_root, id)
+                .unwrap()
+                .verified_install
+        );
+        assert!(pointer.is_file());
+        assert!(state.worker.failed_engines.lock().unwrap().is_empty());
+    };
+
+    // Same-size damage after the worker start check: the helper must neither
+    // restore the backup nor mark the engine; the next worker start does that.
+    *state.worker.verified_run.lock().unwrap() = Some(VerifiedRun::for_test(
+        worker.clone(),
+        Some(id.into()),
+        Some(token.clone()),
+    ));
+    std::fs::write(&worker, b"bad").unwrap();
+    assert_eq!(codec_helper_specification(&state).unwrap().program, worker);
+    unchanged(b"bad");
+
+    // A later install replaced the engine this run verified.
+    *state.worker.verified_run.lock().unwrap() = Some(VerifiedRun::for_test(
+        worker.clone(),
+        Some(id.into()),
+        Some("earlier-install".into()),
+    ));
+    assert!(codec_helper_specification(&state).is_err());
+    unchanged(b"bad");
+
+    // A size change is refused without changing anything either.
+    *state.worker.verified_run.lock().unwrap() = Some(VerifiedRun::for_test(
+        worker.clone(),
+        Some(id.into()),
+        Some(token),
+    ));
+    std::fs::write(&worker, b"short!").unwrap();
+    assert!(codec_helper_specification(&state).is_err());
+    unchanged(b"short!");
+
+    // Without a verified worker run there is nothing to reuse.
+    *state.worker.verified_run.lock().unwrap() = None;
+    assert!(codec_helper_specification(&state).is_err());
+    unchanged(b"short!");
+}

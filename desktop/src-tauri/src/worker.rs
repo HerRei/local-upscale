@@ -46,12 +46,38 @@ pub(crate) fn set_helper_overrides(command: &mut Command) -> std::io::Result<()>
     Ok(())
 }
 
+#[derive(Clone, Debug, PartialEq)]
 struct WorkerCommand {
     program: PathBuf,
     arguments: Vec<String>,
     working_directory: Option<PathBuf>,
     python_path: Option<PathBuf>,
     installed_engine_id: Option<String>,
+}
+
+/// The worker command a start verified, and the pending install it ran, if any.
+#[derive(Clone, Debug)]
+pub(crate) struct VerifiedRun {
+    command: WorkerCommand,
+    install_token: Option<String>,
+}
+
+#[cfg(test)]
+impl VerifiedRun {
+    pub(crate) fn for_test(
+        program: PathBuf,
+        installed_engine_id: Option<String>,
+        install_token: Option<String>,
+    ) -> Self {
+        Self {
+            command: installed_worker_command(
+                program,
+                installed_engine_id,
+                std::path::Path::new("work"),
+            ),
+            install_token,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -184,6 +210,20 @@ fn spawn_failure_fallback<'a>(
     })
 }
 
+fn confirm_engine_start(state: &AppState, id: &str, token: &str) {
+    let retired = {
+        let Ok(_engine_files) = lock(&state.worker.engine_files) else {
+            return;
+        };
+        crate::updates::confirm_engine_start(&state.paths.next_root, id, token)
+    };
+    match retired {
+        Ok(Some(retired)) => crate::updates::remove_engine_tree_if_real(&retired),
+        Ok(None) => {}
+        Err(error) => eprintln!("LocalSR could not retire the previous engine: {error}"),
+    }
+}
+
 fn activate_bundled_fallback(state: &AppState, failed_id: &str) -> AppResult<()> {
     lock(&state.worker.failed_engines)?.insert(failed_id.to_owned());
     state
@@ -194,6 +234,7 @@ fn activate_bundled_fallback(state: &AppState, failed_id: &str) -> AppResult<()>
 }
 
 pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
+    let engine_files = lock(&state.worker.engine_files)?;
     if state.worker.shutting_down.load(Ordering::SeqCst) {
         return Ok(());
     }
@@ -204,6 +245,10 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
     let low_priority = lock(&state.settings)?.low_priority;
     *lock(&state.edit_runtime)? = String::new();
     let specification = resolve_worker_command(&state, &app)?;
+    let pending_start = specification.installed_engine_id.as_ref().and_then(|id| {
+        crate::updates::pending_engine_token(&state.paths.next_root, id)
+            .map(|token| (id.clone(), token))
+    });
     state.worker.using_installed_engine.store(
         specification.installed_engine_id.is_some(),
         Ordering::SeqCst,
@@ -225,10 +270,10 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
     // The engine starts FFmpeg and the system media helper. Stopping the engine has
     // to stop them too, so they stay in its process group (or Job Object).
     lead_own_group(&mut command);
-    if let Some(directory) = specification.working_directory {
+    if let Some(directory) = &specification.working_directory {
         command.current_dir(directory);
     }
-    if let Some(path) = specification.python_path {
+    if let Some(path) = &specification.python_path {
         command.env("PYTHONPATH", path);
         command.env("PYTHONUTF8", "1");
     }
@@ -249,6 +294,17 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                     .crashed_engine
                     .store(crashed_engine, Ordering::SeqCst);
             }
+            if specification
+                .installed_engine_id
+                .as_deref()
+                .is_some_and(|id| {
+                    crate::updates::restore_verified_engine_backup(&state.paths.next_root, id)
+                        .unwrap_or(false)
+                })
+            {
+                drop(engine_files);
+                return start_worker(state, app);
+            }
             let id = spawn_failure_fallback(
                 specification.installed_engine_id.as_deref(),
                 bundled_engine_executable(&app).is_some(),
@@ -267,6 +323,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                         .into();
             }
             emit_state_changed(&app);
+            drop(engine_files);
             return start_worker(state, app);
         }
     };
@@ -289,6 +346,11 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
     state.worker.finished_job.store(false, Ordering::SeqCst);
     let (sender, receiver) = mpsc::channel::<String>();
     *lock(&state.worker.sender)? = Some(sender);
+    *lock(&state.worker.verified_run)? = Some(VerifiedRun {
+        command: specification.clone(),
+        install_token: pending_start.as_ref().map(|(_, token)| token.clone()),
+    });
+    drop(engine_files);
     {
         let mut runtime = lock(&state.runtime)?;
         runtime.worker = "starting".into();
@@ -318,7 +380,9 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
     let reader_drained = drained.clone();
     let overflowed = Arc::new(AtomicBool::new(false));
     let reader_overflowed = overflowed.clone();
+    let starting_install = pending_start.clone();
     thread::spawn(move || {
+        let mut pending_start = pending_start;
         let mut event_gate = WorkerEventGate::default();
         let mut reader = BufReader::new(stdout);
         let mut line = Vec::new();
@@ -341,6 +405,16 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                     }
                     if event_gate.should_forward(&envelope, Instant::now()) {
                         handle_worker_envelope(&reader_state, &reader_app, envelope, generation);
+                        if reader_state.worker.engine_ready_seen.load(Ordering::SeqCst) {
+                            if let Some((id, token)) = pending_start.take() {
+                                // Deleting the backup takes a while; the reader keeps
+                                // forwarding worker messages meanwhile.
+                                let confirm_state = reader_state.clone();
+                                thread::spawn(move || {
+                                    confirm_engine_start(&confirm_state, &id, &token)
+                                });
+                            }
+                        }
                     }
                 }
                 Err(_) => {
@@ -541,6 +615,10 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         emit_state_changed(&app);
 
         let failed = forced_jobs.is_empty() && !requested_restart;
+        let failed_to_start = specification
+            .installed_engine_id
+            .as_deref()
+            .filter(|_| !state.worker.engine_ready_seen.load(Ordering::SeqCst));
         let finished_job = state.worker.finished_job.swap(false, Ordering::SeqCst);
         if let Some(delay) = restart_delay(
             &state.worker.restart_count,
@@ -552,13 +630,24 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
             if let Err(error) = start_worker(state.clone(), app.clone()) {
                 give_up_on_engine(&state, &app, error.to_string());
             }
-        } else if let Some(id) = bundled_fallback_id(
-            specification
-                .installed_engine_id
-                .as_deref()
-                .filter(|_| !state.worker.engine_ready_seen.load(Ordering::SeqCst)),
-            bundled_engine_executable(&app).is_some(),
-        ) {
+        } else if failed_to_start.is_some()
+            && starting_install.as_ref().is_some_and(|(id, token)| {
+                let Ok(_engine_files) = lock(&state.worker.engine_files) else {
+                    return false;
+                };
+                crate::updates::pending_engine_token(&state.paths.next_root, id).as_ref()
+                    == Some(token)
+                    && crate::updates::restore_verified_engine_backup(&state.paths.next_root, id)
+                        .unwrap_or(false)
+            })
+        {
+            state.worker.restart_count.store(0, Ordering::SeqCst);
+            if let Err(error) = start_worker(state.clone(), app.clone()) {
+                give_up_on_engine(&state, &app, error.to_string());
+            }
+        } else if let Some(id) =
+            bundled_fallback_id(failed_to_start, bundled_engine_executable(&app).is_some())
+        {
             if let Err(error) = activate_bundled_fallback(&state, id) {
                 give_up_on_engine(&state, &app, error.to_string());
                 return;
@@ -964,8 +1053,18 @@ pub fn shutdown(state: &AppState) {
     }
 }
 
-/// Stop the running worker and start a new one after switching engines.
-pub fn restart_for_engine_switch(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
+/// Whether a running worker was started from the installed engine `id`.
+pub(crate) fn runs_installed_engine(state: &AppState, id: &str) -> bool {
+    state.worker.pid.load(Ordering::SeqCst) != 0
+        && state.worker.verified_run.lock().is_ok_and(|run| {
+            run.as_ref()
+                .is_some_and(|run| run.command.installed_engine_id.as_deref() == Some(id))
+        })
+}
+
+/// Stop the running worker and wait until it has exited. `shutting_down` stays
+/// set, so nothing restarts it until the caller does.
+pub(crate) fn stop_for_engine_switch(state: &AppState) -> AppResult<()> {
     shutdown(state);
     let start = Instant::now();
     while state.worker.pid.load(Ordering::SeqCst) != 0 {
@@ -976,6 +1075,12 @@ pub fn restart_for_engine_switch(state: &Arc<AppState>, app: &AppHandle) -> AppR
         }
         thread::sleep(Duration::from_millis(50));
     }
+    Ok(())
+}
+
+/// Stop the running worker and start a new one after switching engines.
+pub fn restart_for_engine_switch(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
+    stop_for_engine_switch(state)?;
     state.worker.shutting_down.store(false, Ordering::SeqCst);
     state.worker.restart_count.store(0, Ordering::SeqCst);
     state
@@ -2182,8 +2287,29 @@ pub(crate) fn media_probe_request(state: &AppState, path: &str) -> serde_json::V
     })
 }
 
-pub(crate) fn codec_helper_command(state: &AppState, app: &AppHandle) -> AppResult<Command> {
-    let specification = resolve_worker_command(state, app)?;
+/// The command of the current worker run, which its start verified. Read-only:
+/// restoring a backup or marking an engine is left to the next worker start.
+fn codec_helper_specification(state: &AppState) -> AppResult<WorkerCommand> {
+    let run = lock(&state.worker.verified_run)?.clone().ok_or_else(|| {
+        AppError::Worker("The inference engine has not started yet. Try again shortly.".into())
+    })?;
+    if let Some(id) = &run.command.installed_engine_id {
+        let next_root = &state.paths.next_root;
+        // The marker disappears when this run confirms its install; any other
+        // token belongs to an install published after this run started.
+        let token = crate::updates::pending_engine_token(next_root, id);
+        let same_install = token.is_none() || token == run.install_token;
+        if !same_install || !crate::updates::installed_engine_looks_intact(next_root, id) {
+            return Err(AppError::Worker(
+                "The inference engine is being replaced. Try again when it has started.".into(),
+            ));
+        }
+    }
+    Ok(run.command)
+}
+
+pub(crate) fn codec_helper_command(state: &AppState, _app: &AppHandle) -> AppResult<Command> {
+    let specification = codec_helper_specification(state)?;
     let mut command = Command::new(specification.program);
     command.args(specification.arguments);
     set_helper_overrides(&mut command)?;
@@ -2280,12 +2406,11 @@ fn resolve_worker_command(state: &AppState, app: &AppHandle) -> AppResult<Worker
     let selected = if state.worker.use_bundled_fallback.load(Ordering::SeqCst) {
         bundled.map(|path| (path, None))
     } else {
-        let mut failed = lock(&state.worker.failed_engines)?;
-        let quick_failed = crate::updates::verify_active_engine_at_start(&state.paths, &mut failed);
-        // A failed copy is now in `failed`, so the normal choice skips it and keeps any
-        // other valid engine; only a fall back to the bundle is reported.
-        let choice = crate::updates::worker_engine_choice(&state.paths, bundled, &failed);
-        if quick_failed.is_some() && matches!(choice, Some((_, None))) {
+        let mut failed = lock(&state.worker.failed_engines)?.clone();
+        let (choice, verification_failed) =
+            crate::updates::verified_worker_engine_choice(&state.paths, bundled, &mut failed);
+        lock(&state.worker.failed_engines)?.extend(failed);
+        if verification_failed && matches!(choice, Some((_, None))) {
             if let Ok(mut runtime) = state.runtime.lock() {
                 runtime.status_title = "Switched to bundled engine".into();
                 runtime.status_detail =
