@@ -330,6 +330,21 @@ if openvino_package_libraries:
             duplicate.unlink()
             print(f"Removed the top-level copy of {name}")
 
+# The mlx module loads the top-level copy of libmlx.dylib (PyInstaller sets its library path
+# to @loader_path/..), and libmlx loads mlx.metallib from its own directory. Left in mlx/lib,
+# importing mlx.core aborts the worker (SIGTRAP in mlx::core::metal::Device) before the
+# handshake. A link would be copied as a second 214 MB file by the app bundler, so the
+# library moves to the top level; the copy of libmlx.dylib in mlx/lib is never loaded.
+if sys.platform == "darwin" and find_spec("mlx") is not None:
+    internal = Path(DISTPATH) / "engine" / "_internal"
+    metallib = internal / "mlx" / "lib" / "mlx.metallib"
+    if not (internal / "libmlx.dylib").is_file():
+        raise RuntimeError("Expected libmlx.dylib at the top level of the engine folder")
+    if not metallib.is_file():
+        raise RuntimeError(f"The MLX Metal library is missing: {metallib}")
+    metallib.replace(internal / "mlx.metallib")
+    print("Moved mlx.metallib next to the libmlx.dylib that Python loads")
+
 # Fail the build if any bundled media component falls outside the codec policy
 # (GPL/patent-licensed codecs such as x264, x265, H.264, HEVC or AAC). Private,
 # never-distributed preview builds may opt out explicitly.
