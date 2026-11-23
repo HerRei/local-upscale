@@ -31,6 +31,8 @@ UPDATE_GATES = {
     "update build identity": "release_targets.py --update-env",
     "installed update identity": "--update-target",
     "updater engine payload": "prepare_engine_payload.py",
+    # Older releases' own updaters must take this release (the 0.5.2 incident).
+    "update from older releases": "upgrade_check.py",
 }
 # The CPU .deb: its own identity (apt installs its updates), its Depends, and an install,
 # start and removal with apt.
@@ -59,6 +61,7 @@ MACOS_RELEASE_GATES = {
     "host smoke": "--headless-smoke-test",
     "signed update archive": "beta_update_signing.py sign",
     "signed release statement": "beta_update_signing.py statement",
+    "update from older releases": "upgrade_check.py",
     "corresponding source bundle": "build_source_bundle.py",
 }
 

@@ -138,8 +138,10 @@ release; otherwise the files stay run artifacts for 14 days, and
 Each build gets its update identity from `scripts/release_targets.py --update-env`
 and writes its schema 2 engine package (`<package>.engine-payload.json` with
 `version`, `os`, `arch`, `protocol_version` and `engine_id`, plus its
-`.engine.tar.gz.part-*` files) next to the package; the updater signatures are
-made on the Mac ([Windows and Linux updates](#windows-and-linux-updates)).
+`.engine.tar.gz.part-*` files) next to the package, and the update form of that
+manifest (`<package>.engine-update.json`, see [Older releases](#older-releases));
+the updater signatures are made on the Mac
+([Windows and Linux updates](#windows-and-linux-updates)).
 
 The CPU Linux job also builds `LocalSR-v<version>-Linux-CPU-amd64.deb` (package
 `localsr`) from the same worker, with Tauri's deb bundler and the `deb` identity
@@ -192,10 +194,40 @@ The installed host's smoke report must also show the edition's update identity
 (`smoke_tauri_installer.py --update-target`), so a package built without its updater
 key cannot reach a release.
 
+Older releases must be able to update to this one, with their own code
+(`upgrade_check.py`, see [Older releases](#older-releases)): in the Windows CUDA
+and Linux CPU jobs and in `release_macos_beta.sh`.
+
 `scripts/check_desktop_architecture.py` fails when either workflow loses one of
 these gates, its update identity or its engine package, starts on anything but a
 manual run, or lets a job other than the attach job write to releases, and when
 `release_macos_beta.sh` loses its signing, notarization or smoke tests.
+
+### Older releases
+
+Every installed release updates with the code it shipped, not with this release's.
+On 2026-11-23 every 0.5.0 install refused the update to 0.5.2: the feed named a
+schema 2 engine manifest, which the updaters of 0.4.0 and 0.5.0 reject, and no test
+had run an older updater ([post-mortem](postmortems/2026-11-23-updates-from-0.5.0.md)).
+So:
+
+- The feed names `<package>.engine-update.json`: the engine manifest in the form every
+  updater since 0.4.0 reads (exactly `schema_version` 1, `format`, `backend`,
+  `file_count`, `unpacked_bytes` and `parts`). It is derived from the schema 2 manifest
+  and signed with it; the version, platform and engine identity it leaves out are bound
+  by the signed release statement. `verify_prepared_release.py` refuses a feed whose
+  manifest an older updater would refuse. Never add a field to that form, to the
+  release statement or to anything else an older updater parses strictly.
+- `scripts/upgrade_check.py` checks out each release in `OLDER_RELEASES`, builds its
+  update code with `scripts/upgrade_check/old_release_probe.rs` injected and runs it on
+  this release's engine package, signed with a disposable key: the contract check, the
+  release statement and the engine installation. This release's host must then record
+  that engine and start it. Run it locally with `--as-in-0.5.2` to see it fail the way
+  0.5.2 did.
+- After publishing, add the new tag to `OLDER_RELEASES`. If a release changes the update
+  functions the probe calls, give that release its own probe rather than dropping it.
+- A change to the feed, the release statement, the engine manifest or the engine folder
+  layout is reviewed for what every installed release will do with it.
 
 ### Signing
 

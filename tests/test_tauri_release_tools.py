@@ -342,54 +342,8 @@ def test_installed_smoke_must_carry_the_build_update_identity() -> None:
         )
 
 
-def _compress(point: tuple[int, int, int, int]) -> bytes:
-    prime = verify_prepared._P
-    inverse = pow(point[2], prime - 2, prime)
-    x, y = point[0] * inverse % prime, point[1] * inverse % prime
-    return (y | ((x & 1) << 255)).to_bytes(32, "little")
-
-
-class SigningKey:
-    """A disposable minisign key that signs the way tauri signer does (prehashed)."""
-
-    def __init__(self, seed: bytes, key_id: bytes):
-        digest = hashlib.sha512(seed).digest()
-        scalar = int.from_bytes(digest[:32], "little")
-        self.scalar = (scalar & ((1 << 254) - 8)) | (1 << 254)
-        self.prefix = digest[32:]
-        self.key_id = key_id
-        self.point = _compress(verify_prepared._mul(self.scalar, verify_prepared._G))
-        text = (
-            f"untrusted comment: minisign public key: {key_id.hex().upper()}\n"
-            + base64.b64encode(b"Ed" + key_id + self.point).decode()
-            + "\n"
-        )
-        self.public_key = base64.b64encode(text.encode()).decode()
-
-    def _raw(self, message: bytes) -> bytes:
-        order = verify_prepared._Q
-        r = int.from_bytes(hashlib.sha512(self.prefix + message).digest(), "little") % order
-        commitment = _compress(verify_prepared._mul(r, verify_prepared._G))
-        h = (
-            int.from_bytes(hashlib.sha512(commitment + self.point + message).digest(), "little")
-            % order
-        )
-        return commitment + ((r + h * self.scalar) % order).to_bytes(32, "little")
-
-    def signature(self, data: bytes, name: str = "file") -> str:
-        signature = self._raw(hashlib.blake2b(data, digest_size=64).digest())
-        trusted = f"timestamp:0\tfile:{name}"
-        text = (
-            "untrusted comment: signature from tauri secret key\n"
-            + base64.b64encode(b"ED" + self.key_id + signature).decode()
-            + f"\ntrusted comment: {trusted}\n"
-            + base64.b64encode(self._raw(signature + trusted.encode())).decode()
-            + "\n"
-        )
-        return base64.b64encode(text.encode()).decode()
-
-    def sign_file(self, path: Path) -> None:
-        path.with_name(path.name + ".sig").write_text(self.signature(path.read_bytes(), path.name))
+# The disposable signer the upgrade check uses too (scripts/disposable_signing.py).
+SigningKey = load_script("disposable_signing").SigningKey
 
 
 TEST_KEY = SigningKey(b"\x01" * 32, b"localsr1")
@@ -1730,3 +1684,69 @@ def test_release_verification_refuses_a_feed_manifest_with_a_field_old_updaters_
     update_signing.add_statements(feed_path, sign=fake_sign)
     with pytest.raises(ValueError, match="updaters of 0.4.0 and 0.5.0 would refuse"):
         verify_feed(feed_path, [downloads, mac])
+
+
+upgrade_check = load_script("upgrade_check")
+
+
+def test_upgrade_check_feed_is_one_older_updaters_read_and_as_in_052_is_not(
+    tmp_path: Path,
+) -> None:
+    engine = fake_engine(tmp_path / "engine-source", "localsr-worker")
+    key = upgrade_check.SigningKey()
+    feed, files, contract = upgrade_check.candidate_feed(
+        "linux-x86_64-cpu", "9.0.0-beta", tmp_path / "fixed", key, engine=engine, payload=None
+    )
+    named = json.loads(feed.read_text())["platforms"][contract["feed_key"]]["localsr"]
+    manifest = files / named["engine"]["manifest"]["name"]
+    assert verify_prepared.legacy_update_problem(manifest.read_bytes()) is None
+    assert verify_prepared.minisign_verify(
+        key.public_key, named["engine"]["manifest"]["signature"], [manifest.read_bytes()]
+    )
+
+    broken, files_052, contract_052 = upgrade_check.candidate_feed(
+        "linux-x86_64-cpu",
+        "9.0.0-beta",
+        tmp_path / "as-in-052",
+        key,
+        engine=engine,
+        payload=None,
+        as_in_052=True,
+    )
+    named = json.loads(broken.read_text())["platforms"][contract_052["feed_key"]]["localsr"]
+    problem = verify_prepared.legacy_update_problem(
+        (files_052 / named["engine"]["manifest"]["name"]).read_bytes()
+    )
+    assert problem and "arch" in problem
+
+
+def test_upgrade_check_never_signs_beside_the_release_files(tmp_path: Path) -> None:
+    release = tmp_path / "release"
+    release.mkdir()
+    engine_payload.prepare_for_target(
+        "linux-x86_64-cpu",
+        release,
+        engine=fake_engine(tmp_path / "engine-source", "localsr-worker"),
+        release_version="9.0.0-beta",
+        commit=COMMIT,
+    )
+    before = {path.name: path.read_bytes() for path in release.iterdir()}
+    work = tmp_path / "work"
+    work.mkdir()
+    upgrade_check.candidate_feed(
+        "linux-x86_64-cpu",
+        "9.0.0-beta",
+        work,
+        upgrade_check.SigningKey(),
+        engine=None,
+        payload=next(release.glob("*.engine-payload.json")),
+    )
+    after = {path.name: path.read_bytes() for path in release.iterdir()}
+    assert after == before, "the check wrote into the release folder"
+
+
+def test_upgrade_check_orders_releases_like_semver() -> None:
+    assert upgrade_check._older("v0.5.0-beta", "0.6.0-beta")
+    assert not upgrade_check._older("v0.5.2-beta", "0.5.2-beta")
+    assert upgrade_check._older("v0.5.2-beta", "0.5.2")
+    assert not upgrade_check._older("v0.6.0", "0.6.0-beta")

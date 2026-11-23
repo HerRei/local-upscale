@@ -2480,3 +2480,46 @@ fn adoption_refuses_an_engine_with_a_link() {
     ));
     assert!(read_engine_meta(&paths.next_root, id).is_none());
 }
+
+/// The new host's half of `scripts/upgrade_check.py`: after an older release's own updater
+/// installed this release's engine under `LSR_PROBE_ROOT`, the host must record that
+/// engine, start it (a real handshake) and choose it.
+#[test]
+#[ignore = "run by scripts/upgrade_check.py on an engine an older updater installed"]
+fn upgrade_check_the_new_host_records_and_starts_the_engine_an_older_updater_installed() {
+    let setting = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("{name} is not set"));
+    let paths = crate::paths::AppPaths::under(Path::new(&setting("LSR_PROBE_ROOT")));
+    let id = setting("LSR_PROBE_ENGINE_ID");
+    let work = tempfile::tempdir().unwrap();
+    let mut handshake = String::from("not run");
+    let recorded = adopt_engine_from_older_updater(
+        &paths.next_root,
+        &id,
+        &setting("LSR_PROBE_BACKEND"),
+        || {},
+        |executable| {
+            let result = crate::headless_smoke::run_worker_handshake(
+                executable,
+                Duration::from_secs(300),
+                true,
+                work.path(),
+            );
+            handshake = match &result {
+                Ok(info) => format!("passed: {info:?}"),
+                Err(error) => format!("failed: {error}"),
+            };
+            result.is_ok()
+        },
+    );
+    assert!(
+        recorded,
+        "PROBE FAILED: the host did not record the engine; handshake {handshake}"
+    );
+    let chosen = active_engine_for_distribution(&paths, false, &id);
+    assert_eq!(
+        chosen,
+        engine_executable_path(&paths.next_root, &id),
+        "PROBE FAILED: the host does not choose the recorded engine"
+    );
+    println!("LSR_PROBE_HOST=engine {id} recorded and chosen; handshake {handshake}");
+}

@@ -287,6 +287,15 @@ jobs:
           retention-days: 14
           compression-level: 0
 
+      # The 0.5.2 incident (docs/postmortems/2026-11-23-updates-from-0.5.0.md): the updaters
+      # of older releases, built from their tags, must accept this release's engine package,
+      # and this host must record and start the engine they install.
+      - name: Update from older releases with their own update code
+        if: matrix.backend == 'CPU'
+        run: |
+          python scripts/upgrade_check.py --target "${{ matrix.id }}" --payload /mnt/lsr/out \
+            --work /mnt/lsr/upgrade-check --cargo-target /mnt/lsr/cargo-old
+
   attach:
     name: Attach verified AppImages and the .deb to the release
     needs: appimage

@@ -236,15 +236,17 @@ who do need that engine:
 ```json
 {
   "id": "new-engine-id",
-  "manifest": { "name": "worker.engine-payload.json", "url": "…", "size": 1234, "sha256": "…", "signature": "…" },
+  "manifest": { "name": "worker.engine-update.json", "url": "…", "size": 1234, "sha256": "…", "signature": "…" },
   "parts": [
     { "name": "worker.engine.tar.gz.part-0001", "url": "…", "size": 123456, "sha256": "…", "signature": "…" }
   ]
 }
 ```
 
-The manifest uses `schema_version: 2` (the client also reads `schema_version: 1`
-from previously published feeds) and `format: tar.gz.parts` with the backend
+The feed names the update form of the engine manifest, `schema_version: 1`, because
+every installed release since 0.4.0 reads that form and refuses any other field
+([releasing](releasing.md#older-releases)). The full manifest beside it, used for
+offline import and by the installers, uses `schema_version: 2` and `format: tar.gz.parts` with the backend
 (`CUDA`, `ROCM`, `CPU`, `MPS` or `DIRECTML`), `version`, `os` (`windows`, `linux`
 or `macos`), `arch` (`x86_64` or `aarch64`), `protocol_version`, `engine_id`,
 file count, unpacked size and per-part checksums. Every part and the manifest are

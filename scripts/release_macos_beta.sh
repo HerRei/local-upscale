@@ -114,6 +114,14 @@ for file in "$ENGINE_OUT/$ENGINE_MANIFEST" "$ENGINE_OUT/$ENGINE_UPDATE" "$ENGINE
   python scripts/beta_update_signing.py sign "$file"
 done
 
+# The 0.5.2 incident (docs/postmortems/2026-11-23-updates-from-0.5.0.md): older releases'
+# own updaters, built from their tags, must accept this engine package, and this host must
+# start the engine they install. It works on links in its own folder, with a disposable key.
+step "updates from older releases with their own update code"
+python scripts/upgrade_check.py --target macos-arm64-mps --payload "$ENGINE_OUT" \
+  --version "$VERSION" --work "$OUT/upgrade-check" --cargo-target build/upgrade-check-target
+rm -rf "$OUT/upgrade-check"
+
 step "corresponding source and notices"
 rm -rf "$OUT/source"
 python scripts/build_source_bundle.py --inventory "$APP" --output "$OUT/source" --commit "$COMMIT" \

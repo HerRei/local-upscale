@@ -198,6 +198,18 @@ jobs:
           name: ${{ matrix.id }}
           path: C:\lsr\out\*
           if-no-files-found: error
+
+      # The 0.5.2 incident (docs/postmortems/2026-11-23-updates-from-0.5.0.md): the updaters
+      # of older releases, built from their tags, must accept this release's engine package,
+      # and this host must record and start the engine they install. CUDA has no bundled
+      # engine to fall back on, so it is the edition where that matters most.
+      - name: Update from older releases with their own update code
+        if: matrix.backend == 'CUDA'
+        shell: pwsh
+        run: |
+          python scripts/upgrade_check.py --target "${{ matrix.id }}" --payload "$env:LSR\out" `
+            --work "$env:LSR\upgrade-check" --cargo-target "$env:LSR\cargo-old"
+          if ($LASTEXITCODE -ne 0) { throw "An older release cannot update to this one" }
           retention-days: 14
           compression-level: 0
 
