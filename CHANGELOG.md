@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.0-beta] - Unreleased
+
+- **Video export.** Flush the encoder before closing it when an export fails (#115).
+- **Release process.** Find draft releases when attaching assets and reduce temporary signing disk use (#114).
+
 ## [0.5.2-beta] - 2026-11-23
 
 - **Engine manager.** One main download per OS starts LocalSR. After setup, the app

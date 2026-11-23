@@ -1577,3 +1577,47 @@ def test_sign_retries_missing_timestamp(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(signer.time, "sleep", lambda _: None)
     signer.sign(tmp_path / "app", "identity")
     assert len(calls) == 2
+
+
+def test_draft_release_lookup_retries_until_visible(monkeypatch):
+    lookup = load_script("release_asset_lookup")
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        data = (
+            []
+            if len(calls) == 1
+            else [
+                {
+                    "tag_name": "v1",
+                    "draft": True,
+                    "assets": [{"name": "a", "digest": "sha256:abc", "state": "uploaded"}],
+                }
+            ]
+        )
+        return subprocess.CompletedProcess(command, 0, json.dumps(data), "")
+
+    monkeypatch.setattr(lookup.subprocess, "run", run)
+    monkeypatch.setattr(lookup.time, "sleep", lambda _: None)
+    assert lookup.release_assets("owner/repo", "v1") == [
+        {"name": "a", "digest": "sha256:abc", "state": "uploaded"}
+    ]
+    assert len(calls) == 2
+
+
+def test_split_signing_does_not_keep_whole_and_part_copy_at_once(tmp_path: Path) -> None:
+    downloads = platform_downloads(tmp_path)
+    mac_feed(tmp_path)
+    feed = tmp_path / "beta.json"
+    observed = []
+
+    def sign(path):
+        if ".part-" in path.name and ".engine." not in path.name:
+            observed.append(path.name)
+            whole = path.with_name(path.name.split(".part-")[0])
+            assert not whole.exists()
+        fake_sign(path)
+
+    update_signing.add_platforms(downloads, feed, COMMIT, release_version="1.2.3-beta", sign=sign)
+    assert observed

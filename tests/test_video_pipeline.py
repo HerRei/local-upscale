@@ -1292,3 +1292,26 @@ def test_stopped_subtitle_packet_is_cut_at_both_ends():
     assert result is packet
     assert packet.pts == 0
     assert packet.duration == 1000
+
+
+def test_encoder_shutdown_flushes_before_close_even_on_failure():
+    from localsr.core.video_io import _close_encoder
+
+    events = []
+
+    class Stream:
+        def encode(self):
+            events.append("flush")
+            return ["packet"]
+
+    class Container:
+        def close(self):
+            events.append("close")
+
+    def mux(packet):
+        events.append(packet)
+        raise ValueError("mux failed")
+
+    with pytest.raises(ValueError, match="mux failed"):
+        _close_encoder(Container(), Stream(), mux)
+    assert events == ["flush", "packet", "close"]

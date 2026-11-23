@@ -35,6 +35,7 @@ jobs:
     name: Attach ${{ inputs.artifact }} to ${{ inputs.release_tag }}
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # A ROCm artifact is about 10 GB, more than the runner's root disk has spare.
       - name: Keep the download on the large disk
         run: |
@@ -112,8 +113,7 @@ jobs:
           done
           for attempt in 1 2 3 4 5; do
             missing=()
-            published=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
-              --jq '.assets[] | [.name, .digest, .state] | @tsv')
+            published=$(python3 scripts/release_asset_lookup.py "$GITHUB_REPOSITORY" "$RELEASE_TAG")
             for file in "${files[@]}"; do
               if ! printf '%s\n' "$published" | awk -F'\t' -v n="$(basename "$file")" \
                 -v d="${want[$file]}" '$1==n && $2==d && $3=="uploaded" {found=1}

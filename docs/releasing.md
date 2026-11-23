@@ -77,15 +77,16 @@ After the build:
 Public installers, source bundles and updater files use
 `https://github.com/HerRei/local-upscale/releases/download/v<version>/`.
 
-1. Upload the DMG, the update archive and its signature, the engine payload and
-   its parts, the source bundle, the `.sha256` files and `SHA256SUMS` to the
-   **draft** GitHub release. Publish only after verifying its exact files.
+1. Create the **draft** GitHub release, then attach the DMG, update archive and
+   its signature, engine payload and parts, source bundle, `.sha256` files and
+   `SHA256SUMS`. Add the Windows and Linux entries and attach their packages and
+   signatures ([Windows and Linux updates](#windows-and-linux-updates)).
 2. Download the draft release's files and verify them with
-   `shasum -a 256 -c SHA256SUMS`.
-3. Install the previous version on a test Mac and confirm that the update
-   downloads, installs and relaunches on the new version.
-4. Add the Windows and Linux entries ([Windows and Linux updates](#windows-and-linux-updates)).
-5. Copy `build/release-<version>/beta.json` to the website's `updates/beta.json`,
+   `shasum -a 256 -c SHA256SUMS`. Verify the full prepared release and signatures
+   as described below before publishing.
+3. Publish the release. Install the previous version on each platform and confirm
+   that the update downloads, installs and relaunches on the new version.
+4. Copy `build/release-<version>/beta.json` to the website's `updates/beta.json`,
    update `release.json` and run `localsr/tools/sync_release.py` and
    `validate_site.py`, then publish. GitHub Pages caches the feed for ten minutes.
 
@@ -103,7 +104,7 @@ macOS build, from the workflow runs at the same commit:
    build/release-<version>/platforms` for the Windows and the Linux run. Every
    artifact lands in its target's folder (`windows-x86_64-cpu`, …). With the Linux
    CUDA and ROCm AppImages and their engine packages this is roughly 45 GB; signing
-   a split AppImage needs room for one more copy of it.
+   signing needs room for one more copy of the largest package.
 2. `python scripts/beta_update_signing.py platforms build/release-<version>/platforms
    --feed build/release-<version>/beta.json --commit <sha>` checks every package
    against its checksum file, its installed smoke report (version and update

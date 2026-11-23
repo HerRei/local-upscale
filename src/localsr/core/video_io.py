@@ -723,6 +723,16 @@ def encode_video(
         raise
 
 
+def _close_encoder(container, stream, mux):
+    """Drain the encoder on its owning thread before closing its container."""
+    try:
+        if stream is not None:
+            for packet in stream.encode():
+                mux(packet)
+    finally:
+        container.close()
+
+
 def _encode_video(
     frames,
     destination_path: str,
@@ -803,6 +813,8 @@ def _encode_video(
     encoded_temporary = _owned_output_temporary(destination, "video", temporary_directory)
     mux_temporary = _owned_output_temporary(destination, "mux", temporary_directory)
     output_container = None
+    stream = None
+    mux = None
     try:
         fps_fraction = (
             Fraction(str(float(fps))).limit_denominator(100_000) if fps else Fraction(25, 1)
@@ -913,10 +925,11 @@ def _encode_video(
             raise InterruptedError("video job cancelled")
         if stopped and stage_callback is not None:
             stage_callback("partial_finalizing")
-        for packet in stream.encode():
-            mux(packet)
-        output_container.close()
-        output_container = None
+        frame = None  # drop the last frame before the encoder closes
+        try:
+            _close_encoder(output_container, stream, mux)
+        finally:
+            output_container = None
 
         if stopped:
             duration = float(last_end)
@@ -963,7 +976,7 @@ def _encode_video(
     finally:
         if output_container is not None:
             try:
-                output_container.close()
+                _close_encoder(output_container, stream if mux is not None else None, mux)
             except Exception:
                 pass
         for temporary in (encoded_temporary, mux_temporary):

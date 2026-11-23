@@ -315,16 +315,6 @@ def _check_target(downloads: Path, target: dict, release_version: str, commit: s
     }
 
 
-def _copy_range(stream, destination: Path, count: int) -> None:
-    with destination.open("xb") as output:
-        while count:
-            chunk = stream.read(min(CHUNK, count))
-            if not chunk:
-                raise ValueError(f"{destination.name} ended early")
-            output.write(chunk)
-            count -= len(chunk)
-
-
 def _snapshot(sources: list[Path], destination: Path, expected: tuple[str, int]) -> None:
     """A private copy that is exactly the bytes checked before; only copies get signed."""
     with destination.open("xb") as output:
@@ -445,19 +435,16 @@ def platform_entries(
         for item in checked:
             target, directory, files = item["target"], item["directory"], item["files"]
             name = files["update_package"]
-            # The whole package, joined from its parts if it has them; the part copies
-            # are cut from that checked copy, so every signature covers checked bytes.
-            whole = workspace / name
-            _snapshot(item["package"], whole, item["digest"])
+            # Sign each checked part before creating the joined package copy, so the
+            # workspace never needs both a whole package and an additional part.
             parts = []
             if item["part_digests"]:
-                with whole.open("rb") as stream:
-                    for path, known in zip(item["package"], item["part_digests"], strict=True):
-                        piece = workspace / path.name
-                        _copy_range(stream, piece, known[1])
-                        if _sha256([piece]) != known:
-                            raise ValueError(f"{path.name} changed after it was checked")
-                        parts.append(download(path.name, known, sign_copy(piece, directory)))
+                for path, known in zip(item["package"], item["part_digests"], strict=True):
+                    piece = workspace / path.name
+                    _snapshot([path], piece, known)
+                    parts.append(download(path.name, known, sign_copy(piece, directory)))
+            whole = workspace / name
+            _snapshot(item["package"], whole, item["digest"])
             whole_signature = sign_copy(whole, directory)
             manifest_copy = workspace / item["manifest_path"].name
             _snapshot([item["manifest_path"]], manifest_copy, item["manifest_digest"])
