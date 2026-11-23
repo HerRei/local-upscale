@@ -20,7 +20,7 @@ describe('model library resolution', () => {
   it('resolves Quick and Best by content and honours a pinned slot', () => {
     const snapshot = demoSnapshot();
     expect(choosePresetModel(snapshot, 'upscale', 'best', 'illustration')?.model_id).toBe(
-      'realplksr_hfa2k_anime_x4',
+      'esrgan_hfa2k_x4',
     );
     expect(choosePresetModel(snapshot, 'upscale', 'quick', 'illustration')?.model_id).toBe(
       'realesrgan_x4plus_anime_6b',

@@ -60,6 +60,21 @@
       "preset_eligible": true
     },
     {
+      "model_id": "esrgan_hfa2k_x4",
+      "purposes": [
+        "illustration",
+        "anime"
+      ],
+      "native_scale": 4,
+      "quality_tier": 3,
+      "speed_tier": 2,
+      "speed_factor": 0.55,
+      "memory_factor": 1.05,
+      "size_bytes": 33676982,
+      "commercial_use_allowed": true,
+      "preset_eligible": true
+    },
+    {
       "model_id": "realplksr_hfa2k_anime_x4",
       "purposes": [
         "illustration",
@@ -154,7 +169,7 @@
       "content": "illustration",
       "quality": "best",
       "without": [],
-      "expected": "realplksr_hfa2k_anime_x4"
+      "expected": "esrgan_hfa2k_x4"
     },
     {
       "content": "illustration",
@@ -168,6 +183,15 @@
       "content": "illustration",
       "quality": "best",
       "without": [
+        "esrgan_hfa2k_x4"
+      ],
+      "expected": "realplksr_hfa2k_anime_x4"
+    },
+    {
+      "content": "illustration",
+      "quality": "best",
+      "without": [
+        "esrgan_hfa2k_x4",
         "realplksr_hfa2k_anime_x4"
       ],
       "expected": "realesrgan_x4plus_anime_6b"
@@ -176,6 +200,7 @@
       "content": "illustration",
       "quality": "best",
       "without": [
+        "esrgan_hfa2k_x4",
         "realesrgan_x4plus_anime_6b",
         "realplksr_hfa2k_anime_x4"
       ],
@@ -185,6 +210,7 @@
       "content": "illustration",
       "quality": "quick",
       "without": [
+        "esrgan_hfa2k_x4",
         "realesrgan_x4plus_anime_6b",
         "realplksr_hfa2k_anime_x4"
       ],
