@@ -2,46 +2,52 @@
 
 ## [0.6.0-beta] - Unreleased
 
-- **Illustration Best.** Best for illustrations now selects ESRGAN ×4 HFA2k instead of
-  RealPLKSR HFA2k, keeping flat colours, white backgrounds, QR patterns and fine line art
-  intact. RealPLKSR HFA2k stays available in the model library (#122).
-
-- **Stopping a video.** Cancel asks whether to keep the finished part or discard it;
-  Settings can make it always keep or always discard. Kept parts are marked Unfinished
-  in Outputs.
-- **Menu bar.** An icon in the menu bar or system tray shows what is running, how
-  many files wait and the progress, with Pause and Resume, and a notification for
-  each finished file. New installs choose it in the first-launch setup; Advanced
-  settings turn it on or off, and on a Mac the icon can be monochrome or in colour (#112).
+- **Settings.** One Settings window (⌘, on a Mac; File > Settings… elsewhere) holds every
+  app-wide choice: appearance, default hardware, low priority, notifications and sound,
+  the menu bar icon, the model folder, caches, External FFmpeg, updates and crash
+  reports. Each lives there only; Advanced keeps the per-job choices and shows the
+  hardware with a Change… link. After a GPU failure, Retry on CPU runs that job on the
+  CPU without changing the default.
 - **Colour for video.** Black-and-white videos can be coloured under Restore and
-  Restore first. Colours are carried from frame to frame, so they stay steady (#164).
+  Restore first. Colours are carried from frame to frame, so they stay steady. A video
+  that already has colour skips the step, and a Colour choice made for photos is not
+  carried over to videos (#164).
+- **Stopping a video.** Cancel asks whether to keep the finished part or discard it;
+  Settings can make it always keep or always discard. Kept parts are marked
+  Unfinished in Outputs.
+- **Menu bar.** An icon in the menu bar or system tray shows what is running, how many
+  files wait and the progress, with Pause and Resume, and a notification for each
+  finished file. New installs choose it in the first-launch setup; on a Mac the icon
+  can be monochrome or in colour (#112).
 - **Compare results.** Each side of a comparison lists how it was made: models and
   fixes in order, scale, size, time, device and date (#145).
 - **Your own models.** Own checkpoints get a name you can change and their own group
-  in the model picker. A .pth, .pt or .ckpt file is confirmed once per file, not
-  per job (#146).
-- **Newer upscaler architectures.** Own NERVE and HEART checkpoints load (#154).
-- **Cache.** Advanced settings show the size of the compiled model caches with a
-  Clear cache button; entries unused for 30 days, or beyond 5 GB, are removed at
-  start (#126).
+  in the model picker. A .pth, .pt or .ckpt file is confirmed once per file, not per
+  job. NERVE and HEART checkpoints load too (#146, #154).
+- **Illustration Best.** Best for illustrations now uses ESRGAN ×4 HFA2k, which keeps
+  flat colours, white backgrounds, QR codes and fine lines. RealPLKSR HFA2k stays in
+  the model library (#122).
+- **Heavy video jobs.** Frame interpolation after upscaling needs about half the
+  graphics memory. When a frame pair still does not fit, the other models wait in
+  system memory meanwhile, so very large videos stay on the GPU; only as a last
+  resort does it run on the CPU, and the result says so. Running out of graphics
+  memory reads as a plain sentence with what to change.
+- **Progress.** The status line names the step that runs (for example Adding colour,
+  with a count), downloads share one progress bar, and Saving the result appears only
+  when the file is being written. Interpolation can be moved before or after
+  upscaling from the plan list.
+- **Cache.** Settings show the size of the compiled model caches with Clear cache;
+  unused entries are removed automatically unless you turn that off (#126).
 - **Settings from a newer version.** LocalSR keeps the file untouched, runs with
-  defaults and says so, and an update to that newer version is no longer blocked.
-  When settings really cannot be read, the update notice says why (#123).
+  defaults and says so, and an update to that newer version is no longer blocked
+  (#123).
 - **GPU engines.** Program files are checked at every start, a reinstall keeps the
-  working copy until the new one has started, and linked engine folders are
-  refused (#159).
-- **Video export.** The encoder is always flushed before it closes, also when an
-  export fails (#115).
-- **Video memory.** Frame interpolation after upscaling needs about half the graphics
-  memory for the same frames. When a pair still does not fit, the other models wait in
-  system memory while it is made, so a 4320 x 5760 job stays on the GPU of a 16 GB
-  Mac; only as a last resort is it made on the CPU, and the result says so. Running
-  out of graphics memory now reads as a sentence with what to change.
-- **Release process.** Files can be attached to a draft release, and signing needs
-  less temporary disk space (#114).
-- **Windows installer.** Offers **Just me** (default, no administrator rights needed)
-  and **Everyone on this computer** (UAC prompt), while still honouring `/D=` in both
-  modes.
+  working copy until the new one has started, and linked engine folders are refused
+  (#159).
+- **Windows installer.** Offers Just me (default, no administrator rights) or Everyone
+  on this computer.
+- **Fixes.** The video encoder is always flushed before it closes (#115). Release
+  files can be attached to a draft release, and signing needs less disk space (#114).
 
 ## [0.5.2-beta] - 2026-11-23
 
