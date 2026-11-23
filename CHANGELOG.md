@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.6.0-beta] - Unreleased
+
+- Updates explain when unreadable settings need recovery, and can install when settings come from a newer version (#123).
+
 ## [0.5.2-beta] - 2026-11-23
 
 - **Engine manager.** One main download per OS starts LocalSR. After setup, the app

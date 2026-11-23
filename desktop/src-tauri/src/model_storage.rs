@@ -120,6 +120,11 @@ pub(crate) async fn change_model_directory_with_env<R: tauri::Runtime>(
     env: MoveEnv,
 ) -> AppResult<()> {
     crate::updates::ensure_not_installing(state)?;
+    if crate::settings::is_future_schema(&state.paths) {
+        return Err(AppError::Config(
+            "The model folder cannot be changed until you open the newer LocalSR.".into(),
+        ));
+    }
     ensure_idle_for_move(state)?;
     let _guard = MovingGuard::acquire(state)?;
     // Re-check after acquiring the move flag so no job or download slipped in.

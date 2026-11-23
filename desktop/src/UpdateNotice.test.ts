@@ -98,3 +98,14 @@ it('skips only the selected version and hides behind the update dialog', async (
   updateDialogOpen.set(true);
   await waitFor(() => expect(screen.queryByText('LocalSR 1.1.0 is available')).toBeNull());
 });
+
+it('explains how to recover unreadable settings before updating', () => {
+  updateState.set({ ...available, stage: 'downloaded', settings_recovery: true });
+  render(UpdateNotice);
+  expect(
+    screen.getByText('Settings could not be read. Open Details to recover them before updating.'),
+  ).toBeTruthy();
+  expect(
+    (screen.getByRole('button', { name: 'Restart to Update' }) as HTMLButtonElement).disabled,
+  ).toBe(true);
+});

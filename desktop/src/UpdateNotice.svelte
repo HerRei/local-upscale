@@ -77,9 +77,11 @@
       {:else}
         <b>LocalSR {status.version} is ready to install</b>
         <span
-          >{processing
-            ? 'It installs as soon as the current queue finishes.'
-            : 'LocalSR restarts to finish the update.'}</span
+          >{status.settings_recovery
+            ? 'Settings could not be read. Open Details to recover them before updating.'
+            : processing
+              ? 'It installs as soon as the current queue finishes.'
+              : 'LocalSR restarts to finish the update.'}</span
         >
       {/if}
       {#if error}<span class="error" role="alert">{error}</span>{/if}
