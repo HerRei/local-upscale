@@ -212,6 +212,58 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      # The smoke test above runs as the runner's administrator. "Just me" must also install
+      # for a standard user without administrator rights, and asking for "Everyone" without
+      # them must not install anything into Program Files.
+      - name: Install as a standard user without administrator rights
+        if: matrix.backend == 'CPU'
+        timeout-minutes: 20
+        run: |
+          $version = python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
+          $artifact = Join-Path "$env:LSR\out" "LocalSR-v$version-${{ matrix.suffix }}"
+          $user = "lsrstandard"
+          $password = "Lsr-" + [guid]::NewGuid().ToString("N") + "-9a!"
+          $secure = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name $user -Password $secure -PasswordNeverExpires | Out-Null
+          if ((Get-LocalGroupMember -Group Administrators).Name -match "\\$user$") { throw "$user must not be an administrator" }
+          $credential = New-Object System.Management.Automation.PSCredential(".\$user", $secure)
+          $probe = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "echo %LOCALAPPDATA%> %TEMP%\lsr-localappdata.txt" `
+            -Credential $credential -LoadUserProfile -Wait -PassThru -WorkingDirectory C:\
+          $profileRoot = (Get-CimInstance Win32_UserProfile | Where-Object { $_.LocalPath -like "*\$user" }).LocalPath
+          if (-not $profileRoot) { throw "The standard user's profile was not created" }
+          $installDir = Join-Path $profileRoot "AppData\Local\LocalSR"
+
+          $install = Start-Process -FilePath $artifact -ArgumentList "/S" -Credential $credential `
+            -LoadUserProfile -Wait -PassThru -WorkingDirectory C:\
+          "Per-user install exit code: $($install.ExitCode)"
+          if ($install.ExitCode -ne 0) { throw "The per-user install failed for a standard user" }
+          $host_exe = Get-ChildItem -LiteralPath $installDir -Filter "*.exe" -File |
+            Where-Object { $_.Name -notmatch "^(un|Un)" } | Select-Object -First 1
+          if (-not $host_exe) { throw "No LocalSR executable in $installDir" }
+          "Installed for the standard user: $($host_exe.FullName)"
+          $machineKey = Get-ChildItem "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall" |
+            Where-Object { (Get-ItemProperty $_.PSPath).DisplayName -like "LocalSR*" }
+          if ($machineKey) { throw "A per-user install wrote a machine-wide uninstall entry" }
+
+          $before = Test-Path "$env:ProgramFiles\LocalSR"
+          $all = Start-Process -FilePath $artifact -ArgumentList "/S", "/AllUsers" -Credential $credential `
+            -LoadUserProfile -PassThru -WorkingDirectory C:\
+          if (-not $all.WaitForExit(180000)) {
+            Stop-Process -Id $all.Id -Force
+            throw "An all-users install without administrator rights did not finish within 3 minutes"
+          }
+          "All-users install as a standard user exit code: $($all.ExitCode)"
+          if (-not $before -and (Test-Path "$env:ProgramFiles\LocalSR")) {
+            throw "A standard user installed into Program Files without administrator rights"
+          }
+
+          $uninstaller = Get-ChildItem -LiteralPath $installDir -Filter "uninstall*.exe" -File | Select-Object -First 1
+          if ($uninstaller) {
+            Start-Process -FilePath $uninstaller.FullName -ArgumentList "/S", "_?=$installDir" -Credential $credential `
+              -LoadUserProfile -Wait -WorkingDirectory C:\ | Out-Null
+          }
+          Remove-LocalUser -Name $user
+
   attach:
     name: Attach verified installers to the release
     needs: installer
