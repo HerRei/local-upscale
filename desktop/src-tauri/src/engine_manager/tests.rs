@@ -2415,3 +2415,236 @@ fn confirming_a_start_leaves_backup_deletion_to_another_thread_and_the_next_star
         b"new"
     );
 }
+
+fn published_replacement(
+    next_root: &Path,
+    id: &str,
+) -> (updates::EngineSwap, EngineMeta, EngineMeta) {
+    let old = write_replacement_fixture(next_root, id, b"old");
+    let (staged, new) = stage_fixture(next_root, id, b"new");
+    let swap = staged.publish(Some(&new), None).unwrap();
+    (swap, old, new)
+}
+
+#[cfg(unix)]
+#[test]
+fn confirming_a_start_keeps_the_backup_until_the_new_copy_is_committed() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let id = "gpu";
+    published_replacement(&paths.next_root, id);
+    let token = updates::pending_engine_token(&paths.next_root, id).unwrap();
+    // The marker cannot be removed: the commit point is not reached.
+    let target = paths.next_root.join("engines").join(id);
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o555)).unwrap();
+    let result = updates::confirm_engine_start(&paths.next_root, id, &token);
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(result.is_err());
+    assert!(updates::pending_engine_token(&paths.next_root, id).is_some());
+    assert!(updates::engine_backup_path(&paths.next_root.join("engines"), id).is_dir());
+}
+
+#[test]
+fn rollback_keeps_the_installed_copy_when_its_backup_is_gone() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let id = "gpu";
+    let (swap, ..) = published_replacement(&paths.next_root, id);
+    fs::remove_dir_all(updates::engine_backup_path(
+        &paths.next_root.join("engines"),
+        id,
+    ))
+    .unwrap();
+    assert!(swap.rollback().is_err());
+    assert_eq!(
+        fs::read(engine_worker(&paths.next_root, id)).unwrap(),
+        b"new"
+    );
+}
+
+#[test]
+fn an_install_whose_engine_does_not_start_restores_the_previous_selection() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    write_replacement_fixture(&paths.next_root, "other", b"other");
+    let pointer = paths.next_root.join("active-engine.txt");
+    fs::write(&pointer, "other").unwrap();
+    let id = "gpu";
+    let (staged, new) = stage_fixture(&paths.next_root, id, b"new");
+    let starts = std::sync::atomic::AtomicUsize::new(0);
+    let bundled = root.path().join("bundled-worker");
+    // The worker start falls back to the bundled engine and still reports success.
+    let restart = || -> AppResult<()> {
+        let selected = fs::read_to_string(&pointer).ok();
+        let started = if starts.fetch_add(1, Ordering::SeqCst) == 0 {
+            worker::VerifiedRun::for_test(bundled.clone(), None, None)
+        } else {
+            let id = selected.unwrap();
+            worker::VerifiedRun::for_test(engine_worker(&paths.next_root, &id), Some(id), None)
+        };
+        *lock(&state.worker.verified_run)? = Some(started);
+        Ok(())
+    };
+    assert!(commit_installed_engine_with(&state, staged, &new, Some(&restart)).is_err());
+    assert_eq!(fs::read_to_string(&pointer).unwrap(), "other");
+    assert_eq!(starts.load(Ordering::SeqCst), 2);
+    assert!(!paths.next_root.join("engines").join(id).exists());
+}
+
+#[test]
+fn backups_for_another_host_are_not_restored() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let id = "gpu";
+    let (_, old, _) = published_replacement(&paths.next_root, id);
+    let backup = updates::engine_backup_path(&paths.next_root.join("engines"), id);
+    let foreign = EngineMeta {
+        os: "plan9".into(),
+        ..old
+    };
+    fs::write(
+        backup.join("meta.json"),
+        serde_json::to_vec(&foreign).unwrap(),
+    )
+    .unwrap();
+    fs::write(engine_worker(&paths.next_root, id), b"bad").unwrap();
+    assert!(!updates::restore_verified_engine_backup(&paths.next_root, id).unwrap());
+    assert_eq!(
+        fs::read(engine_worker(&paths.next_root, id)).unwrap(),
+        b"bad"
+    );
+}
+
+#[test]
+fn failed_verification_of_an_unconfirmed_replacement_restores_the_verified_backup() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let (config, ..) = fixture_engine_files("http://127.0.0.1:1");
+    let id = "gpu";
+    let (_, old, _) = published_replacement(&paths.next_root, id);
+    let pointer = paths.next_root.join("active-engine.txt");
+    fs::write(&pointer, id).unwrap();
+    fs::write(engine_worker(&paths.next_root, id), b"bad").unwrap();
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+    assert!(verify_engine_for(&state, None, &config, id, os, arch).is_err());
+    assert_eq!(
+        fs::read(engine_worker(&paths.next_root, id)).unwrap(),
+        b"old"
+    );
+    assert_eq!(read_engine_meta(&paths.next_root, id), Some(old));
+    assert_eq!(fs::read_to_string(&pointer).unwrap(), id);
+    assert!(!state.worker.use_bundled_fallback.load(Ordering::SeqCst));
+}
+
+#[test]
+fn path_files_fat_binaries_and_scripts_are_hashed_at_start() {
+    for (relative, content) in [
+        (
+            "_internal/site-packages/startup.pth",
+            b"import os # 1".as_slice(),
+        ),
+        (
+            "_internal/universal64",
+            b"\xca\xfe\xba\xbf fat 1".as_slice(),
+        ),
+        ("_internal/launcher", b"#!/bin/sh\necho 1\n".as_slice()),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(root.path());
+        let id = "gpu";
+        let engine = paths.next_root.join("engines").join(id).join("engine");
+        fs::create_dir_all(engine.join("_internal/site-packages")).unwrap();
+        fs::write(engine.join(worker_executable_name()), b"worker").unwrap();
+        fs::write(engine.join(relative), content).unwrap();
+        write_engine_meta(
+            &paths.next_root,
+            &EngineMeta {
+                id: id.into(),
+                backend: "rocm".into(),
+                os: std::env::consts::OS.into(),
+                arch: std::env::consts::ARCH.into(),
+                protocol_version: PROTOCOL_VERSION,
+                handshake_passed: true,
+                verified_install: true,
+                version: "1".into(),
+                files: updates::test_engine_files(&paths.next_root, id),
+            },
+        )
+        .unwrap();
+        fs::write(paths.next_root.join("active-engine.txt"), id).unwrap();
+        let mut changed = content.to_vec();
+        *changed
+            .iter_mut()
+            .rev()
+            .find(|byte| **byte == b'1')
+            .unwrap() = b'2';
+        fs::write(engine.join(relative), changed).unwrap();
+        let mut failed = std::collections::HashSet::new();
+        let (choice, verification_failed) =
+            updates::verified_worker_engine_choice(&paths, None, &mut failed);
+        assert_eq!(choice, None, "{relative}");
+        assert!(verification_failed, "{relative}");
+    }
+}
+
+#[test]
+fn a_worker_started_just_before_a_reinstall_is_stopped_before_the_swap() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let id = "gpu";
+    write_replacement_fixture(&paths.next_root, id, b"old");
+    let (staged, new) = stage_fixture(&paths.next_root, id, b"new");
+    let worker = engine_worker(&paths.next_root, id);
+    // The supervisor is between two starts of this engine: no process yet.
+    *lock(&state.worker.verified_run).unwrap() = Some(worker::VerifiedRun::for_test(
+        worker.clone(),
+        Some(id.into()),
+        None,
+    ));
+    let engine_files = lock(&state.worker.engine_files).unwrap();
+    let committing = {
+        let state = state.clone();
+        std::thread::spawn(move || commit_installed_engine(&state, None, staged, &new))
+    };
+    std::thread::sleep(Duration::from_millis(200));
+    // The supervisor starts it again under engine_files while the install waits.
+    state.worker.pid.store(4242, Ordering::SeqCst);
+    drop(engine_files);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut seen = None;
+    while std::time::Instant::now() < deadline {
+        if state.worker.shutting_down.load(Ordering::SeqCst) {
+            seen = fs::read(&worker).ok();
+            state.worker.pid.store(0, Ordering::SeqCst);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    state.worker.pid.store(0, Ordering::SeqCst);
+    committing.join().unwrap().unwrap();
+    assert_eq!(seen, Some(b"old".to_vec()));
+}
+
+#[test]
+fn staging_leaves_recovery_to_callers_that_hold_engine_files() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let id = "gpu";
+    published_replacement(&paths.next_root, id);
+    // The new copy is damaged, so recovery would restore the backup.
+    fs::write(engine_worker(&paths.next_root, id), b"short!").unwrap();
+    let _engine_files = lock(&state.worker.engine_files).unwrap();
+    let (staged, _) = stage_fixture(&paths.next_root, id, b"next");
+    assert_eq!(
+        fs::read(engine_worker(&paths.next_root, id)).unwrap(),
+        b"short!"
+    );
+    assert!(updates::engine_backup_path(&paths.next_root.join("engines"), id).is_dir());
+    drop(staged);
+}

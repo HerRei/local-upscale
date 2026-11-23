@@ -966,6 +966,7 @@ pub(crate) async fn install_engine_for(
         let arch_owned = arch.to_string();
         let version_owned = entry.version;
         tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
+            recover_before_staging(&state_for_commit, &engine_id_for_install)?;
             let staged = updates::stage_verified_engine(
                 &next_root,
                 &engine_id_for_install,
@@ -1248,34 +1249,68 @@ pub(crate) fn verify_engine_for(
             "Engine verification metadata is missing or invalid",
         )),
     };
-    if let Err(error) = verification {
+    let Err(error) = verification else {
+        return Ok(());
+    };
+    // Like a worker start, fall back to a verified previous copy of this id. A
+    // worker started from the folder stops first: Windows locks it.
+    let engines = state.paths.next_root.join("engines");
+    let mut stopped = false;
+    let mut restored = false;
+    if updates::engine_directory_exists(&updates::engine_backup_path(&engines, id))? {
+        stopped = worker::last_run_engine_id(state).as_deref() == Some(id);
+        if stopped {
+            worker::stop_for_engine_switch(state)?;
+        }
+        restored = updates::restore_verified_engine_backup(&state.paths.next_root, id)
+            .unwrap_or_else(|restore| {
+                eprintln!("LocalSR could not restore the previous engine copy: {restore}");
+                false
+            });
+    }
+    if !restored {
         updates::mark_engine_needs_reinstall(&state.paths.next_root, id);
-        if was_active {
-            updates::deactivate_active_engine(&state.paths)?;
-            lock(&state.worker.failed_engines)?.insert(id.to_owned());
-            // Starting the worker takes engine_files itself.
-            drop(engine_files);
-            if let Some(app) = app {
-                if let Ok(mut runtime) = state.runtime.lock() {
-                    runtime.status_title = "Switched to bundled engine".into();
-                    runtime.status_detail =
-                        "The installed engine failed verification; using the bundled engine instead."
-                            .into();
-                }
-                let _ = worker::restart_for_engine_switch(state, app);
-            } else {
-                state
-                    .worker
-                    .use_bundled_fallback
-                    .store(true, Ordering::SeqCst);
+    }
+    let fall_back = !restored && was_active;
+    if fall_back {
+        // Report, but carry on: a worker stopped above must be started again.
+        if let Err(deactivate) = updates::deactivate_active_engine(&state.paths) {
+            eprintln!("LocalSR could not deactivate the failed engine: {deactivate}");
+        }
+        if let Ok(mut failed) = state.worker.failed_engines.lock() {
+            failed.insert(id.to_owned());
+        }
+    }
+    // Starting the worker takes engine_files itself.
+    drop(engine_files);
+    if stopped {
+        state.worker.shutting_down.store(false, Ordering::SeqCst);
+    }
+    if let Some(app) = app {
+        if fall_back {
+            if let Ok(mut runtime) = state.runtime.lock() {
+                runtime.status_title = "Switched to bundled engine".into();
+                runtime.status_detail =
+                    "The installed engine failed verification; using the bundled engine instead."
+                        .into();
             }
         }
-        if let Some(app) = app {
-            emit_state_changed(app);
+        if fall_back || stopped {
+            let _ = worker::restart_for_engine_switch(state, app);
         }
-        return Err(error);
+        emit_state_changed(app);
+    } else if fall_back {
+        state
+            .worker
+            .use_bundled_fallback
+            .store(true, Ordering::SeqCst);
     }
-    Ok(())
+    if restored {
+        return Err(invalid(format!(
+            "{error}. The previous working copy of this engine was restored."
+        )));
+    }
+    Err(error)
 }
 
 #[tauri::command]
@@ -1432,6 +1467,15 @@ pub(crate) fn recover_interrupted_reimport(next_root: &Path, id: &str) -> AppRes
 /// Finish an interrupted install of `id`. Returns whether recovery itself
 /// hash-checked the copy that is now installed, so a start need not hash it again.
 pub(crate) fn recover_engine_copy(next_root: &Path, id: &str) -> AppResult<bool> {
+    recover_engine_copy_for(next_root, id, std::env::consts::OS, std::env::consts::ARCH)
+}
+
+pub(crate) fn recover_engine_copy_for(
+    next_root: &Path,
+    id: &str,
+    os: &str,
+    arch: &str,
+) -> AppResult<bool> {
     if !safe_id(id) {
         return Ok(false);
     }
@@ -1444,12 +1488,12 @@ pub(crate) fn recover_engine_copy(next_root: &Path, id: &str) -> AppResult<bool>
     if updates::engine_directory_exists(&updates::engine_backup_path(&engines, id))? {
         let ready = read_engine_meta(next_root, id).is_some_and(|meta| {
             meta.id == id
-                && engine_meta_valid_for_host(&meta, &meta.os, &meta.arch)
+                && engine_meta_valid_for_host(&meta, os, arch)
                 && updates::engine_update_matches_host(&root)
                 && updates::quick_verify_engine_files(next_root, id, &meta)
         });
         if !ready {
-            return updates::restore_verified_engine_backup(next_root, id);
+            return updates::restore_verified_engine_backup_for(next_root, id, os, arch);
         }
         return Ok(false);
     }
@@ -1479,7 +1523,7 @@ pub(crate) fn recover_engine_copy(next_root: &Path, id: &str) -> AppResult<bool>
     let verifies = |directory: &Path| {
         read_engine_meta(next_root, id).is_some_and(|meta| {
             meta.id == id
-                && engine_meta_valid_for_host(&meta, &meta.os, &meta.arch)
+                && engine_meta_valid_for_host(&meta, os, arch)
                 && updates::check_engine_directory_files(directory, &meta, true)
         })
     };
@@ -1505,15 +1549,13 @@ pub(crate) fn recover_engine_copy(next_root: &Path, id: &str) -> AppResult<bool>
     if restore {
         if existing {
             let retired = root.join(format!(".retired-{}", uuid::Uuid::new_v4()));
-            fs::rename(&engine, &retired)?;
-            fs::rename(&backups[0], &engine)?;
-            update_storage::sync_dir(&root)?;
+            updates::rename_engine_directory(&engine, &retired)?;
+            updates::rename_engine_directory(&backups[0], &engine)?;
             if updates::check_engine_tree_is_real(&retired).is_ok() {
                 let _ = fs::remove_dir_all(retired);
             }
         } else {
-            fs::rename(&backups[0], &engine)?;
-            update_storage::sync_dir(&root)?;
+            updates::rename_engine_directory(&backups[0], &engine)?;
         }
     } else if existing {
         // Leftovers do not affect the installed copy; a failed removal is
@@ -1555,6 +1597,13 @@ pub(crate) fn recover_interrupted_engine_installs(next_root: &Path) {
             updates::remove_engine_tree_if_real(&entry.path());
         }
     }
+}
+
+/// Finish an interrupted install of `id` under `engine_files`, so it cannot race a
+/// worker start doing the same.
+fn recover_before_staging(state: &AppState, id: &str) -> AppResult<()> {
+    let _engine_files = lock(&state.worker.engine_files)?;
+    recover_interrupted_reimport(&state.paths.next_root, id)
 }
 
 /// Startup recovery: finish interrupted swaps, delete retired copies and, while
@@ -1603,18 +1652,39 @@ fn commit_installed_engine(
     staged: updates::StagedEngine,
     meta: &EngineMeta,
 ) -> AppResult<()> {
+    let restart = app.map(|app| move || worker::restart_for_engine_switch(state, app));
+    commit_installed_engine_with(
+        state,
+        staged,
+        meta,
+        restart
+            .as_ref()
+            .map(|restart| restart as &dyn Fn() -> AppResult<()>),
+    )
+}
+
+/// `restart` stops any worker and starts the selected engine; `None` without an app.
+fn commit_installed_engine_with(
+    state: &Arc<AppState>,
+    staged: updates::StagedEngine,
+    meta: &EngineMeta,
+    restart: Option<&dyn Fn() -> AppResult<()>>,
+) -> AppResult<()> {
     let _scheduler = lock(&state.scheduler)?;
     ensure_no_running_jobs(state)?;
     // Windows cannot rename a folder whose worker or libraries are in use, so a
-    // worker running from the target stops before the swap. It stays stopped
-    // (shutting_down) until the restart below or the rollback starts it again.
-    let stopped = worker::runs_installed_engine(state, &meta.id);
+    // worker started from the target stops before the swap. Deciding under
+    // engine_files means no start can slip in between; a supervisor waiting to
+    // restart that engine sees shutting_down and stays off until the restart
+    // below or the rollback starts it again. A dying worker sets pid 0 without
+    // taking engine_files.
+    let engine_files = lock(&state.worker.engine_files)?;
+    let stopped = worker::last_run_engine_id(state).as_deref() == Some(meta.id.as_str());
     let stop = if stopped {
         worker::stop_for_engine_switch(state)
     } else {
         Ok(())
     };
-    let engine_files = lock(&state.worker.engine_files)?;
     let pointer = state.paths.next_root.join("active-engine.txt");
     let old_pointer = fs::read(&pointer).ok();
     let swap = match stop.and_then(|()| staged.publish(Some(meta), None)) {
@@ -1623,9 +1693,11 @@ fn commit_installed_engine(
             drop(engine_files);
             if stopped {
                 state.worker.shutting_down.store(false, Ordering::SeqCst);
-                if let Some(app) = app.filter(|_| state.worker.pid.load(Ordering::SeqCst) == 0) {
-                    if let Err(restart) = worker::start_worker(state.clone(), app.clone()) {
-                        eprintln!("LocalSR could not restart the previous engine: {restart}");
+                if let Some(restart) =
+                    restart.filter(|_| state.worker.pid.load(Ordering::SeqCst) == 0)
+                {
+                    if let Err(error) = restart() {
+                        eprintln!("LocalSR could not restart the previous engine: {error}");
                     }
                 }
             }
@@ -1638,8 +1710,15 @@ fn commit_installed_engine(
     });
     drop(engine_files);
     let result = activate.and_then(|()| {
-        if let Some(app) = app {
-            worker::restart_for_engine_switch(state, app)?;
+        if let Some(restart) = restart {
+            restart()?;
+            // A start that cannot use the new engine falls back to another one
+            // and still succeeds; the previous selection is restored instead.
+            if worker::last_run_engine_id(state).as_deref() != Some(meta.id.as_str()) {
+                return Err(invalid(
+                    "The new engine did not start; the previous engine was restored",
+                ));
+            }
         } else if stopped {
             state.worker.shutting_down.store(false, Ordering::SeqCst);
         }
@@ -1661,9 +1740,10 @@ fn commit_installed_engine(
             }
         }
         state.worker.shutting_down.store(false, Ordering::SeqCst);
-        if let Some(app) = app.filter(|_| state.worker.pid.load(Ordering::SeqCst) == 0) {
-            if let Err(restart) = worker::start_worker(state.clone(), app.clone()) {
-                eprintln!("LocalSR could not restart the previous engine: {restart}");
+        // Restart whatever runs: it may be a fallback chosen for the new engine.
+        if let Some(restart) = restart {
+            if let Err(error) = restart() {
+                eprintln!("LocalSR could not restart the previous engine: {error}");
             }
         }
         return Err(error);
@@ -1825,6 +1905,7 @@ pub(crate) fn import_engine_for(
 
     let source_dir_owned = source_dir.to_path_buf();
     let manifest_bytes_owned = manifest_bytes;
+    recover_before_staging(state, &engine_id)?;
     let staged = updates::stage_engine_with(
         &state.paths.next_root,
         &engine_id,

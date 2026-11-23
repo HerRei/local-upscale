@@ -1053,13 +1053,17 @@ pub fn shutdown(state: &AppState) {
     }
 }
 
-/// Whether a running worker was started from the installed engine `id`.
-pub(crate) fn runs_installed_engine(state: &AppState, id: &str) -> bool {
-    state.worker.pid.load(Ordering::SeqCst) != 0
-        && state.worker.verified_run.lock().is_ok_and(|run| {
-            run.as_ref()
-                .is_some_and(|run| run.command.installed_engine_id.as_deref() == Some(id))
-        })
+/// The installed engine the last worker was started from, running or not.
+pub(crate) fn last_run_engine_id(state: &AppState) -> Option<String> {
+    state
+        .worker
+        .verified_run
+        .lock()
+        .ok()?
+        .as_ref()?
+        .command
+        .installed_engine_id
+        .clone()
 }
 
 /// Stop the running worker and wait until it has exited. `shutting_down` stays

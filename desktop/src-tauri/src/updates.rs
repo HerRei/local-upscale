@@ -1457,7 +1457,7 @@ fn engine_code_file(relative: &str) -> bool {
         "localsr-worker" | "localsr-worker.pkg" | "sd-cli" | "python" | "base_library.zip"
     ) || matches!(
         Path::new(&name).extension().and_then(|ext| ext.to_str()),
-        Some("exe" | "dll" | "pyd" | "so" | "dylib" | "pyz" | "py" | "pyc" | "manifest")
+        Some("exe" | "dll" | "pyd" | "so" | "dylib" | "pyz" | "py" | "pyc" | "pth" | "manifest")
     ) || name.rsplit_once(".so.").is_some_and(|(_, version)| {
         version
             .split('.')
@@ -1500,6 +1500,7 @@ fn executable_content(path: &Path, stat: &fs::Metadata) -> bool {
     };
     let magic = &magic[..read];
     magic.starts_with(b"MZ")
+        || magic.starts_with(b"#!")
         || matches!(
             magic,
             [0x7f, b'E', b'L', b'F']
@@ -1508,6 +1509,7 @@ fn executable_content(path: &Path, stat: &fs::Metadata) -> bool {
                 | [0xce, 0xfa, 0xed, 0xfe]
                 | [0xcf, 0xfa, 0xed, 0xfe]
                 | [0xca, 0xfe, 0xba, 0xbe]
+                | [0xca, 0xfe, 0xba, 0xbf]
         )
 }
 
@@ -1881,8 +1883,8 @@ fn start_engine_candidates(
         let next_root = &paths.next_root;
         // A recovery error concerns leftovers or the backup; the hash check
         // below decides whether the installed copy itself is good.
-        let recovered =
-            crate::engine_manager::recover_engine_copy(next_root, id).unwrap_or_else(|error| {
+        let recovered = crate::engine_manager::recover_engine_copy_for(next_root, id, os, arch)
+            .unwrap_or_else(|error| {
                 eprintln!("LocalSR could not finish recovering engine {id}: {error}");
                 false
             });
@@ -1897,7 +1899,7 @@ fn start_engine_candidates(
         let verified = engine_update_matches_host(&root)
             && (recovered || check_engine_files(next_root, id, &meta, true));
         if verified
-            || (restore_verified_engine_backup(next_root, id).unwrap_or(false)
+            || (restore_verified_engine_backup_for(next_root, id, os, arch).unwrap_or(false)
                 && host_meta().is_some())
         {
             if let Some(path) = engine_executable_path(next_root, id) {
@@ -2169,7 +2171,7 @@ pub(crate) fn engine_backup_path(root: &Path, id: &str) -> PathBuf {
     root.join(format!(".previous-{id}"))
 }
 
-fn rename_engine_directory(from: &Path, to: &Path) -> AppResult<()> {
+pub(crate) fn rename_engine_directory(from: &Path, to: &Path) -> AppResult<()> {
     let parent = from.parent().expect("engine directory has a parent");
     debug_assert_eq!(to.parent(), Some(parent));
     real_engine_directory(parent)?;
@@ -2226,16 +2228,26 @@ fn rename_engine_directory(from: &Path, to: &Path) -> AppResult<()> {
     update_storage::sync_dir(parent)
 }
 
-fn engine_backup_verifies(backup: &Path, id: &str) -> bool {
+fn engine_backup_verifies(backup: &Path, id: &str, os: &str, arch: &str) -> bool {
     read_engine_meta_in(backup).is_some_and(|meta| {
         meta.id == id
-            && engine_meta_valid_for_host(&meta, &meta.os, &meta.arch)
+            && engine_meta_valid_for_host(&meta, os, arch)
+            && engine_update_matches_host(backup)
             && verify_engine_directory(&backup.join("engine"), &meta.files, EngineCheck::Full)
                 .is_ok()
     })
 }
 
 pub(crate) fn restore_verified_engine_backup(next_root: &Path, id: &str) -> AppResult<bool> {
+    restore_verified_engine_backup_for(next_root, id, std::env::consts::OS, std::env::consts::ARCH)
+}
+
+pub(crate) fn restore_verified_engine_backup_for(
+    next_root: &Path,
+    id: &str,
+    os: &str,
+    arch: &str,
+) -> AppResult<bool> {
     if !safe_id(id) {
         return Err(invalid("Invalid engine identity"));
     }
@@ -2244,13 +2256,14 @@ pub(crate) fn restore_verified_engine_backup(next_root: &Path, id: &str) -> AppR
         return Ok(false);
     }
     let backup = engine_backup_path(&engines, id);
-    if !engine_backup_verifies(&backup, id) {
+    if !engine_backup_verifies(&backup, id, os, arch) {
         return Ok(false);
     }
     EngineSwap {
         target: engines.join(id),
         backup,
         token: None,
+        replaced: true,
     }
     .rollback()?;
     Ok(true)
@@ -2275,17 +2288,19 @@ pub(crate) fn confirm_engine_start(
     if !pending_engine_start(&root).is_some_and(|pending| pending.token == token) {
         return Ok(None);
     }
-    let backup = engine_backup_path(&engines, id);
-    let mut retired = None;
-    if engine_directory_exists(&backup)? {
-        // Remove the backup from recovery before deleting any of its files.
-        let path = engines.join(format!(".retired-{}", uuid::Uuid::new_v4()));
-        rename_engine_directory(&backup, &path)?;
-        retired = Some(path);
-    }
+    // Removing the marker is the commit point. Until then the backup stays where
+    // recovery and rollback find it; a leftover backup after a crash here is
+    // replaced at the next install.
     fs::remove_file(root.join(ENGINE_PENDING_START))?;
     update_storage::sync_dir(&root)?;
-    Ok(retired)
+    let backup = engine_backup_path(&engines, id);
+    if !engine_directory_exists(&backup)? {
+        return Ok(None);
+    }
+    // Remove the backup from recovery before deleting any of its files.
+    let retired = engines.join(format!(".retired-{}", uuid::Uuid::new_v4()));
+    rename_engine_directory(&backup, &retired)?;
+    Ok(Some(retired))
 }
 
 pub(crate) struct StagedEngine {
@@ -2314,6 +2329,8 @@ pub(crate) struct EngineSwap {
     target: PathBuf,
     backup: PathBuf,
     token: Option<String>,
+    /// The swap replaced an earlier copy, so a rollback needs its backup.
+    replaced: bool,
 }
 
 impl EngineSwap {
@@ -2333,6 +2350,12 @@ impl EngineSwap {
             }) {
                 // Recovery or a later install has already moved this copy out.
                 return Ok(());
+            }
+            if self.replaced && !has_backup {
+                // Without its backup, the installed copy is the only one left.
+                return Err(invalid(
+                    "The previous engine copy is missing; the installed one was kept",
+                ));
             }
             rename_engine_directory(&self.target, &retired)?;
         }
@@ -2362,14 +2385,15 @@ impl StagedEngine {
             token: uuid::Uuid::new_v4().to_string(),
             app_version: app_version.map(str::to_owned),
         });
+        real_engine_directory(parent)?;
+        real_engine_directory(&self.staging)?;
+        let target_exists = engine_directory_exists(&self.target)?;
         let swap = EngineSwap {
             target: self.target.clone(),
             backup: engine_backup_path(parent, id),
             token: pending.as_ref().map(|pending| pending.token.clone()),
+            replaced: target_exists,
         };
-        real_engine_directory(parent)?;
-        real_engine_directory(&self.staging)?;
-        let target_exists = engine_directory_exists(&swap.target)?;
         let backup_exists = engine_directory_exists(&swap.backup)?;
         if target_exists {
             match plain_engine_metadata(&swap.target.join("meta.json")) {
@@ -2399,7 +2423,12 @@ impl StagedEngine {
             // no longer verifies, makes the current copy the fallback instead.
             let keep_backup = backup_exists
                 && pending_engine_start(&swap.target).is_some()
-                && engine_backup_verifies(&swap.backup, id);
+                && engine_backup_verifies(
+                    &swap.backup,
+                    id,
+                    std::env::consts::OS,
+                    std::env::consts::ARCH,
+                );
             if keep_backup {
                 let path = parent.join(format!(".retired-{}", uuid::Uuid::new_v4()));
                 if let Err(error) = rename_engine_directory(&swap.target, &path) {
@@ -2446,7 +2475,7 @@ pub(crate) fn stage_engine_with(
     if !safe_id(engine_id) {
         return Err(invalid("Invalid engine identity"));
     }
-    crate::engine_manager::recover_interrupted_reimport(next_root, engine_id)?;
+    // Callers finish an interrupted install of this id under `engine_files` first.
     let root = next_root.join("engines");
     if !engine_directory_exists(&root)? {
         fs::create_dir(&root)?;
@@ -2555,6 +2584,8 @@ fn prepare_update_engine_for(
         return Ok((executable, None));
     }
     let engine = engine_package.ok_or_else(|| invalid("The changed engine has no package"))?;
+    // The caller holds `engine_files`.
+    crate::engine_manager::recover_interrupted_reimport(next_root, engine_id)?;
     let staged = stage_verified_engine(
         next_root,
         engine_id,
@@ -2739,6 +2770,9 @@ fn install_checked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
     }
     // The new application is in place and this process has stopped its worker and closed
     // its database: from here it only leaves, whatever the cleanup or restart says.
+    // `app.exit` returns before the process ends: keep `installing` set so no engine
+    // command restarts the worker against the engine published for the new version.
+    std::mem::forget(_installing);
     if let Err(error) = finish_install(&backup, &checked.update.version, &directory) {
         eprintln!("LocalSR: could not clean up after the update: {error}");
     }
