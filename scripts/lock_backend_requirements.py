@@ -26,6 +26,8 @@ def main() -> None:
     for target in targets():
         if args.target and target["id"] != args.target:
             continue
+        if target.get("engine_target"):
+            continue  # This package reuses another target's worker and lock.
         if target["platform"] == "macos":
             continue  # macOS builds natively and has no cross-resolved lock.
         lock = ROOT / "requirements/locks" / f"{target['id']}.txt"

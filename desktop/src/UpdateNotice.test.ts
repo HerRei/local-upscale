@@ -17,6 +17,7 @@ const api = vi.hoisted(() => ({
   checkUpdateAtLaunch: vi.fn(),
   skipUpdate: vi.fn(),
   openUpdateDiscover: vi.fn(),
+  openDownloadPage: vi.fn(async () => {}),
   downloadUpdate: vi.fn(async () => {}),
   installUpdate: vi.fn(async () => {}),
 }));
@@ -97,4 +98,24 @@ it('skips only the selected version and hides behind the update dialog', async (
   expect(await screen.findByText('LocalSR 1.1.0 is available')).toBeTruthy();
   updateDialogOpen.set(true);
   await waitFor(() => expect(screen.queryByText('LocalSR 1.1.0 is available')).toBeNull());
+});
+
+it('sends a .deb install to the download page instead of updating itself', async () => {
+  updateState.set({
+    ...available,
+    // An earlier test dismissed the fixture's version for this module.
+    version: '0.6.0-beta',
+    size: 0,
+    managed_by_package_manager: true,
+    target: 'linux-x86_64-cpu-deb',
+  });
+  const user = userEvent.setup();
+  render(UpdateNotice);
+  expect(await screen.findByText('LocalSR 0.6.0-beta is available')).toBeTruthy();
+  expect(screen.getByText('Download the new .deb and install it with apt.')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Update' })).toBeNull();
+  await user.click(screen.getByRole('button', { name: 'Download' }));
+  expect(api.openDownloadPage).toHaveBeenCalledTimes(1);
+  expect(api.downloadUpdate).not.toHaveBeenCalled();
+  expect(api.installUpdate).not.toHaveBeenCalled();
 });

@@ -258,6 +258,23 @@ fn serve_with_ranges(
 }
 
 #[test]
+fn a_deb_install_downloads_the_engines_of_the_native_feed_entries() {
+    // The .deb has no feed entry of its own (apt installs its updates), but GPU engines
+    // still come from the signed native entries, into the user's app-data folder.
+    let (config, _, _, _, _, _, contract) = fixture_engine_files("http://127.0.0.1:1");
+    let feed = feed_json_with_rocm("0.3.7-beta", &contract);
+    let deb = UpdateConfig {
+        kind: "deb".into(),
+        ..config.clone()
+    };
+    let entries =
+        parse_feed_engines_for(&feed, &deb, "beta", "0.3.7-beta", "linux", "x86_64").unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].backend, "rocm");
+    assert_eq!(entries[0].engine_id, "linux-x86_64-rocm-0123456789ab");
+}
+
+#[test]
 fn catalog_lists_all_backends_for_current_os_and_arch_while_app_updates_keep_compiled_backend() {
     let (config, _, _, _, _, _, contract) = fixture_engine_files("http://127.0.0.1:1");
     let feed = feed_json_with_rocm("0.3.7-beta", &contract);

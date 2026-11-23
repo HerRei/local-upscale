@@ -118,6 +118,12 @@
     "macOS": {
       "minimumSystemVersion": "12.0"
     },
+    "linux": {
+      "deb": {
+        "depends": ["libc6 (>= 2.35)", "ocl-icd-libopencl1"],
+        "section": "graphics"
+      }
+    },
     "icon": [
       "../../packaging/icons/LocalSR.png",
       "../../packaging/icons/LocalSR.icns",

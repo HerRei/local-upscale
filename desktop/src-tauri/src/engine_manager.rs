@@ -226,8 +226,9 @@ pub(crate) async fn fetch_feed_json(
 }
 
 /// Extract and signature-verify all engine packages of the feed for `os`/`arch` and
-/// `config.kind`. Unlike app updates, entries for any backend of this OS/arch are listed,
-/// and `version == installed_version` is accepted alongside newer versions.
+/// `config.kind` (`native` for the .deb, which has no entries of its own). Unlike app
+/// updates, entries for any backend of this OS/arch are listed, and
+/// `version == installed_version` is accepted alongside newer versions.
 pub(crate) fn parse_feed_engines_for(
     raw_json: &serde_json::Value,
     config: &UpdateConfig,
@@ -236,6 +237,7 @@ pub(crate) fn parse_feed_engines_for(
     os: &str,
     arch: &str,
 ) -> AppResult<Vec<VerifiedCatalogEntry>> {
+    let config = &config.feed_config();
     let feed_version = raw_json["version"]
         .as_str()
         .ok_or_else(|| invalid("Update feed is missing a release version"))?;

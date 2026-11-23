@@ -104,8 +104,8 @@ def test_installed_cpu_probe_rejects_gpu_runtime_identity(flavor: str, monkeypat
 
 def test_backend_locks_have_the_named_torch_flavor_and_native_dependencies():
     for target in targets():
-        if target["platform"] == "macos":
-            continue
+        if target["platform"] == "macos" or target.get("engine_target"):
+            continue  # The .deb ships its engine target's worker, checked under that id.
         lock = (ROOT / "requirements/locks" / f"{target['id']}.txt").read_text()
         flavor = "cpu" if target["backend"] == "DirectML" else target["index"]
         version = "2.13.0"

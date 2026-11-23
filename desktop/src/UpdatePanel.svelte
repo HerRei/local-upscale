@@ -143,7 +143,7 @@
         with each download.
       </p>
       <p role="status">{status.message}</p>
-      {#if status.version}<h3>{status.version} · {sizeText}</h3>
+      {#if status.version}<h3>{sizeText ? `${status.version} · ${sizeText}` : status.version}</h3>
         <p class="notes">{status.notes}</p>{/if}
       {#if status.stage === 'downloading'}<progress max={status.size || 1} value={status.downloaded}
         ></progress>
@@ -191,6 +191,10 @@
             class="button primary"
             disabled={processing || inProgress || status.settings_recovery}
             on:click={() => run(api.installUpdate)}>Install and restart</button
+          >
+        {:else if status.stage === 'available' && status.managed_by_package_manager}<button
+            class="button primary"
+            on:click={() => run(api.openDownloadPage)}>Open download page</button
           >
         {:else if status.stage === 'available'}<button
             class="button primary"

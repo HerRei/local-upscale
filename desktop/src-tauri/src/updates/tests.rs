@@ -2117,3 +2117,62 @@ fn staged_engine_verifies_before_replacing_existing_engine() {
     assert_eq!(fs::read(installed).unwrap(), b"worker");
     assert!(!existing.join("old").exists());
 }
+
+fn debian(config: UpdateConfig) -> UpdateConfig {
+    UpdateConfig {
+        kind: "deb".into(),
+        ..config
+    }
+}
+
+#[test]
+fn a_deb_reads_its_native_edition_in_the_feed_but_never_updates_itself() {
+    let deb = debian(configured("KEY", "cpu"));
+    assert!(deb.installed_by_package_manager());
+    assert!(require_self_update(&deb).is_err());
+    let feed = deb.feed_config();
+    assert_eq!(feed.kind, "native");
+    assert!(!feed.installed_by_package_manager());
+    assert_eq!(
+        (&feed.public_key, &feed.backend, &feed.engine_id, &feed.feed),
+        (&deb.public_key, &deb.backend, &deb.engine_id, &deb.feed)
+    );
+    // The installed identity stays the .deb's own: release CI and the count report it.
+    assert!(deb.target().ends_with("-cpu-deb"));
+    assert_eq!(identity(&deb, false)["kind"], "deb");
+    assert_eq!(identity(&deb, false)["enabled"], true);
+    for kind in ["native", "portable"] {
+        let config = UpdateConfig {
+            kind: kind.into(),
+            ..configured("KEY", "cpu")
+        };
+        assert!(!config.installed_by_package_manager());
+        assert!(require_self_update(&config).is_ok());
+        assert_eq!(config.feed_config().kind, kind);
+    }
+}
+
+#[test]
+fn a_deb_trusts_only_the_signed_native_entry_it_reads() {
+    let (native, contract) = statement_contract();
+    let deb = debian(native);
+    let target = "linux-x86_64-rocm-native";
+    // As itself the .deb matches no signed entry: the feed has none for `deb`.
+    assert!(validate_contract(&deb, "beta", "0.3.7-beta", &contract).is_err());
+    assert!(verify_statement(&deb, target, "beta", "0.3.7-beta", "0.3.6-beta", &contract).is_err());
+    let feed = deb.feed_config();
+    validate_contract(&feed, "beta", "0.3.7-beta", &contract).unwrap();
+    verify_statement(&feed, target, "beta", "0.3.7-beta", "0.3.6-beta", &contract).unwrap();
+}
+
+#[test]
+fn a_deb_shows_a_newer_release_without_anything_to_download() {
+    let mut status = UpdateStatus {
+        size: 300,
+        ..Default::default()
+    };
+    show_package_manager_update(&mut status);
+    assert_eq!(status.stage, "available");
+    assert_eq!(status.size, 0);
+    assert!(status.message.contains("apt"), "{}", status.message);
+}

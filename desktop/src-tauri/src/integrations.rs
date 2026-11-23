@@ -127,17 +127,30 @@ pub(crate) fn should_offer_linux_menu(
     is_linux && is_appimage && !installed && !dismissed
 }
 
+/// Whether this process runs from an AppImage. The .deb (built with the `deb` update kind)
+/// never does: apt installs its menu entry, so APPIMAGE and APPDIR inherited from an
+/// AppImage that started it must not bring back the AppImage's menu offer or Help item.
+#[cfg(any(target_os = "linux", test))]
+fn runs_from_appimage(
+    installed_by_package_manager: bool,
+    current: &Path,
+    appimage: Option<&std::ffi::OsStr>,
+    appdir: Option<&std::ffi::OsStr>,
+) -> bool {
+    !installed_by_package_manager && appimage_container(current, appimage, appdir).is_some()
+}
+
 #[cfg(target_os = "linux")]
 pub fn running_in_appimage() -> bool {
     let Ok(current) = env::current_exe().and_then(fs::canonicalize) else {
         return false;
     };
-    appimage_container(
+    runs_from_appimage(
+        crate::updates::installed_by_package_manager(),
         &current,
         env::var_os("APPIMAGE").as_deref(),
         env::var_os("APPDIR").as_deref(),
     )
-    .is_some()
 }
 
 pub fn linux_menu_installed() -> bool {
@@ -937,6 +950,35 @@ mod tests {
         assert!(!linux_menu_installed_in(&data_dir));
         assert!(!desktop_path.exists());
         assert!(!icon_path.exists());
+    }
+
+    #[test]
+    fn a_deb_build_never_counts_as_an_appimage_even_with_leaked_appimage_variables() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mount = temporary.path().join("mount/usr/bin");
+        fs::create_dir_all(&mount).unwrap();
+        let current = mount.join("localsr-next");
+        let appimage = temporary.path().join("LocalSR.AppImage");
+        fs::write(&current, b"host").unwrap();
+        fs::write(&appimage, b"appimage").unwrap();
+        let current = fs::canonicalize(current).unwrap();
+        let mount = temporary.path().join("mount");
+        let (appimage, mount) = (appimage.as_os_str(), mount.as_os_str());
+
+        assert!(runs_from_appimage(
+            false,
+            &current,
+            Some(appimage),
+            Some(mount)
+        ));
+        // apt installed the .deb and its menu entry: no AppImage offer or Help item.
+        assert!(!runs_from_appimage(
+            true,
+            &current,
+            Some(appimage),
+            Some(mount)
+        ));
+        assert!(!runs_from_appimage(false, &current, None, None));
     }
 
     #[test]

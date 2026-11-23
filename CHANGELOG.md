@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0-beta] - Unreleased
+
+- **Debian package.** The CPU edition for Ubuntu 22.04+ and Debian 12+ as a .deb that
+  `apt` installs into the applications menu and removes with `apt remove`. It reports new
+  versions instead of updating itself, and downloads the CUDA or ROCm engine inside the
+  app. The AppImage stays (#165).
+
 ## [0.5.2-beta] - 2026-11-23
 
 - **Engine manager.** One main download per OS starts LocalSR. After setup, the app

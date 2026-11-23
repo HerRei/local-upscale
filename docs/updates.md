@@ -71,6 +71,15 @@ How the verified package is installed depends on the edition:
   run from its AppImage (no `APPIMAGE`, or the host outside `APPDIR`) refuses the
   update, and the AppImage's folder must be writable.
 - **Portable Linux host** (`portable` kind): see [Feed format](#feed-format).
+- **Debian package** (`deb` kind): apt owns the files under `/usr`, so the app never
+  downloads or installs an app update (`download_update` and `install_update` refuse).
+  It has no feed entry: a check reads and verifies the signed `native` entry of the
+  same backend (`UpdateConfig::feed_config()`, `linux-x86_64-cpu-native`) and only
+  reports the version, with the download page as its action
+  (`managed_by_package_manager` in the status). Engine downloads read the `native`
+  engine entries the same way and install into the app-data folder. The launch check,
+  the count (`t=linux-x86_64-cpu-deb`) and the Help menu switches work as for an
+  AppImage; the AppImage's applications-menu offer does not appear.
 
 ### Anonymous update-check count
 
@@ -97,7 +106,7 @@ means rebuilding the Rust host.
 | `LOCALSR_UPDATE_FEED` | HTTPS directory containing `stable.json` and `beta.json` |
 | `LOCALSR_UPDATE_BACKEND` | The package's engine: `cpu`, `cuda`, `rocm`, `directml`, `mps` |
 | `LOCALSR_ENGINE_ID` | Immutable identity of the bundled engine build |
-| `LOCALSR_UPDATE_KIND` | `native` for Tauri updater artifacts, `portable` for the unpacked Linux host |
+| `LOCALSR_UPDATE_KIND` | `native` for Tauri updater artifacts, `portable` for the unpacked Linux host, `deb` for the Debian package (updated by apt) |
 
 Each release target in `ci/tauri-targets.json` names its update `backend` and
 `kind`. The Windows and Linux workflows set the variables with
@@ -118,6 +127,7 @@ The platform key in a feed is `<os>-<architecture>-<backend>-<kind>`:
 | Windows CUDA, CPU, DirectML | `windows-x86_64-cuda-native`, `windows-x86_64-cpu-native`, `windows-x86_64-directml-native` |
 | Linux CPU, CUDA, ROCm AppImage | `linux-x86_64-cpu-native`, `linux-x86_64-cuda-native`, `linux-x86_64-rocm-native` |
 | Unpacked Linux host | `linux-x86_64-<backend>-portable` |
+| Linux CPU .deb | `linux-x86_64-cpu-deb` (no feed entry; reads `linux-x86_64-cpu-native`) |
 
 The Stable channel rejects prereleases, and both channels reject entries whose
 backend, package kind or worker protocol do not match the installed build. The

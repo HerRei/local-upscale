@@ -95,7 +95,7 @@ The updater signing key is managed by `scripts/beta_update_signing.py`; see
 
 ### Windows and Linux updates
 
-Every Windows and Linux package carries its update identity and updates itself
+Windows installers and Linux AppImages carry their update identity and update themselves
 ([Updates](updates.md)); its feed entry is written and signed on the Mac, after the
 macOS build, from the workflow runs at the same commit:
 
@@ -111,16 +111,19 @@ macOS build, from the workflow runs at the same commit:
    then signs private copies of exactly those files with the Keychain key, adds the
    entries with their signed release statements next to the macOS entry, and prints
    the `.sig` files it wrote. The copies need room for the largest package once more.
-3. `python scripts/verify_prepared_release.py --feed
+3. Nothing is signed for the .deb: apt installs its updates. It reads the signed
+   `linux-x86_64-cpu-native` entry to report a new version and the `native` engine
+   entries to download GPU engines, so the feed has no entry for it.
+4. `python scripts/verify_prepared_release.py --feed
    build/release-<version>/beta.json --commit <sha> --files build/release-<version>
    --files build/release-<version>/platforms` must pass: one entry per release
-   target, with its backend, kind, protocol, engine id and engine package, and every
+   target except the .deb, with its backend, kind, protocol, engine id and engine package, and every
    statement and signature verified against the public key over the local files.
-4. Attach the packages, their parts and engine packages from the same runs
+5. Attach the packages, their parts and engine packages from the same runs
    (`release_tag`, or `attach-release-assets.yml`), and upload the printed `.sig`
    files from the Mac to the release. The signatures cover the exact files of those
    runs; a rerun produces different files and needs new signatures.
-5. Install the previous version on a Windows machine and from an AppImage on Linux
+6. Install the previous version on a Windows machine and from an AppImage on Linux
    and confirm that the update downloads, installs and relaunches, before the feed
    goes live.
 
@@ -137,13 +140,26 @@ and writes its schema 2 engine package (`<package>.engine-payload.json` with
 `.engine.tar.gz.part-*` files) next to the package; the updater signatures are
 made on the Mac ([Windows and Linux updates](#windows-and-linux-updates)).
 
+The CPU Linux job also builds `LocalSR-v<version>-Linux-CPU-amd64.deb` (package
+`localsr`) from the same worker, with Tauri's deb bundler and the `deb` identity
+(`release_targets.py --update-env linux-x86_64-cpu-deb`: the CPU engine id, kind
+`deb`). The extracted package gets the AppImage's codec, NVIDIA, glibc 2.35 and
+source bundle checks (`LocalSR-v<version>-Linux-CPU-deb-source-and-notices.tar.gz`),
+and `verify_deb_dependencies.py` checks that every system library it links comes
+with its Depends: Tauri adds WebKitGTK 4.1 and GTK 3, `tauri.conf.json` adds
+`libc6 (>= 2.35)` and the OpenCL loader that the AppImage bundles. The smoke test
+installs it with `sudo apt-get install`, starts the installed host headless, removes
+it with `sudo apt-get remove` and fails if a file it installed is left. The .deb and
+its checksum are attached with the AppImages; it is never split, it has no updater
+file or engine package, and the feed has no entry for it.
+
 ### Targets
 
 | Platform | Engines | Runtime |
 | --- | --- | --- |
 | macOS, Apple Silicon | MPS | Torch 2.13, built and signed on a Mac with `release_macos_beta.sh` |
 | Windows 10/11, x86-64 | CPU, CUDA, DirectML | Torch 2.13; CUDA ships as an installer plus verified external engine payloads; DirectML through ONNX Runtime |
-| Linux, x86-64 | CPU, CUDA, AMD ROCm | separate Torch 2.13 distributions |
+| Linux, x86-64 | CPU, CUDA, AMD ROCm | separate Torch 2.13 distributions; the CPU edition also as a .deb for Ubuntu 22.04+ and Debian 12+ |
 
 Intel XPU is listed under `withheld_targets`; see
 [media formats and licensing](licensing-media.md).

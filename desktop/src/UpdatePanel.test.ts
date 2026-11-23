@@ -14,6 +14,7 @@ const api = vi.hoisted(() => ({
   discardUpdate: vi.fn(),
   cancelUpdate: vi.fn(),
   recoverUpdateSettings: vi.fn(),
+  openDownloadPage: vi.fn(async () => {}),
 }));
 vi.mock('./lib/api', () => api);
 afterEach(cleanup);
@@ -150,4 +151,27 @@ it('shows the host message when cancelling the download is refused', async () =>
   render(UpdatePanel);
   await user.click(await screen.findByRole('button', { name: 'Cancel download' }));
   expect((await screen.findByRole('alert')).textContent).toContain('could not be cancelled');
+});
+
+it('offers a .deb install the download page, never a download inside the app', async () => {
+  api.updateStatus.mockResolvedValue({
+    configured: true,
+    managed_by_package_manager: true,
+    channel: 'beta',
+    target: 'linux-x86_64-cpu-deb',
+    stage: 'available',
+    version: '0.6.0-beta',
+    notes: 'Debian package',
+    size: 0,
+    downloaded: 0,
+    message: 'Install it with apt.',
+    settings_recovery: false,
+  });
+  const user = userEvent.setup();
+  render(UpdatePanel);
+  await user.click(await screen.findByRole('button', { name: 'Open download page' }));
+  await waitFor(() => expect(api.openDownloadPage).toHaveBeenCalledTimes(1));
+  expect(screen.getByRole('heading', { name: '0.6.0-beta' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /Download update/ })).toBeNull();
+  expect(api.downloadUpdate).not.toHaveBeenCalled();
 });

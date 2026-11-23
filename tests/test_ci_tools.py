@@ -186,6 +186,7 @@ def test_beta_contract_requires_the_update_target_of_every_edition(tmp_path):
         "windows-x86_64-cpu": "windows-x86_64-cpu-native",
         "windows-x86_64-directml": "windows-x86_64-directml-native",
         "linux-x86_64-cpu": "linux-x86_64-cpu-native",
+        "linux-x86_64-cpu-deb": "linux-x86_64-cpu-deb",
         "linux-x86_64-cuda": "linux-x86_64-cuda-native",
         "linux-x86_64-rocm": "linux-x86_64-rocm-native",
     }

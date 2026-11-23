@@ -149,6 +149,16 @@ settings by default on uninstall. SmartScreen warns because the installers are
 unsigned. On Linux, the AppImage offers once after setup to add LocalSR to your
 applications menu (removable from the Help menu).
 
+From 0.6.0-beta, Ubuntu 22.04 or newer and Debian 12 or newer (x86-64) can
+install the CPU edition as a .deb: `sudo apt install
+./LocalSR-v<version>-Linux-CPU-amd64.deb`, and `sudo apt remove localsr` removes
+it. apt installs the system's WebKitGTK 4.1 and GTK 3 with it. The package adds
+its own applications menu entry, so it never shows the AppImage's menu offer.
+LocalSR reports a new version and opens the download page; install the new .deb
+with apt the same way, because the app never replaces files that apt manages. The
+CUDA and ROCm engines download inside the app (Advanced -> Engine), into
+`${XDG_DATA_HOME:-~/.local/share}/LocalSR`, which `apt remove` keeps.
+
 ## In-app engine switching (Windows and Linux)
 
 Direct builds can also install and switch engines inside the app instead of

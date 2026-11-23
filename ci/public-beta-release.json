@@ -56,6 +56,15 @@
       "signing": "sha256-and-update-signature"
     },
     {
+      "id": "linux-x86_64-cpu-deb",
+      "platform": "linux",
+      "architecture": "x86_64",
+      "backend": "CPU",
+      "coverage": "main-path",
+      "package": "candidate",
+      "signing": "sha256"
+    },
+    {
       "id": "linux-x86_64-cuda",
       "platform": "linux",
       "architecture": "x86_64",

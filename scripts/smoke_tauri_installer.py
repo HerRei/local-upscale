@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Install or mount a Tauri preview package and verify its bundled worker boots."""
+"""Install or mount a Tauri preview package and verify its bundled worker boots.
+
+A .deb is installed and removed with apt on the runner itself (sudo).
+"""
 
 from __future__ import annotations
 
@@ -426,6 +429,47 @@ def resolve_artifact(pattern: str) -> Path:
     return matches[0]
 
 
+def deb_host_and_files(listing: list[str]) -> tuple[Path, list[Path]]:
+    """The installed host and every file and link of the package, from `dpkg-query -L`."""
+    paths = [Path(line) for line in listing if line.strip()]
+    files = [path for path in paths if path.is_symlink() or path.is_file()]
+    hosts = [
+        path
+        for path in files
+        if path.parent.name == "bin"
+        and path.parent.parent.name == "usr"
+        and os.access(path, os.X_OK)
+    ]
+    if len(hosts) != 1:
+        raise RuntimeError(f"the .deb must install one program in /usr/bin, not {hosts}")
+    if not any(path.suffix == ".desktop" and path.parent.name == "applications" for path in files):
+        raise RuntimeError("the .deb installs no applications menu entry")
+    return hosts[0], files
+
+
+def smoke_deb(artifact: Path, report: Path, env: dict[str, str], timeout: float) -> None:
+    """Install the .deb with apt as users do, start the installed host, remove it with apt."""
+    package = run(["dpkg-deb", "-f", str(artifact), "Package"], env=env, timeout=timeout)
+    package_name = package.stdout.decode().strip()
+    if package_name != "localsr":
+        raise RuntimeError(f"the .deb is named {package_name!r}, not localsr")
+    # apt resolves the declared Depends, as `sudo apt install ./file.deb` does.
+    run(["sudo", "apt-get", "install", "-y", str(artifact.resolve())], env=env, timeout=timeout)
+    try:
+        listing = run(["dpkg-query", "-L", package_name], env=env, timeout=timeout)
+        host, files = deb_host_and_files(listing.stdout.decode().splitlines())
+        run([str(host), "--headless-smoke-test"], env=env, timeout=timeout)
+        worker = json.loads(report.read_text(encoding="utf-8")).get("worker_path")
+        if not worker or Path(worker).resolve() not in {path.resolve() for path in files}:
+            raise RuntimeError(f"the installed host ran {worker!r}, not the engine apt installed")
+        verify_backend(report, env, timeout)
+    finally:
+        run(["sudo", "apt-get", "remove", "-y", package_name], env=env, timeout=timeout)
+    remaining = [str(path) for path in files if path.is_symlink() or path.exists()]
+    if remaining:
+        raise RuntimeError(f"apt remove left the package's files behind: {remaining[:20]}")
+
+
 def smoke(artifact: Path, report: Path, timeout: float = 240.0) -> dict[str, object]:
     report = report.resolve()
     report.parent.mkdir(parents=True, exist_ok=True)
@@ -444,6 +488,8 @@ def smoke(artifact: Path, report: Path, timeout: float = 240.0) -> dict[str, obj
                 smoke_windows(artifact, report, env, timeout)
             elif suffix == ".appimage":
                 smoke_linux(artifact, report, env, timeout)
+            elif suffix == ".deb":
+                smoke_deb(artifact, report, env, timeout)
             else:
                 raise RuntimeError(f"unsupported Tauri package type: {artifact.name}")
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
