@@ -362,7 +362,7 @@ def test_vendored_pipeline_loads_safetensors_without_torch_load(monkeypatch):
     assert tuple(pipe.prompt_emb_posi["context"].shape) == (1, 512, 4096)
 
 
-def test_worker_temporal_routing_uses_fixed_4x_and_flashvsr_defaults(tmp_path, monkeypatch):
+def test_worker_temporal_routing_sizes_flashvsr_like_every_temporal_engine(tmp_path, monkeypatch):
     import localsr.worker.server as server_module
 
     source_mp4 = tmp_path / "in.mp4"
@@ -427,9 +427,9 @@ def test_worker_temporal_routing_uses_fixed_4x_and_flashvsr_defaults(tmp_path, m
             "model_kind": "flashvsr",
             "video_codec": "vp9",
             "container": "mp4",
-            "target_resolution": 120,
-            "temporal_window": 0,
-            "temporal_overlap": 0,
+            "target_resolution": 96,
+            "temporal_window": 37,
+            "temporal_overlap": 8,
             "preview_enabled": False,
         },
         lambda *_args: engine,
@@ -642,7 +642,7 @@ def test_worker_end_to_end_flashvsr(tmp_path, monkeypatch):
         "bundle_dir": str(bundle_dir),
         "temporal_window": 37,
         "temporal_overlap": 8,
-        "target_resolution": 100,  # Intentionally non-4x; FlashVSR must still output 4x (256x192).
+        "target_resolution": 192,  # 4x of the 48 px shorter edge: 256x192.
         "video_low_memory": True,
         "output_scale": 4,
         "allow_unverified_checkpoint": False,
@@ -664,3 +664,24 @@ def test_worker_end_to_end_flashvsr(tmp_path, monkeypatch):
     assert out_probe.frame_count == 24
     assert any(isinstance(msg, VideoJobCompleted) for msg in messages)
     assert any(isinstance(msg, TileUpdate) for msg in messages)
+
+
+def test_output_size_follows_the_requested_shorter_edge():
+    from localsr.video_models.flashvsr.engine import model_size, output_size
+
+    assert output_size(97, 61, 0) == (388, 244)  # 0 = the model's own 4x
+    assert output_size(64, 48, 96) == (128, 96)  # 2x
+    assert output_size(64, 48, 100) == (132, 100)  # even sides, source proportions
+    assert model_size(64, 48, 128, 96) == (128, 96)  # up to 4x the model runs at the output size
+    assert model_size(64, 48, 512, 384) == (256, 192)  # beyond 4x it runs at 4x
+
+
+def test_engine_honours_a_2x_request_and_resizes_beyond_4x():
+    frames = _synthetic_frames(5, width=40, height=30)
+    engine, calls = _stub_engine(budget_bytes=10_800_000_000)
+    half = engine.process_frames(frames, resolution=60)
+    assert half[0].shape == (60, 80, 3)
+    assert calls[-1]["width"] == 128 and calls[-1]["height"] == 128  # 80x60 padded to 128
+    big = engine.process_frames(frames, resolution=240)
+    assert big[0].shape == (240, 320, 3)
+    assert calls[-1]["width"] == 256 and calls[-1]["height"] == 128  # model ran at 160x120

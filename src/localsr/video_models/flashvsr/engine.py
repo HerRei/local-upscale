@@ -232,17 +232,41 @@ def plan_tiles(
     )
 
 
+def output_size(in_width: int, in_height: int, resolution: int) -> tuple[int, int]:
+    """Output size for a requested shorter edge: source proportions, even sides.
+
+    0 means the model's own 4x. Rounding matches the SeedVR2 engine and the worker's
+    disk estimate, so every temporal engine reports the same size for a request.
+    """
+    shorter = min(in_width, in_height)
+    if resolution <= 0:
+        resolution = shorter * OUTPUT_SCALE
+    ratio = resolution / shorter
+    return max(2, int(in_width * ratio) // 2 * 2), max(2, int(in_height * ratio) // 2 * 2)
+
+
+def model_size(in_width: int, in_height: int, out_width: int, out_height: int) -> tuple[int, int]:
+    """The size FlashVSR runs at: the output itself up to 4x, beyond that 4x.
+
+    The model restores a bicubic-enlarged clip, so any size up to its training scale
+    works directly; a larger request is resized from the 4x result afterwards.
+    """
+    if out_width <= in_width * OUTPUT_SCALE and out_height <= in_height * OUTPUT_SCALE:
+        return out_width, out_height
+    return in_width * OUTPUT_SCALE, in_height * OUTPUT_SCALE
+
+
 def upscale_and_pad_frames(
     frames: Sequence[np.ndarray],
+    out_w: int,
+    out_h: int,
     pad_width: int,
     pad_height: int,
     *,
     resample: Image.Resampling = Image.Resampling.BICUBIC,
 ) -> np.ndarray:
-    """Upscale RGB uint8 frames by 4x and edge-replicate pad to (pad_height, pad_width)."""
+    """Resize RGB uint8 frames to (out_h, out_w) and edge-replicate pad to the padded size."""
     in_h, in_w = frames[0].shape[:2]
-    out_w = in_w * OUTPUT_SCALE
-    out_h = in_h * OUTPUT_SCALE
     pad_right = pad_width - out_w
     pad_bottom = pad_height - out_h
 
@@ -259,10 +283,18 @@ def upscale_and_pad_frames(
     return stacked
 
 
+def _to_output(frame: np.ndarray, width: int, height: int) -> np.ndarray:
+    """Resize a model-size frame to the requested output (only needed beyond 4x)."""
+    if frame.shape[1] != width or frame.shape[0] != height:
+        frame = np.asarray(
+            Image.fromarray(frame).resize((width, height), Image.Resampling.LANCZOS), np.uint8
+        )
+    return np.ascontiguousarray(frame)
+
+
 class FlashVSREngine:
     """One job's worth of MLX FlashVSR v1.1 Tiny state and tiled frame execution."""
 
-    fixed_scale = OUTPUT_SCALE
     default_temporal_window = DEFAULT_TEMPORAL_WINDOW
     default_temporal_overlap = DEFAULT_TEMPORAL_OVERLAP
 
@@ -403,8 +435,8 @@ class FlashVSREngine:
         progress_callback: Callable[[str, int, int], None] | None = None,
         tile_callback: Callable[..., None] | None = None,
     ) -> list[np.ndarray]:
-        """Upscale a temporal window of RGB uint8 frames by 4x via MLX FlashVSR."""
-        del resolution, batch_size, temporal_overlap
+        """Upscale a temporal window of RGB uint8 frames to `resolution` (shorter edge)."""
+        del batch_size, temporal_overlap
         if self.pipeline is None:
             raise RuntimeError("FlashVSREngine has been released.")
 
@@ -422,8 +454,8 @@ class FlashVSREngine:
             return []
 
         in_h, in_w = frames[0].shape[:2]
-        out_w = in_w * OUTPUT_SCALE
-        out_h = in_h * OUTPUT_SCALE
+        final_w, final_h = output_size(in_w, in_h, resolution)
+        out_w, out_h = model_size(in_w, in_h, final_w, final_h)
         plan = plan_tiles(
             out_w,
             out_h,
@@ -436,6 +468,8 @@ class FlashVSREngine:
         report("preparing_clip", 0, 0)
         lq_padded = upscale_and_pad_frames(
             frames,
+            out_w,
+            out_h,
             plan.padded_width,
             plan.padded_height,
             resample=getattr(self, "_upscale_resample", Image.Resampling.BICUBIC),
@@ -457,7 +491,7 @@ class FlashVSREngine:
             if tile_callback is not None:
                 tile_callback("enhancing", "completed", 1, 1, 0, 0, out_w, out_h, out_w, out_h)
             report("finishing", 1, 1)
-            return [np.ascontiguousarray(cropped[idx]) for idx in range(n_in)]
+            return [_to_output(cropped[idx], final_w, final_h) for idx in range(n_in)]
 
         # Keep the blended canvas in float32 unless very large (>= ~1.8 GB) to avoid swap.
         canvas_dtype = np.float16 if n_in * out_h * out_w > 150_000_000 else np.float32
@@ -512,7 +546,11 @@ class FlashVSREngine:
 
         if np.any(weight_sum <= 0):
             raise RuntimeError("FlashVSR tile plan left uncovered output pixels.")
-        canvas_f32 = canvas.astype(np.float32) / weight_sum[None, :, :, None]
-        out_uint8 = np.clip(canvas_f32, 0.0, 255.0).astype(np.uint8)
+        # Normalise one frame at a time: a whole-window float32 copy is several GB at 4K.
+        weights = weight_sum[:, :, None]
+        result = []
+        for idx in range(n_in):
+            frame = np.clip(canvas[idx].astype(np.float32) / weights, 0.0, 255.0)
+            result.append(_to_output(frame.astype(np.uint8), final_w, final_h))
         report("finishing", 1, 1)
-        return [np.ascontiguousarray(out_uint8[idx]) for idx in range(n_in)]
+        return result
