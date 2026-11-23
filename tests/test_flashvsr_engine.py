@@ -203,7 +203,7 @@ def test_odd_size_padding_to_128_multiples_and_crop_back_is_exact():
     ("out_w", "out_h", "budget_bytes", "override"),
     [
         (1920, 1080, 10_800_000_000, None),
-        (3840, 2160, 10_800_000_000, None),
+        (3840, 2160, 20_000_000_000, None),
         (896, 512, 10_800_000_000, (512, 384)),
         (1024, 1024, 10_800_000_000, (640, 640)),
     ],
@@ -317,6 +317,19 @@ def test_low_memory_budget_refuses_below_512x512():
         plan_tiles(1024, 1024, budget_bytes=too_small_budget)
     # Must not trigger SeedVR2's "out of memory" message rewrite in WorkerServer.
     assert "out of memory" not in str(exc_info.value).lower()
+
+
+def test_plan_tiles_accounts_for_window_length_and_unified_host_buffers():
+    # On a 16 GB Mac (10.8 GB budget), 4K at 37 frames needs ~2.80 GB of unified host buffers
+    # plus 41-frame MLX tensors, leaving < 512x512 and refusing cleanly before OOM/swap.
+    with pytest.raises(RuntimeError, match="512x512"):
+        plan_tiles(3840, 2160, n_frames=37, budget_bytes=10_800_000_000)
+
+    # On a 32 GB Mac (20 GB budget), longer windows shrink max_tile_area via both n_pad and buffers.
+    plan_37 = plan_tiles(3840, 2160, n_frames=37, budget_bytes=20_000_000_000)
+    plan_61 = plan_tiles(3840, 2160, n_frames=61, budget_bytes=20_000_000_000)
+    assert plan_61.max_tile_area < plan_37.max_tile_area
+    assert plan_61.tile_width * plan_61.tile_height <= plan_61.max_tile_area
 
 
 def test_engine_rejects_non_mps_and_release_clears_pipeline():
@@ -685,3 +698,34 @@ def test_engine_honours_a_2x_request_and_resizes_beyond_4x():
     big = engine.process_frames(frames, resolution=240)
     assert big[0].shape == (240, 320, 3)
     assert calls[-1]["width"] == 256 and calls[-1]["height"] == 128  # model ran at 160x120
+
+
+def test_float_to_uint8_rounds_instead_of_truncating_on_float16_canvas(monkeypatch):
+    # Constant 200.0 output across single-tile and float16 multi-tile overlap must stay 200.
+    class Const200Engine(FlashVSREngine):
+        def __init__(self, out_val: float):
+            self.bundle_dir = Path("/stub")
+            self.device = "mps"
+            self._backend = "mps"
+            self.max_temporal_window = flashvsr_engine.MAX_TEMPORAL_WINDOW
+            self._budget_bytes_override = 20_000_000_000
+            self._tile_size_override = None
+            self._upscale_resample = Image.Resampling.NEAREST
+            self.pipeline = object()
+            self._out_val = out_val
+
+        def _run_tile(self, lq_tile_uint8, n_in, n_pad, tile, seed, step_callback):
+            del lq_tile_uint8, n_pad, seed, step_callback
+            return np.full((n_in, tile.height, tile.width, 3), self._out_val, dtype=np.float32)
+
+    frames = _synthetic_frames(2, width=40, height=30)
+    single_out = Const200Engine(199.8).process_frames(frames)
+    assert np.all(single_out[0] == 200)
+
+    # Trigger float16 canvas on a small 2x2 tiled clip.
+    monkeypatch.setattr(flashvsr_engine, "FLOAT16_CANVAS_ELEMENTS", 1)
+    tiled_engine = Const200Engine(200.0)
+    tiled_engine._tile_size_override = (512, 384)
+    tiled_frames = _synthetic_frames(2, width=224, height=128)
+    tiled_out = tiled_engine.process_frames(tiled_frames)
+    assert np.all(tiled_out[0] == 200)

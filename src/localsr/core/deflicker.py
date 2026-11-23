@@ -65,8 +65,14 @@ def _luma(rgb: np.ndarray) -> np.ndarray:
     return 0.299 * rgb_f[..., 0] + 0.587 * rgb_f[..., 1] + 0.114 * rgb_f[..., 2]
 
 
+def _require_uint8_rgb(rgb: np.ndarray, label: str) -> None:
+    if rgb.dtype != np.uint8:
+        raise ValueError(f"De-flicker requires 8-bit uint8 RGB frames ({label} has {rgb.dtype}).")
+
+
 def prepare_analysis_frame(rgb: np.ndarray) -> AnalysisFrame:
     """Downscale ``rgb`` so its longer edge is at most 640 px and extract luma buffers."""
+    _require_uint8_rgb(rgb, "source frame")
     height, width = rgb.shape[:2]
     longest = max(height, width)
     if longest > ANALYSIS_MAX_DIMENSION:
@@ -409,6 +415,7 @@ def deflicker_stream(
             for stream_index, (frame, source) in enumerate(frames):
                 if cancelled_discard():
                     raise InterruptedError("video job cancelled")
+                _require_uint8_rgb(_pixels(frame), "output frame")
                 analysis = (
                     source if isinstance(source, AnalysisFrame) else prepare_analysis_frame(source)
                 )

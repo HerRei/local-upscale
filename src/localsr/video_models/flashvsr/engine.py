@@ -28,6 +28,7 @@ MAX_TILE_SIDE = 1408
 MIN_TILE_SIDE = 512
 TILE_OVERLAP = 128
 BUDGET_FRACTION = 0.85
+FLOAT16_CANVAS_ELEMENTS = 150_000_000
 
 # FlashVSR outputs 8n - 3 frames when fed 8n + 1 frames (n >= 3).
 # Window 37 + 4 repeated tail frames = 41 = 8*5 + 1, yielding 37 outputs with
@@ -36,29 +37,44 @@ DEFAULT_TEMPORAL_WINDOW = 37
 DEFAULT_TEMPORAL_OVERLAP = 8
 MAX_TEMPORAL_WINDOW = 61
 
-# Memory model: budget = 0.85 * mps_recommended_working_set;
-# max_tile_area = (budget - FIXED_MEMORY_BYTES) / PER_PIXEL_MEMORY_BYTES.
-# Fitted from two bfloat16 measurements on Apple M1 Pro (16 GB, 25 frames, mx.get_peak_memory):
-#   512x256 (131,072 px): peak_mlx =  7,076,796,368 B (footprint 11,303,308,336 B, 0 swaps)
-#   896x512 (458,752 px): peak_mlx = 11,235,842,640 B (footprint 12,770,265,560 B, 0 swaps)
-FIXED_MEMORY_BYTES = 5_413_178_122
-PER_PIXEL_MEMORY_BYTES = 12_692.4
+# Memory model: budget = 0.85 * mps_recommended_working_set - host_buffers;
+# max_tile_area = (effective_budget - FIXED_MEMORY_BYTES) / scaled_per_pixel.
+# Fitted from two bfloat16 measurements on Apple M1 Pro (16 GB, 37-frame window / n_pad = 41,
+# mx.get_peak_memory) after freeing lq_np and tile_frames upon conversion:
+#   512x256 (131,072 px): peak_mlx =  7,297,914,864 B (footprint 12,295,391,872 B, max_rss 5,344,313,344 B, 0 swaps)
+#   768x512 (393,216 px): peak_mlx = 10,952,918,736 B (footprint 12,456,282,200 B, max_rss 6,137,610,240 B, 0 swaps)
+MPS_CALIBRATED_PAD_FRAMES = 41
+FIXED_MEMORY_BYTES = 5_470_412_928
+PER_PIXEL_MEMORY_BYTES = 13_942.7
 
 # CUDA / ROCm PyTorch bfloat16 memory model: budget = 0.85 * available_vram (from torch.cuda.mem_get_info);
-# max_tile_area = (budget - ROCM_FIXED_MEMORY_BYTES) / ROCM_PER_PIXEL_MEMORY_BYTES.
-# Fitted from flashvsr-mlx ROCM.md bfloat16 measurements on AMD Radeon RX 9060 XT (16 GB, gfx1200)
-# with KV-cache/LQ release before decoding and TCDecoder cache release (reused for NVIDIA CUDA):
-#   512x256  (  131,072 px): peak =  5.2 GB
-#   896x512  (  458,752 px): peak =  8.6 GB
-#   768x1408 (1,081,344 px): peak = 11.4 GB
-# Linear fit for peak ≈ 4.9 GB + 6.3 kB per output pixel.
+# host buffers (lq_padded, canvas) live in system RAM, not VRAM, so only VRAM scales with n_pad.
+# max_tile_area = (budget - ROCM_FIXED_MEMORY_BYTES) / scaled_per_pixel.
+# Fitted from flashvsr-mlx ROCM.md bfloat16 measurements on AMD Radeon RX 9060 XT (16 GB, gfx1200,
+# 29 output frames / n_pad = 33 for 896x512 and 768x1408) with KV-cache/LQ release before decoding
+# and TCDecoder cache release (reused for NVIDIA CUDA):
+#   512x256  (  131,072 px, n_pad = 65): peak =  5.2 GB
+#   896x512  (  458,752 px, n_pad = 33): peak =  8.6 GB
+#   768x1408 (1,081,344 px, n_pad = 33): peak = 11.4 GB
+# Linear fit for peak ≈ 4.9 GB + 6.3 kB per output pixel at n_pad = 33.
+ROCM_CALIBRATED_PAD_FRAMES = 33
 ROCM_FIXED_MEMORY_BYTES = 4_900_000_000
 ROCM_PER_PIXEL_MEMORY_BYTES = 6_300.0
 
 _MEMORY_MODELS = {
-    "mps": (FIXED_MEMORY_BYTES, PER_PIXEL_MEMORY_BYTES),
-    "rocm": (ROCM_FIXED_MEMORY_BYTES, ROCM_PER_PIXEL_MEMORY_BYTES),
-    "cuda": (ROCM_FIXED_MEMORY_BYTES, ROCM_PER_PIXEL_MEMORY_BYTES),
+    "mps": (FIXED_MEMORY_BYTES, PER_PIXEL_MEMORY_BYTES, MPS_CALIBRATED_PAD_FRAMES, True),
+    "rocm": (
+        ROCM_FIXED_MEMORY_BYTES,
+        ROCM_PER_PIXEL_MEMORY_BYTES,
+        ROCM_CALIBRATED_PAD_FRAMES,
+        False,
+    ),
+    "cuda": (
+        ROCM_FIXED_MEMORY_BYTES,
+        ROCM_PER_PIXEL_MEMORY_BYTES,
+        ROCM_CALIBRATED_PAD_FRAMES,
+        False,
+    ),
 }
 
 
@@ -242,10 +258,29 @@ def _choose_tile_dimensions(
     return best_dims
 
 
+def _host_buffer_bytes(
+    out_width: int,
+    out_height: int,
+    pad_width: int,
+    pad_height: int,
+    n_in: int,
+    *,
+    include_canvas: bool,
+) -> int:
+    lq_bytes = n_in * pad_width * pad_height * 3
+    if not include_canvas:
+        return lq_bytes
+    canvas_elem_bytes = 2 if n_in * out_width * out_height > FLOAT16_CANVAS_ELEMENTS else 4
+    canvas_bytes = n_in * out_width * out_height * 3 * canvas_elem_bytes
+    weight_bytes = out_width * out_height * 4
+    return lq_bytes + canvas_bytes + weight_bytes
+
+
 def plan_tiles(
     out_width: int,
     out_height: int,
     *,
+    n_frames: int = DEFAULT_TEMPORAL_WINDOW,
     backend: str = "mps",
     device: str = "mps",
     budget_bytes: int | None = None,
@@ -255,7 +290,9 @@ def plan_tiles(
     """Plan 128-aligned output tiles and feather weights from the backend memory budget."""
     if backend not in _MEMORY_MODELS:
         raise ValueError(f"Unsupported FlashVSR memory model backend: {backend!r}")
-    fixed_bytes, per_pixel_bytes = _MEMORY_MODELS[backend]
+    fixed_bytes, per_pixel_bytes, calibrated_pad_frames, unified_memory = _MEMORY_MODELS[backend]
+    n_pad = padded_frame_count(n_frames)
+    scaled_per_pixel = per_pixel_bytes * max(1.0, float(n_pad) / float(calibrated_pad_frames))
 
     pad_w = ceil_multiple(out_width, SPATIAL_MULTIPLE)
     pad_h = ceil_multiple(out_height, SPATIAL_MULTIPLE)
@@ -267,30 +304,62 @@ def plan_tiles(
             else mps_recommended_working_set_bytes()
         )
         budget_bytes = int(raw_budget * BUDGET_FRACTION)
-    max_area = int((budget_bytes - fixed_bytes) / per_pixel_bytes)
-    if tile_size_override is None and max_area < MIN_TILE_SIDE * MIN_TILE_SIDE:
-        raise RuntimeError(
-            _low_memory_message(
-                backend,
-                "the memory budget leaves less than a 512x512 output tile",
-            )
-        )
 
     if tile_size_override is not None:
         tw, th = tile_size_override
         if tw <= 0 or th <= 0 or tw % SPATIAL_MULTIPLE != 0 or th % SPATIAL_MULTIPLE != 0:
             raise ValueError(f"Tile size must be positive multiples of 128, got {(tw, th)}")
-    else:
-        tw, th = _choose_tile_dimensions(
-            pad_w,
-            pad_h,
-            max_area,
-            max_tile_side,
-            backend=backend,
+        xs = compute_axis_starts(pad_w, tw, TILE_OVERLAP)
+        ys = compute_axis_starts(pad_h, th, TILE_OVERLAP)
+        host_bytes = (
+            _host_buffer_bytes(
+                out_width,
+                out_height,
+                pad_w,
+                pad_h,
+                n_frames,
+                include_canvas=len(xs) * len(ys) > 1,
+            )
+            if unified_memory
+            else 0
         )
+        max_area = int((budget_bytes - host_bytes - fixed_bytes) / scaled_per_pixel)
+    else:
+        single_host = (
+            _host_buffer_bytes(out_width, out_height, pad_w, pad_h, n_frames, include_canvas=False)
+            if unified_memory
+            else 0
+        )
+        single_max_area = int((budget_bytes - single_host - fixed_bytes) / scaled_per_pixel)
+        if pad_w <= max_tile_side and pad_h <= max_tile_side and pad_w * pad_h <= single_max_area:
+            tw, th = pad_w, pad_h
+            max_area = single_max_area
+        else:
+            multi_host = (
+                _host_buffer_bytes(
+                    out_width, out_height, pad_w, pad_h, n_frames, include_canvas=True
+                )
+                if unified_memory
+                else 0
+            )
+            max_area = int((budget_bytes - multi_host - fixed_bytes) / scaled_per_pixel)
+            if max_area < MIN_TILE_SIDE * MIN_TILE_SIDE:
+                raise RuntimeError(
+                    _low_memory_message(
+                        backend,
+                        "the memory budget leaves less than a 512x512 output tile",
+                    )
+                )
+            tw, th = _choose_tile_dimensions(
+                pad_w,
+                pad_h,
+                max_area,
+                max_tile_side,
+                backend=backend,
+            )
+        xs = compute_axis_starts(pad_w, tw, TILE_OVERLAP)
+        ys = compute_axis_starts(pad_h, th, TILE_OVERLAP)
 
-    xs = compute_axis_starts(pad_w, tw, TILE_OVERLAP)
-    ys = compute_axis_starts(pad_h, th, TILE_OVERLAP)
     wx_list = _axis_feather_weights(xs, tw)
     wy_list = _axis_feather_weights(ys, th)
 
@@ -510,13 +579,16 @@ class FlashVSREngine:
         if n_pad > n_in:
             pad_tail = np.repeat(lq_tile_uint8[-1:], n_pad - n_in, axis=0)
             tile_frames = np.concatenate([lq_tile_uint8, pad_tail], axis=0)
+            del pad_tail
         else:
             tile_frames = lq_tile_uint8
 
         # (T, H, W, 3) uint8 -> (1, 3, T, H, W) float32 in [-1, 1]
-        lq_np = (np.transpose(tile_frames, (3, 0, 1, 2)).astype(np.float32) / 127.5 - 1.0)[
-            None, ...
-        ]
+        lq_np = np.transpose(tile_frames, (3, 0, 1, 2)).astype(np.float32)
+        del tile_frames
+        lq_np /= 127.5
+        lq_np -= 1.0
+        lq_np = lq_np[None, ...]
         topk_ratio = 2.0 * 768.0 * 1280.0 / float(tile.height * tile.width)
         backend = getattr(self, "_backend", "mps")
 
@@ -526,11 +598,13 @@ class FlashVSREngine:
             import torch
 
             lq_arr = torch.from_numpy(lq_np).to(device=self.device, dtype=torch.bfloat16)
+            del lq_np
         else:
             import mlx.core as mx
 
             lq_arr = mx.array(lq_np, dtype=mx.float32).astype(mx.bfloat16)
             mx.eval(lq_arr)
+            del lq_np
 
         out_tensor = self.pipeline(
             height=tile.height,
@@ -601,19 +675,20 @@ class FlashVSREngine:
             return []
 
         in_h, in_w = frames[0].shape[:2]
+        n_in = len(frames)
+        n_pad = padded_frame_count(n_in)
         final_w, final_h = output_size(in_w, in_h, resolution)
         out_w, out_h = model_size(in_w, in_h, final_w, final_h)
         plan = plan_tiles(
             out_w,
             out_h,
+            n_frames=n_in,
             backend=getattr(self, "_backend", "mps"),
             device=getattr(self, "device", "mps"),
             budget_bytes=getattr(self, "_budget_bytes_override", None),
             tile_size_override=getattr(self, "_tile_size_override", None),
         )
 
-        n_in = len(frames)
-        n_pad = padded_frame_count(n_in)
         report("preparing_clip", 0, 0)
         lq_padded = upscale_and_pad_frames(
             frames,
@@ -635,15 +710,17 @@ class FlashVSREngine:
                 report("enhancing", step, total_steps)
 
             tile_out = self._run_tile(lq_padded, n_in, n_pad, tile, seed, single_step)
+            del lq_padded
             check_cancelled()
-            cropped = tile_out[:, :out_h, :out_w, :].astype(np.uint8)
+            cropped = np.rint(tile_out[:, :out_h, :out_w, :]).astype(np.uint8)
+            del tile_out
             if tile_callback is not None:
                 tile_callback("enhancing", "completed", 1, 1, 0, 0, out_w, out_h, out_w, out_h)
             report("finishing", 1, 1)
             return [_to_output(cropped[idx], final_w, final_h) for idx in range(n_in)]
 
         # Keep the blended canvas in float32 unless very large (>= ~1.8 GB) to avoid swap.
-        canvas_dtype = np.float16 if n_in * out_h * out_w > 150_000_000 else np.float32
+        canvas_dtype = np.float16 if n_in * out_h * out_w > FLOAT16_CANVAS_ELEMENTS else np.float32
         canvas = np.zeros((n_in, out_h, out_w, 3), dtype=canvas_dtype)
         weight_sum = np.zeros((out_h, out_w), dtype=np.float32)
 
@@ -670,6 +747,7 @@ class FlashVSREngine:
 
             lq_slice = lq_padded[:, tile.y : tile.y + tile.height, tile.x : tile.x + tile.width, :]
             tile_out = self._run_tile(lq_slice, n_in, n_pad, tile, seed, tile_step)
+            del lq_slice
             check_cancelled()
 
             if vis_w > 0 and vis_h > 0:
@@ -678,6 +756,7 @@ class FlashVSREngine:
                     tile_out[:, :vis_h, :vis_w, :] * w_crop[None, :, :, None]
                 ).astype(canvas_dtype)
                 weight_sum[tile.y : tile.y + vis_h, tile.x : tile.x + vis_w] += w_crop
+            del tile_out
 
             if tile_callback is not None and vis_w > 0 and vis_h > 0:
                 tile_callback(
@@ -693,6 +772,7 @@ class FlashVSREngine:
                     out_h,
                 )
 
+        del lq_padded
         if np.any(weight_sum <= 0):
             raise RuntimeError("FlashVSR tile plan left uncovered output pixels.")
         # Normalise one frame at a time: a whole-window float32 copy is several GB at 4K.
@@ -700,6 +780,7 @@ class FlashVSREngine:
         result = []
         for idx in range(n_in):
             frame = np.clip(canvas[idx].astype(np.float32) / weights, 0.0, 255.0)
-            result.append(_to_output(frame.astype(np.uint8), final_w, final_h))
+            result.append(_to_output(np.rint(frame).astype(np.uint8), final_w, final_h))
+        del canvas, weight_sum, weights
         report("finishing", 1, 1)
         return result

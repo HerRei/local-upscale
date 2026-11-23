@@ -382,3 +382,50 @@ def test_end_to_end_video_job_deflicker_reports_stage_and_preserves_frames(tmp_p
     deflicker_stages = [(done, total) for stage, done, total in stages if stage == "deflickering"]
     assert deflicker_stages == [(i + 1, 8) for i in range(8)]
     assert len(list(decode_timed_frames(str(output)))) == 8
+
+
+def test_deflicker_rejects_float_frames():
+    float_frame = np.full((32, 32, 3), 0.5, dtype=np.float32)
+    with pytest.raises(ValueError, match="uint8"):
+        prepare_analysis_frame(float_frame)
+    with pytest.raises(ValueError, match="uint8"):
+        list(deflicker_stream([(float_frame, float_frame)]))
+
+
+def test_run_video_job_rejects_deflicker_with_hdr_preservation(tmp_path: Path, monkeypatch):
+    from dataclasses import replace
+
+    from localsr.core import video_pipeline
+
+    source = tmp_path / "hdr.mp4"
+    with av.open(str(source), mode="w", format="mp4") as container:
+        stream = container.add_stream("libvpx-vp9", rate=12)
+        stream.width, stream.height, stream.pix_fmt = 32, 32, "yuv420p"
+        rgb = np.zeros((32, 32, 3), dtype=np.uint8)
+        for packet in stream.encode(av.VideoFrame.from_ndarray(rgb, format="rgb24")):
+            container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+
+    real_probe = video_pipeline.probe_video
+    monkeypatch.setattr(
+        video_pipeline,
+        "probe_video",
+        lambda path: replace(real_probe(path), hdr_format="PQ"),
+    )
+    monkeypatch.setattr(video_pipeline, "validate_hdr_encoder", lambda *args: None)
+    config = VideoJobConfig(
+        video_path=str(source),
+        model_path="hat.pth",
+        output_video_path=str(tmp_path / "out.mkv"),
+        model_info=SimpleNamespace(architecture="HAT", scale=2, in_channels=3, out_channels=3),
+        device_str="cpu",
+        precision_str="fp16",
+        tile_size=64,
+        halo=0,
+        safe_memory=False,
+        deflicker=True,
+        hdr_mode="preserve",
+    )
+    with pytest.raises(ValueError, match="De-flicker is not yet supported with HDR"):
+        run_video_job(config, SimpleNamespace(), threading.Event())  # type: ignore[arg-type]

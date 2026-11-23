@@ -679,12 +679,12 @@ def test_cuda_and_rocm_tile_planner_and_budget_from_mem_get_info(monkeypatch):
     assert ROCM_FIXED_MEMORY_BYTES == 4_900_000_000
     assert ROCM_PER_PIXEL_MEMORY_BYTES == 6_300.0
 
-    # 16 GB RX 9060 XT: 16 GB free -> budget 13.6 GB -> 768x1408 fits in 1 tile.
+    # 16 GB RX 9060 XT: 16 GB free -> budget 13.6 GB -> 768x1408 fits in 1 tile at 29f (n_pad=33).
     monkeypatch.setattr(
         torch.cuda, "mem_get_info", lambda _dev="cuda": (16_000_000_000, 17_179_869_184)
     )
     for backend in ("rocm", "cuda"):
-        plan_single = plan_tiles(768, 1408, backend=backend, device="cuda:0")
+        plan_single = plan_tiles(768, 1408, n_frames=29, backend=backend, device="cuda:0")
         assert plan_single.budget_bytes == int(16_000_000_000 * BUDGET_FRACTION)
         expected_area = int(
             (plan_single.budget_bytes - ROCM_FIXED_MEMORY_BYTES) / ROCM_PER_PIXEL_MEMORY_BYTES
@@ -692,6 +692,18 @@ def test_cuda_and_rocm_tile_planner_and_budget_from_mem_get_info(monkeypatch):
         assert plan_single.max_tile_area == expected_area
         assert len(plan_single.tiles) == 1
         assert (plan_single.tile_width, plan_single.tile_height) == (768, 1408)
+
+        # Longer windows scale VRAM per-pixel budget without subtracting host-RAM buffers.
+        plan_37 = plan_tiles(3840, 2160, n_frames=37, backend=backend, device="cuda:0")
+        plan_61 = plan_tiles(3840, 2160, n_frames=61, backend=backend, device="cuda:0")
+        assert plan_37.max_tile_area == int(
+            (plan_37.budget_bytes - ROCM_FIXED_MEMORY_BYTES)
+            / (ROCM_PER_PIXEL_MEMORY_BYTES * 41 / 33)
+        )
+        assert plan_61.max_tile_area == int(
+            (plan_61.budget_bytes - ROCM_FIXED_MEMORY_BYTES)
+            / (ROCM_PER_PIXEL_MEMORY_BYTES * 65 / 33)
+        )
 
     # 1080p exceeds single-tile ROCm/CUDA area on 16 GB -> tiles cleanly with weights summing to 1.
     plan_1080 = plan_tiles(1920, 1080, backend="cuda", device="cuda:0")
