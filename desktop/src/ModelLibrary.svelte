@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { customModels } from './lib/customModels';
   import { keptTrialSettings, trialIncompatibility, trialTime } from './lib/modelTrials';
   import {
     FIX_LABELS,
@@ -81,6 +82,10 @@
   export let importFile: (model: CatalogModel, accepted: boolean) => Promise<void>;
   export let remove: (model: CatalogModel | CatalogVideoModel | EditModel) => Promise<void>;
   export let chooseCustom: () => Promise<void>;
+  export let selectCustomModel: (path: string) => void = () => {};
+  export let renameCustomModel: (path: string, name: string) => void = () => {};
+  let renamingPath = '';
+  let customName = '';
   export let openCustomEdit: () => void = () => {};
   export let openLicense: (modelId: string) => Promise<void>;
   export let openSource: (modelId: string) => Promise<void>;
@@ -823,6 +828,41 @@
           >
         {:else if group === 'own'}
           <div class="list-head">Your own file</div>
+          {#each customModels(settings) as model (model.path)}
+            <div class="own-file">
+              <div class="name">{model.name}</div>
+              <div class="role">{model.path}</div>
+              {#if renamingPath === model.path}
+                <label>Model name <input aria-label="Model name" bind:value={customName} /></label>
+                <button
+                  class="button"
+                  type="button"
+                  on:click={() => {
+                    renameCustomModel(model.path, customName);
+                    renamingPath = '';
+                  }}>Save name</button
+                >
+                <button class="button" type="button" on:click={() => (renamingPath = '')}
+                  >Cancel</button
+                >
+              {:else}
+                {#if context.slot === 'primary'}<button
+                    class="button"
+                    type="button"
+                    on:click={() => selectCustomModel(model.path)}>Use {model.name}</button
+                  >{/if}
+                <button
+                  class="button"
+                  type="button"
+                  aria-label={`Rename ${model.name}`}
+                  on:click={() => {
+                    renamingPath = model.path;
+                    customName = model.name;
+                  }}>Rename</button
+                >
+              {/if}
+            </div>
+          {/each}
           <div class="own-file">
             <p>
               Use a checkpoint you already have. Safetensors is strongly recommended; pickle-based

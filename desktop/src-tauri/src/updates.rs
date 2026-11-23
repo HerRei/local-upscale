@@ -1236,6 +1236,7 @@ pub fn recover_update_settings(state: State<'_, Arc<AppState>>, app: AppHandle) 
         state.grants.reconcile_outputs(&settings.output_directory);
         state.grants.reconcile_models(
             &settings.custom_model_path,
+            &settings.custom_models,
             &settings.custom_edit_model,
             &recipes,
         );

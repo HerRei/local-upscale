@@ -226,6 +226,7 @@
         "face_model_path": { "type": ["string", "null"] },
         "face_fidelity": { "type": "number", "minimum": 0, "maximum": 1 },
         "allow_unverified_checkpoint": { "type": ["boolean", "null"] },
+        "approved_checkpoint_sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
         "preview_enabled": { "type": "boolean" },
         "preview_max_fps": { "type": "number", "exclusiveMinimum": 0, "maximum": 5 },
         "preview_max_dimension": { "type": "integer", "minimum": 64, "maximum": 640 },

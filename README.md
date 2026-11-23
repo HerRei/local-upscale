@@ -194,7 +194,8 @@ version, no account and no advertising, and the code is MIT licensed.
 custom checkpoint for upscaling and restoration. `.pth`, `.pt` and `.ckpt`
 files can run code when they load, so the app only uses one after you tick
 *Allow this pickle-based checkpoint*. Do that only for files from a publisher
-you trust. For editing, **Use your own edit model…** in the model library lets
+you trust. The app remembers approval for that file’s SHA-256; changed files need approval again.
+You can name and select your checkpoints in the model library. For editing, **Use your own edit model…** in the model library lets
 you pick local GGUF/safetensors component files for Qwen Image Edit 2511,
 Qwen Image 2.1, FLUX.2 klein, or Mage-Flow-Edit-Turbo.
 

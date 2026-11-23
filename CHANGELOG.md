@@ -7,6 +7,7 @@
 - Clear compiled model caches in Advanced settings; old entries are trimmed at startup (#126).
 
 - Updates explain when unreadable settings need recovery, and can install when settings come from a newer version (#123).
+- **Your own models.** Name and select custom checkpoints in the model library. Approval for pickle-based files is remembered by file hash (#146).
 
 ## [0.5.2-beta] - 2026-11-23
 

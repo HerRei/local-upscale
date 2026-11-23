@@ -315,6 +315,8 @@ export interface UiSettings {
   selected_video_model_id: string;
   fix_stages: FixStageSelection[];
   custom_model_path: string;
+  custom_models?: { path: string; name: string }[];
+  trusted_checkpoint_sha256?: string[];
   output_scale: number;
   output_directory: string;
   output_format: 'png' | 'jpg' | 'tif' | 'webp' | 'heic';
