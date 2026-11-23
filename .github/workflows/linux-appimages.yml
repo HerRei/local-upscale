@@ -241,6 +241,8 @@ jobs:
           rm -rf "$REPACK"
           dpkg-deb -R "${PACKAGES[0]}" "$REPACK"
           sed -i -E 's/^Version: ([0-9.]+)-(.+)$/Version: \1~\2/' "$REPACK/DEBIAN/control"
+          # Tauri derives "local-sr" from the product name; the package is "localsr".
+          sed -i -E 's/^Package: .*/Package: localsr/' "$REPACK/DEBIAN/control"
           dpkg-deb --root-owner-group -b "$REPACK" "$ARTIFACT"
           rm -rf "$REPACK" "${PACKAGES[0]}"
           dpkg-deb --info "$ARTIFACT"
