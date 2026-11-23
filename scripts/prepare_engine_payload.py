@@ -47,6 +47,37 @@ BACKENDS = {"CUDA", "ROCM", "CPU", "MPS", "DIRECTML"}
 OS_VALUES = {"windows", "linux", "macos"}
 ARCH_VALUES = {"x86_64", "aarch64"}
 ENGINE_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
+# What the updaters of LocalSR 0.4.0 and 0.5.0 accept in an engine manifest: exactly these
+# fields (serde deny_unknown_fields), schema_version 1. A field more and they refuse the
+# update. tests/legacy_clients holds their parsers; never add a field here.
+LEGACY_UPDATE_FIELDS = (
+    "schema_version",
+    "format",
+    "backend",
+    "file_count",
+    "unpacked_bytes",
+    "parts",
+)
+LEGACY_PART_FIELDS = ("filename", "size", "sha256")
+
+
+def legacy_update_manifest(manifest: dict) -> bytes:
+    """The engine manifest of the update feed, readable by every updater since 0.4.0.
+
+    The same package as ``manifest`` (schema 2): the version, platform and engine
+    identity it leaves out are bound by the signed release statement instead.
+    """
+    legacy = {
+        "schema_version": 1,
+        "format": manifest["format"],
+        "backend": manifest["backend"],
+        "file_count": manifest["file_count"],
+        "unpacked_bytes": manifest["unpacked_bytes"],
+        "parts": [
+            {field: part[field] for field in LEGACY_PART_FIELDS} for part in manifest["parts"]
+        ],
+    }
+    return (json.dumps(legacy, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
 class PartWriter:
@@ -398,6 +429,7 @@ def prepare_for_target(
             engine_id=resolved_engine_id,
         )
         written.replace(destination)
+        _write_update_manifest(destination, output / files["engine_update_manifest"])
         return destination
     assert reuse is not None
     data = reuse.read_bytes()
@@ -414,7 +446,12 @@ def prepare_for_target(
         expected_engine_id=resolved_engine_id,
     )
     destination.write_bytes(data)
+    _write_update_manifest(destination, output / files["engine_update_manifest"])
     return destination
+
+
+def _write_update_manifest(manifest: Path, update: Path) -> None:
+    update.write_bytes(legacy_update_manifest(json.loads(manifest.read_bytes())))
 
 
 def main() -> int:

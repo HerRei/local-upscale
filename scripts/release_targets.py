@@ -225,6 +225,9 @@ def update_files(entry: dict, release_version: str) -> dict[str, str]:
         "update_package": f"{stem}.app.tar.gz" if entry["platform"] == "macos" else package,
         "engine_prefix": f"{stem}.engine.tar.gz",
         "engine_manifest": f"{stem}.engine-payload.json",
+        # The same engine package described the way every updater since 0.4.0 reads it;
+        # the feed names this one (prepare_engine_payload.legacy_update_manifest).
+        "engine_update_manifest": f"{stem}.engine-update.json",
         "payload_backend": entry["update"]["backend"].upper(),
         "worker": "localsr-worker.exe" if entry["platform"] == "windows" else "localsr-worker",
     }

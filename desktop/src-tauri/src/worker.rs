@@ -2473,6 +2473,34 @@ pub(crate) fn codec_helper_command(state: &AppState, _app: &AppHandle) -> AppRes
     Ok(command)
 }
 
+fn adopt_engine_installed_by_older_updater(state: &AppState, app: &AppHandle) {
+    let compiled_id = option_env!("LOCALSR_ENGINE_ID").unwrap_or("");
+    let backend = option_env!("LOCALSR_UPDATE_BACKEND").unwrap_or("");
+    let work_root = state.paths.work_root.clone();
+    crate::updates::adopt_engine_from_older_updater(
+        &state.paths.next_root,
+        compiled_id,
+        backend,
+        || {
+            if let Ok(mut runtime) = state.runtime.lock() {
+                runtime.status_title = "Checking the inference engine".into();
+                runtime.status_detail =
+                    "The engine the update installed is checked once before it is used.".into();
+            }
+            emit_state_changed(app);
+        },
+        |executable| {
+            crate::headless_smoke::run_worker_handshake(
+                executable,
+                Duration::from_secs(60),
+                true,
+                &work_root,
+            )
+            .is_ok()
+        },
+    );
+}
+
 pub fn installed_worker_path(state: &AppState, app: &AppHandle) -> AppResult<PathBuf> {
     Ok(resolve_worker_command(state, app)?.program)
 }
@@ -2542,6 +2570,11 @@ fn resolve_worker_command(state: &AppState, app: &AppHandle) -> AppResult<Worker
     let selected = if state.worker.use_bundled_fallback.load(Ordering::SeqCst) {
         bundled.map(|path| (path, None))
     } else {
+        // An edition without a bundled engine updated by 0.4.0 to 0.5.0 has that release's
+        // engine installed without metadata; record it before choosing.
+        if bundled.is_none() && !crate::distribution::managed_by_store() {
+            adopt_engine_installed_by_older_updater(state, app);
+        }
         let mut failed = lock(&state.worker.failed_engines)?.clone();
         let (choice, verification_failed) =
             crate::updates::verified_worker_engine_choice(&state.paths, bundled, &mut failed);

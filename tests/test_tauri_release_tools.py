@@ -217,6 +217,7 @@ def test_updater_file_names_follow_the_published_package_names() -> None:
         "update_package": "LocalSR-v1.2.3-beta-Windows-CUDA-x86_64.exe",
         "engine_prefix": "LocalSR-v1.2.3-beta-Windows-CUDA-x86_64.engine.tar.gz",
         "engine_manifest": "LocalSR-v1.2.3-beta-Windows-CUDA-x86_64.engine-payload.json",
+        "engine_update_manifest": "LocalSR-v1.2.3-beta-Windows-CUDA-x86_64.engine-update.json",
         "payload_backend": "CUDA",
         "worker": "localsr-worker.exe",
     }
@@ -478,6 +479,8 @@ def mac_feed(tmp_path: Path, release_version: str = "1.2.3-beta") -> tuple[Path,
         engine_id=identity,
     )
     manifest = written.rename(mac / f"{stem}.engine-payload.json")
+    update = mac / f"{stem}.engine-update.json"
+    update.write_bytes(engine_payload.legacy_update_manifest(json.loads(manifest.read_bytes())))
     for path in mac.iterdir():
         fake_sign(path)
 
@@ -510,7 +513,7 @@ def mac_feed(tmp_path: Path, release_version: str = "1.2.3-beta") -> tuple[Path,
                     "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
                     "engine": {
                         "id": identity,
-                        "manifest": file(manifest),
+                        "manifest": file(update),
                         "parts": [file(mac / part["filename"]) for part in payload["parts"]],
                     },
                 },
@@ -577,8 +580,10 @@ def test_platform_tool_signs_ci_artifacts_and_adds_their_feed_entries(tmp_path: 
     assert contract["sha256"] == hashlib.sha256(package.read_bytes()).hexdigest()
     assert "parts" not in contract
     manifest = contract["engine"]["manifest"]
-    assert manifest["name"] == "LocalSR-v1.2.3-beta-Windows-CPU-x86_64.engine-payload.json"
+    # The feed names the update form, which every updater since 0.4.0 reads.
+    assert manifest["name"] == "LocalSR-v1.2.3-beta-Windows-CPU-x86_64.engine-update.json"
     engine = json.loads((package.parent / manifest["name"]).read_text())
+    assert engine["schema_version"] == 1 and "arch" not in engine
     # A bundled engine is installed twice: in the package and as the versioned engine.
     assert contract["unpacked_size"] == contract["size"] + 2 * engine["unpacked_bytes"]
     statement = json.loads(base64.b64decode(contract["statement"]))
@@ -1688,3 +1693,40 @@ def test_registry_keeps_the_deb_tied_to_a_native_engine_target(tmp_path: Path, m
         path.write_text(json.dumps(broken))
         with pytest.raises(ValueError, match="engine"):
             release_targets.targets()
+
+
+def test_the_feed_names_an_engine_manifest_every_updater_since_0_4_reads(tmp_path: Path) -> None:
+    """The 0.5.2 incident: the feed named a schema 2 manifest, which 0.4.0 and 0.5.0 refuse
+    ("unknown field `arch`"). Every feed entry must name the legacy update form."""
+    feed_path, folders = feed_with_every_target(tmp_path)
+    feed = json.loads(feed_path.read_text())
+    for key, entry in feed["platforms"].items():
+        item = entry["localsr"]["engine"]["manifest"]
+        found = next(path for folder in folders for path in folder.rglob(item["name"]))
+        assert verify_prepared.legacy_update_problem(found.read_bytes()) is None, key
+    verify_feed(feed_path, folders)
+
+
+@pytest.mark.parametrize("field", ["arch", "os", "version", "engine_id", "protocol_version"])
+def test_release_verification_refuses_a_feed_manifest_with_a_field_old_updaters_reject(
+    tmp_path: Path, field: str
+) -> None:
+    feed_path, (downloads, mac) = feed_with_every_target(tmp_path)
+    feed = json.loads(feed_path.read_text())
+    contract = feed["platforms"]["darwin-aarch64-mps-native"]["localsr"]
+    item = contract["engine"]["manifest"]
+    path = mac / item["name"]
+    payload = json.loads(path.read_text()) | {field: "x"}
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    fake_sign(path)
+    item.update(
+        size=path.stat().st_size,
+        sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+        signature=path.with_name(path.name + ".sig").read_text(),
+    )
+    for name in ("statement", "statement_signature", "statement_v2", "statement_v2_signature"):
+        contract.pop(name)
+    feed_path.write_text(json.dumps(feed))
+    update_signing.add_statements(feed_path, sign=fake_sign)
+    with pytest.raises(ValueError, match="updaters of 0.4.0 and 0.5.0 would refuse"):
+        verify_feed(feed_path, [downloads, mac])

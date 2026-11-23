@@ -31,7 +31,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
-from prepare_engine_payload import validate_payload
+from prepare_engine_payload import legacy_update_manifest, validate_payload
 from release_targets import (
     UPDATE_ARCH,
     engine_id,
@@ -291,6 +291,14 @@ def _check_target(downloads: Path, target: dict, release_version: str, commit: s
         expected_protocol_version=protocol_version(),
         expected_engine_id=identity,
     )
+    # The feed names the legacy form, which older updaters read; it must describe exactly
+    # this package (prepare_engine_payload.legacy_update_manifest).
+    update_path = _regular(directory / files["engine_update_manifest"])
+    update_bytes = update_path.read_bytes()
+    if update_bytes != legacy_update_manifest(manifest):
+        raise ValueError(
+            f"{target['id']}: {update_path.name} is not the update form of the engine manifest"
+        )
     # Where the smoke test installed the engine manifest (Windows CUDA), the published
     # engine package must be that one, not merely a valid one.
     installed = smoke.get("engine_payload_sha256")
@@ -312,6 +320,8 @@ def _check_target(downloads: Path, target: dict, release_version: str, commit: s
         "manifest_digest": (hashlib.sha256(manifest_bytes).hexdigest(), len(manifest_bytes)),
         "manifest": manifest,
         "engine_parts": engine_parts,
+        "update_path": update_path,
+        "update_digest": (hashlib.sha256(update_bytes).hexdigest(), len(update_bytes)),
     }
 
 
@@ -449,11 +459,15 @@ def platform_entries(
             whole_signature = sign_copy(whole, directory)
             manifest_copy = workspace / item["manifest_path"].name
             _snapshot([item["manifest_path"]], manifest_copy, item["manifest_digest"])
+            # The full manifest is signed for offline import; the feed names the update form.
+            sign_copy(manifest_copy, directory)
+            update_copy = workspace / item["update_path"].name
+            _snapshot([item["update_path"]], update_copy, item["update_digest"])
             engine_files = [
                 download(
-                    item["manifest_path"].name,
-                    item["manifest_digest"],
-                    sign_copy(manifest_copy, directory),
+                    item["update_path"].name,
+                    item["update_digest"],
+                    sign_copy(update_copy, directory),
                 )
             ]
             for path, part in zip(item["engine_parts"], item["manifest"]["parts"], strict=True):

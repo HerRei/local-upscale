@@ -1706,6 +1706,99 @@ pub(crate) fn test_engine_files(
     files
 }
 
+/// The files of an installed engine as its metadata lists them: every regular file, hashed.
+/// Links and other special files are refused, as the payload installer refuses them.
+fn hash_engine_directory(
+    engine: &Path,
+) -> AppResult<Vec<crate::engine_payload::InstalledEngineFile>> {
+    fn walk(
+        root: &Path,
+        dir: &Path,
+        out: &mut Vec<crate::engine_payload::InstalledEngineFile>,
+    ) -> AppResult<()> {
+        real_engine_directory(dir)?;
+        for entry in fs::read_dir(dir)? {
+            let path = entry?.path();
+            let metadata = fs::symlink_metadata(&path)?;
+            if metadata.file_type().is_symlink() {
+                return Err(invalid("An installed engine contains a link"));
+            }
+            if metadata.is_dir() {
+                walk(root, &path, out)?;
+            } else if metadata.is_file() {
+                let (size, sha256) = crate::engine_payload::sha256_file(&path)?;
+                let relative = path
+                    .strip_prefix(root)
+                    .map_err(|_| invalid("An engine file lies outside its engine"))?;
+                out.push(crate::engine_payload::InstalledEngineFile {
+                    path: crate::engine_payload::canonical_relative_path(relative),
+                    size,
+                    sha256,
+                });
+            } else {
+                return Err(invalid("An installed engine contains a special file"));
+            }
+        }
+        Ok(())
+    }
+    let mut files = Vec::new();
+    walk(engine, engine, &mut files)?;
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(files)
+}
+
+/// Record an engine that an updater of LocalSR 0.4.0 to 0.5.0 installed.
+///
+/// Those updaters install the new release's engine package under its id, but they predate
+/// `meta.json`, so a newer host would ignore the engine. On an edition without a bundled
+/// engine (Windows CUDA) that leaves no engine at all. The engine whose id this host was
+/// built for, installed from parts the old updater checked against the signed manifest,
+/// is recorded once: its files hashed and a handshake passed, then the usual checks apply.
+/// An engine with metadata, one being installed, or any other id is left alone.
+pub(crate) fn adopt_engine_from_older_updater(
+    next_root: &Path,
+    compiled_id: &str,
+    backend: &str,
+    announce: impl FnOnce(),
+    handshake: impl FnOnce(&Path) -> bool,
+) -> bool {
+    if compiled_id.is_empty() || !safe_id(compiled_id) {
+        return false;
+    }
+    let Ok(root) = engine_install_root(next_root, compiled_id) else {
+        return false;
+    };
+    match fs::symlink_metadata(root.join("meta.json")) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        _ => return false,
+    }
+    if pending_engine_start(&root).is_some() {
+        return false;
+    }
+    let Some(executable) = engine_executable_path(next_root, compiled_id) else {
+        return false;
+    };
+    announce();
+    let Ok(files) = hash_engine_directory(&root.join("engine")) else {
+        return false;
+    };
+    if !valid_engine_file_list(&files) || !handshake(&executable) {
+        return false;
+    }
+    let meta = EngineMeta {
+        id: compiled_id.to_owned(),
+        backend: backend.to_owned(),
+        os: std::env::consts::OS.into(),
+        arch: std::env::consts::ARCH.into(),
+        protocol_version: PROTOCOL_VERSION,
+        handshake_passed: true,
+        verified_install: true,
+        version: env!("CARGO_PKG_VERSION").into(),
+        files,
+    };
+    write_engine_meta(next_root, &meta).is_ok()
+}
+
 pub(crate) fn engine_executable_path(next_root: &Path, id: &str) -> Option<PathBuf> {
     let engine = engine_install_root(next_root, id).ok()?.join("engine");
     real_engine_directory(&engine).ok()?;

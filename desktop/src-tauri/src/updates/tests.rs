@@ -2363,3 +2363,120 @@ fn a_deb_shows_a_newer_release_without_anything_to_download() {
     assert_eq!(status.size, 0);
     assert!(status.message.contains("apt"), "{}", status.message);
 }
+
+/// An engine as an updater of 0.4.0 to 0.5.0 leaves it: files under engines/<id>/engine,
+/// active-engine.txt naming it, no meta.json (the 0.5.2 Windows CUDA incident).
+fn engine_from_older_updater(next_root: &Path, id: &str) -> PathBuf {
+    let engine = next_root.join("engines").join(id).join("engine");
+    fs::create_dir_all(engine.join("_internal")).unwrap();
+    fs::write(engine.join(worker_executable_name()), b"worker").unwrap();
+    fs::write(engine.join("_internal/torch_cuda.dll"), b"library").unwrap();
+    fs::write(next_root.join("active-engine.txt"), id).unwrap();
+    engine
+}
+
+#[test]
+fn an_engine_installed_by_an_older_updater_is_recorded_after_a_handshake_and_then_used() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(root.path());
+    let id = "windows-x86_64-cuda-new";
+    let engine = engine_from_older_updater(&paths.next_root, id);
+    // Without metadata a host ignores it: with no bundled engine, nothing would run.
+    assert_eq!(active_engine_for_distribution(&paths, false, id), None);
+
+    let mut announced = false;
+    let mut checked = None;
+    assert!(adopt_engine_from_older_updater(
+        &paths.next_root,
+        id,
+        "cuda",
+        || announced = true,
+        |executable| {
+            checked = Some(executable.to_path_buf());
+            true
+        },
+    ));
+    assert!(announced);
+    assert_eq!(checked, Some(engine.join(worker_executable_name())));
+    let meta = read_engine_meta(&paths.next_root, id).unwrap();
+    assert!(meta.handshake_passed && meta.verified_install);
+    assert_eq!(meta.backend, "cuda");
+    assert_eq!(meta.files, test_engine_files(&paths.next_root, id));
+    assert_eq!(
+        active_engine_for_distribution(&paths, false, id),
+        Some(engine.join(worker_executable_name()))
+    );
+    // Once recorded it is not adopted again.
+    assert!(!adopt_engine_from_older_updater(
+        &paths.next_root,
+        id,
+        "cuda",
+        || {},
+        |_| true
+    ));
+}
+
+#[test]
+fn adoption_leaves_alone_what_it_cannot_vouch_for() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(root.path());
+    let id = "windows-x86_64-cuda-new";
+    engine_from_older_updater(&paths.next_root, id);
+
+    // A failed handshake records nothing.
+    assert!(!adopt_engine_from_older_updater(
+        &paths.next_root,
+        id,
+        "cuda",
+        || {},
+        |_| false
+    ));
+    assert!(read_engine_meta(&paths.next_root, id).is_none());
+    // Another id than the one this host was built for.
+    assert!(!adopt_engine_from_older_updater(
+        &paths.next_root,
+        "windows-x86_64-cuda-other",
+        "cuda",
+        || {},
+        |_| true
+    ));
+    // A host without an engine id (a development build).
+    assert!(!adopt_engine_from_older_updater(
+        &paths.next_root,
+        "",
+        "cuda",
+        || {},
+        |_| true
+    ));
+    // An engine with metadata, even invalid, goes through the usual checks instead.
+    fs::write(
+        paths.next_root.join("engines").join(id).join("meta.json"),
+        b"{}",
+    )
+    .unwrap();
+    assert!(!adopt_engine_from_older_updater(
+        &paths.next_root,
+        id,
+        "cuda",
+        || {},
+        |_| true
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn adoption_refuses_an_engine_with_a_link() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(root.path());
+    let id = "linux-x86_64-cuda-new";
+    let engine = engine_from_older_updater(&paths.next_root, id);
+    std::os::unix::fs::symlink("/etc/passwd", engine.join("_internal/linked")).unwrap();
+    assert!(!adopt_engine_from_older_updater(
+        &paths.next_root,
+        id,
+        "cuda",
+        || {},
+        |_| true
+    ));
+    assert!(read_engine_meta(&paths.next_root, id).is_none());
+}

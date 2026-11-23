@@ -307,7 +307,7 @@ jobs:
           shopt -s nullglob
           files=(assets/*.AppImage assets/*.AppImage.part-* assets/*.AppImage.sha256 \
             assets/*.deb assets/*.deb.sha256 \
-            assets/*.engine.tar.gz.part-* assets/*.engine-payload.json \
+            assets/*.engine.tar.gz.part-* assets/*.engine-payload.json assets/*.engine-update.json \
             assets/*-source-and-notices.tar.gz)
           test "${#files[@]}" -gt 0
           gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
