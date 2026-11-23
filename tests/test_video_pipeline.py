@@ -1322,6 +1322,35 @@ def test_encoder_shutdown_flushes_before_close_even_on_failure():
     assert events == ["flush", "packet", "close"]
 
 
+def test_encode_video_flushes_encoder_before_close_when_frame_loop_fails(monkeypatch, tmp_path):
+    import localsr.core.video_io as video_io
+
+    events = []
+    real_close = video_io._close_encoder
+
+    def tracked_close(container, stream, mux):
+        events.append("close_encoder")
+        return real_close(container, stream, mux)
+
+    monkeypatch.setattr(video_io, "_close_encoder", tracked_close)
+
+    def failing_frames():
+        yield np.zeros((32, 48, 3), dtype=np.uint8)
+        raise RuntimeError("boom mid-encode")
+
+    with pytest.raises(video_io.VideoStageError, match="boom mid-encode"):
+        video_io._encode_video(
+            failing_frames(),
+            str(tmp_path / "failed.mp4"),
+            fps=24,
+            video_codec="av1",
+            width=48,
+            height=32,
+        )
+    assert events == ["close_encoder"]
+    assert not list(tmp_path.iterdir())
+
+
 def test_video_colour_preserves_timing_and_audio_with_sparse_keyframes(tmp_path):
     from types import SimpleNamespace
 
