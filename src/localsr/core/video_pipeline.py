@@ -169,6 +169,10 @@ class VideoFixStage:
     time_factor: float = 1.0
 
 
+# Keyframe spacing of the temporal video colour (see video_colour.colour_frames).
+COLOUR_KEYFRAME_INTERVAL = 12
+
+
 @dataclass
 class VideoJobConfig:
     video_path: str
@@ -235,7 +239,7 @@ def run_video_job(
     tile_progress_cb: Callable[..., None] | None = None,
     warning_callback: Callable[[str], None] | None = None,
     source_frame_cb: Callable[[int, int, np.ndarray], None] | None = None,
-    stage_cb: Callable[[str], None] | None = None,
+    stage_cb: Callable[..., None] | None = None,
     audio_progress_cb: Callable[[int, int, float, float | None], None] | None = None,
     synthesizer=None,
 ) -> VideoJobResult:
@@ -507,6 +511,11 @@ def _run_video_frames(
     stage_cb,
     synthesizer=None,
 ) -> VideoJobResult:
+    # A frame pair that does not fit next to the fix and upscaling models may park them
+    # in system memory; the engine brings them back before its next frame.
+    park = getattr(engine, "park_models", None)
+    if interpolation is not None and callable(park) and hasattr(synthesizer, "memory_relief"):
+        synthesizer.memory_relief = park
     # Load the fix models once and reuse them for every frame.
     for stage in config.preprocess_stages:
         engine.load_model(
@@ -587,6 +596,12 @@ def _run_video_frames(
             colour_input = decoded
             stage = config.preprocess_stages[colour_index]
 
+            prepared = [0]
+            first_output = [False]
+            first_batch = min(
+                COLOUR_KEYFRAME_INTERVAL + 1, total_frames or COLOUR_KEYFRAME_INTERVAL + 1
+            )
+
             def input_pixels():
                 nonlocal inference_started_at
                 for item in colour_input:
@@ -635,6 +650,11 @@ def _run_video_frames(
                                     add_note(note)
                         else:
                             pixels = uint8_chw_to_rgb_hwc(output)
+                    # Colour needs a batch of frames before the first one can be finished;
+                    # until then the frame progress cannot move, so the batch is counted.
+                    prepared[0] += 1
+                    if not first_output[0] and stage_cb is not None:
+                        stage_cb("colour_preparing", prepared[0], first_batch)
                     yield pixels
 
             def colourise(pixels):
@@ -652,7 +672,10 @@ def _run_video_frames(
                 return uint8_chw_to_rgb_hwc(result)
 
             def colour_stream():
-                for pixels in colour_frames(input_pixels(), colourise):
+                for pixels in colour_frames(
+                    input_pixels(), colourise, interval=COLOUR_KEYFRAME_INTERVAL
+                ):
+                    first_output[0] = True
                     index, timestamp, duration, time_base, preview = metadata.popleft()
                     if preview is not None:
                         source_previews.append(preview)
@@ -935,10 +958,11 @@ def _run_video_frames(
 
     # Apply temporal de-flicker if enabled. The median filter wraps the
     # restored-frame generator so the encoder receives smoothed frames.
+    restored_frames = _release_after_last_frame(frame_generator(), engine, config.device_str)
     if config.deflicker:
-        output_frames = _deflicker_frames(frame_generator(), config.deflicker_window, cancel_event)
+        output_frames = _deflicker_frames(restored_frames, config.deflicker_window, cancel_event)
     else:
-        output_frames = frame_generator()
+        output_frames = restored_frames
     if interpolation is not None:
         if not before_upscale:
             output_frames = interpolate_frames(
@@ -1009,6 +1033,23 @@ def _run_video_frames(
         elapsed_seconds=completed_at - job_started_at,
         inference_seconds=(completed_at - (inference_started_at or completed_at)),
     )
+
+
+def _release_after_last_frame(frames, engine, device_str: str):
+    """Free the fix and upscaling models once the last frame has passed through them.
+
+    Interpolating after the upscale, de-flicker and the encoder still work on the last
+    frames; on a shared-memory Mac the freed graphics memory is theirs, not the models'.
+    """
+    yield from frames
+    release = getattr(engine, "release_model", None)
+    if callable(release):
+        release()
+    kind = device_str.split(":", 1)[0]
+    if kind == "mps" and torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+    elif kind == "cuda" and torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def _interpolation_target(

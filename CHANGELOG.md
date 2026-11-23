@@ -20,6 +20,11 @@
   refused (#159).
 - **Video export.** The encoder is always flushed before it closes, also when an
   export fails (#115).
+- **Video memory.** Frame interpolation after upscaling needs about half the graphics
+  memory for the same frames. When a pair still does not fit, the other models wait in
+  system memory while it is made, so a 4320 x 5760 job stays on the GPU of a 16 GB
+  Mac; only as a last resort is it made on the CPU, and the result says so. Running
+  out of graphics memory now reads as a sentence with what to change.
 - **Release process.** Files can be attached to a draft release, and signing needs
   less temporary disk space (#114).
 

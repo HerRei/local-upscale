@@ -643,7 +643,9 @@ class WorkerServer:
                             JobFailed(
                                 job_id=job_id,
                                 restart_required=self.restart_after_job,
-                                **failure_fields(e, data.get("output_video_path")),
+                                **failure_fields(
+                                    e, data.get("output_video_path"), video_request=data
+                                ),
                             )
                         )
                         self._restart_if_required()
@@ -1191,7 +1193,7 @@ class WorkerServer:
             temporary_directory=data.get("temporary_directory"),
             output_video_path=output_path,
             cancel_event=self.cancel_event,
-            stage_cb=lambda stage: report(stage),
+            stage_cb=lambda stage, *counts: report(stage, *counts),
             progress_cb=lambda done, total, elapsed, rem: (
                 memory.phase("audio_denoise"),
                 send_message(
@@ -1614,6 +1616,8 @@ class WorkerServer:
                 status_callback=lambda message: send_message(
                     EngineStatus(job_id=job_id, message=message)
                 ),
+                # A route change mid-job belongs on the finished result too.
+                note_callback=lambda message: self.engine.add_note(message),
             ),
         )
 
@@ -1955,7 +1959,9 @@ class WorkerServer:
                 warning_callback=lambda message: send_message(
                     LogMessage(level="warning", message=message)
                 ),
-                stage_cb=lambda stage: send_message(VideoStageProgress(job_id=job_id, stage=stage)),
+                stage_cb=lambda stage, completed=0, total=0: send_message(
+                    VideoStageProgress(job_id=job_id, stage=stage, completed=completed, total=total)
+                ),
                 audio_progress_cb=lambda done, total, elapsed, remaining: send_message(
                     VideoStageProgress(
                         job_id=job_id,

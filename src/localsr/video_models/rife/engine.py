@@ -4,11 +4,17 @@ Loads a catalog-verified Practical-RIFE ``flownet.pkl`` as tensors only and
 makes in-between frames for :func:`localsr.core.frame_interpolation.interpolate_frames`.
 RIFE 4.x takes the timestep as an input, so 23.976 → 60 fps needs no recursive
 halving. Backends without a PyTorch route (DirectML and OpenVINO, which LocalSR
-reaches through ONNX Runtime) interpolate on the CPU.
+reaches through ONNX Runtime) interpolate on the CPU. A frame pair that does not fit
+in graphics memory is tried once more after the cache is emptied, then once more with
+the job's other models parked in system memory (``memory_relief``; from then on they
+are parked before every pair), and only then on the CPU, which gives the same frames
+more slowly; the job's result says so.
 """
 
 from __future__ import annotations
 
+import gc
+import logging
 import math
 import threading
 from collections.abc import Callable, Sequence
@@ -18,7 +24,11 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from localsr.core.memory_errors import is_device_out_of_memory
+
 from .ifnet import IFNet
+
+logger = logging.getLogger(__name__)
 
 # RIFE 4.25/4.26 pad their input to a multiple of 64 / scale (HolyWu/vs-rife).
 _MODULO = 64
@@ -50,6 +60,16 @@ def _load_state(path: Path) -> dict[str, torch.Tensor]:
     return {name.removeprefix("module."): value for name, value in state.items()}
 
 
+def _empty_cache(device: torch.device) -> None:
+    gc.collect()
+    if device.type == "mps":
+        torch.mps.empty_cache()
+    elif device.type == "cuda":
+        torch.cuda.empty_cache()
+    elif device.type == "xpu":
+        torch.xpu.empty_cache()
+
+
 class RifeSynthesizer:
     def __init__(
         self,
@@ -57,7 +77,13 @@ class RifeSynthesizer:
         device_str: str,
         *,
         status_callback: Callable[[str], None] | None = None,
+        note_callback: Callable[[str], None] | None = None,
     ):
+        self.status_callback = status_callback
+        self.note_callback = note_callback
+        # Frees graphics memory held by the job's other models; returns whether it did.
+        self.memory_relief: Callable[[], bool] | None = None
+        self._relieve_each_pair = False
         self.device = torch_device_for(device_str)
         if self.device.type == "cpu" and not device_str.startswith("cpu") and status_callback:
             status_callback("Frame interpolation runs on the CPU with this hardware choice.")
@@ -88,8 +114,58 @@ class RifeSynthesizer:
         height, width = rgb.shape[:2]
         return F.pad(tensor, (0, padded[1] - width, 0, padded[0] - height))
 
-    @torch.inference_mode()
     def synthesize(
+        self,
+        first: np.ndarray,
+        second: np.ndarray,
+        timesteps: Sequence[float],
+        cancel_event: threading.Event | None = None,
+    ) -> list[np.ndarray]:
+        if self.device.type == "cpu":
+            return self._synthesize(first, second, timesteps, cancel_event)
+        if self._relieve_each_pair and self.memory_relief is not None:
+            # An earlier pair needed it: the models ran a frame since and are back.
+            self.memory_relief()
+        for attempt in range(3):
+            try:
+                return self._synthesize(first, second, timesteps, cancel_event)
+            except RuntimeError as error:
+                if not is_device_out_of_memory(error):
+                    raise
+                logger.warning(
+                    "RIFE ran out of %s memory (attempt %d): %s", self.device, attempt + 1, error
+                )
+            # Outside the handler: the failed attempt's tensors are freed by now.
+            _empty_cache(self.device)
+            if attempt == 1:
+                # An emptied cache was not enough: park the other models, once per job.
+                if self._relieve_each_pair or self.memory_relief is None:
+                    break
+                if not self.memory_relief():
+                    break
+                self._relieve_each_pair = True
+        self._move_to_cpu(first.shape[0], first.shape[1])
+        return self._synthesize(first, second, timesteps, cancel_event)
+
+    def _move_to_cpu(self, height: int, width: int) -> None:
+        """Run the rest of this job's interpolation on the CPU, in FP32, and say so."""
+        previous = self.device
+        self.model = self.model.to("cpu", torch.float32)
+        self.device = torch.device("cpu")
+        self.half = False
+        _empty_cache(previous)
+        message = (
+            f"Frame interpolation ran on the CPU: its {width} × {height} frames did not fit in "
+            "graphics memory. The frames look the same; it is only slower. Interpolate: "
+            "Before upscaling keeps it on the GPU."
+        )
+        if self.status_callback is not None:
+            self.status_callback(message)
+        if self.note_callback is not None:
+            self.note_callback(message)
+
+    @torch.inference_mode()
+    def _synthesize(
         self,
         first: np.ndarray,
         second: np.ndarray,
@@ -108,8 +184,10 @@ class RifeSynthesizer:
             if cancel_event is not None and cancel_event.is_set():
                 raise InterruptedError("video job cancelled")
             merged = self.model(img0, img1, float(step), scales, f0, f1)
-            pixels = merged[0, :, :height, :width].clamp(0, 1).mul(255).round().byte()
+            pixels = merged.clamp_(0, 1).mul_(255).round_()[0, :, :height, :width].byte()
             frames.append(np.ascontiguousarray(pixels.permute(1, 2, 0).cpu().numpy()))
+            # Not held while the next timestep runs.
+            del merged, pixels
         return frames
 
 
