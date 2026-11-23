@@ -1074,6 +1074,52 @@
       "temporal_overlap": 2,
       "temporal_window": 9,
       "terms_acceptance_required": false
+    },
+    {
+      "attribution_required": true,
+      "author": "Junhao Zhuang et al. \u00b7 OpenImagingLab",
+      "automated_download_allowed": true,
+      "commercial_use_allowed": true,
+      "description": "Experimental one-step diffusion video upscaling (Tiny pipeline). Runs on Apple silicon through MLX. Large frames are processed in tiles, so jobs can take hours. Needs at least 16 GB of memory. SDR output only.",
+      "engine_id": "localsr.video.flashvsr",
+      "engine_kind": "flashvsr",
+      "family": "flashvsr_v11",
+      "files": [
+        {
+          "download_url": "https://huggingface.co/JunhaoZhuang/FlashVSR-v1.1/resolve/2aa7e1f3ab50e743537d1eca243fb0bff442b336/diffusion_pytorch_model_streaming_dmd.safetensors?download=true",
+          "filename": "diffusion_pytorch_model_streaming_dmd.safetensors",
+          "role": "dit",
+          "sha256": "bd28180edcf3446c028e32fc6b731a80bf7e4da2ab4caac3186b9499964d37be",
+          "size_bytes": 5676070392
+        },
+        {
+          "download_url": "https://huggingface.co/JunhaoZhuang/FlashVSR-v1.1/resolve/2aa7e1f3ab50e743537d1eca243fb0bff442b336/LQ_proj_in.ckpt?download=true",
+          "filename": "LQ_proj_in.ckpt",
+          "role": "lq_proj",
+          "sha256": "d6d011cdaaba6a52645086caa08fa04124e746f6ca568140a24007591142bfd2",
+          "size_bytes": 575694948
+        },
+        {
+          "download_url": "https://huggingface.co/JunhaoZhuang/FlashVSR-v1.1/resolve/2aa7e1f3ab50e743537d1eca243fb0bff442b336/TCDecoder.ckpt?download=true",
+          "filename": "TCDecoder.ckpt",
+          "role": "tcdecoder",
+          "sha256": "e224bdcf2f52745cbf4d393ff5374c2ba09e90285d5d19062d2bf63b915b6161",
+          "size_bytes": 189018333
+        }
+      ],
+      "license_name": "Apache-2.0",
+      "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "min_unified_memory_gb": 16,
+      "min_vram_gb": 16,
+      "model_id": "flashvsr_v11",
+      "name": "FlashVSR v1.1 \u2014 Labs",
+      "redistribution_allowed": false,
+      "source_url": "https://github.com/OpenImagingLab/FlashVSR",
+      "summary": "",
+      "support_tier": "labs",
+      "temporal_overlap": 8,
+      "temporal_window": 41,
+      "terms_acceptance_required": false
     }
   ]
 }

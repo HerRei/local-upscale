@@ -90,6 +90,14 @@ own terms; this file is a distribution notice, not a replacement for their licen
   OpenCV Zoo with an exact size and SHA-256 rather than bundled in the application.
 - **SeedVR2 video integration** — vendored adapter code is covered by the included
   `src/localsr/video_models/seedvr2/NOTICE.md` and `vendor/LICENSE`; model bundles remain external.
+- **FlashVSR video integration (Labs)**: an MLX port of the FlashVSR v1.1 Tiny pipeline
+  (Apache-2.0, OpenImagingLab/FlashVSR, built on DiffSynth-Studio and Wan2.1, both Apache-2.0),
+  with the TCDecoder from TAEHV (MIT, copyright 2025 Ollin Boer Bohan) and attention code
+  adapted from MLX (MIT, copyright 2023 Apple Inc.). The license texts and the list of changes
+  are in `src/localsr/video_models/flashvsr/NOTICE.md`. The FlashVSR v1.1 weights (Apache-2.0)
+  are an optional, checksum-pinned download and are not included in installers.
+- **MLX** (Apple silicon packages only): the `mlx` and `mlx-metal` wheels, MIT, copyright 2023
+  Apple Inc.; they run FlashVSR on the GPU.
 - **RIFE frame interpolation** — the IFNet network code from Practical-RIFE (MIT, copyright
   2021 hzwer), with the license text in `src/localsr/video_models/rife/NOTICE.md`. The RIFE 4.26
   checkpoint (MIT, per the Practical-RIFE README) is an optional, checksum-pinned download and is
