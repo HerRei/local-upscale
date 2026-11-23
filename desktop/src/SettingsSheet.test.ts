@@ -368,7 +368,9 @@ describe('SettingsSheet', () => {
     });
     expect((check as HTMLInputElement).disabled).toBe(true);
     expect((count as HTMLInputElement).disabled).toBe(true);
-    expect(screen.getByText(/This build has no update feed/)).toBeTruthy();
+    expect((check as HTMLInputElement).checked).toBe(false);
+    expect((count as HTMLInputElement).checked).toBe(false);
+    expect(screen.getByText(/made without an update feed, so these two stay off/)).toBeTruthy();
   });
 
   it('supports Esc, HelpTip Esc priority, focus return, rail arrow keys, scroll reset, and focusTarget', async () => {

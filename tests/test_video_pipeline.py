@@ -1711,3 +1711,15 @@ def test_stopped_video_job_discards_partial_and_cleans_scratch_when_keep_partial
         )
     assert list(out_dir.iterdir()) == []
     assert list(scratch_dir.iterdir()) == []
+
+
+def test_deflicker_reports_each_frame_it_smooths():
+    import threading
+
+    from localsr.core.video_pipeline import _deflicker_frames
+
+    frames = [np.full((4, 4, 3), value, dtype=np.uint8) for value in (10, 12, 11, 13, 10)]
+    reported = []
+    out = list(_deflicker_frames(iter(frames), 3, threading.Event(), reported.append))
+    assert len(out) == 5
+    assert reported == [0, 1, 2, 3, 4]

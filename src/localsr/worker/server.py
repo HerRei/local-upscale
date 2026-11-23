@@ -1430,6 +1430,7 @@ class WorkerServer:
             )
 
         published = False
+        written_path = None
         try:
             first_chunk = read_chunk(window)
             if not first_chunk:
@@ -1487,7 +1488,7 @@ class WorkerServer:
                         yield frame
                     output.clear()
 
-            encode_video(
+            written_path = encode_video(
                 all_frames(),
                 output_path,
                 fps=float(fps),
@@ -1512,6 +1513,7 @@ class WorkerServer:
                 ),
                 sdr_bt709=bool(probe.hdr_format and data.get("hdr_mode") == "tone_map"),
                 temporary_directory=data.get("temporary_directory"),
+                keep_partial=lambda: self._keep_partial_for_job(job_id),
             )
             published = True
         except InterruptedError:
@@ -1544,10 +1546,18 @@ class WorkerServer:
 
         memory.sample()
         elapsed = _time.monotonic() - started_at
+        partial = bool(written_path) and str(written_path) != str(output_path)
+        kept_seconds = 0.0
+        if partial:
+            from localsr.core.video_io import probe_video
+
+            kept_seconds = probe_video(str(written_path)).duration_seconds
         send_message(
             VideoJobCompleted(
                 job_id=job_id,
-                output_path=output_path,
+                output_path=str(written_path) if partial else output_path,
+                partial=partial,
+                kept_seconds=kept_seconds,
                 frames_processed=state["done"],
                 elapsed_seconds=float(elapsed),
                 inference_seconds=float(elapsed),

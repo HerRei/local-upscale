@@ -77,7 +77,7 @@ def test_cancel_during_the_container_close_publishes_nothing(tmp_path, monkeypat
     assert _leftovers(tmp_path) == []
 
 
-def _run_temporal(tmp_path, monkeypatch, wrap_encode):
+def _run_temporal(tmp_path, monkeypatch, wrap_encode, keep=False):
     source = make_vfr(tmp_path / "source.mp4")
     output = tmp_path / "output.mp4"
     messages = []
@@ -87,7 +87,11 @@ def _run_temporal(tmp_path, monkeypatch, wrap_encode):
     monkeypatch.setattr(
         video_io, "encode_video", lambda *a, **k: wrap_encode(real_encode, cancel, *a, **k)
     )
-    worker = SimpleNamespace(cancel_event=cancel, _emit_live_preview=lambda _: None)
+    worker = SimpleNamespace(
+        cancel_event=cancel,
+        _emit_live_preview=lambda _: None,
+        _keep_partial_for_job=lambda _job: keep,
+    )
     server_module.WorkerServer._run_temporal_video_job(
         worker,
         "job",
@@ -127,6 +131,26 @@ def test_temporal_job_cancelled_after_publication_reports_the_saved_output(tmp_p
     assert "VideoJobCompleted" in kinds and "JobCancelled" not in kinds
     completed = next(m for m in messages if type(m).__name__ == "VideoJobCompleted")
     assert completed.output_path == str(output)
+
+
+def test_temporal_job_stopped_with_keep_reports_the_finished_part(tmp_path, monkeypatch):
+    def encode(real, cancel, frames, *args, **kwargs):
+        def cancel_after_two():
+            for index, frame in enumerate(frames):
+                if index == 2:
+                    cancel.set()
+                yield frame
+
+        return real(cancel_after_two(), *args, **kwargs)
+
+    output, kinds, messages = _run_temporal(tmp_path, monkeypatch, encode, keep=True)
+    assert "VideoJobCompleted" in kinds and "JobCancelled" not in kinds
+    completed = next(m for m in messages if type(m).__name__ == "VideoJobCompleted")
+    assert completed.partial
+    assert completed.output_path != str(output)
+    assert Path(completed.output_path).is_file()
+    assert "_partial_" in Path(completed.output_path).name
+    assert not output.exists()
 
 
 def _frame_by_frame_server(monkeypatch, tmp_path, fake_run):

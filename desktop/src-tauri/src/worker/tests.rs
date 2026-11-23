@@ -2559,3 +2559,43 @@ fn the_last_tile_does_not_read_as_saving_and_colour_preparation_is_named() {
     assert_eq!(runtime.status_title, "Adding colour");
     assert!(runtime.status_detail.starts_with("3 / 13"));
 }
+
+#[test]
+fn de_flickering_is_named_and_keeps_the_progress_and_estimate() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    {
+        let mut runtime = lock(&state.runtime).unwrap();
+        runtime.active_job_id = "a".into();
+        runtime.progress = 42.0;
+        runtime.estimated_remaining_seconds = 90.0;
+    }
+    apply_worker_envelope(
+        &state,
+        &envelope(
+            "video_stage_progress",
+            json!({"job_id": "a", "stage": "deflickering", "completed": 6, "total": 52}),
+        ),
+    )
+    .unwrap();
+    let runtime = lock(&state.runtime).unwrap();
+    assert_eq!(runtime.status_title, "De-flickering");
+    assert_eq!(runtime.status_detail, "Frame 6 of 52 · ETA 1:30");
+    assert_eq!(runtime.progress, 42.0);
+    assert_eq!(runtime.estimated_remaining_seconds, 90.0);
+}
+
+#[test]
+fn every_video_engine_can_keep_its_finished_part_but_photos_cannot() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    let video = |kind: &str| {
+        json!({"type": "video_job_request", "data": {
+            "model_kind": kind, "video_codec": "av1", "container": "mkv", "video_path": "/v.mov"
+        }})
+    };
+    assert!(job_can_keep_partial(&state, &video("spandrel_image")));
+    assert!(job_can_keep_partial(&state, &video("seedvr2")));
+    let photo = json!({"type": "job_request", "data": {"image_path": "/p.jpg"}});
+    assert!(!job_can_keep_partial(&state, &photo));
+}

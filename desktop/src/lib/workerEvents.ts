@@ -231,6 +231,9 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       const total = Number(data.total_frames ?? 0);
       const fraction = frame + (count > 0 ? done / count : 0);
       const remaining = Number(data.estimated_remaining_seconds ?? 0);
+      // The frames before this one are finished, even when their own completed
+      // message was coalesced away by a newer pulse.
+      next.runtime.frames_processed = Math.max(next.runtime.frames_processed ?? 0, frame);
       next.runtime.progress = total > 0 ? (fraction / total) * 100 : 0;
       next.runtime.status_title = 'Enhancing video';
       next.runtime.status_detail = `Frame ${frame + 1} of ${total || '?'}${count > 1 && done > 0 ? ` · Tile ${Math.min(done, count)} / ${count}` : ''} · ${remaining > 0 ? `ETA ≈ ${formatDuration(remaining)}` : fraction > 0 ? 'Finishing frame' : 'ETA: measuring first tile…'}`;
@@ -251,6 +254,13 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       break;
     case 'video_stage_progress': {
       if (String(data.job_id ?? '') !== next.runtime.active_job_id) break;
+      if (data.stage === 'deflickering') {
+        // Between two upscaled frames: the progress and the estimate stay as they are.
+        const eta = next.runtime.estimated_remaining_seconds;
+        next.runtime.status_title = 'De-flickering';
+        next.runtime.status_detail = `Frame ${Number(data.completed ?? 0)} of ${Number(data.total ?? 0)}${eta > 0 ? ` · ETA ≈ ${formatDuration(eta)}` : ''}`;
+        break;
+      }
       const labels: Record<string, string> = {
         verifying_model: 'Checking model files',
         external_decode: 'Converting the source with your FFmpeg',
@@ -304,6 +314,10 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
     }
     case 'video_frame_started':
       next.runtime.total_frames = Number(data.total_frames ?? 0);
+      next.runtime.frames_processed = Math.max(
+        next.runtime.frames_processed ?? 0,
+        Number(data.frame_index ?? 0),
+      );
       next.runtime.status_title = 'Enhancing video';
       next.runtime.status_detail = `Frame ${Number(data.frame_index ?? 0) + 1} of ${Number(data.total_frames ?? 0) || '?'} · ${next.runtime.estimated_remaining_seconds > 0 ? `ETA ≈ ${formatDuration(next.runtime.estimated_remaining_seconds)}` : 'ETA: measuring first tile…'}`;
       break;

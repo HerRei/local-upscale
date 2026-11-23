@@ -1,5 +1,6 @@
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use tauri::{
     image::Image,
@@ -22,6 +23,17 @@ const MENU_RESUME_ID: &str = "tray.resume";
 const MENU_REVEAL_LAST_ID: &str = "tray.reveal-last";
 const MENU_SHOW_ID: &str = "tray.show";
 const MENU_QUIT_ID: &str = "tray.quit";
+
+/// What decides which items the menu has. While it stays the same, the menu's lines
+/// are changed in place: replacing the menu would close it while someone reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MenuShape {
+    paused: bool,
+    reveal: bool,
+}
+
+/// The menu the tray shows now, with its shape.
+static SHOWN_MENU: Mutex<Option<(MenuShape, Box<dyn Any + Send + Sync>)>> = Mutex::new(None);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TraySnapshot {
@@ -145,6 +157,34 @@ pub fn format_waiting_line(waiting_count: usize) -> String {
         1 => "1 file waiting".into(),
         count => format!("{count} files waiting"),
     }
+}
+
+/// Pausing needs something to pause; resuming is always possible.
+pub fn pause_resume_enabled(snapshot: &TraySnapshot) -> bool {
+    snapshot.paused || !snapshot.active_job_id.is_empty() || snapshot.waiting_count > 0
+}
+
+fn menu_shape(snapshot: &TraySnapshot) -> MenuShape {
+    MenuShape {
+        paused: snapshot.paused,
+        reveal: !snapshot.last_output_path.is_empty(),
+    }
+}
+
+/// Changes the lines of the shown menu; false when an item is missing.
+fn update_menu_in_place<R: Runtime>(menu: &Menu<R>, snapshot: &TraySnapshot) -> bool {
+    let item = |id: &str| menu.get(id).and_then(|kind| kind.as_menuitem().cloned());
+    let (pause_id, _) = pause_resume_item(snapshot.paused);
+    let (Some(current), Some(waiting), Some(pause)) =
+        (item(MENU_STATUS_ID), item(MENU_WAITING_ID), item(pause_id))
+    else {
+        return false;
+    };
+    current.set_text(format_current_job_line(snapshot)).is_ok()
+        && waiting
+            .set_text(format_waiting_line(snapshot.waiting_count))
+            .is_ok()
+        && pause.set_enabled(pause_resume_enabled(snapshot)).is_ok()
 }
 
 pub fn pause_resume_item(paused: bool) -> (&'static str, &'static str) {
@@ -281,7 +321,9 @@ fn build_tray_menu<R: Runtime>(
             .enabled(false)
             .build(app)?;
     let (pause_id, pause_label) = pause_resume_item(snapshot.paused);
-    let pause_resume = MenuItemBuilder::with_id(pause_id, pause_label).build(app)?;
+    let pause_resume = MenuItemBuilder::with_id(pause_id, pause_label)
+        .enabled(pause_resume_enabled(snapshot))
+        .build(app)?;
     let show = MenuItemBuilder::with_id(MENU_SHOW_ID, "Show LocalSR").build(app)?;
     let quit = MenuItemBuilder::with_id(MENU_QUIT_ID, "Quit").build(app)?;
 
@@ -374,13 +416,15 @@ fn snapshot_from_state(state: &crate::state::AppState) -> Option<TraySnapshot> {
 }
 
 fn apply_snapshot<R: Runtime>(app: &AppHandle<R>, snapshot: &TraySnapshot) {
+    let Ok(mut shown) = SHOWN_MENU.lock() else {
+        return;
+    };
     if !snapshot.visible {
+        *shown = None;
         let _ = app.remove_tray_by_id(TRAY_ID);
         return;
     }
-    let Ok(menu) = build_tray_menu(app, snapshot) else {
-        return;
-    };
+    let shape = menu_shape(snapshot);
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         // The icon style changes rarely: only swap the image when it did.
         if ICON_MONOCHROME.swap(snapshot.monochrome, Ordering::SeqCst) != snapshot.monochrome {
@@ -390,11 +434,27 @@ fn apply_snapshot<R: Runtime>(app: &AppHandle<R>, snapshot: &TraySnapshot) {
             #[cfg(target_os = "macos")]
             let _ = tray.set_icon_as_template(snapshot.monochrome);
         }
-        let _ = tray.set_menu(Some(menu));
+        let kept = shown.as_ref().is_some_and(|(cached, menu)| {
+            *cached == shape
+                && menu
+                    .downcast_ref::<Menu<R>>()
+                    .is_some_and(|menu| update_menu_in_place(menu, snapshot))
+        });
+        if !kept {
+            let Ok(menu) = build_tray_menu(app, snapshot) else {
+                return;
+            };
+            let _ = tray.set_menu(Some(menu.clone()));
+            *shown = Some((shape, Box::new(menu)));
+        }
         #[cfg(target_os = "macos")]
         let _ = tray.set_title(snapshot.title.as_deref());
         return;
     }
+    let Ok(menu) = build_tray_menu(app, snapshot) else {
+        return;
+    };
+    *shown = Some((shape, Box::new(menu.clone())));
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip("LocalSR")
         .menu(&menu)
@@ -547,6 +607,19 @@ mod tests {
         snap.paused = true;
         assert_eq!(format_current_job_line(&snap), "Queue paused");
         assert_eq!(pause_resume_item(false), (MENU_PAUSE_ID, "Pause queue"));
+        let mut idle = sample_snapshot();
+        idle.active_job_id.clear();
+        idle.waiting_count = 0;
+        idle.paused = false;
+        assert!(!pause_resume_enabled(&idle), "nothing to pause when idle");
+        idle.waiting_count = 2;
+        assert!(pause_resume_enabled(&idle));
+        idle.waiting_count = 0;
+        idle.paused = true;
+        assert!(
+            pause_resume_enabled(&idle),
+            "a paused queue can always resume"
+        );
         assert_eq!(pause_resume_item(true), (MENU_RESUME_ID, "Resume queue"));
     }
 

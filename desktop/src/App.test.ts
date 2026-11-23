@@ -7885,6 +7885,27 @@ describe('Settings sheet', () => {
   });
 });
 
+describe('Clearing the model cache', () => {
+  it('asks first, and only Clear cache clears', async () => {
+    api.getCacheSize.mockResolvedValue(3 * 1024 * 1024 * 1024);
+    api.clearCache.mockResolvedValue(0);
+    const user = await mountWith(readySnapshot([]));
+    await chooseMenuItem('app.settings');
+    const settings = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settings).getByRole('tab', { name: 'Storage' }));
+    await user.click(await within(settings).findByRole('button', { name: 'Clear cache' }));
+    const question = await screen.findByRole('dialog', { name: 'Clear the model cache?' });
+    expect(question.textContent).toContain('3.0 GB');
+    await user.click(within(question).getByRole('button', { name: 'Cancel' }));
+    expect(api.clearCache).not.toHaveBeenCalled();
+
+    await user.click(within(settings).getByRole('button', { name: 'Clear cache' }));
+    const again = await screen.findByRole('dialog', { name: 'Clear the model cache?' });
+    await user.click(within(again).getByRole('button', { name: 'Clear cache' }));
+    await waitFor(() => expect(api.clearCache).toHaveBeenCalledTimes(1));
+  });
+});
+
 describe('Stopping a running job', () => {
   function runningVideoSnapshot(overrides: Partial<AppSnapshot['runtime']> = {}) {
     const clip = {
@@ -7948,6 +7969,49 @@ describe('Stopping a running job', () => {
     await fireEvent.click(backdrop);
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(api.cancelJobs).not.toHaveBeenCalled();
+  });
+
+  it('asks after real frame messages, where each finished frame is followed at once by the next start', async () => {
+    // The window keeps only the newest progress message per 100 ms, so a frame's
+    // completed message is usually replaced by the next frame's start.
+    const snap = runningVideoSnapshot({ frames_processed: 0, can_keep_partial: undefined });
+    const user = await mountWith(snap);
+    const emitWorker = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+    for (let frame = 0; frame < 5; frame += 1) {
+      emitWorker({
+        type: 'video_frame_completed',
+        data: { job_id: 'video-job-1', frames_processed: frame + 1, total_frames: 288 },
+      });
+      emitWorker({
+        type: 'video_frame_started',
+        data: { job_id: 'video-job-1', frame_index: frame + 1, total_frames: 288 },
+      });
+      emitWorker({
+        type: 'video_tile_progress',
+        data: {
+          job_id: 'video-job-1',
+          frame_index: frame + 1,
+          completed_tiles: 3,
+          total_tiles: 80,
+          total_frames: 288,
+        },
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(await screen.findByRole('dialog', { name: 'Stop alpine-lake.mp4?' })).toBeTruthy();
+    expect(api.cancelJobs).not.toHaveBeenCalled();
+  });
+
+  it('asks for a video-model job (SeedVR) too', async () => {
+    const snap = runningVideoSnapshot();
+    snap.jobs[0].model_id = snap.catalog.video_models[0]?.model_id ?? 'seedvr2_3b';
+    snap.runtime.video_memory = {
+      peak_bytes: 1,
+    } as unknown as AppSnapshot['runtime']['video_memory'];
+    const user = await mountWith(snap);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(await screen.findByRole('dialog', { name: 'Stop alpine-lake.mp4?' })).toBeTruthy();
   });
 
   it('Discard and Keep finished part call cancelJobs with keepPartial false/true and save preference when Dont ask again is ticked', async () => {

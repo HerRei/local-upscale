@@ -100,6 +100,7 @@ def _deflicker_frames(
     restored: Iterator[np.ndarray | TimedVideoFrame],
     window: int,
     cancel_event: threading.Event,
+    on_frame: Callable[[int], None] | None = None,
 ) -> Iterator[np.ndarray | TimedVideoFrame]:
     """Conservative, experimental smoothing of low-amplitude static-region flicker.
 
@@ -141,6 +142,8 @@ def _deflicker_frames(
         buffer.append((stream_index, frame))
         last_index = stream_index
         while next_emit + right <= stream_index:
+            if on_frame is not None:
+                on_frame(next_emit)
             yield median_for(next_emit)
             next_emit += 1
             minimum_needed = max(0, next_emit - left)
@@ -152,6 +155,8 @@ def _deflicker_frames(
     while next_emit <= last_index:
         if cancel_event.is_set():
             raise InterruptedError("video job cancelled")
+        if on_frame is not None:
+            on_frame(next_emit)
         yield median_for(next_emit)
         next_emit += 1
         minimum_needed = max(0, next_emit - left)
@@ -1015,7 +1020,14 @@ def _run_video_frames(
     # restored-frame generator so the encoder receives smoothed frames.
     restored_frames = _release_after_last_frame(frame_generator(), engine, config.device_str)
     if config.deflicker:
-        output_frames = _deflicker_frames(restored_frames, config.deflicker_window, cancel_event)
+        # Smoothing a large frame takes a moment of its own; the status names it.
+        def report_deflicker(index: int) -> None:
+            if stage_cb is not None:
+                stage_cb("deflickering", index + 1, total_frames)
+
+        output_frames = _deflicker_frames(
+            restored_frames, config.deflicker_window, cancel_event, report_deflicker
+        )
     else:
         output_frames = restored_frames
     if interpolation is not None:

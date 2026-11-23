@@ -942,9 +942,6 @@ fn job_can_keep_partial(state: &AppState, message: &Value) -> bool {
         return false;
     }
     let data = &message["data"];
-    if data["model_kind"].as_str().unwrap_or("spandrel_image") != "spandrel_image" {
-        return false;
-    }
     let codec = data["video_codec"].as_str().unwrap_or("av1");
     if matches!(codec, "av1" | "vp9" | "ffv1" | "auto") {
         return true;
@@ -1941,6 +1938,19 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 runtime.live_system_ram_available = integer(data, "system_ram_available");
             }
         }
+        "video_stage_progress" if string(data, "stage") == "deflickering" => {
+            // Between two upscaled frames: the progress and the estimate stay as they are.
+            let mut runtime = lock(&state.runtime)?;
+            if runtime.active_job_id == string(data, "job_id") {
+                runtime.status_title = video_stage_title("deflickering").into();
+                runtime.status_detail = format!(
+                    "Frame {} of {}{}",
+                    integer(data, "completed"),
+                    integer(data, "total"),
+                    eta_suffix(runtime.estimated_remaining_seconds)
+                );
+            }
+        }
         "video_stage_progress" => {
             let mut runtime = lock(&state.runtime)?;
             if runtime.active_job_id == string(data, "job_id") {
@@ -2758,6 +2768,7 @@ fn video_stage_title(stage: &str) -> &'static str {
         "audio_denoise" => "Audio cleanup",
         "loading_model" => "Loading video model",
         "colour_preparing" => "Adding colour",
+        "deflickering" => "De-flickering",
         "loading_interpolation" => "Loading frame interpolation",
         "reading_frames" => "Reading video frames",
         "preparing_clip" => "Preparing clip",

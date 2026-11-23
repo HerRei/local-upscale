@@ -741,11 +741,6 @@
         {:else if section === 'privacy'}
           <h3 class="settings-section-heading">{storeBuild ? 'Privacy' : 'Privacy & updates'}</h3>
           {#if !storeBuild}
-            {#if !activeUpdateStatus.configured}
-              <p class="setting-desc settings-note" id="settings-no-feed">
-                This build has no update feed, so it does not check for updates.
-              </p>
-            {/if}
             <div class="setting-row">
               <div class="setting-copy">
                 <label class="setting-label" for="settings-check-updates"
@@ -764,7 +759,8 @@
                   ? 'settings-check-updates-desc'
                   : 'settings-check-updates-desc settings-no-feed'}
                 disabled={!activeUpdateStatus.configured}
-                checked={settings.check_updates_at_launch ?? true}
+                checked={activeUpdateStatus.configured &&
+                  (settings.check_updates_at_launch ?? true)}
                 on:change={(event) =>
                   setPreference('check_updates_at_launch', event.currentTarget.checked)}
               />
@@ -788,11 +784,18 @@
                   ? 'settings-anonymous-count-desc'
                   : 'settings-anonymous-count-desc settings-no-feed'}
                 disabled={!activeUpdateStatus.configured}
-                checked={settings.anonymous_update_count ?? false}
+                checked={activeUpdateStatus.configured &&
+                  (settings.anonymous_update_count ?? false)}
                 on:change={(event) =>
                   setPreference('anonymous_update_count', event.currentTarget.checked)}
               />
             </div>
+            {#if !activeUpdateStatus.configured}
+              <p class="settings-note" id="settings-no-feed">
+                This build was made without an update feed, so these two stay off. LocalSR from the
+                website checks for updates as set here.
+              </p>
+            {/if}
           {/if}
 
           {#if !storeBuild}

@@ -592,6 +592,17 @@
     }
   }
 
+  /** Clearing is safe but slows the next start of each model, so it asks first. */
+  async function askClearCache(): Promise<void> {
+    if (clearingCache) return;
+    const size = cacheSize ? ` (${formatBytes(cacheSize)})` : '';
+    showModal(
+      'Clear the model cache?',
+      `This deletes the compiled model copies${size}. Your models, settings and results stay. Each model starts more slowly once, while its copy is rebuilt.`,
+    );
+    modalConfirm = { label: 'Clear cache', run: clearCache };
+  }
+
   async function clearCache(): Promise<void> {
     if (clearingCache) return;
     clearingCache = true;
@@ -1737,6 +1748,8 @@
     if (message.type === 'job_completed' || message.type === 'video_job_completed') {
       scheduleRefresh();
     }
+    // The host decides at the start whether the finished part of this job can be kept.
+    if (message.type === 'job_started') scheduleRefresh();
     if (
       message.type === 'download-queued' ||
       message.type === 'download-started' ||
@@ -3223,20 +3236,6 @@
     if (!activeJob || activeJob.media_kind !== 'video') return false;
     if (snapshot.runtime.can_keep_partial !== undefined) {
       return snapshot.runtime.can_keep_partial;
-    }
-    if (snapshot.runtime.video_memory) return false;
-    if (
-      activeJob.model_id &&
-      snapshot.catalog.video_models.some((model) => model.model_id === activeJob.model_id)
-    ) {
-      return false;
-    }
-    if (
-      !activeJob.model_id &&
-      settings.selected_video_model_id &&
-      settings.selected_video_model_id !== 'frame_by_frame'
-    ) {
-      return false;
     }
     const codec = settings.video_codec ?? 'auto';
     if (codec === 'h264' || codec === 'hevc' || codec === 'prores') {
@@ -5337,7 +5336,7 @@
     {updateSettings}
     {chooseModelFolder}
     {resetModelFolder}
-    {clearCache}
+    clearCache={askClearCache}
     loadCacheSize={() => void loadCacheSize()}
     refreshCapabilities={async () => {
       try {
