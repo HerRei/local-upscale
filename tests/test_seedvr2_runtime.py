@@ -17,6 +17,9 @@ def test_seedvr2_rejects_unsupported_gpu_before_loading_or_verifying_a_bundle(ba
 def test_directml_runtime_keeps_frame_engine_and_explains_seedvr2_incompatibility(monkeypatch):
     versions = {"torch": "2.4.1+cpu", "diffusers": "0.38.0"}
     monkeypatch.setattr(video_engines, "version", versions.__getitem__)
+    monkeypatch.setattr(
+        video_engines, "flashvsr_runtime_issue", lambda: "DirectML is not Apple Silicon"
+    )
     assert _video_engines() == ["spandrel_image"]
     assert "video_seedvr2" not in _engine_features()
     with pytest.raises(ValueError, match="PyTorch version"):

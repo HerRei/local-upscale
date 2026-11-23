@@ -128,9 +128,14 @@ def _encode_chw_jpeg(image, max_dimension: int, quality: int = 78) -> str:
 
 
 def _video_engines() -> list[str]:
-    from localsr.core.video_engines import seedvr2_runtime_issue
+    from localsr.core.video_engines import flashvsr_runtime_issue, seedvr2_runtime_issue
 
-    return ["spandrel_image"] + (["seedvr2"] if seedvr2_runtime_issue() is None else [])
+    engines = ["spandrel_image"]
+    if seedvr2_runtime_issue() is None:
+        engines.append("seedvr2")
+    if flashvsr_runtime_issue() is None:
+        engines.append("flashvsr")
+    return engines
 
 
 # The most photos one batch request carries; the desktop sends at most this many.
@@ -159,6 +164,8 @@ def _engine_features() -> list[str]:
     ]
     if "seedvr2" in _video_engines():
         features.append("video_seedvr2")
+    if "flashvsr" in _video_engines():
+        features.append("video_flashvsr")
     if importlib.util.find_spec("cv2") is not None:
         try:
             cv2 = importlib.import_module("cv2")
@@ -1537,6 +1544,11 @@ class WorkerServer:
             decode_iter.close()
             preview_encoder.close()
             source_encoder.close()
+            if engine is not None and hasattr(engine, "close"):
+                try:
+                    engine.close()
+                except Exception:  # noqa: BLE001
+                    pass
             engine = None  # noqa: F841 — releases the models
             try:
                 import torch
@@ -1721,7 +1733,11 @@ class WorkerServer:
         # are not single-image checkpoints. An engine this build cannot
         # serve fails the job with a status-bar-ready message instead of a
         # stack trace, and frame-by-frame stays available.
-        from localsr.core.video_engines import resolve_video_engine, seedvr2_runtime_issue
+        from localsr.core.video_engines import (
+            flashvsr_runtime_issue,
+            resolve_video_engine,
+            seedvr2_runtime_issue,
+        )
 
         if data.get("video_codec") == "auto":
             from localsr.core.media_bridge import automatic_video_codec, load_media_bridge
@@ -1750,6 +1766,16 @@ class WorkerServer:
                 "for Intel/DirectML, or a compatible CUDA, ROCm or Metal engine for SeedVR2."
             )
         if model_kind == "seedvr2" and (issue := seedvr2_runtime_issue()):
+            raise ValueError(issue)
+        if model_kind == "flashvsr" and str(data.get("device", "")).split(":", 1)[0] not in {
+            "mps",
+            "auto",
+        }:
+            raise ValueError(
+                "FlashVSR runs on Apple Silicon GPU (mps) only. Choose frame-by-frame video "
+                "for CPU or other backends."
+            )
+        if model_kind == "flashvsr" and (issue := flashvsr_runtime_issue()):
             raise ValueError(issue)
         engine_factory = resolve_video_engine(model_kind)
         if engine_factory is not None:
