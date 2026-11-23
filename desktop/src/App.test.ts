@@ -408,7 +408,8 @@ describe('Appearance from the host', () => {
     await user.click(within(dialog).getByRole('tab', { name: 'Appearance' }));
     await user.click(within(dialog).getByRole('switch', { name: 'High contrast' }));
     await waitFor(() => expect(api.setPreference).toHaveBeenCalledWith('contrast', 'high'));
-    expect(document.documentElement.dataset.contrast).toBe('high');
+    // The theme follows once the awaited host call returns.
+    await waitFor(() => expect(document.documentElement.dataset.contrast).toBe('high'));
   });
 
   it('keeps saved contrast and viewer background during first-run theme preview', async () => {
@@ -485,7 +486,7 @@ describe('Update switches', () => {
 });
 
 describe('Edit task', () => {
-  it('sits beside Upscale and Restore, takes a prompt and sends one editing job', async () => {
+  it('sits beside Upscale & restore, takes a prompt and sends one editing job', async () => {
     // 36 GB: the Qwen editor fits within the share of memory a default may use.
     const user = await mountWith(editSnapshot(36));
     await chooseTask(user, /^Edit$/);
@@ -1435,7 +1436,7 @@ describe('LocalSR desktop interface', () => {
 
   it('keeps advanced controls in a dedicated scroll region', async () => {
     const user = await mountWith(readySnapshot([image('first', true)]));
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
 
     const inspector = screen.getByRole('region', { name: 'Enhancement settings' });
     expect(inspector.classList.contains('inspector-scroll')).toBe(true);
@@ -1452,8 +1453,7 @@ describe('LocalSR desktop interface', () => {
       media.probe_status = 'pending';
       const snapshot = readySnapshot([media]);
       snapshot.settings.batch_mode = batch;
-      const user = await mountWith(snapshot);
-      await chooseTask(user, /^Upscale$/);
+      await mountWith(snapshot);
       expect(screen.getByRole('heading', { name: 'Preparing preview…' })).toBeTruthy();
       expect(screen.getAllByText('Preparing preview…').length).toBe(2);
       expect(screen.queryByText('Inspecting…')).toBeNull();
@@ -1499,8 +1499,7 @@ describe('LocalSR desktop interface', () => {
     const snapshot = readySnapshot([media]);
     snapshot.settings.task = 'video';
     snapshot.settings.batch_mode = true;
-    const user = await mountWith(snapshot);
-    await chooseTask(user, /^Upscale$/);
+    await mountWith(snapshot);
     const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
     callback({
       type: 'media_probe_progress',
@@ -1548,6 +1547,17 @@ describe('LocalSR desktop interface', () => {
     ).toBe(false);
   });
 
+  async function pickUpscalerInLibrary(
+    user: ReturnType<typeof userEvent.setup>,
+    rowName: RegExp,
+  ): Promise<void> {
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: rowName }));
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
+  }
+
   it('switches SeedVR2 to SDR, preserves the custom HDR option, and submits the chosen resolution', async () => {
     const media = { ...video('hdr', true), width: 2160, height: 3840, hdr_format: 'HLG' as const };
     const snapshot = readySnapshot([media]);
@@ -1567,11 +1577,11 @@ describe('LocalSR desktop interface', () => {
     const user = await mountWith(snapshot);
     const hdr = screen.getByLabelText('Colour output') as HTMLSelectElement;
     expect(hdr.value).toBe('preserve');
-    await user.selectOptions(screen.getByLabelText('Video engine'), 'seedvr2_3b');
+    await pickUpscalerInLibrary(user, /^SeedVR2-3B — Labs/);
     expect(hdr.value).toBe('tone_map');
     expect(hdr.querySelector<HTMLOptionElement>('option[value="preserve"]')!.disabled).toBe(true);
     expect(screen.getByText('SDR output selected. This model cannot preserve HDR.')).toBeTruthy();
-    expect((screen.getByLabelText('Output resolution') as HTMLSelectElement).selectedIndex).toBe(0);
+    expect((screen.getByLabelText('Output resolution') as HTMLSelectElement).value).toBe('x4');
     await user.selectOptions(screen.getByLabelText('Output resolution'), '512');
     expect(screen.getAllByText('512 × 910 · SDR').length).toBeGreaterThan(0);
     const memory = screen.getByRole('checkbox', { name: 'Reduce GPU memory' }) as HTMLInputElement;
@@ -1586,7 +1596,7 @@ describe('LocalSR desktop interface', () => {
         video_low_memory: false,
       }),
     );
-    await user.selectOptions(screen.getByLabelText('Video engine'), 'frame_by_frame');
+    await pickUpscalerInLibrary(user, /^HAT-S ×4/);
     expect(hdr.value).toBe('preserve');
     api.chooseCustomModel.mockResolvedValueOnce('/models/mine.safetensors' as never);
     await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
@@ -1659,14 +1669,14 @@ describe('LocalSR desktop interface', () => {
 
   it('exposes image recipes, hardware controls, and installed face companions', async () => {
     const user = await mountWith(readySnapshot());
-    await chooseTask(user, /^Upscale$/);
+    await chooseTask(user, /^Upscale & restore$/);
 
     expect(screen.getByRole('button', { name: /^Quick\s*Fast, clean result/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /^Best\s*Finest detail, slower/i })).toBeTruthy();
     expect(screen.getByRole('list', { name: 'Stages' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Change the upscaler' })).toBeTruthy();
 
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     const hardware = screen.getByLabelText('Hardware');
     expect(within(hardware).getByRole('option', { name: 'Apple GPU (Metal)' })).toBeTruthy();
     expect(within(hardware).getByRole('option', { name: 'CPU' })).toBeTruthy();
@@ -1696,20 +1706,32 @@ describe('LocalSR desktop interface', () => {
     },
   );
 
-  it('labels experimental engines separately from standard video', async () => {
-    const user = await mountWith(readySnapshot([video('clip', true)]));
-    await chooseTask(user, /^Upscale$/);
+  it('chooses temporal video models from the library and keeps frame-by-frame options hidden', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    const user = await mountWith(snapshot);
 
-    const engine = screen.getByLabelText('Video engine');
-    expect(within(engine).getByRole('option', { name: /Frame-by-frame/i })).toBeTruthy();
-    expect(within(engine).getByRole('option', { name: /SeedVR2-3B — Labs/i })).toBeTruthy();
+    expect(screen.queryByLabelText('Video engine')).toBeNull();
+    expect(document.querySelectorAll('.model-output-note')).toHaveLength(0);
+    const oldModelId = (api.saveSettings.mock.calls.at(-1)?.[0] as UiSettings).selected_model_id;
 
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     expect(screen.getByLabelText('Container')).toBeTruthy();
     expect(screen.getByLabelText(/Video quality · CRF/i)).toBeTruthy();
     expect(screen.getByRole('checkbox', { name: /De-flicker · Labs/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Start selected video' })).toBeTruthy();
-    await user.selectOptions(engine, 'seedvr2_3b');
+
+    await pickUpscalerInLibrary(user, /^SeedVR2-3B — Labs/);
+    expect(api.saveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        selected_video_model_id: 'seedvr2_3b',
+        quality: 'custom',
+        selected_model_id: oldModelId,
+      }),
+    );
+    const stages = screen.getByRole('list', { name: 'Stages' });
+    expect(within(stages).getByText('SeedVR2-3B')).toBeTruthy();
+    expect(within(stages).getByText('Labs · several frames at once')).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Your video' })).toBeNull();
     expect(screen.queryByRole('checkbox', { name: /De-flicker · Labs/i })).toBeNull();
     expect(screen.queryByRole('checkbox', { name: /Safe memory mode/i })).toBeNull();
   });
@@ -1729,16 +1751,27 @@ describe('LocalSR desktop interface', () => {
         enable_face_model: false,
       });
       const user = await mountWith(snapshot);
-      await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
-      const engine = screen.getByLabelText('Video engine');
-      await user.selectOptions(engine, 'seedvr2_3b');
-      await user.selectOptions(engine, 'frame_by_frame');
+      await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
+      await pickUpscalerInLibrary(user, /^SeedVR2-3B — Labs/);
+      await pickUpscalerInLibrary(user, /^HAT-L ×4 ImageNet/);
       expect(
         (screen.getByRole('checkbox', { name: /De-flicker · Labs/i }) as HTMLInputElement).checked,
       ).toBe(deflicker);
       expect((screen.getByLabelText('Frame rate') as HTMLSelectElement).value).toBe('x2');
       expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ deflicker, video_interpolation: 'x2', enable_face_model: false }),
+        expect.objectContaining({
+          selected_video_model_id: 'frame_by_frame',
+          deflicker,
+          video_interpolation: 'x2',
+          enable_face_model: false,
+        }),
+      );
+      await user.click(screen.getByRole('button', { name: /^Quick/ }));
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ selected_video_model_id: 'frame_by_frame' }),
+      );
+      expect(screen.getByRole('button', { name: /^Quick/ }).getAttribute('aria-pressed')).toBe(
+        'true',
       );
     },
   );
@@ -1748,7 +1781,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.task = 'video';
     snapshot.engine!.features = ['video_frame'];
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     expect((screen.getByLabelText('Frame rate') as HTMLSelectElement).disabled).toBe(true);
   });
 
@@ -1758,7 +1791,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.video_hdr_mode = 'preserve';
     snapshot.settings.selected_model_id = 'hat_s_x4';
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     const rate = screen.getByLabelText('Frame rate') as HTMLSelectElement;
     expect(rate.disabled).toBe(false);
     await user.selectOptions(rate, 'x2');
@@ -1809,8 +1842,7 @@ describe('LocalSR desktop interface', () => {
     const snapshot = readySnapshot([video('clip', true)]);
     snapshot.catalog.interpolation_models.forEach((model) => (model.installed = true));
     const user = await mountWith(snapshot);
-    await chooseTask(user, /^Upscale$/);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     const rate = screen.getByLabelText('Frame rate') as HTMLSelectElement;
     expect(rate.value).toBe('off');
     expect(screen.queryByLabelText('Interpolate')).toBeNull();
@@ -1879,8 +1911,8 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.video_interpolation = 'x2';
     snapshot.catalog.interpolation_models.forEach((model) => (model.installed = true));
     const user = await mountWith(snapshot);
-    await user.selectOptions(screen.getByLabelText('Video engine'), 'seedvr2_3b');
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
+    await pickUpscalerInLibrary(user, /^SeedVR2-3B — Labs/);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     expect(screen.queryByLabelText('Frame rate')).toBeNull();
     expect(screen.queryByText('Interpolate 2×')).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Start selected video' }));
@@ -1909,19 +1941,230 @@ describe('LocalSR desktop interface', () => {
         model.installed = false;
       });
       const user = await mountWith(snapshot);
-      const option = screen.getByRole('option', { name: /SeedVR2-3B — Labs.*Unavailable/ });
-      expect((option as HTMLOptionElement).disabled).toBe(true);
+      expect(document.querySelector('.inline-warning')?.textContent).toMatch(/SeedVR2/);
       expect(
         screen.getByRole('button', { name: 'Start selected video' }).matches(':disabled'),
       ).toBe(true);
       expect(screen.queryByRole('button', { name: /^Download / })).toBeNull();
-      await user.selectOptions(screen.getByLabelText('Video engine'), 'frame_by_frame');
+      await pickUpscalerInLibrary(user, /^SPAN ×4/);
       expect(
         screen.getByRole('button', { name: 'Start selected video' }).matches(':disabled'),
       ).toBe(false);
       expect(api.downloadModel).not.toHaveBeenCalled();
     },
   );
+
+  /** A Mac whose engine also lists FlashVSR, with this much unified memory. */
+  function flashSnapshot(unifiedGb: number): AppSnapshot {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.settings.task = 'video';
+    snapshot.engine!.video_engines.push('flashvsr');
+    snapshot.capabilities.system_ram_total = unifiedGb * 1024 ** 3;
+    return snapshot;
+  }
+
+  it('runs FlashVSR on the Apple GPU of a 16 GB Mac and describes it in its own terms', async () => {
+    const user = await mountWith(flashSnapshot(16));
+    expect(document.querySelectorAll('.model-output-note')).toHaveLength(0);
+
+    await user.click(await screen.findByRole('button', { name: 'Change the upscaler' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ }));
+    expect(
+      (within(library).getByRole('button', { name: 'Use for this job' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
+
+    const memory = screen.getByLabelText('FlashVSR memory');
+    expect(memory.textContent).toMatch(
+      /windows of 37 frames; each starts with 8\s+frames of run-up/,
+    );
+    expect(memory.textContent).not.toMatch(/SeedVR2|VAE|per clip|offload/);
+    expect(screen.queryByRole('checkbox', { name: 'Reduce GPU memory' })).toBeNull();
+    expect(screen.getByLabelText('Output resolution')).toBeTruthy();
+    expect(screen.getByText(/above that, it runs at 4× and resizes the rest/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
+    expect(screen.getByText(/^FlashVSR · Labs\. One-step diffusion upscaling/)).toBeTruthy();
+    expect(screen.queryByText(/^SeedVR2 · Labs/)).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: /De-flicker · Labs/i })).toBeNull();
+
+    // SeedVR2 keeps its own panel and note.
+    await pickUpscalerInLibrary(user, /^SeedVR2-3B — Labs/);
+    expect(screen.getByLabelText('SeedVR2 memory').textContent).toMatch(
+      /Up to 5 frames per clip · 128 px VAE tiles\./,
+    );
+    expect(screen.getByText(/^SeedVR2 · Labs\. Uses its own temporal processing/)).toBeTruthy();
+
+    await pickUpscalerInLibrary(user, /^FlashVSR v1\.1 — Labs/);
+    await user.click(screen.getByRole('button', { name: 'Start selected video' }));
+    expect(api.startJobs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        video_model_id: 'flashvsr_v11',
+        fix_stages: [],
+        deflicker: false,
+        video_interpolation: 'off',
+        video_hdr_mode: 'tone_map',
+      }),
+    );
+  });
+
+  it.each([
+    ['the CPU', 'cpu', 16, true, 'Apple GPU only', /^FlashVSR cannot run on this device\./],
+    ['CUDA', 'cuda:0', 16, true, 'Apple GPU only', /^FlashVSR cannot run on this device\./],
+    [
+      'a Mac with 8 GB',
+      'mps',
+      8,
+      true,
+      'Needs 16 GB',
+      /^FlashVSR needs 16 GB of memory\. This Mac has 8 GB\.$/,
+    ],
+    [
+      'an engine that does not list it',
+      'mps',
+      16,
+      false,
+      'Unavailable',
+      /^FlashVSR needs the MLX runtime/,
+    ],
+  ] as const)(
+    'keeps FlashVSR unavailable on %s without taking SeedVR2 with it',
+    async (_name, deviceId, unifiedGb, listed, tag, reason) => {
+      const snapshot = flashSnapshot(unifiedGb);
+      if (!listed) snapshot.engine!.video_engines = ['spandrel_image', 'seedvr2'];
+      if (deviceId === 'cuda:0') snapshot.capabilities.devices.push(gpu('cuda:0', 'cuda', 'GPU'));
+      snapshot.settings.device_id = deviceId;
+      snapshot.settings.selected_video_model_id = 'flashvsr_v11';
+      const user = await mountWith(snapshot);
+      // A saved FlashVSR choice cannot start and says why; the panel that describes this Mac
+      // stays away.
+      const warning = document.querySelector('.inline-warning');
+      expect(warning?.textContent?.trim()).toMatch(reason);
+      expect(
+        screen.getByRole('button', { name: 'Start selected video' }).matches(':disabled'),
+      ).toBe(true);
+      expect(screen.queryByLabelText('FlashVSR memory')).toBeNull();
+
+      await user.click(await screen.findByRole('button', { name: 'Change the upscaler' }));
+      const library = screen.getByRole('dialog', { name: 'Model library' });
+      const flashRow = within(library).getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ });
+      expect(within(flashRow).getByText(tag)).toBeTruthy();
+      expect(within(library).getByText(reason)).toBeTruthy();
+      expect(
+        (within(library).getByRole('button', { name: 'Use for this job' }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(true);
+
+      await user.click(within(library).getByRole('button', { name: /^SeedVR2-3B — Labs/ }));
+      const useButton = within(library).getByRole('button', {
+        name: 'Use for this job',
+      }) as HTMLButtonElement;
+      expect(useButton.disabled).toBe(false);
+      await user.click(useButton);
+      await waitFor(() =>
+        expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull(),
+      );
+      expect(
+        screen.getByRole('button', { name: 'Start selected video' }).matches(':disabled'),
+      ).toBe(false);
+      expect(document.querySelector('.inline-warning')).toBeNull();
+    },
+  );
+
+  it('shows old temporal settings with quality quick as Custom', async () => {
+    const oldSettingsSnapshot = flashSnapshot(16);
+    oldSettingsSnapshot.settings.quality = 'quick';
+    oldSettingsSnapshot.settings.selected_video_model_id = 'seedvr2_3b';
+    await mountWith(oldSettingsSnapshot);
+    expect(document.querySelector('.enhance-pane .pane-heading span')?.textContent).toBe('Custom');
+    expect(screen.getByRole('button', { name: /^Quick/ }).getAttribute('aria-pressed')).toBe(
+      'false',
+    );
+    expect(
+      within(screen.getByRole('list', { name: 'Stages' })).getByText('SeedVR2-3B'),
+    ).toBeTruthy();
+  });
+
+  it('selects the active video model and marks it Chosen when opening the library', async () => {
+    const flashJob = flashSnapshot(16);
+    flashJob.settings.selected_video_model_id = 'flashvsr_v11';
+    const user = await mountWith(flashJob);
+    await user.click(await screen.findByRole('button', { name: 'Change the upscaler' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    const flashRow = within(library).getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ });
+    expect(flashRow.getAttribute('aria-pressed')).toBe('true');
+    expect(within(flashRow).getByText('Chosen')).toBeTruthy();
+    await user.click(within(library).getByRole('button', { name: 'Close model library' }));
+
+    // Video Same size has no video rows in For this job and no Use for this job in Video (Labs).
+    await user.click(screen.getByRole('button', { name: /^Quick/ }));
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    const restoreLib = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(restoreLib).queryByText('Several frames at once · Labs')).toBeNull();
+    await user.click(within(restoreLib).getByRole('button', { name: /Video \(Labs\)/ }));
+    await user.click(within(restoreLib).getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ }));
+    expect(within(restoreLib).queryByRole('button', { name: 'Use for this job' })).toBeNull();
+  });
+
+  it('omits video rows from For this job and Use for this job in Photo upscale', async () => {
+    const photoSnap = readySnapshot([image('photo', true)]);
+    photoSnap.settings.task = 'upscale';
+    const photoUser = await mountWith(photoSnap);
+    await photoUser.click(await screen.findByRole('button', { name: 'Change the upscaler' }));
+    const photoLib = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(photoLib).queryByText('Several frames at once · Labs')).toBeNull();
+    await photoUser.click(within(photoLib).getByRole('button', { name: /Video \(Labs\)/ }));
+    await photoUser.click(within(photoLib).getByRole('button', { name: /^SeedVR2-3B — Labs/ }));
+    expect(within(photoLib).queryByRole('button', { name: 'Use for this job' })).toBeNull();
+  });
+
+  it('counts runnable video models in N more models under the plan row', async () => {
+    const seedOnlyMac = readySnapshot([video('clip', true)]);
+    seedOnlyMac.settings.task = 'video';
+    seedOnlyMac.capabilities.system_ram_total = 16 * 1024 ** 3;
+    const user = await mountWith(seedOnlyMac);
+    const seedOnlyButton = await screen.findByRole('button', {
+      name: /\d+ more models? in the library/,
+    });
+    const seedOnlyCount = Number(seedOnlyButton.textContent!.match(/(\d+)/)![1]);
+
+    // When FlashVSR becomes runnable on this Mac, the count grows by 1.
+    const switched = structuredClone(seedOnlyMac);
+    switched.engine!.video_engines.push('flashvsr');
+    api.refreshSnapshot.mockResolvedValue(switched);
+    (api.listenForStateChange.mock.calls[0][0] as () => void)();
+    await waitFor(() => {
+      const text = screen.getByRole('button', {
+        name: /\d+ more models? in the library/,
+      }).textContent!;
+      expect(Number(text.match(/(\d+)/)![1])).toBe(seedOnlyCount + 1);
+    });
+    void user;
+  });
+
+  it('marks an unavailable video model in the library and says why', async () => {
+    const snapshot = flashSnapshot(8);
+    snapshot.catalog.video_models.forEach((model) => (model.installed = false));
+    const user = await mountWith(snapshot);
+    expect(document.querySelectorAll('.model-output-note')).toHaveLength(0);
+    await chooseMenuItem('view.models');
+    const library = await screen.findByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /Video \(Labs\)/ }));
+    expect(within(library).getByText('3 models')).toBeTruthy();
+    expect(within(library).queryByText('SeedVR2 engines')).toBeNull();
+    const row = within(library).getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ });
+    expect(within(row).getByText('Needs 16 GB')).toBeTruthy();
+    expect(within(library).getAllByText(/^Needs 16 GB$|^Unavailable$/)).toHaveLength(1);
+    await user.click(row);
+    expect(
+      within(library).getByText('FlashVSR needs 16 GB of memory. This Mac has 8 GB.'),
+    ).toBeTruthy();
+    expect(within(library).getByText('FlashVSR')).toBeTruthy();
+  });
 
   it('shows the precision of the CPU for a model the selected NPU does not run', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
@@ -1943,7 +2186,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.precision = 'fp32';
     snapshot.settings.quality = 'custom';
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     const precision = screen.getByLabelText('Precision') as HTMLSelectElement;
     expect(precision.value).toBe('fp32');
   });
@@ -1990,24 +2233,21 @@ describe('LocalSR desktop interface', () => {
     expect(region.querySelectorAll('.help-tip').length).toBeGreaterThan(0);
   });
 
-  it('disables media-incompatible task cards', async () => {
+  it('shows two tasks for photos and hides the Task section for video', async () => {
     await mountWith(readySnapshot([image('photo', true)]));
-    expect(screen.getByText('Enlarges photos and artwork with new detail.')).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Restore' }) as HTMLButtonElement).disabled).toBe(
-      false,
-    );
+    expect(screen.getByText('Enlarges photos and artwork, fixes them, or both.')).toBeTruthy();
+    const taskGroup = screen.getByRole('group', { name: 'Task' });
+    expect(Array.from(taskGroup.querySelectorAll('button')).map((b) => b.textContent)).toEqual([
+      'Upscale & restore',
+      'Edit',
+    ]);
+    expect(screen.queryByRole('button', { name: /^Restore$/ })).toBeNull();
 
     cleanup();
     await mountWith(readySnapshot([video('clip', true)]));
-    // A selected video turns Upscale into video upscaling, enables Restore, and keeps Edit disabled.
-    expect((screen.getByRole('button', { name: 'Upscale' }) as HTMLButtonElement).disabled).toBe(
-      false,
-    );
-    expect(screen.getByText('Enlarges video, SDR or HDR.')).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Restore' }) as HTMLButtonElement).disabled).toBe(
-      false,
-    );
-    expect((screen.getByRole('button', { name: 'Edit' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('group', { name: 'Task' })).toBeNull();
+    expect(screen.getByRole('group', { name: 'Fix' })).toBeTruthy();
+    expect(screen.getByRole('radiogroup', { name: 'Size' })).toBeTruthy();
   });
 
   it.each([
@@ -2038,8 +2278,8 @@ describe('LocalSR desktop interface', () => {
         expect(api.openDownloadPage).toHaveBeenCalledTimes(1);
       }
       // The hint moved: Advanced does not repeat it.
-      await chooseTask(user, /^Upscale$/);
-      await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
+      await chooseTask(user, /^Upscale & restore$/);
+      await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
       expect(screen.getAllByText(text)).toHaveLength(1);
     },
   );
@@ -2123,8 +2363,8 @@ describe('LocalSR desktop interface', () => {
       },
     ];
     const user = await mountWith(snapshot);
-    await chooseTask(user, /^Upscale$/);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
+    await chooseTask(user, /^Upscale & restore$/);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     await chooseMenuItem('app.settings');
     const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
     await user.click(within(settingsDialog).getByRole('tab', { name: 'Appearance' }));
@@ -2180,7 +2420,7 @@ describe('LocalSR desktop interface', () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.settings.device_id = 'cuda:7';
     const user = await mountWith(snapshot);
-    await chooseTask(user, /^Upscale$/);
+    await chooseTask(user, /^Upscale & restore$/);
     await chooseMenuItem('app.settings');
     const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
     await user.click(within(settingsDialog).getByRole('tab', { name: 'Performance' }));
@@ -2222,7 +2462,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.device_id = 'directml:0';
     snapshot.settings.selected_model_id = 'span_photo_x4';
     const user = await mountWith(snapshot);
-    await chooseTask(user, /^Upscale$/);
+    await chooseTask(user, /^Upscale & restore$/);
     // The status line names the GPU as the menu and the engine do.
     expect(document.querySelector('.status-detail')?.textContent).toMatch(
       /· Intel UHD Graphics 620 \(DirectML\)$/,
@@ -2402,7 +2642,7 @@ describe('LocalSR desktop interface', () => {
 
   it('re-queues only the failed job on Retry on CPU without changing device_id or opening anything else', async () => {
     const open = await mountWith(onTheGpu());
-    await chooseTask(open, /^Upscale$/);
+    await chooseTask(open, /^Upscale & restore$/);
     await failOnTheGpu();
     const failure = screen.getByRole('alert', { name: 'Last error' });
     await open.click(within(failure).getByRole('button', { name: 'Retry on CPU' }));
@@ -2607,7 +2847,7 @@ describe('LocalSR desktop interface', () => {
       }
       snapshot.settings.device_id = device;
       const user = await mountWith(snapshot);
-      await chooseTask(user, /^Upscale$/);
+      await chooseTask(user, /^Upscale & restore$/);
 
       const start = screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement;
       expect(start.disabled).toBe(false);
@@ -2722,10 +2962,10 @@ describe('LocalSR desktop interface', () => {
         '1 video item can be queued with this setup; select the other media type to configure it separately.';
       const start = screen.getByRole('button', { name: 'Start selected video' });
       expect(start.getAttribute('title')).toBe(why);
-      expect(screen.getByRole('button', { name: /^Restore$/ }).hasAttribute('disabled')).toBe(
+      expect(screen.queryByRole('group', { name: 'Task' })).toBeNull();
+      expect((screen.getByRole('radio', { name: 'Same size' }) as HTMLButtonElement).disabled).toBe(
         false,
       );
-      expect(screen.getByRole('button', { name: /^Edit$/ }).hasAttribute('disabled')).toBe(true);
       await user.click(start);
       await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
       expect(api.startJobs).toHaveBeenCalledWith(
@@ -2795,8 +3035,10 @@ describe('LocalSR desktop interface', () => {
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ task: 'upscale' })),
     );
-    expect(screen.getByRole('button', { name: /^Upscale$/ }).classList).toContain('active');
-    expect((screen.getByRole('button', { name: /^Restore$/ }) as HTMLButtonElement).disabled).toBe(
+    expect(screen.getByRole('button', { name: /^Upscale & restore$/ }).classList).toContain(
+      'active',
+    );
+    expect((screen.getByRole('radio', { name: 'Same size' }) as HTMLButtonElement).disabled).toBe(
       false,
     );
     expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ task: 'upscale' }));
@@ -2951,6 +3193,7 @@ describe('LocalSR desktop interface', () => {
   it('keeps controls locked through cancellation and unlocks after the worker stops', async () => {
     const current = readySnapshot([video('clip', true)]);
     current.settings.task = 'video';
+    current.settings.selected_model_id = 'span_photo_x4';
     current.runtime.active_job_id = 'running-video';
     api.bootstrap.mockResolvedValue(structuredClone(current));
     api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
@@ -2962,13 +3205,17 @@ describe('LocalSR desktop interface', () => {
     const cancel = await screen.findByRole('button', { name: 'Cancel' });
     await user.click(cancel);
     expect(screen.getByRole('button', { name: 'Stopping…' }).matches(':disabled')).toBe(true);
-    expect(screen.getByLabelText('Video engine').matches(':disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Change the upscaler' }).matches(':disabled')).toBe(
+      true,
+    );
     current.runtime.active_job_id = '';
     current.runtime.status_title = 'Cancelled';
     const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;
     refresh();
     await waitFor(() =>
-      expect(screen.getByLabelText('Video engine').matches(':disabled')).toBe(false),
+      expect(screen.getByRole('button', { name: 'Change the upscaler' }).matches(':disabled')).toBe(
+        false,
+      ),
     );
     expect(api.cancelJobs).toHaveBeenCalledTimes(1);
   });
@@ -3713,7 +3960,7 @@ describe('LocalSR desktop interface', () => {
         }),
       ),
     );
-    expect(screen.getByText('Quick · Illustration')).toBeTruthy();
+    expect(screen.getByText('Quick · Illustration · 4×')).toBeTruthy();
     // An illustration model is picked outright, with no note about a stand-in.
     expect(screen.queryByText(/fully verified illustration/)).toBeNull();
     expect(screen.queryByRole('button', { name: /\(Labs\) for this job/ })).toBeNull();
@@ -3875,15 +4122,15 @@ describe('LocalSR desktop interface', () => {
     );
   });
 
-  it('lets Restore choose its model per problem and retains the last fix as primary', async () => {
+  it('lets Same size choose its model per problem and retains the last fix as primary', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     const user = await mountWith(snapshot);
-    await chooseTask(user, /^Restore/);
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
     await user.click(screen.getByRole('button', { name: /^Best/ }));
     await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
     await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
-    expect(within(library).getByText('Choosing for Restore · Noise')).toBeTruthy();
+    expect(within(library).getByText('Choosing for Same size · Noise')).toBeTruthy();
     expect(within(library).queryByRole('button', { name: /FBCNN/ })).toBeNull();
     await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
     await user.click(within(library).getByRole('button', { name: 'Use for Noise · Best' }));
@@ -3918,15 +4165,31 @@ describe('LocalSR desktop interface', () => {
     ).toBeTruthy();
   });
 
-  it('Back to the default in Restore also replaces a model picked by hand', async () => {
+  it('Back to the default at Same size also replaces a model picked by hand', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
+    Object.assign(snapshot.settings, {
+      task: 'denoise',
+      output_scale: 1,
+      quality: 'custom',
+      selected_model_id: '__custom__',
+      custom_model_path: '/models/mine.safetensors',
+      custom_models: [{ path: '/models/mine.safetensors', name: 'mine' }],
+    });
     const user = await mountWith(snapshot);
-    await chooseTask(user, /^Restore/);
     await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
     let library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
     await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          selected_model_id: 'scunet_color_real_psnr',
+          fixes: ['noise'],
+          fix_stages: [{ fix: 'noise', model_id: 'scunet_color_real_psnr' }],
+          quality: 'custom',
+        }),
+      ),
+    );
     await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
     library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: 'Use for Noise' }));
@@ -3952,7 +4215,7 @@ describe('LocalSR desktop interface', () => {
         'Can add artifacts to sharp pictures and line art. Skipped if the result is unstable.',
       ),
     ).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'About Restore first' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'About Fix' })).toBeTruthy();
   });
 
   it('names the fix of a recipe saved before fix chips existed', async () => {
@@ -4076,7 +4339,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.device_id = 'openvino:80d1';
     snapshot.settings.selected_model_id = 'span_photo_x4';
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     expect((screen.getByLabelText('Precision') as HTMLSelectElement).value).toBe('fp16');
     await chooseMenuItem('app.settings');
     const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
@@ -4098,7 +4361,7 @@ describe('LocalSR desktop interface', () => {
       ),
     ).toBeTruthy();
     expect(within(status).queryByRole('button', { name: 'Download page' })).toBeNull();
-    await user2.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
+    await user2.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     expect(document.querySelector('.advanced-controls')?.textContent).not.toMatch(
       /NPU compiler|intel-driver-compiler-npu|current Intel NPU driver/,
     );
@@ -4240,7 +4503,7 @@ describe('LocalSR desktop interface', () => {
         }),
       ),
     );
-    expect(screen.getByText('Best · Illustration')).toBeTruthy();
+    expect(screen.getByText('Best · Illustration · 4×')).toBeTruthy();
   });
 });
 
@@ -4301,7 +4564,6 @@ it('asks for FFmpeg before starting an H.264 export instead of failing later', a
   snapshot.settings.video_codec = 'h264';
   snapshot.settings.external_ffmpeg_path = '';
   const user = await mountWith(snapshot);
-  await chooseTask(user, /^Upscale$/);
   await user.click(screen.getByRole('button', { name: 'Start selected video' }));
   expect(
     await screen.findByRole('dialog', { name: 'H.264 and HEVC export needs FFmpeg' }),
@@ -4467,10 +4729,10 @@ describe('Several fixes in one pass', () => {
     );
   });
 
-  it('runs the fixes before the last one first in Restore, whose last fix is its model', async () => {
+  it('runs the fixes before the last one first at Same size, whose last fix is its model', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     const user = await mountWith(snapshot);
-    await chooseTask(user, /^Restore/);
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
     await user.click(screen.getByRole('button', { name: /^Quick/ }));
     await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
     await user.click(screen.getByRole('button', { name: 'JPEG artifacts', pressed: false }));
@@ -4484,11 +4746,11 @@ describe('Several fixes in one pass', () => {
         fix_stages: [jpeg, { fix: 'noise', model_id: 'denoise_realplksr_1x' }],
       }),
     );
-    expect(labels()).toEqual(['Fix JPEG', 'Restore']);
+    expect(labels()).toEqual(['Fix JPEG', 'Fix noise']);
     // A fix before the model is chosen like one before an upscale; the model stays.
     await user.click(screen.getByRole('button', { name: 'Change the JPEG fix model' }));
     const fixLibrary = screen.getByRole('dialog', { name: 'Model library' });
-    expect(within(fixLibrary).getByText('Choosing for Restore · JPEG artifacts')).toBeTruthy();
+    expect(within(fixLibrary).getByText('Choosing for Same size · JPEG artifacts')).toBeTruthy();
     await user.click(
       within(fixLibrary).getByRole('button', { name: 'Use for JPEG artifacts · Quick' }),
     );
@@ -4502,7 +4764,7 @@ describe('Several fixes in one pass', () => {
     await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
     expect(
       within(screen.getByRole('dialog', { name: 'Model library' })).getByText(
-        'Choosing for Restore · Noise',
+        'Choosing for Same size · Noise',
       ),
     ).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Close model library' }));
@@ -4516,7 +4778,7 @@ describe('Several fixes in one pass', () => {
         fix_stages: [{ fix: 'noise', model_id: 'denoise_realplksr_1x' }, jpeg],
       }),
     );
-    expect(labels()).toEqual(['Fix noise', 'Restore']);
+    expect(labels()).toEqual(['Fix noise', 'Fix JPEG']);
 
     // The host answers the save with the settings it holds.
     snapshot.settings = structuredClone(lastSaved());
@@ -4542,22 +4804,31 @@ describe('Several fixes in one pass', () => {
     );
   });
 
-  it('keeps a model picked by hand when it fixes the first problem chosen in Restore', async () => {
-    const user = await mountWith(readySnapshot([image('photo', true)]));
-    await chooseTask(user, /^Restore/);
+  it('turns Use for this job at Same size into its problem chip', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    Object.assign(snapshot.settings, {
+      task: 'denoise',
+      output_scale: 1,
+      quality: 'custom',
+      selected_model_id: '__custom__',
+      custom_model_path: '/models/mine.safetensors',
+      custom_models: [{ path: '/models/mine.safetensors', name: 'mine' }],
+    });
+    const user = await mountWith(snapshot);
     await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
     await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
         quality: 'custom',
+        output_scale: 1,
         selected_model_id: 'scunet_color_real_psnr',
+        fixes: ['noise'],
         fix_stages: [{ fix: 'noise', model_id: 'scunet_color_real_psnr' }],
       }),
     );
-    // A problem it cannot fix brings a model that can, as one fix did before.
+    // A problem it cannot fix brings a model that can.
     await user.click(screen.getByRole('button', { name: 'Noise', pressed: true }));
     await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
     await waitFor(() =>
@@ -4568,9 +4839,9 @@ describe('Several fixes in one pass', () => {
     );
   });
 
-  it('lets your own checkpoint be the Restore model without a fix in front of it', async () => {
+  it('lets your own checkpoint be the Same size model without a fix in front of it', async () => {
     const user = await mountWith(readySnapshot([image('photo', true)]));
-    await chooseTask(user, /^Restore/);
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
     await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
     await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
     api.chooseCustomModel.mockResolvedValueOnce('/models/mine.safetensors' as never);
@@ -4584,6 +4855,7 @@ describe('Several fixes in one pass', () => {
         fixes: [],
       }),
     );
+    expect(labels()).toEqual(['Fix']);
     expect(screen.getByRole('button', { name: 'Blur', pressed: false })).toBeTruthy();
   });
 
@@ -4647,8 +4919,8 @@ describe('Several fixes in one pass', () => {
         fixes: [],
         stages: [{ kind: 'restore' as const, model_id: 'scunet_color_real_psnr' }],
       },
-      fix_stages: [],
-      fixes: [],
+      fix_stages: [{ fix: 'noise', model_id: 'scunet_color_real_psnr' }],
+      fixes: ['noise'],
     },
     {
       name: 'Upscale with a fix and Faces',
@@ -4875,12 +5147,12 @@ describe('Several fixes in one pass', () => {
     const user = await mountWith(snapshot);
     await waitFor(() => expect(lastSaved()).toMatchObject({ enable_face_model: false, fixes: [] }));
     expect(screen.queryByRole('button', { name: 'Faces' })).toBeNull();
-    await chooseTask(user, /^Restore/);
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
     await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({ enable_face_model: false, fixes: ['noise'] }),
     );
-    await chooseTask(user, /^Upscale$/);
+    await user.click(screen.getByRole('radio', { name: '4×' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
         task: 'upscale',
@@ -5685,7 +5957,7 @@ describe('Comparing saved results', () => {
     snapshot.settings.batch_mode = false;
     snapshot.catalog.models.forEach((model) => (model.installed = false));
     const user = await mountWith(snapshot);
-    await chooseTask(user, /^Upscale$/);
+    await chooseTask(user, /^Upscale & restore$/);
     await user.click(
       await screen.findByRole('button', { name: 'Try other upscalers on this image' }),
     );
@@ -5704,7 +5976,7 @@ describe('Comparing saved results', () => {
       })),
     );
     const user = await mountWith(snapshot);
-    await chooseTask(user, /^Upscale$/);
+    await chooseTask(user, /^Upscale & restore$/);
     await user.click(
       await screen.findByRole('button', { name: 'Try other upscalers on this image' }),
     );
@@ -5763,7 +6035,7 @@ describe('Dialogs and refused host calls', () => {
 
   it('gives an error dialog the keyboard: Tab stays in, Escape closes, focus returns', async () => {
     const user = await mountWith(readySnapshot([image('photo', true)]));
-    await chooseTask(user, /^Upscale$/);
+    await chooseTask(user, /^Upscale & restore$/);
     api.startJobs.mockRejectedValueOnce('No GPU.');
     const start = screen.getByRole('button', { name: 'Upscale selected' });
     start.focus();
@@ -6232,15 +6504,18 @@ it('explains why the menu cannot start when the worker is unavailable', async ()
   );
 });
 
-it('mentions video when asking for a task before applying a preset', async () => {
+it('asks for a task before applying a preset', async () => {
   await mountWith(readySnapshot());
   await chooseMenuItem('preset.quick');
-  expect(screen.getByRole('dialog', { name: 'Choose a task' }).textContent).toContain('Video');
+  expect(screen.getByRole('dialog', { name: 'Choose a task' }).textContent).toContain(
+    'Choose a task before applying a preset.',
+  );
 });
 
 it('does not ask for a catalog model under Your own file', async () => {
   const user = await mountWith(readySnapshot([image('photo', true)]));
-  await chooseTask(user, /^Restore/);
+  await user.click(screen.getByRole('radio', { name: 'Same size' }));
+  await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
   await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
   await user.click(screen.getByRole('button', { name: /Your own file/ }));
   expect(
@@ -6829,10 +7104,10 @@ describe('Concurrent model downloads in the Model Library', () => {
   });
 });
 
-describe('video restore, Restore first, and 1× removal', () => {
+describe('video Same size, Fix, and Output resolution', () => {
   const lastSaved = (): UiSettings => api.saveSettings.mock.calls.at(-1)![0] as UiSettings;
 
-  it('switches a selected video to Restore with Noise on, saves a restore recipe, and starts jobs', async () => {
+  it('switches a selected video to Same size without auto-ticking Noise, saves a recipe, and starts jobs', async () => {
     const snapshot = readySnapshot([video('clip', true)]);
     snapshot.catalog.models.forEach((m) => (m.installed = true));
     Object.assign(snapshot.settings, {
@@ -6850,17 +7125,19 @@ describe('video restore, Restore first, and 1× removal', () => {
     });
     api.refreshSnapshot.mockImplementation(async () => structuredClone(persisted));
 
-    // Toggle Restore for video: turns Noise on when nothing is picked
-    await user.click(screen.getByRole('button', { name: /^Restore$/ }));
+    // Switch video to Same size: nothing ticks itself.
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
         task: 'video',
         video_task: 'denoise',
-        fixes: ['noise'],
+        fixes: [],
+        selected_model_id: '',
       }),
     );
 
-    // Turn on JPEG artifacts (prefix fix) before Noise (primary restore) for video Restore
+    // Tick Noise, then JPEG artifacts (prefix fix) before Noise (primary restore).
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
     await user.click(screen.getByRole('button', { name: 'JPEG artifacts' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
@@ -6870,7 +7147,7 @@ describe('video restore, Restore first, and 1× removal', () => {
       }),
     );
 
-    // Save recipe as a video restore recipe
+    // Save recipe as a video same-size recipe.
     await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
     await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Video Restore Fix');
     await user.click(screen.getByRole('button', { name: 'Save' }));
@@ -6893,8 +7170,8 @@ describe('video restore, Restore first, and 1× removal', () => {
       fix: 'noise',
     });
 
-    // Start selected video with restore + prefix fix
-    await user.click(screen.getByRole('button', { name: 'Restore selected video' }));
+    // Start selected video with Same size + prefix fix.
+    await user.click(screen.getByRole('button', { name: 'Start selected video' }));
     await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
     expect(api.startJobs.mock.calls.at(-1)![0]).toMatchObject({
       task: 'video',
@@ -6906,7 +7183,7 @@ describe('video restore, Restore first, and 1× removal', () => {
     });
   });
 
-  it('removes 1× from video Upscale and runs video Restore options-only without a chip', async () => {
+  it('removes Output scale from Advanced and runs video Same size options-only without a chip', async () => {
     const snapshot = readySnapshot([video('clip', true)]);
     snapshot.catalog.models.forEach((m) => (m.installed = true));
     Object.assign(snapshot.settings, {
@@ -6921,19 +7198,13 @@ describe('video restore, Restore first, and 1× removal', () => {
     });
     const user = await mountWith(snapshot);
 
-    // Output scale in video Upscale starts at 2×; Quality has no 1× HelpTip.
+    // Output scale is gone from Advanced; summary reads Format, tiles.
     await user.click(screen.getByRole('button', { name: /Advanced/ }));
-    const scaleSelect = screen.getByLabelText('Output scale') as HTMLSelectElement;
-    expect(Array.from(scaleSelect.options).map((o) => o.value)).toEqual(['2', '3', '4']);
-    expect(screen.queryByRole('button', { name: 'About Quality' })).toBeNull();
-
-    // Switch to video Restore: Noise starts on, Output scale hides, Advanced says Format, tiles.
-    await user.click(screen.getByRole('button', { name: /^Restore$/ }));
     expect(screen.queryByLabelText('Output scale')).toBeNull();
     expect(screen.getByText('Format, tiles')).toBeTruthy();
 
-    // Untick Noise: no restore model runs, Start is disabled with "Nothing to run..."
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: true }));
+    // Switch to Same size with nothing ticked: Noise stays off, Start disabled with video note.
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
         task: 'video',
@@ -6942,13 +7213,16 @@ describe('video restore, Restore first, and 1× removal', () => {
         selected_model_id: '',
       }),
     );
+    expect(screen.getByRole('button', { name: 'Noise' }).getAttribute('aria-pressed')).toBe(
+      'false',
+    );
     expect(
       screen.getByText(
         'Nothing to run. Pick what to fix, or turn on De-flicker, Frame rate or Clean up audio.',
       ),
     ).toBeTruthy();
     const startBtn = screen.getByRole('button', {
-      name: 'Restore selected video',
+      name: 'Start selected video',
     }) as HTMLButtonElement;
     expect(startBtn.disabled).toBe(true);
     expect(screen.queryByRole('list', { name: 'Stages' })?.textContent?.trim()).toBe('');
@@ -6967,8 +7241,8 @@ describe('video restore, Restore first, and 1× removal', () => {
     });
   });
 
-  it('migrates saved Upscale 1× and no-chip video Restore states on load and keeps Restore first chip order and HelpTips', async () => {
-    // 1) Saved photo Upscale 1× loads as Restore with the same fixes and last fix as model.
+  it('migrates saved Upscale 1×, no-chip denoise states on load, and keeps Fix/Size tips and order', async () => {
+    // 1) Saved photo Upscale 1× loads as Same size with the same fixes and last fix as model.
     const photo1x = readySnapshot([image('photo', true)]);
     Object.assign(photo1x.settings, {
       task: 'upscale',
@@ -6988,34 +7262,31 @@ describe('video restore, Restore first, and 1× removal', () => {
         enable_face_model: false,
       }),
     );
-    expect(
-      screen.getByText('Removes noise, blur and JPEG artifacts or adds colour, at the same size.'),
-    ).toBeTruthy();
-    const restoreChips = Array.from(
-      screen.getByRole('group', { name: 'What to fix' }).querySelectorAll('button'),
+    expect(screen.getByRole('radio', { name: 'Same size' }).getAttribute('aria-checked')).toBe(
+      'true',
+    );
+    const sameSizeChips = Array.from(
+      screen.getByRole('group', { name: 'Fix' }).querySelectorAll('button'),
     ).map((b) => b.textContent?.trim());
-    expect(restoreChips).toEqual(['Noise', 'Blur', 'JPEG artifacts', 'Colour']);
-    await user1.click(screen.getByRole('button', { name: 'About What to fix' }));
+    expect(sameSizeChips).toEqual(['Noise', 'Blur', 'JPEG artifacts', 'Colour']);
+    await user1.click(screen.getByRole('button', { name: 'About Fix' }));
     expect(screen.getByRole('tooltip').textContent).toBe(
-      'Each problem you pick gets its own fix, in the order listed under Model. The size stays the same. To enlarge the picture as well, use Upscale and pick the same problems under Restore first.',
+      "Each problem you pick gets its own fix at the original size, in the order listed under Model. Quick picks a fast model for each problem, Best the most careful one. ↑ and ↓ change the order; a fix's Change… picks its model, which LocalSR remembers for that problem. Colour adds colour to black-and-white photos.",
     );
 
-    // Upscale uses the same chip order.
-    await user1.click(screen.getByRole('button', { name: /^Upscale$/ }));
+    // Enlarging uses the same Fix chips.
+    await user1.click(screen.getByRole('radio', { name: '4×' }));
     const upscaleChips = Array.from(
-      screen.getByRole('group', { name: 'Restore first' }).querySelectorAll('button'),
+      screen.getByRole('group', { name: 'Fix' }).querySelectorAll('button'),
     ).map((b) => b.textContent?.trim());
     expect(upscaleChips).toEqual(['Noise', 'Blur', 'JPEG artifacts', 'Colour']);
-    await user1.click(screen.getByRole('button', { name: 'About Restore first' }));
-    expect(screen.getByRole('tooltip').textContent).toContain(
-      'Runs the Restore task before upscaling.',
-    );
-    expect(screen.getByRole('tooltip').textContent).toContain(
-      'Colour adds colour to black-and-white photos.',
+    await user1.click(screen.getByRole('button', { name: 'About Size' }));
+    expect(screen.getByRole('tooltip').textContent).toBe(
+      'Same size keeps the pixel size and runs only the fixes you picked. 2× to 4× enlarges the result after the fixes. The model always works at its own 4× scale; a smaller choice resizes that result down afterwards, so it saves no time.',
     );
     cleanup();
 
-    // 2) Saved video Upscale 1× loads as video Restore, and recipes at 1× display "restore"/"video restore" without scale.
+    // 2) Saved video Upscale 1× loads as video Same size, and recipes at 1× display "same size" / "video · same size".
     const video1x = readySnapshot([video('clip', true)]);
     Object.assign(video1x.settings, {
       task: 'video',
@@ -7071,21 +7342,21 @@ describe('video restore, Restore first, and 1× removal', () => {
       }),
     );
     const oldPhotoBtn = screen.getByRole('button', { name: /^Old photo 1x/ });
-    expect(oldPhotoBtn.textContent).toContain('restore · FP32');
+    expect(oldPhotoBtn.textContent).toContain('same size · FP32');
     expect(oldPhotoBtn.textContent).not.toContain('1×');
     const oldVidBtn = screen.getByRole('button', { name: /^Old video 1x/ });
-    expect(oldVidBtn.textContent).toContain('video restore · FP16');
+    expect(oldVidBtn.textContent).toContain('video · same size · FP16');
     expect(oldVidBtn.textContent).not.toContain('1×');
     expect(oldVidBtn.getAttribute('aria-pressed')).toBe('false');
     await user2.click(oldVidBtn);
     await waitFor(() => expect(oldVidBtn.getAttribute('aria-pressed')).toBe('true'));
-    await user2.click(screen.getByRole('button', { name: 'About What to fix' }));
+    await user2.click(screen.getByRole('button', { name: 'About Size' }));
     expect(screen.getByRole('tooltip').textContent).toContain(
       'With nothing picked, only De-flicker, Frame rate and Clean up audio run.',
     );
     cleanup();
 
-    // 3) Saved no-chip video Restore gets the chip its model fits, else Noise.
+    // 3) Saved no-chip video denoise gets the chip its model fits, else Noise.
     const noChipVideo = readySnapshot([video('clip', true)]);
     Object.assign(noChipVideo.settings, {
       task: 'video',
@@ -7308,7 +7579,7 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     ).toBeNull();
   });
 
-  it('offers Colour under Restore first and Restore for photos and video', async () => {
+  it('offers Colour under Fix for photos and video across sizes', async () => {
     const snapshot = readySnapshot([image('photo', true), video('clip')]);
     const user = await mountWith(snapshot);
     const prevSelect = api.selectMedia.getMockImplementation();
@@ -7348,7 +7619,7 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     expect(screen.queryByRole('button', { name: 'Change the colour fix model' })).toBeNull();
     expect(screen.getByText('DDColor')).toBeTruthy();
 
-    // Best uses the same model, and Restore at 1x runs it as the Restore model labelled "Colour".
+    // Best uses the same model, and Same size runs it as the primary row labelled "Colour".
     await user.click(screen.getByRole('button', { name: /^Best/ }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
@@ -7358,7 +7629,7 @@ describe('Model folder and Windows CPU GPU download notice', () => {
       ),
     );
 
-    await chooseTask(user, /^Restore/);
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
     expect(screen.getByRole('button', { name: 'Colour', pressed: true })).toBeTruthy();
     const stages = screen.getByRole('list', { name: 'Stages' });
     expect(within(stages).getByText('Colour')).toBeTruthy();
@@ -7373,7 +7644,7 @@ describe('Model folder and Windows CPU GPU download notice', () => {
       ),
     );
 
-    // Switching to a video keeps Colour available under both tasks, but the photo's
+    // Switching to a video keeps Colour available under Fix, but the photo's
     // Colour choice is not carried over: a colour video would be recoloured.
     await user.click(screen.getByRole('button', { name: /▶\s*clip\.mp4/ }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Colour' })).toBeTruthy());
@@ -7383,11 +7654,11 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     expect(api.saveSettings).toHaveBeenLastCalledWith(
       expect.objectContaining({ task: 'video', fixes: [] }),
     );
-    await user.click(screen.getByRole('button', { name: /^Upscale/ }));
+    await user.click(screen.getByRole('radio', { name: '4×' }));
     expect(screen.getByRole('button', { name: 'Colour' }).getAttribute('title')).toBe(
       'Adds colour to black-and-white videos',
     );
-    await user.click(screen.getByRole('button', { name: 'About Restore first' }));
+    await user.click(screen.getByRole('button', { name: 'About Fix' }));
     expect(screen.getByRole('tooltip').textContent).toContain(
       'Colour adds colour to black-and-white videos and keeps it steady from frame to frame.',
     );
@@ -7925,7 +8196,7 @@ describe('Hardware and low priority in Advanced', () => {
     snapshot.settings.device_id = 'mps';
     snapshot.settings.low_priority = false;
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     await user.selectOptions(screen.getByLabelText('Hardware'), 'cpu');
     await user.click(screen.getByRole('checkbox', { name: 'Run at low priority' }));
     expect(api.setRunLowPriority).toHaveBeenCalledWith(true);
@@ -8368,5 +8639,352 @@ describe('Stopping a running photo', () => {
         'Stopped. 0 of 1 finished, 1 kept unfinished.',
       ),
     );
+  });
+});
+
+describe('Size decides', () => {
+  const lastSaved = (): UiSettings => api.saveSettings.mock.calls.at(-1)![0] as UiSettings;
+  const headerText = () =>
+    document.querySelector('.enhance-pane .pane-heading span')?.textContent?.trim() ?? '';
+
+  it('switches photo between 4×, Same size (with and without fixes) and 2×', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+
+    // Noise ticked, Size -> Same size: Content and Upscale row gone, last row Fix noise, Restore selected.
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'denoise',
+        output_scale: 1,
+        selected_model_id: 'denoise_realplksr_1x',
+      }),
+    );
+    expect(screen.queryByRole('radiogroup', { name: 'Content' })).toBeNull();
+    const stages = screen.getByRole('list', { name: 'Stages' });
+    expect(within(stages).queryByText(/Upscale/)).toBeNull();
+    expect(within(stages).getByText('Fix noise')).toBeTruthy();
+    expect(headerText()).toBe('Quick · Same size');
+    expect(screen.getByText('Fast clean-up')).toBeTruthy();
+    expect(screen.getByText('Most careful, slower')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Restore selected' })).toBeTruthy();
+
+    // Untick Noise at Same size: nothing to run, Start disabled, no card download lines, no header Change….
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: true }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        fix_stages: [],
+        selected_model_id: '',
+      }),
+    );
+    expect(screen.getByRole('button', { name: 'Noise' }).getAttribute('aria-pressed')).toBe(
+      'false',
+    );
+    expect(
+      screen.getByText('Nothing to run. Pick what to fix, or choose a larger size.'),
+    ).toBeTruthy();
+    const startBtn = screen.getByRole('button', { name: 'Restore selected' }) as HTMLButtonElement;
+    expect(startBtn.disabled).toBe(true);
+    expect(document.querySelectorAll('.recipe-grid small')).toHaveLength(0);
+    expect(
+      within(screen.getByRole('region', { name: 'Model plan' })).queryByRole('button', {
+        name: 'Change…',
+      }),
+    ).toBeNull();
+
+    // Tick Blur: Start enabled, row Fix blur, selected_model_id nafnet_gopro_deblur.
+    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: 'nafnet_gopro_deblur',
+      }),
+    );
+    expect(startBtn.disabled).toBe(false);
+    expect(within(stages).getByText('Fix blur')).toBeTruthy();
+
+    // Size -> 2×: Blur stays ticked, Content back, row Upscale ×2, header Quick · Photo · 2×.
+    await user.click(screen.getByRole('radio', { name: '2×' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'upscale',
+        output_scale: 2,
+        fixes: ['blur'],
+      }),
+    );
+    expect(screen.getByRole('radiogroup', { name: 'Content' })).toBeTruthy();
+    expect(within(stages).getByText('Upscale ×2')).toBeTruthy();
+    expect(headerText()).toBe('Quick · Photo · 2×');
+
+    // Best then Illustration at 2× keep output_scale at 2.
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
+    await waitFor(() => expect(lastSaved()).toMatchObject({ quality: 'best', output_scale: 2 }));
+    await user.click(screen.getByRole('radio', { name: 'Illustration' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({ content: 'illustration', output_scale: 2 }),
+    );
+  });
+
+  it('clamps scale to a 2× upscaler and disables 3× and 4× with a tooltip', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /Real-ESRGAN ×2/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: 'realesrgan_x2plus',
+        output_scale: 2,
+      }),
+    );
+    for (const label of ['3×', '4×']) {
+      const radio = screen.getByRole('radio', { name: label }) as HTMLButtonElement;
+      expect(radio.disabled).toBe(true);
+      expect(radio.getAttribute('title')).toBe('This model enlarges up to 2×.');
+    }
+  });
+
+  it('remembers a hand-picked upscaler across Same size and forgets it when a preset is clicked there', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: 'hat_l_x4_imagenet',
+        quality: 'custom',
+      }),
+    );
+
+    // Same size falls to best (not quick), keeping nafnet_sidd_width64.
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'denoise',
+        quality: 'best',
+        selected_model_id: 'nafnet_sidd_width64',
+      }),
+    );
+
+    // Back to 4× brings the hand-picked upscaler and Model · chosen by you.
+    await user.click(screen.getByRole('radio', { name: '4×' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'upscale',
+        output_scale: 4,
+        quality: 'custom',
+        selected_model_id: 'hat_l_x4_imagenet',
+      }),
+    );
+    expect(screen.getByText('Model · chosen by you')).toBeTruthy();
+
+    // Clicking Quick at Same size forgets the remembered upscaler.
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
+    await user.click(screen.getByRole('button', { name: /^Quick/ }));
+    await user.click(screen.getByRole('radio', { name: '4×' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'upscale',
+        quality: 'quick',
+        selected_model_id: 'span_photo_x4',
+      }),
+    );
+  });
+
+  it('switches fix models between Quick and Best, shows Same size downloads, and honours Use for Noise · Quick', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    for (const id of ['denoise_realplksr_1x', 'nafnet_sidd_width64']) {
+      snapshot.catalog.models.find((m) => m.model_id === id)!.installed = false;
+    }
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
+    expect(
+      within(screen.getByRole('button', { name: /^Quick/ })).getByText('28 MB download'),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByRole('button', { name: /^Best/ })).getByText('443 MB download'),
+    ).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
+    expect(
+      within(screen.getByRole('list', { name: 'Stages' })).getByText('NAFNet SIDD Width64'),
+    ).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: /^Quick/ }));
+    expect(
+      within(screen.getByRole('list', { name: 'Stages' })).getByText('RealPLKSR Denoise'),
+    ).toBeTruthy();
+
+    // Pin SCUNet Color for Noise · Quick, switch Best -> Quick, then Back to the default.
+    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    let library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /SCUNet Color/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for Noise · Quick' }));
+    const stages = screen.getByRole('list', { name: 'Stages' });
+    expect(within(stages).getByText('SCUNet Color')).toBeTruthy();
+    expect(within(stages).getByText(/Your pick/)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
+    expect(within(stages).getByText('NAFNet SIDD Width64')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: /^Quick/ }));
+    expect(within(stages).getByText('SCUNet Color')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: 'Back to the default' }));
+    expect(within(stages).getByText('RealPLKSR Denoise')).toBeTruthy();
+    expect(lastSaved().preset_pins).toEqual({});
+  });
+
+  it('handles video Same size with interpolation only and all video options off', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.catalog.interpolation_models.forEach((m) => (m.installed = true));
+    Object.assign(snapshot.settings, {
+      task: 'video',
+      video_task: 'upscale',
+      output_scale: 4,
+      video_clean_audio: false,
+      deflicker: false,
+      video_interpolation: 'off',
+    });
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
+    const startBtn = screen.getByRole('button', {
+      name: 'Start selected video',
+    }) as HTMLButtonElement;
+    expect(screen.getByRole('button', { name: 'Noise' }).getAttribute('aria-pressed')).toBe(
+      'false',
+    );
+    expect(startBtn.disabled).toBe(true);
+    expect(
+      screen.getByText(
+        'Nothing to run. Pick what to fix, or turn on De-flicker, Frame rate or Clean up audio.',
+      ),
+    ).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    await user.selectOptions(screen.getByLabelText('Frame rate'), 'x2');
+    await waitFor(() => expect(startBtn.disabled).toBe(false));
+    await user.click(startBtn);
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+    expect(api.startJobs.mock.calls.at(-1)![0]).toMatchObject({
+      task: 'video',
+      video_task: 'denoise',
+      model_id: '',
+      fix_stages: [],
+      video_interpolation: 'x2',
+    });
+  });
+
+  it('keeps 2× and Same size across a round trip through Edit', async () => {
+    const snapshot = editSnapshot(36);
+    const user = await mountWith(snapshot);
+
+    await user.click(screen.getByRole('radio', { name: '2×' }));
+    await chooseTask(user, /^Edit$/);
+    await chooseTask(user, /^Upscale & restore$/);
+    await waitFor(() => expect(lastSaved()).toMatchObject({ task: 'upscale', output_scale: 2 }));
+    expect(screen.getByRole('radio', { name: '2×' }).getAttribute('aria-checked')).toBe('true');
+
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
+    await chooseTask(user, /^Edit$/);
+    await chooseTask(user, /^Upscale & restore$/);
+    await waitFor(() => expect(lastSaved()).toMatchObject({ task: 'denoise', output_scale: 1 }));
+    expect(screen.getByRole('radio', { name: 'Same size' }).getAttribute('aria-checked')).toBe(
+      'true',
+    );
+  });
+
+  it('applies a task: denoise recipe and migrates loaded no-chip photo denoise settings', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.recipes = [
+      {
+        id: 'denoise-r',
+        name: 'Clean photo',
+        task: 'denoise',
+        quality: 'quick',
+        model_id: 'denoise_realplksr_1x',
+        output_scale: 1,
+        tile_size: 256,
+        halo: 8,
+        precision: 'fp16',
+        safe_memory: false,
+        fixes: ['noise'],
+        stages: [{ kind: 'restore', model_id: 'denoise_realplksr_1x', fix: 'noise' }],
+      },
+    ];
+    const user = await mountWith(snapshot);
+    const recipeBtn = screen.getByRole('button', { name: /^Clean photo/ });
+    expect(recipeBtn.textContent).toContain('same size · FP16');
+    await user.click(recipeBtn);
+    expect(screen.getByRole('radio', { name: 'Same size' }).getAttribute('aria-checked')).toBe(
+      'true',
+    );
+    cleanup();
+
+    const loaded = readySnapshot([image('photo', true)]);
+    Object.assign(loaded.settings, {
+      task: 'denoise',
+      output_scale: 1,
+      selected_model_id: 'denoise_realplksr_1x',
+      fixes: [],
+      fix_stages: [],
+    });
+    await mountWith(loaded);
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'denoise',
+        fixes: ['noise'],
+        fix_stages: [{ fix: 'noise', model_id: 'denoise_realplksr_1x' }],
+      }),
+    );
+    expect(screen.getByRole('button', { name: 'Noise' }).getAttribute('aria-pressed')).toBe('true');
+    expect(
+      within(screen.getByRole('list', { name: 'Stages' })).getByText('Fix noise'),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Restore selected' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it('shows scale choices in Output resolution when SeedVR2 is chosen and hides Size', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.settings.task = 'video';
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /^SeedVR2-3B — Labs/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+
+    expect(screen.queryByRole('radiogroup', { name: 'Size' })).toBeNull();
+    const res = screen.getByLabelText('Output resolution') as HTMLSelectElement;
+    expect(Array.from(res.options).map((o) => o.value)).toEqual([
+      'x2',
+      'x3',
+      'x4',
+      '256',
+      '512',
+      '720',
+      '1080',
+      '1440',
+      '2160',
+    ]);
+    await user.selectOptions(res, 'x3');
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({ output_scale: 3, video_target_resolution: 0 }),
+    );
+    await user.selectOptions(res, '512');
+    await waitFor(() => expect(lastSaved()).toMatchObject({ video_target_resolution: 512 }));
+    expect(
+      screen.getByText(
+        'Chosen by you. Fix, Same size, De-flicker and Frame rate need a frame-by-frame model: pick Quick or Best to go back.',
+      ),
+    ).toBeTruthy();
   });
 });
