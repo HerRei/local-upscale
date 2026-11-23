@@ -101,10 +101,17 @@ fn packaged_worker_path() -> Result<PathBuf, String> {
     let bundled = worker_candidates(&executable, worker_name, appdir.as_deref(), product_name)
         .into_iter()
         .find(|path| path.is_file());
-    let installed = crate::paths::AppPaths::discover()
-        .ok()
-        .and_then(|paths| crate::updates::active_engine(&paths));
-    crate::updates::choose_host_engine(bundled, installed).ok_or_else(|| {
+    let selected = match crate::paths::AppPaths::discover() {
+        Ok(paths) => crate::updates::verified_worker_engine_choice(
+            &paths,
+            bundled,
+            &mut std::collections::HashSet::new(),
+        )
+        .0
+        .map(|(path, _)| path),
+        Err(_) => bundled,
+    };
+    selected.ok_or_else(|| {
         "the installed desktop host is missing its bundled inference engine".to_owned()
     })
 }

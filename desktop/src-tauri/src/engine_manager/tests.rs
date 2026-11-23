@@ -1,5 +1,5 @@
 use super::*;
-use crate::updates::worker_executable_name;
+use crate::updates::{worker_executable_name, write_engine_meta};
 use base64::Engine;
 use std::io::Read;
 
@@ -38,6 +38,271 @@ fn restoring_backup_invalidates_metadata_for_replaced_engine() {
     recover_interrupted_reimport(root.path(), "example").unwrap();
     assert!(engine_root.join("engine").is_dir());
     assert!(!engine_root.join("meta.json").exists());
+}
+
+fn write_replacement_fixture(next_root: &Path, id: &str, content: &[u8]) -> EngineMeta {
+    let engine = next_root.join("engines").join(id).join("engine");
+    fs::create_dir_all(&engine).unwrap();
+    fs::write(engine.join(worker_executable_name()), content).unwrap();
+    let meta = EngineMeta {
+        id: id.into(),
+        backend: "rocm".into(),
+        os: std::env::consts::OS.into(),
+        arch: std::env::consts::ARCH.into(),
+        protocol_version: PROTOCOL_VERSION,
+        handshake_passed: true,
+        verified_install: true,
+        version: String::from_utf8(content.to_vec()).unwrap(),
+        files: updates::test_engine_files(next_root, id),
+    };
+    write_engine_meta(next_root, &meta).unwrap();
+    meta
+}
+
+#[test]
+fn engine_replacement_keeps_the_complete_old_install_until_start() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let id = "gpu";
+    let old_meta = write_replacement_fixture(&paths.next_root, id, b"old");
+    let source = tempfile::tempdir().unwrap();
+    let new_meta = write_replacement_fixture(source.path(), id, b"new");
+    let staged = updates::stage_engine_with(
+        &paths.next_root,
+        id,
+        |destination| {
+            fs::create_dir(destination)?;
+            fs::write(destination.join(worker_executable_name()), b"new")?;
+            Ok(new_meta.files.clone())
+        },
+        |_| Ok(()),
+    )
+    .unwrap();
+    commit_installed_engine(&state, None, staged, &new_meta).unwrap();
+    assert_eq!(read_engine_meta(&paths.next_root, id), Some(new_meta));
+    let backup = paths.next_root.join("engines/.previous-gpu");
+    assert_eq!(
+        fs::read(backup.join("engine").join(worker_executable_name())).unwrap(),
+        b"old"
+    );
+    assert_eq!(
+        serde_json::from_slice::<EngineMeta>(&fs::read(backup.join("meta.json")).unwrap()).unwrap(),
+        old_meta
+    );
+    let token = updates::pending_engine_token(&paths.next_root, id).unwrap();
+    updates::confirm_engine_start(&paths.next_root, id, "earlier-install").unwrap();
+    assert!(backup.is_dir());
+    updates::confirm_engine_start(&paths.next_root, id, &token).unwrap();
+    assert!(!backup.exists());
+    assert!(updates::pending_engine_token(&paths.next_root, id).is_none());
+}
+
+#[test]
+fn engine_replacement_rollback_leaves_an_already_restored_copy_in_place() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    fs::create_dir_all(&paths.next_root).unwrap();
+    let id = "gpu";
+    let old = write_replacement_fixture(&paths.next_root, id, b"old");
+    let source = tempfile::tempdir().unwrap();
+    let new = write_replacement_fixture(source.path(), id, b"new");
+    let staged = updates::stage_engine_with(
+        &paths.next_root,
+        id,
+        |destination| {
+            fs::create_dir(destination)?;
+            fs::write(destination.join(worker_executable_name()), b"new")?;
+            Ok(new.files.clone())
+        },
+        |_| Ok(()),
+    )
+    .unwrap();
+    let swap = staged.publish(Some(&new), Some("99.0.0")).unwrap();
+    // An app-update smoke start can restore the old engine before the
+    // updater rolls back the app itself.
+    assert!(updates::restore_verified_engine_backup(&paths.next_root, id).unwrap());
+    swap.rollback().unwrap();
+    assert_eq!(read_engine_meta(&paths.next_root, id), Some(old));
+}
+
+#[test]
+fn engine_replacement_recovers_verified_files_and_metadata_at_each_step() {
+    for (step, expected) in [
+        ("partial-stage", b"old"),
+        ("complete-stage", b"old"),
+        ("old-renamed", b"old"),
+        ("new-renamed", b"new"),
+        ("new-incomplete", b"old"),
+        ("new-same-size-corruption", b"old"),
+        ("backup-retired", b"new"),
+        ("backup-deleted", b"new"),
+        ("app-update-rolled-back", b"old"),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(root.path());
+        let id = "gpu";
+        let engines = paths.next_root.join("engines");
+        let target = engines.join(id);
+        let backup = engines.join(".previous-gpu");
+        let retired = engines.join(".retired-123e4567-e89b-42d3-a456-426614174000");
+        let staging = engines.join(".import-123e4567-e89b-42d3-a456-426614174000");
+        let old = write_replacement_fixture(&paths.next_root, id, b"old");
+        let new = write_replacement_fixture(&paths.next_root, "staging", b"new");
+        fs::rename(engines.join("staging"), &staging).unwrap();
+        let new = EngineMeta {
+            id: id.into(),
+            ..new
+        };
+        fs::write(staging.join("meta.json"), serde_json::to_vec(&new).unwrap()).unwrap();
+        if step == "partial-stage" {
+            fs::remove_file(staging.join("engine").join(worker_executable_name())).unwrap();
+        }
+        if !matches!(step, "partial-stage" | "complete-stage") {
+            fs::rename(&target, &backup).unwrap();
+        }
+        if !matches!(step, "partial-stage" | "complete-stage" | "old-renamed") {
+            fs::rename(&staging, &target).unwrap();
+        }
+        let worker = target.join("engine").join(worker_executable_name());
+        match step {
+            "new-incomplete" => fs::remove_file(&worker).unwrap(),
+            "new-same-size-corruption" => fs::write(&worker, b"bad").unwrap(),
+            "backup-retired" => fs::rename(&backup, &retired).unwrap(),
+            "backup-deleted" => fs::remove_dir_all(&backup).unwrap(),
+            "app-update-rolled-back" => fs::write(
+                target.join(".pending-start.json"),
+                br#"{"token":"replacement","app_version":"99.0.0"}"#,
+            )
+            .unwrap(),
+            _ => {}
+        }
+        fs::write(paths.next_root.join("active-engine.txt"), id).unwrap();
+        recover_interrupted_engine_installs(&paths.next_root);
+        let mut failed = std::collections::HashSet::new();
+        let (choice, verification_failed) =
+            updates::verified_worker_engine_choice(&paths, None, &mut failed);
+        assert_eq!(choice, Some((worker.clone(), Some(id.into()))), "{step}");
+        assert!(!verification_failed, "{step}");
+        assert_eq!(fs::read(&worker).unwrap(), expected, "{step}");
+        let expected_meta = if expected == b"old" { old } else { new };
+        assert_eq!(
+            read_engine_meta(&paths.next_root, id),
+            Some(expected_meta),
+            "{step}"
+        );
+        assert_eq!(backup.is_dir(), step == "new-renamed", "{step}");
+        assert!(!retired.exists(), "{step}");
+    }
+}
+
+fn assert_linked_engine_folders_are_refused(link: impl Fn(&Path, &Path)) {
+    for relative in [
+        "engines",
+        "engines/gpu",
+        "engines/gpu/engine",
+        "engines/gpu/engine/unused",
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(root.path());
+        let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+        let (config, ..) = fixture_engine_files("http://127.0.0.1:1");
+        let id = "gpu";
+        let old_meta = write_replacement_fixture(&paths.next_root, id, b"old");
+        fs::create_dir(paths.next_root.join("engines/gpu/engine/unused")).unwrap();
+        let linked = paths.next_root.join(relative);
+        let external = root.path().join("external");
+        fs::rename(&linked, &external).unwrap();
+        fs::write(external.join("sentinel"), b"outside engine").unwrap();
+        link(&external, &linked);
+
+        let os = std::env::consts::OS;
+        let arch = std::env::consts::ARCH;
+        assert!(
+            !list_installed_engines_for(&paths, &config, None, os, arch)
+                .iter()
+                .any(|engine| engine.id == id && !engine.needs_reinstall),
+            "{relative}"
+        );
+        let pointer = paths.next_root.join("active-engine.txt");
+        fs::write(&pointer, id).unwrap();
+        let bundled = root.path().join("bundled-worker");
+        let mut failed = std::collections::HashSet::new();
+        assert_eq!(
+            updates::verified_worker_engine_choice(&paths, Some(bundled.clone()), &mut failed).0,
+            Some((bundled, None)),
+            "{relative}"
+        );
+        assert!(
+            verify_engine_for(&state, None, &config, id, os, arch).is_err(),
+            "{relative}"
+        );
+        assert!(
+            use_engine_for(&state, None, &config, "rocm", os, arch, |_| {
+                panic!("linked engine must not be launched")
+            })
+            .is_err(),
+            "{relative}"
+        );
+        assert!(
+            updates::stage_engine_with(
+                &paths.next_root,
+                id,
+                |_| panic!("linked engine must be refused before unpacking"),
+                |_| panic!("linked engine must not be launched"),
+            )
+            .is_err(),
+            "{relative}"
+        );
+        assert!(
+            remove_engine_in(&state, None, &config, id).is_err(),
+            "{relative}"
+        );
+        assert_eq!(
+            fs::read(external.join("sentinel")).unwrap(),
+            b"outside engine"
+        );
+        if matches!(relative, "engines" | "engines/gpu") {
+            let external_meta = if relative == "engines" {
+                external.join(id)
+            } else {
+                external
+            };
+            assert_eq!(
+                serde_json::from_slice::<EngineMeta>(
+                    &fs::read(external_meta.join("meta.json")).unwrap()
+                )
+                .unwrap(),
+                old_meta
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn linked_engine_folders_are_refused_on_unix() {
+    assert_linked_engine_folders_are_refused(|target, link| {
+        std::os::unix::fs::symlink(target, link).unwrap();
+    });
+}
+
+#[cfg(windows)]
+#[test]
+fn linked_engine_folders_are_refused_on_windows() {
+    assert_linked_engine_folders_are_refused(|target, link| {
+        let output = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    });
 }
 
 #[test]
@@ -1324,6 +1589,12 @@ fn interrupted_reimport_restores_active_engine_at_startup_and_retry() {
     .unwrap();
     drop(state);
     let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let mut failed = std::collections::HashSet::new();
+    assert_eq!(
+        updates::verify_active_engine_at_start_for(&paths, &mut failed, "linux", "x86_64"),
+        None
+    );
+    assert_eq!(read_engine_meta(&paths.next_root, &meta.id), Some(meta));
     assert_eq!(
         fs::read(engine_dir.join(worker_executable_name())).unwrap(),
         b"worker"
@@ -1794,5 +2065,353 @@ fn same_id_reinstall_keeps_backup_until_activation_and_holds_scheduler_lock() {
     assert_eq!(
         read_engine_meta(&paths.next_root, &id).unwrap().version,
         "0.3.6-beta"
+    );
+}
+
+const LEFTOVER: &str = "123e4567-e89b-42d3-a456-426614174000";
+
+fn engine_worker(next_root: &Path, id: &str) -> PathBuf {
+    next_root
+        .join("engines")
+        .join(id)
+        .join("engine")
+        .join(worker_executable_name())
+}
+
+fn stage_fixture(
+    next_root: &Path,
+    id: &str,
+    content: &'static [u8],
+) -> (updates::StagedEngine, EngineMeta) {
+    let source = tempfile::tempdir().unwrap();
+    let meta = write_replacement_fixture(source.path(), id, content);
+    let files = meta.files.clone();
+    let staged = updates::stage_engine_with(
+        next_root,
+        id,
+        |destination| {
+            fs::create_dir(destination)?;
+            fs::write(destination.join(worker_executable_name()), content)?;
+            Ok(files)
+        },
+        |_| Ok(()),
+    )
+    .unwrap();
+    (staged, meta)
+}
+
+fn retired_folders(next_root: &Path) -> Vec<PathBuf> {
+    fs::read_dir(next_root.join("engines"))
+        .unwrap()
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(".retired-"))
+        .map(|entry| entry.path())
+        .collect()
+}
+
+#[test]
+fn same_size_swap_of_an_extensionless_executable_is_rejected_at_start() {
+    let mut cases = vec![
+        ("localsr-media", b"\x7fELF media 1".to_vec()),
+        (
+            "_internal/torch/bin/torch_shm_manager",
+            b"\xcf\xfa\xed\xfe shm 1".to_vec(),
+        ),
+        ("_internal/helper", b"MZ helper 1".to_vec()),
+        ("_internal/universal", b"\xca\xfe\xba\xbe fat 1".to_vec()),
+    ];
+    if cfg!(unix) {
+        cases.push(("_internal/protoc", b"#!/bin/sh\necho 1\n".to_vec()));
+    }
+    for swapped in [None, Some(0), Some(1), Some(2), Some(3), Some(4)] {
+        if swapped.is_some_and(|index| index >= cases.len()) {
+            continue;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(root.path());
+        let id = "gpu";
+        let engine = paths.next_root.join("engines").join(id).join("engine");
+        fs::create_dir_all(&engine).unwrap();
+        fs::write(engine.join(worker_executable_name()), b"worker").unwrap();
+        for (relative, content) in &cases {
+            let path = engine.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, content).unwrap();
+            #[cfg(unix)]
+            if relative.ends_with("protoc") {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+        write_engine_meta(
+            &paths.next_root,
+            &EngineMeta {
+                id: id.into(),
+                backend: "rocm".into(),
+                os: std::env::consts::OS.into(),
+                arch: std::env::consts::ARCH.into(),
+                protocol_version: PROTOCOL_VERSION,
+                handshake_passed: true,
+                verified_install: true,
+                version: "1".into(),
+                files: updates::test_engine_files(&paths.next_root, id),
+            },
+        )
+        .unwrap();
+        fs::write(paths.next_root.join("active-engine.txt"), id).unwrap();
+        if let Some(index) = swapped {
+            let (relative, content) = &cases[index];
+            let mut changed = content.clone();
+            *changed
+                .iter_mut()
+                .rev()
+                .find(|byte| **byte == b'1')
+                .unwrap() = b'2';
+            // Writing keeps the executable bit of the existing file.
+            fs::write(engine.join(relative), changed).unwrap();
+        }
+        let mut failed = std::collections::HashSet::new();
+        let (choice, verification_failed) =
+            updates::verified_worker_engine_choice(&paths, None, &mut failed);
+        if let Some(index) = swapped {
+            assert_eq!(choice, None, "{}", cases[index].0);
+            assert!(verification_failed, "{}", cases[index].0);
+        } else {
+            assert_eq!(
+                choice,
+                Some((engine.join(worker_executable_name()), Some(id.into())))
+            );
+            assert!(!verification_failed);
+        }
+    }
+}
+
+#[test]
+fn verification_waits_for_engine_file_changes_before_marking() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let (config, ..) = fixture_engine_files("http://127.0.0.1:1");
+    let id = "gpu";
+    write_replacement_fixture(&paths.next_root, id, b"good");
+    let pointer = paths.next_root.join("active-engine.txt");
+    fs::write(&pointer, id).unwrap();
+    let worker = engine_worker(&paths.next_root, id);
+    fs::write(&worker, b"bad!").unwrap();
+    // A start check that restores the good copy holds `engine_files`.
+    let engine_files = lock(&state.worker.engine_files).unwrap();
+    let verifying = {
+        let state = state.clone();
+        std::thread::spawn(move || {
+            verify_engine_for(
+                &state,
+                None,
+                &config,
+                id,
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+            )
+        })
+    };
+    std::thread::sleep(Duration::from_millis(300));
+    fs::write(&worker, b"good").unwrap();
+    drop(engine_files);
+    verifying.join().unwrap().unwrap();
+    assert!(
+        read_engine_meta(&paths.next_root, id)
+            .unwrap()
+            .verified_install
+    );
+    assert!(pointer.is_file());
+    assert!(lock(&state.worker.failed_engines).unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn an_undeletable_legacy_backup_does_not_mark_a_verified_engine() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let id = "gpu";
+    write_replacement_fixture(&paths.next_root, id, b"good");
+    let pointer = paths.next_root.join("active-engine.txt");
+    fs::write(&pointer, id).unwrap();
+    let leftover = paths
+        .next_root
+        .join("engines")
+        .join(id)
+        .join(format!(".backup-{LEFTOVER}"));
+    let locked = leftover.join("locked");
+    fs::create_dir_all(&locked).unwrap();
+    fs::write(locked.join("file"), b"left by 0.5.x").unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+    let mut failed = std::collections::HashSet::new();
+    let (choice, verification_failed) =
+        updates::verified_worker_engine_choice(&paths, None, &mut failed);
+    let meta = read_engine_meta(&paths.next_root, id);
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(
+        choice,
+        Some((engine_worker(&paths.next_root, id), Some(id.into())))
+    );
+    assert!(!verification_failed);
+    assert!(meta.unwrap().verified_install);
+    assert!(pointer.is_file());
+    assert!(leftover.is_dir());
+    // The next start retries the cleanup.
+    let (choice, _) = updates::verified_worker_engine_choice(&paths, None, &mut failed);
+    assert!(choice.is_some());
+    assert!(!leftover.exists());
+}
+
+#[test]
+fn startup_removes_abandoned_import_staging_unless_an_install_runs() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let engines = paths.next_root.join("engines");
+    let staging = engines.join(format!(".import-{LEFTOVER}"));
+    fs::create_dir_all(staging.join("engine/_internal")).unwrap();
+    fs::write(staging.join("engine/_internal/part"), b"partial").unwrap();
+    let not_staging = engines.join(".import-notes");
+    fs::create_dir_all(&not_staging).unwrap();
+    #[cfg(unix)]
+    let (linked, external) = {
+        let external = root.path().join("external");
+        fs::create_dir_all(&external).unwrap();
+        fs::write(external.join("sentinel"), b"outside").unwrap();
+        let linked = engines.join(".import-223e4567-e89b-42d3-a456-426614174000");
+        std::os::unix::fs::symlink(&external, &linked).unwrap();
+        (linked, external)
+    };
+    for flag in [&state.engines.busy, &state.updates.busy] {
+        let _busy = updates::acquire(flag).unwrap();
+        recover_engine_files_at_startup(&state);
+        assert!(staging.is_dir());
+    }
+    recover_engine_files_at_startup(&state);
+    assert!(!staging.exists());
+    assert!(not_staging.is_dir());
+    #[cfg(unix)]
+    {
+        assert!(fs::symlink_metadata(&linked)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(fs::read(external.join("sentinel")).unwrap(), b"outside");
+    }
+}
+
+#[test]
+fn a_second_install_keeps_the_confirmed_copy_or_a_verified_backup_as_the_fallback() {
+    for case in ["confirmed-target", "damaged-backup", "verified-backup"] {
+        let root = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(root.path());
+        let id = "gpu";
+        let engines = paths.next_root.join("engines");
+        let target = engines.join(id);
+        let backup = updates::engine_backup_path(&engines, id);
+        write_replacement_fixture(&paths.next_root, id, b"cur");
+        let previous = write_replacement_fixture(&paths.next_root, "prev", b"old");
+        fs::rename(engines.join("prev"), &backup).unwrap();
+        let previous = EngineMeta {
+            id: id.into(),
+            ..previous
+        };
+        fs::write(
+            backup.join("meta.json"),
+            serde_json::to_vec(&previous).unwrap(),
+        )
+        .unwrap();
+        if case != "confirmed-target" {
+            fs::write(
+                target.join(".pending-start.json"),
+                br#"{"token":"first","app_version":null}"#,
+            )
+            .unwrap();
+        }
+        if case == "damaged-backup" {
+            fs::remove_file(backup.join("engine").join(worker_executable_name())).unwrap();
+        }
+        let (staged, new) = stage_fixture(&paths.next_root, id, b"new");
+        staged.publish(Some(&new), None).unwrap();
+        let expected: &[u8] = if case == "verified-backup" {
+            b"old"
+        } else {
+            b"cur"
+        };
+        assert_eq!(
+            fs::read(backup.join("engine").join(worker_executable_name())).unwrap(),
+            expected,
+            "{case}"
+        );
+        assert_eq!(
+            fs::read(engine_worker(&paths.next_root, id)).unwrap(),
+            b"new",
+            "{case}"
+        );
+        assert!(retired_folders(&paths.next_root).is_empty(), "{case}");
+    }
+}
+
+#[test]
+fn reinstalling_the_running_engine_stops_the_worker_before_moving_its_folder() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let id = "gpu";
+    write_replacement_fixture(&paths.next_root, id, b"old");
+    let (staged, new) = stage_fixture(&paths.next_root, id, b"new");
+    let worker = engine_worker(&paths.next_root, id);
+    *lock(&state.worker.verified_run).unwrap() = Some(worker::VerifiedRun::for_test(
+        worker.clone(),
+        Some(id.into()),
+        None,
+    ));
+    state.worker.pid.store(4242, Ordering::SeqCst);
+    let observer = {
+        let state = state.clone();
+        let worker = worker.clone();
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !state.worker.shutting_down.load(Ordering::SeqCst) {
+                if std::time::Instant::now() > deadline {
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            // The worker still runs from the old folder when it is asked to stop.
+            let seen = fs::read(&worker).ok();
+            state.worker.pid.store(0, Ordering::SeqCst);
+            seen
+        })
+    };
+    commit_installed_engine(&state, None, staged, &new).unwrap();
+    assert_eq!(observer.join().unwrap(), Some(b"old".to_vec()));
+    assert_eq!(fs::read(&worker).unwrap(), b"new");
+}
+
+#[test]
+fn confirming_a_start_leaves_backup_deletion_to_another_thread_and_the_next_start() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let id = "gpu";
+    write_replacement_fixture(&paths.next_root, id, b"old");
+    let (staged, new) = stage_fixture(&paths.next_root, id, b"new");
+    staged.publish(Some(&new), None).unwrap();
+    let token = updates::pending_engine_token(&paths.next_root, id).unwrap();
+    let _ = updates::confirm_engine_start(&paths.next_root, id, &token).unwrap();
+    assert!(!updates::engine_backup_path(&paths.next_root.join("engines"), id).exists());
+    assert!(updates::pending_engine_token(&paths.next_root, id).is_none());
+    let retired = retired_folders(&paths.next_root);
+    assert_eq!(retired.len(), 1);
+    // A crash in the middle of the deletion leaves part of the tree behind.
+    fs::remove_file(retired[0].join("meta.json")).unwrap();
+    recover_engine_files_at_startup(&state);
+    assert!(!retired[0].exists());
+    assert_eq!(
+        fs::read(engine_worker(&paths.next_root, id)).unwrap(),
+        b"new"
     );
 }

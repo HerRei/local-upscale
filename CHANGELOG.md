@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.6.0-beta] - Unreleased
+
+- Engines: code files are checked at every start, reinstalling keeps the working copy until the new one runs, and linked engine folders are refused (#159).
+
 ## [0.5.2-beta] - 2026-11-23
 
 - **Engine manager.** One main download per OS starts LocalSR. After setup, the app

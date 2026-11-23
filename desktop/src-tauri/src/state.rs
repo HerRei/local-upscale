@@ -23,6 +23,10 @@ use crate::{
 };
 
 pub struct WorkerControl {
+    /// Serializes worker launch and publication or rollback of an engine.
+    pub engine_files: Mutex<()>,
+    /// The command the current worker run was verified and started with.
+    pub(crate) verified_run: Mutex<Option<crate::worker::VerifiedRun>>,
     pub cancellation: Mutex<crate::cancellation::Cancellation>,
     pub sender: Mutex<Option<std::sync::mpsc::Sender<String>>>,
     pub generation: AtomicU64,
@@ -49,6 +53,8 @@ pub struct WorkerControl {
 impl Default for WorkerControl {
     fn default() -> Self {
         Self {
+            engine_files: Mutex::new(()),
+            verified_run: Mutex::new(None),
             cancellation: Mutex::new(crate::cancellation::Cancellation::default()),
             sender: Mutex::new(None),
             generation: AtomicU64::new(0),
@@ -120,9 +126,6 @@ impl AppState {
 
     pub(crate) fn from_paths(paths: AppPaths) -> AppResult<Self> {
         let mut notices = Vec::new();
-        if let Ok(id) = std::fs::read_to_string(paths.next_root.join("active-engine.txt")) {
-            crate::engine_manager::recover_interrupted_reimport(&paths.next_root, id.trim())?;
-        }
         // The safety copy is a convenience: a full disk or a damaged queue must not keep
         // the app from starting. No update step depends on it.
         if let Err(error) =

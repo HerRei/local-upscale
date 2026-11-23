@@ -2029,6 +2029,74 @@ fn attach_status_metadata_populates_skipped_version_for_return_values() {
 }
 
 #[test]
+fn every_engine_start_rejects_same_size_changes_to_code_files() {
+    for name in [
+        worker_executable_name(),
+        "_internal/helper.EXE",
+        "_internal/library.DlL",
+        "_internal/extension.pyd",
+        "_internal/libpython.so",
+        "_internal/libpython.So.1.2",
+        "_internal/libcompat.so.bridge.so.1",
+        "_internal/library.dylib",
+        "_internal/base_library.zip",
+        "_internal/PYZ-00.pyz",
+        "_internal/module.py",
+        "_internal/module.pyc",
+        "_internal/edit/sd-cli",
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let paths = crate::paths::AppPaths::under(root.path());
+        let id = "gpu";
+        let engine = paths.next_root.join("engines/gpu/engine");
+        fs::create_dir_all(engine.join("_internal/edit")).unwrap();
+        fs::write(engine.join(worker_executable_name()), b"good").unwrap();
+        fs::write(engine.join(name), b"good").unwrap();
+        fs::write(engine.join("model.safetensors"), b"good").unwrap();
+        fs::write(engine.join("data.zip"), b"good").unwrap();
+        write_test_engine_meta(&paths.next_root, id);
+        fs::write(paths.next_root.join("active-engine.txt"), id).unwrap();
+
+        let mut failed = HashSet::new();
+        fs::write(engine.join("model.safetensors"), b"data").unwrap();
+        fs::write(engine.join("data.zip"), b"data").unwrap();
+        assert_eq!(verify_active_engine_at_start(&paths, &mut failed), None);
+        fs::write(engine.join(name), b"edit").unwrap();
+        assert_eq!(
+            verify_active_engine_at_start(&paths, &mut failed).as_deref(),
+            Some(id),
+            "{name}"
+        );
+        assert!(failed.contains(id));
+        assert!(
+            !read_engine_meta(&paths.next_root, id)
+                .unwrap()
+                .verified_install
+        );
+        assert!(!paths.next_root.join("active-engine.txt").exists());
+    }
+}
+
+#[test]
+fn engine_start_rejects_code_without_an_installed_checksum() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(root.path());
+    let id = "gpu";
+    let engine = paths.next_root.join("engines/gpu/engine");
+    fs::create_dir_all(engine.join("_internal")).unwrap();
+    fs::write(engine.join(worker_executable_name()), b"worker").unwrap();
+    write_test_engine_meta(&paths.next_root, id);
+    fs::write(paths.next_root.join("active-engine.txt"), id).unwrap();
+    fs::write(engine.join("_internal/unlisted.pyd"), b"extra").unwrap();
+
+    let mut failed = HashSet::new();
+    assert_eq!(
+        verify_active_engine_at_start(&paths, &mut failed).as_deref(),
+        Some(id)
+    );
+}
+
+#[test]
 fn failed_installed_compiled_engine_is_not_selected_again() {
     let installed = vec![("compiled".to_owned(), PathBuf::from("/installed/worker"))];
     let failed = HashSet::from(["compiled".to_owned()]);

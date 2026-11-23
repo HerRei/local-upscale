@@ -155,13 +155,22 @@ pub fn run() {
             let switches = native_menu::switches(&*lock(&state.settings)?);
             native_menu::install(app, &lock(&state.recipes)?, switches)?;
             fit_main_window(app.handle());
-            if let Err(error) = worker::start_worker(state.clone(), app.handle().clone()) {
-                if let Ok(mut runtime) = state.runtime.lock() {
-                    runtime.worker = "failed".into();
-                    runtime.status_title = "Engine unavailable".into();
-                    runtime.status_detail = error.to_string();
+            let startup_state = state.clone();
+            let startup_app = app.handle().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                if !crate::distribution::managed_by_store() {
+                    engine_manager::recover_engine_files_at_startup(&startup_state);
                 }
-            }
+                if let Err(error) = worker::start_worker(startup_state.clone(), startup_app.clone())
+                {
+                    if let Ok(mut runtime) = startup_state.runtime.lock() {
+                        runtime.worker = "failed".into();
+                        runtime.status_title = "Engine unavailable".into();
+                        runtime.status_detail = error.to_string();
+                    }
+                    crate::state::emit_state_changed(&startup_app);
+                }
+            });
             if smoke_test {
                 start_smoke_monitor(app.handle().clone(), state);
             }
