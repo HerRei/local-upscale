@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Run one synthetic clip through FlashVSREngine on ROCm and report timing and peak VRAM."""
+"""Run one synthetic clip through FlashVSREngine on CUDA/ROCm and report timing and peak VRAM."""
 
 from __future__ import annotations
 
 import argparse
+import os
 import time
 from pathlib import Path
 
@@ -28,6 +29,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-dir", type=Path, required=True)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument(
+        "--attention",
+        choices=("gather", "flex", "reference"),
+        default="gather",
+    )
     parser.add_argument("--width", type=int, default=224, help="Input frame width (4x=896)")
     parser.add_argument("--height", type=int, default=128, help="Input frame height (4x=512)")
     parser.add_argument("--frames", type=int, default=29)
@@ -35,6 +41,7 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
+    os.environ["FLASHVSR_ATTENTION"] = args.attention
     frames = _synthetic_frames(args.frames, args.width, args.height)
     t_load = time.perf_counter()
     engine = FlashVSREngine(str(args.model_dir), device=args.device, precision="bf16")
@@ -56,9 +63,11 @@ def main() -> int:
     finally:
         engine.close()
 
+    per_frame = run_seconds / len(out)
     print(
-        f"Loaded in {load_seconds:.2f}s | {len(out)} frames @ {out[0].shape[1]}x{out[0].shape[0]} "
-        f"in {run_seconds:.2f}s ({len(out) / run_seconds:.2f} FPS) | "
+        f"attention={args.attention} | Loaded in {load_seconds:.2f}s | "
+        f"{len(out)} frames @ {out[0].shape[1]}x{out[0].shape[0]} "
+        f"in {run_seconds:.2f}s ({per_frame:.3f} s/frame, {len(out) / run_seconds:.2f} FPS) | "
         f"peak_alloc={peak_alloc / 1e9:.3f} GB peak_reserved={peak_reserved / 1e9:.3f} GB"
     )
     return 0
