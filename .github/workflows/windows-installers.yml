@@ -233,19 +233,22 @@ jobs:
             -Credential $credential -LoadUserProfile -Wait -PassThru -WorkingDirectory C:\
           $profileRoot = (Get-CimInstance Win32_UserProfile | Where-Object { $_.LocalPath -like "*\$user" }).LocalPath
           if (-not $profileRoot) { throw "The standard user's profile was not created" }
-          $started = Get-Date
-          $install = Start-Process -FilePath $artifact -ArgumentList "/S" -Credential $credential `
+          # Start-Process -Credential hands the child this runner's environment, so Windows
+          # cannot resolve the user's AppData there. The installer must then fail, not
+          # report a success with nothing installed.
+          $broken = Start-Process -FilePath $artifact -ArgumentList "/S" -Credential $credential `
             -LoadUserProfile -Wait -PassThru -WorkingDirectory C:\
-          "Per-user install exit code: $($install.ExitCode) after $([int]((Get-Date) - $started).TotalSeconds) s"
-          # Diagnostics: where did the files go, and what does the user's registry say?
-          New-Item -ItemType Directory -Force -Path C:\lsrdiag | Out-Null
-          icacls C:\lsrdiag /grant "${user}:(OI)(CI)F" | Out-Null
-          Start-Process -FilePath "cmd.exe" -Credential $credential -LoadUserProfile -Wait -WorkingDirectory C:\ -ArgumentList "/c", `
-            "(echo LOCALAPPDATA=%LOCALAPPDATA% & echo USERPROFILE=%USERPROFILE% & reg query HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall /s /f LocalSR & dir /s /b %LOCALAPPDATA%\*localsr* & dir /s /b %LOCALAPPDATA%\Programs) > C:\lsrdiag\user.txt 2>&1"
-          Get-Content C:\lsrdiag\user.txt | ForEach-Object { "user> $_" }
-          Get-ChildItem -Path C:\Users, "$env:ProgramFiles", "$env:LOCALAPPDATA" -Recurse -Depth 6 -Filter "*.exe" -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.LastWriteTime -ge $started -or $_.CreationTime -ge $started } |
-            Select-Object -First 20 | ForEach-Object { "new since install: $($_.FullName)" }
+          "Install with an unresolved AppData folder exit code: $($broken.ExitCode)"
+          if ($broken.ExitCode -eq 0) { throw "The installer reported success without a user folder" }
+          if (Test-Path "C:\LocalSR") { throw "The installer wrote to C:\LocalSR" }
+
+          # The real case: the user's own environment, as when they start the installer.
+          $userEnv = "set USERPROFILE=$profileRoot&& set LOCALAPPDATA=$profileRoot\AppData\Local&& " +
+            "set APPDATA=$profileRoot\AppData\Roaming&& set TEMP=$profileRoot\AppData\Local\Temp&& " +
+            "set TMP=$profileRoot\AppData\Local\Temp&& "
+          $install = Start-Process -FilePath "cmd.exe" -Credential $credential -LoadUserProfile -Wait -PassThru `
+            -WorkingDirectory C:\ -ArgumentList "/c", "$userEnv`"$artifact`" /S"
+          "Per-user install exit code: $($install.ExitCode)"
           if ($install.ExitCode -ne 0) { throw "The per-user install failed for a standard user" }
           # Where "Just me" installs is the installer's choice; find the host in that user's AppData.
           $host_exe = Get-ChildItem -LiteralPath (Join-Path $profileRoot "AppData") -Recurse -Depth 5 `
@@ -265,8 +268,8 @@ jobs:
           if ($machineKey) { throw "A per-user install wrote a machine-wide uninstall entry" }
 
           $before = Test-Path "$env:ProgramFiles\LocalSR"
-          $all = Start-Process -FilePath $artifact -ArgumentList "/S", "/AllUsers" -Credential $credential `
-            -LoadUserProfile -PassThru -WorkingDirectory C:\
+          $all = Start-Process -FilePath "cmd.exe" -Credential $credential -LoadUserProfile -PassThru `
+            -WorkingDirectory C:\ -ArgumentList "/c", "$userEnv`"$artifact`" /S /AllUsers"
           if (-not $all.WaitForExit(180000)) {
             Stop-Process -Id $all.Id -Force
             throw "An all-users install without administrator rights did not finish within 3 minutes"
@@ -278,8 +281,8 @@ jobs:
 
           $uninstaller = Get-ChildItem -LiteralPath $installDir -Filter "uninstall*.exe" -File | Select-Object -First 1
           if ($uninstaller) {
-            Start-Process -FilePath $uninstaller.FullName -ArgumentList "/S", "_?=$installDir" -Credential $credential `
-              -LoadUserProfile -Wait -WorkingDirectory C:\ | Out-Null
+            Start-Process -FilePath "cmd.exe" -Credential $credential -LoadUserProfile -Wait -WorkingDirectory C:\ `
+              -ArgumentList "/c", "$userEnv`"$($uninstaller.FullName)`" /S _?=$installDir" | Out-Null
           }
           Remove-LocalUser -Name $user
 

@@ -30,3 +30,4 @@ LangString installModeSubtitle ${LANG_ENGLISH} "Choose which users you want to i
 LangString installModeTop ${LANG_ENGLISH} "Choose whether to install ${PRODUCTNAME} just for yourself or for everyone on this computer. $(^ClickNext)"
 LangString installModeCurrentUser ${LANG_ENGLISH} "Just me (no administrator rights needed)"
 LangString installModeAllUsers ${LANG_ENGLISH} "Everyone on this computer (UAC prompt)"
+LangString noLocalAppData ${LANG_ENGLISH} "Windows did not say where your user folder is, so ${PRODUCTNAME} was not installed. Sign in to your own Windows account and run the installer again, or choose a folder with /D=."

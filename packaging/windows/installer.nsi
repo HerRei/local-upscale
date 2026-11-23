@@ -202,6 +202,21 @@ Function ApplyCurrentUserMode
   ${If} $CustomInstallDir != ""
     StrCpy $INSTDIR $CustomInstallDir
   ${Else}
+    ; Without the user's AppData folder the path would become "\${PRODUCTNAME}" on the
+    ; drive root; stop with an error instead of reporting a success.
+    ${If} $LOCALAPPDATA == ""
+      ${If} ${Silent}
+        System::Call 'kernel32::AttachConsole(i -1)i.r0'
+        ${If} $0 <> 0
+          System::Call 'kernel32::GetStdHandle(i -11)i.r0'
+          FileWrite $0 "$(noLocalAppData)$\n"
+        ${EndIf}
+      ${Else}
+        MessageBox MB_ICONSTOP "$(noLocalAppData)"
+      ${EndIf}
+      SetErrorLevel 2
+      Quit
+    ${EndIf}
     StrCpy $INSTDIR "$LOCALAPPDATA\${PRODUCTNAME}"
     ReadRegStr $4 HKCU "${MANUPRODUCTKEY}" ""
     ${If} $4 != ""
