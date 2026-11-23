@@ -4,7 +4,7 @@ import { hostCalls } from './fake-host';
 import { ready, upscale } from './fixtures';
 
 const chip = (page: Page, name: string) =>
-  page.getByRole('group', { name: 'Restore first' }).getByRole('button', { name, exact: true });
+  page.getByRole('group', { name: 'Fix' }).getByRole('button', { name, exact: true });
 const rows = (page: Page) => page.getByRole('list', { name: 'Stages' }).getByRole('listitem');
 
 async function savedFixes(page: Page): Promise<string[]> {

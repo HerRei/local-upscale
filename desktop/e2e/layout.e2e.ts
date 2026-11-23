@@ -507,7 +507,7 @@ test.describe('overflow and alignment', () => {
     await openApp(page, ready);
     await showPane(page, 'enhance');
     await page.getByRole('button', { name: /^Advanced/ }).click();
-    const column = page.locator('#scale');
+    const column = page.locator('#format');
     await column.scrollIntoViewIfNeeded();
     expect(Math.abs((await left(page.locator('#halo-size'))) - (await left(column)))).toBeLessThan(
       0.5,

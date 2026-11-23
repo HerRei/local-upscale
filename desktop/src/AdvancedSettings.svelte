@@ -11,12 +11,12 @@
   } from './lib/outputFormats';
   import { onDestroy } from 'svelte';
   import HelpTip from './HelpTip.svelte';
-  import { isRestoreTask } from './lib/plan';
   import { hardwareChoices, hardwarePatch, selectedHardware } from './lib/neuralEngine';
   import { groupedHardware, optionLabel } from './lib/hardwareRoutes';
   import type {
     CapabilityInfo,
     CatalogModel,
+    CatalogVideoModel,
     EditModel,
     InterpolationOrder,
     InterpolationTarget,
@@ -29,6 +29,8 @@
   export let editModel: EditModel | undefined = undefined;
   export let capabilities: CapabilityInfo;
   export let usingTemporalVideo: boolean;
+  /** The selected video model of a temporal job; its engine decides the Labs note. */
+  export let videoModel: Pick<CatalogVideoModel, 'engine_kind'> | undefined = undefined;
   export let preservingHdr = false;
   export let interpolationSupported = false;
   export let updateSettings: (patch: Partial<UiSettings>) => void;
@@ -165,13 +167,7 @@
         stroke-linejoin="round"
         ><path d={advanced ? 'M3 7.5 6 4.5 9 7.5' : 'M3 4.5 6 7.5 9 4.5'} /></svg
       ></b
-    ><small
-      >{settings.task === 'edit'
-        ? 'Size, steps, seed'
-        : isRestoreTask(settings)
-          ? 'Format, tiles'
-          : 'Scale, format, tiles'}</small
-    ></button
+    ><small>{settings.task === 'edit' ? 'Size, steps, seed' : 'Format, tiles'}</small></button
   >
   {#if advanced}
     <div class="advanced-controls">
@@ -239,29 +235,6 @@
             ? `${editModel.name} is tuned for ${editModel.default_steps} steps.`
             : 'More steps take longer.'} The same seed with the same prompt and image repeats a result.
         </p>
-      {:else if !isRestoreTask(settings) && !(usingTemporalVideo && settings.video_target_resolution)}
-        {@const minScale = 2}
-        {@const maxScale = usingTemporalVideo ? 4 : (selectedModel?.native_scale ?? 4)}
-        <div class="field-row">
-          <span class="label-with-tip"
-            ><label for="scale">Output scale</label><HelpTip
-              label="Output scale"
-              text={usingTemporalVideo
-                ? 'How many times larger the result is than the original when Output resolution is set to match scale.'
-                : settings.task === 'video'
-                  ? `How many times larger the result is than the original. A 2× or 3× choice on a ${selectedModel?.native_scale ?? 4}× model resizes down afterwards. To keep the size, use Restore.`
-                  : `How many times larger the result is than the original. The model always works at its own ${selectedModel?.native_scale ?? 4}× scale; a smaller choice resizes that result down afterwards, so it saves no time. To keep the size, use Restore.`}
-            /></span
-          ><select
-            id="scale"
-            value={settings.output_scale}
-            on:change={(event) =>
-              updateSettings({ output_scale: Number(event.currentTarget.value) })}
-            >{#each Array.from({ length: Math.max(1, maxScale - minScale + 1) }, (_, index) => index + minScale) as scale}<option
-                value={scale}>{scale}×</option
-              >{/each}</select
-          >
-        </div>
       {/if}
       {#if settings.task !== 'video' && settings.task !== 'edit'}
         <div class="field-row">
@@ -459,8 +432,13 @@
           {/if}
         {:else}
           <p class="model-description">
-            SeedVR2 · Labs. Uses its own temporal processing and memory settings; longer clips and
-            hardware limits are still being validated.
+            {#if videoModel?.engine_kind === 'flashvsr'}
+              FlashVSR · Labs. One-step diffusion upscaling that works best up to 4× the source.
+              Memory is managed automatically; jobs on large frames can take hours.
+            {:else}
+              SeedVR2 · Labs. Uses its own temporal processing and memory settings; longer clips and
+              hardware limits are still being validated.
+            {/if}
           </p>
         {/if}
         <p class="model-description">

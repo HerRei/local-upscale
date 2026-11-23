@@ -32,15 +32,7 @@ export function recipeFixStages(
     const fixes = model
       ? fixesOf(model).filter((fix): fix is Exclude<FixKind, 'faces'> => fix !== 'faces')
       : [];
-    const fix =
-      stage.fix ??
-      (index === primary
-        ? chip && fixes.includes(chip)
-          ? chip
-          : undefined
-        : chip && (!model || fixes.includes(chip))
-          ? chip
-          : fixes[0]);
+    const fix = stage.fix ?? (chip && (!model || fixes.includes(chip)) ? chip : fixes[0]);
     if (fix && !result.some((selection) => selection.fix === fix))
       result.push({ fix, model_id: stage.model_id });
   });

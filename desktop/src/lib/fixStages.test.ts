@@ -79,7 +79,7 @@ describe('several fixes in one pass', () => {
     expect(restore.map((stage) => [stage.role, stage.fix, stage.label])).toEqual([
       ['fix', 'blur', 'Fix blur'],
       ['fix', 'jpeg', 'Fix JPEG'],
-      ['primary', 'noise', 'Restore'],
+      ['primary', 'noise', 'Fix noise'],
     ]);
 
     const restoreColour = resolvePlan(
