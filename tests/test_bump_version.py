@@ -256,9 +256,14 @@ def test_download_table_uses_registered_suffixes():
 
 
 def test_readme_download_table_matches_registry():
+    # While a candidate is prepared the README still offers the published release's files.
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    shown = (
+        bump_version.published_version(ROOT) if "<!-- release-candidate -->" in readme else VERSION
+    )
     expected = (
-        bump_version.download_table(VERSION)
+        bump_version.download_table(shown)
         .replace("## Which file", "### Which file", 1)
         .replace("## Offline and advanced downloads", "### Offline and advanced downloads", 1)
     )
-    assert expected in (ROOT / "README.md").read_text(encoding="utf-8")
+    assert expected in readme
