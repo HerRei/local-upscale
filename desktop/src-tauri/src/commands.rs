@@ -522,6 +522,7 @@ fn keep_update_switches(current: &UiSettings, incoming: &mut UiSettings) {
     incoming.completion_sound = current.completion_sound;
     incoming.menu_bar_icon_monochrome = current.menu_bar_icon_monochrome;
     incoming.auto_cache_cleanup = current.auto_cache_cleanup;
+    incoming.stopped_job_result = current.stopped_job_result.clone();
     incoming.skipped_update_version = current.skipped_update_version.clone();
     incoming.model_directory = current.model_directory.clone();
     incoming.gpu_download_notice_dismissed = current.gpu_download_notice_dismissed;
@@ -710,6 +711,13 @@ fn apply_preference(state: &AppState, name: &str, value: &Value) -> AppResult<()
             "menu_bar_icon_monochrome" => settings.menu_bar_icon_monochrome = bool_value()?,
             "colour_blind_palette" => settings.colour_blind_palette = bool_value()?,
             "auto_cache_cleanup" => settings.auto_cache_cleanup = bool_value()?,
+            "stopped_job_result" => {
+                let choice = value
+                    .as_str()
+                    .filter(|s| matches!(*s, "ask" | "keep" | "discard"))
+                    .ok_or_else(|| AppError::Validation("unknown stopped job result".into()))?;
+                settings.stopped_job_result = choice.into();
+            }
             "appearance" => {
                 let appearance = value
                     .as_str()
@@ -1287,7 +1295,17 @@ fn reserve_retry_output(original: &Path, reserved: &mut ReservedOutputs) -> Path
 }
 
 #[tauri::command]
-pub fn cancel_jobs(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
+pub fn cancel_jobs(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    keep_partial: bool,
+) -> AppResult<()> {
+    cancel_jobs_checked(&state, keep_partial)?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
+pub(crate) fn cancel_jobs_checked(state: &AppState, keep_partial: bool) -> AppResult<()> {
     let _scheduler = lock(&state.scheduler)?;
     state
         .worker
@@ -1312,11 +1330,10 @@ pub fn cancel_jobs(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult
                     .into();
         }
         worker::send(
-            &state,
-            &json!({"type": "cancel_request", "data": {"job_id": active}}),
+            state,
+            &json!({"type": "cancel_request", "data": {"job_id": active, "keep_partial": keep_partial}}),
         )?;
     }
-    emit_state_changed(&app);
     Ok(())
 }
 
@@ -1364,28 +1381,39 @@ pub fn cancel_jobs_for_media(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
     media_id: String,
+    keep_partial: bool,
+) -> AppResult<()> {
+    cancel_jobs_for_media_checked(&state, &media_id, keep_partial)?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
+pub(crate) fn cancel_jobs_for_media_checked(
+    state: &AppState,
+    media_id: &str,
+    keep_partial: bool,
 ) -> AppResult<()> {
     let _scheduler = lock(&state.scheduler)?;
     let mut cancellation = lock(&state.worker.cancellation)?;
-    let active = lock(&state.database)?.cancel_jobs_for_media(&media_id)?;
+    let active = lock(&state.database)?.cancel_jobs_for_media(media_id)?;
     if let Some(active) = active {
-        cancellation.request(&active, std::time::Instant::now());
-        {
-            let mut runtime = lock(&state.runtime)?;
-            if runtime.active_job_id == active {
-                runtime.status_title = "Cancelling".into();
-                runtime.status_detail =
-                    "Stopping this image's run at the next model step. Other images stay queued."
-                        .into();
+        if !cancellation.is_cancelling(&active) {
+            cancellation.request(&active, std::time::Instant::now());
+            {
+                let mut runtime = lock(&state.runtime)?;
+                if runtime.active_job_id == active {
+                    runtime.status_title = "Cancelling".into();
+                    runtime.status_detail =
+                        "Stopping this image's run at the next model step. Other images stay queued."
+                            .into();
+                }
             }
+            worker::send(
+                state,
+                &json!({"type": "cancel_request", "data": {"job_id": active, "keep_partial": keep_partial}}),
+            )?;
         }
-        worker::send(
-            &state,
-            &json!({"type": "cancel_request", "data": {"job_id": active}}),
-        )?;
     }
-    drop(cancellation);
-    emit_state_changed(&app);
     Ok(())
 }
 

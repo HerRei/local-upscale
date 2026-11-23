@@ -101,7 +101,7 @@
     toggleFixStage,
   } from './lib/fixStages';
   import { applyWorkerEnvelope, resultPreviewForSelectedMedia } from './lib/workerEvents';
-  import { formatBytes, formatDuration } from './lib/format';
+  import { formatBytes, formatDuration, formatVideoClock } from './lib/format';
   import { plainEngineError, recommendedEngineOffer } from './lib/engines';
   import { demoSnapshot } from './lib/demo';
   import { modal } from './lib/modal';
@@ -201,7 +201,7 @@
             .join(' · ')
         : `${media?.width ?? 0} × ${media?.height ?? 0}`,
       details: result
-        ? resultDetails(result, slot?.width, slot?.height)
+        ? resultDetails(result, slot?.width, slot?.height, media?.duration_seconds)
         : media?.width && media?.height
           ? [`Size: ${media.width} × ${media.height}`]
           : [],
@@ -513,6 +513,32 @@
     /** What the question counts; the Inputs by default. */
     countOf?: () => number;
   } | null = null;
+  let stopPrompt: {
+    scope: 'queue' | 'media';
+    mediaId: string;
+    jobId: string;
+    fileName: string;
+  } | null = null;
+  let stopDontAskAgain = false;
+  $: if (stopPrompt && snapshot.runtime.active_job_id !== stopPrompt.jobId) {
+    stopPrompt = null;
+    stopDontAskAgain = false;
+  }
+  $: stopPromptBody = (() => {
+    if (!stopPrompt) return '';
+    const activeJob = snapshot.jobs.find((job) => job.id === stopPrompt?.jobId);
+    const media = activeJob
+      ? snapshot.media.find((item) => item.id === activeJob.media_id)
+      : undefined;
+    const done = snapshot.runtime.frames_processed ?? 0;
+    const totalFrames = snapshot.runtime.total_frames || media?.frame_count || 0;
+    const totalDuration = media?.duration_seconds ?? 0;
+    if (done > 0 && totalFrames > 0 && totalDuration > 0) {
+      const finished = Math.min(totalDuration, Math.max(0, (done / totalFrames) * totalDuration));
+      return `${formatVideoClock(finished)} of ${formatVideoClock(totalDuration)} is finished.`;
+    }
+    return 'Part of the video is finished.';
+  })();
   // The Clear question counts the list as it is when answered, not as it was when asked.
   $: if (modalConfirm?.titleFor) {
     const left = modalConfirm.countOf ? modalConfirm.countOf() : snapshot.media.length;
@@ -2308,7 +2334,11 @@
    */
   async function setPreference(
     name: api.PreferenceName,
-    value: boolean | UiSettings['appearance'] | UiSettings['interface_scale'],
+    value:
+      | boolean
+      | UiSettings['appearance']
+      | UiSettings['interface_scale']
+      | NonNullable<UiSettings['stopped_job_result']>,
   ): Promise<void> {
     if (!api.isTauri()) {
       snapshot = { ...snapshot, settings: { ...snapshot.settings, [name]: value } };
@@ -3167,10 +3197,10 @@
   }
 
   // Only when it differs from Cancel queue, or names what a trial is doing.
-  $: selectedInflight = selectedImage
+  $: selectedInflight = selectedMedia
     ? snapshot.jobs.filter(
         (job) =>
-          job.media_id === selectedImage?.id &&
+          job.media_id === selectedMedia?.id &&
           ['queued', 'starting', 'running', 'cancelling'].includes(job.status),
       ).length
     : 0;
@@ -3186,11 +3216,55 @@
   let cancellingImage = false;
   let retryingEngine = false;
 
-  async function cancelSelectedImage(): Promise<void> {
-    if (!selectedImage) return;
+  function activeJobSupportsPartial(): boolean {
+    const activeId = snapshot.runtime.active_job_id;
+    if (!activeId) return false;
+    const activeJob = snapshot.jobs.find((job) => job.id === activeId);
+    if (!activeJob || activeJob.media_kind !== 'video') return false;
+    if (snapshot.runtime.can_keep_partial !== undefined) {
+      return snapshot.runtime.can_keep_partial;
+    }
+    if (snapshot.runtime.video_memory) return false;
+    if (
+      activeJob.model_id &&
+      snapshot.catalog.video_models.some((model) => model.model_id === activeJob.model_id)
+    ) {
+      return false;
+    }
+    if (
+      !activeJob.model_id &&
+      settings.selected_video_model_id &&
+      settings.selected_video_model_id !== 'frame_by_frame'
+    ) {
+      return false;
+    }
+    const codec = settings.video_codec ?? 'auto';
+    if (codec === 'h264' || codec === 'hevc' || codec === 'prores') {
+      const system = systemCodecs(snapshot.capabilities);
+      const container = settings.video_container ?? 'mp4';
+      const media = snapshot.media.find((item) => item.id === activeJob.media_id);
+      const preserving =
+        (settings.video_hdr_mode ?? 'tone_map') === 'preserve' && Boolean(media?.hdr_format);
+      if (
+        !system ||
+        preserving ||
+        !system.encode.includes(codec) ||
+        !system.containers.includes(container)
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function activeJobCanKeepPartial(): boolean {
+    return activeJobSupportsPartial() && (snapshot.runtime.frames_processed ?? 0) > 0;
+  }
+
+  async function performCancelSelectedImage(mediaId: string, keepPartial: boolean): Promise<void> {
     cancellingImage = true;
     try {
-      await api.cancelJobsForMedia(selectedImage.id);
+      await api.cancelJobsForMedia(mediaId, keepPartial);
       await refresh();
     } catch (error) {
       showModal('Could not cancel', String(error));
@@ -3199,17 +3273,79 @@
     }
   }
 
-  async function cancelWork(): Promise<void> {
+  async function cancelSelectedImage(): Promise<void> {
+    if (!selectedMedia || stopPrompt) return;
+    const activeId = snapshot.runtime.active_job_id;
+    const stopsActive = Boolean(activeId && activeJobMediaId === selectedMedia.id);
+    const choice = settings.stopped_job_result ?? 'ask';
+    if (stopsActive && activeJobCanKeepPartial() && choice === 'ask') {
+      stopDontAskAgain = false;
+      stopPrompt = {
+        scope: 'media',
+        mediaId: selectedMedia.id,
+        jobId: activeId,
+        fileName: selectedMedia.name,
+      };
+      return;
+    }
+    const keepPartial = stopsActive && activeJobSupportsPartial() && choice === 'keep';
+    await performCancelSelectedImage(selectedMedia.id, keepPartial);
+  }
+
+  async function performCancelWork(keepPartial: boolean): Promise<void> {
     if (cancelling) return;
     requestingCancel = true;
     discardRuntimePulse();
     try {
-      await api.cancelJobs();
+      await api.cancelJobs(keepPartial);
       await refresh();
     } catch (error) {
       showModal('Could not cancel', String(error));
     } finally {
       requestingCancel = false;
+    }
+  }
+
+  async function cancelWork(): Promise<void> {
+    if (cancelling || stopPrompt) return;
+    const activeId = snapshot.runtime.active_job_id;
+    const choice = settings.stopped_job_result ?? 'ask';
+    if (activeId && activeJobCanKeepPartial() && choice === 'ask') {
+      const activeJob = snapshot.jobs.find((job) => job.id === activeId);
+      const media = activeJob
+        ? snapshot.media.find((item) => item.id === activeJob.media_id)
+        : undefined;
+      stopDontAskAgain = false;
+      stopPrompt = {
+        scope: 'queue',
+        mediaId: activeJob?.media_id ?? '',
+        jobId: activeId,
+        fileName: media?.name || activeJob?.media_name || 'this video',
+      };
+      return;
+    }
+    const keepPartial = activeJobSupportsPartial() && choice === 'keep';
+    await performCancelWork(keepPartial);
+  }
+
+  function closeStopModal(): void {
+    stopPrompt = null;
+    stopDontAskAgain = false;
+  }
+
+  async function confirmStopModal(keepPartial: boolean): Promise<void> {
+    const prompt = stopPrompt;
+    const remember = stopDontAskAgain;
+    if (!prompt) return;
+    stopPrompt = null;
+    stopDontAskAgain = false;
+    if (remember) {
+      await setPreference('stopped_job_result', keepPartial ? 'keep' : 'discard');
+    }
+    if (prompt.scope === 'media') {
+      await performCancelSelectedImage(prompt.mediaId, keepPartial);
+    } else {
+      await performCancelWork(keepPartial);
     }
   }
 
@@ -3541,6 +3677,7 @@
     // A dialog takes the input until it is answered; only Cancel, which ends work, still acts.
     if (
       (modalTitle ||
+        stopPrompt ||
         reportOpen ||
         settings.privacy_choice_made === false ||
         libraryOpen ||
@@ -3577,7 +3714,7 @@
           break;
         case 'file.cancel':
           if (preparing) await cancelPreparation();
-          else await api.cancelJobs();
+          else await cancelWork();
           break;
         case 'preset.quick':
           applyPreset('quick');
@@ -5074,8 +5211,11 @@
           <button
             class="button"
             disabled={cancelling || cancellingImage}
-            title="Cancel this image's queued runs and stop its running one. Other images stay queued; finished results stay."
-            on:click={() => void cancelSelectedImage()}>Cancel runs for this image</button
+            title="Cancel this file's queued runs and stop its running one. Other files stay queued; finished results stay."
+            on:click={() => void cancelSelectedImage()}
+            >{selectedMedia?.kind === 'video'
+              ? 'Cancel runs for this file'
+              : 'Cancel runs for this image'}</button
           >
         {/if}
         <button class="button danger" disabled={cancelling} on:click={cancelWork}
@@ -5345,6 +5485,44 @@
     on:preview={(event) => previewSetupTheme(event.detail.appearance, event.detail.colourBlind)}
     on:continue={(event) => void continuePrivacy(event.detail)}
   />
+{/if}
+
+{#if stopPrompt}
+  <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
+  <div
+    class="modal-backdrop"
+    role="presentation"
+    on:click={(event) => {
+      if (event.target === event.currentTarget) closeStopModal();
+    }}
+  >
+    <div
+      class="modal stop-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="stop-modal-title"
+      tabindex="-1"
+      use:modal={closeStopModal}
+    >
+      <h2 id="stop-modal-title">Stop {stopPrompt.fileName}?</h2>
+      <p class="modal-message">{stopPromptBody}</p>
+      <label class="stop-dont-ask">
+        <input type="checkbox" bind:checked={stopDontAskAgain} />
+        <span>Don't ask again</span>
+      </label>
+      <div class="modal-actions">
+        <button type="button" class="button" on:click={() => void confirmStopModal(false)}
+          >Discard</button
+        >
+        <button
+          type="button"
+          class="button primary"
+          data-autofocus
+          on:click={() => void confirmStopModal(true)}>Keep finished part</button
+        >
+      </div>
+    </div>
+  </div>
 {/if}
 
 {#if modalTitle}

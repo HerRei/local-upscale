@@ -1,8 +1,40 @@
 import type { ComparePick, MediaItem, MediaResults, ResultSummary } from './types';
-import { formatDuration } from './format';
+import { formatDuration, formatVideoClock } from './format';
+
+export function partialKeptSeconds(
+  result: Pick<ResultSummary, 'partial' | 'kept_seconds' | 'output_name'>,
+): number | null {
+  if (!result.partial) return null;
+  if (typeof result.kept_seconds === 'number' && Number.isFinite(result.kept_seconds)) {
+    return Math.max(0, result.kept_seconds);
+  }
+  const match = /_partial_(\d+)m(\d{2})s(?:\.[^.]+)?$/i.exec(result.output_name ?? '');
+  if (!match) return null;
+  const minutes = Number(match[1]);
+  const secs = Number(match[2]);
+  return secs < 60 ? minutes * 60 + secs : null;
+}
+
+export function unfinishedLabel(result: ResultSummary, totalDuration = 0): string {
+  if (!result.partial) return '';
+  const kept = partialKeptSeconds(result);
+  const total = result.output_duration_seconds || totalDuration || 0;
+  if (kept !== null && total > 0) {
+    return `Unfinished · ${formatVideoClock(kept)} of ${formatVideoClock(total)}`;
+  }
+  if (kept !== null && kept > 0) {
+    return `Unfinished · ${formatVideoClock(kept)}`;
+  }
+  return 'Unfinished';
+}
 
 /** Only facts saved with the job or read from the output itself. */
-export function resultDetails(result: ResultSummary, width = 0, height = 0): string[] {
+export function resultDetails(
+  result: ResultSummary,
+  width = 0,
+  height = 0,
+  totalDuration = 0,
+): string[] {
   const labels = (result.stages ?? [])
     .map((stage) => stage.model_label)
     .filter((label) => label && label !== 'Unknown model');
@@ -18,6 +50,7 @@ export function resultDetails(result: ResultSummary, width = 0, height = 0): str
   const fixes = (result.ui?.fixes ?? []).map((fix) => fixNames[fix]).filter(Boolean);
   const date = result.completed_at > 0 ? new Date(result.completed_at) : null;
   return [
+    unfinishedLabel(result, totalDuration),
     labels.length ? `Models: ${labels.join(' → ')}` : '',
     fixes.length ? `Fixes: ${fixes.join(' → ')}` : '',
     result.scale ? `Scale: ${result.scale}×` : '',

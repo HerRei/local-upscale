@@ -105,7 +105,11 @@ const api = vi.hoisted(() => ({
   setPreference: vi.fn(
     async (
       _name: string,
-      _value: boolean | UiSettings['appearance'] | UiSettings['interface_scale'],
+      _value:
+        | boolean
+        | UiSettings['appearance']
+        | UiSettings['interface_scale']
+        | UiSettings['stopped_job_result'],
     ): Promise<void> => undefined,
   ),
   listCrashReports: vi.fn(
@@ -123,7 +127,7 @@ const api = vi.hoisted(() => ({
     }): Promise<void> => undefined,
   ),
   startJobs: vi.fn(async (_input: StartBatchInput) => undefined),
-  cancelJobs: vi.fn(async () => undefined),
+  cancelJobs: vi.fn(async (_keepPartial?: boolean) => undefined),
   retryEngine: vi.fn(async (): Promise<void> => undefined),
   retryJobOnCpu: vi.fn(async (_jobId: string): Promise<void> => undefined),
   startBenchmark: vi.fn(async () => undefined),
@@ -155,7 +159,9 @@ const api = vi.hoisted(() => ({
       _base: StartBatchInput,
     ): Promise<TrialEstimate[]> => [],
   ),
-  cancelJobsForMedia: vi.fn(async (_mediaId: string): Promise<void> => undefined),
+  cancelJobsForMedia: vi.fn(
+    async (_mediaId: string, _keepPartial?: boolean): Promise<void> => undefined,
+  ),
   refreshCapabilities: vi.fn(async () => undefined),
   probePath: vi.fn(async () => undefined),
   detectExternalFFmpeg: vi.fn(async (): Promise<string[]> => []),
@@ -5635,7 +5641,7 @@ describe('Comparing saved results', () => {
     ];
     const user = await mountWith(snapshot);
     await user.click(await screen.findByRole('button', { name: 'Cancel runs for this image' }));
-    expect(api.cancelJobsForMedia).toHaveBeenCalledWith('photo');
+    expect(api.cancelJobsForMedia).toHaveBeenCalledWith('photo', false);
     expect(api.cancelJobs).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Cancel queue' })).toBeTruthy();
   });
@@ -7875,5 +7881,180 @@ describe('Settings sheet', () => {
       expect(screen.queryByRole('dialog', { name: 'System Integrations' })).toBeNull(),
     );
     expect(screen.getByRole('dialog', { name: 'Settings' })).toBeTruthy();
+  });
+});
+
+describe('Stopping a running job', () => {
+  function runningVideoSnapshot(overrides: Partial<AppSnapshot['runtime']> = {}) {
+    const clip = {
+      ...video('clip', true),
+      name: 'alpine-lake.mp4',
+      frame_count: 288,
+      fps: 24,
+      duration_seconds: 12,
+    };
+    const snapshot = readySnapshot([clip]);
+    snapshot.settings.task = 'video';
+    snapshot.settings.stopped_job_result = 'ask';
+    snapshot.runtime = {
+      ...snapshot.runtime,
+      active_job_id: 'video-job-1',
+      progress: 40,
+      frames_processed: 115,
+      total_frames: 288,
+      can_keep_partial: true,
+      ...overrides,
+    };
+    snapshot.jobs = [
+      {
+        id: 'video-job-1',
+        media_id: 'clip',
+        media_name: 'alpine-lake.mp4',
+        media_kind: 'video',
+        status: 'running',
+        progress: 40,
+        output_path: '',
+        error: '',
+        created_at: 1,
+      },
+    ];
+    return snapshot;
+  }
+
+  it('asks whether to keep or discard for a keepable video with ask, and Esc keeps the job running', async () => {
+    const user = await mountWith(runningVideoSnapshot());
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Stop alpine-lake.mp4?' });
+    expect(dialog.textContent).toContain('0:05 of 0:12 is finished.');
+    expect(api.cancelJobs).not.toHaveBeenCalled();
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(api.cancelJobs).not.toHaveBeenCalled();
+    expect(api.setPreference).not.toHaveBeenCalled();
+  });
+
+  it('falls back to Part of the video is finished when duration is unknown, and backdrop click keeps running', async () => {
+    const snap = runningVideoSnapshot({ total_frames: 0 });
+    snap.media[0].duration_seconds = 0;
+    snap.media[0].frame_count = 0;
+    const user = await mountWith(snap);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Stop alpine-lake.mp4?' });
+    expect(dialog.textContent).toContain('Part of the video is finished.');
+
+    const backdrop = dialog.parentElement as HTMLElement;
+    await fireEvent.click(backdrop);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(api.cancelJobs).not.toHaveBeenCalled();
+  });
+
+  it('Discard and Keep finished part call cancelJobs with keepPartial false/true and save preference when Dont ask again is ticked', async () => {
+    const user = await mountWith(runningVideoSnapshot());
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Stop alpine-lake.mp4?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Discard' }));
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(false));
+    expect(api.setPreference).not.toHaveBeenCalled();
+
+    cleanup();
+    api.cancelJobs.mockClear();
+    api.setPreference.mockClear();
+
+    const user2 = await mountWith(runningVideoSnapshot());
+    await user2.click(screen.getByRole('button', { name: 'Cancel' }));
+    const dialog2 = await screen.findByRole('dialog', { name: 'Stop alpine-lake.mp4?' });
+    await user2.click(within(dialog2).getByRole('checkbox', { name: "Don't ask again" }));
+    await user2.click(within(dialog2).getByRole('button', { name: 'Keep finished part' }));
+    await waitFor(() =>
+      expect(api.setPreference).toHaveBeenCalledWith('stopped_job_result', 'keep'),
+    );
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(true));
+  });
+
+  it('opens the modal for Cancel runs for this file on an active keepable video in a queue', async () => {
+    const snap = runningVideoSnapshot();
+    const second = { ...video('clip2'), name: 'second.mp4' };
+    snap.media.push(second);
+    snap.jobs.push({
+      id: 'video-job-2',
+      media_id: 'clip2',
+      media_name: 'second.mp4',
+      media_kind: 'video',
+      status: 'queued',
+      progress: 0,
+      output_path: '',
+      error: '',
+      created_at: 2,
+    });
+    const user = await mountWith(snap);
+    await user.click(await screen.findByRole('button', { name: 'Cancel runs for this file' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Stop alpine-lake.mp4?' });
+    await user.click(within(dialog).getByRole('checkbox', { name: "Don't ask again" }));
+    await user.click(within(dialog).getByRole('button', { name: 'Discard' }));
+    await waitFor(() =>
+      expect(api.setPreference).toHaveBeenCalledWith('stopped_job_result', 'discard'),
+    );
+    await waitFor(() => expect(api.cancelJobsForMedia).toHaveBeenCalledWith('clip', false));
+  });
+
+  it('cancels at once without modal for photos, 0 finished frames, FFV1-master, temporal engines, or keep/discard settings', async () => {
+    // Photo job cancels at once.
+    const photoSnap = readySnapshot([image('photo', true)]);
+    photoSnap.settings.stopped_job_result = 'ask';
+    photoSnap.runtime.active_job_id = 'img-1';
+    photoSnap.jobs = [
+      {
+        id: 'img-1',
+        media_id: 'photo',
+        media_name: 'photo.png',
+        media_kind: 'image',
+        status: 'running',
+        progress: 50,
+        output_path: '',
+        error: '',
+        created_at: 1,
+      },
+    ];
+    let user = await mountWith(photoSnap);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(false));
+    cleanup();
+    api.cancelJobs.mockClear();
+
+    // 0 finished frames cancels at once.
+    user = await mountWith(runningVideoSnapshot({ frames_processed: 0 }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(false));
+    cleanup();
+    api.cancelJobs.mockClear();
+
+    // Non-keepable video (FFV1-master or temporal) cancels at once.
+    user = await mountWith(runningVideoSnapshot({ can_keep_partial: false }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(false));
+    cleanup();
+    api.cancelJobs.mockClear();
+
+    // Setting 'keep' cancels at once with keepPartial true.
+    const keepSnap = runningVideoSnapshot();
+    keepSnap.settings.stopped_job_result = 'keep';
+    user = await mountWith(keepSnap);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(true));
+    cleanup();
+    api.cancelJobs.mockClear();
+
+    // Setting 'discard' cancels at once with keepPartial false.
+    const discardSnap = runningVideoSnapshot();
+    discardSnap.settings.stopped_job_result = 'discard';
+    user = await mountWith(discardSnap);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(false));
   });
 });

@@ -461,6 +461,12 @@ pub struct UiSettings {
     // Remove unused compiled model caches (older than 30 days or over 5 GB) on startup.
     #[serde(default = "default_true")]
     pub auto_cache_cleanup: bool,
+    // What happens when stopping a running video job: ask, keep, or discard.
+    #[serde(
+        default = "default_stopped_job_result",
+        deserialize_with = "deserialize_stopped_job_result"
+    )]
+    pub stopped_job_result: String,
 }
 
 fn default_true() -> bool {
@@ -502,6 +508,21 @@ pub(crate) fn default_video_codec() -> String {
 
 fn default_appearance() -> String {
     "dark".into()
+}
+
+fn default_stopped_job_result() -> String {
+    "ask".into()
+}
+
+fn deserialize_stopped_job_result<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    Ok(if matches!(value.as_str(), "ask" | "keep" | "discard") {
+        value
+    } else {
+        default_stopped_job_result()
+    })
 }
 
 fn deserialize_appearance<'de, D: serde::Deserializer<'de>>(
@@ -582,6 +603,7 @@ impl Default for UiSettings {
             notify_on_finish: true,
             menu_bar_icon_monochrome: true,
             auto_cache_cleanup: true,
+            stopped_job_result: default_stopped_job_result(),
         }
     }
 }
@@ -650,6 +672,12 @@ pub struct RuntimeStatus {
     pub cancel_grace_seconds: u64,
     #[serde(default)]
     pub queue_paused: bool,
+    #[serde(default)]
+    pub frames_processed: u64,
+    #[serde(default)]
+    pub total_frames: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub can_keep_partial: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -767,6 +795,11 @@ impl BenchmarkResult {
 impl RuntimeStatus {
     /// Makes `id` the running job or benchmark; the route note belonged to the one before.
     pub fn begin_active_job(&mut self, id: String) {
+        if self.active_job_id != id {
+            self.frames_processed = 0;
+            self.total_frames = 0;
+            self.can_keep_partial = None;
+        }
         self.active_job_id = id;
         self.hardware_note.clear();
     }
@@ -775,6 +808,9 @@ impl RuntimeStatus {
     /// send, a killed or crashed engine), and returns its id. Its route note goes with it.
     pub fn take_active_job(&mut self) -> String {
         self.hardware_note.clear();
+        self.frames_processed = 0;
+        self.total_frames = 0;
+        self.can_keep_partial = None;
         std::mem::take(&mut self.active_job_id)
     }
 }
@@ -814,6 +850,9 @@ impl Default for RuntimeStatus {
             engine_retry: false,
             cancel_grace_seconds: 0,
             queue_paused: false,
+            frames_processed: 0,
+            total_frames: 0,
+            can_keep_partial: None,
         }
     }
 }

@@ -71,6 +71,15 @@ it('formats recorded details in order and leaves absent older fields out', () =>
     } as ResultSummary),
   ).toEqual(['Models: SPAN', 'Requested device: mps']);
   expect(resultDetails({ model_label: 'Unknown model' } as ResultSummary)).toEqual([]);
+  expect(
+    resultDetails({
+      kind: 'video',
+      model_label: 'Frame by frame',
+      partial: true,
+      kept_seconds: 5,
+      output_duration_seconds: 12,
+    } as ResultSummary),
+  ).toEqual(['Unfinished · 0:05 of 0:12', 'Models: Frame by frame']);
 });
 
 import { pickKey, toggleSlot, swapSlots, sliderBlock } from './compareOutputs';

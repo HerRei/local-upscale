@@ -82,6 +82,10 @@ pub struct ResultSummary {
     pub checkpoint_filename: String,
     pub output_duration_seconds: f64,
     pub output_fps: f64,
+    #[serde(default)]
+    pub partial: bool,
+    #[serde(default)]
+    pub kept_seconds: f64,
     /// The recorded output scale; 0 when the request has none (Edit).
     pub scale: u64,
     /// The written instruction of an Edit; empty for other kinds.
@@ -381,11 +385,55 @@ fn request_stages(request: &Value) -> Vec<ResultStage> {
     stages
 }
 
+pub(crate) fn partial_output_seconds(requested: &Path, reported: &Path) -> Option<u64> {
+    if requested.parent() != reported.parent() || requested.extension() != reported.extension() {
+        return None;
+    }
+    let (Some(stem), Some(name)) = (
+        requested.file_stem().and_then(|s| s.to_str()),
+        reported.file_stem().and_then(|s| s.to_str()),
+    ) else {
+        return None;
+    };
+    let duration = name.strip_prefix(&format!("{stem}_partial_"))?;
+    parse_minutes_seconds(duration, 'm', 's')
+}
+
+fn parse_minutes_seconds(text: &str, sep: char, suffix: char) -> Option<u64> {
+    let body = if suffix == '\0' {
+        text
+    } else {
+        text.strip_suffix(suffix)?
+    };
+    let (minutes, seconds) = body.split_once(sep)?;
+    if minutes.is_empty()
+        || !minutes.bytes().all(|c| c.is_ascii_digit())
+        || seconds.len() != 2
+        || !seconds.bytes().all(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    let minutes = minutes.parse::<u64>().ok()?;
+    let seconds = seconds.parse::<u64>().ok()?;
+    if seconds >= 60 {
+        return None;
+    }
+    Some(minutes.saturating_mul(60).saturating_add(seconds))
+}
+
+fn stopped_kept_seconds(notes: &str) -> Option<u64> {
+    let rest = notes.strip_prefix("Stopped, kept ")?;
+    let time = rest.split(['.', ' ']).next()?;
+    parse_minutes_seconds(time, ':', '\0')
+}
+
 pub fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ResultSummary> {
     let request: Value = serde_json::from_str(&row.get::<_, String>(6)?).unwrap_or_default();
     let data = &request["data"];
     let status: String = row.get(2)?;
     let output_path: String = row.get(3)?;
+    let notes: String = row.get(4)?;
+    let kind = request_kind(&request);
     let (model_id, model_label) = request_model(&request);
     let ui_json: String = row.get(7)?;
     let (output_duration_seconds, output_fps) = video_timing(
@@ -393,6 +441,17 @@ pub fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ResultSumma
         row.get::<_, Option<f64>>(8)?.unwrap_or(0.0),
         row.get::<_, Option<f64>>(9)?.unwrap_or(0.0),
     );
+    let partial_seconds = if kind == "video" && status == "completed" && !output_path.is_empty() {
+        data["output_video_path"]
+            .as_str()
+            .filter(|path| !path.is_empty())
+            .and_then(|requested| {
+                partial_output_seconds(Path::new(requested), Path::new(&output_path))
+            })
+            .or_else(|| stopped_kept_seconds(&notes))
+    } else {
+        None
+    };
     Ok(ResultSummary {
         job_id: row.get(0)?,
         completed_at: row.get(1)?,
@@ -400,7 +459,7 @@ pub fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ResultSumma
             && !output_path.is_empty()
             && Path::new(&output_path).is_file(),
         status,
-        kind: request_kind(&request).into(),
+        kind: kind.into(),
         output_name: Path::new(&output_path)
             .file_name()
             .and_then(|name| name.to_str())
@@ -419,13 +478,15 @@ pub fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ResultSumma
             .to_owned(),
         output_duration_seconds,
         output_fps,
+        partial: partial_seconds.is_some(),
+        kept_seconds: partial_seconds.map(|s| s as f64).unwrap_or(0.0),
         scale: data["output_scale"].as_u64().unwrap_or(0),
         prompt: edit_field(&request, "prompt", |value| {
             value.as_str().map(str::to_owned)
         }),
         max_dimension: edit_field(&request, "max_dimension", Value::as_u64),
         stages: request_stages(&request),
-        notes: row.get(4)?,
+        notes,
         elapsed_seconds: row.get(5)?,
         device: data["device"].as_str().unwrap_or_default().to_owned(),
         neural_engine: data["neural_engine"].as_bool().unwrap_or(false),
@@ -594,5 +655,35 @@ mod tests {
         assert_eq!(super::request_model(&fixed_upscale).0, "swinir");
         assert_eq!(super::request_kind(&edit), "edit");
         assert_eq!(super::request_model(&edit).0, "qwen_edit");
+    }
+
+    #[test]
+    fn partial_video_results_are_flagged_with_kept_duration() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        let req = json!({
+            "type": "video_job_request",
+            "data": {"output_video_path": "/out/clip.mp4"}
+        })
+        .to_string();
+        let partial = db
+            .query_row(
+                "SELECT 'job-partial', 1, 'completed', '/out/clip_partial_0m42s.mp4', 'Stopped, kept 0:42', 12.0, ?1, '', 24.0, 90.0",
+                [&req],
+                super::summary_from_row,
+            )
+            .unwrap();
+        assert!(partial.partial);
+        assert_eq!(partial.kept_seconds, 42.0);
+        assert_eq!(partial.output_duration_seconds, 90.0);
+
+        let complete = db
+            .query_row(
+                "SELECT 'job-full', 1, 'completed', '/out/clip.mp4', '', 20.0, ?1, '', 24.0, 90.0",
+                [&req],
+                super::summary_from_row,
+            )
+            .unwrap();
+        assert!(!complete.partial);
+        assert_eq!(complete.kept_seconds, 0.0);
     }
 }

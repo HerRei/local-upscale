@@ -2,6 +2,9 @@
 
 ## [0.6.0-beta] - Unreleased
 
+- **Stopping a video.** Cancel asks whether to keep the finished part or discard it;
+  Settings can make it always keep or always discard. Kept parts are marked Unfinished
+  in Outputs.
 - **Menu bar.** An icon in the menu bar or system tray shows what is running, how
   many files wait and the progress, with Pause and Resume, and a notification for
   each finished file. New installs choose it in the first-launch setup; Advanced

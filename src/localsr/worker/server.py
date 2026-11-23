@@ -246,6 +246,8 @@ class WorkerServer:
         self.active_job_id = None
         self.active_batch_job_ids: set[str] = set()
         self.pending_cancel_job_ids: set[str] = set()
+        self.pending_cancel_keep_partial: dict[str, bool] = {}
+        self.active_cancel_keep_partial = True
         self.model_adapter = ModelAdapter()
         self.model_store = ModelStore()
         self.engine = InferenceEngine(self.model_adapter)
@@ -288,27 +290,43 @@ class WorkerServer:
         ).start()
         return True
 
-    def _request_cancel(self, requested_job_id: str) -> None:
+    def _request_cancel(self, requested_job_id: str, keep_partial: bool = True) -> None:
         """Remember cancellation even if the matching job is still queued."""
         if not requested_job_id:
             return
         with self.state_lock:
             self.pending_cancel_job_ids.add(requested_job_id)
+            self.pending_cancel_keep_partial[requested_job_id] = keep_partial
             if requested_job_id in self.active_batch_job_ids:
                 # The desktop cancels a whole queue: every photo of the batch,
                 # also those that later run on their own, is cancelled.
                 self.pending_cancel_job_ids |= self.active_batch_job_ids
+                self.active_cancel_keep_partial = keep_partial
                 self.cancel_event.set()
             elif requested_job_id == self.active_job_id:
+                self.active_cancel_keep_partial = keep_partial
                 self.cancel_event.set()
+
+    def _keep_partial_for_job(self, job_id: str) -> bool:
+        with self.state_lock:
+            if self.shutdown_event.is_set():
+                return False
+            if job_id == self.active_job_id:
+                return self.active_cancel_keep_partial
+            return self.pending_cancel_keep_partial.get(job_id, True)
 
     def _activate_job(self, job_id: str) -> None:
         with self.state_lock:
             cancelled = job_id in self.pending_cancel_job_ids
             self.active_job_id = job_id
-            if cancelled or self.shutdown_event.is_set():
+            if self.shutdown_event.is_set():
+                self.active_cancel_keep_partial = False
+                self.cancel_event.set()
+            elif cancelled:
+                self.active_cancel_keep_partial = self.pending_cancel_keep_partial.get(job_id, True)
                 self.cancel_event.set()
             else:
+                self.active_cancel_keep_partial = True
                 self.cancel_event.clear()
 
     def _clear_cancel_unless_shutting_down(self) -> None:
@@ -319,17 +337,22 @@ class WorkerServer:
         with self.state_lock:
             self.active_job_id = None
             self.pending_cancel_job_ids.discard(job_id)
+            self.pending_cancel_keep_partial.pop(job_id, None)
+            self.active_cancel_keep_partial = True
             self._clear_cancel_unless_shutting_down()
 
     def _activate_batch(self, job_ids: list[str]) -> None:
         with self.state_lock:
             self.active_batch_job_ids = set(job_ids)
             if self.shutdown_event.is_set():
+                self.active_cancel_keep_partial = False
                 self.cancel_event.set()
             elif self.active_batch_job_ids & self.pending_cancel_job_ids:
                 self.pending_cancel_job_ids |= self.active_batch_job_ids
+                self.active_cancel_keep_partial = False
                 self.cancel_event.set()
             else:
+                self.active_cancel_keep_partial = True
                 self.cancel_event.clear()
 
     def _deactivate_batch(self, job_ids: list[str]) -> None:
@@ -337,6 +360,9 @@ class WorkerServer:
             self.active_job_id = None
             self.active_batch_job_ids = set()
             self.pending_cancel_job_ids.difference_update(job_ids)
+            for job_id in job_ids:
+                self.pending_cancel_keep_partial.pop(job_id, None)
+            self.active_cancel_keep_partial = True
             self._clear_cancel_unless_shutting_down()
 
     def reader_thread_func(self):
@@ -399,11 +425,17 @@ class WorkerServer:
             return
         self.message_queue.put(msg)
         if request_type == "shutdown_request":
+            with self.state_lock:
+                self.active_cancel_keep_partial = False
             self.shutdown_event.set()
             self.cancel_event.set()
         elif request_type == "cancel_request":
             requested_job_id = data.get("job_id") if isinstance(data, dict) else None
-            self._request_cancel(requested_job_id if isinstance(requested_job_id, str) else "")
+            keep_partial = data.get("keep_partial") if isinstance(data, dict) else None
+            self._request_cancel(
+                requested_job_id if isinstance(requested_job_id, str) else "",
+                keep_partial=keep_partial if isinstance(keep_partial, bool) else True,
+            )
 
     def _restart_if_required(self) -> None:
         """After a lost device, exit as soon as the failure is reported. Freeing the sessions
@@ -556,6 +588,7 @@ class WorkerServer:
                     with self.state_lock:
                         if requested_job_id != self.active_job_id:
                             self.pending_cancel_job_ids.discard(requested_job_id)
+                            self.pending_cancel_keep_partial.pop(requested_job_id, None)
 
                 elif req_type == "image_batch_request":
                     self._run_image_batch(data.get("jobs"))
@@ -1976,6 +2009,7 @@ class WorkerServer:
                     )
                 ),
                 synthesizer=synthesizer,
+                keep_partial=lambda: self._keep_partial_for_job(job_id),
             )
         except InterruptedError:
             preview_encoder.close()

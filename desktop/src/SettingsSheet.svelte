@@ -40,7 +40,11 @@
   export let linuxMenuBusy = false;
   export let setPreference: (
     name: api.PreferenceName,
-    value: boolean | UiSettings['appearance'] | UiSettings['interface_scale'],
+    value:
+      | boolean
+      | UiSettings['appearance']
+      | UiSettings['interface_scale']
+      | NonNullable<UiSettings['stopped_job_result']>,
   ) => void;
   export let updateSettings: (patch: Partial<UiSettings>) => void;
   export let chooseModelFolder: () => Promise<void> = async () => undefined;
@@ -342,6 +346,35 @@
               on:change={(event) =>
                 updateSettings({ enable_live_preview: event.currentTarget.checked })}
             />
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-copy">
+              <label class="setting-label" for="settings-stopped-job-result"
+                >When you stop a job</label
+              >
+              <p class="setting-desc" id="settings-stopped-job-result-desc">
+                Applies to videos: the frames already finished can be kept as a playable video.
+                Photos and edits that are stopped are always discarded; finished files in a queue
+                always stay.
+              </p>
+            </div>
+            <div class="setting-control">
+              <select
+                id="settings-stopped-job-result"
+                aria-describedby="settings-stopped-job-result-desc"
+                value={settings.stopped_job_result ?? 'ask'}
+                on:change={(event) =>
+                  setPreference(
+                    'stopped_job_result',
+                    event.currentTarget.value as NonNullable<UiSettings['stopped_job_result']>,
+                  )}
+              >
+                <option value="ask">Ask</option>
+                <option value="keep">Keep the finished part</option>
+                <option value="discard">Discard</option>
+              </select>
+            </div>
           </div>
 
           <div class="setting-row">

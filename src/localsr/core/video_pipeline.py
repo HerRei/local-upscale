@@ -215,6 +215,7 @@ class VideoJobConfig:
     automatic_codec: bool = False
     preprocess_stages: tuple[VideoFixStage, ...] = ()
     primary_time_factor: float = 1.0
+    keep_partial: bool = True
 
 
 @dataclass
@@ -242,6 +243,7 @@ def run_video_job(
     stage_cb: Callable[..., None] | None = None,
     audio_progress_cb: Callable[[int, int, float, float | None], None] | None = None,
     synthesizer=None,
+    keep_partial: bool | Callable[[], bool] | None = None,
 ) -> VideoJobResult:
     """Run a video upscale job end-to-end.
 
@@ -311,6 +313,7 @@ def run_video_job(
             stage_cb=stage_cb,
             audio_progress_cb=audio_progress_cb,
             synthesizer=synthesizer,
+            keep_partial=keep_partial,
         )
 
 
@@ -330,6 +333,7 @@ def _run_video_job(
     stage_cb,
     audio_progress_cb=None,
     synthesizer=None,
+    keep_partial: bool | Callable[[], bool] | None = None,
 ) -> VideoJobResult:
     # Python 3.11's Windows monotonic clock can tick more slowly than a tile.
     # Measure short inference intervals with the highest-resolution clock so
@@ -475,6 +479,7 @@ def _run_video_job(
             source_frame_cb=source_frame_cb,
             stage_cb=stage_cb,
             synthesizer=synthesizer,
+            keep_partial=keep_partial,
         )
 
 
@@ -541,6 +546,7 @@ def _run_video_frames(
     source_frame_cb,
     stage_cb,
     synthesizer=None,
+    keep_partial: bool | Callable[[], bool] | None = None,
 ) -> VideoJobResult:
     # A frame pair that does not fit next to the fix and upscaling models may park them
     # in system memory; the engine brings them back before its next frame.
@@ -1066,7 +1072,7 @@ def _run_video_frames(
         # A whole clip can stream into the system's hardware encoder; trims keep
         # the lossless master, which carries their trimmed audio.
         stream_to_system=config.start_frame is None and config.end_frame is None,
-        keep_partial=True,
+        keep_partial=config.keep_partial if keep_partial is None else keep_partial,
     )
 
     completed_at = time.perf_counter()

@@ -278,3 +278,41 @@ it('disables the opposite media kind in both directions and resets after Unpick 
   expect(imageBox().disabled).toBe(false);
   expect(videoBox().disabled).toBe(false);
 });
+
+it('flags kept partial video results with Unfinished and kept vs total duration', () => {
+  const clip = {
+    ...media,
+    id: 'v',
+    name: 'clip.mp4',
+    kind: 'video',
+    duration_seconds: 12,
+  } as MediaItem;
+  const outputs = [
+    result('v-part', {
+      kind: 'video',
+      model_label: 'Frame by frame',
+      output_name: 'clip_partial_0m05s.mp4',
+      output_duration_seconds: 12,
+      output_fps: 24,
+      size_bytes: 1024,
+      partial: true,
+      kept_seconds: 5,
+      ui: null,
+    }),
+    result('v-part-unknown', {
+      kind: 'video',
+      model_label: 'Frame by frame',
+      output_duration_seconds: 0,
+      partial: true,
+      kept_seconds: 0,
+      ui: null,
+    }),
+  ];
+  render(OutputsList, {
+    ...props([]),
+    groups: outputGroups([clip], [{ media_id: 'v', results: outputs }] as MediaResults[]),
+  });
+  const rows = [...document.querySelectorAll<HTMLElement>('.media-copy')];
+  expect(rows[1].textContent).toContain('Unfinished · 0:05 of 0:12');
+  expect(rows[2].textContent).toContain('Unfinished');
+});
