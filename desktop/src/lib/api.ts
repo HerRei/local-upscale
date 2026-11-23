@@ -145,17 +145,25 @@ export const clearResults = (): Promise<void> => invoke('clear_results');
 export const saveSettings = (settings: UiSettings): Promise<void> =>
   invoke('save_settings', { settings });
 
-/** One update switch, saved by the host on its own: a full settings save never changes it. */
-export const setUpdateSwitch = (
-  name:
-    | 'check_updates_at_launch'
-    | 'anonymous_update_count'
-    | 'crash_reports'
-    | 'low_priority'
-    | 'show_in_menu_bar'
-    | 'notify_on_finish',
-  value: boolean,
-): Promise<void> => invoke('set_update_switch', { name, value });
+export type PreferenceName =
+  | 'check_updates_at_launch'
+  | 'anonymous_update_count'
+  | 'crash_reports'
+  | 'low_priority'
+  | 'show_in_menu_bar'
+  | 'notify_on_finish'
+  | 'completion_sound'
+  | 'menu_bar_icon_monochrome'
+  | 'colour_blind_palette'
+  | 'auto_cache_cleanup'
+  | 'appearance'
+  | 'interface_scale';
+
+/** One app-wide preference, saved by the host on its own: a full settings save never changes it. */
+export const setPreference = (
+  name: PreferenceName,
+  value: boolean | UiSettings['appearance'] | UiSettings['interface_scale'],
+): Promise<void> => invoke('set_preference', { name, value });
 export interface SetupChoices {
   appearance: UiSettings['appearance'];
   colourBlindPalette: boolean;
@@ -189,6 +197,8 @@ export async function chooseEditModelFile(
 export const saveCustomEditModel = (custom: CustomEditModel, runtimePath: string): Promise<void> =>
   invoke('save_custom_edit_model', { custom, runtimePath });
 export const retryEngine = (): Promise<void> => invoke('retry_engine');
+export const retryJobOnCpu = (jobId: string): Promise<void> =>
+  invoke('retry_job_on_cpu', { jobId });
 export const cancelJobs = (): Promise<void> => invoke('cancel_jobs');
 export const startBenchmark = (device: string): Promise<void> =>
   invoke('start_benchmark', { input: { device } });

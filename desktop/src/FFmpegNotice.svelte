@@ -123,15 +123,14 @@
     {#if context === 'export' && systemCodecs}
       <p>
         {systemCodecs} writes H.264 and HEVC into MP4 without any extra software. Choose MP4 as the container,
-        or install FFmpeg (for example <code>{command}</code>) for MKV and select it under Advanced
-        settings → Video.
+        or install FFmpeg (for example <code>{command}</code>) for MKV and select it under Settings
+        → Storage.
       </p>
     {:else if systemCodecs}
       <p>
         Neither LocalSR nor {systemCodecs} can decode this format (for example WMV, DivX or FLV). Photos,
         and H.264 or HEVC videos from phones and cameras, open without extra software. To open this file,
-        install FFmpeg (for example <code>{command}</code>) and select it under Advanced settings →
-        Video.
+        install FFmpeg (for example <code>{command}</code>) and select it under Settings → Storage.
       </p>
     {:else}
       <p>

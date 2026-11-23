@@ -86,9 +86,11 @@ one. The CUDA and ROCm downloads exceed GitHub's 2 GB file limit and come in par
   selected model will use, or says the model is unsupported on the Neural Engine.
   *Apple GPU (Metal)* keeps every model on MPS, and `LOCALSR_DISABLE_COREML=1` does
   the same for the worker and the command line.
-  Advanced settings shows the size of regenerable model caches and can clear them
-  while no job is running. At desktop startup, LocalSR removes entries older than
-  30 days, then removes the oldest until these caches total at most 5 GiB. Dates
+  **Settings → Storage** shows the size of regenerable model caches, can clear them
+  while no job is running, and lets you turn automatic startup cleanup on or off
+  (**Remove unused caches automatically**). At desktop startup when automatic cleanup
+  is on, LocalSR removes entries older than 30 days, then removes the oldest until
+  these caches total at most 5 GiB. Dates
   use the latest file access or modification time available from the filesystem;
   filesystems that do not update access times can treat recently used entries as old.
   The cleanup keeps Core ML verdicts and GPU crash records. The next model run may
@@ -154,7 +156,7 @@ lets you choose a folder, add a
 desktop shortcut and launch LocalSR when done, and keeps downloaded models and
 settings by default on uninstall. SmartScreen warns because the installers are
 unsigned. On Linux, the AppImage offers once after setup to add LocalSR to your
-applications menu (removable from the Help menu).
+applications menu (removable from **Settings → General → Applications menu**).
 
 ## In-app engine switching (Windows and Linux)
 
@@ -171,7 +173,7 @@ to try it again. Microsoft Store builds receive both app and engine updates
 from the Store and do not support in-app engine switching. On direct Windows and
 Linux builds, LocalSR offers the detected GPU engine after the first-launch setup
 screen and keeps engine switching, download, removal and offline file import in
-**Advanced -> Engine -> Change…**.
+**Settings → Performance → Engine → Change…**.
 
 ## Memory guidance
 

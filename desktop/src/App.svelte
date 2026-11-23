@@ -49,6 +49,7 @@
   import LinuxMenuNotice from './LinuxMenuNotice.svelte';
   import EngineRecommendationCard from './EngineRecommendationCard.svelte';
   import EngineManagerDialog from './EngineManagerDialog.svelte';
+  import SettingsSheet from './SettingsSheet.svelte';
   import UpdatePanel from './UpdatePanel.svelte';
   import SetupScreen from './SetupScreen.svelte';
   import WelcomeNotice from './WelcomeNotice.svelte';
@@ -133,6 +134,7 @@
     Quality,
     Recipe,
     ResultSummary,
+    SettingsSection,
     StartBatchInput,
     TaskKind,
     UiSettings,
@@ -538,6 +540,17 @@
     slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit' | 'try';
     fix?: Exclude<FixKind, 'faces'>;
   } = { slot: 'browse' };
+  let settingsOpen = false;
+  let settingsSection: SettingsSection = 'general';
+  let settingsFocusTarget: 'hardware' | 'ffmpeg' | null = null;
+  function openSettings(
+    section: SettingsSection = 'general',
+    focusTarget: 'hardware' | 'ffmpeg' | null = null,
+  ): void {
+    settingsSection = section;
+    settingsFocusTarget = focusTarget;
+    settingsOpen = true;
+  }
   let startingJob = false;
   let requestingCancel = false;
   let movingModels = false;
@@ -1250,15 +1263,22 @@
   // until the next job starts, also while the engine restarts after it (a driver reset) and
   // the status line moves on to "Starting engine" and "Ready".
   let lastFailure = '';
-  $: if (snapshot.runtime.active_job_id) lastFailure = '';
-  else if (snapshot.runtime.status_title === 'Could not finish')
+  let lastFailureJobId = '';
+  $: if (snapshot.runtime.active_job_id) {
+    lastFailure = '';
+    lastFailureJobId = '';
+  } else if (snapshot.runtime.status_title === 'Could not finish') {
     lastFailure = snapshot.runtime.status_detail;
+  }
   let failureNote: HTMLElement | undefined;
-  // A GPU or NPU that failed (a rejected check, a driver reset) is fixed by the CPU; editing
-  // needs a GPU, so it gets no such button.
+  $: failedJobIdForRetry =
+    lastFailureJobId || snapshot.jobs.find((job) => job.status === 'failed')?.id || '';
+  // A GPU or NPU that failed (a rejected check, a driver reset) can be retried once on the CPU;
+  // editing needs a GPU, so it gets no such button.
   $: acceleratorFailure =
     settings.task !== 'edit' &&
     settings.device_id !== 'cpu' &&
+    Boolean(failedJobIdForRetry) &&
     /\b[GN]PU\b|graphics driver/.test(lastFailure);
   // What the engine said about the route (a check, a slow GPU, a partial CPU fallback): progress
   // ticks replace the detail line, so the note keeps its own line until the job ends.
@@ -1522,9 +1542,9 @@
       }
       snapshot = latest;
       if (!latest.settings.crash_reports) {
-        crashReports = [];
         crashNotice = false;
-      } else if (modalKind === 'performance') {
+      }
+      if (modalKind === 'performance') {
         void refreshCrashReports();
       }
       themeForRefresh(
@@ -1674,6 +1694,7 @@
     } else if (!offScreen && (message.type === 'job_cancelled' || message.type === 'job_failed')) {
       livePreviewWarning = '';
       resetProgressivePreview();
+      if (message.type === 'job_failed') lastFailureJobId = messageJob;
     }
     if (message.type === 'media_info') {
       if (
@@ -2240,12 +2261,16 @@
     else await start();
   }
 
-  /** The failure's shortcut. The button goes away with the GPU, so the keyboard moves to the
-   *  Hardware menu that now says CPU, or to the error itself while Advanced is closed. */
-  async function useTheCpu(): Promise<void> {
-    updateSettings(hardwarePatch('cpu'));
-    await tick();
-    (document.getElementById('device') ?? failureNote)?.focus();
+  /** Re-queue only the failed job on CPU, leaving the saved device preference unchanged. */
+  async function retryOnCpu(): Promise<void> {
+    const jobId = failedJobIdForRetry;
+    if (!jobId) return;
+    await attempt('Could not retry on CPU', async () => {
+      await api.retryJobOnCpu(jobId);
+      lastFailure = '';
+      lastFailureJobId = '';
+      if (api.isTauri()) await refresh();
+    });
   }
 
   function supportsHdrPreservation(candidate: UiSettings): boolean {
@@ -2278,30 +2303,32 @@
   }
 
   /**
-   * The update switches are saved by the host on its own and may change during a job.
+   * App-wide preferences are saved by the host on its own and may change during a job.
    * The window shows the host's value afterwards, also when saving failed.
    */
-  function setUpdateSwitch(
-    name:
-      | 'check_updates_at_launch'
-      | 'anonymous_update_count'
-      | 'crash_reports'
-      | 'low_priority'
-      | 'show_in_menu_bar'
-      | 'notify_on_finish',
-    value: boolean,
-  ): void {
+  async function setPreference(
+    name: api.PreferenceName,
+    value: boolean | UiSettings['appearance'] | UiSettings['interface_scale'],
+  ): Promise<void> {
     if (!api.isTauri()) {
       snapshot = { ...snapshot, settings: { ...snapshot.settings, [name]: value } };
+      if (name === 'appearance' || name === 'colour_blind_palette') {
+        themeForRefresh(snapshot.settings);
+      }
       return;
     }
-    void api
-      .setUpdateSwitch(name, value)
-      .catch((error) => showModal('Could not save settings', String(error)))
-      .finally(() => {
-        scheduleRefresh();
-        if (name === 'crash_reports') void refreshCrashReports();
-      });
+    try {
+      await api.setPreference(name, value);
+      snapshot = { ...snapshot, settings: { ...snapshot.settings, [name]: value } };
+      if (name === 'appearance' || name === 'colour_blind_palette') {
+        themeForRefresh(snapshot.settings);
+      }
+    } catch (error) {
+      showModal('Could not save settings', String(error));
+    } finally {
+      scheduleRefresh();
+      if (name === 'crash_reports') void refreshCrashReports();
+    }
   }
 
   function setTask(task: TaskKind, nextVideoTask?: 'upscale' | 'denoise'): void {
@@ -2790,6 +2817,23 @@
       };
     } catch (error) {
       showModal('Could not add to applications menu', String(error));
+    } finally {
+      linuxMenuBusy = false;
+    }
+  }
+
+  async function removeLinuxMenu(): Promise<void> {
+    if (linuxMenuBusy) return;
+    linuxMenuBusy = true;
+    try {
+      await api.uninstallLinuxMenu();
+      snapshot = {
+        ...snapshot,
+        linux_menu_installed: false,
+        settings: { ...snapshot.settings, linux_menu_prompt_dismissed: true },
+      };
+    } catch (error) {
+      showModal('Could not remove from applications menu', String(error));
     } finally {
       linuxMenuBusy = false;
     }
@@ -3500,6 +3544,7 @@
         reportOpen ||
         settings.privacy_choice_made === false ||
         libraryOpen ||
+        settingsOpen ||
         ffmpegNotice ||
         $updateDialogOpen) &&
       action !== 'file.cancel'
@@ -3533,9 +3578,6 @@
         case 'file.cancel':
           if (preparing) await cancelPreparation();
           else await api.cancelJobs();
-          break;
-        case 'file.integrations':
-          await showIntegrations();
           break;
         case 'preset.quick':
           applyPreset('quick');
@@ -3577,13 +3619,8 @@
         case 'help.report-problem':
           await showReport();
           break;
-        case 'help.add-desktop-menu':
-          await api.installLinuxMenu();
-          await refresh();
-          break;
-        case 'help.remove-desktop-menu':
-          await api.uninstallLinuxMenu();
-          await refresh();
+        case 'app.settings':
+          openSettings('general');
           break;
         case 'app.updates':
           updateDialogOpen.set(true);
@@ -3595,7 +3632,7 @@
   }
 
   function showPerformance(): void {
-    if (settings.crash_reports) void refreshCrashReports();
+    void refreshCrashReports();
     if (!benchmarkDevice)
       benchmarkDevice =
         snapshot.capabilities.devices.find((device) => device.id !== 'cpu')?.id ?? 'cpu';
@@ -3607,8 +3644,12 @@
   }
 
   async function showIntegrations(): Promise<void> {
-    integration = await api.integrationStatus();
-    showModal('System Integrations', integration.summary, 'integrations');
+    try {
+      integration = await api.integrationStatus();
+      showModal('System Integrations', integration.summary, 'integrations');
+    } catch (error) {
+      showModal('System Integrations', String(error));
+    }
   }
 
   async function changeIntegrations(install: boolean): Promise<void> {
@@ -3692,7 +3733,7 @@
     if (settingsLocked) {
       showModal(
         'Settings are locked',
-        'Wait for the running job to finish, then select FFmpeg under Advanced settings → Video.',
+        'Wait for the running job to finish, then select FFmpeg under Settings → Storage.',
       );
       return;
     }
@@ -3893,12 +3934,6 @@
 
   <UpdatePanel
     processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
-    anonymousUpdateCount={settings.anonymous_update_count ?? false}
-    completionSound={settings.completion_sound ?? false}
-    on:completionsound={(event) => updateSettings({ completion_sound: event.detail })}
-    checkAtLaunch={settings.check_updates_at_launch ?? true}
-    on:anonymouscount={(event) => setUpdateSwitch('anonymous_update_count', event.detail)}
-    on:checkatlaunch={(event) => setUpdateSwitch('check_updates_at_launch', event.detail)}
   />
   <WelcomeNotice
     anonymousUpdateCount={settings.anonymous_update_count ?? false}
@@ -4864,8 +4899,8 @@
               >
                 <p>{lastFailure}</p>
                 {#if acceleratorFailure}
-                  <button class="button" type="button" on:click={() => void useTheCpu()}
-                    >Use the CPU</button
+                  <button class="button" type="button" on:click={() => void retryOnCpu()}
+                    >Retry on CPU</button
                   >
                 {/if}
               </section>
@@ -4895,28 +4930,13 @@
               {selectedModel}
               {editModel}
               capabilities={snapshot.capabilities}
-              engines={snapshot.engines}
               {usingTemporalVideo}
               {preservingHdr}
               {interpolationSupported}
-              defaultModelDirectory={snapshot.default_model_directory ?? ''}
-              modelDirectoryMissing={Boolean(snapshot.model_directory_missing)}
-              {movingModels}
-              {modelMoveProgress}
-              {cacheSize}
-              cacheBusy={clearingCache ||
-                Boolean(snapshot.runtime.active_job_id) ||
-                Boolean(snapshot.runtime.active_batch_job_ids?.length)}
-              {clearCache}
-              loadCacheSize={() => void loadCacheSize()}
               {updateSettings}
-              setLowPriority={(value) => setUpdateSwitch('low_priority', value)}
-              setShowInMenuBar={(value) => setUpdateSwitch('show_in_menu_bar', value)}
-              setNotifyOnFinish={(value) => setUpdateSwitch('notify_on_finish', value)}
               {chooseOutput}
-              {chooseModelFolder}
-              {resetModelFolder}
-              onOpenEngineManager={() => void openEngineManager()}
+              onOpenHardwareSettings={() => openSettings('performance', 'hardware')}
+              onOpenFfmpegSettings={() => openSettings('storage', 'ffmpeg')}
               refreshCapabilities={async () => {
                 try {
                   await api.refreshCapabilities();
@@ -4967,6 +4987,7 @@
                   : 'Checked against its pinned checksum before use.'
                 : stoppedNote || idleSummary || runningStatusDetail)}</span
         >
+        {#if settings.low_priority}<span class="status-note">Low priority</span>{/if}
         {#if hardwareNote}<span class="status-note" title={hardwareNote}>{hardwareNote}</span>{/if}
         {#if hardwareHint}<span class="status-note" title={hardwareHint.text}
             >{hardwareHint.text}
@@ -5151,6 +5172,54 @@
   />
 {/if}
 
+{#if settingsOpen}
+  <SettingsSheet
+    {settings}
+    capabilities={snapshot.capabilities}
+    engines={snapshot.engines}
+    section={settingsSection}
+    focusTarget={settingsFocusTarget}
+    {settingsLocked}
+    defaultModelDirectory={snapshot.default_model_directory ?? ''}
+    modelDirectoryMissing={Boolean(snapshot.model_directory_missing)}
+    {movingModels}
+    {modelMoveProgress}
+    {cacheSize}
+    cacheBusy={clearingCache ||
+      settingsLocked ||
+      Boolean(snapshot.runtime.active_job_id) ||
+      Boolean(snapshot.runtime.active_batch_job_ids?.length)}
+    linuxMenuAvailable={Boolean(snapshot.linux_menu_available)}
+    linuxMenuOffer={Boolean(snapshot.linux_menu_offer)}
+    linuxMenuInstalled={Boolean(snapshot.linux_menu_installed)}
+    {linuxMenuBusy}
+    setPreference={(name, value) => void setPreference(name, value)}
+    {updateSettings}
+    {chooseModelFolder}
+    {resetModelFolder}
+    {clearCache}
+    loadCacheSize={() => void loadCacheSize()}
+    refreshCapabilities={async () => {
+      try {
+        await api.refreshCapabilities();
+        return true;
+      } catch (error) {
+        showModal('Could not refresh the hardware', String(error));
+        return false;
+      }
+    }}
+    onOpenEngineManager={() => void openEngineManager()}
+    onOpenIntegrations={() => void showIntegrations()}
+    onOpenUpdates={() => updateDialogOpen.set(true)}
+    onInstallLinuxMenu={acceptLinuxMenu}
+    onUninstallLinuxMenu={removeLinuxMenu}
+    onClose={() => {
+      settingsOpen = false;
+      settingsFocusTarget = null;
+    }}
+  />
+{/if}
+
 {#if customEditOpen}
   <CustomEditModelModal
     initial={settings.custom_edit_model}
@@ -5294,14 +5363,19 @@
       <p class="modal-message">{modalMessage}</p>
       {#if modalKind === 'performance'}
         <section class="crash-reports-panel" aria-label="Crash reports">
-          <label class="crash-reports-toggle"
-            ><input
-              type="checkbox"
-              checked={settings.crash_reports ?? false}
-              on:change={(event) => setUpdateSwitch('crash_reports', event.currentTarget.checked)}
-            /> Offer to Report Crashes</label
-          >
-          <p>Turning this off deletes all stored crash reports immediately.</p>
+          {#if !settings.crash_reports}
+            <div class="crash-reports-row">
+              <span>Crash reports are off. Turn them on in Settings.</span>
+              <button
+                type="button"
+                class="button"
+                on:click={() => {
+                  closeModal();
+                  openSettings('privacy');
+                }}>Open Settings</button
+              >
+            </div>
+          {/if}
           <div class="crash-reports-row">
             <span>Stored crash reports: {crashReports.length}</span>
             <div class="crash-reports-actions">

@@ -747,7 +747,7 @@ mod tests {
     }
 
     #[test]
-    fn disabling_deletes_existing_reports() {
+    fn disabling_keeps_existing_reports() {
         let root = tempfile::tempdir().unwrap();
         let state = AppState::from_paths(AppPaths::under(root.path())).unwrap();
         super::super::commands::test_crash_switch(&state, true).unwrap();
@@ -757,7 +757,7 @@ mod tests {
         );
         assert_eq!(list(&state.paths).len(), 1);
         super::super::commands::test_crash_switch(&state, false).unwrap();
-        assert!(list(&state.paths).is_empty());
+        assert_eq!(list(&state.paths).len(), 1);
     }
 
     #[test]

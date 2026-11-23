@@ -79,7 +79,7 @@ test.describe('screens @visual', () => {
     await openApp(page, ready);
     await showPane(page, 'enhance');
     await page.getByRole('button', { name: /^Advanced/ }).click();
-    await page.locator('#device').scrollIntoViewIfNeeded();
+    await page.locator('#advanced-hardware-change').scrollIntoViewIfNeeded();
     await shoot(page, 'advanced-mac');
   });
 
@@ -87,7 +87,7 @@ test.describe('screens @visual', () => {
     await openApp(page, { ...windows, worker: 'ready' });
     await showPane(page, 'enhance');
     await page.getByRole('button', { name: /^Advanced/ }).click();
-    await page.locator('#device').scrollIntoViewIfNeeded();
+    await page.locator('#advanced-hardware-change').scrollIntoViewIfNeeded();
     await shoot(page, 'advanced-windows');
   });
 

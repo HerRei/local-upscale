@@ -507,9 +507,8 @@ function hostScript(scenario: Scenario): void {
         return null;
       case 'record_frontend_error':
         return null;
-      case 'set_update_switch':
+      case 'set_preference':
         snapshot.settings[args.name] = args.value;
-        if (args.name === 'crash_reports' && !args.value) crashReports = [];
         emit('state-changed', null);
         return null;
       case 'set_privacy_choice':
@@ -687,6 +686,8 @@ function hostScript(scenario: Scenario): void {
           engine_retry: false,
         });
         emit('state-changed', null);
+        return null;
+      case 'retry_job_on_cpu':
         return null;
       case 'diagnostic_summary':
         return 'Fixture host: no inference engine.';

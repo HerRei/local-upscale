@@ -127,17 +127,23 @@ pub(crate) fn should_offer_linux_menu(
     is_linux && is_appimage && !installed && !dismissed
 }
 
-#[cfg(target_os = "linux")]
 pub fn running_in_appimage() -> bool {
-    let Ok(current) = env::current_exe().and_then(fs::canonicalize) else {
-        return false;
-    };
-    appimage_container(
-        &current,
-        env::var_os("APPIMAGE").as_deref(),
-        env::var_os("APPDIR").as_deref(),
-    )
-    .is_some()
+    #[cfg(target_os = "linux")]
+    {
+        let Ok(current) = env::current_exe().and_then(fs::canonicalize) else {
+            return false;
+        };
+        appimage_container(
+            &current,
+            env::var_os("APPIMAGE").as_deref(),
+            env::var_os("APPDIR").as_deref(),
+        )
+        .is_some()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
 }
 
 pub fn linux_menu_installed() -> bool {

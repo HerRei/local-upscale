@@ -1,4 +1,5 @@
 export type TaskKind = 'upscale' | 'denoise' | 'edit' | 'video';
+export type SettingsSection = 'general' | 'appearance' | 'performance' | 'storage' | 'privacy';
 export type MediaKind = 'image' | 'video' | 'unknown';
 export type JobStatus =
   | 'queued'
@@ -376,6 +377,7 @@ export interface UiSettings {
   show_in_menu_bar?: boolean;
   notify_on_finish?: boolean;
   menu_bar_icon_monochrome?: boolean;
+  auto_cache_cleanup?: boolean;
 }
 
 export interface ModelMoveProgress {
@@ -613,6 +615,7 @@ export interface AppSnapshot {
   gpu_download_notice?: string | null;
   linux_menu_offer?: boolean;
   linux_menu_installed?: boolean;
+  linux_menu_available?: boolean;
   engines?: EngineManagerSnapshot;
 }
 

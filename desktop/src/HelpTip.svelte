@@ -51,6 +51,7 @@
     if (event.key === 'Escape' && open) {
       open = false;
       event.preventDefault();
+      event.stopPropagation();
     } else if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
       void show();

@@ -85,52 +85,13 @@ it('uses Store updates and waits for the active queue to finish', async () => {
   expect(api.installUpdate).not.toHaveBeenCalled();
 });
 
-it('lets direct builds turn off the launch check and the count, even while processing', async () => {
-  const user = userEvent.setup();
-  const counts: boolean[] = [];
-  const launches: boolean[] = [];
-  const view = render(UpdatePanel, {
-    // Neither switch touches a running job, so neither waits for one.
-    props: { processing: true, anonymousUpdateCount: true, checkAtLaunch: true },
-    events: {
-      anonymouscount: (event: CustomEvent<boolean>) => counts.push(event.detail),
-      checkatlaunch: (event: CustomEvent<boolean>) => launches.push(event.detail),
-    },
-  });
-  const count = await screen.findByLabelText(
-    'After an update check, send an anonymous count: app version, platform and channel only. No install ID, cookies, files or settings.',
-  );
-  const launch = screen.getByLabelText('Check for updates when LocalSR starts');
-  expect((count as HTMLInputElement).checked).toBe(true);
-  expect((launch as HTMLInputElement).checked).toBe(true);
-  await user.click(count);
-  await user.click(launch);
-  expect(counts).toEqual([false]);
-  expect(launches).toEqual([false]);
-  // The boxes show what is saved until the host has saved the change (or refused it).
-  expect((count as HTMLInputElement).checked).toBe(true);
-  expect((launch as HTMLInputElement).checked).toBe(true);
-  await view.rerender({ processing: true, anonymousUpdateCount: false, checkAtLaunch: false });
-  expect((count as HTMLInputElement).checked).toBe(false);
-  expect((launch as HTMLInputElement).checked).toBe(false);
-});
-
-it('shows no update switches in a build without its own update feed', async () => {
-  api.updateStatus.mockResolvedValue({
-    configured: false,
-    channel: 'beta',
-    target: '',
-    stage: 'idle',
-    version: '',
-    notes: '',
-    size: 0,
-    downloaded: 0,
-    message: '',
-    settings_recovery: false,
-  });
-  render(UpdatePanel, { anonymousUpdateCount: true, checkAtLaunch: true });
+it('keeps the release channel select without update or sound switches', async () => {
+  render(UpdatePanel);
   await screen.findByText('Software Update');
+  expect(screen.getByLabelText('Release channel')).toBeTruthy();
   expect(screen.queryByLabelText('Check for updates when LocalSR starts')).toBeNull();
+  expect(screen.queryByLabelText(/anonymous count/i)).toBeNull();
+  expect(screen.queryByLabelText(/Play a sound/i)).toBeNull();
 });
 it('shows the host message when cancelling the download is refused', async () => {
   api.updateStatus.mockResolvedValue({

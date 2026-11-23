@@ -82,13 +82,6 @@ pub(crate) fn platform_key(os: &str, arch: &str, backend: &str, kind: &str) -> S
 
 /// Whether this build checks a signed update feed itself: a direct build with an updater
 /// key, not a Store build. Only then do the launch check and the count exist.
-pub fn checks_for_updates() -> bool {
-    checks_feed(
-        &UpdateConfig::load(),
-        crate::distribution::managed_by_store(),
-    )
-}
-
 fn checks_feed(config: &UpdateConfig, managed_by_store: bool) -> bool {
     config.enabled() && !managed_by_store
 }

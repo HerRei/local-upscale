@@ -7,10 +7,7 @@ import AdvancedSettings from './AdvancedSettings.svelte';
 import { demoSnapshot } from './lib/demo';
 import type { CapabilityInfo, UiSettings } from './lib/types';
 
-const api = vi.hoisted(() => ({
-  chooseExternalFFmpeg: vi.fn(),
-  detectExternalFFmpeg: vi.fn(),
-}));
+const api = vi.hoisted(() => ({}));
 vi.mock('./lib/api', () => api);
 
 afterEach(cleanup);
@@ -95,28 +92,44 @@ describe('MOV video output', () => {
   });
 });
 
-describe('FFmpeg buttons', () => {
-  it('show the host message when looking for or choosing a program fails', async () => {
-    await open({ task: 'video', video_container: 'mp4', video_codec: 'h264' }, mac);
-    api.detectExternalFFmpeg.mockRejectedValueOnce('The search was refused.');
-    await fireEvent.click(screen.getByRole('button', { name: 'Find installed' }));
-    expect(await screen.findByText(/The search was refused\./)).toBeTruthy();
-    api.chooseExternalFFmpeg.mockRejectedValueOnce('The file picker failed.');
-    await fireEvent.click(screen.getByRole('button', { name: /Choose FFmpeg/ }));
-    expect(await screen.findByText(/The file picker failed\./)).toBeTruthy();
-  });
-});
+describe('External FFmpeg shortcut', () => {
+  it('shows detected or chosen FFmpeg status and opens Storage settings on Change…', async () => {
+    const onOpenFfmpegSettings = vi.fn();
+    render(AdvancedSettings, {
+      settings: {
+        ...demoSnapshot().settings,
+        task: 'video',
+        external_ffmpeg_path: '/usr/bin/ffmpeg',
+      },
+      selectedModel: undefined,
+      capabilities: mac,
+      usingTemporalVideo: false,
+      updateSettings: vi.fn(),
+      chooseOutput: async () => undefined,
+      onOpenFfmpegSettings,
+      refreshCapabilities: async () => true,
+    });
+    await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+    expect(screen.getByText('/usr/bin/ffmpeg')).toBeTruthy();
+    const row = screen.getByText('External FFmpeg').closest('.field-row') as HTMLElement;
+    const change = row.querySelector('button.link-button') as HTMLButtonElement;
+    expect(change.textContent).toBe('Change…');
+    await fireEvent.click(change);
+    expect(onOpenFfmpegSettings).toHaveBeenCalledTimes(1);
 
-it('places the FFmpeg chooser beside the path and offers quiet actions', async () => {
-  await open({ task: 'video', external_ffmpeg_path: '/usr/bin/ffmpeg' }, mac);
-  const path = screen.getByTitle('/usr/bin/ffmpeg');
-  expect(path.closest('.directory-field')?.textContent).toContain('Choose…');
-  expect(
-    screen.getByRole('button', { name: 'Find installed' }).classList.contains('link-button'),
-  ).toBe(true);
-  expect(screen.getByRole('button', { name: 'Don’t use' }).classList.contains('link-button')).toBe(
-    true,
-  );
+    cleanup();
+    render(AdvancedSettings, {
+      settings: { ...demoSnapshot().settings, task: 'video', external_ffmpeg_path: '' },
+      selectedModel: undefined,
+      capabilities: mac,
+      usingTemporalVideo: false,
+      updateSettings: vi.fn(),
+      chooseOutput: async () => undefined,
+      refreshCapabilities: async () => true,
+    });
+    await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+    expect(screen.getByText('None')).toBeTruthy();
+  });
 });
 
 it('explains when interpolation happens', async () => {
@@ -129,7 +142,7 @@ it('starts output scale at 2× for both photo and video upscale and hides it in 
   const scaleSelect = screen.getByLabelText('Output scale') as HTMLSelectElement;
   expect(Array.from(scaleSelect.options).map((o) => o.value)).toEqual(['2', '3', '4']);
   expect(scaleSelect.value).toBe('2');
-  expect(screen.getByText('Scale, format, hardware')).toBeTruthy();
+  expect(screen.getByText('Scale, format, tiles')).toBeTruthy();
   await fireEvent.click(screen.getByRole('button', { name: 'About Output scale' }));
   expect(screen.getByRole('tooltip').textContent).toBe(
     'How many times larger the result is than the original. A 2× or 3× choice on a 4× model resizes down afterwards. To keep the size, use Restore.',
@@ -138,12 +151,12 @@ it('starts output scale at 2× for both photo and video upscale and hides it in 
   cleanup();
   await open({ task: 'video', video_task: 'denoise', output_scale: 4 }, mac);
   expect(screen.queryByLabelText('Output scale')).toBeNull();
-  expect(screen.getByText('Format, hardware')).toBeTruthy();
+  expect(screen.getByText('Format, tiles')).toBeTruthy();
 
   cleanup();
   await open({ task: 'denoise', output_scale: 1 }, mac);
   expect(screen.queryByLabelText('Output scale')).toBeNull();
-  expect(screen.getByText('Format, hardware')).toBeTruthy();
+  expect(screen.getByText('Format, tiles')).toBeTruthy();
 
   cleanup();
   await open({ task: 'upscale', output_scale: 2 }, mac);
@@ -240,300 +253,42 @@ describe('Refresh in the memory line', () => {
   });
 });
 
-describe('Run at low priority', () => {
-  it('shows its help tip, toggles by click or keyboard, and stays usable inside a disabled fieldset', async () => {
-    const fieldset = document.body.appendChild(document.createElement('fieldset'));
-    const setLowPriority = vi.fn();
+describe('Read-only Hardware shortcut row', () => {
+  it('shows the effective hardware label and opens Settings at Performance on Change…', async () => {
+    const onOpenHardwareSettings = vi.fn();
     render(AdvancedSettings, {
-      target: fieldset,
-      props: {
-        settings: { ...demoSnapshot().settings, task: 'upscale', low_priority: false },
-        selectedModel: undefined,
-        capabilities: base,
-        usingTemporalVideo: false,
-        updateSettings: vi.fn(),
-        setLowPriority,
-        chooseOutput: async () => undefined,
-        refreshCapabilities: async () => true,
+      settings: { ...demoSnapshot().settings, task: 'upscale', device_id: 'openvino:80d1' },
+      selectedModel: {
+        ...demoSnapshot().catalog.models[0],
+        architecture: 'SwinIR',
       },
-    });
-    await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
-    expect(screen.getByRole('button', { name: 'About Run at low priority' })).toBeTruthy();
-
-    fieldset.disabled = true;
-    const checkbox = screen.getByRole('checkbox', { name: 'Run at low priority' });
-    expect(checkbox.getAttribute('aria-checked')).toBe('false');
-    expect(checkbox.matches(':disabled')).toBe(false);
-
-    await fireEvent.click(checkbox);
-    await fireEvent.keyDown(checkbox, { key: ' ' });
-    await fireEvent.keyDown(checkbox, { key: 'Enter' });
-    expect(setLowPriority).toHaveBeenCalledTimes(3);
-    expect(setLowPriority).toHaveBeenNthCalledWith(1, true);
-    fieldset.remove();
-  });
-});
-
-describe('Model folder setting', () => {
-  it('shows default folder, custom reset action, moving progress, and missing folder options', async () => {
-    const chooseModelFolder = vi.fn(async () => undefined);
-    const resetModelFolder = vi.fn(async () => undefined);
-    const view = render(AdvancedSettings, {
-      settings: { ...demoSnapshot().settings, task: 'upscale', model_directory: '' },
-      selectedModel: undefined,
-      capabilities: base,
+      capabilities: {
+        ...base,
+        devices: [
+          ...base.devices,
+          {
+            id: 'openvino:80d1',
+            type: 'npu',
+            name: 'Intel(R) AI Boost (NPU)',
+            total_memory: 8 * 1024 ** 3,
+            free_memory: 6 * 1024 ** 3,
+            supports_fp16: true,
+            is_integrated: true,
+            recommended_tile_sizes: [64, 128],
+          },
+        ],
+      },
       usingTemporalVideo: false,
-      defaultModelDirectory: '/Users/demo/Library/Application Support/LocalSR/models',
-      modelDirectoryMissing: false,
-      movingModels: false,
-      modelMoveProgress: null,
       updateSettings: vi.fn(),
       chooseOutput: async () => undefined,
-      chooseModelFolder,
-      resetModelFolder,
+      onOpenHardwareSettings,
       refreshCapabilities: async () => true,
     });
     await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
-    expect(screen.getByText('/Users/demo/Library/Application Support/LocalSR/models')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Reset to default' })).toBeNull();
-
-    await fireEvent.click(screen.getByRole('button', { name: /^Model folder / }));
-    expect(chooseModelFolder).toHaveBeenCalledTimes(1);
-
-    await view.rerender({
-      settings: {
-        ...demoSnapshot().settings,
-        task: 'upscale',
-        model_directory: '/Volumes/SSD/models',
-      },
-      selectedModel: undefined,
-      capabilities: base,
-      usingTemporalVideo: false,
-      defaultModelDirectory: '/Users/demo/Library/Application Support/LocalSR/models',
-      modelDirectoryMissing: false,
-      movingModels: false,
-      modelMoveProgress: null,
-      updateSettings: vi.fn(),
-      chooseOutput: async () => undefined,
-      chooseModelFolder,
-      resetModelFolder,
-      refreshCapabilities: async () => true,
-    });
-    expect(screen.getByText('/Volumes/SSD/models')).toBeTruthy();
-    await fireEvent.click(screen.getByRole('button', { name: 'Reset to default' }));
-    expect(resetModelFolder).toHaveBeenCalledTimes(1);
-
-    await view.rerender({
-      settings: {
-        ...demoSnapshot().settings,
-        task: 'upscale',
-        model_directory: '/Volumes/SSD/models',
-      },
-      selectedModel: undefined,
-      capabilities: base,
-      usingTemporalVideo: false,
-      defaultModelDirectory: '/Users/demo/Library/Application Support/LocalSR/models',
-      modelDirectoryMissing: false,
-      movingModels: true,
-      modelMoveProgress: {
-        moved_bytes: 50,
-        total_bytes: 100,
-        moved_files: 1,
-        total_files: 2,
-        progress: 50,
-        current_file: 'a.pth',
-      },
-      updateSettings: vi.fn(),
-      chooseOutput: async () => undefined,
-      chooseModelFolder,
-      resetModelFolder,
-      refreshCapabilities: async () => true,
-    });
-    expect(screen.getByText('Moving 1 of 2 files…')).toBeTruthy();
-    expect(screen.getByText('50%')).toBeTruthy();
-    expect(screen.queryByText(/Moving models…/)).toBeNull();
-    const progress = document.querySelector('progress.download-progress') as HTMLProgressElement;
-    expect(progress).toBeTruthy();
-    expect(progress.value).toBe(50);
-    expect(
-      (screen.getByRole('button', { name: /^Model folder / }) as HTMLButtonElement).disabled,
-    ).toBe(true);
-
-    await view.rerender({
-      settings: {
-        ...demoSnapshot().settings,
-        task: 'upscale',
-        model_directory: '/Volumes/Missing/models',
-      },
-      selectedModel: undefined,
-      capabilities: base,
-      usingTemporalVideo: false,
-      defaultModelDirectory: '/Users/demo/Library/Application Support/LocalSR/models',
-      modelDirectoryMissing: true,
-      movingModels: false,
-      modelMoveProgress: null,
-      updateSettings: vi.fn(),
-      chooseOutput: async () => undefined,
-      chooseModelFolder,
-      resetModelFolder,
-      refreshCapabilities: async () => true,
-    });
-    expect(screen.queryByRole('alert')).toBeNull();
-  });
-});
-
-describe('Engine row above Hardware', () => {
-  it('shows the active engine and link-button Change… above Hardware on supported builds, and hides on Mac or Store', async () => {
-    const onOpenEngineManager = vi.fn();
-    const engines = structuredClone(demoSnapshot().engines!);
-    const view = render(AdvancedSettings, {
-      settings: { ...demoSnapshot().settings, task: 'upscale' },
-      selectedModel: undefined,
-      capabilities: base,
-      engines,
-      usingTemporalVideo: false,
-      updateSettings: vi.fn(),
-      chooseOutput: async () => undefined,
-      onOpenEngineManager,
-      refreshCapabilities: async () => true,
-    });
-    await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
-    expect(screen.getByText('Engine')).toBeTruthy();
-    expect(screen.getByText('CPU')).toBeTruthy();
+    expect(screen.getByText('CPU · this model does not run on the NPU')).toBeTruthy();
     const changeBtn = screen.getByRole('button', { name: 'Change…' });
     expect(changeBtn.classList.contains('link-button')).toBe(true);
-    expect(changeBtn.classList.contains('compact')).toBe(false);
-
-    // Engine row precedes Hardware row in DOM order.
-    const engineRow = document.querySelector('.engine-row') as HTMLElement;
-    const hardwareRow = screen.getByLabelText('Hardware').closest('.field-row') as HTMLElement;
-    expect(
-      engineRow.compareDocumentPosition(hardwareRow) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-
     await fireEvent.click(changeBtn);
-    expect(onOpenEngineManager).toHaveBeenCalledTimes(1);
-
-    await view.rerender({
-      settings: { ...demoSnapshot().settings, task: 'upscale' },
-      selectedModel: undefined,
-      capabilities: base,
-      engines: { ...engines, active_backend: 'rocm' },
-      usingTemporalVideo: false,
-      updateSettings: vi.fn(),
-      chooseOutput: async () => undefined,
-      onOpenEngineManager,
-      refreshCapabilities: async () => true,
-    });
-    expect(screen.getByText('AMD ROCm')).toBeTruthy();
-
-    await view.rerender({
-      settings: { ...demoSnapshot().settings, task: 'upscale' },
-      selectedModel: undefined,
-      capabilities: base,
-      engines: { ...engines, supported: false },
-      usingTemporalVideo: false,
-      updateSettings: vi.fn(),
-      chooseOutput: async () => undefined,
-      onOpenEngineManager,
-      refreshCapabilities: async () => true,
-    });
-    expect(screen.queryByText('Engine')).toBeNull();
-
-    await view.rerender({
-      settings: { ...demoSnapshot().settings, task: 'upscale' },
-      selectedModel: undefined,
-      capabilities: base,
-      engines: { ...engines, supported: true, managed_by_store: true },
-      usingTemporalVideo: false,
-      updateSettings: vi.fn(),
-      chooseOutput: async () => undefined,
-      onOpenEngineManager,
-      refreshCapabilities: async () => true,
-    });
-    expect(screen.queryByText('Engine')).toBeNull();
-  });
-});
-
-it('shows the cache size and clears it only while idle', async () => {
-  const clearCache = vi.fn().mockResolvedValue(0);
-  const { rerender } = render(AdvancedSettings, {
-    settings: demoSnapshot().settings,
-    selectedModel: undefined,
-    capabilities: base,
-    usingTemporalVideo: false,
-    updateSettings: vi.fn(),
-    chooseOutput: async () => undefined,
-    refreshCapabilities: async () => true,
-    cacheSize: 1024,
-    clearCache,
-    cacheBusy: false,
-  });
-  await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
-  expect(screen.getByText(/1 KB/)).toBeTruthy();
-  const button = screen.getByRole('button', { name: 'Clear cache' }) as HTMLButtonElement;
-  await fireEvent.click(button);
-  expect(clearCache).toHaveBeenCalledOnce();
-  await rerender({ cacheBusy: true });
-  expect(button.disabled).toBe(true);
-});
-
-describe('Menu bar and completion notification switches', () => {
-  it('default on, toggle via callbacks, and stay usable inside a disabled fieldset', async () => {
-    const fieldset = document.body.appendChild(document.createElement('fieldset'));
-    const setShowInMenuBar = vi.fn();
-    const setNotifyOnFinish = vi.fn();
-    render(AdvancedSettings, {
-      target: fieldset,
-      props: {
-        settings: { ...demoSnapshot().settings, task: 'upscale' },
-        selectedModel: undefined,
-        capabilities: base,
-        usingTemporalVideo: false,
-        updateSettings: vi.fn(),
-        setShowInMenuBar,
-        setNotifyOnFinish,
-        chooseOutput: async () => undefined,
-        refreshCapabilities: async () => true,
-      },
-    });
-    await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
-    fieldset.disabled = true;
-
-    const menuBar = screen.getByRole('checkbox', { name: 'Show in menu bar' });
-    const notify = screen.getByRole('checkbox', { name: 'Notify when a file finishes' });
-    expect(menuBar.getAttribute('aria-checked')).toBe('true');
-    expect(notify.getAttribute('aria-checked')).toBe('true');
-
-    await fireEvent.click(menuBar);
-    await fireEvent.click(notify);
-    expect(setShowInMenuBar).toHaveBeenCalledWith(false);
-    expect(setNotifyOnFinish).toHaveBeenCalledWith(false);
-    fieldset.remove();
-  });
-
-  it('offers a monochrome menu bar icon on a Mac', async () => {
-    const platform = Object.getOwnPropertyDescriptor(navigator, 'platform');
-    Object.defineProperty(navigator, 'platform', { value: 'MacIntel', configurable: true });
-    try {
-      const updateSettings = vi.fn();
-      render(AdvancedSettings, {
-        settings: { ...demoSnapshot().settings, task: 'upscale' },
-        selectedModel: undefined,
-        capabilities: base,
-        usingTemporalVideo: false,
-        updateSettings,
-        chooseOutput: async () => undefined,
-        refreshCapabilities: async () => true,
-      });
-      await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
-      const mono = screen.getByRole('checkbox', { name: 'Monochrome menu bar icon' });
-      expect(mono.getAttribute('aria-checked')).toBe('true');
-      await fireEvent.click(mono);
-      expect(updateSettings).toHaveBeenCalledWith({ menu_bar_icon_monochrome: false });
-    } finally {
-      if (platform) Object.defineProperty(navigator, 'platform', platform);
-      else delete (navigator as unknown as Record<string, unknown>).platform;
-    }
+    expect(onOpenHardwareSettings).toHaveBeenCalledTimes(1);
   });
 });

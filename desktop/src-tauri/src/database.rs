@@ -30,6 +30,14 @@ pub struct PendingJob {
     pub request_json: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct RetryJobSource {
+    pub media_id: String,
+    pub status: String,
+    pub request_json: String,
+    pub ui_json: String,
+}
+
 /// A scratch folder an earlier run made for a job and recorded with it, and the
 /// output that job was asked to write.
 #[derive(Clone, Debug)]
@@ -929,6 +937,24 @@ impl Database {
             params![id, status, now_millis()],
         )?;
         Ok(())
+    }
+
+    pub fn job_for_cpu_retry(&self, id: &str) -> AppResult<Option<RetryJobSource>> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT media_id, status, request_json, COALESCE(ui_json, '') FROM jobs WHERE id=?1",
+                [id],
+                |row| {
+                    Ok(RetryJobSource {
+                        media_id: row.get(0)?,
+                        status: row.get(1)?,
+                        request_json: row.get(2)?,
+                        ui_json: row.get(3)?,
+                    })
+                },
+            )
+            .optional()?)
     }
 
     pub fn update_job_progress(&self, id: &str, progress: f64) -> AppResult<()> {
