@@ -165,8 +165,14 @@ describe('SettingsSheet', () => {
       await user.click(screen.getByRole('switch', { name: 'Colour-blind friendly colours' }));
       expect(props.setPreference).toHaveBeenCalledWith('colour_blind_palette', true);
 
+      await user.click(screen.getByRole('switch', { name: 'High contrast' }));
+      expect(props.setPreference).toHaveBeenCalledWith('contrast', 'high');
+
       await user.selectOptions(screen.getByLabelText('Interface text'), '125');
       expect(props.setPreference).toHaveBeenCalledWith('interface_scale', 125);
+
+      await user.selectOptions(screen.getByLabelText('Viewer background'), 'grey');
+      expect(props.setPreference).toHaveBeenCalledWith('viewer_background', 'grey');
 
       // Performance
       await user.click(screen.getByRole('tab', { name: 'Performance' }));
@@ -273,6 +279,41 @@ describe('SettingsSheet', () => {
         }) as HTMLInputElement
       ).disabled,
     ).toBe(false);
+
+    await user.click(screen.getByRole('tab', { name: 'Appearance' }));
+    expect(
+      (screen.getByRole('switch', { name: 'High contrast' }) as HTMLInputElement).disabled,
+    ).toBe(false);
+    expect((screen.getByLabelText('Viewer background') as HTMLSelectElement).disabled).toBe(false);
+  });
+
+  it('defaults High contrast and Viewer background when fields are missing, turns High contrast off to system, and shows the background tip', async () => {
+    const user = userEvent.setup();
+    const settings = { ...demoSnapshot().settings };
+    delete settings.contrast;
+    delete settings.viewer_background;
+    const { props } = renderSheet({ settings, section: 'appearance' });
+
+    const contrastSwitch = screen.getByRole('switch', {
+      name: 'High contrast',
+    }) as HTMLInputElement;
+    const backgroundSelect = screen.getByLabelText('Viewer background') as HTMLSelectElement;
+    expect(contrastSwitch.checked).toBe(false);
+    expect(backgroundSelect.value).toBe('checker');
+
+    const tipButton = screen.getByRole('button', { name: 'About Viewer background' });
+    await user.click(tipButton);
+    expect(screen.getByRole('tooltip').textContent).toContain(
+      'What is shown behind the picture in the viewer and in Compare. Grey is the neutral 18 % grey used to judge brightness and colour. Black and White show how edges and transparent areas hold up. Checkerboard shows where a picture is transparent. Saved files are not changed.',
+    );
+
+    cleanup();
+    const highSettings = { ...demoSnapshot().settings, contrast: 'high' as const };
+    const { props: highProps } = renderSheet({ settings: highSettings, section: 'appearance' });
+    const onSwitch = screen.getByRole('switch', { name: 'High contrast' }) as HTMLInputElement;
+    expect(onSwitch.checked).toBe(true);
+    await user.click(onSwitch);
+    expect(highProps.setPreference).toHaveBeenCalledWith('contrast', 'system');
   });
 
   it('shows monochrome only on macOS, disables it when menu bar is off, and disables sound when notify is off', () => {

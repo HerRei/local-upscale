@@ -393,4 +393,19 @@ describe('video comparison slider', () => {
     expect(viewport).toBeTruthy();
     expect(Math.sign(high[0] - low[0])).toBe(Math.sign(high[1] - low[1]));
   });
+
+  it('shows the viewer background swatch in Video zoom and steps on click', async () => {
+    const setViewerBackground = vi.fn();
+    render(VideoComparison, {
+      originalSrc: 'asset://o.mp4',
+      enhancedSrc: 'asset://e.mp4',
+      viewerBackground: 'black',
+      setViewerBackground,
+    });
+    const zoomGroup = screen.getByRole('group', { name: 'Video zoom' });
+    const button = zoomGroup.querySelector('button[aria-label="Viewer background: Black"]');
+    expect(button).toBeTruthy();
+    await fireEvent.click(button as HTMLElement);
+    expect(setViewerBackground).toHaveBeenCalledWith('grey');
+  });
 });

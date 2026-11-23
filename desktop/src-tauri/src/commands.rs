@@ -511,6 +511,8 @@ fn keep_update_switches(current: &UiSettings, incoming: &mut UiSettings) {
     incoming.trusted_checkpoint_sha256 = current.trusted_checkpoint_sha256.clone();
     incoming.appearance = current.appearance.clone();
     incoming.colour_blind_palette = current.colour_blind_palette;
+    incoming.contrast = current.contrast.clone();
+    incoming.viewer_background = current.viewer_background.clone();
     incoming.interface_scale = current.interface_scale;
     incoming.check_updates_at_launch = current.check_updates_at_launch;
     incoming.anonymous_update_count = current.anonymous_update_count;
@@ -724,6 +726,20 @@ fn apply_preference(state: &AppState, name: &str, value: &Value) -> AppResult<()
                     .filter(|s| matches!(*s, "dark" | "light" | "system"))
                     .ok_or_else(|| AppError::Validation("unknown appearance".into()))?;
                 settings.appearance = appearance.into();
+            }
+            "contrast" => {
+                let contrast = value
+                    .as_str()
+                    .filter(|s| matches!(*s, "system" | "standard" | "high"))
+                    .ok_or_else(|| AppError::Validation("unknown contrast".into()))?;
+                settings.contrast = contrast.into();
+            }
+            "viewer_background" => {
+                let background = value
+                    .as_str()
+                    .filter(|s| matches!(*s, "checker" | "black" | "grey" | "white"))
+                    .ok_or_else(|| AppError::Validation("unknown viewer background".into()))?;
+                settings.viewer_background = background.into();
             }
             "interface_scale" => {
                 let scale = value

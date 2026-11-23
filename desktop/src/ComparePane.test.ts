@@ -692,6 +692,21 @@ it('closes an open list of details on Escape wherever the focus is, then Compare
   }
 });
 
+it('shows the viewer background swatch in Compare zoom and steps on click', async () => {
+  const setViewerBackground = vi.fn();
+  render(ComparePane, {
+    ...props,
+    items: [item('one', 'a'), item('two', 'a')],
+    viewerBackground: 'black',
+    setViewerBackground,
+  });
+  const zoomGroup = screen.getByRole('group', { name: 'Compare zoom' });
+  const button = zoomGroup.querySelector('button[aria-label="Viewer background: Black"]');
+  expect(button).toBeTruthy();
+  await fireEvent.click(button as HTMLElement);
+  expect(setViewerBackground).toHaveBeenCalledWith('grey');
+});
+
 it('does not open the list of details while the pointer rests on the Unfinished mark', async () => {
   const scroll = vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(500);
   const client = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(100);
@@ -730,4 +745,19 @@ it('does not open the list of details while the pointer rests on the Unfinished 
     scroll.mockRestore();
     client.mockRestore();
   }
+});
+
+it('shows the viewer background swatch in Compare zoom and steps on click', async () => {
+  const setViewerBackground = vi.fn();
+  render(ComparePane, {
+    ...props,
+    items: [item('one', 'a'), item('two', 'a')],
+    viewerBackground: 'black',
+    setViewerBackground,
+  });
+  const zoomGroup = screen.getByRole('group', { name: 'Compare zoom' });
+  const button = zoomGroup.querySelector('button[aria-label="Viewer background: Black"]');
+  expect(button).toBeTruthy();
+  await fireEvent.click(button as HTMLElement);
+  expect(setViewerBackground).toHaveBeenCalledWith('grey');
 });

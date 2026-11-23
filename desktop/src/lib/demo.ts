@@ -60,6 +60,8 @@ export function demoSnapshot(): AppSnapshot {
       video_audio_model: '',
       appearance: 'dark',
       colour_blind_palette: false,
+      contrast: 'system',
+      viewer_background: 'checker',
       anonymous_update_count: false,
       completion_sound: false,
       check_updates_at_launch: true,

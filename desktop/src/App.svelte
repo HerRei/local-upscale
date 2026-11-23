@@ -447,6 +447,7 @@
     setupAppearance = appearance;
     setupColourBlind = colourBlindPalette;
     themeForRefresh({
+      ...snapshot.settings,
       appearance,
       colour_blind_palette: colourBlindPalette,
     });
@@ -1493,7 +1494,10 @@
                     : 'The current settings are not ready to start.');
 
   let themeForRefresh: (
-    settings: Pick<UiSettings, 'appearance' | 'colour_blind_palette'>,
+    settings: Pick<
+      UiSettings,
+      'appearance' | 'colour_blind_palette' | 'contrast' | 'viewer_background'
+    >,
   ) => void = () => {};
 
   onMount(() => {
@@ -1652,7 +1656,11 @@
       }
       themeForRefresh(
         latest.settings.privacy_choice_made === false
-          ? { appearance: setupAppearance, colour_blind_palette: setupColourBlind }
+          ? {
+              ...latest.settings,
+              appearance: setupAppearance,
+              colour_blind_palette: setupColourBlind,
+            }
           : latest.settings,
       );
       chooseInitialModel();
@@ -2465,11 +2473,18 @@
       | boolean
       | UiSettings['appearance']
       | UiSettings['interface_scale']
+      | NonNullable<UiSettings['contrast']>
+      | NonNullable<UiSettings['viewer_background']>
       | NonNullable<UiSettings['stopped_job_result']>,
   ): Promise<void> {
     if (!api.isTauri()) {
       snapshot = { ...snapshot, settings: { ...snapshot.settings, [name]: value } };
-      if (name === 'appearance' || name === 'colour_blind_palette') {
+      if (
+        name === 'appearance' ||
+        name === 'colour_blind_palette' ||
+        name === 'contrast' ||
+        name === 'viewer_background'
+      ) {
         themeForRefresh(snapshot.settings);
       }
       return;
@@ -2481,7 +2496,12 @@
         sessionChoice = kept;
       }
       snapshot = { ...snapshot, settings: { ...snapshot.settings, [name]: value } };
-      if (name === 'appearance' || name === 'colour_blind_palette') {
+      if (
+        name === 'appearance' ||
+        name === 'colour_blind_palette' ||
+        name === 'contrast' ||
+        name === 'viewer_background'
+      ) {
         themeForRefresh(snapshot.settings);
       }
     } catch (error) {
@@ -4324,6 +4344,8 @@
           removeItem={(key) =>
             setComparePicks(comparePicks.filter((pick) => pickKey(pick) !== key))}
           close={() => (mainTab = 'preview')}
+          viewerBackground={snapshot.settings.viewer_background ?? 'checker'}
+          setViewerBackground={(value) => void setPreference('viewer_background', value)}
           asTab
         >
           <svelte:fragment slot="tabs">{@render paneTabs()}</svelte:fragment>
@@ -4332,6 +4354,8 @@
         <PreviewPane
           bind:this={previewPane}
           bind:liveFrame
+          viewerBackground={snapshot.settings.viewer_background ?? 'checker'}
+          setViewerBackground={(value) => void setPreference('viewer_background', value)}
           editing={settings.task === 'edit'}
           processing={Boolean(
             activeJobMediaId &&

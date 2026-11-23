@@ -961,3 +961,34 @@ it('keeps the preview header free of result choosers', () => {
     true,
   );
 });
+
+it('shows the viewer background swatch in the preview zoom bar and steps on click', async () => {
+  const setViewerBackground = vi.fn();
+  const selectedMedia: MediaItem = {
+    id: 'bg-photo',
+    path: '/bg-photo.png',
+    name: 'bg-photo.png',
+    kind: 'image',
+    width: 400,
+    height: 300,
+    frame_count: 1,
+    fps: 0,
+    duration_seconds: 0,
+    preview_data_url: 'data:image/jpeg;base64,source',
+    probe_status: 'ready',
+    error: '',
+    selected: true,
+  };
+  render(PreviewPane, {
+    selectedMedia,
+    resultPreview: '',
+    completedVideoOutput: '',
+    viewerBackground: 'black',
+    setViewerBackground,
+  });
+  const zoomGroup = screen.getByRole('group', { name: 'Preview zoom' });
+  const button = zoomGroup.querySelector('button[aria-label="Viewer background: Black"]');
+  expect(button).toBeTruthy();
+  await fireEvent.click(button as HTMLElement);
+  expect(setViewerBackground).toHaveBeenCalledWith('grey');
+});

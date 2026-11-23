@@ -354,6 +354,16 @@ pub struct UiSettings {
     )]
     pub appearance: String,
     pub colour_blind_palette: bool,
+    #[serde(
+        default = "default_contrast",
+        deserialize_with = "deserialize_contrast"
+    )]
+    pub contrast: String,
+    #[serde(
+        default = "default_viewer_background",
+        deserialize_with = "deserialize_viewer_background"
+    )]
+    pub viewer_background: String,
     pub interface_scale: u32,
     pub batch_mode: bool,
     pub task: String,
@@ -510,6 +520,14 @@ fn default_appearance() -> String {
     "dark".into()
 }
 
+fn default_contrast() -> String {
+    "system".into()
+}
+
+fn default_viewer_background() -> String {
+    "checker".into()
+}
+
 fn default_stopped_job_result() -> String {
     "ask".into()
 }
@@ -536,11 +554,39 @@ fn deserialize_appearance<'de, D: serde::Deserializer<'de>>(
     })
 }
 
+fn deserialize_contrast<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    Ok(
+        if matches!(value.as_str(), "system" | "standard" | "high") {
+            value
+        } else {
+            default_contrast()
+        },
+    )
+}
+
+fn deserialize_viewer_background<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    Ok(
+        if matches!(value.as_str(), "checker" | "black" | "grey" | "white") {
+            value
+        } else {
+            default_viewer_background()
+        },
+    )
+}
+
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
             appearance: default_appearance(),
             colour_blind_palette: false,
+            contrast: default_contrast(),
+            viewer_background: default_viewer_background(),
             interface_scale: 100,
             batch_mode: false,
             task: String::new(),

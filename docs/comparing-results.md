@@ -42,7 +42,9 @@ and pan are linked across boxes. Use the zoom controls or the mouse wheel, drag
 to pan, and choose **Fit** to reset zoom. For images, at fit size Compare
 uses previews; when zoom exceeds a preview's available detail, LocalSR loads
 the visible region from the saved file at full resolution. Loading and file
-errors are shown on the affected item.
+errors are shown on the affected item. The swatch at the end of the zoom bar (or
+**Settings > Appearance > Viewer background**) switches the background behind the
+picture between checkerboard, black, neutral grey and white.
 
 ## Video playback
 
