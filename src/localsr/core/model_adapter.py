@@ -7,7 +7,7 @@ from math import lcm
 import spandrel
 import torch
 
-from localsr.core.model_catalog import CATALOG_BY_FILENAME, file_matches_checksum
+from localsr.core.model_catalog import CATALOG_BY_FILENAME, file_matches_checksum, file_sha256
 from localsr.core.preparation import PreparationTimeout, bounded_preparation
 
 # Reading a checkpoint is a local file read; a drive that stopped answering would
@@ -89,6 +89,7 @@ class _DirectMLDescriptor:
 class ModelAdapter:
     def __init__(self, *, allow_unverified_checkpoints: bool | None = None):
         self.loader = spandrel.ModelLoader()
+        self.approved_checkpoint: tuple[str, str] | None = None
         self.parsed = None
         self.parsed_path = None
         self.status_callback: Callable[[str], None] | None = None
@@ -154,6 +155,17 @@ class ModelAdapter:
                 )
             return "catalog-verified"
         if suffix in RISKY_CHECKPOINT_SUFFIXES:
+            if self.approved_checkpoint and candidate == os.path.abspath(
+                self.approved_checkpoint[0]
+            ):
+                try:
+                    matches = file_sha256(candidate) == self.approved_checkpoint[1]
+                except OSError:
+                    matches = False
+                if not matches:
+                    raise CheckpointSecurityError(
+                        "The approved checkpoint changed. Confirm it again."
+                    )
             if not self.allow_unverified_checkpoints:
                 raise CheckpointSecurityError(
                     "LocalSR blocks unverified .pth, .pt, and .ckpt checkpoints because they may "

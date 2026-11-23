@@ -145,6 +145,7 @@ def _engine_features() -> list[str]:
     features = [
         "image",
         "image_multi_fix",
+        "checkpoint_sha256_consent",
         "image_batch_v1",
         "video_frame",
         "camera_raw",
@@ -248,6 +249,7 @@ class WorkerServer:
         self.model_adapter = ModelAdapter()
         self.model_store = ModelStore()
         self.engine = InferenceEngine(self.model_adapter)
+        self.approved_model_cache: dict[str, str] = {}
         self.result_previews = ResultPreviewService(send_message)
         from localsr.worker.compare_regions import RegionService
 
@@ -256,6 +258,18 @@ class WorkerServer:
         self.restart_after_job = False
         # The last device report, so a refresh during a job needs no new look at the drivers.
         self.last_capabilities: dict | None = None
+
+    def _check_approved_checkpoint(self, data: dict) -> None:
+        digest = data.get("approved_checkpoint_sha256")
+        if not digest:
+            return
+        path = data["model_path"]
+        # A cached descriptor must not skip the per-job digest check. If a new
+        # digest was approved at the same path, discard the old descriptor too.
+        self.model_adapter._checkpoint_trust(path)
+        if self.approved_model_cache.get(path) != digest:
+            self.engine.release_model(path)
+            self.approved_model_cache[path] = digest
 
     def _answer_capabilities_during_job(self) -> bool:
         """Answer a hardware refresh while a job runs; the main loop is busy until it ends.
@@ -603,6 +617,13 @@ class WorkerServer:
                     previous_checkpoint_policy = getattr(
                         self.model_adapter, "allow_unverified_checkpoints", False
                     )
+                    previous_approved_checkpoint = getattr(
+                        self.model_adapter, "approved_checkpoint", None
+                    )
+                    digest = data.get("approved_checkpoint_sha256")
+                    self.model_adapter.approved_checkpoint = (
+                        (data["model_path"], digest) if digest else None
+                    )
                     requested_checkpoint_policy = data.get("allow_unverified_checkpoint")
                     self.model_adapter.allow_unverified_checkpoints = (
                         previous_checkpoint_policy
@@ -613,6 +634,7 @@ class WorkerServer:
                     try:
                         self._activate_job(job_id)
                         send_message(JobStarted(job_id=job_id))
+                        self._check_approved_checkpoint(data)
                         self._run_video_job(job_id, data)
                     except Exception as e:  # noqa: BLE001
                         traceback.print_exc(file=sys.stderr)
@@ -629,6 +651,7 @@ class WorkerServer:
                         self._deactivate_job(job_id)
                         self.model_adapter.release()
                         self.model_adapter.allow_unverified_checkpoints = previous_checkpoint_policy
+                        self.model_adapter.approved_checkpoint = previous_approved_checkpoint
                         self.engine.release_model()
                         # Exception frames and model references have been released;
                         # return their cached allocations to other applications too.
@@ -872,6 +895,9 @@ class WorkerServer:
         previous_checkpoint_policy = getattr(
             self.model_adapter, "allow_unverified_checkpoints", False
         )
+        previous_approved_checkpoint = getattr(self.model_adapter, "approved_checkpoint", None)
+        digest = data.get("approved_checkpoint_sha256")
+        self.model_adapter.approved_checkpoint = (data["model_path"], digest) if digest else None
         requested_checkpoint_policy = data.get("allow_unverified_checkpoint")
         self.model_adapter.allow_unverified_checkpoints = (
             previous_checkpoint_policy
@@ -883,6 +909,7 @@ class WorkerServer:
             self._activate_job(job_id)
             if not announced:
                 send_message(JobStarted(job_id=job_id))
+            self._check_approved_checkpoint(data)
             self._run_job(job_id, data)
         # The process boundary must turn any inference/I/O failure
         # into a job_failed message instead of killing the worker.
@@ -901,6 +928,7 @@ class WorkerServer:
             self._deactivate_job(job_id)
             self.model_adapter.release()
             self.model_adapter.allow_unverified_checkpoints = previous_checkpoint_policy
+            self.model_adapter.approved_checkpoint = previous_approved_checkpoint
             # Release the face model from the engine cache if it
             # was loaded for this job. The general model stays
             # cached for the next image.
@@ -947,10 +975,14 @@ class WorkerServer:
 
         self._activate_batch(ids)
         previous_checkpoint_policy = self.model_adapter.allow_unverified_checkpoints
+        previous_approved_checkpoint = getattr(self.model_adapter, "approved_checkpoint", None)
+        digest = jobs[0].get("approved_checkpoint_sha256")
+        self.model_adapter.approved_checkpoint = (jobs[0]["model_path"], digest) if digest else None
         requested_checkpoint_policy = jobs[0].get("allow_unverified_checkpoint")
         if requested_checkpoint_policy is not None:
             self.model_adapter.allow_unverified_checkpoints = bool(requested_checkpoint_policy)
         try:
+            self._check_approved_checkpoint(jobs[0])
             returned = ImageBatchRunner(
                 engine=self.engine,
                 model_adapter=self.model_adapter,
@@ -982,6 +1014,7 @@ class WorkerServer:
         finally:
             self.model_adapter.release()
             self.model_adapter.allow_unverified_checkpoints = previous_checkpoint_policy
+            self.model_adapter.approved_checkpoint = previous_approved_checkpoint
         try:
             self._restart_if_required()
             for data in returned:

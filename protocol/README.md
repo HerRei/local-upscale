@@ -22,7 +22,8 @@ Compatibility rules:
 - Model paths and media bytes stay on the local machine.
 - Catalog-pinned checkpoints are verified by size and SHA-256. A custom
   pickle-based checkpoint is accepted only when that individual job carries
-  the explicit `allow_unverified_checkpoint` acknowledgement.
+  the explicit `allow_unverified_checkpoint` acknowledgement. Desktop jobs also carry
+  `approved_checkpoint_sha256` for the chosen custom file, checked before loading it.
 
 The JSON Schema is the language-neutral contract. Update its
 `x-protocol-version`, the Python constants, Rust constant, and compatibility

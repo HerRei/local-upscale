@@ -174,6 +174,12 @@ pub(crate) async fn change_model_directory_with_env<R: tauri::Runtime>(
         std::iter::once(settings.custom_model_path.clone())
             .chain(
                 settings
+                    .custom_models
+                    .iter()
+                    .map(|model| model.path.clone()),
+            )
+            .chain(
+                settings
                     .custom_edit_model
                     .non_empty_paths()
                     .map(str::to_owned),
@@ -902,6 +908,9 @@ fn apply_setting_and_refresh(
             let mut settings = lock(&state.settings)?;
             settings.model_directory = new_model_directory.clone();
             rewrite(&mut settings.custom_model_path);
+            for model in &mut settings.custom_models {
+                rewrite(&mut model.path);
+            }
             let edit = &mut settings.custom_edit_model;
             rewrite(&mut edit.diffusion_path);
             rewrite(&mut edit.text_encoder_path);
@@ -922,6 +931,7 @@ fn apply_setting_and_refresh(
     let recipes = lock(&state.recipes)?;
     state.grants.reconcile_models(
         &settings.custom_model_path,
+        &settings.custom_models,
         &settings.custom_edit_model,
         &recipes,
     );

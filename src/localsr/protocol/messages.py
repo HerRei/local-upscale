@@ -68,6 +68,7 @@ class JobRequest:
     face_model_path: str | None = None
     face_fidelity: float = 0.7
     allow_unverified_checkpoint: bool | None = None
+    approved_checkpoint_sha256: str | None = None
     preview_enabled: bool = True
     preview_max_fps: float = 2.0
     preview_max_dimension: int = 320
@@ -160,6 +161,7 @@ class VideoJobRequest:
     # downsample each restored frame when a smaller 2×/3× output is requested.
     output_scale: int | None = None
     allow_unverified_checkpoint: bool | None = None
+    approved_checkpoint_sha256: str | None = None
     preview_enabled: bool = True
     preview_max_fps: float = 2.0
     preview_max_dimension: int = 320

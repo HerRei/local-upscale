@@ -14,8 +14,9 @@ from localsr.core.model_adapter import (
 from localsr.core.model_catalog import CATALOG_BY_FILENAME
 
 
-def test_unverified_pickle_checkpoint_is_blocked_before_spandrel(tmp_path, monkeypatch):
-    checkpoint = tmp_path / "downloaded-from-a-forum.pth"
+@pytest.mark.parametrize("suffix", [".pth", ".pt", ".ckpt"])
+def test_unverified_pickle_checkpoint_is_blocked_before_spandrel(tmp_path, monkeypatch, suffix):
+    checkpoint = tmp_path / f"downloaded-from-a-forum{suffix}"
     checkpoint.write_bytes(b"not deserialized")
     monkeypatch.delenv(UNVERIFIED_CHECKPOINT_ENV, raising=False)
     adapter = ModelAdapter()
@@ -89,3 +90,14 @@ def test_unsupported_checkpoint_reports_architecture_hint(tmp_path, monkeypatch,
     if expected in {"MoSR", "MoESR"}:
         assert "not supported yet" in str(error.value)
         assert "https://github.com/HerRei/local-upscale/issues/154" in str(error.value)
+
+
+def test_remembered_consent_refuses_changed_checkpoint(tmp_path):
+    checkpoint = tmp_path / "trusted.pth"
+    checkpoint.write_bytes(b"approved")
+    adapter = ModelAdapter(allow_unverified_checkpoints=True)
+    adapter.approved_checkpoint = (str(checkpoint), hashlib.sha256(b"approved").hexdigest())
+    assert adapter._checkpoint_trust(str(checkpoint)) == "explicitly-trusted"
+    checkpoint.write_bytes(b"replaced")
+    with pytest.raises(CheckpointSecurityError, match="changed"):
+        adapter._checkpoint_trust(str(checkpoint))

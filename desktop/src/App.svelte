@@ -53,6 +53,7 @@
   import { startUpdateWatcher, updateDialogOpen } from './lib/updates';
   import { redactDiagnostics, redactDiagnosticText, reportUrl } from './lib/report';
   import BenchmarkStudio from './BenchmarkStudio.svelte';
+  import { customModels, defaultCustomModelName } from './lib/customModels';
   import CustomEditModelModal from './CustomEditModelModal.svelte';
   import * as api from './lib/api';
   import ModelLibrary from './ModelLibrary.svelte';
@@ -2765,29 +2766,81 @@
     }
   }
 
+  let consentPath = '';
+  let consentRequest = 0;
+  $: if (!settingsLocked && settings.custom_model_path !== consentPath) {
+    consentPath = settings.custom_model_path;
+    void refreshCheckpointConsent(consentPath);
+  }
+
+  async function refreshCheckpointConsent(path: string): Promise<void> {
+    const request = ++consentRequest;
+    if (!path || path.toLowerCase().endsWith('.safetensors')) return;
+    updateSettings({ allow_unsafe_pickle_model: false });
+    try {
+      const allowed = await api.checkpointConsent(path);
+      if (request === consentRequest && settings.custom_model_path === path) {
+        if (settingsLocked) consentPath = '';
+        else updateSettings({ allow_unsafe_pickle_model: allowed });
+      }
+    } catch {
+      if (request === consentRequest && settings.custom_model_path === path) {
+        if (settingsLocked) consentPath = '';
+        else updateSettings({ allow_unsafe_pickle_model: false });
+      }
+    }
+  }
+
+  async function changeCheckpointConsent(allow: boolean): Promise<void> {
+    const path = settings.custom_model_path;
+    const request = ++consentRequest;
+    try {
+      const allowed = await api.checkpointConsent(path, allow);
+      if (request === consentRequest && settings.custom_model_path === path)
+        updateSettings({ allow_unsafe_pickle_model: allowed });
+    } catch (error) {
+      if (request === consentRequest && settings.custom_model_path === path) {
+        updateSettings({ allow_unsafe_pickle_model: false });
+        showModal('Could not save checkpoint confirmation', String(error));
+      }
+    }
+  }
+
+  function selectCustomModel(path: string): void {
+    const models = customModels(settings);
+    if (!models.some((model) => model.path === path)) {
+      models.push({ path, name: defaultCustomModelName(path) });
+    }
+    updateSettings({
+      selected_model_id: '__custom__',
+      custom_model_path: path,
+      custom_models: models,
+      allow_unsafe_pickle_model: false,
+      enable_face_model: false,
+      quality: 'custom',
+      ...(restoring ? { fix_stages: [], fixes: [] } : {}),
+    });
+    if (consentPath === path) void refreshCheckpointConsent(path);
+    libraryOpen = false;
+    termsAccepted = {};
+  }
+
+  function renameCustomModel(path: string, name: string): void {
+    updateSettings({
+      custom_models: customModels(settings).map((model) =>
+        model.path === path
+          ? { ...model, name: name.trim() || defaultCustomModelName(path) }
+          : model,
+      ),
+    });
+  }
+
   async function chooseCustomModel(): Promise<void> {
     const path = await api.chooseCustomModel().catch((error) => {
       showModal('Could not choose the model', String(error));
       return null;
     });
-    if (path) {
-      updateSettings({
-        selected_model_id: '__custom__',
-        custom_model_path: path,
-        allow_unsafe_pickle_model: false,
-        enable_face_model: false,
-        quality: 'custom',
-        // In Restore your own checkpoint is the model, not one of the fixes.
-        ...(restoring
-          ? {
-              fix_stages: [],
-              fixes: [],
-            }
-          : {}),
-      });
-      libraryOpen = false;
-      termsAccepted = {};
-    }
+    if (path) selectCustomModel(path);
   }
 
   function selectVideoEngine(modelId: string): void {
@@ -4429,7 +4482,9 @@
                             ? editFamilyLabel(stage.editModel.family)
                             : stage.missing
                               ? 'No model for this fix'
-                              : 'Your checkpoint'}
+                              : (customModels(settings).find(
+                                  (model) => model.path === settings.custom_model_path,
+                                )?.name ?? 'Checkpoint')}
                   <!-- Licenses live in the model library; only exceptions show here. -->
                   {@const meta = stage.editModel
                     ? `${editVariantName(stage.editModel)}${
@@ -4584,9 +4639,7 @@
                                 type="checkbox"
                                 checked={settings.allow_unsafe_pickle_model}
                                 on:change={(event) =>
-                                  updateSettings({
-                                    allow_unsafe_pickle_model: event.currentTarget.checked,
-                                  })}
+                                  void changeCheckpointConsent(event.currentTarget.checked)}
                               /> Allow this pickle-based checkpoint. It may execute code inside the inference
                               worker.</label
                             >
@@ -4984,6 +5037,8 @@
     importFile={(model, accepted) => runDownload(model, accepted)}
     remove={removeModel}
     chooseCustom={chooseCustomModel}
+    {selectCustomModel}
+    {renameCustomModel}
     openCustomEdit={() => (customEditOpen = true)}
     openLicense={openAnyLicense}
     openSource={openAnySource}

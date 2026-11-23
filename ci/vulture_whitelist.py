@@ -7,6 +7,7 @@
 # catalog entries are emitted through dataclasses.asdict() or the catalog export.
 VIDEO  # ModelPurpose enum member used by catalog data and the desktop
 allow_unverified_checkpoint
+approved_checkpoint_sha256
 client_name
 client_version
 completed_frames

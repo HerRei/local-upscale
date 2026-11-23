@@ -118,6 +118,11 @@ export async function listenForEngineStatus(
   return listen<EngineDownloadStatus>('engine-status', (event) => handler(event.payload));
 }
 
+export async function checkpointConsent(path: string, allow?: boolean): Promise<boolean> {
+  if (!isTauri()) return false;
+  return invoke<boolean>('checkpoint_consent', { path, allow: allow ?? null });
+}
+
 export async function chooseCustomModel(): Promise<string | null> {
   if (!isTauri()) return null;
   return invoke<string | null>('choose_custom_model');

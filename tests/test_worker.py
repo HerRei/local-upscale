@@ -801,3 +801,49 @@ def test_the_engine_offers_photo_batches():
     from localsr.worker.server import _engine_features
 
     assert "image_batch_v1" in _engine_features()
+
+
+def test_changed_approved_checkpoint_is_refused_even_with_a_cached_model(
+    tmp_path, monkeypatch, capsys
+):
+    import hashlib
+
+    server = WorkerServer()
+    checkpoint = tmp_path / "cached.pth"
+    checkpoint.write_bytes(b"changed")
+    server.engine._loaded_models[str(checkpoint)] = (object(), None, None)
+    monkeypatch.setattr(
+        server, "_run_job", lambda *_: pytest.fail("changed checkpoint must not run")
+    )
+    data = {
+        "job_id": "changed-model",
+        "model_path": str(checkpoint),
+        "output_path": str(tmp_path / "out.png"),
+        "allow_unverified_checkpoint": True,
+        "approved_checkpoint_sha256": hashlib.sha256(b"approved").hexdigest(),
+    }
+    server._run_image_job(data)
+    assert "checkpoint changed" in capsys.readouterr().out.lower()
+
+
+def test_checkpoint_cache_tracks_approved_digest(tmp_path, monkeypatch):
+    import hashlib
+
+    server = WorkerServer()
+    checkpoint = tmp_path / "model.pth"
+    checkpoint.write_bytes(b"first")
+    first = hashlib.sha256(b"first").hexdigest()
+    server.model_adapter.allow_unverified_checkpoints = True
+    server.model_adapter.approved_checkpoint = (str(checkpoint), first)
+    released = []
+    monkeypatch.setattr(server.engine, "release_model", released.append)
+    data = {"model_path": str(checkpoint), "approved_checkpoint_sha256": first}
+    server._check_approved_checkpoint(data)
+    server._check_approved_checkpoint(data)
+    assert released == [str(checkpoint)]
+    checkpoint.write_bytes(b"second")
+    second = hashlib.sha256(b"second").hexdigest()
+    server.model_adapter.approved_checkpoint = (str(checkpoint), second)
+    data["approved_checkpoint_sha256"] = second
+    server._check_approved_checkpoint(data)
+    assert released == [str(checkpoint), str(checkpoint)]

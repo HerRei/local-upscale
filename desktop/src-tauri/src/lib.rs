@@ -209,6 +209,7 @@ pub fn run() {
             commands::install_linux_menu,
             commands::uninstall_linux_menu,
             commands::choose_custom_model,
+            commands::checkpoint_consent,
             commands::choose_benchmark_export,
             commands::select_media,
             commands::remove_media,

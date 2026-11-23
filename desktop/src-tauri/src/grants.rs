@@ -25,7 +25,7 @@ use std::{
 use crate::{
     error::{AppError, AppResult},
     paths::AppPaths,
-    types::{CustomEditModel, MediaItem, Recipe, UiSettings},
+    types::{CustomEditModel, CustomModel, MediaItem, Recipe, UiSettings},
 };
 
 const MEDIA_REFUSAL: &str =
@@ -91,6 +91,7 @@ impl GrantRegistry {
         seed_models(
             &mut state,
             &settings.custom_model_path,
+            &settings.custom_models,
             &settings.custom_edit_model,
             recipes,
         );
@@ -227,11 +228,18 @@ impl GrantRegistry {
     pub fn reconcile_models(
         &self,
         custom_model_path: &str,
+        custom_models: &[CustomModel],
         custom_edit_model: &CustomEditModel,
         recipes: &[Recipe],
     ) {
         if let Ok(mut state) = self.inner.lock() {
-            seed_models(&mut state, custom_model_path, custom_edit_model, recipes);
+            seed_models(
+                &mut state,
+                custom_model_path,
+                custom_models,
+                custom_edit_model,
+                recipes,
+            );
         }
     }
 
@@ -494,11 +502,13 @@ fn seed_outputs(state: &mut RegistryState, output_directory: &str) {
 fn seed_models(
     state: &mut RegistryState,
     custom_model_path: &str,
+    custom_models: &[CustomModel],
     custom_edit_model: &CustomEditModel,
     recipes: &[Recipe],
 ) {
     let mut next_persisted = HashSet::new();
     for raw in std::iter::once(custom_model_path)
+        .chain(custom_models.iter().map(|model| model.path.as_str()))
         .chain(custom_edit_model.non_empty_paths())
         .chain(
             recipes
@@ -806,6 +816,7 @@ mod tests {
         assert!(registry.check_output_folder(Path::new(&spaced)).is_ok());
         registry.reconcile_models(
             &format!(" {}", model.to_string_lossy()),
+            &[],
             &CustomEditModel::default(),
             &[],
         );

@@ -338,6 +338,13 @@ impl CustomEditModel {
     }
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct CustomModel {
+    pub path: String,
+    pub name: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct UiSettings {
@@ -356,6 +363,8 @@ pub struct UiSettings {
     pub selected_video_model_id: String,
     pub fix_stages: Vec<FixStageSelection>,
     pub custom_model_path: String,
+    pub custom_models: Vec<CustomModel>,
+    pub trusted_checkpoint_sha256: Vec<String>,
     pub output_scale: u32,
     pub output_directory: String,
     pub output_format: String,
@@ -508,6 +517,8 @@ impl Default for UiSettings {
             selected_video_model_id: "frame_by_frame".into(),
             fix_stages: Vec::new(),
             custom_model_path: String::new(),
+            custom_models: Vec::new(),
+            trusted_checkpoint_sha256: Vec::new(),
             output_scale: 4,
             output_directory: String::new(),
             output_format: "png".into(),

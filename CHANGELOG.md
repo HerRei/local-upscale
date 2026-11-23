@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.6.0-beta] - Unreleased
+
+- **Your own models.** Name and select custom checkpoints in the model library. Approval for pickle-based files is remembered by file hash (#146).
+
 ## [0.5.2-beta] - 2026-11-23
 
 - **Engine manager.** One main download per OS starts LocalSR. After setup, the app

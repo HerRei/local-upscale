@@ -450,6 +450,9 @@ pub(crate) fn save_settings_checked(state: &AppState, settings: UiSettings) -> A
             .grants
             .check_model_file(Path::new(&settings.custom_model_path))?;
     }
+    for model in &settings.custom_models {
+        state.grants.check_model_file(Path::new(&model.path))?;
+    }
     for path in settings.custom_edit_model.non_empty_paths() {
         state.grants.check_model_file(Path::new(path))?;
     }
@@ -472,19 +475,23 @@ fn replace_settings(state: &AppState, mut settings: UiSettings) -> AppResult<()>
 }
 
 fn reconcile_persisted_grants(state: &AppState) -> AppResult<()> {
-    let (output_directory, custom_model_path, custom_edit_model) = {
+    let (output_directory, custom_model_path, custom_models, custom_edit_model) = {
         let current = lock(&state.settings)?;
         (
             current.output_directory.clone(),
             current.custom_model_path.clone(),
+            current.custom_models.clone(),
             current.custom_edit_model.clone(),
         )
     };
     let recipes = lock(&state.recipes)?.clone();
     state.grants.reconcile_outputs(&output_directory);
-    state
-        .grants
-        .reconcile_models(&custom_model_path, &custom_edit_model, &recipes);
+    state.grants.reconcile_models(
+        &custom_model_path,
+        &custom_models,
+        &custom_edit_model,
+        &recipes,
+    );
     Ok(())
 }
 
@@ -502,6 +509,7 @@ fn persist_or_restore(state: &AppState, restore: impl FnOnce(&AppState)) -> AppR
 /// carries the window's copy, which an older refresh may have left behind; it must
 /// never turn an opt-out back on.
 fn keep_update_switches(current: &UiSettings, incoming: &mut UiSettings) {
+    incoming.trusted_checkpoint_sha256 = current.trusted_checkpoint_sha256.clone();
     incoming.appearance = current.appearance.clone();
     incoming.colour_blind_palette = current.colour_blind_palette;
     incoming.check_updates_at_launch = current.check_updates_at_launch;
@@ -1004,23 +1012,28 @@ pub(crate) fn delete_recipe_checked(state: &AppState, id: &str) -> AppResult<()>
 }
 
 #[tauri::command]
-pub fn start_jobs(
+pub async fn start_jobs(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
     input: StartBatchInput,
 ) -> AppResult<()> {
-    if state
-        .updates
-        .installing
-        .load(std::sync::atomic::Ordering::SeqCst)
-    {
-        return Err(AppError::Validation("An update is being installed".into()));
-    }
-    let _scheduler = lock(&state.scheduler)?;
-    start_jobs_checked(&state, input)?;
-    worker::dispatch_next_locked(&state, &app)?;
-    emit_state_changed(&app);
-    Ok(())
+    let state = Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        if state
+            .updates
+            .installing
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(AppError::Validation("An update is being installed".into()));
+        }
+        let _scheduler = lock(&state.scheduler)?;
+        start_jobs_checked(&state, input)?;
+        worker::dispatch_next_locked(&state, &app)?;
+        emit_state_changed(&app);
+        Ok(())
+    })
+    .await
+    .map_err(|error| AppError::Config(format!("Could not start jobs: {error}")))?
 }
 
 pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -> AppResult<()> {
@@ -1068,6 +1081,7 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
     let output_directory = prepare_output_directory(state, &input.output_directory)?;
     check_output_room(&output_directory, &input, platform_path_limit())?;
     let selection = resolve_model_selection(state, &input)?;
+    validate_checkpoint_engine(&selection, lock(&state.engine)?.as_ref())?;
     let media = {
         let database = lock(&state.database)?;
         let inflight_media: HashSet<String> = database
@@ -2718,6 +2732,58 @@ pub async fn choose_custom_model(
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 
+fn custom_checkpoint_trusted(state: &AppState, path: &Path) -> AppResult<bool> {
+    state.grants.check_model_file(path)?;
+    let digest = catalog::sha256_file(path)?;
+    Ok(lock(&state.settings)?
+        .trusted_checkpoint_sha256
+        .contains(&digest))
+}
+
+fn set_custom_checkpoint_consent(state: &AppState, path: &Path, allow: bool) -> AppResult<bool> {
+    state.grants.check_model_file(path)?;
+    if !matches!(extension(path).as_deref(), Some("pth" | "pt" | "ckpt")) {
+        return Err(AppError::Validation(
+            "Only pickle-based checkpoints need confirmation.".into(),
+        ));
+    }
+    let digest = catalog::sha256_file(path)?;
+    let _io = lock(&state.settings_io)?;
+    let previous = lock(&state.settings)?.trusted_checkpoint_sha256.clone();
+    {
+        let mut settings = lock(&state.settings)?;
+        settings
+            .trusted_checkpoint_sha256
+            .retain(|item| item != &digest);
+        if allow {
+            settings.trusted_checkpoint_sha256.push(digest);
+        }
+    }
+    if let Err(error) = state.write_settings() {
+        lock(&state.settings)?.trusted_checkpoint_sha256 = previous;
+        return Err(error);
+    }
+    Ok(allow)
+}
+
+#[tauri::command]
+pub async fn checkpoint_consent(
+    state: State<'_, Arc<AppState>>,
+    path: String,
+    allow: Option<bool>,
+) -> AppResult<bool> {
+    let state = Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = Path::new(&path);
+        match allow {
+            Some(value) => set_custom_checkpoint_consent(&state, path, value),
+            None => custom_checkpoint_trusted(&state, path),
+        }
+    })
+    .await
+    .map_err(|error| AppError::Config(format!("Could not check checkpoint: {error}")))?
+}
+
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct EditModelFilePick {
     pub path: String,
@@ -3596,6 +3662,7 @@ enum ModelSelection {
     Image {
         model_id: String,
         path: String,
+        approved_checkpoint_sha256: Option<String>,
         preprocess: Vec<ResolvedImageStage>,
         face_path: Option<String>,
         face_model_id: String,
@@ -3612,6 +3679,29 @@ enum ModelSelection {
         temporal_overlap: u32,
         audio_denoise: Option<ResolvedBundle>,
     },
+}
+
+fn validate_checkpoint_engine(
+    selection: &ModelSelection,
+    engine: Option<&crate::types::EngineInfo>,
+) -> AppResult<()> {
+    if matches!(
+        selection,
+        ModelSelection::Image {
+            approved_checkpoint_sha256: Some(_),
+            ..
+        }
+    ) && !engine.is_some_and(|engine| {
+        engine
+            .features
+            .iter()
+            .any(|feature| feature == "checkpoint_sha256_consent")
+    }) {
+        return Err(AppError::Validation(
+            "Update the inference engine before using this pickle-based checkpoint.".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// A downloaded multi-file bundle used by an optional video pipeline stage.
@@ -3674,6 +3764,7 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
         });
     }
 
+    let mut approved_checkpoint_sha256 = None;
     let (path, selected_model) = if skip_upscale {
         // At 1×, the upscaling model is never loaded or required.
         (String::new(), None)
@@ -3690,7 +3781,16 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
             ));
         }
         let extension = extension(&path).unwrap_or_default();
-        if extension != "safetensors" && !input.allow_unsafe_pickle_model {
+        if extension != "safetensors" && input.allow_unsafe_pickle_model {
+            let digest = catalog::sha256_file(&path)?;
+            if lock(&state.settings)?
+                .trusted_checkpoint_sha256
+                .contains(&digest)
+            {
+                approved_checkpoint_sha256 = Some(digest);
+            }
+        }
+        if extension != "safetensors" && approved_checkpoint_sha256.is_none() {
             return Err(AppError::Validation(
                 "pickle-based checkpoints require the explicit unsafe checkpoint confirmation"
                     .into(),
@@ -3814,6 +3914,7 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
             input.model_id.clone()
         },
         path,
+        approved_checkpoint_sha256,
         preprocess,
         face_path,
         face_model_id: selected_model
@@ -3915,6 +4016,7 @@ fn build_job_message(
         ModelSelection::Image {
             model_id,
             path,
+            approved_checkpoint_sha256,
             preprocess,
             face_path,
             face_model_id,
@@ -3953,12 +4055,14 @@ fn build_job_message(
                     *skip_upscale,
                     input,
                 ),
-                "allow_unverified_checkpoint": input.allow_unsafe_pickle_model
+                "allow_unverified_checkpoint": input.allow_unsafe_pickle_model,
+                "approved_checkpoint_sha256": approved_checkpoint_sha256
             }
         })),
         ModelSelection::Image {
             model_id,
             path,
+            approved_checkpoint_sha256,
             preprocess,
             face_path,
             face_model_id,
@@ -4025,6 +4129,7 @@ fn build_job_message(
                         input,
                     ),
                     "allow_unverified_checkpoint": input.allow_unsafe_pickle_model,
+                    "approved_checkpoint_sha256": approved_checkpoint_sha256,
                     "preview_enabled": input.enable_live_preview,
                     "preview_max_fps": 2.0,
                     "preview_max_dimension": 320,

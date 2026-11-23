@@ -92,6 +92,7 @@ const api = vi.hoisted(() => ({
         undefined,
   ),
   chooseCustomModel: vi.fn(async () => null),
+  checkpointConsent: vi.fn(async (_path: string, _allow?: boolean) => false),
   addMedia: vi.fn(async (_paths: string[], _replace: boolean): Promise<void> => undefined),
   selectMedia: vi.fn(async (_id: string): Promise<void> => undefined),
   removeMedia: vi.fn(async () => undefined),
@@ -725,6 +726,7 @@ beforeEach(() => {
   api.addMedia.mockResolvedValue(undefined);
   api.selectMedia.mockResolvedValue(undefined);
   api.saveSettings.mockResolvedValue(undefined);
+  api.checkpointConsent.mockReset().mockResolvedValue(false);
   api.startJobs.mockResolvedValue(undefined);
   api.startBenchmark.mockReset().mockResolvedValue(undefined);
   api.downloadModel.mockReset().mockResolvedValue(undefined);
@@ -7469,5 +7471,95 @@ describe('Linux AppImage menu prompt', () => {
 
     menuHandler?.('help.remove-desktop-menu');
     await waitFor(() => expect(api.uninstallLinuxMenu).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('custom checkpoint library', () => {
+  it('names a checkpoint, renames it and selects it from the custom group', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    api.chooseCustomModel.mockResolvedValueOnce('/models/my_model.safetensors' as never);
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
+    await user.click(screen.getByRole('button', { name: /Your own file/ }));
+    await user.click(screen.getByRole('button', { name: 'Choose checkpoint…' }));
+    expect(await screen.findByText('my model')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
+    await user.click(screen.getByRole('button', { name: /Your own file/ }));
+    await user.click(screen.getByRole('button', { name: 'Rename my model' }));
+    const name = screen.getByRole('textbox', { name: 'Model name' });
+    await user.clear(name);
+    await user.type(name, 'My favourite');
+    await user.click(screen.getByRole('button', { name: 'Save name' }));
+    expect(api.saveSettings.mock.calls.at(-1)?.[0]).toMatchObject({
+      custom_models: [{ path: '/models/my_model.safetensors', name: 'My favourite' }],
+    });
+    await user.click(screen.getByRole('button', { name: 'Use My favourite' }));
+    expect(await screen.findByText('My favourite')).toBeTruthy();
+  });
+});
+
+describe('remembered custom checkpoint consent', () => {
+  it('checks consent again when reselecting the same checkpoint', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    Object.assign(snapshot.settings, {
+      selected_model_id: '__custom__',
+      custom_model_path: '/models/mine.pth',
+      custom_models: [{ path: '/models/mine.pth', name: 'Mine' }],
+      quality: 'custom',
+    });
+    api.checkpointConsent.mockResolvedValue(true);
+    const user = await mountWith(snapshot);
+    await waitFor(() => expect(api.checkpointConsent).toHaveBeenCalledWith('/models/mine.pth'));
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
+    await user.click(screen.getByRole('button', { name: /Your own file/ }));
+    await user.click(screen.getByRole('button', { name: 'Use Mine' }));
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('checkbox', { name: /Allow this pickle-based/ }) as HTMLInputElement)
+          .checked,
+      ).toBe(true),
+    );
+  });
+});
+
+describe('older custom checkpoint settings', () => {
+  it('shows a cleaned filename when the saved entry has no name', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      selected_model_id: '__custom__',
+      custom_model_path: '/models/old_checkpoint.pth',
+      custom_models: [{ path: '/models/old_checkpoint.pth' }],
+      quality: 'custom',
+    });
+    await mountWith(snapshot);
+    expect(await screen.findByText('old checkpoint')).toBeTruthy();
+  });
+});
+
+describe('checkpoint consent after a running job', () => {
+  it('checks remembered consent once settings unlock', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      selected_model_id: '__custom__',
+      custom_model_path: '/models/mine.pth',
+      custom_models: [{ path: '/models/mine.pth', name: 'Mine' }],
+      quality: 'custom',
+      allow_unsafe_pickle_model: false,
+    });
+    snapshot.runtime.active_job_id = 'running';
+    api.checkpointConsent.mockResolvedValue(true);
+    await mountWith(snapshot);
+    await waitFor(() => expect(api.listenForStateChange).toHaveBeenCalled());
+    const stopped = structuredClone(snapshot);
+    stopped.runtime.active_job_id = '';
+    api.refreshSnapshot.mockResolvedValue(stopped);
+    (api.listenForStateChange.mock.calls[0][0] as () => void)();
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('checkbox', { name: /Allow this pickle-based/ }) as HTMLInputElement)
+          .checked,
+      ).toBe(true),
+    );
   });
 });

@@ -1443,6 +1443,7 @@ fn image_jobs_request_a_bounded_nonblocking_progressive_preview() {
         selected: true,
     };
     let selection = ModelSelection::Image {
+        approved_checkpoint_sha256: None,
         model_id: "model".into(),
         path: "/models/upscaler.safetensors".into(),
         preprocess: Vec::new(),
@@ -1603,6 +1604,7 @@ fn image_recipe_serializes_restore_upscale_and_fused_face_in_order() {
         selected: true,
     };
     let selection = ModelSelection::Image {
+        approved_checkpoint_sha256: None,
         model_id: "upscale".into(),
         path: "/models/upscale.pth".into(),
         preprocess: vec![ResolvedImageStage {
@@ -2155,6 +2157,7 @@ fn interpolation_settings_are_validated_and_default_to_off() {
 #[test]
 fn hdr_preservation_refuses_interpolation_only_for_hdr_sources() {
     let selection = ModelSelection::Image {
+        approved_checkpoint_sha256: None,
         model_id: "span_photo_x4".into(),
         path: "/models/span.pth".into(),
         preprocess: Vec::new(),
@@ -2529,6 +2532,7 @@ fn start_requests_from_an_older_window_default_to_no_interpolation() {
 #[test]
 fn a_start_that_cannot_be_written_is_refused_before_anything_is_queued() {
     let selection = ModelSelection::Image {
+        approved_checkpoint_sha256: None,
         model_id: "model".into(),
         path: "/models/m.pth".into(),
         preprocess: Vec::new(),
@@ -3873,4 +3877,111 @@ fn colour_fix_is_resolved_for_photos_and_rejected_for_video() {
         model_id: "ddcolor_modelscope".into(),
     }];
     assert!(resolve_model_selection(&state, &video_job).is_err());
+}
+
+#[test]
+fn custom_checkpoint_consent_is_persisted_by_digest_and_changes_require_new_consent() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(dir.path());
+    let checkpoint = dir.path().join("my_model.pth");
+    fs::write(&checkpoint, b"first").unwrap();
+    let state = AppState::from_paths(paths.clone()).unwrap();
+    state.grants.grant_model_file(&checkpoint);
+    assert!(!custom_checkpoint_trusted(&state, &checkpoint).unwrap());
+    set_custom_checkpoint_consent(&state, &checkpoint, true).unwrap();
+    assert!(custom_checkpoint_trusted(&state, &checkpoint).unwrap());
+    let state = AppState::from_paths(paths).unwrap();
+    state.grants.grant_model_file(&checkpoint);
+    assert!(custom_checkpoint_trusted(&state, &checkpoint).unwrap());
+    fs::write(&checkpoint, b"changed").unwrap();
+    assert!(!custom_checkpoint_trusted(&state, &checkpoint).unwrap());
+}
+
+#[test]
+fn custom_checkpoint_job_requires_matching_approval_and_safe_format_does_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = AppState::from_paths(AppPaths::under(dir.path())).unwrap();
+    let checkpoint = dir.path().join("custom.ckpt");
+    fs::write(&checkpoint, b"first").unwrap();
+    state.grants.grant_model_file(&checkpoint);
+    let mut request = input("upscale");
+    request.model_id = "__custom__".into();
+    request.custom_model_path = checkpoint.to_string_lossy().into_owned();
+    request.allow_unsafe_pickle_model = true;
+    assert!(resolve_model_selection(&state, &request).is_err());
+    set_custom_checkpoint_consent(&state, &checkpoint, true).unwrap();
+    let selected = resolve_model_selection(&state, &request).unwrap();
+    match selected {
+        ModelSelection::Image {
+            approved_checkpoint_sha256,
+            ..
+        } => {
+            assert_eq!(
+                approved_checkpoint_sha256,
+                Some(catalog::sha256_file(&checkpoint).unwrap())
+            );
+        }
+        _ => panic!("expected image model"),
+    }
+    request.allow_unsafe_pickle_model = false;
+    assert!(resolve_model_selection(&state, &request).is_err());
+    request.allow_unsafe_pickle_model = true;
+    fs::write(&checkpoint, b"changed").unwrap();
+    assert!(resolve_model_selection(&state, &request).is_err());
+    let safe = dir.path().join("safe.safetensors");
+    fs::write(&safe, b"fixture").unwrap();
+    state.grants.grant_model_file(&safe);
+    request.custom_model_path = safe.to_string_lossy().into_owned();
+    request.allow_unsafe_pickle_model = false;
+    assert!(resolve_model_selection(&state, &request).is_ok());
+}
+
+#[test]
+fn saved_custom_model_names_and_grants_survive_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(dir.path());
+    let file = dir.path().join("my_model.pth");
+    fs::write(&file, b"fixture").unwrap();
+    let state = AppState::from_paths(paths.clone()).unwrap();
+    state.grants.grant_model_file(&file);
+    let mut settings = lock(&state.settings).unwrap().clone();
+    settings.custom_models.push(crate::types::CustomModel {
+        path: file.to_string_lossy().into_owned(),
+        name: "My model".into(),
+    });
+    save_settings_checked(&state, settings).unwrap();
+    let restarted = AppState::from_paths(paths).unwrap();
+    assert_eq!(
+        lock(&restarted.settings).unwrap().custom_models[0].name,
+        "My model"
+    );
+    assert!(restarted.grants.check_model_file(&file).is_ok());
+}
+
+#[test]
+fn remembered_pickle_consent_requires_an_engine_that_checks_the_digest() {
+    let selection = ModelSelection::Image {
+        model_id: "__custom__".into(),
+        path: "/models/checkpoint.pth".into(),
+        approved_checkpoint_sha256: Some("a".repeat(64)),
+        preprocess: vec![],
+        face_path: None,
+        face_model_id: String::new(),
+        native_scale: 4,
+        skip_upscale: false,
+        interpolation: None,
+        audio_denoise: None,
+    };
+    let mut engine = crate::types::EngineInfo {
+        protocol_version: 1,
+        minimum_protocol_version: 1,
+        engine_id: "test".into(),
+        engine_version: "old".into(),
+        features: vec!["image".into()],
+        model_formats: vec![],
+        video_engines: vec![],
+    };
+    assert!(validate_checkpoint_engine(&selection, Some(&engine)).is_err());
+    engine.features.push("checkpoint_sha256_consent".into());
+    assert!(validate_checkpoint_engine(&selection, Some(&engine)).is_ok());
 }
