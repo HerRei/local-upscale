@@ -313,12 +313,12 @@ fn build_tray_menu<R: Runtime>(
     app: &AppHandle<R>,
     snapshot: &TraySnapshot,
 ) -> tauri::Result<Menu<R>> {
-    let current = MenuItemBuilder::with_id(MENU_STATUS_ID, format_current_job_line(snapshot))
-        .enabled(false)
-        .build(app)?;
+    // The status lines read as text, not greyed out: macOS draws a disabled item grey.
+    // Choosing one shows LocalSR, where that work is.
+    let current =
+        MenuItemBuilder::with_id(MENU_STATUS_ID, format_current_job_line(snapshot)).build(app)?;
     let waiting =
         MenuItemBuilder::with_id(MENU_WAITING_ID, format_waiting_line(snapshot.waiting_count))
-            .enabled(false)
             .build(app)?;
     let (pause_id, pause_label) = pause_resume_item(snapshot.paused);
     let pause_resume = MenuItemBuilder::with_id(pause_id, pause_label)
@@ -541,7 +541,7 @@ pub fn handle_menu_event(app: &AppHandle, id: &str) -> bool {
             });
             true
         }
-        MENU_SHOW_ID => {
+        MENU_SHOW_ID | MENU_STATUS_ID | MENU_WAITING_ID => {
             crate::focus_main_window(app);
             true
         }

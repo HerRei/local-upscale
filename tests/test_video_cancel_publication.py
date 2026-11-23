@@ -297,7 +297,7 @@ def test_a_kept_part_with_the_name_of_an_earlier_one_gets_a_number(tmp_path):
     for _ in range(2):
         cancel = threading.Event()
 
-        def stopped_after_two():
+        def stopped_after_two(cancel=cancel):
             frames = _frames()
             yield next(frames)
             yield next(frames)
