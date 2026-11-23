@@ -15,6 +15,15 @@ Two things change:
    (`chooseFixModel`, lib/fixStages.ts:94). The spec states the rule, makes it visible in one
    tip sentence and closes the gaps in its tests. See "Quick and Best for the fixes".
 
+## Amendment: Content stays as it is (Hermes, 2026-11-23)
+
+Hermes: "leave photo illustration now for what it is please … leave it as it is now". This
+overrides every Content detail below: the Content control keeps today's place, label, tip and
+look, first under YOUR IMAGE / YOUR VIDEO, above the Fix chips, exactly as in Upscale today. It
+shows whenever the result gets bigger and is hidden at Same size, as it is absent from Restore
+today. The only Content change left is `keepScale: true` in `setContent` (a Content click must not
+change Size). The order is therefore Content, Fix, Size.
+
 ## Decisions
 
 Each is settled here with its reason; Hermes can still change them.
@@ -26,7 +35,7 @@ Each is settled here with its reason; Hermes can still change them.
 | Video start button | Always `Start selected video` | At Same size a video may run only Frame rate or audio cleanup, which is not restoring. |
 | Label for 1× | `Same size` | Plain, and it is what the changelog already says ("to keep the size"). |
 | Same size with nothing ticked | Nothing ticks itself. Photo: Start is off and one line says why. Video: De-flicker, Frame rate and Clean up audio run alone, as today. | A noise fix that appeared on a size click would stay on when the size goes back to 4×. |
-| Field order | Fix, Size, Content | The order of the work, and nothing above Size moves when Content comes and goes. |
+| Field order | Content, Fix, Size (see Amendment) | Content stays where it is today, at Hermes's request. |
 | Content at Same size | Hidden | It only chooses the upscaler; all six fix models are photo models shared by Photo and Illustration. |
 | Size with SeedVR2 or FlashVSR | The Size row is hidden with "Your video" (video spec). **Output resolution** is the one size control there and lists `2×`, `3×`, `4×` before the pixel sizes. | These models work to a target resolution; one control, where the video spec already puts it. Same size needs a frame-by-frame model. |
 | Quick, Best, Content | Never change Size, except down to the new model's largest scale | Today they reset the scale to the model's own (2× jumps to 4×). Hidden in Advanced that went unnoticed; on the panel it would look broken. |
@@ -50,12 +59,12 @@ QUALITY                                    Save as recipe…
           [ Fast, clean result   ] [ Finest detail, slower ]
           [ 287 MB download      ] [ 730 MB download       ]
 YOUR IMAGE
+Content (?)
+[ (Photo) | Illustration ]
 Fix (?)
 [✓ Noise] [✓ Blur] [JPEG artifacts] [Colour]
 Size (?)                                        6400 × 4268
 [ Same size |  2×  |  3×  | (4×) ]
-Content (?)
-[ (Photo) | Illustration ]
 MODEL
 Fix blur     NAFNet GoPro Deblur                 ↓ Change…
              1 more model
@@ -324,9 +333,9 @@ is passed over (not deleted) while its model is gone from the catalog or no long
 - 1410 `taskCaption`, 4392 header, 4625–4629 recipe subtitle: Copy.
 - 4411–4448: the Task section renders only when the task is not `'video'` and the selected
   file is not a video. Two buttons; the first is pressed for `upscale` and `denoise`.
-- 4668–4750: one section. Order: Fix label and tip, chips, Size label with tip and result,
-  Size switch (`role="radiogroup"`, buttons `role="radio"` as Content has, 4691–4712),
-  then Content label, tip and switch inside `{#if !restoring}`.
+- 4668–4750: one section. Order (see Amendment): Content label, tip and switch exactly as
+  today inside `{#if !restoring}`, then Fix label and tip, chips, Size label with tip and
+  result, Size switch (`role="radiogroup"`, buttons `role="radio"` as Content has, 4691–4712).
 - 5150–5163: the Output resolution options. Option values `x2`, `x3`, `x4` and the pixel
   numbers; the selected value is the pixel size when `video_target_resolution` is set, else
   `x` + `output_scale`.
