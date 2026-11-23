@@ -9,6 +9,8 @@ blending across 128 px tile overlaps.
 from __future__ import annotations
 
 import gc
+import re
+import sys
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -41,6 +43,23 @@ MAX_TEMPORAL_WINDOW = 61
 #   896x512 (458,752 px): peak_mlx = 11,235,842,640 B (footprint 12,770,265,560 B, 0 swaps)
 FIXED_MEMORY_BYTES = 5_413_178_122
 PER_PIXEL_MEMORY_BYTES = 12_692.4
+
+# CUDA / ROCm PyTorch bfloat16 memory model: budget = 0.85 * available_vram (from torch.cuda.mem_get_info);
+# max_tile_area = (budget - ROCM_FIXED_MEMORY_BYTES) / ROCM_PER_PIXEL_MEMORY_BYTES.
+# Fitted from flashvsr-mlx ROCM.md bfloat16 measurements on AMD Radeon RX 9060 XT (16 GB, gfx1200)
+# with KV-cache/LQ release before decoding and TCDecoder cache release (reused for NVIDIA CUDA):
+#   512x256  (  131,072 px): peak =  5.2 GB
+#   896x512  (  458,752 px): peak =  8.6 GB
+#   768x1408 (1,081,344 px): peak = 11.4 GB
+# Linear fit for peak ≈ 4.9 GB + 6.3 kB per output pixel.
+ROCM_FIXED_MEMORY_BYTES = 4_900_000_000
+ROCM_PER_PIXEL_MEMORY_BYTES = 6_300.0
+
+_MEMORY_MODELS = {
+    "mps": (FIXED_MEMORY_BYTES, PER_PIXEL_MEMORY_BYTES),
+    "rocm": (ROCM_FIXED_MEMORY_BYTES, ROCM_PER_PIXEL_MEMORY_BYTES),
+    "cuda": (ROCM_FIXED_MEMORY_BYTES, ROCM_PER_PIXEL_MEMORY_BYTES),
+}
 
 
 @dataclass(frozen=True)
@@ -94,6 +113,49 @@ def mps_recommended_working_set_bytes() -> int:
     return int(recommended)
 
 
+def rocm_free_memory_bytes(device: str = "cuda") -> int:
+    """Return available ROCm VRAM in bytes from mem_get_info (free + own allocated, <= total)."""
+    import torch
+
+    free, total = torch.cuda.mem_get_info(device)
+    allocated = 0
+    try:
+        if torch.cuda.is_available():
+            allocated = int(torch.cuda.memory_allocated(device))
+    except (RuntimeError, AttributeError):
+        allocated = 0
+    return min(int(total), int(free) + allocated)
+
+
+def _has_rocm() -> bool:
+    import torch
+
+    return bool(getattr(getattr(torch, "version", None), "hip", None))
+
+
+def _has_cuda() -> bool:
+    import torch
+
+    return bool(getattr(getattr(torch, "version", None), "cuda", None))
+
+
+def _low_memory_message(backend: str, detail: str) -> str:
+    if backend == "rocm":
+        return (
+            f"Not enough AMD ROCm GPU memory for FlashVSR: {detail}. "
+            "Close other applications or choose Frame-by-frame video."
+        )
+    if backend == "cuda":
+        return (
+            f"Not enough NVIDIA CUDA GPU memory for FlashVSR: {detail}. "
+            "Close other applications or choose Frame-by-frame video."
+        )
+    return (
+        f"Not enough Apple Silicon unified memory for FlashVSR: {detail}. "
+        "Close other applications or choose Frame-by-frame video."
+    )
+
+
 def compute_axis_starts(length: int, tile_len: int, overlap: int = TILE_OVERLAP) -> list[int]:
     """Return 1D tile start offsets covering [0, length) with uniform tile_len.
 
@@ -141,6 +203,8 @@ def _choose_tile_dimensions(
     pad_h: int,
     max_area: int,
     max_tile_side: int,
+    *,
+    backend: str = "mps",
 ) -> tuple[int, int]:
     """Select uniform tile dimensions (tw, th) in multiples of 128 px."""
     if pad_w <= max_tile_side and pad_h <= max_tile_side and pad_w * pad_h <= max_area:
@@ -170,9 +234,10 @@ def _choose_tile_dimensions(
 
     if best_dims is None:
         raise RuntimeError(
-            "Not enough Apple Silicon unified memory for FlashVSR: no valid tile size fits "
-            "within the available memory budget. Close other applications or choose "
-            "Frame-by-frame video."
+            _low_memory_message(
+                backend,
+                "no valid tile size fits within the available memory budget",
+            )
         )
     return best_dims
 
@@ -181,22 +246,34 @@ def plan_tiles(
     out_width: int,
     out_height: int,
     *,
+    backend: str = "mps",
+    device: str = "mps",
     budget_bytes: int | None = None,
     max_tile_side: int = MAX_TILE_SIDE,
     tile_size_override: tuple[int, int] | None = None,
 ) -> FlashVSRTilePlan:
-    """Plan 128-aligned output tiles and feather weights from the MPS memory budget."""
+    """Plan 128-aligned output tiles and feather weights from the backend memory budget."""
+    if backend not in _MEMORY_MODELS:
+        raise ValueError(f"Unsupported FlashVSR memory model backend: {backend!r}")
+    fixed_bytes, per_pixel_bytes = _MEMORY_MODELS[backend]
+
     pad_w = ceil_multiple(out_width, SPATIAL_MULTIPLE)
     pad_h = ceil_multiple(out_height, SPATIAL_MULTIPLE)
 
     if budget_bytes is None:
-        budget_bytes = int(mps_recommended_working_set_bytes() * BUDGET_FRACTION)
-    max_area = int((budget_bytes - FIXED_MEMORY_BYTES) / PER_PIXEL_MEMORY_BYTES)
+        raw_budget = (
+            rocm_free_memory_bytes(device)
+            if backend in ("rocm", "cuda")
+            else mps_recommended_working_set_bytes()
+        )
+        budget_bytes = int(raw_budget * BUDGET_FRACTION)
+    max_area = int((budget_bytes - fixed_bytes) / per_pixel_bytes)
     if tile_size_override is None and max_area < MIN_TILE_SIDE * MIN_TILE_SIDE:
         raise RuntimeError(
-            "Not enough Apple Silicon unified memory for FlashVSR: the memory budget leaves "
-            "less than a 512x512 output tile, which would swap heavily. Close other "
-            "applications or choose Frame-by-frame video."
+            _low_memory_message(
+                backend,
+                "the memory budget leaves less than a 512x512 output tile",
+            )
         )
 
     if tile_size_override is not None:
@@ -204,7 +281,13 @@ def plan_tiles(
         if tw <= 0 or th <= 0 or tw % SPATIAL_MULTIPLE != 0 or th % SPATIAL_MULTIPLE != 0:
             raise ValueError(f"Tile size must be positive multiples of 128, got {(tw, th)}")
     else:
-        tw, th = _choose_tile_dimensions(pad_w, pad_h, max_area, max_tile_side)
+        tw, th = _choose_tile_dimensions(
+            pad_w,
+            pad_h,
+            max_area,
+            max_tile_side,
+            backend=backend,
+        )
 
     xs = compute_axis_starts(pad_w, tw, TILE_OVERLAP)
     ys = compute_axis_starts(pad_h, th, TILE_OVERLAP)
@@ -292,8 +375,41 @@ def _to_output(frame: np.ndarray, width: int, height: int) -> np.ndarray:
     return np.ascontiguousarray(frame)
 
 
+def _resolve_device_and_backend(device: str) -> tuple[str, str]:
+    device_str = str(device)
+    backend = device_str.split(":", 1)[0]
+    if backend == "auto":
+        if sys.platform == "darwin":
+            return "mps", "mps"
+        if _has_rocm():
+            return "cuda", "rocm"
+        if _has_cuda():
+            return "cuda", "cuda"
+        raise ValueError(
+            "FlashVSR runs on Apple Silicon GPU (mps), NVIDIA CUDA, or AMD ROCm GPU only. "
+            "Choose Frame-by-frame video for CPU or other backends."
+        )
+    if backend == "mps":
+        return "mps", "mps"
+    if backend == "cuda":
+        if not re.fullmatch(r"cuda(?::\d+)?", device_str):
+            raise ValueError(f"Invalid FlashVSR CUDA/ROCm device: {device!r}")
+        if _has_rocm():
+            return device_str, "rocm"
+        if _has_cuda():
+            return device_str, "cuda"
+        raise ValueError(
+            "FlashVSR on GPU requires NVIDIA CUDA or AMD ROCm. "
+            "Choose Frame-by-frame video for CPU or other backends."
+        )
+    raise ValueError(
+        "FlashVSR runs on Apple Silicon GPU (mps), NVIDIA CUDA, or AMD ROCm GPU only. "
+        "Choose Frame-by-frame video for CPU or other backends."
+    )
+
+
 class FlashVSREngine:
-    """One job's worth of MLX FlashVSR v1.1 Tiny state and tiled frame execution."""
+    """One job's worth of FlashVSR v1.1 Tiny state (MLX on MPS or PyTorch on CUDA/ROCm) and tiling."""
 
     def __init__(
         self,
@@ -301,42 +417,63 @@ class FlashVSREngine:
         device: str = "mps",
         precision: str = "bf16",
     ) -> None:
-        del precision  # FlashVSR v1.1 MLX weights and Metal kernel run in bfloat16.
-        backend = str(device).split(":", 1)[0]
-        if backend not in {"mps", "auto"}:
-            raise ValueError(
-                "FlashVSR runs on Apple Silicon GPU (mps) only. Choose Frame-by-frame video "
-                "for CPU or other backends."
-            )
+        del precision  # FlashVSR v1.1 runs in bfloat16 on both MLX/Metal and PyTorch/ROCm.
+        resolved_device, backend_kind = _resolve_device_and_backend(device)
         self.bundle_dir = Path(bundle_dir)
-        self.device = "mps"
+        self.device = resolved_device
+        self._backend = backend_kind
         self.max_temporal_window = MAX_TEMPORAL_WINDOW
         self._budget_bytes_override: int | None = None
         self._tile_size_override: tuple[int, int] | None = None
         self._upscale_resample: Image.Resampling = Image.Resampling.BICUBIC
 
-        import mlx.core as mx
+        if self._backend == "mps":
+            import mlx.core as mx
 
-        from .mlx_flashvsr.pipeline import FlashVSRTinyPipeline
+            from .mlx_flashvsr.pipeline import FlashVSRTinyPipeline
 
-        self.pipeline: Any = FlashVSRTinyPipeline.from_pretrained(
-            self.bundle_dir,
-            dtype="bfloat16",
-        )
-        # Materialize every weight and precomputed tensor on the constructing
-        # thread so WorkerServer's bounded_preparation helper thread never
-        # leaves lazy MLX ops bound to a thread-local stream.
-        to_eval: list[Any] = [self.pipeline.dit.parameters(), self.pipeline.dit.freqs]
-        if self.pipeline.TCDecoder is not None:
-            to_eval.append(self.pipeline.TCDecoder.parameters())
-        if self.pipeline.prompt_emb_posi is not None:
-            to_eval.append(self.pipeline.prompt_emb_posi)
-        mx.eval(*to_eval)
+            self.pipeline: Any = FlashVSRTinyPipeline.from_pretrained(
+                self.bundle_dir,
+                dtype="bfloat16",
+            )
+            # Materialize every weight and precomputed tensor on the constructing
+            # thread so WorkerServer's bounded_preparation helper thread never
+            # leaves lazy MLX ops bound to a thread-local stream.
+            to_eval: list[Any] = [self.pipeline.dit.parameters(), self.pipeline.dit.freqs]
+            if self.pipeline.TCDecoder is not None:
+                to_eval.append(self.pipeline.TCDecoder.parameters())
+            if self.pipeline.prompt_emb_posi is not None:
+                to_eval.append(self.pipeline.prompt_emb_posi)
+            mx.eval(*to_eval)
+        else:
+            import torch
+
+            from .torch_flashvsr.pipeline import FlashVSRTinyPipeline as TorchFlashVSRTinyPipeline
+
+            self.pipeline = TorchFlashVSRTinyPipeline.from_pretrained(
+                self.bundle_dir,
+                device=self.device,
+                dtype=torch.bfloat16,
+            )
 
     def release(self) -> None:
-        """Free loaded MLX weights and clear the Metal allocator cache."""
+        """Free loaded model weights and clear the GPU allocator cache."""
+        backend = getattr(self, "_backend", "mps")
         pipe = getattr(self, "pipeline", None)
         if pipe is not None:
+            tcdecoder = getattr(pipe, "TCDecoder", None)
+            if tcdecoder is not None:
+                if hasattr(tcdecoder, "set_rocm_cache_release"):
+                    tcdecoder.set_rocm_cache_release(False)
+                if hasattr(tcdecoder, "clean_mem"):
+                    tcdecoder.clean_mem()
+            dit = getattr(pipe, "dit", None)
+            if dit is not None:
+                if hasattr(dit, "clear_cross_kv"):
+                    dit.clear_cross_kv()
+                lq_proj = getattr(dit, "LQ_proj_in", None)
+                if lq_proj is not None and hasattr(lq_proj, "clear_cache"):
+                    lq_proj.clear_cache()
             pipe.dit = None
             pipe.TCDecoder = None
             pipe.ColorCorrector = None
@@ -345,12 +482,17 @@ class FlashVSREngine:
             pipe.t_mod = None
             self.pipeline = None
         gc.collect()
-        try:
-            import mlx.core as mx
+        if backend in ("rocm", "cuda"):
+            import torch
 
-            mx.clear_cache()
-        except ImportError:
-            pass
+            torch.cuda.empty_cache()
+        else:
+            try:
+                import mlx.core as mx
+
+                mx.clear_cache()
+            except ImportError:
+                pass
 
     def close(self) -> None:
         self.release()
@@ -376,19 +518,19 @@ class FlashVSREngine:
             None, ...
         ]
         topk_ratio = 2.0 * 768.0 * 1280.0 / float(tile.height * tile.width)
+        backend = getattr(self, "_backend", "mps")
 
-        try:
+        if getattr(self, "_numpy_stub_arrays", False):
+            lq_arr: Any = lq_np
+        elif backend in ("rocm", "cuda"):
+            import torch
+
+            lq_arr = torch.from_numpy(lq_np).to(device=self.device, dtype=torch.bfloat16)
+        else:
             import mlx.core as mx
 
-            has_mlx = True
-        except ImportError:
-            has_mlx = False
-
-        if has_mlx and not getattr(self, "_numpy_stub_arrays", False):
-            lq_arr: Any = mx.array(lq_np, dtype=mx.float32).astype(mx.bfloat16)
+            lq_arr = mx.array(lq_np, dtype=mx.float32).astype(mx.bfloat16)
             mx.eval(lq_arr)
-        else:
-            lq_arr = lq_np
 
         out_tensor = self.pipeline(
             height=tile.height,
@@ -407,6 +549,14 @@ class FlashVSREngine:
 
         if isinstance(out_tensor, np.ndarray):
             arr = out_tensor[:, :n_in, :, :].astype(np.float32)
+        elif backend in ("rocm", "cuda"):
+            import torch
+
+            sliced = out_tensor[:, :n_in, :, :]
+            arr = sliced.detach().to(device="cpu", dtype=torch.float32).numpy()
+            del out_tensor, sliced, lq_arr
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
         else:
             import mlx.core as mx
 
@@ -456,6 +606,8 @@ class FlashVSREngine:
         plan = plan_tiles(
             out_w,
             out_h,
+            backend=getattr(self, "_backend", "mps"),
+            device=getattr(self, "device", "mps"),
             budget_bytes=getattr(self, "_budget_bytes_override", None),
             tile_size_override=getattr(self, "_tile_size_override", None),
         )

@@ -39,19 +39,30 @@ def seedvr2_runtime_issue() -> str | None:
 
 
 def flashvsr_runtime_issue() -> str | None:
-    """FlashVSR runs on Apple Silicon via MLX."""
-    if sys.platform != "darwin" or platform.machine().lower() != "arm64":
-        return (
-            "FlashVSR requires Apple Silicon (macOS arm64). Frame-by-frame video remains available."
-        )
+    """FlashVSR runs on Apple Silicon via MLX or on NVIDIA CUDA / AMD ROCm via PyTorch."""
+    if sys.platform == "darwin" and platform.machine().lower() == "arm64":
+        try:
+            import mlx.core  # noqa: F401
+        except (ImportError, OSError):
+            return (
+                "FlashVSR requires MLX on Apple Silicon, which is not installed in this build. "
+                "Frame-by-frame video remains available."
+            )
+        return None
     try:
-        import mlx.core  # noqa: F401
+        import torch
     except (ImportError, OSError):
         return (
-            "FlashVSR requires MLX on Apple Silicon, which is not installed in this build. "
+            "FlashVSR requires Apple Silicon (macOS arm64), NVIDIA CUDA, or AMD ROCm. "
             "Frame-by-frame video remains available."
         )
-    return None
+    torch_version = getattr(torch, "version", None)
+    if getattr(torch_version, "hip", None) or getattr(torch_version, "cuda", None):
+        return None
+    return (
+        "FlashVSR requires Apple Silicon (macOS arm64), NVIDIA CUDA, or AMD ROCm. "
+        "Frame-by-frame video remains available."
+    )
 
 
 def resolve_video_engine(kind: str):

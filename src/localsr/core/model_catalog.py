@@ -923,9 +923,9 @@ VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
         model_id="flashvsr_v11",
         name="FlashVSR v1.1 — Labs",
         description=(
-            "Experimental one-step diffusion video upscaling (Tiny pipeline). Runs on Apple "
-            "silicon through MLX. Large frames are processed in tiles, so jobs can take "
-            "hours. Needs at least 16 GB of memory. SDR output only."
+            "Experimental one-step diffusion video upscaling (Tiny pipeline) for Apple silicon "
+            "(MLX), AMD ROCm on Linux and NVIDIA CUDA. Tiles large frames, so jobs can take "
+            "hours. Needs 16 GB unified or 12 GB GPU memory. SDR output only."
         ),
         family="flashvsr_v11",
         engine_kind="flashvsr",
@@ -959,7 +959,7 @@ VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
         author="Junhao Zhuang et al. · OpenImagingLab",
         source_url="https://github.com/OpenImagingLab/FlashVSR",
         min_unified_memory_gb=16,
-        min_vram_gb=16,
+        min_vram_gb=12,
         # 37 frames + 4 repeated = 41 = 8*5 + 1: the stream yields exactly 37 frames.
         temporal_window=37,
         temporal_overlap=8,

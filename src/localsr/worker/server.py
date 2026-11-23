@@ -1767,14 +1767,22 @@ class WorkerServer:
             )
         if model_kind == "seedvr2" and (issue := seedvr2_runtime_issue()):
             raise ValueError(issue)
-        if model_kind == "flashvsr" and str(data.get("device", "")).split(":", 1)[0] not in {
-            "mps",
-            "auto",
-        }:
-            raise ValueError(
-                "FlashVSR runs on Apple Silicon GPU (mps) only. Choose frame-by-frame video "
-                "for CPU or other backends."
-            )
+        if model_kind == "flashvsr":
+            raw_device = str(data.get("device", ""))
+            backend = raw_device.split(":", 1)[0]
+            if backend == "cuda":
+                import re
+
+                if not re.fullmatch(r"cuda(?::\d+)?", raw_device):
+                    raise ValueError(
+                        f"Invalid FlashVSR CUDA/ROCm device: {raw_device!r}. "
+                        "Choose frame-by-frame video for CPU or other backends."
+                    )
+            elif backend not in {"mps", "auto"}:
+                raise ValueError(
+                    "FlashVSR runs on Apple Silicon GPU (mps), NVIDIA CUDA, or AMD ROCm GPU only. "
+                    "Choose frame-by-frame video for CPU or other backends."
+                )
         if model_kind == "flashvsr" and (issue := flashvsr_runtime_issue()):
             raise ValueError(issue)
         engine_factory = resolve_video_engine(model_kind)

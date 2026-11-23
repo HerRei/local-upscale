@@ -11,9 +11,24 @@ import {
 } from './videoEngines';
 
 const GIB = 1024 ** 3;
-const flash = { model_id: 'flashvsr_v11', engine_kind: 'flashvsr', min_unified_memory_gb: 16 };
-const seed = { model_id: 'seedvr2_3b', engine_kind: 'seedvr2', min_unified_memory_gb: 16 };
-const seedFp8 = { model_id: 'seedvr2_3b_fp8', engine_kind: 'seedvr2', min_unified_memory_gb: 24 };
+const flash = {
+  model_id: 'flashvsr_v11',
+  engine_kind: 'flashvsr',
+  min_unified_memory_gb: 16,
+  min_vram_gb: 12,
+};
+const seed = {
+  model_id: 'seedvr2_3b',
+  engine_kind: 'seedvr2',
+  min_unified_memory_gb: 16,
+  min_vram_gb: 16,
+};
+const seedFp8 = {
+  model_id: 'seedvr2_3b_fp8',
+  engine_kind: 'seedvr2',
+  min_unified_memory_gb: 24,
+  min_vram_gb: 12,
+};
 
 function device(id: string, totalGb = 0): DeviceInfo {
   return {
@@ -43,18 +58,40 @@ describe('FlashVSR availability', () => {
     expect(videoModelUnavailable(flash, macEngine, mac(64), 'mps')).toBeUndefined();
   });
 
-  it('does not run on the CPU', () => {
-    expect(videoModelUnavailable(flash, macEngine, mac(16), 'cpu')).toEqual({
-      reason: 'FlashVSR cannot run on this device. Choose a frame-by-frame model or the Apple GPU.',
-      tag: 'Apple GPU only',
-    });
+  it('does not run on the CPU or unsupported backends', () => {
+    const wrongDevice = {
+      reason:
+        'FlashVSR cannot run on this device. Choose a frame-by-frame model or a compatible CUDA, ROCm or Metal device.',
+      tag: 'Unavailable',
+    };
+    expect(videoModelUnavailable(flash, macEngine, mac(16), 'cpu')).toEqual(wrongDevice);
+    expect(videoModelUnavailable(flash, macEngine, pc, 'cpu')).toEqual(wrongDevice);
+    expect(videoModelUnavailable(flash, macEngine, pc, 'directml:0')).toEqual(wrongDevice);
+    expect(videoModelUnavailable(flash, macEngine, pc, 'xpu:0')).toEqual(wrongDevice);
+    expect(videoModelUnavailable(flash, macEngine, pc, 'openvino:GPU')).toEqual(wrongDevice);
   });
 
-  it('does not run on CUDA or ROCm even when an engine lists it', () => {
-    expect(videoModelUnavailable(flash, macEngine, pc, 'cuda:0')?.reason).toMatch(
-      /^FlashVSR cannot run on this device\./,
-    );
-    expect(videoModelUnavailable(flash, macEngine, pc, 'cuda')?.tag).toBe('Apple GPU only');
+  it('runs on CUDA and ROCm GPUs with enough VRAM when the engine lists it', () => {
+    expect(videoModelUnavailable(flash, macEngine, pc, 'cuda:0')).toBeUndefined();
+    const pc12 = { devices: [device('cpu', 32), device('cuda:0', 12)], system_ram_total: 32 * GIB };
+    expect(videoModelUnavailable(flash, macEngine, pc12, 'cuda:0')).toBeUndefined();
+    // Driver reports slightly below 12 GiB (e.g. 11.8 GiB) still rounds to 12 GB.
+    const pc11_8 = {
+      devices: [device('cpu', 32), device('cuda:0', 11.8)],
+      system_ram_total: 32 * GIB,
+    };
+    expect(videoModelUnavailable(flash, macEngine, pc11_8, 'cuda:0')).toBeUndefined();
+  });
+
+  it('does not run on a CUDA/ROCm GPU with less than min_vram_gb', () => {
+    const pc8 = { devices: [device('cpu', 32), device('cuda:0', 8)], system_ram_total: 32 * GIB };
+    expect(videoModelUnavailable(flash, macEngine, pc8, 'cuda:0')).toEqual({
+      reason: 'FlashVSR needs 12 GB of GPU memory. This GPU has 8 GB.',
+      tag: 'Needs 12 GB',
+    });
+    // Unknown VRAM leaves the check to the engine.
+    const pcUnknown = { devices: [device('cuda:0', 0)], system_ram_total: 32 * GIB };
+    expect(videoModelUnavailable(flash, macEngine, pcUnknown, 'cuda:0')).toBeUndefined();
   });
 
   it('does not run on a Mac with 8 GB, whatever device is chosen', () => {
@@ -81,8 +118,9 @@ describe('FlashVSR availability', () => {
 
   it('is unavailable when the engine does not list it', () => {
     expect(videoModelUnavailable(flash, seedOnly, pc, 'cuda:0')).toEqual({
-      reason: 'FlashVSR needs an Apple silicon Mac with 16 GB of memory.',
-      tag: 'Apple silicon only',
+      reason:
+        'This installation supports frame-by-frame models. FlashVSR requires a compatible CUDA, ROCm or Metal engine.',
+      tag: 'Unavailable',
     });
     // On a Mac that should run it, a missing engine is unexpected and says so.
     expect(videoModelUnavailable(flash, seedOnly, mac(16), 'mps')).toEqual({
@@ -140,7 +178,10 @@ describe('per-model availability and library helpers', () => {
 
     const onPc = videoAvailability(models, seedOnly, pc, 'cuda:0');
     expect(ids(onPc)).toEqual(['flashvsr_v11']);
-    expect(onPc.flashvsr_v11?.tag).toBe('Apple silicon only');
+    expect(onPc.flashvsr_v11?.tag).toBe('Unavailable');
+
+    const onCuda = videoAvailability(models, macEngine, pc, 'cuda:0');
+    expect(ids(onCuda)).toEqual([]);
   });
 
   it('covers every video model of the shipped catalog', () => {
@@ -155,7 +196,12 @@ describe('per-model availability and library helpers', () => {
   });
 
   it('lets an engine this version does not know run when the worker lists it', () => {
-    const next = { model_id: 'next', engine_kind: 'next_engine', min_unified_memory_gb: 0 };
+    const next = {
+      model_id: 'next',
+      engine_kind: 'next_engine',
+      min_unified_memory_gb: 0,
+      min_vram_gb: 0,
+    };
     expect(
       videoModelUnavailable(next, { video_engines: ['next_engine'] }, pc, 'cpu'),
     ).toBeUndefined();

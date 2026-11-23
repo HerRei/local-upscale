@@ -2011,8 +2011,15 @@ describe('LocalSR desktop interface', () => {
   });
 
   it.each([
-    ['the CPU', 'cpu', 16, true, 'Apple GPU only', /^FlashVSR cannot run on this device\./],
-    ['CUDA', 'cuda:0', 16, true, 'Apple GPU only', /^FlashVSR cannot run on this device\./],
+    ['the CPU', 'cpu', 16, true, 'Unavailable', /^FlashVSR cannot run on this device\./],
+    [
+      'an 8 GB CUDA GPU',
+      'cuda:0',
+      16,
+      true,
+      'Needs 12 GB',
+      /^FlashVSR needs 12 GB of GPU memory\. This GPU has 8 GB\.$/,
+    ],
     [
       'a Mac with 8 GB',
       'mps',
@@ -2034,7 +2041,12 @@ describe('LocalSR desktop interface', () => {
     async (_name, deviceId, unifiedGb, listed, tag, reason) => {
       const snapshot = flashSnapshot(unifiedGb);
       if (!listed) snapshot.engine!.video_engines = ['spandrel_image', 'seedvr2'];
-      if (deviceId === 'cuda:0') snapshot.capabilities.devices.push(gpu('cuda:0', 'cuda', 'GPU'));
+      if (deviceId === 'cuda:0') {
+        snapshot.capabilities.devices.push({
+          ...gpu('cuda:0', 'cuda', 'GPU'),
+          total_memory: 8 * 1024 ** 3,
+        });
+      }
       snapshot.settings.device_id = deviceId;
       snapshot.settings.selected_video_model_id = 'flashvsr_v11';
       const user = await mountWith(snapshot);
