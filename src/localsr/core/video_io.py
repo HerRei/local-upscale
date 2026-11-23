@@ -461,6 +461,19 @@ def count_video_frames(path: str) -> int:
         return sum(1 for packet in container.demux(stream) if packet.size)
 
 
+def partial_destination(destination: Path, seconds: float) -> Path:
+    """`<name>_partial_<m>m<ss>s.<ext>` beside the requested output, numbered when that
+    name is taken: a kept part is never lost to an earlier one of the same length."""
+    whole = int(seconds)
+    stem = f"{destination.stem}_partial_{whole // 60}m{whole % 60:02d}s"
+    candidate = destination.with_name(f"{stem}{destination.suffix}")
+    number = 2
+    while os.path.lexists(candidate):
+        candidate = destination.with_name(f"{stem}-{number}{destination.suffix}")
+        number += 1
+    return candidate
+
+
 def _should_keep_partial(keep_partial: bool | Callable[[], bool]) -> bool:
     return bool(keep_partial()) if callable(keep_partial) else bool(keep_partial)
 
@@ -532,10 +545,7 @@ def _system_stream_export(
                 cancel_event=None if can_keep_partial else cancel_event,
             )
         if stopped:
-            seconds = int(last_end)
-            destination = destination.with_name(
-                f"{destination.stem}_partial_{seconds // 60}m{seconds % 60:02d}s{destination.suffix}"
-            )
+            destination = partial_destination(destination, float(last_end))
         final_cancel_event = (
             None
             if stopped or cancel_event is None
@@ -961,11 +971,7 @@ def _encode_video(
             output_container = None
 
         if stopped:
-            duration = float(last_end)
-            seconds = int(duration)
-            destination = destination.with_name(
-                f"{destination.stem}_partial_{seconds // 60}m{seconds % 60:02d}s{destination.suffix}"
-            )
+            destination = partial_destination(destination, float(last_end))
         final_cancel_event = (
             None
             if stopped or cancel_event is None

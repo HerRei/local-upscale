@@ -288,3 +288,36 @@ def test_a_stop_that_keeps_after_the_last_frame_saves_the_whole_video(tmp_path):
     assert written == str(destination)
     with av.open(written) as container:
         assert sum(1 for _ in container.decode(video=0)) == 3
+
+
+def test_a_kept_part_with_the_name_of_an_earlier_one_gets_a_number(tmp_path):
+    """Hermes, 11-23: a second kept part of the same length found the name taken and the
+    whole kept part was lost ("already exists ... this result was not saved")."""
+    names = []
+    for _ in range(2):
+        cancel = threading.Event()
+
+        def stopped_after_two():
+            frames = _frames()
+            yield next(frames)
+            yield next(frames)
+            cancel.set()
+            raise InterruptedError("stopped")
+
+        names.append(
+            encode_video(
+                stopped_after_two(),
+                str(tmp_path / "clip_video_4x.mkv"),
+                fps=5.0,
+                width=64,
+                height=64,
+                container_format="mkv",
+                cancel_event=cancel,
+                keep_partial=True,
+            )
+        )
+    assert [Path(name).name for name in names] == [
+        "clip_video_4x_partial_0m00s.mkv",
+        "clip_video_4x_partial_0m00s-2.mkv",
+    ]
+    assert all(Path(name).is_file() for name in names)
