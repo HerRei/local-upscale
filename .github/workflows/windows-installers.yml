@@ -289,7 +289,12 @@ jobs:
           # of adding a second per-user copy, and a silent uninstall of it must fail too.
           $machine = Start-Process -FilePath $artifact -ArgumentList "/S", "/AllUsers" -Wait -PassThru
           if ($machine.ExitCode -ne 0) { throw "The administrator's all-users install failed: $($machine.ExitCode)" }
-          $machineDir = Join-Path $env:ProgramFiles "LocalSR"
+          # The installer reuses a remembered location (the smoke test's folder), so ask the
+          # uninstall entry where it went instead of assuming Program Files.
+          $entry = Get-ItemProperty "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\LocalSR" -ErrorAction SilentlyContinue
+          if (-not $entry) { throw "The all-users install wrote no machine-wide uninstall entry" }
+          $machineDir = $entry.InstallLocation.Trim('"')
+          "All-users install by the administrator in: $machineDir"
           $machineUninstaller = Join-Path $machineDir "uninstall.exe"
           if (-not (Test-Path -LiteralPath $machineUninstaller)) { throw "No all-users install in $machineDir" }
           $over = Start-Process -FilePath "cmd.exe" -Credential $credential -LoadUserProfile -PassThru `
