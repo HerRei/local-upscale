@@ -2,6 +2,8 @@
 
 ## [0.6.0-beta] - Unreleased
 
+- **Menu bar.** Shows queue progress and pause or resume controls in the menu bar or
+  system tray, with optional completion notifications for each finished file (#112).
 - **Colour for video.** Black-and-white videos can be coloured under Restore and
   Restore first. Colours are carried from frame to frame, so they stay steady (#164).
 - **Compare results.** Each side of a comparison lists how it was made: models and

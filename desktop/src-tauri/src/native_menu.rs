@@ -375,6 +375,9 @@ fn appearance_action(id: &str) -> Option<&'static str> {
 }
 
 pub fn dispatch(app: &AppHandle, id: &str) {
+    if crate::tray::handle_menu_event(app, id) {
+        return;
+    }
     if let Some(action) = appearance_action(id) {
         let app = app.clone();
         tauri::async_runtime::spawn_blocking(move || {

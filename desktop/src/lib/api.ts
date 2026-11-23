@@ -147,7 +147,13 @@ export const saveSettings = (settings: UiSettings): Promise<void> =>
 
 /** One update switch, saved by the host on its own: a full settings save never changes it. */
 export const setUpdateSwitch = (
-  name: 'check_updates_at_launch' | 'anonymous_update_count' | 'crash_reports' | 'low_priority',
+  name:
+    | 'check_updates_at_launch'
+    | 'anonymous_update_count'
+    | 'crash_reports'
+    | 'low_priority'
+    | 'show_in_menu_bar'
+    | 'notify_on_finish',
   value: boolean,
 ): Promise<void> => invoke('set_update_switch', { name, value });
 export interface SetupChoices {

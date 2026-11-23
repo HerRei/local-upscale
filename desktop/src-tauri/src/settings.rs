@@ -344,6 +344,31 @@ mod tests {
     }
 
     #[test]
+    fn menu_bar_and_finish_notifications_default_on_and_round_trip() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        assert!(load(&paths).0.show_in_menu_bar);
+        assert!(load(&paths).0.notify_on_finish);
+
+        fs::create_dir_all(&paths.next_root).unwrap();
+        fs::write(
+            &paths.settings,
+            r#"{"schema_version":2,"ui":{},"recipes":[]}"#,
+        )
+        .unwrap();
+        let (mut settings, recipes) = load(&paths);
+        assert!(settings.show_in_menu_bar);
+        assert!(settings.notify_on_finish);
+
+        settings.show_in_menu_bar = false;
+        settings.notify_on_finish = false;
+        save(&paths, &settings, &recipes).unwrap();
+        let (reloaded, _) = load(&paths);
+        assert!(!reloaded.show_in_menu_bar);
+        assert!(!reloaded.notify_on_finish);
+    }
+
+    #[test]
     fn appearance_defaults_round_trips_and_rejects_unknown_values() {
         let defaults: UiSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(defaults.appearance, "dark");

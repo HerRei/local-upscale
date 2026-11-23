@@ -2275,7 +2275,13 @@
    * The window shows the host's value afterwards, also when saving failed.
    */
   function setUpdateSwitch(
-    name: 'check_updates_at_launch' | 'anonymous_update_count' | 'crash_reports' | 'low_priority',
+    name:
+      | 'check_updates_at_launch'
+      | 'anonymous_update_count'
+      | 'crash_reports'
+      | 'low_priority'
+      | 'show_in_menu_bar'
+      | 'notify_on_finish',
     value: boolean,
   ): void {
     if (!api.isTauri()) {
@@ -4898,6 +4904,8 @@
               loadCacheSize={() => void loadCacheSize()}
               {updateSettings}
               setLowPriority={(value) => setUpdateSwitch('low_priority', value)}
+              setShowInMenuBar={(value) => setUpdateSwitch('show_in_menu_bar', value)}
+              setNotifyOnFinish={(value) => setUpdateSwitch('notify_on_finish', value)}
               {chooseOutput}
               {chooseModelFolder}
               {resetModelFolder}

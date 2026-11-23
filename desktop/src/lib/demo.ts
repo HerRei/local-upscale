@@ -88,6 +88,8 @@ export function demoSnapshot(): AppSnapshot {
       model_directory: '',
       gpu_download_notice_dismissed: false,
       linux_menu_prompt_dismissed: false,
+      show_in_menu_bar: true,
+      notify_on_finish: true,
     },
     recipes: [],
     capabilities: {

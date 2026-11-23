@@ -31,6 +31,7 @@ mod queue_timing;
 mod results;
 mod settings;
 mod state;
+mod tray;
 mod types;
 mod update_storage;
 mod updates;
@@ -158,6 +159,7 @@ pub fn run() {
             *lock(&state.bundled_engine_path)? = worker::bundled_engine_executable(app.handle());
             let switches = native_menu::switches(&*lock(&state.settings)?);
             native_menu::install(app, &lock(&state.recipes)?, switches)?;
+            tray::install(app.handle());
             fit_main_window(app.handle());
             let startup_state = state.clone();
             let startup_app = app.handle().clone();

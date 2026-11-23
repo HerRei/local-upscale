@@ -517,6 +517,8 @@ fn keep_update_switches(current: &UiSettings, incoming: &mut UiSettings) {
     incoming.privacy_choice_made = current.privacy_choice_made;
     incoming.crash_reports = current.crash_reports;
     incoming.low_priority = current.low_priority;
+    incoming.show_in_menu_bar = current.show_in_menu_bar;
+    incoming.notify_on_finish = current.notify_on_finish;
     incoming.skipped_update_version = current.skipped_update_version.clone();
     incoming.model_directory = current.model_directory.clone();
     incoming.gpu_download_notice_dismissed = current.gpu_download_notice_dismissed;
@@ -737,6 +739,8 @@ fn apply_update_switch(
             "anonymous_update_count" => &mut settings.anonymous_update_count,
             "crash_reports" => &mut settings.crash_reports,
             "low_priority" => &mut settings.low_priority,
+            "show_in_menu_bar" => &mut settings.show_in_menu_bar,
+            "notify_on_finish" => &mut settings.notify_on_finish,
             _ => {
                 return Err(AppError::Validation(format!(
                     "unknown update switch: {name}"
@@ -755,6 +759,8 @@ fn apply_update_switch(
                 "anonymous_update_count" => settings.anonymous_update_count = previous,
                 "crash_reports" => settings.crash_reports = previous,
                 "low_priority" => settings.low_priority = previous,
+                "show_in_menu_bar" => settings.show_in_menu_bar = previous,
+                "notify_on_finish" => settings.notify_on_finish = previous,
                 _ => {}
             }
         }
@@ -1190,6 +1196,11 @@ pub async fn retry_engine(state: State<'_, Arc<AppState>>, app: AppHandle) -> Ap
 #[tauri::command]
 pub fn cancel_jobs(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
     let _scheduler = lock(&state.scheduler)?;
+    state
+        .worker
+        .queue_paused
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    lock(&state.runtime)?.queue_paused = false;
     let mut cancellation = lock(&state.worker.cancellation)?;
     lock(&state.database)?.cancel_queued_jobs()?;
     let active = lock(&state.runtime)?.active_job_id.clone();
@@ -2524,7 +2535,11 @@ pub fn open_result(state: State<'_, Arc<AppState>>, path: String) -> AppResult<(
 
 #[tauri::command]
 pub fn reveal_result(state: State<'_, Arc<AppState>>, path: String) -> AppResult<()> {
-    let authorized = authorized_result(&state, &path)?;
+    reveal_result_path(&state, &path)
+}
+
+pub(crate) fn reveal_result_path(state: &AppState, path: &str) -> AppResult<()> {
+    let authorized = authorized_result(state, path)?;
     let parent = authorized
         .parent()
         .ok_or_else(|| AppError::Validation("output directory is unavailable".into()))?;

@@ -49,6 +49,10 @@
   export let updateSettings: (patch: Partial<UiSettings>) => void;
   export let setLowPriority: (value: boolean) => void = (value) =>
     updateSettings({ low_priority: value });
+  export let setShowInMenuBar: (value: boolean) => void = (value) =>
+    updateSettings({ show_in_menu_bar: value });
+  export let setNotifyOnFinish: (value: boolean) => void = (value) =>
+    updateSettings({ notify_on_finish: value });
   export let chooseOutput: () => Promise<void>;
   export let chooseModelFolder: () => Promise<void> = async () => undefined;
   export let resetModelFolder: () => Promise<void> = async () => undefined;
@@ -797,6 +801,74 @@
         ><HelpTip
           label="Run at low priority"
           text="Lets other apps stay responsive while LocalSR works. Jobs take longer: on a Mac about twice as long, even when nothing else is running. You can switch it during a job. On Linux, switching it off takes full effect the next time the engine starts."
+        />
+      </div>
+      <div class="check-line">
+        <span
+          id="show-in-menu-bar"
+          role="checkbox"
+          tabindex="0"
+          aria-checked={settings.show_in_menu_bar ?? true}
+          class="check-row live-setting"
+          on:click={() => setShowInMenuBar(!(settings.show_in_menu_bar ?? true))}
+          on:keydown={(event) => {
+            if (event.key === ' ' || event.key === 'Enter') {
+              event.preventDefault();
+              setShowInMenuBar(!(settings.show_in_menu_bar ?? true));
+            }
+          }}
+          ><span
+            class="live-checkbox"
+            class:checked={settings.show_in_menu_bar ?? true}
+            aria-hidden="true"
+            >{#if settings.show_in_menu_bar ?? true}<svg
+                viewBox="0 0 12 12"
+                width="10"
+                height="10"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"><path d="M2.5 6.2 5 8.7 9.5 3.5" /></svg
+              >{/if}</span
+          ><span class="live-setting-label">Show in menu bar</span></span
+        ><HelpTip
+          label="Show in menu bar"
+          text="Shows queue progress and pause or resume controls in the system menu bar or tray."
+        />
+      </div>
+      <div class="check-line">
+        <span
+          id="notify-on-finish"
+          role="checkbox"
+          tabindex="0"
+          aria-checked={settings.notify_on_finish ?? true}
+          class="check-row live-setting"
+          on:click={() => setNotifyOnFinish(!(settings.notify_on_finish ?? true))}
+          on:keydown={(event) => {
+            if (event.key === ' ' || event.key === 'Enter') {
+              event.preventDefault();
+              setNotifyOnFinish(!(settings.notify_on_finish ?? true));
+            }
+          }}
+          ><span
+            class="live-checkbox"
+            class:checked={settings.notify_on_finish ?? true}
+            aria-hidden="true"
+            >{#if settings.notify_on_finish ?? true}<svg
+                viewBox="0 0 12 12"
+                width="10"
+                height="10"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"><path d="M2.5 6.2 5 8.7 9.5 3.5" /></svg
+              >{/if}</span
+          ><span class="live-setting-label">Notify when a file finishes</span></span
+        ><HelpTip
+          label="Notify when a file finishes"
+          text="Shows a desktop notification with the file name each time a queued file finishes."
         />
       </div>
       <div class="hardware-card">

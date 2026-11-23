@@ -833,6 +833,37 @@ impl Database {
             .optional()?)
     }
 
+    pub fn queued_job_count(&self) -> AppResult<usize> {
+        let count: i64 = self.connection.query_row(
+            "SELECT COUNT(*) FROM jobs WHERE status='queued'",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(usize::try_from(count.max(0)).unwrap_or(0))
+    }
+
+    pub fn job_media_name(&self, id: &str) -> AppResult<Option<String>> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT media.name FROM jobs JOIN media ON media.id = jobs.media_id WHERE jobs.id=?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn active_job_tray_info(&self, id: &str) -> AppResult<Option<(String, String)>> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT media.name, jobs.request_json FROM jobs JOIN media ON media.id = jobs.media_id WHERE jobs.id=?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?)
+    }
+
     /// The first queued jobs in queue order, for a photo batch.
     pub fn queued_job_window(&self, limit: usize) -> AppResult<Vec<PendingJob>> {
         let mut statement = self.connection.prepare(

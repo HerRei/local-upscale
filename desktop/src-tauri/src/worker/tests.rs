@@ -1292,21 +1292,29 @@ fn frame_messages_of_a_video_share_one_status_title() {
 }
 
 #[test]
-fn the_finished_notice_waits_until_the_queue_is_done() {
+fn finished_notice_names_the_completed_file_and_respects_the_notification_setting() {
     let directory = tempfile::tempdir().unwrap();
     let state = batch_state(directory.path());
-    let done = json!({"job_id": "a"});
-    assert_eq!(finished_notice(&state, &done), None);
-    lock(&state.database).unwrap().cancel_queued_jobs().unwrap();
+    let done = json!({"job_id": "a", "output_path": "/out/a_upscaled.png"});
     assert_eq!(
-        finished_notice(&state, &done),
-        Some("Your enhanced media is ready.")
+        finished_notice(&state, &done).as_deref(),
+        Some("a is ready.")
     );
-    assert!(
-        finished_notice(&state, &json!({"notes": "Blur fix skipped"}))
-            .unwrap()
-            .contains("A fix was skipped")
+    assert_eq!(
+        finished_notice(&state, &json!({"job_id": "a", "notes": "Blur fix skipped"})).as_deref(),
+        Some("a is ready. A fix was skipped; open LocalSR for details.")
     );
+    assert_eq!(
+        finished_notice(
+            &state,
+            &json!({"job_id": "missing", "output_path": "/out/photo_4x.png"})
+        )
+        .as_deref(),
+        Some("photo_4x.png is ready.")
+    );
+
+    lock(&state.settings).unwrap().notify_on_finish = false;
+    assert_eq!(finished_notice(&state, &done), None);
 }
 
 fn ready_for_batches(state: &AppState) {
@@ -2497,4 +2505,29 @@ fn a_video_step_without_frame_counts_does_not_keep_the_last_step_at_100_percent(
     let runtime = lock(&state.runtime).unwrap();
     assert_eq!(runtime.status_title, "Loading video model");
     assert_eq!(runtime.progress, 0.0);
+}
+
+#[test]
+fn pause_and_resume_hold_and_dispatch_the_existing_queue() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    ready_for_batches(&state);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+
+    set_queue_paused_locked(&state, true);
+    assert!(state.worker.queue_paused.load(Ordering::SeqCst));
+    assert!(lock(&state.runtime).unwrap().queue_paused);
+    assert!(!begin_dispatch(&state, false).unwrap());
+    assert!(receiver.try_recv().is_err());
+    assert_eq!(status(&state, "a"), "queued");
+
+    set_queue_paused_locked(&state, false);
+    assert!(!state.worker.queue_paused.load(Ordering::SeqCst));
+    assert!(!lock(&state.runtime).unwrap().queue_paused);
+    assert!(begin_dispatch(&state, false).unwrap());
+    let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+    assert_eq!(sent["data"]["job_id"], "a");
+    assert_eq!(status(&state, "a"), "starting");
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
 }

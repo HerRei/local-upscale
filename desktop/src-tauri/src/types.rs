@@ -450,6 +450,11 @@ pub struct UiSettings {
     pub gpu_download_notice_dismissed: bool,
     #[serde(default)]
     pub linux_menu_prompt_dismissed: bool,
+    // Menu bar / tray icon and per-file completion notification.
+    #[serde(default = "default_true")]
+    pub show_in_menu_bar: bool,
+    #[serde(default = "default_true")]
+    pub notify_on_finish: bool,
 }
 
 fn default_true() -> bool {
@@ -567,6 +572,8 @@ impl Default for UiSettings {
             model_directory: String::new(),
             gpu_download_notice_dismissed: false,
             linux_menu_prompt_dismissed: false,
+            show_in_menu_bar: true,
+            notify_on_finish: true,
         }
     }
 }
@@ -633,6 +640,8 @@ pub struct RuntimeStatus {
     /// How long a cancelled job may take to stop before the engine is restarted.
     #[serde(default)]
     pub cancel_grace_seconds: u64,
+    #[serde(default)]
+    pub queue_paused: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -796,6 +805,7 @@ impl Default for RuntimeStatus {
             hardware_note: String::new(),
             engine_retry: false,
             cancel_grace_seconds: 0,
+            queue_paused: false,
         }
     }
 }

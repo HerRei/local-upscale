@@ -2707,6 +2707,37 @@ fn low_priority_switch_saves_while_a_job_runs_and_notifies_the_engine() {
 }
 
 #[test]
+fn menu_bar_and_finish_notification_switches_save_while_running_and_default_on() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(directory.path());
+    fs::create_dir_all(&paths.next_root).unwrap();
+    fs::create_dir_all(&paths.model_root).unwrap();
+    let state = AppState::from_paths(paths).unwrap();
+    assert!(crate::settings::load(&state.paths).0.show_in_menu_bar);
+    assert!(crate::settings::load(&state.paths).0.notify_on_finish);
+
+    lock(&state.runtime).unwrap().active_job_id = "running".into();
+    apply_update_switch(&state, "show_in_menu_bar", |_| false).unwrap();
+    apply_update_switch(&state, "notify_on_finish", |_| false).unwrap();
+    let saved = crate::settings::load(&state.paths).0;
+    assert!(!saved.show_in_menu_bar);
+    assert!(!saved.notify_on_finish);
+
+    let mut stale = UiSettings::default();
+    keep_update_switches(&saved, &mut stale);
+    assert!(!stale.show_in_menu_bar);
+    assert!(!stale.notify_on_finish);
+
+    let mut old = serde_json::to_value(UiSettings::default()).unwrap();
+    let map = old.as_object_mut().unwrap();
+    map.remove("show_in_menu_bar");
+    map.remove("notify_on_finish");
+    let loaded = serde_json::from_value::<UiSettings>(old).unwrap();
+    assert!(loaded.show_in_menu_bar);
+    assert!(loaded.notify_on_finish);
+}
+
+#[test]
 fn custom_model_tutorial_url_points_to_the_exact_help_anchor() {
     assert_eq!(
         CUSTOM_MODEL_TUTORIAL_URL,

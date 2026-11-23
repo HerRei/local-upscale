@@ -477,3 +477,38 @@ it('shows the cache size and clears it only while idle', async () => {
   await rerender({ cacheBusy: true });
   expect(button.disabled).toBe(true);
 });
+
+describe('Menu bar and completion notification switches', () => {
+  it('default on, toggle via callbacks, and stay usable inside a disabled fieldset', async () => {
+    const fieldset = document.body.appendChild(document.createElement('fieldset'));
+    const setShowInMenuBar = vi.fn();
+    const setNotifyOnFinish = vi.fn();
+    render(AdvancedSettings, {
+      target: fieldset,
+      props: {
+        settings: { ...demoSnapshot().settings, task: 'upscale' },
+        selectedModel: undefined,
+        capabilities: base,
+        usingTemporalVideo: false,
+        updateSettings: vi.fn(),
+        setShowInMenuBar,
+        setNotifyOnFinish,
+        chooseOutput: async () => undefined,
+        refreshCapabilities: async () => true,
+      },
+    });
+    await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+    fieldset.disabled = true;
+
+    const menuBar = screen.getByRole('checkbox', { name: 'Show in menu bar' });
+    const notify = screen.getByRole('checkbox', { name: 'Notify when a file finishes' });
+    expect(menuBar.getAttribute('aria-checked')).toBe('true');
+    expect(notify.getAttribute('aria-checked')).toBe('true');
+
+    await fireEvent.click(menuBar);
+    await fireEvent.click(notify);
+    expect(setShowInMenuBar).toHaveBeenCalledWith(false);
+    expect(setNotifyOnFinish).toHaveBeenCalledWith(false);
+    fieldset.remove();
+  });
+});

@@ -373,6 +373,8 @@ export interface UiSettings {
   model_directory?: string;
   gpu_download_notice_dismissed?: boolean;
   linux_menu_prompt_dismissed?: boolean;
+  show_in_menu_bar?: boolean;
+  notify_on_finish?: boolean;
 }
 
 export interface ModelMoveProgress {
@@ -452,6 +454,7 @@ export interface RuntimeStatus {
   hardware_note: string;
   /** How long a cancelled job may take to stop before the engine is restarted. */
   cancel_grace_seconds?: number;
+  queue_paused?: boolean;
 }
 
 export interface BenchmarkRender {

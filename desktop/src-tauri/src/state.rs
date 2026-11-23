@@ -48,6 +48,7 @@ pub struct WorkerControl {
     pub failed_engines: Mutex<HashSet<String>>,
     pub use_bundled_fallback: AtomicBool,
     pub engine_ready_seen: AtomicBool,
+    pub queue_paused: AtomicBool,
 }
 
 impl Default for WorkerControl {
@@ -68,6 +69,7 @@ impl Default for WorkerControl {
             failed_engines: Mutex::new(HashSet::new()),
             use_bundled_fallback: AtomicBool::new(false),
             engine_ready_seen: AtomicBool::new(false),
+            queue_paused: AtomicBool::new(false),
         }
     }
 }
@@ -117,6 +119,7 @@ pub struct AppState {
     /// Cached result of Windows DXGI GPU probing so `snapshot()` enumerates at most once.
     gpu_download_notice_cache: Mutex<Option<Option<String>>>,
     engine_recommendation_cache: Mutex<Option<crate::types::EngineRecommendation>>,
+    pub tray_state: Mutex<Option<crate::tray::TraySnapshot>>,
 }
 
 impl AppState {
@@ -198,6 +201,7 @@ impl AppState {
             moving_models: AtomicBool::new(false),
             gpu_download_notice_cache: Mutex::new(None),
             engine_recommendation_cache: Mutex::new(None),
+            tray_state: Mutex::new(None),
         })
     }
 
@@ -373,6 +377,7 @@ pub fn lock<T>(mutex: &Mutex<T>) -> AppResult<MutexGuard<'_, T>> {
 
 pub fn emit_state_changed<R: tauri::Runtime>(app: &AppHandle<R>) {
     let _ = app.emit("state-changed", ());
+    crate::tray::sync(app);
 }
 
 #[cfg(test)]

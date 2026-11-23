@@ -804,6 +804,28 @@ pub fn dispatch_next(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
     dispatch_next_locked(state, app)
 }
 
+pub fn pause_queue(state: &AppState, app: &AppHandle) {
+    let Ok(_scheduler) = lock(&state.scheduler) else {
+        return;
+    };
+    set_queue_paused_locked(state, true);
+    emit_state_changed(app);
+}
+
+pub fn resume_queue(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    set_queue_paused_locked(state, false);
+    emit_state_changed(app);
+    dispatch_next_locked(state, app)
+}
+
+pub(crate) fn set_queue_paused_locked(state: &AppState, paused: bool) {
+    state.worker.queue_paused.store(paused, Ordering::SeqCst);
+    if let Ok(mut runtime) = state.runtime.lock() {
+        runtime.queue_paused = paused;
+    }
+}
+
 pub fn dispatch_next_locked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
     if begin_dispatch(state, cfg!(target_os = "macos"))? {
         emit_state_changed(app);
@@ -833,6 +855,9 @@ enum Dispatch {
 
 fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
     if !lock(&state.runtime)?.active_job_id.is_empty() {
+        return Ok(Dispatch::Idle);
+    }
+    if state.worker.queue_paused.load(Ordering::SeqCst) {
         return Ok(Dispatch::Idle);
     }
     let Some(pending) = lock(&state.database)?.next_queued_job()? else {
@@ -1187,6 +1212,16 @@ fn handle_worker_envelope(
     let _ = app.emit("worker-message", envelope.clone());
     if should_emit_state_changed(&envelope.message_type) {
         emit_state_changed(app);
+    } else if matches!(
+        envelope.message_type.as_str(),
+        "progress"
+            | "video_stage_progress"
+            | "video_frame_started"
+            | "video_frame_completed"
+            | "video_tile_progress"
+            | "benchmark_progress"
+    ) {
+        crate::tray::sync(app);
     }
 
     // Request the final full-image preview after updating native state.
@@ -2745,20 +2780,37 @@ fn with_completion_sound<R: tauri::Runtime>(
     })
 }
 
-fn finished_notice(state: &AppState, data: &Value) -> Option<&'static str> {
-    let more_work = state
-        .database
-        .lock()
-        .ok()
-        .and_then(|database| database.has_inflight_jobs().ok())
-        .unwrap_or(false);
-    if more_work {
+fn finished_notice(state: &AppState, data: &Value) -> Option<String> {
+    if !lock(&state.settings).is_ok_and(|settings| settings.notify_on_finish) {
         return None;
     }
+    let job_id = string(data, "job_id");
+    let file_name = (!job_id.is_empty())
+        .then(|| {
+            state
+                .database
+                .lock()
+                .ok()
+                .and_then(|database| database.job_media_name(&job_id).ok())
+                .flatten()
+        })
+        .flatten()
+        .or_else(|| {
+            let output_path = string(data, "output_path");
+            Path::new(&output_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned)
+        })
+        .filter(|name| !name.is_empty());
+    let base = match file_name {
+        Some(name) => format!("{name} is ready."),
+        None => "Your enhanced media is ready.".to_owned(),
+    };
     Some(if string(data, "notes").is_empty() {
-        "Your enhanced media is ready."
+        base
     } else {
-        "Your enhanced media is ready. A fix was skipped; open LocalSR for details."
+        format!("{base} A fix was skipped; open LocalSR for details.")
     })
 }
 

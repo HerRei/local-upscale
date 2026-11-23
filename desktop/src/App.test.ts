@@ -6207,6 +6207,11 @@ it('saves Run at low priority via setUpdateSwitch even while a job is running', 
   expect(api.saveSettings).not.toHaveBeenCalledWith(
     expect.objectContaining({ low_priority: true }),
   );
+
+  await fireEvent.click(screen.getByRole('checkbox', { name: 'Show in menu bar' }));
+  expect(api.setUpdateSwitch).toHaveBeenCalledWith('show_in_menu_bar', false);
+  await fireEvent.click(screen.getByRole('checkbox', { name: 'Notify when a file finishes' }));
+  expect(api.setUpdateSwitch).toHaveBeenCalledWith('notify_on_finish', false);
 });
 
 describe('first-launch setup screen', () => {
