@@ -124,6 +124,7 @@ where = ["src"]
 "localsr.image_models.heart" = ["*.md"]
 "localsr.image_models.nerve" = ["*.md"]
 "localsr.video_models.rife" = ["*.md"]
+"localsr.video_models.flashvsr" = ["*.safetensors", "*.md", "LICENSE", "LICENSES/*.txt"]
 "localsr.video_models.seedvr2" = [
     "*.safetensors",
     "*.md",

@@ -171,7 +171,7 @@ def test_flashvsr_catalog_bundle_is_pinned_and_complete():
         )
         assert file.download_url.split("/")[-1].split("?")[0] == file.filename
     assert model.license_name == "Apache-2.0"
-    assert model.temporal_window % 8 == 1  # FlashVSR's 8n+1 stream rule
+    assert (model.temporal_window + 4) % 8 == 1  # 8n+1 input frames give 8n-3 outputs
     assert 0 < model.temporal_overlap < model.temporal_window
 
 

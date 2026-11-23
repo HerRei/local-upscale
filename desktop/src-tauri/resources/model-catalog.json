@@ -1118,7 +1118,7 @@
       "summary": "",
       "support_tier": "labs",
       "temporal_overlap": 8,
-      "temporal_window": 41,
+      "temporal_window": 37,
       "terms_acceptance_required": false
     }
   ]

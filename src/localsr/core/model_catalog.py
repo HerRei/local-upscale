@@ -960,7 +960,8 @@ VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
         source_url="https://github.com/OpenImagingLab/FlashVSR",
         min_unified_memory_gb=16,
         min_vram_gb=16,
-        temporal_window=41,
+        # 37 frames + 4 repeated = 41 = 8*5 + 1: the stream yields exactly 37 frames.
+        temporal_window=37,
         temporal_overlap=8,
     ),
 )
