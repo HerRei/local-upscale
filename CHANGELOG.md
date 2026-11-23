@@ -17,9 +17,14 @@
   `arch`"). The update files are again in a form they read, an engine they install is
   taken over, and every release is now checked against the updaters of older
   releases before it ships.
-- **Stopping a video.** Cancel asks whether to keep the finished part or discard it,
-  for frame-by-frame and SeedVR videos; Settings can make it always keep or always
-  discard. Kept parts are marked Unfinished in Outputs.
+- **Stopping a job.** Cancel asks whether to keep the finished part or discard it;
+  Settings can make it always keep or always discard. A video keeps its finished
+  frames (frame-by-frame and SeedVR), a photo its finished tiles with the rest left
+  as in the original, also in a queue. Kept parts are marked Unfinished: a photo shows
+  its finished tiles on hover, and comparing an unfinished video steps through its
+  frames against the same frames of the original.
+- **Compare.** Choose which side's audio plays, step frame by frame, and the details of
+  each side stay within a fixed height however long the model chain is.
 - **Menu bar.** An icon in the menu bar or system tray shows what is running, how many
   files wait and the progress, with Pause and Resume, and a notification for each
   finished file. New installs choose it in the first-launch setup; on a Mac the icon
