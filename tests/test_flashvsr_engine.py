@@ -362,14 +362,109 @@ def test_vendored_pipeline_loads_safetensors_without_torch_load(monkeypatch):
     assert tuple(pipe.prompt_emb_posi["context"].shape) == (1, 512, 4096)
 
 
+def test_worker_temporal_routing_uses_fixed_4x_and_flashvsr_defaults(tmp_path, monkeypatch):
+    import localsr.worker.server as server_module
+
+    source_mp4 = tmp_path / "in.mp4"
+    output_mp4 = tmp_path / "out.mp4"
+    frames = _synthetic_frames(10, width=32, height=24)
+    with av.open(str(source_mp4), "w") as container:
+        stream = container.add_stream("libvpx-vp9", rate=24)
+        stream.width, stream.height, stream.pix_fmt = 32, 24, "yuv420p"
+        stream.codec_context.time_base = Fraction(1, 24)
+        stream.options = {"lossless": "1", "lag-in-frames": "0"}
+        for idx, rgb in enumerate(frames):
+            frame = av.VideoFrame.from_ndarray(rgb, format="rgb24")
+            frame.pts, frame.time_base = idx, Fraction(1, 24)
+            for packet in stream.encode(frame):
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+
+    room_calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        server_module,
+        "require_video_room",
+        lambda _data, width, height, _frames, **_kw: room_calls.append((width, height)),
+    )
+    monkeypatch.setattr(server_module, "send_message", lambda _msg: None)
+
+    configured: list[tuple[int, int, int]] = []
+    seen_batch_sizes: list[int] = []
+
+    class FakeMemory:
+        latest = SimpleNamespace(clip_frames=5, output_width=0, output_height=0)
+
+        def phase(self, _stage):
+            pass
+
+        def configure(self, width, height, clip_frames):
+            configured.append((width, height, clip_frames))
+            self.latest.output_width = width
+            self.latest.output_height = height
+
+        def sample(self):
+            pass
+
+    engine, _calls = _stub_engine(budget_bytes=10_800_000_000)
+    orig_process = engine.process_frames
+
+    def spy_process(chunk_frames, **kwargs):
+        seen_batch_sizes.append(kwargs["batch_size"])
+        return orig_process(chunk_frames, **kwargs)
+
+    engine.process_frames = spy_process  # type: ignore[method-assign]
+    closed = []
+    engine.close = lambda: closed.append(True)  # type: ignore[method-assign]
+
+    worker = SimpleNamespace(cancel_event=threading.Event(), _emit_live_preview=lambda _: None)
+    WorkerServer._run_temporal_video_job_impl(
+        worker,
+        "flash-route",
+        {
+            "video_path": str(source_mp4),
+            "output_video_path": str(output_mp4),
+            "model_kind": "flashvsr",
+            "video_codec": "vp9",
+            "container": "mp4",
+            "target_resolution": 120,
+            "temporal_window": 0,
+            "temporal_overlap": 0,
+            "preview_enabled": False,
+        },
+        lambda *_args: engine,
+        FakeMemory(),
+    )
+    assert room_calls == [(128, 96)]
+    assert configured[0] == (128, 96, 5)
+    assert seen_batch_sizes == [37]
+    assert closed == [True]
+    assert probe_video(str(output_mp4)).width == 128
+    assert probe_video(str(output_mp4)).height == 96
+
+
 @pytest.mark.skipif(
     not _HAS_REAL_WEIGHTS,
     reason="Set LOCALSR_FLASHVSR_MODELS to run real-weight FlashVSR tests.",
 )
 def test_real_weights_untiled_matches_port_pipeline():
+    import importlib.util
+
     import mlx.core as mx
 
-    from localsr.video_models.flashvsr.mlx_flashvsr.pipeline import FlashVSRTinyPipeline
+    port_root = Path("/Users/hermesheiniger/Projects/FlashVSR/flashvsr-mlx-port")
+    if port_root.is_dir():
+        sys.path.insert(0, str(port_root))
+        try:
+            port_mod = importlib.import_module("mlx_flashvsr.pipeline")
+            port_cls = port_mod.FlashVSRTinyPipeline
+        finally:
+            if sys.path and sys.path[0] == str(port_root):
+                sys.path.pop(0)
+    else:
+        from localsr.video_models.flashvsr.mlx_flashvsr.pipeline import (
+            FlashVSRTinyPipeline as port_cls,
+        )
 
     frames = _synthetic_frames(25, width=64, height=32)
     engine = FlashVSREngine(_FLASHVSR_MODELS, device="mps", precision="bf16")
@@ -377,46 +472,46 @@ def test_real_weights_untiled_matches_port_pipeline():
         engine_out = engine.process_frames(frames, seed=0)
         assert len(engine_out) == 25
         assert engine_out[0].shape == (128, 256, 3)
-
-        # Compare against direct FlashVSRTinyPipeline on the same 33-frame padded input.
-        up_list = []
-        for frame in frames:
-            up = np.asarray(
-                Image.fromarray(frame).resize((256, 128), Image.Resampling.BICUBIC),
-                dtype=np.float32,
-            )
-            up_list.append(np.transpose(up, (2, 0, 1)) / 127.5 - 1.0)
-        up_list.extend([up_list[-1]] * 8)
-        lq_mx = mx.array(np.stack(up_list, axis=1)[None, ...], dtype=mx.float32).astype(mx.bfloat16)
-        mx.eval(lq_mx)
-
-        port_pipe = FlashVSRTinyPipeline.from_pretrained(_FLASHVSR_MODELS, dtype="bfloat16")
-        try:
-            ref_tensor = port_pipe(
-                height=128,
-                width=256,
-                num_frames=33,
-                seed=0,
-                LQ_video=lq_mx,
-                is_full_block=False,
-                if_buffer=True,
-                topk_ratio=2.0 * 768.0 * 1280.0 / float(128 * 256),
-                kv_ratio=3.0,
-                local_range=11,
-                color_fix=True,
-            )
-            mx.eval(ref_tensor)
-            ref_np = np.transpose(np.asarray(ref_tensor.astype(mx.float32)), (1, 2, 3, 0))[:25]
-            ref_uint8 = np.clip((ref_np + 1.0) * 127.5, 0.0, 255.0).astype(np.uint8)
-        finally:
-            del port_pipe
-            mx.clear_cache()
-
-        psnr_val = _psnr(np.stack(engine_out), ref_uint8)
-        print(f"\n[FlashVSR untiled 256x128 x 25f] PSNR vs port pipeline: {psnr_val:.2f} dB")
-        assert psnr_val > 40.0
     finally:
         engine.close()
+
+    # Compare against direct FlashVSRTinyPipeline on the same 33-frame padded input.
+    up_list = []
+    for frame in frames:
+        up = np.asarray(
+            Image.fromarray(frame).resize((256, 128), Image.Resampling.BICUBIC),
+            dtype=np.float32,
+        )
+        up_list.append(np.transpose(up, (2, 0, 1)) / 127.5 - 1.0)
+    up_list.extend([up_list[-1]] * 8)
+    lq_mx = mx.array(np.stack(up_list, axis=1)[None, ...], dtype=mx.float32).astype(mx.bfloat16)
+    mx.eval(lq_mx)
+
+    port_pipe = port_cls.from_pretrained(_FLASHVSR_MODELS, dtype="bfloat16")
+    try:
+        ref_tensor = port_pipe(
+            height=128,
+            width=256,
+            num_frames=33,
+            seed=0,
+            LQ_video=lq_mx,
+            is_full_block=False,
+            if_buffer=True,
+            topk_ratio=2.0 * 768.0 * 1280.0 / float(128 * 256),
+            kv_ratio=3.0,
+            local_range=11,
+            color_fix=True,
+        )
+        mx.eval(ref_tensor)
+        ref_np = np.transpose(np.asarray(ref_tensor.astype(mx.float32)), (1, 2, 3, 0))[:25]
+        ref_uint8 = np.clip((ref_np + 1.0) * 127.5, 0.0, 255.0).astype(np.uint8)
+    finally:
+        del port_pipe
+        mx.clear_cache()
+
+    psnr_val = _psnr(np.stack(engine_out), ref_uint8)
+    print(f"\n[FlashVSR untiled 256x128 x 25f] PSNR vs port pipeline: {psnr_val:.2f} dB")
+    assert psnr_val > 40.0
 
 
 @pytest.mark.skipif(

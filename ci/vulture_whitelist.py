@@ -157,3 +157,9 @@ clear_cross_kv
 timesteps
 last_lq_cur_idx
 DecoderResult
+
+# Public dataclass/engine attributes on FlashVSREngine and FlashVSRTilePlan (inspected by tests).
+tile_width
+tile_height
+max_tile_area
+fixed_scale

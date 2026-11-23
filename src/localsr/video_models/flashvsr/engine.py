@@ -9,7 +9,6 @@ blending across 128 px tile overlaps.
 from __future__ import annotations
 
 import gc
-import math
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -287,12 +286,23 @@ class FlashVSREngine:
         self._tile_size_override: tuple[int, int] | None = None
         self._upscale_resample: Image.Resampling = Image.Resampling.BICUBIC
 
+        import mlx.core as mx
+
         from .mlx_flashvsr.pipeline import FlashVSRTinyPipeline
 
         self.pipeline: Any = FlashVSRTinyPipeline.from_pretrained(
             self.bundle_dir,
             dtype="bfloat16",
         )
+        # Materialize every weight and precomputed tensor on the constructing
+        # thread so WorkerServer's bounded_preparation helper thread never
+        # leaves lazy MLX ops bound to a thread-local stream.
+        to_eval: list[Any] = [self.pipeline.dit.parameters(), self.pipeline.dit.freqs]
+        if self.pipeline.TCDecoder is not None:
+            to_eval.append(self.pipeline.TCDecoder.parameters())
+        if self.pipeline.prompt_emb_posi is not None:
+            to_eval.append(self.pipeline.prompt_emb_posi)
+        mx.eval(*to_eval)
 
     def release(self) -> None:
         """Free loaded MLX weights and clear the Metal allocator cache."""
