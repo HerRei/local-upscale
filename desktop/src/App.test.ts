@@ -6285,6 +6285,7 @@ describe('first-launch setup screen', () => {
       within(dialog).getByRole('radio', { name: 'Light' }),
       within(dialog).getByRole('radio', { name: 'Match System' }),
       within(dialog).getByRole('switch', { name: 'Colour-blind friendly colours' }),
+      within(dialog).getByRole('switch', { name: /Show LocalSR in the (menu bar|system tray)/ }),
       within(dialog).getByRole('switch', { name: 'Check for updates automatically' }),
       within(dialog).getByRole('switch', {
         name: 'Send an anonymous count with each update check',
@@ -6302,6 +6303,24 @@ describe('first-launch setup screen', () => {
 
     await user.keyboard('{Escape}');
     expect(screen.getByRole('dialog', { name: 'Welcome to LocalSR' })).toBeTruthy();
+  });
+
+  it('asks at first launch whether to show LocalSR in the menu bar', async () => {
+    const snapshot = readySnapshot();
+    snapshot.settings.privacy_choice_made = false;
+    const user = await mountWith(snapshot);
+    const dialog = await screen.findByRole('dialog', { name: 'Welcome to LocalSR' });
+    const toggle = within(dialog).getByRole('switch', {
+      name: /Show LocalSR in the (menu bar|system tray)/,
+    }) as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+    await user.click(toggle);
+    await user.click(within(dialog).getByRole('button', { name: 'Continue' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ show_in_menu_bar: false }),
+      ),
+    );
   });
 
   it('does not show after a choice', async () => {

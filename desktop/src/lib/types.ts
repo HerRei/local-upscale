@@ -375,6 +375,7 @@ export interface UiSettings {
   linux_menu_prompt_dismissed?: boolean;
   show_in_menu_bar?: boolean;
   notify_on_finish?: boolean;
+  menu_bar_icon_monochrome?: boolean;
 }
 
 export interface ModelMoveProgress {

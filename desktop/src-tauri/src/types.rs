@@ -455,6 +455,9 @@ pub struct UiSettings {
     pub show_in_menu_bar: bool,
     #[serde(default = "default_true")]
     pub notify_on_finish: bool,
+    // macOS: a template (black or white) icon like the system's; false shows the app icon.
+    #[serde(default = "default_true")]
+    pub menu_bar_icon_monochrome: bool,
 }
 
 fn default_true() -> bool {
@@ -574,6 +577,7 @@ impl Default for UiSettings {
             linux_menu_prompt_dismissed: false,
             show_in_menu_bar: true,
             notify_on_finish: true,
+            menu_bar_icon_monochrome: true,
         }
     }
 }

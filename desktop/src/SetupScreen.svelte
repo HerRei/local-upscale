@@ -10,6 +10,7 @@
   export let checkAtLaunch = true;
   export let anonymousCount = false;
   export let crashReports = false;
+  export let menuBar = true;
   export let saving = false;
   export let error = '';
 
@@ -21,6 +22,7 @@
       checkAtLaunch: boolean;
       anonymousCount: boolean;
       crashReports: boolean;
+      menuBar: boolean;
     };
   }>();
 
@@ -65,8 +67,12 @@
       checkAtLaunch,
       anonymousCount,
       crashReports,
+      menuBar,
     });
   }
+
+  const trayName =
+    typeof navigator !== 'undefined' && /Mac/.test(navigator.platform) ? 'menu bar' : 'system tray';
 </script>
 
 <div class="modal-backdrop" role="presentation">
@@ -163,6 +169,29 @@
           role="switch"
           checked={colourBlind}
           on:change={toggleColourBlind}
+        />
+      </div>
+    </section>
+
+    <section class="setup-section" aria-labelledby="setup-menu-bar-heading">
+      <h3 id="setup-menu-bar-heading">Menu bar</h3>
+      <div class="setup-toggle-row">
+        <div class="setup-toggle-copy">
+          <label class="setup-toggle-label" for="setup-menu-bar"
+            >Show LocalSR in the {trayName}</label
+          >
+          <p class="setup-toggle-desc" id="setup-menu-bar-desc">
+            Shows what is running and lets you pause the queue. You can change this later in
+            Advanced settings.
+          </p>
+        </div>
+        <input
+          id="setup-menu-bar"
+          class="setup-switch"
+          type="checkbox"
+          role="switch"
+          aria-describedby="setup-menu-bar-desc"
+          bind:checked={menuBar}
         />
       </div>
     </section>

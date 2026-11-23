@@ -54,6 +54,12 @@
   export let setNotifyOnFinish: (value: boolean) => void = (value) =>
     updateSettings({ notify_on_finish: value });
   export let chooseOutput: () => Promise<void>;
+
+  const isMac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
+
+  function setMenuBarMonochrome(value: boolean): void {
+    updateSettings({ menu_bar_icon_monochrome: value });
+  }
   export let chooseModelFolder: () => Promise<void> = async () => undefined;
   export let resetModelFolder: () => Promise<void> = async () => undefined;
   export let onOpenEngineManager: () => void = () => undefined;
@@ -837,6 +843,42 @@
           text="Shows queue progress and pause or resume controls in the system menu bar or tray."
         />
       </div>
+      {#if isMac && (settings.show_in_menu_bar ?? true)}
+        <div class="check-line">
+          <span
+            id="menu-bar-monochrome"
+            role="checkbox"
+            tabindex="0"
+            aria-checked={settings.menu_bar_icon_monochrome ?? true}
+            class="check-row live-setting"
+            on:click={() => setMenuBarMonochrome(!(settings.menu_bar_icon_monochrome ?? true))}
+            on:keydown={(event) => {
+              if (event.key === ' ' || event.key === 'Enter') {
+                event.preventDefault();
+                setMenuBarMonochrome(!(settings.menu_bar_icon_monochrome ?? true));
+              }
+            }}
+            ><span
+              class="live-checkbox"
+              class:checked={settings.menu_bar_icon_monochrome ?? true}
+              aria-hidden="true"
+              >{#if settings.menu_bar_icon_monochrome ?? true}<svg
+                  viewBox="0 0 12 12"
+                  width="10"
+                  height="10"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"><path d="M2.5 6.2 5 8.7 9.5 3.5" /></svg
+                >{/if}</span
+            ><span class="live-setting-label">Monochrome menu bar icon</span></span
+          ><HelpTip
+            label="Monochrome menu bar icon"
+            text="Black or white like the system's own icons, following light and dark mode. Off shows the coloured app icon."
+          />
+        </div>
+      {/if}
       <div class="check-line">
         <span
           id="notify-on-finish"

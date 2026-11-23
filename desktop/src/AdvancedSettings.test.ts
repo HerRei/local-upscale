@@ -511,4 +511,29 @@ describe('Menu bar and completion notification switches', () => {
     expect(setNotifyOnFinish).toHaveBeenCalledWith(false);
     fieldset.remove();
   });
+
+  it('offers a monochrome menu bar icon on a Mac', async () => {
+    const platform = Object.getOwnPropertyDescriptor(navigator, 'platform');
+    Object.defineProperty(navigator, 'platform', { value: 'MacIntel', configurable: true });
+    try {
+      const updateSettings = vi.fn();
+      render(AdvancedSettings, {
+        settings: { ...demoSnapshot().settings, task: 'upscale' },
+        selectedModel: undefined,
+        capabilities: base,
+        usingTemporalVideo: false,
+        updateSettings,
+        chooseOutput: async () => undefined,
+        refreshCapabilities: async () => true,
+      });
+      await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+      const mono = screen.getByRole('checkbox', { name: 'Monochrome menu bar icon' });
+      expect(mono.getAttribute('aria-checked')).toBe('true');
+      await fireEvent.click(mono);
+      expect(updateSettings).toHaveBeenCalledWith({ menu_bar_icon_monochrome: false });
+    } finally {
+      if (platform) Object.defineProperty(navigator, 'platform', platform);
+      else delete (navigator as unknown as Record<string, unknown>).platform;
+    }
+  });
 });

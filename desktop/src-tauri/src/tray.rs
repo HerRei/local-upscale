@@ -1,4 +1,5 @@
 use std::any::TypeId;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::{
     image::Image,
@@ -11,6 +12,9 @@ use crate::state::lock;
 
 pub const TRAY_ID: &str = "localsr-tray";
 
+/// The icon style the tray was last drawn with.
+static ICON_MONOCHROME: AtomicBool = AtomicBool::new(true);
+
 const MENU_STATUS_ID: &str = "tray.status";
 const MENU_WAITING_ID: &str = "tray.waiting";
 const MENU_PAUSE_ID: &str = "tray.pause";
@@ -22,6 +26,7 @@ const MENU_QUIT_ID: &str = "tray.quit";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TraySnapshot {
     pub visible: bool,
+    pub monochrome: bool,
     pub active_job_id: String,
     pub active_action: String,
     pub active_media_name: String,
@@ -240,8 +245,15 @@ pub(crate) fn template_icon_from_rgba(
 }
 
 #[cfg(target_os = "macos")]
-fn tray_icon_image<R: Runtime>(app: &AppHandle<R>) -> Option<Image<'static>> {
+fn tray_icon_image<R: Runtime>(app: &AppHandle<R>, monochrome: bool) -> Option<Image<'static>> {
     let icon = app.default_window_icon()?;
+    if !monochrome {
+        return Some(Image::new_owned(
+            icon.rgba().to_vec(),
+            icon.width(),
+            icon.height(),
+        ));
+    }
     template_icon_from_rgba(icon.rgba(), icon.width(), icon.height()).or_else(|| {
         Some(Image::new_owned(
             icon.rgba().to_vec(),
@@ -252,7 +264,7 @@ fn tray_icon_image<R: Runtime>(app: &AppHandle<R>) -> Option<Image<'static>> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn tray_icon_image<R: Runtime>(app: &AppHandle<R>) -> Option<Image<'static>> {
+fn tray_icon_image<R: Runtime>(app: &AppHandle<R>, _monochrome: bool) -> Option<Image<'static>> {
     app.default_window_icon()
         .map(|icon| Image::new_owned(icon.rgba().to_vec(), icon.width(), icon.height()))
 }
@@ -291,10 +303,14 @@ fn build_tray_menu<R: Runtime>(
 }
 
 fn snapshot_from_state(state: &crate::state::AppState) -> Option<TraySnapshot> {
-    let visible = lock(&state.settings).ok()?.show_in_menu_bar;
+    let (visible, monochrome) = {
+        let settings = lock(&state.settings).ok()?;
+        (settings.show_in_menu_bar, settings.menu_bar_icon_monochrome)
+    };
     if !visible {
         return Some(TraySnapshot {
             visible: false,
+            monochrome,
             active_job_id: String::new(),
             active_action: String::new(),
             active_media_name: String::new(),
@@ -344,6 +360,7 @@ fn snapshot_from_state(state: &crate::state::AppState) -> Option<TraySnapshot> {
 
     Some(TraySnapshot {
         visible: true,
+        monochrome,
         active_job_id,
         active_action,
         active_media_name,
@@ -365,6 +382,14 @@ fn apply_snapshot<R: Runtime>(app: &AppHandle<R>, snapshot: &TraySnapshot) {
         return;
     };
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        // The icon style changes rarely: only swap the image when it did.
+        if ICON_MONOCHROME.swap(snapshot.monochrome, Ordering::SeqCst) != snapshot.monochrome {
+            if let Some(icon) = tray_icon_image(app, snapshot.monochrome) {
+                let _ = tray.set_icon(Some(icon));
+            }
+            #[cfg(target_os = "macos")]
+            let _ = tray.set_icon_as_template(snapshot.monochrome);
+        }
         let _ = tray.set_menu(Some(menu));
         #[cfg(target_os = "macos")]
         let _ = tray.set_title(snapshot.title.as_deref());
@@ -374,11 +399,12 @@ fn apply_snapshot<R: Runtime>(app: &AppHandle<R>, snapshot: &TraySnapshot) {
         .tooltip("LocalSR")
         .menu(&menu)
         .show_menu_on_left_click(true);
-    if let Some(icon) = tray_icon_image(app) {
+    ICON_MONOCHROME.store(snapshot.monochrome, Ordering::SeqCst);
+    if let Some(icon) = tray_icon_image(app, snapshot.monochrome) {
         builder = builder.icon(icon);
         #[cfg(target_os = "macos")]
         {
-            builder = builder.icon_as_template(true);
+            builder = builder.icon_as_template(snapshot.monochrome);
         }
     }
     #[cfg(target_os = "macos")]
@@ -474,6 +500,7 @@ mod tests {
     fn sample_snapshot() -> TraySnapshot {
         TraySnapshot {
             visible: true,
+            monochrome: true,
             active_job_id: String::new(),
             active_action: String::new(),
             active_media_name: String::new(),

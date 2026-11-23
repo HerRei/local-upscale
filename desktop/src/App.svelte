@@ -424,6 +424,7 @@
   let setupAppearance: UiSettings['appearance'] = 'dark';
   let setupColourBlind = false;
   let setupCheckAtLaunch = true;
+  let setupMenuBar = true;
   let setupAnonymousCount = true;
   let setupCrashReports = true;
   let privacySaving = false;
@@ -447,6 +448,7 @@
     checkAtLaunch: boolean;
     anonymousCount: boolean;
     crashReports: boolean;
+    menuBar?: boolean;
   }): Promise<void> {
     privacySaving = true;
     privacyError = '';
@@ -471,6 +473,11 @@
         },
       };
       themeForRefresh(snapshot.settings);
+      if (
+        choices.menuBar !== undefined &&
+        choices.menuBar !== (snapshot.settings.show_in_menu_bar ?? true)
+      )
+        updateSettings({ show_in_menu_bar: choices.menuBar });
       if (choices.checkAtLaunch) {
         const status = await api.updateStatus();
         if (status.configured && !status.managed_by_store && status.stage === 'idle') {
@@ -5263,6 +5270,7 @@
     bind:checkAtLaunch={setupCheckAtLaunch}
     bind:anonymousCount={setupAnonymousCount}
     bind:crashReports={setupCrashReports}
+    bind:menuBar={setupMenuBar}
     saving={privacySaving}
     error={privacyError}
     on:preview={(event) => previewSetupTheme(event.detail.appearance, event.detail.colourBlind)}
