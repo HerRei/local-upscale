@@ -261,9 +261,27 @@ def disk_full_from(error: BaseException, folder: str | os.PathLike | None) -> Di
     return None
 
 
-def failure_fields(error: BaseException, output_path: str | os.PathLike | None) -> dict[str, Any]:
-    """The ``job_failed`` fields for ``error``: the full-disk sentence and flag, or its text."""
+def failure_fields(
+    error: BaseException,
+    output_path: str | os.PathLike | None,
+    *,
+    video_request: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The ``job_failed`` fields for ``error``: the full-disk sentence and flag, a plain
+    sentence for full graphics memory, or the error's text.
+
+    ``video_request`` (a video job's request) words the memory advice for video.
+    """
     full = disk_full_from(error, Path(output_path).parent if output_path else None)
-    if full is None:
-        return {"error_message": str(error)}
-    return {"error_message": str(full), "disk_full": True}
+    if full is not None:
+        return {"error_message": str(full), "disk_full": True}
+    from localsr.core.memory_errors import memory_failure_message
+
+    memory = memory_failure_message(
+        error,
+        video=video_request is not None,
+        interpolating_after_upscale=video_request is not None
+        and str(video_request.get("interpolation") or "off") != "off"
+        and str(video_request.get("interpolation_order") or "after_upscale") == "after_upscale",
+    )
+    return {"error_message": memory or str(error)}

@@ -1988,8 +1988,10 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             let total = integer(data, "total_frames") as f64;
             let fraction = frame + if count > 0.0 { done / count } else { 0.0 };
             let mut runtime = lock(&state.runtime)?;
+            // Tiles finish a frame, not the job: interpolation, de-flicker and the
+            // encoder still follow, so tile progress stops short of the saving mark.
             runtime.progress = if total > 0.0 {
-                (fraction / total * 100.0).clamp(0.0, 100.0)
+                (fraction / total * 100.0).clamp(0.0, 99.0)
             } else {
                 0.0
             };
@@ -2707,6 +2709,7 @@ fn video_stage_title(stage: &str) -> &'static str {
         "loading_audio_denoise" => "Loading audio model",
         "audio_denoise" => "Audio cleanup",
         "loading_model" => "Loading video model",
+        "colour_preparing" => "Adding colour",
         "loading_interpolation" => "Loading frame interpolation",
         "reading_frames" => "Reading video frames",
         "preparing_clip" => "Preparing clip",

@@ -1486,6 +1486,12 @@ def test_the_frame_loop_is_reported_after_audio_cleanup(tmp_path):
     from types import SimpleNamespace
 
     source = _make_synthetic_video_with_audio(tmp_path / "steps.mp4", frames=6, fps=24)
+
+
+def test_colour_preparation_is_counted_before_the_first_frame(tmp_path):
+    from types import SimpleNamespace
+
+    source = _make_synthetic_video_with_audio(tmp_path / "grey.mp4", frames=6, fps=24)
     info = SimpleNamespace(architecture="DDColor", scale=1, in_channels=3, out_channels=3)
 
     class StubEngine:
@@ -1588,6 +1594,8 @@ def test_video_colour_is_skipped_with_a_note_when_the_video_has_colour(tmp_path)
 
     engine = StubEngine()
     warnings = []
+
+    calls = []
     config = VideoJobConfig(
         video_path=str(source),
         model_path="ddcolor.pth",
@@ -1606,3 +1614,14 @@ def test_video_colour_is_skipped_with_a_note_when_the_video_has_colour(tmp_path)
     assert engine.calls == 0
     assert warnings == ["This video already has colour, so Colour was skipped."]
     assert engine.notes == warnings
+
+    run_video_job(
+        config,
+        StubEngine(),
+        threading.Event(),
+        stage_cb=lambda stage, *counts: calls.append((stage, *counts)),
+    )
+    counted = [call for call in calls if call[0] == "colour_preparing"]
+    assert counted, calls
+    assert [call[1] for call in counted] == list(range(1, len(counted) + 1))
+    assert all(call[2] == 6 for call in counted)

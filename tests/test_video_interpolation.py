@@ -521,3 +521,54 @@ def test_a_video_model_that_never_finishes_loading_stops_the_job_with_a_sentence
         )
     assert time.monotonic() - started < 2.0
     release.set()
+
+
+def test_models_are_released_once_the_last_frame_is_upscaled_before_the_last_pair(tmp_path):
+    # The last interpolated frames, de-flicker and the encoder get the graphics memory
+    # the fix and upscaling models no longer need.
+    events: list[str] = []
+
+    class ReleasingEngine(CountingEngine):
+        def process_frame(self, *, img_tensor, **kwargs):
+            events.append("upscale")
+            return super().process_frame(img_tensor=img_tensor, **kwargs)
+
+        def release_model(self, path=None):
+            events.append("release")
+
+    class OrderedSynthesizer(RecordingSynthesizer):
+        def synthesize(self, first, second, timesteps, cancel_event=None):
+            events.append("interpolate")
+            return super().synthesize(first, second, timesteps, cancel_event)
+
+    source = make_cfr(tmp_path / "cfr.webm", frames=4)
+    interpolated_job(
+        source,
+        tmp_path / "double.mp4",
+        synthesizer=OrderedSynthesizer(),
+        engine=ReleasingEngine(),
+        interpolation="x2",
+        deflicker=True,
+    )
+    assert events.count("release") == 1
+    assert events.count("upscale") == 4
+    release = events.index("release")
+    assert "upscale" not in events[release:]
+    # Interpolation reads a frame ahead, so the last pair is made after the release.
+    assert events[release + 1 :] == ["interpolate"]
+
+
+def test_interpolation_may_park_the_jobs_models(tmp_path):
+    class ParkingEngine(CountingEngine):
+        def park_models(self):
+            return True
+
+    class ReliefSynthesizer(RecordingSynthesizer):
+        memory_relief = None
+
+    engine, synthesizer = ParkingEngine(), ReliefSynthesizer()
+    source = make_cfr(tmp_path / "cfr.webm", frames=3)
+    interpolated_job(
+        source, tmp_path / "x2.mp4", synthesizer=synthesizer, engine=engine, interpolation="x2"
+    )
+    assert synthesizer.memory_relief == engine.park_models

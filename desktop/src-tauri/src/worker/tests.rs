@@ -819,7 +819,8 @@ fn percentages_and_times_from_the_engine_stay_in_range() {
     )
     .unwrap();
     let runtime = lock(&state.runtime).unwrap();
-    assert_eq!(runtime.progress, 100.0);
+    // Out-of-range tile reports clamp; tiles never reach the saving mark on their own.
+    assert_eq!(runtime.progress, 99.0);
     assert_eq!(runtime.estimated_remaining_seconds, 0.0);
 }
 
@@ -2530,4 +2531,29 @@ fn pause_and_resume_hold_and_dispatch_the_existing_queue() {
     assert_eq!(sent["data"]["job_id"], "a");
     assert_eq!(status(&state, "a"), "starting");
     lock(&state.worker.cancellation).unwrap().finish().unwrap();
+
+fn the_last_tile_does_not_read_as_saving_and_colour_preparation_is_named() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    lock(&state.runtime).unwrap().active_job_id = "a".into();
+    apply_worker_envelope(
+        &state,
+        &envelope(
+            "video_tile_progress",
+            json!({"frame_index": 14, "total_frames": 15, "completed_tiles": 4, "total_tiles": 4}),
+        ),
+    )
+    .unwrap();
+    assert!(lock(&state.runtime).unwrap().progress < 99.5);
+    apply_worker_envelope(
+        &state,
+        &envelope(
+            "video_stage_progress",
+            json!({"job_id": "a", "stage": "colour_preparing", "completed": 3, "total": 13}),
+        ),
+    )
+    .unwrap();
+    let runtime = lock(&state.runtime).unwrap();
+    assert_eq!(runtime.status_title, "Adding colour");
+    assert!(runtime.status_detail.starts_with("3 / 13"));
 }
