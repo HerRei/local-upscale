@@ -25,6 +25,32 @@ const props = {
   close: vi.fn(),
   asTab: true,
 };
+it('shows each side’s recorded details below the comparison and omits missing fields', () => {
+  render(ComparePane, {
+    ...props,
+    items: [
+      {
+        ...item('one', 'a'),
+        details: [
+          'Models: Fix → Upscale',
+          'Scale: 4×',
+          'Output: 400 × 400',
+          'Time: 31s',
+          'Device: cpu',
+          'Date: 1 Jan 2026',
+        ],
+      },
+      { ...item('two', 'a'), details: ['Models: Second'] },
+    ],
+  });
+  const first = screen.getByRole('group', { name: 'Slot 1 details' });
+  const second = screen.getByRole('group', { name: 'Slot 2 details' });
+  expect(first.textContent).toContain('Models: Fix → Upscale');
+  expect(first.textContent).toContain('Output: 400 × 400');
+  expect(first.textContent).toContain('Device: cpu');
+  expect(second.textContent).toContain('Models: Second');
+  expect(second.textContent).not.toMatch(/unknown|Time:|Device:/i);
+});
 it('shows the slider in slot order and provides swap and move controls', async () => {
   render(ComparePane, {
     ...props,
@@ -146,6 +172,8 @@ it('opens two videos in the image slider with one shared transport, then boxes f
     expect(screen.getByRole('slider', { name: 'Divider between slot 1 and slot 2' })).toBeTruthy();
     expect(view.container.querySelectorAll('video')).toHaveLength(2);
     expect(screen.getAllByRole('group', { name: 'Video playback controls' })).toHaveLength(1);
+    expect(screen.getByRole('group', { name: 'Slot 1 details' }).textContent).toContain('one');
+    expect(screen.getByRole('group', { name: 'Slot 2 details' }).textContent).toContain('two');
     await vi.waitFor(() => expect(prepareVideo).toHaveBeenCalledTimes(2));
     expect(prepareVideo).toHaveBeenCalledWith(1, 0, expect.any(String), false, false);
     const old = [...view.container.querySelectorAll('video')];

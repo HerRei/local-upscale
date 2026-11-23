@@ -986,6 +986,19 @@
         >{/each}
     {/if}
   </div>
+  {#if items.length >= 2}
+    <div
+      class="compare-details"
+      style={`grid-template-columns: repeat(${shownLayout === 'slider' ? 2 : cols}, minmax(0, 1fr));`}
+    >
+      {#each boxes as item, index (item.key)}
+        <div role="group" aria-label={`Slot ${index + 1} details`}>
+          <strong><b class="slot-number">{index + 1}</b> {item.label}</strong>
+          {#each item.details ?? [] as detail}<span>{detail}</span>{/each}
+        </div>
+      {/each}
+    </div>
+  {/if}
 </section>
 
 <style>
@@ -1007,7 +1020,7 @@
     left: 10%;
     max-width: 80%;
   }
-  .compare-pane > div:last-child {
+  .compare-pane > div:nth-child(3) {
     position: relative;
     min-height: 0;
   }
@@ -1015,11 +1028,38 @@
     position: relative;
     inset: auto;
   }
-  .compare-pane > div:last-child:not(.video-comparison) > .compare-well {
+  .compare-pane > div:nth-child(3):not(.video-comparison) > .compare-well {
     height: 100%;
   }
   .compare-pane {
-    grid-template-rows: 52px auto 1fr;
+    grid-template-rows: 52px auto minmax(0, 1fr) auto;
+  }
+  .compare-details {
+    display: grid;
+    max-height: 30vh;
+    overflow: auto;
+    border-top: 1px solid var(--hairline-faint);
+    background: var(--header-bg);
+    font-size: calc(11px * var(--ui-scale));
+  }
+  .compare-details > div {
+    min-width: 0;
+    padding: 6px 16px;
+    display: flex;
+    flex-wrap: wrap;
+    align-content: start;
+    gap: 3px 10px;
+  }
+  .compare-details strong {
+    flex-basis: 100%;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow-wrap: anywhere;
+  }
+  .compare-details span {
+    color: var(--secondary);
+    overflow-wrap: anywhere;
   }
   .compare-header span :global(.help-tip) {
     vertical-align: 0;

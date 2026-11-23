@@ -10,6 +10,7 @@ import { demoSnapshot } from './lib/demo';
 import { applyWorkerEnvelope } from './lib/workerEvents';
 import type {
   AppSnapshot,
+  ComparePick,
   DeviceInfo,
   EngineDownloadStatus,
   JobRecord,
@@ -137,7 +138,7 @@ const api = vi.hoisted(() => ({
     original_url: 'asset://localhost/compare.mp4',
     enhanced_url: '',
   })),
-  requestCompare: vi.fn(async (): Promise<void> => undefined),
+  requestCompare: vi.fn(async (_picks: ComparePick[]): Promise<void> => undefined),
   startModelTrials: vi.fn(
     async (_mediaId: string, _modelIds: string[], _base: StartBatchInput): Promise<string[]> => [],
   ),
@@ -5219,6 +5220,12 @@ describe('Comparing saved results', () => {
     expect(document.querySelector('.compare-pane')).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
     expect(document.querySelectorAll('.compare-pane video')).toHaveLength(2);
+    expect(
+      within(screen.getByRole('group', { name: 'Slot 1 details' })).getByText('Models: slow'),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByRole('group', { name: 'Slot 2 details' })).getByText('Models: fast'),
+    ).toBeTruthy();
     expect(screen.getByRole('slider', { name: 'Divider between slot 1 and slot 2' })).toBeTruthy();
     expect(screen.getAllByRole('group', { name: 'Video playback controls' })).toHaveLength(1);
     await waitFor(() =>
@@ -5230,6 +5237,86 @@ describe('Comparing saved results', () => {
     expect(document.querySelectorAll('video')).toHaveLength(0);
     expect(pause).toHaveBeenCalled();
     expect(load).toHaveBeenCalled();
+  });
+
+  it('compares two photo outputs of one source in slider and boxes with job details and omits missing fields', async () => {
+    const first = row('first', {
+      model_label: 'Upscale',
+      stages: [
+        { kind: 'restore', model_id: 'fix', model_label: 'Fix' },
+        { kind: 'upscale', model_id: 'up', model_label: 'Upscale' },
+      ],
+      ui: { quality: 'best', content: 'photo', recipe_name: '', fixes: ['blur', 'noise'] },
+      scale: 4,
+      elapsed_seconds: 95,
+      device: 'mps',
+      neural_engine: true,
+      completed_at: 1_700_000_000_000,
+    });
+    const older = row('older', {
+      model_label: 'Legacy',
+      stages: [],
+      ui: null,
+      scale: 0,
+      elapsed_seconds: 0,
+      device: '',
+      completed_at: 0,
+    });
+    const snapshot = pairHost(readySnapshot([image('photo', true)]));
+    snapshot.jobs = [completedJob('first'), completedJob('older')];
+    const sizes: Record<string, { width: number; height: number }> = {
+      first: { width: 2560, height: 1920 },
+      older: { width: 1280, height: 960 },
+    };
+    api.requestCompare.mockImplementation(async (picks) => {
+      snapshot.runtime.compare = {
+        generation: 1,
+        slots: picks.map((pick) => {
+          const size = pick.kind === 'output' ? sizes[pick.job_id] : { width: 640, height: 480 };
+          return {
+            pick,
+            media_kind: 'image',
+            status: 'ready',
+            preview_data_url: `data:image/png;base64,${pick.kind === 'output' ? pick.job_id : 'orig'}`,
+            error: '',
+            width: size.width,
+            height: size.height,
+            preview_width: size.width,
+            preview_height: size.height,
+          };
+        }),
+      };
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    });
+    api.listAllMediaResults.mockResolvedValue([historyOf('photo', [first, older])]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+    await user.click(await screen.findByRole('checkbox', { name: 'Upscale, photo.png' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Legacy, photo.png' }));
+    await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
+    expect(screen.getByRole('slider', { name: 'Divider between slot 1 and slot 2' })).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.getByRole('group', { name: 'Slot 1 details' }).textContent).toContain(
+        'Output: 2560 × 1920',
+      ),
+    );
+    const slot1 = screen.getByRole('group', { name: 'Slot 1 details' });
+    expect(slot1.textContent).toContain('Models: Fix → Upscale');
+    expect(slot1.textContent).toContain('Fixes: Blur → Noise');
+    expect(slot1.textContent).toContain('Scale: 4×');
+    expect(slot1.textContent).toContain('Time: 1:35');
+    expect(slot1.textContent).toContain('Requested device: mps · Neural Engine enabled');
+    expect(slot1.textContent).toContain(
+      `Date: ${new Date(1_700_000_000_000).toLocaleDateString()}`,
+    );
+    const slot2 = screen.getByRole('group', { name: 'Slot 2 details' });
+    expect(slot2.textContent).toContain('Models: Legacy');
+    expect(slot2.textContent).toContain('Output: 1280 × 960');
+    expect(slot2.textContent).not.toMatch(/unknown|Fixes:|Scale:|Time:|Requested device:|Date:/i);
+    await user.click(screen.getByRole('radio', { name: 'Boxes' }));
+    expect(document.querySelectorAll('.compare-pane .boxes .box')).toHaveLength(2);
+    expect(screen.getByRole('group', { name: 'Slot 1 details' })).toBeTruthy();
+    expect(screen.getByRole('group', { name: 'Slot 2 details' })).toBeTruthy();
   });
 
   it('ticks grouped originals and outputs into Compare in order and keeps them across tabs', async () => {

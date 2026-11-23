@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { outputGroups } from './compareOutputs';
+import { outputGroups, resultDetails } from './compareOutputs';
 import type { ComparePick, MediaItem, MediaResults, ResultSummary } from './types';
 
 describe('Outputs list histories', () => {
@@ -33,6 +33,44 @@ describe('Outputs list histories', () => {
       result: histories[2].results[2],
     });
   });
+});
+
+it('formats recorded details in order and leaves absent older fields out', () => {
+  const saved = {
+    stages: [
+      { kind: 'restore', model_id: 'a', model_label: 'Fix' },
+      { kind: 'upscale', model_id: 'b', model_label: 'Upscale' },
+    ],
+    ui: { fixes: ['blur', 'noise'] },
+    scale: 4,
+    elapsed_seconds: 31,
+    device: 'cuda:0',
+    completed_at: 1700000000000,
+  } as ResultSummary;
+  expect(resultDetails(saved, 400, 300)).toEqual([
+    'Models: Fix → Upscale',
+    'Fixes: Blur → Noise',
+    'Scale: 4×',
+    'Output: 400 × 300',
+    'Time: 31s',
+    'Requested device: cuda:0',
+    `Date: ${new Date(saved.completed_at).toLocaleDateString()}`,
+  ]);
+  expect(
+    resultDetails({
+      model_label: 'SPAN',
+      device: 'mps',
+      neural_engine: true,
+    } as ResultSummary),
+  ).toEqual(['Models: SPAN', 'Requested device: mps · Neural Engine enabled']);
+  expect(
+    resultDetails({
+      model_label: 'SPAN',
+      device: 'mps',
+      neural_engine: false,
+    } as ResultSummary),
+  ).toEqual(['Models: SPAN', 'Requested device: mps']);
+  expect(resultDetails({ model_label: 'Unknown model' } as ResultSummary)).toEqual([]);
 });
 
 import { pickKey, toggleSlot, swapSlots, sliderBlock } from './compareOutputs';

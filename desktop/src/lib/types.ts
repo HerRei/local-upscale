@@ -694,6 +694,9 @@ export interface ResultSummary {
   notes: string;
   /** Run time including loading and saving; 0 when unknown. */
   elapsed_seconds: number;
+  /** Requested device and Neural Engine preference, if recorded. */
+  device?: string;
+  neural_engine?: boolean;
   ui: ResultUi | null;
 }
 export interface MediaResults {

@@ -9,6 +9,7 @@
 - Updates explain when unreadable settings need recovery, and can install when settings come from a newer version (#123).
 - **Your own models.** Name and select custom checkpoints in the model library. Approval for pickle-based files is remembered by file hash (#146).
 - **Colour for video.** Black-and-white videos can be coloured under Restore and Restore first. Colours are carried from frame to frame, so they stay steady (#164).
+- **Compare results.** Compare saved photo or video outputs in one view, with recorded job details under each side (#145).
 
 ## [0.5.2-beta] - 2026-11-23
 
