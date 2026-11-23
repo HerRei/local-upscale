@@ -233,9 +233,19 @@ jobs:
             -Credential $credential -LoadUserProfile -Wait -PassThru -WorkingDirectory C:\
           $profileRoot = (Get-CimInstance Win32_UserProfile | Where-Object { $_.LocalPath -like "*\$user" }).LocalPath
           if (-not $profileRoot) { throw "The standard user's profile was not created" }
+          $started = Get-Date
           $install = Start-Process -FilePath $artifact -ArgumentList "/S" -Credential $credential `
             -LoadUserProfile -Wait -PassThru -WorkingDirectory C:\
-          "Per-user install exit code: $($install.ExitCode)"
+          "Per-user install exit code: $($install.ExitCode) after $([int]((Get-Date) - $started).TotalSeconds) s"
+          # Diagnostics: where did the files go, and what does the user's registry say?
+          New-Item -ItemType Directory -Force -Path C:\lsrdiag | Out-Null
+          icacls C:\lsrdiag /grant "${user}:(OI)(CI)F" | Out-Null
+          Start-Process -FilePath "cmd.exe" -Credential $credential -LoadUserProfile -Wait -WorkingDirectory C:\ -ArgumentList "/c", `
+            "(echo LOCALAPPDATA=%LOCALAPPDATA% & echo USERPROFILE=%USERPROFILE% & reg query HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall /s /f LocalSR & dir /s /b %LOCALAPPDATA%\*localsr* & dir /s /b %LOCALAPPDATA%\Programs) > C:\lsrdiag\user.txt 2>&1"
+          Get-Content C:\lsrdiag\user.txt | ForEach-Object { "user> $_" }
+          Get-ChildItem -Path C:\Users, "$env:ProgramFiles", "$env:LOCALAPPDATA" -Recurse -Depth 6 -Filter "*.exe" -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -ge $started -or $_.CreationTime -ge $started } |
+            Select-Object -First 20 | ForEach-Object { "new since install: $($_.FullName)" }
           if ($install.ExitCode -ne 0) { throw "The per-user install failed for a standard user" }
           # Where "Just me" installs is the installer's choice; find the host in that user's AppData.
           $host_exe = Get-ChildItem -LiteralPath (Join-Path $profileRoot "AppData") -Recurse -Depth 5 `
