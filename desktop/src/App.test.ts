@@ -408,7 +408,8 @@ describe('Appearance from the host', () => {
     await user.click(within(dialog).getByRole('tab', { name: 'Appearance' }));
     await user.click(within(dialog).getByRole('switch', { name: 'High contrast' }));
     await waitFor(() => expect(api.setPreference).toHaveBeenCalledWith('contrast', 'high'));
-    expect(document.documentElement.dataset.contrast).toBe('high');
+    // The theme follows once the awaited host call returns.
+    await waitFor(() => expect(document.documentElement.dataset.contrast).toBe('high'));
   });
 
   it('keeps saved contrast and viewer background during first-run theme preview', async () => {
@@ -1978,7 +1979,7 @@ describe('LocalSR desktop interface', () => {
 
     const memory = screen.getByLabelText('FlashVSR memory');
     expect(memory.textContent).toMatch(
-      /windows of 41 frames; each starts with 8\s+frames of run-up/,
+      /windows of 37 frames; each starts with 8\s+frames of run-up/,
     );
     expect(memory.textContent).not.toMatch(/SeedVR2|VAE|per clip|offload/);
     expect(screen.queryByRole('checkbox', { name: 'Reduce GPU memory' })).toBeNull();

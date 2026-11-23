@@ -50,7 +50,7 @@ it.each(['cuda:0', 'cuda:1'])('offers the real CPU offload control on CUDA/ROCm 
   expect(screen.getByRole('checkbox', { name: 'Reduce GPU memory' })).toBeTruthy();
 });
 
-const flash = { engine_kind: 'flashvsr', temporal_window: 41, temporal_overlap: 8 };
+const flash = { engine_kind: 'flashvsr', temporal_window: 37, temporal_overlap: 8 };
 const reading = (changes: Partial<VideoMemoryStatus>): VideoMemoryStatus => ({
   job_id: 'job',
   device: 'mps',
@@ -85,17 +85,17 @@ it('explains FlashVSR by its tiles and windows, with no SeedVR2 numbers and noth
   const text = screen.getByLabelText('FlashVSR memory').textContent ?? '';
   expect(text).toMatch(/Apple GPU · automatic memory management/);
   expect(text).toMatch(/tiles sized to this Mac's memory, so there is no memory setting/);
-  expect(text).toMatch(/windows of 41 frames; each starts with 8\s+frames of run-up/);
+  expect(text).toMatch(/windows of 37 frames; each starts with 8\s+frames of run-up/);
   expect(text).toMatch(/Requested output: 3840 × 2160\. Jobs on large\s+frames can take hours\./);
   expect(text).not.toMatch(/SeedVR2|VAE|per clip|offload|GiB|Capacity/);
   expect(screen.queryByRole('checkbox')).toBeNull();
 });
 
 it('reads a FlashVSR job in windows, without VAE, clip or PyTorch wording', () => {
-  render(VideoMemory, { model: flash, memory: reading({ clip_frames: 41 }), running: true });
+  render(VideoMemory, { model: flash, memory: reading({ clip_frames: 37 }), running: true });
   const text = screen.getByLabelText('FlashVSR memory').textContent ?? '';
   expect(screen.getByText('Decoding')).toBeTruthy();
-  expect(text).toMatch(/1920 × 1080 · windows of 41 frames · automatic memory management/);
+  expect(text).toMatch(/1920 × 1080 · windows of 37 frames · automatic memory management/);
   expect(screen.getByText('9.00 GiB / 11.00 GiB')).toBeTruthy();
   expect(text).toMatch(/Measured every second\./);
   expect(text).not.toMatch(/VAE|frames\/clip|PyTorch/);

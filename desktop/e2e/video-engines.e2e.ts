@@ -48,7 +48,7 @@ test('FlashVSR is chosen from the library on a Mac that can run it, with its own
 
   const memory = page.getByLabel('FlashVSR memory');
   await expect(memory).toContainText('Apple GPU · automatic memory management');
-  await expect(memory).toContainText('windows of 41 frames');
+  await expect(memory).toContainText('windows of 37 frames');
   await expect(memory).not.toContainText(/SeedVR2|VAE|per clip|offload/);
   await expect(page.getByLabel('Reduce GPU memory')).toHaveCount(0);
   await expect(page.getByRole('radiogroup', { name: 'Size' })).toHaveCount(0);
