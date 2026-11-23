@@ -16,8 +16,12 @@ name: Linux AppImages
 # identity (updater public key, backend, kind, engine id), so it checks its own feed
 # entry; the AppImage is its own updater file, and its engine package is written next to
 # it. Their signatures are made on the Mac (scripts/beta_update_signing.py platforms).
+# The CPU job also builds the .deb for Ubuntu and Debian from the same worker, with the same
+# codec, NVIDIA, glibc and source checks, a check that its Depends bring every system
+# library it links, and an install, start and removal with apt. It has its own update kind
+# (`deb`) and no feed entry: apt installs its updates, and GPU engines come from the app.
 # Given a release tag, the verified AppImages (split into 1.9 GB parts when larger than
-# GitHub's asset limit), engine packages and bundles are attached.
+# GitHub's asset limit), the .deb, engine packages and bundles are attached.
 
 on:
   workflow_dispatch:
@@ -210,6 +214,71 @@ jobs:
           ls -la /mnt/lsr/out
           df -h / /mnt
 
+      - name: Give the CPU .deb its update identity
+        if: matrix.backend == 'CPU'
+        run: |
+          # The CPU AppImage's worker and engine id, with the `deb` kind: apt installs and
+          # removes its files, so the app only reports new versions (docs/updates.md).
+          python scripts/release_targets.py --update-env linux-x86_64-cpu-deb --commit "$GITHUB_SHA" \
+            >> "$GITHUB_ENV"
+
+      - name: Build, verify and smoke-test the CPU .deb
+        if: matrix.backend == 'CPU'
+        run: |
+          # Reuses the worker built above; Tauri's deb bundler adds the host compiled with
+          # the .deb's identity. WebKitGTK, GTK and GStreamer come from the system.
+          python scripts/build_tauri_preview.py --skip-worker --skip-checks --bundles deb
+          BUNDLE="$CARGO_TARGET_DIR/release/bundle/deb"
+          mapfile -t PACKAGES < <(find "$BUNDLE" -maxdepth 1 -type f -name '*.deb')
+          test "${#PACKAGES[@]}" = 1
+          VERSION=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          NAME="LocalSR-v${VERSION}-Linux-CPU-amd64.deb"
+          ARTIFACT="/mnt/lsr/out/$NAME"
+          # Tauri writes the app version as is; to apt "0.6.0-beta" is upstream 0.6.0 with
+          # Debian revision "beta", which sorts above the stable 0.6.0. "0.6.0~beta" sorts
+          # below it, so the step from beta to stable is an upgrade.
+          REPACK=/mnt/lsr/deb-repack
+          rm -rf "$REPACK"
+          dpkg-deb -R "${PACKAGES[0]}" "$REPACK"
+          sed -i -E 's/^Version: ([0-9.]+)-(.+)$/Version: \1~\2/' "$REPACK/DEBIAN/control"
+          # Tauri derives "local-sr" from the product name; the package is "localsr".
+          sed -i -E 's/^Package: .*/Package: localsr/' "$REPACK/DEBIAN/control"
+          dpkg-deb --root-owner-group -b "$REPACK" "$ARTIFACT"
+          rm -rf "$REPACK" "${PACKAGES[0]}"
+          dpkg-deb --info "$ARTIFACT"
+          test "$(dpkg-deb -f "$ARTIFACT" Version)" = "$(printf '%s' "$VERSION" | sed 's/-/~/')"
+          test "$(dpkg-deb -f "$ARTIFACT" Package)" = localsr
+          test "$(dpkg-deb -f "$ARTIFACT" Architecture)" = amd64
+          EXTRACT=/mnt/lsr/deb-extract
+          rm -rf "$EXTRACT" /mnt/lsr/deb-source
+          dpkg-deb -x "$ARTIFACT" "$EXTRACT"
+          # The AppImage's checks, on what the .deb installs.
+          python scripts/verify_codec_allowlist.py --tree "$EXTRACT" --output "/mnt/lsr/out/$NAME.codec-policy.json"
+          python scripts/verify_nvidia_redistributables.py "$EXTRACT" | tee "/mnt/lsr/out/$NAME.nvidia.json"
+          python scripts/verify_appimage_libc.py "$EXTRACT" --report "/mnt/lsr/out/$NAME.libc.json"
+          # Every system library it links comes with its Depends. Before the install, so
+          # dpkg -S (here and in the source bundle) finds only the system's own copies.
+          python scripts/verify_deb_dependencies.py "$EXTRACT" --package "$ARTIFACT" \
+            --report "/mnt/lsr/out/$NAME.dependencies.json"
+          mapfile -t EXTRA < <(python scripts/fetch_extra_sources.py --platform linux-x86_64 \
+            --destination /mnt/lsr/extra-sources)
+          SOURCE_NAME="LocalSR-v${VERSION}-Linux-CPU-deb-source-and-notices.tar.gz"
+          python scripts/build_source_bundle.py --inventory "$EXTRACT" \
+            --output /mnt/lsr/deb-source --commit "$GITHUB_SHA" \
+            --media-source /mnt/lsr/lgpl-media/linux-x86_64/dist/corresponding-source \
+            --opencv-source /mnt/lsr/lgpl-media/linux-x86_64/opencv/corresponding-source \
+            "${EXTRA[@]}" --apt-sources > "/mnt/lsr/out/$SOURCE_NAME.json"
+          tar -C /mnt/lsr -czf "/mnt/lsr/out/$SOURCE_NAME" deb-source
+          rm -rf "$EXTRACT" /mnt/lsr/deb-source
+          # sudo apt-get install ./file.deb, start the installed host, sudo apt-get remove,
+          # and every file it installed must be gone.
+          python scripts/smoke_tauri_installer.py --backend CPU --timeout 900 \
+            --artifact-glob "$ARTIFACT" --report "/mnt/lsr/out/$NAME.smoke.json" \
+            --update-target linux-x86_64-cpu-deb --commit "$GITHUB_SHA"
+          (cd /mnt/lsr/out && sha256sum "$NAME" > "$NAME.sha256")
+          ls -la /mnt/lsr/out
+          df -h / /mnt
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.id }}
@@ -219,7 +288,7 @@ jobs:
           compression-level: 0
 
   attach:
-    name: Attach verified AppImages to the release
+    name: Attach verified AppImages and the .deb to the release
     needs: appimage
     if: ${{ !cancelled() && inputs.release_tag != '' }}
     runs-on: ubuntu-24.04
@@ -230,13 +299,14 @@ jobs:
         with:
           path: assets
           merge-multiple: true
-      - name: Upload the AppImages and their checksums
+      - name: Upload the AppImages, the .deb and their checksums
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           shopt -s nullglob
           files=(assets/*.AppImage assets/*.AppImage.part-* assets/*.AppImage.sha256 \
+            assets/*.deb assets/*.deb.sha256 \
             assets/*.engine.tar.gz.part-* assets/*.engine-payload.json \
             assets/*-source-and-notices.tar.gz)
           test "${#files[@]}" -gt 0

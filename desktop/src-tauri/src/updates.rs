@@ -1,6 +1,7 @@
 //! Explicit, signed updates for every direct edition. A build checks a feed only when
 //! it was compiled with an update identity: the public verification key, its backend,
 //! its package kind and its engine id (scripts/release_targets.py --update-env).
+//! The .deb (kind `deb`) is the exception that only reports updates: apt owns its files.
 use crate::{
     error::{AppError, AppResult},
     state::{lock, AppState},
@@ -24,6 +25,14 @@ use std::{
 };
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_updater::UpdaterExt;
+
+/// The package kind of the .deb. apt installs, upgrades and removes its files under /usr,
+/// so LocalSR never replaces them. It has no feed entry of its own: it reads the signed
+/// `native` entry of the edition whose engine it ships, to report new versions and to
+/// download engines into the user's app-data folder.
+pub(crate) const DEBIAN_PACKAGE_KIND: &str = "deb";
+const PACKAGE_MANAGER_UPDATES: &str =
+    "This copy of LocalSR was installed as a .deb package. Download the new .deb from the download page and install it with apt.";
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct UpdateConfig {
@@ -59,6 +68,19 @@ impl UpdateConfig {
                 .into(),
         }
     }
+    /// Whether apt, not LocalSR, installs this build's updates.
+    pub(crate) fn installed_by_package_manager(&self) -> bool {
+        self.kind == DEBIAN_PACKAGE_KIND
+    }
+    /// The identity this build looks up in the feed: its own, or for the .deb the
+    /// `native` edition with the same key, backend and engine.
+    pub(crate) fn feed_config(&self) -> Self {
+        let mut config = self.clone();
+        if config.installed_by_package_manager() {
+            config.kind = "native".into();
+        }
+        config
+    }
     pub(crate) fn target(&self) -> String {
         platform_key(
             std::env::consts::OS,
@@ -84,6 +106,27 @@ pub(crate) fn platform_key(os: &str, arch: &str, backend: &str, kind: &str) -> S
 /// key, not a Store build. Only then do the launch check and the count exist.
 fn checks_feed(config: &UpdateConfig, managed_by_store: bool) -> bool {
     config.enabled() && !managed_by_store
+}
+
+/// Whether this build is the .deb (compiled with `LOCALSR_UPDATE_KIND=deb`).
+pub fn installed_by_package_manager() -> bool {
+    UpdateConfig::load().installed_by_package_manager()
+}
+
+/// Downloading and installing an app update replaces the installed files, which apt owns
+/// for the .deb.
+fn require_self_update(config: &UpdateConfig) -> AppResult<()> {
+    if config.installed_by_package_manager() {
+        return Err(invalid(PACKAGE_MANAGER_UPDATES));
+    }
+    Ok(())
+}
+
+/// A newer signed release, for a build that apt updates: nothing to download in the app.
+fn show_package_manager_update(status: &mut UpdateStatus) {
+    status.stage = "available".into();
+    status.size = 0;
+    status.message = PACKAGE_MANAGER_UPDATES.into();
 }
 
 /// The compiled update identity, for the installed-package smoke report: release CI
@@ -189,6 +232,8 @@ struct ReleaseStatement {
 pub struct UpdateStatus {
     pub configured: bool,
     pub managed_by_store: bool,
+    /// The .deb: apt installs updates, the app only reports them.
+    pub managed_by_package_manager: bool,
     pub channel: String,
     pub target: String,
     pub stage: String,
@@ -441,6 +486,7 @@ pub(crate) fn channel(state: &AppState) -> String {
         .unwrap_or("beta".into())
 }
 fn attach_status_metadata(state: &AppState, status: &mut UpdateStatus) {
+    status.managed_by_package_manager = installed_by_package_manager();
     if let Ok(settings) = state.settings.lock() {
         status.skipped_version = settings.skipped_update_version.clone();
     }
@@ -469,6 +515,7 @@ pub fn update_status(state: State<'_, Arc<AppState>>) -> AppResult<UpdateStatus>
     let config = UpdateConfig::load();
     let mut status = lock(&state.updates.status)?.clone();
     status.configured = config.enabled();
+    status.managed_by_package_manager = config.installed_by_package_manager();
     status.skipped_version = lock(&state.settings)?.skipped_update_version.clone();
     status.settings_recovery = crate::settings::needs_recovery(&state.paths);
     if status.channel.is_empty() {
@@ -593,11 +640,14 @@ pub async fn check_update(
             "Discard the downloaded update before changing channels",
         ));
     }
+    // The .deb reads the native entry of its edition; status and count keep its own target.
+    let installed = config;
+    let config = installed.feed_config();
     let endpoint = format!("{}/{}.json", config.feed.trim_end_matches('/'), channel);
     let mut status = UpdateStatus {
         configured: true,
         channel: channel.clone(),
-        target: config.target(),
+        target: installed.target(),
         stage: "checking".into(),
         ..Default::default()
     };
@@ -623,7 +673,7 @@ pub async fn check_update(
     }
     .await;
     if result.is_ok() && !config.feed.starts_with("http://127.0.0.1:") {
-        send_usage_ping(&state, &app, &config, &channel);
+        send_usage_ping(&state, &app, &installed, &channel);
     }
     let update = match result {
         Ok(update) => update,
@@ -651,6 +701,26 @@ pub async fn check_update(
                 &installed_version,
                 &contract,
             )?;
+            if installed.installed_by_package_manager() {
+                // apt installs it: report the signed release, keep the engine catalog
+                // current, and keep nothing to download or install.
+                crate::engine_manager::update_catalog_from_feed(
+                    &state,
+                    &update.raw_json,
+                    &config,
+                    &channel,
+                    &installed_version,
+                );
+                status.version = update.version.clone();
+                status.notes = update.body.clone().unwrap_or_default();
+                status.discover_url =
+                    validated_discover_url(update.raw_json["discover_url"].as_str());
+                show_package_manager_update(&mut status);
+                return update_storage::write_atomic(
+                    &state.paths.next_root.join("update-channel.json"),
+                    channel.as_bytes(),
+                );
+            }
             let resolved_engine = resolve_update_engine_for_backend(
                 &update.raw_json,
                 &config,
@@ -1072,6 +1142,7 @@ async fn download_application(
 #[tauri::command]
 pub async fn download_update(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
     crate::distribution::require_direct_updates()?;
+    require_self_update(&UpdateConfig::load())?;
     if state.engines.busy.load(Ordering::SeqCst) {
         return Err(invalid("An engine installation is already running"));
     }
@@ -1947,6 +2018,7 @@ pub(crate) fn active_engine_for_host(
 #[tauri::command]
 pub async fn install_update(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
     crate::distribution::require_direct_updates()?;
+    require_self_update(&UpdateConfig::load())?;
     if state.engines.busy.load(Ordering::SeqCst) {
         return Err(invalid("An engine installation is already running"));
     }

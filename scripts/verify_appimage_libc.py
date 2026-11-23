@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail when any ELF file in an extracted AppImage needs a newer glibc than the oldest supported LTS has.
+"""Fail when any ELF file in an extracted AppImage or .deb needs a newer glibc than the oldest supported LTS has.
 
 AppImageHub (the AppImage catalog) counts every dynamically linked ELF file in the payload, even one that is
 only loaded in rare cases, and the AppImage's runtime, and tests on the oldest Ubuntu LTS still in standard
@@ -22,6 +22,8 @@ VERSION = re.compile(r"GLIBC_(\d+(?:\.\d+)+)")
 # What runs on the host's CPU (EM_386, EM_X86_64). Other ELF files, such as the AMD GPU code
 # objects in the ROCm edition, never load the host's glibc and objdump cannot read them.
 HOST_MACHINES = {3, 62}
+# Ubuntu 22.04's glibc; the .deb declares the same floor (libc6 >= 2.35 in tauri.conf.json).
+DEFAULT_MAX = "2.35"
 
 
 class InspectionError(RuntimeError):
@@ -88,12 +90,14 @@ def scan(tree: Path) -> dict[str, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("tree", type=Path, help="the extracted AppImage (squashfs-root)")
     parser.add_argument(
-        "--appimage", type=Path, required=True, help="the AppImage itself, for its runtime"
+        "tree", type=Path, help="the extracted AppImage (squashfs-root) or .deb (dpkg-deb -x)"
     )
     parser.add_argument(
-        "--max", default="2.35", help="newest glibc allowed (default: Ubuntu 22.04's 2.35)"
+        "--appimage", type=Path, help="the AppImage itself, for its runtime (not for a .deb)"
+    )
+    parser.add_argument(
+        "--max", default=DEFAULT_MAX, help="newest glibc allowed (default: Ubuntu 22.04's 2.35)"
     )
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
@@ -101,13 +105,13 @@ def main() -> int:
         parser.error(f"not a directory: {args.tree}")
     try:
         needs = scan(args.tree)
-        runtime = required_glibc(args.appimage)
+        runtime = required_glibc(args.appimage) if args.appimage else None
     except InspectionError as error:
         print(f"cannot check the glibc requirement: {error}", file=sys.stderr)
         return 2
     if not needs:
         print(
-            f"no ELF file in {args.tree} uses glibc: is it the extracted AppImage?", file=sys.stderr
+            f"no ELF file in {args.tree} uses glibc: is it the extracted package?", file=sys.stderr
         )
         return 2
     if runtime:

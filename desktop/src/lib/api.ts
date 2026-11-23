@@ -432,6 +432,8 @@ export async function openModelSource(modelId: string): Promise<void> {
 export interface UpdateStatus {
   configured: boolean;
   managed_by_store: boolean;
+  /** The .deb: apt installs new versions, the app only reports them. */
+  managed_by_package_manager: boolean;
   channel: string;
   target: string;
   stage: string;

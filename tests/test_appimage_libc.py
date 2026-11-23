@@ -90,6 +90,18 @@ def test_the_appimage_runtime_counts_too(monkeypatch, tmp_path):
     assert json.loads(report.read_text())["offenders"][0]["path"] == "(AppImage runtime)"
 
 
+def test_an_extracted_deb_has_no_runtime_and_is_held_to_the_same_ceiling(monkeypatch, tmp_path):
+    tree, _appimage = tree_with(tmp_path)
+    fake_objdump(monkeypatch, {"libnew.so": NEEDS_2_38, "libold.so": NEEDS_2_17})
+    report = tmp_path / "libc.json"
+    assert run_main(monkeypatch, str(tree), "--report", str(report)) == 1
+    assert json.loads(report.read_text())["offenders"] == [
+        {"path": "usr/lib/libnew.so", "glibc": "2.38"}
+    ]
+    fake_objdump(monkeypatch, {"libold.so": NEEDS_2_17})
+    assert run_main(monkeypatch, str(tree)) == 0
+
+
 def test_a_payload_within_the_ceiling_passes(monkeypatch, tmp_path):
     tree, appimage = tree_with(tmp_path)
     fake_objdump(monkeypatch, {"libnew.so": NEEDS_2_38, "libold.so": NEEDS_2_17})

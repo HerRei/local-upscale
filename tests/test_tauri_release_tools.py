@@ -120,6 +120,7 @@ UPDATE_TARGETS = {
     "windows-x86_64-cpu": "windows-x86_64-cpu-native",
     "windows-x86_64-directml": "windows-x86_64-directml-native",
     "linux-x86_64-cpu": "linux-x86_64-cpu-native",
+    "linux-x86_64-cpu-deb": "linux-x86_64-cpu-deb",
     "linux-x86_64-cuda": "linux-x86_64-cuda-native",
     "linux-x86_64-rocm": "linux-x86_64-rocm-native",
 }
@@ -424,7 +425,7 @@ def test_the_feed_check_verifies_signatures_as_the_app_does() -> None:
 def platform_downloads(tmp_path: Path, release_version: str = "1.2.3-beta") -> Path:
     """What `gh run download` leaves for the Windows and Linux runs: one folder per edition."""
     downloads = tmp_path / "downloads"
-    for target in release_targets.targets():
+    for target in release_targets.feed_targets():
         if target["platform"] == "macos":
             continue
         directory = downloads / target["id"]
@@ -550,7 +551,8 @@ def test_platform_tool_signs_ci_artifacts_and_adds_their_feed_entries(tmp_path: 
         downloads, feed_path, COMMIT, release_version="1.2.3-beta", sign=recording
     )
     feed = json.loads(feed_path.read_text())
-    assert set(feed["platforms"]) == set(UPDATE_TARGETS.values())
+    # The .deb has no entry of its own: apt installs its updates.
+    assert set(feed["platforms"]) == set(UPDATE_TARGETS.values()) - {"linux-x86_64-cpu-deb"}
     # The macOS entry and the release text are left exactly as the Mac build wrote them.
     assert (
         feed["platforms"]["darwin-aarch64-mps-native"]
@@ -1642,3 +1644,47 @@ def test_split_signing_does_not_keep_whole_and_part_copy_at_once(tmp_path: Path)
 
     update_signing.add_platforms(downloads, feed, COMMIT, release_version="1.2.3-beta", sign=sign)
     assert observed
+
+
+def test_deb_release_identity_reuses_cpu_engine_without_feed_entry() -> None:
+    deb = release_targets.target("linux-x86_64-cpu-deb")
+    cpu = release_targets.target("linux-x86_64-cpu")
+    commit = "a" * 40
+    assert release_targets.platform_key(deb) == "linux-x86_64-cpu-deb"
+    # It ships the CPU AppImage's worker, so the installed engine has the same identity.
+    assert release_targets.engine_id(deb, commit) == release_targets.engine_id(cpu, commit)
+    assert release_targets.update_environment("linux-x86_64-cpu-deb", commit) == {
+        **release_targets.update_environment("linux-x86_64-cpu", commit),
+        "LOCALSR_UPDATE_KIND": "deb",
+    }
+    assert deb not in release_targets.feed_targets()
+    assert cpu in release_targets.feed_targets()
+    assert (
+        release_targets.update_files(deb, "1.2.3-beta")["package"]
+        == "LocalSR-v1.2.3-beta-Linux-CPU-amd64.deb"
+    )
+
+
+def test_registry_keeps_the_deb_tied_to_a_native_engine_target(tmp_path: Path, monkeypatch) -> None:
+    registry = json.loads(release_targets.REGISTRY.read_text())
+    path = tmp_path / "targets.json"
+    monkeypatch.setattr(release_targets, "REGISTRY", path)
+
+    def deb(targets: list[dict]) -> dict:
+        return next(t for t in targets if t["id"] == "linux-x86_64-cpu-deb")
+
+    for change in (
+        # A .deb with a feed entry would need self-update files apt does not allow.
+        lambda targets: deb(targets).update(feed=True),
+        lambda targets: deb(targets).pop("engine_target"),
+        lambda targets: deb(targets).update(engine_target="linux-x86_64-rocm"),
+        lambda targets: deb(targets).update(engine_target="linux-x86_64-missing"),
+        # Only a .deb may leave the feed or borrow another target's engine.
+        lambda targets: targets[1].update(feed=False),
+        lambda targets: targets[1].update(engine_target="windows-x86_64-cpu"),
+    ):
+        broken = json.loads(json.dumps(registry))
+        change(broken["targets"])
+        path.write_text(json.dumps(broken))
+        with pytest.raises(ValueError, match="engine"):
+            release_targets.targets()

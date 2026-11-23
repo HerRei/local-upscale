@@ -36,8 +36,8 @@ from release_targets import (
     UPDATE_ARCH,
     engine_id,
     expected_update_identity,
+    feed_targets,
     protocol_version,
-    targets,
     update_files,
     version,
 )
@@ -406,7 +406,8 @@ def platform_entries(
     protocol = protocol_version()
     checked = [
         _check_target(downloads, target, release_version, commit)
-        for target in targets()
+        # The .deb has no feed entry: apt installs its updates (release_targets.py).
+        for target in feed_targets()
         if target["platform"] != "macos"
     ]
     entries: dict[str, dict] = {}

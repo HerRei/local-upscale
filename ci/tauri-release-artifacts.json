@@ -49,6 +49,15 @@
       "update_target": "linux-x86_64-cpu-native"
     },
     {
+      "id": "linux-x86_64-cpu-deb",
+      "filename": "LocalSR-v0.5.2-beta-Linux-CPU-amd64.deb",
+      "platform": "linux",
+      "architecture": "x86_64",
+      "backend": "CPU",
+      "signing": "sha256",
+      "update_target": "linux-x86_64-cpu-deb"
+    },
+    {
       "id": "linux-x86_64-cuda",
       "filename": "LocalSR-v0.5.2-beta-Linux-CUDA-x86_64.AppImage",
       "platform": "linux",

@@ -32,11 +32,20 @@ UPDATE_GATES = {
     "installed update identity": "--update-target",
     "updater engine payload": "prepare_engine_payload.py",
 }
+# The CPU .deb: its own identity (apt installs its updates), its Depends, and an install,
+# start and removal with apt.
+DEBIAN_PACKAGE_GATES = {
+    "Debian package build": "--bundles deb",
+    "Debian package update identity": "--update-env linux-x86_64-cpu-deb",
+    "Debian package dependency check": "verify_deb_dependencies.py",
+    "Debian package apt smoke": "--update-target linux-x86_64-cpu-deb",
+}
 RELEASE_PACKAGE_WORKFLOWS = {
     "linux-appimages.yml": {
         "glibc ceiling": "verify_appimage_libc.py",
         "offline window check": "verify_appimage_window.py",
         **UPDATE_GATES,
+        **DEBIAN_PACKAGE_GATES,
     },
     "windows-installers.yml": UPDATE_GATES,
 }

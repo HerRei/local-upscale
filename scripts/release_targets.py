@@ -15,9 +15,11 @@ REGISTRY = ROOT / "ci" / "tauri-targets.json"
 PUBLIC_KEY = ROOT / "packaging" / "updates" / "production.pub"
 # UpdateConfig::target() in desktop/src-tauri/src/updates.rs builds the same key from
 # std::env::consts: <os>-<arch>-<backend>-<kind>, with "darwin" for macOS.
+# `deb` is a Debian package that apt installs and updates: it has no feed entry of its own
+# and reads the `native` entries of its engine's target (UpdateConfig::feed_config()).
 UPDATE_OS = {"macos": "darwin", "windows": "windows", "linux": "linux"}
 UPDATE_ARCH = {"arm64": "aarch64", "x86_64": "x86_64"}
-UPDATE_KINDS = {"native", "portable"}
+UPDATE_KINDS = {"native", "portable", "deb"}
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 # Bump when this hashing recipe itself changes; release tooling edits are not engine inputs.
 ENGINE_ID_SCHEME = 1
@@ -36,6 +38,35 @@ def _valid_update(target: dict) -> bool:
     )
 
 
+def _check_system_package(entry: dict, by_id: dict[str, dict]) -> None:
+    """A .deb, and only a .deb, packages another target's engine and has no feed entry.
+
+    apt owns its files, so it never installs an update itself; it learns about new
+    versions from the signed `native` entry of the target whose worker it ships.
+    """
+    is_deb = entry["update"]["kind"] == "deb"
+    base_id = entry.get("engine_target")
+    has_feed_entry = entry.get("feed", True)
+    if is_deb != (base_id is not None) or has_feed_entry is not (not is_deb):
+        raise ValueError(
+            f"{entry['id']}: a deb package, and only it, reuses another target's engine "
+            "(engine_target) and has no feed entry (feed: false)"
+        )
+    if not is_deb:
+        return
+    base = by_id.get(base_id)
+    if (
+        base is None
+        or base.get("engine_target")
+        or base["update"] != {"backend": entry["update"]["backend"], "kind": "native"}
+        or any(base[key] != entry[key] for key in ("platform", "architecture", "backend", "index"))
+    ):
+        raise ValueError(
+            f"{entry['id']} must reuse the engine of a native target with the same platform, "
+            "architecture and backend"
+        )
+
+
 def targets() -> list[dict]:
     data = json.loads(REGISTRY.read_text(encoding="utf-8"))
     entries = data["targets"]
@@ -44,10 +75,18 @@ def targets() -> list[dict]:
     for entry in entries:
         if not _valid_update(entry):
             raise ValueError(f"{entry['id']} has no valid update identity (backend, kind)")
+    by_id = {entry["id"]: entry for entry in entries}
+    for entry in entries:
+        _check_system_package(entry, by_id)
     keys = [platform_key(entry) for entry in entries]
     if len(set(keys)) != len(keys):
         raise ValueError("two release targets share an update platform key")
     return entries
+
+
+def feed_targets() -> list[dict]:
+    """The targets with their own signed feed entry: every one but the .deb."""
+    return [entry for entry in targets() if entry.get("feed", True)]
 
 
 def target(target_id: str) -> dict:
@@ -80,7 +119,10 @@ def engine_id(entry: dict, commit: str, *, root: Path = ROOT) -> str:
     Hash sorted paths and content digests, with text line endings normalized. The
     local package version is informational; the worker protocol governs compatibility.
     Keep this input list in step with the worker spec and the locked build recipe.
+    A .deb ships its engine target's worker, so it has that target's engine id.
     """
+    if entry.get("engine_target"):
+        entry = target(entry["engine_target"])
     if not COMMIT_RE.fullmatch(commit):
         raise ValueError(f"release commit must be a full lowercase SHA, not {commit!r}")
     inputs = [
@@ -198,7 +240,11 @@ def download_table(release_version: str) -> str:
     main_rows = [
         ("Mac (M1 or newer)", f"`{package('macos-arm64-mps')}`"),
         ("Windows", f"`{package('windows-x86_64-cpu')}`"),
-        ("Linux", f"`{package('linux-x86_64-cpu')}`"),
+        (
+            "Linux",
+            f"`{package('linux-x86_64-cpu')}`, or `{package('linux-x86_64-cpu-deb')}` "
+            "on Ubuntu and Debian",
+        ),
     ]
     offline_rows = [
         ("Windows, AMD or Intel graphics", f"`{package('windows-x86_64-directml')}`"),

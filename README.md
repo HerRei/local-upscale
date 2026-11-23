@@ -76,7 +76,7 @@ and DDColor, and each model shows its size, licence and source before you downlo
 |---|---|
 | Mac (M1 or newer) | `LocalSR-v0.5.2-beta-macOS-arm64.dmg` |
 | Windows | `LocalSR-v0.5.2-beta-Windows-CPU-x86_64.exe` |
-| Linux | `LocalSR-v0.5.2-beta-Linux-CPU-x86_64.AppImage` |
+| Linux | `LocalSR-v0.5.2-beta-Linux-CPU-x86_64.AppImage`, or `LocalSR-v0.5.2-beta-Linux-CPU-amd64.deb` on Ubuntu and Debian |
 
 The app offers the faster GPU engine after setup.
 
@@ -106,7 +106,11 @@ for each platform:
 - **Linux v0.5.0-beta:** x86-64 AppImage. Choose CPU, CUDA or ROCm above. The CPU
   AppImage runs Intel graphics through OpenVINO once Intel's compute driver
   (`intel-opencl-icd`) is installed. After first setup, it offers once to add
-  LocalSR to your applications menu, removable later from the Help menu.
+  LocalSR to your applications menu, removable later from the Help menu. From
+  0.6.0-beta, Ubuntu 22.04+ and Debian 12+ can install the CPU edition as a .deb
+  with `sudo apt install ./LocalSR-v<version>-Linux-CPU-amd64.deb`. It adds its
+  own menu entry and downloads the CUDA or ROCm engine inside the app. It reports
+  new versions; install the new .deb with apt the same way.
 
 The CUDA edition needs an NVIDIA RTX 20 series or newer and driver 580 or
 newer. On Windows, older NVIDIA cards can use DirectML.
@@ -202,7 +206,8 @@ Qwen Image 2.1, FLUX.2 klein, or Mage-Flow-Edit-Turbo.
 **How do I uninstall it?** On a Mac, move LocalSR to the Trash and delete
 `~/Library/Application Support/LocalSR` and `~/Library/Caches/LocalSR`. On
 Windows, uninstall it under Apps and delete `%LOCALAPPDATA%\LocalSR`. On Linux,
-delete the AppImage and `${XDG_DATA_HOME:-~/.local/share}/LocalSR`. The
+delete the AppImage or run `sudo apt remove localsr`, then delete
+`${XDG_DATA_HOME:-~/.local/share}/LocalSR`. The
 [guide](https://herrei.github.io/localsr/guide/) has the details.
 
 ## Build from source

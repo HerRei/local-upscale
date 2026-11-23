@@ -46,6 +46,10 @@
   (#159).
 - **Windows installer.** Offers Just me (default, no administrator rights) or Everyone
   on this computer.
+- **Debian package.** The CPU edition for Ubuntu 22.04+ and Debian 12+ as a .deb that
+  `apt` installs into the applications menu and removes with `apt remove`. It reports new
+  versions instead of updating itself, and downloads the CUDA or ROCm engine inside the
+  app. The AppImage stays (#165).
 - **Fixes.** The video encoder is always flushed before it closes (#115). Release
   files can be attached to a draft release, and signing needs less disk space (#114).
 

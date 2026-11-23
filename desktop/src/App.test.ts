@@ -7413,6 +7413,7 @@ describe('Engine manager UI and recommendation card', () => {
     updateState.set({
       configured: true,
       managed_by_store: false,
+      managed_by_package_manager: false,
       channel: 'beta',
       target: 'windows-x86_64-cpu-native',
       stage: 'available',

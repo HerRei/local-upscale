@@ -22,8 +22,8 @@ from pathlib import Path, PurePath
 from release_targets import (
     UPDATE_ARCH,
     engine_id,
+    feed_targets,
     platform_key,
-    targets,
     update_files,
     validate_manifest,
     version,
@@ -390,7 +390,8 @@ def verify_feed(
     protocol = current_protocol_version()
     channel = "beta" if "-" in release_version else "stable"
     platforms = feed.get("platforms")
-    expected = {platform_key(target): target for target in targets()}
+    # The .deb has no entry: apt installs its updates, so it only reads the CPU entry.
+    expected = {platform_key(target): target for target in feed_targets()}
     if not isinstance(platforms, dict) or set(platforms) != set(expected):
         raise ValueError(
             "the feed must have exactly one entry per release target: missing "
@@ -508,7 +509,7 @@ def main() -> int:
             public_key=args.public_key.read_text().strip() if args.public_key else None,
             host=args.host,
         )
-        print(f"Verified {len(targets())} update targets and their signatures in {args.feed}")
+        print(f"Verified {len(feed_targets())} update targets and their signatures in {args.feed}")
     if args.output or args.manifest:
         if not (args.output and args.manifest):
             parser.error("checking a prepared release needs the output folder and --manifest")
