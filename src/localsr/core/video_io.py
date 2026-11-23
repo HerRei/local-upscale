@@ -850,6 +850,7 @@ def _encode_video(
     output_container = None
     stream = None
     mux = None
+    frame = None
     try:
         fps_fraction = (
             Fraction(str(float(fps))).limit_denominator(100_000) if fps else Fraction(25, 1)
@@ -1013,6 +1014,7 @@ def _encode_video(
     except BaseException as error:
         raise VideoStageError("encode", str(error)) from error
     finally:
+        frame = None  # drop any active frame before flushing and closing the encoder
         if output_container is not None:
             try:
                 _close_encoder(output_container, stream if mux is not None else None, mux)
