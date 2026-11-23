@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { openApp, showPane } from './app';
 import { hostCalls } from './fake-host';
 
-test('video restore, Restore first and video recipes', async ({ page }) => {
+test('video Same size, Fix chips and video recipes', async ({ page }) => {
   await openApp(page, {
     photos: 0,
     video: true,
@@ -46,22 +46,23 @@ test('video restore, Restore first and video recipes', async ({ page }) => {
   });
   await showPane(page, 'enhance');
 
-  // Switching a video to Restore with nothing picked turns Noise on; add JPEG artifacts.
-  await page.getByRole('button', { name: 'Restore', exact: true }).click();
+  // Switching a video to Same size leaves Fix chips off; tick Noise and JPEG artifacts.
+  await page.getByRole('radio', { name: 'Same size' }).click();
   await expect(page.getByRole('button', { name: 'Noise', exact: true })).toHaveAttribute(
     'aria-pressed',
-    'true',
+    'false',
   );
+  await page.getByRole('button', { name: 'Noise', exact: true }).click();
   await page.getByRole('button', { name: 'JPEG artifacts', exact: true }).click();
   const stages = page.getByRole('list', { name: 'Stages' });
   await expect(stages.getByRole('listitem')).toHaveCount(2);
   await expect(stages).toContainText('FBCNN');
 
-  // Output scale stays hidden in video Restore.
+  // Output scale is gone from Advanced.
   await page.getByRole('button', { name: /Advanced/ }).click();
   await expect(page.getByLabel('Output scale', { exact: true })).toHaveCount(0);
 
-  // Save a video Restore recipe and check what is sent to the host.
+  // Save a video Same size recipe and check what is sent to the host.
   await page.getByRole('button', { name: 'Save as recipe…' }).click();
   await page.getByRole('textbox', { name: 'Recipe name' }).fill('Video Clean');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
@@ -83,7 +84,7 @@ test('video restore, Restore first and video recipes', async ({ page }) => {
   expect([...savedRecipe.fixes].sort()).toEqual(['jpeg', 'noise']);
   expect(savedRecipe.stages.map((s) => s.fix).sort()).toEqual(['jpeg', 'noise']);
 
-  await page.getByRole('button', { name: 'Restore selected video' }).click();
+  await page.getByRole('button', { name: 'Start selected video' }).click();
   await expect.poll(async () => (await hostCalls(page, 'start_jobs')).length).toBe(1);
   const { input: restoreCall } = (await hostCalls(page, 'start_jobs'))[0].args as {
     input: {
@@ -96,11 +97,8 @@ test('video restore, Restore first and video recipes', async ({ page }) => {
   expect(restoreCall.video_task).toBe('denoise');
   expect(restoreCall.fix_stages.map((s) => s.fix).sort()).toEqual(['jpeg', 'noise']);
 
-  // Switch back to Upscale: no 1x any more; add Blur under Restore first and start.
-  await page.getByRole('button', { name: 'Upscale', exact: true }).click();
-  const scaleSelect = page.getByLabel('Output scale', { exact: true });
-  await expect(scaleSelect).toBeVisible();
-  await expect(scaleSelect.locator('option[value="1"]')).toHaveCount(0);
+  // Switch back to 4× via Size; add Blur under Fix and start.
+  await page.getByRole('radio', { name: '4×' }).click();
   await page.getByRole('button', { name: 'Blur', exact: true }).click();
   await expect(stages).toContainText('SPAN');
 
@@ -119,16 +117,15 @@ test('video restore, Restore first and video recipes', async ({ page }) => {
   expect(upscaleCall.output_scale).toBeGreaterThanOrEqual(2);
   expect(upscaleCall.fix_stages.map((s) => s.fix)).toContain('blur');
 
-  // Re-apply saved video Restore recipe and confirm it switches back to Restore and hides scale.
+  // Re-apply saved video Same size recipe and confirm it switches back to Same size.
   await page.getByRole('button', { name: /^Saved Video Clean/ }).click();
-  await expect(page.getByRole('button', { name: 'Restore', exact: true })).toHaveAttribute(
-    'aria-pressed',
+  await expect(page.getByRole('radio', { name: 'Same size' })).toHaveAttribute(
+    'aria-checked',
     'true',
   );
-  await expect(page.getByLabel('Output scale', { exact: true })).toHaveCount(0);
 });
 
-test('video Restore with nothing picked disables Start until a fix or video option is on', async ({
+test('video Same size with nothing picked disables Start until a fix or video option is on', async ({
   page,
 }) => {
   await openApp(page, {
@@ -146,12 +143,13 @@ test('video Restore with nothing picked disables Start until a fix or video opti
     },
   });
   await showPane(page, 'enhance');
-  await page.getByRole('button', { name: 'Restore', exact: true }).click();
+  await page.getByRole('radio', { name: 'Same size' }).click();
   const noise = page.getByRole('button', { name: 'Noise', exact: true });
-  await expect(noise).toHaveAttribute('aria-pressed', 'true');
-  await noise.click();
+  await expect(noise).toHaveAttribute('aria-pressed', 'false');
   await expect(page.getByText(/Nothing to run\. Pick what to fix/).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Start selected video' })).toBeDisabled();
 
   await page.getByRole('button', { name: 'Blur', exact: true }).click();
   await expect(page.getByText(/Nothing to run\. Pick what to fix/)).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Start selected video' })).toBeEnabled();
 });

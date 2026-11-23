@@ -51,16 +51,33 @@ test('FlashVSR is chosen from the library on a Mac that can run it, with its own
   await expect(memory).toContainText('windows of 41 frames');
   await expect(memory).not.toContainText(/SeedVR2|VAE|per clip|offload/);
   await expect(page.getByLabel('Reduce GPU memory')).toHaveCount(0);
-  await expect(page.getByLabel('Output resolution')).toBeVisible();
+  await expect(page.getByRole('radiogroup', { name: 'Size' })).toHaveCount(0);
+  const res = page.getByLabel('Output resolution');
+  await expect(res).toBeVisible();
+  await expect(res.locator('option')).toHaveText([
+    '2× · 3840 × 2160',
+    '3× · 5760 × 3240',
+    '4× · 7680 × 4320',
+    '256 px · shorter edge',
+    '512 px · shorter edge',
+    '720 px · shorter edge',
+    '1080 px · shorter edge',
+    '1440 px · shorter edge',
+    '2160 px · shorter edge',
+  ]);
+  await res.selectOption('x3');
+  await expect(res).toHaveValue('x3');
   await page.getByRole('button', { name: /^Advanced/ }).click();
   await expect(page.getByText(/^FlashVSR · Labs\./)).toBeVisible();
 
   await page.getByRole('button', { name: 'Start selected video' }).click();
   await expect.poll(async () => (await hostCalls(page, 'start_jobs')).length).toBe(1);
   const { input } = (await hostCalls(page, 'start_jobs'))[0].args as {
-    input: { video_model_id: string };
+    input: { video_model_id: string; output_scale: number; video_target_resolution: number };
   };
   expect(input.video_model_id).toBe('flashvsr_v11');
+  expect(input.output_scale).toBe(3);
+  expect(input.video_target_resolution).toBe(0);
 });
 
 test('on the CPU of the same Mac the library says what FlashVSR needs, and SeedVR2 still runs', async ({
