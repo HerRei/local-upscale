@@ -25,3 +25,8 @@ LangString webview2Downloading ${LANG_ENGLISH} "Downloading WebView2 bootstrappe
 LangString webview2InstallError ${LANG_ENGLISH} "Error: Installing WebView2 failed with exit code $1"
 LangString webview2InstallSuccess ${LANG_ENGLISH} "WebView2 installed successfully"
 LangString deleteAppData ${LANG_ENGLISH} "Remove downloaded models and settings"
+LangString installModeTitle ${LANG_ENGLISH} "Choose Users"
+LangString installModeSubtitle ${LANG_ENGLISH} "Choose which users you want to install ${PRODUCTNAME} for."
+LangString installModeTop ${LANG_ENGLISH} "Choose whether to install ${PRODUCTNAME} just for yourself or for everyone on this computer. $(^ClickNext)"
+LangString installModeCurrentUser ${LANG_ENGLISH} "Just me (no administrator rights needed)"
+LangString installModeAllUsers ${LANG_ENGLISH} "Everyone on this computer (UAC prompt)"

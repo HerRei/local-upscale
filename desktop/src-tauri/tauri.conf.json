@@ -105,7 +105,8 @@
     ],
     "windows": {
       "nsis": {
-        "installMode": "currentUser",
+        "installMode": "both",
+        "template": "../../packaging/windows/installer.nsi",
         "installerHooks": "../../packaging/windows/installer.nsh",
         "installerIcon": "../../packaging/icons/LocalSR.ico",
         "uninstallerIcon": "../../packaging/icons/LocalSR.ico",

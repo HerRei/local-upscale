@@ -197,33 +197,60 @@ def record_windows_payload_architectures(
     report.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def smoke_windows(artifact: Path, report: Path, env: dict[str, str], timeout: float) -> None:
-    with temporary_directory(prefix="localsr-next-installer-") as temporary:
-        install_dir = Path(temporary) / "app"
+def _smoke_windows_install(
+    artifact: Path,
+    install_dir: Path,
+    report: Path,
+    env: dict[str, str],
+    timeout: float,
+    *,
+    install_args: tuple[str, ...] = (),
+) -> None:
+    report.unlink(missing_ok=True)
+    run(
+        [str(artifact), "/S", *install_args, f"/D={install_dir}"],
+        env=env,
+        timeout=timeout,
+    )
+    executable = installed_windows_executable(install_dir)
+    # A Windows service or CI runner may run in Session 0, with no
+    # interactive desktop. Exercise the installed Rust host and bundled worker before
+    # WebView initialization so this acceptance test does not require an
+    # interactive desktop.
+    run([str(executable), "--headless-smoke-test"], env=env, timeout=timeout)
+    validate_report(report)
+    record_windows_payload_architectures(artifact, install_dir, executable, report)
+    payload_path = install_dir / "engine-payload.json"
+    if payload_path.is_file():
+        data = json.loads(report.read_text())
+        data["engine_payload"] = json.loads(payload_path.read_text())
+        data["engine_payload_sha256"] = hashlib.sha256(payload_path.read_bytes()).hexdigest()
+        report.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    verify_backend(report, env, timeout)
+    uninstallers = sorted(install_dir.glob("[Uu]ninstall*.exe")) + sorted(
+        install_dir.glob("unins*.exe")
+    )
+    if uninstallers:
         run(
-            [str(artifact), "/S", f"/D={install_dir}"],
+            [str(uninstallers[0]), "/S", f"_?={install_dir}"],
             env=env,
             timeout=timeout,
+            check=False,
         )
-        executable = installed_windows_executable(install_dir)
-        # A Windows service or CI runner may run in Session 0, with no
-        # interactive desktop. Exercise the installed Rust host and bundled worker before
-        # WebView initialization so this acceptance test does not require an
-        # interactive desktop.
-        run([str(executable), "--headless-smoke-test"], env=env, timeout=timeout)
-        record_windows_payload_architectures(artifact, install_dir, executable, report)
-        payload_path = install_dir / "engine-payload.json"
-        if payload_path.is_file():
-            data = json.loads(report.read_text())
-            data["engine_payload"] = json.loads(payload_path.read_text())
-            data["engine_payload_sha256"] = hashlib.sha256(payload_path.read_bytes()).hexdigest()
-            report.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
-        verify_backend(report, env, timeout)
-        uninstallers = sorted(install_dir.glob("[Uu]ninstall*.exe")) + sorted(
-            install_dir.glob("unins*.exe")
+    shutil.rmtree(install_dir, ignore_errors=True)
+
+
+def smoke_windows(artifact: Path, report: Path, env: dict[str, str], timeout: float) -> None:
+    with temporary_directory(prefix="localsr-next-installer-") as temporary:
+        _smoke_windows_install(artifact, Path(temporary) / "user", report, env, timeout)
+        _smoke_windows_install(
+            artifact,
+            Path(temporary) / "all",
+            report,
+            env,
+            timeout,
+            install_args=("/AllUsers",),
         )
-        if uninstallers:
-            run([str(uninstallers[0]), "/S"], env=env, timeout=timeout, check=False)
 
 
 def find_appimage_offset(artifact: Path) -> int | None:

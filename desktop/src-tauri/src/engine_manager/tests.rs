@@ -291,10 +291,13 @@ fn linked_engine_folders_are_refused_on_unix() {
 #[test]
 fn linked_engine_folders_are_refused_on_windows() {
     assert_linked_engine_folders_are_refused(|target, link| {
+        // cmd reads a forward slash as a switch ("engines/gpu" -> "/gpu"); mklink needs
+        // backslashes.
+        let windows_path = |path: &std::path::Path| path.to_string_lossy().replace('/', "\\");
         let output = std::process::Command::new("cmd")
             .args(["/C", "mklink", "/J"])
-            .arg(link)
-            .arg(target)
+            .arg(windows_path(link))
+            .arg(windows_path(target))
             .output()
             .unwrap();
         assert!(
@@ -334,8 +337,50 @@ fn release_fixture() -> serde_json::Value {
     serde_json::from_str(include_str!("../../tests/fixtures/update-release.json")).unwrap()
 }
 
-fn fixture_engine_files(
+fn host_release_fixture() -> serde_json::Value {
+    #[cfg(windows)]
+    {
+        serde_json::from_str(include_str!(
+            "../../tests/fixtures/update-release-windows.json"
+        ))
+        .unwrap()
+    }
+    #[cfg(not(windows))]
+    {
+        release_fixture()
+    }
+}
+
+fn host_test_os() -> &'static str {
+    if cfg!(windows) {
+        "windows"
+    } else {
+        "linux"
+    }
+}
+
+fn host_test_backend() -> &'static str {
+    if cfg!(windows) {
+        "cuda"
+    } else {
+        "rocm"
+    }
+}
+
+fn host_test_engine_id() -> &'static str {
+    if cfg!(windows) {
+        "windows-x86_64-cuda-0123456789ab"
+    } else {
+        "linux-x86_64-rocm-0123456789ab"
+    }
+}
+
+fn fixture_engine_files_from(
+    value: serde_json::Value,
     base_url: &str,
+    backend: &str,
+    engine_id: &str,
+    config_engine_id: &str,
 ) -> (
     UpdateConfig,
     String,
@@ -345,7 +390,6 @@ fn fixture_engine_files(
     EngineUpdate,
     ReleaseContract,
 ) {
-    let value = release_fixture();
     let public_key = value["public_key"].as_str().unwrap().to_owned();
     let engine = &value["engine"];
     let manifest_text = engine["manifest"].as_str().unwrap();
@@ -356,7 +400,7 @@ fn fixture_engine_files(
         .decode(part["data"].as_str().unwrap())
         .unwrap();
 
-    let engine_id = "linux-x86_64-rocm-0123456789ab".to_owned();
+    let engine_id = engine_id.to_owned();
     let manifest_file = DownloadFile {
         name: "engine-payload.json".into(),
         url: format!("{base_url}/engine-payload.json"),
@@ -378,10 +422,10 @@ fn fixture_engine_files(
     };
     let contract = ReleaseContract {
         channel: "beta".into(),
-        backend: "rocm".into(),
+        backend: backend.into(),
         kind: "native".into(),
         protocol: PROTOCOL_VERSION,
-        engine_id: engine_id.clone(),
+        engine_id,
         size: 21,
         unpacked_size: 1024,
         sha256: value["package"]["sha256"].as_str().unwrap().into(),
@@ -394,7 +438,7 @@ fn fixture_engine_files(
         public_key,
         feed: base_url.to_owned(),
         backend: "cpu".into(),
-        engine_id: "linux-x86_64-cpu-000000000000".into(),
+        engine_id: config_engine_id.into(),
         kind: "native".into(),
     };
     (
@@ -409,6 +453,76 @@ fn fixture_engine_files(
         engine_update,
         contract,
     )
+}
+
+fn fixture_engine_files(
+    base_url: &str,
+) -> (
+    UpdateConfig,
+    String,
+    Vec<u8>,
+    String,
+    Vec<u8>,
+    EngineUpdate,
+    ReleaseContract,
+) {
+    fixture_engine_files_from(
+        release_fixture(),
+        base_url,
+        "rocm",
+        "linux-x86_64-rocm-0123456789ab",
+        "linux-x86_64-cpu-000000000000",
+    )
+}
+
+fn host_fixture_engine_files(
+    base_url: &str,
+) -> (
+    UpdateConfig,
+    String,
+    Vec<u8>,
+    String,
+    Vec<u8>,
+    EngineUpdate,
+    ReleaseContract,
+) {
+    let config_engine_id = if cfg!(windows) {
+        "windows-x86_64-cpu-000000000000"
+    } else {
+        "linux-x86_64-cpu-000000000000"
+    };
+    fixture_engine_files_from(
+        host_release_fixture(),
+        base_url,
+        host_test_backend(),
+        host_test_engine_id(),
+        config_engine_id,
+    )
+}
+
+fn feed_json_with_host_backend(version: &str, contract: &ReleaseContract) -> serde_json::Value {
+    let key = updates::platform_key(host_test_os(), "x86_64", host_test_backend(), "native");
+    let package_url = if cfg!(windows) {
+        "http://127.0.0.1:1/cuda.exe"
+    } else {
+        "http://127.0.0.1:1/rocm.AppImage"
+    };
+    serde_json::json!({
+        "version": version,
+        "notes": "Test release",
+        "platforms": {
+            key: {
+                "url": package_url,
+                "signature": "unused",
+                "localsr": serde_json::to_value(contract).unwrap(),
+            },
+            "darwin-aarch64-mps-native": {
+                "url": "http://127.0.0.1:1/mac.app.tar.gz",
+                "signature": "unused",
+                "localsr": serde_json::to_value(contract).unwrap(),
+            }
+        }
+    })
 }
 
 fn feed_json_with_rocm(version: &str, contract: &ReleaseContract) -> serde_json::Value {
@@ -683,14 +797,10 @@ fn host_runs_active_installed_engine_with_different_id_when_os_arch_and_handshak
     assert!(!paths.next_root.join("active-engine.txt").exists());
 }
 
-#[cfg_attr(
-    windows,
-    ignore = "the signed test engine carries a Linux worker without .exe"
-)]
 #[test]
 fn install_engine_resumes_from_partial_file_verifies_signature_and_activates() {
     let (_, _, manifest_bytes, part_name, part_bytes, _, mut contract) =
-        fixture_engine_files("http://127.0.0.1:1");
+        host_fixture_engine_files("http://127.0.0.1:1");
 
     // Spin up a server knowing its exact base URL for beta.json + engine files.
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -698,8 +808,9 @@ fn install_engine_resumes_from_partial_file_verifies_signature_and_activates() {
     let base = format!("http://{}", listener.local_addr().unwrap());
     contract.engine.as_mut().unwrap().manifest.url = format!("{base}/engine-payload.json");
     contract.engine.as_mut().unwrap().parts[0].url = format!("{base}/{part_name}");
-    let feed_bytes = serde_json::to_vec(&feed_json_with_rocm("0.3.7-beta", &contract)).unwrap();
-    let (mut config, _, _, _, _, _, _) = fixture_engine_files(&base);
+    let feed_bytes =
+        serde_json::to_vec(&feed_json_with_host_backend("0.3.7-beta", &contract)).unwrap();
+    let (mut config, _, _, _, _, _, _) = host_fixture_engine_files(&base);
     config.feed = base.clone();
 
     let seen_ranges = Arc::new(Mutex::new(Vec::new()));
@@ -780,12 +891,13 @@ fn install_engine_resumes_from_partial_file_verifies_signature_and_activates() {
     let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
     lock(&state.settings).unwrap().privacy_choice_made = true;
 
+    let engine_id = host_test_engine_id();
     // Seed a partial .part file in updates storage as if a prior download stopped after 80 bytes.
     let cache_dir = paths
         .next_root
         .join("updates")
         .join("engine-cache")
-        .join("linux-x86_64-rocm-0123456789ab");
+        .join(engine_id);
     fs::create_dir_all(&cache_dir).unwrap();
     fs::write(
         cache_dir.join(format!("{part_name}.part")),
@@ -795,7 +907,9 @@ fn install_engine_resumes_from_partial_file_verifies_signature_and_activates() {
 
     let previous = paths
         .next_root
-        .join("engines/linux-x86_64-rocm-0123456789ab/engine");
+        .join("engines")
+        .join(engine_id)
+        .join("engine");
     fs::create_dir_all(&previous).unwrap();
     fs::write(
         previous.join(worker_executable_name()),
@@ -808,9 +922,9 @@ fn install_engine_resumes_from_partial_file_verifies_signature_and_activates() {
         &state,
         None,
         &config,
-        "rocm",
+        host_test_backend(),
         "0.3.7-beta",
-        "linux",
+        host_test_os(),
         "x86_64",
         move |exe| {
             assert_eq!(fs::read(exe).unwrap(), b"worker");
@@ -826,13 +940,16 @@ fn install_engine_resumes_from_partial_file_verifies_signature_and_activates() {
     assert_eq!(seen_ranges.lock().unwrap().as_slice(), &["bytes=80-"]);
     assert_eq!(
         fs::read_to_string(paths.next_root.join("active-engine.txt")).unwrap(),
-        "linux-x86_64-rocm-0123456789ab"
+        engine_id
     );
     assert_eq!(
         fs::read(
             paths
                 .next_root
-                .join("engines/linux-x86_64-rocm-0123456789ab/engine/localsr-worker")
+                .join("engines")
+                .join(engine_id)
+                .join("engine")
+                .join(worker_executable_name())
         )
         .unwrap(),
         b"worker"
@@ -893,14 +1010,10 @@ fn download_file_resumable_refuses_wrong_hash_and_preserves_partial_on_cancel() 
     assert_eq!(fs::read(&partial).unwrap(), &part_bytes[..40]);
 }
 
-#[cfg_attr(
-    windows,
-    ignore = "the signed test engine carries a Linux worker without .exe"
-)]
 #[test]
 fn install_engine_refuses_privacy_unset_running_job_low_space_and_failed_handshake() {
     let (mut config, _, manifest_bytes, part_name, part_bytes, _, mut contract) =
-        fixture_engine_files("http://127.0.0.1:1");
+        host_fixture_engine_files("http://127.0.0.1:1");
     let root = tempfile::tempdir().unwrap();
     let paths = AppPaths::under(root.path());
     let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
@@ -910,9 +1023,9 @@ fn install_engine_refuses_privacy_unset_running_job_low_space_and_failed_handsha
         &state,
         None,
         &config,
-        "rocm",
+        host_test_backend(),
         "0.3.7-beta",
-        "linux",
+        host_test_os(),
         "x86_64",
         |_| Ok(()),
     ))
@@ -927,9 +1040,9 @@ fn install_engine_refuses_privacy_unset_running_job_low_space_and_failed_handsha
         &state,
         None,
         &config,
-        "rocm",
+        host_test_backend(),
         "0.3.7-beta",
-        "linux",
+        host_test_os(),
         "x86_64",
         |_| Ok(()),
     ))
@@ -949,11 +1062,11 @@ fn install_engine_refuses_privacy_unset_running_job_low_space_and_failed_handsha
     contract.engine.as_mut().unwrap().manifest.url = format!("{base}/engine-payload.json");
     contract.engine.as_mut().unwrap().parts[0].url = format!("{base}/{part_name}");
     let entries = parse_feed_engines_for(
-        &feed_json_with_rocm("0.3.7-beta", &contract),
+        &feed_json_with_host_backend("0.3.7-beta", &contract),
         &config,
         "beta",
         "0.3.7-beta",
-        "linux",
+        host_test_os(),
         "x86_64",
     )
     .unwrap();
@@ -965,9 +1078,9 @@ fn install_engine_refuses_privacy_unset_running_job_low_space_and_failed_handsha
         &state,
         None,
         &config,
-        "rocm",
+        host_test_backend(),
         "0.3.7-beta",
-        "linux",
+        host_test_os(),
         "x86_64",
         |_| Ok(()),
     ))
@@ -981,9 +1094,9 @@ fn install_engine_refuses_privacy_unset_running_job_low_space_and_failed_handsha
         &state,
         None,
         &config,
-        "rocm",
+        host_test_backend(),
         "0.3.7-beta",
-        "linux",
+        host_test_os(),
         "x86_64",
         |_| Err(AppError::Worker("handshake failed".into())),
     ))
@@ -996,7 +1109,8 @@ fn install_engine_refuses_privacy_unset_running_job_low_space_and_failed_handsha
     );
     assert!(!paths
         .next_root
-        .join("engines/linux-x86_64-rocm-0123456789ab")
+        .join("engines")
+        .join(host_test_engine_id())
         .exists());
 }
 
@@ -1062,14 +1176,10 @@ fn use_engine_and_remove_engine_switch_protect_active_and_remove_inactive() {
     assert!(!paths.next_root.join("engines").join(rocm_id).exists());
 }
 
-#[cfg_attr(
-    windows,
-    ignore = "the signed test engine carries a Linux worker without .exe"
-)]
 #[test]
 fn import_engine_verifies_signatures_reuses_install_manifest_and_enforces_grants() {
     let (config, _, manifest_bytes, part_name, part_bytes, engine, _) =
-        fixture_engine_files("http://127.0.0.1:1");
+        host_fixture_engine_files("http://127.0.0.1:1");
     let root = tempfile::tempdir().unwrap();
     let paths = AppPaths::under(root.path());
     let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
@@ -1091,27 +1201,28 @@ fn import_engine_verifies_signatures_reuses_install_manifest_and_enforces_grants
     state.grants.grant_engine_manifest(&manifest_path);
     assert!(state.grants.check_engine_manifest(&manifest_path).is_ok());
 
-    // Wrong OS (importing ROCM on Windows) is refused.
+    // Unsupported backend on the other OS (e.g. ROCM on Windows, or CUDA on macOS;
+    // on Windows our CUDA fixture is refused on macOS, or we pass "macos" as wrong OS).
     assert!(import_engine_for(
         &state,
         None,
         &config,
         &manifest_path,
         "0.5.1-beta",
-        "windows",
+        "macos",
         "x86_64",
         |_| Ok(())
     )
     .is_err());
 
-    // Valid import on Linux installs via install_manifest, passes handshake, and activates.
+    // Valid import on the host OS installs via install_manifest, passes handshake, and activates.
     let meta = import_engine_for(
         &state,
         None,
         &config,
         &manifest_path,
         "0.5.1-beta",
-        "linux",
+        host_test_os(),
         "x86_64",
         |exe| {
             assert_eq!(fs::read(exe).unwrap(), b"worker");
@@ -1119,7 +1230,7 @@ fn import_engine_verifies_signatures_reuses_install_manifest_and_enforces_grants
         },
     )
     .unwrap();
-    assert_eq!(meta.backend, "rocm");
+    assert_eq!(meta.backend, host_test_backend());
     assert_eq!(
         fs::read_to_string(paths.next_root.join("active-engine.txt")).unwrap(),
         meta.id
@@ -1133,7 +1244,7 @@ fn import_engine_verifies_signatures_reuses_install_manifest_and_enforces_grants
         &config,
         &manifest_path,
         "0.5.1-beta",
-        "linux",
+        host_test_os(),
         "x86_64",
         |_| Ok(())
     )
@@ -1146,7 +1257,7 @@ fn import_engine_verifies_signatures_reuses_install_manifest_and_enforces_grants
         &config,
         &manifest_path,
         "0.5.1-beta",
-        "linux",
+        host_test_os(),
         "x86_64",
         |_| Ok(())
     )
@@ -1155,17 +1266,17 @@ fn import_engine_verifies_signatures_reuses_install_manifest_and_enforces_grants
 
 fn check_install_failure_status(failure: &'static str) {
     let (config, _, manifest_bytes, part_name, part_bytes, _, contract) =
-        fixture_engine_files("http://127.0.0.1:1");
+        host_fixture_engine_files("http://127.0.0.1:1");
     let root = tempfile::tempdir().unwrap();
     let paths = AppPaths::under(root.path());
     let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
     lock(&state.settings).unwrap().privacy_choice_made = true;
     let entries = parse_feed_engines_for(
-        &feed_json_with_rocm("0.3.7-beta", &contract),
+        &feed_json_with_host_backend("0.3.7-beta", &contract),
         &config,
         "beta",
         "0.3.7-beta",
-        "linux",
+        host_test_os(),
         "x86_64",
     )
     .unwrap();
@@ -1187,9 +1298,9 @@ fn check_install_failure_status(failure: &'static str) {
         &state,
         None,
         &config,
-        "rocm",
+        host_test_backend(),
         "0.3.7-beta",
-        "linux",
+        host_test_os(),
         "x86_64",
         move |_| {
             match failure {
@@ -1229,23 +1340,15 @@ fn install_reports_metadata_and_handshake_task_errors() {
     check_install_failure_status("panic");
 }
 
-#[cfg_attr(
-    windows,
-    ignore = "the signed test engine carries a Linux worker without .exe"
-)]
 #[test]
 fn late_cancel_does_not_reclassify_handshake_failure() {
     check_install_failure_status("late_cancel");
 }
 
-#[cfg_attr(
-    windows,
-    ignore = "the signed test engine carries a Linux worker without .exe"
-)]
 #[test]
 fn reimport_handshake_failure_preserves_active_engine() {
     let (config, _, manifest_bytes, part_name, part_bytes, engine, _) =
-        fixture_engine_files("http://127.0.0.1:1");
+        host_fixture_engine_files("http://127.0.0.1:1");
     let root = tempfile::tempdir().unwrap();
     let paths = AppPaths::under(root.path());
     let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
@@ -1270,7 +1373,7 @@ fn reimport_handshake_failure_preserves_active_engine() {
         &config,
         &manifest,
         "0.5.1-beta",
-        "linux",
+        host_test_os(),
         "x86_64",
         |_| Ok(()),
     )
@@ -1287,7 +1390,7 @@ fn reimport_handshake_failure_preserves_active_engine() {
         &config,
         &manifest,
         "0.5.1-beta",
-        "linux",
+        host_test_os(),
         "x86_64",
         |_| Err(AppError::Worker("failed".into()))
     )
@@ -1306,7 +1409,7 @@ fn reimport_handshake_failure_preserves_active_engine() {
         &config,
         &manifest,
         "0.5.1-beta",
-        "linux",
+        host_test_os(),
         "x86_64",
         |_| Ok(()),
     )
@@ -1543,14 +1646,10 @@ fn explicit_use_allows_previously_failed_engine() {
     assert!(!lock(&state.worker.failed_engines).unwrap().contains(id));
 }
 
-#[cfg_attr(
-    windows,
-    ignore = "the signed test engine carries a Linux worker without .exe"
-)]
 #[test]
 fn interrupted_reimport_restores_active_engine_at_startup_and_retry() {
     let (config, _, manifest_bytes, part_name, part_bytes, engine, _) =
-        fixture_engine_files("http://127.0.0.1:1");
+        host_fixture_engine_files("http://127.0.0.1:1");
     let root = tempfile::tempdir().unwrap();
     let paths = AppPaths::under(root.path());
     let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
@@ -1575,7 +1674,7 @@ fn interrupted_reimport_restores_active_engine_at_startup_and_retry() {
         &config,
         &manifest,
         "0.5.1-beta",
-        "linux",
+        host_test_os(),
         "x86_64",
         |_| Ok(()),
     )
@@ -1591,7 +1690,7 @@ fn interrupted_reimport_restores_active_engine_at_startup_and_retry() {
     let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
     let mut failed = std::collections::HashSet::new();
     assert_eq!(
-        updates::verify_active_engine_at_start_for(&paths, &mut failed, "linux", "x86_64"),
+        updates::verify_active_engine_at_start_for(&paths, &mut failed, host_test_os(), "x86_64"),
         None
     );
     assert_eq!(read_engine_meta(&paths.next_root, &meta.id), Some(meta));
@@ -1610,7 +1709,7 @@ fn interrupted_reimport_restores_active_engine_at_startup_and_retry() {
         &config,
         &manifest,
         "0.5.1-beta",
-        "linux",
+        host_test_os(),
         "x86_64",
         |_| Err(AppError::Worker("handshake failed".into()))
     )
@@ -1725,7 +1824,17 @@ fn reimport_recovery_keeps_ambiguous_backups_and_removes_obsolete_ones() {
 }
 
 fn schema2_fixture() -> serde_json::Value {
-    serde_json::from_str(include_str!("../../tests/fixtures/engine-schema2.json")).unwrap()
+    #[cfg(windows)]
+    {
+        serde_json::from_str(include_str!(
+            "../../tests/fixtures/engine-schema2-windows.json"
+        ))
+        .unwrap()
+    }
+    #[cfg(not(windows))]
+    {
+        serde_json::from_str(include_str!("../../tests/fixtures/engine-schema2.json")).unwrap()
+    }
 }
 
 fn write_schema2_case(dir: &Path, fixture: &serde_json::Value, case: &str) -> PathBuf {
@@ -1755,20 +1864,22 @@ fn write_schema2_case(dir: &Path, fixture: &serde_json::Value, case: &str) -> Pa
     manifest_path
 }
 
-#[cfg_attr(
-    windows,
-    ignore = "the signed test engine carries a Linux worker without .exe"
-)]
 #[test]
 fn import_schema2_checks_os_arch_protocol_and_refuses_older_versions() {
     let fixture = schema2_fixture();
-    let (mut config, ..) = fixture_engine_files("http://127.0.0.1:1");
+    let (mut config, ..) = host_fixture_engine_files("http://127.0.0.1:1");
     config.public_key = fixture["public_key"].as_str().unwrap().to_owned();
     let root = tempfile::tempdir().unwrap();
     let paths = AppPaths::under(root.path());
     let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
     let import_dir = root.path().join("import");
     fs::create_dir_all(&import_dir).unwrap();
+    let os = host_test_os();
+    let (v2_case, older_case, newer_case, expected_id) = if cfg!(windows) {
+        ("cuda_052", "cuda_051", "cuda_053", "windows-x86_64-cuda-v2")
+    } else {
+        ("rocm_052", "rocm_051", "rocm_053", "linux-x86_64-rocm-v2")
+    };
 
     // Wrong OS, arch, and protocol are refused.
     for case in ["wrong_os", "wrong_arch", "wrong_protocol"] {
@@ -1780,7 +1891,7 @@ fn import_schema2_checks_os_arch_protocol_and_refuses_older_versions() {
                 &config,
                 &manifest,
                 "0.5.1-beta",
-                "linux",
+                os,
                 "x86_64",
                 |_| Ok(()),
             )
@@ -1797,37 +1908,37 @@ fn import_schema2_checks_os_arch_protocol_and_refuses_older_versions() {
         &config,
         &old_cpu,
         "0.5.2-beta",
-        "linux",
+        os,
         "x86_64",
         |_| Ok(()),
     )
     .is_err());
 
     // Valid schema 2 import succeeds, sets version/id/files, and rejects older 0.5.1-beta.
-    let v2_manifest = write_schema2_case(&import_dir, &fixture, "rocm_052");
+    let v2_manifest = write_schema2_case(&import_dir, &fixture, v2_case);
     let meta = import_engine_for(
         &state,
         None,
         &config,
         &v2_manifest,
         "0.5.2-beta",
-        "linux",
+        os,
         "x86_64",
         |_| Ok(()),
     )
     .unwrap();
-    assert_eq!(meta.id, "linux-x86_64-rocm-v2");
+    assert_eq!(meta.id, expected_id);
     assert_eq!(meta.version, "0.5.2-beta");
     assert!(!meta.files.is_empty());
 
-    let older_rocm = write_schema2_case(&import_dir, &fixture, "rocm_051");
+    let older_gpu = write_schema2_case(&import_dir, &fixture, older_case);
     assert!(import_engine_for(
         &state,
         None,
         &config,
-        &older_rocm,
+        &older_gpu,
         "0.5.2-beta",
-        "linux",
+        os,
         "x86_64",
         |_| Ok(()),
     )
@@ -1840,20 +1951,20 @@ fn import_schema2_checks_os_arch_protocol_and_refuses_older_versions() {
         &config,
         &v2_manifest,
         "0.5.2-beta",
-        "linux",
+        os,
         "x86_64",
         |_| Ok(()),
     )
     .unwrap();
     assert_eq!(meta_same.version, "0.5.2-beta");
-    let newer_rocm = write_schema2_case(&import_dir, &fixture, "rocm_053");
+    let newer_gpu = write_schema2_case(&import_dir, &fixture, newer_case);
     let meta_newer = import_engine_for(
         &state,
         None,
         &config,
-        &newer_rocm,
+        &newer_gpu,
         "0.5.2-beta",
-        "linux",
+        os,
         "x86_64",
         |_| Ok(()),
     )
@@ -1861,14 +1972,10 @@ fn import_schema2_checks_os_arch_protocol_and_refuses_older_versions() {
     assert_eq!(meta_newer.version, "0.5.3-beta");
 }
 
-#[cfg_attr(
-    windows,
-    ignore = "the signed test engine carries a Linux worker without .exe"
-)]
 #[test]
 fn recorded_file_list_catches_size_change_at_start_and_hash_change_on_verify() {
     let (config, _, manifest_bytes, part_name, part_bytes, engine, _) =
-        fixture_engine_files("http://127.0.0.1:1");
+        host_fixture_engine_files("http://127.0.0.1:1");
     let root = tempfile::tempdir().unwrap();
     let paths = AppPaths::under(root.path());
     let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
@@ -1887,13 +1994,14 @@ fn recorded_file_list_catches_size_change_at_start_and_hash_change_on_verify() {
         &engine.parts[0].signature,
     )
     .unwrap();
+    let os = host_test_os();
     let meta = import_engine_for(
         &state,
         None,
         &config,
         &manifest,
         "0.5.2-beta",
-        "linux",
+        os,
         "x86_64",
         |_| Ok(()),
     )
@@ -1904,7 +2012,7 @@ fn recorded_file_list_catches_size_change_at_start_and_hash_change_on_verify() {
         .any(|f| f.path == worker_executable_name()));
 
     // Clean full verification passes.
-    verify_engine_for(&state, None, &config, &meta.id, "linux", "x86_64").unwrap();
+    verify_engine_for(&state, None, &config, &meta.id, os, "x86_64").unwrap();
 
     // Same-size byte corruption passes quick size check, but fails full verify_engine_for,
     // marks the engine needs_reinstall, deactivates it, and falls back to bundled.
@@ -1919,10 +2027,10 @@ fn recorded_file_list_catches_size_change_at_start_and_hash_change_on_verify() {
     tampered[0] ^= 0xff;
     assert_eq!(tampered.len(), original.len());
     fs::write(&worker_file, &tampered).unwrap();
-    assert!(verify_engine_for(&state, None, &config, &meta.id, "linux", "x86_64").is_err());
+    assert!(verify_engine_for(&state, None, &config, &meta.id, os, "x86_64").is_err());
     assert!(!paths.next_root.join("active-engine.txt").exists());
     assert!(state.worker.use_bundled_fallback.load(Ordering::SeqCst));
-    let listed = list_installed_engines_for(&paths, &config, None, "linux", "x86_64");
+    let listed = list_installed_engines_for(&paths, &config, None, os, "x86_64");
     assert!(listed
         .iter()
         .any(|item| item.id == meta.id && item.needs_reinstall && !item.active));
@@ -1939,7 +2047,7 @@ fn recorded_file_list_catches_size_change_at_start_and_hash_change_on_verify() {
         &config,
         &manifest,
         "0.5.2-beta",
-        "linux",
+        os,
         "x86_64",
         |_| Ok(()),
     )
@@ -1947,11 +2055,11 @@ fn recorded_file_list_catches_size_change_at_start_and_hash_change_on_verify() {
     fs::write(&worker_file, b"short").unwrap();
     let mut failed = lock(&state.worker.failed_engines).unwrap();
     let quick_failed =
-        updates::verify_active_engine_at_start_for(&paths, &mut failed, "linux", "x86_64");
+        updates::verify_active_engine_at_start_for(&paths, &mut failed, os, "x86_64");
     drop(failed);
     assert_eq!(quick_failed.as_deref(), Some(meta.id.as_str()));
     assert!(!paths.next_root.join("active-engine.txt").exists());
-    let listed_after_quick = list_installed_engines_for(&paths, &config, None, "linux", "x86_64");
+    let listed_after_quick = list_installed_engines_for(&paths, &config, None, os, "x86_64");
     assert!(listed_after_quick
         .iter()
         .any(|item| item.id == meta.id && item.needs_reinstall && !item.active));
@@ -1965,24 +2073,22 @@ fn recorded_file_list_catches_size_change_at_start_and_hash_change_on_verify() {
     assert_eq!(choice, Some((bundled, None)));
 }
 
-#[cfg_attr(
-    windows,
-    ignore = "the signed test engine carries a Linux worker without .exe"
-)]
 #[test]
 fn same_id_reinstall_keeps_backup_until_activation_and_holds_scheduler_lock() {
     let (config, _, manifest_bytes, part_name, part_bytes, _, contract) =
-        fixture_engine_files("http://127.0.0.1:1");
+        host_fixture_engine_files("http://127.0.0.1:1");
     let root = tempfile::tempdir().unwrap();
     let paths = AppPaths::under(root.path());
     let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
     lock(&state.settings).unwrap().privacy_choice_made = true;
+    let os = host_test_os();
+    let backend = host_test_backend();
     let entries = parse_feed_engines_for(
-        &feed_json_with_rocm("0.3.7-beta", &contract),
+        &feed_json_with_host_backend("0.3.7-beta", &contract),
         &config,
         "beta",
         "0.3.7-beta",
-        "linux",
+        os,
         "x86_64",
     )
     .unwrap();
@@ -1998,9 +2104,9 @@ fn same_id_reinstall_keeps_backup_until_activation_and_holds_scheduler_lock() {
         &state,
         None,
         &config,
-        "rocm",
+        backend,
         "0.3.7-beta",
-        "linux",
+        os,
         "x86_64",
         |_| Ok(()),
     ))
@@ -2025,9 +2131,9 @@ fn same_id_reinstall_keeps_backup_until_activation_and_holds_scheduler_lock() {
         &state,
         None,
         &config,
-        "rocm",
+        backend,
         "0.3.7-beta",
-        "linux",
+        os,
         "x86_64",
         |_| Ok(()),
     ));
@@ -2050,9 +2156,9 @@ fn same_id_reinstall_keeps_backup_until_activation_and_holds_scheduler_lock() {
         &state,
         None,
         &config,
-        "rocm",
+        backend,
         "0.3.7-beta",
-        "linux",
+        os,
         "x86_64",
         move |_| {
             let _scheduler = lock(&state_for_job.scheduler)?;

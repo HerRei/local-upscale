@@ -519,18 +519,30 @@ def test_nsis_installer_uses_localsr_icons() -> None:
         assert (config_path.parent / nsis[name]).is_file()
 
 
-def test_nsis_editions_install_for_the_current_user() -> None:
-    # "both" pulls in NSIS MultiUser, which replaces a silent /D= folder with its own
-    # default; per-user installs keep /D= and need no administrator rights.
+def test_nsis_editions_offer_both_modes_with_per_user_default_and_preserve_install_dir() -> None:
     config_path = ROOT / "desktop/src-tauri/tauri.conf.json"
     nsis = json.loads(config_path.read_text(encoding="utf-8"))["bundle"]["windows"]["nsis"]
-    assert nsis["installMode"] == "currentUser"
+    assert nsis["installMode"] == "both"
+    template_path = (config_path.parent / nsis["template"]).resolve()
+    assert template_path == ROOT / "packaging/windows/installer.nsi"
+    template = template_path.read_text(encoding="utf-8")
+    # Tauri's MultiUser.nsh replaces /D= and forces elevation upfront; the custom
+    # template keeps RequestExecutionLevel user, elevates on demand, and preserves /D=.
+    assert "MultiUser.nsh" not in template
+    assert "RequestExecutionLevel user" in template
+    assert "CustomInstallDir" in template
+    assert 'StrCpy $InstallMode "CurrentUser"' in template
+    assert "Page custom PageInstallMode PageLeaveInstallMode" in template
+    assert "ShellExecuteW" in template
+    assert "/AllUsers" in template
+    assert "!insertmacro NSIS_HOOK_POSTINSTALL" in template
+    assert "!insertmacro NSIS_HOOK_PREUNINSTALL" in template
+    assert "!insertmacro NSIS_HOOK_POSTUNINSTALL" in template
     for hook in (
         config_path.parent / nsis["installerHooks"],
         ROOT / "packaging/windows/engine-payload.nsh",
     ):
         text = hook.read_text(encoding="utf-8")
-        assert "MULTIUSER" not in text
         assert '!include "${__FILEDIR__}\\common.nsh"' in text
 
 
@@ -546,6 +558,16 @@ def test_nsis_shows_version_launch_and_optional_appdata_removal() -> None:
         'LangString deleteAppData ${LANG_ENGLISH} "Remove downloaded models and settings"'
         in english
     )
+    for key in (
+        "installModeTitle",
+        "installModeSubtitle",
+        "installModeTop",
+        "installModeCurrentUser",
+        "installModeAllUsers",
+    ):
+        assert f"LangString {key} ${{LANG_ENGLISH}}" in english
+    assert "Just me" in english
+    assert "Everyone on this computer" in english
 
     common = (ROOT / "packaging/windows/common.nsh").read_text(encoding="utf-8")
     assert 'MUI_WELCOMEPAGE_TITLE "Welcome to ${PRODUCTNAME} ${VERSION} Setup"' in common
