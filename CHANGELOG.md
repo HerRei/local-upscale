@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.5.2-beta] - Unreleased
+## [0.5.2-beta] - 2026-11-23
 
 - **Engine manager.** One main download per OS starts LocalSR. After setup, the app
   can recommend and download a GPU engine. Change, remove or import an engine from
