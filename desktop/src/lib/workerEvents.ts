@@ -1,4 +1,5 @@
 import { formatDuration } from './format';
+import { keptTilesText, keptVideoText } from './unfinished';
 import type { AppSnapshot, ModelDownloadStatus, RuntimeStatus, WorkerEnvelope } from './types';
 export function resultPreviewForSelectedMedia(snapshot: AppSnapshot): string {
   const selected = snapshot.media.find((media) => media.selected) ?? snapshot.media[0];
@@ -75,6 +76,25 @@ function leaveBatch(runtime: AppSnapshot['runtime'], id: string, failed: boolean
   if (failed) return;
   runtime.status_title = 'Processing';
   runtime.status_detail = 'Finishing the other photos of this batch.';
+}
+
+/** What a stopped job kept, for the status line: "2 frames", "0:42", "12 of 40 tiles". */
+function keptPart(snapshot: AppSnapshot, envelope: WorkerEnvelope): string {
+  const data = envelope.data;
+  if (envelope.type === 'video_job_completed' || data.kept_seconds || data.kept_frames) {
+    const job = snapshot.jobs.find((entry) => entry.id === String(data.job_id ?? ''));
+    const media = snapshot.media.find((entry) => entry.id === job?.media_id);
+    return keptVideoText({
+      seconds: Number(data.kept_seconds ?? 0),
+      frames: Number(data.kept_frames ?? 0),
+      fps: Number(data.output_fps ?? 0) || media?.fps || 0,
+    });
+  }
+  if (data.finished_tiles === undefined) return '';
+  const finished = Array.isArray(data.finished_tiles)
+    ? data.finished_tiles.length
+    : Number(data.finished_tiles);
+  return keptTilesText(finished, Number(data.total_tiles ?? 0));
 }
 
 function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppSnapshot {
@@ -166,6 +186,8 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       if (next.runtime.active_job_id !== String(data.job_id ?? '')) {
         next.runtime.frames_processed = 0;
         next.runtime.total_frames = 0;
+        next.runtime.tiles_completed = 0;
+        next.runtime.tiles_total = 0;
         next.runtime.can_keep_partial = undefined;
       }
       // The host adds its decision about keeping a stopped job's finished part.
@@ -193,6 +215,9 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
         edit: 'Preparing edit',
       };
       const kind = String(data.stage_kind ?? '');
+      // A new stage starts its tiles again: none of them is finished yet.
+      next.runtime.tiles_completed = 0;
+      next.runtime.tiles_total = 0;
       next.runtime.status_title = `${labels[kind] ?? 'Processing'} · stage ${Number(data.stage_index ?? 0) + 1}/${Number(data.stage_count ?? 1)}`;
       next.runtime.status_detail = `Preparing ${String(data.model_id ?? 'model')}.`;
       break;
@@ -202,6 +227,11 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       break;
     case 'progress':
       next.runtime.progress = Number(data.percentage ?? 0);
+      // An Edit counts steps; only tiles can be kept when a photo is stopped.
+      if (data.unit !== 'steps') {
+        next.runtime.tiles_completed = Number(data.completed_tiles ?? 0);
+        next.runtime.tiles_total = Number(data.total_tiles ?? 0);
+      }
       // In a job of several stages the title keeps which one runs (two fixes can both be
       // "Restoring"); a one-stage job reads "Enhancing" as before.
       if (data.unit === 'steps') next.runtime.status_title = 'Editing';
@@ -445,6 +475,8 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       next.runtime.active_job_id = '';
       next.runtime.frames_processed = 0;
       next.runtime.total_frames = 0;
+      next.runtime.tiles_completed = 0;
+      next.runtime.tiles_total = 0;
       next.runtime.can_keep_partial = undefined;
       next.runtime.hardware_note = '';
       // Drop a live video-frame thumbnail while the host decodes the final
@@ -452,8 +484,7 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       next.runtime.result_preview_data_url = '';
       next.runtime.progress = 100;
       if (data.partial) {
-        const seconds = Math.floor(Number(data.kept_seconds ?? 0));
-        next.runtime.status_title = `Stopped, kept ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+        next.runtime.status_title = `Stopped, kept ${keptPart(next, envelope) || 'the finished part'}`;
       } else {
         next.runtime.status_title = 'Complete';
       }
@@ -469,6 +500,8 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       next.runtime.active_job_id = '';
       next.runtime.frames_processed = 0;
       next.runtime.total_frames = 0;
+      next.runtime.tiles_completed = 0;
+      next.runtime.tiles_total = 0;
       next.runtime.can_keep_partial = undefined;
       next.runtime.hardware_note = '';
       next.runtime.status_title = 'Cancelled';
@@ -478,6 +511,8 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       next.runtime.active_job_id = '';
       next.runtime.frames_processed = 0;
       next.runtime.total_frames = 0;
+      next.runtime.tiles_completed = 0;
+      next.runtime.tiles_total = 0;
       next.runtime.can_keep_partial = undefined;
       next.runtime.hardware_note = '';
       next.runtime.status_title = 'Could not finish';

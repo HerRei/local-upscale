@@ -10,7 +10,14 @@ export interface ComparePlayer {
   play(): Promise<void>;
   pause(): void;
 }
-type Entry = { video: ComparePlayer; fps: number; audible?: boolean };
+type Entry = {
+  video: ComparePlayer;
+  fps: number;
+  /** The side whose sound plays; every other side is muted. */
+  audible?: boolean;
+  /** A stopped job's kept part: the clock ends where the shortest of these ends. */
+  partial?: boolean;
+};
 const length = (video: ComparePlayer) =>
   Number.isFinite(video.duration) ? Math.max(0, video.duration) : 0;
 export class CompareVideoSync {
@@ -21,17 +28,45 @@ export class CompareVideoSync {
   private blocked = new Set<ComparePlayer>();
   private tail: { time: number; at: number } | undefined;
   private revision = 0;
+  /** Frames per second that stepping counts in; 0 takes the fastest side. */
+  grid = 0;
   constructor(
     private entries: Entry[],
     private now = () => performance.now(),
   ) {
-    this.mute(false);
+    // Slot one sounds unless the caller named the audible side.
+    if (entries.length && entries.every((entry) => entry.audible === undefined))
+      entries[0].audible = true;
+    this.applyAudio();
   }
   get requestedPlayback(): boolean {
     return this.wanted;
   }
+  /** The longest side, or the shortest unfinished one: past its end there is nothing to compare. */
   get duration(): number {
-    return Math.max(0, ...this.entries.map(({ video }) => length(video)));
+    const kept = this.kept;
+    return kept.length
+      ? Math.min(...kept)
+      : Math.max(0, ...this.entries.map(({ video }) => length(video)));
+  }
+  private get kept(): number[] {
+    return this.entries
+      .filter((entry) => entry.partial)
+      .map(({ video }) => length(video))
+      .filter((seconds) => seconds > 0);
+  }
+  /** An unfinished side ends the clock before the longest side does. */
+  get limited(): boolean {
+    return this.duration < Math.max(0, ...this.entries.map(({ video }) => length(video)));
+  }
+  private get frameRate(): number {
+    return this.grid > 0 ? this.grid : Math.max(1, ...this.entries.map((entry) => entry.fps || 30));
+  }
+  get frames(): number {
+    return Math.max(1, Math.ceil(this.duration * this.frameRate - 1e-6));
+  }
+  get frame(): number {
+    return Math.max(0, Math.min(this.frames - 1, Math.floor(this.time * this.frameRate + 1e-6)));
   }
   private stop(): void {
     this.playing = false;
@@ -51,7 +86,12 @@ export class CompareVideoSync {
       this.entries.some(({ video }) => video.seeking || video.readyState < 3)
     )
       return;
-    if (this.time >= this.duration && this.duration) this.seek(0);
+    // At the end, or on the last frame of a span an unfinished side cut short: from the start.
+    if (
+      this.duration &&
+      (this.time >= this.duration || (this.limited && this.frame >= this.frames - 1))
+    )
+      this.seek(0);
     this.playing = true;
     const revision = ++this.revision;
     const master = this.entries[0].video;
@@ -88,14 +128,29 @@ export class CompareVideoSync {
     if (this.tail) this.tail = { time: this.time, at: this.now() };
     for (const { video } of this.entries) video.playbackRate = value;
   }
-  mute(muted: boolean): void {
-    this.entries.forEach(({ video, audible }, index) => {
-      video.muted = index > 0 || audible === false || muted;
-    });
+  /** One side sounds: the one given, or none. */
+  audio(source: ComparePlayer | null): void {
+    for (const entry of this.entries) entry.audible = entry.video === source;
+    this.applyAudio();
+  }
+  private applyAudio(): void {
+    for (const { video, audible } of this.entries) video.muted = !audible;
+  }
+  /**
+   * The middle of a frame, never its edge: every side then shows the frame that holds
+   * this time, whatever its own timestamps round to.
+   */
+  seekFrame(index: number): void {
+    const frame = Math.max(0, Math.min(this.frames - 1, Math.round(index)));
+    this.seek((frame + 0.5) / this.frameRate);
+  }
+  /** A seek from the timeline: the frame that holds this time. */
+  scrub(seconds: number): void {
+    this.seekFrame(Math.floor(Math.max(0, seconds) * this.frameRate + 1e-6));
   }
   step(direction: number): void {
     this.pause();
-    this.seek(this.time + direction / Math.max(1, ...this.entries.map((e) => e.fps || 30)));
+    this.seekFrame(this.frame + direction);
   }
   stall(video: ComparePlayer): void {
     this.tick();
@@ -144,6 +199,11 @@ export class CompareVideoSync {
         video.currentTime = target;
       if (this.time >= length(video)) video.pause();
     }
-    if (this.playing && this.time >= this.duration) this.pause();
+    if (this.playing && this.time >= this.duration) {
+      const limited = this.limited;
+      this.pause();
+      // The longer sides ran a frame past the kept part before this check.
+      if (limited) this.seekFrame(this.frames - 1);
+    }
   }
 }

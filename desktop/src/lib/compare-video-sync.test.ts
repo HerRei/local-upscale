@@ -44,7 +44,9 @@ describe('video Compare clock', () => {
     sync.rate(1.5);
     expect(players.map((v) => v.playbackRate)).toEqual([1.5, 1.5]);
     expect(players.map((v) => v.muted)).toEqual([false, true]);
-    sync.mute(true);
+    sync.audio(players[1]);
+    expect(players.map((v) => v.muted)).toEqual([true, false]);
+    sync.audio(null);
     expect(players.every((v) => v.muted)).toBe(true);
     sync.pause();
     expect(players.every((v) => v.paused)).toBe(true);
@@ -91,21 +93,109 @@ describe('video Compare clock', () => {
     expect(sync.duration).toBe(5);
     expect(sync.playing).toBe(false);
   });
-  it('uses the highest frame rate for stepping and a paused seek still corrects followers', () => {
+  it('steps by the highest frame rate into the middle of a frame and a paused seek still corrects followers', () => {
     const { players, sync } = setup([5, 2]);
     sync.step(1);
-    expect(sync.time).toBeCloseTo(1 / 60);
+    // Frame 1 of the 60 fps side; the 15 fps side shows its frame 0, which holds that time.
+    expect(sync.frame).toBe(1);
+    expect(sync.time).toBeCloseTo(1.5 / 60);
+    expect(players.map((v) => v.currentTime)).toEqual([1.5 / 60, 1.5 / 60]);
+    sync.step(-1);
+    sync.step(-1);
+    expect(sync.frame).toBe(0);
+    sync.scrub(1);
+    expect(sync.frame).toBe(60);
+    expect(sync.time).toBeCloseTo(60.5 / 60);
     sync.seek(4);
     expect(players.map((v) => v.currentTime)).toEqual([4, 2]);
     expect(players[1].paused).toBe(true);
   });
 });
 
-it('keeps later slots muted if the first slot is unavailable', () => {
+it('keeps a side muted when the audible side has no player yet', () => {
   const follower = player();
-  const sync = new CompareVideoSync([{ video: follower, fps: 60, audible: false }]);
-  sync.mute(false);
+  new CompareVideoSync([{ video: follower, fps: 60, audible: false }]);
   expect(follower.muted).toBe(true);
+});
+
+describe('an unfinished side', () => {
+  // The original runs 4 s; the stopped job kept two frames of it.
+  function partial(order: 'original first' | 'unfinished first' = 'original first') {
+    const original = player(4);
+    const kept = player(2 / 27);
+    let now = 0;
+    const entries = [
+      { video: original, fps: 27 },
+      { video: kept, fps: 27, partial: true },
+    ];
+    const sync = new CompareVideoSync(
+      order === 'original first' ? entries : entries.reverse(),
+      () => now,
+    );
+    return { original, kept, sync, advance: (ms: number) => (now += ms) };
+  }
+  it('ends the clock where the kept part ends, whichever slot holds it', () => {
+    for (const order of ['original first', 'unfinished first'] as const) {
+      const { original, sync } = partial(order);
+      expect(sync.duration).toBeCloseTo(2 / 27);
+      expect(sync.limited).toBe(true);
+      expect(sync.frames).toBe(2);
+      sync.seek(3);
+      expect(original.currentTime).toBeCloseTo(2 / 27);
+    }
+  });
+  it('steps both sides to the same frame, one by one, and stops at the last kept frame', () => {
+    const { original, kept, sync } = partial();
+    expect(sync.frame).toBe(0);
+    sync.step(1);
+    expect(sync.frame).toBe(1);
+    expect(original.currentTime).toBeCloseTo(1.5 / 27);
+    expect(kept.currentTime).toBeCloseTo(1.5 / 27);
+    sync.step(1);
+    expect(sync.frame).toBe(1);
+    expect(original.currentTime).toBeCloseTo(1.5 / 27);
+    sync.step(-1);
+    expect(original.currentTime).toBeCloseTo(0.5 / 27);
+    expect(kept.currentTime).toBeCloseTo(0.5 / 27);
+  });
+  it('counts frames by the rate given for the kept part instead of a nominal one', () => {
+    const original = player(4);
+    const kept = player(0.074);
+    const sync = new CompareVideoSync([
+      { video: original, fps: 30 },
+      { video: kept, fps: 30, partial: true },
+    ]);
+    // 0.074 s at a nominal 30 fps would count a third frame that does not exist.
+    expect(sync.frames).toBe(3);
+    sync.grid = 2 / 0.074;
+    expect(sync.frames).toBe(2);
+    sync.seekFrame(1);
+    expect(kept.currentTime).toBeCloseTo(0.0555);
+    expect(original.currentTime).toBeCloseTo(0.0555);
+  });
+  it('holds every side on the last kept frame when playback reaches the end', async () => {
+    const { original, kept, sync } = partial();
+    await sync.play();
+    original.currentTime = 0.1;
+    kept.currentTime = 2 / 27;
+    sync.tick();
+    expect(sync.playing).toBe(false);
+    expect(original.paused).toBe(true);
+    expect(original.currentTime).toBeCloseTo(1.5 / 27);
+    expect(sync.frame).toBe(1);
+    // Play again starts over instead of ending at once.
+    await sync.play();
+    expect(sync.time).toBe(0);
+    expect(original.currentTime).toBe(0);
+  });
+  it('spans the longest side again when no side is unfinished', () => {
+    const sync = new CompareVideoSync([
+      { video: player(4), fps: 27 },
+      { video: player(2), fps: 27 },
+    ]);
+    expect(sync.duration).toBe(4);
+    expect(sync.limited).toBe(false);
+  });
 });
 
 it('does not resume until both seeking players are ready', async () => {

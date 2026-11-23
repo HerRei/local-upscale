@@ -22,6 +22,10 @@
   export let compare = 50;
   // Chosen in the preview header; holding M there shows the original.
   export let view: 'original' | 'split' | 'enhanced' = 'split';
+  /** Frames per second of the result (or of the source alone); 0 hides the frame steps. */
+  export let fps = 0;
+  /** Frames a stopped job kept, when the host counted them. */
+  export let keptFrames = 0;
 
   const RATES = [0.5, 1, 1.5, 2];
 
@@ -67,6 +71,23 @@
     compare,
   );
   $: single = !enhancedSrc;
+  // Under a second the transport counts frames: two frames are not "0:00".
+  $: frameCount =
+    duration > 0 && duration < 1
+      ? keptFrames > 0
+        ? keptFrames
+        : fps > 0
+          ? Math.max(1, Math.round(duration * fps))
+          : 0
+      : 0;
+  $: frameRate = frameCount > 0 && duration > 0 ? frameCount / duration : fps;
+  $: frameIndex =
+    frameRate > 0
+      ? Math.max(
+          0,
+          Math.min((frameCount || Infinity) - 1, Math.floor(currentTime * frameRate + 1e-6)),
+        )
+      : 0;
   $: clip = single
     ? 0
     : view === 'original'
@@ -265,6 +286,20 @@
     if (enhanced) enhanced.currentTime = Math.min(target, finiteDuration(enhanced));
   }
 
+  /** The middle of a frame, so both sides show the frame that holds this time. */
+  function seekFrame(index: number): void {
+    if (!(frameRate > 0)) return;
+    const last = Math.max(0, Math.ceil((duration || 0) * frameRate - 1e-6) - 1);
+    seek((Math.max(0, Math.min(last, Math.round(index))) + 0.5) / frameRate);
+  }
+
+  function step(direction: -1 | 1): void {
+    enhanced.pause();
+    original?.pause();
+    playing = false;
+    seekFrame(frameIndex + direction);
+  }
+
   function finiteDuration(video: HTMLVideoElement): number {
     return Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
   }
@@ -427,6 +462,10 @@
       toggle={togglePlayback}
       {seek}
       {nextRate}
+      step={frameRate > 0 ? step : undefined}
+      frames={frameCount}
+      frame={frameIndex}
+      {seekFrame}
     />
     <div class="zoom-hud" class:shown={pointerOver} role="group" aria-label="Video zoom">
       <button

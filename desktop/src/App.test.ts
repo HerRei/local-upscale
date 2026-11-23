@@ -8039,6 +8039,14 @@ describe('Stopping a running job', () => {
     expect(api.cancelJobs).not.toHaveBeenCalled();
   });
 
+  it('counts a finished part of under a second in frames', async () => {
+    const user = await mountWith(runningVideoSnapshot({ frames_processed: 2 }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Stop alpine-lake.mp4?' });
+    expect(dialog.textContent).toContain('2 of 288 frames are finished.');
+    expect(dialog.textContent).not.toContain('0:00');
+  });
+
   it('asks for a video-model job (SeedVR) too', async () => {
     const snap = runningVideoSnapshot();
     snap.jobs[0].model_id = snap.catalog.video_models[0]?.model_id ?? 'seedvr2_3b';
@@ -8157,5 +8165,165 @@ describe('Stopping a running job', () => {
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByRole('dialog')).toBeNull();
     await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(false));
+  });
+});
+
+describe('Stopping a running photo', () => {
+  function runningPhotoSnapshot(overrides: Partial<AppSnapshot['runtime']> = {}) {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.stopped_job_result = 'ask';
+    snapshot.runtime = {
+      ...snapshot.runtime,
+      active_job_id: 'img-1',
+      progress: 30,
+      can_keep_partial: true,
+      ...overrides,
+    };
+    snapshot.jobs = [
+      {
+        id: 'img-1',
+        media_id: 'photo',
+        media_name: 'photo.png',
+        media_kind: 'image',
+        status: 'running',
+        progress: 30,
+        output_path: '',
+        error: '',
+        created_at: 1,
+      },
+    ];
+    return snapshot;
+  }
+  /** The engine's tile count, as the window receives it (one pulse per 100 ms is kept). */
+  async function reportTiles(completed: number, total: number, unit?: string): Promise<void> {
+    const emitWorker = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+    emitWorker({
+      type: 'progress',
+      data: {
+        job_id: 'img-1',
+        percentage: 30,
+        completed_tiles: completed,
+        total_tiles: total,
+        ...(unit ? { unit } : {}),
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+
+  it('asks once a tile is finished, says how many are, and keeps or discards as answered', async () => {
+    const user = await mountWith(runningPhotoSnapshot());
+    await reportTiles(12, 40);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Stop photo.png?' });
+    expect(dialog.textContent).toContain(
+      '12 of 40 tiles are finished. If you keep it, the photo is saved at full size with the rest left as in the original.',
+    );
+    expect(api.cancelJobs).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole('button', { name: 'Keep finished part' }));
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(true));
+    expect(api.setPreference).not.toHaveBeenCalled();
+  });
+
+  it('keeps the tile count through a refresh of the snapshot, which has none', async () => {
+    const user = await mountWith(runningPhotoSnapshot());
+    await reportTiles(3, 40);
+    (api.listenForStateChange.mock.calls[0][0] as () => void)();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Stop photo.png?' });
+    expect(dialog.textContent).toContain('3 of 40 tiles are finished.');
+    await user.click(within(dialog).getByRole('button', { name: 'Discard' }));
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(false));
+  });
+
+  it('cancels at once before the first tile, for the steps of an edit, and when the host cannot keep a photo', async () => {
+    // No tile is finished yet: there is nothing to keep.
+    let user = await mountWith(runningPhotoSnapshot());
+    await reportTiles(0, 40);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(false));
+    cleanup();
+    api.cancelJobs.mockClear();
+    api.listenForWorker.mockClear();
+
+    // An Edit counts steps, not tiles.
+    user = await mountWith(runningPhotoSnapshot());
+    await reportTiles(12, 40, 'steps');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(false));
+    cleanup();
+    api.cancelJobs.mockClear();
+    api.listenForWorker.mockClear();
+
+    // A host that does not keep photos says nothing, or says no.
+    for (const can_keep_partial of [undefined, false]) {
+      user = await mountWith(runningPhotoSnapshot({ can_keep_partial }));
+      await reportTiles(12, 40);
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(screen.queryByRole('dialog')).toBeNull();
+      await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(false));
+      cleanup();
+      api.cancelJobs.mockClear();
+      api.listenForWorker.mockClear();
+    }
+  });
+
+  it('follows the saved answer without asking', async () => {
+    const keep = runningPhotoSnapshot();
+    keep.settings.stopped_job_result = 'keep';
+    let user = await mountWith(keep);
+    await reportTiles(12, 40);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(true));
+    cleanup();
+    api.cancelJobs.mockClear();
+    api.listenForWorker.mockClear();
+
+    const discard = runningPhotoSnapshot();
+    discard.settings.stopped_job_result = 'discard';
+    user = await mountWith(discard);
+    await reportTiles(12, 40);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(false));
+  });
+
+  it('says what was kept when the stopped photo is saved, not that it finished', async () => {
+    const current = runningPhotoSnapshot();
+    current.settings.stopped_job_result = 'keep';
+    api.bootstrap.mockResolvedValue(structuredClone(current));
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+    render(App);
+    const user = userEvent.setup();
+    const strong = () => document.querySelector('.status-copy strong')?.textContent ?? '';
+    await waitFor(() => expect(strong()).toMatch(/^Ready/));
+    await reportTiles(12, 40);
+    // The host marks the job as stopping and, once the engine has saved the part, as completed.
+    api.cancelJobs.mockImplementation(async () => {
+      current.jobs[0].status = 'cancelling';
+    });
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(strong()).toBe('Stopping…'));
+    current.runtime.active_job_id = '';
+    current.jobs[0] = { ...current.jobs[0], status: 'completed', output_path: '/out/photo.png' };
+    (api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void)({
+      type: 'job_completed',
+      data: {
+        job_id: 'img-1',
+        output_path: '/out/photo_partial.png',
+        partial: true,
+        finished_tiles: Array.from({ length: 12 }, (_, index) => [index * 256, 0, 256, 256]),
+        total_tiles: 40,
+      },
+    });
+    await waitFor(() => expect(strong()).toBe('Stopped, kept 12 of 40 tiles'));
+    await waitFor(() =>
+      expect(document.querySelector('.status-detail')!.textContent).toBe(
+        'Stopped. 0 of 1 finished, 1 kept unfinished.',
+      ),
+    );
   });
 });

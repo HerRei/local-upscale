@@ -1,40 +1,9 @@
 import type { ComparePick, MediaItem, MediaResults, ResultSummary } from './types';
-import { formatDuration, formatVideoClock } from './format';
-
-export function partialKeptSeconds(
-  result: Pick<ResultSummary, 'partial' | 'kept_seconds' | 'output_name'>,
-): number | null {
-  if (!result.partial) return null;
-  if (typeof result.kept_seconds === 'number' && Number.isFinite(result.kept_seconds)) {
-    return Math.max(0, result.kept_seconds);
-  }
-  const match = /_partial_(\d+)m(\d{2})s(?:\.[^.]+)?$/i.exec(result.output_name ?? '');
-  if (!match) return null;
-  const minutes = Number(match[1]);
-  const secs = Number(match[2]);
-  return secs < 60 ? minutes * 60 + secs : null;
-}
-
-export function unfinishedLabel(result: ResultSummary, totalDuration = 0): string {
-  if (!result.partial) return '';
-  const kept = partialKeptSeconds(result);
-  const total = result.output_duration_seconds || totalDuration || 0;
-  if (kept !== null && total > 0) {
-    return `Unfinished · ${formatVideoClock(kept)} of ${formatVideoClock(total)}`;
-  }
-  if (kept !== null && kept > 0) {
-    return `Unfinished · ${formatVideoClock(kept)}`;
-  }
-  return 'Unfinished';
-}
+import { formatDuration } from './format';
+import type { UnfinishedMark } from './unfinished';
 
 /** Only facts saved with the job or read from the output itself. */
-export function resultDetails(
-  result: ResultSummary,
-  width = 0,
-  height = 0,
-  totalDuration = 0,
-): string[] {
+export function resultDetails(result: ResultSummary, width = 0, height = 0): string[] {
   const labels = (result.stages ?? [])
     .map((stage) => stage.model_label)
     .filter((label) => label && label !== 'Unknown model');
@@ -50,7 +19,6 @@ export function resultDetails(
   const fixes = (result.ui?.fixes ?? []).map((fix) => fixNames[fix]).filter(Boolean);
   const date = result.completed_at > 0 ? new Date(result.completed_at) : null;
   return [
-    unfinishedLabel(result, totalDuration),
     labels.length ? `Models: ${labels.join(' → ')}` : '',
     fixes.length ? `Fixes: ${fixes.join(' → ')}` : '',
     result.scale ? `Scale: ${result.scale}×` : '',
@@ -61,6 +29,20 @@ export function resultDetails(
       : '',
     date && !Number.isNaN(date.getTime()) ? `Date: ${date.toLocaleDateString()}` : '',
   ].filter(Boolean);
+}
+
+/**
+ * The facts on as many lines as the details strip has. Models and fixes, which can be
+ * long, take a line each; the short facts share what is left, in their order.
+ */
+export function detailLines(facts: string[], lines = 4): string[][] {
+  const long = facts.filter((fact) => /^(Models|Fixes):/.test(fact)).slice(0, lines - 1);
+  const short = facts.filter((fact) => !long.includes(fact));
+  const each = Math.max(1, Math.ceil(short.length / Math.max(1, lines - long.length)));
+  const packed: string[][] = long.map((fact) => [fact]);
+  for (let index = 0; index < short.length; index += each)
+    packed.push(short.slice(index, index + each));
+  return packed;
 }
 
 export interface OutputGroup {
@@ -141,6 +123,8 @@ export interface CompareItem {
   label: string;
   meta: string;
   details?: string[];
+  /** A stopped job's kept result: its mark, and what the view needs to show the kept part. */
+  unfinished?: UnfinishedMark;
   preview_data_url: string;
   preview_width?: number;
   preview_height?: number;

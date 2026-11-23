@@ -354,9 +354,9 @@
                 >When you stop a job</label
               >
               <p class="setting-desc" id="settings-stopped-job-result-desc">
-                Applies to videos: the frames already finished can be kept as a playable video.
-                Photos and edits that are stopped are always discarded; finished files in a queue
-                always stay.
+                A video keeps its finished frames as a playable video; a photo keeps its finished
+                tiles, with the rest left as in the original. Both are marked Unfinished. A stopped
+                edit is always discarded; finished files in a queue always stay.
               </p>
             </div>
             <div class="setting-control">
