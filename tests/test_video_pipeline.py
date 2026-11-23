@@ -1486,22 +1486,24 @@ def test_the_frame_loop_is_reported_after_audio_cleanup(tmp_path):
     from types import SimpleNamespace
 
     source = _make_synthetic_video_with_audio(tmp_path / "steps.mp4", frames=6, fps=24)
-
-
-def test_colour_preparation_is_counted_before_the_first_frame(tmp_path):
-    from types import SimpleNamespace
-
-    source = _make_synthetic_video_with_audio(tmp_path / "grey.mp4", frames=6, fps=24)
     info = SimpleNamespace(architecture="DDColor", scale=1, in_channels=3, out_channels=3)
 
     class StubEngine:
+        def __init__(self):
+            self.calls = 0
+            self.notes = []
+
         def load_model(self, *args):
             pass
 
         def switch_model(self, *args):
             pass
 
+        def add_note(self, note):
+            self.notes.append(note)
+
         def process_frame(self, *, img_tensor, **kwargs):
+            self.calls += 1
             return (img_tensor.numpy() * 255).astype(np.uint8)
 
     stages = []
@@ -1519,8 +1521,63 @@ def test_colour_preparation_is_counted_before_the_first_frame(tmp_path):
         audio_path=str(source),
         video_codec="vp9",
     )
-    run_video_job(config, StubEngine(), threading.Event(), stage_cb=stages.append)
+    run_video_job(
+        config,
+        StubEngine(),
+        threading.Event(),
+        stage_cb=lambda stage, *counts: stages.append(stage),
+    )
     assert "reading_frames" in stages
+
+
+def test_colour_preparation_is_counted_before_the_first_frame(tmp_path):
+    from types import SimpleNamespace
+
+    source = _make_synthetic_video_with_audio(tmp_path / "grey.mp4", frames=6, fps=24)
+    info = SimpleNamespace(architecture="DDColor", scale=1, in_channels=3, out_channels=3)
+
+    class StubEngine:
+        def __init__(self):
+            self.calls = 0
+            self.notes = []
+
+        def load_model(self, *args):
+            pass
+
+        def switch_model(self, *args):
+            pass
+
+        def add_note(self, note):
+            self.notes.append(note)
+
+        def process_frame(self, *, img_tensor, **kwargs):
+            self.calls += 1
+            return (img_tensor.numpy() * 255).astype(np.uint8)
+
+    calls = []
+    config = VideoJobConfig(
+        video_path=str(source),
+        model_path="ddcolor.pth",
+        output_video_path=str(tmp_path / "out.mp4"),
+        model_info=info,
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=0,
+        safe_memory=False,
+        output_scale=1,
+        video_codec="vp9",
+    )
+    run_video_job(
+        config,
+        StubEngine(),
+        threading.Event(),
+        stage_cb=lambda stage, *counts: calls.append((stage, *counts)),
+    )
+    counted = [call for call in calls if call[0] == "colour_preparing"]
+    assert counted, calls
+    assert [call[1] for call in counted] == list(range(1, len(counted) + 1))
+    assert all(call[2] == 6 for call in counted)
 
 
 def test_video_colour_is_skipped_with_a_note_when_the_video_has_colour(tmp_path):
@@ -1594,8 +1651,6 @@ def test_video_colour_is_skipped_with_a_note_when_the_video_has_colour(tmp_path)
 
     engine = StubEngine()
     warnings = []
-
-    calls = []
     config = VideoJobConfig(
         video_path=str(source),
         model_path="ddcolor.pth",
@@ -1614,14 +1669,3 @@ def test_video_colour_is_skipped_with_a_note_when_the_video_has_colour(tmp_path)
     assert engine.calls == 0
     assert warnings == ["This video already has colour, so Colour was skipped."]
     assert engine.notes == warnings
-
-    run_video_job(
-        config,
-        StubEngine(),
-        threading.Event(),
-        stage_cb=lambda stage, *counts: calls.append((stage, *counts)),
-    )
-    counted = [call for call in calls if call[0] == "colour_preparing"]
-    assert counted, calls
-    assert [call[1] for call in counted] == list(range(1, len(counted) + 1))
-    assert all(call[2] == 6 for call in counted)

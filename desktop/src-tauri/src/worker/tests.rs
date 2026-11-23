@@ -2531,7 +2531,9 @@ fn pause_and_resume_hold_and_dispatch_the_existing_queue() {
     assert_eq!(sent["data"]["job_id"], "a");
     assert_eq!(status(&state, "a"), "starting");
     lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
 
+#[test]
 fn the_last_tile_does_not_read_as_saving_and_colour_preparation_is_named() {
     let directory = tempfile::tempdir().unwrap();
     let state = batch_state(directory.path());
