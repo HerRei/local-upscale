@@ -297,6 +297,12 @@ jobs:
           "All-users install by the administrator in: $machineDir"
           $machineUninstaller = Join-Path $machineDir "uninstall.exe"
           if (-not (Test-Path -LiteralPath $machineUninstaller)) { throw "No all-users install in $machineDir" }
+          # The earlier per-user install leaves its folder; the refused run must change nothing in it.
+          $userInstall = Join-Path $profileRoot "AppData\Local\LocalSR"
+          $snapshot = { if (Test-Path -LiteralPath $userInstall) {
+              Get-ChildItem -LiteralPath $userInstall -Recurse -Force -ErrorAction SilentlyContinue |
+                ForEach-Object { "$($_.FullName)|$($_.Length)|$($_.LastWriteTimeUtc.Ticks)" } } }
+          $beforeOver = (& $snapshot) -join "`n"
           $over = Start-Process -FilePath "cmd.exe" -Credential $credential -LoadUserProfile -PassThru `
             -WorkingDirectory C:\ -ArgumentList "/c", "$userEnv`"$artifact`" /S"
           if (-not $over.WaitForExit(180000)) {
@@ -305,8 +311,8 @@ jobs:
           }
           "Standard user's silent run over the all-users install exit code: $($over.ExitCode)"
           if ($over.ExitCode -eq 0) { throw "A standard user's silent run over an all-users install reported success" }
-          if (Test-Path -LiteralPath (Join-Path $profileRoot "AppData\Local\LocalSR")) {
-            throw "A silent run over an all-users install added a per-user copy"
+          if (((& $snapshot) -join "`n") -ne $beforeOver) {
+            throw "A silent run over an all-users install wrote into the standard user's AppData"
           }
           $remove = Start-Process -FilePath "cmd.exe" -Credential $credential -LoadUserProfile -Wait -PassThru `
             -WorkingDirectory C:\ -ArgumentList "/c", "$userEnv`"$machineUninstaller`" /S _?=$machineDir"
