@@ -96,7 +96,10 @@ NPU_MINIMUM_PSNR = 45.0
 # driver 1.32) at a 288-pixel window against PyTorch on the CPU: SPAN 72 dB, ESRGAN 72 dB,
 # FBCNN 81 dB, NAFNet 75-83 dB, each 1.7-2.8x faster than the same chip's GPU and 2-9x
 # faster than its CPU. RealPLKSR and SCUNet do not compile for it; the attention models
-# (HAT, SwinIR, DAT) did not finish compiling in 30 minutes. Those run on the CPU instead.
+# (HAT, SwinIR, DAT) did not finish compiling in 30 minutes. Those run on the CPU instead,
+# as do NERVE and HEART (#154), which were not tried on an NPU. On DirectML and OpenVINO
+# GPUs they take the same ONNX export and PSNR gate as Spandrel's other architectures; both
+# export cleanly and match PyTorch on ONNX Runtime's CPU provider (tests/test_nerve_heart.py).
 NPU_ARCHITECTURES = frozenset({"SPAN", "ESRGAN", "FBCNN", "NAFNet"})
 _MAXIMUM_VERDICTS = 400
 # Above this, a model keeps two sessions instead of four (NAFNet SIDD is 465 MB).

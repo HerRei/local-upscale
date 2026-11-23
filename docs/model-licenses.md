@@ -237,6 +237,33 @@ they take about ten times as long as Best. A model pinned to Best by the user is
 The two HAT face checkpoints stay outside this policy and require a verified manual import.
 No restoration weights are bundled with the application.
 
+### Architecture code for your own checkpoints
+
+Spandrel 0.4.2 (MIT) loads most own checkpoints. Two newer architectures by Philip Hofmann
+(`Phips` / `Phhofm`) that are not yet in a released Spandrel package are vendored directly:
+
+- **NERVE** (#154): the network from
+  [chaiNNer-org/spandrel#333](https://github.com/chaiNNer-org/spandrel/pull/333) at commit
+  `3429b70e043a96838b5f10d2fe275e56f69e5c69` (upstream
+  [Phhofm/traiNNer-redux](https://github.com/Phhofm/traiNNer-redux) `nerve_arch.py` at
+  `9ecb9adf80160d4bf85f0e7c6d95ffdb8bba315b` and
+  [Phips/NERVE](https://huggingface.co/Phips/NERVE), Apache-2.0), with its MIT Spandrel loader
+  from PR #333. Notices and modifications: `src/localsr/image_models/nerve/NOTICE.md`.
+- **HEART** (#154): the network from
+  [chaiNNer-org/spandrel#334](https://github.com/chaiNNer-org/spandrel/pull/334) at commit
+  `2778b9f8231fd3fcc766aff83d37c50c6f45e146` (upstream
+  [Phhofm/traiNNer-redux](https://github.com/Phhofm/traiNNer-redux) `heart_arch.py` at
+  `cb3f6f256b9131109d00893bad53abb4d08e033b` and
+  [Phips/HEART](https://huggingface.co/Phips/HEART), Apache-2.0; building blocks from
+  [XPixelGroup/HAT](https://github.com/XPixelGroup/HAT) Apache-2.0,
+  [2minkyulee/i-LN](https://github.com/2minkyulee/i-LN) Apache-2.0,
+  [Rift73/DRFT](https://github.com/Rift73/DRFT) MIT, and
+  [dslisleedh/SST](https://github.com/dslisleedh/SST) MIT), with its MIT Spandrel loader from
+  PR #334. Notices and modifications: `src/localsr/image_models/heart/NOTICE.md`.
+
+The architecture code licence says nothing about a checkpoint's terms: each checkpoint's
+author sets those.
+
 ## Frame interpolation
 
 ### RIFE 4.26 (`rife_4_26`)

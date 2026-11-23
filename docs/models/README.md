@@ -106,6 +106,14 @@ appear in **Your own file** in the model library, where you can rename and selec
 On the command line, set
 `LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1`. Check your model's license, architecture,
 scale and colour assumptions before using it.
+
+Own checkpoints can use any architecture that Spandrel 0.4.2 loads (ESRGAN, SPAN,
+RealPLKSR, SwinIR, HAT, DAT, SCUNet, NAFNet and many more), plus **NERVE** and
+**HEART** (#154), whose loaders LocalSR includes itself because Spandrel 0.4.2 does
+not yet ship them. Both support FP16; on a Mac they run through PyTorch on the Apple
+GPU rather than the Neural Engine, and on an Intel NPU they run on the CPU. On
+DirectML and OpenVINO GPUs they go through the same ONNX export and first-tile
+check as other architectures.
 If a checkpoint cannot be recognized, LocalSR reports when its keys suggest a
 MoSR or MoESR model that this version cannot load. Other unrecognized models
 show a general unsupported architecture message.

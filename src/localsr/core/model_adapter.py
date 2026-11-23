@@ -9,6 +9,8 @@ import torch
 
 from localsr.core.model_catalog import CATALOG_BY_FILENAME, file_matches_checksum, file_sha256
 from localsr.core.preparation import PreparationTimeout, bounded_preparation
+from localsr.image_models.heart import heart_support
+from localsr.image_models.nerve import nerve_support
 
 # Reading a checkpoint is a local file read; a drive that stopped answering would
 # otherwise hold the job for ever.
@@ -16,6 +18,12 @@ MODEL_READ_SECONDS = 180.0
 
 UNVERIFIED_CHECKPOINT_ENV = "LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS"
 RISKY_CHECKPOINT_SUFFIXES = {".ckpt", ".pt", ".pth"}
+
+# Spandrel's own registry plus architectures LocalSR vendors under permissive
+# licences (NERVE and HEART, #154). A copy, so Spandrel's global registry stays
+# unchanged; the added architectures are detected after Spandrel's own.
+MODEL_REGISTRY = spandrel.MAIN_REGISTRY.copy()
+MODEL_REGISTRY.add(nerve_support(), heart_support())
 
 
 def _unsupported_model_message(state_dict) -> str:
@@ -88,7 +96,7 @@ class _DirectMLDescriptor:
 
 class ModelAdapter:
     def __init__(self, *, allow_unverified_checkpoints: bool | None = None):
-        self.loader = spandrel.ModelLoader()
+        self.loader = spandrel.ModelLoader(registry=MODEL_REGISTRY)
         self.approved_checkpoint: tuple[str, str] | None = None
         self.parsed = None
         self.parsed_path = None

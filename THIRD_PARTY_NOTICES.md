@@ -99,6 +99,19 @@ own terms; this file is a distribution notice, not a replacement for their licen
   Inc. copyright), with the license text and modifications listed in
   `src/localsr/image_models/ddcolor/NOTICE.md`. The DDColor checkpoint (`ddcolor_modelscope`, Apache-2.0) is an optional, checksum-pinned download and is not included
   in installers. Source: https://github.com/piddnad/DDColor.
+- **NERVE architecture**: the NERVE network by Philip Hofmann (`Phhofm/traiNNer-redux` at
+  `9ecb9adf` and `huggingface.co/Phips/NERVE`, Apache-2.0) and its Spandrel loader from
+  `chaiNNer-org/spandrel#333` (`Phhofm/spandrel`, MIT, Copyright (c) 2024 The ChaiNNer
+  Organization) at commit `3429b70e`. Both licence texts and LocalSR's modifications are in
+  `src/localsr/image_models/nerve/NOTICE.md`. No NERVE weights are included; users load their
+  own checkpoints.
+- **HEART architecture**: the HEART network by Philip Hofmann (`Phhofm/traiNNer-redux` at
+  `cb3f6f25` and `huggingface.co/Phips/HEART`, Apache-2.0, incorporating `XPixelGroup/HAT` under
+  Apache-2.0, `2minkyulee/i-LN` under Apache-2.0, `Rift73/DRFT` under MIT, and `dslisleedh/SST`
+  under MIT) and its Spandrel loader from `chaiNNer-org/spandrel#334` (`Phhofm/spandrel`, MIT,
+  Copyright (c) 2024 The ChaiNNer Organization) at commit `2778b9f8`. All licence texts and
+  LocalSR's modifications are in `src/localsr/image_models/heart/NOTICE.md`. No HEART weights
+  are included; users load their own checkpoints.
 - **Curated checkpoints** — each catalog entry shows its author, source, and license before
   download. CC-BY checkpoints require attribution. The official Real-ESRGAN ×2 project/asset is
   recorded as BSD-3-Clause and the official FBCNN project/model-zoo asset as Apache-2.0. The HAT-S
