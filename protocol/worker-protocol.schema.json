@@ -319,7 +319,7 @@
                     "end_frame": { "type": ["integer", "null"], "minimum": 0 },
                     "deflicker": { "type": "boolean" },
                     "deflicker_window": { "type": "integer", "minimum": 1, "maximum": 9 },
-                    "model_kind": { "enum": ["spandrel_image", "seedvr2"] },
+                    "model_kind": { "enum": ["spandrel_image", "seedvr2", "flashvsr"] },
                     "bundle_dir": { "type": ["string", "null"] },
                     "temporal_window": { "type": "integer", "minimum": 0 },
                     "temporal_overlap": { "type": "integer", "minimum": 0 },
