@@ -386,9 +386,16 @@ def run_photo_batch(
                     else:
                         resolve(index, "failed", InterruptedError("The photo was interrupted."))
             # A running save commits or raises InterruptedError; one that has not
-            # started is dropped. Report each as it ends.
-            for future in encoding.values():
-                future.cancel()
+            # started is dropped, unless the stop keeps the finished part. Report each as
+            # it ends.
+            keeping_saves = (
+                cancel.is_set()
+                and keep is not None
+                and any(keep(items[entry.index]) for entry in encoding)
+            )
+            if not keeping_saves:
+                for future in encoding.values():
+                    future.cancel()
             while encoding:
                 wait(list(encoding.values()), return_when=FIRST_COMPLETED)
                 finish_encoded()

@@ -994,7 +994,17 @@ fn job_can_keep_partial(state: &AppState, message: &Value) -> bool {
         message["type"].as_str(),
         Some("job_request" | "image_batch_request")
     ) {
-        return true;
+        // Face restoration works on the whole picture at once: nothing to keep.
+        let with_faces = |job: &Value| {
+            job["face_model_path"]
+                .as_str()
+                .is_some_and(|path| !path.is_empty())
+        };
+        let data = &message["data"];
+        return match data["jobs"].as_array() {
+            Some(jobs) => !jobs.iter().any(with_faces),
+            None => !with_faces(data),
+        };
     }
     if message["type"].as_str() != Some("video_job_request") {
         return false;
@@ -1693,14 +1703,20 @@ fn apply_background_photo(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> A
         }
         "job_completed" => {
             let output = string(data, "output_path");
-            let database = lock(&state.database)?;
-            database.finish_job(&id, "completed", &output, &string(data, "notes"))?;
-            database.record_job_duration(&id, seconds(data, "elapsed_seconds"))?;
-            if data
+            let partial = data
                 .get("partial")
                 .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
+                .unwrap_or(false);
+            // A kept part says so with its notes, as the shown photo's do.
+            let notes = match (partial, string(data, "notes")) {
+                (false, notes) => notes,
+                (true, notes) if notes.is_empty() => stopped_title(data),
+                (true, notes) => format!("{}. {notes}", stopped_title(data)),
+            };
+            let database = lock(&state.database)?;
+            database.finish_job(&id, "completed", &output, &notes)?;
+            database.record_job_duration(&id, seconds(data, "elapsed_seconds"))?;
+            if partial {
                 database.record_partial(&id, &partial_record(data))?;
             }
             drop(database);
@@ -1958,6 +1974,10 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             let mut runtime = lock(&state.runtime)?;
             runtime.progress = progress;
             let editing = string(data, "unit") == "steps";
+            if !editing && data.get("completed_tiles").is_some() {
+                runtime.tiles_completed = integer(data, "completed_tiles");
+                runtime.tiles_total = integer(data, "total_tiles");
+            }
             // In a job of several stages the title keeps which one runs (two fixes can
             // both be "Restoring"); a one-stage job reads "Enhancing".
             let staged = runtime.status_title.contains(" · stage ")

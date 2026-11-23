@@ -678,6 +678,11 @@ pub struct RuntimeStatus {
     pub total_frames: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub can_keep_partial: Option<bool>,
+    /// Tiles finished of the running photo stage, for the stop question.
+    #[serde(default)]
+    pub tiles_completed: u64,
+    #[serde(default)]
+    pub tiles_total: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -799,6 +804,8 @@ impl RuntimeStatus {
             self.frames_processed = 0;
             self.total_frames = 0;
             self.can_keep_partial = None;
+            self.tiles_completed = 0;
+            self.tiles_total = 0;
         }
         self.active_job_id = id;
         self.hardware_note.clear();
@@ -811,6 +818,8 @@ impl RuntimeStatus {
         self.frames_processed = 0;
         self.total_frames = 0;
         self.can_keep_partial = None;
+        self.tiles_completed = 0;
+        self.tiles_total = 0;
         std::mem::take(&mut self.active_job_id)
     }
 }
@@ -853,6 +862,8 @@ impl Default for RuntimeStatus {
             frames_processed: 0,
             total_frames: 0,
             can_keep_partial: None,
+            tiles_completed: 0,
+            tiles_total: 0,
         }
     }
 }

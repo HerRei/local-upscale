@@ -2600,6 +2600,13 @@ fn videos_and_photos_can_keep_their_finished_part() {
     assert!(job_can_keep_partial(&state, &photo));
     let batch = json!({"type": "image_batch_request", "data": {"jobs": []}});
     assert!(job_can_keep_partial(&state, &batch));
+    // Face restoration runs on the whole picture: there are no finished tiles to keep.
+    let faces = json!({"type": "job_request", "data": {"face_model_path": "/m/face.pth"}});
+    assert!(!job_can_keep_partial(&state, &faces));
+    let batch_faces = json!({"type": "image_batch_request", "data": {"jobs": [
+        {"face_model_path": ""}, {"face_model_path": "/m/face.pth"}
+    ]}});
+    assert!(!job_can_keep_partial(&state, &batch_faces));
 }
 
 #[test]

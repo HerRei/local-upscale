@@ -265,3 +265,26 @@ def test_temporal_stop_right_after_the_first_window_keeps_that_window(tmp_path, 
         written = sum(1 for _ in container.decode(video=0))
     assert written > 0
     assert written == completed.frames_processed
+
+
+def test_a_stop_that_keeps_after_the_last_frame_saves_the_whole_video(tmp_path):
+    """Argon 11-23: every frame was written, then Keep; the finished video must not be lost."""
+    cancel = threading.Event()
+
+    def frames_then_stop():
+        yield from _frames()
+        cancel.set()
+
+    destination = tmp_path / "out.mp4"
+    written = encode_video(
+        frames_then_stop(),
+        str(destination),
+        fps=5.0,
+        width=64,
+        height=64,
+        cancel_event=cancel,
+        keep_partial=True,
+    )
+    assert written == str(destination)
+    with av.open(written) as container:
+        assert sum(1 for _ in container.decode(video=0)) == 3

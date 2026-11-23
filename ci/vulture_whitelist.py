@@ -144,3 +144,7 @@ inter_op_num_threads
 
 # Protocol field set by the Rust host for the audio cleanup model (protocol/messages.py).
 audio_denoise_model_id
+
+# Fields of a kept photo's job_completed, read by the host from the JSON (protocol/messages.py).
+finished_tiles
+total_tiles

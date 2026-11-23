@@ -16,6 +16,7 @@ from localsr.core.inference import InferenceEngine, UnstableRestorationError
 from localsr.core.live_preview import LatestPreviewEncoder, PreviewPacket
 from localsr.core.model_adapter import ModelAdapter, NormalizedModelInfo
 from localsr.core.model_catalog import CATALOG_BY_ID
+from localsr.core.output_publish import DiscardOnStop
 from localsr.core.output_writer import OutputWriter, cleanup_stale_work_files
 from localsr.core.partial_image import (
     TilesStopped,
@@ -155,6 +156,11 @@ class ImageJobRunner:
                     writer, info = self._primary(working_image, pipeline, data, progress, resources)
                 except TilesStopped as stopped:
                     resources.callback(stopped.writer.cleanup)
+                    colour = stopped.info is not None and stopped.info.architecture == "DDColor"
+                    if colour or (
+                        pipeline.primary is not None and pipeline.primary.fix == "colour"
+                    ):
+                        manager.grayscale = False
                     self._save_finished_part(
                         job_id, data, manager, image, working_image, stopped, started_at
                     )
@@ -163,7 +169,9 @@ class ImageJobRunner:
                     pipeline.primary is not None and pipeline.primary.fix == "colour"
                 ):
                     manager.grayscale = False
-                self._check_cancelled()
+                # Every tile is done: a stop that keeps the finished part saves it whole.
+                if self._discard_signal().is_set():
+                    raise InterruptedError("Cancelled before the output was saved.")
                 self._log("Writing final output...")
                 notes.extend(self._save(manager, writer, image, info, data))
                 notes.extend(self._take_engine_notes())
@@ -468,7 +476,11 @@ class ImageJobRunner:
         info: NormalizedModelInfo,
         data: Mapping[str, Any],
     ) -> list[str]:
-        return save_output(manager, writer, image, info, data, self.cancel_event)
+        return save_output(manager, writer, image, info, data, self._discard_signal())
+
+    def _discard_signal(self) -> DiscardOnStop:
+        """Set when a stop discards; a stop that keeps lets a finished image be saved."""
+        return DiscardOnStop(self.cancel_event, self.keep_partial or False)
 
     def _check_cancelled(self) -> None:
         if self.cancel_event.is_set():

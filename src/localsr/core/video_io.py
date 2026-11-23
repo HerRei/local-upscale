@@ -38,7 +38,7 @@ from .media_codecs import (
     stream_copy_supported,
     validate_output,
 )
-from .output_publish import OutputExistsError, owned_temporary, publish_output
+from .output_publish import DiscardOnStop, OutputExistsError, owned_temporary, publish_output
 from .pixel_budget import MAX_INPUT_PIXELS, require_pixel_budget
 from .video_audio import add_converted_audio_stream, needs_audio_transcode, opus_packets
 from .video_normalization import display_frames, square_pixel_width
@@ -536,7 +536,11 @@ def _system_stream_export(
             destination = destination.with_name(
                 f"{destination.stem}_partial_{seconds // 60}m{seconds % 60:02d}s{destination.suffix}"
             )
-        final_cancel_event = None if stopped else cancel_event
+        final_cancel_event = (
+            None
+            if stopped or cancel_event is None
+            else DiscardOnStop(cancel_event, lambda: _should_keep_partial(keep_partial))
+        )
         source = Path(audio_source) if audio_source else None
         subtitles = Path(subtitle_source) if subtitle_source else None
         if can_keep_partial and (
@@ -962,7 +966,11 @@ def _encode_video(
             destination = destination.with_name(
                 f"{destination.stem}_partial_{seconds // 60}m{seconds % 60:02d}s{destination.suffix}"
             )
-        final_cancel_event = None if stopped else cancel_event
+        final_cancel_event = (
+            None
+            if stopped or cancel_event is None
+            else DiscardOnStop(cancel_event, lambda: _should_keep_partial(keep_partial))
+        )
 
         def publish(temporary: Path) -> None:
             if replace_existing:

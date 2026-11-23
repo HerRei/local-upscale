@@ -333,3 +333,65 @@ def test_a_photo_stopped_after_some_tiles_keeps_them_only_when_asked(tmp_path, m
     assert (pixels[0:8, 0:8] == 200).all()  # the finished tile as the model made it
     assert (pixels[8:, :] == (32, 64, 96)).all()  # the rest: a plain resize of the photo
     assert not list(scratch.glob("localsr-output-*.dat"))
+
+
+def test_a_stop_that_keeps_after_the_last_tile_saves_the_whole_photo(tmp_path, monkeypatch):
+    import localsr.worker.server as server_module
+
+    source = tmp_path / "photo.png"
+    Image.new("RGB", (8, 8), (32, 64, 96)).save(source)
+    scratch = tmp_path / "scratch"
+    messages = []
+    server = WorkerServer()
+    server.model_adapter = SimpleNamespace(
+        inspect=lambda path: NormalizedModelInfo("Test", 2, 3, 3, True, False, 1, 1, path, []),
+        release=lambda: None,
+    )
+
+    def process_image(**kwargs):
+        writer = OutputWriter((3, 16, 16), temporary_directory=scratch)
+        writer.mmap[:] = 150  # every tile done
+        server._request_cancel("job-0", keep_partial=True)
+        return writer
+
+    server.engine = SimpleNamespace(
+        process_image=process_image,
+        release_model=lambda *args: None,
+        release_models_except=lambda *args: None,
+    )
+    monkeypatch.setattr(server_module, "LatestPreviewEncoder", TestPreview)
+    monkeypatch.setattr(server, "reader_thread_func", lambda: None)
+    monkeypatch.setattr(
+        server_module,
+        "send_message",
+        lambda message: messages.append(json.loads(message.to_json())),
+    )
+    server.message_queue.put(
+        {
+            "type": "job_request",
+            "data": {
+                "job_id": "job-0",
+                "image_path": str(source),
+                "model_path": str(tmp_path / "model.pth"),
+                "output_path": str(tmp_path / "photo_upscaled_2x.png"),
+                "scratch_directory": str(scratch),
+                "output_format": "png",
+                "device": "cpu",
+                "precision": "fp32",
+                "tile_size": 64,
+                "halo": 8,
+                "jpeg_quality": 98,
+                "preserve_metadata": True,
+                "safe_memory": True,
+                "preview_enabled": False,
+            },
+        }
+    )
+    server.message_queue.put({"type": "shutdown_request"})
+    server.run()
+    terminal = [item for item in messages if item["type"] in {"job_completed", "job_cancelled"}]
+    assert [item["type"] for item in terminal] == ["job_completed"]
+    assert terminal[0]["data"]["partial"] is False
+    assert terminal[0]["data"]["output_path"].endswith("photo_upscaled_2x.png")
+    with Image.open(tmp_path / "photo_upscaled_2x.png") as result:
+        assert (np.asarray(result) == 150).all()
