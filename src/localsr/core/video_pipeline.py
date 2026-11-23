@@ -21,6 +21,7 @@ import torch
 from PIL import Image
 
 from .audio_denoise import cleaned_audio_source
+from .deflicker import AnalysisFrame, deflicker_stream, prepare_analysis_frame
 from .disk_space import require_video_room
 from .eta import RemainingTime
 from .face_compositing import blend_tile_outputs, classify_tile
@@ -99,85 +100,40 @@ def _prefetch(items, depth: int):
 
 
 def _deflicker_frames(
-    restored: Iterator[np.ndarray | TimedVideoFrame],
-    window: int,
-    cancel_event: threading.Event,
+    restored: Iterator[
+        TimedVideoFrame
+        | np.ndarray
+        | tuple[TimedVideoFrame | np.ndarray, AnalysisFrame | np.ndarray]
+    ],
+    window: int = 3,
+    cancel_event: threading.Event | None = None,
     on_frame: Callable[[int], None] | None = None,
     keep: Callable[[], bool] | None = None,
-) -> Iterator[np.ndarray | TimedVideoFrame]:
-    """Conservative, experimental smoothing of low-amplitude static-region flicker.
+    *,
+    device_str: str = "cpu",
+) -> Iterator[TimedVideoFrame | np.ndarray]:
+    """Source-driven de-flicker wrapper preserving the streaming/cancel contract.
 
-    Regions that differ by more than 12 levels bypass filtering, including
-    motion and hard cuts. A half-strength blend limits damage to low-contrast
-    details. This is not optical-flow restoration. Timing and bounded buffering
-    are preserved; edge frames use only their available neighbors.
+    ``window`` is kept for compatibility with callers that still pass it and is
+    ignored by the new engine (which uses a fixed +-3 frame shot window).
     """
-    if window < 2:
-        yield from restored
-        return
+    _ = window
 
-    left = (window - 1) // 2
-    right = window - 1 - left
-    buffer = deque()
-    next_emit = 0
-    last_index = -1
+    def paired():
+        for item in restored:
+            if isinstance(item, tuple):
+                yield item
+            else:
+                source = item.rgb if isinstance(item, TimedVideoFrame) else item
+                yield (item, source)
 
-    def median_for(index: int):
-        start = max(0, index - left)
-        end = index + right
-        selected = [frame for frame_index, frame in buffer if start <= frame_index <= end]
-        current = next(frame for frame_index, frame in buffer if frame_index == index)
-
-        def pixels(frame):
-            return frame.rgb if isinstance(frame, TimedVideoFrame) else frame
-
-        original = pixels(current)
-        stack = np.stack([pixels(frame) for frame in selected]).astype(np.int16)
-        static = np.max(np.abs(stack - original), axis=(0, 3)) <= 12
-        median = np.median(stack, axis=0)
-        blended = np.rint((original.astype(float) + median) / 2).astype(np.uint8)
-        output = np.where(static[..., None], blended, original)
-        return current.with_pixels(output) if isinstance(current, TimedVideoFrame) else output
-
-    def keeping() -> bool:
-        return keep is not None and keep()
-
-    # A stop that keeps the finished part still smooths and hands on the frames this
-    # filter holds back for its look-ahead; a stop that discards ends at once.
-    stopped = False
-    try:
-        for stream_index, frame in enumerate(restored):
-            if cancel_event.is_set() and not keeping():
-                raise InterruptedError("video job cancelled")
-            buffer.append((stream_index, frame))
-            last_index = stream_index
-            while next_emit + right <= stream_index:
-                if on_frame is not None:
-                    on_frame(next_emit)
-                yield median_for(next_emit)
-                next_emit += 1
-                minimum_needed = max(0, next_emit - left)
-                while buffer and buffer[0][0] < minimum_needed:
-                    buffer.popleft()
-    except InterruptedError:
-        if not keeping():
-            raise
-        stopped = True
-
-    # Flush the final frames with a shrinking look-ahead window. The deque
-    # remains bounded by `window`, even for multi-hour clips.
-    while next_emit <= last_index:
-        if cancel_event.is_set() and not keeping():
-            raise InterruptedError("video job cancelled")
-        if on_frame is not None:
-            on_frame(next_emit)
-        yield median_for(next_emit)
-        next_emit += 1
-        minimum_needed = max(0, next_emit - left)
-        while buffer and buffer[0][0] < minimum_needed:
-            buffer.popleft()
-    if stopped:
-        raise InterruptedError("video job cancelled")
+    yield from deflicker_stream(
+        paired(),
+        device_str=device_str,
+        cancel_event=cancel_event,
+        on_frame=on_frame,
+        keep=keep,
+    )
 
 
 @dataclass(frozen=True)
@@ -215,6 +171,7 @@ class VideoJobConfig:
     face_model_info: object | None = None
     face_detection_interval: int = 5
     deflicker: bool = False
+    # Kept in requests and settings for compatibility; ignored by the new deflicker engine.
     deflicker_window: int = 3
     output_scale: int | None = None
     face_fidelity: float = 0.7
@@ -647,7 +604,7 @@ def _run_video_frames(
     frames_since_detection = 0
     warned_unstable: set[int] = set()
 
-    def frame_generator() -> Iterator[TimedVideoFrame]:
+    def frame_generator() -> Iterator[TimedVideoFrame | tuple[TimedVideoFrame, AnalysisFrame]]:
         nonlocal inference_started_at
         nonlocal frames_processed
         nonlocal cached_face_mask
@@ -665,6 +622,7 @@ def _run_video_frames(
         if before_upscale and interpolation is not None:
             # On this thread, not the decoder's: one thread drives the GPU.
             decoded = interpolate_frames(decoded, interpolation, synthesizer, cancel_event)
+        source_analyses: deque[AnalysisFrame] = deque()
         if colour_index is not None:
             from .video_colour import colour_frames
 
@@ -692,8 +650,16 @@ def _run_video_frames(
                     if source_frame_cb is not None:
                         stride = max(1, int(np.ceil(max(item.rgb.shape[:2]) / 640)))
                         preview = item.rgb[::stride, ::stride].copy()
+                    analysis = prepare_analysis_frame(item.rgb) if config.deflicker else None
                     metadata.append(
-                        (item.index, item.timestamp, item.duration, item.time_base, preview)
+                        (
+                            item.index,
+                            item.timestamp,
+                            item.duration,
+                            item.time_base,
+                            preview,
+                            analysis,
+                        )
                     )
                     pixels = item.rgb
                     for preceding_index, preceding in enumerate(
@@ -753,9 +719,11 @@ def _run_video_frames(
                     input_pixels(), colourise, interval=COLOUR_KEYFRAME_INTERVAL
                 ):
                     first_output[0] = True
-                    index, timestamp, duration, time_base, preview = metadata.popleft()
+                    index, timestamp, duration, time_base, preview, analysis = metadata.popleft()
                     if preview is not None:
                         source_previews.append(preview)
+                    if analysis is not None:
+                        source_analyses.append(analysis)
                     yield TimedVideoFrame(index, pixels, timestamp, duration, time_base)
 
             decoded = colour_stream()
@@ -770,6 +738,13 @@ def _run_video_frames(
             if source_frame_cb is not None:
                 source = source_previews.popleft() if colour_index is not None else rgb
                 source_frame_cb(output_frame_index, total_frames, source)
+            source_analysis: AnalysisFrame | None = None
+            if config.deflicker:
+                source_analysis = (
+                    source_analyses.popleft()
+                    if colour_index is not None
+                    else prepare_analysis_frame(rgb)
+                )
 
             tensor = torch.from_numpy(rgb).permute(2, 0, 1) if preserve_hdr else rgb_to_tensor(rgb)
             float_options = {"float_output": True} if preserve_hdr else {}
@@ -1031,13 +1006,19 @@ def _run_video_frames(
                     remaining_time.remaining() if remaining_time else None,
                 )
 
-            yield source_frame.with_pixels(out_rgb)
+            restored_frame = source_frame.with_pixels(out_rgb)
+            if config.deflicker:
+                assert source_analysis is not None
+                yield (restored_frame, source_analysis)
+            else:
+                yield restored_frame
 
-    # Apply temporal de-flicker if enabled. The median filter wraps the
-    # restored-frame generator so the encoder receives smoothed frames.
+    # Apply temporal de-flicker if enabled. The source-driven filter wraps the
+    # restored-frame generator so the encoder receives stabilised frames.
     restored_frames = _release_after_last_frame(frame_generator(), engine, config.device_str)
     if config.deflicker:
         # Smoothing a large frame takes a moment of its own; the status names it.
+        # config.deflicker_window is accepted for request compatibility and unused.
         def report_deflicker(index: int) -> None:
             if stage_cb is not None:
                 stage_cb("deflickering", index + 1, total_frames)
@@ -1050,6 +1031,7 @@ def _run_video_frames(
             keep=lambda: _should_keep_partial(
                 config.keep_partial if keep_partial is None else keep_partial
             ),
+            device_str=config.device_str,
         )
     else:
         output_frames = restored_frames

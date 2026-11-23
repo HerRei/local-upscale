@@ -142,6 +142,7 @@ class VideoJobRequest:
     face_model_path: str | None = None
     face_fidelity: float = 0.7
     deflicker: bool = False
+    # Kept in the request schema for compatibility; ignored by the new deflicker engine.
     deflicker_window: int = 3
     # Temporal-engine routing. "spandrel_image" is the frame-by-frame path;
     # any other kind names vendored engine code and carries its bundle.
