@@ -1292,3 +1292,166 @@ def test_stopped_subtitle_packet_is_cut_at_both_ends():
     assert result is packet
     assert packet.pts == 0
     assert packet.duration == 1000
+
+
+def test_video_colour_preserves_timing_and_audio_with_sparse_keyframes(tmp_path):
+    from types import SimpleNamespace
+
+    source = _make_synthetic_video_with_audio(tmp_path / "colour-input.mp4", frames=24, fps=24)
+    output = tmp_path / "colour-output.mp4"
+    info = SimpleNamespace(architecture="DDColor", scale=1, in_channels=3, out_channels=3)
+
+    class StubEngine:
+        def __init__(self):
+            self.calls = 0
+
+        def load_model(self, *args):
+            pass
+
+        def switch_model(self, *args):
+            pass
+
+        def process_frame(self, *, img_tensor, **kwargs):
+            self.calls += 1
+            rgb = (img_tensor.numpy() * 255).astype(np.uint8)
+            rgb[0] = np.maximum(rgb[0], 150)
+            return rgb
+
+    engine = StubEngine()
+    config = VideoJobConfig(
+        video_path=str(source),
+        model_path="ddcolor.pth",
+        output_video_path=str(output),
+        model_info=info,
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=0,
+        safe_memory=False,
+        output_scale=1,
+        audio_path=str(source),
+        video_codec="vp9",
+    )
+    result = run_video_job(config, engine, threading.Event())
+    assert result.frames_processed == 24
+    source_frames = list(decode_timed_frames(str(source)))
+    output_frames = list(decode_timed_frames(str(output)))
+    assert len(output_frames) == 24
+    assert [float(frame.timestamp) for frame in output_frames] == pytest.approx(
+        [float(frame.timestamp) for frame in source_frames], abs=0.001
+    )
+    assert [float(frame.duration) for frame in output_frames] == pytest.approx(
+        [float(frame.duration) for frame in source_frames], abs=0.001
+    )
+    assert probe_video(str(output)).fps == pytest.approx(24, abs=0.1)
+    with av.open(str(output)) as container:
+        assert any(stream.type == "audio" for stream in container.streams)
+    assert engine.calls < 24
+
+
+def test_video_colour_runs_between_other_fixes_before_upscale(tmp_path):
+    from types import SimpleNamespace
+
+    from localsr.core.video_pipeline import VideoFixStage
+
+    source = _make_synthetic_video_with_audio(tmp_path / "ordered-input.mp4", frames=8, fps=8)
+    output = tmp_path / "ordered-output.mp4"
+    fix_info = SimpleNamespace(architecture="Dummy", scale=1, in_channels=3, out_channels=3)
+    colour_info = SimpleNamespace(architecture="DDColor", scale=1, in_channels=3, out_channels=3)
+    up_info = SimpleNamespace(architecture="Dummy", scale=2, in_channels=3, out_channels=3)
+
+    class StageEngine:
+        current = ""
+        colour_calls = 0
+        after_colour_calls = 0
+
+        def load_model(self, *args):
+            pass
+
+        def switch_model(self, path):
+            self.current = path
+
+        def process_frame(self, *, img_tensor, **kwargs):
+            pixels = (img_tensor.numpy() * 255).clip(0, 255).astype(np.uint8)
+            if self.current == "before":
+                pixels[:] = 100
+            elif self.current == "colour":
+                self.colour_calls += 1
+                assert pixels.mean() == pytest.approx(100, abs=1)
+                pixels[0] = 180
+                pixels[1:] = 70
+            elif self.current == "after":
+                self.after_colour_calls += 1
+                assert pixels[0].mean() > pixels[1].mean() + 20
+            elif self.current == "up":
+                pixels = np.repeat(np.repeat(pixels, 2, axis=1), 2, axis=2)
+            return pixels
+
+    engine = StageEngine()
+    config = VideoJobConfig(
+        video_path=str(source),
+        model_path="up",
+        output_video_path=str(output),
+        model_info=up_info,
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=0,
+        safe_memory=False,
+        output_scale=2,
+        audio_path=str(source),
+        video_codec="vp9",
+        preprocess_stages=(
+            VideoFixStage("before", fix_info, fix="noise"),
+            VideoFixStage("colour", colour_info, fix="colour"),
+            VideoFixStage("after", fix_info, fix="blur"),
+        ),
+    )
+    events = []
+    run_video_job(
+        config,
+        engine,
+        threading.Event(),
+        frame_started_cb=lambda index, total: events.append(("start", index)),
+        source_frame_cb=lambda index, total, pixels: events.append(("source", index)),
+    )
+    assert events == [
+        event for index in range(8) for event in (("start", index), ("source", index))
+    ]
+    assert engine.colour_calls == 1
+    assert engine.after_colour_calls == 8
+    probe = probe_video(str(output))
+    assert (probe.width, probe.height) == (FRAME_WIDTH * 2, FRAME_HEIGHT * 2)
+    assert len(list(decode_timed_frames(str(output)))) == 8
+
+
+def test_video_colour_is_refused_with_hdr_preservation(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    import localsr.core.video_pipeline as video_pipeline
+
+    source = _make_synthetic_video_with_audio(tmp_path / "hdr-colour.mp4", frames=4, fps=24)
+    real_probe = video_pipeline.probe_video
+
+    def hdr_probe(path):
+        return replace(real_probe(path), hdr_format="PQ")
+
+    monkeypatch.setattr(video_pipeline, "probe_video", hdr_probe)
+    monkeypatch.setattr(video_pipeline, "validate_hdr_encoder", lambda *args: None)
+    info = SimpleNamespace(architecture="DDColor", scale=1, in_channels=3, out_channels=3)
+    config = VideoJobConfig(
+        video_path=str(source),
+        model_path="ddcolor.pth",
+        output_video_path=str(tmp_path / "out.mkv"),
+        model_info=info,
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=0,
+        safe_memory=False,
+        output_scale=1,
+        hdr_mode="preserve",
+    )
+    with pytest.raises(ValueError, match="Colour is not yet supported with HDR"):
+        run_video_job(config, SimpleNamespace(), threading.Event())

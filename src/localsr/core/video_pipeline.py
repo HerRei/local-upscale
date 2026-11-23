@@ -254,6 +254,24 @@ def run_video_job(
 
     from .media_bridge import automatic_video_codec, decodable_source, validate_export
 
+    # Restore's last fix is represented as the primary model by the UI. Treat
+    # DDColor as a fix so the same temporal stage handles both restore modes.
+    if getattr(config.model_info, "architecture", "") == "DDColor":
+        config = replace(
+            config,
+            preprocess_stages=(
+                *config.preprocess_stages,
+                VideoFixStage(
+                    model_path=config.model_path,
+                    model_info=config.model_info,
+                    fix="colour",
+                    time_factor=config.primary_time_factor,
+                ),
+            ),
+            model_path="",
+            model_info=None,
+        )
+
     if config.video_codec == "auto":
         config = replace(
             config,
@@ -323,6 +341,8 @@ def _run_video_job(
         validate_hdr_encoder(config.video_codec, config.external_ffmpeg, config.container)
         if config.deflicker:
             raise ValueError("De-flicker is not yet supported with HDR preservation.")
+        if any(stage.fix == "colour" for stage in config.preprocess_stages):
+            raise ValueError("Colour is not yet supported with HDR preservation.")
     for stage in config.preprocess_stages:
         if int(getattr(stage.model_info, "scale", 0)) != 1:
             raise ValueError("A preprocessing restoration checkpoint must have native scale 1×.")
@@ -532,25 +552,113 @@ def _run_video_frames(
     frames_since_detection = 0
     warned_unstable: set[int] = set()
 
+    colour_indices = [
+        i
+        for i, stage in enumerate(config.preprocess_stages)
+        if stage.fix == "colour" or getattr(stage.model_info, "architecture", "") == "DDColor"
+    ]
+    if len(colour_indices) > 1:
+        raise ValueError("Only one video colour stage is supported.")
+    colour_index = colour_indices[0] if colour_indices else None
+
     def frame_generator() -> Iterator[TimedVideoFrame]:
         nonlocal inference_started_at
         nonlocal frames_processed
         nonlocal cached_face_mask
         nonlocal frames_since_detection
 
-        decoded = _prefetch(
-            decode_timed_frames(
-                config.video_path,
-                start_frame=config.start_frame,
-                end_frame=config.end_frame,
-                cancel_event=cancel_event,
-                hdr_mode=config.hdr_mode,
-            ),
-            4,
+        decoded = decode_timed_frames(
+            config.video_path,
+            start_frame=config.start_frame,
+            end_frame=config.end_frame,
+            cancel_event=cancel_event,
+            hdr_mode=config.hdr_mode,
         )
+        if colour_index is None:
+            decoded = _prefetch(decoded, 4)
         if before_upscale and interpolation is not None:
             # On this thread, not the decoder's: one thread drives the GPU.
             decoded = interpolate_frames(decoded, interpolation, synthesizer, cancel_event)
+        if colour_index is not None:
+            from .video_colour import colour_frames
+
+            metadata = deque()
+            source_previews = deque()
+            colour_input = decoded
+            stage = config.preprocess_stages[colour_index]
+
+            def input_pixels():
+                nonlocal inference_started_at
+                for item in colour_input:
+                    if cancel_event.is_set():
+                        raise InterruptedError("video job cancelled")
+                    if inference_started_at is None:
+                        inference_started_at = time.perf_counter()
+                    # The UI uses a 640 px preview. Keep that small proxy with the
+                    # timing metadata until the corresponding output is ready.
+                    preview = None
+                    if source_frame_cb is not None:
+                        stride = max(1, int(np.ceil(max(item.rgb.shape[:2]) / 640)))
+                        preview = item.rgb[::stride, ::stride].copy()
+                    metadata.append(
+                        (item.index, item.timestamp, item.duration, item.time_base, preview)
+                    )
+                    pixels = item.rgb
+                    for preceding_index, preceding in enumerate(
+                        config.preprocess_stages[:colour_index]
+                    ):
+                        engine.switch_model(preceding.model_path)
+                        try:
+                            output = engine.process_frame(
+                                img_tensor=rgb_to_tensor(pixels),
+                                model_info=preceding.model_info,
+                                tile_size=config.tile_size,
+                                halo=max(config.halo, preceding.halo),
+                                cancel_event=cancel_event,
+                                progress_callback=lambda *_: None,
+                                safe_memory=config.safe_memory,
+                                whole_frame=True,
+                            )
+                        except UnstableRestorationError as error:
+                            if preceding_index not in warned_unstable:
+                                warned_unstable.add(preceding_index)
+                                note = (
+                                    f"The {preceding.fix or 'restoration'} fix "
+                                    f"({preceding.model_id or preceding.model_path}) was "
+                                    f"skipped for one or more frames because the model became "
+                                    f"unstable: {error}"
+                                )
+                                if warning_callback is not None:
+                                    warning_callback(note)
+                                add_note = getattr(engine, "add_note", None)
+                                if callable(add_note):
+                                    add_note(note)
+                        else:
+                            pixels = uint8_chw_to_rgb_hwc(output)
+                    yield pixels
+
+            def colourise(pixels):
+                engine.switch_model(stage.model_path)
+                result = engine.process_frame(
+                    img_tensor=rgb_to_tensor(pixels),
+                    model_info=stage.model_info,
+                    tile_size=config.tile_size,
+                    halo=max(config.halo, stage.halo),
+                    cancel_event=cancel_event,
+                    progress_callback=lambda *_: None,
+                    safe_memory=config.safe_memory,
+                    whole_frame=True,
+                )
+                return uint8_chw_to_rgb_hwc(result)
+
+            def colour_stream():
+                for pixels in colour_frames(input_pixels(), colourise):
+                    index, timestamp, duration, time_base, preview = metadata.popleft()
+                    if preview is not None:
+                        source_previews.append(preview)
+                    yield TimedVideoFrame(index, pixels, timestamp, duration, time_base)
+
+            decoded = colour_stream()
         for output_frame_index, source_frame in enumerate(decoded):
             rgb = source_frame.rgb
             if cancel_event.is_set():
@@ -560,7 +668,8 @@ def _run_video_frames(
             if frame_started_cb is not None:
                 frame_started_cb(output_frame_index, total_frames)
             if source_frame_cb is not None:
-                source_frame_cb(output_frame_index, total_frames, rgb)
+                source = source_previews.popleft() if colour_index is not None else rgb
+                source_frame_cb(output_frame_index, total_frames, source)
 
             tensor = torch.from_numpy(rgb).permute(2, 0, 1) if preserve_hdr else rgb_to_tensor(rgb)
             float_options = {"float_output": True} if preserve_hdr else {}
@@ -614,8 +723,12 @@ def _run_video_frames(
                 """Tile timing is reported by ``tile_callback``; the engine requires a callback."""
 
             try:
-                last_fix_chw: np.ndarray | None = None
+                last_fix_chw: np.ndarray | None = (
+                    rgb.transpose(2, 0, 1) if colour_index is not None else None
+                )
                 for stage_index, stage in enumerate(config.preprocess_stages):
+                    if colour_index is not None and stage_index <= colour_index:
+                        continue
                     if cancel_event.is_set():
                         raise InterruptedError("video job cancelled")
                     engine.switch_model(stage.model_path)
@@ -845,7 +958,8 @@ def _run_video_frames(
                 output_frames = report_interpolation_done(output_frames)
         fps = interpolation.output_fps(fps)
     # Restore the next frames while the encoder writes the previous ones.
-    output_frames = _prefetch(output_frames, 2)
+    if colour_index is None:
+        output_frames = _prefetch(output_frames, 2)
 
     # The encoder consumes the generator directly so frames never accumulate
     # in memory beyond what PyAV's internal buffers hold. Compatible audio and

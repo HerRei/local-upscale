@@ -48,15 +48,15 @@ tile borders differ more from a whole-image run than Best's. Model choice
 changes speed, memory use and visual results; compare a representative crop before
 processing a large folder.
 
-## Photo colorization (DDColor)
+## Colour (DDColor)
 
 Under **Restore first** (and **Restore** at 1×), the **Colour** option adds colour to
 black-and-white photos using DDColor-L (911.9 MB). Colours are a guess. LocalSR converts the photo to Lab, runs
 DDColor on the luminance channel of the photo resized to 512×512, resizes the predicted colour
 channels back, and combines them with the original full-resolution luminance so
 sharpness and fine detail stay intact. Already colourful photos still run with a
-note in the job details. Colour is for still photos only; video Restore first does
-not offer it. On DirectML, OpenVINO, and the Apple Neural Engine route, DDColor
+note in the job details. Videos use the same model on selected frames and carry colour
+between frames, resetting at cuts. On DirectML, OpenVINO, and the Apple Neural Engine route, DDColor
 runs on the CPU or PyTorch Apple GPU instead.
 
 ## Author credit and checkpoint terms

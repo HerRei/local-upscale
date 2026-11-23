@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.6.0-beta] - Unreleased
+
+- **Colour for video.** Black-and-white videos can be coloured under Restore and Restore first. Colours are carried from frame to frame, so they stay steady (#164).
+
 ## [0.5.2-beta] - 2026-11-23
 
 - **Engine manager.** One main download per OS starts LocalSR. After setup, the app
