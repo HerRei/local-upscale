@@ -2306,7 +2306,12 @@
       task === 'denoise' || (task === 'video' && targetVideoTask === 'denoise');
     const switchingToVideoRestore =
       targetRestoring && task === 'video' && !(settings.task === 'video' && restoring);
-    const videoFixes = settings.fix_stages;
+    // Colour picked for photos is not carried to a video: on a colour video it would
+    // replace the real colours, so a video gets Colour only when it is chosen there.
+    const enteringVideo = task === 'video' && settings.task !== 'video';
+    const videoFixes = enteringVideo
+      ? settings.fix_stages.filter((selection) => selection.fix !== 'colour')
+      : settings.fix_stages;
     const needsDefaultNoise = switchingToVideoRestore && videoFixes.length === 0;
     const models = modelsForTask(snapshot, task, targetVideoTask);
     // Keep a manual choice that still fits the task; otherwise the active
@@ -2318,6 +2323,9 @@
     updateSettings({
       task,
       ...(task === 'video' ? { video_task: targetVideoTask } : {}),
+      ...(videoFixes !== settings.fix_stages
+        ? { fix_stages: videoFixes, fixes: videoFixes.map((selection) => selection.fix) }
+        : {}),
       ...(targetRestoring ? { selected_video_model_id: 'frame_by_frame' } : {}),
       selected_model_id: kept?.model_id ?? '',
       output_scale: targetRestoring
@@ -2334,7 +2342,7 @@
               model_id: kept && fitsFix(kept, 'noise') ? kept.model_id : '',
             },
           ]
-        : settings.fix_stages;
+        : videoFixes;
       resolveRecipe(
         {
           quality: activeQuality === 'quick' || activeQuality === 'best' ? activeQuality : 'quick',
@@ -4548,6 +4556,9 @@
                                     selectedMedia?.fps ?? 0,
                                   )
                                 : '',
+                              settings.video_interpolation_order === 'before_upscale'
+                                ? 'before upscaling'
+                                : 'after upscaling',
                               'Labs',
                             ]
                               .filter(Boolean)
@@ -4606,6 +4617,27 @@
                               title="Move later"
                               aria-label={`Move the ${FIX_NAMES[stage.fix!]} fix later`}
                               on:click={() => void moveFix(stage.fix!, 1)}>↓</button
+                            >{/if}
+                        </span>
+                      {:else if stage.kind === 'interpolate'}
+                        <!-- Interpolation runs first (before upscaling) or last (after it). -->
+                        <span class="plan-moves">
+                          {#if settings.video_interpolation_order === 'before_upscale'}<button
+                              class="move-button"
+                              type="button"
+                              title="Interpolate after upscaling (faster)"
+                              aria-label="Interpolate after upscaling"
+                              on:click={() =>
+                                updateSettings({ video_interpolation_order: 'after_upscale' })}
+                              >↓</button
+                            >{:else}<button
+                              class="move-button"
+                              type="button"
+                              title="Interpolate before upscaling (smoother, slower)"
+                              aria-label="Interpolate before upscaling"
+                              on:click={() =>
+                                updateSettings({ video_interpolation_order: 'before_upscale' })}
+                              >↑</button
                             >{/if}
                         </span>
                       {/if}

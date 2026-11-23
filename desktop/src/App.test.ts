@@ -1781,6 +1781,35 @@ describe('LocalSR desktop interface', () => {
     );
   });
 
+  it('moves interpolation before or after upscaling from the plan list', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.settings.task = 'video';
+    snapshot.settings.video_interpolation = 'x2';
+    snapshot.settings.video_interpolation_order = 'after_upscale';
+    snapshot.catalog.interpolation_models.forEach((model) => (model.installed = true));
+    const user = await mountWith(snapshot);
+    const stages = screen.getByRole('list', { name: 'Stages' });
+    expect(within(stages).getByText(/after upscaling/)).toBeTruthy();
+    expect(
+      within(stages).queryByRole('button', { name: 'Interpolate after upscaling' }),
+    ).toBeNull();
+    await user.click(within(stages).getByRole('button', { name: 'Interpolate before upscaling' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ video_interpolation_order: 'before_upscale' }),
+      ),
+    );
+    await waitFor(() => expect(within(stages).getByText(/before upscaling/)).toBeTruthy());
+    const rows = within(stages).getAllByRole('listitem');
+    const order = rows.map((row) => row.textContent ?? '');
+    expect(order.findIndex((text) => text.includes('RIFE'))).toBeLessThan(
+      order.findIndex((text) => /Upscale/.test(text)),
+    );
+    expect(
+      within(stages).getByRole('button', { name: 'Interpolate after upscaling' }),
+    ).toBeTruthy();
+  });
+
   it('downloads the interpolation model when Start needs it', async () => {
     const snapshot = readySnapshot([video('clip', true)]);
     snapshot.settings.task = 'video';
@@ -7205,9 +7234,16 @@ describe('Model folder and Windows CPU GPU download notice', () => {
       ),
     );
 
-    // Switching to a video keeps Colour available under both tasks.
+    // Switching to a video keeps Colour available under both tasks, but the photo's
+    // Colour choice is not carried over: a colour video would be recoloured.
     await user.click(screen.getByRole('button', { name: /▶\s*clip\.mp4/ }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Colour' })).toBeTruthy());
+    expect(screen.getByRole('button', { name: 'Colour' }).getAttribute('aria-pressed')).toBe(
+      'false',
+    );
+    expect(api.saveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ task: 'video', fixes: [] }),
+    );
     await user.click(screen.getByRole('button', { name: /^Upscale/ }));
     expect(screen.getByRole('button', { name: 'Colour' }).getAttribute('title')).toBe(
       'Adds colour to black-and-white videos',

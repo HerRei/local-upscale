@@ -14,7 +14,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import torch
@@ -474,6 +474,33 @@ def _run_video_job(
         )
 
 
+def _video_has_colour(config: "VideoJobConfig", sample_frames: int = 3) -> bool:
+    """True when the first frames carry real colour (the photo colour check, per frame)."""
+    import cv2
+
+    from localsr.image_models.ddcolor import COLORFUL_INPUT_CHROMA_THRESHOLD
+
+    start = config.start_frame or 0
+    for _, item in zip(
+        range(sample_frames),
+        decode_timed_frames(
+            config.video_path,
+            start_frame=start,
+            end_frame=start + sample_frames,
+            hdr_mode=config.hdr_mode,
+        ),
+        strict=False,
+    ):
+        rgb = item.rgb
+        if rgb.dtype != np.uint8:
+            rgb = (np.clip(rgb, 0, 1) * 255).astype(np.uint8)
+        lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB).astype(np.float32)
+        chroma = float(np.hypot(lab[:, :, 1] - 128.0, lab[:, :, 2] - 128.0).mean())
+        if chroma > COLORFUL_INPUT_CHROMA_THRESHOLD:
+            return True
+    return False
+
+
 def _run_video_frames(
     config: VideoJobConfig,
     engine: InferenceEngine,
@@ -564,6 +591,22 @@ def _run_video_frames(
     if len(colour_indices) > 1:
         raise ValueError("Only one video colour stage is supported.")
     colour_index = colour_indices[0] if colour_indices else None
+    if colour_index is not None and _video_has_colour(config):
+        # Colour invents colours for black-and-white footage; on a colour video it
+        # would replace the real colours with guesses.
+        note = "This video already has colour, so Colour was skipped."
+        config = replace(
+            config,
+            preprocess_stages=tuple(
+                stage for i, stage in enumerate(config.preprocess_stages) if i != colour_index
+            ),
+        )
+        colour_index = None
+        if warning_callback is not None:
+            warning_callback(note)
+        add_note = getattr(engine, "add_note", None)
+        if callable(add_note):
+            add_note(note)
 
     def frame_generator() -> Iterator[TimedVideoFrame]:
         nonlocal inference_started_at

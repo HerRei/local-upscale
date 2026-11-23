@@ -1515,3 +1515,94 @@ def test_the_frame_loop_is_reported_after_audio_cleanup(tmp_path):
     )
     run_video_job(config, StubEngine(), threading.Event(), stage_cb=stages.append)
     assert "reading_frames" in stages
+
+
+def test_video_colour_is_skipped_with_a_note_when_the_video_has_colour(tmp_path):
+    import subprocess
+    from types import SimpleNamespace
+
+    from localsr.core.video_pipeline import _video_has_colour
+
+    source = tmp_path / "colourful.mp4"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=96x64:rate=24",
+            "-frames:v",
+            "8",
+            "-pix_fmt",
+            "yuv420p",
+            str(source),
+        ],
+        check=True,
+        stdin=subprocess.DEVNULL,
+    )
+    assert _video_has_colour(
+        SimpleNamespace(video_path=str(source), start_frame=0, hdr_mode="reject")
+    )
+    grey = tmp_path / "grey.mp4"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-y",
+            "-i",
+            str(source),
+            "-vf",
+            "format=gray,format=yuv420p",
+            str(grey),
+        ],
+        check=True,
+        stdin=subprocess.DEVNULL,
+    )
+    assert not _video_has_colour(
+        SimpleNamespace(video_path=str(grey), start_frame=0, hdr_mode="reject")
+    )
+
+    info = SimpleNamespace(architecture="DDColor", scale=1, in_channels=3, out_channels=3)
+
+    class StubEngine:
+        def __init__(self):
+            self.calls = 0
+            self.notes = []
+
+        def load_model(self, *args):
+            pass
+
+        def switch_model(self, *args):
+            pass
+
+        def add_note(self, note):
+            self.notes.append(note)
+
+        def process_frame(self, *, img_tensor, **kwargs):
+            self.calls += 1
+            return (img_tensor.numpy() * 255).astype(np.uint8)
+
+    engine = StubEngine()
+    warnings = []
+    config = VideoJobConfig(
+        video_path=str(source),
+        model_path="ddcolor.pth",
+        output_video_path=str(tmp_path / "out.mp4"),
+        model_info=info,
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=0,
+        safe_memory=False,
+        output_scale=1,
+        video_codec="vp9",
+    )
+    result = run_video_job(config, engine, threading.Event(), warning_callback=warnings.append)
+    assert result.frames_processed == 8
+    assert engine.calls == 0
+    assert warnings == ["This video already has colour, so Colour was skipped."]
+    assert engine.notes == warnings
