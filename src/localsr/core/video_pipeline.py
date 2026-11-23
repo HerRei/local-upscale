@@ -32,6 +32,8 @@ from .media_codecs import EXTERNAL_OUTPUT_CODECS, validate_output
 from .tiling import generate_tiles
 from .video_io import (
     TimedVideoFrame,
+    _should_keep_partial,
+    count_video_frames,
     decode_timed_frames,
     encode_video,
     probe_video,
@@ -101,6 +103,7 @@ def _deflicker_frames(
     window: int,
     cancel_event: threading.Event,
     on_frame: Callable[[int], None] | None = None,
+    keep: Callable[[], bool] | None = None,
 ) -> Iterator[np.ndarray | TimedVideoFrame]:
     """Conservative, experimental smoothing of low-amplitude static-region flicker.
 
@@ -136,24 +139,35 @@ def _deflicker_frames(
         output = np.where(static[..., None], blended, original)
         return current.with_pixels(output) if isinstance(current, TimedVideoFrame) else output
 
-    for stream_index, frame in enumerate(restored):
-        if cancel_event.is_set():
-            raise InterruptedError("video job cancelled")
-        buffer.append((stream_index, frame))
-        last_index = stream_index
-        while next_emit + right <= stream_index:
-            if on_frame is not None:
-                on_frame(next_emit)
-            yield median_for(next_emit)
-            next_emit += 1
-            minimum_needed = max(0, next_emit - left)
-            while buffer and buffer[0][0] < minimum_needed:
-                buffer.popleft()
+    def keeping() -> bool:
+        return keep is not None and keep()
+
+    # A stop that keeps the finished part still smooths and hands on the frames this
+    # filter holds back for its look-ahead; a stop that discards ends at once.
+    stopped = False
+    try:
+        for stream_index, frame in enumerate(restored):
+            if cancel_event.is_set() and not keeping():
+                raise InterruptedError("video job cancelled")
+            buffer.append((stream_index, frame))
+            last_index = stream_index
+            while next_emit + right <= stream_index:
+                if on_frame is not None:
+                    on_frame(next_emit)
+                yield median_for(next_emit)
+                next_emit += 1
+                minimum_needed = max(0, next_emit - left)
+                while buffer and buffer[0][0] < minimum_needed:
+                    buffer.popleft()
+    except InterruptedError:
+        if not keeping():
+            raise
+        stopped = True
 
     # Flush the final frames with a shrinking look-ahead window. The deque
     # remains bounded by `window`, even for multi-hour clips.
     while next_emit <= last_index:
-        if cancel_event.is_set():
+        if cancel_event.is_set() and not keeping():
             raise InterruptedError("video job cancelled")
         if on_frame is not None:
             on_frame(next_emit)
@@ -162,6 +176,8 @@ def _deflicker_frames(
         minimum_needed = max(0, next_emit - left)
         while buffer and buffer[0][0] < minimum_needed:
             buffer.popleft()
+    if stopped:
+        raise InterruptedError("video job cancelled")
 
 
 @dataclass(frozen=True)
@@ -231,6 +247,7 @@ class VideoJobResult:
     inference_seconds: float
     partial: bool = False
     kept_seconds: float = 0.0
+    kept_frames: int = 0
 
 
 def run_video_job(
@@ -1026,7 +1043,13 @@ def _run_video_frames(
                 stage_cb("deflickering", index + 1, total_frames)
 
         output_frames = _deflicker_frames(
-            restored_frames, config.deflicker_window, cancel_event, report_deflicker
+            restored_frames,
+            config.deflicker_window,
+            cancel_event,
+            report_deflicker,
+            keep=lambda: _should_keep_partial(
+                config.keep_partial if keep_partial is None else keep_partial
+            ),
         )
     else:
         output_frames = restored_frames
@@ -1097,6 +1120,9 @@ def _run_video_frames(
         kept_seconds=probe_video(output_path).duration_seconds
         if output_path != config.output_video_path
         else 0.0,
+        kept_frames=count_video_frames(output_path)
+        if output_path != config.output_video_path
+        else 0,
         elapsed_seconds=completed_at - job_started_at,
         inference_seconds=(completed_at - (inference_started_at or completed_at)),
     )

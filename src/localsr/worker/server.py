@@ -1067,6 +1067,7 @@ class WorkerServer:
             emit=send_message,
             emit_preview=self._emit_live_preview,
             preview_factory=LatestPreviewEncoder,
+            keep_partial=lambda: self._keep_partial_for_job(job_id),
         ).run(job_id, data)
 
     @staticmethod
@@ -1444,9 +1445,10 @@ class WorkerServer:
                 emitted = 0
                 previous_tail = first_chunk[-overlap:] if overlap > 0 else []
                 first_chunk.clear()
+                # The frames of a finished window always go to the encoder: on Discard
+                # it stops reading them, on Keep they belong to the finished part. A
+                # stop takes effect between windows.
                 for frame in first_out:
-                    if self.cancel_event.is_set():
-                        raise InterruptedError("video job cancelled")
                     preview_encoder.submit(
                         job_id=job_id,
                         preview_kind="video",
@@ -1471,8 +1473,6 @@ class WorkerServer:
                     output = process_chunk(chunk, list(previous_tail))
                     previous_tail = chunk[-overlap:] if overlap > 0 else []
                     for frame in output:
-                        if self.cancel_event.is_set():
-                            raise InterruptedError("video job cancelled")
                         preview_encoder.submit(
                             job_id=job_id,
                             preview_kind="video",
@@ -1548,16 +1548,19 @@ class WorkerServer:
         elapsed = _time.monotonic() - started_at
         partial = bool(written_path) and str(written_path) != str(output_path)
         kept_seconds = 0.0
+        kept_frames = 0
         if partial:
-            from localsr.core.video_io import probe_video
+            from localsr.core.video_io import count_video_frames, probe_video
 
             kept_seconds = probe_video(str(written_path)).duration_seconds
+            kept_frames = count_video_frames(str(written_path))
         send_message(
             VideoJobCompleted(
                 job_id=job_id,
                 output_path=str(written_path) if partial else output_path,
                 partial=partial,
                 kept_seconds=kept_seconds,
+                kept_frames=kept_frames,
                 frames_processed=state["done"],
                 elapsed_seconds=float(elapsed),
                 inference_seconds=float(elapsed),
@@ -2037,6 +2040,7 @@ class WorkerServer:
                 output_path=result.output_path,
                 partial=result.partial,
                 kept_seconds=result.kept_seconds,
+                kept_frames=result.kept_frames,
                 frames_processed=result.frames_processed,
                 elapsed_seconds=result.elapsed_seconds,
                 inference_seconds=result.inference_seconds,

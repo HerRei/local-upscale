@@ -269,6 +269,7 @@ def patched_worker(monkeypatch, tmp_path, *, installed=True):
             inference_seconds=1.0,
             partial=False,
             kept_seconds=0.0,
+            kept_frames=0,
         )
 
     monkeypatch.setattr(rife_engine, "RifeSynthesizer", FakeRife)

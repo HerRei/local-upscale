@@ -462,6 +462,7 @@ def test_video_worker_accepts_colour_stage(tmp_path, monkeypatch):
             inference_seconds=1.0,
             partial=False,
             kept_seconds=0.0,
+            kept_frames=0,
         )
 
     monkeypatch.setattr("localsr.worker.server.run_video_job", run)

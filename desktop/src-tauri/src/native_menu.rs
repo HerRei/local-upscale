@@ -73,11 +73,18 @@ enum LayoutEntry {
         accelerator: Option<String>,
     },
     Separator,
+    // The app menu exists on macOS only; elsewhere the window's own controls do this.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     About,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Services,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Hide,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     HideOthers,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     ShowAll,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Quit,
     Minimize,
     Maximize,

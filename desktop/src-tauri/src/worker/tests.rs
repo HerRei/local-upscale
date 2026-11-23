@@ -2586,7 +2586,7 @@ fn de_flickering_is_named_and_keeps_the_progress_and_estimate() {
 }
 
 #[test]
-fn every_video_engine_can_keep_its_finished_part_but_photos_cannot() {
+fn videos_and_photos_can_keep_their_finished_part() {
     let directory = tempfile::tempdir().unwrap();
     let state = batch_state(directory.path());
     let video = |kind: &str| {
@@ -2597,5 +2597,25 @@ fn every_video_engine_can_keep_its_finished_part_but_photos_cannot() {
     assert!(job_can_keep_partial(&state, &video("spandrel_image")));
     assert!(job_can_keep_partial(&state, &video("seedvr2")));
     let photo = json!({"type": "job_request", "data": {"image_path": "/p.jpg"}});
-    assert!(!job_can_keep_partial(&state, &photo));
+    assert!(job_can_keep_partial(&state, &photo));
+}
+
+#[test]
+fn a_kept_part_is_named_in_frames_below_a_second_and_in_tiles_for_a_photo() {
+    assert_eq!(
+        stopped_title(&json!({"kept_seconds": 0.074, "kept_frames": 2})),
+        "Stopped, kept 2 frames"
+    );
+    assert_eq!(
+        stopped_title(&json!({"kept_seconds": 75.4, "kept_frames": 1885})),
+        "Stopped, kept 1:15"
+    );
+    assert_eq!(
+        stopped_title(&json!({"finished_tiles": [[0, 0, 8, 8], [8, 0, 8, 8]], "total_tiles": 6})),
+        "Stopped, kept 2 of 6 tiles"
+    );
+    assert_eq!(
+        partial_record(&json!({"kept_seconds": 0.074, "kept_frames": 2})),
+        json!({"kept_seconds": 0.074, "kept_frames": 2})
+    );
 }

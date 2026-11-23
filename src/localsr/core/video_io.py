@@ -40,7 +40,7 @@ from .media_codecs import (
 )
 from .output_publish import OutputExistsError, owned_temporary, publish_output
 from .pixel_budget import MAX_INPUT_PIXELS, require_pixel_budget
-from .video_audio import add_opus_stream, needs_audio_transcode, opus_packets
+from .video_audio import add_converted_audio_stream, needs_audio_transcode, opus_packets
 from .video_normalization import display_frames, square_pixel_width
 
 
@@ -447,6 +447,18 @@ def validate_hdr_encoder(
             require_bundled_encoder(encode_spec(video_codec, hdr=True))
     except (av.FFmpegError, ValueError, RuntimeError) as error:
         raise VideoStageError("HDR encode", str(error)) from error
+
+
+def count_video_frames(path: str) -> int:
+    """The frames of a written video: its stream's own count, else its packets, read
+    without decoding. A kept part of two frames has no frame rate a probe could use."""
+    with av.open(str(path)) as container:
+        if not container.streams.video:
+            return 0
+        stream = container.streams.video[0]
+        if stream.frames:
+            return int(stream.frames)
+        return sum(1 for packet in container.demux(stream) if packet.size)
 
 
 def _should_keep_partial(keep_partial: bool | Callable[[], bool]) -> bool:
@@ -1118,7 +1130,9 @@ def _remux_source_streams(
                 or needs_audio_transcode(stream, container_format)
                 or (reencode_audio and normalize_container(container_format) != "mkv")
             ):
-                converted_audio[stream.index] = add_opus_stream(output_container, stream)
+                converted_audio[stream.index] = add_converted_audio_stream(
+                    output_container, stream, container_format
+                )
                 continue
             try:
                 auxiliary_outputs[stream.index] = output_container.add_stream_from_template(stream)

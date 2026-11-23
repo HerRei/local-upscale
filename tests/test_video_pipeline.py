@@ -995,6 +995,7 @@ def test_worker_server_runs_video_job_with_stages_payload(tmp_path, monkeypatch)
             inference_seconds=0.1,
             partial=False,
             kept_seconds=0.0,
+            kept_frames=0,
             notes=[],
         )
 
@@ -1174,6 +1175,7 @@ def test_worker_server_1x_upscale_skips_inspecting_sr_model(tmp_path, monkeypatc
             inference_seconds=0.1,
             partial=False,
             kept_seconds=0.0,
+            kept_frames=0,
             notes=[],
         )
 
@@ -1723,3 +1725,31 @@ def test_deflicker_reports_each_frame_it_smooths():
     out = list(_deflicker_frames(iter(frames), 3, threading.Event(), reported.append))
     assert len(out) == 5
     assert reported == [0, 1, 2, 3, 4]
+
+
+def test_deflicker_hands_on_its_held_back_frame_when_a_stop_keeps_the_finished_part():
+    """Bug hunt 2026-11-23: 20 finished frames, 19 in the kept part."""
+    import threading
+
+    from localsr.core.video_pipeline import _deflicker_frames
+
+    cancel = threading.Event()
+    frames = [np.full((4, 4, 3), 10 + index, dtype=np.uint8) for index in range(5)]
+
+    def upstream():
+        yield from frames
+        cancel.set()
+        raise InterruptedError("stopped")
+
+    kept = []
+    with pytest.raises(InterruptedError):
+        for frame in _deflicker_frames(upstream(), 3, cancel, keep=lambda: True):
+            kept.append(frame)
+    assert len(kept) == 5
+
+    discarded = []
+    cancel.clear()
+    with pytest.raises(InterruptedError):
+        for frame in _deflicker_frames(upstream(), 3, cancel, keep=lambda: False):
+            discarded.append(frame)
+    assert len(discarded) == 4  # the held-back frame goes with the discarded job

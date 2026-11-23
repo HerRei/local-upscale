@@ -953,7 +953,45 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
     Ok(Dispatch::Sent)
 }
 
+/// The status line after a stop that kept the finished part.
+fn stopped_title(data: &Value) -> String {
+    let tiles = integer(data, "total_tiles");
+    if tiles > 0 {
+        let done = data["finished_tiles"].as_array().map_or(0, Vec::len);
+        return format!("Stopped, kept {done} of {tiles} tiles");
+    }
+    let kept = seconds(data, "kept_seconds");
+    let frames = integer(data, "kept_frames");
+    if kept < 1.0 && frames > 0 {
+        return format!(
+            "Stopped, kept {frames} {}",
+            if frames == 1 { "frame" } else { "frames" }
+        );
+    }
+    let duration = kept.floor() as u64;
+    format!("Stopped, kept {}:{:02}", duration / 60, duration % 60)
+}
+
+/// What results.rs shows of a kept part, from the completion message.
+fn partial_record(data: &Value) -> Value {
+    if integer(data, "total_tiles") > 0 {
+        json!({
+            "finished_tiles": data["finished_tiles"].clone(),
+            "total_tiles": integer(data, "total_tiles"),
+        })
+    } else {
+        json!({
+            "kept_seconds": seconds(data, "kept_seconds"),
+            "kept_frames": integer(data, "kept_frames"),
+        })
+    }
+}
+
 fn job_can_keep_partial(state: &AppState, message: &Value) -> bool {
+    // A photo keeps its finished tiles (the worker saves them only once one is done).
+    if message["type"].as_str() == Some("job_request") {
+        return true;
+    }
     if message["type"].as_str() != Some("video_job_request") {
         return false;
     }
@@ -1654,6 +1692,13 @@ fn apply_background_photo(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> A
             let database = lock(&state.database)?;
             database.finish_job(&id, "completed", &output, &string(data, "notes"))?;
             database.record_job_duration(&id, seconds(data, "elapsed_seconds"))?;
+            if data
+                .get("partial")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                database.record_partial(&id, &partial_record(data))?;
+            }
             drop(database);
             let mut runtime = lock(&state.runtime)?;
             // The result shown after the batch belongs to last_output_path.
@@ -2300,8 +2345,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
             let stopped = if partial {
-                let duration = seconds(data, "kept_seconds").floor() as u64;
-                format!("Stopped, kept {}:{:02}", duration / 60, duration % 60)
+                stopped_title(data)
             } else {
                 String::new()
             };
@@ -2314,6 +2358,9 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             }
             lock(&state.database)?.finish_job(&id, "completed", &output, &notes)?;
             lock(&state.database)?.record_job_duration(&id, seconds(data, "elapsed_seconds"))?;
+            if partial {
+                lock(&state.database)?.record_partial(&id, &partial_record(data))?;
+            }
             let mut runtime = lock(&state.runtime)?;
             runtime.take_active_job();
             // A video frame thumbnail is a live preview, not a completed
@@ -2835,6 +2882,7 @@ fn video_stage_title(stage: &str) -> &'static str {
         "loading_model" => "Loading video model",
         "colour_preparing" => "Adding colour",
         "deflickering" => "De-flickering",
+        "partial_finalizing" => "Saving the finished part",
         "loading_interpolation" => "Loading frame interpolation",
         "reading_frames" => "Reading video frames",
         "preparing_clip" => "Preparing clip",

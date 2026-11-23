@@ -38,7 +38,9 @@ pub fn ensure_not_linked(path: &Path) -> crate::error::AppResult<()> {
 
 /// The columns `summary_from_row` reads, in its order.
 pub const SUMMARY_COLUMNS: &str =
-    "id, updated_at, status, output_path, error, elapsed_seconds, request_json, ui_json, (SELECT fps FROM media WHERE media.id=jobs.media_id), (SELECT duration_seconds FROM media WHERE media.id=jobs.media_id)";
+    "id, updated_at, status, output_path, error, elapsed_seconds, request_json, ui_json, (SELECT fps FROM media WHERE media.id=jobs.media_id), (SELECT duration_seconds FROM media WHERE media.id=jobs.media_id), partial_json";
+/// How many columns `SUMMARY_COLUMNS` has: a query that appends its own reads them after.
+pub const SUMMARY_COLUMN_COUNT: usize = 11;
 
 /// Host-only labels recorded when a job is queued. They never enter the worker
 /// request, so the protocol and the timing profile stay as they were.
@@ -86,6 +88,14 @@ pub struct ResultSummary {
     pub partial: bool,
     #[serde(default)]
     pub kept_seconds: f64,
+    /// Frames of a kept video part (exact, read from the file).
+    #[serde(default)]
+    pub kept_frames: u64,
+    /// The finished tiles of a kept photo part, [x, y, width, height] in its pixels.
+    #[serde(default)]
+    pub finished_tiles: Vec<[u64; 4]>,
+    #[serde(default)]
+    pub total_tiles: u64,
     /// The recorded output scale; 0 when the request has none (Edit).
     pub scale: u64,
     /// The written instruction of an Edit; empty for other kinds.
@@ -452,6 +462,30 @@ pub fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ResultSumma
     } else {
         None
     };
+    // Recorded when a stop kept the finished part (worker.rs partial_record); older rows
+    // and queries without the column have none.
+    let kept: Value = row
+        .get::<_, Option<String>>(10)
+        .ok()
+        .flatten()
+        .filter(|text| !text.is_empty())
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or(Value::Null);
+    let finished_tiles: Vec<[u64; 4]> = kept["finished_tiles"]
+        .as_array()
+        .map(|tiles| {
+            tiles
+                .iter()
+                .filter_map(|tile| {
+                    let values: Vec<u64> =
+                        tile.as_array()?.iter().filter_map(Value::as_u64).collect();
+                    <[u64; 4]>::try_from(values).ok()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let total_tiles = kept["total_tiles"].as_u64().unwrap_or(0);
+    let recorded_seconds = kept["kept_seconds"].as_f64().filter(|s| *s > 0.0);
     Ok(ResultSummary {
         job_id: row.get(0)?,
         completed_at: row.get(1)?,
@@ -478,8 +512,13 @@ pub fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ResultSumma
             .to_owned(),
         output_duration_seconds,
         output_fps,
-        partial: partial_seconds.is_some(),
-        kept_seconds: partial_seconds.map(|s| s as f64).unwrap_or(0.0),
+        partial: partial_seconds.is_some() || recorded_seconds.is_some() || total_tiles > 0,
+        kept_seconds: recorded_seconds
+            .or(partial_seconds.map(|s| s as f64))
+            .unwrap_or(0.0),
+        kept_frames: kept["kept_frames"].as_u64().unwrap_or(0),
+        finished_tiles,
+        total_tiles,
         scale: data["output_scale"].as_u64().unwrap_or(0),
         prompt: edit_field(&request, "prompt", |value| {
             value.as_str().map(str::to_owned)
@@ -501,6 +540,43 @@ pub fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ResultSumma
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+
+    #[test]
+    fn a_kept_part_reports_its_exact_frames_seconds_and_tiles() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        let read = |request: &str, output: &str, partial: &str| {
+            db.query_row(
+                "SELECT 'job', 1, 'completed', ?2, '', 0.0, ?1, '', 30.0, 2.0, ?3",
+                [request, output, partial],
+                super::summary_from_row,
+            )
+            .unwrap()
+        };
+        let video =
+            r#"{"type":"video_job_request","data":{"output_video_path":"/o/clip_video_4x.mkv"}}"#;
+        let kept = read(
+            video,
+            "/o/clip_video_4x_partial_0m00s.mkv",
+            r#"{"kept_seconds":0.074,"kept_frames":2}"#,
+        );
+        assert!(kept.partial);
+        assert_eq!(kept.kept_frames, 2);
+        assert!((kept.kept_seconds - 0.074).abs() < 1e-9);
+        let photo = r#"{"type":"job_request","data":{"output_path":"/o/p_upscaled_4x.png"}}"#;
+        let tiles = read(
+            photo,
+            "/o/p_upscaled_4x_partial.png",
+            r#"{"finished_tiles":[[0,0,512,512],[512,0,512,512]],"total_tiles":6}"#,
+        );
+        assert!(tiles.partial);
+        assert_eq!(tiles.total_tiles, 6);
+        assert_eq!(
+            tiles.finished_tiles,
+            vec![[0, 0, 512, 512], [512, 0, 512, 512]]
+        );
+        // A finished photo without a record is not partial.
+        assert!(!read(photo, "/o/p_upscaled_4x.png", "").partial);
+    }
 
     #[test]
     fn saved_results_expose_the_requested_device_when_recorded() {

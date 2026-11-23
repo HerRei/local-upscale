@@ -314,6 +314,16 @@ def _restore_tensors(moved: list[tuple]) -> None:
             owner._buffers[name] = owner._buffers[name].to(device)
 
 
+def _stop(writer, finished, total: int, keep_partial) -> InterruptedError:
+    """The exception a stop raises in the tile loop: TilesStopped with the finished tiles
+    when the stop keeps them and there are some, else a plain InterruptedError."""
+    from localsr.core.partial_image import TilesStopped
+
+    if finished and keep_partial is not None and keep_partial():
+        return TilesStopped(writer, list(finished), total)
+    return InterruptedError("Cancelled")
+
+
 class InferenceEngine:
     def __init__(self, model_adapter):
         self.model_adapter = model_adapter
@@ -1067,7 +1077,14 @@ class InferenceEngine:
         safe_memory: bool = True,
         tile_callback: Callable[..., None] | None = None,
         temporary_directory: str | None = None,
+        keep_partial: Callable[[], bool] | None = None,
     ) -> OutputWriter:
+        """Run the model over the image in tiles.
+
+        A stop raises InterruptedError; when ``keep_partial`` says the finished part is kept
+        and a tile is finished, it raises TilesStopped with the output and those tiles.
+        """
+        from localsr.core.partial_image import TilesStopped
 
         device, precision = self.load_model(
             model_path, device_str, precision_str, model_info, safe_memory=safe_memory
@@ -1104,11 +1121,11 @@ class InferenceEngine:
                     tiles = list(generate_tiles(w, h, current_tile_size, halo, scale))
                     total_tiles = len(tiles)
                     self.prepare_tiles(current_tile_size, halo)
+                    finished: list[tuple[int, int, int, int]] = []
 
                     for i, t in enumerate(tiles):
                         if cancel_event.is_set():
-                            writer.cleanup()
-                            raise InterruptedError("Cancelled")
+                            raise _stop(writer, finished, total_tiles, keep_partial)
 
                         if tile_callback is not None:
                             tile_callback(
@@ -1122,18 +1139,22 @@ class InferenceEngine:
                                 current_tile_size,
                             )
 
-                        out_core_np = self.run_tile(
-                            t,
-                            img_tensor,
-                            model_info,
-                            device,
-                            precision,
-                            halo,
-                            model,
-                            cancel_event=cancel_event,
-                        )
+                        try:
+                            out_core_np = self.run_tile(
+                                t,
+                                img_tensor,
+                                model_info,
+                                device,
+                                precision,
+                                halo,
+                                model,
+                                cancel_event=cancel_event,
+                            )
+                        except InterruptedError:
+                            raise _stop(writer, finished, total_tiles, keep_partial) from None
 
                         writer.write_tile(out_core_np, t.out_x, t.out_y)
+                        finished.append((t.out_x, t.out_y, t.out_w, t.out_h))
 
                         if tile_callback is not None:
                             tile_callback(
@@ -1198,6 +1219,8 @@ class InferenceEngine:
 
             writer.cleanup()
             raise RuntimeError("Failed to process image.")
+        except TilesStopped:
+            raise  # the caller saves the finished tiles, then cleans the writer up
         except Exception:
             writer.cleanup()
             raise

@@ -1,7 +1,8 @@
-"""Streaming Opus conversion for audio that cannot travel unchanged.
+"""Streaming conversion for audio that cannot travel unchanged.
 
 Compatible audio is always copied without decoding. Otherwise a decodable
-track is converted to Opus, a royalty-free codec. LocalSR does not encode AAC.
+track is converted to Opus, a royalty-free codec, or to PCM for QuickTime
+(.mov), which cannot carry Opus. LocalSR does not encode AAC.
 """
 
 from fractions import Fraction
@@ -29,7 +30,22 @@ def add_opus_stream(output_container, source_stream):
     converted.layout = {1: "mono", 2: "stereo"}.get(
         channels, source_stream.codec_context.layout.name
     )
+    converted.format = "flt"
     converted.bit_rate = 96000 * max(1, min(channels, 8)) if channels > 2 else 160000
+    converted.metadata.update(source_stream.metadata)
+    return converted
+
+
+def add_converted_audio_stream(output_container, source_stream, container_format: str):
+    """The track a converted soundtrack goes into: Opus, or 16-bit PCM in a .mov."""
+    if container_format.lower().lstrip(".") != "mov":
+        return add_opus_stream(output_container, source_stream)
+    converted = output_container.add_stream("pcm_s16le", rate=OPUS_RATE)
+    channels = source_stream.codec_context.channels
+    converted.layout = {1: "mono", 2: "stereo"}.get(
+        channels, source_stream.codec_context.layout.name
+    )
+    converted.format = "s16"
     converted.metadata.update(source_stream.metadata)
     return converted
 
@@ -41,13 +57,15 @@ def opus_packets(source, stream_index, output, start_seconds, end_seconds, cance
     long recording does not require buffering its soundtrack in memory.
     """
     rate = OPUS_RATE
+    # The encoder's interleaved sample format: flt for Opus, s16 for PCM.
+    sample_format = getattr(getattr(output, "format", None), "name", None) or "flt"
     start = Fraction(str(start_seconds))
     end = Fraction(str(end_seconds)) if end_seconds != float("inf") else None
     layout = output.layout.name
     with av.open(str(source), options={"protocol_whitelist": "file"}) as container:
         stream = container.streams[stream_index]
         # libopus accepts interleaved samples; PyAV rechunks frames to 20 ms.
-        resampler = av.AudioResampler(format="flt", layout=layout, rate=rate)
+        resampler = av.AudioResampler(format=sample_format, layout=layout, rate=rate)
         next_input_time = None
 
         def encode(frame):
@@ -60,7 +78,7 @@ def opus_packets(source, stream_index, output, start_seconds, end_seconds, cance
                 return
             channels = len(frame.layout.channels)
             samples = frame.to_ndarray()[:, left * channels : right * channels].copy()
-            trimmed = av.AudioFrame.from_ndarray(samples, format="flt", layout=layout)
+            trimmed = av.AudioFrame.from_ndarray(samples, format=sample_format, layout=layout)
             trimmed.sample_rate = rate
             trimmed.time_base = Fraction(1, rate)
             trimmed.pts = round((timestamp - start) * rate) + left

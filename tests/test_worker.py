@@ -53,6 +53,7 @@ class DummyEngine:
         safe_memory,
         tile_callback=None,
         temporary_directory=None,
+        keep_partial=None,
     ):
         progress_callback(0, 4, tile_size)
         assert cancel_event.wait(timeout=2)
@@ -449,6 +450,7 @@ def test_a_video_reports_its_preparation_and_carries_the_route_it_gave_up_in_its
             inference_seconds=1.0,
             partial=False,
             kept_seconds=0.0,
+            kept_frames=0,
         )
 
     monkeypatch.setattr(server_module, "run_video_job", fake_video_job)
@@ -510,6 +512,7 @@ def test_video_worker_emits_one_authoritative_progress_event_with_eta(monkeypatc
             inference_seconds=19.0,
             partial=False,
             kept_seconds=0.0,
+            kept_frames=0,
         )
 
     monkeypatch.setattr(server_module, "LatestPreviewEncoder", FakePreviewEncoder)

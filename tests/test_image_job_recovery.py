@@ -254,3 +254,82 @@ def test_a_lost_device_exits_before_the_native_cleanup(tmp_path, monkeypatch):
     # The fake _exit returns control, so Python still unwinds through the cleanup
     # afterwards; the real os._exit never gets there.
     assert events[:2] == [("job_failed", True), ("exit", server_module.DEVICE_LOST_EXIT_CODE)]
+
+
+@pytest.mark.parametrize("keep", [True, False])
+def test_a_photo_stopped_after_some_tiles_keeps_them_only_when_asked(tmp_path, monkeypatch, keep):
+    import localsr.worker.server as server_module
+    from localsr.core.partial_image import TilesStopped
+
+    source = tmp_path / "photo.png"
+    Image.new("RGB", (8, 8), (32, 64, 96)).save(source)
+    scratch = tmp_path / "scratch"
+    messages = []
+    server = WorkerServer()
+    server.model_adapter = SimpleNamespace(
+        inspect=lambda path: NormalizedModelInfo("Test", 2, 3, 3, True, False, 1, 1, path, []),
+        release=lambda: None,
+    )
+
+    def process_image(**kwargs):
+        writer = OutputWriter((3, 16, 16), temporary_directory=scratch)
+        writer.mmap[:] = 0
+        writer.mmap[:, 0:8, 0:8] = 200  # the one finished tile
+        server._request_cancel("job-0", keep_partial=keep)
+        if kwargs["keep_partial"]():
+            raise TilesStopped(writer, [(0, 0, 8, 8)], 4)
+        writer.cleanup()
+        raise InterruptedError("Cancelled")
+
+    server.engine = SimpleNamespace(
+        process_image=process_image,
+        release_model=lambda *args: None,
+        release_models_except=lambda *args: None,
+    )
+    monkeypatch.setattr(server_module, "LatestPreviewEncoder", TestPreview)
+    monkeypatch.setattr(server, "reader_thread_func", lambda: None)
+    monkeypatch.setattr(
+        server_module,
+        "send_message",
+        lambda message: messages.append(json.loads(message.to_json())),
+    )
+    server.message_queue.put(
+        {
+            "type": "job_request",
+            "data": {
+                "job_id": "job-0",
+                "image_path": str(source),
+                "model_path": str(tmp_path / "model.pth"),
+                "output_path": str(tmp_path / "photo_upscaled_2x.png"),
+                "scratch_directory": str(scratch),
+                "output_format": "png",
+                "device": "cpu",
+                "precision": "fp32",
+                "tile_size": 64,
+                "halo": 8,
+                "jpeg_quality": 98,
+                "preserve_metadata": True,
+                "safe_memory": True,
+                "preview_enabled": False,
+            },
+        }
+    )
+    server.message_queue.put({"type": "shutdown_request"})
+    server.run()
+
+    terminal = [item for item in messages if item["type"] in {"job_completed", "job_cancelled"}]
+    assert len(terminal) == 1
+    if not keep:
+        assert terminal[0]["type"] == "job_cancelled"
+        assert not list(tmp_path.glob("photo_upscaled_2x*"))
+        return
+    done = terminal[0]["data"]
+    assert terminal[0]["type"] == "job_completed"
+    assert done["partial"] is True
+    assert done["output_path"].endswith("photo_upscaled_2x_partial.png")
+    assert done["finished_tiles"] == [[0, 0, 8, 8]] and done["total_tiles"] == 4
+    with Image.open(done["output_path"]) as result:
+        pixels = np.asarray(result)
+    assert (pixels[0:8, 0:8] == 200).all()  # the finished tile as the model made it
+    assert (pixels[8:, :] == (32, 64, 96)).all()  # the rest: a plain resize of the photo
+    assert not list(scratch.glob("localsr-output-*.dat"))

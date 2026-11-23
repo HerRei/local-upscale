@@ -6,6 +6,7 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
+import av
 import numpy as np
 import pytest
 from test_video_interpolation import patched_worker, worker_request
@@ -177,6 +178,7 @@ def test_frame_by_frame_job_cancelled_after_publication_reports_the_saved_output
             inference_seconds=1.0,
             partial=False,
             kept_seconds=0.0,
+            kept_frames=0,
         )
 
     _server, kinds, messages = _frame_by_frame_server(monkeypatch, tmp_path, run_then_cancel)
@@ -242,3 +244,24 @@ def test_streamed_system_stop_closes_input_and_publishes_partial(tmp_path, monke
     assert calls == ["partial_finalizing", 2]
     assert result.endswith("out_partial_0m01s.mp4")
     assert Path(result).read_bytes() == b"videoaudio"
+
+
+@pytest.mark.parametrize("keep", [True, False])
+def test_temporal_stop_right_after_the_first_window_keeps_that_window(tmp_path, monkeypatch, keep):
+    """Bug hunt 2026-11-23: a stop after SeedVR's first window threw its frames away."""
+
+    def encode(real, cancel, frames, *args, **kwargs):
+        cancel.set()  # the window is done; the encoder has not read a frame yet
+        return real(frames, *args, **kwargs)
+
+    output, kinds, messages = _run_temporal(tmp_path, monkeypatch, encode, keep=keep)
+    if not keep:
+        assert "JobCancelled" in kinds and "VideoJobCompleted" not in kinds
+        assert not any(path.name.startswith("output") for path in tmp_path.iterdir())
+        return
+    completed = next(m for m in messages if type(m).__name__ == "VideoJobCompleted")
+    assert completed.partial
+    with av.open(completed.output_path) as container:
+        written = sum(1 for _ in container.decode(video=0))
+    assert written > 0
+    assert written == completed.frames_processed

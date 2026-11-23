@@ -203,6 +203,18 @@ impl Database {
                 [],
             )?;
         }
+        // What a job stopped with its finished part kept left behind (results.rs reads it).
+        let has_partial: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('jobs') WHERE name='partial_json')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_partial {
+            connection.execute(
+                "ALTER TABLE jobs ADD COLUMN partial_json TEXT NOT NULL DEFAULT ''",
+                [],
+            )?;
+        }
         // Result history of one media, newest first (see list_media_results).
         connection.execute(
             "CREATE INDEX IF NOT EXISTS jobs_media_results_idx ON jobs(media_id, updated_at)",
@@ -615,7 +627,10 @@ impl Database {
             crate::results::SUMMARY_COLUMNS
         ))?;
         let rows = statement.query_map([], |row| {
-            Ok((row.get::<_, String>(10)?, summary_from_row(row)?))
+            Ok((
+                row.get::<_, String>(crate::results::SUMMARY_COLUMN_COUNT)?,
+                summary_from_row(row)?,
+            ))
         })?;
         for row in rows {
             let (id, result) = row?;
@@ -973,6 +988,15 @@ impl Database {
             "UPDATE jobs SET status=?2, progress=?3, output_path=?4, error=?5, updated_at=?6 WHERE id=?1
              AND status NOT IN ('completed','failed','cancelled','interrupted')",
             params![id, status, progress, output, error, now_millis()],
+        )?;
+        Ok(())
+    }
+
+    /// The kept part of a stopped job: frames and seconds of a video, tiles of a photo.
+    pub fn record_partial(&self, id: &str, partial: &serde_json::Value) -> AppResult<()> {
+        self.connection.execute(
+            "UPDATE jobs SET partial_json=?2 WHERE id=?1 AND status='completed'",
+            params![id, partial.to_string()],
         )?;
         Ok(())
     }

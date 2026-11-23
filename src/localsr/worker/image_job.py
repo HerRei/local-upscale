@@ -17,6 +17,12 @@ from localsr.core.live_preview import LatestPreviewEncoder, PreviewPacket
 from localsr.core.model_adapter import ModelAdapter, NormalizedModelInfo
 from localsr.core.model_catalog import CATALOG_BY_ID
 from localsr.core.output_writer import OutputWriter, cleanup_stale_work_files
+from localsr.core.partial_image import (
+    TilesStopped,
+    fill_unfinished,
+    partial_output_path,
+    saved_tiles,
+)
 from localsr.core.pipeline import (
     ImagePipeline,
     PipelineStage,
@@ -76,7 +82,10 @@ class ImageJobRunner:
         emit: Callable[[WorkerMessage], None],
         emit_preview: Callable[[PreviewPacket], None],
         preview_factory: Callable[..., LatestPreviewEncoder] = LatestPreviewEncoder,
+        keep_partial: Callable[[], bool] | None = None,
     ) -> None:
+        # Whether a stop keeps the finished tiles of the upscaling step (the host asks).
+        self.keep_partial = keep_partial
         self.engine = engine
         self.model_adapter = model_adapter
         self.cancel_event = cancel_event
@@ -142,7 +151,14 @@ class ImageJobRunner:
                     if stage.fix == "colour":
                         manager.grayscale = False
                 self._check_cancelled()
-                writer, info = self._primary(working_image, pipeline, data, progress, resources)
+                try:
+                    writer, info = self._primary(working_image, pipeline, data, progress, resources)
+                except TilesStopped as stopped:
+                    resources.callback(stopped.writer.cleanup)
+                    self._save_finished_part(
+                        job_id, data, manager, image, working_image, stopped, started_at
+                    )
+                    return
                 if info.architecture == "DDColor" or (
                     pipeline.primary is not None and pipeline.primary.fix == "colour"
                 ):
@@ -294,8 +310,13 @@ class ImageJobRunner:
                     image, primary, info, face_path, face_info, data, progress, resources
                 )
             if writer is None:
-                writer = self._process_image(image, primary, info, data, progress)
+                writer = self._process_image(
+                    image, primary, info, data, progress, keep_partial=self.keep_partial
+                )
                 resources.callback(writer.cleanup)
+        except TilesStopped as stopped:
+            stopped.info = info
+            raise
         except InterruptedError:
             raise
         except Exception as error:  # noqa: BLE001
@@ -319,6 +340,7 @@ class ImageJobRunner:
         data: Mapping[str, Any],
         progress: ImageJobProgress,
         halo: int | None = None,
+        keep_partial: Callable[[], bool] | None = None,
     ) -> OutputWriter:
         return self.engine.process_image(
             img_data=image,
@@ -333,6 +355,39 @@ class ImageJobRunner:
             safe_memory=data["safe_memory"],
             tile_callback=progress.tile,
             temporary_directory=data.get("scratch_directory"),
+            **({"keep_partial": keep_partial} if keep_partial is not None else {}),
+        )
+
+    def _save_finished_part(
+        self,
+        job_id: str,
+        data: Mapping[str, Any],
+        manager: ImageManager,
+        image: dict[str, Any],
+        working_image: dict[str, Any],
+        stopped: TilesStopped,
+        started_at: float,
+    ) -> None:
+        """Save a stopped photo: its finished tiles, the rest a plain resize of the image
+        the model was given, under `<name>_partial`."""
+        info = stopped.info
+        assert info is not None
+        self._log("Saving the finished part...")
+        fill_unfinished(stopped.writer.get_array(), stopped.finished, working_image["tensor"])
+        partial = {**data, "output_path": partial_output_path(str(data["output_path"]))}
+        # The stop is what ends this job; the save itself must not be refused for it.
+        notes = save_output(manager, stopped.writer, image, info, partial, threading.Event())
+        output_scale = int(data.get("output_scale") or info.scale)
+        self.emit(
+            JobCompleted(
+                job_id=job_id,
+                elapsed_seconds=time.monotonic() - started_at,
+                output_path=partial["output_path"],
+                notes=" ".join([*notes, *self._take_engine_notes()]),
+                partial=True,
+                finished_tiles=saved_tiles(stopped.finished, info.scale, output_scale),
+                total_tiles=stopped.total,
+            )
         )
 
     def _process_faces(

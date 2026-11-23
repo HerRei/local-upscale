@@ -474,6 +474,11 @@ class JobCompleted:
     output_path: str = ""
     # What the user should know about a job that finished, such as a skipped fix.
     notes: str = ""
+    # A photo stopped with its finished part kept: the tiles done, as [x, y, width,
+    # height] in the saved image's pixels, of how many.
+    partial: bool = False
+    finished_tiles: list[list[int]] = field(default_factory=list)
+    total_tiles: int = 0
 
     def to_json(self) -> str:
         return json.dumps({"type": "job_completed", "data": asdict(self)})
@@ -701,6 +706,7 @@ class VideoJobCompleted:
     notes: str = ""
     partial: bool = False
     kept_seconds: float = 0.0
+    kept_frames: int = 0
 
     def to_json(self) -> str:
         return json.dumps({"type": "video_job_completed", "data": asdict(self)})
