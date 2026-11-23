@@ -442,40 +442,61 @@ def test_device_routing_runs_pytorch_directly_and_falls_back_to_cpu_for_onnx_rou
         )
 
 
-def test_video_worker_rejects_colour_stage(tmp_path):
+def test_video_worker_accepts_colour_stage(tmp_path, monkeypatch):
     ckpt_path = _save_small_checkpoint(tmp_path / "small_ddcolor.pth")
     server = WorkerServer()
-    server.model_adapter = ModelAdapter(allow_unverified_checkpoints=True)
-    with pytest.raises(ValueError, match="still images, not video"):
-        server._run_video_job(
-            "video-color-reject",
-            {
-                "job_id": "video-color-reject",
-                "video_path": str(tmp_path / "in.mp4"),
-                "model_path": str(tmp_path / "up.pth"),
-                "output_video_path": str(tmp_path / "out.mp4"),
-                "device": "cpu",
-                "precision": "fp32",
-                "tile_size": 128,
-                "halo": 8,
-                "safe_memory": True,
-                "stages": [
-                    {
-                        "kind": "restore",
-                        "role": "fix",
-                        "fix": "colour",
-                        "model_id": "ddcolor_modelscope",
-                        "model_path": str(ckpt_path),
-                    },
-                    {
-                        "kind": "upscale",
-                        "role": "primary",
-                        "model_id": "up",
-                        "model_path": str(tmp_path / "up.pth"),
-                    },
-                ],
-            },
+    adapter = ModelAdapter(allow_unverified_checkpoints=True)
+    colour_info = adapter.inspect(str(ckpt_path))
+    upscale_info = SimpleNamespace(architecture="Dummy", scale=2, in_channels=3, out_channels=3)
+    server.model_adapter.inspect = lambda path: (
+        colour_info if path == str(ckpt_path) else upscale_info
+    )
+    captured = []
+
+    def run(config, **kwargs):
+        captured.append(config)
+        return SimpleNamespace(
+            output_path=config.output_video_path,
+            frames_processed=1,
+            elapsed_seconds=1.0,
+            inference_seconds=1.0,
+            partial=False,
+            kept_seconds=0.0,
         )
+
+    monkeypatch.setattr("localsr.worker.server.run_video_job", run)
+    monkeypatch.setattr("localsr.worker.server.send_message", lambda message: None)
+    server._run_video_job(
+        "video-colour",
+        {
+            "video_path": str(tmp_path / "in.mp4"),
+            "model_path": str(tmp_path / "up.pth"),
+            "output_video_path": str(tmp_path / "out.mp4"),
+            "device": "cpu",
+            "precision": "fp32",
+            "tile_size": 128,
+            "halo": 8,
+            "preview_enabled": False,
+            "stages": [
+                {
+                    "kind": "restore",
+                    "role": "fix",
+                    "fix": "colour",
+                    "model_id": "ddcolor_modelscope",
+                    "model_path": str(ckpt_path),
+                },
+                {
+                    "kind": "upscale",
+                    "role": "primary",
+                    "model_id": "up",
+                    "model_path": str(tmp_path / "up.pth"),
+                },
+            ],
+        },
+    )
+    assert len(captured) == 1
+    assert captured[0].preprocess_stages[0].fix == "colour"
+    assert captured[0].preprocess_stages[0].model_info.architecture == "DDColor"
 
 
 def test_catalog_contains_only_pinned_ddcolor_l():

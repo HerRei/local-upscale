@@ -3819,7 +3819,7 @@ fn custom_edit_model_requires_grants_checks_sd_cli_and_persists_paths_in_place()
 }
 
 #[test]
-fn colour_fix_is_resolved_for_photos_and_rejected_for_video() {
+fn colour_fix_is_resolved_for_photos_and_video() {
     use crate::types::FixStageSelection;
 
     let directory = tempfile::tempdir().unwrap();
@@ -3876,7 +3876,36 @@ fn colour_fix_is_resolved_for_photos_and_rejected_for_video() {
         fix: "colour".into(),
         model_id: "ddcolor_modelscope".into(),
     }];
-    assert!(resolve_model_selection(&state, &video_job).is_err());
+    match resolve_model_selection(&state, &video_job).unwrap() {
+        ModelSelection::Image { preprocess, .. } => {
+            assert_eq!(preprocess.len(), 1);
+            assert_eq!(preprocess[0].fix, "colour");
+        }
+        _ => panic!("expected video plan with colour fix"),
+    }
+    video_job.video_task = "denoise".into();
+    video_job.output_scale = 1;
+    video_job.model_id = "ddcolor_modelscope".into();
+    match resolve_model_selection(&state, &video_job).unwrap() {
+        ModelSelection::Image {
+            model_id,
+            preprocess,
+            ..
+        } => {
+            assert_eq!(model_id, "ddcolor_modelscope");
+            assert!(preprocess.is_empty());
+        }
+        _ => panic!("expected video restore with colour"),
+    }
+    let recipe: Recipe = serde_json::from_value(json!({
+        "id": "colour-video", "name": "Colour video", "task": "video",
+        "video_task": "denoise", "video_model_id": "frame_by_frame",
+        "model_id": "ddcolor_modelscope", "output_scale": 1,
+        "tile_size": 128, "halo": 16, "precision": "fp32", "safe_memory": true,
+        "stages": [{"kind":"restore", "model_id":"ddcolor_modelscope", "fix":"colour"}]
+    }))
+    .unwrap();
+    assert!(validate_recipe_stages(&recipe).is_ok());
 }
 
 #[test]

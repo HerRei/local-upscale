@@ -42,7 +42,7 @@ at the moment), and the app shows you each licence before it downloads anything.
 - Enlarge photos and artwork by 2×, 3× or 4×. Quick is a good start, and Best
   spends more time on photo detail.
 - Clean up noise, blur and JPEG artifacts first, or add colour to black-and-white
-  photos, then enlarge.
+  photos and videos, then enlarge.
 - Compare the original and the result with a slider, or hold M to see the
   original.
 - Enhance video frame by frame, with the source timing, rotation and audio kept.

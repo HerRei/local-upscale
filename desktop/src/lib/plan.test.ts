@@ -357,6 +357,43 @@ describe('model library resolution', () => {
     expect(displayName({ name: 'x', display_name: 'Given' })).toBe('Given');
   });
 
+  it('includes the Colour fix for video Restore and Restore first', () => {
+    const snapshot = demoSnapshot();
+    const settings = {
+      ...snapshot.settings,
+      task: 'video' as const,
+      video_task: 'denoise' as const,
+      selected_video_model_id: 'frame_by_frame',
+      selected_model_id: 'ddcolor_modelscope',
+      fix_stages: [{ fix: 'colour' as const, model_id: 'ddcolor_modelscope' }],
+      fixes: ['colour' as const],
+    };
+    const options = { faceEnabled: false, usingTemporalVideo: false };
+    const recipe: Recipe = {
+      id: 'colour-video',
+      name: 'Colour video',
+      task: 'video',
+      video_task: 'denoise',
+      quality: 'custom',
+      model_id: 'ddcolor_modelscope',
+      video_model_id: 'frame_by_frame',
+      output_scale: 1,
+      fixes: ['colour'],
+      stages: [{ kind: 'restore', model_id: 'ddcolor_modelscope', fix: 'colour' }],
+    } as Recipe;
+    expect(recipeFixStages(recipe, snapshot.catalog)).toEqual(settings.fix_stages);
+    expect(resolvePlan(snapshot, settings, options).some((stage) => stage.fix === 'colour')).toBe(
+      true,
+    );
+    expect(
+      resolvePlan(
+        snapshot,
+        { ...settings, video_task: 'upscale', selected_model_id: 'span_photo_x4' },
+        options,
+      ).some((stage) => stage.fix === 'colour'),
+    ).toBe(true);
+  });
+
   it('resolves video restore, video fix-first stages, and video recipes', () => {
     const snapshot = demoSnapshot();
     const restoreSettings = {

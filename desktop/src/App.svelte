@@ -636,9 +636,7 @@
   // The fixes this job runs, in order. In Restore the last one is the model itself.
   $: imageFixes =
     !usingTemporalVideo && settings.task !== 'edit' && Boolean(settings.task)
-      ? settings.task === 'video'
-        ? settings.fix_stages.filter((selection) => selection.fix !== 'colour')
-        : settings.fix_stages
+      ? settings.fix_stages
       : [];
   // Engines without image_multi_fix run one fix at a time.
   $: fixPlanSupported =
@@ -1147,9 +1145,7 @@
   $: downloads = pendingDownloads(plan);
   $: planNeedsFile = plan.some((stage) => stage.needsFile);
   $: planMissing = plan.some((stage) => stage.missing);
-  $: fixChips = (
-    settings.task === 'video' ? ['noise', 'blur', 'jpeg'] : ['noise', 'blur', 'jpeg', 'colour']
-  ) as FixKind[];
+  $: fixChips = ['noise', 'blur', 'jpeg', 'colour'] as FixKind[];
   $: prepareReady =
     !snapshot.runtime.active_job_id &&
     !activeDownload &&
@@ -1265,9 +1261,7 @@
   $: taskCaption = !settings.task
     ? ''
     : restoring
-      ? settings.task === 'video'
-        ? 'Removes noise, blur and JPEG artifacts at the same size.'
-        : 'Removes noise, blur and JPEG artifacts or adds colour, at the same size.'
+      ? 'Removes noise, blur and JPEG artifacts or adds colour, at the same size.'
       : settings.task === 'edit'
         ? 'Describe a change in words.'
         : selectedMedia?.kind === 'video' || settings.task === 'video'
@@ -1801,17 +1795,15 @@
       patch.selected_video_model_id = 'frame_by_frame';
       patch.output_scale = 1;
       patch.enable_face_model = false;
-      const stages = current.fix_stages
-        .filter((selection) => selection.fix !== 'colour')
-        .map((selection) => {
-          const own = byId(selection.model_id);
-          if (own && fitsFix(own, selection.fix)) return selection;
-          return {
-            ...selection,
-            model_id:
-              chooseFixModel(snapshot, selection.fix, quality, current.preset_pins)?.model_id ?? '',
-          };
-        });
+      const stages = current.fix_stages.map((selection) => {
+        const own = byId(selection.model_id);
+        if (own && fitsFix(own, selection.fix)) return selection;
+        return {
+          ...selection,
+          model_id:
+            chooseFixModel(snapshot, selection.fix, quality, current.preset_pins)?.model_id ?? '',
+        };
+      });
       patch.fix_stages = stages;
       patch.fixes = stages.map((selection) => selection.fix);
       const last = stages.at(-1);
@@ -1822,7 +1814,7 @@
       }
       changed = true;
     } else if (current.task === 'video' && current.video_task === 'denoise') {
-      const videoStages = current.fix_stages.filter((selection) => selection.fix !== 'colour');
+      const videoStages = current.fix_stages;
       const hasVideoOption =
         Boolean(current.deflicker) ||
         (current.video_interpolation ?? 'off') !== 'off' ||
@@ -1834,7 +1826,7 @@
       ) {
         const picked = byId(current.selected_model_id);
         const fit = picked
-          ? (['noise', 'blur', 'jpeg'] as const).find((fix) => fitsFix(picked, fix))
+          ? (['noise', 'blur', 'jpeg', 'colour'] as const).find((fix) => fitsFix(picked, fix))
           : undefined;
         if (fit && picked) {
           patch.fix_stages = [{ fix: fit, model_id: picked.model_id }];
@@ -2295,7 +2287,7 @@
       task === 'denoise' || (task === 'video' && targetVideoTask === 'denoise');
     const switchingToVideoRestore =
       targetRestoring && task === 'video' && !(settings.task === 'video' && restoring);
-    const videoFixes = settings.fix_stages.filter((selection) => selection.fix !== 'colour');
+    const videoFixes = settings.fix_stages;
     const needsDefaultNoise = switchingToVideoRestore && videoFixes.length === 0;
     const models = modelsForTask(snapshot, task, targetVideoTask);
     // Keep a manual choice that still fits the task; otherwise the active
@@ -2958,8 +2950,7 @@
         quality: settings.quality,
         content: settings.content,
         recipe_name: snapshot.recipes.find((recipe) => activeRecipeIds.has(recipe.id))?.name ?? '',
-        fixes:
-          task === 'video' ? settings.fixes.filter((fix) => fix !== 'colour') : [...settings.fixes],
+        fixes: [...settings.fixes],
       },
       batch_mode: batchMode,
       task,
@@ -4338,7 +4329,7 @@
                       >What to fix<HelpTip
                         label="What to fix"
                         text={settings.task === 'video'
-                          ? 'Each problem you pick gets its own fix, in the order listed under Model. The size stays the same. With nothing picked, only De-flicker, Frame rate and Clean up audio run. To enlarge the video as well, use Upscale and pick the same problems under Restore first.'
+                          ? 'Each problem you pick gets its own fix, in the order listed under Model. The size stays the same. With nothing picked, only De-flicker, Frame rate and Clean up audio run. Colour adds colour to black-and-white videos and keeps it steady from frame to frame. To enlarge the video as well, use Upscale and pick the same problems under Restore first.'
                           : 'Each problem you pick gets its own fix, in the order listed under Model. The size stays the same. To enlarge the picture as well, use Upscale and pick the same problems under Restore first.'}
                       /></span
                     >
@@ -4373,7 +4364,7 @@
                     <span class="field-label" id="fix-label">Restore first</span><HelpTip
                       label="Restore first"
                       text={settings.task === 'video'
-                        ? "Runs the Restore task before upscaling. Each problem you pick is fixed at the original size, in the order listed under Model, then the result is enlarged. ↑ and ↓ change the order; a fix's Change… picks its model, which LocalSR remembers for that problem."
+                        ? "Runs the Restore task before upscaling. Each problem you pick is fixed at the original size, in the order listed under Model, then the result is enlarged. ↑ and ↓ change the order; a fix's Change… picks its model, which LocalSR remembers for that problem. Colour adds colour to black-and-white videos and keeps it steady from frame to frame."
                         : "Runs the Restore task before upscaling. Each problem you pick is fixed at the original size, in the order listed under Model, then the result is enlarged. ↑ and ↓ change the order; a fix's Change… picks its model, which LocalSR remembers for that problem. Colour adds colour to black-and-white photos."}
                     />
                   </div>
@@ -4389,7 +4380,9 @@
                       type="button"
                       class:on={settings.fixes.includes(fix)}
                       aria-pressed={settings.fixes.includes(fix)}
-                      title={fix === 'colour' ? 'Adds colour to black-and-white photos' : ''}
+                      title={fix === 'colour'
+                        ? `Adds colour to black-and-white ${settings.task === 'video' ? 'videos' : 'photos'}`
+                        : ''}
                       on:click={() => toggleFix(fix)}
                       >{#if settings.fixes.includes(fix)}<svg
                           xmlns="http://www.w3.org/2000/svg"
@@ -4561,7 +4554,9 @@
                           class="label-with-tip"
                           >{stage.label}<HelpTip
                             label="Colour"
-                            text="Adds colour to black-and-white photos. The colours are the model's guess. A photo that already has colour is recoloured too."
+                            text={settings.task === 'video'
+                              ? "Adds colour to black-and-white videos. Colours are the model's guess and are carried between frames so they stay steady."
+                              : "Adds colour to black-and-white photos. The colours are the model's guess. A photo that already has colour is recoloured too."}
                           /></span
                         >{:else}{stage.label}{/if}</span
                     >

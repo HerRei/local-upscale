@@ -6729,7 +6729,7 @@ describe('video restore, Restore first, and 1× removal', () => {
       'Each problem you pick gets its own fix, in the order listed under Model. The size stays the same. To enlarge the picture as well, use Upscale and pick the same problems under Restore first.',
     );
 
-    // Upscale uses the exact same chip order (without Colour for video).
+    // Upscale uses the same chip order.
     await user1.click(screen.getByRole('button', { name: /^Upscale$/ }));
     const upscaleChips = Array.from(
       screen.getByRole('group', { name: 'Restore first' }).querySelectorAll('button'),
@@ -7021,7 +7021,7 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     ).toBeNull();
   });
 
-  it('offers Colour under Fix first and Restore for photos, with title, HelpTip, Colour label, and hides it for video', async () => {
+  it('offers Colour under Restore first and Restore for photos and video', async () => {
     const snapshot = readySnapshot([image('photo', true), video('clip')]);
     const user = await mountWith(snapshot);
     const prevSelect = api.selectMedia.getMockImplementation();
@@ -7086,11 +7086,17 @@ describe('Model folder and Windows CPU GPU download notice', () => {
       ),
     );
 
-    // Switching to a video does not offer Colour in Fix first (Upscale or Restore).
+    // Switching to a video keeps Colour available under both tasks.
     await user.click(screen.getByRole('button', { name: /▶\s*clip\.mp4/ }));
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Colour' })).toBeNull());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Colour' })).toBeTruthy());
     await user.click(screen.getByRole('button', { name: /^Upscale/ }));
-    expect(screen.queryByRole('button', { name: 'Colour' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Colour' }).getAttribute('title')).toBe(
+      'Adds colour to black-and-white videos',
+    );
+    await user.click(screen.getByRole('button', { name: 'About Restore first' }));
+    expect(screen.getByRole('tooltip').textContent).toContain(
+      'Colour adds colour to black-and-white videos and keeps it steady from frame to frame.',
+    );
   });
 });
 

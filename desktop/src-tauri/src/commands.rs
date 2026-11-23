@@ -913,16 +913,6 @@ fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
             "recipe fix kinds must be known, unique and on restoration stages".into(),
         ));
     }
-    if recipe.task == "video"
-        && recipe
-            .stages
-            .iter()
-            .any(|stage| stage.fix.as_deref() == Some("colour"))
-    {
-        return Err(AppError::Validation(
-            "Colour is only available for photos, not video.".into(),
-        ));
-    }
     let kinds: Vec<&str> = recipe
         .stages
         .iter()
@@ -3721,11 +3711,6 @@ struct ResolvedImageStage {
 
 fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResult<ModelSelection> {
     validate_fix_selections(&input.fix_stages)?;
-    if input.task == "video" && input.fix_stages.iter().any(|stage| stage.fix == "colour") {
-        return Err(AppError::Validation(
-            "Colour is only available for photos, not video.".into(),
-        ));
-    }
     let restoring =
         input.task == "denoise" || (input.task == "video" && input.video_task == "denoise");
     if !input.fix_stages.is_empty()
@@ -3809,11 +3794,6 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
             .find(|model| model.model_id == input.model_id)
             .ok_or_else(|| AppError::Validation("unknown image model".into()))?;
         validate_model_for_task(model, if restoring { "denoise" } else { &input.task })?;
-        if input.task == "video" && model.purposes.iter().any(|purpose| purpose == "colorize") {
-            return Err(AppError::Validation(
-                "Colour is only available for photos, not video.".into(),
-            ));
-        }
         if !restoring && input.output_scale > model.native_scale {
             return Err(AppError::Validation(format!(
                 "the selected model supports output scales up to {}×",
