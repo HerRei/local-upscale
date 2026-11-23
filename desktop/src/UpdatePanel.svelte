@@ -1,17 +1,9 @@
 <script lang="ts">
-  import { createEventDispatcher, onMount } from 'svelte';
+  import { onMount } from 'svelte';
   import * as api from './lib/api';
   import { modal } from './lib/modal';
   import { updateDialogOpen, updateError, updateState } from './lib/updates';
   export let processing = false;
-  export let anonymousUpdateCount = false;
-  export let completionSound = false;
-  export let checkAtLaunch = true;
-  const dispatch = createEventDispatcher<{
-    anonymouscount: boolean;
-    checkatlaunch: boolean;
-    completionsound: boolean;
-  }>();
   let channel = 'beta';
   let working = false;
   let recoveryConfirmed = false;
@@ -100,42 +92,7 @@
           disabled={inProgress || status.stage === 'downloaded'}
           ><option value="stable">Stable</option><option value="beta">Beta</option></select
         >
-        {#if status.configured}
-          <!-- Each box shows what LocalSR has saved: a click asks for the change, and the
-               box follows once it is saved, so a failed save never leaves it showing one. -->
-          <label class="count"
-            ><input
-              type="checkbox"
-              checked={checkAtLaunch}
-              on:change={(event) => {
-                const wanted = event.currentTarget.checked;
-                event.currentTarget.checked = checkAtLaunch;
-                dispatch('checkatlaunch', wanted);
-              }}
-            /> Check for updates when LocalSR starts</label
-          >
-          <label class="count"
-            ><input
-              type="checkbox"
-              checked={anonymousUpdateCount}
-              on:change={(event) => {
-                const wanted = event.currentTarget.checked;
-                event.currentTarget.checked = anonymousUpdateCount;
-                dispatch('anonymouscount', wanted);
-              }}
-            /> After an update check, send an anonymous count: app version, platform and channel only.
-            No install ID, cookies, files or settings.</label
-          >
-        {/if}
       {/if}
-      <label class="count"
-        ><input
-          type="checkbox"
-          checked={completionSound}
-          disabled={processing}
-          on:change={(event) => dispatch('completionsound', event.currentTarget.checked)}
-        /> Play a sound when a job finishes</label
-      >
       {#if status.target}<p class="detail">Installed build: {status.target}</p>{/if}
       <p class="detail">
         This software uses libraries from the FFmpeg project under the LGPLv2.1. LocalSR does not
@@ -255,10 +212,6 @@
   .detail {
     font-size: 12px;
     color: var(--dialog-muted-text);
-  }
-  .count {
-    display: block;
-    margin-top: 12px;
   }
   .notes {
     white-space: pre-wrap;

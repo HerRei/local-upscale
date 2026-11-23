@@ -154,20 +154,16 @@ test('chooses the editing runtime through the host and sends that path to Start 
   );
 });
 
-test('Run at low priority stays clickable while a job runs and uses set_update_switch', async ({
+test('Run at low priority stays clickable while a job runs and uses set_preference', async ({
   page,
 }) => {
   await openApp(page, { ...upscale, running: true });
-  await showPane(page, 'enhance');
-  await page.evaluate(() => {
-    const fieldset = document.querySelector('fieldset.processing-settings') as HTMLFieldSetElement;
-    fieldset.disabled = false;
-    (document.querySelector('.disclosure') as HTMLButtonElement).click();
-    fieldset.disabled = true;
-  });
-  const lowPriority = page.getByRole('checkbox', { name: 'Run at low priority' });
-  await lowPriority.scrollIntoViewIfNeeded();
+  await emit(page, 'native-menu-action', 'app.settings');
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await settings.getByRole('tab', { name: 'Performance' }).click();
+  const lowPriority = settings.getByRole('switch', { name: 'Run at low priority' });
   await expect(lowPriority).not.toBeChecked();
+  await expect(lowPriority).toBeEnabled();
   await lowPriority.click();
   await expect(lowPriority).toBeChecked();
   expect((await hostCalls(page, 'set_preference')).at(-1)?.args).toEqual({

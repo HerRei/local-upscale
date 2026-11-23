@@ -414,4 +414,100 @@ describe('SettingsSheet', () => {
       restoreMac();
     }
   });
+
+  it('shows host errors for External FFmpeg detection/pick and moving progress for Model folder', async () => {
+    const user = userEvent.setup();
+    const view = renderSheet({
+      section: 'storage',
+      settings: {
+        ...demoSnapshot().settings,
+        model_directory: '/Volumes/SSD/models',
+        external_ffmpeg_path: '/usr/bin/ffmpeg',
+      },
+      movingModels: true,
+      modelMoveProgress: {
+        moved_bytes: 50,
+        total_bytes: 100,
+        moved_files: 1,
+        total_files: 2,
+        progress: 50,
+        current_file: 'a.pth',
+      },
+      cacheSize: 1024,
+      cacheBusy: false,
+    });
+
+    expect(screen.getByText('Moving 1 of 2 files…')).toBeTruthy();
+    expect(screen.getByText('50%')).toBeTruthy();
+    const progress = document.querySelector('progress.download-progress') as HTMLProgressElement;
+    expect(progress.value).toBe(50);
+    expect(
+      (screen.getByRole('button', { name: /^Model folder / }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect((screen.getByRole('button', { name: 'Done' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('Wait for the model move to finish.')).toBeTruthy();
+
+    api.detectExternalFFmpeg.mockRejectedValueOnce('The search was refused.');
+    await user.click(screen.getByRole('button', { name: 'Find installed' }));
+    expect(await screen.findByText(/The search was refused\./)).toBeTruthy();
+
+    api.chooseExternalFFmpeg.mockRejectedValueOnce('The file picker failed.');
+    await user.click(screen.getByRole('button', { name: 'Choose FFmpeg' }));
+    expect(await screen.findByText(/The file picker failed\./)).toBeTruthy();
+
+    expect(screen.getByText(/1 KB/)).toBeTruthy();
+    await view.rerender({
+      section: 'storage',
+      settings: { ...demoSnapshot().settings },
+      capabilities: macCapabilities,
+      setPreference: vi.fn(),
+      updateSettings: vi.fn(),
+      onClose: vi.fn(),
+      cacheSize: 1024,
+      cacheBusy: true,
+    });
+    expect(
+      (screen.getByRole('button', { name: 'Clear cache' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it('shows Engine row on supported builds and hides on unsupported or Store builds', async () => {
+    const engines = structuredClone(demoSnapshot().engines!);
+    const view = renderSheet({ section: 'performance', engines });
+    expect(screen.getByText('Engine')).toBeTruthy();
+    expect(screen.getByText('CPU')).toBeTruthy();
+
+    await view.rerender({
+      section: 'performance',
+      settings: { ...demoSnapshot().settings },
+      capabilities: macCapabilities,
+      engines: { ...engines, active_backend: 'rocm' },
+      setPreference: vi.fn(),
+      updateSettings: vi.fn(),
+      onClose: vi.fn(),
+    });
+    expect(screen.getByText('AMD ROCm')).toBeTruthy();
+
+    await view.rerender({
+      section: 'performance',
+      settings: { ...demoSnapshot().settings },
+      capabilities: macCapabilities,
+      engines: { ...engines, supported: false },
+      setPreference: vi.fn(),
+      updateSettings: vi.fn(),
+      onClose: vi.fn(),
+    });
+    expect(screen.queryByText('Engine')).toBeNull();
+
+    await view.rerender({
+      section: 'performance',
+      settings: { ...demoSnapshot().settings },
+      capabilities: macCapabilities,
+      engines: { ...engines, supported: true, managed_by_store: true },
+      setPreference: vi.fn(),
+      updateSettings: vi.fn(),
+      onClose: vi.fn(),
+    });
+    expect(screen.queryByText('Engine')).toBeNull();
+  });
 });

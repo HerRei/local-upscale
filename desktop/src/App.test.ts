@@ -385,14 +385,15 @@ describe('Appearance from the host', () => {
 });
 
 describe('Completion sound switch', () => {
-  it('saves the chosen value', async () => {
+  it('saves the chosen value from Settings', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     const user = await mountWith(snapshot);
-    await chooseMenuItem('app.updates');
-    await user.click(await screen.findByLabelText('Play a sound when a job finishes'));
-    expect(api.saveSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ completion_sound: true }),
+    await chooseMenuItem('app.settings');
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(
+      within(dialog).getByRole('switch', { name: 'Play a sound with the notification' }),
     );
+    expect(api.setPreference).toHaveBeenCalledWith('completion_sound', true);
   });
 });
 
@@ -419,13 +420,17 @@ describe('Update switches', () => {
       settings_recovery: false,
     });
     const user = await mountWith(snapshot);
-    await chooseMenuItem('app.updates');
+    await chooseMenuItem('app.settings');
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(dialog).getByRole('tab', { name: 'Privacy & updates' }));
     await user.click(
-      await screen.findByLabelText(
-        'After an update check, send an anonymous count: app version, platform and channel only. No install ID, cookies, files or settings.',
-      ),
+      await within(dialog).findByRole('switch', {
+        name: 'Send an anonymous count with each update check',
+      }),
     );
-    await user.click(screen.getByLabelText('Check for updates when LocalSR starts'));
+    await user.click(
+      within(dialog).getByRole('switch', { name: 'Check for updates when LocalSR starts' }),
+    );
     expect(api.setPreference.mock.calls).toEqual([
       ['anonymous_update_count', true], // off until the user turns it on
       ['check_updates_at_launch', true], // it started off in this test
@@ -433,9 +438,6 @@ describe('Update switches', () => {
     expect(api.saveSettings).not.toHaveBeenCalledWith(
       expect.objectContaining({ anonymous_update_count: true }),
     );
-    // The menu's own items are the host's: the window does not act on them.
-    await chooseMenuItem('app.update-count');
-    expect(api.setPreference).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -735,6 +737,8 @@ it.each(['realplksr_nomoswebphoto_x4', 'realplksr_hfa2k_anime_x4'])(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  api.bootstrap.mockReset();
+  api.refreshSnapshot.mockReset();
   api.isTauri.mockReturnValue(true);
   api.addMedia.mockResolvedValue(undefined);
   api.selectMedia.mockResolvedValue(undefined);
@@ -1387,11 +1391,11 @@ describe('LocalSR desktop interface', () => {
 
   it('keeps advanced controls in a dedicated scroll region', async () => {
     const user = await mountWith(readySnapshot([image('first', true)]));
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
 
     const inspector = screen.getByRole('region', { name: 'Enhancement settings' });
     expect(inspector.classList.contains('inspector-scroll')).toBe(true);
-    expect(screen.getByLabelText('Interface text')).toBeTruthy();
+    expect(screen.getByLabelText('Format')).toBeTruthy();
     expect(screen.getByRole('checkbox', { name: /Safe memory mode/i })).toBeTruthy();
   });
 
@@ -1618,10 +1622,13 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByRole('list', { name: 'Stages' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Change the upscaler' })).toBeTruthy();
 
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
-    const hardware = screen.getByLabelText('Hardware');
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
+    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    const hardware = within(settingsDialog).getByLabelText('Hardware');
     expect(within(hardware).getByRole('option', { name: 'Apple GPU (Metal)' })).toBeTruthy();
     expect(within(hardware).getByRole('option', { name: 'CPU' })).toBeTruthy();
+    await user.click(within(settingsDialog).getByRole('button', { name: 'Done' }));
 
     // Faces need a primary model with a companion; the default Best (RealPLKSR)
     // has none, so the chip is not offered until such a model is chosen.
@@ -1656,7 +1663,7 @@ describe('LocalSR desktop interface', () => {
     expect(within(engine).getByRole('option', { name: /Frame-by-frame/i })).toBeTruthy();
     expect(within(engine).getByRole('option', { name: /SeedVR2-3B — Labs/i })).toBeTruthy();
 
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
     expect(screen.getByLabelText('Container')).toBeTruthy();
     expect(screen.getByLabelText(/Video quality · CRF/i)).toBeTruthy();
     expect(screen.getByRole('checkbox', { name: /De-flicker · Labs/i })).toBeTruthy();
@@ -1681,7 +1688,7 @@ describe('LocalSR desktop interface', () => {
         enable_face_model: false,
       });
       const user = await mountWith(snapshot);
-      await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+      await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
       const engine = screen.getByLabelText('Video engine');
       await user.selectOptions(engine, 'seedvr2_3b');
       await user.selectOptions(engine, 'frame_by_frame');
@@ -1700,7 +1707,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.task = 'video';
     snapshot.engine!.features = ['video_frame'];
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
     expect((screen.getByLabelText('Frame rate') as HTMLSelectElement).disabled).toBe(true);
   });
 
@@ -1710,7 +1717,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.video_hdr_mode = 'preserve';
     snapshot.settings.selected_model_id = 'hat_s_x4';
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
     const rate = screen.getByLabelText('Frame rate') as HTMLSelectElement;
     expect(rate.disabled).toBe(false);
     await user.selectOptions(rate, 'x2');
@@ -1762,7 +1769,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.catalog.interpolation_models.forEach((model) => (model.installed = true));
     const user = await mountWith(snapshot);
     await chooseTask(user, /^Upscale$/);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
     const rate = screen.getByLabelText('Frame rate') as HTMLSelectElement;
     expect(rate.value).toBe('off');
     expect(screen.queryByLabelText('Interpolate')).toBeNull();
@@ -1832,7 +1839,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.catalog.interpolation_models.forEach((model) => (model.installed = true));
     const user = await mountWith(snapshot);
     await user.selectOptions(screen.getByLabelText('Video engine'), 'seedvr2_3b');
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
     expect(screen.queryByLabelText('Frame rate')).toBeNull();
     expect(screen.queryByText('Interpolate 2×')).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Start selected video' }));
@@ -1895,7 +1902,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.precision = 'fp32';
     snapshot.settings.quality = 'custom';
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
     const precision = screen.getByLabelText('Precision') as HTMLSelectElement;
     expect(precision.value).toBe('fp32');
   });
@@ -1991,7 +1998,7 @@ describe('LocalSR desktop interface', () => {
       }
       // The hint moved: Advanced does not repeat it.
       await chooseTask(user, /^Upscale$/);
-      await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+      await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
       expect(screen.getAllByText(text)).toHaveLength(1);
     },
   );
@@ -2076,8 +2083,17 @@ describe('LocalSR desktop interface', () => {
     ];
     const user = await mountWith(snapshot);
     await chooseTask(user, /^Upscale$/);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
-    const hardware = screen.getByLabelText('Hardware');
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Appearance' }));
+    // The saved scale is a number; the menu must still show the matching option.
+    expect(
+      (within(settingsDialog).getByLabelText('Interface text') as HTMLSelectElement).selectedIndex,
+    ).toBe(0);
+
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Performance' }));
+    const hardware = within(settingsDialog).getByLabelText('Hardware');
 
     for (const name of [
       'Apple GPU (Metal)',
@@ -2098,18 +2114,24 @@ describe('LocalSR desktop interface', () => {
         expect.objectContaining({ device_id: 'directml:0' }),
       ),
     );
-    expect(screen.getByText(/DirectML has not been tested on real hardware yet/)).toBeTruthy();
-    expect(screen.getByText(/checks once that it gives the same result as the CPU/)).toBeTruthy();
-    // The saved scale is a number; the menu must still show the matching option.
-    expect((screen.getByLabelText('Interface text') as HTMLSelectElement).selectedIndex).toBe(0);
+    expect(
+      within(settingsDialog).getByText(/DirectML has not been tested on real hardware yet/),
+    ).toBeTruthy();
+    expect(
+      within(settingsDialog).getByText(/checks once that it gives the same result as the CPU/),
+    ).toBeTruthy();
     // ONNX Runtime GPU routes always run FP32: the control says so and cannot change it.
     const precision = screen.getByLabelText('Precision') as HTMLSelectElement;
     expect(precision.disabled).toBe(true);
     expect(precision.value).toBe('fp32');
 
     await user.selectOptions(hardware, 'openvino:8680677d060000000002000000000000');
-    await waitFor(() => expect(screen.queryByText(/DirectML has not been tested/)).toBeNull());
-    expect(screen.getByText(/checks once that it gives the same result as the CPU/)).toBeTruthy();
+    await waitFor(() =>
+      expect(within(settingsDialog).queryByText(/DirectML has not been tested/)).toBeNull(),
+    );
+    expect(
+      within(settingsDialog).getByText(/checks once that it gives the same result as the CPU/),
+    ).toBeTruthy();
     expect((screen.getByLabelText('Precision') as HTMLSelectElement).disabled).toBe(true);
   });
 
@@ -2118,9 +2140,12 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.device_id = 'cuda:7';
     const user = await mountWith(snapshot);
     await chooseTask(user, /^Upscale$/);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
-    const hardware = screen.getByLabelText('Hardware') as HTMLSelectElement;
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Performance' }));
+    const hardware = within(settingsDialog).getByLabelText('Hardware') as HTMLSelectElement;
     expect(hardware.selectedOptions[0]?.textContent).toBe('CPU');
+    await user.click(within(settingsDialog).getByRole('button', { name: 'Done' }));
     await user.click(screen.getByRole('button', { name: 'Upscale selected' }));
     await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
     expect(api.startJobs).toHaveBeenCalledWith(expect.objectContaining({ device: 'cpu' }));
@@ -2157,8 +2182,15 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.selected_model_id = 'span_photo_x4';
     const user = await mountWith(snapshot);
     await chooseTask(user, /^Upscale$/);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
-    const hardware = screen.getByLabelText('Hardware') as HTMLSelectElement;
+    // The status line names the GPU as the menu and the engine do.
+    expect(document.querySelector('.status-detail')?.textContent).toMatch(
+      /· Intel UHD Graphics 620 \(DirectML\)$/,
+    );
+
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Performance' }));
+    const hardware = within(settingsDialog).getByLabelText('Hardware') as HTMLSelectElement;
 
     const groups = [...hardware.querySelectorAll('optgroup')];
     expect(groups.map((group) => group.label)).toEqual(['Intel UHD Graphics 620']);
@@ -2170,15 +2202,8 @@ describe('LocalSR desktop interface', () => {
     for (const name of ['CPU', 'NVIDIA GeForce RTX 3060', 'Intel AI Boost (NPU)']) {
       expect(within(hardware).getByRole('option', { name })).toBeTruthy();
     }
-    // The closed menu shows the whole name and route: the menu gets the row's full width,
-    // and its tooltip repeats the entry.
     expect(hardware.selectedOptions[0].textContent).toBe('Intel UHD Graphics 620 · DirectML');
     expect(hardware.title).toBe('Intel UHD Graphics 620 · DirectML');
-    expect(hardware.closest('.field-row')?.classList.contains('stacked')).toBe(true);
-    // The status line names the GPU as the menu and the engine do.
-    expect(document.querySelector('.status-detail')?.textContent).toMatch(
-      /· Intel UHD Graphics 620 \(DirectML\)$/,
-    );
 
     await user.selectOptions(hardware, 'openvino:8680');
     await waitFor(() =>
@@ -2193,16 +2218,16 @@ describe('LocalSR desktop interface', () => {
         expect.objectContaining({ device_id: 'openvino:80d1' }),
       ),
     );
-    expect(screen.getByText(/compiles a model once for the NPU/)).toBeTruthy();
+    expect(within(settingsDialog).getByText(/compiles a model once for the NPU/)).toBeTruthy();
   });
 
-  it('keeps short Hardware entries beside their label', async () => {
+  it('keeps short Hardware entries without optgroups in Settings', async () => {
     const user = await mountWith(readySnapshot([image('photo', true)]));
-    await chooseTask(user, /^Upscale$/);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
-    const hardware = screen.getByLabelText('Hardware') as HTMLSelectElement;
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Performance' }));
+    const hardware = within(settingsDialog).getByLabelText('Hardware') as HTMLSelectElement;
     expect(hardware.querySelector('optgroup')).toBeNull();
-    expect(hardware.closest('.field-row')?.classList.contains('stacked')).toBe(false);
   });
 
   it('keeps the engine route note for the whole job, through a snapshot refresh', async () => {
@@ -2348,13 +2373,12 @@ describe('LocalSR desktop interface', () => {
 
     const open = await mountWith(onTheGpu());
     await chooseTask(open, /^Upscale$/);
-    await open.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await open.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
     await failOnTheGpu();
     failure = screen.getByRole('alert', { name: 'Last error' });
     await open.click(within(failure).getByRole('button', { name: 'Use the CPU' }));
-    // Advanced is open: the Hardware menu that now says CPU takes it.
-    await waitFor(() => expect(document.activeElement?.id).toBe('device'));
-    expect((document.activeElement as HTMLSelectElement).value).toBe('cpu');
+    // Advanced is open: the Hardware Change… link takes focus.
+    await waitFor(() => expect(document.activeElement?.id).toBe('advanced-hardware-change'));
   });
 
   describe('Try again for an engine the host gave up on', () => {
@@ -4002,7 +4026,7 @@ describe('LocalSR desktop interface', () => {
     ).toBeTruthy();
   });
 
-  it('explains the NPU in Advanced and names a missing compiler in the status line', async () => {
+  it('explains the NPU in Settings and names a missing compiler in the status line', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.capabilities.devices = [
       {
@@ -4020,9 +4044,11 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.device_id = 'openvino:80d1';
     snapshot.settings.selected_model_id = 'span_photo_x4';
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
     expect((screen.getByLabelText('Precision') as HTMLSelectElement).value).toBe('fp16');
-    expect(screen.getByText(/compiles a model once for the NPU/)).toBeTruthy();
+    await user.click(document.getElementById('advanced-hardware-change') as HTMLElement);
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(within(settingsDialog).getByText(/compiles a model once for the NPU/)).toBeTruthy();
     cleanup();
 
     const missing = readySnapshot([image('photo', true)]);
@@ -4039,7 +4065,7 @@ describe('LocalSR desktop interface', () => {
       ),
     ).toBeTruthy();
     expect(within(status).queryByRole('button', { name: 'Download page' })).toBeNull();
-    await user2.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await user2.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
     expect(document.querySelector('.advanced-controls')?.textContent).not.toMatch(
       /NPU compiler|intel-driver-compiler-npu|current Intel NPU driver/,
     );
@@ -6191,11 +6217,10 @@ it('does not ask for a catalog model under Your own file', async () => {
   expect(api.openCustomModelTutorial).toHaveBeenCalledTimes(1);
 });
 
-it('saves Run at low priority via setUpdateSwitch even while a job is running', async () => {
+it('saves Run at low priority, Show in menu bar and Notify via setPreference even while a job is running', async () => {
   const snapshot = readySnapshot([image('photo', true)]);
   snapshot.settings.task = 'upscale';
   const user = await mountWith(snapshot);
-  await user.click(screen.getByRole('button', { name: /Advanced/ }));
   // Start a job so processing settings lock.
   const running = structuredClone(snapshot);
   running.runtime.active_job_id = 'job-1';
@@ -6206,17 +6231,22 @@ it('saves Run at low priority via setUpdateSwitch even while a job is running', 
       true,
     ),
   );
-  // user-event skips any descendant of fieldset[disabled], even non-form spans; fireEvent matches a real browser.
-  await fireEvent.click(screen.getByRole('checkbox', { name: 'Run at low priority' }));
+
+  await chooseMenuItem('app.settings');
+  const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+  await user.click(within(settingsDialog).getByRole('switch', { name: /Show LocalSR in the/ }));
+  expect(api.setPreference).toHaveBeenCalledWith('show_in_menu_bar', false);
+  await user.click(
+    within(settingsDialog).getByRole('switch', { name: 'Notify when a file finishes' }),
+  );
+  expect(api.setPreference).toHaveBeenCalledWith('notify_on_finish', false);
+
+  await user.click(within(settingsDialog).getByRole('tab', { name: 'Performance' }));
+  await user.click(within(settingsDialog).getByRole('switch', { name: 'Run at low priority' }));
   expect(api.setPreference).toHaveBeenCalledWith('low_priority', true);
   expect(api.saveSettings).not.toHaveBeenCalledWith(
     expect.objectContaining({ low_priority: true }),
   );
-
-  await fireEvent.click(screen.getByRole('checkbox', { name: 'Show in menu bar' }));
-  expect(api.setPreference).toHaveBeenCalledWith('show_in_menu_bar', false);
-  await fireEvent.click(screen.getByRole('checkbox', { name: 'Notify when a file finishes' }));
-  expect(api.setPreference).toHaveBeenCalledWith('notify_on_finish', false);
 });
 
 describe('first-launch setup screen', () => {
@@ -6475,12 +6505,12 @@ describe('crash reports', () => {
     ).toBeNull();
   });
 
-  it('manages crash reports and opt-in toggle from Performance & Diagnostics', async () => {
+  it('manages crash reports in Performance & Diagnostics and links to Settings when off', async () => {
     const snap = readySnapshot();
     snap.settings.crash_reports = true;
     api.listCrashReports.mockResolvedValue([sampleReport]);
     const user = await mountWith(snap);
-    const notice = await screen.findByRole('dialog', {
+    await screen.findByRole('dialog', {
       name: 'LocalSR quit unexpectedly last time.',
     });
     await user.keyboard('{Escape}');
@@ -6493,17 +6523,39 @@ describe('crash reports', () => {
     nativeMenu?.('view.performance');
     const dialog = await screen.findByRole('dialog', { name: 'Performance & Diagnostics' });
     const section = within(dialog).getByRole('region', { name: 'Crash reports' });
-    expect(
-      within(section).getByText('Turning this off deletes all stored crash reports immediately.'),
-    ).toBeTruthy();
+    expect(within(section).queryByLabelText('Offer to Report Crashes')).toBeNull();
     expect(within(section).getByText('Stored crash reports: 1')).toBeTruthy();
-
-    await user.click(within(section).getByLabelText('Offer to Report Crashes'));
-    await waitFor(() => expect(api.setPreference).toHaveBeenCalledWith('crash_reports', false));
 
     api.listCrashReports.mockResolvedValueOnce([]).mockResolvedValue([]);
     await user.click(within(section).getByRole('button', { name: 'Delete All' }));
     await waitFor(() => expect(api.deleteAllCrashReports).toHaveBeenCalledTimes(1));
+    await user.keyboard('{Escape}');
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Performance & Diagnostics' })).toBeNull(),
+    );
+
+    // Toggle crash reports off in Settings -> Privacy & updates, then re-open Diagnostics.
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Privacy & updates' }));
+    await user.click(
+      within(settingsDialog).getByRole('switch', { name: 'Offer to report crashes' }),
+    );
+    await waitFor(() => expect(api.setPreference).toHaveBeenCalledWith('crash_reports', false));
+    await user.click(within(settingsDialog).getByRole('button', { name: 'Done' }));
+
+    nativeMenu?.('view.performance');
+    const offDialog = await screen.findByRole('dialog', { name: 'Performance & Diagnostics' });
+    expect(
+      within(offDialog).getByText('Crash reports are off. Turn them on in Settings.'),
+    ).toBeTruthy();
+    await user.click(within(offDialog).getByRole('button', { name: 'Open Settings' }));
+    const reopened = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(
+      within(reopened)
+        .getByRole('tab', { name: 'Privacy & updates' })
+        .getAttribute('aria-selected'),
+    ).toBe('true');
   });
 
   it('toggles Clean up audio with help tip, downloads DeepFilterNet3 on start, disables when silent, and saves in recipes', async () => {
@@ -6833,10 +6885,10 @@ describe('video restore, Restore first, and 1× removal', () => {
     expect(Array.from(scaleSelect.options).map((o) => o.value)).toEqual(['2', '3', '4']);
     expect(screen.queryByRole('button', { name: 'About Quality' })).toBeNull();
 
-    // Switch to video Restore: Noise starts on, Output scale hides, Advanced says Format, hardware.
+    // Switch to video Restore: Noise starts on, Output scale hides, Advanced says Format, tiles.
     await user.click(screen.getByRole('button', { name: /^Restore$/ }));
     expect(screen.queryByLabelText('Output scale')).toBeNull();
-    expect(screen.getByText('Format, hardware')).toBeTruthy();
+    expect(screen.getByText('Format, tiles')).toBeTruthy();
 
     // Untick Noise: no restore model runs, Start is disabled with "Nothing to run..."
     await user.click(screen.getByRole('button', { name: 'Noise', pressed: true }));
@@ -7043,8 +7095,10 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     );
     const user = await mountWith(current);
     api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
-    await user.click(screen.getByRole('button', { name: /Advanced/ }));
-    await user.click(screen.getByRole('button', { name: /^Model folder / }));
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Storage' }));
+    await user.click(within(settingsDialog).getByRole('button', { name: /^Model folder / }));
     await waitFor(() => expect(api.setModelDirectory).toHaveBeenCalled());
     api.takeLaunchIntents
       .mockResolvedValueOnce([
@@ -7059,7 +7113,7 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1), { timeout: 3000 });
   });
 
-  it('chooses and resets the model folder from Advanced settings', async () => {
+  it('chooses and resets the model folder from Settings', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.settings.task = 'upscale';
     snapshot.default_model_directory = '/Users/demo/Library/Application Support/LocalSR/models';
@@ -7070,16 +7124,20 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     api.chooseModelDirectory.mockResolvedValueOnce('/Volumes/SSD/models');
     api.refreshSnapshot.mockResolvedValueOnce(moved).mockResolvedValueOnce(snapshot);
 
-    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Storage' }));
 
-    await user.click(screen.getByRole('button', { name: /^Model folder / }));
+    await user.click(within(settingsDialog).getByRole('button', { name: /^Model folder / }));
     await waitFor(() => expect(api.setModelDirectory).toHaveBeenCalledWith('/Volumes/SSD/models'));
-    expect(await screen.findByText('/Volumes/SSD/models')).toBeTruthy();
+    expect(await within(settingsDialog).findByText('/Volumes/SSD/models')).toBeTruthy();
 
-    await user.click(screen.getByRole('button', { name: 'Reset to default' }));
+    await user.click(within(settingsDialog).getByRole('button', { name: 'Reset to default' }));
     await waitFor(() => expect(api.resetModelDirectory).toHaveBeenCalledTimes(1));
     expect(
-      await screen.findByText('/Users/demo/Library/Application Support/LocalSR/models'),
+      await within(settingsDialog).findByText(
+        '/Users/demo/Library/Application Support/LocalSR/models',
+      ),
     ).toBeTruthy();
   });
 
@@ -7113,7 +7171,7 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     await waitFor(() => expect(api.resetModelDirectory).toHaveBeenCalledTimes(1));
   });
 
-  it('shows moving progress inside the card, sets header to Moving models, and disables Upscale selected', async () => {
+  it('shows moving progress inside the card, prevents closing Settings, and disables Upscale selected', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.settings.task = 'upscale';
     snapshot.settings.quality = 'quick';
@@ -7144,8 +7202,10 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     );
 
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced/ }));
-    await user.click(screen.getByRole('button', { name: /^Model folder / }));
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Storage' }));
+    await user.click(within(settingsDialog).getByRole('button', { name: /^Model folder / }));
 
     moveHandler?.({
       moved_bytes: 47,
@@ -7156,9 +7216,14 @@ describe('Model folder and Windows CPU GPU download notice', () => {
       current_file: 'model.pth',
     });
 
-    expect(await screen.findByText('Moving 7 of 15 files…')).toBeTruthy();
-    expect(screen.getByText('47%')).toBeTruthy();
-    expect(document.querySelector('progress.download-progress')).toBeTruthy();
+    expect(await within(settingsDialog).findByText('Moving 7 of 15 files…')).toBeTruthy();
+    expect(within(settingsDialog).getByText('47%')).toBeTruthy();
+    expect(settingsDialog.querySelector('progress.download-progress')).toBeTruthy();
+    expect(
+      (within(settingsDialog).getByRole('button', { name: 'Done' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeTruthy();
     expect(document.querySelector('.enhance-pane .pane-heading span')?.textContent).toBe(
       'Moving models',
     );
@@ -7172,6 +7237,9 @@ describe('Model folder and Windows CPU GPU download notice', () => {
         (screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement).disabled,
       ).toBe(false),
     );
+    expect(
+      (within(settingsDialog).getByRole('button', { name: 'Done' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
   });
 
   it('shows the dismissable GPU download notice, opens the download page, and remembers dismissal', async () => {
@@ -7316,10 +7384,12 @@ describe('Engine manager UI and recommendation card', () => {
     await waitFor(() => expect(api.dismissGpuDownloadNotice).toHaveBeenCalledTimes(1));
     expect(screen.queryByText(cardText)).toBeNull();
 
-    // Still reachable via Advanced settings -> Engine -> Change…
-    await user.click(screen.getByRole('button', { name: /Advanced/ }));
-    expect(screen.getByText('Engine')).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    // Still reachable via Settings -> Performance -> Engine -> Change…
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Performance' }));
+    expect(within(settingsDialog).getByText('Engine')).toBeTruthy();
+    await user.click(within(settingsDialog).getByRole('button', { name: 'Change…' }));
     const dialog = await screen.findByRole('dialog', { name: 'Engine' });
     expect(within(dialog).getByText('NVIDIA CUDA')).toBeTruthy();
     expect(within(dialog).getByText('Recommended')).toBeTruthy();
@@ -7357,8 +7427,10 @@ describe('Engine manager UI and recommendation card', () => {
     snapshot.engines!.recommendation = { backend: 'cpu', adapter_name: null };
 
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced/ }));
-    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Performance' }));
+    await user.click(within(settingsDialog).getByRole('button', { name: 'Change…' }));
     const dialog = await screen.findByRole('dialog', { name: 'Engine' });
     expect(
       within(dialog).getByText('Choose the engine LocalSR uses on this computer.'),
@@ -7461,8 +7533,10 @@ describe('Engine manager UI and recommendation card', () => {
     afterImport.engines!.catalog[0].active = true;
 
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced/ }));
-    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Performance' }));
+    await user.click(within(settingsDialog).getByRole('button', { name: 'Change…' }));
 
     const dialog = await screen.findByRole('dialog', { name: 'Engine' });
     const list = within(dialog).getByRole('list', { name: 'Available engines' });
@@ -7642,15 +7716,9 @@ describe('Linux AppImage menu prompt', () => {
     expect(screen.queryByText('Add LocalSR to your applications menu?')).toBeNull();
   });
 
-  it('installs the applications menu entry when accepted and supports Help menu removal', async () => {
-    let menuHandler: ((action: string) => void) | undefined;
-    api.listenForNativeMenu.mockImplementationOnce(async (handler) => {
-      menuHandler = handler;
-      return () => undefined;
-    });
+  it('installs the applications menu entry when accepted and removes it from Settings', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.linux_menu_offer = true;
-    api.refreshSnapshot.mockResolvedValueOnce(structuredClone(snapshot));
 
     const user = await mountWith(snapshot);
     const banner = screen
@@ -7661,7 +7729,9 @@ describe('Linux AppImage menu prompt', () => {
     await waitFor(() => expect(api.installLinuxMenu).toHaveBeenCalledTimes(1));
     expect(screen.queryByText('Add LocalSR to your applications menu?')).toBeNull();
 
-    menuHandler?.('help.remove-desktop-menu');
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('button', { name: 'Remove' }));
     await waitFor(() => expect(api.uninstallLinuxMenu).toHaveBeenCalledTimes(1));
   });
 });
@@ -7710,32 +7780,6 @@ describe('remembered custom checkpoint consent', () => {
           .checked,
       ).toBe(true),
     );
-  });
-});
-
-describe('Settings sheet', () => {
-  it('opens from app.settings and is ignored while another dialog or first-launch setup is open', async () => {
-    const setupSnap = readySnapshot([image('photo', true)]);
-    setupSnap.settings.privacy_choice_made = false;
-    await mountWith(setupSnap);
-    expect(await screen.findByRole('dialog', { name: 'Welcome to LocalSR' })).toBeTruthy();
-    await chooseMenuItem('app.settings');
-    expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull();
-    cleanup();
-
-    const user = await mountWith(readySnapshot([image('photo', true)]));
-    await chooseMenuItem('view.models');
-    expect(await screen.findByRole('dialog', { name: 'Model library' })).toBeTruthy();
-    await chooseMenuItem('app.settings');
-    expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull();
-    await user.keyboard('{Escape}');
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
-
-    await chooseMenuItem('app.settings');
-    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
-    expect(dialog).toBeTruthy();
-    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull());
   });
 });
 

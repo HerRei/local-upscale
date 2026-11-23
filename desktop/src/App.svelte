@@ -2258,7 +2258,7 @@
   async function useTheCpu(): Promise<void> {
     updateSettings(hardwarePatch('cpu'));
     await tick();
-    (document.getElementById('device') ?? failureNote)?.focus();
+    (document.getElementById('advanced-hardware-change') ?? failureNote)?.focus();
   }
 
   function supportsHdrPreservation(candidate: UiSettings): boolean {
@@ -3567,9 +3567,6 @@
           if (preparing) await cancelPreparation();
           else await api.cancelJobs();
           break;
-        case 'file.integrations':
-          await showIntegrations();
-          break;
         case 'preset.quick':
           applyPreset('quick');
           break;
@@ -3609,14 +3606,6 @@
           break;
         case 'help.report-problem':
           await showReport();
-          break;
-        case 'help.add-desktop-menu':
-          await api.installLinuxMenu();
-          await refresh();
-          break;
-        case 'help.remove-desktop-menu':
-          await api.uninstallLinuxMenu();
-          await refresh();
           break;
         case 'app.settings':
           openSettings('general');
@@ -3929,12 +3918,6 @@
 
   <UpdatePanel
     processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
-    anonymousUpdateCount={settings.anonymous_update_count ?? false}
-    completionSound={settings.completion_sound ?? false}
-    on:completionsound={(event) => updateSettings({ completion_sound: event.detail })}
-    checkAtLaunch={settings.check_updates_at_launch ?? true}
-    on:anonymouscount={(event) => void setPreference('anonymous_update_count', event.detail)}
-    on:checkatlaunch={(event) => void setPreference('check_updates_at_launch', event.detail)}
   />
   <WelcomeNotice
     anonymousUpdateCount={settings.anonymous_update_count ?? false}
@@ -4931,28 +4914,13 @@
               {selectedModel}
               {editModel}
               capabilities={snapshot.capabilities}
-              engines={snapshot.engines}
               {usingTemporalVideo}
               {preservingHdr}
               {interpolationSupported}
-              defaultModelDirectory={snapshot.default_model_directory ?? ''}
-              modelDirectoryMissing={Boolean(snapshot.model_directory_missing)}
-              {movingModels}
-              {modelMoveProgress}
-              {cacheSize}
-              cacheBusy={clearingCache ||
-                Boolean(snapshot.runtime.active_job_id) ||
-                Boolean(snapshot.runtime.active_batch_job_ids?.length)}
-              {clearCache}
-              loadCacheSize={() => void loadCacheSize()}
               {updateSettings}
-              setLowPriority={(value) => void setPreference('low_priority', value)}
-              setShowInMenuBar={(value) => void setPreference('show_in_menu_bar', value)}
-              setNotifyOnFinish={(value) => void setPreference('notify_on_finish', value)}
               {chooseOutput}
-              {chooseModelFolder}
-              {resetModelFolder}
-              onOpenEngineManager={() => void openEngineManager()}
+              onOpenHardwareSettings={() => openSettings('performance', 'hardware')}
+              onOpenFfmpegSettings={() => openSettings('storage', 'ffmpeg')}
               refreshCapabilities={async () => {
                 try {
                   await api.refreshCapabilities();
@@ -5378,15 +5346,19 @@
       <p class="modal-message">{modalMessage}</p>
       {#if modalKind === 'performance'}
         <section class="crash-reports-panel" aria-label="Crash reports">
-          <label class="crash-reports-toggle"
-            ><input
-              type="checkbox"
-              checked={settings.crash_reports ?? false}
-              on:change={(event) =>
-                void setPreference('crash_reports', event.currentTarget.checked)}
-            /> Offer to Report Crashes</label
-          >
-          <p>Turning this off deletes all stored crash reports immediately.</p>
+          {#if !settings.crash_reports}
+            <div class="crash-reports-row">
+              <span>Crash reports are off. Turn them on in Settings.</span>
+              <button
+                type="button"
+                class="button"
+                on:click={() => {
+                  closeModal();
+                  openSettings('privacy');
+                }}>Open Settings</button
+              >
+            </div>
+          {/if}
           <div class="crash-reports-row">
             <span>Stored crash reports: {crashReports.length}</span>
             <div class="crash-reports-actions">

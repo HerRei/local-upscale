@@ -63,8 +63,8 @@
   >
     <h2 id="setup-title">Welcome to LocalSR</h2>
     <p class="setup-intro">
-      Choose how LocalSR looks and what it checks or records. You can change these later in the
-      menu.
+      Choose how LocalSR looks and what it checks or records. You can change all of this later in
+      Settings.
     </p>
 
     <section class="setup-section" aria-labelledby="setup-appearance-heading">
@@ -95,8 +95,7 @@
         <div class="setting-copy">
           <label class="setting-label" for="setup-menu-bar">Show LocalSR in the {trayName}</label>
           <p class="setting-desc" id="setup-menu-bar-desc">
-            Shows what is running and lets you pause the queue. You can change this later in
-            Advanced settings.
+            Shows what is running and lets you pause the queue.
           </p>
         </div>
         <input
