@@ -39,19 +39,38 @@ def seedvr2_runtime_issue() -> str | None:
 
 
 def flashvsr_runtime_issue() -> str | None:
-    """FlashVSR runs on Apple Silicon via MLX."""
-    if sys.platform != "darwin" or platform.machine().lower() != "arm64":
-        return (
-            "FlashVSR requires Apple Silicon (macOS arm64). Frame-by-frame video remains available."
-        )
-    try:
-        import mlx.core  # noqa: F401
-    except (ImportError, OSError):
-        return (
-            "FlashVSR requires MLX on Apple Silicon, which is not installed in this build. "
-            "Frame-by-frame video remains available."
-        )
-    return None
+    """FlashVSR runs on Apple Silicon via MLX or on Linux with ROCm + FlexAttention."""
+    if sys.platform == "darwin" and platform.machine().lower() == "arm64":
+        try:
+            import mlx.core  # noqa: F401
+        except (ImportError, OSError):
+            return (
+                "FlashVSR requires MLX on Apple Silicon, which is not installed in this build. "
+                "Frame-by-frame video remains available."
+            )
+        return None
+    if sys.platform == "linux":
+        try:
+            import torch
+        except (ImportError, OSError):
+            return (
+                "FlashVSR requires Apple Silicon (macOS arm64). "
+                "Frame-by-frame video remains available."
+            )
+        if getattr(getattr(torch, "version", None), "hip", None):
+            try:
+                import triton  # noqa: F401
+                from torch.nn.attention.flex_attention import (  # noqa: F401
+                    BlockMask,
+                    flex_attention,
+                )
+            except (ImportError, OSError, AttributeError):
+                return (
+                    "FlashVSR on AMD ROCm requires PyTorch FlexAttention and Triton, "
+                    "which are not available in this build. Frame-by-frame video remains available."
+                )
+            return None
+    return "FlashVSR requires Apple Silicon (macOS arm64). Frame-by-frame video remains available."
 
 
 def resolve_video_engine(kind: str):
