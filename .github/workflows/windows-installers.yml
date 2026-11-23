@@ -233,15 +233,22 @@ jobs:
             -Credential $credential -LoadUserProfile -Wait -PassThru -WorkingDirectory C:\
           $profileRoot = (Get-CimInstance Win32_UserProfile | Where-Object { $_.LocalPath -like "*\$user" }).LocalPath
           if (-not $profileRoot) { throw "The standard user's profile was not created" }
-          $installDir = Join-Path $profileRoot "AppData\Local\LocalSR"
-
           $install = Start-Process -FilePath $artifact -ArgumentList "/S" -Credential $credential `
             -LoadUserProfile -Wait -PassThru -WorkingDirectory C:\
           "Per-user install exit code: $($install.ExitCode)"
           if ($install.ExitCode -ne 0) { throw "The per-user install failed for a standard user" }
-          $host_exe = Get-ChildItem -LiteralPath $installDir -Filter "*.exe" -File |
-            Where-Object { $_.Name -notmatch "^(un|Un)" } | Select-Object -First 1
-          if (-not $host_exe) { throw "No LocalSR executable in $installDir" }
+          # Where "Just me" installs is the installer's choice; find the host in that user's AppData.
+          $host_exe = Get-ChildItem -LiteralPath (Join-Path $profileRoot "AppData") -Recurse -Depth 5 `
+            -Filter "*.exe" -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like "*localsr*" -and $_.Name -notmatch "^(un|Un)" -and
+              $_.FullName -notmatch "\\(engine|resources)\\" } |
+            Sort-Object { $_.FullName.Length } | Select-Object -First 1
+          if (-not $host_exe) {
+            Get-ChildItem -LiteralPath $profileRoot -Recurse -Depth 6 -Filter "*.exe" -File -ErrorAction SilentlyContinue |
+              Select-Object -First 30 | ForEach-Object { "found: $($_.FullName)" }
+            throw "No LocalSR executable in the standard user's AppData"
+          }
+          $installDir = $host_exe.DirectoryName
           "Installed for the standard user: $($host_exe.FullName)"
           $machineKey = Get-ChildItem "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall" |
             Where-Object { (Get-ItemProperty $_.PSPath).DisplayName -like "LocalSR*" }
