@@ -236,9 +236,26 @@ test.describe('the details under Compare', () => {
       await page.keyboard.press('Escape');
       await expect(full).toHaveCount(0);
       await expect(page.locator('.compare-pane')).toBeVisible();
-      // Hovering a column opens the same list.
+      // Hovering a column opens the same list; Escape closes it wherever the focus is,
+      // and Compare stays.
+      await page.locator('.compare-pane .compare-well').click({ position: { x: 5, y: 5 } });
       await strip.locator('.details-column').first().hover();
       await expect(full).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(full).toHaveCount(0);
+      await expect(page.locator('.compare-pane')).toBeVisible();
+      // So does a list opened by a click on More (WebKit does not focus the button), and a
+      // click elsewhere.
+      await page.mouse.move(0, 0);
+      await more.click();
+      await expect(full).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(full).toHaveCount(0);
+      await expect(page.locator('.compare-pane')).toBeVisible();
+      await more.click();
+      await expect(full).toBeVisible();
+      await page.locator('.compare-pane .compare-well').click({ position: { x: 5, y: 5 } });
+      await expect(full).toHaveCount(0);
     });
 
   test('are as tall with a larger interface text as their five lines need', async ({ page }) => {
@@ -330,6 +347,18 @@ test.describe('an unfinished video', () => {
       audio.getByRole('radio', { name: 'Audio of slot 1: 15 fps result' }),
     ).toBeChecked();
     expect(await muted()).toEqual([false, true]);
+    // Before any choice the sound already belongs to the result in slot 1: a swap moves
+    // the picture, not what is heard.
+    const swap = compare.getByRole('button', { name: 'Swap slots 1 and 2' });
+    await swap.click();
+    await expect(
+      audio.getByRole('radio', { name: 'Audio of slot 2: 15 fps result' }),
+    ).toBeChecked();
+    await expect.poll(muted).toEqual([true, false]);
+    await swap.click();
+    await expect(
+      audio.getByRole('radio', { name: 'Audio of slot 1: 15 fps result' }),
+    ).toBeChecked();
     await audio.getByRole('radio', { name: 'Audio of slot 2: 60 fps result' }).click();
     expect(await muted()).toEqual([true, false]);
     // The choice follows the result when the slots are swapped.
@@ -363,6 +392,47 @@ test.describe('an unfinished video', () => {
       (await box(compare.getByRole('slider', { name: /Video (position|frame)/ }))).width,
     ).toBeGreaterThanOrEqual(60);
     expect(hud.height).toBeLessThan(60);
+  });
+
+  test('the arrow keys on the timeline go one frame at a time', async ({ page }) => {
+    await openApp(page, videoUnfinished);
+    await showPane(page, 'media');
+    await outputsTab(page).click();
+    await pick(page, '15 fps result', 'Alpine lake.mp4');
+    await pick(page, '60 fps result', 'Alpine lake.mp4');
+    await page.getByRole('button', { name: 'Compare these 2' }).click();
+    await showPane(page, 'preview');
+    const compare = page.locator('.compare-pane');
+    const videos = compare.locator('video');
+    await expect
+      .poll(() =>
+        videos.evaluateAll((nodes) =>
+          nodes.every((node) => (node as HTMLVideoElement).readyState >= 3),
+        ),
+      )
+      .toBe(true);
+    // Which sixtieth of a second each player is in: the frames of the faster side.
+    const sixtieths = () =>
+      videos.evaluateAll((nodes) =>
+        nodes.map((node) => Math.floor((node as HTMLVideoElement).currentTime * 60 + 0.01)),
+      );
+    const timeline = compare.getByRole('slider', { name: 'Video position' });
+    await timeline.focus();
+    for (const frame of [1, 2, 3]) {
+      await page.keyboard.press('ArrowRight');
+      await expect.poll(sixtieths).toEqual([frame, frame]);
+    }
+    await page.keyboard.press('ArrowLeft');
+    await expect.poll(sixtieths).toEqual([2, 2]);
+    // At the end Next is dimmed and Previous goes back one frame at once.
+    await page.keyboard.press('End');
+    await expect.poll(sixtieths).toEqual([239, 239]);
+    await expect(compare.getByRole('button', { name: 'Next frame' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+    await compare.getByRole('button', { name: 'Previous frame' }).click();
+    await expect.poll(sixtieths).toEqual([238, 238]);
   });
 
   test('plays in the preview as its two frames, marked Unfinished', async ({ page }) => {

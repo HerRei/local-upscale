@@ -23,12 +23,7 @@
     swapSlots,
     type CompareItem,
   } from './lib/compareOutputs';
-  import {
-    keptTilesText,
-    unfinishedMark,
-    type PaneTiles,
-    type PaneUnfinished,
-  } from './lib/unfinished';
+  import { keptTilesText, unfinishedMark, type PaneUnfinished } from './lib/unfinished';
   import {
     ORIGINAL,
     alignedFraming,
@@ -212,7 +207,12 @@
         : media?.width && media?.height
           ? [`Size: ${media.width} × ${media.height}`]
           : [],
-      unfinished: unfinishedMark(result, media?.duration_seconds, media?.fps),
+      unfinished: unfinishedMark(result, {
+        duration: media?.duration_seconds,
+        fps: media?.fps,
+        decoded: slot,
+        source: media,
+      }),
       width: slot?.width || media?.width || 1,
       height: slot?.height || media?.height || 1,
       preview_data_url: slot?.preview_data_url ?? '',
@@ -539,11 +539,9 @@
       ? snapshot.media.find((item) => item.id === activeJob.media_id)
       : undefined;
     if (activeJob?.media_kind === 'image') {
-      const tiles = keptTilesText(
-        snapshot.runtime.tiles_completed ?? 0,
-        snapshot.runtime.tiles_total ?? 0,
-      );
-      return `${tiles ? `${tiles} are finished.` : 'Part of the photo is finished.'} If you keep it, the photo is saved at full size with the rest left as in the original.`;
+      const finished = snapshot.runtime.tiles_completed ?? 0;
+      const tiles = keptTilesText(finished, snapshot.runtime.tiles_total ?? 0);
+      return `${tiles ? `${tiles} ${finished === 1 ? 'is' : 'are'} finished.` : 'Part of the photo is finished.'} If you keep it, the photo is saved at full size with the rest left as in the original.`;
     }
     const done = snapshot.runtime.frames_processed ?? 0;
     const totalFrames = snapshot.runtime.total_frames || media?.frame_count || 0;
@@ -1100,30 +1098,16 @@
   $: againstRow = referenceIsResult
     ? resultRows.find((row) => row.job_id === choice.against)
     : undefined;
-  $: videoMark = completedVideoOutput
-    ? unfinishedMark(videoResult, selectedMedia?.duration_seconds, selectedMedia?.fps)
-    : undefined;
-  $: showingMark = unfinishedMark(showingRow);
-  $: againstMark = unfinishedMark(againstRow);
-  const paneTiles = (
+  const paneMark = (
     row: ResultSummary | undefined,
-    side: { width: number; height: number } | undefined,
-    source: MediaItem | undefined,
-  ): PaneTiles | null => {
-    const tiles = unfinishedMark(row)?.tiles;
-    const width = side?.width || (row?.scale ?? 0) * (source?.width ?? 0);
-    const height = side?.height || (row?.scale ?? 0) * (source?.height ?? 0);
-    return tiles && width > 0 && height > 0 ? { tiles, width, height } : null;
+    about: Parameters<typeof unfinishedMark>[1],
+  ): PaneUnfinished | null => {
+    const mark = unfinishedMark(row, about);
+    return row && mark ? { id: row.job_id, ...mark } : null;
   };
-  $: paneUnfinished = (
-    videoMark
-      ? { side: 'showing', label: videoMark.label }
-      : showingMark
-        ? { side: 'showing', label: showingMark.label }
-        : againstMark
-          ? { side: 'reference', label: againstMark.label }
-          : null
-  ) as PaneUnfinished | null;
+  $: videoMark = completedVideoOutput
+    ? paneMark(videoResult, { duration: selectedMedia?.duration_seconds, fps: selectedMedia?.fps })
+    : null;
   $: paneView = {
     mediaId: selectedImage?.id ?? '',
     resultPreview,
@@ -1132,9 +1116,13 @@
     referenceLabel: referenceIsResult ? (againstSide?.label ?? 'Original') : 'Original',
     showingLabel: showingSide?.label ?? '',
     singleFrame,
-    unfinished: paneUnfinished,
-    showingTiles: paneTiles(showingRow, pairShown ? showingSide : undefined, selectedImage),
-    referenceTiles: paneTiles(againstRow, againstSide, selectedImage),
+    showingUnfinished:
+      videoMark ??
+      paneMark(showingRow, {
+        decoded: pairShown ? showingSide : undefined,
+        source: selectedImage,
+      }),
+    referenceUnfinished: paneMark(againstRow, { decoded: againstSide, source: selectedImage }),
   };
   let heldView = paneView;
   $: if (!loadingTarget) heldView = paneView;
@@ -1148,9 +1136,8 @@
           referenceLabel: 'Original',
           showingLabel: '',
           singleFrame: null,
-          unfinished: null,
-          showingTiles: null,
-          referenceTiles: null,
+          showingUnfinished: null,
+          referenceUnfinished: null,
         }
       : loadingTarget
         ? heldView
@@ -4364,11 +4351,9 @@
           showingState={showingSide?.state ?? 'ready'}
           showingError={showingSide?.error ?? ''}
           singleFrame={shownView.singleFrame}
-          unfinished={shownView.unfinished}
-          showingTiles={shownView.showingTiles}
-          referenceTiles={shownView.referenceTiles}
+          showingUnfinished={shownView.showingUnfinished}
+          referenceUnfinished={shownView.referenceUnfinished}
           videoFps={(completedVideoOutput && videoResult?.output_fps) || selectedMedia?.fps || 0}
-          videoKeptFrames={videoMark?.frames ?? 0}
           loadingLabel={pairLoadingLabel}
           {comparisonNote}
           showLiveTiles={selectedMedia?.kind === 'video' ? !videoChoice.pinned : !choice.pinned}

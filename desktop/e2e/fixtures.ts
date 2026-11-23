@@ -123,8 +123,9 @@ export const withLongDetails: Scenario = {
   },
 };
 
-/** A video with two finished results and one stopped after two frames. */
+/** A video with two finished results and one stopped after two frames, on a host with pair slots. */
 export const videoUnfinished: Scenario = {
+  pairs: true,
   photos: 1,
   video: true,
   videoCompare: true,

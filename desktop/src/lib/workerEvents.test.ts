@@ -279,6 +279,10 @@ describe('desktop state', () => {
     progress({ completed_tiles: 7, total_tiles: 40, unit: 'steps' });
     expect(snapshot.runtime.tiles_completed).toBe(0);
     progress({ completed_tiles: 5, total_tiles: 40 });
+    // A message that only names a phase carries no count and must not take the count away.
+    progress({ detail: 'Saving the result' });
+    expect(snapshot.runtime.tiles_completed).toBe(5);
+    expect(snapshot.runtime.tiles_total).toBe(40);
     snapshot = applyWorkerEnvelope(snapshot, { type: 'job_cancelled', data: { job_id: 'job-1' } });
     expect(snapshot.runtime.tiles_completed).toBe(0);
   });

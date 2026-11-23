@@ -424,12 +424,17 @@ it('opens the full details of a slot whose lines are cut, from More and with the
 });
 
 it('marks the finished tiles of an unfinished photo and shows them from its mark', async () => {
+  // The saved file is four times the source; the item's own size is still the source's.
   const unfinished = {
     label: 'Unfinished · 2 of 6 tiles',
-    tiles: [
-      [0, 0, 50, 50],
-      [50, 0, 50, 50],
-    ] as [number, number, number, number][],
+    tiles: {
+      tiles: [
+        [0, 0, 200, 200],
+        [200, 0, 200, 200],
+      ] as [number, number, number, number][],
+      width: 400,
+      height: 400,
+    },
   };
   const view = render(ComparePane, {
     ...props,
@@ -438,7 +443,7 @@ it('marks the finished tiles of an unfinished photo and shows them from its mark
   // The marks follow the side they belong to: the right of the divider in the slider.
   const marks = view.container.querySelector('.unfinished-tiles') as SVGElement;
   expect(view.container.querySelectorAll('.unfinished-tiles')).toHaveLength(1);
-  expect(marks.getAttribute('viewBox')).toBe('0 0 100 100');
+  expect(marks.getAttribute('viewBox')).toBe('0 0 400 400');
   expect(marks.getAttribute('style')).toContain('clip-path: inset(0 0% 0 50%)');
   expect(marks.classList.contains('lit')).toBe(false);
   const mark = screen.getByRole('button', {
@@ -467,7 +472,7 @@ it('compares an unfinished video only over its kept frames, one by one', async (
       ...item('kept', 'v'),
       media_kind: 'video',
       fps: 30,
-      unfinished: { label: 'Unfinished · 2 of 60 frames', frames: 2 },
+      unfinished: { label: 'Unfinished · 2 of 60 frames', frames: 2, seconds: 0.074 },
     },
   ];
   try {
@@ -514,5 +519,215 @@ it('compares an unfinished video only over its kept frames, one by one', async (
   } finally {
     pause.mockRestore();
     load.mockRestore();
+  }
+});
+
+/** Two loaded players in the slider; `lengths` are what the players report. */
+async function loadedVideos(entries: CompareItem[], lengths: number[]) {
+  const view = render(ComparePane, {
+    ...props,
+    items: entries,
+    generation: 1,
+    prepareVideo: async (_g, index) => ({
+      original_url: `https://fixture/${index}.mp4`,
+      enhanced_url: '',
+    }),
+    cancelVideo: async () => {},
+  });
+  await vi.waitFor(() =>
+    expect(view.container.querySelectorAll('video[src]')).toHaveLength(entries.length),
+  );
+  const videos = [...view.container.querySelectorAll('video')];
+  for (const [index, video] of videos.entries()) {
+    Object.defineProperties(video, {
+      duration: { value: lengths[index] },
+      readyState: { value: 4 },
+    });
+    await fireEvent.loadedData(video);
+  }
+  return { view, videos };
+}
+const clip = (id: string, fps = 30): CompareItem => ({
+  ...item(id, 'v'),
+  media_kind: 'video',
+  fps,
+});
+function mockPlayers() {
+  const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+  const load = vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
+  return () => {
+    pause.mockRestore();
+    load.mockRestore();
+  };
+}
+
+it('pairs the frames of an unfinished video by the file’s length, not the player’s', async () => {
+  const restore = mockPlayers();
+  try {
+    // Two frames of a 30 fps video (0.0667 s in the file); the player reports 0.10 s.
+    const { view, videos } = await loadedVideos(
+      [
+        clip('original'),
+        {
+          ...clip('kept'),
+          unfinished: { label: 'Unfinished · 2 of 60 frames', frames: 2, seconds: 2 / 30 },
+        },
+      ],
+      [2, 0.1],
+    );
+    const transport = screen.getByRole('group', { name: 'Video playback controls' });
+    expect(transport.textContent).toContain('2 frames');
+    await fireEvent.click(screen.getByRole('button', { name: 'Next frame' }));
+    // The middle of frame 1 of the 30 fps original, not 0.075 s in its frame 2.
+    expect(videos[0].currentTime).toBeCloseTo(0.05);
+    expect(videos[1].currentTime).toBeCloseTo(0.05);
+    expect(transport.textContent).toContain('Frame 2');
+    view.unmount();
+  } finally {
+    restore();
+  }
+});
+
+it('moves one frame per arrow key on the timeline, and dims a step button at an end', async () => {
+  const restore = mockPlayers();
+  try {
+    const { view, videos } = await loadedVideos([clip('one'), clip('two')], [4, 4]);
+    const timeline = screen.getByRole('slider', { name: 'Video position' });
+    const back = screen.getByRole('button', { name: 'Previous frame' });
+    const on = screen.getByRole('button', { name: 'Next frame' });
+    expect(back.getAttribute('aria-disabled')).toBe('true');
+    expect(on.getAttribute('aria-disabled')).toBe('false');
+    // The timeline's own step, a hundredth of a second, is less than a frame.
+    for (const frame of [1, 2, 3]) {
+      expect(await fireEvent.keyDown(timeline, { key: 'ArrowRight' })).toBe(false);
+      expect(videos.map((video) => video.currentTime)).toEqual(
+        [0, 0].map(() => (frame + 0.5) / 30),
+      );
+    }
+    await fireEvent.keyDown(timeline, { key: 'ArrowLeft' });
+    expect(videos[0].currentTime).toBeCloseTo(2.5 / 30);
+    expect(back.getAttribute('aria-disabled')).toBe('false');
+    // Other keys stay with the timeline.
+    expect(await fireEvent.keyDown(timeline, { key: 'Home' })).toBe(true);
+    await fireEvent.input(timeline, { target: { value: '4' } });
+    expect(on.getAttribute('aria-disabled')).toBe('true');
+    await fireEvent.click(back);
+    expect(videos[0].currentTime).toBeCloseTo(118.5 / 30);
+    view.unmount();
+  } finally {
+    restore();
+  }
+});
+
+it('keeps the sound with its result when the slots are swapped before any choice', async () => {
+  const restore = mockPlayers();
+  try {
+    const entries = [clip('one'), clip('two')];
+    const { view } = await loadedVideos(entries, [4, 4]);
+    const sounding = () =>
+      screen
+        .getAllByRole('radio')
+        .filter((radio) => radio.closest('.transport-audio'))
+        .filter((radio) => radio.getAttribute('aria-checked') === 'true')
+        .map((radio) => radio.getAttribute('aria-label'));
+    const unmuted = () =>
+      [...view.container.querySelectorAll('video')]
+        .filter((video) => !video.muted)
+        .map((video) => video.getAttribute('aria-label'));
+    expect(sounding()).toEqual(['Audio of slot 1: one']);
+    expect(unmuted()).toEqual(['1: one']);
+    await view.rerender({ items: [entries[1], entries[0]] });
+    expect(sounding()).toEqual(['Audio of slot 2: one']);
+    expect(unmuted()).toEqual(['2: one']);
+    // A result that leaves hands the sound to slot 1.
+    await view.rerender({ items: [entries[1], clip('three')] });
+    expect(sounding()).toEqual(['Audio of slot 1: two']);
+    view.unmount();
+  } finally {
+    restore();
+  }
+});
+
+it('closes an open list of details on Escape wherever the focus is, then Compare', async () => {
+  const scroll = vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(500);
+  const client = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(100);
+  vi.useFakeTimers();
+  try {
+    render(ComparePane, {
+      ...props,
+      items: [
+        { ...item('one', 'a'), details: ['Models: Fix → Upscale'] },
+        { ...item('two', 'a'), details: ['Models: Second'] },
+      ],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const close = props.close;
+    close.mockClear();
+    const full = () => document.querySelector('.details-full');
+    // Opened by a click that leaves the focus where it was, as in WebKit.
+    await fireEvent.click(screen.getByRole('button', { name: 'All details of slot 1' }));
+    expect(full()).toBeTruthy();
+    await fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(full()).toBeNull();
+    expect(close).not.toHaveBeenCalled();
+    // Opened by resting the pointer on the slot.
+    await fireEvent.pointerEnter(document.querySelector('.details-column') as HTMLElement);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(full()).toBeTruthy();
+    await fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(full()).toBeNull();
+    expect(close).not.toHaveBeenCalled();
+    // A click elsewhere closes a list that More keeps open.
+    await fireEvent.click(screen.getByRole('button', { name: 'All details of slot 1' }));
+    expect(full()).toBeTruthy();
+    await fireEvent.pointerDown(screen.getByRole('region', { name: 'Compare canvas' }));
+    expect(full()).toBeNull();
+    // With nothing open, Escape leaves Compare.
+    await fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(close).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+    scroll.mockRestore();
+    client.mockRestore();
+  }
+});
+
+it('does not open the list of details while the pointer rests on the Unfinished mark', async () => {
+  const scroll = vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(500);
+  const client = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(100);
+  vi.useFakeTimers();
+  try {
+    const view = render(ComparePane, {
+      ...props,
+      items: [
+        item('one', 'a'),
+        {
+          ...item('two', 'a'),
+          details: ['Models: Second'],
+          unfinished: {
+            label: 'Unfinished · 1 of 4 tiles',
+            tiles: { tiles: [[0, 0, 50, 50]], width: 100, height: 100 },
+          },
+        },
+      ],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const column = view.container.querySelectorAll<HTMLElement>('.details-column')[1];
+    const mark = screen.getByRole('button', { name: /Show the finished tiles/ });
+    // The pointer crosses the column and rests on the mark: the tiles show, the list does not.
+    await fireEvent.pointerEnter(column);
+    await vi.advanceTimersByTimeAsync(100);
+    await fireEvent.pointerEnter(mark);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(view.container.querySelector('.unfinished-tiles')?.classList.contains('lit')).toBe(true);
+    expect(document.querySelector('.details-full')).toBeNull();
+    // Off the mark but still on the slot, the list opens as for any slot.
+    await fireEvent.pointerLeave(mark);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(document.querySelector('.details-full')).toBeTruthy();
+  } finally {
+    vi.useRealTimers();
+    scroll.mockRestore();
+    client.mockRestore();
   }
 });
