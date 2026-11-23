@@ -60,6 +60,8 @@ video = [
     "psutil",
     "tqdm",
     "gguf",
+    # FlashVSR (Labs) on Apple silicon: the MLX port runs the model on Metal.
+    "mlx>=0.32.4,<0.33; sys_platform == 'darwin' and platform_machine == 'arm64'",
     # Audio cleanup for videos. Not a base dependency: the DirectML build ships
     # onnxruntime-directml under another name, and its release check would fail.
     "onnxruntime>=1.24",

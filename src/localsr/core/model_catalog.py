@@ -847,6 +847,17 @@ _SEEDVR2_VAE = ModelFile(
     download_url=f"{_SEEDVR2_BASE}/ema_vae_fp16.safetensors?download=true",
 )
 
+# Immutable revision-pinned URLs: JunhaoZhuang/FlashVSR-v1.1 at commit
+# 2aa7e1f3ab50e743537d1eca243fb0bff442b336 (model card: Apache-2.0). Sizes and SHA-256
+# digests are the HuggingFace LFS metadata of that revision. The Tiny pipeline does not
+# use the repository's Wan2.1 VAE, so the bundle leaves it out. The two .ckpt files are
+# pickles; the engine loads them with torch.load(weights_only=True) after the bundle's
+# SHA-256 check.
+_FLASHVSR_BASE = (
+    "https://huggingface.co/JunhaoZhuang/FlashVSR-v1.1/resolve/"
+    "2aa7e1f3ab50e743537d1eca243fb0bff442b336"
+)
+
 VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
     CatalogVideoModel(
         model_id="seedvr2_3b",
@@ -907,6 +918,50 @@ VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
         min_vram_gb=12,
         temporal_window=9,
         temporal_overlap=2,
+    ),
+    CatalogVideoModel(
+        model_id="flashvsr_v11",
+        name="FlashVSR v1.1 — Labs",
+        description=(
+            "Experimental one-step diffusion video upscaling (Tiny pipeline). Runs on Apple "
+            "silicon through MLX. Large frames are processed in tiles, so jobs can take "
+            "hours. Needs at least 16 GB of memory. SDR output only."
+        ),
+        family="flashvsr_v11",
+        engine_kind="flashvsr",
+        files=(
+            ModelFile(
+                role="dit",
+                filename="diffusion_pytorch_model_streaming_dmd.safetensors",
+                size_bytes=5_676_070_392,
+                sha256="bd28180edcf3446c028e32fc6b731a80bf7e4da2ab4caac3186b9499964d37be",
+                download_url=(
+                    f"{_FLASHVSR_BASE}/diffusion_pytorch_model_streaming_dmd.safetensors"
+                    "?download=true"
+                ),
+            ),
+            ModelFile(
+                role="lq_proj",
+                filename="LQ_proj_in.ckpt",
+                size_bytes=575_694_948,
+                sha256="d6d011cdaaba6a52645086caa08fa04124e746f6ca568140a24007591142bfd2",
+                download_url=f"{_FLASHVSR_BASE}/LQ_proj_in.ckpt?download=true",
+            ),
+            ModelFile(
+                role="tcdecoder",
+                filename="TCDecoder.ckpt",
+                size_bytes=189_018_333,
+                sha256="e224bdcf2f52745cbf4d393ff5374c2ba09e90285d5d19062d2bf63b915b6161",
+                download_url=f"{_FLASHVSR_BASE}/TCDecoder.ckpt?download=true",
+            ),
+        ),
+        license_name="Apache-2.0",
+        author="Junhao Zhuang et al. · OpenImagingLab",
+        source_url="https://github.com/OpenImagingLab/FlashVSR",
+        min_unified_memory_gb=16,
+        min_vram_gb=16,
+        temporal_window=41,
+        temporal_overlap=8,
     ),
 )
 VIDEO_CATALOG_BY_ID = {model.model_id: model for model in VIDEO_MODEL_CATALOG}

@@ -41,6 +41,10 @@ datas = spandrel_datas + [
         "localsr/video_models/seedvr2",
     ),
     (
+        str(SOURCE / "localsr" / "video_models" / "flashvsr"),
+        "localsr/video_models/flashvsr",
+    ),
+    (
         str(SOURCE / "localsr" / "image_models" / "ddcolor" / "NOTICE.md"),
         "localsr/image_models/ddcolor",
     ),
@@ -148,11 +152,23 @@ if sys.platform == "darwin" and find_spec("coremltools") is not None:
         "pyobjc-core", "pyobjc-framework-Cocoa", "pyobjc-framework-CoreML",
     ):
         datas += copy_metadata(distribution)
+mlx_hidden = []
+if sys.platform == "darwin" and find_spec("mlx") is not None:
+    # FlashVSR (Labs) runs on Metal through MLX. libmlx loads mlx.metallib from its own
+    # directory, so the package keeps its layout; headers and CMake files stay out.
+    mlx_datas, mlx_binaries, mlx_hidden = collect_all(
+        "mlx", exclude_datas=["include/**", "lib/cmake/**", "share/**"]
+    )
+    if not any(Path(entry[0]).name == "mlx.metallib" for entry in mlx_datas):
+        raise RuntimeError("The MLX Metal library (mlx.metallib) must be bundled")
+    datas += mlx_datas + copy_metadata("mlx") + copy_metadata("mlx-metal")
+    spandrel_binaries += mlx_binaries
 hiddenimports = sorted(
     set(
         spandrel_hidden
         + onnx_hidden
         + coreml_hidden
+        + mlx_hidden
         + collect_submodules("spandrel")
         + [
             "PIL._tkinter_finder",
