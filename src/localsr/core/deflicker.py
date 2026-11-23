@@ -29,6 +29,9 @@ CUT_LUMA_SIZE = (64, 48)
 CUT_THRESHOLD = 25.0
 
 STAGE_A_GRID = (16, 12)  # (width_blocks, height_blocks)
+# Stage A only needs a 16x12 grid of gains, so it measures on a quarter of the analysis
+# pixels: optical flow is the dominant cost and scales with the pixel count.
+STAGE_A_MAX_DIMENSION = 320
 STAGE_A_RADIUS = 3
 STAGE_A_DEADZONE = 0.01
 STAGE_A_GAIN_MIN = 0.8
@@ -51,6 +54,10 @@ class AnalysisFrame:
     gray: np.ndarray
     y64: np.ndarray
     log_y: np.ndarray
+    # Stage A copies (longer edge <= STAGE_A_MAX_DIMENSION).
+    a_y: np.ndarray
+    a_gray: np.ndarray
+    a_log_y: np.ndarray
 
 
 def _luma(rgb: np.ndarray) -> np.ndarray:
@@ -72,7 +79,18 @@ def prepare_analysis_frame(rgb: np.ndarray) -> AnalysisFrame:
     gray = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
     y64 = cv2.resize(y, CUT_LUMA_SIZE, interpolation=cv2.INTER_AREA)
     log_y = np.log(y + _EPS)
-    return AnalysisFrame(y=y, gray=gray, y64=y64, log_y=log_y)
+    small_h, small_w = y.shape
+    if max(small_h, small_w) > STAGE_A_MAX_DIMENSION:
+        a_scale = STAGE_A_MAX_DIMENSION / float(max(small_h, small_w))
+        a_size = (max(1, round(small_w * a_scale)), max(1, round(small_h * a_scale)))
+        a_y = cv2.resize(y, a_size, interpolation=cv2.INTER_AREA)
+        a_gray = cv2.resize(gray, a_size, interpolation=cv2.INTER_AREA)
+        a_log_y = np.log(a_y + _EPS)
+    else:
+        a_y, a_gray, a_log_y = y, gray, log_y
+    return AnalysisFrame(
+        y=y, gray=gray, y64=y64, log_y=log_y, a_y=a_y, a_gray=a_gray, a_log_y=a_log_y
+    )
 
 
 def resolve_deflicker_device(device_str: str) -> torch.device:
@@ -123,23 +141,23 @@ class _DeflickerProcessor:
 
     def _block_log_ratio(self, target: AnalysisFrame, neighbour: AnalysisFrame) -> np.ndarray:
         gw, gh = STAGE_A_GRID
-        height, width = target.y.shape
+        height, width = target.a_y.shape
         if height >= 12 and width >= 12:
-            flow = self._dis.calc(target.gray, neighbour.gray, None)
+            flow = self._dis.calc(target.a_gray, neighbour.a_gray, None)
             grid_x, grid_y = self._warp_grid(height, width)
             yu = cv2.remap(
-                neighbour.y,
+                neighbour.a_y,
                 grid_x + flow[..., 0],
                 grid_y + flow[..., 1],
                 cv2.INTER_LINEAR,
                 borderMode=cv2.BORDER_REPLICATE,
             )
         else:
-            yu = neighbour.y
+            yu = neighbour.a_y
 
         valid = (
-            (target.y > _LUMA_VALID_LOW)
-            & (target.y < _LUMA_VALID_HIGH)
+            (target.a_y > _LUMA_VALID_LOW)
+            & (target.a_y < _LUMA_VALID_HIGH)
             & (yu > _LUMA_VALID_LOW)
             & (yu < _LUMA_VALID_HIGH)
         )
@@ -147,7 +165,7 @@ class _DeflickerProcessor:
             return np.zeros((gh, gw), dtype=np.float32)
 
         ratio = np.full((height, width), np.nan, dtype=np.float32)
-        ratio[valid] = np.log(yu[valid] + _EPS) - target.log_y[valid]
+        ratio[valid] = np.log(yu[valid] + _EPS) - target.a_log_y[valid]
         global_med = float(np.median(ratio[valid]))
         result = np.full((gh, gw), global_med, dtype=np.float32)
 
