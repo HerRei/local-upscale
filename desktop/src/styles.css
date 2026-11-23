@@ -99,6 +99,10 @@
   --tile-inset: rgba(19, 19, 19, 0.55);
   --tile-glow: rgba(255, 255, 255, 0.193);
   --compare-line-color: #f6f6f9;
+  /* Drawn on the photo itself, so the same in every theme. */
+  --unfinished-veil: rgba(8, 8, 10, 0.55);
+  --unfinished-line: #f6f6f9;
+  --unfinished-line-shadow: #000;
   --shadow-hairline: rgba(0, 0, 0, 0.4);
   --compare-handle-border: rgba(255, 255, 255, 0.24);
   --compare-handle-bg: rgba(29, 29, 31, 0.97);
@@ -106,7 +110,6 @@
   --hud-bg: rgba(24, 24, 26, 0.82);
   --hud-text: #dcdcdf;
   --control-active: rgba(255, 255, 255, 0.11);
-  --labs-chip-bg: rgba(20, 20, 22, 0.72);
   --canvas-icon-stroke: #8b929d;
   --section-divider: rgba(255, 255, 255, 0.055);
   --control-accent: #cfcfcf;
@@ -296,7 +299,6 @@
   --hud-bg: rgba(233, 233, 233, 0.82);
   --hud-text: #3d3d3d;
   --control-active: rgba(0, 0, 0, 0.11);
-  --labs-chip-bg: rgba(237, 237, 237, 0.72);
   --canvas-icon-stroke: #7d7d7d;
   --section-divider: rgba(0, 0, 0, 0.055);
   --control-accent: #494949;
@@ -1031,7 +1033,6 @@ input:focus-visible {
   flex: none;
   color: var(--secondary);
 }
-.labs-chip,
 .original-chip {
   padding: 4px 8px;
   border: 1px solid var(--chip-border);
@@ -1301,14 +1302,6 @@ input:focus-visible {
   left: 14px;
   top: 14px;
   pointer-events: none;
-}
-.labs-chip {
-  position: absolute;
-  left: 14px;
-  top: 14px;
-  color: var(--secondary);
-  border-color: var(--border);
-  background: var(--labs-chip-bg);
 }
 .canvas-empty {
   text-align: center;
@@ -2616,8 +2609,41 @@ input[type='number'],
   font-size: calc(11px * var(--ui-scale));
   font-variant-numeric: tabular-nums;
 }
-.video-transport button:hover {
+.video-transport button:hover:not([aria-disabled='true']) {
   background: var(--control-active);
+}
+.video-transport button[aria-disabled='true'] {
+  cursor: default;
+  opacity: 0.35;
+}
+.video-transport .transport-step {
+  min-width: 26px;
+}
+.transport-step svg {
+  width: 12px;
+  height: 12px;
+  fill: currentColor;
+}
+/* Which side sounds: the slots by their numbers, or none. */
+.transport-audio {
+  flex: none;
+  display: flex;
+  align-items: center;
+  margin-left: 4px;
+  padding-left: 8px;
+  border-left: 1px solid var(--tint-subtle);
+}
+.transport-audio span {
+  padding-right: 4px;
+  color: var(--secondary);
+  font-size: calc(11px * var(--ui-scale));
+}
+.video-transport .transport-audio button {
+  min-width: 26px;
+}
+.video-transport .transport-audio button.active {
+  background: var(--control-active);
+  color: var(--text);
 }
 .transport-play svg {
   width: 14px;

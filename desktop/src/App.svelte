@@ -24,6 +24,12 @@
     type CompareItem,
   } from './lib/compareOutputs';
   import {
+    keptTilesText,
+    unfinishedMark,
+    type PaneTiles,
+    type PaneUnfinished,
+  } from './lib/unfinished';
+  import {
     ORIGINAL,
     alignedFraming,
     chooseTarget,
@@ -193,6 +199,7 @@
       label: pick.kind === 'original' ? 'Original' : result?.model_label || 'Earlier result',
       meta: result
         ? [
+            result.partial ? 'Unfinished' : '',
             result.ui?.quality,
             result.scale ? `${result.scale}×` : '',
             result.elapsed_seconds ? formatDuration(result.elapsed_seconds) : '',
@@ -201,10 +208,11 @@
             .join(' · ')
         : `${media?.width ?? 0} × ${media?.height ?? 0}`,
       details: result
-        ? resultDetails(result, slot?.width, slot?.height, media?.duration_seconds)
+        ? resultDetails(result, slot?.width, slot?.height)
         : media?.width && media?.height
           ? [`Size: ${media.width} × ${media.height}`]
           : [],
+      unfinished: unfinishedMark(result, media?.duration_seconds, media?.fps),
       width: slot?.width || media?.width || 1,
       height: slot?.height || media?.height || 1,
       preview_data_url: slot?.preview_data_url ?? '',
@@ -530,12 +538,22 @@
     const media = activeJob
       ? snapshot.media.find((item) => item.id === activeJob.media_id)
       : undefined;
+    if (activeJob?.media_kind === 'image') {
+      const tiles = keptTilesText(
+        snapshot.runtime.tiles_completed ?? 0,
+        snapshot.runtime.tiles_total ?? 0,
+      );
+      return `${tiles ? `${tiles} are finished.` : 'Part of the photo is finished.'} If you keep it, the photo is saved at full size with the rest left as in the original.`;
+    }
     const done = snapshot.runtime.frames_processed ?? 0;
     const totalFrames = snapshot.runtime.total_frames || media?.frame_count || 0;
     const totalDuration = media?.duration_seconds ?? 0;
     if (done > 0 && totalFrames > 0 && totalDuration > 0) {
       const finished = Math.min(totalDuration, Math.max(0, (done / totalFrames) * totalDuration));
-      return `${formatVideoClock(finished)} of ${formatVideoClock(totalDuration)} is finished.`;
+      // Under a second a clock would read 0:00, so the frames are counted.
+      return finished < 1
+        ? `${done} of ${totalFrames} frames ${done === 1 ? 'is' : 'are'} finished.`
+        : `${formatVideoClock(finished)} of ${formatVideoClock(totalDuration)} is finished.`;
     }
     return 'Part of the video is finished.';
   })();
@@ -634,6 +652,8 @@
       : 'Waiting for the engine to stop'
   } (up to ${snapshot.runtime.cancel_grace_seconds || 8} s).`;
   let stopWasOn = false;
+  /** Jobs that ended as a kept, unfinished result in this session. */
+  const keptJobIds = new Set<string>();
   let stopRunSince: number | null = null;
   let stoppedNote = '';
   $: trackStop(cancelling, runSince);
@@ -646,7 +666,12 @@
       const own = snapshot.jobs.filter(
         (job) => stopRunSince !== null && job.created_at >= stopRunSince,
       );
-      stoppedNote = `Stopped. ${own.filter((job) => job.status === 'completed').length} of ${own.length} finished.`;
+      // A kept part is saved as a completed job; it is not a finished one.
+      const kept = own.filter((job) => keptJobIds.has(job.id)).length;
+      const finished = own.filter(
+        (job) => job.status === 'completed' && !keptJobIds.has(job.id),
+      ).length;
+      stoppedNote = `Stopped. ${finished} of ${own.length} finished${kept ? `, ${kept} kept unfinished` : ''}.`;
     }
     stopWasOn = now;
   }
@@ -1065,6 +1090,40 @@
   $: pairLoadingLabel = loadingTarget
     ? (resultRows.find((row) => row.job_id === loadingTarget)?.model_label ?? 'result')
     : '';
+  // A stopped job's kept result is marked Unfinished wherever it shows. A photo's finished
+  // tiles are measured in pixels of its saved file, which the decoded side reports.
+  $: showingRow = pairShown
+    ? resultRows.find((row) => row.job_id === choice.showing)
+    : bulkHistories
+        .find((entry) => entry.media_id === completedImageJob?.media_id)
+        ?.results.find((row) => row.output_path === completedImageJob?.output_path);
+  $: againstRow = referenceIsResult
+    ? resultRows.find((row) => row.job_id === choice.against)
+    : undefined;
+  $: videoMark = completedVideoOutput
+    ? unfinishedMark(videoResult, selectedMedia?.duration_seconds, selectedMedia?.fps)
+    : undefined;
+  $: showingMark = unfinishedMark(showingRow);
+  $: againstMark = unfinishedMark(againstRow);
+  const paneTiles = (
+    row: ResultSummary | undefined,
+    side: { width: number; height: number } | undefined,
+    source: MediaItem | undefined,
+  ): PaneTiles | null => {
+    const tiles = unfinishedMark(row)?.tiles;
+    const width = side?.width || (row?.scale ?? 0) * (source?.width ?? 0);
+    const height = side?.height || (row?.scale ?? 0) * (source?.height ?? 0);
+    return tiles && width > 0 && height > 0 ? { tiles, width, height } : null;
+  };
+  $: paneUnfinished = (
+    videoMark
+      ? { side: 'showing', label: videoMark.label }
+      : showingMark
+        ? { side: 'showing', label: showingMark.label }
+        : againstMark
+          ? { side: 'reference', label: againstMark.label }
+          : null
+  ) as PaneUnfinished | null;
   $: paneView = {
     mediaId: selectedImage?.id ?? '',
     resultPreview,
@@ -1073,6 +1132,9 @@
     referenceLabel: referenceIsResult ? (againstSide?.label ?? 'Original') : 'Original',
     showingLabel: showingSide?.label ?? '',
     singleFrame,
+    unfinished: paneUnfinished,
+    showingTiles: paneTiles(showingRow, pairShown ? showingSide : undefined, selectedImage),
+    referenceTiles: paneTiles(againstRow, againstSide, selectedImage),
   };
   let heldView = paneView;
   $: if (!loadingTarget) heldView = paneView;
@@ -1086,6 +1148,9 @@
           referenceLabel: 'Original',
           showingLabel: '',
           singleFrame: null,
+          unfinished: null,
+          showingTiles: null,
+          referenceTiles: null,
         }
       : loadingTarget
         ? heldView
@@ -1582,6 +1647,15 @@
       ) {
         latest.runtime.result_preview_data_url = snapshot.runtime.result_preview_data_url;
       }
+      // The window counts a photo's finished tiles from its progress; the host's snapshot
+      // has no such count to replace it with.
+      if (
+        latest.runtime.active_job_id &&
+        latest.runtime.active_job_id === snapshot.runtime.active_job_id
+      ) {
+        latest.runtime.tiles_completed ??= snapshot.runtime.tiles_completed;
+        latest.runtime.tiles_total ??= snapshot.runtime.tiles_total;
+      }
       snapshot = latest;
       if (!latest.settings.crash_reports) {
         crashNotice = false;
@@ -1719,6 +1793,11 @@
     const offScreen =
       messageJob !== snapshot.runtime.active_job_id &&
       (snapshot.runtime.active_batch_job_ids ?? []).includes(messageJob);
+    if (
+      (message.type === 'job_completed' || message.type === 'video_job_completed') &&
+      message.data.partial
+    )
+      keptJobIds.add(messageJob);
     snapshot = applyWorkerEnvelope(snapshot, message);
     // A pinned pair keeps its zoom, pan and divider while other runs start and finish.
     const pinned = Boolean(selectedMedia && pairChoices[selectedMedia.id]?.pinned);
@@ -3285,7 +3364,9 @@
     const activeId = snapshot.runtime.active_job_id;
     if (!activeId) return false;
     const activeJob = snapshot.jobs.find((job) => job.id === activeId);
-    if (!activeJob || activeJob.media_kind !== 'video') return false;
+    if (!activeJob) return false;
+    // A photo is kept only when the host says so; an older host never does.
+    if (activeJob.media_kind !== 'video') return snapshot.runtime.can_keep_partial === true;
     if (snapshot.runtime.can_keep_partial !== undefined) {
       return snapshot.runtime.can_keep_partial;
     }
@@ -3308,8 +3389,13 @@
     return true;
   }
 
+  /** Something is finished that could be kept: a frame of a video, a tile of a photo. */
   function activeJobCanKeepPartial(): boolean {
-    return activeJobSupportsPartial() && (snapshot.runtime.frames_processed ?? 0) > 0;
+    if (!activeJobSupportsPartial()) return false;
+    const activeJob = snapshot.jobs.find((job) => job.id === snapshot.runtime.active_job_id);
+    return activeJob?.media_kind === 'video'
+      ? (snapshot.runtime.frames_processed ?? 0) > 0
+      : (snapshot.runtime.tiles_completed ?? 0) > 0;
   }
 
   async function performCancelSelectedImage(mediaId: string, keepPartial: boolean): Promise<void> {
@@ -3371,7 +3457,10 @@
         scope: 'queue',
         mediaId: activeJob?.media_id ?? '',
         jobId: activeId,
-        fileName: media?.name || activeJob?.media_name || 'this video',
+        fileName:
+          media?.name ||
+          activeJob?.media_name ||
+          (activeJob?.media_kind === 'image' ? 'this photo' : 'this video'),
       };
       return;
     }
@@ -4275,6 +4364,11 @@
           showingState={showingSide?.state ?? 'ready'}
           showingError={showingSide?.error ?? ''}
           singleFrame={shownView.singleFrame}
+          unfinished={shownView.unfinished}
+          showingTiles={shownView.showingTiles}
+          referenceTiles={shownView.referenceTiles}
+          videoFps={(completedVideoOutput && videoResult?.output_fps) || selectedMedia?.fps || 0}
+          videoKeptFrames={videoMark?.frames ?? 0}
           loadingLabel={pairLoadingLabel}
           {comparisonNote}
           showLiveTiles={selectedMedia?.kind === 'video' ? !videoChoice.pinned : !choice.pinned}

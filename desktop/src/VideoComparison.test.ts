@@ -131,6 +131,60 @@ describe('video comparison player', () => {
     expect(videos[1].getAttribute('src')).toBeNull();
   });
 
+  it('counts a clip of under a second in frames and steps both sides one frame at a time', async () => {
+    // A stopped job kept two frames (0.074 s) of a two-second source.
+    const rendered = render(VideoComparison, {
+      originalSrc: 'asset://localhost/original.mov',
+      enhancedSrc: 'asset://localhost/kept_partial.mp4',
+      fps: 30,
+      keptFrames: 2,
+    });
+    const videos = rendered.container.querySelectorAll('video');
+    Object.defineProperty(videos[0], 'duration', { configurable: true, value: 2 });
+    Object.defineProperty(videos[1], 'duration', { configurable: true, value: 0.074 });
+    await fireEvent.loadedMetadata(videos[0]);
+    await fireEvent.loadedMetadata(videos[1]);
+
+    const transport = screen.getByRole('group', { name: 'Video playback controls' });
+    expect(transport.textContent).toContain('Frame 1');
+    expect(transport.textContent).toContain('2 frames');
+    expect(transport.textContent).not.toContain(' s');
+    const scrubber = screen.getByRole('slider', { name: 'Video frame' }) as HTMLInputElement;
+    expect([scrubber.min, scrubber.max, scrubber.value]).toEqual(['1', '2', '1']);
+
+    const back = screen.getByRole('button', { name: 'Previous frame' }) as HTMLButtonElement;
+    const on = screen.getByRole('button', { name: 'Next frame' }) as HTMLButtonElement;
+    expect(back.getAttribute('aria-disabled')).toBe('true');
+    await fireEvent.click(on);
+    // The middle of the second kept frame on both sides, by the file's own frame rate.
+    expect(videos[0].currentTime).toBeCloseTo(0.0555);
+    expect(videos[1].currentTime).toBeCloseTo(0.0555);
+    expect(transport.textContent).toContain('Frame 2');
+    expect(on.getAttribute('aria-disabled')).toBe('true');
+    await fireEvent.input(scrubber, { target: { value: '1' } });
+    expect(videos[0].currentTime).toBeCloseTo(0.0185);
+    expect(videos[1].currentTime).toBeCloseTo(0.0185);
+  });
+
+  it('keeps the clock for a longer video and offers frame steps only with a frame rate', async () => {
+    const rendered = render(VideoComparison, {
+      originalSrc: 'asset://localhost/original.mp4',
+      enhancedSrc: 'asset://localhost/enhanced.mp4',
+      fps: 24,
+    });
+    const videos = rendered.container.querySelectorAll('video');
+    for (const video of videos)
+      Object.defineProperty(video, 'duration', { configurable: true, value: 4 });
+    await fireEvent.loadedMetadata(videos[0]);
+    await fireEvent.loadedMetadata(videos[1]);
+    expect(screen.getByRole('slider', { name: 'Video position' })).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: 'Next frame' }));
+    expect(videos[0].currentTime).toBeCloseTo(1.5 / 24);
+    expect(videos[1].currentTime).toBeCloseTo(1.5 / 24);
+    await rendered.rerender({ fps: 0 });
+    expect(screen.queryByRole('button', { name: 'Next frame' })).toBeNull();
+  });
+
   it('keeps the original in step when the enhanced video pauses or stalls on its own', async () => {
     const rendered = render(VideoComparison, {
       originalSrc: 'asset://localhost/generated-original.mp4',

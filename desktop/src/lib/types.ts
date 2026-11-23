@@ -461,6 +461,9 @@ export interface RuntimeStatus {
   queue_paused?: boolean;
   frames_processed?: number;
   total_frames?: number;
+  /** Tiles of the running photo stage that are finished, counted here from its progress. */
+  tiles_completed?: number;
+  tiles_total?: number;
   can_keep_partial?: boolean;
 }
 
@@ -692,8 +695,16 @@ export interface ResultSummary {
   size_bytes?: number;
   output_duration_seconds?: number;
   output_fps?: number;
+  /** Stopped before the end and kept: a video's first frames, or a photo's finished tiles. */
   partial?: boolean;
+  /** Video: seconds kept (0.074 for two frames). */
   kept_seconds?: number;
+  /** Video: frames kept. */
+  kept_frames?: number;
+  /** Photo: the finished tiles as [x, y, width, height] in pixels of the saved file. */
+  finished_tiles?: [number, number, number, number][];
+  /** Photo: the tiles the job had. */
+  total_tiles?: number;
   /** Completed and its file exists. */
   available: boolean;
   model_id: string;

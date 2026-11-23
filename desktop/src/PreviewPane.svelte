@@ -7,6 +7,8 @@
   import MediaIllustration from './MediaIllustration.svelte';
   import PreviewActivity from './PreviewActivity.svelte';
   import SplitComparison from './SplitComparison.svelte';
+  import UnfinishedTiles from './UnfinishedTiles.svelte';
+  import type { PaneTiles, PaneUnfinished } from './lib/unfinished';
   import type { ComparisonSide } from './lib/results';
   import * as api from './lib/api';
   import { comparisonFromKey, comparisonFromPointer } from './lib/comparison';
@@ -51,6 +53,14 @@
   /** The result a pair is still waiting for: the picture stays as it was, no divider or view options. */
   export let loadingLabel = '';
   export let singleFrame: { width: number; height: number } | null = null;
+  /** What is shown is a stopped job's kept part: its mark and the side that holds it. */
+  export let unfinished: PaneUnfinished | null = null;
+  /** The finished tiles of an unfinished photo on either side of the pair. */
+  export let showingTiles: PaneTiles | null = null;
+  export let referenceTiles: PaneTiles | null = null;
+  /** Frame rate of the video shown, and the frames a stopped job kept of it. */
+  export let videoFps = 0;
+  export let videoKeptFrames = 0;
   /** Live tiles of a running job; off once a saved result was chosen for this image. */
   export let showLiveTiles = true;
   /** Why a pair is shown as a single result, for example a different framing. */
@@ -163,6 +173,20 @@
     ? { src: referencePreview, label: referenceLabel, state: referenceState, error: referenceError }
     : undefined;
   $: dividerPercent = Math.round(100 - comparison.enhancedPercent);
+  // The mark shows while its side does; hovering it, or focusing it with the keyboard,
+  // shows the finished tiles, and a click keeps them shown.
+  $: resultShown = Boolean((resultPreview && !loading) || videoComparison?.enhanced_url);
+  $: unfinishedShown =
+    Boolean(unfinished) &&
+    resultShown &&
+    !holdingOriginal &&
+    shownView !== (unfinished?.side === 'reference' ? 'enhanced' : 'original');
+  $: tilesMarked = Boolean(showingTiles || referenceTiles) && !videoComparison;
+  let tilesPinned = false;
+  let tilesHovered = false;
+  let tilesFocused = false;
+  $: tilesLit = tilesPinned || tilesHovered || tilesFocused;
+  $: if (!unfinishedShown) tilesHovered = tilesFocused = false;
   $: liveTilesShown = progressiveVisible && !resultPreview && showLiveTiles && !pairShown;
   $: frameKey = singleFrame ? `${singleFrame.width}x${singleFrame.height}` : '';
   let laidOutFrame = '';
@@ -244,6 +268,7 @@
     previewNaturalHeight = Math.max(1, selectedMedia?.height ?? 1);
     laidOutSourcePreview = '';
     previewRetryMediaId = '';
+    tilesPinned = false;
     resetProgressivePreview();
     resetView();
     scheduleViewportReset();
@@ -950,6 +975,8 @@
             sourceWidth={selectedMedia.width}
             sourceHeight={selectedMedia.height}
             enhancedSrc={videoComparison.enhanced_url}
+            fps={videoFps}
+            keptFrames={videoComparison.enhanced_url ? videoKeptFrames : 0}
             bind:compare
             view={shownView}
             on:compatibilityneeded={compatiblePlayback}
@@ -1003,8 +1030,24 @@
         {#if loading}<div class="pair-loading">
             <PreviewActivity media={selectedMedia} loading={loadingLabel} />
           </div>{/if}
-        {#if selectedMedia?.kind === 'video'}<span class="labs-chip">Video · processed locally</span
-          >{/if}
+        {#if resultPreview && !loading}
+          {#if showingTiles}<UnfinishedTiles
+              {...showingTiles}
+              fit={{ width: stageWidth, height: stageHeight }}
+              {zoom}
+              pan={{ x: panX, y: panY }}
+              clipLeft={resultClip}
+              lit={tilesLit}
+            />{/if}
+          {#if referenceTiles && referenceIsResult && !holdingOriginal}<UnfinishedTiles
+              {...referenceTiles}
+              fit={{ width: stageWidth, height: stageHeight }}
+              {zoom}
+              pan={{ x: panX, y: panY }}
+              clipRight={100 - resultClip}
+              lit={tilesLit}
+            />{/if}
+        {/if}
         {#if selectedMedia?.kind !== 'video'}<div
             class="zoom-hud"
             class:shown={pointerOverCanvas}
@@ -1063,6 +1106,40 @@
           </div>
         {/if}
       {/if}
+      {#if unfinishedShown && unfinished}
+        {#if tilesMarked}
+          <button
+            type="button"
+            class="unfinished-chip"
+            aria-pressed={tilesPinned}
+            aria-label={`${unfinished.label}. Show the finished tiles`}
+            title="Show the finished tiles · click to keep them shown"
+            on:pointerdown|stopPropagation
+            on:pointerenter={() => (tilesHovered = true)}
+            on:pointerleave={() => (tilesHovered = false)}
+            on:focus={(event) => (tilesFocused = event.currentTarget.matches(':focus-visible'))}
+            on:blur={() => (tilesFocused = false)}
+            on:click={() => (tilesPinned = !tilesPinned)}
+          >
+            <svg viewBox="0 0 11 11" aria-hidden="true"
+              ><rect x="0.5" y="0.5" width="4" height="4" /><rect
+                x="6.5"
+                y="0.5"
+                width="4"
+                height="4"
+              /><rect x="0.5" y="6.5" width="4" height="4" /><rect
+                class="open"
+                x="6.5"
+                y="6.5"
+                width="4"
+                height="4"
+              /></svg
+            >{unfinished.label}
+          </button>
+        {:else}
+          <span class="unfinished-chip" role="status">{unfinished.label}</span>
+        {/if}
+      {/if}
       {#if videoPreparation}
         <div class="playback-preparation" role="status" on:pointerdown|stopPropagation>
           <span class="playback-spinner" aria-hidden="true"></span>
@@ -1101,6 +1178,46 @@
     display: grid;
     place-items: center;
     pointer-events: none;
+  }
+  /* Where the Original chip sits; the two never show together. */
+  .unfinished-chip {
+    position: absolute;
+    z-index: 6;
+    left: 14px;
+    top: 14px;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    max-width: calc(100% - 28px);
+    padding: 4px 8px;
+    overflow: hidden;
+    border: 1px solid var(--chip-border);
+    border-radius: var(--radius);
+    background: var(--chip-bg);
+    color: var(--chip-text);
+    font-size: calc(11px * var(--ui-scale));
+    line-height: 1.3;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  button.unfinished-chip {
+    cursor: pointer;
+  }
+  button.unfinished-chip:hover,
+  button.unfinished-chip[aria-pressed='true'] {
+    border-color: var(--accent-line);
+    color: var(--text);
+  }
+  .unfinished-chip svg {
+    flex: none;
+    width: 11px;
+    height: 11px;
+    fill: currentColor;
+    stroke: currentColor;
+    stroke-width: 1;
+  }
+  .unfinished-chip svg .open {
+    fill: none;
   }
   .playback-preparation {
     position: absolute;

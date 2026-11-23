@@ -68,3 +68,66 @@ export const withEdits: Scenario = {
     ],
   },
 };
+
+// A 6400 x 4268 result in 1024 px tiles: seven columns and five rows, 35 tiles.
+const tile = (column: number, row: number): [number, number, number, number] => [
+  column * 1024,
+  row * 1024,
+  Math.min(1024, 6400 - column * 1024),
+  Math.min(1024, 4268 - row * 1024),
+];
+
+/** Photo 1 was stopped after ten of its 35 tiles and kept; an earlier run finished. */
+export const withUnfinished: Scenario = {
+  ...ready,
+  pairs: true,
+  finished: true,
+  outputs: {
+    1: [
+      {
+        id: 'hat-part',
+        label: 'HAT-S ×4',
+        quality: 'Best',
+        seconds: 48,
+        partial: {
+          tiles: Array.from({ length: 10 }, (_, index) => tile(index % 7, Math.floor(index / 7))),
+          total: 35,
+        },
+      },
+      { id: 'span', label: 'SPAN ×4', quality: 'Quick', seconds: 9 },
+    ],
+  },
+};
+
+const chain = [
+  'SCUNet GAN',
+  'FBCNN colour',
+  'NAFNet GoPro Deblur',
+  'DDColor ModelScope',
+  'CodeFormer',
+  'HAT-L ×4 SRx4 ImageNet-pretrain',
+];
+
+/** Four results of photo 1 that each ran every fix and a long chain of models. */
+export const withLongDetails: Scenario = {
+  ...ready,
+  outputs: {
+    1: ['one', 'two', 'three', 'four'].map((id, index) => ({
+      id,
+      label: `${chain[5 - index]} run ${index + 1}`,
+      quality: 'Best',
+      seconds: 100 + index,
+      stages: chain,
+      fixes: ['noise', 'jpeg', 'blur', 'colour', 'faces'],
+    })),
+  },
+};
+
+/** A video with two finished results and one stopped after two frames. */
+export const videoUnfinished: Scenario = {
+  photos: 1,
+  video: true,
+  videoCompare: true,
+  videoPartial: true,
+  task: 'video',
+};

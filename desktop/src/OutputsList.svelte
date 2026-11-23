@@ -1,13 +1,8 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import FileName from './FileName.svelte';
-  import {
-    MAX_SLOTS,
-    pickKey,
-    pickKindBlock,
-    unfinishedLabel,
-    type OutputGroup,
-  } from './lib/compareOutputs';
+  import { MAX_SLOTS, pickKey, pickKindBlock, type OutputGroup } from './lib/compareOutputs';
+  import { unfinishedLabel } from './lib/unfinished';
   import { editDimensions } from './lib/editing';
   import { followAllowed } from './lib/rowRun';
   import { formatBytes, formatDuration, formatVideoClock } from './lib/format';
@@ -66,7 +61,7 @@
       result.kind === 'edit' && result.max_dimension
         ? editDimensions(source.width, source.height, result.max_dimension)
         : [0, 0];
-    const unfinished = unfinishedLabel(result, source.duration_seconds);
+    const unfinished = unfinishedLabel(result, source.duration_seconds, source.fps);
     return [
       unfinished,
       capitalize(result.ui?.quality ?? ''),

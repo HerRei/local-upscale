@@ -707,6 +707,81 @@ describe('image comparison', () => {
     expect(clip()).toBe(50);
   });
 
+  it('marks an unfinished photo and shows its finished tiles from the mark', async () => {
+    const tiles = {
+      tiles: [
+        [0, 0, 2000, 2000],
+        [2000, 0, 2000, 2000],
+      ] as [number, number, number, number][],
+      width: 8000,
+      height: 4000,
+    };
+    const { container, rerender } = await renderComparison();
+    expect(container.querySelector('.unfinished-chip')).toBeNull();
+    expect(container.querySelector('.unfinished-tiles')).toBeNull();
+    await rerender({
+      unfinished: { side: 'showing', label: 'Unfinished · 2 of 8 tiles' },
+      showingTiles: tiles,
+    });
+    const mark = screen.getByRole('button', {
+      name: 'Unfinished · 2 of 8 tiles. Show the finished tiles',
+    });
+    expect(mark.textContent?.trim()).toBe('Unfinished · 2 of 8 tiles');
+    // Laid over the stage in pixels of the saved file, cut where the result is cut.
+    const marks = container.querySelector('.unfinished-tiles') as SVGElement;
+    expect(marks.getAttribute('viewBox')).toBe('0 0 8000 4000');
+    expect(marks.getAttribute('style')).toContain('width: 744px');
+    expect(marks.getAttribute('style')).toContain('clip-path: inset(0 0% 0 50%)');
+    expect(marks.classList.contains('lit')).toBe(false);
+    await fireEvent.pointerEnter(mark);
+    expect(marks.classList.contains('lit')).toBe(true);
+    await fireEvent.pointerLeave(mark);
+    expect(marks.classList.contains('lit')).toBe(false);
+    await fireEvent.click(mark);
+    expect(mark.getAttribute('aria-pressed')).toBe('true');
+    expect(marks.classList.contains('lit')).toBe(true);
+
+    // The Original has no mark: the chip gives way to the Original chip, the tiles are cut away.
+    await fireEvent.click(screen.getByRole('radio', { name: 'Original' }));
+    expect(container.querySelector('.unfinished-chip')).toBeNull();
+    expect(marks.getAttribute('style')).toContain('clip-path: inset(0 0% 0 100%)');
+    await fireEvent.click(screen.getByRole('radio', { name: 'Enhanced' }));
+    expect(container.querySelector('.unfinished-chip')).toBeTruthy();
+    await fireEvent.keyDown(window, { key: 'm' });
+    expect(container.querySelector('.unfinished-chip')).toBeNull();
+    await fireEvent.keyUp(window, { key: 'm' });
+
+    // Zoomed in, the marks grow with the picture instead of being scaled as a layer.
+    await fireEvent.wheel(container.querySelector('.canvas-well') as HTMLElement, {
+      deltaY: -100,
+      clientX: 400,
+      clientY: 300,
+    });
+    expect(parseFloat(marks.style.width)).toBeCloseTo(744 * 1.12);
+    expect(marks.getAttribute('style')).not.toContain('scale(');
+  });
+
+  it('marks the unfinished side of a pair of results, on the side it shows', async () => {
+    const { container, rerender } = await renderComparison();
+    await rerender({
+      ...pair,
+      unfinished: { side: 'reference', label: 'Unfinished · 1 of 8 tiles' },
+      referenceTiles: {
+        tiles: [[0, 0, 1000, 1000]] as [number, number, number, number][],
+        width: 4000,
+        height: 2000,
+      },
+    });
+    const marks = container.querySelector('.unfinished-tiles') as SVGElement;
+    // The reference shows left of the divider, so its tiles are cut from the right.
+    expect(marks.getAttribute('style')).toContain('clip-path: inset(0 50% 0 0%)');
+    expect(container.querySelector('.unfinished-chip')?.textContent).toContain(
+      'Unfinished · 1 of 8 tiles',
+    );
+    await fireEvent.click(screen.getByRole('radio', { name: 'Showing' }));
+    expect(container.querySelector('.unfinished-chip')).toBeNull();
+  });
+
   it('shows the zoom controls only while the pointer is over the image', async () => {
     const { container } = await renderComparison();
     const zoom = screen.getByRole('group', { name: 'Preview zoom' });
@@ -793,6 +868,32 @@ it('hides the live tiles once a saved result was chosen while the image runs', a
     showLiveTiles: false,
   });
   expect(container.querySelector('.progressive-image.visible')).toBeNull();
+});
+
+it('shows no chip over a video that is only waiting to play', () => {
+  const clip = {
+    id: 'clip',
+    path: '/clip.mp4',
+    name: 'clip.mp4',
+    kind: 'video',
+    width: 1920,
+    height: 1080,
+    frame_count: 48,
+    fps: 24,
+    duration_seconds: 2,
+    preview_data_url: 'data:image/jpeg;base64,source',
+    probe_status: 'ready',
+    error: '',
+    selected: true,
+  } as MediaItem;
+  const { container } = render(PreviewPane, {
+    selectedMedia: clip,
+    resultPreview: '',
+    completedVideoOutput: '',
+  });
+  expect(container.querySelector('.source-image')).toBeTruthy();
+  expect(container.textContent).not.toContain('processed locally');
+  expect(container.querySelector('.labs-chip, .unfinished-chip')).toBeNull();
 });
 
 it('keeps the preview header free of result choosers', () => {
