@@ -526,6 +526,29 @@
   let startingJob = false;
   let requestingCancel = false;
   let movingModels = false;
+  let cacheSize: number | null = null;
+  let clearingCache = false;
+
+  async function loadCacheSize(): Promise<void> {
+    try {
+      cacheSize = await api.getCacheSize();
+    } catch (error) {
+      cacheSize = null;
+      showModal('Could not read the cache', String(error));
+    }
+  }
+
+  async function clearCache(): Promise<void> {
+    if (clearingCache) return;
+    clearingCache = true;
+    try {
+      cacheSize = await api.clearCache();
+    } catch (error) {
+      showModal('Could not clear the cache', String(error));
+    } finally {
+      clearingCache = false;
+    }
+  }
   let modelMoveProgress: ModelMoveProgress | null = null;
   // Between two jobs of a queue the host already runs the next one while the window still
   // shows none: its row is queued or starting until the next refresh brings it up.
@@ -4768,6 +4791,12 @@
               modelDirectoryMissing={Boolean(snapshot.model_directory_missing)}
               {movingModels}
               {modelMoveProgress}
+              {cacheSize}
+              cacheBusy={clearingCache ||
+                Boolean(snapshot.runtime.active_job_id) ||
+                Boolean(snapshot.runtime.active_batch_job_ids?.length)}
+              {clearCache}
+              loadCacheSize={() => void loadCacheSize()}
               {updateSettings}
               setLowPriority={(value) => setUpdateSwitch('low_priority', value)}
               {chooseOutput}

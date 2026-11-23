@@ -2,6 +2,8 @@
 
 ## [0.6.0-beta] - Unreleased
 
+- Clear compiled model caches in Advanced settings; old entries are trimmed at startup (#126).
+
 - Updates explain when unreadable settings need recovery, and can install when settings come from a newer version (#123).
 
 ## [0.5.2-beta] - 2026-11-23

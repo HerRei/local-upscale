@@ -66,6 +66,8 @@ const api = vi.hoisted(() => ({
   isTauri: vi.fn(() => true),
   bootstrap: vi.fn(),
   refreshSnapshot: vi.fn(),
+  getCacheSize: vi.fn(async () => 0),
+  clearCache: vi.fn(async () => 0),
   chooseMediaFiles: vi.fn(async (): Promise<string[]> => []),
   chooseMediaFolder: vi.fn(
     async (): Promise<{ paths: string[]; outputDirectory: string } | null> => null,

@@ -1,3 +1,4 @@
+mod cache_cleanup;
 mod cancellation;
 mod catalog;
 mod commands;
@@ -131,6 +132,9 @@ pub fn run() {
         })
         .setup(move |app| {
             let state = Arc::new(AppState::new()?);
+            if let Err(error) = cache_cleanup::cleanup_at_start(&state) {
+                eprintln!("LocalSR could not clean the model cache: {error}");
+            }
             // A Windows installer that finished while LocalSR was closed.
             updates::confirm_pending_install(
                 &state.paths.next_root,
@@ -192,6 +196,8 @@ pub fn run() {
             commands::delete_crash_report,
             commands::delete_all_crash_reports,
             commands::record_frontend_error,
+            cache_cleanup::cache_size,
+            cache_cleanup::clear_cache,
             commands::bootstrap,
             commands::get_snapshot,
             commands::open_model_license,
