@@ -148,6 +148,9 @@ impl AppState {
             ));
         }
         let first_run = !settings::has_existing_settings(&paths);
+        if settings::is_future_schema(&paths) {
+            notices.push("Your settings come from a newer LocalSR. This version uses defaults and will not save settings changes.".into());
+        }
         let (settings, recipes) = settings::load(&paths);
         let model_root = effective_model_root(&paths, &settings);
         let catalog = load_catalog_in(&model_root)?;
@@ -431,6 +434,19 @@ mod tests {
         std::fs::create_dir_all(&paths.next_root).unwrap();
         std::fs::write(&paths.database, content).unwrap();
         paths
+    }
+
+    #[test]
+    fn newer_settings_get_one_startup_notice() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        std::fs::create_dir_all(&paths.next_root).unwrap();
+        std::fs::write(&paths.settings, r#"{"schema_version":3}"#).unwrap();
+        let state = AppState::from_paths(paths).unwrap();
+        let notices = state.take_startup_notices();
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].contains("newer LocalSR"));
+        assert!(state.take_startup_notices().is_empty());
     }
 
     #[test]

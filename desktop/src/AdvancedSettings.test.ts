@@ -454,3 +454,26 @@ describe('Engine row above Hardware', () => {
     expect(screen.queryByText('Engine')).toBeNull();
   });
 });
+
+it('shows the cache size and clears it only while idle', async () => {
+  const clearCache = vi.fn().mockResolvedValue(0);
+  const { rerender } = render(AdvancedSettings, {
+    settings: demoSnapshot().settings,
+    selectedModel: undefined,
+    capabilities: base,
+    usingTemporalVideo: false,
+    updateSettings: vi.fn(),
+    chooseOutput: async () => undefined,
+    refreshCapabilities: async () => true,
+    cacheSize: 1024,
+    clearCache,
+    cacheBusy: false,
+  });
+  await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+  expect(screen.getByText(/1 KB/)).toBeTruthy();
+  const button = screen.getByRole('button', { name: 'Clear cache' }) as HTMLButtonElement;
+  await fireEvent.click(button);
+  expect(clearCache).toHaveBeenCalledOnce();
+  await rerender({ cacheBusy: true });
+  expect(button.disabled).toBe(true);
+});

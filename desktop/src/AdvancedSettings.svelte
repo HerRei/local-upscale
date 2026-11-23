@@ -1,5 +1,6 @@
 <script lang="ts">
   import { chooseExternalFFmpeg, detectExternalFFmpeg } from './lib/api';
+  import { formatBytes } from './lib/format';
   import { editDevice, editSizeLimit, editingDevices } from './lib/editing';
   import { detectedFfmpeg, systemCodecs } from './lib/ffmpeg';
   import {
@@ -41,6 +42,10 @@
   export let modelDirectoryMissing = false;
   export let movingModels = false;
   export let modelMoveProgress: ModelMoveProgress | null = null;
+  export let cacheSize: number | null = null;
+  export let cacheBusy = false;
+  export let clearCache: () => Promise<void> = async () => undefined;
+  export let loadCacheSize: () => void = () => undefined;
   export let updateSettings: (patch: Partial<UiSettings>) => void;
   export let setLowPriority: (value: boolean) => void = (value) =>
     updateSettings({ low_priority: value });
@@ -81,6 +86,12 @@
     group.options.some((option) => option.label.length > 22),
   );
   let advanced = false;
+  let wasCacheBusy = false;
+  $: if (cacheBusy) wasCacheBusy = true;
+  else if (wasCacheBusy && advanced) {
+    wasCacheBusy = false;
+    loadCacheSize();
+  }
   let refreshing = false;
   let refreshed = false;
   let refreshedTimer: ReturnType<typeof setTimeout> | undefined;
@@ -178,7 +189,12 @@
 </script>
 
 <section class="control-section">
-  <button class="disclosure" on:click={() => (advanced = !advanced)}
+  <button
+    class="disclosure"
+    on:click={() => {
+      advanced = !advanced;
+      if (advanced) loadCacheSize();
+    }}
     ><span>Advanced</span><b aria-hidden="true"
       ><svg
         viewBox="0 0 12 12"
@@ -591,6 +607,22 @@
           >
         </div>
       {/if}
+      <div class="field-row">
+        <span
+          >Model cache: {cacheSize === null
+            ? 'Unavailable'
+            : cacheSize === 0
+              ? '0 B'
+              : formatBytes(cacheSize)}</span
+        >
+        <button
+          type="button"
+          class="button"
+          disabled={cacheBusy || cacheSize === null}
+          on:click={() => void clearCache()}>Clear cache</button
+        >
+      </div>
+      <p>Model caches are rebuilt the next time a model runs, which makes that first run slower.</p>
       {#if engines?.supported && !engines.managed_by_store}
         <div class="field-row engine-row">
           <span class="label-with-tip"

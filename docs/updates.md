@@ -330,9 +330,7 @@ database including its WAL, and copies the profile to `LocalSR/next/backups`. A
 version marker makes the next app version back up existing data before it opens
 or migrates the database. Downloaded models are never moved or removed.
 
-Settings that cannot be read, or that come from a newer version, are never
-overwritten by a routine save. The app offers to keep the original as a recovery
-copy and start with defaults; recipes in that file can be recovered by hand.
+Settings that cannot be read are never overwritten by a routine save. The app offers to keep the original as a recovery copy and start with defaults; recipes in that file can be recovered by hand. Settings from a newer version are left untouched, and this version uses defaults without saving changes. They do not block an update.
 
 An AppImage or portable Linux update runs a startup smoke check of the new host
 before removing the previous one, restores it if the check fails, and rolls back at

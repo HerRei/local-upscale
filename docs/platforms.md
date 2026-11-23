@@ -86,6 +86,13 @@ one. The CUDA and ROCm downloads exceed GitHub's 2 GB file limit and come in par
   selected model will use, or says the model is unsupported on the Neural Engine.
   *Apple GPU (Metal)* keeps every model on MPS, and `LOCALSR_DISABLE_COREML=1` does
   the same for the worker and the command line.
+  Advanced settings shows the size of regenerable model caches and can clear them
+  while no job is running. At desktop startup, LocalSR removes entries older than
+  30 days, then removes the oldest until these caches total at most 5 GiB. Dates
+  use the latest file access or modification time available from the filesystem;
+  filesystems that do not update access times can treat recently used entries as old.
+  The cleanup keeps Core ML verdicts and GPU crash records. The next model run may
+  take longer while its compiled program is rebuilt.
   Measured on the M1 Pro (2026-10-24, 256 px tiles): per tile, SPAN ran 2.0× as
   fast as MPS FP32, Real-ESRGAN anime 6B 3.4×, FBCNN 2.4× and RealPLKSR 1.3×.
   Whole images match the MPS output at 52 to 62 dB for SPAN, Real-ESRGAN and FBCNN

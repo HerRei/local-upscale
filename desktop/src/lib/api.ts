@@ -34,6 +34,14 @@ export async function refreshSnapshot(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('get_snapshot');
 }
 
+export async function getCacheSize(): Promise<number> {
+  return isTauri() ? invoke<number>('cache_size') : 0;
+}
+
+export async function clearCache(): Promise<number> {
+  return isTauri() ? invoke<number>('clear_cache') : 0;
+}
+
 export async function chooseMediaFiles(): Promise<string[]> {
   if (!isTauri()) return [];
   return invoke<string[]>('choose_media_files');
