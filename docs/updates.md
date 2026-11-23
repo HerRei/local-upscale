@@ -236,13 +236,17 @@ who do need that engine:
 }
 ```
 
-The manifest uses `schema_version: 1` and `format: tar.gz.parts` with the
-backend (`CUDA`, `ROCM`, `CPU`, `MPS` or `DIRECTML`), file count, unpacked size
-and per-part checksums. Every part and the manifest are downloaded and
-signature-checked individually; extraction verifies checksums, paths, file counts
-and free disk space. Parts must stay below 2 GiB. `unpacked_size` reserves room
-for the app and the engine together, and a protocol handshake must pass before the
-new engine is activated. On Windows the NSIS hook accepts the updater's
+The manifest uses `schema_version: 2` (the client also reads `schema_version: 1`
+from previously published feeds) and `format: tar.gz.parts` with the backend
+(`CUDA`, `ROCM`, `CPU`, `MPS` or `DIRECTML`), `version`, `os` (`windows`, `linux`
+or `macos`), `arch` (`x86_64` or `aarch64`), `protocol_version`, `engine_id`,
+file count, unpacked size and per-part checksums. Every part and the manifest are
+downloaded and signature-checked individually; extraction verifies checksums,
+paths, file counts and free disk space. Parts must stay below 2 GiB. `unpacked_size`
+reserves room for the app and the engine together, and a protocol handshake must
+pass before the new engine is activated. Downloads and app updates unpack into a
+fresh staging folder and keep the previous engine until the handshake, metadata
+write and activation all succeed. On Windows the NSIS hook accepts the updater's
 managed-engine flag, so a CUDA update never asks the user to locate payload parts
 by hand.
 
@@ -393,3 +397,54 @@ layout), so a crash between the two renames of an installation does not leave th
 application without an engine until the next installation. Two installations of the
 same engine folder at once are not supported (the application runs once, and the
 Windows installer is one wizard); recovery assumes none runs.
+
+## In-app engine manager
+
+Direct Windows and Linux builds can install, switch, import and remove inference
+engines of their own OS and architecture without downloading a separate installer
+or AppImage:
+
+- **Catalog and GPU recommendation.** The host reads all signed engine entries for
+  its OS, architecture and package kind from the verified update feed (including
+  entries for backends other than the compiled one, and for the current release
+  version). Windows detects DXGI adapters (`NVIDIA` maps to `cuda`, `AMD` or
+  `Intel` to `directml`, otherwise `cpu`); Linux parses `lspci -nn` vendor IDs
+  (`10de` for `cuda`, `1002` for `rocm`) and `nvidia-smi` when available.
+- **On-demand install and offline import.** `install_engine` downloads the signed
+  engine manifest and parts into `LocalSR/next/updates/engine-cache/<id>` using
+  HTTP Range `.part` files so interrupted or cancelled downloads resume across
+  restarts. `import_engine` installs a downloaded `*.engine-payload.json` and its
+  parts from disk using companion `.sig` files (or matching verified catalog
+  signatures). Both verify minisign signatures and SHA-256 digests, unpack the
+  engine, run the worker protocol handshake, hold the job lock while swapping the
+  engine and activating `active-engine.txt`, write host metadata (`meta.json`)
+  including every extracted file's relative path, size and SHA-256 digest, and
+  keep the previous backup until activation succeeds. For schema 2 manifests,
+  `import_engine` also refuses packages for another OS, architecture or protocol
+  version, or a version older than the installed version of that backend. Both
+  test a staged engine before replacing an existing one. Installed engine folders
+  need metadata from a verified install before they can be selected. Older
+  metadata from a handshake alone is not enough. These engines show **Needs
+  reinstall**; choose **Use** to download and install the signed engine again. An
+  interrupted replacement restores its backup at startup or on the next import
+  and discards ambiguous metadata, so that engine needs reinstall too. If a job
+  starts during a download or handshake, the swap is refused before replacing the
+  active engine and can be retried once the job ends. Network fetches are refused
+  before `privacy_choice_made`, in Store editions, while jobs run, or when free
+  disk space is insufficient.
+- **Switching, verification, fallback and app updates.** `use_engine` switches
+  between installed engines and the bundled CPU fallback; `remove_engine`
+  deletes an inactive engine folder. At worker start, LocalSR runs a quick check
+  that every recorded engine file is present at its recorded size. The **Verify**
+  button in the Engine dialog runs `verify_engine` for a full SHA-256 check of
+  every recorded file. If either check fails, the engine is marked **Needs
+  reinstall**, `active-engine.txt` is cleared if it was active, and LocalSR
+  falls back to the bundled engine. Failed installed engines are excluded until
+  the user selects Use or reimports them, and the restart limit also applies to
+  the bundled engine. App updates keep the user's chosen backend and update that
+  backend's engine alongside the host.
+- **Interface.** After the first-launch setup screen's Continue, if the recommended
+  GPU engine is not installed, LocalSR offers one dismissable card to download it
+  (remembered via `gpu_download_notice_dismissed`). The same engines, progress,
+  removal and offline `.engine-payload.json` import remain reachable under
+  **Advanced -> Engine -> Change…** on direct Windows and Linux builds.

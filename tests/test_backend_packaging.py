@@ -128,7 +128,8 @@ def test_backend_locks_have_the_named_torch_flavor_and_native_dependencies():
             # The GPU editions keep their own runtimes and size.
             assert "onnxruntime-ep-openvino" not in lock
         if target["id"] == "linux-x86_64-cuda":
-            assert "nvidia-cublas-cu12==" in lock
+            assert "nvidia-cublas==" in lock
+            assert "nvidia-cuda-runtime==13." in lock
         if target["id"] == "linux-x86_64-xpu":
             assert "intel-sycl-rt==" in lock
 

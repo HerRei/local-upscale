@@ -69,6 +69,7 @@ Linux package manager). An FFmpeg on the PATH or in the usual locations is used
 automatically; selecting one under **Advanced settings → Video → External
 FFmpeg** picks a specific build. The notice that appears when a file needs it
 shows the command for the actual distribution and can run it in a terminal.
+On Windows, PATH search uses absolute drive or network share folders and ignores the current folder.
 
 - LocalSR never downloads, bundles or links that program. It runs the selected
   executable as a separate process.

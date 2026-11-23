@@ -57,7 +57,7 @@ export interface CatalogModel {
 
 export type Quality = 'quick' | 'best' | 'custom';
 export type ContentKind = 'photo' | 'illustration' | 'face';
-export type FixKind = 'noise' | 'jpeg' | 'blur' | 'faces';
+export type FixKind = 'noise' | 'jpeg' | 'blur' | 'colour' | 'faces';
 export type StageKind = 'upscale' | 'deblock' | 'restore' | 'face_restore';
 export type RightsStatus = 'verified' | 'attribution' | 'unresolved' | 'non_commercial';
 
@@ -88,9 +88,18 @@ export interface EditModel {
   total_size_bytes: number;
 }
 
+export interface CustomEditModel {
+  family: string;
+  diffusion_path: string;
+  text_encoder_path: string;
+  vision_path: string;
+  vae_path: string;
+}
+
 export interface EditSetup {
   models: EditModel[];
   runtime_path: string;
+  custom_model?: EditModel | null;
 }
 
 export interface StartEditInput {
@@ -358,6 +367,19 @@ export interface UiSettings {
   edit_max_dimension: number;
   edit_steps: number;
   edit_seed: number;
+  custom_edit_model?: CustomEditModel;
+  model_directory?: string;
+  gpu_download_notice_dismissed?: boolean;
+  linux_menu_prompt_dismissed?: boolean;
+}
+
+export interface ModelMoveProgress {
+  moved_bytes: number;
+  total_bytes: number;
+  moved_files: number;
+  total_files: number;
+  progress: number;
+  current_file: string;
 }
 
 export interface VideoMemoryStatus {
@@ -519,6 +541,54 @@ export interface VideoComparisonSources {
   enhanced_url: string;
 }
 
+export interface InstalledEngine {
+  id: string;
+  backend: string;
+  bundled: boolean;
+  active: boolean;
+  path: string;
+  needs_reinstall?: boolean;
+}
+
+export interface EngineRecommendation {
+  backend: string;
+  adapter_name?: string | null;
+}
+
+export interface EngineCatalogEntry {
+  backend: string;
+  engine_id: string;
+  version: string;
+  size: number;
+  manifest_url: string;
+  parts_count: number;
+  installed: boolean;
+  active: boolean;
+}
+
+export interface EngineDownloadStatus {
+  stage: string;
+  backend: string;
+  engine_id: string;
+  downloaded: number;
+  total: number;
+  error?: string | null;
+}
+
+export interface EngineManagerSnapshot {
+  supported: boolean;
+  managed_by_store: boolean;
+  configured: boolean;
+  active_backend: string;
+  active_engine_id: string;
+  bundled_backend: string;
+  installed: InstalledEngine[];
+  recommendation: EngineRecommendation;
+  catalog: EngineCatalogEntry[];
+  catalog_error?: string | null;
+  download: EngineDownloadStatus;
+}
+
 export interface AppSnapshot {
   app_version: string;
   protocol_version: number;
@@ -532,6 +602,12 @@ export interface AppSnapshot {
   runtime: RuntimeStatus;
   latest_benchmark: BenchmarkResult | null;
   edit: EditSetup;
+  default_model_directory?: string;
+  model_directory_missing?: boolean;
+  gpu_download_notice?: string | null;
+  linux_menu_offer?: boolean;
+  linux_menu_installed?: boolean;
+  engines?: EngineManagerSnapshot;
 }
 
 export interface WorkerEnvelope {

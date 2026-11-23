@@ -46,8 +46,9 @@ def test_catalog_has_pinned_optional_downloads():
         "scunet_color_real_psnr",
         "bhi_dat2_real_x4",
         "realwebphoto_v4_dat2_x4",
+        "ddcolor_modelscope",
     ]
-    assert len({model.filename for model in MODEL_CATALOG}) == 18
+    assert len({model.filename for model in MODEL_CATALOG}) == 19
     upstream_hat = [
         model
         for model in MODEL_CATALOG

@@ -755,7 +755,7 @@ def denoise_video_audio(
     source = Path(source_path)
     destination = Path(output_path)
 
-    with av.open(str(source)) as src:
+    with av.open(str(source), options={"protocol_whitelist": "file"}) as src:
         audio_streams = [
             stream
             for stream in src.streams

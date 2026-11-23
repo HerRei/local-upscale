@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { openApp, showPane } from './app';
 import { hostCalls } from './fake-host';
 
-test('video restore, prefix fixes, 1x output scale, and video recipes', async ({ page }) => {
+test('video restore, Restore first and video recipes', async ({ page }) => {
   await openApp(page, {
     photos: 0,
     video: true,
@@ -46,13 +46,16 @@ test('video restore, prefix fixes, 1x output scale, and video recipes', async ({
   });
   await showPane(page, 'enhance');
 
-  // Switch selected video to Restore and enable JPEG artifacts (prefix fix) + Noise (primary restore).
+  // Switching a video to Restore with nothing picked turns Noise on; add JPEG artifacts.
   await page.getByRole('button', { name: 'Restore', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Noise', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
   await page.getByRole('button', { name: 'JPEG artifacts', exact: true }).click();
-  await page.getByRole('button', { name: 'Noise', exact: true }).click();
   const stages = page.getByRole('list', { name: 'Stages' });
-  await expect(stages).toContainText('Fix JPEG');
-  await expect(stages).toContainText('Restore');
+  await expect(stages.getByRole('listitem')).toHaveCount(2);
+  await expect(stages).toContainText('FBCNN');
 
   // Output scale stays hidden in video Restore.
   await page.getByRole('button', { name: /Advanced/ }).click();
@@ -77,11 +80,8 @@ test('video restore, prefix fixes, 1x output scale, and video recipes', async ({
   expect(savedRecipe.task).toBe('video');
   expect(savedRecipe.video_task).toBe('denoise');
   expect(savedRecipe.output_scale).toBe(1);
-  expect(savedRecipe.fixes).toEqual(['jpeg', 'noise']);
-  expect(savedRecipe.stages.map((s) => [s.kind, s.fix])).toEqual([
-    ['deblock', 'jpeg'],
-    ['restore', 'noise'],
-  ]);
+  expect([...savedRecipe.fixes].sort()).toEqual(['jpeg', 'noise']);
+  expect(savedRecipe.stages.map((s) => s.fix).sort()).toEqual(['jpeg', 'noise']);
 
   await page.getByRole('button', { name: 'Restore selected video' }).click();
   await expect.poll(async () => (await hostCalls(page, 'start_jobs')).length).toBe(1);
@@ -94,27 +94,15 @@ test('video restore, prefix fixes, 1x output scale, and video recipes', async ({
   };
   expect(restoreCall.task).toBe('video');
   expect(restoreCall.video_task).toBe('denoise');
-  expect(restoreCall.fix_stages.map((s) => s.fix)).toEqual(['jpeg', 'noise']);
+  expect(restoreCall.fix_stages.map((s) => s.fix).sort()).toEqual(['jpeg', 'noise']);
 
-  // Switch back to Upscale, pick 1x Output scale, add Blur fix-first stage, and start.
+  // Switch back to Upscale: no 1x any more; add Blur under Restore first and start.
   await page.getByRole('button', { name: 'Upscale', exact: true }).click();
   const scaleSelect = page.getByLabel('Output scale', { exact: true });
   await expect(scaleSelect).toBeVisible();
-  await scaleSelect.selectOption('1');
-  // At 1× the Quality heading carries the "?" that says the upscaler is not used.
-  const oneXHelp = page.getByRole('button', { name: 'About Quality' });
-  await expect(oneXHelp).toBeVisible();
-  await expect(stages).not.toContainText('SPAN');
+  await expect(scaleSelect.locator('option[value="1"]')).toHaveCount(0);
   await page.getByRole('button', { name: 'Blur', exact: true }).click();
-  await expect(scaleSelect).toHaveValue('1');
-  await expect(stages).toContainText('Fix blur');
-  await expect(stages).not.toContainText('SPAN');
-
-  await scaleSelect.selectOption('2');
-  await expect(oneXHelp).toHaveCount(0);
   await expect(stages).toContainText('SPAN');
-  await scaleSelect.selectOption('1');
-  await expect(oneXHelp).toBeVisible();
 
   await page.getByRole('button', { name: 'Start selected video' }).click();
   await expect.poll(async () => (await hostCalls(page, 'start_jobs')).length).toBe(2);
@@ -128,7 +116,7 @@ test('video restore, prefix fixes, 1x output scale, and video recipes', async ({
   };
   expect(upscaleCall.task).toBe('video');
   expect(upscaleCall.video_task).toBe('upscale');
-  expect(upscaleCall.output_scale).toBe(1);
+  expect(upscaleCall.output_scale).toBeGreaterThanOrEqual(2);
   expect(upscaleCall.fix_stages.map((s) => s.fix)).toContain('blur');
 
   // Re-apply saved video Restore recipe and confirm it switches back to Restore and hides scale.
@@ -140,7 +128,7 @@ test('video restore, prefix fixes, 1x output scale, and video recipes', async ({
   await expect(page.getByLabel('Output scale', { exact: true })).toHaveCount(0);
 });
 
-test('1x video upscale disables Start when nothing else is selected and hides the SR stage', async ({
+test('video Restore with nothing picked disables Start until a fix or video option is on', async ({
   page,
 }) => {
   await openApp(page, {
@@ -148,7 +136,7 @@ test('1x video upscale disables Start when nothing else is selected and hides th
     video: true,
     worker: 'ready',
     features: ['image_multi_fix', 'video_interpolation'],
-    installed: ['nafnet_gopro_deblur'],
+    installed: ['span_photo_x4', 'scunet_color_real_psnr', 'nafnet_gopro_deblur'],
     settings: {
       task: 'video',
       video_task: 'upscale',
@@ -158,28 +146,12 @@ test('1x video upscale disables Start when nothing else is selected and hides th
     },
   });
   await showPane(page, 'enhance');
-  await page.getByRole('button', { name: /Advanced/ }).click();
-
-  const scaleSelect = page.getByLabel('Output scale', { exact: true });
-  // At 1× the Quality heading carries the "?" that says the upscaler is not used.
-  const oneXHelp = page.getByRole('button', { name: 'About Quality' });
-  const startButton = page.getByRole('button', { name: 'Start selected video' });
-  const stages = page.getByRole('list', { name: 'Stages' });
-
-  await expect(oneXHelp).toHaveCount(0);
-  await expect(stages).toContainText('SPAN');
-
-  await scaleSelect.selectOption('1');
-  await expect(oneXHelp).toBeVisible();
-  await expect(stages).not.toContainText('SPAN');
-  await expect(startButton).toBeDisabled();
-  await expect(page.getByText(/Nothing to run at 1×/)).toBeVisible();
+  await page.getByRole('button', { name: 'Restore', exact: true }).click();
+  const noise = page.getByRole('button', { name: 'Noise', exact: true });
+  await expect(noise).toHaveAttribute('aria-pressed', 'true');
+  await noise.click();
+  await expect(page.getByText(/Nothing to run\. Pick what to fix/).first()).toBeVisible();
 
   await page.getByRole('button', { name: 'Blur', exact: true }).click();
-  await expect(stages).toContainText('Fix blur');
-  await expect(startButton).toBeEnabled();
-
-  await scaleSelect.selectOption('2');
-  await expect(oneXHelp).toHaveCount(0);
-  await expect(stages).toContainText('SPAN');
+  await expect(page.getByText(/Nothing to run\. Pick what to fix/)).toHaveCount(0);
 });

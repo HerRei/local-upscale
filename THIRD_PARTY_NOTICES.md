@@ -21,7 +21,7 @@ own terms; this file is a distribution notice, not a replacement for their licen
   worker are protobuf (BSD-3-Clause), attrs and cattrs (MIT) and pyaml (WTFPL), and their
   license files are included in the frozen worker. The converted programs run through
   PyObjC (pyobjc-core, pyobjc-framework-Cocoa and pyobjc-framework-CoreML, MIT).
-- **NVIDIA CUDA packages** — contain the NVIDIA libraries PyTorch's CUDA 12.6 build uses (CUDA
+- **NVIDIA CUDA packages** — contain the NVIDIA libraries PyTorch's CUDA 13.0 build uses (CUDA
   Runtime, cuBLAS, cuFFT, cuRAND, cuSOLVER, cuSPARSE, cuSPARSELt, NVRTC, nvJitLink, CUPTI, NVTX,
   cuFile, nvJPEG and cuDNN). They are NVIDIA's software, included as the portions its
   [CUDA Toolkit EULA](https://docs.nvidia.com/cuda/eula/index.html) and
@@ -94,6 +94,11 @@ own terms; this file is a distribution notice, not a replacement for their licen
   2021 hzwer), with the license text in `src/localsr/video_models/rife/NOTICE.md`. The RIFE 4.26
   checkpoint (MIT, per the Practical-RIFE README) is an optional, checksum-pinned download and is
   not included in installers.
+- **DDColor photo colorization**: the DDColor inference network from piddnad/DDColor (Apache-2.0,
+  with ConvNeXt under Meta Platforms, Inc. copyright and DETR positional encoding under Facebook,
+  Inc. copyright), with the license text and modifications listed in
+  `src/localsr/image_models/ddcolor/NOTICE.md`. The DDColor checkpoint (`ddcolor_modelscope`, Apache-2.0) is an optional, checksum-pinned download and is not included
+  in installers. Source: https://github.com/piddnad/DDColor.
 - **Curated checkpoints** — each catalog entry shows its author, source, and license before
   download. CC-BY checkpoints require attribution. The official Real-ESRGAN ×2 project/asset is
   recorded as BSD-3-Clause and the official FBCNN project/model-zoo asset as Apache-2.0. The HAT-S
@@ -126,6 +131,12 @@ commercial workflow.
   Qwen Image 2.1 is not offered: its Qwen Research License permits research and
   evaluation only.
   Source: https://huggingface.co/black-forest-labs/FLUX.2-klein-4B.
+- **Mage-Flow-Edit-Turbo** - Microsoft (MIT, via `https://github.com/microsoft/Mage`),
+  using the public Comfy-Org repack (`https://huggingface.co/Comfy-Org/Mage-Flow`, MIT)
+  and johnsor Q6_K GGUF (`https://huggingface.co/johnsor/Mage-Flow-Edit-Turbo-GGUF`, MIT),
+  with Qwen3-VL-4B-Instruct text and vision encoders (Qwen, Apache-2.0,
+  `https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF`). The original Microsoft
+  Hugging Face repositories are not publicly accessible.
   Editing weights are separate, optional, checksum-pinned downloads and are never
   included in installers. Exact revisions and component digests are in
   `src/localsr/core/edit_catalog.json`.

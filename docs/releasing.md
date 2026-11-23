@@ -1,6 +1,6 @@
 # Releasing
 
-Current release: **v0.5.0-beta** for macOS, Windows and Linux. Release notes live in
+Current release: **v0.5.1-beta**; release candidate: **v0.5.2-beta** for macOS, Windows and Linux. Release notes live in
 [`releases/`](releases/), one file per tag; that file is the GitHub release
 body.
 
@@ -22,6 +22,8 @@ Every 14 days `release-train.yml` opens a `Version X` PR made by
 `scripts/bump_version.py` ([dependency-updates.md](dependency-updates.md) has the
 rules). `bump_version.py X.Y.Z-beta` (or `--next`) does the same by hand. After the
 packages are live, `bump_version.py --mark-published` clears the candidate markers.
+Before publishing, use `python scripts/bump_version.py --published-notes` to prepare
+the release body without the candidate notice.
 
 Before building a candidate on the Mac:
 
@@ -130,9 +132,10 @@ GitHub-hosted runners. Both start only by hand, at the release tag or commit
 release; otherwise the files stay run artifacts for 14 days, and
 `attach-release-assets.yml` can copy one reviewed artifact to a release later.
 Each build gets its update identity from `scripts/release_targets.py --update-env`
-and writes its engine package (`<package>.engine-payload.json` and its
-`.engine.tar.gz.part-*` files) next to the package; the updater signatures are made
-on the Mac ([Windows and Linux updates](#windows-and-linux-updates)).
+and writes its schema 2 engine package (`<package>.engine-payload.json` with
+`version`, `os`, `arch`, `protocol_version` and `engine_id`, plus its
+`.engine.tar.gz.part-*` files) next to the package; the updater signatures are
+made on the Mac ([Windows and Linux updates](#windows-and-linux-updates)).
 
 ### Targets
 

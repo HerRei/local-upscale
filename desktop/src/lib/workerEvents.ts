@@ -420,7 +420,12 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       // output. This prevents a transient comparison slider over one frame.
       next.runtime.result_preview_data_url = '';
       next.runtime.progress = 100;
-      next.runtime.status_title = 'Complete';
+      if (data.partial) {
+        const seconds = Math.floor(Number(data.kept_seconds ?? 0));
+        next.runtime.status_title = `Stopped, kept ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+      } else {
+        next.runtime.status_title = 'Complete';
+      }
       next.runtime.status_detail = String(data.notes || 'The output was written successfully.');
       next.runtime.last_output_path = String(data.output_path ?? '');
       next.runtime.elapsed_seconds = Math.max(

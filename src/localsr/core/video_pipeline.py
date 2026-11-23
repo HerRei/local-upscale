@@ -219,6 +219,8 @@ class VideoJobResult:
     frames_processed: int
     elapsed_seconds: float
     inference_seconds: float
+    partial: bool = False
+    kept_seconds: float = 0.0
 
 
 def run_video_job(
@@ -854,7 +856,7 @@ def _run_video_frames(
         warning_callback(
             "FPS override changes playback speed; source audio and subtitles are omitted."
         )
-    encode_video(
+    output_path = encode_video(
         output_frames,
         config.output_video_path,
         fps=fps,
@@ -879,12 +881,17 @@ def _run_video_frames(
         # A whole clip can stream into the system's hardware encoder; trims keep
         # the lossless master, which carries their trimmed audio.
         stream_to_system=config.start_frame is None and config.end_frame is None,
+        keep_partial=True,
     )
 
     completed_at = time.perf_counter()
     return VideoJobResult(
-        output_path=config.output_video_path,
+        output_path=output_path,
         frames_processed=frames_processed,
+        partial=output_path != config.output_video_path,
+        kept_seconds=probe_video(output_path).duration_seconds
+        if output_path != config.output_video_path
+        else 0.0,
         elapsed_seconds=completed_at - job_started_at,
         inference_seconds=(completed_at - (inference_started_at or completed_at)),
     )

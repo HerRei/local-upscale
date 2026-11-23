@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 import rawModels from '../../../src/localsr/core/edit_catalog.json';
 import { demoSnapshot } from './demo';
 import {
+  CUSTOM_EDIT_FAMILIES,
   EDIT_GIB,
+  customEditFamilySpec,
   editDevice,
   editDimensions,
+  editFamilyLabel,
   editFitFor,
   editHardwareLabel,
   editPeakEstimate,
@@ -92,5 +95,44 @@ describe('Edit helpers', () => {
     expect(editDimensions(4000, 3000, 512)).toEqual([512, 384]);
     expect(editDimensions(300, 200, 512)).toEqual([288, 192]);
     expect(editDimensions(0, 0, 512)).toEqual([32, 32]);
+  });
+
+  it('lists custom edit families with their file roles and default sampler settings', () => {
+    expect(CUSTOM_EDIT_FAMILIES.map((item) => item.id)).toEqual([
+      'qwen-image-edit-2511',
+      'qwen-image-2.1',
+      'flux2-klein',
+      'mage-flow-edit-turbo',
+    ]);
+    expect(customEditFamilySpec('qwen-image-2.1')).toMatchObject({
+      needsVision: true,
+      defaultSteps: 40,
+      cfgScale: 6,
+    });
+    expect(customEditFamilySpec('flux2-klein')).toMatchObject({
+      needsVision: false,
+      defaultSteps: 4,
+      cfgScale: 1,
+    });
+    expect(customEditFamilySpec('mage-flow-edit-turbo')).toMatchObject({
+      needsVision: true,
+      defaultSteps: 4,
+      cfgScale: 1,
+    });
+    expect(editFamilyLabel('qwen-image-2.1')).toBe('Qwen Image 2.1');
+    expect(editFamilyLabel('flux2-klein')).toBe('FLUX.2 klein');
+    expect(editFamilyLabel('mage-flow-edit-turbo')).toBe('Mage-Flow-Edit-Turbo');
+  });
+
+  it('keeps FLUX.2 klein as the Mac default while offering Mage-Flow-Edit-Turbo on 16 GB', () => {
+    const capabilities = demoSnapshot().capabilities;
+    capabilities.system_ram_total = 16 * EDIT_GIB;
+    const mage = models.find((model) => model.model_id === 'mage_flow_edit_turbo_q6_k')!;
+    expect(mage).toBeDefined();
+    expect(editFitFor(mage, capabilities, gpu('mps', 16))).toBe('runs');
+    expect(editFitFor(mage, capabilities, gpu('cuda:0', 8))).toBe('runs');
+    expect(recommendAnyEditModel(models, capabilities, gpu('mps', 16))?.model_id).toBe(
+      'flux2_klein_4b_q4_0',
+    );
   });
 });

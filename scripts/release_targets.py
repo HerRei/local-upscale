@@ -188,9 +188,55 @@ def update_files(entry: dict, release_version: str) -> dict[str, str]:
     }
 
 
+def download_table(release_version: str) -> str:
+    """The release download choices, using the registered package suffixes."""
+    entries = {entry["id"]: entry for entry in targets()}
+
+    def package(target_id: str) -> str:
+        return update_files(entries[target_id], release_version)["package"]
+
+    main_rows = [
+        ("Mac (M1 or newer)", f"`{package('macos-arm64-mps')}`"),
+        ("Windows", f"`{package('windows-x86_64-cpu')}`"),
+        ("Linux", f"`{package('linux-x86_64-cpu')}`"),
+    ]
+    offline_rows = [
+        ("Windows, AMD or Intel graphics", f"`{package('windows-x86_64-directml')}`"),
+        (
+            "Windows, NVIDIA",
+            f"`{package('windows-x86_64-cuda')}` and all "
+            f"`{update_files(entries['windows-x86_64-cuda'], release_version)['engine_prefix']}.part-*` files in the same folder",
+        ),
+        ("Linux, AMD", f"all `{package('linux-x86_64-rocm')}.part-*` files, joined"),
+        ("Linux, NVIDIA", f"all `{package('linux-x86_64-cuda')}.part-*` files, joined"),
+    ]
+    return (
+        "## Which file do I need?\n\n| Computer | Download |\n|---|---|\n"
+        + "".join(f"| {computer} | {download} |\n" for computer, download in main_rows)
+        + "\nThe app offers the faster GPU engine after setup.\n\n"
+        + "## Offline and advanced downloads\n\n"
+        + "| Computer | Download |\n|---|---|\n"
+        + "".join(f"| {computer} | {download} |\n" for computer, download in offline_rows)
+        + "\nTo import an engine offline, download the `*.engine-payload.json` manifest, "
+        + "its `.engine.tar.gz.part-*` files and their `.sig` signature files into one folder, "
+        + "then open **Advanced -> Engine -> Change… -> Import engine from file…** "
+        + "and choose the `*.engine-payload.json` file.\n\n"
+        + "The other files (signatures, checksums and source archives) "
+        + "are for verification and updates.\n"
+    )
+
+
 def version(root: Path = ROOT) -> str:
     with (root / "pyproject.toml").open("rb") as stream:
         return tomllib.load(stream)["project"]["version"]
+
+
+def protocol_version(root: Path = ROOT) -> int:
+    source = (root / "desktop/src-tauri/src/types.rs").read_text(encoding="utf-8")
+    match = re.search(r"pub const PROTOCOL_VERSION: u32 = (\d+);", source)
+    if not match:
+        raise ValueError("the worker protocol version is missing from types.rs")
+    return int(match.group(1))
 
 
 def artifact_entries(release_version: str) -> list[dict]:

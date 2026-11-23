@@ -11,14 +11,32 @@ vi.mock('@tauri-apps/api/path', () => ({
 }));
 
 import {
+  cancelEngineInstall,
   chooseCustomModel,
+  chooseEditModelFile,
   chooseEditRuntime,
+  chooseEngineManifest,
   chooseExternalFFmpeg,
   chooseMediaFiles,
   chooseMediaFolder,
+  chooseModelDirectory,
   chooseOutputDirectory,
+  dismissGpuDownloadNotice,
+  dismissLinuxMenuPrompt,
   exportBenchmark,
+  importEngine,
+  installEngine,
+  installLinuxMenu,
+  listenForEngineStatus,
+  listenForModelMove,
   listenForWorker,
+  refreshEngineCatalog,
+  removeEngine,
+  saveCustomEditModel,
+  resetModelDirectory,
+  setModelDirectory,
+  uninstallLinuxMenu,
+  useEngine,
 } from './api';
 
 afterEach(() => {
@@ -61,6 +79,35 @@ it('asks the host to choose and grant the editing runtime', async () => {
   expect(invoke).toHaveBeenCalledWith('choose_edit_runtime');
   invoke.mockResolvedValueOnce(null);
   expect(await chooseEditRuntime()).toBeNull();
+});
+
+it('picks custom edit model files and asks the host to verify and save them', async () => {
+  (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+  invoke.mockResolvedValueOnce({
+    path: '/models/q21.gguf',
+    size_bytes: 1234,
+    detected_family: 'qwen-image-2.1',
+  });
+  expect(await chooseEditModelFile('diffusion')).toEqual({
+    path: '/models/q21.gguf',
+    size_bytes: 1234,
+    detected_family: 'qwen-image-2.1',
+  });
+  expect(invoke).toHaveBeenCalledWith('choose_edit_model_file', { role: 'diffusion' });
+
+  invoke.mockResolvedValueOnce(null);
+  const custom = {
+    family: 'qwen-image-2.1',
+    diffusion_path: '/models/q21.gguf',
+    text_encoder_path: '/models/te.gguf',
+    vision_path: '/models/mmproj.gguf',
+    vae_path: '/models/vae.safetensors',
+  };
+  await saveCustomEditModel(custom, '/engine/sd-cli');
+  expect(invoke).toHaveBeenCalledWith('save_custom_edit_model', {
+    custom,
+    runtimePath: '/engine/sd-cli',
+  });
 });
 
 it('asks the host to pick and grant media, output folders, checkpoints, and exports', async () => {
@@ -113,4 +160,104 @@ it('resolves a Compare slot through the single-video descriptor route using only
     compareGeneration: 7,
     compareSlot: 2,
   });
+});
+
+it('forwards model folder commands, move progress events, and GPU notice dismissal', async () => {
+  (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+  invoke.mockResolvedValueOnce('/Volumes/SSD/models');
+  expect(await chooseModelDirectory('/old/models')).toBe('/Volumes/SSD/models');
+  expect(invoke).toHaveBeenCalledWith('choose_model_directory', { current: '/old/models' });
+
+  invoke.mockResolvedValueOnce(undefined);
+  await setModelDirectory('/Volumes/SSD/models');
+  expect(invoke).toHaveBeenCalledWith('set_model_directory', { path: '/Volumes/SSD/models' });
+
+  invoke.mockResolvedValueOnce(undefined);
+  await resetModelDirectory();
+  expect(invoke).toHaveBeenCalledWith('reset_model_directory');
+
+  invoke.mockResolvedValueOnce(undefined);
+  await dismissGpuDownloadNotice();
+  expect(invoke).toHaveBeenCalledWith('dismiss_gpu_download_notice');
+
+  invoke.mockResolvedValueOnce(undefined);
+  await dismissLinuxMenuPrompt();
+  expect(invoke).toHaveBeenCalledWith('dismiss_linux_menu_prompt');
+
+  invoke.mockResolvedValueOnce(undefined);
+  await installLinuxMenu();
+  expect(invoke).toHaveBeenCalledWith('install_linux_menu');
+
+  invoke.mockResolvedValueOnce(undefined);
+  await uninstallLinuxMenu();
+  expect(invoke).toHaveBeenCalledWith('uninstall_linux_menu');
+
+  let deliver: (event: { payload: unknown }) => void = () => {};
+  listen.mockImplementation(async (_name: string, handler: typeof deliver) => {
+    deliver = handler;
+    return () => {};
+  });
+  const updates: unknown[] = [];
+  await listenForModelMove((progress) => updates.push(progress));
+  deliver({
+    payload: {
+      moved_bytes: 50,
+      total_bytes: 100,
+      moved_files: 1,
+      total_files: 2,
+      progress: 50,
+      current_file: 'm.pth',
+    },
+  });
+  expect(updates).toHaveLength(1);
+});
+
+it('forwards engine manager commands and status events', async () => {
+  (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+  invoke.mockResolvedValueOnce([]);
+  await refreshEngineCatalog('beta');
+  expect(invoke).toHaveBeenCalledWith('refresh_engine_catalog', { channel: 'beta' });
+
+  invoke.mockResolvedValueOnce(undefined);
+  await installEngine('cuda');
+  expect(invoke).toHaveBeenCalledWith('install_engine', { backend: 'cuda' });
+
+  invoke.mockResolvedValueOnce(undefined);
+  await cancelEngineInstall();
+  expect(invoke).toHaveBeenCalledWith('cancel_engine_install');
+
+  invoke.mockResolvedValueOnce(undefined);
+  await useEngine('directml');
+  expect(invoke).toHaveBeenCalledWith('use_engine', { backend: 'directml' });
+
+  invoke.mockResolvedValueOnce(undefined);
+  await removeEngine('windows-x86_64-directml-1');
+  expect(invoke).toHaveBeenCalledWith('remove_engine', { id: 'windows-x86_64-directml-1' });
+
+  invoke.mockResolvedValueOnce('/tmp/win.engine-payload.json');
+  expect(await chooseEngineManifest()).toBe('/tmp/win.engine-payload.json');
+  expect(invoke).toHaveBeenCalledWith('choose_engine_manifest');
+
+  invoke.mockResolvedValueOnce(undefined);
+  await importEngine('/tmp/win.engine-payload.json');
+  expect(invoke).toHaveBeenCalledWith('import_engine', { path: '/tmp/win.engine-payload.json' });
+
+  let deliver: (event: { payload: unknown }) => void = () => {};
+  listen.mockImplementation(async (_name: string, handler: typeof deliver) => {
+    deliver = handler;
+    return () => {};
+  });
+  const statuses: unknown[] = [];
+  await listenForEngineStatus((status) => statuses.push(status));
+  deliver({
+    payload: {
+      stage: 'downloading',
+      backend: 'cuda',
+      engine_id: 'windows-x86_64-cuda-1',
+      downloaded: 100,
+      total: 1000,
+      error: null,
+    },
+  });
+  expect(statuses).toHaveLength(1);
 });

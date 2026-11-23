@@ -29,13 +29,17 @@ model files, loading, reading the photo, reading your instruction, the sampling
 steps, finishing the image in parts, saving) with an overall percentage. Phases
 without a counter of their own advance with time so the bar never stands still.
 
-The catalog contains two families: Qwen Image Edit 2511 in six GGUF sizes and
-FLUX.2 klein 4B in two sizes. FLUX.2 klein
+The catalog contains three families: Qwen Image Edit 2511 in six GGUF sizes,
+FLUX.2 klein 4B in two sizes, and Mage-Flow-Edit-Turbo in Q6_K. FLUX.2 klein
 is Black Forest Labs' distilled four-step editor (Apache-2.0, with a Qwen3-4B text
-encoder and the FLUX.2 autoencoder); it is the bundle for 16 GB computers, where
-the 20B Qwen editors do not fit, and LocalSR falls back to it automatically. The
+encoder and the FLUX.2 autoencoder); it is the default bundle for 16 GB computers, where
+the 20B Qwen editors do not fit, and LocalSR falls back to it automatically.
+Mage-Flow-Edit-Turbo is a four-step, 4B editor (MIT via Comfy-Org's repack and
+johnsor's Q6_K GGUF, with Qwen3-VL-4B-Instruct under Apache-2.0 for text and
+reference vision); it is offered as an optional choice in the library and is not
+chosen automatically. The
 bundled native runtime is stable-diffusion.cpp revision
-`3f8527a46c54ecf4cb4ed6003da8e8982283c73c`. A Qwen bundle has four components
+`3f8527a46c54ecf4cb4ed6003da8e8982283c73c`. Qwen and Mage-Flow bundles have four components
 (diffusion transformer, text encoder, vision projection, VAE); a FLUX.2 klein bundle
 has three, since it conditions on the encoded reference image instead of a vision
 projector. Every component has a pinned upstream revision, exact byte size and
@@ -76,21 +80,42 @@ when regenerating the catalog:
 | Qwen Image Edit 2511 | Q8_0 | 25.7 GiB | 20.3 GiB | 48 GiB | 24 GiB |
 | FLUX.2 klein 4B | Q4_0 | 4.9 GiB | 2.3 GiB | 16 GiB | 8 GiB |
 | FLUX.2 klein 4B | Q8_0 | 8.3 GiB | 4.0 GiB | 16 GiB | 8 GiB |
+| Mage-Flow-Edit-Turbo | Q6_K | 6.2 GiB | 3.2 GiB | 16 GiB | 8 GiB |
 
 Default maximum edit size: 512 px below 36 GiB of unified memory, 768 px below
 48 GiB, 1024 px above (dedicated GPUs: 512 px below 12 GiB, 768 px below 16 GiB).
 The app always defaults to a 512 px edit, even on larger hardware; larger sizes
-are explicit choices. A 16 GB Mac gets FLUX.2 klein 4B; below 16 GiB the app shows
+are explicit choices. A 16 GB Mac starts on FLUX.2 klein 4B; Mage-Flow-Edit-Turbo
+is an extra option for 16 GB Macs and 8 GB GPUs. Below 16 GiB the app shows
 the smallest bundle, says why it cannot start, and the worker refuses to load it.
 Each model carries its own step count (40 for the Qwen editors, 4 for FLUX.2
-klein) and guidance; **Steps** under Advanced overrides it for the chosen model
+klein and Mage-Flow-Edit-Turbo) and guidance; **Steps** under Advanced overrides it for the chosen model
 only. Dimensions are aligned to 32 pixels and the source is resized to the chosen
-longest edge. Qwen Image 2.1 is not offered: its Qwen Research License allows
+longest edge. Qwen Image 2.1 is not offered for download: its Qwen Research License allows
 research and evaluation only. The backend still supports bundles that require
 explicit license acceptance (a checkbox in the library before the download, and
 again under the model row before an edit starts) should one be added. Lower quantizations can reduce edit fidelity; CPU offload also makes
 small-GPU edits slower. No timing or quality guarantee is attached to these
 starting profiles.
+
+### Your own edit model
+
+At the end of the **Edit with a prompt** list in the model library, **Use your own
+edit model…** lets you pick local model files without copying or downloading
+anything. Choose a family supported by the bundled `stable-diffusion.cpp`
+runtime (Qwen Image Edit 2511, Qwen Image 2.1, FLUX.2 klein, or Mage-Flow-Edit-Turbo; GGUF diffusion
+headers are detected when available) and pick the component files it uses
+(diffusion model, text encoder, vision projector for Qwen and Mage-Flow families, and VAE).
+Steps and guidance scale default per family (40 steps and CFG 2.5 for Qwen
+Image Edit 2511, 40 steps and CFG 6.0 for Qwen Image 2.1, and 4 steps and CFG
+1.0 for FLUX.2 klein and Mage-Flow-Edit-Turbo). Before saving, LocalSR runs a quick metadata check with
+`sd-cli` and refuses incompatible or unreadable files. The memory guard
+estimates peak memory from the real sizes of your files on disk, and custom
+paths and file names are omitted from diagnostic summaries and redacted from
+crash reports. You remain responsible for the licence of any model files you
+supply. If a custom edit model uses a downloaded component, LocalSR updates that
+component's path when you move the model folder. Other custom files stay where
+you put them.
 
 ## Memory and lifecycle
 
@@ -116,6 +141,9 @@ starting profiles.
 - CPU offload, mapped weights, disabled prefetch, two CPU threads, Flash
   Attention and tiled VAE encoding/decoding are enabled. Edit 2511 explicitly enables
   `qwen_image_zero_cond_t=true`, as required by the runtime's model documentation.
+  On Apple Silicon Macs, Mage-Flow-Edit-Turbo runs on the CPU backend (`--backend cpu`
+  with default physical-core threading) instead of Metal because the pinned Metal
+  backend produces all-white output for its diffusion transformer.
 - A small supervisor checks free memory, pressure, swap growth and the native
   process's memory every 250 ms and names the reason when it stops an edit. On a
   Mac, compressing memory and some swapping are how macOS makes room, and
@@ -134,6 +162,9 @@ starting profiles.
   4B Q4_0 at 512 × 352 px took about 130 s, peaked at a 2.6 GiB footprint (6.4 GiB
   RSS including mapped weights), kept pressure normal and did not swap; the free
   level fell from 71% to 40%.
+- Measured on the 16 GB M1 Pro (22 November 2026): Mage-Flow-Edit-Turbo Q6_K at
+  512 × 288 px on CPU with the app's flags (`--backend cpu`, mapped weights) took
+  95.9 s and peaked at a 0.44 GiB physical footprint (2.8 GiB RSS).
   Its stdin pipe also detects cancellation, worker restart or worker death.
 - Native weights live only in the disposable process. On success, cancellation,
   pressure failure or runtime error the process is reaped and temporary files are
@@ -168,7 +199,8 @@ To build the development Metal executable without model inference:
 python scripts/build_edit_runtime.py --backend MPS
 ```
 
-The desktop discovers `.cache/edit-runtime/sd-cli` in development and
+The desktop refreshes the editing runtime when the active engine changes. A runtime
+chosen by the user stays selected. The desktop discovers `.cache/edit-runtime/sd-cli` in development and
 `engine/_internal/edit/sd-cli` (`sd-cli.exe` on Windows) in packaged builds.
 `LOCALSR_EDIT_RUNTIME` or **Choose runtime…** (shown under the model row when
 no runtime is found) can supply a current native executable. The backend checks
@@ -183,9 +215,14 @@ Upstream references:
 
 - https://huggingface.co/Qwen/Qwen-Image-Edit-2511
 - https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF
+- https://github.com/microsoft/Mage
+- https://huggingface.co/Comfy-Org/Mage-Flow
+- https://huggingface.co/johnsor/Mage-Flow-Edit-Turbo-GGUF
 - https://github.com/leejet/stable-diffusion.cpp/blob/3f8527a46c54ecf4cb4ed6003da8e8982283c73c/docs/qwen_image_edit.md
+- https://github.com/leejet/stable-diffusion.cpp/blob/3f8527a46c54ecf4cb4ed6003da8e8982283c73c/docs/mage_flow.md
 
 Automated tests use simulated memory profiles and small fixtures, not real
-weights. On real hardware only FLUX.2 klein 4B Q4_0 at 512 px has run so far
-(16 GB M1 Pro); the Qwen bundles and larger sizes are estimates. See
+weights. On real hardware only FLUX.2 klein 4B Q4_0 and Mage-Flow-Edit-Turbo
+Q6_K (CPU on Mac) at 512 px have run so far (16 GB M1 Pro); the Qwen bundles
+and larger sizes are estimates. See
 [Known limitations](../KNOWN_LIMITATIONS.md#image-editing).

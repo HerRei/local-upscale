@@ -3,6 +3,8 @@ import stat
 import sys
 from pathlib import Path
 
+PILLOW_INPUT_FORMATS = ("JPEG", "PNG", "WEBP", "TIFF", "AVIF", "GIF", "JPEG2000", "BMP")
+
 # Camera RAW files, developed by LibRaw (rawpy), which LocalSR ships with its
 # corresponding source.
 RAW_INPUT_EXTENSIONS = frozenset(

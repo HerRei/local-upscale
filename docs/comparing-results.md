@@ -76,7 +76,7 @@ queued, and saves its own file in the output folder with the model in the name
 Each model gets at least the tile overlap it needs, as when you choose it in
 the library.
 
-A model that cannot keep the scale, the fix or Faces cannot be picked, and the
+A model that cannot keep the scale or the fix cannot be picked, and the
 whole request is refused if one of them stops fitting before it is queued;
 LocalSR does not change those settings to make a model fit. In Restore the
 candidates are 1× models that fix the selected problem. The summary gives a

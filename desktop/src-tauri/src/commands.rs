@@ -53,7 +53,7 @@ pub fn open_edit_link(
     model_id: String,
     link: String,
 ) -> AppResult<()> {
-    let model = crate::editing::catalog(&state.paths)?
+    let model = crate::editing::catalog_in(&state.model_root())?
         .into_iter()
         .find(|m| m.model_id == model_id)
         .ok_or_else(|| AppError::Validation("Unknown editing model.".into()))?;
@@ -98,10 +98,39 @@ pub(crate) fn start_edit_checked(
             "This worker does not support editing. Update LocalSR.".into(),
         ));
     }
-    let model = crate::editing::catalog(&state.paths)?
-        .into_iter()
-        .find(|model| model.model_id == input.model_id)
-        .ok_or_else(|| AppError::Validation("Unknown editing model.".into()))?;
+    let (model, bundle_dir, custom_files) =
+        if input.model_id == crate::editing::CUSTOM_EDIT_MODEL_ID {
+            let custom = lock(&state.settings)?.custom_edit_model.clone();
+            for path in custom.non_empty_paths() {
+                state.grants.check_model_file(Path::new(path))?;
+            }
+            let model = crate::editing::custom_edit_model(&custom).ok_or_else(|| {
+                AppError::Validation("Choose your custom editing model files first.".into())
+            })?;
+            let mut files = serde_json::Map::new();
+            for file in &model.files {
+                let path = match file.role.as_str() {
+                    "diffusion" => &custom.diffusion_path,
+                    "text_encoder" => &custom.text_encoder_path,
+                    "vision" => &custom.vision_path,
+                    "vae" => &custom.vae_path,
+                    _ => "",
+                };
+                files.insert(file.role.clone(), json!(path));
+            }
+            (model, String::new(), Some(Value::Object(files)))
+        } else {
+            let model = crate::editing::catalog_in(&state.model_root())?
+                .into_iter()
+                .find(|model| model.model_id == input.model_id)
+                .ok_or_else(|| AppError::Validation("Unknown editing model.".into()))?;
+            let bundle_dir = state
+                .model_root()
+                .join(&model.family)
+                .to_string_lossy()
+                .into_owned();
+            (model, bundle_dir, None)
+        };
     crate::editing::validate(&input, &model).map_err(AppError::Validation)?;
     if !lock(&state.capabilities)?
         .devices
@@ -129,14 +158,19 @@ pub(crate) fn start_edit_checked(
         .unwrap_or_default()
         .to_string_lossy();
     let output = directory.join(format!("{stem}_localsr_edit_{}.png", &id[..8]));
-    let request = json!({"type": "edit_job_request", "data": {
+    let mut data = json!({
         "job_id": id, "image_path": media.path, "output_path": output.to_string_lossy(),
         "model_id": model.model_id,
-        "bundle_dir": state.paths.model_root.join(&model.family).to_string_lossy(),
+        "bundle_dir": bundle_dir,
         "runtime_path": runtime.to_string_lossy(), "prompt": input.prompt,
         "device": input.device, "max_dimension": input.max_dimension,
         "steps": input.steps, "seed": input.seed, "accepted_terms": input.accepted_terms,
-    }});
+    });
+    if let Some(files) = custom_files {
+        data["family"] = json!(model.family);
+        data["custom_files"] = files;
+    }
+    let request = json!({"type": "edit_job_request", "data": data});
     lock(&state.database)?.insert_job(&id, &media.id, &serde_json::to_string(&request)?)?;
     Ok(())
 }
@@ -416,6 +450,9 @@ pub(crate) fn save_settings_checked(state: &AppState, settings: UiSettings) -> A
             .grants
             .check_model_file(Path::new(&settings.custom_model_path))?;
     }
+    for path in settings.custom_edit_model.non_empty_paths() {
+        state.grants.check_model_file(Path::new(path))?;
+    }
     replace_settings(state, settings)
 }
 
@@ -435,16 +472,19 @@ fn replace_settings(state: &AppState, mut settings: UiSettings) -> AppResult<()>
 }
 
 fn reconcile_persisted_grants(state: &AppState) -> AppResult<()> {
-    let (output_directory, custom_model_path) = {
+    let (output_directory, custom_model_path, custom_edit_model) = {
         let current = lock(&state.settings)?;
         (
             current.output_directory.clone(),
             current.custom_model_path.clone(),
+            current.custom_edit_model.clone(),
         )
     };
     let recipes = lock(&state.recipes)?.clone();
     state.grants.reconcile_outputs(&output_directory);
-    state.grants.reconcile_models(&custom_model_path, &recipes);
+    state
+        .grants
+        .reconcile_models(&custom_model_path, &custom_edit_model, &recipes);
     Ok(())
 }
 
@@ -470,6 +510,81 @@ fn keep_update_switches(current: &UiSettings, incoming: &mut UiSettings) {
     incoming.crash_reports = current.crash_reports;
     incoming.low_priority = current.low_priority;
     incoming.skipped_update_version = current.skipped_update_version.clone();
+    incoming.model_directory = current.model_directory.clone();
+    incoming.gpu_download_notice_dismissed = current.gpu_download_notice_dismissed;
+    incoming.linux_menu_prompt_dismissed = current.linux_menu_prompt_dismissed;
+}
+
+fn persist_host_flag(
+    state: &AppState,
+    app: &AppHandle,
+    mutate: impl FnOnce(&mut UiSettings) -> bool,
+    restore: impl FnOnce(&mut UiSettings, bool),
+) -> AppResult<()> {
+    {
+        let _io = lock(&state.settings_io)?;
+        let previous = {
+            let mut settings = lock(&state.settings)?;
+            mutate(&mut settings)
+        };
+        if let Err(error) = state.write_settings() {
+            if let Ok(mut settings) = lock(&state.settings) {
+                restore(&mut settings, previous);
+            }
+            return Err(error);
+        }
+    }
+    emit_state_changed(app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn dismiss_gpu_download_notice(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+) -> AppResult<()> {
+    persist_host_flag(
+        &state,
+        &app,
+        |settings| std::mem::replace(&mut settings.gpu_download_notice_dismissed, true),
+        |settings, previous| settings.gpu_download_notice_dismissed = previous,
+    )
+}
+
+#[tauri::command]
+pub fn dismiss_linux_menu_prompt(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
+    persist_host_flag(
+        &state,
+        &app,
+        |settings| std::mem::replace(&mut settings.linux_menu_prompt_dismissed, true),
+        |settings, previous| settings.linux_menu_prompt_dismissed = previous,
+    )
+}
+
+#[tauri::command]
+pub fn install_linux_menu(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
+    integrations::install_linux_menu()?;
+    persist_host_flag(
+        &state,
+        &app,
+        |settings| std::mem::replace(&mut settings.linux_menu_prompt_dismissed, true),
+        |settings, previous| settings.linux_menu_prompt_dismissed = previous,
+    )?;
+    native_menu::reconcile(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn uninstall_linux_menu(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
+    integrations::uninstall_linux_menu()?;
+    persist_host_flag(
+        &state,
+        &app,
+        |settings| std::mem::replace(&mut settings.linux_menu_prompt_dismissed, true),
+        |settings, previous| settings.linux_menu_prompt_dismissed = previous,
+    )?;
+    native_menu::reconcile(&app);
+    Ok(())
 }
 
 /// Persist menu appearance changes independently of processing settings.
@@ -760,7 +875,7 @@ fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
         // The frontend reconstructs recipes without stages from their top-level fields.
         return Ok(());
     }
-    if recipe.stages.len() > 5
+    if recipe.stages.len() > 6
         || recipe.stages.iter().any(|stage| {
             stage.model_id.trim().is_empty()
                 || !matches!(
@@ -781,13 +896,23 @@ fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
     let mut fixes = HashSet::new();
     if recipe.stages.iter().any(|stage| {
         stage.fix.as_deref().is_some_and(|fix| {
-            !matches!(fix, "blur" | "jpeg" | "noise")
+            !matches!(fix, "blur" | "jpeg" | "noise" | "colour")
                 || !matches!(stage.kind.as_str(), "deblock" | "restore")
                 || !fixes.insert(fix)
         })
     }) {
         return Err(AppError::Validation(
             "recipe fix kinds must be known, unique and on restoration stages".into(),
+        ));
+    }
+    if recipe.task == "video"
+        && recipe
+            .stages
+            .iter()
+            .any(|stage| stage.fix.as_deref() == Some("colour"))
+    {
+        return Err(AppError::Validation(
+            "Colour is only available for photos, not video.".into(),
         ));
     }
     let kinds: Vec<&str> = recipe
@@ -800,7 +925,7 @@ fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
             let upscale = kinds.iter().position(|kind| *kind == "upscale");
             upscale.is_some_and(|index| {
                 kinds.iter().filter(|kind| **kind == "upscale").count() == 1
-                    && index <= 3
+                    && index <= 4
                     && kinds[..index]
                         .iter()
                         .all(|kind| matches!(*kind, "deblock" | "restore"))
@@ -1007,7 +1132,7 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
             ));
         }
     }
-    if upscale_skips_sr(&input)
+    if (upscale_skips_sr(&input) || no_video_restore_model(&input))
         && input.fix_stages.is_empty()
         && !(input.task == "video"
             && input.video_model_id == "frame_by_frame"
@@ -1017,7 +1142,7 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
         && media.iter().all(|item| !item.has_audio)
     {
         return Err(AppError::Validation(
-            "Nothing to run at 1×: the selected video has no audio track.".into(),
+            "Nothing to run: the selected video has no audio track.".into(),
         ));
     }
     refuse_when_disk_is_short(&input, &selection, &media[0], &output_directory)?;
@@ -1191,6 +1316,9 @@ fn model_fixes(model: &CatalogModel) -> Vec<String> {
     }
     if has("deblur") {
         found.push("blur".to_owned());
+    }
+    if has("colorize") {
+        found.push("colour".to_owned());
     }
     if has("restoration") && found.is_empty() {
         found.push("jpeg".to_owned());
@@ -2217,7 +2345,15 @@ pub fn remove_model(
     app: AppHandle,
     model_id: String,
 ) -> AppResult<()> {
+    remove_model_checked(&state, &model_id)?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
+fn remove_model_checked(state: &AppState, model_id: &str) -> AppResult<()> {
     let _scheduler = lock(&state.scheduler)?;
+    ensure_not_moving_models(state)?;
+    ensure_not_missing_model_root(state)?;
     if !lock(&state.runtime)?.active_job_id.is_empty() {
         return Err(AppError::Validation(
             "finish or cancel processing before removing a model".into(),
@@ -2228,6 +2364,7 @@ pub fn remove_model(
             "wait for the current download to finish before removing a model".into(),
         ));
     }
+    let model_root = state.model_root();
     let path = {
         let catalog = lock(&state.catalog)?;
         match catalog
@@ -2238,12 +2375,9 @@ pub fn remove_model(
             Some(model) if !model.installed => {
                 return Err(AppError::Validation("the model is not installed".into()));
             }
-            Some(model) => Some(
-                state
-                    .paths
-                    .model_root
-                    .join(crate::catalog::safe_model_filename(&model.filename)?),
-            ),
+            Some(model) => {
+                Some(model_root.join(crate::catalog::safe_model_filename(&model.filename)?))
+            }
             None => None,
         }
     };
@@ -2260,13 +2394,12 @@ pub fn remove_model(
             state.refresh_catalog()?;
         }
         // Editing and catalog bundles live beside the single-file models; shared files survive.
-        None if remove_catalog_bundle(&state, &model_id)? => {}
-        None if !crate::editing::remove_bundle(&state.paths, &model_id)? => {
+        None if remove_catalog_bundle(state, model_id)? => {}
+        None if !crate::editing::remove_bundle_in(&model_root, model_id)? => {
             return Err(AppError::Validation("unknown model".into()));
         }
         None => {}
     }
-    emit_state_changed(&app);
     Ok(())
 }
 
@@ -2297,6 +2430,8 @@ pub(crate) fn import_catalog_model_checked(
     accepted_terms: bool,
 ) -> AppResult<()> {
     crate::updates::ensure_not_installing(state)?;
+    ensure_not_moving_models(state)?;
+    ensure_not_missing_model_root(state)?;
     let (filename, size_bytes, sha256, terms_required) = {
         let catalog = lock(&state.catalog)?;
         let model = catalog
@@ -2325,8 +2460,9 @@ pub(crate) fn import_catalog_model_checked(
             "the selected file does not match the catalog size and SHA-256 digest".into(),
         ));
     }
-    fs::create_dir_all(&state.paths.model_root)?;
-    let destination = state.paths.model_root.join(filename);
+    let model_root = state.model_root();
+    fs::create_dir_all(&model_root)?;
+    let destination = model_root.join(filename);
     import_verified_catalog_file(&source, &destination, size_bytes, &sha256)?;
     state.refresh_catalog()
 }
@@ -2523,6 +2659,41 @@ pub async fn choose_output_directory(
 }
 
 #[tauri::command]
+pub async fn choose_model_directory(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    current: String,
+) -> AppResult<Option<String>> {
+    let hint = if current.trim().is_empty() {
+        state.model_root().to_string_lossy().into_owned()
+    } else {
+        current
+    };
+    let picked = pick_folder(app, "Choose model folder", &hint).await?;
+    if let Some(folder) = &picked {
+        state.grants.grant_model_folder(folder);
+    }
+    Ok(picked.map(|path| path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+pub async fn set_model_directory(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    path: String,
+) -> AppResult<()> {
+    crate::model_storage::change_model_directory(&state, Some(&app), Some(&path)).await
+}
+
+#[tauri::command]
+pub async fn reset_model_directory(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> AppResult<()> {
+    crate::model_storage::change_model_directory(&state, Some(&app), None).await
+}
+
+#[tauri::command]
 pub async fn choose_custom_model(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
@@ -2545,6 +2716,100 @@ pub async fn choose_custom_model(
         .map_err(|error| AppError::Validation(format!("that is not a file path: {error}")))?;
     state.grants.grant_model_file(&path);
     Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct EditModelFilePick {
+    pub path: String,
+    pub size_bytes: u64,
+    pub detected_family: Option<String>,
+}
+
+/// Let the user pick one component file for a custom editing model.
+#[tauri::command]
+pub async fn choose_edit_model_file(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    role: String,
+) -> AppResult<Option<EditModelFilePick>> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let title = match role.as_str() {
+        "diffusion" => "Choose diffusion model",
+        "text_encoder" => "Choose text encoder",
+        "vision" => "Choose vision projector",
+        "vae" => "Choose VAE",
+        _ => return Err(AppError::Validation("Unknown edit model file role.".into())),
+    };
+    let dialog = app
+        .dialog()
+        .file()
+        .set_title(title)
+        .add_filter("Edit model weights", &["gguf", "safetensors"]);
+    let picked = tauri::async_runtime::spawn_blocking(move || dialog.blocking_pick_file())
+        .await
+        .map_err(|error| AppError::Config(format!("the file dialog failed: {error}")))?;
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|error| AppError::Validation(format!("that is not a file path: {error}")))?;
+    state.grants.grant_model_file(&path);
+    let size_bytes = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    let detected_family = if role == "diffusion" {
+        crate::editing::detect_gguf_edit_family(&path).map(str::to_owned)
+    } else {
+        None
+    };
+    Ok(Some(EditModelFilePick {
+        path: path.to_string_lossy().into_owned(),
+        size_bytes,
+        detected_family,
+    }))
+}
+
+pub(crate) fn save_custom_edit_model_checked(
+    state: &AppState,
+    custom: crate::types::CustomEditModel,
+    runtime_path: &str,
+) -> AppResult<()> {
+    crate::updates::ensure_not_installing(state)?;
+    if !lock(&state.runtime)?.active_job_id.is_empty() {
+        return Err(AppError::Validation(
+            "Finish or cancel the current queue before changing settings.".into(),
+        ));
+    }
+    validate_custom_edit_model(&custom)?;
+    for path in custom.non_empty_paths() {
+        state.grants.check_model_file(Path::new(path))?;
+    }
+    let runtime = edit_runtime(state, runtime_path)?;
+    crate::editing::verify_custom_edit_load(&runtime, &custom).map_err(AppError::Validation)?;
+    let mut updated = lock(&state.settings)?.clone();
+    updated.custom_edit_model = custom;
+    updated.edit_model_id = crate::editing::CUSTOM_EDIT_MODEL_ID.into();
+    updated.edit_steps = 0;
+    replace_settings(state, updated)
+}
+
+/// Verify a custom editing model with sd-cli and save its paths in settings.
+#[tauri::command]
+pub async fn save_custom_edit_model(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    custom: crate::types::CustomEditModel,
+    runtime_path: String,
+) -> AppResult<()> {
+    let state_arc = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _scheduler = lock(&state_arc.scheduler)?;
+        save_custom_edit_model_checked(&state_arc, custom, &runtime_path)
+    })
+    .await
+    .map_err(|error| AppError::Config(format!("the model check failed: {error}")))??;
+    emit_state_changed(&app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -2898,7 +3163,32 @@ pub fn diagnostic_summary(state: State<'_, Arc<AppState>>) -> AppResult<String> 
     Ok(serde_json::to_string_pretty(&summary)?)
 }
 
+fn ensure_not_moving_models(state: &AppState) -> AppResult<()> {
+    if state
+        .moving_models
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        Err(AppError::Validation(
+            "Wait for the model folder move to finish first.".into(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_not_missing_model_root(state: &AppState) -> AppResult<()> {
+    if state.model_root_missing() {
+        Err(AppError::Validation(
+            "The model folder is unavailable. Reconnect the drive, choose another folder, or reset to default."
+                .into(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 fn ensure_queue_idle(state: &AppState) -> AppResult<()> {
+    ensure_not_moving_models(state)?;
     if lock(&state.database)?.has_inflight_jobs()? {
         Err(AppError::Validation(
             "the processing queue is already active; cancel it before starting another batch"
@@ -3010,6 +3300,27 @@ fn validate_start(input: &StartBatchInput, state: &AppState) -> AppResult<()> {
     validate_system_outputs(input, &media)
 }
 
+fn validate_custom_edit_model(custom: &crate::types::CustomEditModel) -> AppResult<()> {
+    if !custom.family.is_empty() && crate::editing::find_family_spec(&custom.family).is_none() {
+        return Err(AppError::Validation(
+            "unsupported editing model family".into(),
+        ));
+    }
+    for path in [
+        custom.diffusion_path.as_str(),
+        custom.text_encoder_path.as_str(),
+        custom.vision_path.as_str(),
+        custom.vae_path.as_str(),
+    ] {
+        if path.len() > 4096 || path.contains('\0') {
+            return Err(AppError::Validation(
+                "the custom editing model path is invalid".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_settings(settings: &UiSettings) -> AppResult<()> {
     validate_fix_selections(&settings.fix_stages)?;
     if !matches!(settings.interface_scale, 100 | 110 | 125) {
@@ -3038,13 +3349,14 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
             "unsupported edit size, step count, seed or model".into(),
         ));
     }
+    validate_custom_edit_model(&settings.custom_edit_model)?;
     if !matches!(settings.quality.as_str(), "" | "quick" | "best" | "custom")
         || !matches!(settings.content.as_str(), "" | "photo" | "illustration")
-        || settings.fixes.len() > 4
+        || settings.fixes.len() > 5
         || !settings
             .fixes
             .iter()
-            .all(|fix| matches!(fix.as_str(), "noise" | "jpeg" | "blur" | "faces"))
+            .all(|fix| matches!(fix.as_str(), "noise" | "jpeg" | "blur" | "colour" | "faces"))
         || settings.preset_pins.len() > 64
         || !settings
             .preset_pins
@@ -3133,15 +3445,15 @@ fn validate_fix_engine(
 
 fn validate_fix_selections(stages: &[crate::types::FixStageSelection]) -> AppResult<()> {
     let mut fixes = HashSet::new();
-    if stages.len() > 3
+    if stages.len() > 4
         || stages.iter().any(|stage| {
-            !matches!(stage.fix.as_str(), "blur" | "jpeg" | "noise")
+            !matches!(stage.fix.as_str(), "blur" | "jpeg" | "noise" | "colour")
                 || !fixes.insert(&stage.fix)
                 || stage.model_id.len() > 64
         })
     {
         return Err(AppError::Validation(
-            "choose up to three different fixes: blur, JPEG or noise".into(),
+            "choose up to four different fixes: blur, JPEG, noise or colour".into(),
         ));
     }
     Ok(())
@@ -3222,12 +3534,25 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
     if input.media_ids.is_empty() || input.media_ids.len() > MAX_MEDIA_ITEMS {
         return Err(AppError::Validation("invalid batch size".into()));
     }
+    if no_video_restore_model(input) && !has_work_at_1x(input) {
+        return Err(AppError::Validation(
+            "Nothing to run. Pick what to fix, or turn on De-flicker, Frame rate or Clean up audio.".into(),
+        ));
+    }
     if upscale_skips_sr(input) && !has_work_at_1x(input) {
         return Err(AppError::Validation(
-            "Nothing to run at 1×. Turn on Fix first, a video option or audio cleanup, or choose 2× or higher.".into(),
+            "Nothing to run at 1×. Turn on Restore first, a video option or audio cleanup, or choose 2× or higher.".into(),
         ));
     }
     Ok(())
+}
+
+/// True when video Restore has no fix selected and runs only video/audio options.
+fn no_video_restore_model(input: &StartBatchInput) -> bool {
+    input.task == "video"
+        && input.video_task == "denoise"
+        && input.fix_stages.is_empty()
+        && input.model_id.is_empty()
 }
 
 /// True when the Upscale task is set to 1× and therefore runs no upscaling model.
@@ -3306,6 +3631,11 @@ struct ResolvedImageStage {
 
 fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResult<ModelSelection> {
     validate_fix_selections(&input.fix_stages)?;
+    if input.task == "video" && input.fix_stages.iter().any(|stage| stage.fix == "colour") {
+        return Err(AppError::Validation(
+            "Colour is only available for photos, not video.".into(),
+        ));
+    }
     let restoring =
         input.task == "denoise" || (input.task == "video" && input.video_task == "denoise");
     if !input.fix_stages.is_empty()
@@ -3317,7 +3647,7 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
         ));
     }
     let catalog = lock(&state.catalog)?;
-    let skip_upscale = upscale_skips_sr(input);
+    let skip_upscale = upscale_skips_sr(input) || no_video_restore_model(input);
     if input.task == "video" && input.video_model_id != "frame_by_frame" && !skip_upscale {
         if input.video_task == "denoise" {
             return Err(AppError::Validation(
@@ -3379,6 +3709,11 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
             .find(|model| model.model_id == input.model_id)
             .ok_or_else(|| AppError::Validation("unknown image model".into()))?;
         validate_model_for_task(model, if restoring { "denoise" } else { &input.task })?;
+        if input.task == "video" && model.purposes.iter().any(|purpose| purpose == "colorize") {
+            return Err(AppError::Validation(
+                "Colour is only available for photos, not video.".into(),
+            ));
+        }
         if !restoring && input.output_scale > model.native_scale {
             return Err(AppError::Validation(format!(
                 "the selected model supports output scales up to {}×",
@@ -4181,7 +4516,7 @@ fn remove_catalog_bundle(state: &AppState, model_id: &str) -> AppResult<bool> {
             })
             .flat_map(|other| other.files.iter().map(|file| file.filename.clone()))
             .collect();
-        let directory = state.paths.model_root.join(&model.family);
+        let directory = state.model_root().join(&model.family);
         let files: Vec<PathBuf> = model
             .files
             .iter()

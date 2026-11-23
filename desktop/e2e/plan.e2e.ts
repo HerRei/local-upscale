@@ -4,7 +4,7 @@ import { hostCalls } from './fake-host';
 import { ready, upscale } from './fixtures';
 
 const chip = (page: Page, name: string) =>
-  page.getByRole('group', { name: 'Fix first' }).getByRole('button', { name, exact: true });
+  page.getByRole('group', { name: 'Restore first' }).getByRole('button', { name, exact: true });
 const rows = (page: Page) => page.getByRole('list', { name: 'Stages' }).getByRole('listitem');
 
 async function savedFixes(page: Page): Promise<string[]> {
@@ -103,8 +103,8 @@ test.describe('plan card', () => {
     expect(notes.x + notes.width).toBeGreaterThan(rowBox.x + rowBox.width - 4);
   });
 
-  test('Faces is unavailable without a face model', async ({ page }) => {
-    await expect(chip(page, 'Faces')).toBeDisabled();
+  test('Faces is not offered', async ({ page }) => {
+    await expect(chip(page, 'Faces')).toHaveCount(0);
   });
 
   test('Change… opens the model library on the upscaler and closes again', async ({ page }) => {

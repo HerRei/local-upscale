@@ -132,6 +132,17 @@ async fn download_model_with_env<R: tauri::Runtime>(
     accepted_terms: bool,
     env: DownloadEnv,
 ) -> AppResult<()> {
+    if state.moving_models.load(Ordering::SeqCst) {
+        return Err(AppError::Download(
+            "wait for the model folder move to finish before downloading".into(),
+        ));
+    }
+    if state.model_root_missing() {
+        return Err(AppError::Download(
+            "the model folder is unavailable; reconnect the drive, choose another folder, or reset to the default"
+                .into(),
+        ));
+    }
     let target = resolve_target(&state, &model_id)?;
     target.validate_policy(accepted_terms)?;
     let planned_files = target.planned_files(&state, env)?;
@@ -244,7 +255,7 @@ fn resolve_target(state: &AppState, model_id: &str) -> AppResult<DownloadTarget>
         Ok(DownloadTarget::Image(Box::new(model.clone())))
     } else if let Some(model) = bundle_model(&catalog, model_id) {
         Ok(DownloadTarget::Video(Box::new(model)))
-    } else if let Some(model) = crate::editing::catalog(&state.paths)?
+    } else if let Some(model) = crate::editing::catalog_in(&state.model_root())?
         .into_iter()
         .find(|model| model.model_id == model_id)
     {
@@ -295,10 +306,11 @@ async fn begin_running_download(
             fs::create_dir_all(parent).await?;
         }
     }
+    let model_root = state.model_root();
     let check_dir = planned_files
         .first()
         .and_then(|file| file.destination.parent())
-        .unwrap_or(&state.paths.model_root);
+        .unwrap_or(&model_root);
     let mut downloads = lock(&state.downloads)?;
     if let Some(entry) = downloads.get(model_id) {
         check_cancel(entry.cancellation.as_ref())?;
@@ -568,7 +580,7 @@ impl DownloadTarget {
                     &model.sha256,
                     env,
                 )?;
-                let destination = state.paths.model_root.join(&model.filename);
+                let destination = state.model_root().join(&model.filename);
                 Ok(vec![PlannedFile {
                     partial: partial_path(&destination),
                     destination,
@@ -593,7 +605,7 @@ impl DownloadTarget {
         match self {
             Self::Image(model) => {
                 safe_model_filename(&model.filename)?;
-                let destination = state.paths.model_root.join(&model.filename);
+                let destination = state.model_root().join(&model.filename);
                 download_one(
                     &client,
                     app,
@@ -659,7 +671,7 @@ fn planned_bundle_files(
             &file.sha256,
             env,
         )?;
-        let destination = state.paths.model_root.join(family).join(&file.filename);
+        let destination = state.model_root().join(family).join(&file.filename);
         planned.push(PlannedFile {
             partial: partial_path(&destination),
             destination,
@@ -697,7 +709,7 @@ async fn download_bundle<R: tauri::Runtime>(
     for file in files {
         check_cancel(cancellation)?;
         safe_model_filename(&file.filename)?;
-        let destination = state.paths.model_root.join(family).join(&file.filename);
+        let destination = state.model_root().join(family).join(&file.filename);
         if verified_file_async(&destination, file.size_bytes, &file.sha256).await? {
             completed += file.size_bytes;
             publish_progress(state, app, model_id, completed, total);
@@ -2161,6 +2173,97 @@ mod tests {
             assert!(state.paths.model_root.join("good2.bin").is_file());
             assert!(!state.paths.model_root.join("bad.bin").exists());
             assert!(!state.paths.model_root.join("bad.bin.part").exists());
+            server.abort();
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn downloads_work_in_a_custom_and_symlinked_model_folder_and_refuse_when_missing() {
+        use std::os::unix::fs::symlink;
+
+        multi_thread_runtime().block_on(async {
+            let directory = tempfile::tempdir().unwrap();
+            let paths = crate::paths::AppPaths::under(directory.path());
+            let target = directory.path().join("external-models");
+            let linked = directory.path().join("linked-models");
+            fs::create_dir_all(&target).await.unwrap();
+            symlink(&target, &linked).unwrap();
+
+            let payload = b"symlinked-download-payload".to_vec();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let body = payload.clone();
+            let router = Router::new().route(
+                "/linked.bin",
+                get(move || {
+                    let body = body.clone();
+                    async move {
+                        Response::builder()
+                            .status(AxumStatus::OK)
+                            .header(http_header::CONTENT_LENGTH, body.len())
+                            .body(Body::from(body))
+                            .unwrap()
+                    }
+                }),
+            );
+            let server = tokio::spawn(async move {
+                axum::serve(listener, router).await.unwrap();
+            });
+
+            let saved = crate::types::UiSettings {
+                model_directory: linked.to_string_lossy().into_owned(),
+                ..crate::types::UiSettings::default()
+            };
+            crate::settings::save(&paths, &saved, &[]).unwrap();
+
+            let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+            {
+                let mut catalog = state.catalog.lock().unwrap();
+                catalog.models = vec![test_image_model(
+                    "linked_m",
+                    "linked.bin",
+                    &payload,
+                    format!("http://{addr}/linked.bin"),
+                )];
+            }
+
+            let app = tauri::test::mock_app();
+            let env = DownloadEnv {
+                allow_local_http: true,
+                available_space_override: Some(10_000_000),
+            };
+            download_model_with_env(
+                state.clone(),
+                app.handle().clone(),
+                "linked_m".into(),
+                false,
+                env,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(std::fs::read(target.join("linked.bin")).unwrap(), payload);
+            assert!(state.catalog.lock().unwrap().models[0].installed);
+            assert!(state
+                .grants
+                .is_app_owned(&target.join("linked.bin"))
+                .unwrap());
+
+            // Unplugging the drive (removing the target) makes the symlink dangling and refuses downloads.
+            std::fs::remove_dir_all(&target).unwrap();
+            assert!(state.model_root_missing());
+            let err = download_model_with_env(
+                state.clone(),
+                app.handle().clone(),
+                "linked_m".into(),
+                false,
+                env,
+            )
+            .await
+            .unwrap_err();
+            assert!(err.to_string().contains("model folder is unavailable"));
+
             server.abort();
         });
     }

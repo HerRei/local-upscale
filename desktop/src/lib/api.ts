@@ -4,8 +4,12 @@ import { join } from '@tauri-apps/api/path';
 import { demoSnapshot } from './demo';
 import type {
   AppSnapshot,
+  CustomEditModel,
+  EngineCatalogEntry,
+  EngineDownloadStatus,
   IntegrationStatus,
   LaunchIntent,
+  ModelMoveProgress,
   Recipe,
   StartBatchInput,
   UiSettings,
@@ -51,6 +55,69 @@ export async function chooseOutputDirectory(current: string): Promise<string | n
   return invoke<string | null>('choose_output_directory', { current });
 }
 
+export async function chooseModelDirectory(current: string): Promise<string | null> {
+  if (!isTauri()) return null;
+  return invoke<string | null>('choose_model_directory', { current });
+}
+
+export const setModelDirectory = (path: string): Promise<void> =>
+  invoke('set_model_directory', { path });
+
+export const resetModelDirectory = (): Promise<void> => invoke('reset_model_directory');
+
+export async function listenForModelMove(
+  handler: (progress: ModelMoveProgress) => void,
+): Promise<UnlistenFn> {
+  if (!isTauri()) return () => {};
+  return listen<ModelMoveProgress>('model-move-progress', (event) => handler(event.payload));
+}
+
+export async function dismissGpuDownloadNotice(): Promise<void> {
+  if (isTauri()) await invoke('dismiss_gpu_download_notice');
+}
+
+export async function dismissLinuxMenuPrompt(): Promise<void> {
+  if (isTauri()) await invoke('dismiss_linux_menu_prompt');
+}
+
+export async function installLinuxMenu(): Promise<void> {
+  if (isTauri()) await invoke('install_linux_menu');
+}
+
+export async function uninstallLinuxMenu(): Promise<void> {
+  if (isTauri()) await invoke('uninstall_linux_menu');
+}
+
+export async function refreshEngineCatalog(channel?: string | null): Promise<EngineCatalogEntry[]> {
+  if (!isTauri()) return [];
+  return invoke<EngineCatalogEntry[]>('refresh_engine_catalog', { channel: channel ?? null });
+}
+
+export const installEngine = (backend: string): Promise<void> =>
+  invoke('install_engine', { backend });
+
+export const cancelEngineInstall = (): Promise<void> => invoke('cancel_engine_install');
+
+export const useEngine = (backend: string): Promise<void> => invoke('use_engine', { backend });
+
+export const verifyEngine = (id: string): Promise<void> => invoke('verify_engine', { id });
+
+export const removeEngine = (id: string): Promise<void> => invoke('remove_engine', { id });
+
+export async function chooseEngineManifest(): Promise<string | null> {
+  if (!isTauri()) return null;
+  return invoke<string | null>('choose_engine_manifest');
+}
+
+export const importEngine = (path: string): Promise<void> => invoke('import_engine', { path });
+
+export async function listenForEngineStatus(
+  handler: (status: EngineDownloadStatus) => void,
+): Promise<UnlistenFn> {
+  if (!isTauri()) return () => {};
+  return listen<EngineDownloadStatus>('engine-status', (event) => handler(event.payload));
+}
+
 export async function chooseCustomModel(): Promise<string | null> {
   if (!isTauri()) return null;
   return invoke<string | null>('choose_custom_model');
@@ -89,6 +156,19 @@ export async function chooseEditRuntime(): Promise<string | null> {
   if (!isTauri()) return null;
   return invoke<string | null>('choose_edit_runtime');
 }
+export interface EditModelFilePick {
+  path: string;
+  size_bytes: number;
+  detected_family?: string | null;
+}
+export async function chooseEditModelFile(
+  role: 'diffusion' | 'text_encoder' | 'vision' | 'vae',
+): Promise<EditModelFilePick | null> {
+  if (!isTauri()) return null;
+  return invoke<EditModelFilePick | null>('choose_edit_model_file', { role });
+}
+export const saveCustomEditModel = (custom: CustomEditModel, runtimePath: string): Promise<void> =>
+  invoke('save_custom_edit_model', { custom, runtimePath });
 export const retryEngine = (): Promise<void> => invoke('retry_engine');
 export const cancelJobs = (): Promise<void> => invoke('cancel_jobs');
 export const startBenchmark = (device: string): Promise<void> =>

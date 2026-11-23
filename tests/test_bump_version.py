@@ -216,3 +216,49 @@ def test_bump_moves_an_unreleased_section_under_the_new_version(tree: Path):
     section = updated.split(f"## [{new}] - Unreleased")[1].split("\n## [")[0]
     assert "- Real fix." in section
     assert "- Dependency updates." in section
+
+
+def test_release_notes_table_and_published_notice(tree: Path):
+    new = bump_version.next_patch(VERSION)
+    bump_version.bump(tree, new, "- Changes.", dt.date(2026, 11, 16))
+    notes = tree / f"docs/releases/v{new}.md"
+    text = notes.read_text()
+    assert f"LocalSR-v{new}-Windows-CUDA-x86_64.engine.tar.gz.part-*" in text
+    assert f"LocalSR-v{new}-Linux-ROCm-x86_64.AppImage.part-*" in text
+    assert "Release candidate, not published yet" not in text
+    text = text.replace(
+        "## Which file",
+        "Release candidate, not published yet (prepared 2026-11-16).\n\n## Which file",
+    )
+    assert "Release candidate, not published yet" not in bump_version.published_notes(text)
+    notes.write_text(text)
+    plan_path = tree / "ci/public-beta-release.json"
+    plan = json.loads(plan_path.read_text())
+    for target in plan["targets"]:
+        target["package"] = "published"
+    plan_path.write_text(json.dumps(plan))
+    with pytest.raises(ValueError, match="Published release notes"):
+        release_version.check(f"v{new}", tree)
+
+
+def test_download_table_uses_registered_suffixes():
+    table = bump_version.download_table("1.2.3-beta")
+    registry = json.loads((ROOT / "ci/tauri-targets.json").read_text())
+    for target in registry["targets"]:
+        assert f"LocalSR-v1.2.3-beta-{target['suffix']}" in table
+    main_section, offline_section = table.split("## Offline and advanced downloads", 1)
+    assert "The app offers the faster GPU engine after setup." in main_section
+    assert "LocalSR-v1.2.3-beta-macOS-arm64.dmg" in main_section
+    assert "LocalSR-v1.2.3-beta-Windows-CPU-x86_64.exe" in main_section
+    assert "LocalSR-v1.2.3-beta-Linux-CPU-x86_64.AppImage" in main_section
+    assert "Windows-CUDA-x86_64.exe" not in main_section
+    assert "Import engine from file…" in offline_section
+
+
+def test_readme_download_table_matches_registry():
+    expected = (
+        bump_version.download_table(VERSION)
+        .replace("## Which file", "### Which file", 1)
+        .replace("## Offline and advanced downloads", "### Offline and advanced downloads", 1)
+    )
+    assert expected in (ROOT / "README.md").read_text(encoding="utf-8")

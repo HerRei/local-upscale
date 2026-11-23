@@ -11,7 +11,8 @@ access. The inference worker remains a separate Python process.
 and `--auto-start`. The single-instance plugin forwards later launches to the
 existing window. Directory expansion and duplicate handling live in `commands.rs`.
 The frontend reconciles launch requests with the selected media type and cancels
-automatic processing when a mixed selection needs a user choice.
+automatic processing when a mixed selection needs a user choice. If models are
+moving, automatic processing waits until the move finishes.
 
 The Python `localsr` command forwards desktop launches to this host. Its
 `process`, `watch` and `benchmark` subcommands run directly through the Python

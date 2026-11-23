@@ -155,6 +155,9 @@ jobs:
       - name: Build, verify and smoke-test the AppImage
         run: |
           python scripts/build_tauri_preview.py --skip-checks --bundles appimage
+          if [ "${{ matrix.backend }}" = CUDA ]; then
+            build/tauri-preview/worker-dist/engine/localsr-worker --check-cuda-arch
+          fi
           BUNDLE="$CARGO_TARGET_DIR/release/bundle/appimage"
           SOURCE=$(find "$BUNDLE" -maxdepth 1 -type f -name '*.AppImage')
           test "$(printf '%s\n' "$SOURCE" | sed '/^$/d' | wc -l | tr -d ' ')" = 1

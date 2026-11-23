@@ -53,6 +53,7 @@ def test_mac_tiers_are_sensible_for_the_bigger_models():
     assert tiers["qwen_edit_2511_q8_0"] <= 48, "a 48 GB Mac holds the 26 GiB Q8 bundle"
     assert tiers["qwen_edit_2511_q4_k_m"] <= 32, "common 32 GB Macs get a Q4 editor"
     assert tiers["flux2_klein_4b_q8_0"] == 16
+    assert tiers["mage_flow_edit_turbo_q6_k"] == 16
     assert tiers["qwen_edit_2511_q2_k"] > 16, "the 20B editor stays off 16 GB Macs"
 
 
@@ -302,6 +303,8 @@ def test_bundle_verification_is_streamed_and_rejects_corruption(tmp_path):
         ("qwen-image-edit-2511", "Q4_K_M", "cuda:0", "CUDA"),
         ("qwen-image-edit-2511", "Q2_K", "cuda:1", "VULKAN"),
         ("flux2-klein-4b", "Q4_0", "mps", "MPS"),
+        ("mage-flow-edit-turbo", "Q6_K", "mps", "MPS"),
+        ("mage-flow-edit-turbo", "Q6_K", "cuda:0", "CUDA"),
     ],
 )
 def test_native_command_preserves_quantization_and_model_specific_configuration(
@@ -329,12 +332,24 @@ def test_native_command_preserves_quantization_and_model_specific_configuration(
     assert "--type" not in command  # Never expand a GGUF bundle into float weights.
     assert "--disable-prefetch" in command and "--mmap" in command
     assert command[command.index("--max-vram") + 1] == "6.00"
-    assert command[command.index("--backend") + 1].startswith(
-        {"MPS": "diffusion=MTL0", "CUDA": "diffusion=CUDA0", "VULKAN": "diffusion=Vulkan1"}[backend]
-    )
+    if family == "mage-flow-edit-turbo" and backend == "MPS":
+        assert command[command.index("--backend") + 1] == "cpu"
+        assert "--threads" not in command
+    else:
+        assert command[command.index("--backend") + 1].startswith(
+            {"MPS": "diffusion=MTL0", "CUDA": "diffusion=CUDA0", "VULKAN": "diffusion=Vulkan1"}[
+                backend
+            ]
+        )
+        assert command[command.index("--threads") + 1] == "2"
     if family == "flux2-klein-4b":
         # Distilled: guidance 1, no vision projector, no model arguments.
         assert "--model-args" not in command and "--llm_vision" not in command
+        assert command[command.index("--cfg-scale") + 1] == "1"
+        assert selected["default_steps"] == 4
+    elif family == "mage-flow-edit-turbo":
+        # Distilled 4-step editor with Qwen3-VL vision conditioning and automatic preset.
+        assert "--llm_vision" in command and "--model-args" not in command
         assert command[command.index("--cfg-scale") + 1] == "1"
         assert selected["default_steps"] == 4
     else:
@@ -586,7 +601,7 @@ def test_edit_refuses_an_output_name_the_file_system_cannot_hold_before_any_work
 
 
 def test_catalog_offers_only_openly_licensed_bundles():
-    assert {m["license_name"] for m in image_edit.edit_catalog()} == {"Apache-2.0"}
+    assert {m["license_name"] for m in image_edit.edit_catalog()} == {"Apache-2.0", "MIT"}
     assert not any(m["terms_acceptance_required"] for m in image_edit.edit_catalog())
 
 
@@ -741,3 +756,188 @@ def test_edit_progress_follows_the_runtime_log_and_never_stands_still():
     now[0] += 20
     assert stuck.snapshot()[0] > first
     assert all(percentage <= 99 for percentage, _ in seen)
+
+
+def test_custom_edit_memory_estimate_uses_real_file_sizes(tmp_path):
+    from localsr.core.edit_memory import (
+        estimate_edit_memory,
+        minimum_unified_memory_gb,
+        minimum_vram_gb,
+    )
+
+    diff = tmp_path / "diff.gguf"
+    te = tmp_path / "te.gguf"
+    vis = tmp_path / "mmproj.gguf"
+    vae = tmp_path / "vae.safetensors"
+    for path, size in (
+        (diff, 12 * GIB),
+        (te, 4 * GIB),
+        (vis, 1 * GIB),
+        (vae, 256 * 1024**2),
+    ):
+        with path.open("wb") as handle:
+            handle.truncate(size)
+
+    model_cfg = image_edit.validate_request(
+        {
+            "model_id": "__custom__",
+            "family": "qwen-image-2.1",
+            "custom_files": {
+                "diffusion": str(diff),
+                "text_encoder": str(te),
+                "vision": str(vis),
+                "vae": str(vae),
+            },
+            "prompt": "Change the sky.",
+        }
+    )
+    assert model_cfg["name"] == "Your edit model"
+    assert model_cfg["cfg_scale"] == 6.0
+    assert model_cfg["default_steps"] == 40
+    expected_mac = int((12 * GIB + 256 * 1024**2 + int(1.5 * GIB)) * 1.1)
+    assert estimate_edit_memory(model_cfg, True, 512) == expected_mac
+    assert minimum_unified_memory_gb(model_cfg) == 32
+    assert minimum_vram_gb(model_cfg) == 16
+
+    # Guard refuses when Mac RAM is below the real custom requirement, and admits when it fits.
+    with pytest.raises(MemoryError, match="smaller"):
+        plan_edit(model_cfg, EditMemory(16 * GIB, 14 * GIB, unified=True))
+    plan = plan_edit(model_cfg, EditMemory(32 * GIB, 24 * GIB, unified=True))
+    assert plan.required_ram == expected_mac
+
+    # FLUX.2 klein custom works without a vision projector and uses 4 steps / CFG 1.
+    with diff.open("wb") as handle:
+        handle.truncate(2 * GIB)
+    klein_cfg = image_edit.validate_request(
+        {
+            "model_id": "__custom__",
+            "family": "flux2-klein",
+            "custom_files": {
+                "diffusion": str(diff),
+                "text_encoder": str(te),
+                "vae": str(vae),
+            },
+            "prompt": "Warm lighting.",
+        }
+    )
+    assert [entry["role"] for entry in klein_cfg["files"]] == ["diffusion", "text_encoder", "vae"]
+    assert klein_cfg["default_steps"] == 4 and klein_cfg["cfg_scale"] == 1.0
+    assert minimum_unified_memory_gb(klein_cfg) == 16
+    assert minimum_vram_gb(klein_cfg) == 8
+
+
+def test_custom_edit_command_and_lifecycle_keep_files_in_place_and_omit_filenames(
+    monkeypatch, tmp_path
+):
+    from PIL import Image
+
+    diff = tmp_path / "secret-qwen21.gguf"
+    te = tmp_path / "secret-te.gguf"
+    vis = tmp_path / "secret-mmproj.gguf"
+    vae = tmp_path / "secret-vae.safetensors"
+    for path in (diff, te, vis, vae):
+        path.write_bytes(b"weights")
+
+    request = {
+        "job_id": "custom-edit-job",
+        "model_id": "__custom__",
+        "family": "qwen-image-2.1",
+        "custom_files": {
+            "diffusion": str(diff),
+            "text_encoder": str(te),
+            "vision": str(vis),
+            "vae": str(vae),
+        },
+        "prompt": "Make it winter.",
+        "device": "mps",
+        "runtime_path": str(tmp_path / "sd-cli"),
+        "bundle_dir": "",
+        "image_path": str(tmp_path / "source.png"),
+        "output_path": str(tmp_path / "output.png"),
+        "scratch_directory": str(tmp_path / "scratch"),
+    }
+    (tmp_path / "scratch").mkdir()
+    Image.new("RGB", (128, 96)).save(request["image_path"])
+    monkeypatch.setattr(image_edit, "check_runtime", lambda _: tmp_path / "sd-cli")
+
+    captured = []
+
+    class FixtureProcess:
+        def __init__(self, command, **_kwargs):
+            native = json.loads(Path(command[-1]).read_text())["command"]
+            captured.append(native)
+            Image.new("RGB", (128, 96), "blue").save(native[native.index("-o") + 1])
+            self.stdin = io.BytesIO()
+            self.stdout = io.BytesIO(b"")
+            self.returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(image_edit.subprocess, "Popen", FixtureProcess)
+    messages = []
+    memory = EditMemory(32 * GIB, 28 * GIB, unified=True)
+    image_edit.run_edit_job(request, threading.Event(), messages.append, sampler=lambda _: memory)
+    assert Path(request["output_path"]).is_file()
+    native = captured[0]
+    assert native[native.index("--diffusion-model") + 1] == str(diff)
+    assert native[native.index("--llm_vision") + 1] == str(vis)
+    assert native[native.index("--cfg-scale") + 1] == "6"
+    assert native[native.index("--steps") + 1] == "40"
+    assert native[native.index("--model-args") + 1] == "qwen_image_2_1_prefix_cache=false"
+    started = json.loads(messages[0].to_json())
+    assert started["data"]["model_id"] == "Your edit model"
+    assert "secret-" not in json.dumps([json.loads(m.to_json()) for m in messages])
+
+
+def test_selected_runtime_requires_current_cli_controls(tmp_path, monkeypatch):
+    runtime = tmp_path / "sd-cli"
+    runtime.touch()
+    monkeypatch.setattr(
+        image_edit,
+        "probe_runtime",
+        lambda path, option: subprocess.CompletedProcess([str(path), option], 0, "old runtime", ""),
+    )
+    with pytest.raises(ValueError, match="too old"):
+        image_edit.check_runtime(str(runtime))
+    monkeypatch.setattr(
+        image_edit,
+        "probe_runtime",
+        lambda path, option: subprocess.CompletedProcess(
+            [str(path), option], 0, " ".join(image_edit.REQUIRED_FLAGS), ""
+        ),
+    )
+    assert image_edit.check_runtime(str(runtime)) == runtime.resolve()
+
+
+def test_runtime_probe_runs_once_per_runtime_and_timeouts_are_explained(tmp_path, monkeypatch):
+    # Issue #160: a cold Windows start of the CUDA sd-cli outlived the old 10 s probe.
+    assert image_edit.PROBE_TIMEOUTS["--help"] >= 60
+    assert image_edit.PROBE_TIMEOUTS["--list-devices"] >= 90
+    monkeypatch.setattr(image_edit, "_CHECKED_RUNTIMES", set())
+    runtime = tmp_path / "sd-cli"
+    runtime.write_bytes(b"runtime")
+
+    def slow(path, option):
+        raise subprocess.TimeoutExpired([str(path), option], image_edit.PROBE_TIMEOUTS[option])
+
+    monkeypatch.setattr(image_edit, "probe_runtime", slow)
+    with pytest.raises(ValueError, match="did not answer in time"):
+        image_edit.check_runtime(str(runtime))
+
+    calls = []
+
+    def ok(path, option):
+        calls.append(option)
+        return subprocess.CompletedProcess(
+            [str(path), option], 0, " ".join(image_edit.REQUIRED_FLAGS), ""
+        )
+
+    monkeypatch.setattr(image_edit, "probe_runtime", ok)
+    assert image_edit.check_runtime(str(runtime)) == runtime.resolve()
+    assert image_edit.check_runtime(str(runtime)) == runtime.resolve()
+    assert calls == ["--help"]
+    # A replaced runtime is probed again.
+    runtime.write_bytes(b"runtime, newer build")
+    image_edit.check_runtime(str(runtime))
+    assert calls == ["--help", "--help"]

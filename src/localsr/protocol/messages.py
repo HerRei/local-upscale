@@ -107,6 +107,8 @@ class EditJobRequest:
     accepted_terms: bool = False
     scratch_directory: str | None = None
     output_temporary_directory: str | None = None
+    family: str = ""
+    custom_files: dict[str, str] | None = None
 
     def to_json(self) -> str:
         return json.dumps({"type": "edit_job_request", "data": asdict(self)})
@@ -695,6 +697,8 @@ class VideoJobCompleted:
     inference_seconds: float = 0.0
     # What the user should know about a video that finished, such as a route that was given up.
     notes: str = ""
+    partial: bool = False
+    kept_seconds: float = 0.0
 
     def to_json(self) -> str:
         return json.dumps({"type": "video_job_completed", "data": asdict(self)})

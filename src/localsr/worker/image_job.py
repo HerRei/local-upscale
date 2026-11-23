@@ -139,8 +139,14 @@ class ImageJobRunner:
                     working_image = self._preprocess(
                         working_image, stage, index, data, progress, notes
                     )
+                    if stage.fix == "colour":
+                        manager.grayscale = False
                 self._check_cancelled()
                 writer, info = self._primary(working_image, pipeline, data, progress, resources)
+                if info.architecture == "DDColor" or (
+                    pipeline.primary is not None and pipeline.primary.fix == "colour"
+                ):
+                    manager.grayscale = False
                 self._check_cancelled()
                 self._log("Writing final output...")
                 notes.extend(self._save(manager, writer, image, info, data))
@@ -208,6 +214,9 @@ class ImageJobRunner:
                     )
                 working_image = {
                     **image,
+                    "grayscale": False
+                    if stage.fix == "colour" or info.architecture == "DDColor"
+                    else image.get("grayscale", False),
                     "tensor": torch.from_numpy(np.array(restored, copy=True)).float().div_(255.0),
                 }
                 progress.complete(index, stage)

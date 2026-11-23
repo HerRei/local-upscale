@@ -27,11 +27,31 @@ use crate::{
     },
 };
 
+fn helper_override_path(value: &std::ffi::OsStr, host_directory: &Path) -> PathBuf {
+    let path = PathBuf::from(value);
+    if path.is_absolute() || path.starts_with("~") {
+        path
+    } else {
+        host_directory.join(path)
+    }
+}
+
+pub(crate) fn set_helper_overrides(command: &mut Command) -> std::io::Result<()> {
+    for name in ["LOCALSR_MEDIA_HELPER", "LOCALSR_EXTERNAL_FFMPEG"] {
+        if let Some(value) = env::var_os(name).filter(|value| !value.is_empty()) {
+            let path = helper_override_path(&value, &env::current_dir()?);
+            command.env(name, path);
+        }
+    }
+    Ok(())
+}
+
 struct WorkerCommand {
     program: PathBuf,
     arguments: Vec<String>,
     working_directory: Option<PathBuf>,
     python_path: Option<PathBuf>,
+    installed_engine_id: Option<String>,
 }
 
 #[derive(Default)]
@@ -148,6 +168,31 @@ fn is_last_item(data: &Value, completed_key: &str, total_key: &str) -> bool {
     total > 0 && completed >= total
 }
 
+fn bundled_fallback_id(installed_id: Option<&str>, bundled_available: bool) -> Option<&str> {
+    installed_id.filter(|_| bundled_available)
+}
+
+fn spawn_failure_fallback<'a>(
+    installed_id: Option<&'a str>,
+    bundled_available: bool,
+    error: &str,
+) -> AppResult<&'a str> {
+    bundled_fallback_id(installed_id, bundled_available).ok_or_else(|| {
+        AppError::Worker(format!(
+            "could not start the LocalSR inference engine: {error}"
+        ))
+    })
+}
+
+fn activate_bundled_fallback(state: &AppState, failed_id: &str) -> AppResult<()> {
+    lock(&state.worker.failed_engines)?.insert(failed_id.to_owned());
+    state
+        .worker
+        .use_bundled_fallback
+        .store(true, Ordering::SeqCst);
+    Ok(())
+}
+
 pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
     if state.worker.shutting_down.load(Ordering::SeqCst) {
         return Ok(());
@@ -157,9 +202,21 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
     }
 
     let low_priority = lock(&state.settings)?.low_priority;
+    *lock(&state.edit_runtime)? = String::new();
     let specification = resolve_worker_command(&state, &app)?;
+    state.worker.using_installed_engine.store(
+        specification.installed_engine_id.is_some(),
+        Ordering::SeqCst,
+    );
+    state
+        .worker
+        .engine_ready_seen
+        .store(false, Ordering::SeqCst);
+    *lock(&state.edit_runtime)? =
+        crate::editing::runtime_path(&state.paths, specification.program.parent());
     let mut command = Command::new(&specification.program);
     command.args(&specification.arguments);
+    set_helper_overrides(&mut command)?;
     crate::process_priority::configure_command(&mut command, low_priority);
     command
         .stdin(Stdio::piped())
@@ -176,23 +233,43 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         command.env("PYTHONUTF8", "1");
     }
     command.env("PYTHONUNBUFFERED", "1");
+    command.env("LOCALSR_MODEL_DIR", state.model_root());
     let crashed_engine = state.worker.crashed_engine.swap(0, Ordering::SeqCst);
     if crashed_engine != 0 {
         command.env("LOCALSR_CRASHED_ENGINE", crashed_engine.to_string());
     }
 
-    let mut child = command.spawn().map_err(|error| {
-        // The next attempt still has to tell its engine which one crashed.
-        if crashed_engine != 0 {
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            // The next attempt still has to tell its engine which one crashed.
+            if crashed_engine != 0 {
+                state
+                    .worker
+                    .crashed_engine
+                    .store(crashed_engine, Ordering::SeqCst);
+            }
+            let id = spawn_failure_fallback(
+                specification.installed_engine_id.as_deref(),
+                bundled_engine_executable(&app).is_some(),
+                &error.to_string(),
+            )?;
+            activate_bundled_fallback(&state, id)?;
+            let _ = crate::updates::deactivate_active_engine(&state.paths);
             state
                 .worker
-                .crashed_engine
-                .store(crashed_engine, Ordering::SeqCst);
+                .using_installed_engine
+                .store(false, Ordering::SeqCst);
+            if let Ok(mut runtime) = state.runtime.lock() {
+                runtime.status_title = "Switched to bundled engine".into();
+                runtime.status_detail =
+                    "The installed engine failed to start; using the bundled engine instead."
+                        .into();
+            }
+            emit_state_changed(&app);
+            return start_worker(state, app);
         }
-        AppError::Worker(format!(
-            "could not start the LocalSR inference engine: {error}"
-        ))
-    })?;
+    };
     state.worker.pid.store(child.id(), Ordering::SeqCst);
     let tree = ProcessTree::new(&child);
     let stdin = child
@@ -411,6 +488,10 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
             .and_then(|mut cancellation| cancellation.finish())
             .err();
         let mut requested_restart = false;
+        // Jobs to settle in the database once `runtime` is released: `snapshot()`
+        // locks `database` before `runtime`, so taking both here in the other
+        // order could deadlock.
+        let mut to_settle = None;
         if let Ok(mut runtime) = state.runtime.lock() {
             // The killed or crashed engine's job ends here, its route note with it.
             let active = runtime.take_active_job();
@@ -450,8 +531,11 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                 "Work stopped; temporary output removed. Restarting engine…".into()
             };
             runtime.estimated_remaining_seconds = 0.0;
+            to_settle = Some((active_ids, forced_jobs.clone(), interruption));
+        }
+        if let Some((active_ids, forced, interruption)) = to_settle {
             if let Ok(database) = state.database.lock() {
-                settle_stopped_jobs(&database, &active_ids, &forced_jobs, &interruption);
+                settle_stopped_jobs(&database, &active_ids, &forced, &interruption);
             }
         }
         emit_state_changed(&app);
@@ -465,6 +549,32 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
             failed,
         ) {
             thread::sleep(delay);
+            if let Err(error) = start_worker(state.clone(), app.clone()) {
+                give_up_on_engine(&state, &app, error.to_string());
+            }
+        } else if let Some(id) = bundled_fallback_id(
+            specification
+                .installed_engine_id
+                .as_deref()
+                .filter(|_| !state.worker.engine_ready_seen.load(Ordering::SeqCst)),
+            bundled_engine_executable(&app).is_some(),
+        ) {
+            if let Err(error) = activate_bundled_fallback(&state, id) {
+                give_up_on_engine(&state, &app, error.to_string());
+                return;
+            }
+            let _ = crate::updates::deactivate_active_engine(&state.paths);
+            state
+                .worker
+                .using_installed_engine
+                .store(false, Ordering::SeqCst);
+            if let Ok(mut runtime) = state.runtime.lock() {
+                runtime.status_title = "Switched to bundled engine".into();
+                runtime.status_detail =
+                    "The installed engine failed to start; using the bundled engine instead."
+                        .into();
+            }
+            emit_state_changed(&app);
             if let Err(error) = start_worker(state.clone(), app.clone()) {
                 give_up_on_engine(&state, &app, error.to_string());
             }
@@ -854,6 +964,50 @@ pub fn shutdown(state: &AppState) {
     }
 }
 
+/// Stop the running worker and start a new one after switching engines.
+pub fn restart_for_engine_switch(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
+    shutdown(state);
+    let start = Instant::now();
+    while state.worker.pid.load(Ordering::SeqCst) != 0 {
+        if start.elapsed() > Duration::from_secs(10) {
+            return Err(AppError::Worker(
+                "The inference worker did not stop in time to switch engines.".into(),
+            ));
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    state.worker.shutting_down.store(false, Ordering::SeqCst);
+    state.worker.restart_count.store(0, Ordering::SeqCst);
+    state
+        .worker
+        .use_bundled_fallback
+        .store(false, Ordering::SeqCst);
+    *lock(&state.engine)? = None;
+    *lock(&state.capabilities)? = CapabilityInfo::detecting();
+    start_worker(state.clone(), app.clone())
+}
+
+/// Ask a running worker to exit and respawn so it picks up the new `LOCALSR_MODEL_DIR`.
+pub fn restart_for_model_directory(state: &AppState) {
+    let has_sender = state
+        .worker
+        .sender
+        .lock()
+        .map(|guard| guard.is_some())
+        .unwrap_or(false);
+    if !has_sender {
+        return;
+    }
+    if let Ok(mut runtime) = state.runtime.lock() {
+        if runtime.worker == "unavailable" || runtime.worker == "failed" {
+            return;
+        }
+        runtime.worker = "restarting".into();
+        runtime.status_detail = "Reloading engine for the new model folder…".into();
+    }
+    let _ = send(state, &json!({"type": "shutdown_request", "data": {}}));
+}
+
 fn handle_worker_envelope(
     state: &Arc<AppState>,
     app: &AppHandle,
@@ -877,6 +1031,11 @@ fn handle_worker_envelope(
             | "benchmark_cancelled"
             | "benchmark_failed"
     );
+    if envelope.message_type == "video_stage_progress"
+        && string(&envelope.data, "stage") == "partial_finalizing"
+    {
+        cancellation.partial_finalizing(&job_id, Instant::now());
+    }
     // Once cancelling, late progress must not restore "Enhancing" or enable
     // controls. Measurements may still update while the GPU drains.
     if cancellation.is_cancelling(&job_id) && !terminal && envelope.message_type != "video_memory" {
@@ -1207,10 +1366,42 @@ fn wrong_output(state: &AppState, envelope: &WorkerEnvelope) -> AppResult<Option
     if requested.as_deref().map(Path::new) == Some(Path::new(&reported)) {
         return Ok(None);
     }
+    if kind == "video_job_completed"
+        && envelope.data.get("partial").and_then(Value::as_bool) == Some(true)
+        && requested
+            .as_deref()
+            .is_some_and(|path| partial_output(Path::new(path), Path::new(&reported)))
+    {
+        return Ok(None);
+    }
     let shown: String = reported.chars().take(256).collect();
     Ok(Some(format!(
         "{kind} for job {id} reports {shown:?}, which is not the output the host requested"
     )))
+}
+
+fn partial_output(requested: &Path, reported: &Path) -> bool {
+    if requested.parent() != reported.parent() || requested.extension() != reported.extension() {
+        return false;
+    }
+    let (Some(stem), Some(name)) = (
+        requested.file_stem().and_then(|s| s.to_str()),
+        reported.file_stem().and_then(|s| s.to_str()),
+    ) else {
+        return false;
+    };
+    let Some(duration) = name.strip_prefix(&format!("{stem}_partial_")) else {
+        return false;
+    };
+    let Some((minutes, seconds)) = duration.strip_suffix('s').and_then(|s| s.split_once('m'))
+    else {
+        return false;
+    };
+    !minutes.is_empty()
+        && minutes.bytes().all(|c| c.is_ascii_digit())
+        && seconds.len() == 2
+        && seconds.bytes().all(|c| c.is_ascii_digit())
+        && seconds.parse::<u8>().is_ok_and(|s| s < 60)
 }
 
 fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppResult<()> {
@@ -1341,6 +1532,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                     PROTOCOL_VERSION, info.minimum_protocol_version, info.protocol_version
                 )));
             }
+            state.worker.engine_ready_seen.store(true, Ordering::SeqCst);
             *lock(&state.engine)? = Some(info);
             {
                 let mut runtime = lock(&state.runtime)?;
@@ -1359,15 +1551,24 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
         }
         "capabilities_info" => {
             let capabilities = serde_json::from_value::<CapabilityInfo>(data.clone())?;
-            if state.choose_device.swap(false, Ordering::SeqCst) {
-                if let Some(device) = first_run_device(&capabilities.devices) {
-                    let mut settings = lock(&state.settings)?;
-                    if settings.device_id == "cpu" {
-                        settings.device_id = device;
-                        drop(settings);
-                        if let Err(error) = state.persist_settings() {
-                            eprintln!("Could not save the first-run device: {error}");
-                        }
+            let choose = state.choose_device.swap(false, Ordering::SeqCst);
+            let current_missing = {
+                let settings = lock(&state.settings)?;
+                settings.device_id != "cpu"
+                    && !capabilities
+                        .devices
+                        .iter()
+                        .any(|device| device.id == settings.device_id)
+            };
+            if choose || current_missing {
+                let replacement =
+                    first_run_device(&capabilities.devices).unwrap_or_else(|| "cpu".into());
+                let mut settings = lock(&state.settings)?;
+                if (choose && settings.device_id == "cpu") || current_missing {
+                    settings.device_id = replacement;
+                    drop(settings);
+                    if let Err(error) = state.persist_settings() {
+                        eprintln!("Could not save the selected device: {error}");
                     }
                 }
             }
@@ -1857,7 +2058,24 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             let output = string(data, "output_path");
             // What the user should know about the finished job, such as a skipped fix;
             // kept with the job and on the status line.
-            let notes = string(data, "notes");
+            let mut notes = string(data, "notes");
+            let partial = data
+                .get("partial")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let stopped = if partial {
+                let duration = seconds(data, "kept_seconds").floor() as u64;
+                format!("Stopped, kept {}:{:02}", duration / 60, duration % 60)
+            } else {
+                String::new()
+            };
+            if partial {
+                notes = if notes.is_empty() {
+                    stopped.clone()
+                } else {
+                    format!("{stopped}. {notes}")
+                };
+            }
             lock(&state.database)?.finish_job(&id, "completed", &output, &notes)?;
             lock(&state.database)?.record_job_duration(&id, seconds(data, "elapsed_seconds"))?;
             let mut runtime = lock(&state.runtime)?;
@@ -1868,7 +2086,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             runtime.result_preview_data_url.clear();
             runtime.progress = 100.0;
             runtime.last_output_path = output;
-            runtime.status_title = "Complete".into();
+            runtime.status_title = if partial { stopped } else { "Complete".into() };
             runtime.status_detail = if notes.is_empty() {
                 "The output was written successfully.".into()
             } else {
@@ -1968,9 +2186,14 @@ pub(crate) fn codec_helper_command(state: &AppState, app: &AppHandle) -> AppResu
     let specification = resolve_worker_command(state, app)?;
     let mut command = Command::new(specification.program);
     command.args(specification.arguments);
+    set_helper_overrides(&mut command)?;
     let low_priority = if let Ok(settings) = state.settings.lock() {
         if !settings.external_ffmpeg_path.is_empty() {
-            command.env("LOCALSR_EXTERNAL_FFMPEG", &settings.external_ffmpeg_path);
+            let path = helper_override_path(
+                std::ffi::OsStr::new(&settings.external_ffmpeg_path),
+                &env::current_dir()?,
+            );
+            command.env("LOCALSR_EXTERNAL_FFMPEG", path);
         }
         settings.low_priority
     } else {
@@ -1992,12 +2215,7 @@ pub fn installed_worker_path(state: &AppState, app: &AppHandle) -> AppResult<Pat
     Ok(resolve_worker_command(state, app)?.program)
 }
 
-/// The engine program this host runs: the one it ships beside itself, or the one an
-/// update installed (`updates::choose_engine` says which wins).
-pub(crate) fn engine_executable(
-    app: &AppHandle,
-    paths: &crate::paths::AppPaths,
-) -> Option<PathBuf> {
+pub(crate) fn bundled_engine_executable(app: &AppHandle) -> Option<PathBuf> {
     let executable_name = if cfg!(windows) {
         "localsr-worker.exe"
     } else {
@@ -2014,10 +2232,21 @@ pub(crate) fn engine_executable(
             candidates.push(parent.join(executable_name));
         }
     }
-    crate::updates::choose_host_engine(
-        candidates.into_iter().find(|path| path.is_file()),
-        crate::updates::active_engine(paths),
-    )
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+fn installed_worker_command(
+    program: PathBuf,
+    installed_engine_id: Option<String>,
+    work_root: &Path,
+) -> WorkerCommand {
+    WorkerCommand {
+        program,
+        arguments: Vec::new(),
+        working_directory: Some(work_root.to_path_buf()),
+        python_path: None,
+        installed_engine_id,
+    }
 }
 
 fn resolve_worker_command(state: &AppState, app: &AppHandle) -> AppResult<WorkerCommand> {
@@ -2033,6 +2262,7 @@ fn resolve_worker_command(state: &AppState, app: &AppHandle) -> AppResult<Worker
                     arguments: Vec::new(),
                     working_directory: None,
                     python_path: None,
+                    installed_engine_id: None,
                 });
             }
             return Err(AppError::Worker(
@@ -2040,15 +2270,38 @@ fn resolve_worker_command(state: &AppState, app: &AppHandle) -> AppResult<Worker
             ));
         }
     }
-    // After any explicit development worker, the engine this host runs (see
-    // `engine_executable`); otherwise Python sources.
-    if let Some(path) = engine_executable(app, &state.paths) {
-        return Ok(WorkerCommand {
-            program: path,
-            arguments: Vec::new(),
-            working_directory: None,
-            python_path: None,
-        });
+    // After any explicit development worker, choose an engine or Python sources.
+    let bundled = bundled_engine_executable(app);
+    if state.worker.use_bundled_fallback.load(Ordering::SeqCst) && bundled.is_none() {
+        return Err(AppError::Worker(
+            "the bundled inference engine is missing".into(),
+        ));
+    }
+    let selected = if state.worker.use_bundled_fallback.load(Ordering::SeqCst) {
+        bundled.map(|path| (path, None))
+    } else {
+        let mut failed = lock(&state.worker.failed_engines)?;
+        let quick_failed = crate::updates::verify_active_engine_at_start(&state.paths, &mut failed);
+        // A failed copy is now in `failed`, so the normal choice skips it and keeps any
+        // other valid engine; only a fall back to the bundle is reported.
+        let choice = crate::updates::worker_engine_choice(&state.paths, bundled, &failed);
+        if quick_failed.is_some() && matches!(choice, Some((_, None))) {
+            if let Ok(mut runtime) = state.runtime.lock() {
+                runtime.status_title = "Switched to bundled engine".into();
+                runtime.status_detail =
+                    "The installed engine failed verification; using the bundled engine instead."
+                        .into();
+            }
+            emit_state_changed(app);
+        }
+        choice
+    };
+    if let Some((program, installed_engine_id)) = selected {
+        return Ok(installed_worker_command(
+            program,
+            installed_engine_id,
+            &state.paths.work_root,
+        ));
     }
 
     #[cfg(not(debug_assertions))]
@@ -2109,6 +2362,7 @@ fn resolve_worker_command(state: &AppState, app: &AppHandle) -> AppResult<Worker
             arguments: vec!["-u".into(), "-m".into(), "localsr.worker".into()],
             working_directory: Some(state.paths.repo_root.clone()),
             python_path: Some(source),
+            installed_engine_id: None,
         })
     }
 }
@@ -2397,12 +2651,18 @@ fn completion_preview_request(state: &AppState, envelope: &WorkerEnvelope) -> Op
     }
 }
 
-/// The device a new installation starts on: Apple's GPU or a CUDA/ROCm card.
-/// DirectML stays opt-in because it is untested.
+/// The device a new installation starts on. DirectML adapters are ranked by
+/// dedicated memory, preferring discrete cards over integrated graphics.
 fn first_run_device(devices: &[DeviceInfo]) -> Option<String> {
     devices
         .iter()
         .find(|device| device.id == "mps" || device.id == "cuda" || device.id.starts_with("cuda:"))
+        .or_else(|| {
+            devices
+                .iter()
+                .filter(|device| device.id.starts_with("directml:"))
+                .max_by_key(|device| (!device.is_integrated, device.total_memory))
+        })
         .map(|device| device.id.clone())
 }
 

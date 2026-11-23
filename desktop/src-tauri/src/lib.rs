@@ -8,14 +8,17 @@ mod disk_room;
 mod distribution;
 mod downloads;
 mod editing;
+mod engine_manager;
 mod engine_payload;
 mod error;
+mod gpu_notice;
 mod grants;
 mod headless_smoke;
 mod integrations;
 mod launch;
 #[cfg(any(target_os = "linux", test))]
 mod media_server;
+mod model_storage;
 mod native_menu;
 mod output_names;
 mod paths;
@@ -148,7 +151,7 @@ pub fn run() {
             if !smoke_test {
                 show_startup_notices(app.handle(), &state);
             }
-            *lock(&state.edit_runtime)? = editing::runtime_path(app.handle(), &state.paths);
+            *lock(&state.bundled_engine_path)? = worker::bundled_engine_executable(app.handle());
             let switches = native_menu::switches(&*lock(&state.settings)?);
             native_menu::install(app, &lock(&state.recipes)?, switches)?;
             fit_main_window(app.handle());
@@ -176,6 +179,14 @@ pub fn run() {
             updates::cancel_update,
             updates::discard_update,
             updates::recover_update_settings,
+            engine_manager::refresh_engine_catalog,
+            engine_manager::install_engine,
+            engine_manager::cancel_engine_install,
+            engine_manager::use_engine,
+            engine_manager::verify_engine,
+            engine_manager::remove_engine,
+            engine_manager::choose_engine_manifest,
+            engine_manager::import_engine,
             commands::open_bug_report,
             commands::list_crash_reports,
             commands::delete_crash_report,
@@ -190,6 +201,13 @@ pub fn run() {
             commands::choose_media_files,
             commands::choose_media_folder,
             commands::choose_output_directory,
+            commands::choose_model_directory,
+            commands::set_model_directory,
+            commands::reset_model_directory,
+            commands::dismiss_gpu_download_notice,
+            commands::dismiss_linux_menu_prompt,
+            commands::install_linux_menu,
+            commands::uninstall_linux_menu,
             commands::choose_custom_model,
             commands::choose_benchmark_export,
             commands::select_media,
@@ -235,6 +253,8 @@ pub fn run() {
             commands::detect_external_ffmpeg,
             commands::choose_external_ffmpeg,
             commands::choose_edit_runtime,
+            commands::choose_edit_model_file,
+            commands::save_custom_edit_model,
             commands::open_ffmpeg_download_page,
             commands::ffmpeg_install_hint,
             commands::open_terminal_with_install_command,

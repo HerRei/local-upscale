@@ -137,7 +137,7 @@ struct Arguments {
                 continue
             }
             let name = String(item.dropFirst(2))
-            if ["no-video", "no-audio"].contains(name) {
+            if ["no-video", "no-audio", "no-reordering"].contains(name) {
                 flags.insert(name)
             } else if let value = iterator.next() {
                 options[name] = value
@@ -963,6 +963,11 @@ func encode(_ arguments: Arguments) throws {
             codecName: codecName, width: header.width, height: header.height, fps: header.fps,
             colors: colors, hdr: hdr, quality: quality,
             bitrate: max(500_000, Int(Double(header.width * header.height) * fps * 0.12)))
+    }
+    if arguments.flags.contains("no-reordering") {
+        var compression = settings[AVVideoCompressionPropertiesKey] as? [String: Any] ?? [:]
+        compression[AVVideoAllowFrameReorderingKey] = false
+        settings[AVVideoCompressionPropertiesKey] = compression
     }
     guard writer.canApply(outputSettings: settings, forMediaType: .video) else {
         throw HelperError("macOS cannot encode \(codecName.uppercased())\(hdr.isEmpty ? "" : " \(hdr)") at \(header.width)x\(header.height)")

@@ -52,7 +52,9 @@ def _system_memory() -> tuple[int, int]:
 
     if sys.platform == "darwin":
         try:
-            output = subprocess.check_output(["vm_stat"], text=True, timeout=2)
+            output = subprocess.check_output(
+                ["vm_stat"], stdin=subprocess.DEVNULL, text=True, timeout=2
+            )
             page_match = re.search(r"page size of (\d+) bytes", output)
             vm_page_size = int(page_match.group(1)) if page_match else page_size
             values = {
@@ -148,7 +150,7 @@ def _system_pressure_snapshot(total_ram: int, available_ram: int) -> dict:
     if sys.platform == "darwin":
         try:
             pressure_output = subprocess.check_output(
-                ["memory_pressure", "-Q"], text=True, timeout=2
+                ["memory_pressure", "-Q"], stdin=subprocess.DEVNULL, text=True, timeout=2
             )
             measured = _parse_macos_pressure(pressure_output)
             if measured is not None:
@@ -156,7 +158,9 @@ def _system_pressure_snapshot(total_ram: int, available_ram: int) -> dict:
         except (OSError, subprocess.SubprocessError, ValueError):
             pass
         try:
-            vm_output = subprocess.check_output(["vm_stat"], text=True, timeout=2)
+            vm_output = subprocess.check_output(
+                ["vm_stat"], stdin=subprocess.DEVNULL, text=True, timeout=2
+            )
             page_match = re.search(r"page size of (\d+) bytes", vm_output)
             page_size = int(page_match.group(1)) if page_match else 4096
             compressed_match = re.search(r"Pages occupied by compressor:\s+(\d+)\.", vm_output)
@@ -165,7 +169,9 @@ def _system_pressure_snapshot(total_ram: int, available_ram: int) -> dict:
         except (OSError, subprocess.SubprocessError, ValueError):
             pass
         try:
-            swap_output = subprocess.check_output(["sysctl", "vm.swapusage"], text=True, timeout=2)
+            swap_output = subprocess.check_output(
+                ["sysctl", "vm.swapusage"], stdin=subprocess.DEVNULL, text=True, timeout=2
+            )
             swap_total, swap_used = _parse_macos_swap(swap_output)
         except (OSError, subprocess.SubprocessError, ValueError):
             pass

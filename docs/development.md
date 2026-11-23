@@ -44,6 +44,10 @@ packages wait for verification. Each job creates a fresh Python 3.11 venv under
 Use `./local-ci.sh --help` for individual checks. `lint` and `test` remain aliases
 for `lint-only` and `test-only`. Help and invalid commands never install packages.
 
+Installed and handshake workers use the app's work folder. Relative
+`LOCALSR_MEDIA_HELPER` and `LOCALSR_EXTERNAL_FFMPEG` overrides are resolved from
+the host's current folder before a worker starts.
+
 The release-metadata check selects the beta register for beta versions. Frontend formatting uses the pinned
 Prettier/Svelte plugin; run `npm --prefix desktop run format` to apply it. Python
 uses Ruff and Rust uses rustfmt. Vendored third-party source is excluded from

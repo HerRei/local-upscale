@@ -270,7 +270,9 @@ def _thermal_state(device_id: str) -> str:
         try:
             import subprocess
 
-            output = subprocess.check_output(["pmset", "-g", "therm"], text=True, timeout=2).lower()
+            output = subprocess.check_output(
+                ["pmset", "-g", "therm"], stdin=subprocess.DEVNULL, text=True, timeout=2
+            ).lower()
             if "no thermal warning level" in output:
                 return "nominal"
             for level in ("critical", "wait", "fair", "sleep"):

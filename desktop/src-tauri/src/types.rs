@@ -311,6 +311,33 @@ pub struct FixStageSelection {
     pub model_id: String,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct CustomEditModel {
+    #[serde(default)]
+    pub family: String,
+    #[serde(default)]
+    pub diffusion_path: String,
+    #[serde(default)]
+    pub text_encoder_path: String,
+    #[serde(default)]
+    pub vision_path: String,
+    #[serde(default)]
+    pub vae_path: String,
+}
+
+impl CustomEditModel {
+    pub fn non_empty_paths(&self) -> impl Iterator<Item = &str> {
+        [
+            self.diffusion_path.as_str(),
+            self.text_encoder_path.as_str(),
+            self.vision_path.as_str(),
+            self.vae_path.as_str(),
+        ]
+        .into_iter()
+        .filter(|path| !path.is_empty())
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct UiSettings {
@@ -407,6 +434,13 @@ pub struct UiSettings {
     pub edit_steps: u32,
     #[serde(default = "default_edit_seed")]
     pub edit_seed: u32,
+    #[serde(default)]
+    pub custom_edit_model: CustomEditModel,
+    pub model_directory: String,
+    #[serde(default)]
+    pub gpu_download_notice_dismissed: bool,
+    #[serde(default)]
+    pub linux_menu_prompt_dismissed: bool,
 }
 
 fn default_true() -> bool {
@@ -518,6 +552,10 @@ impl Default for UiSettings {
             edit_max_dimension: default_edit_dimension(),
             edit_steps: default_edit_steps(),
             edit_seed: default_edit_seed(),
+            custom_edit_model: CustomEditModel::default(),
+            model_directory: String::new(),
+            gpu_download_notice_dismissed: false,
+            linux_menu_prompt_dismissed: false,
         }
     }
 }
@@ -779,6 +817,62 @@ pub struct ComparisonSlot {
     pub preview_height: u32,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct InstalledEngine {
+    pub id: String,
+    pub backend: String,
+    pub bundled: bool,
+    pub active: bool,
+    pub path: String,
+    pub needs_reinstall: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct EngineRecommendation {
+    pub backend: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter_name: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct EngineCatalogEntry {
+    pub backend: String,
+    pub engine_id: String,
+    pub version: String,
+    pub size: u64,
+    pub manifest_url: String,
+    pub parts_count: usize,
+    pub installed: bool,
+    pub active: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct EngineDownloadStatus {
+    pub stage: String,
+    pub backend: String,
+    pub engine_id: String,
+    pub downloaded: u64,
+    pub total: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct EngineManagerSnapshot {
+    pub supported: bool,
+    pub managed_by_store: bool,
+    pub configured: bool,
+    pub active_backend: String,
+    pub active_engine_id: String,
+    pub bundled_backend: String,
+    pub installed: Vec<InstalledEngine>,
+    pub recommendation: EngineRecommendation,
+    pub catalog: Vec<EngineCatalogEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_error: Option<String>,
+    pub download: EngineDownloadStatus,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AppSnapshot {
     pub app_version: String,
@@ -793,6 +887,18 @@ pub struct AppSnapshot {
     pub runtime: RuntimeStatus,
     pub latest_benchmark: Option<BenchmarkResult>,
     pub edit: crate::editing::EditSetup,
+    #[serde(default)]
+    pub default_model_directory: String,
+    #[serde(default)]
+    pub model_directory_missing: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_download_notice: Option<String>,
+    #[serde(default)]
+    pub linux_menu_offer: bool,
+    #[serde(default)]
+    pub linux_menu_installed: bool,
+    #[serde(default)]
+    pub engines: EngineManagerSnapshot,
 }
 
 #[derive(Clone, Debug, Deserialize)]

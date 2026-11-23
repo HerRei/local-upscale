@@ -41,13 +41,15 @@ at the moment), and the app shows you each licence before it downloads anything.
 
 - Enlarge photos and artwork by 2×, 3× or 4×. Quick is a good start, and Best
   spends more time on photo detail.
-- Clean up noise, blur and JPEG artifacts first, then enlarge.
+- Clean up noise, blur and JPEG artifacts first, or add colour to black-and-white
+  photos, then enlarge.
 - Compare the original and the result with a slider, or hold M to see the
   original.
 - Enhance video frame by frame, with the source timing, rotation and audio kept.
 - Process a whole folder or a queue, and save a setup as a recipe.
-- Edit with a prompt, with FLUX.2 klein or Qwen Image Edit. This is
-  experimental, and so far only FLUX.2 klein has been tested, on a 16 GB Mac.
+- Edit with a prompt, with FLUX.2 klein, Mage-Flow-Edit-Turbo or Qwen Image Edit.
+  This is experimental, and so far FLUX.2 klein and Mage-Flow-Edit-Turbo (CPU on Mac)
+  have been tested on a 16 GB Mac.
   [About editing](docs/image-editing.md).
 
 LocalSR also has a built-in benchmark. It times a real upscaling model on fixed
@@ -62,24 +64,58 @@ also HEIC. Videos can be MP4, MOV, MKV, WebM and other common formats, and are
 saved as AV1, VP9 or FFV1, or on the Mac also as HEVC or ProRes. [Video support](docs/video-support.md).
 
 Quick uses SPAN NomosUni and Best uses RealPLKSR NomosWebPhoto, both by Philip
-Hofmann. The library also has HAT, Real-ESRGAN, SwinIR, NAFNet, SCUNet and
-FBCNN, and each model shows its size, licence and source before you download it.
+Hofmann. The library also has HAT, Real-ESRGAN, SwinIR, NAFNet, SCUNet, FBCNN
+and DDColor, and each model shows its size, licence and source before you download it.
 [Model guide](docs/models/README.md) · [Model licences](docs/model-licenses.md).
 
+<!-- release-candidate -->
+v0.5.2-beta is in preparation; the table below describes the candidate.
+For the published v0.5.0-beta downloads, see the [0.5.0 release notes](docs/releases/v0.5.0-beta.md).
+[Draft release notes](docs/releases/v0.5.2-beta.md).
+<!-- /release-candidate -->
+
 ## Download
+
+### Which file do I need?
+
+| Computer | Download |
+|---|---|
+| Mac (M1 or newer) | `LocalSR-v0.5.2-beta-macOS-arm64.dmg` |
+| Windows | `LocalSR-v0.5.2-beta-Windows-CPU-x86_64.exe` |
+| Linux | `LocalSR-v0.5.2-beta-Linux-CPU-x86_64.AppImage` |
+
+The app offers the faster GPU engine after setup.
+
+### Offline and advanced downloads
+
+| Computer | Download |
+|---|---|
+| Windows, AMD or Intel graphics | `LocalSR-v0.5.2-beta-Windows-DirectML-x86_64.exe` |
+| Windows, NVIDIA | `LocalSR-v0.5.2-beta-Windows-CUDA-x86_64.exe` and all `LocalSR-v0.5.2-beta-Windows-CUDA-x86_64.engine.tar.gz.part-*` files in the same folder |
+| Linux, AMD | all `LocalSR-v0.5.2-beta-Linux-ROCm-x86_64.AppImage.part-*` files, joined |
+| Linux, NVIDIA | all `LocalSR-v0.5.2-beta-Linux-CUDA-x86_64.AppImage.part-*` files, joined |
+
+To import an engine offline, download the `*.engine-payload.json` manifest, its `.engine.tar.gz.part-*` files and their `.sig` signature files into one folder, then open **Advanced -> Engine -> Change… -> Import engine from file…** and choose the `*.engine-payload.json` file.
+
+The other files (signatures, checksums and source archives) are for verification and updates.
 
 The [download page](https://herrei.github.io/localsr/download/) has the installers
 for each platform:
 
 - **macOS v0.5.0-beta:** Apple Silicon (M1 or newer) and macOS 14 or later. Intel
   Macs are not supported. Signed and notarized, and it updates itself.
-- **Windows v0.5.0-beta:** Windows 10 or 11 on x86-64, as CPU, DirectML and
-  NVIDIA CUDA editions. DirectML also runs on AMD and Intel graphics, built-in ones
-  included, and Intel NPUs work on Windows and Linux. The installers are unsigned, so SmartScreen warns first: choose **More info**,
-  then **Run anyway**.
-- **Linux v0.5.0-beta:** x86-64 AppImages for CPU, AMD ROCm and NVIDIA CUDA.
-  The CPU AppImage runs Intel graphics through OpenVINO once Intel's compute
-  driver (`intel-opencl-icd`) is installed.
+- **Windows v0.5.0-beta:** Windows 10 or 11 on x86-64. Choose CPU, DirectML
+  or CUDA above. The installers are unsigned, so SmartScreen warns first: choose
+  **More info**, then **Run anyway**. Setup installs for your account without
+  administrator rights, lets you choose a folder, add a desktop shortcut and launch
+  LocalSR when done; uninstall keeps downloaded models and settings by default.
+- **Linux v0.5.0-beta:** x86-64 AppImage. Choose CPU, CUDA or ROCm above. The CPU
+  AppImage runs Intel graphics through OpenVINO once Intel's compute driver
+  (`intel-opencl-icd`) is installed. After first setup, it offers once to add
+  LocalSR to your applications menu, removable later from the Help menu.
+
+The next CUDA edition needs an NVIDIA RTX 20 series or newer and driver 580 or
+newer. On Windows, older NVIDIA cards can use DirectML.
 
 On a Mac you can also install it with [Homebrew](https://brew.sh/):
 
@@ -89,8 +125,10 @@ brew install --cask herrei/tap/localsr
 
 The Mac app takes about 1.2 GB, because it brings its own Python and PyTorch.
 Models download when you choose them: Quick is 4.5 MB, most others are under
-500 MB, and the editing models are 5 to 26 GB. I test upscaling on a Mac with
-16 GB of memory.
+500 MB, and the editing models are 5 to 26 GB. You can change the model folder
+under Advanced settings to store models on another drive. Matching files already in
+the new folder are reused. Different files, model file symlinks, or links back to files being moved stop
+the move. Replace model file symlinks with the files before moving. I test upscaling on a Mac with 16 GB of memory.
 
 LocalSR is only published on
 [GitHub Releases](https://github.com/HerRei/local-upscale/releases), on
@@ -159,9 +197,12 @@ face-aware job runs. Once your models are downloaded, LocalSR works offline.
 version, no account and no advertising, and the code is MIT licensed.
 
 **Can I use my own models?** Yes, compatible `.safetensors` files work as a
-custom checkpoint. `.pth`, `.pt` and `.ckpt` files can run code when they load,
-so the app only uses one after you tick *Allow this pickle-based checkpoint*.
-Do that only for files from a publisher you trust.
+custom checkpoint for upscaling and restoration. `.pth`, `.pt` and `.ckpt`
+files can run code when they load, so the app only uses one after you tick
+*Allow this pickle-based checkpoint*. Do that only for files from a publisher
+you trust. For editing, **Use your own edit model…** in the model library lets
+you pick local GGUF/safetensors component files for Qwen Image Edit 2511,
+Qwen Image 2.1, FLUX.2 klein, or Mage-Flow-Edit-Turbo.
 
 **How do I uninstall it?** On a Mac, move LocalSR to the Trash and delete
 `~/Library/Application Support/LocalSR` and `~/Library/Caches/LocalSR`. On

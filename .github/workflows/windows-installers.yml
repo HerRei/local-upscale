@@ -151,6 +151,9 @@ jobs:
             $buildArgs += @('--external-engine-prefix', "$([IO.Path]::GetFileNameWithoutExtension($name)).engine.tar.gz")
           }
           python scripts/build_tauri_preview.py @buildArgs
+          if ("${{ matrix.backend }}" -eq "CUDA") {
+            & build/tauri-preview/worker-dist/engine/localsr-worker.exe --check-cuda-arch
+          }
           $bundle = "desktop/src-tauri/target/release/bundle/nsis"
           $sources = @(Get-ChildItem -Path $bundle -Filter '*.exe' -File)
           if ($sources.Count -ne 1) { throw "Expected 1 NSIS installer, found $($sources.Count)" }

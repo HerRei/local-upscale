@@ -11,6 +11,8 @@ These apply to v0.5.0-beta. Please read them before starting a long job.
   labels it Labs), and
   DirectML's NAFNet denoising results still miss the accuracy tolerance. Intel XPU
   packages are held back; [Platforms](docs/platforms.md) explains why.
+- The next CUDA edition needs an NVIDIA RTX 20 series or newer and driver 580 or
+  newer. On Windows, older NVIDIA cards can use DirectML.
 - The CUDA and ROCm editions are several gigabytes and come in parts that must be
   downloaded into one folder (see the download page).
 - The macOS build is the most tested. The Windows and Linux packages pass the
@@ -47,6 +49,7 @@ These apply to v0.5.0-beta. Please read them before starting a long job.
   open AV1; VP9 and lossless FFV1 are built in. Choosing H.264/HEVC explicitly uses
   macOS's encoders (MP4 only) or your FFmpeg, from a temporary lossless copy that
   needs extra disk space, except whole clips on macOS, which stream straight in.
+- The built-in video decoder opens local files only; it does not fetch network playlist segments.
 - Interlacing is deinterlaced only when the file is tagged; untagged interlacing
   and inverse telecine are not detected. DVD menus, disc images and encrypted
   media are out of scope.
@@ -62,8 +65,8 @@ These apply to v0.5.0-beta. Please read them before starting a long job.
 - Memory use depends on the model, the output size and the clip. 16 GB of GPU
   memory does not guarantee that a SeedVR2 job fits; the FP8 download is smaller,
   but the working memory is not. Try a short clip at a modest output size first.
-- A source image may have at most 178,956,970 pixels (about 179 megapixels), the size
-  Pillow still accepts; a larger one is refused before it is decoded. The output has 16
+- A source image, RAW photo or video frame may have at most 178,956,970 pixels
+  (about 179 megapixels). The limit also applies to the RAW sensor size and video decoding. Larger inputs are refused before pixel conversion. The output has 16
   times as many pixels at ×4, so a source far below that limit can already be too large
   for the memory of the computer.
 - Frame interpolation adds processing and memory costs. Interpolating before the
@@ -89,26 +92,38 @@ These apply to v0.5.0-beta. Please read them before starting a long job.
 - The two HAT face companions must be imported manually because their
   checkpoint rights are unresolved. Video face processing reuses masks across
   frames and is not motion tracking.
+- **Colour** (DDColor) under **Restore first** and **Restore** is for still photos
+  only; video **Restore first** does not offer it. On DirectML and OpenVINO devices
+  DDColor runs on the CPU, and on Apple Silicon with Neural Engine enabled it runs
+  on the Apple GPU via PyTorch.
+- Colour needs a 912 MB model download. Colours are a guess; skies can come out pink.
 
 ## Image editing
 
 - Edit is experimental and tested only on the Mac. CUDA/ROCm packages also
-  include editing support, but it has not been validated on those GPUs. One
-  configuration is validated: FLUX.2 klein 4B Q4_0 at 512 px on the 16 GB M1 Pro,
-  about two minutes per edit with other apps open, without swapping. FLUX.2 klein Q8_0,
+  include editing support, but it has not been validated on those GPUs. Two
+  configurations are validated at 512 px on the 16 GB M1 Pro: FLUX.2 klein 4B
+  Q4_0 (about two minutes per edit with other apps open, without swapping) and
+  Mage-Flow-Edit-Turbo Q6_K (about 96 s on the CPU backend because Metal
+  produces blank white output for its diffusion transformer). FLUX.2 klein Q8_0,
   the Qwen bundles and larger edit sizes have not run on real hardware yet; their
   memory profiles are estimates. Up to v0.1.5-beta the memory guard misread free
   memory on Macs and refused edits that fit.
-- A 16 GB Mac can use FLUX.2 klein 4B; Qwen Image Edit 2511 needs 24 GB or more.
+- A 16 GB Mac can use FLUX.2 klein 4B or Mage-Flow-Edit-Turbo; Qwen Image Edit 2511 needs 24 GB or more.
   Edits are limited to 512, 768 or 1024 px on the longest side, one image at a
   time, and the result is a new PNG.
 - The editing models are separate downloads of 5 to 26 GB. Qwen Image 2.1 is
-  not offered because its license allows research and evaluation only.
+  not offered for download because its license allows research and evaluation
+  only, though you can supply your own local files for Qwen Image Edit 2511,
+  Qwen Image 2.1, FLUX.2 klein, or Mage-Flow-Edit-Turbo under **Use your own edit model…**.
 
 ## Models
 
 - No weights are bundled. Each model downloads from its author's release when
-  you choose it, so the first use of a model needs a network connection.
+  you choose it, so the first use of a model needs a network connection. By
+  default, models are stored in `LocalSR/models`; you can move the model folder
+  to another drive under Advanced settings (engine and temporary work files stay
+  in the app folder).
 - Custom `.safetensors` checkpoints are accepted. Pickle-based `.pth`, `.pt` and
   `.ckpt` files can run code when loaded and are refused unless you tick
   *Allow this pickle-based checkpoint* in the app (on the command line, set
@@ -126,3 +141,5 @@ These apply to v0.5.0-beta. Please read them before starting a long job.
 - Uninstalling the Store edition can delete its data folder, including settings
   and recipes. Back it up first; downloaded models live in the shared
   `LocalSR/models` folder and survive.
+
+- Stopping an H.264 or HEVC export that uses an FFV1 master discards the unfinished output. The streamed macOS system encoder can keep a partial file.

@@ -13,7 +13,7 @@ from dataclasses import replace
 
 from PIL import Image, ImageCms, ImageOps
 
-from localsr.core.image_formats import is_system_decoded
+from localsr.core.image_formats import PILLOW_INPUT_FORMATS, is_system_decoded
 from localsr.protocol.messages import PreviewFailed, PreviewReady
 
 
@@ -23,7 +23,7 @@ def open_result_image(path):
         from localsr.core.image_io import open_image
 
         return open_image(path)
-    return Image.open(path)
+    return Image.open(path, formats=PILLOW_INPUT_FORMATS)
 
 
 def render_result_preview(data):

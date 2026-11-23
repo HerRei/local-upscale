@@ -32,6 +32,7 @@ import numpy as np
 from .child_processes import start as start_child
 from .external_ffmpeg import ExternalFFmpegError
 from .media_codecs import MOV_CODECS, encode_spec
+from .pixel_budget import require_pixel_budget
 
 ENVIRONMENT_VARIABLE = "LOCALSR_MEDIA_HELPER"
 HELPER_NAME = "localsr-media"
@@ -104,7 +105,12 @@ def helper_candidates() -> list[Path]:
 def _helper_version(path: Path) -> int | None:
     try:
         result = subprocess.run(
-            [str(path), "version"], capture_output=True, text=True, timeout=15, check=False
+            [str(path), "version"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -289,7 +295,7 @@ class _IntermediateAudio:
 
     def __init__(self, container, audio: dict) -> None:
         self.container = container
-        self.source = av.open(str(audio["path"]))
+        self.source = av.open(str(audio["path"]), options={"protocol_whitelist": "file"})
         source_stream = self.source.streams.audio[0]
         self.rate = int(audio.get("sample_rate") or source_stream.rate)
         self.stream = container.add_stream("flac", rate=self.rate)
@@ -349,6 +355,7 @@ class SystemCodecs:
         try:
             result = subprocess.run(
                 [self.path, *arguments],
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -515,6 +522,9 @@ class SystemCodecs:
         ``video=False`` converts only the soundtrack; ``frames`` limits the video to
         its first frames (a one-frame file serves the preview probe).
         """
+        if video:
+            track = self.probe(path).get("video") or {}
+            require_pixel_budget(int(track.get("width") or 0), int(track.get("height") or 0))
         destination = Path(destination)
         with tempfile.TemporaryDirectory(
             prefix="localsr-media-", dir=destination.parent
@@ -598,7 +608,10 @@ class SystemCodecs:
                 arguments += ["--hdr", hdr_format]
             if wav is not None:
                 arguments += ["--audio", str(wav)]
-            with av.open(str(source)) as master, self._process(arguments, stdin=True) as process:
+            with (
+                av.open(str(source), options={"protocol_whitelist": "file"}) as master,
+                self._process(arguments, stdin=True) as process,
+            ):
                 stdin = process.stdin
                 assert stdin is not None
                 stream = master.streams.video[0]
@@ -668,6 +681,8 @@ class SystemCodecs:
             "--quality",
             f"{_quality(crf):.3f}",
         ]
+        if video_codec != "prores":
+            arguments.append("--no-reordering")
         if audio is not None:
             arguments += ["--audio", str(audio)]
         with self._process(arguments, stdin=True) as process:
@@ -722,7 +737,7 @@ class SystemCodecs:
     @staticmethod
     def _master_audio(source: Path, wav: Path, cancel_event: threading.Event | None) -> Path | None:
         """Decode the master's audio to 16-bit PCM WAV, aligned to the video's start."""
-        with av.open(str(source)) as master:
+        with av.open(str(source), options={"protocol_whitelist": "file"}) as master:
             audio = next((stream for stream in master.streams if stream.type == "audio"), None)
             if audio is None:
                 return None

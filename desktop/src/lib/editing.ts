@@ -15,7 +15,61 @@ export const EDIT_FAMILIES: { id: string; label: string; summary: string }[] = [
     label: 'FLUX.2 klein 4B',
     summary: 'Fast 4-step editor for 16 GB computers · Apache-2.0',
   },
+  {
+    id: 'mage-flow-edit-turbo',
+    label: 'Mage-Flow-Edit-Turbo',
+    summary: '4-step editor (CPU on Mac) · MIT',
+  },
 ];
+
+export interface CustomEditFamilySpec {
+  id: string;
+  label: string;
+  summary: string;
+  needsVision: boolean;
+  defaultSteps: number;
+  cfgScale: number;
+}
+
+/** Families the bundled stable-diffusion.cpp revision supports for local custom files. */
+export const CUSTOM_EDIT_FAMILIES: CustomEditFamilySpec[] = [
+  {
+    id: 'qwen-image-edit-2511',
+    label: 'Qwen Image Edit 2511',
+    summary: 'Edits a photo from a written instruction',
+    needsVision: true,
+    defaultSteps: 40,
+    cfgScale: 2.5,
+  },
+  {
+    id: 'qwen-image-2.1',
+    label: 'Qwen Image 2.1',
+    summary: 'Edits a photo with Qwen Image 2.1',
+    needsVision: true,
+    defaultSteps: 40,
+    cfgScale: 6.0,
+  },
+  {
+    id: 'flux2-klein',
+    label: 'FLUX.2 klein',
+    summary: 'Fast 4-step editor',
+    needsVision: false,
+    defaultSteps: 4,
+    cfgScale: 1.0,
+  },
+  {
+    id: 'mage-flow-edit-turbo',
+    label: 'Mage-Flow-Edit-Turbo',
+    summary: '4-step editor',
+    needsVision: true,
+    defaultSteps: 4,
+    cfgScale: 1.0,
+  },
+];
+
+export function customEditFamilySpec(family: string): CustomEditFamilySpec {
+  return CUSTOM_EDIT_FAMILIES.find((item) => item.id === family) ?? CUSTOM_EDIT_FAMILIES[0];
+}
 
 export const EDIT_FIT_LABELS: Record<Fit, string> = {
   runs: 'Fits this computer',
@@ -37,7 +91,19 @@ export function editVariantName(model: Pick<EditModel, 'quantization'>): string 
 }
 
 export function editFamilyLabel(family: string): string {
-  return EDIT_FAMILIES.find((candidate) => candidate.id === family)?.label ?? family;
+  return (
+    EDIT_FAMILIES.find((candidate) => candidate.id === family)?.label ??
+    CUSTOM_EDIT_FAMILIES.find((candidate) => candidate.id === family)?.label ??
+    family
+  );
+}
+
+export function editFamilySummary(family: string): string {
+  return (
+    EDIT_FAMILIES.find((candidate) => candidate.id === family)?.summary.split(' · ')[0] ??
+    CUSTOM_EDIT_FAMILIES.find((candidate) => candidate.id === family)?.summary ??
+    ''
+  );
 }
 
 /** Editing runs natively on Apple Silicon (Metal) or a CUDA/ROCm card; never on the CPU. */

@@ -25,7 +25,7 @@ use std::{
 use crate::{
     error::{AppError, AppResult},
     paths::AppPaths,
-    types::{MediaItem, Recipe, UiSettings},
+    types::{CustomEditModel, MediaItem, Recipe, UiSettings},
 };
 
 const MEDIA_REFUSAL: &str =
@@ -34,8 +34,12 @@ const OUTPUT_REFUSAL: &str =
     "LocalSR can only write to its default output folder or a folder you chose. Choose the output folder again.";
 const MODEL_REFUSAL: &str =
     "LocalSR can only use a checkpoint that you chose in its file dialog. Choose the checkpoint again.";
+const MODEL_FOLDER_REFUSAL: &str =
+    "LocalSR can only store models in its default folder or a folder you chose. Choose the model folder again.";
 const EXPORT_REFUSAL: &str =
     "LocalSR can only export to a destination you chose in its save dialog. Choose the destination again.";
+const ENGINE_MANIFEST_REFUSAL: &str =
+    "LocalSR can only import an engine manifest that you chose in its file dialog.";
 
 #[derive(Default)]
 pub struct GrantRegistry {
@@ -46,14 +50,18 @@ pub struct GrantRegistry {
 struct RegistryState {
     app_owned_roots: Vec<PathBuf>,
     default_output: Option<PathBuf>,
+    default_model_root: Option<PathBuf>,
     media_files: HashSet<PathBuf>,
     media_folders: HashSet<PathBuf>,
     revoked_media: HashSet<PathBuf>,
     output_folders: HashSet<PathBuf>,
     persisted_outputs: HashSet<PathBuf>,
+    model_folders: HashSet<PathBuf>,
+    persisted_model_folders: HashSet<PathBuf>,
     model_files: HashSet<PathBuf>,
     persisted_models: HashSet<PathBuf>,
     export_files: HashSet<PathBuf>,
+    engine_manifests: HashSet<PathBuf>,
 }
 
 impl GrantRegistry {
@@ -72,13 +80,20 @@ impl GrantRegistry {
             }
         }
         state.default_output = resolve_path(&paths.default_output).ok();
+        state.default_model_root = resolve_path(&paths.model_root).ok();
+        seed_model_root(&mut state, &settings.model_directory);
         for item in media {
             if let Ok(resolved) = resolve_path(Path::new(&item.path)) {
                 state.media_files.insert(resolved);
             }
         }
         seed_outputs(&mut state, &settings.output_directory);
-        seed_models(&mut state, &settings.custom_model_path, recipes);
+        seed_models(
+            &mut state,
+            &settings.custom_model_path,
+            &settings.custom_edit_model,
+            recipes,
+        );
         Self {
             inner: Mutex::new(state),
         }
@@ -209,9 +224,46 @@ impl GrantRegistry {
         }
     }
 
-    pub fn reconcile_models(&self, custom_model_path: &str, recipes: &[Recipe]) {
+    pub fn reconcile_models(
+        &self,
+        custom_model_path: &str,
+        custom_edit_model: &CustomEditModel,
+        recipes: &[Recipe],
+    ) {
         if let Ok(mut state) = self.inner.lock() {
-            seed_models(&mut state, custom_model_path, recipes);
+            seed_models(&mut state, custom_model_path, custom_edit_model, recipes);
+        }
+    }
+
+    pub fn grant_model_folder(&self, path: &Path) {
+        let Ok(resolved) = resolve_path(path) else {
+            return;
+        };
+        if let Ok(mut state) = self.inner.lock() {
+            state.model_folders.insert(resolved);
+        }
+    }
+
+    pub fn check_model_folder(&self, path: &Path) -> AppResult<PathBuf> {
+        let resolved = self.resolve_requested(path, MODEL_FOLDER_REFUSAL)?;
+        let allowed = self
+            .inner
+            .lock()
+            .map(|state| {
+                state.default_model_root.as_ref() == Some(&resolved)
+                    || state.model_folders.contains(&resolved)
+            })
+            .unwrap_or(false);
+        if allowed {
+            Ok(resolved)
+        } else {
+            Err(AppError::Validation(MODEL_FOLDER_REFUSAL.into()))
+        }
+    }
+
+    pub fn reconcile_model_root(&self, model_directory: &str) {
+        if let Ok(mut state) = self.inner.lock() {
+            seed_model_root(&mut state, model_directory);
         }
     }
 
@@ -230,6 +282,29 @@ impl GrantRegistry {
         };
         if let Ok(mut state) = self.inner.lock() {
             state.export_files.remove(&resolved);
+        }
+    }
+
+    pub fn grant_engine_manifest(&self, path: &Path) {
+        let Ok(resolved) = resolve_path(path) else {
+            return;
+        };
+        if let Ok(mut state) = self.inner.lock() {
+            state.engine_manifests.insert(resolved);
+        }
+    }
+
+    pub fn check_engine_manifest(&self, path: &Path) -> AppResult<PathBuf> {
+        let resolved = self.resolve_requested(path, ENGINE_MANIFEST_REFUSAL)?;
+        let allowed = self
+            .inner
+            .lock()
+            .map(|state| state.engine_manifests.contains(&resolved))
+            .unwrap_or(false);
+        if allowed {
+            Ok(resolved)
+        } else {
+            Err(AppError::Validation(ENGINE_MANIFEST_REFUSAL.into()))
         }
     }
 
@@ -341,8 +416,10 @@ impl GrantRegistry {
                     .chain(&state.media_files)
                     .chain(&state.media_folders)
                     .chain(&state.output_folders)
+                    .chain(&state.model_folders)
                     .chain(&state.model_files)
                     .chain(&state.export_files)
+                    .chain(&state.engine_manifests)
                     .map(|root| root.to_string_lossy().into_owned());
                 local_or_on_share_of(&path.to_string_lossy(), roots)
             })
@@ -364,6 +441,32 @@ impl GrantRegistry {
             })
             .unwrap_or(false))
     }
+}
+
+fn seed_model_root(state: &mut RegistryState, model_directory: &str) {
+    let mut next_persisted = HashSet::new();
+    if !model_directory.trim().is_empty() {
+        if let Ok(resolved) = resolve_path(Path::new(model_directory)) {
+            if state.default_model_root.as_ref() != Some(&resolved) {
+                next_persisted.insert(resolved);
+            }
+        }
+    }
+    for old in &state.persisted_model_folders {
+        if !next_persisted.contains(old) {
+            state.model_folders.remove(old);
+            if !state.app_owned_roots.iter().take(3).any(|core| core == old) {
+                state.app_owned_roots.retain(|entry| entry != old);
+            }
+        }
+    }
+    for current in &next_persisted {
+        state.model_folders.insert(current.clone());
+        if !state.app_owned_roots.contains(current) {
+            state.app_owned_roots.push(current.clone());
+        }
+    }
+    state.persisted_model_folders = next_persisted;
 }
 
 fn seed_outputs(state: &mut RegistryState, output_directory: &str) {
@@ -388,13 +491,21 @@ fn seed_outputs(state: &mut RegistryState, output_directory: &str) {
     state.persisted_outputs = next_persisted;
 }
 
-fn seed_models(state: &mut RegistryState, custom_model_path: &str, recipes: &[Recipe]) {
+fn seed_models(
+    state: &mut RegistryState,
+    custom_model_path: &str,
+    custom_edit_model: &CustomEditModel,
+    recipes: &[Recipe],
+) {
     let mut next_persisted = HashSet::new();
-    for raw in std::iter::once(custom_model_path).chain(
-        recipes
-            .iter()
-            .map(|recipe| recipe.custom_model_path.as_str()),
-    ) {
+    for raw in std::iter::once(custom_model_path)
+        .chain(custom_edit_model.non_empty_paths())
+        .chain(
+            recipes
+                .iter()
+                .map(|recipe| recipe.custom_model_path.as_str()),
+        )
+    {
         if !raw.is_empty() {
             if let Ok(resolved) = resolve_path(Path::new(raw)) {
                 next_persisted.insert(resolved);
@@ -693,7 +804,11 @@ mod tests {
         #[cfg(not(windows))]
         assert!(registry.check_output_folder(&export).is_err());
         assert!(registry.check_output_folder(Path::new(&spaced)).is_ok());
-        registry.reconcile_models(&format!(" {}", model.to_string_lossy()), &[]);
+        registry.reconcile_models(
+            &format!(" {}", model.to_string_lossy()),
+            &CustomEditModel::default(),
+            &[],
+        );
         assert!(registry.check_model_file(&model).is_err());
     }
 

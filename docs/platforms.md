@@ -37,7 +37,9 @@ one. The CUDA and ROCm downloads exceed GitHub's 2 GB file limit and come in par
 
 ## What is untested or withheld
 
-- **CUDA (Windows and Linux)** is published untested. It contains only the NVIDIA
+- **CUDA (Windows and Linux)** is published untested. The next CUDA edition needs
+  an NVIDIA RTX 20 series or newer and driver 580 or newer. On Windows, older
+  NVIDIA cards can use DirectML. It contains only the NVIDIA
   libraries that NVIDIA's CUDA Toolkit EULA and cuDNN supplement identify as
   distributable (`packaging/nvidia/redistributables.json`, checked on every build);
   files the license does not list are left out. The Windows engine ships as verified parts next to
@@ -101,8 +103,10 @@ one. The CUDA and ROCm downloads exceed GitHub's 2 GB file limit and come in par
   intermediate. No Apple chip encodes AV1 in hardware. Measured on the M1 Pro with
   a 15-second 720×1280 iPhone clip upscaled 4× with SPAN (461 frames): 1.58 frames
   per second with tiles and AV1 before, 3.6 now (2 minutes 8 seconds).
-- **DirectML.** Any DXGI adapter with D3D12 support can be selected; only the
-  UHD 620 has been run. Some graph nodes execute on the CPU. SeedVR2 has no
+- **DirectML.** A new installation selects a DirectML adapter automatically,
+  preferring discrete graphics and then the most memory. An existing installation
+  keeps its hardware choice. Any DXGI adapter with D3D12 support can be selected;
+  only the UHD 620 has been run. Some graph nodes execute on the CPU. SeedVR2 has no
   DirectML implementation.
 - **The GPU check (DirectML and OpenVINO, from v0.3.2-beta).** These routes run the
   model as an ONNX graph in FP32. The first time a model runs on a GPU, at each tile
@@ -134,7 +138,33 @@ one. The CUDA and ROCm downloads exceed GitHub's 2 GB file limit and come in par
   which corrupted colour conversion; LocalSR uses per-channel arithmetic there
   instead (mean absolute error below 1e-6 against the CPU).
 - **CPU.** Every package can run on the CPU. On the i7-8550U the CPU benchmark
-  was faster than the integrated GPU.
+  was faster than the integrated GPU. On Windows, the CPU edition checks for a
+  DirectX 12 graphics card (AMD, Intel, or NVIDIA) and shows a dismissable
+  notice with a link to the DirectML or CUDA download page.
+
+The Windows installer installs for your account without administrator rights,
+lets you choose a folder, add a
+desktop shortcut and launch LocalSR when done, and keeps downloaded models and
+settings by default on uninstall. SmartScreen warns because the installers are
+unsigned. On Linux, the AppImage offers once after setup to add LocalSR to your
+applications menu (removable from the Help menu).
+
+## In-app engine switching (Windows and Linux)
+
+Direct builds can also install and switch engines inside the app instead of
+downloading a separate edition:
+
+- **Windows (x86-64):** `cpu`, `directml` and `cuda`.
+- **Linux (x86-64):** `cpu`, `cuda` and `rocm`.
+- **macOS (Apple Silicon):** `mps` only (unchanged).
+
+The bundled CPU engine stays installed as a fallback if a downloaded or imported
+engine fails to start. After fixing the cause, select Use or reimport the engine
+to try it again. Microsoft Store builds receive both app and engine updates
+from the Store and do not support in-app engine switching. On direct Windows and
+Linux builds, LocalSR offers the detected GPU engine after the first-launch setup
+screen and keeps engine switching, download, removal and offline file import in
+**Advanced -> Engine -> Change…**.
 
 ## Memory guidance
 

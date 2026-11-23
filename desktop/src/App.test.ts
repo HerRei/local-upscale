@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { updateDialogOpen } from './lib/updates';
+import { emptyUpdateStatus, updateDialogOpen, updateState } from './lib/updates';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -11,10 +11,12 @@ import { applyWorkerEnvelope } from './lib/workerEvents';
 import type {
   AppSnapshot,
   DeviceInfo,
+  EngineDownloadStatus,
   JobRecord,
   LaunchIntent,
   MediaItem,
   MediaResults,
+  ModelMoveProgress,
   Recipe,
   ResultSummary,
   StartBatchInput,
@@ -69,6 +71,26 @@ const api = vi.hoisted(() => ({
     async (): Promise<{ paths: string[]; outputDirectory: string } | null> => null,
   ),
   chooseOutputDirectory: vi.fn(async () => null),
+  chooseModelDirectory: vi.fn(async (): Promise<string | null> => null),
+  setModelDirectory: vi.fn(async (_path: string): Promise<void> => undefined),
+  resetModelDirectory: vi.fn(async (): Promise<void> => undefined),
+  listenForModelMove: vi.fn(async (_handler: (progress: ModelMoveProgress) => void) => () => {}),
+  dismissGpuDownloadNotice: vi.fn(async (): Promise<void> => undefined),
+  dismissLinuxMenuPrompt: vi.fn(async (): Promise<void> => undefined),
+  installLinuxMenu: vi.fn(async (): Promise<void> => undefined),
+  uninstallLinuxMenu: vi.fn(async (): Promise<void> => undefined),
+  refreshEngineCatalog: vi.fn(async () => []),
+  installEngine: vi.fn(async (_backend: string): Promise<void> => undefined),
+  cancelEngineInstall: vi.fn(async (): Promise<void> => undefined),
+  useEngine: vi.fn(async (_backend: string): Promise<void> => undefined),
+  removeEngine: vi.fn(async (_id: string): Promise<void> => undefined),
+  chooseEngineManifest: vi.fn(async (): Promise<string | null> => null),
+  importEngine: vi.fn(async (_path: string): Promise<void> => undefined),
+  listenForEngineStatus: vi.fn(
+    async (_handler: (status: EngineDownloadStatus) => void): Promise<() => void> =>
+      () =>
+        undefined,
+  ),
   chooseCustomModel: vi.fn(async () => null),
   addMedia: vi.fn(async (_paths: string[], _replace: boolean): Promise<void> => undefined),
   selectMedia: vi.fn(async (_id: string): Promise<void> => undefined),
@@ -140,6 +162,13 @@ const api = vi.hoisted(() => ({
   startEdit: vi.fn(async () => undefined),
   openEditLink: vi.fn(async () => undefined),
   chooseEditRuntime: vi.fn(async (): Promise<string | null> => null),
+  chooseEditModelFile: vi.fn(
+    async (
+      _role: 'diffusion' | 'text_encoder' | 'vision' | 'vae',
+    ): Promise<{ path: string; size_bytes: number; detected_family?: string | null } | null> =>
+      null,
+  ),
+  saveCustomEditModel: vi.fn(async () => undefined),
   saveRecipe: vi.fn(async (_recipe: Recipe) => undefined),
   deleteRecipe: vi.fn(async () => undefined),
   updateStatus: vi.fn(async () => ({
@@ -242,6 +271,16 @@ function readySnapshot(media: MediaItem[] = []): AppSnapshot {
     status_title: 'Ready',
     status_detail: 'The isolated inference engine is ready.',
   };
+  snapshot.engines = {
+    ...snapshot.engines!,
+    supported: false,
+    active_backend: 'mps',
+    active_engine_id: 'bundled',
+    bundled_backend: 'mps',
+    installed: [{ id: 'bundled', backend: 'mps', bundled: true, active: true, path: '' }],
+    recommendation: { backend: 'mps', adapter_name: null },
+    catalog: [],
+  };
   return snapshot;
 }
 
@@ -287,6 +326,7 @@ async function mountWith(snapshot: AppSnapshot): Promise<ReturnType<typeof userE
 }
 
 let nativeMenu: ((action: string) => void) | undefined;
+let engineStatusHandler: ((status: EngineDownloadStatus) => void) | undefined;
 
 /** Models and Performance live in the native menu bar; tests send its actions directly. */
 async function chooseMenuItem(action: string): Promise<void> {
@@ -506,6 +546,14 @@ describe('Edit task', () => {
     expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull();
   });
 
+  it('offers no Faces group in the model library', async () => {
+    await mountWith(readySnapshot([image('photo', true)]));
+    await chooseMenuItem('view.models');
+    const dialog = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(dialog).getByRole('button', { name: /^Edit with a prompt/ })).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: /^Faces/ })).toBeNull();
+  });
+
   it('shows Mac and Windows/Linux memory needs in the library and removes a bundle', async () => {
     const user = await mountWith(editSnapshot(26));
     await chooseMenuItem('view.models');
@@ -529,6 +577,123 @@ describe('Edit task', () => {
     expect(within(dialog).getByText('48 GB memory')).toBeTruthy();
     await user.click(within(dialog).getByRole('button', { name: 'Remove from this computer' }));
     expect(api.removeModel).toHaveBeenCalledWith('qwen_edit_2511_q8_0');
+  });
+
+  it('lets the user configure, check and save their own edit model with family roles and defaults', async () => {
+    const snapshot = editSnapshot(32);
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Edit$/);
+    await user.click(screen.getByRole('button', { name: 'Change the edit model' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: 'Use your own edit model…' }));
+
+    const modal = screen.getByRole('dialog', { name: 'Use your own edit model' });
+    expect(within(modal).getByText(/responsible for the model's licence/i)).toBeTruthy();
+    expect(within(modal).queryByText(/^Defaults:/)).toBeNull();
+
+    // Switching to FLUX.2 klein hides Vision projector and updates the Model family HelpTip to 4 steps / CFG 1.
+    const familySelect = within(modal).getByLabelText('Model family') as HTMLSelectElement;
+    await user.selectOptions(familySelect, 'flux2-klein');
+    expect(within(modal).queryByText('Vision projector')).toBeNull();
+    expect(within(modal).queryByText(/^Defaults:/)).toBeNull();
+    const familyTipButton = within(modal).getByRole('button', { name: 'About Model family' });
+    await user.click(familyTipButton);
+    expect(within(modal).getByRole('tooltip').textContent).toBe(
+      'Tells LocalSR how to run your files and sets the defaults. For this family: 4 steps, CFG 1.',
+    );
+
+    // Picking a Qwen 2.1 GGUF auto-detects the family and shows Vision projector + CFG 6 in the HelpTip.
+    api.chooseEditModelFile
+      .mockResolvedValueOnce({
+        path: '/local/qwen21.gguf',
+        size_bytes: 12 * 1024 ** 3,
+        detected_family: 'qwen-image-2.1',
+      })
+      .mockResolvedValueOnce({ path: '/local/te.gguf', size_bytes: 4 * 1024 ** 3 })
+      .mockResolvedValueOnce({ path: '/local/mmproj.gguf', size_bytes: 1024 ** 3 })
+      .mockResolvedValueOnce({ path: '/local/vae.safetensors', size_bytes: 256 * 1024 ** 2 });
+
+    const chooseButtons = () => within(modal).getAllByRole('button', { name: 'Choose…' });
+    await user.click(chooseButtons()[0]);
+    expect(familySelect.value).toBe('qwen-image-2.1');
+    expect(within(modal).getByText('Detected Qwen Image 2.1 from GGUF metadata.')).toBeTruthy();
+    expect(within(modal).getByText('Vision projector')).toBeTruthy();
+    await user.click(familyTipButton);
+    expect(within(modal).getByRole('tooltip').textContent).toBe(
+      'Tells LocalSR how to run your files and sets the defaults. For this family: 40 steps, CFG 6.',
+    );
+
+    // Pick text encoder, vision projector, and VAE.
+    for (let i = 0; i < 3; i += 1) {
+      await user.click(within(modal).getAllByRole('button', { name: 'Choose…' })[0]);
+    }
+
+    // A failed sd-cli load check keeps the dialog open and refuses with a clear error.
+    api.saveCustomEditModel.mockRejectedValueOnce(
+      'sd-cli could not load these model files: invalid VAE',
+    );
+    await user.click(within(modal).getByRole('button', { name: 'Check and save' }));
+    expect(within(modal).getByRole('alert').textContent).toContain('invalid VAE');
+    expect(screen.getByRole('dialog', { name: 'Use your own edit model' })).toBeTruthy();
+
+    // A passing load check saves, refreshes the snapshot, and selects the custom edit model.
+    const savedSnapshot = structuredClone(snapshot);
+    savedSnapshot.settings.task = 'edit';
+    savedSnapshot.settings.edit_model_id = '__custom__';
+    savedSnapshot.settings.edit_steps = 0;
+    savedSnapshot.settings.custom_edit_model = {
+      family: 'qwen-image-2.1',
+      diffusion_path: '/local/qwen21.gguf',
+      text_encoder_path: '/local/te.gguf',
+      vision_path: '/local/mmproj.gguf',
+      vae_path: '/local/vae.safetensors',
+    };
+    savedSnapshot.edit.custom_model = {
+      model_id: '__custom__',
+      name: 'Your edit model',
+      family: 'qwen-image-2.1',
+      quantization: 'Custom',
+      files: [
+        {
+          role: 'diffusion',
+          filename: 'diffusion',
+          size_bytes: 12 * 1024 ** 3,
+          sha256: '',
+          download_url: '',
+        },
+        {
+          role: 'text_encoder',
+          filename: 'text_encoder',
+          size_bytes: 4 * 1024 ** 3,
+          sha256: '',
+          download_url: '',
+        },
+        { role: 'vision', filename: 'vision', size_bytes: 1024 ** 3, sha256: '', download_url: '' },
+        { role: 'vae', filename: 'vae', size_bytes: 256 * 1024 ** 2, sha256: '', download_url: '' },
+      ],
+      min_unified_memory_gb: 32,
+      min_vram_gb: 16,
+      default_steps: 40,
+      cfg_scale: 6,
+      license_name: 'Your own file',
+      license_url: '',
+      source_url: '',
+      terms_acceptance_required: false,
+      automated_download_allowed: false,
+      installed: true,
+      total_size_bytes: 17 * 1024 ** 3 + 256 * 1024 ** 2,
+    };
+    api.saveCustomEditModel.mockResolvedValueOnce(undefined);
+    api.refreshSnapshot.mockResolvedValue(savedSnapshot);
+
+    await user.click(within(modal).getByRole('button', { name: 'Check and save' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Use your own edit model' })).toBeNull(),
+    );
+    expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull();
+    const stages = screen.getByRole('list', { name: 'Stages' });
+    expect(within(stages).getByText('Qwen Image 2.1')).toBeTruthy();
+    expect(within(stages).getByText('Custom')).toBeTruthy();
   });
 });
 
@@ -566,10 +731,24 @@ beforeEach(() => {
   api.listenForWorker.mockResolvedValue(() => undefined);
   api.listenForStateChange.mockResolvedValue(() => undefined);
   nativeMenu = undefined;
+  engineStatusHandler = undefined;
   api.listenForNativeMenu.mockImplementation(async (handler) => {
     nativeMenu = handler;
     return () => undefined;
   });
+  api.listenForEngineStatus.mockImplementation(
+    async (handler: (status: EngineDownloadStatus) => void) => {
+      engineStatusHandler = handler;
+      return () => undefined;
+    },
+  );
+  api.refreshEngineCatalog.mockReset().mockResolvedValue([]);
+  api.installEngine.mockReset().mockResolvedValue(undefined);
+  api.cancelEngineInstall.mockReset().mockResolvedValue(undefined);
+  api.useEngine.mockReset().mockResolvedValue(undefined);
+  api.removeEngine.mockReset().mockResolvedValue(undefined);
+  api.chooseEngineManifest.mockReset().mockResolvedValue(null);
+  api.importEngine.mockReset().mockResolvedValue(undefined);
   api.listenForLaunchIntent.mockResolvedValue(() => undefined);
   api.listenForFileDrops.mockResolvedValue(() => undefined);
   api.takeLaunchIntents.mockResolvedValue([]);
@@ -594,6 +773,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  updateState.set(emptyUpdateStatus);
   updateDialogOpen.set(false); // the dialog's store outlives each test's window
   cleanup();
   vi.restoreAllMocks();
@@ -1402,49 +1582,27 @@ describe('LocalSR desktop interface', () => {
     expect(within(hardware).getByRole('option', { name: 'CPU' })).toBeTruthy();
 
     // Faces need a primary model with a companion; the default Best (RealPLKSR)
-    // has none, so the chip is disabled until such a model is chosen.
-    expect(
-      (screen.getByRole('button', { name: 'Faces', pressed: false }) as HTMLButtonElement).disabled,
-    ).toBe(true);
+    // has none, so the chip is not offered until such a model is chosen.
+    expect(screen.queryByRole('button', { name: 'Faces' })).toBeNull();
   });
 
-  it.each([
-    ['hat_s_x4', 'hat_s_x4_face'],
-    ['hat_l_x4_imagenet', 'hat_l_x4_face'],
-  ])(
-    'imports the matching face companion for %s without downloading',
-    async (primaryId, faceId) => {
+  it.each([['hat_s_x4'], ['hat_l_x4_imagenet']])(
+    'does not offer the Faces chip or companion UI for %s',
+    async (primaryId) => {
       const snapshot = readySnapshot([image('portrait', true)]);
       snapshot.engine!.features.push('face_aware');
-      const face = snapshot.catalog.models.find((model) => model.model_id === faceId)!;
-      face.installed = false;
-      api.chooseCustomModel.mockResolvedValueOnce(`/models/${face.filename}` as never);
       snapshot.settings.task = 'upscale';
       snapshot.settings.selected_model_id = primaryId;
       snapshot.settings.quality = 'custom';
-      const user = await mountWith(snapshot);
-      await user.click(screen.getByRole('button', { name: 'Faces', pressed: false }));
-      expect(screen.getByRole('button', { name: 'Faces', pressed: true })).toBeTruthy();
-      expect(screen.getByText('Needs your file')).toBeTruthy();
+      await mountWith(snapshot);
+      expect(screen.queryByRole('button', { name: 'Faces' })).toBeNull();
+      expect(
+        screen.queryByRole('button', { name: 'Choose externally downloaded face checkpoint…' }),
+      ).toBeNull();
+      expect(screen.queryByLabelText(/Face fidelity/)).toBeNull();
       expect(
         screen.getByRole('button', { name: 'Upscale selected' }).hasAttribute('disabled'),
-      ).toBe(true);
-      await user.click(
-        screen.getByRole('checkbox', {
-          name: /I understand that the checkpoint rights are unresolved/i,
-        }),
-      );
-      await user.click(
-        screen.getByRole('button', { name: 'Choose externally downloaded face checkpoint…' }),
-      );
-      await waitFor(() =>
-        expect(api.importCatalogModel).toHaveBeenCalledWith(
-          faceId,
-          `/models/${face.filename}`,
-          true,
-        ),
-      );
-      expect(api.downloadModel).not.toHaveBeenCalled();
+      ).toBe(false);
     },
   );
 
@@ -1475,10 +1633,10 @@ describe('LocalSR desktop interface', () => {
         task: 'video',
         quality: 'custom',
         selected_model_id: 'hat_l_x4_imagenet',
-        fixes: ['faces'],
+        fixes: [],
         deflicker,
         video_interpolation: 'x2',
-        enable_face_model: true,
+        enable_face_model: false,
       });
       const user = await mountWith(snapshot);
       await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
@@ -1490,7 +1648,7 @@ describe('LocalSR desktop interface', () => {
       ).toBe(deflicker);
       expect((screen.getByLabelText('Frame rate') as HTMLSelectElement).value).toBe('x2');
       expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ deflicker, video_interpolation: 'x2', enable_face_model: true }),
+        expect.objectContaining({ deflicker, video_interpolation: 'x2', enable_face_model: false }),
       );
     },
   );
@@ -3667,7 +3825,7 @@ describe('LocalSR desktop interface', () => {
         'Can add artifacts to sharp pictures and line art. Skipped if the result is unstable.',
       ),
     ).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'About Fix first' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'About Restore first' })).toBeTruthy();
   });
 
   it('names the fix of a recipe saved before fix chips existed', async () => {
@@ -3704,7 +3862,7 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByRole('button', { name: 'JPEG artifacts', pressed: true })).toBeTruthy();
   });
 
-  it('keeps Faces on when the newly picked upscaler has a face companion', async () => {
+  it('switches between HAT upscalers without offering Faces', async () => {
     const snapshot = readySnapshot([image('portrait', true)]);
     snapshot.engine!.features.push('face_aware');
     const user = await mountWith(snapshot);
@@ -3712,17 +3870,17 @@ describe('LocalSR desktop interface', () => {
     let library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }));
     await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
-    await user.click(screen.getByRole('button', { name: 'Faces', pressed: false }));
+    expect(screen.queryByRole('button', { name: 'Faces' })).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /HAT-S ×4/ }));
     await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ selected_model_id: 'hat_s_x4', enable_face_model: true }),
+        expect.objectContaining({ selected_model_id: 'hat_s_x4', enable_face_model: false }),
       ),
     );
-    expect(screen.getByRole('button', { name: 'Faces', pressed: true })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Faces' })).toBeNull();
   });
 
   it('names in the library which models run on the Neural Engine or an NPU', async () => {
@@ -4375,7 +4533,7 @@ describe('Several fixes in one pass', () => {
         ],
       },
       fix_stages: [{ fix: 'noise', model_id: 'scunet_color_real_psnr' }],
-      fixes: ['noise', 'faces'],
+      fixes: ['noise'],
     },
   ])('applies a 0.3.5 recipe: $name', async ({ recipe, fix_stages, fixes }) => {
     const snapshot = readySnapshot([image('photo', true)]);
@@ -4415,10 +4573,10 @@ describe('Several fixes in one pass', () => {
       selected_video_model_id: 'frame_by_frame',
     });
     const user = await mountWith(snapshot);
-    // Frame-by-frame video offers fix stages alongside Faces.
+    // Frame-by-frame video offers fix stages; Faces only with a HAT model.
     expect(screen.getByRole('button', { name: 'Noise' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Blur' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Faces' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Faces' })).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
     await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Clip');
     await user.click(screen.getByRole('button', { name: 'Save' }));
@@ -4573,30 +4731,31 @@ describe('Several fixes in one pass', () => {
     );
   });
 
-  it('keeps Faces for the way back from Restore', async () => {
+  it('drops saved Faces quietly on load and across Restore and Upscale', async () => {
     const snapshot = readySnapshot([image('portrait', true)]);
     snapshot.engine!.features.push('face_aware');
     Object.assign(snapshot.settings, {
       task: 'upscale',
       quality: 'best',
       selected_model_id: 'hat_l_x4_imagenet',
-      // Best brings HAT-L back, whose face companion Faces needs.
       preset_pins: { 'upscale/photo/best': 'hat_l_x4_imagenet' },
       fixes: ['faces'],
       enable_face_model: true,
     });
     const user = await mountWith(snapshot);
+    await waitFor(() => expect(lastSaved()).toMatchObject({ enable_face_model: false, fixes: [] }));
+    expect(screen.queryByRole('button', { name: 'Faces' })).toBeNull();
     await chooseTask(user, /^Restore/);
     await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
     await waitFor(() =>
-      expect(lastSaved()).toMatchObject({ enable_face_model: false, fixes: ['noise', 'faces'] }),
+      expect(lastSaved()).toMatchObject({ enable_face_model: false, fixes: ['noise'] }),
     );
     await chooseTask(user, /^Upscale$/);
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
         task: 'upscale',
-        enable_face_model: true,
-        fixes: ['noise', 'faces'],
+        enable_face_model: false,
+        fixes: ['noise'],
       }),
     );
   });
@@ -5303,6 +5462,19 @@ describe('Comparing saved results', () => {
     expect(api.cancelJobsForMedia).toHaveBeenCalledWith('photo');
     expect(api.cancelJobs).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Cancel queue' })).toBeTruthy();
+  });
+
+  it('tells you to download models when fewer than 2 can be compared', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.batch_mode = false;
+    snapshot.catalog.models.forEach((model) => (model.installed = false));
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Upscale$/);
+    await user.click(
+      await screen.findByRole('button', { name: 'Try other upscalers on this image' }),
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(dialog).getByText(/Comparing needs at least 2 installed models/)).toBeTruthy();
   });
 
   it('runs 2 to 4 installed models from Try others with the settings the plan card showed', async () => {
@@ -6382,10 +6554,10 @@ describe('Concurrent model downloads in the Model Library', () => {
   });
 });
 
-describe('video restore, 1× output, and fix-first stages', () => {
+describe('video restore, Restore first, and 1× removal', () => {
   const lastSaved = (): UiSettings => api.saveSettings.mock.calls.at(-1)![0] as UiSettings;
 
-  it('switches a selected video between Upscale and Restore, saves a restore recipe, and starts jobs', async () => {
+  it('switches a selected video to Restore with Noise on, saves a restore recipe, and starts jobs', async () => {
     const snapshot = readySnapshot([video('clip', true)]);
     snapshot.catalog.models.forEach((m) => (m.installed = true));
     Object.assign(snapshot.settings, {
@@ -6403,15 +6575,18 @@ describe('video restore, 1× output, and fix-first stages', () => {
     });
     api.refreshSnapshot.mockImplementation(async () => structuredClone(persisted));
 
-    // Toggle Restore for video
+    // Toggle Restore for video: turns Noise on when nothing is picked
     await user.click(screen.getByRole('button', { name: /^Restore$/ }));
     await waitFor(() =>
-      expect(lastSaved()).toMatchObject({ task: 'video', video_task: 'denoise' }),
+      expect(lastSaved()).toMatchObject({
+        task: 'video',
+        video_task: 'denoise',
+        fixes: ['noise'],
+      }),
     );
 
-    // Turn on JPEG artifacts (prefix fix) and Noise (primary restore) for video Restore
+    // Turn on JPEG artifacts (prefix fix) before Noise (primary restore) for video Restore
     await user.click(screen.getByRole('button', { name: 'JPEG artifacts' }));
-    await user.click(screen.getByRole('button', { name: 'Noise' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
         task: 'video',
@@ -6456,73 +6631,9 @@ describe('video restore, 1× output, and fix-first stages', () => {
     });
   });
 
-  it('supports 1× output scale and fix-first stages in video upscale', async () => {
+  it('removes 1× from video Upscale and runs video Restore options-only without a chip', async () => {
     const snapshot = readySnapshot([video('clip', true)]);
     snapshot.catalog.models.forEach((m) => (m.installed = true));
-    Object.assign(snapshot.settings, {
-      task: 'video',
-      video_task: 'upscale',
-      selected_video_model_id: 'frame_by_frame',
-      selected_model_id: 'span_photo_x4',
-      output_scale: 4,
-    });
-    const user = await mountWith(snapshot);
-
-    // Select 1× in Advanced -> Output scale
-    await user.click(screen.getByRole('button', { name: /Advanced/ }));
-    const scaleSelect = screen.getByLabelText('Output scale') as HTMLSelectElement;
-    expect(Array.from(scaleSelect.options).map((o) => o.value)).toEqual(['1', '2', '3', '4']);
-    await user.selectOptions(scaleSelect, '1');
-    await waitFor(() => expect(lastSaved()).toMatchObject({ task: 'video', output_scale: 1 }));
-
-    // Add Blur fix-first stage
-    await user.click(screen.getByRole('button', { name: 'Blur' }));
-    await waitFor(() =>
-      expect(lastSaved()).toMatchObject({
-        task: 'video',
-        video_task: 'upscale',
-        output_scale: 1,
-        fixes: ['blur'],
-      }),
-    );
-
-    await user.click(screen.getByRole('button', { name: 'Start selected video' }));
-    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
-    expect(api.startJobs.mock.calls.at(-1)![0]).toMatchObject({
-      task: 'video',
-      video_task: 'upscale',
-      output_scale: 1,
-      fix_stages: [expect.objectContaining({ fix: 'blur' })],
-    });
-  });
-
-  it('keeps 1× when Quick, Best or the content changes', async () => {
-    const snapshot = readySnapshot([video('clip', true)]);
-    snapshot.catalog.models.forEach((m) => (m.installed = true));
-    Object.assign(snapshot.settings, {
-      task: 'video',
-      video_task: 'upscale',
-      selected_video_model_id: 'frame_by_frame',
-      selected_model_id: 'span_photo_x4',
-      quality: 'quick',
-      output_scale: 1,
-    });
-    const user = await mountWith(snapshot);
-
-    await user.click(screen.getByRole('button', { name: 'Blur' }));
-    await waitFor(() => expect(lastSaved()).toMatchObject({ fixes: ['blur'], output_scale: 1 }));
-    await user.click(screen.getByRole('button', { name: /^Best/ }));
-    await waitFor(() => expect(lastSaved()).toMatchObject({ quality: 'best' }));
-    expect(lastSaved().output_scale).toBe(1);
-    await user.click(screen.getByRole('radio', { name: 'Illustration' }));
-    await waitFor(() => expect(lastSaved()).toMatchObject({ content: 'illustration' }));
-    expect(lastSaved().output_scale).toBe(1);
-  });
-
-  it('at 1× omits the SR model stage/download and disables Start until something else is chosen', async () => {
-    const snapshot = readySnapshot([video('clip', true)]);
-    snapshot.catalog.models.forEach((m) => (m.installed = false));
-    snapshot.catalog.models.find((m) => m.model_id === 'nafnet_gopro_deblur')!.installed = true;
     Object.assign(snapshot.settings, {
       task: 'video',
       video_task: 'upscale',
@@ -6535,31 +6646,828 @@ describe('video restore, 1× output, and fix-first stages', () => {
     });
     const user = await mountWith(snapshot);
 
-    // Select 1× in Advanced -> Output scale: Quality gains its 1× help, SR model disappears from Stages, Start is disabled.
+    // Output scale in video Upscale starts at 2×; Quality has no 1× HelpTip.
     await user.click(screen.getByRole('button', { name: /Advanced/ }));
-    await user.selectOptions(screen.getByLabelText('Output scale'), '1');
-    await waitFor(() => expect(lastSaved()).toMatchObject({ output_scale: 1 }));
-    expect(screen.getByRole('button', { name: 'About Quality' })).toBeTruthy();
-    expect(screen.getByRole('group', { name: 'Quality' }).textContent).not.toContain('download');
-    expect(screen.getByRole('region', { name: 'Model plan' }).textContent).not.toContain('At 1×');
-    expect(screen.getByText(/Nothing to run at 1×/)).toBeTruthy();
+    const scaleSelect = screen.getByLabelText('Output scale') as HTMLSelectElement;
+    expect(Array.from(scaleSelect.options).map((o) => o.value)).toEqual(['2', '3', '4']);
+    expect(screen.queryByRole('button', { name: 'About Quality' })).toBeNull();
+
+    // Switch to video Restore: Noise starts on, Output scale hides, Advanced says Format, hardware.
+    await user.click(screen.getByRole('button', { name: /^Restore$/ }));
+    expect(screen.queryByLabelText('Output scale')).toBeNull();
+    expect(screen.getByText('Format, hardware')).toBeTruthy();
+
+    // Untick Noise: no restore model runs, Start is disabled with "Nothing to run..."
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: true }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'video',
+        video_task: 'denoise',
+        fixes: [],
+        selected_model_id: '',
+      }),
+    );
+    expect(
+      screen.getByText(
+        'Nothing to run. Pick what to fix, or turn on De-flicker, Frame rate or Clean up audio.',
+      ),
+    ).toBeTruthy();
     const startBtn = screen.getByRole('button', {
-      name: 'Start selected video',
+      name: 'Restore selected video',
     }) as HTMLButtonElement;
     expect(startBtn.disabled).toBe(true);
-    expect(screen.queryByRole('list', { name: 'Stages' })?.textContent).not.toContain('SPAN');
+    expect(screen.queryByRole('list', { name: 'Stages' })?.textContent?.trim()).toBe('');
 
-    // Enabling Blur enables Start without needing span_photo_x4 installed.
-    await user.click(screen.getByRole('button', { name: 'Blur' }));
+    // Turning on De-flicker enables Start with no restore model.
+    await user.click(screen.getByRole('checkbox', { name: /De-flicker · Labs/i }));
     await waitFor(() => expect(startBtn.disabled).toBe(false));
-    expect(screen.getByRole('list', { name: 'Stages' }).textContent).toContain('Fix blur');
-    expect(screen.getByRole('list', { name: 'Stages' }).textContent).not.toContain('SPAN');
+    await user.click(startBtn);
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+    expect(api.startJobs.mock.calls.at(-1)![0]).toMatchObject({
+      task: 'video',
+      video_task: 'denoise',
+      model_id: '',
+      fix_stages: [],
+      deflicker: true,
+    });
+  });
 
-    // Switching back to 2× removes the 1× help and brings back the upscaler stage.
-    await user.selectOptions(screen.getByLabelText('Output scale'), '2');
-    await waitFor(() => expect(lastSaved()).toMatchObject({ output_scale: 2 }));
-    expect(screen.queryByRole('button', { name: 'About Quality' })).toBeNull();
-    expect(screen.getByRole('group', { name: 'Quality' }).textContent).toContain('download');
-    expect(screen.getByRole('list', { name: 'Stages' }).textContent).toContain('SPAN');
+  it('migrates saved Upscale 1× and no-chip video Restore states on load and keeps Restore first chip order and HelpTips', async () => {
+    // 1) Saved photo Upscale 1× loads as Restore with the same fixes and last fix as model.
+    const photo1x = readySnapshot([image('photo', true)]);
+    Object.assign(photo1x.settings, {
+      task: 'upscale',
+      output_scale: 1,
+      selected_model_id: 'span_photo_x4',
+      fixes: ['blur', 'faces'],
+      fix_stages: [{ fix: 'blur', model_id: 'nafnet_gopro_deblur' }],
+      enable_face_model: true,
+    });
+    const user1 = await mountWith(photo1x);
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'denoise',
+        output_scale: 1,
+        selected_model_id: 'nafnet_gopro_deblur',
+        fixes: ['blur'],
+        enable_face_model: false,
+      }),
+    );
+    expect(
+      screen.getByText('Removes noise, blur and JPEG artifacts or adds colour, at the same size.'),
+    ).toBeTruthy();
+    const restoreChips = Array.from(
+      screen.getByRole('group', { name: 'What to fix' }).querySelectorAll('button'),
+    ).map((b) => b.textContent?.trim());
+    expect(restoreChips).toEqual(['Noise', 'Blur', 'JPEG artifacts', 'Colour']);
+    await user1.click(screen.getByRole('button', { name: 'About What to fix' }));
+    expect(screen.getByRole('tooltip').textContent).toBe(
+      'Each problem you pick gets its own fix, in the order listed under Model. The size stays the same. To enlarge the picture as well, use Upscale and pick the same problems under Restore first.',
+    );
+
+    // Upscale uses the exact same chip order (without Colour for video).
+    await user1.click(screen.getByRole('button', { name: /^Upscale$/ }));
+    const upscaleChips = Array.from(
+      screen.getByRole('group', { name: 'Restore first' }).querySelectorAll('button'),
+    ).map((b) => b.textContent?.trim());
+    expect(upscaleChips).toEqual(['Noise', 'Blur', 'JPEG artifacts', 'Colour']);
+    await user1.click(screen.getByRole('button', { name: 'About Restore first' }));
+    expect(screen.getByRole('tooltip').textContent).toContain(
+      'Runs the Restore task before upscaling.',
+    );
+    expect(screen.getByRole('tooltip').textContent).toContain(
+      'Colour adds colour to black-and-white photos.',
+    );
+    cleanup();
+
+    // 2) Saved video Upscale 1× loads as video Restore, and recipes at 1× display "restore"/"video restore" without scale.
+    const video1x = readySnapshot([video('clip', true)]);
+    Object.assign(video1x.settings, {
+      task: 'video',
+      video_task: 'upscale',
+      output_scale: 1,
+      selected_model_id: 'span_photo_x4',
+      fixes: ['jpeg'],
+      fix_stages: [{ fix: 'jpeg', model_id: 'fbcnn_color' }],
+    });
+    video1x.recipes = [
+      {
+        id: 'old-photo-1x',
+        name: 'Old photo 1x',
+        task: 'upscale',
+        model_id: 'span_photo_x4',
+        output_scale: 1,
+        tile_size: 256,
+        halo: 16,
+        precision: 'fp32',
+        safe_memory: true,
+        fixes: ['blur'],
+        stages: [
+          { kind: 'restore', model_id: 'nafnet_gopro_deblur', fix: 'blur' },
+          { kind: 'upscale', model_id: 'span_photo_x4' },
+        ],
+      },
+      {
+        id: 'old-vid-1x',
+        name: 'Old video 1x',
+        task: 'video',
+        video_task: 'upscale',
+        model_id: 'span_photo_x4',
+        output_scale: 1,
+        tile_size: 256,
+        halo: 16,
+        precision: 'fp16',
+        safe_memory: true,
+        fixes: ['jpeg'],
+        stages: [
+          { kind: 'deblock', model_id: 'fbcnn_color', fix: 'jpeg' },
+          { kind: 'video', model_id: 'span_photo_x4' },
+        ],
+      },
+    ];
+    const user2 = await mountWith(video1x);
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'video',
+        video_task: 'denoise',
+        output_scale: 1,
+        selected_model_id: 'fbcnn_color',
+        fixes: ['jpeg'],
+      }),
+    );
+    const oldPhotoBtn = screen.getByRole('button', { name: /^Old photo 1x/ });
+    expect(oldPhotoBtn.textContent).toContain('restore · FP32');
+    expect(oldPhotoBtn.textContent).not.toContain('1×');
+    const oldVidBtn = screen.getByRole('button', { name: /^Old video 1x/ });
+    expect(oldVidBtn.textContent).toContain('video restore · FP16');
+    expect(oldVidBtn.textContent).not.toContain('1×');
+    expect(oldVidBtn.getAttribute('aria-pressed')).toBe('false');
+    await user2.click(oldVidBtn);
+    await waitFor(() => expect(oldVidBtn.getAttribute('aria-pressed')).toBe('true'));
+    await user2.click(screen.getByRole('button', { name: 'About What to fix' }));
+    expect(screen.getByRole('tooltip').textContent).toContain(
+      'With nothing picked, only De-flicker, Frame rate and Clean up audio run.',
+    );
+    cleanup();
+
+    // 3) Saved no-chip video Restore gets the chip its model fits, else Noise.
+    const noChipVideo = readySnapshot([video('clip', true)]);
+    Object.assign(noChipVideo.settings, {
+      task: 'video',
+      video_task: 'denoise',
+      output_scale: 1,
+      selected_model_id: 'fbcnn_color',
+      fixes: [],
+      fix_stages: [],
+    });
+    await mountWith(noChipVideo);
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'video',
+        video_task: 'denoise',
+        selected_model_id: 'fbcnn_color',
+        fixes: ['jpeg'],
+        fix_stages: [{ fix: 'jpeg', model_id: 'fbcnn_color' }],
+      }),
+    );
+  });
+});
+
+describe('Model folder and Windows CPU GPU download notice', () => {
+  it('starts a ready launch after a model folder move finishes', async () => {
+    const current = readySnapshot();
+    current.settings.task = 'upscale';
+    current.settings.selected_model_id = current.catalog.models.find(
+      (model) => model.native_scale > 1 && !model.purposes.includes('face'),
+    )!.model_id;
+    let listener: () => void = () => {};
+    api.listenForLaunchIntent.mockImplementation(async (cb) => {
+      listener = cb;
+      return () => undefined;
+    });
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+    api.addMedia.mockImplementation(async () => {
+      current.media.push(image('photo', true));
+    });
+    api.selectMedia.mockImplementation(async (id) => {
+      current.media.forEach((item) => (item.selected = item.id === id));
+    });
+    api.chooseModelDirectory.mockResolvedValueOnce('/Volumes/SSD/models');
+    let finishMove: () => void = () => {};
+    api.setModelDirectory.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishMove = resolve;
+        }),
+    );
+    const user = await mountWith(current);
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    await user.click(screen.getByRole('button', { name: /^Model folder / }));
+    await waitFor(() => expect(api.setModelDirectory).toHaveBeenCalled());
+    api.takeLaunchIntents
+      .mockResolvedValueOnce([
+        { files: ['/private/photo.png'], preset: null, recipe: null, auto_start: true },
+      ])
+      .mockResolvedValueOnce([]);
+    listener();
+    await waitFor(() => expect(api.addMedia).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(api.startJobs).not.toHaveBeenCalled();
+    finishMove();
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1), { timeout: 3000 });
+  });
+
+  it('chooses and resets the model folder from Advanced settings', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.task = 'upscale';
+    snapshot.default_model_directory = '/Users/demo/Library/Application Support/LocalSR/models';
+    const moved = structuredClone(snapshot);
+    moved.settings.model_directory = '/Volumes/SSD/models';
+
+    const user = await mountWith(snapshot);
+    api.chooseModelDirectory.mockResolvedValueOnce('/Volumes/SSD/models');
+    api.refreshSnapshot.mockResolvedValueOnce(moved).mockResolvedValueOnce(snapshot);
+
+    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+
+    await user.click(screen.getByRole('button', { name: /^Model folder / }));
+    await waitFor(() => expect(api.setModelDirectory).toHaveBeenCalledWith('/Volumes/SSD/models'));
+    expect(await screen.findByText('/Volumes/SSD/models')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Reset to default' }));
+    await waitFor(() => expect(api.resetModelDirectory).toHaveBeenCalledTimes(1));
+    expect(
+      await screen.findByText('/Users/demo/Library/Application Support/LocalSR/models'),
+    ).toBeTruthy();
+  });
+
+  it('shows the missing-folder message once with two buttons and recovery actions in Model library', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.quality = 'quick';
+    snapshot.settings.selected_model_id = 'span_photo_x4';
+    snapshot.settings.model_directory = '/Volumes/Unplugged/models';
+    snapshot.model_directory_missing = true;
+
+    const user = await mountWith(snapshot);
+
+    // Shown once above Advanced, even after opening Advanced.
+    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    const alerts = screen.getAllByRole('alert', { name: 'Model folder unavailable' });
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].textContent?.replace(/\s+/g, ' ')).toContain(
+      'Model folder not found: /Volumes/Unplugged/models. Reconnect the drive or choose another folder.',
+    );
+    const chooseBtn = within(alerts[0]).getByRole('button', { name: 'Choose folder…' });
+    const defaultBtn = within(alerts[0]).getByRole('button', { name: 'Use default folder' });
+    expect(chooseBtn.classList.contains('button')).toBe(true);
+    expect(defaultBtn.classList.contains('button')).toBe(true);
+
+    await chooseMenuItem('view.models');
+    const dialog = await screen.findByRole('dialog', { name: 'Model library' });
+    const libraryAlert = within(dialog).getByRole('alert', { name: 'Model folder unavailable' });
+    expect(libraryAlert.textContent).toContain('Reconnect the drive');
+    await within(libraryAlert).getByRole('button', { name: 'Reset to default' }).click();
+    await waitFor(() => expect(api.resetModelDirectory).toHaveBeenCalledTimes(1));
+  });
+
+  it('shows moving progress inside the card, sets header to Moving models, and disables Upscale selected', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.quality = 'quick';
+    snapshot.settings.selected_model_id = 'span_photo_x4';
+    snapshot.default_model_directory = '/Users/demo/Library/Application Support/LocalSR/models';
+
+    let moveHandler:
+      | ((p: {
+          moved_bytes: number;
+          total_bytes: number;
+          moved_files: number;
+          total_files: number;
+          progress: number;
+          current_file: string;
+        }) => void)
+      | undefined;
+    api.listenForModelMove.mockImplementationOnce(async (cb) => {
+      moveHandler = cb as typeof moveHandler;
+      return () => undefined;
+    });
+    api.chooseModelDirectory.mockResolvedValueOnce('/Volumes/SSD/models');
+    let resolveMove: () => void = () => undefined;
+    api.setModelDirectory.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveMove = resolve;
+        }),
+    );
+
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    await user.click(screen.getByRole('button', { name: /^Model folder / }));
+
+    moveHandler?.({
+      moved_bytes: 47,
+      total_bytes: 100,
+      moved_files: 7,
+      total_files: 15,
+      progress: 46.8,
+      current_file: 'model.pth',
+    });
+
+    expect(await screen.findByText('Moving 7 of 15 files…')).toBeTruthy();
+    expect(screen.getByText('47%')).toBeTruthy();
+    expect(document.querySelector('progress.download-progress')).toBeTruthy();
+    expect(document.querySelector('.enhance-pane .pane-heading span')?.textContent).toBe(
+      'Moving models',
+    );
+    expect(
+      (screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    resolveMove();
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+  });
+
+  it('shows the dismissable GPU download notice, opens the download page, and remembers dismissal', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.gpu_download_notice =
+      'Your AMD Radeon RX 7900 XT can run LocalSR much faster with the DirectML edition.';
+
+    const user = await mountWith(snapshot);
+    const notice = screen.getByText(
+      'Your AMD Radeon RX 7900 XT can run LocalSR much faster with the DirectML edition.',
+    );
+    expect(notice).toBeTruthy();
+
+    const bar = notice.closest('.gpu-download-notice') as HTMLElement;
+    await user.click(within(bar).getByRole('button', { name: 'Open download page' }));
+    expect(api.openDownloadPage).toHaveBeenCalledTimes(1);
+
+    await user.click(within(bar).getByRole('button', { name: 'Not now' }));
+    await waitFor(() => expect(api.dismissGpuDownloadNotice).toHaveBeenCalledTimes(1));
+    expect(
+      screen.queryByText(
+        'Your AMD Radeon RX 7900 XT can run LocalSR much faster with the DirectML edition.',
+      ),
+    ).toBeNull();
+  });
+
+  it('offers Colour under Fix first and Restore for photos, with title, HelpTip, Colour label, and hides it for video', async () => {
+    const snapshot = readySnapshot([image('photo', true), video('clip')]);
+    const user = await mountWith(snapshot);
+    const prevSelect = api.selectMedia.getMockImplementation();
+    const prevSave = api.saveSettings.getMockImplementation();
+    const prevRefresh = api.refreshSnapshot.getMockImplementation();
+    onTestFinished(() => {
+      if (prevSelect) api.selectMedia.mockImplementation(prevSelect);
+      if (prevSave) api.saveSettings.mockImplementation(prevSave);
+      if (prevRefresh) api.refreshSnapshot.mockImplementation(prevRefresh);
+    });
+    api.saveSettings.mockImplementation(async (next) => {
+      snapshot.settings = structuredClone(next);
+    });
+    api.selectMedia.mockImplementation(async (id) => {
+      snapshot.media = snapshot.media.map((m) => ({ ...m, selected: m.id === id }));
+    });
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(snapshot));
+
+    // Upscale offers Colour chip with title, resolves DDColor for Quick and Best, and shows HelpTip.
+    const colourChip = screen.getByRole('button', { name: 'Colour', pressed: false });
+    expect(colourChip.getAttribute('title')).toBe('Adds colour to black-and-white photos');
+    await user.click(colourChip);
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          fixes: ['colour'],
+          fix_stages: [{ fix: 'colour', model_id: 'ddcolor_modelscope' }],
+        }),
+      ),
+    );
+    const colourTip = screen.getByRole('button', { name: 'About Colour' });
+    await user.click(colourTip);
+    expect(screen.getByRole('tooltip').textContent).toBe(
+      "Adds colour to black-and-white photos. The colours are the model's guess. A photo that already has colour is recoloured too.",
+    );
+
+    expect(screen.queryByRole('button', { name: 'Change the colour fix model' })).toBeNull();
+    expect(screen.getByText('DDColor')).toBeTruthy();
+
+    // Best uses the same model, and Restore at 1x runs it as the Restore model labelled "Colour".
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          fix_stages: [{ fix: 'colour', model_id: 'ddcolor_modelscope' }],
+        }),
+      ),
+    );
+
+    await chooseTask(user, /^Restore/);
+    expect(screen.getByRole('button', { name: 'Colour', pressed: true })).toBeTruthy();
+    const stages = screen.getByRole('list', { name: 'Stages' });
+    expect(within(stages).getByText('Colour')).toBeTruthy();
+    expect(within(stages).queryByText('Restore')).toBeNull();
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          task: 'denoise',
+          output_scale: 1,
+          selected_model_id: 'ddcolor_modelscope',
+        }),
+      ),
+    );
+
+    // Switching to a video does not offer Colour in Fix first (Upscale or Restore).
+    await user.click(screen.getByRole('button', { name: /▶\s*clip\.mp4/ }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Colour' })).toBeNull());
+    await user.click(screen.getByRole('button', { name: /^Upscale/ }));
+    expect(screen.queryByRole('button', { name: 'Colour' })).toBeNull();
+  });
+});
+
+describe('Engine manager UI and recommendation card', () => {
+  function windowsCpuSnapshot(): AppSnapshot {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const demoEngines = structuredClone(demoSnapshot().engines!);
+    snapshot.engines = demoEngines;
+    return snapshot;
+  }
+
+  it('shows the GPU engine recommendation card only after first-launch setup Continue, and remembers Not now', async () => {
+    const snapshot = windowsCpuSnapshot();
+    snapshot.settings.privacy_choice_made = false;
+
+    const user = await mountWith(snapshot);
+    expect(screen.getByRole('dialog', { name: 'Welcome to LocalSR' })).toBeTruthy();
+    expect(screen.queryByText(/can run LocalSR much faster/)).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Welcome to LocalSR' })).toBeNull(),
+    );
+
+    const cardText =
+      'Your NVIDIA GeForce RTX 4070 can run LocalSR much faster with the NVIDIA engine (4.3 GB).';
+    const card = (await screen.findByText(cardText)).closest(
+      '.engine-recommendation-card',
+    ) as HTMLElement;
+    expect(within(card).getByRole('button', { name: 'Download' })).toBeTruthy();
+    await user.click(within(card).getByRole('button', { name: 'Not now' }));
+
+    await waitFor(() => expect(api.dismissGpuDownloadNotice).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(cardText)).toBeNull();
+
+    // Still reachable via Advanced settings -> Engine -> Change…
+    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    expect(screen.getByText('Engine')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Engine' });
+    expect(within(dialog).getByText('NVIDIA CUDA')).toBeTruthy();
+    expect(within(dialog).getByText('Recommended')).toBeTruthy();
+  });
+
+  it('hides the engine recommendation card while the update notice is visible', async () => {
+    const snapshot = windowsCpuSnapshot();
+    const user = await mountWith(snapshot);
+    const cardText =
+      'Your NVIDIA GeForce RTX 4070 can run LocalSR much faster with the NVIDIA engine (4.3 GB).';
+    expect(screen.getByText(cardText)).toBeTruthy();
+
+    updateState.set({
+      configured: true,
+      managed_by_store: false,
+      channel: 'beta',
+      target: 'windows-x86_64-cpu-native',
+      stage: 'available',
+      version: '0.6.0-beta',
+      notes: '',
+      size: 250 * 1024 ** 2,
+      downloaded: 0,
+      message: '',
+      settings_recovery: false,
+    });
+    expect(await screen.findByText('LocalSR 0.6.0-beta is available')).toBeTruthy();
+    expect(screen.queryByText(cardText)).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Close update notice' }));
+    expect(await screen.findByText(cardText)).toBeTruthy();
+  });
+
+  it('shows fallback intro with HelpTip when no discrete GPU is recommended', async () => {
+    const snapshot = windowsCpuSnapshot();
+    snapshot.engines!.recommendation = { backend: 'cpu', adapter_name: null };
+
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Engine' });
+    expect(
+      within(dialog).getByText('Choose the engine LocalSR uses on this computer.'),
+    ).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'About Engine' }));
+    expect(within(dialog).getByRole('tooltip').textContent).toBe(
+      'NVIDIA CUDA is fastest on NVIDIA cards. DirectML works with AMD, Intel and NVIDIA cards on Windows. CPU works everywhere and is slowest.',
+    );
+  });
+
+  it('shows download progress, cancel, and plain-word errors on the recommendation card', async () => {
+    const snapshot = windowsCpuSnapshot();
+    let resolveInstall: () => void = () => undefined;
+    api.installEngine.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveInstall = resolve;
+        }),
+    );
+
+    const user = await mountWith(snapshot);
+    const card = screen
+      .getByText(
+        'Your NVIDIA GeForce RTX 4070 can run LocalSR much faster with the NVIDIA engine (4.3 GB).',
+      )
+      .closest('.engine-recommendation-card') as HTMLElement;
+    await user.click(within(card).getByRole('button', { name: 'Download' }));
+    expect(api.installEngine).toHaveBeenCalledWith('cuda');
+
+    engineStatusHandler?.({
+      stage: 'downloading',
+      backend: 'cuda',
+      engine_id: 'windows-x86_64-cuda-demo',
+      downloaded: 2_150_000_000,
+      total: 4_574_000_000,
+      error: null,
+    });
+    expect(await screen.findByText(/Downloading NVIDIA engine…/)).toBeTruthy();
+    expect(card.querySelector('progress')).toBeTruthy();
+
+    await user.click(within(card).getByRole('button', { name: 'Cancel' }));
+    expect(api.cancelEngineInstall).toHaveBeenCalledTimes(1);
+    engineStatusHandler?.({
+      stage: 'cancelled',
+      backend: 'cuda',
+      engine_id: 'windows-x86_64-cuda-demo',
+      downloaded: 2_150_000_000,
+      total: 4_574_000_000,
+      error: 'Engine download cancelled',
+    });
+    resolveInstall();
+    await waitFor(() =>
+      expect(within(card).getByRole('button', { name: 'Download' })).toBeTruthy(),
+    );
+
+    // Error state shows plain message and allows retry.
+    api.installEngine.mockRejectedValueOnce(
+      'network error: error sending request for url (https://example.com)',
+    );
+    await user.click(within(card).getByRole('button', { name: 'Download' }));
+    const alert = await within(card).findByRole('alert');
+    expect(alert.textContent).toBe(
+      'Could not reach the download server. Check your internet connection and try again.',
+    );
+  });
+
+  it('supports Download, Use, Remove, Cancel, error-in-row with Try again, and Import in the Engine dialog', async () => {
+    const snapshot = windowsCpuSnapshot();
+    snapshot.engines!.installed.push({
+      id: 'windows-x86_64-directml-demo',
+      backend: 'directml',
+      bundled: false,
+      active: false,
+      path: '/engines/directml',
+    });
+    snapshot.engines!.catalog[1].installed = true;
+
+    const afterUse = structuredClone(snapshot);
+    afterUse.engines!.active_backend = 'directml';
+    afterUse.engines!.installed[0].active = false;
+    afterUse.engines!.installed[1].active = true;
+    afterUse.engines!.catalog[1].active = true;
+    afterUse.engines!.catalog[2].active = false;
+
+    const afterRemove = structuredClone(snapshot);
+    afterRemove.engines!.installed = [snapshot.engines!.installed[0]];
+    afterRemove.engines!.catalog[1].installed = false;
+
+    const afterImport = structuredClone(snapshot);
+    afterImport.engines!.installed.push({
+      id: 'windows-x86_64-cuda-imported',
+      backend: 'cuda',
+      bundled: false,
+      active: true,
+      path: '/engines/cuda',
+    });
+    afterImport.engines!.active_backend = 'cuda';
+    afterImport.engines!.installed[0].active = false;
+    afterImport.engines!.catalog[0].installed = true;
+    afterImport.engines!.catalog[0].active = true;
+
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    await user.click(screen.getByRole('button', { name: 'Change…' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Engine' });
+    const list = within(dialog).getByRole('list', { name: 'Available engines' });
+    expect(within(list).getByText('NVIDIA CUDA')).toBeTruthy();
+    expect(within(list).getByText('4.3 GB · Not installed')).toBeTruthy();
+    expect(within(list).getByText('DirectML')).toBeTruthy();
+    expect(within(list).getByText('430 MB · Installed')).toBeTruthy();
+    expect(within(list).getByText('CPU')).toBeTruthy();
+    expect(within(list).getByText('317 MB · Built in')).toBeTruthy();
+
+    // Only Recommended and Active stay as badges.
+    const badges = [...list.querySelectorAll('.engine-badge')].map((el) => el.textContent);
+    expect(badges).toEqual(['Recommended', 'Active']);
+
+    // Button classes: only recommended Download is primary, Use is plain compact, Remove is compact ghost danger.
+    const cudaRowInitial = within(list).getByText('NVIDIA CUDA').closest('li') as HTMLElement;
+    const directmlRow = within(list).getByText('DirectML').closest('li') as HTMLElement;
+    const cudaDownloadBtn = within(cudaRowInitial).getByRole('button', { name: 'Download' });
+    const directmlUseBtn = within(directmlRow).getByRole('button', { name: 'Use' });
+    const directmlRemoveBtn = within(directmlRow).getByRole('button', { name: 'Remove' });
+    expect(cudaDownloadBtn.classList.contains('primary')).toBe(true);
+    expect(directmlUseBtn.classList.contains('primary')).toBe(false);
+    expect(directmlUseBtn.classList.contains('compact')).toBe(true);
+    expect(directmlRemoveBtn.classList.contains('ghost')).toBe(true);
+    expect(directmlRemoveBtn.classList.contains('danger')).toBe(true);
+
+    // Switch to DirectML
+    api.refreshSnapshot.mockResolvedValueOnce(structuredClone(afterUse));
+    await user.click(directmlUseBtn);
+    await waitFor(() => expect(api.useEngine).toHaveBeenCalledWith('directml'));
+    await waitFor(() => expect(within(directmlRow).getByText('Active')).toBeTruthy());
+
+    // Switch back to CPU, then Remove DirectML
+    api.refreshSnapshot.mockResolvedValueOnce(structuredClone(snapshot));
+    const cpuRow = within(list).getByText('CPU').closest('li') as HTMLElement;
+    await waitFor(() =>
+      expect(
+        (within(cpuRow).getByRole('button', { name: 'Use' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    await user.click(within(cpuRow).getByRole('button', { name: 'Use' }));
+    await waitFor(() => expect(api.useEngine).toHaveBeenCalledWith('cpu'));
+
+    api.refreshSnapshot.mockResolvedValueOnce(structuredClone(afterRemove));
+    await waitFor(() =>
+      expect(
+        (within(directmlRow).getByRole('button', { name: 'Remove' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    await user.click(within(directmlRow).getByRole('button', { name: 'Remove' }));
+    await waitFor(() =>
+      expect(api.removeEngine).toHaveBeenCalledWith('windows-x86_64-directml-demo'),
+    );
+
+    // Import from file: cancel file picker does nothing, then valid pick imports and activates
+    api.chooseEngineManifest.mockResolvedValueOnce(null);
+    await waitFor(() =>
+      expect(
+        (
+          within(dialog).getByRole('button', {
+            name: 'Import engine from file…',
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(false),
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Import engine from file…' }));
+    expect(api.importEngine).not.toHaveBeenCalled();
+
+    api.chooseEngineManifest.mockResolvedValueOnce('/downloads/cuda.engine-payload.json');
+    api.refreshSnapshot.mockResolvedValueOnce(structuredClone(afterImport));
+    await user.click(within(dialog).getByRole('button', { name: 'Import engine from file…' }));
+    await waitFor(() =>
+      expect(api.importEngine).toHaveBeenCalledWith('/downloads/cuda.engine-payload.json'),
+    );
+    const cudaRow = within(list).getByText('NVIDIA CUDA').closest('li') as HTMLElement;
+    await waitFor(() => expect(within(cudaRow).getByText('Active')).toBeTruthy());
+
+    // Error on remove displays inside the failing row boxed with .download-error and button reads Try again
+    api.removeEngine.mockRejectedValueOnce('Not enough space on disk');
+    api.refreshSnapshot.mockResolvedValueOnce(structuredClone(snapshot));
+    await waitFor(() =>
+      expect(
+        (within(cpuRow).getByRole('button', { name: 'Use' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    await user.click(within(cpuRow).getByRole('button', { name: 'Use' }));
+    await waitFor(() => expect(api.useEngine).toHaveBeenCalledTimes(3));
+    const updatedDirectmlRow = within(list).getByText('DirectML').closest('li') as HTMLElement;
+    await waitFor(() =>
+      expect(
+        (within(updatedDirectmlRow).getByRole('button', { name: 'Remove' }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(false),
+    );
+    await user.click(within(updatedDirectmlRow).getByRole('button', { name: 'Remove' }));
+    const removeAlert = await within(updatedDirectmlRow).findByRole('alert');
+    expect(removeAlert.classList.contains('download-error')).toBe(true);
+    expect(removeAlert.textContent).toBe('Not enough space on disk');
+    expect(within(updatedDirectmlRow).getByRole('button', { name: 'Try again' })).toBeTruthy();
+
+    // Download hides size meta during progress, supports Cancel, and renders download error inside row with Try again
+    let resolveDialogInstall: () => void = () => undefined;
+    api.installEngine.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDialogInstall = resolve;
+        }),
+    );
+    await waitFor(() =>
+      expect(
+        (within(cudaRow).getByRole('button', { name: 'Download' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    await user.click(within(cudaRow).getByRole('button', { name: 'Download' }));
+    expect(api.installEngine).toHaveBeenCalledWith('cuda');
+    engineStatusHandler?.({
+      stage: 'downloading',
+      backend: 'cuda',
+      engine_id: 'windows-x86_64-cuda-demo',
+      downloaded: 2_150_000_000,
+      total: 4_574_000_000,
+      error: null,
+    });
+    expect(await within(cudaRow).findByText(/Downloading…/)).toBeTruthy();
+    expect(within(cudaRow).queryByText('4.3 GB · Not installed')).toBeNull();
+    expect(within(cudaRow).queryByText('4.3 GB')).toBeNull();
+    expect(cudaRow.querySelector('progress')).toBeTruthy();
+    await user.click(within(cudaRow).getByRole('button', { name: 'Cancel' }));
+    expect(api.cancelEngineInstall).toHaveBeenCalledTimes(1);
+    engineStatusHandler?.({
+      stage: 'cancelled',
+      backend: 'cuda',
+      engine_id: 'windows-x86_64-cuda-demo',
+      downloaded: 2_150_000_000,
+      total: 4_574_000_000,
+      error: 'Engine download cancelled',
+    });
+    resolveDialogInstall();
+    await waitFor(() =>
+      expect(within(cudaRow).getByRole('button', { name: 'Download' })).toBeTruthy(),
+    );
+
+    // Download error renders inside cudaRow with .download-error and button reads Try again
+    api.installEngine.mockRejectedValueOnce(
+      'network error: error sending request for url (https://example.com)',
+    );
+    await user.click(within(cudaRow).getByRole('button', { name: 'Download' }));
+    const downloadAlert = await within(cudaRow).findByRole('alert');
+    expect(downloadAlert.classList.contains('download-error')).toBe(true);
+    expect(downloadAlert.textContent).toBe(
+      'Could not reach the download server. Check your internet connection and try again.',
+    );
+    expect(within(cudaRow).getByRole('button', { name: 'Try again' })).toBeTruthy();
+  });
+});
+
+describe('Linux AppImage menu prompt', () => {
+  it('offers to add LocalSR to the applications menu only after setup Continue, and remembers Not now', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.privacy_choice_made = false;
+    snapshot.linux_menu_offer = true;
+
+    const user = await mountWith(snapshot);
+    expect(screen.getByRole('dialog', { name: 'Welcome to LocalSR' })).toBeTruthy();
+    expect(screen.queryByText('Add LocalSR to your applications menu?')).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Welcome to LocalSR' })).toBeNull(),
+    );
+
+    const promptText = await screen.findByText('Add LocalSR to your applications menu?');
+    const banner = promptText.closest('.linux-menu-notice') as HTMLElement;
+    await user.click(within(banner).getByRole('button', { name: 'Not now' }));
+
+    await waitFor(() => expect(api.dismissLinuxMenuPrompt).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText('Add LocalSR to your applications menu?')).toBeNull();
+  });
+
+  it('installs the applications menu entry when accepted and supports Help menu removal', async () => {
+    let menuHandler: ((action: string) => void) | undefined;
+    api.listenForNativeMenu.mockImplementationOnce(async (handler) => {
+      menuHandler = handler;
+      return () => undefined;
+    });
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.linux_menu_offer = true;
+    api.refreshSnapshot.mockResolvedValueOnce(structuredClone(snapshot));
+
+    const user = await mountWith(snapshot);
+    const banner = screen
+      .getByText('Add LocalSR to your applications menu?')
+      .closest('.linux-menu-notice') as HTMLElement;
+    await user.click(within(banner).getByRole('button', { name: 'Add to menu' }));
+
+    await waitFor(() => expect(api.installLinuxMenu).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText('Add LocalSR to your applications menu?')).toBeNull();
+
+    menuHandler?.('help.remove-desktop-menu');
+    await waitFor(() => expect(api.uninstallLinuxMenu).toHaveBeenCalledTimes(1));
   });
 });

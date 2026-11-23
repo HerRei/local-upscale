@@ -9,6 +9,125 @@ fn the_download_page_is_the_one_the_release_publishes() {
     assert_eq!(release["download_page"], DOWNLOAD_PAGE_URL);
 }
 
+#[cfg(unix)]
+#[test]
+fn catalog_models_can_be_found_and_removed_through_a_linked_model_folder() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempfile::tempdir().unwrap();
+    let mut paths = AppPaths::under(directory.path());
+    let target = directory.path().join("other-volume-models");
+    fs::create_dir_all(&target).unwrap();
+    fs::create_dir_all(&paths.next_root).unwrap();
+    symlink(&target, &paths.model_root).unwrap();
+
+    let model = crate::catalog::bundled_catalog().unwrap().models[0].clone();
+    let checkpoint = target.join(&model.filename);
+    fs::File::create(&checkpoint)
+        .unwrap()
+        .set_len(model.size_bytes)
+        .unwrap();
+    let unrelated = target.join("my-own-file");
+    fs::write(&unrelated, b"keep").unwrap();
+
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    assert!(lock(&state.catalog).unwrap().models[0].installed);
+    assert!(state.grants.is_app_owned(&checkpoint).unwrap());
+    remove_model_checked(&state, &model.model_id).unwrap();
+    assert!(!checkpoint.exists());
+    assert_eq!(fs::read(&unrelated).unwrap(), b"keep");
+    assert!(fs::symlink_metadata(&paths.model_root)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert!(!lock(&state.catalog).unwrap().models[0].installed);
+
+    let bundle = lock(&state.catalog).unwrap().interpolation_models[0].clone();
+    let bundle_dir = target.join(&bundle.family);
+    fs::create_dir_all(&bundle_dir).unwrap();
+    for file in &bundle.files {
+        fs::File::create(bundle_dir.join(&file.filename))
+            .unwrap()
+            .set_len(file.size_bytes)
+            .unwrap();
+    }
+    state.refresh_catalog().unwrap();
+    assert!(remove_catalog_bundle(&state, &bundle.model_id).unwrap());
+    for file in &bundle.files {
+        assert!(!bundle_dir.join(&file.filename).exists());
+    }
+    assert!(unrelated.is_file());
+
+    // A direct custom root has the same catalog and grant behavior.
+    fs::File::create(&checkpoint)
+        .unwrap()
+        .set_len(model.size_bytes)
+        .unwrap();
+    paths.model_root = target.clone();
+    let state = AppState::from_paths(paths.clone()).unwrap();
+    assert!(lock(&state.catalog).unwrap().models[0].installed);
+    assert!(state.grants.is_app_owned(&unrelated).unwrap());
+    remove_model_checked(&state, &model.model_id).unwrap();
+    assert!(!checkpoint.exists());
+    assert!(unrelated.is_file());
+
+    // Configured via settings.model_directory (both direct and symlinked) behaves identically.
+    let link_setting = directory.path().join("settings-link");
+    symlink(&target, &link_setting).unwrap();
+    fs::File::create(&checkpoint)
+        .unwrap()
+        .set_len(model.size_bytes)
+        .unwrap();
+    let paths = AppPaths::under(&directory.path().join("settings-profile"));
+    fs::create_dir_all(&paths.model_root).unwrap();
+    crate::settings::save(
+        &paths,
+        &UiSettings {
+            model_directory: link_setting.to_string_lossy().into_owned(),
+            ..UiSettings::default()
+        },
+        &[],
+    )
+    .unwrap();
+    let state = AppState::from_paths(paths).unwrap();
+    assert!(lock(&state.catalog).unwrap().models[0].installed);
+    assert!(state.grants.is_app_owned(&checkpoint).unwrap());
+    remove_model_checked(&state, &model.model_id).unwrap();
+    assert!(!checkpoint.exists());
+    assert!(unrelated.is_file());
+}
+
+#[test]
+fn save_settings_keeps_host_managed_model_directory_and_gpu_notice_dismissal() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(dir.path());
+    let custom = dir.path().join("custom-models");
+    fs::create_dir_all(&custom).unwrap();
+    let initial = UiSettings {
+        model_directory: custom.to_string_lossy().into_owned(),
+        gpu_download_notice_dismissed: true,
+        ..UiSettings::default()
+    };
+    crate::settings::save(&paths, &initial, &[]).unwrap();
+
+    let state = AppState::from_paths(paths.clone()).unwrap();
+    save_settings_checked(
+        &state,
+        UiSettings {
+            model_directory: "/tmp/should-not-overwrite".into(),
+            gpu_download_notice_dismissed: false,
+            output_scale: 2,
+            ..UiSettings::default()
+        },
+    )
+    .unwrap();
+
+    let saved = lock(&state.settings).unwrap().clone();
+    assert_eq!(saved.model_directory, custom.to_string_lossy());
+    assert!(saved.gpu_download_notice_dismissed);
+    assert_eq!(saved.output_scale, 2);
+}
+
 #[test]
 fn multi_fix_requires_a_capable_engine_before_queueing() {
     let mut options = input("upscale");
@@ -2756,6 +2875,34 @@ fn video_restore_and_fix_first_build_stages_names_and_reject_temporal() {
     }))
     .unwrap();
     assert!(validate_recipe_stages(&video_restore_recipe).is_ok());
+
+    // 6) No-chip video Restore runs only video/audio options and rejects when nothing is on.
+    let mut no_chip_restore = input("video");
+    no_chip_restore.video_task = "denoise".into();
+    no_chip_restore.model_id.clear();
+    no_chip_restore.fix_stages.clear();
+    no_chip_restore.output_scale = 1;
+    no_chip_restore.deflicker = false;
+    no_chip_restore.video_interpolation = "off".into();
+    no_chip_restore.video_clean_audio = false;
+    assert!(validate_start_input(&no_chip_restore, true).is_err());
+
+    no_chip_restore.deflicker = true;
+    assert!(validate_start_input(&no_chip_restore, true).is_ok());
+    let no_chip_selection = resolve_model_selection(&state, &no_chip_restore).unwrap();
+    let no_chip_msg = build_job_message(
+        "vid-restore-deflicker",
+        &video_media(),
+        Path::new("/output/clip_video_restored.mp4"),
+        Path::new("/app-owned/work"),
+        &no_chip_restore,
+        &no_chip_selection,
+    )
+    .unwrap();
+    assert_eq!(no_chip_msg["data"]["model_path"], "");
+    assert_eq!(no_chip_msg["data"]["output_scale"], 1);
+    assert_eq!(no_chip_msg["data"]["stages"], serde_json::json!([]));
+    assert_eq!(no_chip_msg["data"]["deflicker"], true);
 }
 
 #[test]
@@ -3552,4 +3699,178 @@ fn the_target_of_a_last_output_that_became_a_link_is_not_a_result() {
         .unwrap()
         .is_empty());
     assert!(state.grants.check_media_input(&private).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn custom_edit_model_requires_grants_checks_sd_cli_and_persists_paths_in_place() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(directory.path()).unwrap();
+    let paths = AppPaths::under(&root.join("app"));
+    let state = AppState::from_paths(paths.clone()).unwrap();
+
+    let diff = root.join("custom-diff.gguf");
+    let te = root.join("custom-te.gguf");
+    let vae = root.join("custom-vae.safetensors");
+    for file in [&diff, &te, &vae] {
+        fs::write(file, b"gguf").unwrap();
+    }
+    let sd_cli = root.join("sd-cli");
+    fs::write(
+        &sd_cli,
+        "#!/bin/sh\necho '[INFO] Version: Flux.2 klein '\necho '[VERBOSE] model metadata validated'\n",
+    )
+    .unwrap();
+    let mut perms = fs::metadata(&sd_cli).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&sd_cli, perms).unwrap();
+    *lock(&state.edit_runtime).unwrap() = sd_cli.to_string_lossy().into_owned();
+
+    let custom = crate::types::CustomEditModel {
+        family: "flux2-klein".into(),
+        diffusion_path: diff.to_string_lossy().into_owned(),
+        text_encoder_path: te.to_string_lossy().into_owned(),
+        vision_path: String::new(),
+        vae_path: vae.to_string_lossy().into_owned(),
+    };
+
+    // Un-granted files cannot be saved or persisted.
+    assert!(save_custom_edit_model_checked(&state, custom.clone(), "").is_err());
+
+    state.grants.grant_model_file(&diff);
+    state.grants.grant_model_file(&te);
+    state.grants.grant_model_file(&vae);
+    save_custom_edit_model_checked(&state, custom.clone(), "").unwrap();
+
+    let snap = state.snapshot().unwrap();
+    assert_eq!(snap.settings.edit_model_id, "__custom__");
+    assert_eq!(snap.settings.custom_edit_model, custom);
+    assert_eq!(
+        snap.edit.custom_model.as_ref().unwrap().family,
+        "flux2-klein"
+    );
+
+    // Persisted custom edit files remain granted after reload and can queue an edit job.
+    let reloaded = AppState::from_paths(paths).unwrap();
+    *lock(&reloaded.edit_runtime).unwrap() = sd_cli.to_string_lossy().into_owned();
+    lock(&reloaded.runtime).unwrap().worker = "ready".into();
+    *lock(&reloaded.engine).unwrap() = Some(crate::types::EngineInfo {
+        protocol_version: 1,
+        minimum_protocol_version: 1,
+        engine_id: "test".into(),
+        engine_version: "1".into(),
+        features: vec!["image_edit".into()],
+        model_formats: vec![],
+        video_engines: vec![],
+    });
+    lock(&reloaded.capabilities)
+        .unwrap()
+        .devices
+        .push(crate::types::DeviceInfo {
+            id: "mps".into(),
+            device_type: "mps".into(),
+            name: "Apple GPU".into(),
+            ..Default::default()
+        });
+    let photo = root.join("photo.png");
+    fs::write(&photo, b"png").unwrap();
+    reloaded.grants.grant_media_file(&photo);
+    {
+        let db = lock(&reloaded.database).unwrap();
+        db.insert_media("m1", photo.to_str().unwrap(), "photo.png", "image")
+            .unwrap();
+        db.update_media_probe(
+            photo.to_str().unwrap(),
+            "image",
+            512,
+            512,
+            1,
+            0.0,
+            0.0,
+            "",
+            "",
+            "",
+            false,
+        )
+        .unwrap();
+    }
+    start_edit_checked(
+        &reloaded,
+        crate::editing::StartEditInput {
+            media_id: "m1".into(),
+            model_id: "__custom__".into(),
+            prompt: "Add snow".into(),
+            runtime_path: String::new(),
+            device: "mps".into(),
+            max_dimension: 512,
+            steps: 4,
+            seed: 42,
+            accepted_terms: false,
+            output_directory: String::new(),
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn colour_fix_is_resolved_for_photos_and_rejected_for_video() {
+    use crate::types::FixStageSelection;
+
+    let directory = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(directory.path());
+    fs::create_dir_all(&paths.next_root).unwrap();
+    fs::create_dir_all(&paths.model_root).unwrap();
+    let state = AppState::from_paths(paths).unwrap();
+    {
+        let mut catalog = lock(&state.catalog).unwrap();
+        for model in &mut catalog.models {
+            model.installed = true;
+            model.installed_path = Some(format!("/models/{}", model.filename));
+        }
+    }
+
+    let mut photo_upscale = input("upscale");
+    photo_upscale.model_id = "span_photo_x4".into();
+    photo_upscale.fix_stages = vec![FixStageSelection {
+        fix: "colour".into(),
+        model_id: "ddcolor_modelscope".into(),
+    }];
+    match resolve_model_selection(&state, &photo_upscale).unwrap() {
+        ModelSelection::Image { preprocess, .. } => {
+            assert_eq!(preprocess.len(), 1);
+            assert_eq!(preprocess[0].fix, "colour");
+            assert_eq!(preprocess[0].model_id, "ddcolor_modelscope");
+        }
+        _ => panic!("expected photo upscale plan with colour fix"),
+    }
+
+    let mut photo_restore = input("denoise");
+    photo_restore.output_scale = 1;
+    photo_restore.model_id = "ddcolor_modelscope".into();
+    photo_restore.fix_stages = vec![FixStageSelection {
+        fix: "colour".into(),
+        model_id: "ddcolor_modelscope".into(),
+    }];
+    match resolve_model_selection(&state, &photo_restore).unwrap() {
+        ModelSelection::Image {
+            model_id,
+            preprocess,
+            ..
+        } => {
+            assert_eq!(model_id, "ddcolor_modelscope");
+            assert!(preprocess.is_empty());
+        }
+        _ => panic!("expected photo restore plan with ddcolor"),
+    }
+
+    let mut video_job = input("video");
+    video_job.model_id = "span_photo_x4".into();
+    video_job.video_model_id = "frame_by_frame".into();
+    video_job.fix_stages = vec![FixStageSelection {
+        fix: "colour".into(),
+        model_id: "ddcolor_modelscope".into(),
+    }];
+    assert!(resolve_model_selection(&state, &video_job).is_err());
 }

@@ -242,11 +242,23 @@ def test_engine_payload_cli_names_the_payload_for_its_edition(tmp_path: Path) ->
     output = tmp_path / "out"
     output.mkdir()
     manifest = engine_payload.prepare_for_target(
-        "windows-x86_64-directml", output, engine=engine, release_version="1.2.3-beta"
+        "windows-x86_64-directml",
+        output,
+        engine=engine,
+        release_version="1.2.3-beta",
+        commit=COMMIT,
     )
     assert manifest.name == "LocalSR-v1.2.3-beta-Windows-DirectML-x86_64.engine-payload.json"
     data = json.loads(manifest.read_text())
+    assert data["schema_version"] == 2
     assert data["backend"] == "DIRECTML"
+    assert data["version"] == "1.2.3-beta"
+    assert data["os"] == "windows"
+    assert data["arch"] == "x86_64"
+    assert data["protocol_version"] == release_targets.protocol_version()
+    assert data["engine_id"] == release_targets.engine_id(
+        release_targets.target("windows-x86_64-directml"), COMMIT
+    )
     assert [part["filename"] for part in data["parts"]] == [
         "LocalSR-v1.2.3-beta-Windows-DirectML-x86_64.engine.tar.gz.part-0001"
     ]
@@ -258,19 +270,32 @@ def test_engine_payload_cli_reuses_the_cuda_installer_payload_only_when_it_match
 ) -> None:
     built = tmp_path / "built"
     prefix = "LocalSR-v1.2.3-beta-Windows-CUDA-x86_64.engine.tar.gz"
-    source = engine_payload.prepare(fake_engine(tmp_path, "localsr-worker.exe"), built, prefix)
+    cuda_id = release_targets.engine_id(release_targets.target("windows-x86_64-cuda"), COMMIT)
+    source = engine_payload.prepare(
+        fake_engine(tmp_path, "localsr-worker.exe"),
+        built,
+        prefix,
+        version="1.2.3-beta",
+        os_name="windows",
+        arch="x86_64",
+        engine_id=cuda_id,
+    )
     output = tmp_path / "out"
     output.mkdir()
     for part in built.glob("*.part-*"):
         (output / part.name).write_bytes(part.read_bytes())
     manifest = engine_payload.prepare_for_target(
-        "windows-x86_64-cuda", output, reuse=source, release_version="1.2.3-beta"
+        "windows-x86_64-cuda", output, reuse=source, release_version="1.2.3-beta", commit=COMMIT
     )
     assert manifest.read_bytes() == source.read_bytes()
+    with pytest.raises(ValueError, match="invalid CUDA engine payload manifest"):
+        engine_payload.prepare_for_target(
+            "windows-x86_64-cuda", output, reuse=source, release_version="9.9.9-beta", commit=COMMIT
+        )
     next(output.glob("*.part-0001")).write_bytes(b"truncated")
     with pytest.raises(ValueError, match="does not match"):
         engine_payload.prepare_for_target(
-            "windows-x86_64-cuda", output, reuse=source, release_version="1.2.3-beta"
+            "windows-x86_64-cuda", output, reuse=source, release_version="1.2.3-beta", commit=COMMIT
         )
 
 
@@ -417,7 +442,11 @@ def platform_downloads(tmp_path: Path, release_version: str = "1.2.3-beta") -> P
         (directory / f"{name}.sha256").write_text(f"{digest}  {name}\n")
         engine = fake_engine(tmp_path / target["id"], files["worker"])
         manifest = engine_payload.prepare_for_target(
-            target["id"], directory, engine=engine, release_version=release_version
+            target["id"],
+            directory,
+            engine=engine,
+            release_version=release_version,
+            commit=COMMIT,
         )
         smoke = update_smoke(target["id"], release_version)
         if target.get("external_engine"):
@@ -435,12 +464,17 @@ def mac_feed(tmp_path: Path, release_version: str = "1.2.3-beta") -> tuple[Path,
     stem = f"LocalSR-v{release_version}-macOS-arm64"
     archive = mac / f"{stem}.app.tar.gz"
     archive.write_bytes(b"mac app archive" * 32)
+    identity = release_targets.engine_id(release_targets.target("macos-arm64-mps"), COMMIT)
     written = engine_payload.prepare(
         fake_engine(tmp_path / "mac-engine", "localsr-worker"),
         mac,
         f"{stem}.engine.tar.gz",
         backend="MPS",
         worker="localsr-worker",
+        version=release_version,
+        os_name="macos",
+        arch="aarch64",
+        engine_id=identity,
     )
     manifest = written.rename(mac / f"{stem}.engine-payload.json")
     for path in mac.iterdir():
@@ -455,7 +489,6 @@ def mac_feed(tmp_path: Path, release_version: str = "1.2.3-beta") -> tuple[Path,
             "signature": path.with_name(path.name + ".sig").read_text(),
         }
 
-    identity = release_targets.engine_id(release_targets.target("macos-arm64-mps"), COMMIT)
     payload = json.loads(manifest.read_text())
     feed = {
         "version": release_version,
@@ -886,9 +919,14 @@ def test_round2_signer_rejects_uninstallable_archives(tmp_path: Path, failure: s
     name = "engine.part-0001"
     (tmp_path / name).write_bytes(data)
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "format": "tar.gz.parts",
         "backend": "CPU",
+        "version": "1.2.3-beta",
+        "os": "linux",
+        "arch": "x86_64",
+        "protocol_version": 1,
+        "engine_id": "linux-x86_64-cpu-test",
         "file_count": len(names),
         "unpacked_bytes": 3 * len(names),
         "parts": [
@@ -1156,6 +1194,48 @@ def test_the_updater_fixture_holds_the_statements_this_signer_writes() -> None:
         fixture["statement_v2_signature"],
         [base64.b64decode(fixture["statement_v2"])],
     )
+    schema2_fixture = json.loads(
+        (ROOT / "desktop/src-tauri/tests/fixtures/engine-schema2.json").read_text()
+    )
+    assert schema2_fixture["public_key"] == TEST_KEY.public_key
+    for case, entry in schema2_fixture["cases"].items():
+        manifest = entry["manifest"].encode()
+        assert verify_prepared.minisign_verify(
+            TEST_KEY.public_key, entry["manifest_signature"], [manifest]
+        ), case
+
+
+def test_release_tools_reject_schema_1_or_mismatched_schema_2_engine_manifests(
+    tmp_path: Path,
+) -> None:
+    downloads = platform_downloads(tmp_path)
+    feed_path = tmp_path / "beta.json"
+    mac, _ = mac_feed(tmp_path)
+    update_signing.add_platforms(
+        downloads, feed_path, COMMIT, release_version="1.2.3-beta", sign=fake_sign
+    )
+    target = release_targets.target("linux-x86_64-rocm")
+    files = release_targets.update_files(target, "1.2.3-beta")
+    manifest_path = downloads / "linux-x86_64-rocm" / files["engine_manifest"]
+    manifest = json.loads(manifest_path.read_text())
+
+    # verify_prepared_release refuses a manifest with mismatched schema 2 fields.
+    bad = manifest | {"os": "windows"}
+    manifest_path.write_text(json.dumps(bad))
+    with pytest.raises(ValueError, match="schema 2 metadata"):
+        verify_feed(feed_path, [downloads, mac])
+
+    # beta_update_signing refuses a schema 1 engine manifest.
+    schema1 = {
+        k: v
+        for k, v in manifest.items()
+        if k not in {"version", "os", "arch", "protocol_version", "engine_id"}
+    } | {"schema_version": 1}
+    manifest_path.write_text(json.dumps(schema1))
+    with pytest.raises(ValueError, match="invalid ROCM engine payload manifest"):
+        update_signing.add_platforms(
+            downloads, feed_path, COMMIT, release_version="1.2.3-beta", sign=fake_sign
+        )
 
 
 @pytest.mark.parametrize("target_id", ["linux-x86_64-cpu", "macos-arm64-mps"])
@@ -1411,9 +1491,14 @@ def test_round3_engine_parts_are_numbered_from_one_and_names_are_canonical(
     name = "engine.part-0000" if failure == "first-part-is-zero" else "engine.part-0001"
     (tmp_path / name).write_bytes(data)
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "format": "tar.gz.parts",
         "backend": "CPU",
+        "version": "1.2.3-beta",
+        "os": "linux",
+        "arch": "x86_64",
+        "protocol_version": 1,
+        "engine_id": "linux-x86_64-cpu-test",
         "file_count": 2,
         "unpacked_bytes": 6,
         "parts": [

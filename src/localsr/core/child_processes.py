@@ -109,7 +109,13 @@ def track(process: subprocess.Popen) -> subprocess.Popen:
 
 
 def start(command: list[str], **options) -> subprocess.Popen:
-    """Start a program that is stopped again when this process ends."""
+    """Start a program that is stopped again when this process ends.
+
+    The worker keeps reading its own stdin from the host. On Windows a child that
+    inherits that pipe blocks at startup while the read is pending (#160), so a
+    child gets no stdin unless the caller passes one.
+    """
+    options.setdefault("stdin", subprocess.DEVNULL)
     process = subprocess.Popen(command, **options)
     return track(process)
 

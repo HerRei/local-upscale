@@ -1708,6 +1708,10 @@ class WorkerServer:
         preprocess_stages: list[VideoFixStage] = []
         for stage in pipeline.preprocess_stages:
             stage_info = self.model_adapter.inspect(stage.model_path)
+            if stage.fix == "colour" or getattr(stage_info, "architecture", "") == "DDColor":
+                raise ValueError(
+                    "Photo colorization is only available for still images, not video."
+                )
             if int(getattr(stage_info, "scale", 0)) != 1:
                 raise ValueError(
                     "A preprocessing restoration checkpoint must have native scale 1×."
@@ -1735,6 +1739,10 @@ class WorkerServer:
         else:
             model_path = str(data["model_path"])
             info = self.model_adapter.inspect(model_path)
+            if getattr(info, "architecture", "") == "DDColor" or (pipeline.primary.fix == "colour"):
+                raise ValueError(
+                    "Photo colorization is only available for still images, not video."
+                )
             if data.get("output_scale") == 1 and int(getattr(info, "scale", 1)) > 1:
                 face_model_path = None
                 primary_time_factor = 0.0
@@ -1952,6 +1960,8 @@ class WorkerServer:
             VideoJobCompleted(
                 job_id=job_id,
                 output_path=result.output_path,
+                partial=result.partial,
+                kept_seconds=result.kept_seconds,
                 frames_processed=result.frames_processed,
                 elapsed_seconds=result.elapsed_seconds,
                 inference_seconds=result.inference_seconds,

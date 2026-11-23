@@ -327,19 +327,30 @@ class InferenceEngine:
         calls this internally.
         """
         onnx_route = _onnx_route(device_str)
-        if onnx_route is not None and onnx_route.kind == "NPU":
+        architecture = str(getattr(model_info, "architecture", ""))
+        if onnx_route is not None and (architecture == "DDColor" or onnx_route.kind == "NPU"):
             from .onnx_runtime import NPU_ARCHITECTURES
 
-            architecture = str(getattr(model_info, "architecture", ""))
-            if architecture not in NPU_ARCHITECTURES:
+            if architecture == "DDColor" or architecture not in NPU_ARCHITECTURES:
                 if self.status_callback is not None:
                     self.status_callback(
                         f"{architecture} does not run on {onnx_route.label}, so it runs on the CPU."
                     )
                 onnx_route = None
                 device_str = "cpu"
-                # The CPU runs FP32 whatever the NPU route was asked for.
+                # The CPU runs FP32 whatever the accelerator route was asked for.
                 precision_str = "fp32"
+        if (
+            architecture == "DDColor"
+            and onnx_route is None
+            and device_str.startswith(("directml:", "openvino:", "qnn"))
+        ):
+            if self.status_callback is not None:
+                self.status_callback(
+                    f"{architecture} does not run on {device_str}, so it runs on the CPU."
+                )
+            device_str = "cpu"
+            precision_str = "fp32"
         # ONNX owns the GPU tensors. PyTorch stages tiles and validates returned
         # pixels on CPU; the selected execution backend is tracked separately.
         device = (
@@ -354,7 +365,11 @@ class InferenceEngine:
         if onnx_route is None and device.type == "mps" and self.neural_engine_enabled:
             from .coreml_runtime import coreml_units_for
 
-            coreml_units = coreml_units_for(str(getattr(model_info, "architecture", "")))
+            coreml_units = coreml_units_for(architecture)
+            if not coreml_units and architecture == "DDColor" and self.status_callback is not None:
+                self.status_callback(
+                    "DDColor does not run on the Neural Engine, so it runs on the Apple GPU."
+                )
         backend_id = f"{device_str}+coreml" if coreml_units else device_str
 
         # Apply the memory cap once per device, shared by its cached models, and again
@@ -907,6 +922,50 @@ class InferenceEngine:
 
         raise RuntimeError("Failed to process frame.")
 
+    def _process_ddcolor_image(
+        self,
+        img_tensor: torch.Tensor,
+        model_info,
+        model,
+        device: torch.device,
+        cancel_event: threading.Event,
+        progress_callback: Callable[[int, int, int], None],
+        *,
+        safe_memory: bool = True,
+        tile_callback: Callable[..., None] | None = None,
+        temporary_directory: str | None = None,
+    ) -> OutputWriter:
+        from localsr.image_models.ddcolor import colorize_tensor
+
+        _, h, w = img_tensor.shape
+        full_tile = make_tile(w, h, 0, 0, w, h, 0, 1)
+        active_size = max(w, h)
+        writer = OutputWriter(
+            (model_info.out_channels, h, w),
+            dtype=np.uint8,
+            temporary_directory=temporary_directory,
+        )
+        try:
+            if tile_callback is not None:
+                tile_callback("started", full_tile, None, 0, 1, w, h, active_size)
+            result = colorize_tensor(model, img_tensor, device=device, cancel_event=cancel_event)
+            if result.already_colorful and result.note:
+                self.add_note(result.note)
+                if self.status_callback is not None:
+                    self.status_callback(result.note)
+            writer.mmap[:] = result.rgb
+            writer.mmap.flush()
+            if tile_callback is not None:
+                tile_callback("completed", full_tile, result.rgb, 1, 1, w, h, active_size)
+            progress_callback(1, 1, active_size)
+            if safe_memory:
+                _clear_device_cache(device)
+                gc.collect()
+            return writer
+        except Exception:
+            writer.cleanup()
+            raise
+
     def process_image(
         self,
         img_data: dict,
@@ -930,6 +989,18 @@ class InferenceEngine:
 
         img_tensor = img_data["tensor"]
         _, h, w = img_tensor.shape
+        if getattr(model_info, "architecture", "") == "DDColor":
+            return self._process_ddcolor_image(
+                img_tensor,
+                model_info,
+                model,
+                device,
+                cancel_event,
+                progress_callback,
+                safe_memory=safe_memory,
+                tile_callback=tile_callback,
+                temporary_directory=temporary_directory,
+            )
         scale = model_info.scale
 
         current_tile_size = tile_size

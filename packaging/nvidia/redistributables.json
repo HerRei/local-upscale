@@ -127,6 +127,13 @@
         "^libnvshmem",
         "^nvshmem_"
       ]
+    },
+    {
+      "component": "cuda-bindings NVVM Python modules",
+      "basis": "Apache-2.0: cuda-bindings 13.5.0 ships its own LICENSE (Apache License 2.0, Copyright NVIDIA) in cuda_bindings-13.5.0.dist-info/licenses, checked 2026-11-22. These are the Python binding modules nvvm.cpython-*.so, not NVIDIA's libnvvm, which is not bundled.",
+      "patterns": [
+        "^nvvm\\.cpython-[0-9]+-x86_64-linux-gnu\\.so$"
+      ]
     }
   ],
   "forbidden": [

@@ -39,6 +39,7 @@ from .media_codecs import (
     validate_output,
 )
 from .output_publish import OutputExistsError, owned_temporary, publish_output
+from .pixel_budget import MAX_INPUT_PIXELS, require_pixel_budget
 from .video_audio import add_opus_stream, needs_audio_transcode, opus_packets
 from .video_normalization import display_frames, square_pixel_width
 
@@ -139,12 +140,19 @@ class VideoStageError(RuntimeError):
 
 @contextmanager
 def _video_decoder(path: str, *, frame_threads: bool = False, thread_count: int = 0):
-    with av.open(path) as container:
+    with av.open(
+        path, options={"protocol_whitelist": "file", "max_pixels": str(MAX_INPUT_PIXELS)}
+    ) as container:
         stream = next((s for s in container.streams if s.type == "video"), None)
         if stream is None:
             raise ValueError(f"No video stream found in {path}")
         if stream.codec_context is None:
             raise UndecodableVideoError(UNDECODABLE_VIDEO_MESSAGE)
+        require_pixel_budget(int(stream.width or 0), int(stream.height or 0))
+        stream.codec_context.options = {
+            **stream.codec_context.options,
+            "max_pixels": str(MAX_INPUT_PIXELS),
+        }
         stream.codec_context.thread_count = max(0, min(8, thread_count))
         if frame_threads:
             try:
@@ -216,7 +224,9 @@ def _audio_compatibility_warning(
 
 def _source_decodable(path: str) -> bool:
     try:
-        container = av.open(path)
+        container = av.open(
+            path, options={"protocol_whitelist": "file", "max_pixels": str(MAX_INPUT_PIXELS)}
+        )
     except av.FFmpegError:
         if Path(path).is_file():
             return False
@@ -239,6 +249,8 @@ def probe_video(
 def _frame_rgb(stream, frame: av.VideoFrame, hdr_mode: str) -> np.ndarray:
     turns, flipped = _display_transform(frame)
     width = square_pixel_width(stream, frame.width)
+    require_pixel_budget(frame.width, frame.height)
+    require_pixel_budget(width, frame.height)
     if width != frame.width:
         frame = frame.reformat(width=width, height=frame.height, interpolation="BICUBIC")
     transfer = int(getattr(frame, "color_trc", stream.codec_context.color_trc))
@@ -282,7 +294,9 @@ def _source_timing(
     path: str, converter: str = "your FFmpeg"
 ) -> tuple[float, int, float, str, bool]:
     """Timing from the container and stream headers, which need no decoder."""
-    with av.open(path) as container:
+    with av.open(
+        path, options={"protocol_whitelist": "file", "max_pixels": str(MAX_INPUT_PIXELS)}
+    ) as container:
         stream = next((s for s in container.streams if s.type == "video"), None)
         if stream is None:
             raise ValueError(f"No video stream found in {path}")
@@ -447,36 +461,92 @@ def _system_stream_export(
     audio_source: str | None,
     cancel_event: threading.Event | None,
     temporary_directory: str | None,
+    keep_partial: bool = False,
+    stage_callback=None,
+    subtitle_source: str | None = None,
+    reencode_audio: bool = False,
+    warning_callback=None,
 ) -> str:
     """Pipe restored frames to the system encoder while the next ones are restored."""
     final = _owned_output_temporary(destination, "external", temporary_directory)
+    stopped = False
+    last_end = 0.0
+    origin = None
+
+    def available_frames():
+        nonlocal stopped, last_end, origin
+        try:
+            for frame in frames:
+                if not keep_partial and cancel_event is not None and cancel_event.is_set():
+                    raise InterruptedError("video job cancelled")
+                if origin is None:
+                    origin = frame.timestamp
+                last_end = float(frame.timestamp - origin + frame.duration)
+                yield frame
+        except InterruptedError:
+            if not keep_partial or origin is None:
+                raise
+            stopped = True
+            if stage_callback is not None:
+                stage_callback("partial_finalizing")
+
+    muxed = _owned_output_temporary(destination, "mux", temporary_directory)
     try:
         with tempfile.TemporaryDirectory(
             prefix="localsr-media-", dir=destination.parent
         ) as scratch:
             wav = (
                 system.source_audio(Path(audio_source), Path(scratch) / "audio.wav", cancel_event)
-                if audio_source
+                if audio_source and not keep_partial
                 else None
             )
             system.encode_frames(
-                frames,
+                available_frames() if keep_partial else frames,
                 final,
                 video_codec=video_codec,
                 container=container_format,
                 crf=crf,
                 fps=fps,
                 audio=wav,
-                cancel_event=cancel_event,
+                cancel_event=None if keep_partial else cancel_event,
             )
-        publish_output(final, destination, cancel_event)
+        if stopped:
+            seconds = int(last_end)
+            destination = destination.with_name(
+                f"{destination.stem}_partial_{seconds // 60}m{seconds % 60:02d}s{destination.suffix}"
+            )
+        final_cancel_event = None if stopped else cancel_event
+        source = Path(audio_source) if audio_source else None
+        subtitles = Path(subtitle_source) if subtitle_source else None
+        if keep_partial and (
+            (source is not None and source.is_file())
+            or (subtitles is not None and subtitles.is_file())
+        ):
+            copied = _remux_source_streams(
+                final,
+                source if source is not None and source.is_file() else subtitles,
+                muxed,
+                container_format=container_format,
+                subtitle_source=subtitles if subtitles != source else None,
+                reencode_audio=reencode_audio,
+                warning_callback=warning_callback,
+                source_start_seconds=float(origin or 0),
+                force_audio_transcode=stopped,
+                cut_packet_durations=stopped,
+                cancel_event=final_cancel_event,
+            )
+            if copied:
+                final, muxed = muxed, final
+        publish_output(final, destination, final_cancel_event)
         return str(destination)
     finally:
         try:
             final.unlink()
         except FileNotFoundError:
             pass
+        muxed.unlink(missing_ok=True)
         _remove_system_sidecars(final)
+        _remove_system_sidecars(muxed)
 
 
 def _remove_system_sidecars(final: Path) -> None:
@@ -540,8 +610,14 @@ def _external_export(
                 audio_source=master_options.get("audio_source"),
                 cancel_event=cancel_event,
                 temporary_directory=temporary_directory,
+                keep_partial=master_options.get("keep_partial", False),
+                stage_callback=stage_callback,
+                subtitle_source=master_options.get("subtitle_source"),
+                reencode_audio=master_options.get("reencode_audio", False),
+                warning_callback=master_options.get("warning_callback"),
             )
     master_options.pop("stream_to_system", None)
+    master_options.pop("keep_partial", None)
     if external_ffmpeg is None:
         raise VideoStageError(
             "encode",
@@ -673,6 +749,7 @@ def _encode_video(
     stage_callback: Callable[[str], None] | None = None,
     stream_to_system: bool = False,
     replace_existing: bool = False,
+    keep_partial: bool = False,
 ) -> str:
     """Encode an iterable of (rgb_uint8_HxWx3) frames into a video file.
 
@@ -715,6 +792,7 @@ def _encode_video(
             sdr_bt709=sdr_bt709,
             encoder_threads=encoder_threads,
             stream_to_system=stream_to_system and preserve_timing,
+            keep_partial=keep_partial,
         )
     spec = encode_spec(
         video_codec, crf=crf, hdr=bool(hdr_format), threads=encoder_threads, fast=fast
@@ -763,6 +841,7 @@ def _encode_video(
         frame_count = 0
         durations = {}
         previous_pts = None
+        last_end = Fraction(0)
 
         def mux(packet):
             duration = durations.pop(packet.pts * packet.time_base, None)
@@ -772,9 +851,20 @@ def _encode_video(
 
         from itertools import chain
 
-        for item in chain((first,), iterator):
-            if cancel_event is not None and cancel_event.is_set():
-                raise InterruptedError("video job cancelled")
+        stopped = False
+
+        def available_frames():
+            nonlocal stopped
+            try:
+                for item in chain((first,), iterator):
+                    if not keep_partial and cancel_event is not None and cancel_event.is_set():
+                        stopped = True
+                        return
+                    yield item
+            except InterruptedError:
+                stopped = True
+
+        for item in available_frames():
             rgb = item.rgb if isinstance(item, TimedVideoFrame) else item
             if hdr_format:
                 if rgb.dtype != np.float32 or not np.isfinite(rgb).all():
@@ -815,19 +905,32 @@ def _encode_video(
                 raise ValueError("Output presentation timestamps must increase.")
             previous_pts = frame.pts
             durations[frame.pts * time_base] = item.duration if timed else time_base
+            last_end = frame.pts * time_base + durations[frame.pts * time_base]
             for packet in stream.encode(frame):
                 mux(packet)
             frame_count += 1
+        if stopped and (not keep_partial or not frame_count):
+            raise InterruptedError("video job cancelled")
+        if stopped and stage_callback is not None:
+            stage_callback("partial_finalizing")
         for packet in stream.encode():
             mux(packet)
         output_container.close()
         output_container = None
 
+        if stopped:
+            duration = float(last_end)
+            seconds = int(duration)
+            destination = destination.with_name(
+                f"{destination.stem}_partial_{seconds // 60}m{seconds % 60:02d}s{destination.suffix}"
+            )
+        final_cancel_event = None if stopped else cancel_event
+
         def publish(temporary: Path) -> None:
             if replace_existing:
                 os.replace(temporary, destination)
             else:
-                publish_output(temporary, destination, cancel_event)
+                publish_output(temporary, destination, final_cancel_event)
 
         source = Path(audio_source) if audio_source else None
         sub_source = Path(subtitle_source) if subtitle_source else None
@@ -843,14 +946,16 @@ def _encode_video(
                     sub_source if sub_source is not None and sub_source != source else None
                 ),
                 reencode_audio=reencode_audio,
+                force_audio_transcode=stopped,
+                cut_packet_durations=stopped,
                 source_start_seconds=float(source_start_seconds),
-                cancel_event=cancel_event,
+                cancel_event=final_cancel_event,
                 warning_callback=warning_callback,
             )
             publish(mux_temporary if copied else encoded_temporary)
         else:
             publish(encoded_temporary)
-        return destination_path
+        return str(destination)
     except (InterruptedError, VideoStageError, OutputExistsError):
         raise
     except BaseException as error:
@@ -897,7 +1002,9 @@ def _shift_packet_to_trimmed_timeline(packet: av.Packet, start_seconds: float) -
         packet.dts = max(0, packet.dts - offset)
 
 
-def _next_trimmed_packet(iterator, start_seconds: float, end_seconds: float, cancel_event=None):
+def _next_trimmed_packet(
+    iterator, start_seconds: float, end_seconds: float, cancel_event=None, cut_durations=False
+):
     """Return the next packet overlapping the selected source time range."""
     for packet in iterator:
         if cancel_event is not None and cancel_event.is_set():
@@ -910,6 +1017,9 @@ def _next_trimmed_packet(iterator, start_seconds: float, end_seconds: float, can
             continue
         if packet_start >= end_seconds:
             continue
+        if cut_durations and packet.time_base and packet.duration:
+            clipped = min(packet_end, end_seconds) - max(packet_start, start_seconds)
+            packet.duration = max(0, round(clipped / float(packet.time_base)))
         _shift_packet_to_trimmed_timeline(packet, start_seconds)
         return packet
     return None
@@ -923,6 +1033,8 @@ def _remux_source_streams(
     container_format: str,
     subtitle_source: Path | None = None,
     reencode_audio: bool = False,
+    force_audio_transcode: bool = False,
+    cut_packet_durations: bool = False,
     source_start_seconds: float = 0.0,
     cancel_event: threading.Event | None = None,
     warning_callback=None,
@@ -933,10 +1045,12 @@ def _remux_source_streams(
     subtitle_container = None
     output_container = None
     try:
-        video_container = av.open(str(video_path))
-        source_container = av.open(str(source_path))
+        video_container = av.open(str(video_path), options={"protocol_whitelist": "file"})
+        source_container = av.open(str(source_path), options={"protocol_whitelist": "file"})
         if subtitle_source is not None and subtitle_source.is_file():
-            subtitle_container = av.open(str(subtitle_source))
+            subtitle_container = av.open(
+                str(subtitle_source), options={"protocol_whitelist": "file"}
+            )
         video_in = next(
             (stream for stream in video_container.streams if stream.type == "video"), None
         )
@@ -973,8 +1087,10 @@ def _remux_source_streams(
         subtitle_outputs: dict[int, object] = {}
         converted_audio: dict[int, object] = {}
         for stream in audio_inputs:
-            if needs_audio_transcode(stream, container_format) or (
-                reencode_audio and normalize_container(container_format) != "mkv"
+            if (
+                force_audio_transcode
+                or needs_audio_transcode(stream, container_format)
+                or (reencode_audio and normalize_container(container_format) != "mkv")
             ):
                 converted_audio[stream.index] = add_opus_stream(output_container, stream)
                 continue
@@ -1045,7 +1161,11 @@ def _remux_source_streams(
             iterator = container.demux(*streams)
             while (
                 packet := _next_trimmed_packet(
-                    iterator, source_start_seconds, source_end_seconds, cancel_event
+                    iterator,
+                    source_start_seconds,
+                    source_end_seconds,
+                    cancel_event,
+                    cut_packet_durations,
                 )
             ) is not None:
                 packet.stream = outputs[packet.stream.index]

@@ -9,6 +9,7 @@ LocalSR's temporary directory, so no code from that program is loaded here.
 
 from __future__ import annotations
 
+import ntpath
 import os
 import re
 import shutil
@@ -32,6 +33,7 @@ from .media_codecs import (
     stream_copy_supported,
     video_stream_decodable,
 )
+from .pixel_budget import MAX_INPUT_PIXELS
 
 ENVIRONMENT_VARIABLE = "LOCALSR_EXTERNAL_FFMPEG"
 _VERSION_PATTERN = re.compile(r"^ffmpeg version (\S+)", re.MULTILINE)
@@ -83,10 +85,49 @@ class ExternalFFmpeg:
         )
 
 
+def _windows_path_ffmpeg(path: str, current_directory: str) -> str | None:
+    """Search absolute PATH entries without Windows' implicit current directory."""
+    current = ntpath.normcase(ntpath.realpath(current_directory))
+    for entry in path.split(";"):
+        directory = ntpath.expandvars(entry.strip().strip('"'))
+        drive, tail = ntpath.splitdrive(directory)
+        if not drive or not ntpath.isabs(directory):
+            continue
+        if drive.startswith("\\\\"):
+            parts = drive[2:].split("\\")
+            if len(parts) < 2 or not parts[0] or not parts[1] or parts[0] == ".":
+                continue
+            if parts[0] == "?":
+                if parts[1].upper() == "UNC":
+                    if len(parts) != 4 or not parts[2] or not parts[3]:
+                        continue
+                elif not (
+                    len(parts) == 2
+                    and len(parts[1]) == 2
+                    and parts[1][0].isascii()
+                    and parts[1][0].isalpha()
+                    and parts[1][1] == ":"
+                    and tail.startswith(("\\", "/"))
+                ):
+                    continue
+        directory = ntpath.realpath(directory)
+        if ntpath.normcase(directory) == current:
+            continue
+        for suffix in (".exe", ".com", ".bat", ".cmd"):
+            candidate = ntpath.realpath(ntpath.join(directory, "ffmpeg" + suffix))
+            if ntpath.isfile(candidate):
+                return candidate
+    return None
+
+
 def discover_candidates() -> list[str]:
     """Return plausible installed FFmpeg executables, without running them."""
     found: list[str] = []
-    which = shutil.which("ffmpeg")
+    which = (
+        _windows_path_ffmpeg(os.environ.get("PATH", ""), os.getcwd())
+        if os.name == "nt"
+        else shutil.which("ffmpeg")
+    )
     for candidate in ([which] if which else []) + list(_COMMON_LOCATIONS):
         if candidate and Path(candidate).is_file() and candidate not in found:
             found.append(candidate)
@@ -110,6 +151,7 @@ def load_external_ffmpeg(path: str | None) -> ExternalFFmpeg | None:
     try:
         version = subprocess.run(
             [str(executable), "-hide_banner", "-version"],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=20,
@@ -117,6 +159,7 @@ def load_external_ffmpeg(path: str | None) -> ExternalFFmpeg | None:
         )
         encoders = subprocess.run(
             [str(executable), "-hide_banner", "-encoders"],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=20,
@@ -241,7 +284,9 @@ def plan_source(path: str, container: str = "mkv", *, decode_audio: bool = False
     require conversion because they cannot be stream-copied directly.
     """
     try:
-        source = av.open(path)
+        source = av.open(
+            path, options={"protocol_whitelist": "file", "max_pixels": str(MAX_INPUT_PIXELS)}
+        )
     except av.FFmpegError:
         if Path(path).is_file():
             return SourcePlan(False, True)
@@ -403,6 +448,7 @@ def external_timing(ffmpeg: ExternalFFmpeg, path: str) -> tuple[float, float]:
     """Read ``(fps, duration_seconds)`` from FFmpeg's input summary."""
     result = subprocess.run(
         [ffmpeg.path, "-hide_banner", "-i", path],
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         timeout=30,
@@ -422,6 +468,7 @@ def external_has_audio(ffmpeg: ExternalFFmpeg, path: str) -> bool:
     """Whether FFmpeg's input summary lists an audio stream."""
     result = subprocess.run(
         [ffmpeg.path, "-hide_banner", "-i", path],
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         timeout=30,

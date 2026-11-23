@@ -4,6 +4,7 @@ import hashlib
 from types import SimpleNamespace
 
 import pytest
+import spandrel
 
 from localsr.core.model_adapter import (
     UNVERIFIED_CHECKPOINT_ENV,
@@ -61,3 +62,30 @@ def test_catalog_checkpoint_requires_exact_digest_even_with_unsafe_opt_in(tmp_pa
     checkpoint.write_bytes(b"tampered byte")
     with pytest.raises(CheckpointSecurityError, match="SHA-256"):
         adapter._checkpoint_trust(str(checkpoint))
+
+
+@pytest.mark.parametrize(
+    ("keys", "expected"),
+    [
+        ({"gblocks.0.weight", "gblocks.1.fc1.weight", "gblocks.1.conv.weight"}, "MoSR"),
+        ({"in_to_dim.weight", "blocks.0.blocks.0.conv.dwconv_hw.weight"}, "MoESR"),
+        ({"unrelated.weight"}, "could not be recognized"),
+    ],
+)
+def test_unsupported_checkpoint_reports_architecture_hint(tmp_path, monkeypatch, keys, expected):
+    checkpoint = tmp_path / "custom.safetensors"
+    checkpoint.write_bytes(b"fixture")
+    adapter = ModelAdapter()
+
+    def unsupported(_path):
+        raise spandrel.UnsupportedModelError()
+
+    monkeypatch.setattr(adapter.loader, "load_from_file", unsupported)
+    monkeypatch.setattr(
+        adapter.loader, "load_state_dict_from_file", lambda _path: dict.fromkeys(keys)
+    )
+    with pytest.raises(RuntimeError, match=expected) as error:
+        adapter.inspect(str(checkpoint))
+    if expected in {"MoSR", "MoESR"}:
+        assert "not supported yet" in str(error.value)
+        assert "https://github.com/HerRei/local-upscale/issues/154" in str(error.value)

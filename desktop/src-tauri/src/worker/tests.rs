@@ -45,7 +45,7 @@ fn the_apple_gpu_reports_whether_the_neural_engine_is_available() {
 }
 
 #[test]
-fn a_new_installation_starts_on_the_gpu_but_not_on_directml() {
+fn a_new_installation_starts_on_the_gpu_and_ranks_directml_adapters() {
     let device = |id: &str| DeviceInfo {
         id: id.into(),
         ..DeviceInfo::default()
@@ -59,9 +59,62 @@ fn a_new_installation_starts_on_the_gpu_but_not_on_directml() {
         Some("cuda:0")
     );
     assert_eq!(
-        first_run_device(&[device("cpu"), device("directml:0")]),
-        None
+        first_run_device(&[device("cpu"), device("directml:0")]).as_deref(),
+        Some("directml:0")
     );
+    let adapter = |id: &str, integrated, total_memory| DeviceInfo {
+        id: id.into(),
+        is_integrated: integrated,
+        total_memory,
+        ..DeviceInfo::default()
+    };
+    assert_eq!(
+        first_run_device(&[
+            adapter("directml:0", true, 64),
+            adapter("directml:1", false, 8),
+            adapter("directml:2", false, 16),
+        ])
+        .as_deref(),
+        Some("directml:2")
+    );
+    assert_eq!(first_run_device(&[device("cpu")]), None);
+}
+
+#[test]
+fn directml_is_selected_only_on_the_first_installation() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(directory.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let capabilities = CapabilityInfo {
+        devices: vec![DeviceInfo {
+            id: "directml:1".into(),
+            ..DeviceInfo::default()
+        }],
+        ..CapabilityInfo::default()
+    };
+    let report = envelope(
+        "capabilities_info",
+        serde_json::to_value(capabilities).unwrap(),
+    );
+    apply_worker_envelope(&state, &report).unwrap();
+    assert_eq!(lock(&state.settings).unwrap().device_id, "directml:1");
+    assert_eq!(crate::settings::load(&paths).0.device_id, "directml:1");
+
+    lock(&state.settings).unwrap().device_id = "cpu".into();
+    state.persist_settings().unwrap();
+    let restarted = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    apply_worker_envelope(&restarted, &report).unwrap();
+    assert_eq!(lock(&restarted.settings).unwrap().device_id, "cpu");
+
+    // A Windows save interrupted between renames leaves the previous copy only.
+    std::fs::rename(
+        &paths.settings,
+        paths.settings.with_extension("json.previous"),
+    )
+    .unwrap();
+    let recovered = Arc::new(AppState::from_paths(paths).unwrap());
+    apply_worker_envelope(&recovered, &report).unwrap();
+    assert_eq!(lock(&recovered.settings).unwrap().device_id, "cpu");
 }
 
 #[test]
@@ -2222,4 +2275,87 @@ fn engine_crash_writes_a_redacted_report_but_cancel_and_device_loss_do_not() {
     crate::crash_reports::delete_all(&state.paths).unwrap();
     record_worker_failure_report(&state, "inference protocol mismatch");
     assert_eq!(crate::crash_reports::list(&state.paths).len(), 1);
+}
+
+#[test]
+fn partial_video_output_must_match_requested_name_and_directory() {
+    let requested = Path::new("/output/video.mp4");
+    assert!(partial_output(
+        requested,
+        Path::new("/output/video_partial_0m42s.mp4")
+    ));
+    for invalid in [
+        "/other/video_partial_0m42s.mp4",
+        "/output/video_partial_0m60s.mp4",
+        "/output/video_partial_0m42s.mkv",
+        "/output/other_partial_0m42s.mp4",
+    ] {
+        assert!(!partial_output(requested, Path::new(invalid)));
+    }
+}
+
+#[test]
+fn bundled_failure_cannot_fallback_again() {
+    assert_eq!(
+        bundled_fallback_id(Some("installed"), true),
+        Some("installed")
+    );
+    assert!(spawn_failure_fallback(None, true, "spawn failed").is_err());
+    assert_eq!(
+        spawn_failure_fallback(Some("installed"), true, "spawn failed").unwrap(),
+        "installed"
+    );
+    assert_eq!(bundled_fallback_id(Some("installed"), false), None);
+}
+
+#[test]
+fn fallback_keeps_restart_count() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap();
+    state
+        .worker
+        .restart_count
+        .store(MAX_FAILED_STARTS + 1, Ordering::SeqCst);
+    activate_bundled_fallback(&state, "installed").unwrap();
+    assert!(state
+        .worker
+        .failed_engines
+        .lock()
+        .unwrap()
+        .contains("installed"));
+    assert!(state.worker.use_bundled_fallback.load(Ordering::SeqCst));
+    assert_eq!(
+        state.worker.restart_count.load(Ordering::SeqCst),
+        MAX_FAILED_STARTS + 1
+    );
+    assert_eq!(
+        restart_delay(&state.worker.restart_count, Duration::ZERO, false, true),
+        None
+    );
+}
+
+#[test]
+fn installed_worker_uses_app_owned_working_directory() {
+    let work_root = PathBuf::from("app-owned-work");
+    let command = installed_worker_command(PathBuf::from("worker"), None, &work_root);
+    assert_eq!(
+        command.working_directory.as_deref(),
+        Some(work_root.as_path())
+    );
+}
+
+#[test]
+fn relative_helper_overrides_resolve_from_host_directory() {
+    assert_eq!(
+        helper_override_path(std::ffi::OsStr::new("tools/helper"), Path::new("/host")),
+        PathBuf::from("/host/tools/helper")
+    );
+    assert_eq!(
+        helper_override_path(std::ffi::OsStr::new("/tools/helper"), Path::new("/host")),
+        PathBuf::from("/tools/helper")
+    );
+    assert_eq!(
+        helper_override_path(std::ffi::OsStr::new("~/tools/helper"), Path::new("/host")),
+        PathBuf::from("~/tools/helper")
+    );
 }

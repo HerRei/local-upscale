@@ -9,6 +9,7 @@ export const FIX_ROW_LABELS: Record<Exclude<FixKind, 'faces'>, string> = {
   noise: 'Fix noise',
   jpeg: 'Fix JPEG',
   blur: 'Fix blur',
+  colour: 'Colour',
 };
 
 /**
@@ -32,8 +33,8 @@ export function fitsFix(model: CatalogModel, fix: Exclude<FixKind, 'faces'>): bo
   );
 }
 
-/** The order a fix takes when it is turned on: deblur first, noise last. */
-export const DEFAULT_FIX_ORDER: Exclude<FixKind, 'faces'>[] = ['blur', 'jpeg', 'noise'];
+/** The order a fix takes when it is turned on: deblur first, colour last. */
+export const DEFAULT_FIX_ORDER: Exclude<FixKind, 'faces'>[] = ['blur', 'jpeg', 'noise', 'colour'];
 
 /**
  * Turn a fix off, or on at its place in the default order: before the first fix that

@@ -18,6 +18,21 @@ UNVERIFIED_CHECKPOINT_ENV = "LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS"
 RISKY_CHECKPOINT_SUFFIXES = {".ckpt", ".pt", ".pth"}
 
 
+def _unsupported_model_message(state_dict) -> str:
+    keys = set(state_dict)
+    hints = (
+        ("MoESR", {"in_to_dim.weight", "blocks.0.blocks.0.conv.dwconv_hw.weight"}),
+        ("MoSR", {"gblocks.0.weight", "gblocks.1.fc1.weight", "gblocks.1.conv.weight"}),
+    )
+    for name, required in hints:
+        if required <= keys:
+            return (
+                f"This checkpoint seems to use {name}, but this model is not supported yet. "
+                "See https://github.com/HerRei/local-upscale/issues/154"
+            )
+    return "This checkpoint's architecture could not be recognized and is not supported."
+
+
 class CheckpointSecurityError(RuntimeError):
     """Raised before an untrusted pickle or TorchScript checkpoint reaches PyTorch."""
 
@@ -87,11 +102,34 @@ class ModelAdapter:
     def _read(self, path: str):
         """The checkpoint's trust class and parsed model, within MODEL_READ_SECONDS."""
         name = os.path.basename(path)
+
+        def read():
+            trust = self._checkpoint_trust(path)
+            try:
+                return trust, self.loader.load_from_file(path)
+            except spandrel.UnsupportedModelError as error:
+                try:
+                    state_dict = self.loader.load_state_dict_from_file(path)
+                except Exception:
+                    state_dict = None
+                if state_dict is not None:
+                    from localsr.image_models.ddcolor import (
+                        is_ddcolor_state_dict,
+                        load_ddcolor_descriptor,
+                    )
+
+                    if is_ddcolor_state_dict(state_dict):
+                        return trust, load_ddcolor_descriptor(state_dict)
+                    message = _unsupported_model_message(state_dict)
+                else:
+                    message = "This checkpoint's architecture could not be recognized and is not supported."
+                raise RuntimeError(message) from error
+
         try:
             return bounded_preparation(
                 f"Reading {name}",
                 MODEL_READ_SECONDS,
-                lambda: (self._checkpoint_trust(path), self.loader.load_from_file(path)),
+                read,
                 fallback="the job stops",
                 slot="model-read",
                 cancel_event=self.cancel_event,
@@ -145,8 +183,8 @@ class ModelAdapter:
 
         # Spandrel 0.4 does not expose a tiling capability flag. LocalSR tiles
         # ImageModelDescriptor inputs itself and applies the descriptor's size
-        # requirements to every tile.
-        tiling_supported = True
+        # requirements to every tile; DDColor runs whole-image at its input size.
+        tiling_supported = arch != "DDColor"
 
         half_supported = getattr(self.parsed, "supports_half", False)
 

@@ -218,6 +218,22 @@ checkpoint licence above is verified; clearance of every training image is not.
 Both are library models: no preset picks them on its own (`preset_eligible=False`), because
 they take about ten times as long as Best. A model pinned to Best by the user is still used.
 
+### DDColor (`ddcolor_modelscope`)
+
+- Exact upstream asset: `pytorch_model.bin` from
+  [`piddnad/ddcolor_modelscope`](https://huggingface.co/piddnad/ddcolor_modelscope) pinned at
+  commit `060f67494e31883a4b13cb27f889f3154847ada4` (saved locally as `ddcolor_modelscope.pth`).
+- Size: `911,914,869` bytes (DDColor-L).
+- SHA-256: `d81711971ec59200da26d5e8a1afae8dd3778d495ea8ad7a7dadc769f403f7e7`.
+- Code/checkpoint terms: [Apache-2.0](https://github.com/piddnad/DDColor/blob/master/LICENSE) in
+  the upstream [piddnad/DDColor](https://github.com/piddnad/DDColor) repository and the
+  Hugging Face model repository. The vendored inference code and Apache-2.0 notice are in
+  `src/localsr/image_models/ddcolor/NOTICE.md`.
+- Training data: ImageNet. As with the other checkpoints trained on ImageNet in this catalogue,
+  LocalSR follows the Apache-2.0 license the author grants for the weights and records the
+  training data here.
+- Load: tensors only (`torch.load(weights_only=True)`) after size and SHA-256 verification.
+
 The two HAT face checkpoints stay outside this policy and require a verified manual import.
 No restoration weights are bundled with the application.
 
@@ -292,6 +308,15 @@ describes the bundles and what they need.
 - **FLUX.2 klein 4B** — [Black Forest Labs](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B),
   Apache-2.0, with GGUF diffusion quantizations by leejet, the Qwen3-4B text encoder (Qwen,
   Apache-2.0, GGUF by Unsloth) and the FLUX.2 autoencoder as published by Comfy-Org (Apache-2.0).
+- **Mage-Flow-Edit-Turbo** - [Microsoft Mage](https://github.com/microsoft/Mage), MIT. The
+  original `microsoft/Mage-Flow` and `microsoft/Mage-Flow-Edit-Turbo` Hugging Face repositories are
+  not publicly accessible, so LocalSR pins the public MIT repack by Comfy-Org
+  ([Comfy-Org/Mage-Flow](https://huggingface.co/Comfy-Org/Mage-Flow), VAE) and the community
+  Q6_K diffusion GGUF by johnsor
+  ([johnsor/Mage-Flow-Edit-Turbo-GGUF](https://huggingface.co/johnsor/Mage-Flow-Edit-Turbo-GGUF),
+  MIT), paired with Qwen3-VL-4B-Instruct text and vision encoders
+  ([Qwen/Qwen3-VL-4B-Instruct-GGUF](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF),
+  Apache-2.0).
 - **Qwen Image 2.1** is not offered: its Qwen Research License permits research and evaluation
   only.
 

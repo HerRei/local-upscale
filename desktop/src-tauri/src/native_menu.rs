@@ -28,6 +28,17 @@ pub fn switches(settings: &UiSettings) -> Switches {
 pub const EVENT_NAME: &str = "native-menu-action";
 const REPORT_PROBLEM_ID: &str = "help.report-problem";
 
+#[cfg(any(target_os = "linux", test))]
+fn linux_menu_item(is_appimage: bool, installed: bool) -> Option<(&'static str, &'static str)> {
+    if installed {
+        Some(("help.remove-desktop-menu", "Remove from Applications Menu"))
+    } else if is_appimage {
+        Some(("help.add-desktop-menu", "Add to Applications Menu"))
+    } else {
+        None
+    }
+}
+
 /// The update entries in menu order: macOS shows them in the LocalSR menu, Windows and
 /// Linux at the end of Help. The two switches exist only in builds that check a signed
 /// feed themselves (crate::updates::checks_for_updates); the others, such as Store
@@ -262,14 +273,26 @@ fn install_for_manager<R: Runtime, M: Manager<R>>(
         .item(&github)
         .build()?;
     #[cfg(not(target_os = "macos"))]
-    let help_menu = SubmenuBuilder::new(manager, "Help")
-        .item(&guide)
-        .item(&report)
-        .item(&crash_reports)
-        .item(&github)
-        .separator()
-        .items(&update_entries)
-        .build()?;
+    let help_menu = {
+        #[cfg(target_os = "linux")]
+        let linux_menu_entry = linux_menu_item(
+            crate::integrations::running_in_appimage(),
+            crate::integrations::linux_menu_installed(),
+        )
+        .map(|(id, label)| MenuItemBuilder::with_id(id, label).build(manager))
+        .transpose()?;
+        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+        let mut builder = SubmenuBuilder::new(manager, "Help")
+            .item(&guide)
+            .item(&report)
+            .item(&crash_reports)
+            .item(&github);
+        #[cfg(target_os = "linux")]
+        if let Some(entry) = linux_menu_entry.as_ref() {
+            builder = builder.item(entry);
+        }
+        builder.separator().items(&update_entries).build()?
+    };
 
     #[cfg(target_os = "macos")]
     let menu_builder = {
@@ -467,5 +490,22 @@ mod tests {
         // muda 0.20 reads "Left"/"Right" as the arrow keys (accelerator/mod.rs).
         assert_eq!(super::PREVIOUS_RESULT_ACCELERATOR, "CmdOrCtrl+Alt+Left");
         assert_eq!(super::NEXT_RESULT_ACCELERATOR, "CmdOrCtrl+Alt+Right");
+    }
+
+    #[test]
+    fn linux_help_menu_shows_add_for_uninstalled_appimage_and_remove_when_installed() {
+        assert_eq!(super::linux_menu_item(false, false), None);
+        assert_eq!(
+            super::linux_menu_item(true, false),
+            Some(("help.add-desktop-menu", "Add to Applications Menu"))
+        );
+        assert_eq!(
+            super::linux_menu_item(true, true),
+            Some(("help.remove-desktop-menu", "Remove from Applications Menu"))
+        );
+        assert_eq!(
+            super::linux_menu_item(false, true),
+            Some(("help.remove-desktop-menu", "Remove from Applications Menu"))
+        );
     }
 }

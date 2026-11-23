@@ -236,4 +236,24 @@ describe('interpolation hardware label', () => {
       'CPU · unsupported',
     );
   });
+
+  it('shows CPU or Apple GPU route notes for DDColor on unsupported accelerators', async () => {
+    const { colourHardwareLabel } = await import('./neuralEngine');
+    const directmlCaps = {
+      devices: [
+        device('directml:0', { type: 'directml', name: 'AMD Radeon (DirectML)' }),
+        device('cpu'),
+      ],
+    } as CapabilityInfo;
+    expect(
+      engineLabel({ device_id: 'directml:0' }, directmlCaps, 'DDColor', 'AMD Radeon (DirectML)'),
+    ).toBe('CPU · DDColor runs on the CPU');
+    expect(colourHardwareLabel('Neural Engine', 'mps', true)).toBe('Neural Engine · colour on GPU');
+    expect(colourHardwareLabel('AMD Radeon (DirectML)', 'directml:0', true)).toBe(
+      'AMD Radeon (DirectML) · colour on CPU',
+    );
+    expect(colourHardwareLabel('AMD Radeon (DirectML)', 'directml:0', false)).toBe(
+      'AMD Radeon (DirectML)',
+    );
+  });
 });

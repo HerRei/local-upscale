@@ -1,6 +1,6 @@
 [project]
 name = "localsr"
-version = "0.5.0-beta"
+version = "0.5.2-beta"
 description = "A local-first desktop application for image and video restoration using Tauri, PyTorch, and Spandrel."
 authors = [{name = "Hermes Reisner"}]
 readme = "README.md"
@@ -20,7 +20,7 @@ dependencies = [
     "torch>=2.0.0",
     "torchvision>=0.15.0",
     "spandrel>=0.4.0",
-    "Pillow>=10.0.0",
+    "Pillow>=13.0.0",
     "rawpy>=0.25.1",
     # Current macOS Intel PyTorch wheels use the NumPy 1.x C API. NumPy 2.x
     # imports but leaves torch.from_numpy()/Tensor.numpy() unavailable.
@@ -118,6 +118,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "localsr.core" = ["benchmark_references.json", "edit_catalog.json"]
+"localsr.image_models.ddcolor" = ["*.md"]
 "localsr.video_models.rife" = ["*.md"]
 "localsr.video_models.seedvr2" = [
     "*.safetensors",

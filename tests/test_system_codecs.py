@@ -492,10 +492,12 @@ def test_encode_frames_sends_scheduled_durations(monkeypatch, tmp_path):
             pass
 
     output = Capture()
+    commands = []
     process = SimpleNamespace(stdin=output, returncode=0)
 
     @contextmanager
     def fake_process(self, arguments, *, stdin=False):
+        commands.append(arguments)
         yield process
 
     monkeypatch.setattr(SystemCodecs, "_process", fake_process)
@@ -508,6 +510,7 @@ def test_encode_frames_sends_scheduled_durations(monkeypatch, tmp_path):
     SystemCodecs("helper", 1).encode_frames(
         frames, tmp_path / "out.mp4", fps=96, video_codec="hevc", container="mp4", crf=18
     )
+    assert "--no-reordering" in commands[0]
     data = output.getvalue().split(b"\n", 1)[1]
     pts, duration, length = FRAME_HEADER.unpack_from(data)
     assert (pts, duration) == (0, 1)
@@ -682,3 +685,58 @@ def test_system_export_leaves_nothing_but_the_output(tmp_path, fail):
         _system_stream_export(iter(()), destination, **call)
     expected = {keep.name} | (set() if fail else {destination.name})
     assert {path.name for path in tmp_path.iterdir()} == expected
+
+
+def test_stopped_streamed_system_export_keeps_playable_video_and_trimmed_audio(tmp_path, bridge):
+    import threading
+
+    from test_video_timing import ffmpeg
+
+    video = make_vfr(tmp_path / "video.mp4")
+    source = tmp_path / "source.mp4"
+    ffmpeg(
+        "-i",
+        video,
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=800:duration=3",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-shortest",
+        source,
+    )
+    frames = source_frames(source)
+
+    def stopped_frames():
+        yield from frames[:3]
+        raise InterruptedError("stopped")
+
+    output = encode_video(
+        stopped_frames(),
+        str(tmp_path / "output.mp4"),
+        fps=25,
+        width=frames[0].rgb.shape[1],
+        height=frames[0].rgb.shape[0],
+        video_codec="hevc",
+        external_ffmpeg=bridge,
+        stream_to_system=True,
+        audio_source=str(source),
+        cancel_event=threading.Event(),
+        keep_partial=True,
+    )
+    assert "_partial_" in output
+    with av.open(output) as container:
+        assert len(container.streams.audio) == 1
+        video_stream = container.streams.video[0]
+        audio_stream = container.streams.audio[0]
+        assert (
+            abs(
+                float(audio_stream.duration * audio_stream.time_base)
+                - float(video_stream.duration * video_stream.time_base)
+            )
+            < 0.06
+        )
+        assert len(list(container.decode(video=0))) == 3

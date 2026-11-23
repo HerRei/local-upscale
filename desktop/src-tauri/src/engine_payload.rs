@@ -4,32 +4,118 @@
 use std::{
     collections::HashSet,
     fs::{self, File},
-    io::{self, Read},
+    io::{self, Read, Seek, SeekFrom},
     path::{Component, Path},
 };
 
 use crate::update_storage;
 use flate2::read::GzDecoder;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Part {
-    filename: String,
-    size: u64,
-    sha256: String,
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct InstalledEngineFile {
+    pub path: String,
+    pub size: u64,
+    pub sha256: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Manifest {
-    schema_version: u32,
-    format: String,
-    backend: String,
-    file_count: u64,
-    unpacked_bytes: u64,
-    parts: Vec<Part>,
+pub struct ManifestPart {
+    pub filename: String,
+    pub size: u64,
+    pub sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ParsedManifest {
+    pub schema_version: u32,
+    pub format: String,
+    pub backend: String,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub os: Option<String>,
+    #[serde(default)]
+    pub arch: Option<String>,
+    #[serde(default)]
+    pub protocol_version: Option<u32>,
+    #[serde(default)]
+    pub engine_id: Option<String>,
+    pub file_count: u64,
+    pub unpacked_bytes: u64,
+    pub parts: Vec<ManifestPart>,
+}
+
+pub fn parse_manifest(manifest: &[u8]) -> io::Result<ParsedManifest> {
+    let manifest: ParsedManifest =
+        serde_json::from_slice(manifest).map_err(|error| invalid(error.to_string()))?;
+    let valid_schema = match manifest.schema_version {
+        1 => {
+            manifest.version.is_none()
+                && manifest.os.is_none()
+                && manifest.arch.is_none()
+                && manifest.protocol_version.is_none()
+                && manifest.engine_id.is_none()
+        }
+        2 => {
+            let valid_version = manifest
+                .version
+                .as_deref()
+                .is_some_and(|v| semver::Version::parse(v).is_ok());
+            let valid_os = manifest
+                .os
+                .as_deref()
+                .is_some_and(|o| matches!(o, "windows" | "linux" | "macos"));
+            let valid_arch = manifest.arch.as_deref().is_some_and(|a| {
+                !a.is_empty() && a.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            });
+            let valid_protocol = manifest.protocol_version.is_some_and(|p| p > 0);
+            let valid_engine_id = manifest
+                .engine_id
+                .as_deref()
+                .is_some_and(crate::updates::safe_id);
+            valid_version && valid_os && valid_arch && valid_protocol && valid_engine_id
+        }
+        _ => false,
+    };
+    if !valid_schema
+        || manifest.format != "tar.gz.parts"
+        // scripts/prepare_engine_payload.py BACKENDS: one per edition's engine.
+        || !matches!(
+            manifest.backend.as_str(),
+            "CUDA" | "ROCM" | "CPU" | "MPS" | "DIRECTML"
+        )
+        || manifest.parts.is_empty()
+        || manifest.parts.len() > 64
+        || manifest.file_count == 0
+        || manifest.file_count > 100_000
+        || manifest.unpacked_bytes == 0
+        || manifest.unpacked_bytes > 100 * 1024u64.pow(3)
+    {
+        return Err(invalid("unsupported or invalid engine payload manifest"));
+    }
+    let mut names = HashSet::new();
+    for part in &manifest.parts {
+        let name = Path::new(&part.filename);
+        if !safe_relative(name)
+            || name.components().count() != 1
+            // Case-insensitive volumes read two spellings as one file.
+            || !names.insert(part.filename.to_lowercase())
+            || part.size == 0
+            || part.size >= 2 * 1024u64.pow(3)
+            || part.sha256.len() != 64
+            || !part
+                .sha256
+                .bytes()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        {
+            return Err(invalid("invalid or duplicate engine payload part"));
+        }
+    }
+    Ok(manifest)
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -46,7 +132,14 @@ fn entry_key(path: &Path) -> String {
         .join("/")
 }
 
-fn safe_relative(path: &Path) -> bool {
+pub(crate) fn canonical_relative_path(path: &Path) -> String {
+    path.components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+pub(crate) fn safe_relative(path: &Path) -> bool {
     !path.as_os_str().is_empty()
         && path
             .components()
@@ -58,7 +151,7 @@ fn safe_relative(path: &Path) -> bool {
 // publishing extraction. An open descriptor alone does not stop in-place writes.
 struct VerifiedPart {
     file: File,
-    expected: Part,
+    expected: ManifestPart,
     digest: Sha256,
     bytes: u64,
 }
@@ -71,7 +164,10 @@ impl Read for VerifiedPart {
         self.digest.update(&buffer[..count]);
         self.bytes += count as u64;
         if self.bytes > self.expected.size {
-            return Err(invalid("engine payload exceeds its manifest"));
+            return Err(invalid(format!(
+                "engine payload exceeds its manifest: {}",
+                self.expected.filename
+            )));
         }
         if count == 0 {
             let actual: String = self
@@ -82,9 +178,10 @@ impl Read for VerifiedPart {
                 .map(|byte| format!("{byte:02x}"))
                 .collect();
             if self.bytes != self.expected.size || actual != self.expected.sha256 {
-                return Err(invalid(
-                    "engine payload checksum mismatch during extraction",
-                ));
+                return Err(invalid(format!(
+                    "engine payload checksum mismatch: {}",
+                    self.expected.filename
+                )));
             }
         }
         Ok(count)
@@ -211,6 +308,29 @@ pub fn recover_beside(executable: &Path) {
     }
 }
 
+pub(crate) fn sha256_file(path: &Path) -> io::Result<(u64, String)> {
+    let mut file = File::open(path)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    let mut size = 0u64;
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+        size = size
+            .checked_add(count as u64)
+            .ok_or_else(|| invalid("file size overflow"))?;
+    }
+    let hex = digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    Ok((size, hex))
+}
+
 pub fn install(manifest_path: &Path, source: &Path, destination: &Path) -> io::Result<()> {
     install_manifest(&fs::read(manifest_path)?, source, destination)
 }
@@ -218,24 +338,15 @@ pub fn install(manifest_path: &Path, source: &Path, destination: &Path) -> io::R
 /// Install from manifest bytes the caller has verified, so a manifest file replaced
 /// after verification is never read.
 pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> io::Result<()> {
-    let manifest: Manifest =
-        serde_json::from_slice(manifest).map_err(|error| invalid(error.to_string()))?;
-    if manifest.schema_version != 1
-        || manifest.format != "tar.gz.parts"
-        // scripts/prepare_engine_payload.py BACKENDS: one per edition's engine.
-        || !matches!(
-            manifest.backend.as_str(),
-            "CUDA" | "ROCM" | "CPU" | "MPS" | "DIRECTML"
-        )
-        || manifest.parts.is_empty()
-        || manifest.parts.len() > 64
-        || manifest.file_count == 0
-        || manifest.file_count > 100_000
-        || manifest.unpacked_bytes == 0
-        || manifest.unpacked_bytes > 100 * 1024u64.pow(3)
-    {
-        return Err(invalid("unsupported or invalid engine payload manifest"));
-    }
+    install_manifest_with_files(manifest, source, destination).map(|_| ())
+}
+
+pub fn install_manifest_with_files(
+    manifest: &[u8],
+    source: &Path,
+    destination: &Path,
+) -> io::Result<Vec<InstalledEngineFile>> {
+    let manifest = parse_manifest(manifest)?;
     let parent = parent_folder(destination).ok_or_else(|| invalid("missing engine parent"))?;
     if destination.file_name().is_none_or(|name| name != "engine") {
         return Err(invalid("engine destination must be an engine directory"));
@@ -245,32 +356,46 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
             "not enough free space to install the inference engine",
         ));
     }
-    let mut names = HashSet::new();
     let mut files = Vec::new();
+    let mut problems = Vec::new();
     for part in &manifest.parts {
         let name = Path::new(&part.filename);
-        if !safe_relative(name)
-            || name.components().count() != 1
-            // Case-insensitive volumes read two spellings as one file.
-            || !names.insert(part.filename.to_lowercase())
-            || part.size == 0
-            || part.size >= 2 * 1024u64.pow(3)
-            || part.sha256.len() != 64
-            || !part
-                .sha256
-                .bytes()
-                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
-        {
-            return Err(invalid("invalid or duplicate engine payload part"));
-        }
-        println!("Verifying {}", part.filename);
-        let file = File::open(source.join(name))?;
+        let mut file = match File::open(source.join(name)) {
+            Ok(file) => file,
+            Err(error) => {
+                problems.push(format!("{}: {error}", part.filename));
+                continue;
+            }
+        };
         if file.metadata()?.len() != part.size {
-            return Err(invalid(format!("incomplete payload: {}", part.filename)));
+            problems.push(format!("incomplete payload: {}", part.filename));
+            continue;
         }
+        let mut digest = Sha256::new();
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            let count = file.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            digest.update(&buffer[..count]);
+        }
+        let actual: String = digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        if actual != part.sha256 {
+            problems.push(format!(
+                "engine payload checksum mismatch: {}",
+                part.filename
+            ));
+            continue;
+        }
+        file.seek(SeekFrom::Start(0))?;
         files.push(VerifiedPart {
             file,
-            expected: Part {
+            expected: ManifestPart {
                 filename: part.filename.clone(),
                 size: part.size,
                 sha256: part.sha256.clone(),
@@ -278,6 +403,9 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
             digest: Sha256::new(),
             bytes: 0,
         });
+    }
+    if !problems.is_empty() {
+        return Err(invalid(problems.join("; ")));
     }
     #[cfg(test)]
     AFTER_PART_VERIFICATION.with(|hook| {
@@ -300,6 +428,7 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
         let mut count = 0u64;
         let mut bytes = 0u64;
         let mut paths = HashSet::new();
+        let mut installed_files = Vec::new();
         // The folders that now hold unpacked files, to be made durable with them.
         let mut folders = HashSet::from([staging.clone()]);
         for entry in archive.entries()? {
@@ -313,8 +442,9 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
                     "unsafe, duplicate, or non-file engine archive entry",
                 ));
             }
+            let expected_size = entry.size();
             bytes = bytes
-                .checked_add(entry.size())
+                .checked_add(expected_size)
                 .ok_or_else(|| invalid("engine size overflow"))?;
             count += 1;
             if bytes > manifest.unpacked_bytes || count > manifest.file_count {
@@ -326,6 +456,15 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
             }
             let unpacked = staging.join(&relative);
             update_storage::sync_file(&unpacked)?;
+            let (actual_size, sha256) = sha256_file(&unpacked)?;
+            if actual_size != expected_size {
+                return Err(invalid("unpacked engine file size mismatch"));
+            }
+            installed_files.push(InstalledEngineFile {
+                path: canonical_relative_path(&relative),
+                size: actual_size,
+                sha256,
+            });
             let mut folder = unpacked.parent();
             while let Some(path) = folder.filter(|path| path.starts_with(&staging)) {
                 if !folders.insert(path.to_path_buf()) {
@@ -374,7 +513,8 @@ pub fn install_manifest(manifest: &[u8], source: &Path, destination: &Path) -> i
             update_storage::fault("backup-delete")?;
             fs::remove_dir_all(&deleting)?;
         }
-        Ok(())
+        installed_files.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(installed_files)
     })();
     if staging.exists() {
         let _ = fs::remove_dir_all(&staging);

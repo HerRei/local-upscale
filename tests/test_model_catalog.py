@@ -72,14 +72,15 @@ def test_catalog_has_all_curated_models():
         "scunet_color_real_psnr",
         "bhi_dat2_real_x4",
         "realwebphoto_v4_dat2_x4",
+        "ddcolor_modelscope",
     ]
     catalog_ids = [model.model_id for model in MODEL_CATALOG]
     assert catalog_ids == expected_ids
-    assert len(MODEL_CATALOG) == 18
+    assert len(MODEL_CATALOG) == 19
 
     # Verify uniqueness of IDs and filenames
-    assert len({model.model_id for model in MODEL_CATALOG}) == 18
-    assert len({model.filename for model in MODEL_CATALOG}) == 18
+    assert len({model.model_id for model in MODEL_CATALOG}) == 19
+    assert len({model.filename for model in MODEL_CATALOG}) == 19
 
 
 def test_recent_same_size_rewrite_cannot_reuse_a_checksum_verdict(tmp_path, monkeypatch):
@@ -247,6 +248,7 @@ def test_model_purpose_enum():
     assert ModelPurpose.ILLUSTRATION == "illustration"
     assert ModelPurpose.DENOISE == "denoise"
     assert ModelPurpose.DEBLUR == "deblur"
+    assert ModelPurpose.COLORIZE == "colorize"
     assert ModelPurpose.RESTORATION == "restoration"
     assert ModelPurpose.FACE == "face"
     assert ModelPurpose.VIDEO == "video"
@@ -617,10 +619,15 @@ def test_model_store_is_installed(tmp_path: Path):
     assert not store.is_installed(model)
 
 
-def test_default_model_directory():
+def test_default_model_directory(monkeypatch, tmp_path):
+    monkeypatch.delenv("LOCALSR_MODEL_DIR", raising=False)
     dir_path = default_model_directory()
     assert isinstance(dir_path, Path)
     assert dir_path.name == "models"
+
+    custom = tmp_path / "external-models"
+    monkeypatch.setenv("LOCALSR_MODEL_DIR", str(custom))
+    assert default_model_directory() == custom
 
 
 def test_specialist_models_stay_out_of_the_presets():

@@ -20,13 +20,48 @@ from PIL import Image, ImageOps
 
 from localsr.core.child_processes import native_environment, stop_process, track
 from localsr.core.disk_space import edit_bytes, require_room
-from localsr.core.edit_memory import GIB, plan_edit, read_edit_memory
+from localsr.core.edit_memory import (
+    GIB,
+    minimum_unified_memory_gb,
+    minimum_vram_gb,
+    plan_edit,
+    read_edit_memory,
+)
+from localsr.core.image_formats import PILLOW_INPUT_FORMATS
 from localsr.core.image_io import open_photo
 from localsr.core.output_publish import publish_output, require_output_name
 from localsr.protocol.messages import JobCompleted, ProgressUpdate, StageStarted
 
 CATALOG_PATH = Path(__file__).with_name("edit_catalog.json")
 REQUIRED_FLAGS = ("--max-vram", "--mmap", "--model-args", "--backend", "--vae-tiling")
+CUSTOM_EDIT_MODEL_ID = "__custom__"
+CUSTOM_EDIT_FAMILIES: dict[str, dict] = {
+    "qwen-image-edit-2511": {
+        "roles": ("diffusion", "text_encoder", "vision", "vae"),
+        "default_steps": 40,
+        "cfg_scale": 2.5,
+    },
+    "qwen-image-2.1": {
+        "roles": ("diffusion", "text_encoder", "vision", "vae"),
+        "default_steps": 40,
+        "cfg_scale": 6.0,
+    },
+    "flux2-klein": {
+        "roles": ("diffusion", "text_encoder", "vae"),
+        "default_steps": 4,
+        "cfg_scale": 1.0,
+    },
+    "mage-flow-edit-turbo": {
+        "roles": ("diffusion", "text_encoder", "vision", "vae"),
+        "default_steps": 4,
+        "cfg_scale": 1.0,
+    },
+}
+
+
+PROBE_TIMEOUTS = {"--help": 90, "--list-devices": 120}
+# Runtimes whose --help already passed, keyed by path, size and modification time.
+_CHECKED_RUNTIMES: set[tuple[str, int, int]] = set()
 
 
 def probe_runtime(runtime: Path, option: str):
@@ -36,9 +71,12 @@ def probe_runtime(runtime: Path, option: str):
         command = [sys.executable, "--edit-probe", *command]
     return subprocess.run(
         command,
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
-        timeout=30 if option == "--list-devices" else 10,
+        # The first start of a CUDA sd-cli on Windows loads large DLLs that the antivirus
+        # scans, and the frozen worker that wraps it starts cold: allow for that (#160).
+        timeout=PROBE_TIMEOUTS[option],
         env=native_environment(),
         creationflags=0x08000000 if os.name == "nt" else 0,
     )
@@ -83,8 +121,52 @@ def edit_catalog() -> list[dict]:
     return json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
 
 
+def custom_edit_model(data: dict) -> dict:
+    """Build a model descriptor from the user's local files and their real sizes."""
+    family = str(data.get("family") or "")
+    spec = CUSTOM_EDIT_FAMILIES.get(family)
+    if spec is None:
+        raise ValueError("Unsupported editing model family.")
+    raw_files = data.get("custom_files")
+    if not isinstance(raw_files, dict):
+        raise ValueError("Choose all required editing model files first.")
+    files = []
+    for role in spec["roles"]:
+        raw_path = raw_files.get(role)
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise ValueError("Choose all required editing model files first.")
+        path = Path(raw_path)
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"The custom {role.replace('_', ' ')} file is missing. Choose your edit model files again."
+            )
+        size_bytes = path.stat().st_size
+        if size_bytes <= 0:
+            raise ValueError(f"The custom {role.replace('_', ' ')} file is empty.")
+        files.append(
+            {"role": role, "path": str(path), "filename": path.name, "size_bytes": size_bytes}
+        )
+    model = {
+        "model_id": CUSTOM_EDIT_MODEL_ID,
+        # Never expose custom filenames or paths in job labels or crash reports.
+        "name": "Your edit model",
+        "family": family,
+        "quantization": "Custom",
+        "files": files,
+        "default_steps": spec["default_steps"],
+        "cfg_scale": spec["cfg_scale"],
+        "terms_acceptance_required": False,
+    }
+    model["min_unified_memory_gb"] = minimum_unified_memory_gb(model)
+    model["min_vram_gb"] = minimum_vram_gb(model)
+    return model
+
+
 def validate_request(data: dict) -> dict:
-    model = next((m for m in edit_catalog() if m["model_id"] == data.get("model_id")), None)
+    if data.get("model_id") == CUSTOM_EDIT_MODEL_ID:
+        model = custom_edit_model(data)
+    else:
+        model = next((m for m in edit_catalog() if m["model_id"] == data.get("model_id")), None)
     if model is None:
         raise ValueError("Unknown editing model.")
     prompt = data.get("prompt", "")
@@ -183,6 +265,21 @@ class EditProgress:
         return percentage, label
 
 
+def verify_custom_files(model: dict, progress=None) -> dict[str, Path]:
+    """Verify the user's own model files stay present in place without copying or catalog hashes."""
+    paths = {}
+    for entry in model["files"]:
+        path = Path(entry["path"])
+        if not path.is_file() or path.stat().st_size <= 0:
+            raise FileNotFoundError(
+                f"The custom {entry['role'].replace('_', ' ')} file is missing. Choose your edit model files again."
+            )
+        paths[entry["role"]] = path
+    if progress is not None:
+        progress(1.0)
+    return paths
+
+
 def verify_bundle(
     model: dict, directory: Path, cancel: threading.Event, progress=None
 ) -> dict[str, Path]:
@@ -214,11 +311,22 @@ def check_runtime(path: str) -> Path:
     runtime = Path(path).resolve(strict=True)
     if not runtime.is_file():
         raise ValueError("Select the native sd-cli editing runtime.")
-    help_result = probe_runtime(runtime, "--help")
+    stat = runtime.stat()
+    key = (str(runtime), stat.st_size, stat.st_mtime_ns)
+    if key in _CHECKED_RUNTIMES:
+        return runtime
+    try:
+        help_result = probe_runtime(runtime, "--help")
+    except subprocess.TimeoutExpired as error:
+        raise ValueError(
+            "The editing runtime did not answer in time. Try the edit again; if it keeps "
+            "happening, use Help > Report a problem."
+        ) from error
     if help_result.returncode != 0 or any(
         flag not in help_result.stdout + help_result.stderr for flag in REQUIRED_FLAGS
     ):
         raise ValueError("The editing runtime is too old. Reinstall LocalSR to restore it.")
+    _CHECKED_RUNTIMES.add(key)
     return runtime
 
 
@@ -250,6 +358,10 @@ def build_edit_command(
     gpu = gpu_override or (
         "MTL0" if device == "mps" else f"{gpu_kind}{device.partition(':')[2] or '0'}"
     )
+    # The pinned Metal backend produces blank white output for Mage-Flow's
+    # diffusion transformer on Apple Silicon, whereas full CPU with default
+    # physical-core threading finishes a 512 px edit in ~96 s.
+    use_cpu = model["family"] == "mage-flow-edit-turbo" and device == "mps"
     width, height = dimensions
     args = [
         str(runtime),
@@ -283,12 +395,11 @@ def build_edit_command(
         "--vae-tiling",
         "--vae-tile-size",
         "256",
-        "--threads",
-        "2",
+        *([] if use_cpu else ["--threads", "2"]),
         "--conditioning-cache-size",
         "0",
         "--backend",
-        f"diffusion={gpu},te=cpu,vae=cpu",
+        "cpu" if use_cpu else f"diffusion={gpu},te=cpu,vae=cpu",
         "--max-vram",
         f"{plan.gpu_budget / GIB:.2f}",
         "--cfg-scale",
@@ -296,6 +407,8 @@ def build_edit_command(
     ]
     if model["family"] == "qwen-image-edit-2511":
         args += ["--flow-shift", "3", "--model-args", "qwen_image_zero_cond_t=true"]
+    elif model["family"] == "qwen-image-2.1":
+        args += ["--model-args", "qwen_image_2_1_prefix_cache=false"]
     # FLUX.2 klein is distilled: guidance 1.0, a handful of steps, no model arguments.
     return args
 
@@ -343,7 +456,11 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
         tracker.checked(fraction)
         report()
 
-    files = verify_bundle(model, Path(data["bundle_dir"]), cancel, checked)
+    files = (
+        verify_custom_files(model, checked)
+        if model["model_id"] == CUSTOM_EDIT_MODEL_ID
+        else verify_bundle(model, Path(data["bundle_dir"]), cancel, checked)
+    )
     tracker.enter(1)
     # Re-admit after the potentially long checksum pass, without trusting stale free RAM.
     initial = sampler(device)
@@ -451,7 +568,7 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
                 raise RuntimeError(f"Editing stopped (exit {process.returncode}). {detail}")
             if not result.is_file():
                 raise RuntimeError("The editing runtime returned no image.")
-            with Image.open(result) as image:
+            with Image.open(result, formats=PILLOW_INPUT_FORMATS) as image:
                 image.verify()
             # Publish without overwriting an existing result, even in a filename race.
             publish_output(result, output, cancel)

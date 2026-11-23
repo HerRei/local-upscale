@@ -14,14 +14,17 @@
   import HelpTip from './HelpTip.svelte';
   import FileName from './FileName.svelte';
   import { isRestoreTask } from './lib/plan';
+  import { engineDisplayName } from './lib/engines';
   import { hardwareChoices, hardwarePatch, selectedHardware } from './lib/neuralEngine';
   import { groupedHardware, optionLabel } from './lib/hardwareRoutes';
   import type {
     CapabilityInfo,
     CatalogModel,
     EditModel,
+    EngineManagerSnapshot,
     InterpolationOrder,
     InterpolationTarget,
+    ModelMoveProgress,
     UiSettings,
     VideoCodec,
   } from './lib/types';
@@ -30,13 +33,21 @@
   export let selectedModel: CatalogModel | undefined;
   export let editModel: EditModel | undefined = undefined;
   export let capabilities: CapabilityInfo;
+  export let engines: EngineManagerSnapshot | undefined = undefined;
   export let usingTemporalVideo: boolean;
   export let preservingHdr = false;
   export let interpolationSupported = false;
+  export let defaultModelDirectory = '';
+  export let modelDirectoryMissing = false;
+  export let movingModels = false;
+  export let modelMoveProgress: ModelMoveProgress | null = null;
   export let updateSettings: (patch: Partial<UiSettings>) => void;
   export let setLowPriority: (value: boolean) => void = (value) =>
     updateSettings({ low_priority: value });
   export let chooseOutput: () => Promise<void>;
+  export let chooseModelFolder: () => Promise<void> = async () => undefined;
+  export let resetModelFolder: () => Promise<void> = async () => undefined;
+  export let onOpenEngineManager: () => void = () => undefined;
   /** Resolves true when the host took the request, false when it refused (and said so). */
   export let refreshCapabilities: () => Promise<boolean>;
 
@@ -181,7 +192,11 @@
         ><path d={advanced ? 'M3 7.5 6 4.5 9 7.5' : 'M3 4.5 6 7.5 9 4.5'} /></svg
       ></b
     ><small
-      >{settings.task === 'edit' ? 'Size, steps, seed, hardware' : 'Scale, format, hardware'}</small
+      >{settings.task === 'edit'
+        ? 'Size, steps, seed, hardware'
+        : isRestoreTask(settings)
+          ? 'Format, hardware'
+          : 'Scale, format, hardware'}</small
     ></button
   >
   {#if advanced}
@@ -251,17 +266,17 @@
             : 'More steps take longer.'} The same seed with the same prompt and image repeats a result.
         </p>
       {:else if !isRestoreTask(settings) && !(usingTemporalVideo && settings.video_target_resolution)}
-        {@const minScale = settings.task === 'video' ? 1 : 2}
+        {@const minScale = 2}
         {@const maxScale = usingTemporalVideo ? 4 : (selectedModel?.native_scale ?? 4)}
         <div class="field-row">
           <span class="label-with-tip"
             ><label for="scale">Output scale</label><HelpTip
               label="Output scale"
               text={usingTemporalVideo
-                ? 'How many times larger the result is than the original when Output resolution is set to match scale. At 1×, the video model is not used.'
+                ? 'How many times larger the result is than the original when Output resolution is set to match scale.'
                 : settings.task === 'video'
-                  ? `How many times larger the result is than the original. At 1×, the upscaling model is not used: only Fix first, De-flicker, Frame rate and Clean up audio run. A 2× or 3× choice on a ${selectedModel?.native_scale ?? 4}× model resizes down afterwards.`
-                  : `How many times larger the result is than the original. The model always works at its own ${selectedModel?.native_scale ?? 4}× scale; a smaller choice resizes that result down afterwards, so it saves no time.`}
+                  ? `How many times larger the result is than the original. A 2× or 3× choice on a ${selectedModel?.native_scale ?? 4}× model resizes down afterwards. To keep the size, use Restore.`
+                  : `How many times larger the result is than the original. The model always works at its own ${selectedModel?.native_scale ?? 4}× scale; a smaller choice resizes that result down afterwards, so it saves no time. To keep the size, use Restore.`}
             /></span
           ><select
             id="scale"
@@ -526,6 +541,71 @@
         </div>
         <b>Choose…</b>
       </div>
+      <div class="directory-field">
+        <button
+          type="button"
+          class="directory-hit"
+          disabled={movingModels}
+          aria-label={`Model folder ${settings.model_directory || defaultModelDirectory || 'Default folder'}`}
+          on:click={chooseModelFolder}
+        ></button>
+        <div class="directory-text">
+          <span class="label-with-tip"
+            ><small>Model folder</small><HelpTip
+              label="Model folder"
+              text="Where downloaded models and bundles are stored. Changing it checks free space and moves installed models there. Engine and temporary work files stay in the app folder."
+            /></span
+          ><span
+            class="directory-path"
+            title={movingModels
+              ? modelMoveProgress
+                ? `Moving ${modelMoveProgress.moved_files} of ${modelMoveProgress.total_files} files…`
+                : 'Moving files…'
+              : settings.model_directory || defaultModelDirectory || 'Default folder'}
+            >{movingModels
+              ? modelMoveProgress
+                ? `Moving ${modelMoveProgress.moved_files} of ${modelMoveProgress.total_files} files…`
+                : 'Moving files…'
+              : settings.model_directory || defaultModelDirectory || 'Default folder'}</span
+          >
+        </div>
+        <b
+          >{movingModels
+            ? modelMoveProgress
+              ? `${Math.round(modelMoveProgress.progress)}%`
+              : '0%'
+            : 'Choose…'}</b
+        >
+      </div>
+      {#if movingModels}
+        <progress
+          class="download-progress"
+          max="100"
+          value={modelMoveProgress?.progress ?? 0}
+          aria-label="Moving models"
+        ></progress>
+      {:else if !modelDirectoryMissing && settings.model_directory}
+        <div class="eyebrow-actions">
+          <button type="button" class="link-button" on:click={resetModelFolder}
+            >Reset to default</button
+          >
+        </div>
+      {/if}
+      {#if engines?.supported && !engines.managed_by_store}
+        <div class="field-row engine-row">
+          <span class="label-with-tip"
+            ><span class="field-label">Engine</span><HelpTip
+              label="Engine"
+              text="The inference runtime LocalSR uses on this computer. Switch to a GPU engine for faster processing, or import an offline engine file."
+            /></span
+          >
+          <div class="engine-value">
+            <span class="engine-active-label">{engineDisplayName(engines.active_backend)}</span>
+            <button type="button" class="link-button" on:click={onOpenEngineManager}>Change…</button
+            >
+          </div>
+        </div>
+      {/if}
       <div class="field-row" class:stacked={hardwareStacked}>
         <span class="label-with-tip"
           ><label for="device">Hardware</label><HelpTip

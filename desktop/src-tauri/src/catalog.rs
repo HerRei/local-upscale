@@ -7,18 +7,24 @@ use std::{
 
 use sha2::{Digest, Sha256};
 
+#[cfg(test)]
+use crate::paths::AppPaths;
 use crate::{
     error::{AppError, AppResult},
-    paths::AppPaths,
     types::CatalogManifest,
 };
 
 const CATALOG_JSON: &str = include_str!("../resources/model-catalog.json");
 
-pub fn load_catalog(paths: &AppPaths) -> AppResult<CatalogManifest> {
+pub fn load_catalog_in(model_root: &Path) -> AppResult<CatalogManifest> {
     let mut catalog = bundled_catalog()?;
-    refresh_install_state(&mut catalog, paths);
+    refresh_install_state_in(&mut catalog, model_root);
     Ok(catalog)
+}
+
+#[cfg(test)]
+pub fn load_catalog(paths: &AppPaths) -> AppResult<CatalogManifest> {
+    load_catalog_in(&paths.model_root)
 }
 
 /// The catalog shipped with this build, without install state.
@@ -26,15 +32,21 @@ pub fn bundled_catalog() -> AppResult<CatalogManifest> {
     Ok(serde_json::from_str(CATALOG_JSON)?)
 }
 
+#[cfg(test)]
 pub fn refresh_install_state(catalog: &mut CatalogManifest, paths: &AppPaths) {
+    refresh_install_state_in(catalog, &paths.model_root);
+}
+
+pub fn refresh_install_state_in(catalog: &mut CatalogManifest, model_root: &Path) {
+    let root_present = model_root.is_dir();
     for model in &mut catalog.models {
-        let path = paths.model_root.join(&model.filename);
+        let path = model_root.join(&model.filename);
         // Discovery must stay metadata-only. Download installation performs
         // the full SHA-256 check and the isolated worker re-verifies risky
         // image checkpoints before deserializing them. Hashing every model in
         // this synchronous path would read multi-gigabyte video bundles on the
         // native UI thread.
-        model.installed = installed_file(&path, model.size_bytes);
+        model.installed = root_present && installed_file(&path, model.size_bytes);
         model.installed_path = model.installed.then(|| path.to_string_lossy().into_owned());
     }
     for model in catalog
@@ -44,11 +56,12 @@ pub fn refresh_install_state(catalog: &mut CatalogManifest, paths: &AppPaths) {
         .chain(catalog.audio_models.iter_mut())
     {
         model.total_size_bytes = model.files.iter().map(|file| file.size_bytes).sum();
-        let bundle = paths.model_root.join(&model.family);
-        model.installed = model
-            .files
-            .iter()
-            .all(|file| installed_file(&bundle.join(&file.filename), file.size_bytes));
+        let bundle = model_root.join(&model.family);
+        model.installed = root_present
+            && model
+                .files
+                .iter()
+                .all(|file| installed_file(&bundle.join(&file.filename), file.size_bytes));
         model.installed_path = model
             .installed
             .then(|| bundle.to_string_lossy().into_owned());
