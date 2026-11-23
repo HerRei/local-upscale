@@ -138,6 +138,19 @@ fn worker_candidates(
     if let Some(contents) = parent.parent() {
         candidates.push(contents.join("Resources").join("engine").join(worker_name));
     }
+    // A system package (.deb) installs the host in /usr/bin and Tauri's resources in
+    // /usr/lib/<productName>, the same layout an AppImage has below APPDIR.
+    if parent.file_name().is_some_and(|name| name == "bin") {
+        if let Some(prefix) = parent.parent() {
+            candidates.push(
+                prefix
+                    .join("lib")
+                    .join(product_name)
+                    .join("engine")
+                    .join(worker_name),
+            );
+        }
+    }
     if let Some(appdir) = appdir {
         // Tauri stores AppImage resources in APPDIR/usr/lib/<productName>.
         // Keep the Cargo package name as a compatibility fallback for locally
@@ -485,6 +498,17 @@ mod tests {
         assert!(candidates.contains(&PathBuf::from(
             "/tmp/.mount_LocalSR/usr/lib/localsr-next/engine/localsr-worker"
         )));
+    }
+
+    #[test]
+    fn packaged_worker_candidates_cover_a_system_package_layout() {
+        let candidates = worker_candidates(
+            Path::new("/usr/bin/localsr-next"),
+            "localsr-worker",
+            None,
+            "LocalSR",
+        );
+        assert!(candidates.contains(&PathBuf::from("/usr/lib/LocalSR/engine/localsr-worker")));
     }
 
     #[test]
