@@ -55,6 +55,16 @@ pub(crate) fn compiled_context() -> tauri::Context<tauri::Wry> {
     tauri::generate_context!()
 }
 
+#[doc(hidden)]
+pub fn fuzz_detect_gguf_edit_family(bytes: &[u8]) -> Option<&'static str> {
+    editing::detect_gguf_edit_family_bytes(bytes)
+}
+
+#[doc(hidden)]
+pub fn fuzz_parse_engine_manifest(bytes: &[u8]) -> std::io::Result<()> {
+    engine_payload::parse_manifest(bytes).map(|_| ())
+}
+
 /// Files macOS asked us to open before the setup hook created the app state.
 ///
 /// When the app is launched by opening a document, `application:openURLs:` is

@@ -1,0 +1,30 @@
+[package]
+name = "localsr-next-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.localsr-next]
+path = ".."
+
+[[bin]]
+name = "gguf_family"
+path = "fuzz_targets/gguf_family.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "engine_manifest"
+path = "fuzz_targets/engine_manifest.rs"
+test = false
+doc = false
+bench = false

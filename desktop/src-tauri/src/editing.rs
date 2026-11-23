@@ -376,7 +376,14 @@ fn skip_gguf_value<R: Read>(reader: &mut R, value_type: u32, depth: u8) -> std::
 /// Inspect GGUF metadata and tensor headers to identify the editing model family.
 pub fn detect_gguf_edit_family(path: &Path) -> Option<&'static str> {
     let file = File::open(path).ok()?;
-    let mut reader = BufReader::new(file);
+    detect_gguf_edit_family_reader(BufReader::new(file))
+}
+
+pub fn detect_gguf_edit_family_bytes(bytes: &[u8]) -> Option<&'static str> {
+    detect_gguf_edit_family_reader(std::io::Cursor::new(bytes))
+}
+
+fn detect_gguf_edit_family_reader<R: Read>(mut reader: R) -> Option<&'static str> {
     let mut magic = [0_u8; 4];
     reader.read_exact(&mut magic).ok()?;
     if &magic != b"GGUF" {
@@ -1093,5 +1100,28 @@ mod tests {
         let err = verify_custom_edit_load(&fail_cli, &custom).unwrap_err();
         assert!(err.contains("the VAE"));
         assert!(!err.contains("private-"));
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn gguf_family_parser_never_panics_on_arbitrary_bytes(data in proptest::collection::vec(proptest::arbitrary::any::<u8>(), 0..512)) {
+            let _ = detect_gguf_edit_family_bytes(&data);
+        }
+
+        #[test]
+        fn gguf_family_parser_handles_mutated_headers(
+            tail in proptest::collection::vec(proptest::arbitrary::any::<u8>(), 0..256),
+            version in 0_u32..6,
+            tensors in 0_u64..16,
+            kvs in 0_u64..16,
+        ) {
+            let mut bytes = Vec::with_capacity(24 + tail.len());
+            bytes.extend_from_slice(b"GGUF");
+            bytes.extend_from_slice(&version.to_le_bytes());
+            bytes.extend_from_slice(&tensors.to_le_bytes());
+            bytes.extend_from_slice(&kvs.to_le_bytes());
+            bytes.extend_from_slice(&tail);
+            let _ = detect_gguf_edit_family_bytes(&bytes);
+        }
     }
 }
