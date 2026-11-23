@@ -79,8 +79,10 @@ depended on a user report.
   error the tester saw, word for word, from 0.5.0's own code.
 - `upgrade_check.py` with the fix passes from 0.4.0, 0.5.0 and 0.5.2 on macOS with the
   real engine: each old updater installs the engine package, and the new host records
-  that engine and completes the handshake with it. The Windows CUDA and Linux CPU jobs
-  run the same check in CI.
+  that engine and completes the handshake with it. On Windows CUDA in CI (run
+  45234563541) the updaters of 0.4.0, 0.5.0 and 0.5.2 each installed the real CUDA engine
+  package of 0.6.0, and the 0.6.0 host recorded and started it. The Linux CPU job runs
+  the same check.
 - Still to do before 0.6.0 ships: the real in-app update from 0.5.0 to 0.6.0 of the
   Windows CUDA edition on the Windows test laptop.
 
