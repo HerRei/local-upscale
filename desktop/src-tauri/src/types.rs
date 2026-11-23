@@ -458,6 +458,9 @@ pub struct UiSettings {
     // macOS: a template (black or white) icon like the system's; false shows the app icon.
     #[serde(default = "default_true")]
     pub menu_bar_icon_monochrome: bool,
+    // Remove unused compiled model caches (older than 30 days or over 5 GB) on startup.
+    #[serde(default = "default_true")]
+    pub auto_cache_cleanup: bool,
 }
 
 fn default_true() -> bool {
@@ -578,6 +581,7 @@ impl Default for UiSettings {
             show_in_menu_bar: true,
             notify_on_finish: true,
             menu_bar_icon_monochrome: true,
+            auto_cache_cleanup: true,
         }
     }
 }

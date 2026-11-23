@@ -181,7 +181,14 @@ fn guarded_cleanup(state: &AppState, bases: &[PathBuf], clear: bool) -> AppResul
 }
 
 pub(crate) fn cleanup_at_start(state: &AppState) -> AppResult<()> {
-    guarded_cleanup(state, &[cache_base()?], false).map(|_| ())
+    cleanup_at_start_in(state, &[cache_base()?])
+}
+
+fn cleanup_at_start_in(state: &AppState, bases: &[PathBuf]) -> AppResult<()> {
+    if !lock(&state.settings)?.auto_cache_cleanup {
+        return Ok(());
+    }
+    guarded_cleanup(state, bases, false).map(|_| ())
 }
 
 #[tauri::command]
@@ -302,5 +309,48 @@ mod tests {
         crate::state::lock(&state.runtime).unwrap().active_job_id = "running".into();
         assert!(guarded_cleanup(&state, &[dir.path().to_path_buf()], true).is_err());
         assert!(program.exists());
+    }
+
+    #[test]
+    fn startup_cleanup_respects_auto_cache_cleanup_but_manual_clear_always_clears() {
+        let dir = tempfile::tempdir().unwrap();
+        let state =
+            crate::state::AppState::from_paths(crate::paths::AppPaths::under(dir.path())).unwrap();
+        let program = dir.path().join("LocalSR/gpu-checks/npu-cache/program.blob");
+        fs::create_dir_all(program.parent().unwrap()).unwrap();
+        {
+            let file = fs::File::create(&program).unwrap();
+            use std::io::Write;
+            (&file).write_all(b"program").unwrap();
+            let old = SystemTime::now() - Duration::from_secs(40 * 86400);
+            file.set_times(fs::FileTimes::new().set_accessed(old).set_modified(old))
+                .unwrap();
+        }
+
+        crate::state::lock(&state.settings)
+            .unwrap()
+            .auto_cache_cleanup = false;
+        cleanup_at_start_in(&state, &[dir.path().to_path_buf()]).unwrap();
+        assert!(program.exists());
+
+        // Manual clear still clears when automatic cleanup is off.
+        let remaining = guarded_cleanup(&state, &[dir.path().to_path_buf()], true).unwrap();
+        assert_eq!(remaining, 0);
+        assert!(!program.exists());
+
+        // With automatic cleanup on, an expired entry is removed at startup.
+        {
+            let file = fs::File::create(&program).unwrap();
+            use std::io::Write;
+            (&file).write_all(b"program").unwrap();
+            let old = SystemTime::now() - Duration::from_secs(40 * 86400);
+            file.set_times(fs::FileTimes::new().set_accessed(old).set_modified(old))
+                .unwrap();
+        }
+        crate::state::lock(&state.settings)
+            .unwrap()
+            .auto_cache_cleanup = true;
+        cleanup_at_start_in(&state, &[dir.path().to_path_buf()]).unwrap();
+        assert!(!program.exists());
     }
 }

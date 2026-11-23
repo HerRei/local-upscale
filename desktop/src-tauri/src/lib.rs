@@ -157,8 +157,7 @@ pub fn run() {
                 show_startup_notices(app.handle(), &state);
             }
             *lock(&state.bundled_engine_path)? = worker::bundled_engine_executable(app.handle());
-            let switches = native_menu::switches(&*lock(&state.settings)?);
-            native_menu::install(app, &lock(&state.recipes)?, switches)?;
+            native_menu::install(app, &lock(&state.recipes)?)?;
             tray::install(app.handle());
             fit_main_window(app.handle());
             let startup_state = state.clone();
@@ -233,7 +232,7 @@ pub fn run() {
             commands::clear_media,
             commands::clear_results,
             commands::save_settings,
-            commands::set_update_switch,
+            commands::set_preference,
             commands::set_privacy_choice,
             commands::save_recipe,
             commands::delete_recipe,

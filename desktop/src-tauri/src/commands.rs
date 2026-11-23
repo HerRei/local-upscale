@@ -505,13 +505,13 @@ fn persist_or_restore(state: &AppState, restore: impl FnOnce(&AppState)) -> AppR
     written
 }
 
-/// The update switches change only through set_update_switch. A full settings save
-/// carries the window's copy, which an older refresh may have left behind; it must
-/// never turn an opt-out back on.
+/// Preferences changed via set_preference (and host flags) are preserved across a
+/// full settings save, which may carry an older copy from the window.
 fn keep_update_switches(current: &UiSettings, incoming: &mut UiSettings) {
     incoming.trusted_checkpoint_sha256 = current.trusted_checkpoint_sha256.clone();
     incoming.appearance = current.appearance.clone();
     incoming.colour_blind_palette = current.colour_blind_palette;
+    incoming.interface_scale = current.interface_scale;
     incoming.check_updates_at_launch = current.check_updates_at_launch;
     incoming.anonymous_update_count = current.anonymous_update_count;
     incoming.privacy_choice_made = current.privacy_choice_made;
@@ -519,6 +519,9 @@ fn keep_update_switches(current: &UiSettings, incoming: &mut UiSettings) {
     incoming.low_priority = current.low_priority;
     incoming.show_in_menu_bar = current.show_in_menu_bar;
     incoming.notify_on_finish = current.notify_on_finish;
+    incoming.completion_sound = current.completion_sound;
+    incoming.menu_bar_icon_monochrome = current.menu_bar_icon_monochrome;
+    incoming.auto_cache_cleanup = current.auto_cache_cleanup;
     incoming.skipped_update_version = current.skipped_update_version.clone();
     incoming.model_directory = current.model_directory.clone();
     incoming.gpu_download_notice_dismissed = current.gpu_download_notice_dismissed;
@@ -597,46 +600,17 @@ pub fn uninstall_linux_menu(state: State<'_, Arc<AppState>>, app: AppHandle) -> 
     Ok(())
 }
 
-/// Persist menu appearance changes independently of processing settings.
-pub fn change_appearance(state: &AppState, app: &AppHandle, action: &str) {
-    if let Err(error) = apply_appearance(state, action) {
-        eprintln!("LocalSR: could not save appearance: {error}");
-    }
-    refresh_update_switches(app);
-}
-
-fn apply_appearance(state: &AppState, action: &str) -> AppResult<()> {
-    let _io = lock(&state.settings_io)?;
-    let previous = {
-        let mut settings = lock(&state.settings)?;
-        let previous = (settings.appearance.clone(), settings.colour_blind_palette);
-        match action {
-            "dark" | "light" | "system" => settings.appearance = action.into(),
-            "colour-blind" => settings.colour_blind_palette = !settings.colour_blind_palette,
-            _ => return Err(AppError::Validation("unknown appearance".into())),
-        }
-        previous
-    };
-    if let Err(error) = state.write_settings() {
-        let mut settings = lock(&state.settings)?;
-        settings.appearance = previous.0;
-        settings.colour_blind_palette = previous.1;
-        return Err(error);
-    }
-    Ok(())
-}
-
-/// Set one update switch. It may change while jobs run: it does not touch them.
+/// Set one app-wide preference. It may change while jobs run: it does not touch them.
 #[tauri::command]
-pub fn set_update_switch(
+pub fn set_preference(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
     name: String,
-    value: bool,
+    value: Value,
 ) -> AppResult<()> {
-    let result = apply_update_switch(&state, &name, |_| value);
-    refresh_update_switches(&app);
-    result
+    apply_preference(&state, &name, &value)?;
+    emit_state_changed(&app);
+    Ok(())
 }
 
 struct SetupChoices {
@@ -668,7 +642,7 @@ pub fn set_privacy_choice(
             crash_reports,
         },
     )?;
-    refresh_update_switches(&app);
+    emit_state_changed(&app);
     Ok(())
 }
 
@@ -710,79 +684,72 @@ fn apply_privacy_choice(state: &AppState, choices: SetupChoices) -> AppResult<()
     }
     let enabled = lock(&state.settings)?.crash_reports;
     crate::crash_reports::configure_hook(&state.paths, enabled);
-    if !enabled {
-        crate::crash_reports::delete_all(&state.paths)?;
-    }
     Ok(())
 }
 
-/// The menu's own click: flip the saved value, whatever the window shows.
-pub fn toggle_update_switch(state: &AppState, app: &AppHandle, name: &str) {
-    if let Err(error) = apply_update_switch(state, name, |current| !current) {
-        eprintln!("LocalSR: could not save {name}: {error}");
-    }
-    refresh_update_switches(app);
-}
-
-/// Change one switch and write it, as one step: other writers wait, so two quick clicks
-/// are two flips and no older copy of the settings lands after this one.
-fn apply_update_switch(
-    state: &AppState,
-    name: &str,
-    change: impl FnOnce(bool) -> bool,
-) -> AppResult<()> {
+/// Change one preference and write it, as one step: other writers wait, so two quick
+/// changes apply in order and no older copy of the settings lands after this one.
+fn apply_preference(state: &AppState, name: &str, value: &Value) -> AppResult<()> {
     let _io = lock(&state.settings_io)?;
     let previous = {
         let mut settings = lock(&state.settings)?;
-        let field = match name {
-            "check_updates_at_launch" => &mut settings.check_updates_at_launch,
-            "anonymous_update_count" => &mut settings.anonymous_update_count,
-            "crash_reports" => &mut settings.crash_reports,
-            "low_priority" => &mut settings.low_priority,
-            "show_in_menu_bar" => &mut settings.show_in_menu_bar,
-            "notify_on_finish" => &mut settings.notify_on_finish,
-            _ => {
-                return Err(AppError::Validation(format!(
-                    "unknown update switch: {name}"
-                )))
-            }
+        let previous = settings.clone();
+        let bool_value = || {
+            value
+                .as_bool()
+                .ok_or_else(|| AppError::Validation(format!("expected boolean for {name}")))
         };
-        let previous = *field;
-        *field = change(previous);
+        match name {
+            "check_updates_at_launch" => settings.check_updates_at_launch = bool_value()?,
+            "anonymous_update_count" => settings.anonymous_update_count = bool_value()?,
+            "crash_reports" => settings.crash_reports = bool_value()?,
+            "low_priority" => settings.low_priority = bool_value()?,
+            "show_in_menu_bar" => settings.show_in_menu_bar = bool_value()?,
+            "notify_on_finish" => settings.notify_on_finish = bool_value()?,
+            "completion_sound" => settings.completion_sound = bool_value()?,
+            "menu_bar_icon_monochrome" => settings.menu_bar_icon_monochrome = bool_value()?,
+            "colour_blind_palette" => settings.colour_blind_palette = bool_value()?,
+            "auto_cache_cleanup" => settings.auto_cache_cleanup = bool_value()?,
+            "appearance" => {
+                let appearance = value
+                    .as_str()
+                    .filter(|s| matches!(*s, "dark" | "light" | "system"))
+                    .ok_or_else(|| AppError::Validation("unknown appearance".into()))?;
+                settings.appearance = appearance.into();
+            }
+            "interface_scale" => {
+                let scale = value
+                    .as_u64()
+                    .and_then(|n| u32::try_from(n).ok())
+                    .filter(|n| matches!(*n, 100 | 110 | 125))
+                    .ok_or_else(|| {
+                        AppError::Validation(
+                            "interface scale must be 100, 110, or 125 percent".into(),
+                        )
+                    })?;
+                settings.interface_scale = scale;
+            }
+            _ => {
+                return Err(AppError::Validation(format!("unknown preference: {name}")));
+            }
+        }
         previous
     };
     if let Err(error) = state.write_settings() {
         // Shown and used must match what is on disk.
         if let Ok(mut settings) = lock(&state.settings) {
-            match name {
-                "check_updates_at_launch" => settings.check_updates_at_launch = previous,
-                "anonymous_update_count" => settings.anonymous_update_count = previous,
-                "crash_reports" => settings.crash_reports = previous,
-                "low_priority" => settings.low_priority = previous,
-                "show_in_menu_bar" => settings.show_in_menu_bar = previous,
-                "notify_on_finish" => settings.notify_on_finish = previous,
-                _ => {}
-            }
+            *settings = previous;
         }
         return Err(error);
     }
     if name == "crash_reports" {
         let enabled = lock(&state.settings)?.crash_reports;
         crate::crash_reports::configure_hook(&state.paths, enabled);
-        if !enabled {
-            crate::crash_reports::delete_all(&state.paths)?;
-        }
     } else if name == "low_priority" {
         let enabled = lock(&state.settings)?.low_priority;
         crate::worker::apply_low_priority(state, enabled);
     }
     Ok(())
-}
-
-/// The menu sets its own check mark when clicked; it and the window show what is saved.
-fn refresh_update_switches(app: &AppHandle) {
-    native_menu::reconcile(app);
-    emit_state_changed(app);
 }
 
 #[tauri::command]
@@ -794,8 +761,7 @@ pub fn save_recipe(
     crate::updates::ensure_not_installing(&state)?;
     let _scheduler = lock(&state.scheduler)?;
     save_recipe_checked(&state, recipe)?;
-    let switches = native_menu::switches(&*lock(&state.settings)?);
-    native_menu::rebuild(&app, &lock(&state.recipes)?, switches).map_err(|error| {
+    native_menu::rebuild(&app, &lock(&state.recipes)?).map_err(|error| {
         AppError::Config(format!(
             "could not refresh the native presets menu: {error}"
         ))
@@ -992,8 +958,7 @@ pub fn delete_recipe(state: State<'_, Arc<AppState>>, app: AppHandle, id: String
     crate::updates::ensure_not_installing(&state)?;
     let _scheduler = lock(&state.scheduler)?;
     delete_recipe_checked(&state, &id)?;
-    let switches = native_menu::switches(&*lock(&state.settings)?);
-    native_menu::rebuild(&app, &lock(&state.recipes)?, switches).map_err(|error| {
+    native_menu::rebuild(&app, &lock(&state.recipes)?).map_err(|error| {
         AppError::Config(format!(
             "could not refresh the native presets menu: {error}"
         ))
@@ -4698,16 +4663,7 @@ mod tests;
 pub fn list_crash_reports(
     state: State<'_, Arc<AppState>>,
 ) -> Vec<crate::crash_reports::StoredReport> {
-    if state
-        .settings
-        .lock()
-        .map(|s| s.crash_reports)
-        .unwrap_or(false)
-    {
-        crate::crash_reports::list(&state.paths)
-    } else {
-        Vec::new()
-    }
+    crate::crash_reports::list(&state.paths)
 }
 #[tauri::command]
 pub fn delete_crash_report(state: State<'_, Arc<AppState>>, id: String) -> AppResult<()> {
@@ -4740,5 +4696,5 @@ pub fn record_frontend_error(state: State<'_, Arc<AppState>>, message: String, s
 
 #[cfg(test)]
 pub(crate) fn test_crash_switch(state: &AppState, value: bool) -> AppResult<()> {
-    apply_update_switch(state, "crash_reports", |_| value)
+    apply_preference(state, "crash_reports", &Value::Bool(value))
 }

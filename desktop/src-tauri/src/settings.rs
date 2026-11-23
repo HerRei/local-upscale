@@ -360,15 +360,18 @@ mod tests {
         assert!(settings.show_in_menu_bar);
         assert!(settings.notify_on_finish);
         assert!(settings.menu_bar_icon_monochrome);
+        assert!(settings.auto_cache_cleanup);
 
         settings.show_in_menu_bar = false;
         settings.notify_on_finish = false;
         settings.menu_bar_icon_monochrome = false;
+        settings.auto_cache_cleanup = false;
         save(&paths, &settings, &recipes).unwrap();
         let (reloaded, _) = load(&paths);
         assert!(!reloaded.show_in_menu_bar);
         assert!(!reloaded.notify_on_finish);
         assert!(!reloaded.menu_bar_icon_monochrome);
+        assert!(!reloaded.auto_cache_cleanup);
     }
 
     #[test]

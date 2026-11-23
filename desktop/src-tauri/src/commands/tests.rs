@@ -353,60 +353,77 @@ fn a_restore_recipe_ends_with_its_restore_model_and_only_restorations_name_a_fix
 }
 
 #[test]
-fn an_update_switch_is_written_at_once_and_rolled_back_when_writing_fails() {
-    let directory = tempfile::tempdir().unwrap();
-    let paths = crate::paths::AppPaths::under(directory.path());
-    fs::create_dir_all(&paths.next_root).unwrap();
-    fs::create_dir_all(&paths.model_root).unwrap();
-    let state = AppState::from_paths(paths).unwrap();
-    apply_update_switch(&state, "anonymous_update_count", |_| false).unwrap();
-    let (saved, _) = crate::settings::load(&state.paths);
-    assert!(!saved.anonymous_update_count);
-    // Two flips are two flips.
-    apply_update_switch(&state, "check_updates_at_launch", |current| !current).unwrap();
-    apply_update_switch(&state, "check_updates_at_launch", |current| !current).unwrap();
-    assert!(
-        crate::settings::load(&state.paths)
-            .0
-            .check_updates_at_launch
-    );
-    assert!(apply_update_switch(&state, "device_id", |_| true).is_err());
-    // An unreadable settings file refuses the write; memory goes back to match the disk.
-    fs::write(&state.paths.settings, b"{ not json").unwrap();
-    assert!(apply_update_switch(&state, "anonymous_update_count", |_| true).is_err());
-    assert!(!lock(&state.settings).unwrap().anonymous_update_count);
-}
-
-#[test]
-fn appearance_is_saved_during_a_job_and_restored_on_write_failure() {
+fn set_preference_round_trips_all_keys_rejects_bad_input_and_rolls_back_on_error() {
     let directory = tempfile::tempdir().unwrap();
     let paths = crate::paths::AppPaths::under(directory.path());
     fs::create_dir_all(&paths.next_root).unwrap();
     fs::create_dir_all(&paths.model_root).unwrap();
     let state = AppState::from_paths(paths).unwrap();
     lock(&state.runtime).unwrap().active_job_id = "running".into();
-    apply_appearance(&state, "light").unwrap();
-    apply_appearance(&state, "colour-blind").unwrap();
+
+    for (name, value) in [
+        ("check_updates_at_launch", serde_json::json!(false)),
+        ("anonymous_update_count", serde_json::json!(false)),
+        ("crash_reports", serde_json::json!(false)),
+        ("low_priority", serde_json::json!(true)),
+        ("show_in_menu_bar", serde_json::json!(false)),
+        ("notify_on_finish", serde_json::json!(false)),
+        ("completion_sound", serde_json::json!(true)),
+        ("menu_bar_icon_monochrome", serde_json::json!(false)),
+        ("colour_blind_palette", serde_json::json!(true)),
+        ("auto_cache_cleanup", serde_json::json!(false)),
+        ("appearance", serde_json::json!("light")),
+        ("interface_scale", serde_json::json!(125)),
+    ] {
+        apply_preference(&state, name, &value).unwrap();
+    }
+
     let saved = crate::settings::load(&state.paths).0;
-    assert_eq!(saved.appearance, "light");
+    assert!(!saved.check_updates_at_launch);
+    assert!(!saved.anonymous_update_count);
+    assert!(!saved.crash_reports);
+    assert!(saved.low_priority);
+    assert!(!saved.show_in_menu_bar);
+    assert!(!saved.notify_on_finish);
+    assert!(saved.completion_sound);
+    assert!(!saved.menu_bar_icon_monochrome);
     assert!(saved.colour_blind_palette);
-    let mut stale = UiSettings::default();
-    keep_update_switches(&saved, &mut stale);
-    assert_eq!(stale.appearance, "light");
-    assert!(stale.colour_blind_palette);
+    assert!(!saved.auto_cache_cleanup);
+    assert_eq!(saved.appearance, "light");
+    assert_eq!(saved.interface_scale, 125);
+
+    // Reject unknown names and bad values.
+    assert!(apply_preference(&state, "device_id", &serde_json::json!("cpu")).is_err());
+    assert!(apply_preference(&state, "low_priority", &serde_json::json!("yes")).is_err());
+    assert!(apply_preference(&state, "appearance", &serde_json::json!("sepia")).is_err());
+    assert!(apply_preference(&state, "appearance", &serde_json::json!(123)).is_err());
+    assert!(apply_preference(&state, "interface_scale", &serde_json::json!(150)).is_err());
+    assert!(apply_preference(&state, "interface_scale", &serde_json::json!("125")).is_err());
+
+    // An unreadable settings file refuses the write; memory goes back to match the disk.
     fs::write(&state.paths.settings, b"{ not json").unwrap();
-    assert!(apply_appearance(&state, "dark").is_err());
-    assert_eq!(lock(&state.settings).unwrap().appearance, "light");
-    assert!(apply_appearance(&state, "unknown").is_err());
+    assert!(apply_preference(&state, "anonymous_update_count", &serde_json::json!(true)).is_err());
+    assert!(apply_preference(&state, "appearance", &serde_json::json!("dark")).is_err());
+    assert!(apply_preference(&state, "interface_scale", &serde_json::json!(100)).is_err());
+    let mem = lock(&state.settings).unwrap();
+    assert!(!mem.anonymous_update_count);
+    assert_eq!(mem.appearance, "light");
+    assert_eq!(mem.interface_scale, 125);
 }
 
 #[test]
-fn a_full_settings_save_never_changes_the_update_switches() {
+fn a_full_settings_save_never_changes_host_owned_preferences() {
     let current = UiSettings {
         anonymous_update_count: false,
+        appearance: "light".into(),
+        colour_blind_palette: true,
+        interface_scale: 125,
+        completion_sound: true,
+        menu_bar_icon_monochrome: false,
+        auto_cache_cleanup: false,
         ..UiSettings::default()
     };
-    // A window copy from an older refresh still has the count on.
+    // A window copy from an older refresh still has defaults for host-owned preferences.
     let mut incoming = UiSettings {
         tile_size: UiSettings::default().tile_size + 64,
         ..UiSettings::default()
@@ -414,17 +431,24 @@ fn a_full_settings_save_never_changes_the_update_switches() {
     keep_update_switches(&current, &mut incoming);
     assert!(!incoming.anonymous_update_count);
     assert!(incoming.check_updates_at_launch);
+    assert_eq!(incoming.appearance, "light");
+    assert!(incoming.colour_blind_palette);
+    assert_eq!(incoming.interface_scale, 125);
+    assert!(incoming.completion_sound);
+    assert!(!incoming.menu_bar_icon_monochrome);
+    assert!(!incoming.auto_cache_cleanup);
     assert_eq!(incoming.tile_size, UiSettings::default().tile_size + 64);
-    // Settings saved before 0.3.3 check at launch, as before.
+
+    // Settings saved before 0.3.3 check at launch, and before 0.6.0 auto-clean cache.
     let mut saved = serde_json::to_value(UiSettings::default()).unwrap();
-    saved
-        .as_object_mut()
-        .unwrap()
-        .remove("check_updates_at_launch");
-    saved.as_object_mut().unwrap().remove("crash_reports");
+    let map = saved.as_object_mut().unwrap();
+    map.remove("check_updates_at_launch");
+    map.remove("crash_reports");
+    map.remove("auto_cache_cleanup");
     let loaded = serde_json::from_value::<UiSettings>(saved).unwrap();
     assert!(loaded.check_updates_at_launch);
     assert!(!loaded.crash_reports);
+    assert!(loaded.auto_cache_cleanup);
 }
 
 #[test]
@@ -437,7 +461,7 @@ fn crash_reports_switch_saves_while_a_job_runs_and_full_save_keeps_it() {
     // New installs start with crash reports on; turning them off must stick.
     assert!(crate::settings::load(&state.paths).0.crash_reports);
     lock(&state.runtime).unwrap().active_job_id = "running".into();
-    apply_update_switch(&state, "crash_reports", |_| false).unwrap();
+    apply_preference(&state, "crash_reports", &serde_json::json!(false)).unwrap();
     let saved = crate::settings::load(&state.paths).0;
     assert!(!saved.crash_reports);
     let mut stale = UiSettings::default();
@@ -2687,7 +2711,7 @@ fn low_priority_switch_saves_while_a_job_runs_and_notifies_the_engine() {
     *lock(&state.worker.sender).unwrap() = Some(sender);
     lock(&state.runtime).unwrap().active_job_id = "running".into();
 
-    apply_update_switch(&state, "low_priority", |_| true).unwrap();
+    apply_preference(&state, "low_priority", &serde_json::json!(true)).unwrap();
     let saved = crate::settings::load(&state.paths).0;
     assert!(saved.low_priority);
 
@@ -2717,8 +2741,8 @@ fn menu_bar_and_finish_notification_switches_save_while_running_and_default_on()
     assert!(crate::settings::load(&state.paths).0.notify_on_finish);
 
     lock(&state.runtime).unwrap().active_job_id = "running".into();
-    apply_update_switch(&state, "show_in_menu_bar", |_| false).unwrap();
-    apply_update_switch(&state, "notify_on_finish", |_| false).unwrap();
+    apply_preference(&state, "show_in_menu_bar", &serde_json::json!(false)).unwrap();
+    apply_preference(&state, "notify_on_finish", &serde_json::json!(false)).unwrap();
     let saved = crate::settings::load(&state.paths).0;
     assert!(!saved.show_in_menu_bar);
     assert!(!saved.notify_on_finish);
