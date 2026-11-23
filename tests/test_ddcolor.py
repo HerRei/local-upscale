@@ -509,3 +509,25 @@ def test_catalog_contains_only_pinned_ddcolor_l():
     assert model.sha256 == "d81711971ec59200da26d5e8a1afae8dd3778d495ea8ad7a7dadc769f403f7e7"
     assert "060f67494e31883a4b13cb27f889f3154847ada4" in model.download_url
     assert is_ddcolor_state_dict(_small_ddcolor().state_dict())
+
+
+def test_video_frames_run_ddcolor_on_the_whole_frame(tmp_path):
+    # Video frames go through process_frame, which tiles upscalers. DDColor must run on
+    # the whole frame and return RGB, as process_image does for photos.
+    ckpt_path = _save_small_checkpoint(tmp_path / "small_ddcolor.pth", wrapped=True)
+    adapter = ModelAdapter(allow_unverified_checkpoints=True)
+    info = adapter.inspect(str(ckpt_path))
+    engine = InferenceEngine(adapter)
+    engine.load_model(str(ckpt_path), "cpu", "fp32", info)
+    frame = torch.full((3, 200, 300), 0.5)
+    out = engine.process_frame(
+        img_tensor=frame,
+        model_info=info,
+        tile_size=128,
+        halo=0,
+        cancel_event=threading.Event(),
+        progress_callback=lambda *_: None,
+        whole_frame=True,
+    )
+    assert out.shape == (3, 200, 300)
+    assert out.dtype == np.uint8

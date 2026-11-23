@@ -811,6 +811,14 @@ class InferenceEngine:
             raise RuntimeError("Model is not loaded. Call load_model() first.")
 
         _, h, w = img_tensor.shape
+        if getattr(model_info, "architecture", "") == "DDColor" and not float_output:
+            # DDColor predicts colour for the whole picture; tiling it as an upscaler
+            # would feed its two colour channels into an RGB tile.
+            from localsr.image_models.ddcolor import colorize_tensor
+
+            result = colorize_tensor(model, img_tensor, device=device, cancel_event=cancel_event)
+            progress_callback(1, 1, max(w, h))
+            return result.rgb
         scale = model_info.scale
         out_channels = model_info.out_channels
         output_dtype = np.float32 if float_output else np.uint8
