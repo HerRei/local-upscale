@@ -2048,6 +2048,26 @@ fn attach_status_metadata_populates_skipped_version_for_return_values() {
 }
 
 #[test]
+fn future_schema_settings_do_not_trigger_settings_recovery_or_block_persist() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(root.path());
+    fs::create_dir_all(&paths.next_root).unwrap();
+    let original = r#"{"schema_version":3,"ui":{"output_scale":4},"recipes":[]}"#;
+    fs::write(&paths.settings, original).unwrap();
+    let state = AppState::from_paths(paths.clone()).unwrap();
+    let mut status = UpdateStatus {
+        configured: true,
+        stage: "downloaded".into(),
+        version: "0.7.0-beta".into(),
+        ..Default::default()
+    };
+    attach_status_metadata(&state, &mut status);
+    assert!(!status.settings_recovery);
+    assert!(state.persist_settings().is_ok());
+    assert_eq!(fs::read_to_string(&paths.settings).unwrap(), original);
+}
+
+#[test]
 fn every_engine_start_rejects_same_size_changes_to_code_files() {
     for name in [
         worker_executable_name(),
