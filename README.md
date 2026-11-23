@@ -68,6 +68,11 @@ Hofmann. The library also has HAT, Real-ESRGAN, SwinIR, NAFNet, SCUNet, FBCNN
 and DDColor, and each model shows its size, licence and source before you download it.
 [Model guide](docs/models/README.md) · [Model licences](docs/model-licenses.md).
 
+<!-- release-candidate -->
+v0.6.0-beta is in preparation; the downloads below are still v0.5.2-beta.
+[Draft release notes](docs/releases/v0.6.0-beta.md).
+<!-- /release-candidate -->
+
 ## Download
 
 ### Which file do I need?
@@ -96,14 +101,14 @@ The other files (signatures, checksums and source archives) are for verification
 The [download page](https://herrei.github.io/localsr/download/) has the installers
 for each platform:
 
-- **macOS v0.5.0-beta:** Apple Silicon (M1 or newer) and macOS 14 or later. Intel
+- **macOS v0.5.2-beta:** Apple Silicon (M1 or newer) and macOS 14 or later. Intel
   Macs are not supported. Signed and notarized, and it updates itself.
-- **Windows v0.5.0-beta:** Windows 10 or 11 on x86-64. Choose CPU, DirectML
+- **Windows v0.5.2-beta:** Windows 10 or 11 on x86-64. Choose CPU, DirectML
   or CUDA above. The installers are unsigned, so SmartScreen warns first: choose
   **More info**, then **Run anyway**. Setup installs for your account without
   administrator rights, lets you choose a folder, add a desktop shortcut and launch
   LocalSR when done; uninstall keeps downloaded models and settings by default.
-- **Linux v0.5.0-beta:** x86-64 AppImage. Choose CPU, CUDA or ROCm above. The CPU
+- **Linux v0.5.2-beta:** x86-64 AppImage. Choose CPU, CUDA or ROCm above. The CPU
   AppImage runs Intel graphics through OpenVINO once Intel's compute driver
   (`intel-opencl-icd`) is installed. After first setup, it offers once to add
   LocalSR to your applications menu, removable later from the Help menu. From

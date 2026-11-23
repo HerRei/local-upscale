@@ -5,16 +5,21 @@
 - **Settings.** One Settings window (⌘, on a Mac; File > Settings… elsewhere) holds every
   app-wide choice: appearance, default hardware, low priority, notifications and sound,
   the menu bar icon, the model folder, caches, External FFmpeg, updates and crash
-  reports. Each lives there only; Advanced keeps the per-job choices and shows the
-  hardware with a Change… link. After a GPU failure, Retry on CPU runs that job on the
-  CPU without changing the default.
+  reports. Settings holds the defaults: Advanced chooses the hardware and low priority
+  for this session only, and low priority covers the running job and the whole queue.
+  After a GPU failure, Retry on CPU runs that job on the CPU without changing the
+  default.
 - **Colour for video.** Black-and-white videos can be coloured under Restore and
   Restore first. Colours are carried from frame to frame, so they stay steady. A video
   that already has colour skips the step, and a Colour choice made for photos is not
   carried over to videos (#164).
-- **Stopping a video.** Cancel asks whether to keep the finished part or discard it;
-  Settings can make it always keep or always discard. Kept parts are marked
-  Unfinished in Outputs.
+- **Updates from 0.4.0 and 0.5.0.** They refused the update to 0.5.2 ("unknown field
+  `arch`"). The update files are again in a form they read, an engine they install is
+  taken over, and every release is now checked against the updaters of older
+  releases before it ships.
+- **Stopping a video.** Cancel asks whether to keep the finished part or discard it,
+  for frame-by-frame and SeedVR videos; Settings can make it always keep or always
+  discard. Kept parts are marked Unfinished in Outputs.
 - **Menu bar.** An icon in the menu bar or system tray shows what is running, how many
   files wait and the progress, with Pause and Resume, and a notification for each
   finished file. New installs choose it in the first-launch setup; on a Mac the icon
@@ -32,11 +37,12 @@
   system memory meanwhile, so very large videos stay on the GPU; only as a last
   resort does it run on the CPU, and the result says so. Running out of graphics
   memory reads as a plain sentence with what to change.
-- **Progress.** The status line names the step that runs (for example Adding colour,
-  with a count), downloads share one progress bar, and Saving the result appears only
+- **Progress.** The status line names the step that runs (for example Adding colour
+  or De-flickering, with a count), downloads share one progress bar, and Saving the result appears only
   when the file is being written. Interpolation can be moved before or after
   upscaling from the plan list.
-- **Cache.** Settings show the size of the compiled model caches with Clear cache;
+- **Cache.** Settings show the size of the compiled model caches with Clear cache,
+  which asks first;
   unused entries are removed automatically unless you turn that off (#126).
 - **Settings from a newer version.** LocalSR keeps the file untouched, runs with
   defaults and says so, and an update to that newer version is no longer blocked
