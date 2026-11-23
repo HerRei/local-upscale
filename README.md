@@ -68,12 +68,6 @@ Hofmann. The library also has HAT, Real-ESRGAN, SwinIR, NAFNet, SCUNet, FBCNN
 and DDColor, and each model shows its size, licence and source before you download it.
 [Model guide](docs/models/README.md) · [Model licences](docs/model-licenses.md).
 
-<!-- release-candidate -->
-v0.5.2-beta is in preparation; the table below describes the candidate.
-For the published v0.5.0-beta downloads, see the [0.5.0 release notes](docs/releases/v0.5.0-beta.md).
-[Draft release notes](docs/releases/v0.5.2-beta.md).
-<!-- /release-candidate -->
-
 ## Download
 
 ### Which file do I need?
@@ -114,7 +108,7 @@ for each platform:
   (`intel-opencl-icd`) is installed. After first setup, it offers once to add
   LocalSR to your applications menu, removable later from the Help menu.
 
-The next CUDA edition needs an NVIDIA RTX 20 series or newer and driver 580 or
+The CUDA edition needs an NVIDIA RTX 20 series or newer and driver 580 or
 newer. On Windows, older NVIDIA cards can use DirectML.
 
 On a Mac you can also install it with [Homebrew](https://brew.sh/):
