@@ -1478,3 +1478,40 @@ def test_video_colour_is_refused_with_hdr_preservation(tmp_path, monkeypatch):
     )
     with pytest.raises(ValueError, match="Colour is not yet supported with HDR"):
         run_video_job(config, SimpleNamespace(), threading.Event())
+
+
+def test_the_frame_loop_is_reported_after_audio_cleanup(tmp_path):
+    """After audio cleanup reaches 100 %, the frame loop must announce itself, or the
+    app keeps the audio step's 100 % and shows "Saving the result" while models load."""
+    from types import SimpleNamespace
+
+    source = _make_synthetic_video_with_audio(tmp_path / "steps.mp4", frames=6, fps=24)
+    info = SimpleNamespace(architecture="DDColor", scale=1, in_channels=3, out_channels=3)
+
+    class StubEngine:
+        def load_model(self, *args):
+            pass
+
+        def switch_model(self, *args):
+            pass
+
+        def process_frame(self, *, img_tensor, **kwargs):
+            return (img_tensor.numpy() * 255).astype(np.uint8)
+
+    stages = []
+    config = VideoJobConfig(
+        video_path=str(source),
+        model_path="ddcolor.pth",
+        output_video_path=str(tmp_path / "out.mp4"),
+        model_info=info,
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=0,
+        safe_memory=False,
+        output_scale=1,
+        audio_path=str(source),
+        video_codec="vp9",
+    )
+    run_video_job(config, StubEngine(), threading.Event(), stage_cb=stages.append)
+    assert "reading_frames" in stages

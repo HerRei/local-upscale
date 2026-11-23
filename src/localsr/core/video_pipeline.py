@@ -432,6 +432,10 @@ def _run_video_job(
         progress_cb=audio_progress_cb,
         started_at=job_started_at,
     ) as (effective_audio_source, reencode_audio):
+        # Audio cleanup reports its own percentage up to 100; the frame loop that comes
+        # next (and its model loading) starts a new step, or the app reads 100 as saving.
+        if stage_cb is not None:
+            stage_cb("reading_frames")
         return _run_video_frames(
             config,
             engine,
