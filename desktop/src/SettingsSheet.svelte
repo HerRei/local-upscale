@@ -112,8 +112,8 @@
 
   onDestroy(() => clearTimeout(refreshedTimer));
 
-  function lockDescribed(descId: string, locked = settingsLocked): string {
-    return locked ? `${descId} settings-lock-note` : descId;
+  function lockDescribed(descId: string): string {
+    return settingsLocked ? `${descId} settings-lock-note` : descId;
   }
 
   function requestClose(): void {
@@ -558,10 +558,7 @@
                 class="directory-hit"
                 disabled={settingsLocked || movingModels}
                 aria-label={`Model folder ${settings.model_directory || defaultModelDirectory || 'Default folder'}`}
-                aria-describedby={lockDescribed(
-                  'settings-model-folder-desc',
-                  settingsLocked || movingModels,
-                )}
+                aria-describedby={lockDescribed('settings-model-folder-desc')}
                 on:click={() => void chooseModelFolder()}
               ></button>
               <div class="directory-text">
@@ -681,7 +678,7 @@
             <button
               type="button"
               class="button"
-              aria-describedby={lockDescribed('settings-cache-desc', cacheBusy || settingsLocked)}
+              aria-describedby={lockDescribed('settings-cache-desc')}
               disabled={cacheBusy || cacheSize === null || settingsLocked}
               on:click={() => void clearCache()}>Clear cache</button
             >

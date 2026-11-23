@@ -510,4 +510,33 @@ describe('SettingsSheet', () => {
     });
     expect(screen.queryByText('Engine')).toBeNull();
   });
+
+  it('cannot be closed by Esc, backdrop click, or Done while moving models, and resets scroll on section change', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    renderSheet({
+      section: 'storage',
+      movingModels: true,
+      cacheSize: 1024,
+      onClose,
+    });
+
+    await user.keyboard('{Escape}');
+    const backdrop = document.querySelector('.settings-backdrop') as HTMLElement;
+    await fireEvent.click(backdrop);
+    const done = screen.getByRole('button', { name: 'Done' }) as HTMLButtonElement;
+    expect(done.disabled).toBe(true);
+    await user.click(done);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText('Wait for the model move to finish.')).toBeTruthy();
+
+    // When cacheBusy is true but settingsLocked is false, Clear cache must not point at an absent lock note.
+    const cacheBtn = screen.getByRole('button', { name: 'Clear cache' });
+    expect(cacheBtn.getAttribute('aria-describedby')).toBe('settings-cache-desc');
+
+    const panel = document.querySelector('.settings-panel') as HTMLElement;
+    panel.scrollTop = 180;
+    await user.click(screen.getByRole('tab', { name: 'General' }));
+    expect((document.querySelector('.settings-panel') as HTMLElement).scrollTop).toBe(0);
+  });
 });

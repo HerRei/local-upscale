@@ -11,14 +11,12 @@ is disabled.
 Windows and Linux. It opens Software Update: choose the Stable or Beta channel,
 check for a compatible release, read its notes and total download size, download
 it, and install and restart. The beta also checks its feed once at launch and shows
-a notice when a newer build exists. **Check for Updates at Launch**, next to
-**Check for Updates…**, or the matching box in the update dialog, turns that launch
-check off from the next launch (setting `check_updates_at_launch`); asking with
-**Check for Updates…** still works. Both switches can change while jobs run, and the
-menu shows them only in builds that check a signed feed (`checks_for_updates()`: a
-direct build compiled with its update identity). The host saves them on their own
-(`set_update_switch`); a full settings save never changes them, so a window that has
-not caught up cannot turn an opt-out back on. Downloads can run while jobs are
+a notice when a newer build exists. **Check for updates when LocalSR starts** in
+**Settings → Privacy & updates** turns that launch check off from the next launch
+(setting `check_updates_at_launch`); asking with **Check for Updates…** still
+works. App-wide preferences are saved on their own (`set_preference`); a full
+settings save never overwrites them, so a window that has not caught up cannot
+turn an opt-out back on. Downloads can run while jobs are
 processing; installation waits until the queue, any cancellation and any model
 download have finished, and the native host enforces that as well as the interface.
 
@@ -80,9 +78,8 @@ for example `v=0.1.6-beta&t=darwin-aarch64-mps-native&c=beta` or
 `t=windows-x86_64-cuda-native`. It carries no install or user ID and no cookies,
 times out after five seconds and never affects the check. The usage counter counts active
 installs per day without storing the IP address (see `packaging/hosting/stats/`).
-Turn it off with **Send Anonymous Update Count** (LocalSR menu on macOS, Help menu
-on Windows and Linux) or **Send an anonymous update-check count** in the update
-dialog (setting `anonymous_update_count`). With the launch check off, the count is
+Turn it off with **Send an anonymous count with each update check** in
+**Settings → Privacy & updates** (setting `anonymous_update_count`). With the launch check off, the count is
 sent only after a check you ask for. Store editions and loopback test feeds never
 send it; `LOCALSR_USAGE_PING` points a build at another HTTPS endpoint.
 

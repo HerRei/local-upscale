@@ -4069,3 +4069,113 @@ fn remembered_pickle_consent_requires_an_engine_that_checks_the_digest() {
     engine.features.push("checkpoint_sha256_consent".into());
     assert!(validate_checkpoint_engine(&selection, Some(&engine)).is_ok());
 }
+
+#[test]
+fn retry_job_on_cpu_queues_only_the_failed_job_on_cpu_without_changing_device_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let photo = dir.path().join("photo.png");
+    let out_dir = dir.path().join("out");
+    fs::write(&photo, b"fixture").unwrap();
+    fs::create_dir_all(&out_dir).unwrap();
+
+    let paths = AppPaths::under(&dir.path().join("app"));
+    let state = AppState::from_paths(paths).unwrap();
+    {
+        let mut settings = lock(&state.settings).unwrap();
+        settings.device_id = "mps".into();
+        settings.neural_engine = true;
+        settings.output_directory = out_dir.to_string_lossy().into_owned();
+        settings.output_scale = 2;
+    }
+    state.grants.grant_media_file(&photo);
+    state.grants.grant_output_folder(&out_dir);
+    {
+        let mut caps = lock(&state.capabilities).unwrap();
+        caps.system_ram_total = 16 * 1024 * 1024 * 1024;
+        caps.devices = vec![
+            crate::types::DeviceInfo {
+                id: "mps".into(),
+                device_type: "mps".into(),
+                name: "Apple GPU".into(),
+                total_memory: 8 * 1024 * 1024 * 1024,
+                free_memory: 4 * 1024 * 1024 * 1024,
+                supports_fp16: true,
+                is_integrated: true,
+                recommended_tile_sizes: vec![128, 256],
+                neural_engine: true,
+            },
+            crate::types::DeviceInfo {
+                id: "cpu".into(),
+                device_type: "cpu".into(),
+                name: "CPU".into(),
+                total_memory: 16 * 1024 * 1024 * 1024,
+                free_memory: 8 * 1024 * 1024 * 1024,
+                supports_fp16: false,
+                is_integrated: false,
+                recommended_tile_sizes: vec![128, 256],
+                neural_engine: false,
+            },
+        ];
+    }
+
+    let media_id = Uuid::new_v4().to_string();
+    let failed_job_id = Uuid::new_v4().to_string();
+    let out_file = out_dir.join("photo_upscaled_2x.png");
+    let request_json = json!({
+        "type": "job_request",
+        "data": {
+            "job_id": failed_job_id,
+            "image_path": photo.to_string_lossy(),
+            "model_path": "/models/span.safetensors",
+            "output_path": out_file.to_string_lossy(),
+            "output_format": "png",
+            "device": "mps",
+            "neural_engine": true,
+            "output_scale": 2
+        }
+    })
+    .to_string();
+    {
+        let db = lock(&state.database).unwrap();
+        let photo_str = photo.to_str().unwrap();
+        db.insert_media(&media_id, photo_str, "photo.png", "image")
+            .unwrap();
+        db.update_media_probe(
+            photo_str, "image", 64, 64, 1, 0.0, 0.0, "preview", "", "", false,
+        )
+        .unwrap();
+        db.insert_job(&failed_job_id, &media_id, &request_json)
+            .unwrap();
+        db.finish_job(&failed_job_id, "failed", "", "GPU driver reset")
+            .unwrap();
+    }
+
+    retry_job_on_cpu_checked(&state, &failed_job_id).unwrap();
+
+    // App-wide device_id and neural_engine stay unchanged.
+    {
+        let settings = lock(&state.settings).unwrap();
+        assert_eq!(settings.device_id, "mps");
+        assert!(settings.neural_engine);
+    }
+
+    let queued = lock(&state.database)
+        .unwrap()
+        .next_queued_job()
+        .unwrap()
+        .expect("retried job should be queued");
+    assert_ne!(queued.id, failed_job_id);
+    let queued_req: Value = serde_json::from_str(&queued.request_json).unwrap();
+    assert_eq!(queued_req["data"]["job_id"], queued.id);
+    assert_eq!(queued_req["data"]["device"], "cpu");
+    assert_eq!(queued_req["data"]["neural_engine"], false);
+    assert_eq!(queued_req["data"]["output_scale"], 2);
+    assert_eq!(
+        queued_req["data"]["output_path"],
+        out_file.to_string_lossy().as_ref()
+    );
+
+    // Retrying a job that is not failed is rejected.
+    let err = retry_job_on_cpu_checked(&state, &queued.id).unwrap_err();
+    assert!(err.to_string().contains("failed"));
+}

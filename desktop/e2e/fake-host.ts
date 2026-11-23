@@ -687,6 +687,8 @@ function hostScript(scenario: Scenario): void {
         });
         emit('state-changed', null);
         return null;
+      case 'retry_job_on_cpu':
+        return null;
       case 'diagnostic_summary':
         return 'Fixture host: no inference engine.';
       case 'download_model': {

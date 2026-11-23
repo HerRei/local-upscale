@@ -248,6 +248,7 @@ pub fn run() {
             commands::request_compare_regions,
             commands::clear_compare_regions,
             commands::retry_engine,
+            commands::retry_job_on_cpu,
             commands::cancel_jobs,
             commands::cancel_jobs_for_media,
             commands::start_model_trials,

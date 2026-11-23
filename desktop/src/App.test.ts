@@ -125,6 +125,7 @@ const api = vi.hoisted(() => ({
   startJobs: vi.fn(async (_input: StartBatchInput) => undefined),
   cancelJobs: vi.fn(async () => undefined),
   retryEngine: vi.fn(async (): Promise<void> => undefined),
+  retryJobOnCpu: vi.fn(async (_jobId: string): Promise<void> => undefined),
   startBenchmark: vi.fn(async () => undefined),
   exportBenchmark: vi.fn(async () => true),
   cancelVideoComparison: vi.fn(async () => {}),
@@ -780,6 +781,7 @@ beforeEach(() => {
   api.estimateModelTrials.mockReset().mockResolvedValue([]);
   api.cancelJobsForMedia.mockReset().mockResolvedValue(undefined);
   api.retryEngine.mockReset().mockResolvedValue(undefined);
+  api.retryJobOnCpu.mockReset().mockResolvedValue(undefined);
   api.listCrashReports.mockReset().mockResolvedValue([]);
   api.deleteCrashReport.mockReset().mockResolvedValue(undefined);
   api.deleteAllCrashReports.mockReset().mockResolvedValue(undefined);
@@ -2270,7 +2272,7 @@ describe('LocalSR desktop interface', () => {
     await waitFor(() => expect(document.querySelector('.status-note')).toBeNull());
   });
 
-  it('shows the last failure above Advanced and offers the CPU when a GPU caused it', async () => {
+  it('shows the last failure above Advanced and offers Retry on CPU when a GPU caused it', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.capabilities.devices.push(
       gpu('directml:0', 'directml', 'Intel(R) UHD Graphics 620 (DirectML)'),
@@ -2287,7 +2289,7 @@ describe('LocalSR desktop interface', () => {
     let failure = await screen.findByRole('alert', { name: 'Last error' });
     expect(failure.textContent).toContain('The output folder is not writable.');
     // Not a GPU's fault: the CPU would not help.
-    expect(within(failure).queryByRole('button', { name: 'Use the CPU' })).toBeNull();
+    expect(within(failure).queryByRole('button', { name: 'Retry on CPU' })).toBeNull();
 
     const rejection =
       'RealESRGAN gives different results on Intel UHD Graphics 620 (DirectML) than on the CPU, so LocalSR does not use that GPU for this model. Select the CPU for it.';
@@ -2296,17 +2298,14 @@ describe('LocalSR desktop interface', () => {
     callback({ type: 'job_failed', data: { job_id: 'job-2', error_message: rejection } });
     failure = await screen.findByRole('alert', { name: 'Last error' });
     expect(failure.textContent).toContain('Select the CPU for it.');
-    await user.click(within(failure).getByRole('button', { name: 'Use the CPU' }));
-    await waitFor(() =>
-      expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ device_id: 'cpu' }),
-      ),
+    await user.click(within(failure).getByRole('button', { name: 'Retry on CPU' }));
+    await waitFor(() => expect(api.retryJobOnCpu).toHaveBeenCalledWith('job-2'));
+    // Must NOT change the app-wide hardware default or open Settings.
+    expect(api.saveSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({ device_id: 'cpu' }),
     );
-    expect(
-      within(screen.getByRole('alert', { name: 'Last error' })).queryByRole('button', {
-        name: 'Use the CPU',
-      }),
-    ).toBeNull();
+    expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole('alert', { name: 'Last error' })).toBeNull());
   });
 
   const driverReset =
@@ -2334,7 +2333,7 @@ describe('LocalSR desktop interface', () => {
     return snapshot;
   }
 
-  it('keeps a GPU failure and its CPU shortcut while the engine restarts after it', async () => {
+  it('keeps a GPU failure and its Retry on CPU button while the engine restarts after it', async () => {
     const snapshot = onTheGpu();
     await mountWith(snapshot);
     const callback = await failOnTheGpu();
@@ -2356,29 +2355,23 @@ describe('LocalSR desktop interface', () => {
     }
     const failure = screen.getByRole('alert', { name: 'Last error' });
     expect(failure.textContent).toContain('device removed or reset');
-    expect(within(failure).getByRole('button', { name: 'Use the CPU' })).toBeTruthy();
+    expect(within(failure).getByRole('button', { name: 'Retry on CPU' })).toBeTruthy();
     // The next job starts without it.
     callback({ type: 'job_started', data: { job_id: 'job-2' } });
     await waitFor(() => expect(screen.queryByRole('alert', { name: 'Last error' })).toBeNull());
   });
 
-  it('keeps keyboard focus on a control after Use the CPU', async () => {
-    const user = await mountWith(onTheGpu());
-    await failOnTheGpu();
-    let failure = screen.getByRole('alert', { name: 'Last error' });
-    await user.click(within(failure).getByRole('button', { name: 'Use the CPU' }));
-    // Advanced is closed: the error stays and takes the focus.
-    await waitFor(() => expect(document.activeElement).toBe(failure));
-    cleanup();
-
+  it('re-queues only the failed job on Retry on CPU without changing device_id or opening anything else', async () => {
     const open = await mountWith(onTheGpu());
     await chooseTask(open, /^Upscale$/);
-    await open.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
     await failOnTheGpu();
-    failure = screen.getByRole('alert', { name: 'Last error' });
-    await open.click(within(failure).getByRole('button', { name: 'Use the CPU' }));
-    // Advanced is open: the Hardware Change… link takes focus.
-    await waitFor(() => expect(document.activeElement?.id).toBe('advanced-hardware-change'));
+    const failure = screen.getByRole('alert', { name: 'Last error' });
+    await open.click(within(failure).getByRole('button', { name: 'Retry on CPU' }));
+    await waitFor(() => expect(api.retryJobOnCpu).toHaveBeenCalledWith('job-1'));
+    expect(api.saveSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({ device_id: 'cpu' }),
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   describe('Try again for an engine the host gave up on', () => {
@@ -6247,6 +6240,9 @@ it('saves Run at low priority, Show in menu bar and Notify via setPreference eve
   expect(api.saveSettings).not.toHaveBeenCalledWith(
     expect.objectContaining({ low_priority: true }),
   );
+  await waitFor(() =>
+    expect(document.querySelector('.status-bar .status-note')?.textContent).toBe('Low priority'),
+  );
 });
 
 describe('first-launch setup screen', () => {
@@ -6495,7 +6491,7 @@ describe('crash reports', () => {
     ).toBeNull();
   });
 
-  it('does not show the crash notice when crash reports are off', async () => {
+  it('does not show the crash notice when crash reports are off, but keeps stored reports in Diagnostics', async () => {
     const snap = readySnapshot();
     snap.settings.crash_reports = false;
     api.listCrashReports.mockResolvedValue([sampleReport]);
@@ -6503,6 +6499,12 @@ describe('crash reports', () => {
     expect(
       screen.queryByRole('dialog', { name: 'LocalSR quit unexpectedly last time.' }),
     ).toBeNull();
+    nativeMenu?.('view.performance');
+    const dialog = await screen.findByRole('dialog', { name: 'Performance & Diagnostics' });
+    expect(within(dialog).getByText('Stored crash reports: 1')).toBeTruthy();
+    expect(
+      within(dialog).getByText('Crash reports are off. Turn them on in Settings.'),
+    ).toBeTruthy();
   });
 
   it('manages crash reports in Performance & Diagnostics and links to Settings when off', async () => {
@@ -7849,5 +7851,29 @@ describe('Settings sheet', () => {
     expect(dialog).toBeTruthy();
     await user.click(within(dialog).getByRole('button', { name: 'Done' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull());
+  });
+
+  it('stacks System Integrations above Settings and routes External FFmpeg Change… to Storage with focus', async () => {
+    const snap = readySnapshot([video('clip', true)]);
+    snap.settings.task = 'video';
+    const user = await mountWith(snap);
+
+    // Clicking External FFmpeg Change… in Advanced opens Settings > Storage with #settings-ffmpeg focused.
+    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    const ffmpegRow = screen.getByText('External FFmpeg').closest('.field-row') as HTMLElement;
+    await user.click(within(ffmpegRow).getByRole('button', { name: 'Change…' }));
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(document.activeElement?.id).toBe('settings-ffmpeg');
+
+    // Opening System Integrations from Settings > General stacks above Settings and closes back to it on Esc.
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'General' }));
+    await user.click(within(settingsDialog).getByRole('button', { name: 'Manage…' }));
+    const integrationsDialog = await screen.findByRole('dialog', { name: 'System Integrations' });
+    expect(integrationsDialog).toBeTruthy();
+    await user.keyboard('{Escape}');
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'System Integrations' })).toBeNull(),
+    );
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeTruthy();
   });
 });

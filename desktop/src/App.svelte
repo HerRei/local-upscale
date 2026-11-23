@@ -1263,15 +1263,22 @@
   // until the next job starts, also while the engine restarts after it (a driver reset) and
   // the status line moves on to "Starting engine" and "Ready".
   let lastFailure = '';
-  $: if (snapshot.runtime.active_job_id) lastFailure = '';
-  else if (snapshot.runtime.status_title === 'Could not finish')
+  let lastFailureJobId = '';
+  $: if (snapshot.runtime.active_job_id) {
+    lastFailure = '';
+    lastFailureJobId = '';
+  } else if (snapshot.runtime.status_title === 'Could not finish') {
     lastFailure = snapshot.runtime.status_detail;
+  }
   let failureNote: HTMLElement | undefined;
-  // A GPU or NPU that failed (a rejected check, a driver reset) is fixed by the CPU; editing
-  // needs a GPU, so it gets no such button.
+  $: failedJobIdForRetry =
+    lastFailureJobId || snapshot.jobs.find((job) => job.status === 'failed')?.id || '';
+  // A GPU or NPU that failed (a rejected check, a driver reset) can be retried once on the CPU;
+  // editing needs a GPU, so it gets no such button.
   $: acceleratorFailure =
     settings.task !== 'edit' &&
     settings.device_id !== 'cpu' &&
+    Boolean(failedJobIdForRetry) &&
     /\b[GN]PU\b|graphics driver/.test(lastFailure);
   // What the engine said about the route (a check, a slow GPU, a partial CPU fallback): progress
   // ticks replace the detail line, so the note keeps its own line until the job ends.
@@ -1535,9 +1542,9 @@
       }
       snapshot = latest;
       if (!latest.settings.crash_reports) {
-        crashReports = [];
         crashNotice = false;
-      } else if (modalKind === 'performance') {
+      }
+      if (modalKind === 'performance') {
         void refreshCrashReports();
       }
       themeForRefresh(
@@ -1687,6 +1694,7 @@
     } else if (!offScreen && (message.type === 'job_cancelled' || message.type === 'job_failed')) {
       livePreviewWarning = '';
       resetProgressivePreview();
+      if (message.type === 'job_failed') lastFailureJobId = messageJob;
     }
     if (message.type === 'media_info') {
       if (
@@ -2253,12 +2261,16 @@
     else await start();
   }
 
-  /** The failure's shortcut. The button goes away with the GPU, so the keyboard moves to the
-   *  Hardware menu that now says CPU, or to the error itself while Advanced is closed. */
-  async function useTheCpu(): Promise<void> {
-    updateSettings(hardwarePatch('cpu'));
-    await tick();
-    (document.getElementById('advanced-hardware-change') ?? failureNote)?.focus();
+  /** Re-queue only the failed job on CPU, leaving the saved device preference unchanged. */
+  async function retryOnCpu(): Promise<void> {
+    const jobId = failedJobIdForRetry;
+    if (!jobId) return;
+    await attempt('Could not retry on CPU', async () => {
+      await api.retryJobOnCpu(jobId);
+      lastFailure = '';
+      lastFailureJobId = '';
+      if (api.isTauri()) await refresh();
+    });
   }
 
   function supportsHdrPreservation(candidate: UiSettings): boolean {
@@ -3620,7 +3632,7 @@
   }
 
   function showPerformance(): void {
-    if (settings.crash_reports) void refreshCrashReports();
+    void refreshCrashReports();
     if (!benchmarkDevice)
       benchmarkDevice =
         snapshot.capabilities.devices.find((device) => device.id !== 'cpu')?.id ?? 'cpu';
@@ -3632,8 +3644,12 @@
   }
 
   async function showIntegrations(): Promise<void> {
-    integration = await api.integrationStatus();
-    showModal('System Integrations', integration.summary, 'integrations');
+    try {
+      integration = await api.integrationStatus();
+      showModal('System Integrations', integration.summary, 'integrations');
+    } catch (error) {
+      showModal('System Integrations', String(error));
+    }
   }
 
   async function changeIntegrations(install: boolean): Promise<void> {
@@ -3717,7 +3733,7 @@
     if (settingsLocked) {
       showModal(
         'Settings are locked',
-        'Wait for the running job to finish, then select FFmpeg under Advanced settings → Video.',
+        'Wait for the running job to finish, then select FFmpeg under Settings → Storage.',
       );
       return;
     }
@@ -4883,8 +4899,8 @@
               >
                 <p>{lastFailure}</p>
                 {#if acceleratorFailure}
-                  <button class="button" type="button" on:click={() => void useTheCpu()}
-                    >Use the CPU</button
+                  <button class="button" type="button" on:click={() => void retryOnCpu()}
+                    >Retry on CPU</button
                   >
                 {/if}
               </section>
@@ -4971,6 +4987,7 @@
                   : 'Checked against its pinned checksum before use.'
                 : stoppedNote || idleSummary || runningStatusDetail)}</span
         >
+        {#if settings.low_priority}<span class="status-note">Low priority</span>{/if}
         {#if hardwareNote}<span class="status-note" title={hardwareNote}>{hardwareNote}</span>{/if}
         {#if hardwareHint}<span class="status-note" title={hardwareHint.text}
             >{hardwareHint.text}

@@ -1158,6 +1158,134 @@ pub async fn retry_engine(state: State<'_, Arc<AppState>>, app: AppHandle) -> Ap
         .map_err(|error| AppError::Worker(error.to_string()))?
 }
 
+/// Queue only the failed job again on CPU, keeping `settings.device_id` unchanged.
+#[tauri::command]
+pub async fn retry_job_on_cpu(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    job_id: String,
+) -> AppResult<()> {
+    let state = Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        if state
+            .updates
+            .installing
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(AppError::Validation("An update is being installed".into()));
+        }
+        let _scheduler = lock(&state.scheduler)?;
+        retry_job_on_cpu_checked(&state, &job_id)?;
+        worker::dispatch_next_locked(&state, &app)?;
+        emit_state_changed(&app);
+        Ok(())
+    })
+    .await
+    .map_err(|error| AppError::Config(format!("Could not retry job on CPU: {error}")))?
+}
+
+pub(crate) fn retry_job_on_cpu_checked(state: &AppState, job_id: &str) -> AppResult<()> {
+    if state
+        .updates
+        .installing
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return Err(AppError::Validation("An update is being installed".into()));
+    }
+    ensure_not_moving_models(state)?;
+    let cpu_device = resolve_device(state, "cpu")?;
+    let database = lock(&state.database)?;
+    let source = database
+        .job_for_cpu_retry(job_id)?
+        .ok_or_else(|| AppError::Validation("The failed job could not be found.".into()))?;
+    if source.status != "failed" {
+        return Err(AppError::Validation(
+            "Only a failed job can be retried on CPU.".into(),
+        ));
+    }
+    let mut request: Value = serde_json::from_str(&source.request_json)?;
+    let request_type = request["type"].as_str().unwrap_or("");
+    let output_key = match request_type {
+        "job_request" => "output_path",
+        "video_job_request" => "output_video_path",
+        "edit_job_request" => {
+            return Err(AppError::Validation("Image editing requires a GPU.".into()));
+        }
+        _ => {
+            return Err(AppError::Validation(
+                "This job type cannot be retried on CPU.".into(),
+            ));
+        }
+    };
+    let media = database
+        .get_media(&source.media_id)?
+        .ok_or_else(|| AppError::Validation("The source media item no longer exists.".into()))?;
+    state.grants.check_media_input(Path::new(&media.path))?;
+    if media.probe_status != "ready" || !Path::new(&media.path).is_file() {
+        return Err(AppError::Validation(format!(
+            "{} is no longer available",
+            media.name
+        )));
+    }
+    let original_output = request["data"][output_key]
+        .as_str()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| AppError::Validation("The failed job has no output path.".into()))?
+        .to_owned();
+    let output_path = Path::new(&original_output);
+    let output_parent = output_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| AppError::Validation("The failed job has no output folder.".into()))?;
+    state.grants.check_output_folder(output_parent)?;
+
+    let new_job_id = Uuid::new_v4().to_string();
+    let media_id = source.media_id.clone();
+    let ui_json = source.ui_json;
+    database.admit_jobs(&[media_id.as_str()], |reserved| {
+        let retry_output = reserve_retry_output(output_path, reserved);
+        request["data"]["job_id"] = Value::String(new_job_id.clone());
+        request["data"]["device"] = Value::String(cpu_device.clone());
+        request["data"]["neural_engine"] = Value::Bool(false);
+        request["data"][output_key] = Value::String(retry_output.to_string_lossy().into_owned());
+        Ok(vec![NewJob {
+            id: new_job_id.clone(),
+            media_id: media_id.clone(),
+            request_json: serde_json::to_string(&request)?,
+            ui_json: ui_json.clone(),
+        }])
+    })?;
+    Ok(())
+}
+
+fn reserve_retry_output(original: &Path, reserved: &mut ReservedOutputs) -> PathBuf {
+    if !original.exists() && reserved.insert(original) {
+        return original.to_path_buf();
+    }
+    let parent = original.parent().unwrap_or_else(|| Path::new(""));
+    let stem = original
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("output");
+    let ext = original
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    let mut counter = 1_u32;
+    loop {
+        let filename = if ext.is_empty() {
+            format!("{stem}_{counter}")
+        } else {
+            format!("{stem}_{counter}.{ext}")
+        };
+        let candidate = parent.join(filename);
+        if !candidate.exists() && reserved.insert(&candidate) {
+            return candidate;
+        }
+        counter = counter.saturating_add(1);
+    }
+}
+
 #[tauri::command]
 pub fn cancel_jobs(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
     let _scheduler = lock(&state.scheduler)?;
@@ -3314,7 +3442,8 @@ fn resolve_device(state: &AppState, requested: &str) -> AppResult<String> {
         return Ok("cpu".into());
     }
     Err(AppError::Validation(
-        "The selected device is not available on this computer. Choose another one in Advanced settings.".into(),
+        "The selected device is not available on this computer. Choose another one in Settings."
+            .into(),
     ))
 }
 
@@ -3567,7 +3696,7 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
         && !external_codecs
     {
         return Err(AppError::Validation(
-            "H.264 and HEVC export use the codecs of this system or an FFmpeg installed on this computer. Install FFmpeg and select it under Advanced settings → Video, or choose AV1, VP9 or FFV1.".into(),
+            "H.264 and HEVC export use the codecs of this system or an FFmpeg installed on this computer. Install FFmpeg and select it under Settings → Storage, or choose AV1, VP9 or FFV1.".into(),
         ));
     }
     if input.media_ids.is_empty() || input.media_ids.len() > MAX_MEDIA_ITEMS {

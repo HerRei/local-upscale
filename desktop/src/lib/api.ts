@@ -197,6 +197,8 @@ export async function chooseEditModelFile(
 export const saveCustomEditModel = (custom: CustomEditModel, runtimePath: string): Promise<void> =>
   invoke('save_custom_edit_model', { custom, runtimePath });
 export const retryEngine = (): Promise<void> => invoke('retry_engine');
+export const retryJobOnCpu = (jobId: string): Promise<void> =>
+  invoke('retry_job_on_cpu', { jobId });
 export const cancelJobs = (): Promise<void> => invoke('cancel_jobs');
 export const startBenchmark = (device: string): Promise<void> =>
   invoke('start_benchmark', { input: { device } });

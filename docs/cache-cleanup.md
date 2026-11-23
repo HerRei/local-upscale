@@ -1,12 +1,15 @@
 # Model cache cleanup
 
-The desktop's Advanced settings shows and clears the compiled model cache. On
-startup it removes entries older than 30 days, then removes the oldest entries
+**Settings → Storage** shows and clears the compiled model cache, and includes
+the **Remove unused caches automatically** switch (`auto_cache_cleanup`, on by
+default) that gates the startup cleanup. On startup, when that switch is on,
+LocalSR removes entries older than 30 days, then removes the oldest entries
 until the total is at most 5 GiB. It uses the newest file access or modification
 time available; access times are not updated on every filesystem. The cleanup
 holds the queue scheduler lock and refuses to run during an active desktop job.
 It checks for symbolic links and refuses a cache containing one. Environment
-variable overrides for worker caches are not included.
+variable overrides for worker caches are not included. **Clear cache** remains
+available as a manual action even when automatic cleanup is turned off.
 
 The managed entries are:
 
