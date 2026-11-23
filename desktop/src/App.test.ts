@@ -1888,6 +1888,124 @@ describe('LocalSR desktop interface', () => {
     },
   );
 
+  /** A Mac whose engine also lists FlashVSR, with this much unified memory. */
+  function flashSnapshot(unifiedGb: number): AppSnapshot {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.settings.task = 'video';
+    snapshot.engine!.video_engines.push('flashvsr');
+    snapshot.capabilities.system_ram_total = unifiedGb * 1024 ** 3;
+    return snapshot;
+  }
+
+  it('runs FlashVSR on the Apple GPU of a 16 GB Mac and describes it in its own terms', async () => {
+    const user = await mountWith(flashSnapshot(16));
+    const engine = screen.getByLabelText('Video engine');
+    const option = within(engine).getByRole('option', { name: 'FlashVSR v1.1 — Labs · Installed' });
+    expect((option as HTMLOptionElement).disabled).toBe(false);
+    expect(document.querySelectorAll('.model-output-note')).toHaveLength(0);
+
+    await user.selectOptions(engine, 'flashvsr_v11');
+    const memory = screen.getByLabelText('FlashVSR memory');
+    expect(memory.textContent).toMatch(
+      /windows of 41 frames; each starts with 8\s+frames of run-up/,
+    );
+    expect(memory.textContent).not.toMatch(/SeedVR2|VAE|per clip|offload/);
+    expect(screen.queryByRole('checkbox', { name: 'Reduce GPU memory' })).toBeNull();
+    expect(screen.getByLabelText('Output resolution')).toBeTruthy();
+    expect(screen.getByText(/above that, it runs at 4× and resizes the rest/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, tiles/i }));
+    expect(screen.getByText(/^FlashVSR · Labs\. One-step diffusion upscaling/)).toBeTruthy();
+    expect(screen.queryByText(/^SeedVR2 · Labs/)).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: /De-flicker · Labs/i })).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Start selected video' }));
+    expect(api.startJobs).toHaveBeenCalledWith(
+      expect.objectContaining({ video_model_id: 'flashvsr_v11', video_hdr_mode: 'tone_map' }),
+    );
+
+    // SeedVR2 keeps its own panel and note.
+    await user.selectOptions(engine, 'seedvr2_3b');
+    expect(screen.getByLabelText('SeedVR2 memory').textContent).toMatch(
+      /Up to 5 frames per clip · 128 px VAE tiles\./,
+    );
+    expect(screen.getByText(/^SeedVR2 · Labs\. Uses its own temporal processing/)).toBeTruthy();
+  });
+
+  it.each([
+    ['the CPU', 'cpu', 16, true, 'Apple GPU only', /^FlashVSR cannot run on this device\./],
+    ['CUDA', 'cuda:0', 16, true, 'Apple GPU only', /^FlashVSR cannot run on this device\./],
+    [
+      'a Mac with 8 GB',
+      'mps',
+      8,
+      true,
+      'Needs 16 GB',
+      /^FlashVSR needs 16 GB of memory\. This Mac has 8 GB\.$/,
+    ],
+    [
+      'an engine that does not list it',
+      'mps',
+      16,
+      false,
+      'Unavailable',
+      /^FlashVSR needs the MLX runtime/,
+    ],
+  ] as const)(
+    'keeps FlashVSR unavailable on %s without taking SeedVR2 with it',
+    async (_name, deviceId, unifiedGb, listed, tag, reason) => {
+      const snapshot = flashSnapshot(unifiedGb);
+      if (!listed) snapshot.engine!.video_engines = ['spandrel_image', 'seedvr2'];
+      if (deviceId === 'cuda:0') snapshot.capabilities.devices.push(gpu('cuda:0', 'cuda', 'GPU'));
+      snapshot.settings.device_id = deviceId;
+      snapshot.settings.selected_video_model_id = 'flashvsr_v11';
+      const user = await mountWith(snapshot);
+      const engine = screen.getByLabelText('Video engine');
+      const flash = within(engine).getByRole('option', { name: `FlashVSR v1.1 — Labs · ${tag}` });
+      expect((flash as HTMLOptionElement).disabled).toBe(true);
+      const seed = within(engine).getByRole('option', { name: 'SeedVR2-3B — Labs · Installed' });
+      expect((seed as HTMLOptionElement).disabled).toBe(false);
+      const notes = () =>
+        [...document.querySelectorAll('.model-output-note')].map((note) =>
+          note.textContent?.trim(),
+        );
+      // A saved FlashVSR choice cannot start and says why; the panel that describes this Mac
+      // stays away.
+      expect(notes()).toHaveLength(1);
+      expect(notes()[0]).toMatch(reason);
+      expect(
+        screen.getByRole('button', { name: 'Start selected video' }).matches(':disabled'),
+      ).toBe(true);
+      expect(screen.queryByLabelText('FlashVSR memory')).toBeNull();
+      await user.selectOptions(engine, 'seedvr2_3b');
+      expect(
+        screen.getByRole('button', { name: 'Start selected video' }).matches(':disabled'),
+      ).toBe(false);
+      // With another engine chosen, the menu's own words are enough; only an unexpected
+      // state keeps its line.
+      expect(notes()).toHaveLength(tag === 'Unavailable' ? 1 : 0);
+    },
+  );
+
+  it('marks an unavailable video model in the library and says why', async () => {
+    const snapshot = flashSnapshot(8);
+    snapshot.catalog.video_models.forEach((model) => (model.installed = false));
+    const user = await mountWith(snapshot);
+    expect(document.querySelectorAll('.model-output-note')).toHaveLength(0);
+    await chooseMenuItem('view.models');
+    const library = await screen.findByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /Video \(Labs\)/ }));
+    expect(within(library).getByText('3 models')).toBeTruthy();
+    expect(within(library).queryByText('SeedVR2 engines')).toBeNull();
+    const row = within(library).getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ });
+    expect(within(row).getByText('Needs 16 GB')).toBeTruthy();
+    expect(within(library).getAllByText(/^Needs 16 GB$|^Unavailable$/)).toHaveLength(1);
+    await user.click(row);
+    expect(
+      within(library).getByText('FlashVSR needs 16 GB of memory. This Mac has 8 GB.'),
+    ).toBeTruthy();
+    expect(within(library).getByText('FlashVSR')).toBeTruthy();
+  });
+
   it('shows the precision of the CPU for a model the selected NPU does not run', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.capabilities.devices = [

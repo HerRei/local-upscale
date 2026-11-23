@@ -30,6 +30,8 @@ export interface Scenario {
   /** The host gave up restarting the engine and offers Try again. */
   engineGivenUp?: boolean;
   features?: string[];
+  /** With `features`: the video engines the worker lists (none unless named). */
+  videoEngines?: string[];
   /** Finished outputs per photo number (1-based); each entry is one model result. */
   outputs?: Record<
     number,
@@ -401,7 +403,7 @@ function hostScript(scenario: Scenario): void {
         engine_version: '0',
         features: scenario.features,
         model_formats: [],
-        video_engines: [],
+        video_engines: scenario.videoEngines ?? [],
       };
     }
     return s;

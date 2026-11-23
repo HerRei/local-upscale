@@ -17,6 +17,7 @@
   import type {
     CapabilityInfo,
     CatalogModel,
+    CatalogVideoModel,
     EditModel,
     InterpolationOrder,
     InterpolationTarget,
@@ -29,6 +30,8 @@
   export let editModel: EditModel | undefined = undefined;
   export let capabilities: CapabilityInfo;
   export let usingTemporalVideo: boolean;
+  /** The selected video model of a temporal job; its engine decides the Labs note. */
+  export let videoModel: Pick<CatalogVideoModel, 'engine_kind'> | undefined = undefined;
   export let preservingHdr = false;
   export let interpolationSupported = false;
   export let updateSettings: (patch: Partial<UiSettings>) => void;
@@ -459,8 +462,13 @@
           {/if}
         {:else}
           <p class="model-description">
-            SeedVR2 · Labs. Uses its own temporal processing and memory settings; longer clips and
-            hardware limits are still being validated.
+            {#if videoModel?.engine_kind === 'flashvsr'}
+              FlashVSR · Labs. One-step diffusion upscaling that works best up to 4× the source.
+              Memory is managed automatically; jobs on large frames can take hours.
+            {:else}
+              SeedVR2 · Labs. Uses its own temporal processing and memory settings; longer clips and
+              hardware limits are still being validated.
+            {/if}
           </p>
         {/if}
         <p class="model-description">

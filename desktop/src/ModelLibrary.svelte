@@ -16,6 +16,7 @@
   import FileName from './FileName.svelte';
   import { modal } from './lib/modal';
   import { fitLine, runsOnAccelerator } from './lib/neuralEngine';
+  import { videoAvailability, videoEngineName } from './lib/videoEngines';
   import { estimateModelTrials, openCustomModelTutorial } from './lib/api';
   import {
     EDIT_FAMILIES,
@@ -137,6 +138,12 @@
 
   $: models = snapshot.catalog.models;
   $: videoModels = snapshot.catalog.video_models;
+  $: videoUnavailable = videoAvailability(
+    videoModels,
+    snapshot.engine,
+    snapshot.capabilities,
+    settings.device_id,
+  ).unavailable;
   $: audioModels = snapshot.catalog.audio_models ?? [];
   $: editModels = snapshot.edit.models;
   $: customEdit = snapshot.edit.custom_model ?? undefined;
@@ -674,7 +681,11 @@
             </label>
           {/each}
         {:else if group === 'video'}
-          <div class="list-head">Video · Labs<span>SeedVR2 engines</span></div>
+          <div class="list-head">
+            Video · Labs<span
+              >{videoModels.length === 1 ? '1 model' : `${videoModels.length} models`}</span
+            >
+          </div>
           {#each videoModels as model (model.model_id)}
             {@const dl = downloadMap.get(model.model_id)}
             {@const dlError = downloadErrors[model.model_id]}
@@ -691,7 +702,10 @@
                 <div class="name">{model.name}</div>
                 <div class="role">{model.description}</div>
                 <div class="pills">
-                  <span class="pill labs">Labs</span><span class="pill">{model.license_name}</span>
+                  <span class="pill labs">Labs</span><span class="pill">{model.license_name}</span
+                  >{#if videoUnavailable[model.model_id]}<span class="pill bad"
+                      >{videoUnavailable[model.model_id]?.tag}</span
+                    >{/if}
                 </div>
               </div>
               <div class="right">
@@ -1086,13 +1100,19 @@
             </div>
             <div>
               <dt>Engine</dt>
-              <dd>{selectedVideo.engine_kind}</dd>
+              <dd>{videoEngineName(selectedVideo.engine_kind)}</dd>
             </div>
             <div>
               <dt>Window</dt>
               <dd>{selectedVideo.temporal_window} frames</dd>
             </div>
           </dl>
+          {#if videoUnavailable[selectedVideo.model_id]}
+            <div class="fit">
+              <i aria-hidden="true" class="warn"></i>{videoUnavailable[selectedVideo.model_id]
+                ?.reason}
+            </div>
+          {/if}
           <div class="actions">
             {#if !selectedVideo.installed}
               {@const dl = downloadMap.get(selectedVideo.model_id)}

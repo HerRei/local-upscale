@@ -104,6 +104,7 @@
   import { applyWorkerEnvelope, resultPreviewForSelectedMedia } from './lib/workerEvents';
   import { formatBytes, formatDuration, formatVideoClock } from './lib/format';
   import { plainEngineError, recommendedEngineOffer } from './lib/engines';
+  import { videoAvailability } from './lib/videoEngines';
   import { demoSnapshot } from './lib/demo';
   import { modal } from './lib/modal';
   import {
@@ -743,16 +744,24 @@
     restoring &&
     imageFixes.length === 0 &&
     settings.selected_model_id !== '__custom__';
-  $: temporalUnavailableReason = !snapshot.engine?.video_engines.includes('seedvr2')
-    ? 'This installation supports frame-by-frame video. SeedVR2 requires a compatible CUDA, ROCm or Metal engine.'
-    : /^(directml|xpu|openvino)(:|$)/.test(settings.device_id)
-      ? 'SeedVR2 cannot run on this device. Choose frame-by-frame video or a compatible CUDA, ROCm or Metal device.'
-      : '';
-  $: seedMemory = snapshot.runtime.video_memory;
-  $: selectedMemory =
-    snapshot.jobs.find((job) => job.id === seedMemory?.job_id)?.media_id === selectedMedia?.id
-      ? seedMemory
-      : undefined;
+  // Each video model is judged by its own engine: the worker must list it and the device must suit it.
+  $: videoAvailable = videoAvailability(
+    snapshot.catalog.video_models,
+    snapshot.engine,
+    snapshot.capabilities,
+    settings.device_id,
+    usingTemporalVideo ? settings.selected_video_model_id : '',
+  );
+  $: temporalUnavailableReason =
+    (selectedVideoModel && videoAvailable.unavailable[selectedVideoModel.model_id]?.reason) ?? '';
+  $: flashVideo = usingTemporalVideo && selectedVideoModel?.engine_kind === 'flashvsr';
+  $: videoMemory = snapshot.runtime.video_memory;
+  $: videoMemoryJob = snapshot.jobs.find((job) => job.id === videoMemory?.job_id);
+  $: selectedMemory = videoMemoryJob?.media_id === selectedMedia?.id ? videoMemory : undefined;
+  // Readings stay in the terms of the engine that produced them, whichever is selected now.
+  $: videoMemoryEngine =
+    snapshot.catalog.video_models.find((model) => model.model_id === videoMemoryJob?.model_id)
+      ?.engine_kind ?? '';
   $: preservingHdr =
     settings.task === 'video' &&
     settings.video_hdr_mode === 'preserve' &&
@@ -2119,8 +2128,8 @@
           );
       if (primary) {
         patchSettings.selected_model_id = primary.model_id;
-        // Quick and Best are frame-by-frame recipes; a saved SeedVR2 choice
-        // survives only the initial resolution and task changes.
+        // Quick and Best are frame-by-frame recipes; a saved SeedVR2 or FlashVSR
+        // choice survives only the initial resolution and task changes.
         if (!options.keepVideoEngine) patchSettings.selected_video_model_id = 'frame_by_frame';
         const minScale = 2;
         if (
@@ -4773,19 +4782,22 @@
                   on:change={(event) => selectVideoEngine(event.currentTarget.value)}
                 >
                   <option value="frame_by_frame">Frame-by-frame · compatible</option>
-                  {#each snapshot.catalog.video_models as model}<option
-                      value={model.model_id}
-                      disabled={Boolean(temporalUnavailableReason)}
-                      >{model.name}{temporalUnavailableReason
-                        ? ' · Unavailable'
+                  {#each snapshot.catalog.video_models as model}
+                    {@const unavailable = videoAvailable.unavailable[model.model_id]}
+                    <option value={model.model_id} disabled={Boolean(unavailable)}
+                      >{model.name}{unavailable
+                        ? ` · ${unavailable.tag}`
                         : model.installed
                           ? ' · Installed'
                           : ''}</option
                     >{/each}
                 </select>
-                {#if temporalUnavailableReason}<p class="model-output-note" role="status">
-                    {temporalUnavailableReason}
-                  </p>{/if}
+                {#each videoAvailable.notes as note (note)}<p
+                    class="model-output-note"
+                    role="status"
+                  >
+                    {note}
+                  </p>{/each}
                 {#if selectedMedia?.hdr_format && !hdrPreservationAvailable}
                   <p class="model-output-note" role="status">
                     SDR output selected. This model cannot preserve HDR.
@@ -5114,8 +5126,12 @@
                 </p>
               {/if}
               {#if usingTemporalVideo}
-                {#if !skipUpscale}
+                <!-- The FlashVSR panel describes this Mac; where FlashVSR cannot run, the line
+                   under the engine menu says why instead. -->
+                {#if !skipUpscale && !(flashVideo && temporalUnavailableReason)}
                   <VideoMemory
+                    model={selectedVideoModel}
+                    memoryEngine={videoMemoryEngine}
                     lowMemory={settings.video_low_memory ?? true}
                     device={snapshot.capabilities.devices.find(
                       (device) => device.id === settings.device_id,
@@ -5144,8 +5160,13 @@
                   >
                 </div>
                 <p class="model-description">
-                  Smaller output uses less memory. For a first test, try 256 or 512 px. This can
-                  reduce the size of a large source video.
+                  {#if flashVideo}
+                    Smaller output takes less time. For a first test, try 256 or 512 px. FlashVSR
+                    works best up to 4× the source: above that, it runs at 4× and resizes the rest.
+                  {:else}
+                    Smaller output uses less memory. For a first test, try 256 or 512 px. This can
+                    reduce the size of a large source video.
+                  {/if}
                 </p>
                 {#if selectedMedia && settings.video_target_resolution && settings.video_target_resolution < Math.min(selectedMedia.width, selectedMedia.height)}
                   <p class="notice">
@@ -5198,6 +5219,7 @@
               {editModel}
               capabilities={snapshot.capabilities}
               {usingTemporalVideo}
+              videoModel={usingTemporalVideo ? selectedVideoModel : undefined}
               {preservingHdr}
               {interpolationSupported}
               updateSettings={chooseInAdvanced}
