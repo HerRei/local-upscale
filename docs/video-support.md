@@ -159,6 +159,10 @@ On test clips it removed about 40 % of the still-area shimmer (the earlier media
 
 SeedVR2 uses the same timed decoding and encoding contract. The worker applies trim bounds, preserves compatible audio on trims, and enforces output frame counts across context overlap. Unsupported image-engine tile, halo, precision, safe-memory, and de-flicker controls are hidden for this engine in the desktop UI.
 
+### FlashVSR v1.1 (Labs)
+
+FlashVSR v1.1 Tiny processes 37-frame windows (with 8 frames of run-up from the previous window) in one diffusion step and decodes with its own TCDecoder. It runs on Apple silicon Macs with 16 GB or more unified memory through MLX, and on AMD ROCm (Linux) and NVIDIA CUDA (Linux and Windows) with 12 GB or more VRAM through PyTorch using pure-PyTorch block-sparse gather attention (no Triton or runtime compiler). Large frames are split automatically into 128-aligned tiles sized to available GPU memory, and outputs follow the chosen resolution up to 4× directly (larger sizes resize the 4× output). DirectML, Intel XPU, OpenVINO, and CPU are not supported for FlashVSR, and HDR preservation remains disabled. CUDA has not been run on NVIDIA hardware yet.
+
 The 3B FP16 and FP8 variants support NVIDIA CUDA and AMD ROCm through the
 [vendored upstream implementation](https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler).
 ROCm uses PyTorch's `cuda:0` device identifier internally; that identifier does not

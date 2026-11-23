@@ -8,7 +8,10 @@ import type {
 
 const GIB = 1024 ** 3;
 
-type VideoModel = Pick<CatalogVideoModel, 'model_id' | 'engine_kind' | 'min_unified_memory_gb'>;
+type VideoModel = Pick<
+  CatalogVideoModel,
+  'model_id' | 'engine_kind' | 'min_unified_memory_gb' | 'min_vram_gb'
+>;
 type Engine = Pick<EngineInfo, 'video_engines'> | null | undefined;
 type Capabilities = Pick<CapabilityInfo, 'devices' | 'system_ram_total'>;
 
@@ -75,30 +78,61 @@ export function videoModelUnavailable(
       : undefined;
   }
   if (model.engine_kind === 'flashvsr') {
-    const needed = model.min_unified_memory_gb;
     if (!engine) return unavailable('FlashVSR is unavailable until the engine has started.');
     const appleGpu = capabilities.devices.some((device) => device.id === 'mps');
-    if (!listed && !appleGpu)
-      return unavailable(
-        `FlashVSR needs an Apple silicon Mac with ${needed} GB of memory.`,
-        'Apple silicon only',
-      );
-    // The Apple GPU's own total is the share PyTorch recommends, not what the Mac has: the
-    // engine's limit is the Mac's unified memory. An unknown size is left to the engine.
-    const installed = Math.round(capabilities.system_ram_total / GIB);
-    if (installed > 0 && installed < needed)
-      return unavailable(
-        `FlashVSR needs ${needed} GB of memory. This Mac has ${installed} GB.`,
-        `Needs ${needed} GB`,
-      );
-    if (!listed)
-      return unavailable('FlashVSR needs the MLX runtime, which this installation does not have.');
-    return deviceId === 'mps'
-      ? undefined
-      : unavailable(
-          'FlashVSR cannot run on this device. Choose a frame-by-frame model or the Apple GPU.',
-          'Apple GPU only',
+    const isCuda = /^cuda(?::\d+)?$/.test(deviceId);
+    if (!listed) {
+      if (appleGpu) {
+        // The Apple GPU's own total is the share PyTorch recommends, not what the Mac has: the
+        // engine's limit is the Mac's unified memory. An unknown size is left to the engine.
+        const needed = model.min_unified_memory_gb;
+        const installed = Math.round(capabilities.system_ram_total / GIB);
+        if (installed > 0 && installed < needed)
+          return unavailable(
+            `FlashVSR needs ${needed} GB of memory. This Mac has ${installed} GB.`,
+            `Needs ${needed} GB`,
+          );
+        return unavailable(
+          'FlashVSR needs the MLX runtime, which this installation does not have.',
         );
+      }
+      return unavailable(
+        'This installation supports frame-by-frame models. FlashVSR requires a compatible CUDA, ROCm or Metal engine.',
+      );
+    }
+    if (deviceId === 'mps') {
+      const needed = model.min_unified_memory_gb;
+      const installed = Math.round(capabilities.system_ram_total / GIB);
+      if (installed > 0 && installed < needed)
+        return unavailable(
+          `FlashVSR needs ${needed} GB of memory. This Mac has ${installed} GB.`,
+          `Needs ${needed} GB`,
+        );
+      return undefined;
+    }
+    if (isCuda) {
+      const needed = model.min_vram_gb;
+      const cudaDevice = capabilities.devices.find((device) => device.id === deviceId);
+      const installed = cudaDevice ? Math.round(cudaDevice.total_memory / GIB) : 0;
+      if (needed > 0 && installed > 0 && installed < needed)
+        return unavailable(
+          `FlashVSR needs ${needed} GB of GPU memory. This GPU has ${installed} GB.`,
+          `Needs ${needed} GB`,
+        );
+      return undefined;
+    }
+    if (appleGpu) {
+      const needed = model.min_unified_memory_gb;
+      const installed = Math.round(capabilities.system_ram_total / GIB);
+      if (installed > 0 && installed < needed)
+        return unavailable(
+          `FlashVSR needs ${needed} GB of memory. This Mac has ${installed} GB.`,
+          `Needs ${needed} GB`,
+        );
+    }
+    return unavailable(
+      'FlashVSR cannot run on this device. Choose a frame-by-frame model or a compatible CUDA, ROCm or Metal device.',
+    );
   }
   return listed
     ? undefined

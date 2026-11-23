@@ -87,7 +87,7 @@ test('on the CPU of the same Mac the library says what FlashVSR needs, and SeedV
   await showPane(page, 'enhance');
   const library = await openUpscalerLibrary(page);
   const flashRow = library.getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ });
-  await expect(flashRow.locator('.pill.bad')).toHaveText('Apple GPU only');
+  await expect(flashRow.locator('.pill.bad')).toHaveText('Unavailable');
   await flashRow.click();
   await expect(library.getByRole('button', { name: 'Use for this job' })).toBeDisabled();
 
@@ -106,7 +106,7 @@ test('a saved FlashVSR choice that cannot run here says why and cannot start', a
   });
   await showPane(page, 'enhance');
   await expect(page.locator('.inline-warning')).toHaveText(
-    'FlashVSR cannot run on this device. Choose a frame-by-frame model or the Apple GPU.',
+    'FlashVSR cannot run on this device. Choose a frame-by-frame model or a compatible CUDA, ROCm or Metal device.',
   );
   await expect(page.getByLabel('FlashVSR memory')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Start selected video' })).toBeDisabled();
@@ -127,10 +127,10 @@ test('on a Windows PC each video model is judged by its own rule in the library'
 
   const library = await openUpscalerLibrary(page);
   const flashRow = library.getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ });
-  await expect(flashRow.locator('.pill.bad')).toHaveText('Apple silicon only');
+  await expect(flashRow.locator('.pill.bad')).toHaveText('Unavailable');
   await flashRow.click();
   await expect(library.locator('.detail .fit')).toHaveText(
-    'FlashVSR needs an Apple silicon Mac with 16 GB of memory.',
+    'This installation supports frame-by-frame models. FlashVSR requires a compatible CUDA, ROCm or Metal engine.',
   );
 
   for (const name of [/^SeedVR2-3B — Labs/, /^SeedVR2-3B FP8 — Labs/]) {

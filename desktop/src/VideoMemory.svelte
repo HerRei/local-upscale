@@ -49,9 +49,13 @@
   aria-label={`${videoEngineName(engine)} memory`}
 >
   {#if flash}
-    <strong>Apple GPU · automatic memory management</strong>
+    <strong
+      >{shared ? 'Apple GPU · automatic memory management' : 'Automatic memory management'}</strong
+    >
     <p>
-      Large frames are split into tiles sized to this Mac's memory, so there is no memory setting.
+      Large frames are split into {shared
+        ? "tiles sized to this Mac's memory, so there is no memory setting."
+        : 'tiles sized to the GPU memory, so there is no memory setting.'}
       The video is processed in windows of {model?.temporal_window} frames; each starts with {model?.temporal_overlap}
       frames of run-up from the window before.
     </p>
