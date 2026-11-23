@@ -196,16 +196,43 @@ Function FindWixInstall
   wix_loop_done:
 FunctionEnd
 
+; Shows MESSAGE as a console line (silent) or a dialog, then quits with exit code 2.
+!macro FailWith MESSAGE
+  StrCpy $R9 "${MESSAGE}"
+  ${If} ${Silent}
+    System::Call 'kernel32::AttachConsole(i -1)i.r0'
+    ${If} $0 <> 0
+      System::Call 'kernel32::GetStdHandle(i -11)i.r0'
+      FileWrite $0 "$R9$\n"
+    ${EndIf}
+  ${Else}
+    MessageBox MB_ICONSTOP "$R9"
+  ${EndIf}
+  SetErrorLevel 2
+  Quit
+!macroend
+
 Function ApplyCurrentUserMode
   StrCpy $InstallMode "CurrentUser"
   SetShellVarContext current
   ${If} $CustomInstallDir != ""
     StrCpy $INSTDIR $CustomInstallDir
   ${Else}
-    StrCpy $INSTDIR "$LOCALAPPDATA\${PRODUCTNAME}"
     ReadRegStr $4 HKCU "${MANUPRODUCTKEY}" ""
     ${If} $4 != ""
       StrCpy $INSTDIR $4
+    ${ElseIf} $LOCALAPPDATA != ""
+      StrCpy $INSTDIR "$LOCALAPPDATA\${PRODUCTNAME}"
+    ${Else}
+      ; Without the user's AppData folder the path would become "\${PRODUCTNAME}" on
+      ; the drive root. Unattended runs stop with an error; the full installer leaves
+      ; the folder empty, so its folder page asks for one.
+      StrCpy $INSTDIR ""
+      ${If} ${Silent}
+      ${OrIf} $PassiveMode = 1
+      ${OrIf} $UpdateMode = 1
+        !insertmacro FailWith "$(noLocalAppData)"
+      ${EndIf}
     ${EndIf}
   ${EndIf}
 FunctionEnd
@@ -249,6 +276,16 @@ Function BuildAllUsersRelaunchArgs
   ${IfNot} ${Errors}
     StrCpy $R2 "$R2 /LOCALSR_ENGINE_MANAGED=$R3"
   ${EndIf}
+  ; Restart after an in-app update, as the updater asked.
+  ${GetOptions} $CMDLINE "/R" $R3
+  ${IfNot} ${Errors}
+    StrCpy $R2 "$R2 /R"
+    ${GetOptions} $CMDLINE "/ARGS" $R3
+    ${IfNot} ${Errors}
+      StrCpy $R2 "$R2 /ARGS $R3"
+    ${EndIf}
+  ${EndIf}
+  ; NSIS requires /D= to come last.
   ${If} $CustomInstallDir != ""
     StrCpy $R2 "$R2 /D=$CustomInstallDir"
   ${EndIf}
@@ -262,7 +299,6 @@ Function UpdateInstallModeShield
     UserInfo::GetAccountType
     Pop $R2
     ${If} $R2 != "Admin"
-    ${AndIf} $R2 != "Power"
       SendMessage $R0 ${BCM_SETSHIELD} 0 1
       Return
     ${EndIf}
@@ -316,7 +352,6 @@ Function PageLeaveInstallMode
     UserInfo::GetAccountType
     Pop $R1
     ${If} $R1 != "Admin"
-    ${AndIf} $R1 != "Power"
       Call BuildAllUsersRelaunchArgs
       Pop $R2
       System::Call 'shell32::ShellExecuteW(p $HWNDPARENT, w "runas", w "$EXEPATH", w R2, w "", i 1) p .r0'
@@ -656,7 +691,6 @@ Function .onInit
       UserInfo::GetAccountType
       Pop $R1
       ${If} $R1 != "Admin"
-      ${AndIf} $R1 != "Power"
         StrCpy $R3 0
         ${GetOptions} $CMDLINE "/AllUsers" $R0
         ${IfNot} ${Errors}
@@ -666,16 +700,11 @@ Function .onInit
         ${OrIf} $UpdateMode = 1
           StrCpy $R3 1
         ${EndIf}
+        ; A silent run never switches an all-users install to a second per-user copy,
+        ; and a relaunch that is still not elevated stops instead of asking again.
         ${If} ${Silent}
-          ${If} $R3 = 1
-            System::Call 'kernel32::AttachConsole(i -1)i.r0'
-            ${If} $0 <> 0
-              System::Call 'kernel32::GetStdHandle(i -11)i.r0'
-              FileWrite $0 "Administrator privileges are required for an all-users installation.$\n"
-            ${EndIf}
-            Abort
-          ${EndIf}
-          StrCpy $InstallMode "CurrentUser"
+        ${OrIf} $ElevatedRelaunch = 1
+          !insertmacro FailWith "$(allUsersNeedsAdmin)"
         ${ElseIf} $R3 = 1
           Call BuildAllUsersRelaunchArgs
           Pop $R2
@@ -1007,9 +1036,14 @@ Function un.onInit
       UserInfo::GetAccountType
       Pop $R1
       ${If} $R1 != "Admin"
-      ${AndIf} $R1 != "Power"
-        ${IfNot} ${Silent}
-          StrCpy $R2 "/AllUsers"
+        ${GetOptions} $CMDLINE "/ELEVATED" $R2
+        ${If} ${Silent}
+        ${OrIfNot} ${Errors}
+          !insertmacro FailWith "$(unAllUsersNeedsAdmin)"
+        ${Else}
+          ; Elevate this running copy (in %TEMP%), so the elevated run can delete
+          ; uninstall.exe and the install folder.
+          StrCpy $R2 "/AllUsers /ELEVATED"
           ${If} $PassiveMode = 1
             StrCpy $R2 "$R2 /P"
           ${EndIf}
@@ -1017,7 +1051,7 @@ Function un.onInit
             StrCpy $R2 "$R2 /UPDATE"
           ${EndIf}
           StrCpy $R2 "$R2 _?=$INSTDIR"
-          System::Call 'shell32::ShellExecuteW(p 0, w "runas", w "$INSTDIR\uninstall.exe", w R2, w "", i 1) p .r0'
+          System::Call 'shell32::ShellExecuteW(p 0, w "runas", w "$EXEPATH", w R2, w "", i 1) p .r0'
           ${If} $0 U> 32
             Quit
           ${EndIf}

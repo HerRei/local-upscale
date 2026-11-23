@@ -224,6 +224,118 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      # The smoke test above runs as the runner's administrator. "Just me" must also install
+      # for a standard user without administrator rights, and asking for "Everyone" without
+      # them must not install anything into Program Files.
+      - name: Install as a standard user without administrator rights
+        if: matrix.backend == 'CPU'
+        timeout-minutes: 20
+        run: |
+          $version = python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
+          $artifact = Join-Path "$env:LSR\out" "LocalSR-v$version-${{ matrix.suffix }}"
+          $user = "lsrstandard"
+          # A throwaway credential for this run only, from the system random generator.
+          $bytes = New-Object byte[] 24
+          [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+          $secure = ConvertTo-SecureString ([Convert]::ToBase64String($bytes) + "Aa1+") -AsPlainText -Force
+          New-LocalUser -Name $user -Password $secure -PasswordNeverExpires | Out-Null
+          if ((Get-LocalGroupMember -Group Administrators).Name -match "\\$user$") { throw "$user must not be an administrator" }
+          $credential = New-Object System.Management.Automation.PSCredential(".\$user", $secure)
+          $probe = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "echo %LOCALAPPDATA%> %TEMP%\lsr-localappdata.txt" `
+            -Credential $credential -LoadUserProfile -Wait -PassThru -WorkingDirectory C:\
+          $profileRoot = (Get-CimInstance Win32_UserProfile | Where-Object { $_.LocalPath -like "*\$user" }).LocalPath
+          if (-not $profileRoot) { throw "The standard user's profile was not created" }
+          # Start-Process -Credential hands the child this runner's environment, so Windows
+          # cannot resolve the user's AppData there. The installer must then fail, not
+          # report a success with nothing installed.
+          $broken = Start-Process -FilePath $artifact -ArgumentList "/S" -Credential $credential `
+            -LoadUserProfile -Wait -PassThru -WorkingDirectory C:\
+          "Install with an unresolved AppData folder exit code: $($broken.ExitCode)"
+          if ($broken.ExitCode -eq 0) { throw "The installer reported success without a user folder" }
+          if (Test-Path "C:\LocalSR") { throw "The installer wrote to C:\LocalSR" }
+
+          # The real case: the user's own environment, as when they start the installer.
+          $userEnv = "set USERPROFILE=$profileRoot&& set LOCALAPPDATA=$profileRoot\AppData\Local&& " +
+            "set APPDATA=$profileRoot\AppData\Roaming&& set TEMP=$profileRoot\AppData\Local\Temp&& " +
+            "set TMP=$profileRoot\AppData\Local\Temp&& "
+          $install = Start-Process -FilePath "cmd.exe" -Credential $credential -LoadUserProfile -Wait -PassThru `
+            -WorkingDirectory C:\ -ArgumentList "/c", "$userEnv`"$artifact`" /S"
+          "Per-user install exit code: $($install.ExitCode)"
+          if ($install.ExitCode -ne 0) { throw "The per-user install failed for a standard user" }
+          # Where "Just me" installs is the installer's choice; find the host in that user's AppData.
+          $host_exe = Get-ChildItem -LiteralPath (Join-Path $profileRoot "AppData") -Recurse -Depth 5 `
+            -Filter "*.exe" -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like "*localsr*" -and $_.Name -notmatch "^(un|Un)" -and
+              $_.FullName -notmatch "\\(engine|resources)\\" } |
+            Sort-Object { $_.FullName.Length } | Select-Object -First 1
+          if (-not $host_exe) {
+            Get-ChildItem -LiteralPath $profileRoot -Recurse -Depth 6 -Filter "*.exe" -File -ErrorAction SilentlyContinue |
+              Select-Object -First 30 | ForEach-Object { "found: $($_.FullName)" }
+            throw "No LocalSR executable in the standard user's AppData"
+          }
+          $installDir = $host_exe.DirectoryName
+          "Installed for the standard user: $($host_exe.FullName)"
+          $machineKey = Get-ChildItem "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall" |
+            Where-Object { (Get-ItemProperty $_.PSPath).DisplayName -like "LocalSR*" }
+          if ($machineKey) { throw "A per-user install wrote a machine-wide uninstall entry" }
+
+          $before = Test-Path "$env:ProgramFiles\LocalSR"
+          $all = Start-Process -FilePath "cmd.exe" -Credential $credential -LoadUserProfile -PassThru `
+            -WorkingDirectory C:\ -ArgumentList "/c", "$userEnv`"$artifact`" /S /AllUsers"
+          if (-not $all.WaitForExit(180000)) {
+            Stop-Process -Id $all.Id -Force
+            throw "An all-users install without administrator rights did not finish within 3 minutes"
+          }
+          "All-users install as a standard user exit code: $($all.ExitCode)"
+          if (-not $before -and (Test-Path "$env:ProgramFiles\LocalSR")) {
+            throw "A standard user installed into Program Files without administrator rights"
+          }
+
+          $uninstaller = Get-ChildItem -LiteralPath $installDir -Filter "uninstall*.exe" -File | Select-Object -First 1
+          if ($uninstaller) {
+            Start-Process -FilePath "cmd.exe" -Credential $credential -LoadUserProfile -Wait -WorkingDirectory C:\ `
+              -ArgumentList "/c", "$userEnv`"$($uninstaller.FullName)`" /S _?=$installDir" | Out-Null
+          }
+
+          # With an all-users install present, a standard user's silent run must fail instead
+          # of adding a second per-user copy, and a silent uninstall of it must fail too.
+          $machine = Start-Process -FilePath $artifact -ArgumentList "/S", "/AllUsers" -Wait -PassThru
+          if ($machine.ExitCode -ne 0) { throw "The administrator's all-users install failed: $($machine.ExitCode)" }
+          # The installer reuses a remembered location (the smoke test's folder), so ask the
+          # uninstall entry where it went instead of assuming Program Files.
+          $entry = Get-ItemProperty "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\LocalSR" -ErrorAction SilentlyContinue
+          if (-not $entry) { throw "The all-users install wrote no machine-wide uninstall entry" }
+          $machineDir = $entry.InstallLocation.Trim('"')
+          "All-users install by the administrator in: $machineDir"
+          $machineUninstaller = Join-Path $machineDir "uninstall.exe"
+          if (-not (Test-Path -LiteralPath $machineUninstaller)) { throw "No all-users install in $machineDir" }
+          # The earlier per-user install leaves its folder; the refused run must change nothing in it.
+          $userInstall = Join-Path $profileRoot "AppData\Local\LocalSR"
+          $snapshot = { if (Test-Path -LiteralPath $userInstall) {
+              Get-ChildItem -LiteralPath $userInstall -Recurse -Force -ErrorAction SilentlyContinue |
+                ForEach-Object { "$($_.FullName)|$($_.Length)|$($_.LastWriteTimeUtc.Ticks)" } } }
+          $beforeOver = (& $snapshot) -join "`n"
+          $over = Start-Process -FilePath "cmd.exe" -Credential $credential -LoadUserProfile -PassThru `
+            -WorkingDirectory C:\ -ArgumentList "/c", "$userEnv`"$artifact`" /S"
+          if (-not $over.WaitForExit(180000)) {
+            Stop-Process -Id $over.Id -Force
+            throw "A silent run over an all-users install did not finish within 3 minutes"
+          }
+          "Standard user's silent run over the all-users install exit code: $($over.ExitCode)"
+          if ($over.ExitCode -eq 0) { throw "A standard user's silent run over an all-users install reported success" }
+          if (((& $snapshot) -join "`n") -ne $beforeOver) {
+            throw "A silent run over an all-users install wrote into the standard user's AppData"
+          }
+          $remove = Start-Process -FilePath "cmd.exe" -Credential $credential -LoadUserProfile -Wait -PassThru `
+            -WorkingDirectory C:\ -ArgumentList "/c", "$userEnv`"$machineUninstaller`" /S _?=$machineDir"
+          "Standard user's silent uninstall of the all-users install exit code: $($remove.ExitCode)"
+          if ($remove.ExitCode -eq 0) { throw "A standard user's silent uninstall of an all-users install reported success" }
+          if (-not (Test-Path -LiteralPath $machineUninstaller)) { throw "A standard user removed files of the all-users install" }
+          $cleanup = Start-Process -FilePath $machineUninstaller -ArgumentList "/S", "_?=$machineDir" -Wait -PassThru
+          "Administrator uninstall exit code: $($cleanup.ExitCode)"
+          if ($cleanup.ExitCode -ne 0) { throw "The administrator could not uninstall the all-users install" }
+          Remove-LocalUser -Name $user
+
   attach:
     name: Attach verified installers to the release
     needs: installer
