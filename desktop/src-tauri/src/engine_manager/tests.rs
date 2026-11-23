@@ -291,10 +291,13 @@ fn linked_engine_folders_are_refused_on_unix() {
 #[test]
 fn linked_engine_folders_are_refused_on_windows() {
     assert_linked_engine_folders_are_refused(|target, link| {
+        // cmd reads a forward slash as a switch ("engines/gpu" -> "/gpu"); mklink needs
+        // backslashes.
+        let windows_path = |path: &std::path::Path| path.to_string_lossy().replace('/', "\\");
         let output = std::process::Command::new("cmd")
             .args(["/C", "mklink", "/J"])
-            .arg(link)
-            .arg(target)
+            .arg(windows_path(link))
+            .arg(windows_path(target))
             .output()
             .unwrap();
         assert!(
