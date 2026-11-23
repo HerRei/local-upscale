@@ -29,6 +29,11 @@ slot's arrow to move slot 3 or 4 into slot 2. Items from different inputs can
 be compared in boxes; the slider requires its first two slots to belong to the
 same input.
 
+Below the comparison, each visible slot lists the available job details: models and
+fixes in order, scale, output dimensions, time, requested device and completion date.
+The device is the requested setting; the engine can use a different route. Older jobs
+may have fewer details. Output dimensions appear when they can be read from the file.
+
 Remove a pick with its **×** button or untick it in Outputs; **Clear** removes
 the output history after confirmation; **Unpick all** removes all picks. Zoom
 and pan are linked across boxes. Use the zoom controls or the mouse wheel, drag

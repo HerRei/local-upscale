@@ -16,6 +16,7 @@
   import ComparePane from './ComparePane.svelte';
   import {
     outputGroups,
+    resultDetails,
     pickKey,
     toggleSlot,
     swapSlots,
@@ -195,6 +196,11 @@
             .filter(Boolean)
             .join(' · ')
         : `${media?.width ?? 0} × ${media?.height ?? 0}`,
+      details: result
+        ? resultDetails(result, slot?.width, slot?.height)
+        : media?.width && media?.height
+          ? [`Size: ${media.width} × ${media.height}`]
+          : [],
       width: slot?.width || media?.width || 1,
       height: slot?.height || media?.height || 1,
       preview_data_url: slot?.preview_data_url ?? '',

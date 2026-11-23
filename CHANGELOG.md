@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.6.0-beta] - Unreleased
+
+- **Compare results.** Compare saved photo or video outputs in one view, with recorded job details under each side (#145).
+
 ## [0.5.2-beta] - 2026-11-23
 
 - **Engine manager.** One main download per OS starts LocalSR. After setup, the app

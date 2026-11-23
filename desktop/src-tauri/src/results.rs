@@ -94,6 +94,9 @@ pub struct ResultSummary {
     pub notes: String,
     /// Run time, including model loading and saving; 0 when unknown.
     pub elapsed_seconds: f64,
+    /// Device and Neural Engine preference recorded in the request, not the actual route.
+    pub device: String,
+    pub neural_engine: bool,
     pub ui: Option<ResultUi>,
 }
 
@@ -296,6 +299,88 @@ fn edit_field<T: Default>(request: &Value, name: &str, read: impl Fn(&Value) -> 
     read(&request["data"][name]).unwrap_or_default()
 }
 
+fn stage_label(id: &str, path: Option<&str>) -> String {
+    if id == "__custom__" {
+        if let Some(stem) = path
+            .and_then(|value| Path::new(value).file_stem())
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+        {
+            return stem.to_owned();
+        }
+    }
+    if id.is_empty() {
+        "Unknown model".into()
+    } else {
+        id.to_owned()
+    }
+}
+
+fn request_stages(request: &Value) -> Vec<ResultStage> {
+    let data = &request["data"];
+    let mut stages: Vec<ResultStage> = data["stages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|stage| {
+            let id = stage["model_id"].as_str().unwrap_or_default();
+            let path = stage["model_path"]
+                .as_str()
+                .or_else(|| data["model_path"].as_str());
+            ResultStage {
+                kind: stage["kind"].as_str().unwrap_or_default().to_owned(),
+                model_id: id.to_owned(),
+                model_label: stage_label(id, path),
+            }
+        })
+        .collect();
+    if request["type"].as_str() == Some("video_job_request") {
+        if stages.is_empty() {
+            if let Some(id) = data["video_model_id"]
+                .as_str()
+                .filter(|id| !id.is_empty() && *id != "frame_by_frame")
+            {
+                stages.push(ResultStage {
+                    kind: "video".into(),
+                    model_id: id.to_owned(),
+                    model_label: id.to_owned(),
+                });
+            }
+        }
+        let interpolation = data["interpolation"].as_str().unwrap_or("off");
+        if !interpolation.is_empty() && interpolation != "off" {
+            if let Some(id) = data["interpolation_model_id"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+            {
+                let stage = ResultStage {
+                    kind: "interpolate".into(),
+                    model_id: id.to_owned(),
+                    model_label: id.to_owned(),
+                };
+                if data["interpolation_order"].as_str() == Some("before_upscale") {
+                    stages.insert(0, stage);
+                } else {
+                    stages.push(stage);
+                }
+            }
+        }
+        if data["audio_denoise"].as_bool() == Some(true) {
+            if let Some(id) = data["audio_denoise_model_id"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+            {
+                stages.push(ResultStage {
+                    kind: "audio_denoise".into(),
+                    model_id: id.to_owned(),
+                    model_label: id.to_owned(),
+                });
+            }
+        }
+    }
+    stages
+}
+
 pub fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ResultSummary> {
     let request: Value = serde_json::from_str(&row.get::<_, String>(6)?).unwrap_or_default();
     let data = &request["data"];
@@ -339,25 +424,11 @@ pub fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ResultSumma
             value.as_str().map(str::to_owned)
         }),
         max_dimension: edit_field(&request, "max_dimension", Value::as_u64),
-        stages: data["stages"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|stage| {
-                let id = stage["model_id"].as_str().unwrap_or_default();
-                ResultStage {
-                    kind: stage["kind"].as_str().unwrap_or_default().to_owned(),
-                    model_id: id.to_owned(),
-                    model_label: if id.is_empty() {
-                        "Unknown model".into()
-                    } else {
-                        id.to_owned()
-                    },
-                }
-            })
-            .collect(),
+        stages: request_stages(&request),
         notes: row.get(4)?,
         elapsed_seconds: row.get(5)?,
+        device: data["device"].as_str().unwrap_or_default().to_owned(),
+        neural_engine: data["neural_engine"].as_bool().unwrap_or(false),
         ui: if ui_json.is_empty() {
             None
         } else {
@@ -369,6 +440,83 @@ pub fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ResultSumma
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+
+    #[test]
+    fn saved_results_expose_the_requested_device_when_recorded() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        let read = |request: &str| {
+            db.query_row(
+                "SELECT 'job', 1, 'completed', '', '', 0.0, ?1, '', NULL, NULL",
+                [request],
+                super::summary_from_row,
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            read(r#"{"data":{"device":"cuda:0","neural_engine":false}}"#).device,
+            "cuda:0"
+        );
+        assert_eq!(read(r#"{"data":{}}"#).device, "");
+        assert!(read(r#"{"data":{"device":"mps","neural_engine":true}}"#).neural_engine);
+    }
+
+    #[test]
+    fn video_results_include_interpolation_and_audio_models_in_order() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        let read = |order: &str| {
+            let request = json!({"type":"video_job_request", "data": {
+                "interpolation":"x2", "interpolation_order": order,
+                "interpolation_model_id":"rife", "audio_denoise":true,
+                "audio_denoise_model_id":"audio", "stages":[{"kind":"upscale", "model_id":"image"}]
+            }})
+            .to_string();
+            db.query_row(
+                "SELECT 'job', 1, 'completed', '', '', 0.0, ?1, '', NULL, NULL",
+                [request],
+                super::summary_from_row,
+            )
+            .unwrap()
+        };
+        let ids = |order| {
+            read(order)
+                .stages
+                .into_iter()
+                .map(|s| s.model_id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids("before_upscale"), ["rife", "image", "audio"]);
+        assert_eq!(ids("after_upscale"), ["image", "rife", "audio"]);
+    }
+
+    #[test]
+    fn temporal_video_and_custom_checkpoint_stages_keep_their_labels() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        let read = |request: serde_json::Value| {
+            db.query_row(
+                "SELECT 'job', 1, 'completed', '', '', 0.0, ?1, '', NULL, NULL",
+                [request.to_string()],
+                super::summary_from_row,
+            )
+            .unwrap()
+        };
+        let temporal = read(json!({"type":"video_job_request", "data": {
+            "video_model_id": "seedvr2_3b", "audio_denoise": true,
+            "audio_denoise_model_id": "deepfilternet3"
+        }}));
+        assert_eq!(
+            temporal
+                .stages
+                .iter()
+                .map(|s| s.model_id.as_str())
+                .collect::<Vec<_>>(),
+            ["seedvr2_3b", "deepfilternet3"]
+        );
+        let custom = read(json!({"type":"job_request", "data": {
+            "model_path": "/models/my-fine.safetensors",
+            "stages": [{"kind":"upscale", "model_id":"__custom__", "model_path":"/models/my-fine.safetensors"}]
+        }}));
+        assert_eq!(custom.stages[0].model_label, "my-fine");
+    }
 
     #[test]
     fn video_engine_jobs_are_labelled_with_the_engine_name() {
