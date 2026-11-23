@@ -529,7 +529,23 @@ pub fn update_status(state: State<'_, Arc<AppState>>) -> AppResult<UpdateStatus>
     Ok(status)
 }
 
-const DISCOVER_URL: &str = "https://herrei.github.io/localsr/whats-new/";
+/// The release notes, generated with every release (the old whats-new page was not).
+const DISCOVER_URL: &str = "https://herrei.github.io/localsr/release-notes/";
+
+/// Where What's New opens: the feed's own link, else the offered version's release notes.
+fn discover_url_for(raw: &serde_json::Value, version: &str) -> String {
+    match raw["discover_url"].as_str() {
+        Some(link) => validated_discover_url(Some(link)),
+        None if !version.is_empty()
+            && version
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+')) =>
+        {
+            format!("{DISCOVER_URL}#release-v{version}")
+        }
+        None => DISCOVER_URL.into(),
+    }
+}
 
 fn validated_discover_url(value: Option<&str>) -> String {
     value
@@ -713,8 +729,7 @@ pub async fn check_update(
                 );
                 status.version = update.version.clone();
                 status.notes = update.body.clone().unwrap_or_default();
-                status.discover_url =
-                    validated_discover_url(update.raw_json["discover_url"].as_str());
+                status.discover_url = discover_url_for(&update.raw_json, &update.version);
                 show_package_manager_update(&mut status);
                 return update_storage::write_atomic(
                     &state.paths.next_root.join("update-channel.json"),
@@ -739,7 +754,7 @@ pub async fn check_update(
             );
             status.version = update.version.clone();
             status.notes = update.body.clone().unwrap_or_default();
-            status.discover_url = validated_discover_url(update.raw_json["discover_url"].as_str());
+            status.discover_url = discover_url_for(&update.raw_json, &update.version);
             status.size = contract.size
                 + resolved_engine
                     .engine

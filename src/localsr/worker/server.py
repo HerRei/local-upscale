@@ -247,7 +247,8 @@ class WorkerServer:
         self.active_batch_job_ids: set[str] = set()
         self.pending_cancel_job_ids: set[str] = set()
         self.pending_cancel_keep_partial: dict[str, bool] = {}
-        self.active_cancel_keep_partial = True
+        # Keeping the finished part is always an explicit choice; any other stop discards.
+        self.active_cancel_keep_partial = False
         self.model_adapter = ModelAdapter()
         self.model_store = ModelStore()
         self.engine = InferenceEngine(self.model_adapter)
@@ -290,7 +291,7 @@ class WorkerServer:
         ).start()
         return True
 
-    def _request_cancel(self, requested_job_id: str, keep_partial: bool = True) -> None:
+    def _request_cancel(self, requested_job_id: str, keep_partial: bool = False) -> None:
         """Remember cancellation even if the matching job is still queued."""
         if not requested_job_id:
             return
@@ -313,7 +314,7 @@ class WorkerServer:
                 return False
             if job_id == self.active_job_id:
                 return self.active_cancel_keep_partial
-            return self.pending_cancel_keep_partial.get(job_id, True)
+            return self.pending_cancel_keep_partial.get(job_id, False)
 
     def _batch_keeps_partial(self) -> bool:
         """A batch is stopped as one queue: its stop's choice holds for every photo."""
@@ -328,10 +329,12 @@ class WorkerServer:
                 self.active_cancel_keep_partial = False
                 self.cancel_event.set()
             elif cancelled:
-                self.active_cancel_keep_partial = self.pending_cancel_keep_partial.get(job_id, True)
+                self.active_cancel_keep_partial = self.pending_cancel_keep_partial.get(
+                    job_id, False
+                )
                 self.cancel_event.set()
             else:
-                self.active_cancel_keep_partial = True
+                self.active_cancel_keep_partial = False
                 self.cancel_event.clear()
 
     def _clear_cancel_unless_shutting_down(self) -> None:
@@ -343,7 +346,7 @@ class WorkerServer:
             self.active_job_id = None
             self.pending_cancel_job_ids.discard(job_id)
             self.pending_cancel_keep_partial.pop(job_id, None)
-            self.active_cancel_keep_partial = True
+            self.active_cancel_keep_partial = False
             self._clear_cancel_unless_shutting_down()
 
     def _activate_batch(self, job_ids: list[str]) -> None:
@@ -357,7 +360,7 @@ class WorkerServer:
                 self.active_cancel_keep_partial = False
                 self.cancel_event.set()
             else:
-                self.active_cancel_keep_partial = True
+                self.active_cancel_keep_partial = False
                 self.cancel_event.clear()
 
     def _deactivate_batch(self, job_ids: list[str]) -> None:
@@ -367,7 +370,7 @@ class WorkerServer:
             self.pending_cancel_job_ids.difference_update(job_ids)
             for job_id in job_ids:
                 self.pending_cancel_keep_partial.pop(job_id, None)
-            self.active_cancel_keep_partial = True
+            self.active_cancel_keep_partial = False
             self._clear_cancel_unless_shutting_down()
 
     def reader_thread_func(self):
@@ -439,7 +442,7 @@ class WorkerServer:
             keep_partial = data.get("keep_partial") if isinstance(data, dict) else None
             self._request_cancel(
                 requested_job_id if isinstance(requested_job_id, str) else "",
-                keep_partial=keep_partial if isinstance(keep_partial, bool) else True,
+                keep_partial=keep_partial if isinstance(keep_partial, bool) else False,
             )
 
     def _restart_if_required(self) -> None:

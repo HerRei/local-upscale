@@ -2523,3 +2523,27 @@ fn upgrade_check_the_new_host_records_and_starts_the_engine_an_older_updater_ins
     );
     println!("LSR_PROBE_HOST=engine {id} recorded and chosen; handshake {handshake}");
 }
+
+#[test]
+fn whats_new_opens_the_offered_versions_release_notes() {
+    // A tester found the old link on a page about 0.4.
+    assert_eq!(
+        discover_url_for(&serde_json::json!({}), "0.6.0-beta"),
+        "https://herrei.github.io/localsr/release-notes/#release-v0.6.0-beta"
+    );
+    assert_eq!(
+        discover_url_for(&serde_json::json!({}), ""),
+        "https://herrei.github.io/localsr/release-notes/"
+    );
+    assert_eq!(
+        discover_url_for(&serde_json::json!({}), "0.6.0\"><script>"),
+        "https://herrei.github.io/localsr/release-notes/"
+    );
+    assert_eq!(
+        discover_url_for(
+            &serde_json::json!({"discover_url": "https://herrei.github.io/localsr/somewhere/"}),
+            "0.6.0-beta"
+        ),
+        "https://herrei.github.io/localsr/somewhere/"
+    );
+}
