@@ -514,6 +514,7 @@ def test_real_weights_untiled_matches_port_pipeline():
     assert psnr_val > 40.0
 
 
+@pytest.mark.timeout(600)
 @pytest.mark.skipif(
     not _HAS_REAL_WEIGHTS,
     reason="Set LOCALSR_FLASHVSR_MODELS to run real-weight FlashVSR tests.",
