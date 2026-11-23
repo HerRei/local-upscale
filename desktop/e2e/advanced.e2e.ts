@@ -170,7 +170,7 @@ test('Run at low priority stays clickable while a job runs and uses set_update_s
   await expect(lowPriority).not.toBeChecked();
   await lowPriority.click();
   await expect(lowPriority).toBeChecked();
-  expect((await hostCalls(page, 'set_update_switch')).at(-1)?.args).toEqual({
+  expect((await hostCalls(page, 'set_preference')).at(-1)?.args).toEqual({
     name: 'low_priority',
     value: true,
   });

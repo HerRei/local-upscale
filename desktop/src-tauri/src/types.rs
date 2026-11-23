@@ -927,6 +927,8 @@ pub struct AppSnapshot {
     #[serde(default)]
     pub linux_menu_installed: bool,
     #[serde(default)]
+    pub linux_menu_available: bool,
+    #[serde(default)]
     pub engines: EngineManagerSnapshot,
 }
 

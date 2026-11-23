@@ -49,6 +49,7 @@
   import LinuxMenuNotice from './LinuxMenuNotice.svelte';
   import EngineRecommendationCard from './EngineRecommendationCard.svelte';
   import EngineManagerDialog from './EngineManagerDialog.svelte';
+  import SettingsSheet from './SettingsSheet.svelte';
   import UpdatePanel from './UpdatePanel.svelte';
   import SetupScreen from './SetupScreen.svelte';
   import WelcomeNotice from './WelcomeNotice.svelte';
@@ -133,6 +134,7 @@
     Quality,
     Recipe,
     ResultSummary,
+    SettingsSection,
     StartBatchInput,
     TaskKind,
     UiSettings,
@@ -538,6 +540,17 @@
     slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit' | 'try';
     fix?: Exclude<FixKind, 'faces'>;
   } = { slot: 'browse' };
+  let settingsOpen = false;
+  let settingsSection: SettingsSection = 'general';
+  let settingsFocusTarget: 'hardware' | 'ffmpeg' | null = null;
+  function openSettings(
+    section: SettingsSection = 'general',
+    focusTarget: 'hardware' | 'ffmpeg' | null = null,
+  ): void {
+    settingsSection = section;
+    settingsFocusTarget = focusTarget;
+    settingsOpen = true;
+  }
   let startingJob = false;
   let requestingCancel = false;
   let movingModels = false;
@@ -2278,30 +2291,32 @@
   }
 
   /**
-   * The update switches are saved by the host on its own and may change during a job.
+   * App-wide preferences are saved by the host on its own and may change during a job.
    * The window shows the host's value afterwards, also when saving failed.
    */
-  function setUpdateSwitch(
-    name:
-      | 'check_updates_at_launch'
-      | 'anonymous_update_count'
-      | 'crash_reports'
-      | 'low_priority'
-      | 'show_in_menu_bar'
-      | 'notify_on_finish',
-    value: boolean,
-  ): void {
+  async function setPreference(
+    name: api.PreferenceName,
+    value: boolean | UiSettings['appearance'] | UiSettings['interface_scale'],
+  ): Promise<void> {
     if (!api.isTauri()) {
       snapshot = { ...snapshot, settings: { ...snapshot.settings, [name]: value } };
+      if (name === 'appearance' || name === 'colour_blind_palette') {
+        themeForRefresh(snapshot.settings);
+      }
       return;
     }
-    void api
-      .setUpdateSwitch(name, value)
-      .catch((error) => showModal('Could not save settings', String(error)))
-      .finally(() => {
-        scheduleRefresh();
-        if (name === 'crash_reports') void refreshCrashReports();
-      });
+    try {
+      await api.setPreference(name, value);
+      snapshot = { ...snapshot, settings: { ...snapshot.settings, [name]: value } };
+      if (name === 'appearance' || name === 'colour_blind_palette') {
+        themeForRefresh(snapshot.settings);
+      }
+    } catch (error) {
+      showModal('Could not save settings', String(error));
+    } finally {
+      scheduleRefresh();
+      if (name === 'crash_reports') void refreshCrashReports();
+    }
   }
 
   function setTask(task: TaskKind, nextVideoTask?: 'upscale' | 'denoise'): void {
@@ -2790,6 +2805,23 @@
       };
     } catch (error) {
       showModal('Could not add to applications menu', String(error));
+    } finally {
+      linuxMenuBusy = false;
+    }
+  }
+
+  async function removeLinuxMenu(): Promise<void> {
+    if (linuxMenuBusy) return;
+    linuxMenuBusy = true;
+    try {
+      await api.uninstallLinuxMenu();
+      snapshot = {
+        ...snapshot,
+        linux_menu_installed: false,
+        settings: { ...snapshot.settings, linux_menu_prompt_dismissed: true },
+      };
+    } catch (error) {
+      showModal('Could not remove from applications menu', String(error));
     } finally {
       linuxMenuBusy = false;
     }
@@ -3500,6 +3532,7 @@
         reportOpen ||
         settings.privacy_choice_made === false ||
         libraryOpen ||
+        settingsOpen ||
         ffmpegNotice ||
         $updateDialogOpen) &&
       action !== 'file.cancel'
@@ -3584,6 +3617,9 @@
         case 'help.remove-desktop-menu':
           await api.uninstallLinuxMenu();
           await refresh();
+          break;
+        case 'app.settings':
+          openSettings('general');
           break;
         case 'app.updates':
           updateDialogOpen.set(true);
@@ -3897,8 +3933,8 @@
     completionSound={settings.completion_sound ?? false}
     on:completionsound={(event) => updateSettings({ completion_sound: event.detail })}
     checkAtLaunch={settings.check_updates_at_launch ?? true}
-    on:anonymouscount={(event) => setUpdateSwitch('anonymous_update_count', event.detail)}
-    on:checkatlaunch={(event) => setUpdateSwitch('check_updates_at_launch', event.detail)}
+    on:anonymouscount={(event) => void setPreference('anonymous_update_count', event.detail)}
+    on:checkatlaunch={(event) => void setPreference('check_updates_at_launch', event.detail)}
   />
   <WelcomeNotice
     anonymousUpdateCount={settings.anonymous_update_count ?? false}
@@ -4910,9 +4946,9 @@
               {clearCache}
               loadCacheSize={() => void loadCacheSize()}
               {updateSettings}
-              setLowPriority={(value) => setUpdateSwitch('low_priority', value)}
-              setShowInMenuBar={(value) => setUpdateSwitch('show_in_menu_bar', value)}
-              setNotifyOnFinish={(value) => setUpdateSwitch('notify_on_finish', value)}
+              setLowPriority={(value) => void setPreference('low_priority', value)}
+              setShowInMenuBar={(value) => void setPreference('show_in_menu_bar', value)}
+              setNotifyOnFinish={(value) => void setPreference('notify_on_finish', value)}
               {chooseOutput}
               {chooseModelFolder}
               {resetModelFolder}
@@ -5151,6 +5187,54 @@
   />
 {/if}
 
+{#if settingsOpen}
+  <SettingsSheet
+    {settings}
+    capabilities={snapshot.capabilities}
+    engines={snapshot.engines}
+    section={settingsSection}
+    focusTarget={settingsFocusTarget}
+    {settingsLocked}
+    defaultModelDirectory={snapshot.default_model_directory ?? ''}
+    modelDirectoryMissing={Boolean(snapshot.model_directory_missing)}
+    {movingModels}
+    {modelMoveProgress}
+    {cacheSize}
+    cacheBusy={clearingCache ||
+      settingsLocked ||
+      Boolean(snapshot.runtime.active_job_id) ||
+      Boolean(snapshot.runtime.active_batch_job_ids?.length)}
+    linuxMenuAvailable={Boolean(snapshot.linux_menu_available)}
+    linuxMenuOffer={Boolean(snapshot.linux_menu_offer)}
+    linuxMenuInstalled={Boolean(snapshot.linux_menu_installed)}
+    {linuxMenuBusy}
+    setPreference={(name, value) => void setPreference(name, value)}
+    {updateSettings}
+    {chooseModelFolder}
+    {resetModelFolder}
+    {clearCache}
+    loadCacheSize={() => void loadCacheSize()}
+    refreshCapabilities={async () => {
+      try {
+        await api.refreshCapabilities();
+        return true;
+      } catch (error) {
+        showModal('Could not refresh the hardware', String(error));
+        return false;
+      }
+    }}
+    onOpenEngineManager={() => void openEngineManager()}
+    onOpenIntegrations={() => void showIntegrations()}
+    onOpenUpdates={() => updateDialogOpen.set(true)}
+    onInstallLinuxMenu={acceptLinuxMenu}
+    onUninstallLinuxMenu={removeLinuxMenu}
+    onClose={() => {
+      settingsOpen = false;
+      settingsFocusTarget = null;
+    }}
+  />
+{/if}
+
 {#if customEditOpen}
   <CustomEditModelModal
     initial={settings.custom_edit_model}
@@ -5298,7 +5382,8 @@
             ><input
               type="checkbox"
               checked={settings.crash_reports ?? false}
-              on:change={(event) => setUpdateSwitch('crash_reports', event.currentTarget.checked)}
+              on:change={(event) =>
+                void setPreference('crash_reports', event.currentTarget.checked)}
             /> Offer to Report Crashes</label
           >
           <p>Turning this off deletes all stored crash reports immediately.</p>

@@ -91,6 +91,7 @@ export function demoSnapshot(): AppSnapshot {
       show_in_menu_bar: true,
       notify_on_finish: true,
       menu_bar_icon_monochrome: true,
+      auto_cache_cleanup: true,
     },
     recipes: [],
     capabilities: {
@@ -145,6 +146,7 @@ export function demoSnapshot(): AppSnapshot {
     gpu_download_notice: null,
     linux_menu_offer: false,
     linux_menu_installed: false,
+    linux_menu_available: false,
     engines: {
       supported: true,
       managed_by_store: false,

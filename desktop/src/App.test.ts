@@ -102,7 +102,12 @@ const api = vi.hoisted(() => ({
   clearMedia: vi.fn(async () => undefined),
   clearResults: vi.fn(async () => undefined),
   saveSettings: vi.fn(async (_settings: UiSettings): Promise<void> => undefined),
-  setUpdateSwitch: vi.fn(async (_name: string, _value: boolean): Promise<void> => undefined),
+  setPreference: vi.fn(
+    async (
+      _name: string,
+      _value: boolean | UiSettings['appearance'] | UiSettings['interface_scale'],
+    ): Promise<void> => undefined,
+  ),
   listCrashReports: vi.fn(
     async (): Promise<{ id: string; report: { message: string; os: string } }[]> => [],
   ),
@@ -421,7 +426,7 @@ describe('Update switches', () => {
       ),
     );
     await user.click(screen.getByLabelText('Check for updates when LocalSR starts'));
-    expect(api.setUpdateSwitch.mock.calls).toEqual([
+    expect(api.setPreference.mock.calls).toEqual([
       ['anonymous_update_count', true], // off until the user turns it on
       ['check_updates_at_launch', true], // it started off in this test
     ]);
@@ -430,7 +435,7 @@ describe('Update switches', () => {
     );
     // The menu's own items are the host's: the window does not act on them.
     await chooseMenuItem('app.update-count');
-    expect(api.setUpdateSwitch).toHaveBeenCalledTimes(2);
+    expect(api.setPreference).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -6203,15 +6208,15 @@ it('saves Run at low priority via setUpdateSwitch even while a job is running', 
   );
   // user-event skips any descendant of fieldset[disabled], even non-form spans; fireEvent matches a real browser.
   await fireEvent.click(screen.getByRole('checkbox', { name: 'Run at low priority' }));
-  expect(api.setUpdateSwitch).toHaveBeenCalledWith('low_priority', true);
+  expect(api.setPreference).toHaveBeenCalledWith('low_priority', true);
   expect(api.saveSettings).not.toHaveBeenCalledWith(
     expect.objectContaining({ low_priority: true }),
   );
 
   await fireEvent.click(screen.getByRole('checkbox', { name: 'Show in menu bar' }));
-  expect(api.setUpdateSwitch).toHaveBeenCalledWith('show_in_menu_bar', false);
+  expect(api.setPreference).toHaveBeenCalledWith('show_in_menu_bar', false);
   await fireEvent.click(screen.getByRole('checkbox', { name: 'Notify when a file finishes' }));
-  expect(api.setUpdateSwitch).toHaveBeenCalledWith('notify_on_finish', false);
+  expect(api.setPreference).toHaveBeenCalledWith('notify_on_finish', false);
 });
 
 describe('first-launch setup screen', () => {
@@ -6494,7 +6499,7 @@ describe('crash reports', () => {
     expect(within(section).getByText('Stored crash reports: 1')).toBeTruthy();
 
     await user.click(within(section).getByLabelText('Offer to Report Crashes'));
-    await waitFor(() => expect(api.setUpdateSwitch).toHaveBeenCalledWith('crash_reports', false));
+    await waitFor(() => expect(api.setPreference).toHaveBeenCalledWith('crash_reports', false));
 
     api.listCrashReports.mockResolvedValueOnce([]).mockResolvedValue([]);
     await user.click(within(section).getByRole('button', { name: 'Delete All' }));
@@ -7708,6 +7713,32 @@ describe('remembered custom checkpoint consent', () => {
   });
 });
 
+describe('Settings sheet', () => {
+  it('opens from app.settings and is ignored while another dialog or first-launch setup is open', async () => {
+    const setupSnap = readySnapshot([image('photo', true)]);
+    setupSnap.settings.privacy_choice_made = false;
+    await mountWith(setupSnap);
+    expect(await screen.findByRole('dialog', { name: 'Welcome to LocalSR' })).toBeTruthy();
+    await chooseMenuItem('app.settings');
+    expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull();
+    cleanup();
+
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await chooseMenuItem('view.models');
+    expect(await screen.findByRole('dialog', { name: 'Model library' })).toBeTruthy();
+    await chooseMenuItem('app.settings');
+    expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
+
+    await chooseMenuItem('app.settings');
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(dialog).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull());
+  });
+});
+
 describe('older custom checkpoint settings', () => {
   it('shows a cleaned filename when the saved entry has no name', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
@@ -7748,5 +7779,31 @@ describe('checkpoint consent after a running job', () => {
           .checked,
       ).toBe(true),
     );
+  });
+});
+
+describe('Settings sheet', () => {
+  it('opens from app.settings and is ignored while another dialog or first-launch setup is open', async () => {
+    const setupSnap = readySnapshot([image('photo', true)]);
+    setupSnap.settings.privacy_choice_made = false;
+    await mountWith(setupSnap);
+    expect(await screen.findByRole('dialog', { name: 'Welcome to LocalSR' })).toBeTruthy();
+    await chooseMenuItem('app.settings');
+    expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull();
+    cleanup();
+
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await chooseMenuItem('view.models');
+    expect(await screen.findByRole('dialog', { name: 'Model library' })).toBeTruthy();
+    await chooseMenuItem('app.settings');
+    expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
+
+    await chooseMenuItem('app.settings');
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(dialog).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull());
   });
 });

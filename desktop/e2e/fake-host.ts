@@ -507,9 +507,8 @@ function hostScript(scenario: Scenario): void {
         return null;
       case 'record_frontend_error':
         return null;
-      case 'set_update_switch':
+      case 'set_preference':
         snapshot.settings[args.name] = args.value;
-        if (args.name === 'crash_reports' && !args.value) crashReports = [];
         emit('state-changed', null);
         return null;
       case 'set_privacy_choice':

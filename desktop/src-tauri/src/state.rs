@@ -254,6 +254,8 @@ impl AppState {
         let linux_menu_offer =
             crate::integrations::offer_linux_menu(settings.linux_menu_prompt_dismissed);
         let linux_menu_installed = crate::integrations::linux_menu_installed();
+        let linux_menu_available =
+            crate::integrations::running_in_appimage() || linux_menu_installed;
         let engines = crate::engine_manager::snapshot_for(
             self,
             &crate::updates::UpdateConfig::load(),
@@ -278,6 +280,7 @@ impl AppState {
             gpu_download_notice,
             linux_menu_offer,
             linux_menu_installed,
+            linux_menu_available,
             engines,
         })
     }
