@@ -1192,6 +1192,40 @@ pub async fn retry_job_on_cpu(
     .map_err(|error| AppError::Config(format!("Could not retry job on CPU: {error}")))?
 }
 
+fn check_retry_checkpoint_consent(state: &AppState, request: &Value) -> AppResult<()> {
+    let data = &request["data"];
+    let approved = data["approved_checkpoint_sha256"].as_str();
+    let allowed = data["allow_unverified_checkpoint"]
+        .as_bool()
+        .unwrap_or(false);
+    if approved.is_none() && !allowed {
+        return Ok(());
+    }
+    let confirm_again = || {
+        AppError::Validation(
+            "Confirm your own model again in the model library before retrying.".into(),
+        )
+    };
+    let model_path = data["model_path"]
+        .as_str()
+        .filter(|path| !path.is_empty())
+        .ok_or_else(confirm_again)?;
+    let approved = approved.ok_or_else(confirm_again)?;
+    let path = Path::new(model_path);
+    state
+        .grants
+        .check_model_file(path)
+        .map_err(|_| confirm_again())?;
+    let digest = catalog::sha256_file(path).map_err(|_| confirm_again())?;
+    let trusted = lock(&state.settings)?
+        .trusted_checkpoint_sha256
+        .contains(&digest);
+    if digest != approved || !trusted {
+        return Err(confirm_again());
+    }
+    Ok(())
+}
+
 pub(crate) fn retry_job_on_cpu_checked(state: &AppState, job_id: &str) -> AppResult<()> {
     if state
         .updates
@@ -1202,8 +1236,7 @@ pub(crate) fn retry_job_on_cpu_checked(state: &AppState, job_id: &str) -> AppRes
     }
     ensure_not_moving_models(state)?;
     let cpu_device = resolve_device(state, "cpu")?;
-    let database = lock(&state.database)?;
-    let source = database
+    let source = lock(&state.database)?
         .job_for_cpu_retry(job_id)?
         .ok_or_else(|| AppError::Validation("The failed job could not be found.".into()))?;
     if source.status != "failed" {
@@ -1212,6 +1245,10 @@ pub(crate) fn retry_job_on_cpu_checked(state: &AppState, job_id: &str) -> AppRes
         ));
     }
     let mut request: Value = serde_json::from_str(&source.request_json)?;
+    // The stored request carries the approval it was started with; an own checkpoint
+    // that can run code must still be granted and approved as it is now.
+    check_retry_checkpoint_consent(state, &request)?;
+    let database = lock(&state.database)?;
     let request_type = request["type"].as_str().unwrap_or("");
     let output_key = match request_type {
         "job_request" => "output_path",

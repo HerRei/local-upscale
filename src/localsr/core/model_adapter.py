@@ -163,9 +163,12 @@ class ModelAdapter:
                 )
             return "catalog-verified"
         if suffix in RISKY_CHECKPOINT_SUFFIXES:
-            if self.approved_checkpoint and candidate == os.path.abspath(
-                self.approved_checkpoint[0]
-            ):
+            if self.approved_checkpoint:
+                # A job that carries an approval may load exactly that file, as approved.
+                if candidate != os.path.abspath(self.approved_checkpoint[0]):
+                    raise CheckpointSecurityError(
+                        "Only the checkpoint you confirmed can load in this job."
+                    )
                 try:
                     matches = file_sha256(candidate) == self.approved_checkpoint[1]
                 except OSError:
@@ -174,6 +177,7 @@ class ModelAdapter:
                     raise CheckpointSecurityError(
                         "The approved checkpoint changed. Confirm it again."
                     )
+                return "explicitly-trusted"
             if not self.allow_unverified_checkpoints:
                 raise CheckpointSecurityError(
                     "LocalSR blocks unverified .pth, .pt, and .ckpt checkpoints because they may "

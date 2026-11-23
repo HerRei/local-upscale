@@ -1650,6 +1650,8 @@ def test_video_colour_is_skipped_with_a_note_when_the_video_has_colour(tmp_path)
             return (img_tensor.numpy() * 255).astype(np.uint8)
 
     engine = StubEngine()
+    loaded = []
+    engine.load_model = lambda path, *args, **kwargs: loaded.append(path)
     warnings = []
     config = VideoJobConfig(
         video_path=str(source),
@@ -1669,6 +1671,8 @@ def test_video_colour_is_skipped_with_a_note_when_the_video_has_colour(tmp_path)
     assert engine.calls == 0
     assert warnings == ["This video already has colour, so Colour was skipped."]
     assert engine.notes == warnings
+    # The skipped DDColor is never loaded onto the graphics card.
+    assert "ddcolor.pth" not in loaded
 
 
 def test_stopped_video_job_discards_partial_and_cleans_scratch_when_keep_partial_is_false(

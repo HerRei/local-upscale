@@ -4298,3 +4298,50 @@ fn cancel_jobs_and_cancel_jobs_for_media_forward_keep_partial_and_cancel_queued(
         assert_eq!(jobs.iter().find(|j| j.id == "j2").unwrap().status, "queued");
     }
 }
+
+#[test]
+fn retry_on_cpu_rechecks_the_approval_of_an_own_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let checkpoint = dir.path().join("mine.pth");
+    fs::write(&checkpoint, b"pickled weights").unwrap();
+    let paths = AppPaths::under(&dir.path().join("app"));
+    let state = AppState::from_paths(paths).unwrap();
+    let digest = catalog::sha256_file(&checkpoint).unwrap();
+    let request = |approved: Option<&str>| {
+        json!({"type": "job_request", "data": {
+            "model_path": checkpoint.to_string_lossy(),
+            "allow_unverified_checkpoint": approved.is_some(),
+            "approved_checkpoint_sha256": approved,
+        }})
+    };
+    // No own checkpoint in the request: nothing to check.
+    let catalog_job =
+        json!({"type": "job_request", "data": {"model_path": "/models/span.safetensors"}});
+    assert!(check_retry_checkpoint_consent(&state, &catalog_job).is_ok());
+
+    // Not granted any more: refused.
+    lock(&state.settings).unwrap().trusted_checkpoint_sha256 = vec![digest.clone()];
+    assert!(check_retry_checkpoint_consent(&state, &request(Some(&digest))).is_err());
+
+    state.grants.grant_model_file(&checkpoint);
+    assert!(check_retry_checkpoint_consent(&state, &request(Some(&digest))).is_ok());
+
+    // Approval withdrawn: refused.
+    lock(&state.settings)
+        .unwrap()
+        .trusted_checkpoint_sha256
+        .clear();
+    let error = check_retry_checkpoint_consent(&state, &request(Some(&digest))).unwrap_err();
+    assert!(error.to_string().contains("Confirm your own model again"));
+
+    // The file changed since it was approved: refused, even if the new file is trusted.
+    fs::write(&checkpoint, b"other weights").unwrap();
+    let changed = catalog::sha256_file(&checkpoint).unwrap();
+    lock(&state.settings).unwrap().trusted_checkpoint_sha256 = vec![digest.clone(), changed];
+    assert!(check_retry_checkpoint_consent(&state, &request(Some(&digest))).is_err());
+
+    // A flag without a digest is never enough.
+    let mut flag_only = request(None);
+    flag_only["data"]["allow_unverified_checkpoint"] = json!(true);
+    assert!(check_retry_checkpoint_consent(&state, &flag_only).is_err());
+}

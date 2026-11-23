@@ -553,6 +553,33 @@ def _run_video_frames(
     park = getattr(engine, "park_models", None)
     if interpolation is not None and callable(park) and hasattr(synthesizer, "memory_relief"):
         synthesizer.memory_relief = park
+    # Decide about Colour before loading anything, so a skipped DDColor never
+    # occupies graphics memory.
+    colour_indices = [
+        i
+        for i, stage in enumerate(config.preprocess_stages)
+        if stage.fix == "colour" or getattr(stage.model_info, "architecture", "") == "DDColor"
+    ]
+    if len(colour_indices) > 1:
+        raise ValueError("Only one video colour stage is supported.")
+    colour_index = colour_indices[0] if colour_indices else None
+    if colour_index is not None and _video_has_colour(config):
+        # Colour invents colours for black-and-white footage; on a colour video it
+        # would replace the real colours with guesses.
+        note = "This video already has colour, so Colour was skipped."
+        config = replace(
+            config,
+            preprocess_stages=tuple(
+                stage for i, stage in enumerate(config.preprocess_stages) if i != colour_index
+            ),
+        )
+        colour_index = None
+        if warning_callback is not None:
+            warning_callback(note)
+        add_note = getattr(engine, "add_note", None)
+        if callable(add_note):
+            add_note(note)
+
     # Load the fix models once and reuse them for every frame.
     for stage in config.preprocess_stages:
         engine.load_model(
@@ -597,31 +624,6 @@ def _run_video_frames(
     cached_face_mask: FaceMask | None = None
     frames_since_detection = 0
     warned_unstable: set[int] = set()
-
-    colour_indices = [
-        i
-        for i, stage in enumerate(config.preprocess_stages)
-        if stage.fix == "colour" or getattr(stage.model_info, "architecture", "") == "DDColor"
-    ]
-    if len(colour_indices) > 1:
-        raise ValueError("Only one video colour stage is supported.")
-    colour_index = colour_indices[0] if colour_indices else None
-    if colour_index is not None and _video_has_colour(config):
-        # Colour invents colours for black-and-white footage; on a colour video it
-        # would replace the real colours with guesses.
-        note = "This video already has colour, so Colour was skipped."
-        config = replace(
-            config,
-            preprocess_stages=tuple(
-                stage for i, stage in enumerate(config.preprocess_stages) if i != colour_index
-            ),
-        )
-        colour_index = None
-        if warning_callback is not None:
-            warning_callback(note)
-        add_note = getattr(engine, "add_note", None)
-        if callable(add_note):
-            add_note(note)
 
     def frame_generator() -> Iterator[TimedVideoFrame]:
         nonlocal inference_started_at

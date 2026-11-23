@@ -101,3 +101,15 @@ def test_remembered_consent_refuses_changed_checkpoint(tmp_path):
     checkpoint.write_bytes(b"replaced")
     with pytest.raises(CheckpointSecurityError, match="changed"):
         adapter._checkpoint_trust(str(checkpoint))
+
+
+def test_an_approved_job_loads_no_other_pickle_checkpoint(tmp_path):
+    approved = tmp_path / "trusted.pth"
+    approved.write_bytes(b"approved")
+    other = tmp_path / "other.pth"
+    other.write_bytes(b"other")
+    adapter = ModelAdapter(allow_unverified_checkpoints=True)
+    adapter.approved_checkpoint = (str(approved), hashlib.sha256(b"approved").hexdigest())
+    with pytest.raises(CheckpointSecurityError, match="Only the checkpoint you confirmed"):
+        adapter._checkpoint_trust(str(other))
+    assert adapter._checkpoint_trust(str(approved)) == "explicitly-trusted"
