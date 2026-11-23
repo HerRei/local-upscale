@@ -137,16 +137,10 @@ it('explains when interpolation happens', async () => {
   expect(screen.getByRole('button', { name: 'About Interpolate' })).toBeTruthy();
 });
 
-it('starts output scale at 2× for both photo and video upscale and hides it in restore', async () => {
+it('omits Output scale from Advanced and shows Format, tiles summary for photo and video', async () => {
   await open({ task: 'video', video_task: 'upscale', output_scale: 2 }, mac);
-  const scaleSelect = screen.getByLabelText('Output scale') as HTMLSelectElement;
-  expect(Array.from(scaleSelect.options).map((o) => o.value)).toEqual(['2', '3', '4']);
-  expect(scaleSelect.value).toBe('2');
-  expect(screen.getByText('Scale, format, tiles')).toBeTruthy();
-  await fireEvent.click(screen.getByRole('button', { name: 'About Output scale' }));
-  expect(screen.getByRole('tooltip').textContent).toBe(
-    'How many times larger the result is than the original. A 2× or 3× choice on a 4× model resizes down afterwards. To keep the size, use Restore.',
-  );
+  expect(screen.queryByLabelText('Output scale')).toBeNull();
+  expect(screen.getByText('Format, tiles')).toBeTruthy();
 
   cleanup();
   await open({ task: 'video', video_task: 'denoise', output_scale: 4 }, mac);
@@ -160,12 +154,8 @@ it('starts output scale at 2× for both photo and video upscale and hides it in 
 
   cleanup();
   await open({ task: 'upscale', output_scale: 2 }, mac);
-  const imageScale = screen.getByLabelText('Output scale') as HTMLSelectElement;
-  expect(Array.from(imageScale.options).map((o) => o.value)).toEqual(['2', '3', '4']);
-  await fireEvent.click(screen.getByRole('button', { name: 'About Output scale' }));
-  expect(screen.getByRole('tooltip').textContent).toBe(
-    'How many times larger the result is than the original. The model always works at its own 4× scale; a smaller choice resizes that result down afterwards, so it saves no time. To keep the size, use Restore.',
-  );
+  expect(screen.queryByLabelText('Output scale')).toBeNull();
+  expect(screen.getByText('Format, tiles')).toBeTruthy();
 });
 
 describe('Refresh in the memory line', () => {

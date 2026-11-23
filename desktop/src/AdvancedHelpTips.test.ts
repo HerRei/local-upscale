@@ -51,7 +51,7 @@ interface Variant {
   expected: string[];
 }
 
-const IMAGE = ['Output scale', 'Format', 'Preserve safe metadata and color profile'];
+const IMAGE = ['Format', 'Preserve safe metadata and color profile'];
 const TAIL = ['Save to', 'Memory pressure'];
 const GRID = ['Tile', 'Halo', 'Precision', 'Safe memory mode'];
 const VIDEO = ['Container', 'Video format', 'Video quality · CRF'];
@@ -80,22 +80,14 @@ const variants: Variant[] = [
     settings: { task: 'video', video_interpolation: 'x2' },
     capabilities: mac,
     interpolation: true,
-    expected: [
-      'Output scale',
-      ...VIDEO,
-      'De-flicker · Labs',
-      'Frame rate',
-      'Interpolate',
-      ...TAIL,
-      ...GRID,
-    ],
+    expected: [...VIDEO, 'De-flicker · Labs', 'Frame rate', 'Interpolate', ...TAIL, ...GRID],
   },
   {
     name: 'video frame by frame elsewhere',
     settings: { task: 'video', video_interpolation: 'off' },
     capabilities: other,
     interpolation: true,
-    expected: ['Output scale', ...VIDEO, 'De-flicker · Labs', 'Frame rate', ...TAIL, ...GRID],
+    expected: [...VIDEO, 'De-flicker · Labs', 'Frame rate', ...TAIL, ...GRID],
   },
   {
     name: 'video restore frame by frame elsewhere',
@@ -221,7 +213,7 @@ describe('the wording of the help tips', () => {
       }
       cleanup();
     }
-    expect(texts.size).toBeGreaterThan(20);
+    expect(texts.size).toBeGreaterThanOrEqual(20);
     for (const text of texts) {
       const words = text.trim().split(/\s+/).length;
       expect(words, text).toBeLessThanOrEqual(46);

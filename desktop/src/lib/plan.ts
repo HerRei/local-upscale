@@ -244,10 +244,9 @@ export function resolvePlan(
     (settings.task === 'upscale' || settings.task === 'video' || restoring)
       ? settings.fix_stages
       : [];
-  // Restore's model is its last fix; the ones before it run first, as before an upscale.
+  // Same size's model is its last fix; the ones before it run first, as before an upscale.
   const chip = restoring ? fixStages.at(-1)?.fix : undefined;
-  const noVideoRestoreModel =
-    settings.task === 'video' && restoring && !chip && settings.selected_model_id !== '__custom__';
+  const noRestoreModel = restoring && !chip && settings.selected_model_id !== '__custom__';
   const missingStage = (
     kind: PlanStage['kind'],
     role: PlanStage['role'],
@@ -275,8 +274,8 @@ export function resolvePlan(
     );
   }
 
-  if (noVideoRestoreModel) {
-    // Video Restore with no chip selected runs only De-flicker, Frame rate and Clean up audio.
+  if (noRestoreModel) {
+    // Same size with no chip selected runs only video options (De-flicker, Frame rate, Clean up audio).
   } else if (options.usingTemporalVideo && options.selectedVideoModel) {
     const video = options.selectedVideoModel;
     stages.push({
@@ -293,7 +292,7 @@ export function resolvePlan(
     stages.push({
       kind: restoring ? 'restore' : 'upscale',
       role: 'primary',
-      label: restoring ? 'Restore' : `Upscale ×${settings.output_scale}`,
+      label: restoring ? 'Fix' : `Upscale ×${settings.output_scale}`,
       custom: settings.custom_model_path,
       installed: Boolean(settings.custom_model_path),
       canDownload: false,
@@ -302,10 +301,11 @@ export function resolvePlan(
     });
   } else {
     const primary = byId(settings.selected_model_id);
-    const restoreLabel =
-      chip === 'colour' || primary?.purposes.includes('colorize')
+    const restoreLabel = chip
+      ? FIX_ROW_LABELS[chip]
+      : primary?.purposes.includes('colorize')
         ? FIX_ROW_LABELS.colour
-        : 'Restore';
+        : 'Fix';
     const stage = stageFor(
       restoring ? 'restore' : 'upscale',
       'primary',
@@ -314,18 +314,10 @@ export function resolvePlan(
       restoring && primary && chip && fixesOf(primary).includes(chip) ? chip : undefined,
     );
     if (stage) stages.push(stage);
-    else if (chip)
-      stages.push(
-        missingStage(
-          'restore',
-          'primary',
-          chip === 'colour' ? FIX_ROW_LABELS.colour : 'Restore',
-          chip,
-        ),
-      );
+    else if (chip) stages.push(missingStage('restore', 'primary', FIX_ROW_LABELS[chip], chip));
   }
 
-  if (options.faceEnabled && options.faceModel && !restoring && !noVideoRestoreModel) {
+  if (options.faceEnabled && options.faceModel && !restoring && !noRestoreModel) {
     const stage = stageFor('face_restore', 'face', 'Faces', options.faceModel);
     if (stage) stages.push(stage);
   }
@@ -543,10 +535,9 @@ export function presetDownload(
   const fixes = (
     !temporal && (task === 'upscale' || task === 'video' || restoring) ? ui.fix_stages : []
   ).map((selection) => chooseFixModel(current, selection.fix, quality, ui.preset_pins));
-  // Restore's model is its last fix; without one it is the preset's own choice. At 1× no
-  // upscaler runs, so none is counted.
+  // At Same size no upscaler runs, so only the chosen fixes are counted.
   const primary =
-    (restoring && fixes.length) || skipsUpscaleModel(ui)
+    restoring || skipsUpscaleModel(ui)
       ? undefined
       : choosePresetModel(current, task, quality, ui.content, ui.preset_pins, ui.video_task);
   const models = new Map(

@@ -10,6 +10,7 @@ import {
   frameRateChange,
   interpolationLabel,
   pendingDownloads,
+  presetDownload,
   resolvePlan,
   skipsUpscaleModel,
   supportsHdrPreservation,
@@ -100,10 +101,21 @@ describe('model library resolution', () => {
   it('every fix chip has a model in the bundled catalog for Quick and Best', () => {
     // The plan has no row for a fix without a model, so the catalog must never lose one.
     const snapshot = demoSnapshot();
-    for (const fix of ['noise', 'jpeg', 'blur'] as const) {
+    for (const fix of ['noise', 'jpeg', 'blur', 'colour'] as const) {
       for (const quality of ['quick', 'best'] as const) {
         expect(chooseFixModel(snapshot, fix, quality)).toBeTruthy();
       }
+    }
+  });
+
+  it('picks the expected bundled defaults for every fix in Quick and Best', () => {
+    const snapshot = demoSnapshot();
+    expect(chooseFixModel(snapshot, 'noise', 'quick')?.model_id).toBe('denoise_realplksr_1x');
+    expect(chooseFixModel(snapshot, 'noise', 'best')?.model_id).toBe('nafnet_sidd_width64');
+    for (const quality of ['quick', 'best'] as const) {
+      expect(chooseFixModel(snapshot, 'blur', quality)?.model_id).toBe('nafnet_gopro_deblur');
+      expect(chooseFixModel(snapshot, 'jpeg', quality)?.model_id).toBe('fbcnn_color');
+      expect(chooseFixModel(snapshot, 'colour', quality)?.model_id).toBe('ddcolor_modelscope');
     }
   });
 
@@ -157,7 +169,7 @@ describe('model library resolution', () => {
       options,
     );
     expect([fix.fix, fix.label]).toEqual(['jpeg', 'Fix JPEG']);
-    // In Restore the model is the primary; the active chip still names its problem.
+    // At Same size the primary row is named after its last fix; the active chip marks it remembered.
     const [restore] = resolvePlan(
       snapshot,
       {
@@ -172,9 +184,115 @@ describe('model library resolution', () => {
     expect([restore.role, restore.fix, restore.label, restore.remembered]).toEqual([
       'primary',
       'noise',
-      'Restore',
+      'Fix noise',
       true,
     ]);
+  });
+
+  it('counts fix downloads in presetDownload and drops the hidden default at Same size', () => {
+    const snapshot = demoSnapshot();
+    const ui: UiSettings = {
+      ...snapshot.settings,
+      task: 'upscale',
+      content: 'photo',
+      output_scale: 4,
+      fix_stages: [
+        { fix: 'noise', model_id: 'denoise_realplksr_1x' },
+        { fix: 'blur', model_id: 'nafnet_gopro_deblur' },
+      ],
+      fixes: ['noise', 'blur'],
+      preset_pins: {},
+    };
+    expect(presetDownload('quick', snapshot, ui)).toBe('292 MB download');
+
+    snapshot.catalog.models.find((m) => m.model_id === 'span_photo_x4')!.installed = true;
+    expect(presetDownload('quick', snapshot, ui)).toBe('287 MB download');
+    expect(presetDownload('best', snapshot, ui)).toBe('730 MB download');
+
+    const sameSize = { ...ui, task: 'denoise' as const, output_scale: 1 };
+    expect(presetDownload('quick', snapshot, sameSize)).toBe('287 MB download');
+    expect(presetDownload('best', snapshot, sameSize)).toBe('702 MB download');
+
+    const noFixSameSize = { ...sameSize, fix_stages: [], fixes: [] };
+    expect(presetDownload('quick', snapshot, noFixSameSize)).toBe('');
+    expect(presetDownload('best', snapshot, noFixSameSize)).toBe('');
+
+    const pinnedNoise = {
+      ...sameSize,
+      fix_stages: [{ fix: 'noise' as const, model_id: 'scunet_color_real_psnr' }],
+      fixes: ['noise' as const],
+      preset_pins: { 'fix/noise/quick': 'scunet_color_real_psnr' },
+    };
+    expect(presetDownload('quick', snapshot, pinnedNoise)).toBe('69 MB download');
+    expect(presetDownload('best', snapshot, pinnedNoise)).toBe('443 MB download');
+  });
+
+  it('labels Same size plan rows by fix, Fix for own file, Colour for colour, and omits a catalog primary without fixes', () => {
+    const snapshot = demoSnapshot();
+    const options = { faceEnabled: false, usingTemporalVideo: false };
+    const twoFixes = resolvePlan(
+      snapshot,
+      {
+        ...snapshot.settings,
+        task: 'denoise',
+        output_scale: 1,
+        selected_model_id: 'denoise_realplksr_1x',
+        fix_stages: [
+          { fix: 'blur', model_id: 'nafnet_gopro_deblur' },
+          { fix: 'noise', model_id: 'denoise_realplksr_1x' },
+        ],
+        fixes: ['blur', 'noise'],
+      },
+      options,
+    );
+    expect(twoFixes.map((s) => [s.label, s.role, s.kind])).toEqual([
+      ['Fix blur', 'fix', 'restore'],
+      ['Fix noise', 'primary', 'restore'],
+    ]);
+    expect(twoFixes.some((s) => s.label === 'Restore')).toBe(false);
+
+    const ownFile = resolvePlan(
+      snapshot,
+      {
+        ...snapshot.settings,
+        task: 'denoise',
+        output_scale: 1,
+        selected_model_id: '__custom__',
+        custom_model_path: '/models/own.safetensors',
+        fix_stages: [],
+        fixes: [],
+      },
+      options,
+    );
+    expect(ownFile.map((s) => [s.label, s.role, s.kind])).toEqual([['Fix', 'primary', 'restore']]);
+
+    const noFixCatalog = resolvePlan(
+      snapshot,
+      {
+        ...snapshot.settings,
+        task: 'denoise',
+        output_scale: 1,
+        selected_model_id: 'denoise_realplksr_1x',
+        fix_stages: [],
+        fixes: [],
+      },
+      options,
+    );
+    expect(noFixCatalog).toEqual([]);
+
+    const colourLast = resolvePlan(
+      snapshot,
+      {
+        ...snapshot.settings,
+        task: 'denoise',
+        output_scale: 1,
+        selected_model_id: 'ddcolor_modelscope',
+        fix_stages: [{ fix: 'colour', model_id: 'ddcolor_modelscope' }],
+        fixes: ['colour'],
+      },
+      options,
+    );
+    expect(colourLast.map((s) => [s.label, s.role])).toEqual([['Colour', 'primary']]);
   });
 
   it("keeps a finished job's note, such as a skipped fix, on the status line", () => {

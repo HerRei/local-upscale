@@ -716,6 +716,7 @@ input:focus-visible {
     input:not([type='checkbox']),
     label,
     .field-label,
+    .field-value,
     .directory-path,
     .directory-field small,
     .directory-field > b,
@@ -1385,8 +1386,8 @@ input:focus-visible {
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
 }
-.seg-inline.task-switch {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+.seg-inline.size-switch {
+  grid-template-columns: 1.5fr 1fr 1fr 1fr;
 }
 .seg-inline button:disabled {
   cursor: not-allowed;
@@ -3682,6 +3683,12 @@ input[type='number'],
 }
 .field-heading .field-label {
   margin: 0;
+}
+.field-heading .field-value {
+  margin-left: auto;
+  color: var(--secondary);
+  font-size: calc(12px * var(--ui-scale));
+  font-variant-numeric: tabular-nums;
 }
 .help-tip {
   position: relative;
