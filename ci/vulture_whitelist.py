@@ -162,4 +162,3 @@ DecoderResult
 tile_width
 tile_height
 max_tile_area
-fixed_scale

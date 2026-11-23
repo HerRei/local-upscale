@@ -295,9 +295,6 @@ def _to_output(frame: np.ndarray, width: int, height: int) -> np.ndarray:
 class FlashVSREngine:
     """One job's worth of MLX FlashVSR v1.1 Tiny state and tiled frame execution."""
 
-    default_temporal_window = DEFAULT_TEMPORAL_WINDOW
-    default_temporal_overlap = DEFAULT_TEMPORAL_OVERLAP
-
     def __init__(
         self,
         bundle_dir: str,
