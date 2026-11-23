@@ -76,9 +76,11 @@ depended on a user report.
 ## Verification
 
 - `upgrade_check.py --as-in-0.5.2` builds the feed as 0.5.2 did and fails with the
-  error the tester saw, from 0.5.0's own code.
-- `upgrade_check.py` with the fix passes from 0.4.0, 0.5.0 and 0.5.2, including the new
-  host recording and starting the engine.
+  error the tester saw, word for word, from 0.5.0's own code.
+- `upgrade_check.py` with the fix passes from 0.4.0, 0.5.0 and 0.5.2 on macOS with the
+  real engine: each old updater installs the engine package, and the new host records
+  that engine and completes the handshake with it. The Windows CUDA and Linux CPU jobs
+  run the same check in CI.
 - Still to do before 0.6.0 ships: the real in-app update from 0.5.0 to 0.6.0 of the
   Windows CUDA edition on the Windows test laptop.
 
