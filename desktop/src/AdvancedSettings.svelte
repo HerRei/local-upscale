@@ -406,11 +406,11 @@
               /> De-flicker · Labs</label
             ><HelpTip
               label="De-flicker"
-              text="For clips whose still areas shimmer from frame to frame. Where nothing moves, each frame is blended halfway with the median of itself and its two neighbors. Computationally expensive: it runs on the CPU at the output size and adds about a second per 4K frame on an M1 Pro. Off by default."
+              text="Evens out brightness flicker in the original video and the shimmer that frame-by-frame upscaling adds in still areas. It decides from the original, so motion, cuts and real light changes pass through. Adds a little time per frame. Off by default."
             />
           </div>
           <p class="model-description">
-            Gentle smoothing in static regions. Moving details and scene cuts bypass the filter.
+            Steadies flicker and still-area shimmer. Motion and scene cuts pass through.
           </p>
           <div class="field-row">
             <span class="label-with-tip"
