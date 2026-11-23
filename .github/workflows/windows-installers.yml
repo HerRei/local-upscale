@@ -284,6 +284,33 @@ jobs:
             Start-Process -FilePath "cmd.exe" -Credential $credential -LoadUserProfile -Wait -WorkingDirectory C:\ `
               -ArgumentList "/c", "$userEnv`"$($uninstaller.FullName)`" /S _?=$installDir" | Out-Null
           }
+
+          # With an all-users install present, a standard user's silent run must fail instead
+          # of adding a second per-user copy, and a silent uninstall of it must fail too.
+          $machine = Start-Process -FilePath $artifact -ArgumentList "/S", "/AllUsers" -Wait -PassThru
+          if ($machine.ExitCode -ne 0) { throw "The administrator's all-users install failed: $($machine.ExitCode)" }
+          $machineDir = Join-Path $env:ProgramFiles "LocalSR"
+          $machineUninstaller = Join-Path $machineDir "uninstall.exe"
+          if (-not (Test-Path -LiteralPath $machineUninstaller)) { throw "No all-users install in $machineDir" }
+          $over = Start-Process -FilePath "cmd.exe" -Credential $credential -LoadUserProfile -PassThru `
+            -WorkingDirectory C:\ -ArgumentList "/c", "$userEnv`"$artifact`" /S"
+          if (-not $over.WaitForExit(180000)) {
+            Stop-Process -Id $over.Id -Force
+            throw "A silent run over an all-users install did not finish within 3 minutes"
+          }
+          "Standard user's silent run over the all-users install exit code: $($over.ExitCode)"
+          if ($over.ExitCode -eq 0) { throw "A standard user's silent run over an all-users install reported success" }
+          if (Test-Path -LiteralPath (Join-Path $profileRoot "AppData\Local\LocalSR")) {
+            throw "A silent run over an all-users install added a per-user copy"
+          }
+          $remove = Start-Process -FilePath "cmd.exe" -Credential $credential -LoadUserProfile -Wait -PassThru `
+            -WorkingDirectory C:\ -ArgumentList "/c", "$userEnv`"$machineUninstaller`" /S _?=$machineDir"
+          "Standard user's silent uninstall of the all-users install exit code: $($remove.ExitCode)"
+          if ($remove.ExitCode -eq 0) { throw "A standard user's silent uninstall of an all-users install reported success" }
+          if (-not (Test-Path -LiteralPath $machineUninstaller)) { throw "A standard user removed files of the all-users install" }
+          $cleanup = Start-Process -FilePath $machineUninstaller -ArgumentList "/S", "_?=$machineDir" -Wait -PassThru
+          "Administrator uninstall exit code: $($cleanup.ExitCode)"
+          if ($cleanup.ExitCode -ne 0) { throw "The administrator could not uninstall the all-users install" }
           Remove-LocalUser -Name $user
 
   attach:

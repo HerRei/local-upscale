@@ -31,3 +31,5 @@ LangString installModeTop ${LANG_ENGLISH} "Choose whether to install ${PRODUCTNA
 LangString installModeCurrentUser ${LANG_ENGLISH} "Just me (no administrator rights needed)"
 LangString installModeAllUsers ${LANG_ENGLISH} "Everyone on this computer (UAC prompt)"
 LangString noLocalAppData ${LANG_ENGLISH} "Windows did not say where your user folder is, so ${PRODUCTNAME} was not installed. Sign in to your own Windows account and run the installer again, or choose a folder with /D=."
+LangString allUsersNeedsAdmin ${LANG_ENGLISH} "Installing ${PRODUCTNAME} for everyone on this computer needs administrator rights. Run the installer as an administrator, or add /CurrentUser to install it just for you."
+LangString unAllUsersNeedsAdmin ${LANG_ENGLISH} "${PRODUCTNAME} is installed for everyone on this computer, so removing it needs administrator rights."
