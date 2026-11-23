@@ -1669,3 +1669,41 @@ def test_video_colour_is_skipped_with_a_note_when_the_video_has_colour(tmp_path)
     assert engine.calls == 0
     assert warnings == ["This video already has colour, so Colour was skipped."]
     assert engine.notes == warnings
+
+
+def test_stopped_video_job_discards_partial_and_cleans_scratch_when_keep_partial_is_false(
+    synthetic_video, tmp_path
+):
+    adapter = DummyAdapter(2)
+    cancel = threading.Event()
+    out_dir = tmp_path / "out"
+    scratch_dir = tmp_path / "scratch"
+    out_dir.mkdir()
+    scratch_dir.mkdir()
+    config = VideoJobConfig(
+        video_path=str(synthetic_video),
+        model_path="dummy",
+        output_video_path=str(out_dir / "output.mp4"),
+        model_info=adapter.model_info,
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=4,
+        safe_memory=False,
+        temporary_directory=str(scratch_dir),
+    )
+
+    def stop(index, total):
+        if index >= 4:
+            cancel.set()
+
+    with pytest.raises(InterruptedError):
+        run_video_job(
+            config,
+            InferenceEngine(adapter),
+            cancel,
+            frame_started_cb=stop,
+            keep_partial=False,
+        )
+    assert list(out_dir.iterdir()) == []
+    assert list(scratch_dir.iterdir()) == []

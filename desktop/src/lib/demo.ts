@@ -92,6 +92,7 @@ export function demoSnapshot(): AppSnapshot {
       notify_on_finish: true,
       menu_bar_icon_monochrome: true,
       auto_cache_cleanup: true,
+      stopped_job_result: 'ask',
     },
     recipes: [],
     capabilities: {
@@ -138,6 +139,8 @@ export function demoSnapshot(): AppSnapshot {
       live_memory_pressure_percent: 0,
       thermal_status: 'Not exposed by this backend',
       hardware_note: '',
+      frames_processed: 0,
+      total_frames: 0,
     },
     latest_benchmark: null,
     edit: { models: structuredClone(editModels), runtime_path: '', custom_model: null },

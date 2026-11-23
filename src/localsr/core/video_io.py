@@ -449,6 +449,10 @@ def validate_hdr_encoder(
         raise VideoStageError("HDR encode", str(error)) from error
 
 
+def _should_keep_partial(keep_partial: bool | Callable[[], bool]) -> bool:
+    return bool(keep_partial()) if callable(keep_partial) else bool(keep_partial)
+
+
 def _system_stream_export(
     frames,
     destination: Path,
@@ -461,7 +465,7 @@ def _system_stream_export(
     audio_source: str | None,
     cancel_event: threading.Event | None,
     temporary_directory: str | None,
-    keep_partial: bool = False,
+    keep_partial: bool | Callable[[], bool] = False,
     stage_callback=None,
     subtitle_source: str | None = None,
     reencode_audio: bool = False,
@@ -469,6 +473,7 @@ def _system_stream_export(
 ) -> str:
     """Pipe restored frames to the system encoder while the next ones are restored."""
     final = _owned_output_temporary(destination, "external", temporary_directory)
+    can_keep_partial = bool(keep_partial)
     stopped = False
     last_end = 0.0
     origin = None
@@ -477,14 +482,18 @@ def _system_stream_export(
         nonlocal stopped, last_end, origin
         try:
             for frame in frames:
-                if not keep_partial and cancel_event is not None and cancel_event.is_set():
+                if (
+                    cancel_event is not None
+                    and cancel_event.is_set()
+                    and not _should_keep_partial(keep_partial)
+                ):
                     raise InterruptedError("video job cancelled")
                 if origin is None:
                     origin = frame.timestamp
                 last_end = float(frame.timestamp - origin + frame.duration)
                 yield frame
         except InterruptedError:
-            if not keep_partial or origin is None:
+            if not _should_keep_partial(keep_partial) or origin is None:
                 raise
             stopped = True
             if stage_callback is not None:
@@ -497,18 +506,18 @@ def _system_stream_export(
         ) as scratch:
             wav = (
                 system.source_audio(Path(audio_source), Path(scratch) / "audio.wav", cancel_event)
-                if audio_source and not keep_partial
+                if audio_source and not can_keep_partial
                 else None
             )
             system.encode_frames(
-                available_frames() if keep_partial else frames,
+                available_frames() if can_keep_partial else frames,
                 final,
                 video_codec=video_codec,
                 container=container_format,
                 crf=crf,
                 fps=fps,
                 audio=wav,
-                cancel_event=None if keep_partial else cancel_event,
+                cancel_event=None if can_keep_partial else cancel_event,
             )
         if stopped:
             seconds = int(last_end)
@@ -518,7 +527,7 @@ def _system_stream_export(
         final_cancel_event = None if stopped else cancel_event
         source = Path(audio_source) if audio_source else None
         subtitles = Path(subtitle_source) if subtitle_source else None
-        if keep_partial and (
+        if can_keep_partial and (
             (source is not None and source.is_file())
             or (subtitles is not None and subtitles.is_file())
         ):
@@ -759,7 +768,7 @@ def _encode_video(
     stage_callback: Callable[[str], None] | None = None,
     stream_to_system: bool = False,
     replace_existing: bool = False,
-    keep_partial: bool = False,
+    keep_partial: bool | Callable[[], bool] = False,
 ) -> str:
     """Encode an iterable of (rgb_uint8_HxWx3) frames into a video file.
 
@@ -869,7 +878,11 @@ def _encode_video(
             nonlocal stopped
             try:
                 for item in chain((first,), iterator):
-                    if not keep_partial and cancel_event is not None and cancel_event.is_set():
+                    if (
+                        cancel_event is not None
+                        and cancel_event.is_set()
+                        and not _should_keep_partial(keep_partial)
+                    ):
                         stopped = True
                         return
                     yield item
@@ -921,7 +934,7 @@ def _encode_video(
             for packet in stream.encode(frame):
                 mux(packet)
             frame_count += 1
-        if stopped and (not keep_partial or not frame_count):
+        if stopped and (not _should_keep_partial(keep_partial) or not frame_count):
             raise InterruptedError("video job cancelled")
         if stopped and stage_callback is not None:
             stage_callback("partial_finalizing")

@@ -163,6 +163,11 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       break;
     }
     case 'job_started':
+      if (next.runtime.active_job_id !== String(data.job_id ?? '')) {
+        next.runtime.frames_processed = 0;
+        next.runtime.total_frames = 0;
+        next.runtime.can_keep_partial = undefined;
+      }
       next.runtime.active_job_id = String(data.job_id ?? '');
       next.runtime.video_memory = undefined;
       next.runtime.status_title = 'Processing';
@@ -266,6 +271,9 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       const totalFrames = Number(data.total_frames ?? 0);
       // A newer phase can coalesce away the preceding frame-completed pulse.
       // Carry its measured ETA and frame count in every temporal phase event.
+      if (data.frames_processed !== undefined)
+        next.runtime.frames_processed = Number(data.frames_processed);
+      if (data.total_frames !== undefined) next.runtime.total_frames = Number(data.total_frames);
       if (data.frames_processed !== undefined && totalFrames > 0)
         next.runtime.progress = (Number(data.frames_processed) / totalFrames) * 100;
       if (data.estimated_remaining_seconds !== undefined)
@@ -295,12 +303,15 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       break;
     }
     case 'video_frame_started':
+      next.runtime.total_frames = Number(data.total_frames ?? 0);
       next.runtime.status_title = 'Enhancing video';
       next.runtime.status_detail = `Frame ${Number(data.frame_index ?? 0) + 1} of ${Number(data.total_frames ?? 0) || '?'} · ${next.runtime.estimated_remaining_seconds > 0 ? `ETA ≈ ${formatDuration(next.runtime.estimated_remaining_seconds)}` : 'ETA: measuring first tile…'}`;
       break;
     case 'video_frame_completed': {
       const done = Number(data.frames_processed ?? 0);
       const total = Number(data.total_frames ?? 0);
+      next.runtime.frames_processed = done;
+      next.runtime.total_frames = total;
       if (done > 0 && total > 0) next.runtime.progress = (done / total) * 100;
       const elapsed = Number(data.elapsed_seconds ?? 0);
       const remaining = Number(data.estimated_remaining_seconds ?? 0);
@@ -415,6 +426,9 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
     case 'job_completed':
     case 'video_job_completed':
       next.runtime.active_job_id = '';
+      next.runtime.frames_processed = 0;
+      next.runtime.total_frames = 0;
+      next.runtime.can_keep_partial = undefined;
       next.runtime.hardware_note = '';
       // Drop a live video-frame thumbnail while the host decodes the final
       // output. This prevents a transient comparison slider over one frame.
@@ -436,12 +450,18 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       break;
     case 'job_cancelled':
       next.runtime.active_job_id = '';
+      next.runtime.frames_processed = 0;
+      next.runtime.total_frames = 0;
+      next.runtime.can_keep_partial = undefined;
       next.runtime.hardware_note = '';
       next.runtime.status_title = 'Cancelled';
       next.runtime.status_detail = 'Temporary output was cleaned up.';
       break;
     case 'job_failed':
       next.runtime.active_job_id = '';
+      next.runtime.frames_processed = 0;
+      next.runtime.total_frames = 0;
+      next.runtime.can_keep_partial = undefined;
       next.runtime.hardware_note = '';
       next.runtime.status_title = 'Could not finish';
       next.runtime.status_detail = String(data.error_message ?? 'Unknown worker error.');

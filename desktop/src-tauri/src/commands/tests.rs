@@ -372,6 +372,7 @@ fn set_preference_round_trips_all_keys_rejects_bad_input_and_rolls_back_on_error
         ("menu_bar_icon_monochrome", serde_json::json!(false)),
         ("colour_blind_palette", serde_json::json!(true)),
         ("auto_cache_cleanup", serde_json::json!(false)),
+        ("stopped_job_result", serde_json::json!("keep")),
         ("appearance", serde_json::json!("light")),
         ("interface_scale", serde_json::json!(125)),
     ] {
@@ -389,12 +390,21 @@ fn set_preference_round_trips_all_keys_rejects_bad_input_and_rolls_back_on_error
     assert!(!saved.menu_bar_icon_monochrome);
     assert!(saved.colour_blind_palette);
     assert!(!saved.auto_cache_cleanup);
+    assert_eq!(saved.stopped_job_result, "keep");
     assert_eq!(saved.appearance, "light");
     assert_eq!(saved.interface_scale, 125);
+
+    apply_preference(&state, "stopped_job_result", &serde_json::json!("discard")).unwrap();
+    assert_eq!(
+        crate::settings::load(&state.paths).0.stopped_job_result,
+        "discard"
+    );
 
     // Reject unknown names and bad values.
     assert!(apply_preference(&state, "device_id", &serde_json::json!("cpu")).is_err());
     assert!(apply_preference(&state, "low_priority", &serde_json::json!("yes")).is_err());
+    assert!(apply_preference(&state, "stopped_job_result", &serde_json::json!("always")).is_err());
+    assert!(apply_preference(&state, "stopped_job_result", &serde_json::json!(true)).is_err());
     assert!(apply_preference(&state, "appearance", &serde_json::json!("sepia")).is_err());
     assert!(apply_preference(&state, "appearance", &serde_json::json!(123)).is_err());
     assert!(apply_preference(&state, "interface_scale", &serde_json::json!(150)).is_err());
@@ -421,6 +431,7 @@ fn a_full_settings_save_never_changes_host_owned_preferences() {
         completion_sound: true,
         menu_bar_icon_monochrome: false,
         auto_cache_cleanup: false,
+        stopped_job_result: "discard".into(),
         ..UiSettings::default()
     };
     // A window copy from an older refresh still has defaults for host-owned preferences.
@@ -437,18 +448,21 @@ fn a_full_settings_save_never_changes_host_owned_preferences() {
     assert!(incoming.completion_sound);
     assert!(!incoming.menu_bar_icon_monochrome);
     assert!(!incoming.auto_cache_cleanup);
+    assert_eq!(incoming.stopped_job_result, "discard");
     assert_eq!(incoming.tile_size, UiSettings::default().tile_size + 64);
 
-    // Settings saved before 0.3.3 check at launch, and before 0.6.0 auto-clean cache.
+    // Settings saved before 0.3.3 check at launch, and before 0.6.0 auto-clean cache / stopped_job_result.
     let mut saved = serde_json::to_value(UiSettings::default()).unwrap();
     let map = saved.as_object_mut().unwrap();
     map.remove("check_updates_at_launch");
     map.remove("crash_reports");
     map.remove("auto_cache_cleanup");
+    map.remove("stopped_job_result");
     let loaded = serde_json::from_value::<UiSettings>(saved).unwrap();
     assert!(loaded.check_updates_at_launch);
     assert!(!loaded.crash_reports);
     assert!(loaded.auto_cache_cleanup);
+    assert_eq!(loaded.stopped_job_result, "ask");
 }
 
 #[test]
@@ -4178,4 +4192,109 @@ fn retry_job_on_cpu_queues_only_the_failed_job_on_cpu_without_changing_device_id
     // Retrying a job that is not failed is rejected.
     let err = retry_job_on_cpu_checked(&state, &queued.id).unwrap_err();
     assert!(err.to_string().contains("failed"));
+}
+
+#[test]
+fn cancel_jobs_and_cancel_jobs_for_media_forward_keep_partial_and_cancel_queued() {
+    use std::sync::mpsc;
+
+    for keep_partial in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
+        let (sender, receiver) = mpsc::channel();
+        *lock(&state.worker.sender).unwrap() = Some(sender);
+
+        {
+            let db = lock(&state.database).unwrap();
+            db.insert_media("m1", "/in/clip1.mp4", "clip1.mp4", "video")
+                .unwrap();
+            db.insert_media("m2", "/in/clip2.mp4", "clip2.mp4", "video")
+                .unwrap();
+            db.insert_job(
+                "j1",
+                "m1",
+                &json!({"type": "video_job_request", "data": {"job_id": "j1"}}).to_string(),
+            )
+            .unwrap();
+            db.set_job_status("j1", "running").unwrap();
+            db.insert_job(
+                "j2",
+                "m2",
+                &json!({"type": "video_job_request", "data": {"job_id": "j2"}}).to_string(),
+            )
+            .unwrap();
+        }
+        lock(&state.runtime).unwrap().active_job_id = "j1".into();
+        lock(&state.worker.cancellation).unwrap().job_ids = vec!["j1".into()];
+
+        cancel_jobs_checked(&state, keep_partial).unwrap();
+
+        let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+        assert_eq!(sent["type"], "cancel_request");
+        assert_eq!(sent["data"]["job_id"], "j1");
+        assert_eq!(sent["data"]["keep_partial"], keep_partial);
+
+        let jobs = lock(&state.database).unwrap().list_jobs().unwrap();
+        assert_eq!(
+            jobs.iter().find(|j| j.id == "j1").unwrap().status,
+            "cancelling"
+        );
+        assert_eq!(
+            jobs.iter().find(|j| j.id == "j2").unwrap().status,
+            "cancelled"
+        );
+    }
+
+    for keep_partial in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
+        let (sender, receiver) = mpsc::channel();
+        *lock(&state.worker.sender).unwrap() = Some(sender);
+
+        {
+            let db = lock(&state.database).unwrap();
+            db.insert_media("m1", "/in/clip1.mp4", "clip1.mp4", "video")
+                .unwrap();
+            db.insert_media("m2", "/in/clip2.mp4", "clip2.mp4", "video")
+                .unwrap();
+            db.insert_job(
+                "j1",
+                "m1",
+                &json!({"type": "video_job_request", "data": {"job_id": "j1"}}).to_string(),
+            )
+            .unwrap();
+            db.set_job_status("j1", "running").unwrap();
+            db.insert_job(
+                "j1-q",
+                "m1",
+                &json!({"type": "video_job_request", "data": {"job_id": "j1-q"}}).to_string(),
+            )
+            .unwrap();
+            db.insert_job(
+                "j2",
+                "m2",
+                &json!({"type": "video_job_request", "data": {"job_id": "j2"}}).to_string(),
+            )
+            .unwrap();
+        }
+        lock(&state.runtime).unwrap().active_job_id = "j1".into();
+
+        cancel_jobs_for_media_checked(&state, "m1", keep_partial).unwrap();
+
+        let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+        assert_eq!(sent["type"], "cancel_request");
+        assert_eq!(sent["data"]["job_id"], "j1");
+        assert_eq!(sent["data"]["keep_partial"], keep_partial);
+
+        let jobs = lock(&state.database).unwrap().list_jobs().unwrap();
+        assert_eq!(
+            jobs.iter().find(|j| j.id == "j1").unwrap().status,
+            "cancelling"
+        );
+        assert_eq!(
+            jobs.iter().find(|j| j.id == "j1-q").unwrap().status,
+            "cancelled"
+        );
+        assert_eq!(jobs.iter().find(|j| j.id == "j2").unwrap().status, "queued");
+    }
 }

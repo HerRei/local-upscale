@@ -378,6 +378,7 @@ export interface UiSettings {
   notify_on_finish?: boolean;
   menu_bar_icon_monochrome?: boolean;
   auto_cache_cleanup?: boolean;
+  stopped_job_result?: 'ask' | 'keep' | 'discard';
 }
 
 export interface ModelMoveProgress {
@@ -458,6 +459,9 @@ export interface RuntimeStatus {
   /** How long a cancelled job may take to stop before the engine is restarted. */
   cancel_grace_seconds?: number;
   queue_paused?: boolean;
+  frames_processed?: number;
+  total_frames?: number;
+  can_keep_partial?: boolean;
 }
 
 export interface BenchmarkRender {
@@ -688,6 +692,8 @@ export interface ResultSummary {
   size_bytes?: number;
   output_duration_seconds?: number;
   output_fps?: number;
+  partial?: boolean;
+  kept_seconds?: number;
   /** Completed and its file exists. */
   available: boolean;
   model_id: string;

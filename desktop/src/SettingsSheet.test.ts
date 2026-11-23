@@ -539,4 +539,27 @@ describe('SettingsSheet', () => {
     await user.click(screen.getByRole('tab', { name: 'General' }));
     expect((document.querySelector('.settings-panel') as HTMLElement).scrollTop).toBe(0);
   });
+
+  it('shows When you stop a job in General and saves stopped_job_result via setPreference even while locked', async () => {
+    const user = userEvent.setup();
+    const { props } = renderSheet({ settingsLocked: true });
+    const select = screen.getByLabelText('When you stop a job') as HTMLSelectElement;
+    expect(select.disabled).toBe(false);
+    expect(select.value).toBe('ask');
+    expect([...select.options].map((option) => option.textContent)).toEqual([
+      'Ask',
+      'Keep the finished part',
+      'Discard',
+    ]);
+    expect(
+      screen.getByText(
+        /Applies to videos: the frames already finished can be kept as a playable video\. Photos and edits that are stopped are always discarded; finished files in a queue always stay\./,
+      ),
+    ).toBeTruthy();
+
+    await user.selectOptions(select, 'keep');
+    expect(props.setPreference).toHaveBeenCalledWith('stopped_job_result', 'keep');
+    await user.selectOptions(select, 'discard');
+    expect(props.setPreference).toHaveBeenCalledWith('stopped_job_result', 'discard');
+  });
 });

@@ -356,6 +356,9 @@ function hostScript(scenario: Scenario): void {
       s.runtime.active_job_id = 'job-video-1';
       s.runtime.status_title = 'Enhancing video';
       s.runtime.progress = 40;
+      s.runtime.frames_processed = 115;
+      s.runtime.total_frames = 288;
+      s.runtime.can_keep_partial = true;
       s.jobs.push({
         id: 'job-video-1',
         media_id: 'video-1',
@@ -689,6 +692,29 @@ function hostScript(scenario: Scenario): void {
         return null;
       case 'retry_job_on_cpu':
         return null;
+      case 'cancel_jobs': {
+        for (const job of snapshot.jobs) {
+          if (job.status === 'queued') job.status = 'cancelled';
+          else if (job.id === snapshot.runtime.active_job_id) job.status = 'cancelling';
+        }
+        if (snapshot.runtime.active_job_id) snapshot.runtime.status_title = 'Cancelling';
+        emit('state-changed', null);
+        return null;
+      }
+      case 'cancel_jobs_for_media': {
+        for (const job of snapshot.jobs) {
+          if (job.media_id !== args.mediaId) continue;
+          if (job.status === 'queued') job.status = 'cancelled';
+          else if (job.status === 'running' || job.status === 'starting') {
+            job.status = 'cancelling';
+            if (job.id === snapshot.runtime.active_job_id) {
+              snapshot.runtime.status_title = 'Cancelling';
+            }
+          }
+        }
+        emit('state-changed', null);
+        return null;
+      }
       case 'diagnostic_summary':
         return 'Fixture host: no inference engine.';
       case 'download_model': {

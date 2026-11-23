@@ -156,13 +156,18 @@ export type PreferenceName =
   | 'menu_bar_icon_monochrome'
   | 'colour_blind_palette'
   | 'auto_cache_cleanup'
+  | 'stopped_job_result'
   | 'appearance'
   | 'interface_scale';
 
 /** One app-wide preference, saved by the host on its own: a full settings save never changes it. */
 export const setPreference = (
   name: PreferenceName,
-  value: boolean | UiSettings['appearance'] | UiSettings['interface_scale'],
+  value:
+    | boolean
+    | UiSettings['appearance']
+    | UiSettings['interface_scale']
+    | NonNullable<UiSettings['stopped_job_result']>,
 ): Promise<void> => invoke('set_preference', { name, value });
 export interface SetupChoices {
   appearance: UiSettings['appearance'];
@@ -199,7 +204,8 @@ export const saveCustomEditModel = (custom: CustomEditModel, runtimePath: string
 export const retryEngine = (): Promise<void> => invoke('retry_engine');
 export const retryJobOnCpu = (jobId: string): Promise<void> =>
   invoke('retry_job_on_cpu', { jobId });
-export const cancelJobs = (): Promise<void> => invoke('cancel_jobs');
+export const cancelJobs = (keepPartial = false): Promise<void> =>
+  invoke('cancel_jobs', { keepPartial });
 export const startBenchmark = (device: string): Promise<void> =>
   invoke('start_benchmark', { input: { device } });
 export const exportBenchmark = async (): Promise<boolean> => {
@@ -343,8 +349,8 @@ export const estimateModelTrials = (
   modelIds: string[],
   baseSettings: StartBatchInput,
 ): Promise<TrialEstimate[]> => invoke('estimate_model_trials', { mediaId, modelIds, baseSettings });
-export const cancelJobsForMedia = (mediaId: string): Promise<void> =>
-  invoke('cancel_jobs_for_media', { mediaId });
+export const cancelJobsForMedia = (mediaId: string, keepPartial = false): Promise<void> =>
+  invoke('cancel_jobs_for_media', { mediaId, keepPartial });
 export const probePath = (path: string): Promise<void> => invoke('probe_path', { path });
 export const downloadModel = (modelId: string, acceptedTerms: boolean): Promise<void> =>
   invoke('download_model', { modelId, acceptedTerms });

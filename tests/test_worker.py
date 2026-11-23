@@ -847,3 +847,76 @@ def test_checkpoint_cache_tracks_approved_digest(tmp_path, monkeypatch):
     data["approved_checkpoint_sha256"] = second
     server._check_approved_checkpoint(data)
     assert released == [str(checkpoint), str(checkpoint)]
+
+
+@pytest.mark.parametrize("keep_partial", [False, True])
+def test_video_cancel_request_respects_keep_partial_flag(tmp_path, monkeypatch, keep_partial):
+    from pathlib import Path
+
+    from test_video_interpolation import patched_worker, worker_request
+    from test_video_pipeline import DummyAdapter
+    from test_video_timing import make_vfr
+
+    import localsr.worker.server as server_module
+    from localsr.core.inference import InferenceEngine
+    from localsr.core.video_pipeline import run_video_job as real_run
+
+    source = make_vfr(tmp_path / "source.mp4")
+    out_dir = tmp_path / "out"
+    scratch_dir = tmp_path / "scratch"
+    out_dir.mkdir()
+    scratch_dir.mkdir()
+
+    server, _bundle, _loaded, _captured = patched_worker(monkeypatch, tmp_path)
+    adapter = DummyAdapter(2)
+    adapter.inspect = lambda *_args: adapter.model_info
+    server.engine = InferenceEngine(adapter)
+    server.model_adapter = adapter
+    messages = []
+    monkeypatch.setattr(server_module, "send_message", messages.append)
+
+    req = worker_request(tmp_path, job_id="video-cancel-job")
+    req["video_path"] = str(source)
+    req["output_video_path"] = str(out_dir / "output.mp4")
+    req["temporary_directory"] = str(scratch_dir)
+    req["video_codec"] = "vp9"
+    req["container"] = "mkv"
+    req["output_scale"] = 2
+
+    def run_and_cancel(**kwargs):
+        orig_started = kwargs.get("frame_started_cb")
+
+        def on_frame(index, total):
+            if orig_started:
+                orig_started(index, total)
+            if index >= 2:
+                server._read_line(
+                    json.dumps(
+                        {
+                            "type": "cancel_request",
+                            "data": {"job_id": req["job_id"], "keep_partial": keep_partial},
+                        }
+                    )
+                )
+
+        kwargs["frame_started_cb"] = on_frame
+        return real_run(**kwargs)
+
+    monkeypatch.setattr(server_module, "run_video_job", run_and_cancel)
+    server._activate_job(req["job_id"])
+    try:
+        server._run_video_job(req["job_id"], req)
+    finally:
+        server._deactivate_job(req["job_id"])
+
+    kinds = [type(m).__name__ for m in messages]
+    if keep_partial:
+        assert "VideoJobCompleted" in kinds
+        completed = next(m for m in messages if type(m).__name__ == "VideoJobCompleted")
+        assert completed.partial is True
+        assert Path(completed.output_path).is_file()
+    else:
+        assert "JobCancelled" in kinds
+        assert "VideoJobCompleted" not in kinds
+        assert list(out_dir.iterdir()) == []
+    assert list(scratch_dir.iterdir()) == []

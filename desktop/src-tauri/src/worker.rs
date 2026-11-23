@@ -906,6 +906,7 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
         _ => vec![first.clone()],
     };
     {
+        let can_keep_partial = job_can_keep_partial(state, &message);
         let mut runtime = lock(&state.runtime)?;
         if runtime.worker != "ready" {
             // The engine stopped meanwhile. Nothing was sent, so the folders made for it go.
@@ -914,6 +915,7 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
             return Ok(Dispatch::Idle);
         }
         runtime.begin_active_job(first.clone());
+        runtime.can_keep_partial = Some(can_keep_partial);
         runtime.active_batch_job_ids = if ids.len() > 1 { ids } else { Vec::new() };
         runtime.status_title = "Queued".into();
         runtime.status_detail = "Sending the next item to the inference engine.".into();
@@ -933,6 +935,62 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
         return Err(error);
     }
     Ok(Dispatch::Sent)
+}
+
+fn job_can_keep_partial(state: &AppState, message: &Value) -> bool {
+    if message["type"].as_str() != Some("video_job_request") {
+        return false;
+    }
+    let data = &message["data"];
+    if data["model_kind"].as_str().unwrap_or("spandrel_image") != "spandrel_image" {
+        return false;
+    }
+    let codec = data["video_codec"].as_str().unwrap_or("av1");
+    if matches!(codec, "av1" | "vp9" | "ffv1" | "auto") {
+        return true;
+    }
+    if !matches!(codec, "h264" | "hevc" | "prores") {
+        return false;
+    }
+    if !data["start_frame"].is_null() || !data["end_frame"].is_null() {
+        return false;
+    }
+    let container = data["container"].as_str().unwrap_or("mp4");
+    let hdr_mode = data["hdr_mode"].as_str().unwrap_or("reject");
+    let video_path = data["video_path"].as_str().unwrap_or_default();
+    let media = lock(&state.database)
+        .ok()
+        .and_then(|db| db.get_media_by_path(video_path).ok().flatten());
+    if hdr_mode == "preserve"
+        && media
+            .as_ref()
+            .is_some_and(|item| !item.hdr_format.is_empty())
+    {
+        return false;
+    }
+    if let Some(item) = media.as_ref() {
+        let scale = u32::try_from(data["output_scale"].as_u64().unwrap_or(1)).unwrap_or(1);
+        let out_w = item.width.saturating_mul(scale);
+        let out_h = item.height.saturating_mul(scale);
+        if out_w % 2 != 0 || out_h % 2 != 0 {
+            return false;
+        }
+    }
+    let caps = lock(&state.capabilities).ok();
+    let system = caps
+        .as_ref()
+        .and_then(|info| info.media.get("system_codecs"))
+        .filter(|value| !value.is_null());
+    let Some(system) = system else {
+        return false;
+    };
+    let has_codec = system["encode"]
+        .as_array()
+        .is_some_and(|list| list.iter().any(|entry| entry.as_str() == Some(codec)));
+    let has_container = system["containers"]
+        .as_array()
+        .is_some_and(|list| list.iter().any(|entry| entry.as_str() == Some(container)));
+    has_codec && has_container
 }
 
 /// Why the job stored as `request_json` cannot be written, or None when it fits.
@@ -989,7 +1047,7 @@ fn stop_queue_locked(state: &Arc<AppState>, reason: &str) -> AppResult<()> {
             }
             let _ = send(
                 state,
-                &json!({"type": "cancel_request", "data": {"job_id": active}}),
+                &json!({"type": "cancel_request", "data": {"job_id": active, "keep_partial": false}}),
             );
         }
     }
@@ -1525,27 +1583,7 @@ fn wrong_output(state: &AppState, envelope: &WorkerEnvelope) -> AppResult<Option
 }
 
 fn partial_output(requested: &Path, reported: &Path) -> bool {
-    if requested.parent() != reported.parent() || requested.extension() != reported.extension() {
-        return false;
-    }
-    let (Some(stem), Some(name)) = (
-        requested.file_stem().and_then(|s| s.to_str()),
-        reported.file_stem().and_then(|s| s.to_str()),
-    ) else {
-        return false;
-    };
-    let Some(duration) = name.strip_prefix(&format!("{stem}_partial_")) else {
-        return false;
-    };
-    let Some((minutes, seconds)) = duration.strip_suffix('s').and_then(|s| s.split_once('m'))
-    else {
-        return false;
-    };
-    !minutes.is_empty()
-        && minutes.bytes().all(|c| c.is_ascii_digit())
-        && seconds.len() == 2
-        && seconds.bytes().all(|c| c.is_ascii_digit())
-        && seconds.parse::<u8>().is_ok_and(|s| s < 60)
+    crate::results::partial_output_seconds(requested, reported).is_some()
 }
 
 fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppResult<()> {
@@ -1909,6 +1947,12 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 runtime.status_title = video_stage_title(&string(data, "stage")).into();
                 let frames_done = number(data, "frames_processed");
                 let frames_total = number(data, "total_frames");
+                if data.get("frames_processed").is_some() {
+                    runtime.frames_processed = integer(data, "frames_processed");
+                }
+                if data.get("total_frames").is_some() {
+                    runtime.total_frames = integer(data, "total_frames");
+                }
                 if frames_total > 0.0 {
                     runtime.progress = (frames_done / frames_total * 100.0).clamp(0.0, 100.0);
                 } else {
@@ -1969,6 +2013,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
         }
         "video_frame_started" => {
             let mut runtime = lock(&state.runtime)?;
+            runtime.total_frames = integer(data, "total_frames");
             runtime.status_title = VIDEO_FRAMES_TITLE.into();
             runtime.status_detail = format!(
                 "Frame {} of {}{}",
@@ -1988,6 +2033,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             let total = integer(data, "total_frames") as f64;
             let fraction = frame + if count > 0.0 { done / count } else { 0.0 };
             let mut runtime = lock(&state.runtime)?;
+            runtime.total_frames = integer(data, "total_frames");
             // Tiles finish a frame, not the job: interpolation, de-flicker and the
             // encoder still follow, so tile progress stops short of the saving mark.
             runtime.progress = if total > 0.0 {
@@ -2032,6 +2078,8 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             };
             lock(&state.database)?.update_job_progress(&id, progress)?;
             let mut runtime = lock(&state.runtime)?;
+            runtime.frames_processed = integer(data, "frames_processed");
+            runtime.total_frames = integer(data, "total_frames");
             runtime.progress = progress;
             let elapsed = seconds(data, "elapsed_seconds");
             let remaining = seconds(data, "estimated_remaining_seconds");

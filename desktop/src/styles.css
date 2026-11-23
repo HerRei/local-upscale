@@ -2075,6 +2075,15 @@ input[type='number'],
 .modal-actions .button {
   min-width: 70px;
 }
+.stop-dont-ask {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--secondary);
+  font-size: calc(12px * var(--ui-scale));
+  cursor: pointer;
+}
 .modal.performance-modal {
   width: min(780px, calc(100vw - 40px));
 }
