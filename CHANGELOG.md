@@ -2,15 +2,26 @@
 
 ## [0.6.0-beta] - Unreleased
 
-- **Video export.** Flush the encoder before closing it when an export fails (#115).
-- **Release process.** Find draft releases when attaching assets and reduce temporary signing disk use (#114).
-- Clear compiled model caches in Advanced settings; old entries are trimmed at startup (#126).
-
-- Updates explain when unreadable settings need recovery, and can install when settings come from a newer version (#123).
-- **Your own models.** Name and select custom checkpoints in the model library. Approval for pickle-based files is remembered by file hash (#146).
-- **Colour for video.** Black-and-white videos can be coloured under Restore and Restore first. Colours are carried from frame to frame, so they stay steady (#164).
-- **Compare results.** Compare saved photo or video outputs in one view, with recorded job details under each side (#145).
-- Engines: code files are checked at every start, reinstalling keeps the working copy until the new one runs, and linked engine folders are refused (#159).
+- **Colour for video.** Black-and-white videos can be coloured under Restore and
+  Restore first. Colours are carried from frame to frame, so they stay steady (#164).
+- **Compare results.** Each side of a comparison lists how it was made: models and
+  fixes in order, scale, size, time, device and date (#145).
+- **Your own models.** Own checkpoints get a name you can change and their own group
+  in the model picker. A .pth, .pt or .ckpt file is confirmed once per file, not
+  per job (#146).
+- **Cache.** Advanced settings show the size of the compiled model caches with a
+  Clear cache button; entries unused for 30 days, or beyond 5 GB, are removed at
+  start (#126).
+- **Settings from a newer version.** LocalSR keeps the file untouched, runs with
+  defaults and says so, and an update to that newer version is no longer blocked.
+  When settings really cannot be read, the update notice says why (#123).
+- **GPU engines.** Program files are checked at every start, a reinstall keeps the
+  working copy until the new one has started, and linked engine folders are
+  refused (#159).
+- **Video export.** The encoder is always flushed before it closes, also when an
+  export fails (#115).
+- **Release process.** Files can be attached to a draft release, and signing needs
+  less temporary disk space (#114).
 
 ## [0.5.2-beta] - 2026-11-23
 
