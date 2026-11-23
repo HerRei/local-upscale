@@ -340,6 +340,33 @@ describe('SettingsSheet', () => {
     expect(screen.getByRole('switch', { name: 'Offer to report crashes' })).toBeTruthy();
   });
 
+  it('shows the update switches disabled with a note in a build without an update feed', async () => {
+    const user = userEvent.setup();
+    renderSheet({
+      updateStatus: {
+        configured: false,
+        managed_by_store: false,
+        channel: '',
+        target: '',
+        stage: 'idle',
+        version: '',
+        notes: '',
+        size: 0,
+        downloaded: 0,
+        message: '',
+        settings_recovery: false,
+      },
+    });
+    await user.click(screen.getByRole('tab', { name: 'Privacy & updates' }));
+    const check = screen.getByRole('switch', { name: 'Check for updates when LocalSR starts' });
+    const count = screen.getByRole('switch', {
+      name: 'Send an anonymous count with each update check',
+    });
+    expect((check as HTMLInputElement).disabled).toBe(true);
+    expect((count as HTMLInputElement).disabled).toBe(true);
+    expect(screen.getByText(/This build has no update feed/)).toBeTruthy();
+  });
+
   it('supports Esc, HelpTip Esc priority, focus return, rail arrow keys, scroll reset, and focusTarget', async () => {
     const opener = document.createElement('button');
     opener.textContent = 'Open';

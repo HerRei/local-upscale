@@ -740,7 +740,12 @@
           </div>
         {:else if section === 'privacy'}
           <h3 class="settings-section-heading">{storeBuild ? 'Privacy' : 'Privacy & updates'}</h3>
-          {#if activeUpdateStatus.configured && !storeBuild}
+          {#if !storeBuild}
+            {#if !activeUpdateStatus.configured}
+              <p class="setting-desc settings-note" id="settings-no-feed">
+                This build has no update feed, so it does not check for updates.
+              </p>
+            {/if}
             <div class="setting-row">
               <div class="setting-copy">
                 <label class="setting-label" for="settings-check-updates"
@@ -755,7 +760,10 @@
                 class="switch"
                 type="checkbox"
                 role="switch"
-                aria-describedby="settings-check-updates-desc"
+                aria-describedby={activeUpdateStatus.configured
+                  ? 'settings-check-updates-desc'
+                  : 'settings-check-updates-desc settings-no-feed'}
+                disabled={!activeUpdateStatus.configured}
                 checked={settings.check_updates_at_launch ?? true}
                 on:change={(event) =>
                   setPreference('check_updates_at_launch', event.currentTarget.checked)}
@@ -776,7 +784,10 @@
                 class="switch"
                 type="checkbox"
                 role="switch"
-                aria-describedby="settings-anonymous-count-desc"
+                aria-describedby={activeUpdateStatus.configured
+                  ? 'settings-anonymous-count-desc'
+                  : 'settings-anonymous-count-desc settings-no-feed'}
+                disabled={!activeUpdateStatus.configured}
                 checked={settings.anonymous_update_count ?? false}
                 on:change={(event) =>
                   setPreference('anonymous_update_count', event.currentTarget.checked)}
