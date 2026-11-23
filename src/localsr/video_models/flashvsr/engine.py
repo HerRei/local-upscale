@@ -44,10 +44,10 @@ MAX_TEMPORAL_WINDOW = 61
 FIXED_MEMORY_BYTES = 5_413_178_122
 PER_PIXEL_MEMORY_BYTES = 12_692.4
 
-# ROCm PyTorch bfloat16 memory model: budget = 0.85 * available_vram (from torch.cuda.mem_get_info);
+# CUDA / ROCm PyTorch bfloat16 memory model: budget = 0.85 * available_vram (from torch.cuda.mem_get_info);
 # max_tile_area = (budget - ROCM_FIXED_MEMORY_BYTES) / ROCM_PER_PIXEL_MEMORY_BYTES.
-# Fitted from flashvsr-mlx ROCM.md bfloat16 measurements on Radeon RX 9060 XT (16 GB, gfx1200)
-# with KV-cache/LQ release before decoding and TCDecoder cache release:
+# Fitted from flashvsr-mlx ROCM.md bfloat16 measurements on AMD Radeon RX 9060 XT (16 GB, gfx1200)
+# with KV-cache/LQ release before decoding and TCDecoder cache release (reused for NVIDIA CUDA):
 #   512x256  (  131,072 px): peak =  5.2 GB
 #   896x512  (  458,752 px): peak =  8.6 GB
 #   768x1408 (1,081,344 px): peak = 11.4 GB
@@ -58,6 +58,7 @@ ROCM_PER_PIXEL_MEMORY_BYTES = 6_300.0
 _MEMORY_MODELS = {
     "mps": (FIXED_MEMORY_BYTES, PER_PIXEL_MEMORY_BYTES),
     "rocm": (ROCM_FIXED_MEMORY_BYTES, ROCM_PER_PIXEL_MEMORY_BYTES),
+    "cuda": (ROCM_FIXED_MEMORY_BYTES, ROCM_PER_PIXEL_MEMORY_BYTES),
 }
 
 
@@ -132,10 +133,21 @@ def _has_rocm() -> bool:
     return bool(getattr(getattr(torch, "version", None), "hip", None))
 
 
+def _has_cuda() -> bool:
+    import torch
+
+    return bool(getattr(getattr(torch, "version", None), "cuda", None))
+
+
 def _low_memory_message(backend: str, detail: str) -> str:
     if backend == "rocm":
         return (
             f"Not enough AMD ROCm GPU memory for FlashVSR: {detail}. "
+            "Close other applications or choose Frame-by-frame video."
+        )
+    if backend == "cuda":
+        return (
+            f"Not enough NVIDIA CUDA GPU memory for FlashVSR: {detail}. "
             "Close other applications or choose Frame-by-frame video."
         )
     return (
@@ -251,7 +263,7 @@ def plan_tiles(
     if budget_bytes is None:
         raw_budget = (
             rocm_free_memory_bytes(device)
-            if backend == "rocm"
+            if backend in ("rocm", "cuda")
             else mps_recommended_working_set_bytes()
         )
         budget_bytes = int(raw_budget * BUDGET_FRACTION)
@@ -369,10 +381,12 @@ def _resolve_device_and_backend(device: str) -> tuple[str, str]:
     if backend == "auto":
         if sys.platform == "darwin":
             return "mps", "mps"
-        if sys.platform == "linux" and _has_rocm():
+        if _has_rocm():
             return "cuda", "rocm"
+        if _has_cuda():
+            return "cuda", "cuda"
         raise ValueError(
-            "FlashVSR runs on Apple Silicon GPU (mps) or AMD ROCm GPU only. "
+            "FlashVSR runs on Apple Silicon GPU (mps), NVIDIA CUDA, or AMD ROCm GPU only. "
             "Choose Frame-by-frame video for CPU or other backends."
         )
     if backend == "mps":
@@ -380,20 +394,22 @@ def _resolve_device_and_backend(device: str) -> tuple[str, str]:
     if backend == "cuda":
         if not re.fullmatch(r"cuda(?::\d+)?", device_str):
             raise ValueError(f"Invalid FlashVSR CUDA/ROCm device: {device!r}")
-        if not _has_rocm():
-            raise ValueError(
-                "FlashVSR on PyTorch requires AMD ROCm (NVIDIA CUDA is not supported in this "
-                "version). Choose Frame-by-frame video for CPU or other backends."
-            )
-        return device_str, "rocm"
+        if _has_rocm():
+            return device_str, "rocm"
+        if _has_cuda():
+            return device_str, "cuda"
+        raise ValueError(
+            "FlashVSR on GPU requires NVIDIA CUDA or AMD ROCm. "
+            "Choose Frame-by-frame video for CPU or other backends."
+        )
     raise ValueError(
-        "FlashVSR runs on Apple Silicon GPU (mps) or AMD ROCm GPU only. "
+        "FlashVSR runs on Apple Silicon GPU (mps), NVIDIA CUDA, or AMD ROCm GPU only. "
         "Choose Frame-by-frame video for CPU or other backends."
     )
 
 
 class FlashVSREngine:
-    """One job's worth of FlashVSR v1.1 Tiny state (MLX on MPS or PyTorch on ROCm) and tiling."""
+    """One job's worth of FlashVSR v1.1 Tiny state (MLX on MPS or PyTorch on CUDA/ROCm) and tiling."""
 
     def __init__(
         self,
@@ -466,7 +482,7 @@ class FlashVSREngine:
             pipe.t_mod = None
             self.pipeline = None
         gc.collect()
-        if backend == "rocm":
+        if backend in ("rocm", "cuda"):
             import torch
 
             torch.cuda.empty_cache()
@@ -506,7 +522,7 @@ class FlashVSREngine:
 
         if getattr(self, "_numpy_stub_arrays", False):
             lq_arr: Any = lq_np
-        elif backend == "rocm":
+        elif backend in ("rocm", "cuda"):
             import torch
 
             lq_arr = torch.from_numpy(lq_np).to(device=self.device, dtype=torch.bfloat16)
@@ -533,7 +549,7 @@ class FlashVSREngine:
 
         if isinstance(out_tensor, np.ndarray):
             arr = out_tensor[:, :n_in, :, :].astype(np.float32)
-        elif backend == "rocm":
+        elif backend in ("rocm", "cuda"):
             import torch
 
             sliced = out_tensor[:, :n_in, :, :]

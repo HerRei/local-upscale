@@ -1,4 +1,4 @@
-"""CPU unit, parity, routing, and tile-planner tests for PyTorch/ROCm FlashVSR."""
+"""CPU unit, parity, routing, and tile-planner tests for PyTorch CUDA/ROCm FlashVSR."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 import torch
 import torch.nn as nn
+from einops import rearrange
 from safetensors.torch import save_file as save_safetensors_file
 
 from localsr.core import video_engines
@@ -37,6 +38,7 @@ from localsr.video_models.flashvsr.torch_flashvsr.pipeline import (
 from localsr.video_models.flashvsr.torch_flashvsr.tcdecoder import build_tcdecoder
 from localsr.video_models.flashvsr.torch_flashvsr.wan_video_dit import (
     WanModel,
+    build_local_block_mask_shifted_vec_normal_slide,
     generate_draft_block_mask,
 )
 from localsr.worker.server import WorkerServer, _engine_features, _video_engines
@@ -202,6 +204,7 @@ def _load_fork_modules(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.skipif(not _HAS_FORK, reason="flashvsr-mlx fork checkout is not present")
 def test_vendored_torch_pipeline_matches_fork_on_cpu_three_chunks(monkeypatch):
+    monkeypatch.delenv("FLASHVSR_ATTENTION", raising=False)
     fork_dit_mod, fork_pipeline_mod, fork_lq_mod, fork_tcd_mod = _load_fork_modules(monkeypatch)
 
     torch.manual_seed(17)
@@ -399,6 +402,78 @@ def test_vendored_torch_from_pretrained_loads_safetensors_and_ckpt_without_promp
     assert pipe.dit is not None and pipe.dit._cross_kv_initialized
 
 
+def test_gather_attention_matches_reference_on_random_and_lcsa_masks(monkeypatch):
+    monkeypatch.delenv("FLASHVSR_ATTENTION", raising=False)
+    monkeypatch.delenv("FLASHVSR_ROCM_PRECISION", raising=False)
+    torch.manual_seed(123)
+
+    # Random q/k/v with ragged tail (Sq=260, Sk=391), empty rows, full rows, and multi-batch/head.
+    q = torch.randn(2, 3, 260, 64, dtype=torch.float32)
+    k = torch.randn(2, 3, 391, 64, dtype=torch.float32)
+    v = torch.randn(2, 3, 391, 64, dtype=torch.float32)
+    mask = torch.rand(2, 3, 3, 4) > 0.5
+    mask[0, 0, 1, :] = False  # empty row
+    mask[0, 2, :, :] = False  # entire head empty
+    mask[1, 1, 0, :] = True  # full row
+    mask[1, 2, 2, :] = True  # full row touching ragged tail
+
+    expected = rocm_attention.reference_attention(q, k, v, mask)
+    actual_default = rocm_attention.sparse_attention(q, k, v, mask)
+    actual_chunked = rocm_attention.gather_attention(q, k, v, mask, chunk_bytes=16 * 1024)
+
+    max_diff = float((actual_default - expected).abs().max().item())
+    max_diff_chunked = float((actual_chunked - expected).abs().max().item())
+    assert max_diff <= 1e-5
+    assert max_diff_chunked <= 1e-5
+    assert actual_default[0, 0, 128:256].abs().max().item() == 0.0
+    assert actual_default[0, 2].abs().max().item() == 0.0
+
+    # Non-contiguous rearrange layout as produced by flash_attention in wan_video_dit.py,
+    # paired with a real LCSA block mask from generate_draft_block_mask.
+    B, H, D = 1, 4, 64
+    f_blocks, h_blocks, w_blocks = 2, 2, 4  # 8 spatial blocks -> 256*8=2048 tokens for q
+    q_w = torch.randn(B * f_blocks * h_blocks * w_blocks, 128, H * D, dtype=torch.float32)
+    k_w = torch.randn(B * 3 * h_blocks * w_blocks, 128, H * D, dtype=torch.float32)
+    v_w = torch.randn_like(k_w)
+    local_mask = build_local_block_mask_shifted_vec_normal_slide(
+        h_blocks, w_blocks, win_h=3, win_w=3, include_self=True
+    )
+    lcsa_mask = generate_draft_block_mask(
+        B, H, f_blocks, q_w, k_w, topk=20, local_attn_mask=local_mask
+    )
+    q_h = rearrange(q_w.reshape(B, -1, H * D), "b s (n d) -> b n s d", n=H)
+    k_h = rearrange(k_w.reshape(B, -1, H * D), "b s (n d) -> b n s d", n=H)
+    v_h = rearrange(v_w.reshape(B, -1, H * D), "b s (n d) -> b n s d", n=H)
+    lcsa_ref = rocm_attention.reference_attention(q_h, k_h, v_h, lcsa_mask)
+    lcsa_gather = rocm_attention.sparse_attention(q_h, k_h, v_h, lcsa_mask)
+    assert float((lcsa_gather - lcsa_ref).abs().max().item()) <= 1e-5
+
+    # Precision modes on bfloat16 preserve dtype and zero empty rows cleanly.
+    q_bf = q.to(torch.bfloat16)
+    k_bf = k.to(torch.bfloat16)
+    v_bf = v.to(torch.bfloat16)
+    for precision in ("native", "fp32"):
+        monkeypatch.setenv("FLASHVSR_ROCM_PRECISION", precision)
+        out_bf = rocm_attention.sparse_attention(q_bf, k_bf, v_bf, mask)
+        assert out_bf.dtype == torch.bfloat16
+        assert torch.isfinite(out_bf).all()
+        assert out_bf[0, 0, 128:256].abs().max().item() == 0.0
+
+    # All-empty mask returns exact zeros.
+    assert (
+        rocm_attention.sparse_attention(q, k, v, torch.zeros_like(mask)).abs().max().item() == 0.0
+    )
+
+    # Invalid env vars fail loudly.
+    monkeypatch.setenv("FLASHVSR_ATTENTION", "bogus")
+    with pytest.raises(ValueError, match="FLASHVSR_ATTENTION"):
+        rocm_attention.sparse_attention(q, k, v, mask)
+    monkeypatch.setenv("FLASHVSR_ATTENTION", "gather")
+    monkeypatch.setenv("FLASHVSR_ROCM_PRECISION", "bf16_bad")
+    with pytest.raises(ValueError, match="FLASHVSR_ROCM_PRECISION"):
+        rocm_attention.sparse_attention(q, k, v, mask)
+
+
 @pytest.mark.skipif(not _HAS_FLEX_ATTENTION, reason="flex_attention unavailable in this PyTorch")
 def test_flex_attention_sparse_path_shapes_and_empty_row_zeroing(monkeypatch):
     from torch.nn.attention.flex_attention import flex_attention as eager_flex_attention
@@ -413,7 +488,7 @@ def test_flex_attention_sparse_path_shapes_and_empty_row_zeroing(monkeypatch):
     # Note: eager flex_attention without mask_mod does not apply full_kv_indices; compiled GPU
     # kernels do, so on CPU we verify BlockMask construction, output shape/dtype, and empty-row zeroing.
     monkeypatch.setattr(rocm_attention, "_compiled_attention", lambda: spy_flex)
-    monkeypatch.setenv("FLASHVSR_ROCM_ATTENTION", "flex")
+    monkeypatch.setenv("FLASHVSR_ATTENTION", "flex")
 
     torch.manual_seed(7)
     q = torch.randn(1, 2, 130, 64, dtype=torch.float32)
@@ -441,7 +516,7 @@ def test_flex_attention_sparse_path_shapes_and_empty_row_zeroing(monkeypatch):
     assert captured_masks[0].shape == (1, 2, 130, 260)
     assert captured_masks[0].full_kv_num_blocks.tolist() == [[[2, 1], [0, 2]]]
 
-    monkeypatch.setenv("FLASHVSR_ROCM_ATTENTION", "reference")
+    monkeypatch.setenv("FLASHVSR_ATTENTION", "reference")
     out_env_ref = rocm_attention.sparse_attention(q, k, v, mask)
     out_ref = rocm_attention.reference_attention(q, k, v, mask)
     torch.testing.assert_close(out_env_ref, out_ref, atol=0.0, rtol=0.0)
@@ -469,17 +544,19 @@ def test_grouped_draft_block_mask_and_decoder_cache_hook_lifecycle(monkeypatch):
     assert len(tcd._rocm_cache_handles) == 0
 
 
-def test_engine_routing_mps_rocm_and_refusals(monkeypatch, tmp_path):
-    # CUDA without HIP is refused.
+def test_engine_routing_mps_cuda_rocm_and_refusals(monkeypatch, tmp_path):
+    # CUDA without either HIP or CUDA runtime built in is refused.
     monkeypatch.setattr(torch.version, "hip", None)
-    with pytest.raises(ValueError, match="ROCm"):
+    monkeypatch.setattr(torch.version, "cuda", None)
+    with pytest.raises(ValueError, match="CUDA or AMD ROCm"):
         FlashVSREngine(str(tmp_path), "cuda:0", "bf16")
-    with pytest.raises(ValueError, match="ROCm"):
+    with pytest.raises(ValueError, match="CUDA or AMD ROCm"):
         FlashVSREngine(str(tmp_path), "cuda", "bf16")
 
-    # CPU and invalid devices are refused.
-    with pytest.raises(ValueError, match="Apple Silicon GPU"):
-        FlashVSREngine(str(tmp_path), "cpu", "bf16")
+    # CPU, other GPU backends, and malformed CUDA device names are refused.
+    for bad in ("cpu", "xpu:0", "directml:0", "openvino:GPU"):
+        with pytest.raises(ValueError, match="Apple Silicon GPU"):
+            FlashVSREngine(str(tmp_path), bad, "bf16")
     with pytest.raises(ValueError, match="Invalid"):
         FlashVSREngine(str(tmp_path), "cuda:bad", "bf16")
 
@@ -532,10 +609,10 @@ def test_engine_routing_mps_rocm_and_refusals(monkeypatch, tmp_path):
     seen_to_devices: list[object] = []
 
     def cpu_redirect_to(self, *args, **kwargs):
-        if kwargs.get("device") == "cuda:1":
+        if kwargs.get("device") in ("cuda:1", "cuda"):
             seen_to_devices.append(kwargs["device"])
             kwargs = {**kwargs, "device": "cpu"}
-        elif args and args[0] == "cuda:1":
+        elif args and args[0] in ("cuda:1", "cuda"):
             seen_to_devices.append(args[0])
             args = ("cpu", *args[1:])
         return orig_to(self, *args, **kwargs)
@@ -560,6 +637,26 @@ def test_engine_routing_mps_rocm_and_refusals(monkeypatch, tmp_path):
     assert auto_engine.device == "cuda"
     auto_engine.close()
 
+    # Fake NVIDIA CUDA (without HIP) routes to torch_flashvsr on both Linux and Windows.
+    monkeypatch.setattr(torch.version, "hip", None)
+    monkeypatch.setattr(torch.version, "cuda", "12.8")
+    empty_cache_calls.clear()
+    seen_to_devices.clear()
+    cuda_engine = FlashVSREngine(str(tmp_path), device="cuda", precision="bf16")
+    assert cuda_engine._backend == "cuda"
+    assert cuda_engine.device == "cuda"
+    cuda_out = cuda_engine.process_frames(frames)
+    assert seen_to_devices == ["cuda"]
+    assert len(cuda_out) == 4
+    cuda_engine.close()
+    assert empty_cache_calls
+
+    monkeypatch.setattr(flashvsr_engine.sys, "platform", "win32")
+    win_auto = FlashVSREngine(str(tmp_path), device="auto", precision="bf16")
+    assert win_auto._backend == "cuda"
+    assert win_auto.device == "cuda"
+    win_auto.close()
+
     # MPS routes to MLX backend when available.
     if sys.platform == "darwin":
         import mlx.core as mx
@@ -578,7 +675,7 @@ def test_engine_routing_mps_rocm_and_refusals(monkeypatch, tmp_path):
         assert mps_engine.device == "mps"
 
 
-def test_rocm_tile_planner_and_budget_from_mem_get_info(monkeypatch):
+def test_cuda_and_rocm_tile_planner_and_budget_from_mem_get_info(monkeypatch):
     assert ROCM_FIXED_MEMORY_BYTES == 4_900_000_000
     assert ROCM_PER_PIXEL_MEMORY_BYTES == 6_300.0
 
@@ -586,17 +683,18 @@ def test_rocm_tile_planner_and_budget_from_mem_get_info(monkeypatch):
     monkeypatch.setattr(
         torch.cuda, "mem_get_info", lambda _dev="cuda": (16_000_000_000, 17_179_869_184)
     )
-    plan_single = plan_tiles(768, 1408, backend="rocm", device="cuda:0")
-    assert plan_single.budget_bytes == int(16_000_000_000 * BUDGET_FRACTION)
-    expected_area = int(
-        (plan_single.budget_bytes - ROCM_FIXED_MEMORY_BYTES) / ROCM_PER_PIXEL_MEMORY_BYTES
-    )
-    assert plan_single.max_tile_area == expected_area
-    assert len(plan_single.tiles) == 1
-    assert (plan_single.tile_width, plan_single.tile_height) == (768, 1408)
+    for backend in ("rocm", "cuda"):
+        plan_single = plan_tiles(768, 1408, backend=backend, device="cuda:0")
+        assert plan_single.budget_bytes == int(16_000_000_000 * BUDGET_FRACTION)
+        expected_area = int(
+            (plan_single.budget_bytes - ROCM_FIXED_MEMORY_BYTES) / ROCM_PER_PIXEL_MEMORY_BYTES
+        )
+        assert plan_single.max_tile_area == expected_area
+        assert len(plan_single.tiles) == 1
+        assert (plan_single.tile_width, plan_single.tile_height) == (768, 1408)
 
-    # 1080p exceeds single-tile ROCm area on 16 GB -> tiles cleanly with weights summing to 1.
-    plan_1080 = plan_tiles(1920, 1080, backend="rocm", device="cuda:0")
+    # 1080p exceeds single-tile ROCm/CUDA area on 16 GB -> tiles cleanly with weights summing to 1.
+    plan_1080 = plan_tiles(1920, 1080, backend="cuda", device="cuda:0")
     assert len(plan_1080.tiles) >= 2
     assert plan_1080.tile_width >= MIN_TILE_SIDE and plan_1080.tile_height >= MIN_TILE_SIDE
     canvas = np.zeros((plan_1080.padded_height, plan_1080.padded_width), dtype=np.float32)
@@ -610,56 +708,66 @@ def test_rocm_tile_planner_and_budget_from_mem_get_info(monkeypatch):
     )
     monkeypatch.setattr(torch.cuda, "mem_get_info", lambda _dev="cuda": (low_free, 8_000_000_000))
     with pytest.raises(RuntimeError, match="512x512") as exc_info:
-        plan_tiles(1024, 1024, backend="rocm", device="cuda:0")
+        plan_tiles(1024, 1024, backend="cuda", device="cuda:0")
     assert "out of memory" not in str(exc_info.value).lower()
     assert flashvsr_engine.rocm_free_memory_bytes("cuda:0") == low_free
 
 
-def test_linux_rocm_runtime_issue_and_server_device_guard(monkeypatch):
-    monkeypatch.setattr(video_engines.sys, "platform", "linux")
-    monkeypatch.setattr(torch.version, "hip", "7.2.0")
-
-    # Missing triton -> unavailable with plain sentence.
+def test_cuda_and_rocm_runtime_issue_and_server_device_guard(monkeypatch):
+    # Triton is never required on ROCm or CUDA.
     monkeypatch.setitem(sys.modules, "triton", None)
+
+    for platform_name, hip_val, cuda_val in (
+        ("linux", "7.2.0", None),
+        ("linux", None, "12.8"),
+        ("win32", None, "12.8"),
+    ):
+        monkeypatch.setattr(video_engines.sys, "platform", platform_name)
+        monkeypatch.setattr(torch.version, "hip", hip_val)
+        monkeypatch.setattr(torch.version, "cuda", cuda_val)
+        assert video_engines.flashvsr_runtime_issue() is None
+        assert resolve_video_engine("flashvsr") is FlashVSREngine
+        assert "flashvsr" in _video_engines()
+        assert "video_flashvsr" in _engine_features()
+
+    # CPU-only torch refuses FlashVSR with a plain sentence.
+    monkeypatch.setattr(video_engines.sys, "platform", "linux")
+    monkeypatch.setattr(torch.version, "hip", None)
+    monkeypatch.setattr(torch.version, "cuda", None)
     issue = video_engines.flashvsr_runtime_issue()
-    assert issue is not None and "Triton" in issue
-    with pytest.raises(TemporalEngineUnavailable, match="Triton"):
+    assert issue is not None and "NVIDIA CUDA" in issue
+    with pytest.raises(TemporalEngineUnavailable, match="NVIDIA CUDA"):
         resolve_video_engine("flashvsr")
 
-    # With triton and flex_attention available -> FlashVSR enabled on Linux ROCm.
-    monkeypatch.setitem(sys.modules, "triton", types.ModuleType("triton"))
-    if not _HAS_FLEX_ATTENTION:
-        fake_flex = types.ModuleType("torch.nn.attention.flex_attention")
-        fake_flex.BlockMask = object  # type: ignore[attr-defined]
-        fake_flex.flex_attention = object  # type: ignore[attr-defined]
-        monkeypatch.setitem(sys.modules, "torch.nn.attention.flex_attention", fake_flex)
-    assert video_engines.flashvsr_runtime_issue() is None
-    assert resolve_video_engine("flashvsr") is FlashVSREngine
-    assert "flashvsr" in _video_engines()
-    assert "video_flashvsr" in _engine_features()
-
-    # server.py device guard rejects non-ROCm CUDA and CPU, accepts ROCm cuda[:N].
-    monkeypatch.setattr(torch.version, "hip", None)
-    with pytest.raises(ValueError, match="ROCm"):
+    # server.py device guard rejects CPU/XPU/DirectML/OpenVINO and malformed CUDA ids,
+    # and rejects cuda:0 on CPU-only torch.
+    for bad_dev in ("cpu", "xpu:0", "directml:0", "openvino:GPU"):
+        with pytest.raises(ValueError, match="Apple Silicon GPU"):
+            WorkerServer._run_video_job(
+                SimpleNamespace(), f"bad-{bad_dev}", {"model_kind": "flashvsr", "device": bad_dev}
+            )
+    with pytest.raises(ValueError, match="Invalid"):
         WorkerServer._run_video_job(
-            SimpleNamespace(), "non-rocm", {"model_kind": "flashvsr", "device": "cuda:0"}
+            SimpleNamespace(), "bad-cuda", {"model_kind": "flashvsr", "device": "cuda:bad"}
         )
-    with pytest.raises(ValueError, match="Apple Silicon GPU"):
+    with pytest.raises(ValueError, match="NVIDIA CUDA"):
         WorkerServer._run_video_job(
-            SimpleNamespace(), "cpu-flash", {"model_kind": "flashvsr", "device": "cpu"}
+            SimpleNamespace(), "cpu-torch-cuda", {"model_kind": "flashvsr", "device": "cuda:0"}
         )
 
-    monkeypatch.setattr(torch.version, "hip", "7.2.0")
-    reached: list[tuple[str, str]] = []
-    fake_server = SimpleNamespace(
-        _verify_temporal_bundle=lambda _data, _job_id: None,
-        _run_temporal_video_job=lambda job_id, data, factory: reached.append(
-            (str(data["device"]), factory.__name__)
-        ),
-    )
-    WorkerServer._run_video_job(
-        fake_server,
-        "rocm-ok",
-        {"model_kind": "flashvsr", "device": "cuda:0", "hdr_mode": "tone_map"},
-    )
-    assert reached == [("cuda:0", "FlashVSREngine")]
+    for hip_val, cuda_val in (("7.2.0", None), (None, "12.8")):
+        monkeypatch.setattr(torch.version, "hip", hip_val)
+        monkeypatch.setattr(torch.version, "cuda", cuda_val)
+        reached: list[tuple[str, str]] = []
+        fake_server = SimpleNamespace(
+            _verify_temporal_bundle=lambda _data, _job_id: None,
+            _run_temporal_video_job=lambda job_id, data, factory, out=reached: out.append(
+                (str(data["device"]), factory.__name__)
+            ),
+        )
+        WorkerServer._run_video_job(
+            fake_server,
+            "gpu-ok",
+            {"model_kind": "flashvsr", "device": "cuda:0", "hdr_mode": "tone_map"},
+        )
+        assert reached == [("cuda:0", "FlashVSREngine")]

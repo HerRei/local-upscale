@@ -526,7 +526,7 @@ class FlashVSRTinyPipeline:
         pre_cache_k = pre_cache_v = LQ_latents = latents_total = None  # type: ignore[assignment]
         if lq_proj is not None:
             lq_proj.clear_cache()
-        if torch.version.hip and torch.cuda.is_available():
+        if torch.device(self.device).type == "cuda" and torch.cuda.is_available():
             torch.cuda.empty_cache()
 
         if self.TCDecoder is None or return_latents:

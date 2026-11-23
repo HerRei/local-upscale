@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2024-2026 ModelScope / DiffSynth-Studio and OpenImagingLab FlashVSR authors.
 # Modified for LocalSR: pruned CUDA block_sparse_attn, flash_attn/sageattn, training forward,
-# and state-dict converters; routed CPU sparse attention to reference_attention.
+# and state-dict converters; routed sparse attention through sparse_attention (gather default).
 
 import math
 from typing import Optional, Tuple
@@ -11,7 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 
-from .rocm_attention import reference_attention, sparse_attention
+from .rocm_attention import sparse_attention
 
 WAN_1_3B_CONFIG = {
     "dim": 1536,
@@ -159,14 +159,10 @@ def flash_attention(
     k_h = rearrange(k, "b s (n d) -> b n s d", n=num_heads)
     v_h = rearrange(v, "b s (n d) -> b n s d", n=num_heads)
     if attention_mask is not None:
-        if torch.version.hip:
+        if q.device.type in ("cuda", "cpu"):
             x = sparse_attention(q_h, k_h, v_h, attention_mask)
-        elif q.device.type == "cpu":
-            x = reference_attention(q_h, k_h, v_h, attention_mask)
         else:
-            raise RuntimeError(
-                "FlashVSR sparse attention requires AMD ROCm (torch.version.hip) or CPU reference."
-            )
+            raise RuntimeError("FlashVSR PyTorch sparse attention requires CUDA, ROCm, or CPU.")
     else:
         x = F.scaled_dot_product_attention(q_h, k_h, v_h)
     return rearrange(x, "b n s d -> b s (n d)", n=num_heads)

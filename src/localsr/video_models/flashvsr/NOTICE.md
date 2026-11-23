@@ -38,12 +38,13 @@ FlexAttention" by flowerinheart) and 16 GB ROCm memory fixes.
 - `torch_flashvsr/`: vendored minimal Tiny-only PyTorch pipeline from
   `flashvsr-mlx` commit `12b3b1a`:
   - `rocm_attention.py`: from `diffsynth/models/rocm_attention.py` (PR #114
-    `8a95fd3`), unchanged logic, formatted for `ruff`.
+    `8a95fd3`), extended with pure-PyTorch chunked `gather_attention` (default
+    via `FLASHVSR_ATTENTION=gather`, no Triton/compiler) alongside `flex` and
+    `reference`, formatted for `ruff`.
   - `wan_video_dit.py`: from `diffsynth/models/wan_video_dit.py`; pruned CUDA
     `block_sparse_attn`, `flash_attn`, `sageattention`, training `forward`,
-    unused I2V `MLP`, and `WanModelStateDictConverter`; routes CPU sparse
-    attention to `reference_attention` and ROCm (`torch.version.hip`) to
-    `sparse_attention`.
+    unused I2V `MLP`, and `WanModelStateDictConverter`; routes sparse attention
+    on CUDA, ROCm, and CPU through `sparse_attention`.
   - `flow_match.py`: from `diffsynth/schedulers/flow_match.py`; pruned unused
     training/step methods.
   - `lq_proj.py`: from `examples/WanVSR/utils/utils.py`; kept `Causal_LQ4x_Proj`
