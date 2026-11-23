@@ -84,7 +84,10 @@
   let frames = 0;
   let frame = 0;
   let limited = false;
-  /** The side whose sound plays: a slot's key, 'off', or '' for slot 1. */
+  /**
+   * The side whose sound plays: a slot's key, or 'off'. Slot 1 at first; from then on the
+   * choice belongs to that result and stays with it when the slots are swapped.
+   */
   let audioChoice = '';
   let preparationKey = '';
   let preparationRevision = 0;
@@ -101,17 +104,6 @@
     frames = sync?.frames ?? 0;
     frame = sync?.frame ?? 0;
     limited = sync?.limited ?? false;
-  }
-  /** Frames per second of the kept part where the host counted its frames: the file's own rate. */
-  function keptRate(): number {
-    // The clock spans the shortest kept part among the loaded sides, which has the fewest frames.
-    const kept = Math.min(
-      ...items.flatMap((item) =>
-        item.unfinished?.frames && sources[item.key]?.loaded ? [item.unfinished.frames] : [],
-      ),
-    );
-    const length = sync?.duration ?? 0;
-    return Number.isFinite(kept) && length > 0 ? kept / length : 0;
   }
   function stopClock(): void {
     if (frameId !== undefined) frameVideo?.cancelVideoFrameCallback(frameId);
@@ -150,13 +142,15 @@
                 video,
                 fps: item.fps || 30,
                 audible: item.key === audioKey,
-                partial: Boolean(item.unfinished),
+                kept: item.unfinished && {
+                  seconds: item.unfinished.seconds,
+                  frames: item.unfinished.frames,
+                },
               },
             ]
           : [];
       }),
     );
-    sync.grid = keptRate();
     sync.rate(playbackRate);
     sync.seek(time);
     updateTransport();
@@ -361,12 +355,9 @@
     );
   }
   $: videos = items[0]?.media_kind === 'video';
-  $: audioKey =
-    audioChoice === 'off'
-      ? ''
-      : items.some((item) => item.key === audioChoice)
-        ? audioChoice
-        : (items[0]?.key ?? '');
+  $: if (audioChoice !== 'off' && !items.some((item) => item.key === audioChoice))
+    audioChoice = items[0]?.key ?? '';
+  $: audioKey = audioChoice === 'off' ? '' : audioChoice;
   $: prepareVideos(
     JSON.stringify([
       videos,
@@ -740,11 +731,25 @@
     if (event.key !== 'Escape' || event.defaultPrevented) return;
     const target = event.target instanceof Element ? event.target : null;
     if (target?.closest('[aria-modal="true"], [role="listbox"]')) return;
+    // An open list of details closes first, wherever the focus is: it opens on hover too,
+    // and WebKit does not focus a button that is clicked.
+    if (clipped[detailsHovered] || clipped[detailsPinned]) {
+      event.preventDefault();
+      hoverDetails('');
+      detailsPinned = '';
+      return;
+    }
     close();
+  }
+  /** A list kept open by a click on More closes with a click anywhere else. */
+  function windowPointerDown(event: PointerEvent): void {
+    if (!detailsPinned) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target?.closest('.details-more')) detailsPinned = '';
   }
 </script>
 
-<svelte:window on:keydown={windowKey} />
+<svelte:window on:keydown={windowKey} on:pointerdown={windowPointerDown} />
 
 <section class="preview-pane compare-pane" class:compact-hidden={compactHidden}>
   <div class="preview-header compare-header" data-tauri-drag-region>
@@ -926,9 +931,7 @@
         {#if !videos}
           {#each items.slice(0, 2) as item, index (item.key)}
             {#if item.unfinished?.tiles && item.status === 'ready'}<UnfinishedTiles
-                tiles={item.unfinished.tiles}
-                width={item.width}
-                height={item.height}
+                {...item.unfinished.tiles}
                 fit={fitted}
                 {zoom}
                 pan={{ x: panX, y: panY }}
@@ -1033,9 +1036,7 @@
                   {/if}
                 </div>
                 {#if !videos && item.unfinished?.tiles && item.status === 'ready'}<UnfinishedTiles
-                    tiles={item.unfinished.tiles}
-                    width={item.width}
-                    height={item.height}
+                    {...item.unfinished.tiles}
                     {...boxView(item, fitted, panX, panY, zoom, cell)}
                     {zoom}
                     lit={tilesLit(item.key)}
@@ -1080,7 +1081,7 @@
           {seek}
           {nextRate}
           {step}
-          frames={duration > 0 && duration < 1 ? frames : 0}
+          {frames}
           {frame}
           {seekFrame}
         >
@@ -1167,12 +1168,6 @@
                     detailsHovered = '';
                     detailsPinned = '';
                   }}
-                  on:keydown={(event) => {
-                    if (event.key !== 'Escape' || !open) return;
-                    event.preventDefault();
-                    detailsHovered = '';
-                    detailsPinned = '';
-                  }}
                   on:click={() => (detailsPinned = detailsPinned === item.key ? '' : item.key)}
                   >More</button
                 >{/if}
@@ -1185,8 +1180,15 @@
                   aria-pressed={tilesPinned === item.key}
                   aria-label={`${mark.label}. Show the finished tiles`}
                   title="Show the finished tiles · click to keep them shown"
-                  on:pointerenter={() => (tilesHovered = item.key)}
-                  on:pointerleave={() => (tilesHovered = '')}
+                  on:pointerenter={() => {
+                    // The tiles show on the canvas, where the list of details would open.
+                    hoverDetails('');
+                    tilesHovered = item.key;
+                  }}
+                  on:pointerleave={() => {
+                    tilesHovered = '';
+                    hoverDetails(item.key);
+                  }}
                   on:focus={(event) => {
                     if (event.currentTarget.matches(':focus-visible')) tilesHovered = item.key;
                   }}

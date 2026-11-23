@@ -11,13 +11,32 @@
   /** One frame back or on; without it the transport has no step buttons. */
   export let step: ((direction: -1 | 1) => void) | undefined = undefined;
   /**
-   * A clip of under a second is counted in frames: its length in frames, the frame
-   * shown (from 0) and a seek by frame. 0 keeps the clock.
+   * The length in frames and the frame shown (from 0), where a frame rate is known; 0
+   * frames where it is not. A clip of under a second is then counted in frames, with a
+   * seek by frame, instead of read as a clock.
    */
   export let frames = 0;
   export let frame = 0;
   export let seekFrame: ((index: number) => void) | undefined = undefined;
-  $: counted = frames > 0 && Boolean(seekFrame);
+  $: counted = frames > 0 && duration > 0 && duration < 1 && Boolean(seekFrame);
+
+  /**
+   * The arrow keys on the timeline go one frame, like the step buttons. Its own step of a
+   * hundredth of a second is less than a frame, and a seek that settles on a frame would
+   * put the thumb back where it was.
+   */
+  function scrubberKey(event: KeyboardEvent): void {
+    if (!step) return;
+    const direction =
+      event.key === 'ArrowRight' || event.key === 'ArrowUp'
+        ? 1
+        : event.key === 'ArrowLeft' || event.key === 'ArrowDown'
+          ? -1
+          : 0;
+    if (!direction) return;
+    event.preventDefault();
+    step(direction);
+  }
   $: fractional = duration > 0 && duration < 1;
   $: played = counted
     ? frames > 1
@@ -51,7 +70,7 @@
       class="transport-step"
       title="Previous frame"
       aria-label="Previous frame"
-      aria-disabled={counted && frame <= 0}
+      aria-disabled={frames > 0 && frame <= 0}
       on:click={() => step?.(-1)}
     >
       <svg viewBox="0 0 16 16" aria-hidden="true"
@@ -63,7 +82,7 @@
       class="transport-step"
       title="Next frame"
       aria-label="Next frame"
-      aria-disabled={counted && frame >= frames - 1}
+      aria-disabled={frames > 0 && frame >= frames - 1}
       on:click={() => step?.(1)}
     >
       <svg viewBox="0 0 16 16" aria-hidden="true"
@@ -84,6 +103,7 @@
       value={frame + 1}
       disabled={frames < 2}
       style={`--played:${played}%`}
+      on:keydown={scrubberKey}
       on:input={(event) => seekFrame?.(Number(event.currentTarget.value) - 1)}
     />
     <span class="transport-time">{frames} {frames === 1 ? 'frame' : 'frames'}</span>
@@ -98,6 +118,7 @@
       step="0.01"
       value={currentTime}
       style={`--played:${played}%`}
+      on:keydown={scrubberKey}
       on:input={(event) => seek(Number(event.currentTarget.value))}
     />
     <span class="transport-time">{formatMediaTime(duration, fractional)}</span>

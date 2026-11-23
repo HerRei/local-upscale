@@ -81,40 +81,51 @@ export function unfinishedLabel(result: ResultSummary, totalDuration = 0, source
   return kept ? `Unfinished · ${kept}` : 'Unfinished';
 }
 
-/** What a view needs to mark an unfinished result. */
-export interface UnfinishedMark {
-  label: string;
-  /** A photo's finished tiles; absent for a video or when the host recorded none. */
-  tiles?: TileRect[];
-  /** Frames a video kept, when the host counted them. */
-  frames?: number;
-}
-
-export function unfinishedMark(
-  result: ResultSummary | undefined,
-  totalDuration = 0,
-  sourceFps = 0,
-): UnfinishedMark | undefined {
-  if (!result?.partial) return undefined;
-  return {
-    label: unfinishedLabel(result, totalDuration, sourceFps),
-    ...(result.kind !== 'video' && result.finished_tiles ? { tiles: result.finished_tiles } : {}),
-    ...(result.kept_frames && result.kept_frames > 0 ? { frames: result.kept_frames } : {}),
-  };
-}
-
 /** A photo's finished tiles with the pixel size of the saved file they are measured in. */
-export interface PaneTiles {
+export interface SizedTiles {
   tiles: TileRect[];
   width: number;
   height: number;
 }
 
-/** The mark the preview shows, and the side of the pair it belongs to. */
-export interface PaneUnfinished {
-  side: 'showing' | 'reference';
+/** What a view needs to mark an unfinished result. */
+export interface UnfinishedMark {
   label: string;
+  /** A photo's finished tiles; absent for a video, or when neither they nor a size are known. */
+  tiles?: SizedTiles;
+  /** What a video kept, as the host measured it in the file: its length and its frames. */
+  seconds?: number;
+  frames?: number;
 }
+
+type Size = { width?: number; height?: number };
+
+/**
+ * `decoded` is the pixel size read from the saved file, which the tiles are measured in.
+ * Until it is known the size is the source's times the recorded scale; a result without
+ * a scale has the source's size (only an Edit records none, and an Edit is never kept).
+ */
+export function unfinishedMark(
+  result: ResultSummary | undefined,
+  about: { duration?: number; fps?: number; decoded?: Size; source?: Size } = {},
+): UnfinishedMark | undefined {
+  if (!result?.partial) return undefined;
+  const scale = result.scale || 1;
+  const width = about.decoded?.width || scale * (about.source?.width ?? 0);
+  const height = about.decoded?.height || scale * (about.source?.height ?? 0);
+  const seconds = partialKeptSeconds(result);
+  return {
+    label: unfinishedLabel(result, about.duration, about.fps),
+    ...(result.kind !== 'video' && result.finished_tiles && width > 0 && height > 0
+      ? { tiles: { tiles: result.finished_tiles, width, height } }
+      : {}),
+    ...(seconds ? { seconds } : {}),
+    ...(result.kept_frames && result.kept_frames > 0 ? { frames: result.kept_frames } : {}),
+  };
+}
+
+/** An unfinished result on one side of the preview; the id tells one result from the next. */
+export type PaneUnfinished = UnfinishedMark & { id: string };
 
 /** SVG paths, in pixels of the saved file, that mark a photo's finished tiles. */
 export interface TileMarks {

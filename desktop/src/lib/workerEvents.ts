@@ -227,10 +227,11 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       break;
     case 'progress':
       next.runtime.progress = Number(data.percentage ?? 0);
-      // An Edit counts steps; only tiles can be kept when a photo is stopped.
-      if (data.unit !== 'steps') {
-        next.runtime.tiles_completed = Number(data.completed_tiles ?? 0);
-        next.runtime.tiles_total = Number(data.total_tiles ?? 0);
+      // An Edit counts steps; only tiles can be kept when a photo is stopped. A message
+      // that names a phase without a count leaves the count as it was.
+      if (data.unit !== 'steps' && typeof data.completed_tiles === 'number') {
+        next.runtime.tiles_completed = data.completed_tiles;
+        if (typeof data.total_tiles === 'number') next.runtime.tiles_total = data.total_tiles;
       }
       // In a job of several stages the title keeps which one runs (two fixes can both be
       // "Restoring"); a one-stage job reads "Enhancing" as before.

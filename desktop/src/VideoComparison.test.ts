@@ -166,6 +166,59 @@ describe('video comparison player', () => {
     expect(videos[1].currentTime).toBeCloseTo(0.0185);
   });
 
+  it('steps by the kept file’s own rate when the player reports a longer clip', async () => {
+    // Two frames of a 30 fps video (0.0667 s in the file); the player says 0.10 s.
+    const rendered = render(VideoComparison, {
+      originalSrc: 'asset://localhost/original.mov',
+      enhancedSrc: 'asset://localhost/kept_partial.mp4',
+      fps: 30,
+      keptFrames: 2,
+      keptSeconds: 2 / 30,
+    });
+    const videos = rendered.container.querySelectorAll('video');
+    Object.defineProperty(videos[0], 'duration', { configurable: true, value: 2 });
+    Object.defineProperty(videos[1], 'duration', { configurable: true, value: 0.1 });
+    await fireEvent.loadedMetadata(videos[0]);
+    await fireEvent.loadedMetadata(videos[1]);
+    expect(screen.getByRole('group', { name: 'Video playback controls' }).textContent).toContain(
+      '2 frames',
+    );
+    await fireEvent.click(screen.getByRole('button', { name: 'Next frame' }));
+    // Frame 1 of the 30 fps original; 0.075 s would be its frame 2.
+    expect(videos[0].currentTime).toBeCloseTo(0.05);
+    expect(videos[1].currentTime).toBeCloseTo(0.05);
+  });
+
+  it('steps back from the end of a longer video and dims a step button at an end', async () => {
+    const rendered = render(VideoComparison, {
+      originalSrc: 'asset://localhost/original.mp4',
+      enhancedSrc: 'asset://localhost/enhanced.mp4',
+      fps: 30,
+    });
+    const videos = rendered.container.querySelectorAll('video');
+    for (const video of videos)
+      Object.defineProperty(video, 'duration', { configurable: true, value: 2 });
+    await fireEvent.loadedMetadata(videos[0]);
+    await fireEvent.loadedMetadata(videos[1]);
+    const back = screen.getByRole('button', { name: 'Previous frame' });
+    const on = screen.getByRole('button', { name: 'Next frame' });
+    expect(back.getAttribute('aria-disabled')).toBe('true');
+    expect(on.getAttribute('aria-disabled')).toBe('false');
+    // Played to the end: the last frame, 59, shows.
+    videos[1].currentTime = 2;
+    await fireEvent.timeUpdate(videos[1]);
+    expect(on.getAttribute('aria-disabled')).toBe('true');
+    expect(back.getAttribute('aria-disabled')).toBe('false');
+    await fireEvent.click(back);
+    // One press goes to frame 58, not to the middle of the frame already shown.
+    expect(videos[0].currentTime).toBeCloseTo(58.5 / 30);
+    expect(videos[1].currentTime).toBeCloseTo(58.5 / 30);
+    // The arrow keys on the timeline go by frames too.
+    const timeline = screen.getByRole('slider', { name: 'Video position' });
+    await fireEvent.keyDown(timeline, { key: 'ArrowLeft' });
+    expect(videos[1].currentTime).toBeCloseTo(57.5 / 30);
+  });
+
   it('keeps the clock for a longer video and offers frame steps only with a frame rate', async () => {
     const rendered = render(VideoComparison, {
       originalSrc: 'asset://localhost/original.mp4',

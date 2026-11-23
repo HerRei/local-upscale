@@ -53,14 +53,21 @@ finished part. So the marking is in two levels:
   outline. The finished tiles keep their real pixels, so they seem to light up.
 
 The mark is the switch. Hovering it, or focusing it with the keyboard, shows the tiles; a
-click (or Space/Enter) keeps them shown until the next click. Hovering the picture does not
+click (or Space/Enter) keeps them shown until the next click, or until another result takes
+its place. Hovering the picture does not
 switch it: zoomed in, the pointer is always over the picture, and a marking that cannot be
 moved away from would cover what the user came to look at.
 
 The marks follow the result, not the stage: in a split they are cut at the divider like the
-picture they belong to, and the Original view has none. They are drawn in window pixels
+picture they belong to, and the Original view has none. Where the preview holds two results,
+each unfinished one has its own mark over its side (reference left, Showing right, like the
+labels under them) and its own tiles. They are drawn in window pixels
 beside the zoomed stage (`UnfinishedTiles.svelte`), so the lines stay one pixel wide and
 sharp at every zoom. Inside the stage they would be scaled with it as one composited layer.
+
+The tiles are placed by the pixel size read from the saved file. Until that is read, the
+size is the source's times the recorded scale (a restore, or a result without a scale, has
+the source's size); the source's own size is never used for an enlarged result.
 
 The geometry (`lib/unfinished.ts`, `tileMarks`) does not assume a regular grid. Tile edges
 cut the picture into cells, a cell counts as finished when a tile covers it, and the line
@@ -96,14 +103,21 @@ Frames are compared one by one:
 - A step, and every seek from the timeline, lands in the **middle** of a frame. On a frame
   edge two files can round the same time to different frames; in the middle each side shows
   the frame that holds that time.
-- The grid is the fastest side's frame rate. Where the host counted the kept frames, the
-  grid is `kept_frames / kept length` instead, the file's own rate. A nominal 30 fps would
-  count a third frame in a clip of two.
+- The grid is the fastest side's frame rate. With an unfinished side it is that side's own
+  rate, `kept_frames / kept_seconds` as the host measured them in the file, and the clock
+  ends at `kept_seconds`. The player's idea of the clip's length is not used for either: it
+  can be longer than the frames (an audio tail, a rounded last frame), and a nominal 30 fps
+  would count a third frame in a clip of two. With two unfinished sides, frames and length
+  come from the one that ends first. A side that runs a whole multiple faster (an
+  interpolated result) refines the grid by that multiple.
 - At the end of playback every side is put on the last kept frame; the longer side had
   already run past it.
 - The transport has **Previous frame** and **Next frame** buttons beside Play (Left and
   Right still work in Compare). At an end the button is dimmed but keeps the focus, so the
   other arrow key still works.
+- On the focused timeline the arrow keys go one frame as well. Its own step, a hundredth
+  of a second, is less than a frame, and a seek that settles on a frame would put the
+  thumb back where it was.
 
 Under a second the transport counts frames: `Frame 1`, a scrubber with one stop per frame,
 `2 frames`. The preview's own player (`VideoComparison.svelte`) does the same; it already
@@ -112,9 +126,10 @@ ended at the shorter of its two sides.
 ### Audio in Compare
 
 One side sounds. The transport has a small group, `Audio 1 2 3 4 Off`, with the same numbers
-the slots carry everywhere else. Slot 1 sounds at first, as before. The choice belongs to
-the result, not to the position: it follows a swap, and falls back to slot 1 when its result
-leaves. This replaces the Mute button.
+the slots carry everywhere else. Slot 1 sounds at first, as before. From then on the sound
+belongs to that result, not to the position, whether it was chosen or not: a swap moves the
+picture and leaves what is heard, and the sound falls back to slot 1 when its result leaves.
+This replaces the Mute button.
 
 ### The details under Compare
 
@@ -128,7 +143,9 @@ row, also when four boxes stand two by two.
   their order.
 - A line that does not fit is cut with an ellipsis. A slot with a cut line gets a **More**
   button on its title line; hovering the slot, focusing More, or a click on it opens the
-  full list above the strip. Escape closes the list and leaves Compare open.
+  full list above the strip. Escape closes the list, wherever the focus is, and leaves
+  Compare open; a click elsewhere closes a list that More keeps open. Resting the pointer
+  on the Unfinished tag shows the tiles on the canvas and does not open the list over them.
 
 A count like "+3" was not used: it would hide which facts are missing, while a cut line
 still shows the start of each one.
@@ -145,7 +162,7 @@ Unfinished mark.
 | Outputs row | unfinished | the mark first in the detail line |
 | Preview, photo | Split or Enhanced | chip; line at rest; tiles when the chip is hovered, focused or pressed |
 | Preview, photo | Original, or M held | Original chip only |
-| Preview, pair of results | either side unfinished | each side's tiles on its side of the divider; one chip |
+| Preview, pair of results | either side unfinished | each side's chip over its side, each with its own tiles |
 | Preview, video | result showing | chip (a note, not a switch); frame transport under a second |
 | Compare, photos | slider or boxes | tag in the slot's details; tiles over that slot's picture |
 | Compare, videos | any side unfinished | tag; timeline ends at the kept part; note under the transport |

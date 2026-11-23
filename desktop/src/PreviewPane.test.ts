@@ -720,8 +720,7 @@ describe('image comparison', () => {
     expect(container.querySelector('.unfinished-chip')).toBeNull();
     expect(container.querySelector('.unfinished-tiles')).toBeNull();
     await rerender({
-      unfinished: { side: 'showing', label: 'Unfinished · 2 of 8 tiles' },
-      showingTiles: tiles,
+      showingUnfinished: { id: 'kept', label: 'Unfinished · 2 of 8 tiles', tiles },
     });
     const mark = screen.getByRole('button', {
       name: 'Unfinished · 2 of 8 tiles. Show the finished tiles',
@@ -761,17 +760,22 @@ describe('image comparison', () => {
     expect(marks.getAttribute('style')).not.toContain('scale(');
   });
 
+  const kept = (id: string, finished: number) => ({
+    id,
+    label: `Unfinished · ${finished} of 8 tiles`,
+    tiles: {
+      tiles: Array.from(
+        { length: finished },
+        (_, index) => [index * 1000, 0, 1000, 1000] as [number, number, number, number],
+      ),
+      width: 4000,
+      height: 2000,
+    },
+  });
+
   it('marks the unfinished side of a pair of results, on the side it shows', async () => {
     const { container, rerender } = await renderComparison();
-    await rerender({
-      ...pair,
-      unfinished: { side: 'reference', label: 'Unfinished · 1 of 8 tiles' },
-      referenceTiles: {
-        tiles: [[0, 0, 1000, 1000]] as [number, number, number, number][],
-        width: 4000,
-        height: 2000,
-      },
-    });
+    await rerender({ ...pair, referenceUnfinished: kept('reference', 1) });
     const marks = container.querySelector('.unfinished-tiles') as SVGElement;
     // The reference shows left of the divider, so its tiles are cut from the right.
     expect(marks.getAttribute('style')).toContain('clip-path: inset(0 50% 0 0%)');
@@ -780,6 +784,56 @@ describe('image comparison', () => {
     );
     await fireEvent.click(screen.getByRole('radio', { name: 'Showing' }));
     expect(container.querySelector('.unfinished-chip')).toBeNull();
+  });
+
+  it('gives each of two unfinished results its own mark over its side, and its own tiles', async () => {
+    const { container, rerender } = await renderComparison();
+    await rerender({
+      ...pair,
+      referenceUnfinished: kept('reference', 1),
+      showingUnfinished: kept('showing', 3),
+    });
+    const chips = () => [...container.querySelectorAll<HTMLElement>('.unfinished-chip')];
+    // Reference left, Showing right, as the labels under them.
+    expect(chips().map((chip) => chip.textContent?.trim())).toEqual([
+      'Unfinished · 1 of 8 tiles',
+      'Unfinished · 3 of 8 tiles',
+    ]);
+    expect(chips().map((chip) => chip.classList.contains('right'))).toEqual([false, true]);
+    const [showingTiles, referenceTiles] = [
+      ...container.querySelectorAll<SVGElement>('.unfinished-tiles'),
+    ];
+    expect(showingTiles.getAttribute('style')).toContain('clip-path: inset(0 0% 0 50%)');
+    expect(referenceTiles.getAttribute('style')).toContain('clip-path: inset(0 50% 0 0%)');
+    await fireEvent.pointerEnter(chips()[0]);
+    expect(referenceTiles.classList.contains('lit')).toBe(true);
+    expect(showingTiles.classList.contains('lit')).toBe(false);
+    await fireEvent.pointerLeave(chips()[0]);
+
+    // The Reference view still has the reference's mark, which shows its tiles.
+    await fireEvent.click(screen.getByRole('radio', { name: 'Reference' }));
+    expect(chips().map((chip) => chip.textContent?.trim())).toEqual(['Unfinished · 1 of 8 tiles']);
+    await fireEvent.click(chips()[0]);
+    expect(chips()[0].getAttribute('aria-pressed')).toBe('true');
+    expect(referenceTiles.classList.contains('lit')).toBe(true);
+    await fireEvent.click(screen.getByRole('radio', { name: 'Showing' }));
+    expect(chips().map((chip) => chip.textContent?.trim())).toEqual(['Unfinished · 3 of 8 tiles']);
+    expect(chips()[0].getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('ends a kept view of the tiles when another result takes the side', async () => {
+    const { container, rerender } = await renderComparison();
+    await rerender({ showingUnfinished: kept('first', 2) });
+    const chip = () => container.querySelector('.unfinished-chip') as HTMLElement;
+    await fireEvent.click(chip());
+    expect(chip().getAttribute('aria-pressed')).toBe('true');
+    // The same result again (a refresh of the list) stays as it was.
+    await rerender({ showingUnfinished: kept('first', 2) });
+    expect(chip().getAttribute('aria-pressed')).toBe('true');
+    // Another unfinished result of the same photo starts with only its line.
+    await rerender({ showingUnfinished: kept('second', 5) });
+    expect(chip().getAttribute('aria-pressed')).toBe('false');
+    expect(container.querySelector('.unfinished-tiles')?.classList.contains('lit')).toBe(false);
   });
 
   it('shows the zoom controls only while the pointer is over the image', async () => {

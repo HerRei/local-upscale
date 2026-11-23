@@ -80,17 +80,39 @@ describe('the Unfinished mark', () => {
     expect(keptTilesText(1, 0)).toBe('1 tile');
     expect(keptTilesText(0, 0)).toBe('');
   });
-  it('carries what a view needs: the tiles of a photo, the frames of a video', () => {
-    const tiles: TileRect[] = [[0, 0, 8, 8]];
-    expect(
-      unfinishedMark(result({ kind: 'upscale', finished_tiles: tiles, total_tiles: 4 })),
-    ).toEqual({ label: 'Unfinished · 1 of 4 tiles', tiles });
+  it('carries what a view needs: what a video kept, as the host measured it', () => {
     expect(unfinishedMark(result({ kind: 'video', kept_seconds: 0.074, kept_frames: 2 }))).toEqual({
       label: 'Unfinished · 2 frames',
+      seconds: 0.074,
       frames: 2,
     });
     expect(unfinishedMark(result({ partial: false }))).toBeUndefined();
     expect(unfinishedMark(undefined)).toBeUndefined();
+  });
+  it('sizes a photo’s tiles by the saved file, and by the source and scale until that is read', () => {
+    const tiles: TileRect[] = [[0, 0, 8, 8]];
+    const photo = (scale?: number) =>
+      result({ kind: 'upscale', finished_tiles: tiles, total_tiles: 4, scale });
+    const source = { width: 100, height: 50 };
+    expect(unfinishedMark(photo(4), { decoded: { width: 400, height: 200 }, source })).toEqual({
+      label: 'Unfinished · 1 of 4 tiles',
+      tiles: { tiles, width: 400, height: 200 },
+    });
+    // Not decoded yet (a size of 0): four times the source, never the source's own size.
+    expect(unfinishedMark(photo(4), { decoded: { width: 0, height: 0 }, source })?.tiles).toEqual({
+      tiles,
+      width: 400,
+      height: 200,
+    });
+    // A restore keeps the source's size, also where the result recorded no scale.
+    for (const scale of [1, 0, undefined])
+      expect(unfinishedMark(photo(scale), { source })?.tiles).toEqual({
+        tiles,
+        width: 100,
+        height: 50,
+      });
+    // Without any size the tiles cannot be placed.
+    expect(unfinishedMark(photo(4))).toEqual({ label: 'Unfinished · 1 of 4 tiles' });
   });
 });
 

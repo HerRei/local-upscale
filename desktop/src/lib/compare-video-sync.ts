@@ -15,8 +15,11 @@ type Entry = {
   fps: number;
   /** The side whose sound plays; every other side is muted. */
   audible?: boolean;
-  /** A stopped job's kept part: the clock ends where the shortest of these ends. */
-  partial?: boolean;
+  /**
+   * A stopped job's kept part: the clock ends where the shortest of these ends. Seconds
+   * and frames are what the host measured in the file; either can be unknown (0).
+   */
+  kept?: { seconds?: number; frames?: number };
 };
 const length = (video: ComparePlayer) =>
   Number.isFinite(video.duration) ? Math.max(0, video.duration) : 0;
@@ -28,8 +31,6 @@ export class CompareVideoSync {
   private blocked = new Set<ComparePlayer>();
   private tail: { time: number; at: number } | undefined;
   private revision = 0;
-  /** Frames per second that stepping counts in; 0 takes the fastest side. */
-  grid = 0;
   constructor(
     private entries: Entry[],
     private now = () => performance.now(),
@@ -42,28 +43,56 @@ export class CompareVideoSync {
   get requestedPlayback(): boolean {
     return this.wanted;
   }
+  private get longest(): number {
+    return Math.max(0, ...this.entries.map(({ video }) => length(video)));
+  }
+  /**
+   * The unfinished side that ends first. Its length is the host's, measured in the file:
+   * a player can report a longer one (an audio tail, a rounded last frame), and frames
+   * counted against that would not be the file's frames.
+   */
+  private get limit(): { seconds: number; frames: number; rate: number } | undefined {
+    let first: { seconds: number; frames: number; rate: number } | undefined;
+    for (const { video, kept } of this.entries) {
+      if (!kept) continue;
+      const played = length(video);
+      const measured = kept.seconds && kept.seconds > 0 ? kept.seconds : played;
+      const seconds = played > 0 ? Math.min(measured, played) : measured;
+      if (!(seconds > 0) || (first && first.seconds <= seconds)) continue;
+      const frames = kept.frames && kept.frames > 0 ? Math.round(kept.frames) : 0;
+      first = { seconds, frames, rate: frames ? frames / measured : 0 };
+    }
+    return first;
+  }
   /** The longest side, or the shortest unfinished one: past its end there is nothing to compare. */
   get duration(): number {
-    const kept = this.kept;
-    return kept.length
-      ? Math.min(...kept)
-      : Math.max(0, ...this.entries.map(({ video }) => length(video)));
-  }
-  private get kept(): number[] {
-    return this.entries
-      .filter((entry) => entry.partial)
-      .map(({ video }) => length(video))
-      .filter((seconds) => seconds > 0);
+    return this.limit?.seconds ?? this.longest;
   }
   /** An unfinished side ends the clock before the longest side does. */
   get limited(): boolean {
-    return this.duration < Math.max(0, ...this.entries.map(({ video }) => length(video)));
+    return this.duration < this.longest;
   }
+  /**
+   * How many grid frames one frame of the limiting side holds. Its own rate is exact; a
+   * side that runs a whole multiple faster (an interpolated result) refines the grid,
+   * while a nominal rate that is only a little off (30 for 29.97) does not.
+   */
+  private refinement(rate: number): number {
+    const fastest = Math.max(1, ...this.entries.map((entry) => entry.fps || 30));
+    return Math.max(1, Math.round(fastest / rate));
+  }
+  /** Frames per second that stepping counts in. */
   private get frameRate(): number {
-    return this.grid > 0 ? this.grid : Math.max(1, ...this.entries.map((entry) => entry.fps || 30));
+    const rate = this.limit?.rate;
+    return rate
+      ? rate * this.refinement(rate)
+      : Math.max(1, ...this.entries.map((entry) => entry.fps || 30));
   }
   get frames(): number {
-    return Math.max(1, Math.ceil(this.duration * this.frameRate - 1e-6));
+    const limit = this.limit;
+    return limit?.rate
+      ? limit.frames * this.refinement(limit.rate)
+      : Math.max(1, Math.ceil(this.duration * this.frameRate - 1e-6));
   }
   get frame(): number {
     return Math.max(0, Math.min(this.frames - 1, Math.floor(this.time * this.frameRate + 1e-6)));

@@ -8224,6 +8224,14 @@ describe('Stopping a running photo', () => {
     expect(api.setPreference).not.toHaveBeenCalled();
   });
 
+  it('says "is" of a single finished tile', async () => {
+    const user = await mountWith(runningPhotoSnapshot());
+    await reportTiles(1, 40);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Stop photo.png?' });
+    expect(dialog.textContent).toContain('1 of 40 tiles is finished. If you keep it,');
+  });
+
   it('keeps the tile count through a refresh of the snapshot, which has none', async () => {
     const user = await mountWith(runningPhotoSnapshot());
     await reportTiles(3, 40);

@@ -8,7 +8,7 @@
   import PreviewActivity from './PreviewActivity.svelte';
   import SplitComparison from './SplitComparison.svelte';
   import UnfinishedTiles from './UnfinishedTiles.svelte';
-  import type { PaneTiles, PaneUnfinished } from './lib/unfinished';
+  import type { PaneUnfinished } from './lib/unfinished';
   import type { ComparisonSide } from './lib/results';
   import * as api from './lib/api';
   import { comparisonFromKey, comparisonFromPointer } from './lib/comparison';
@@ -53,14 +53,11 @@
   /** The result a pair is still waiting for: the picture stays as it was, no divider or view options. */
   export let loadingLabel = '';
   export let singleFrame: { width: number; height: number } | null = null;
-  /** What is shown is a stopped job's kept part: its mark and the side that holds it. */
-  export let unfinished: PaneUnfinished | null = null;
-  /** The finished tiles of an unfinished photo on either side of the pair. */
-  export let showingTiles: PaneTiles | null = null;
-  export let referenceTiles: PaneTiles | null = null;
-  /** Frame rate of the video shown, and the frames a stopped job kept of it. */
+  /** A side shows a stopped job's kept part: its mark and, for a photo, its finished tiles. */
+  export let showingUnfinished: PaneUnfinished | null = null;
+  export let referenceUnfinished: PaneUnfinished | null = null;
+  /** Frame rate of the video shown. */
   export let videoFps = 0;
-  export let videoKeptFrames = 0;
   /** Live tiles of a running job; off once a saved result was chosen for this image. */
   export let showLiveTiles = true;
   /** Why a pair is shown as a single result, for example a different framing. */
@@ -173,20 +170,24 @@
     ? { src: referencePreview, label: referenceLabel, state: referenceState, error: referenceError }
     : undefined;
   $: dividerPercent = Math.round(100 - comparison.enhancedPercent);
-  // The mark shows while its side does; hovering it, or focusing it with the keyboard,
-  // shows the finished tiles, and a click keeps them shown.
+  // A mark shows while its side does. Hovering it, or focusing it with the keyboard, shows
+  // that side's finished tiles; a click keeps them shown for as long as the same result
+  // holds the side. Between two results each mark sits over its own side, like the labels.
+  type MarkSide = 'reference' | 'showing';
   $: resultShown = Boolean((resultPreview && !loading) || videoComparison?.enhanced_url);
-  $: unfinishedShown =
-    Boolean(unfinished) &&
-    resultShown &&
-    !holdingOriginal &&
-    shownView !== (unfinished?.side === 'reference' ? 'enhanced' : 'original');
-  $: tilesMarked = Boolean(showingTiles || referenceTiles) && !videoComparison;
-  let tilesPinned = false;
-  let tilesHovered = false;
-  let tilesFocused = false;
-  $: tilesLit = tilesPinned || tilesHovered || tilesFocused;
-  $: if (!unfinishedShown) tilesHovered = tilesFocused = false;
+  $: marks = (
+    [
+      ['reference', referenceIsResult && shownView !== 'enhanced' ? referenceUnfinished : null],
+      ['showing', shownView !== 'original' ? showingUnfinished : null],
+    ] as [MarkSide, PaneUnfinished | null][]
+  ).flatMap(([side, mark]) => (mark && resultShown && !holdingOriginal ? [{ side, mark }] : []));
+  let tilesPinned: Record<MarkSide, string> = { reference: '', showing: '' };
+  let tilesHovered: MarkSide | '' = '';
+  let tilesFocused: MarkSide | '' = '';
+  $: tilesLit = (side: MarkSide, mark: PaneUnfinished) =>
+    tilesPinned[side] === mark.id || tilesHovered === side || tilesFocused === side;
+  $: if (tilesHovered && !marks.some((entry) => entry.side === tilesHovered)) tilesHovered = '';
+  $: if (tilesFocused && !marks.some((entry) => entry.side === tilesFocused)) tilesFocused = '';
   $: liveTilesShown = progressiveVisible && !resultPreview && showLiveTiles && !pairShown;
   $: frameKey = singleFrame ? `${singleFrame.width}x${singleFrame.height}` : '';
   let laidOutFrame = '';
@@ -268,7 +269,6 @@
     previewNaturalHeight = Math.max(1, selectedMedia?.height ?? 1);
     laidOutSourcePreview = '';
     previewRetryMediaId = '';
-    tilesPinned = false;
     resetProgressivePreview();
     resetView();
     scheduleViewportReset();
@@ -976,7 +976,8 @@
             sourceHeight={selectedMedia.height}
             enhancedSrc={videoComparison.enhanced_url}
             fps={videoFps}
-            keptFrames={videoComparison.enhanced_url ? videoKeptFrames : 0}
+            keptFrames={videoComparison.enhanced_url ? (showingUnfinished?.frames ?? 0) : 0}
+            keptSeconds={videoComparison.enhanced_url ? (showingUnfinished?.seconds ?? 0) : 0}
             bind:compare
             view={shownView}
             on:compatibilityneeded={compatiblePlayback}
@@ -1031,21 +1032,21 @@
             <PreviewActivity media={selectedMedia} loading={loadingLabel} />
           </div>{/if}
         {#if resultPreview && !loading}
-          {#if showingTiles}<UnfinishedTiles
-              {...showingTiles}
+          {#if showingUnfinished?.tiles}<UnfinishedTiles
+              {...showingUnfinished.tiles}
               fit={{ width: stageWidth, height: stageHeight }}
               {zoom}
               pan={{ x: panX, y: panY }}
               clipLeft={resultClip}
-              lit={tilesLit}
+              lit={tilesLit('showing', showingUnfinished)}
             />{/if}
-          {#if referenceTiles && referenceIsResult && !holdingOriginal}<UnfinishedTiles
-              {...referenceTiles}
+          {#if referenceUnfinished?.tiles && referenceIsResult && !holdingOriginal}<UnfinishedTiles
+              {...referenceUnfinished.tiles}
               fit={{ width: stageWidth, height: stageHeight }}
               {zoom}
               pan={{ x: panX, y: panY }}
               clipRight={100 - resultClip}
-              lit={tilesLit}
+              lit={tilesLit('reference', referenceUnfinished)}
             />{/if}
         {/if}
         {#if selectedMedia?.kind !== 'video'}<div
@@ -1106,20 +1107,27 @@
           </div>
         {/if}
       {/if}
-      {#if unfinishedShown && unfinished}
-        {#if tilesMarked}
+      {#each marks as { side, mark } (side)}
+        {#if mark.tiles && !videoComparison}
           <button
             type="button"
             class="unfinished-chip"
-            aria-pressed={tilesPinned}
-            aria-label={`${unfinished.label}. Show the finished tiles`}
+            class:right={side === 'showing' && referenceIsResult}
+            class:paired={referenceIsResult}
+            aria-pressed={tilesPinned[side] === mark.id}
+            aria-label={`${mark.label}. Show the finished tiles`}
             title="Show the finished tiles · click to keep them shown"
             on:pointerdown|stopPropagation
-            on:pointerenter={() => (tilesHovered = true)}
-            on:pointerleave={() => (tilesHovered = false)}
-            on:focus={(event) => (tilesFocused = event.currentTarget.matches(':focus-visible'))}
-            on:blur={() => (tilesFocused = false)}
-            on:click={() => (tilesPinned = !tilesPinned)}
+            on:pointerenter={() => (tilesHovered = side)}
+            on:pointerleave={() => (tilesHovered = '')}
+            on:focus={(event) =>
+              (tilesFocused = event.currentTarget.matches(':focus-visible') ? side : '')}
+            on:blur={() => (tilesFocused = '')}
+            on:click={() =>
+              (tilesPinned = {
+                ...tilesPinned,
+                [side]: tilesPinned[side] === mark.id ? '' : mark.id,
+              })}
           >
             <svg viewBox="0 0 11 11" aria-hidden="true"
               ><rect x="0.5" y="0.5" width="4" height="4" /><rect
@@ -1134,12 +1142,17 @@
                 width="4"
                 height="4"
               /></svg
-            >{unfinished.label}
+            >{mark.label}
           </button>
         {:else}
-          <span class="unfinished-chip" role="status">{unfinished.label}</span>
+          <span
+            class="unfinished-chip"
+            class:right={side === 'showing' && referenceIsResult}
+            class:paired={referenceIsResult}
+            role="status">{mark.label}</span
+          >
         {/if}
-      {/if}
+      {/each}
       {#if videoPreparation}
         <div class="playback-preparation" role="status" on:pointerdown|stopPropagation>
           <span class="playback-spinner" aria-hidden="true"></span>
@@ -1179,7 +1192,8 @@
     place-items: center;
     pointer-events: none;
   }
-  /* Where the Original chip sits; the two never show together. */
+  /* Where the Original chip sits; the two never show together. Between two results the
+     Showing side's mark moves to the right corner, over its side. */
   .unfinished-chip {
     position: absolute;
     z-index: 6;
@@ -1199,6 +1213,13 @@
     line-height: 1.3;
     white-space: nowrap;
     text-overflow: ellipsis;
+  }
+  .unfinished-chip.right {
+    left: auto;
+    right: 14px;
+  }
+  .unfinished-chip.paired {
+    max-width: calc(50% - 20px);
   }
   button.unfinished-chip {
     cursor: pointer;
