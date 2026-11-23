@@ -378,7 +378,9 @@ test.describe('overflow and alignment', () => {
     await showPane(page, 'enhance');
     await page.getByRole('button', { name: /^Advanced/ }).click();
     const select = await box(page.locator('#edit-size'));
-    expect(Math.abs((await left(page.locator('#device'))) - select.x)).toBeLessThan(0.5);
+    // The Hardware row's value sits in the same column as the selects.
+    const hardwareValue = page.locator('#advanced-hardware-change').locator('xpath=..');
+    expect(Math.abs((await left(hardwareValue)) - select.x)).toBeLessThan(0.5);
     const steps = await box(page.locator('#edit-steps'));
     const seed = await box(page.locator('#edit-seed'));
     expect(Math.abs(steps.y - seed.y)).toBeLessThan(0.5);
@@ -396,7 +398,7 @@ test.describe('overflow and alignment', () => {
         (fieldset as HTMLFieldSetElement).disabled = false;
         (document.querySelector('.disclosure') as HTMLButtonElement).click();
       });
-      await expect(page.locator('#device')).toBeVisible();
+      await expect(page.locator('#advanced-hardware-change')).toBeVisible();
       await page.evaluate(() => {
         const fieldset = document.querySelector('fieldset.processing-settings');
         (fieldset as HTMLFieldSetElement).disabled = true;
@@ -506,7 +508,7 @@ test.describe('overflow and alignment', () => {
     await openApp(page, ready);
     await showPane(page, 'enhance');
     await page.getByRole('button', { name: /^Advanced/ }).click();
-    const column = page.locator('#device');
+    const column = page.locator('#scale');
     await column.scrollIntoViewIfNeeded();
     expect(Math.abs((await left(page.locator('#halo-size'))) - (await left(column)))).toBeLessThan(
       0.5,
@@ -524,6 +526,11 @@ test.describe('overflow and alignment', () => {
     });
     await showPane(page, 'enhance');
     await page.getByRole('button', { name: /^Advanced/ }).click();
+    // The FFmpeg actions live in Settings > Storage; Advanced links there.
+    await page
+      .locator('.field-row', { hasText: 'External FFmpeg' })
+      .getByRole('button', { name: 'Change…' })
+      .click();
     const find = page.getByRole('button', { name: 'Find installed', exact: true });
     await find.scrollIntoViewIfNeeded();
     const unset = page.getByRole('button', { name: 'Don’t use', exact: true });

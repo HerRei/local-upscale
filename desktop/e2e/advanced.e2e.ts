@@ -1,12 +1,30 @@
 import { expect, test, type Page } from '@playwright/test';
 import { openApp, showPane } from './app';
-import { answer, hostCalls } from './fake-host';
+import { answer, emit, hostCalls } from './fake-host';
 import { upscale, video, windows } from './fixtures';
 
 async function openAdvanced(page: Page): Promise<void> {
   await showPane(page, 'enhance');
   await page.getByRole('button', { name: /^Advanced/ }).click();
-  await expect(page.locator('#device')).toBeVisible();
+  await expect(page.locator('#advanced-hardware-change')).toBeVisible();
+}
+
+// Hardware is an app-wide setting: Advanced shows it read-only with a shortcut that
+// opens Settings at Performance.
+// External FFmpeg is app-wide too: its Advanced row opens Settings at Storage.
+async function openFfmpegSettings(page: Page): Promise<void> {
+  await openAdvanced(page);
+  await page
+    .locator('.field-row', { hasText: 'External FFmpeg' })
+    .getByRole('button', { name: 'Change…' })
+    .click();
+  await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible();
+}
+
+async function openHardwareSettings(page: Page): Promise<void> {
+  await openAdvanced(page);
+  await page.locator('#advanced-hardware-change').click();
+  await expect(page.locator('#settings-device')).toBeVisible();
 }
 
 const optionTexts = (page: Page, selector: string) =>
@@ -17,12 +35,16 @@ async function lastSaved(page: Page): Promise<Record<string, unknown>> {
   return (call?.args as { settings: Record<string, unknown> }).settings;
 }
 
-test.describe('Advanced settings: hardware', () => {
+test.describe('Settings: hardware', () => {
   test('a Mac lists the Neural Engine, the Apple GPU and the CPU', async ({ page }) => {
     await openApp(page, upscale);
-    await openAdvanced(page);
-    expect(await optionTexts(page, '#device')).toEqual(['Neural Engine', 'Apple GPU', 'CPU']);
-    await expect(page.locator('#device optgroup')).toHaveCount(0);
+    await openHardwareSettings(page);
+    expect(await optionTexts(page, '#settings-device')).toEqual([
+      'Neural Engine',
+      'Apple GPU',
+      'CPU',
+    ]);
+    await expect(page.locator('#settings-device optgroup')).toHaveCount(0);
   });
 
   test('a saved GPU that is gone shows as the CPU, and Start sends the CPU', async ({ page }) => {
@@ -31,8 +53,10 @@ test.describe('Advanced settings: hardware', () => {
       worker: 'ready',
       settings: { ...upscale.settings, device_id: 'cuda:7' },
     });
-    await openAdvanced(page);
-    await expect(page.locator('#device')).toHaveValue('cpu');
+    await openHardwareSettings(page);
+    await expect(page.locator('#settings-device')).toHaveValue('cpu');
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
     await page.getByRole('button', { name: 'Upscale selected' }).click();
     const start = (await hostCalls(page, 'start_jobs')).at(-1);
     expect((start?.args as { input: { device: string } }).input.device).toBe('cpu');
@@ -40,8 +64,8 @@ test.describe('Advanced settings: hardware', () => {
 
   test('one GPU reached by two routes is grouped under its name', async ({ page }) => {
     await openApp(page, windows);
-    await openAdvanced(page);
-    const groups = await page.locator('#device').evaluate((select) =>
+    await openHardwareSettings(page);
+    const groups = await page.locator('#settings-device').evaluate((select) =>
       [...select.children].map((child) => ({
         tag: child.tagName,
         label: child.getAttribute('label') ?? child.textContent,
@@ -57,15 +81,15 @@ test.describe('Advanced settings: hardware', () => {
       },
       { tag: 'OPTION', label: 'NVIDIA GeForce RTX 3060', options: [] },
     ]);
-    await expect(page.locator('#device')).toHaveValue('directml:0');
+    await expect(page.locator('#settings-device')).toHaveValue('directml:0');
   });
 
   test('choosing a route saves that device', async ({ page }) => {
     await openApp(page, windows);
-    await openAdvanced(page);
-    await page.locator('#device').selectOption('openvino:GPU');
+    await openHardwareSettings(page);
+    await page.locator('#settings-device').selectOption('openvino:GPU');
     await expect.poll(async () => (await lastSaved(page)).device_id).toBe('openvino:GPU');
-    await expect(page.locator('#device')).toHaveValue('openvino:GPU');
+    await expect(page.locator('#settings-device')).toHaveValue('openvino:GPU');
   });
 });
 
@@ -113,7 +137,7 @@ test('chooses an external FFmpeg through the host and displays the chosen path',
     ...video,
     settings: { ...video.settings, external_ffmpeg_path: '/old/ffmpeg' },
   });
-  await openAdvanced(page);
+  await openFfmpegSettings(page);
   await answer(page, 'choose_external_ffmpeg', '/chosen/ffmpeg');
   // The path is text inside the field, as in Save to; it cannot be typed.
   const choose = page.getByRole('button', { name: 'Choose FFmpeg', exact: true });
@@ -213,9 +237,11 @@ test.describe('Video audio cleanup', () => {
     await expect
       .poll(
         async () =>
-          ((await hostCalls(page, 'start_jobs')).at(-1)?.args as {
-            input: { video_clean_audio?: boolean; video_audio_model?: string };
-          })?.input,
+          (
+            (await hostCalls(page, 'start_jobs')).at(-1)?.args as {
+              input: { video_clean_audio?: boolean; video_audio_model?: string };
+            }
+          )?.input,
       )
       .toMatchObject({ video_clean_audio: true, video_audio_model: 'dpdfnet8_48khz_hr' });
   });
@@ -236,9 +262,11 @@ test.describe('Video audio cleanup', () => {
     await expect
       .poll(
         async () =>
-          ((await hostCalls(page, 'download_model')).at(-1)?.args as {
-            modelId?: string;
-          })?.modelId,
+          (
+            (await hostCalls(page, 'download_model')).at(-1)?.args as {
+              modelId?: string;
+            }
+          )?.modelId,
       )
       .toBe('dpdfnet8_48khz_hr');
   });
