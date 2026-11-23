@@ -2598,6 +2598,8 @@ fn videos_and_photos_can_keep_their_finished_part() {
     assert!(job_can_keep_partial(&state, &video("seedvr2")));
     let photo = json!({"type": "job_request", "data": {"image_path": "/p.jpg"}});
     assert!(job_can_keep_partial(&state, &photo));
+    let batch = json!({"type": "image_batch_request", "data": {"jobs": []}});
+    assert!(job_can_keep_partial(&state, &batch));
 }
 
 #[test]

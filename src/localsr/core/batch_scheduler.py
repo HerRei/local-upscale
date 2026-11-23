@@ -100,6 +100,8 @@ def run_photo_batch(
     encoders: int = 4,
     memory_budget: int | None = None,
     poll: float = 0.02,
+    keep: Callable[[Any], bool] | None = None,
+    kept: Callable[[Any, Any], None] | None = None,
 ) -> list[Any]:
     """Process ``items`` and report each exactly once, or return it.
 
@@ -111,7 +113,9 @@ def run_photo_batch(
     idle ones such as a GPU lane on battery), every unfinished photo is returned.
     On cancellation, running native calls finish before their photos are
     released, every photo outside an encoder is reported cancelled at once, and
-    each running save is reported as it ends: finished if it committed.
+    each running save is reported as it ends: finished if it committed. When
+    ``keep(item)`` says a stop keeps the finished part, ``kept(item, photo)`` saves each
+    open photo that has finished tiles first, and reports it.
 
     Returns the items for the normal per-photo runner, in their original order.
     """
@@ -357,6 +361,18 @@ def run_photo_batch(
             finish_encoded(report=False)
         else:
             take_opened()
+            if cancel.is_set() and keep is not None and kept is not None:
+                # The lanes have stopped: what each open photo holds is final.
+                for entry in (*tiling, *ready):
+                    item = items[entry.index]
+                    if not index_open(entry.index) or entry.stitched == 0 or not keep(item):
+                        continue
+                    try:
+                        kept(item, entry.photo)
+                    except Exception as error:  # noqa: BLE001 - reported for that photo
+                        resolve(entry.index, "failed", error)
+                    else:
+                        resolved.add(entry.index)
             for entry in (*tiling, *ready, *waiting):
                 close(entry)
             tiling.clear()

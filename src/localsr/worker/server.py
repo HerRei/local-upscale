@@ -315,6 +315,11 @@ class WorkerServer:
                 return self.active_cancel_keep_partial
             return self.pending_cancel_keep_partial.get(job_id, True)
 
+    def _batch_keeps_partial(self) -> bool:
+        """A batch is stopped as one queue: its stop's choice holds for every photo."""
+        with self.state_lock:
+            return not self.shutdown_event.is_set() and self.active_cancel_keep_partial
+
     def _activate_job(self, job_id: str) -> None:
         with self.state_lock:
             cancelled = job_id in self.pending_cancel_job_ids
@@ -1025,6 +1030,7 @@ class WorkerServer:
                 emit=emit,
                 emit_preview=self._emit_live_preview,
                 preview_factory=LatestPreviewEncoder,
+                keep_partial=self._batch_keeps_partial,
             ).run(jobs)
         except Exception as error:  # noqa: BLE001 - the process boundary, as for one job
             traceback.print_exc(file=sys.stderr)

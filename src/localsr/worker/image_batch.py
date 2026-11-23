@@ -42,6 +42,7 @@ from localsr.core.inference import InferenceEngine, _fixed_window, _span_output_
 from localsr.core.live_preview import LatestPreviewEncoder, PreviewPacket
 from localsr.core.model_adapter import ModelAdapter, NormalizedModelInfo
 from localsr.core.output_writer import OutputWriter
+from localsr.core.partial_image import fill_unfinished, partial_output_path, saved_tiles
 from localsr.core.pipeline import PipelineStageError, resolve_image_pipeline
 from localsr.core.tiling import generate_tiles
 from localsr.protocol.messages import (
@@ -228,6 +229,8 @@ class _Photo:
             rate=batch.rate,
         )
         self.completed = 0
+        # The finished tiles, [x, y, width, height] in output pixels, for a kept part.
+        self.finished: list[tuple[int, int, int, int]] = []
         self.nbytes = save_bytes(
             self.width,
             self.height,
@@ -264,6 +267,7 @@ class _Photo:
         except Exception as error:  # noqa: BLE001 - reported like the normal runner's
             raise PipelineStageError(self.pipeline.primary, str(error)) from error
         self.completed += 1
+        self.finished.append((tile.out_x, tile.out_y, tile.out_w, tile.out_h))
         total = len(self.tiles)
         self.batch.tile_done(int(tile.out_w) * int(tile.out_h))
         self.progress.tile(
@@ -283,6 +287,22 @@ class _Photo:
             self.batch.save_notes[str(self.data["job_id"])] = notes
         started = self.progress.inference_started_at
         return self.batch.clock() - (started if started is not None else self.batch.clock())
+
+    def save_kept(self) -> tuple[str, bool]:
+        """A stop that keeps the finished part: a photo with every tile done is saved as
+        usual, one with some as `<name>_partial` with the rest a plain resize. Returns the
+        saved path and whether it is partial."""
+        complete = self.completed == len(self.tiles)
+        data = self.data
+        if not complete:
+            fill_unfinished(self.writer.get_array(), self.finished, self.tensor)
+            data = {**data, "output_path": partial_output_path(str(data["output_path"]))}
+        notes = save_output(
+            self.manager, self.writer, self.image, self.info, data, threading.Event()
+        )
+        if notes:
+            self.batch.save_notes[str(self.data["job_id"])] = notes
+        return str(data["output_path"]), not complete
 
     def close(self) -> None:
         self.tensor = None
@@ -304,7 +324,10 @@ class ImageBatchRunner:
         power: PowerSource | None = None,
         memory_budget: int | None = None,
         clock: Callable[[], float] = time.monotonic,
+        keep_partial: Callable[[], bool] | None = None,
     ) -> None:
+        # Whether the stop of this batch keeps the finished part (one choice for all photos).
+        self.keep_partial = keep_partial
         self.engine = engine
         self.model_adapter = model_adapter
         self.cancel_event = cancel_event
@@ -529,6 +552,25 @@ class ImageBatchRunner:
                 )
             )
 
+        def kept(item, photo: _Photo):
+            path, partial = photo.save_kept()
+            output_scale = int(item.get("output_scale") or photo.info.scale)
+            self.emit(
+                JobCompleted(
+                    job_id=str(item["job_id"]),
+                    elapsed_seconds=0.0,
+                    output_path=path,
+                    notes=" ".join(
+                        [*self.lane_notes, *self.save_notes.pop(str(item["job_id"]), [])]
+                    ),
+                    partial=partial,
+                    finished_tiles=saved_tiles(photo.finished, photo.info.scale, output_scale)
+                    if partial
+                    else [],
+                    total_tiles=len(photo.tiles) if partial else 0,
+                )
+            )
+
         try:
             returned = run_photo_batch(
                 remaining,
@@ -546,6 +588,8 @@ class ImageBatchRunner:
                 lane_failed=lambda lane, error: self._lane_failed(model, lane, error),
                 encoders=encoders,
                 memory_budget=self.memory_budget,
+                keep=(lambda _item: self.keep_partial()) if self.keep_partial else None,
+                kept=kept,
             )
         finally:
             preview.close()

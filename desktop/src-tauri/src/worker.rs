@@ -988,8 +988,12 @@ fn partial_record(data: &Value) -> Value {
 }
 
 fn job_can_keep_partial(state: &AppState, message: &Value) -> bool {
-    // A photo keeps its finished tiles (the worker saves them only once one is done).
-    if message["type"].as_str() == Some("job_request") {
+    // A photo keeps its finished tiles (the worker saves them only once one is done), on
+    // its own or in a batch, where one stop's choice holds for every photo.
+    if matches!(
+        message["type"].as_str(),
+        Some("job_request" | "image_batch_request")
+    ) {
         return true;
     }
     if message["type"].as_str() != Some("video_job_request") {
