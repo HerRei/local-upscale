@@ -15,8 +15,16 @@
 - **Viewer background.** The picture can sit on a checkerboard, black, neutral grey or
   white: Settings > Appearance, or the swatch beside the zoom controls. Preview, Compare
   and video use it.
-- **Colour for video.** Black-and-white videos can be coloured under Restore and
-  Restore first. Colours are carried from frame to frame, so they stay steady. A video
+- **Upscale & restore.** Restore is no longer a separate task: the Size row (Same size,
+  2×, 3×, 4×) decides whether the picture gets bigger, and the Fix chips (Noise, Blur,
+  JPEG artifacts, Colour) work at any size. Quick and Best choose the fix models as well,
+  a fast one or the most careful one. Saved recipes and settings keep working.
+- **Video models in the model list.** SeedVR2 and FlashVSR are chosen like any other model,
+  from the model row and the library, with quality and speed ratings. A "?" explains frame
+  by frame against several frames at once, and models that cannot run on this computer
+  say why.
+- **Colour for video.** Black-and-white videos can be coloured with the Colour fix, at
+  any size. Colours are carried from frame to frame, so they stay steady. A video
   that already has colour skips the step, and a Colour choice made for photos is not
   carried over to videos (#164).
 - **Updates from 0.4.0 and 0.5.0.** They refused the update to 0.5.2 ("unknown field
@@ -77,6 +85,10 @@
   `apt` installs into the applications menu and removes with `apt remove`. It reports new
   versions instead of updating itself, and downloads the CUDA or ROCm engine inside the
   app. The AppImage stays (#165).
+- **Fixes.** The live preview of Colour plus upscaling stays in colour. Stopping a large
+  photo with "keep the finished part" gives it the time to save instead of restarting the
+  engine after a few seconds, and kept parts always appear in Outputs. LocalSR's own
+  OpenCV now includes optical flow, which de-flicker and video colour need.
 - **Fixes.** The video encoder is always flushed before it closes (#115). Release
   files can be attached to a draft release, and signing needs less disk space (#114).
 
