@@ -22,7 +22,7 @@ test.describe('plan card', () => {
   test('the plan starts with the upscaler alone', async ({ page }) => {
     await expect(page.getByRole('region', { name: 'Model plan' })).toBeVisible();
     await expect(rows(page)).toHaveCount(1);
-    await expect(rows(page).first()).toContainText('LocalSR Quick');
+    await expect(rows(page).first()).toContainText('LocalSR Photo S');
     for (const name of ['Noise', 'JPEG artifacts', 'Blur'])
       await expect(chip(page, name)).toHaveAttribute('aria-pressed', 'false');
   });
@@ -31,7 +31,7 @@ test.describe('plan card', () => {
     await chip(page, 'Noise').click();
     await expect(chip(page, 'Noise')).toHaveAttribute('aria-pressed', 'true');
     await expect(rows(page)).toHaveCount(2);
-    await expect(rows(page).last()).toContainText('LocalSR Quick');
+    await expect(rows(page).last()).toContainText('LocalSR Photo S');
     expect(await savedFixes(page)).toEqual(['noise']);
 
     await chip(page, 'Noise').click();

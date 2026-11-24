@@ -100,7 +100,7 @@ test('video Same size, Fix chips and video recipes', async ({ page }) => {
   // Switch back to 4× via Size; add Blur under Fix and start.
   await page.getByRole('radio', { name: '4×' }).click();
   await page.getByRole('button', { name: 'Blur', exact: true }).click();
-  await expect(stages).toContainText('LocalSR Quick');
+  await expect(stages).toContainText('LocalSR Photo S');
 
   await page.getByRole('button', { name: 'Start selected video' }).click();
   await expect.poll(async () => (await hostCalls(page, 'start_jobs')).length).toBe(2);

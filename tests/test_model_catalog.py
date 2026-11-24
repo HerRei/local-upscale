@@ -263,7 +263,7 @@ def test_spandrel_compatible_models_metadata():
     # 5. LocalSR Quick and Best (PULSE)
     localsr_quick = CATALOG_BY_ID.get("localsr_quick_x4_v1")
     assert localsr_quick is not None
-    assert localsr_quick.name == "LocalSR Photo S (PULSE 64×8)"
+    assert localsr_quick.name == "LocalSR Photo S"
     assert localsr_quick.architecture == "PULSE"
     assert localsr_quick.scale == 4
     assert localsr_quick.purposes == (ModelPurpose.PHOTO,)
@@ -281,7 +281,7 @@ def test_spandrel_compatible_models_metadata():
 
     localsr_best = CATALOG_BY_ID.get("localsr_best_x4_v1")
     assert localsr_best is not None
-    assert localsr_best.name == "LocalSR Photo M (PULSE 96×12)"
+    assert localsr_best.name == "LocalSR Photo M"
     assert localsr_best.architecture == "PULSE"
     assert localsr_best.scale == 4
     assert localsr_best.purposes == (ModelPurpose.PHOTO,)
