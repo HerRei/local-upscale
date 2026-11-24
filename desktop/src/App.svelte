@@ -1428,7 +1428,7 @@
     : settings.task === 'edit'
       ? 'Describe a change in words.'
       : selectedMedia?.kind === 'video' || settings.task === 'video'
-        ? ''
+        ? 'Enlarges videos, fixes them, or both. Edit is for photos.'
         : 'Enlarges photos and artwork, fixes them, or both.';
   $: benchmarkHardware = snapshot.capabilities.devices.find(
     (device) => device.id === benchmarkDevice,
@@ -4570,25 +4570,27 @@
           disabled={settingsLocked}
           aria-label="Processing settings"
         >
-          {#if settings.task !== 'video' && selectedMedia?.kind !== 'video'}
-            <section class="control-section">
-              <span class="eyebrow">Task</span>
-              <div class="seg-inline" role="group" aria-label="Task">
-                <button
-                  aria-pressed={settings.task === 'upscale' || settings.task === 'denoise'}
-                  class:active={settings.task === 'upscale' || settings.task === 'denoise'}
-                  on:click={() => setTask(settings.output_scale === 1 ? 'denoise' : 'upscale')}
-                  >Upscale & restore</button
-                >
-                <button
-                  aria-pressed={settings.task === 'edit'}
-                  class:active={settings.task === 'edit'}
-                  on:click={() => setTask('edit')}>Edit</button
-                >
-              </div>
-              {#if taskCaption}<p class="task-caption">{taskCaption}</p>{/if}
-            </section>
-          {/if}
+          <section class="control-section">
+            <span class="eyebrow">Task</span>
+            <div class="seg-inline" role="group" aria-label="Task">
+              <button
+                aria-pressed={Boolean(settings.task) && settings.task !== 'edit'}
+                class:active={Boolean(settings.task) && settings.task !== 'edit'}
+                on:click={() => {
+                  // A video has this one task; pressing it again must not reset the setup.
+                  if (settings.task !== 'video')
+                    setTask(settings.output_scale === 1 ? 'denoise' : 'upscale');
+                }}>Upscale & restore</button
+              >
+              <button
+                aria-pressed={settings.task === 'edit'}
+                disabled={selectedMedia?.kind === 'video'}
+                class:active={settings.task === 'edit'}
+                on:click={() => setTask('edit')}>Edit</button
+              >
+            </div>
+            {#if taskCaption}<p class="task-caption">{taskCaption}</p>{/if}
+          </section>
 
           {#if settings.task === 'video' && selectedMedia?.hdr_format}
             <section class="control-section" aria-label="HDR conversion">
@@ -4643,16 +4645,16 @@
             </section>
           {/if}
 
-          {#if settings.task === 'video' && selectedMedia?.audio_warning}
-            <section class="control-section" aria-label="Audio compatibility">
-              <span class="eyebrow">Audio compatibility</span>
-              <p class="model-description">{selectedMedia.audio_warning}</p>
-            </section>
-          {/if}
-
           {#if settings.task === 'video'}
             <section class="control-section" aria-label="Audio">
-              <span class="eyebrow">Audio</span>
+              <div class="eyebrow eyebrow-row">
+                <span class="label-with-tip"
+                  >Audio{#if selectedMedia?.audio_warning}<HelpTip
+                      label="this video's audio"
+                      text={selectedMedia.audio_warning}
+                    />{/if}</span
+                >
+              </div>
               <div class="check-line">
                 <label class="check-row"
                   ><input

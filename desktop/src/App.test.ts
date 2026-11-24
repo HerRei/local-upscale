@@ -1540,7 +1540,14 @@ describe('LocalSR desktop interface', () => {
     });
     expect(await screen.findByRole('region', { name: 'HDR conversion' })).toBeTruthy();
     expect(screen.getByText(/exported as 8-bit SDR/)).toBeTruthy();
-    expect(screen.getByRole('region', { name: 'Audio compatibility' })).toBeTruthy();
+    // The note about this video's audio is a tip on the Audio heading, not a section of its own.
+    expect(screen.queryByRole('region', { name: 'Audio compatibility' })).toBeNull();
+    const audioTip = within(screen.getByRole('region', { name: 'Audio' })).getByRole('button', {
+      name: "About this video's audio",
+    });
+    expect(
+      document.getElementById(audioTip.getAttribute('aria-describedby') ?? '')?.textContent,
+    ).toBe('Standard audio will be kept. The extra track will be omitted.');
     expect(screen.queryByText('Converting HDR to an SDR preview')).toBeNull();
     expect(
       screen.getByRole('button', { name: 'Start selected video' }).hasAttribute('disabled'),
@@ -2245,21 +2252,48 @@ describe('LocalSR desktop interface', () => {
     expect(region.querySelectorAll('.help-tip').length).toBeGreaterThan(0);
   });
 
-  it('shows two tasks for photos and hides the Task section for video', async () => {
+  it('shows the same two tasks for photos, videos and no media; a video greys out Edit', async () => {
+    const tasks = (): HTMLButtonElement[] =>
+      Array.from(screen.getByRole('group', { name: 'Task' }).querySelectorAll('button'));
+    const shown = (): unknown[] =>
+      tasks().map((b) => [b.textContent, b.getAttribute('aria-pressed'), b.disabled]);
+
     await mountWith(readySnapshot([image('photo', true)]));
     expect(screen.getByText('Enlarges photos and artwork, fixes them, or both.')).toBeTruthy();
-    const taskGroup = screen.getByRole('group', { name: 'Task' });
-    expect(Array.from(taskGroup.querySelectorAll('button')).map((b) => b.textContent)).toEqual([
-      'Upscale & restore',
-      'Edit',
+    expect(shown()).toEqual([
+      ['Upscale & restore', 'true', false],
+      ['Edit', 'false', false],
     ]);
     expect(screen.queryByRole('button', { name: /^Restore$/ })).toBeNull();
 
     cleanup();
-    await mountWith(readySnapshot([video('clip', true)]));
-    expect(screen.queryByRole('group', { name: 'Task' })).toBeNull();
+    const user = await mountWith(readySnapshot([video('clip', true)]));
+    expect(shown()).toEqual([
+      ['Upscale & restore', 'true', false],
+      ['Edit', 'false', true],
+    ]);
+    expect(
+      screen.getByText('Enlarges videos, fixes them, or both. Edit is for photos.'),
+    ).toBeTruthy();
     expect(screen.getByRole('group', { name: 'Fix' })).toBeTruthy();
     expect(screen.getByRole('radiogroup', { name: 'Size' })).toBeTruthy();
+    // Pressing the task a video already has changes nothing.
+    api.saveSettings.mockClear();
+    await user.click(tasks()[0]);
+    expect(api.saveSettings).not.toHaveBeenCalled();
+    expect(shown()[0]).toEqual(['Upscale & restore', 'true', false]);
+
+    // With the video removed the row stays, and Edit can be chosen again.
+    cleanup();
+    const empty = readySnapshot([]);
+    empty.settings.task = 'video';
+    const emptyUser = await mountWith(empty);
+    expect(shown()).toEqual([
+      ['Upscale & restore', 'true', false],
+      ['Edit', 'false', false],
+    ]);
+    await emptyUser.click(tasks()[1]);
+    await waitFor(() => expect(tasks()[1].getAttribute('aria-pressed')).toBe('true'));
   });
 
   it.each([
@@ -2974,7 +3008,9 @@ describe('LocalSR desktop interface', () => {
         '1 video item can be queued with this setup; select the other media type to configure it separately.';
       const start = screen.getByRole('button', { name: 'Start selected video' });
       expect(start.getAttribute('title')).toBe(why);
-      expect(screen.queryByRole('group', { name: 'Task' })).toBeNull();
+      expect((screen.getByRole('button', { name: 'Edit' }) as HTMLButtonElement).disabled).toBe(
+        true,
+      );
       expect((screen.getByRole('radio', { name: 'Same size' }) as HTMLButtonElement).disabled).toBe(
         false,
       );

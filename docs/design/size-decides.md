@@ -24,6 +24,15 @@ shows whenever the result gets bigger and is hidden at Same size, as it is absen
 today. The only Content change left is `keepScale: true` in `setContent` (a Content click must not
 change Size). The order is therefore Content, Fix, Size.
 
+## Amendment: the Task row is always there (Hermes, 2026-11-24)
+
+Hermes: "that bar cannot disappear … just make it fixed and then grey out like before when a
+video is up … so the empty one has to look the same". This overrides "a video has no Task row"
+wherever it appears below: the Task row is shown for photos, videos and with no media, in the
+same place. With a video selected `Upscale & restore` is pressed and `Edit` is disabled; the
+caption reads `Enlarges videos, fixes them, or both. Edit is for photos.` With no media `Edit`
+can be chosen, also right after a video was removed.
+
 ## Decisions
 
 Each is settled here with its reason; Hermes can still change them.
