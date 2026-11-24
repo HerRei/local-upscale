@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import glob
 import heapq
+import logging
 import os
 import tempfile
 import threading
@@ -42,6 +43,8 @@ from .output_publish import DiscardOnStop, OutputExistsError, owned_temporary, p
 from .pixel_budget import MAX_INPUT_PIXELS, require_pixel_budget
 from .video_audio import add_converted_audio_stream, needs_audio_transcode, opus_packets
 from .video_normalization import display_frames, square_pixel_width
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -401,33 +404,58 @@ def decode_timed_frames(
         container,
         stream,
     ):
-        pending = None
-        for index, frame in enumerate(display_frames(container, stream, cancel_event)):
-            if cancel_event is not None and cancel_event.is_set():
-                raise InterruptedError("video job cancelled")
-            if index < start:
-                continue
-            if frame.pts is None or frame.time_base is None:
-                raise ValueError(
-                    "Video frame has no presentation timestamp; remux the source first."
+        pending: TimedVideoFrame | None = None
+        origin: Fraction | None = None
+        base_time_base: Fraction | None = None
+        retimed_count = 0
+        try:
+            for index, frame in enumerate(display_frames(container, stream, cancel_event)):
+                if cancel_event is not None and cancel_event.is_set():
+                    raise InterruptedError("video job cancelled")
+                if index < start:
+                    continue
+                if frame.pts is None or frame.time_base is None:
+                    raise ValueError(
+                        "Video frame has no presentation timestamp; remux the source first."
+                    )
+                timestamp = frame.pts * frame.time_base
+                if origin is None:
+                    origin = timestamp
+                    base_time_base = frame.time_base
+                if end_frame is not None and index > end_frame:
+                    if pending is not None:
+                        interval = timestamp - pending.timestamp
+                        yield replace(pending, duration=interval) if interval > 0 else pending
+                    return
+                if pending is not None:
+                    assert origin is not None and base_time_base is not None
+                    if timestamp <= pending.timestamp or round(
+                        (timestamp - origin) / base_time_base
+                    ) <= round((pending.timestamp - origin) / base_time_base):
+                        # Bump by one source time-base tick rather than a full frame
+                        # interval so subsequent valid frames keep their source PTS and
+                        # audio stays in sync.
+                        timestamp = pending.timestamp + base_time_base
+                        retimed_count += 1
+                    interval = timestamp - pending.timestamp
+                    yield replace(pending, duration=interval)
+                    pending = None
+                rgb = _frame_rgb(stream, frame, hdr_mode)
+                duration = getattr(frame, "duration", 0) or 0
+                interval = (
+                    duration * frame.time_base if duration > 0 else 1 / (stream.average_rate or 25)
                 )
-            timestamp = frame.pts * frame.time_base
+                pending = TimedVideoFrame(
+                    index, rgb, timestamp, Fraction(interval), frame.time_base
+                )
             if pending is not None:
-                interval = timestamp - pending.timestamp
-                if interval <= 0:
-                    raise ValueError("Video presentation timestamps must increase.")
-                yield replace(pending, duration=interval)
-                pending = None
-            if end_frame is not None and index > end_frame:
-                return
-            rgb = _frame_rgb(stream, frame, hdr_mode)
-            duration = getattr(frame, "duration", 0) or 0
-            interval = (
-                duration * frame.time_base if duration > 0 else 1 / (stream.average_rate or 25)
-            )
-            pending = TimedVideoFrame(index, rgb, timestamp, Fraction(interval), frame.time_base)
-        if pending is not None:
-            yield pending
+                yield pending
+        finally:
+            if retimed_count:
+                logger.info(
+                    "Retimed %d frame(s) with non-increasing presentation timestamps.",
+                    retimed_count,
+                )
 
 
 def validate_hdr_encoder(
