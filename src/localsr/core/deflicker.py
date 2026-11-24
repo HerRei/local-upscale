@@ -117,6 +117,22 @@ def is_scene_cut(prev_y64: np.ndarray, curr_y64: np.ndarray) -> bool:
     return bool(np.abs(prev_y64 - curr_y64 * gain).mean() > CUT_THRESHOLD)
 
 
+def _optical_flow(preset: int | None):
+    """DIS optical flow, or None when this OpenCV build has no video module.
+
+    Packaged OpenCV is built with a short module list; looking the constants up at
+    import time would stop the whole worker from starting when one is missing.
+    """
+    create = getattr(cv2, "DISOpticalFlow_create", None)
+    if create is None:
+        return None
+    if preset is None:
+        preset = getattr(cv2, "DISOPTICAL_FLOW_PRESET_FAST", None)
+        if preset is None:
+            return None
+    return create(preset)
+
+
 class _DeflickerProcessor:
     """Stateful streaming Stage A + Stage B processor for a single video job."""
 
@@ -124,10 +140,12 @@ class _DeflickerProcessor:
         self,
         *,
         device_str: str = "cpu",
-        flow_preset: int = cv2.DISOPTICAL_FLOW_PRESET_FAST,
+        flow_preset: int | None = None,
     ) -> None:
         self.device = resolve_deflicker_device(device_str)
-        self._dis = cv2.DISOpticalFlow_create(flow_preset)
+        # Without optical flow, neighbours are compared unaligned; the per-block spread
+        # check then rejects moving blocks, which fall back to the frame's global ratio.
+        self._dis = _optical_flow(flow_preset)
         self._grid_shape: tuple[int, int] | None = None
         self._grid_x: np.ndarray | None = None
         self._grid_y: np.ndarray | None = None
@@ -148,7 +166,7 @@ class _DeflickerProcessor:
     def _block_log_ratio(self, target: AnalysisFrame, neighbour: AnalysisFrame) -> np.ndarray:
         gw, gh = STAGE_A_GRID
         height, width = target.a_y.shape
-        if height >= 12 and width >= 12:
+        if self._dis is not None and height >= 12 and width >= 12:
             flow = self._dis.calc(target.a_gray, neighbour.a_gray, None)
             grid_x, grid_y = self._warp_grid(height, width)
             yu = cv2.remap(
@@ -367,7 +385,7 @@ def deflicker_stream(
     cancel_event: threading.Event | None = None,
     on_frame: Callable[[int], None] | None = None,
     keep: Callable[[], bool] | None = None,
-    flow_preset: int = cv2.DISOPTICAL_FLOW_PRESET_FAST,
+    flow_preset: int | None = None,
     diagnostics: list[tuple[np.ndarray, bool]] | None = None,
 ) -> Iterator[TimedVideoFrame | np.ndarray]:
     """Stream-deflicker ``(output_frame, source_or_analysis)`` pairs with bounded memory.

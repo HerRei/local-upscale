@@ -429,3 +429,26 @@ def test_run_video_job_rejects_deflicker_with_hdr_preservation(tmp_path: Path, m
     )
     with pytest.raises(ValueError, match="De-flicker is not yet supported with HDR"):
         run_video_job(config, SimpleNamespace(), threading.Event())  # type: ignore[arg-type]
+
+
+def test_deflicker_imports_and_runs_without_opencv_optical_flow(monkeypatch):
+    """Packaged OpenCV builds may lack the video module; the worker must still start."""
+    import importlib
+
+    import cv2
+
+    import localsr.core.deflicker as deflicker_module
+
+    monkeypatch.delattr(cv2, "DISOpticalFlow_create", raising=False)
+    monkeypatch.delattr(cv2, "DISOPTICAL_FLOW_PRESET_FAST", raising=False)
+    module = importlib.reload(deflicker_module)
+    try:
+        rng = np.random.default_rng(3)
+        base = rng.integers(40, 200, (48, 64, 3), dtype=np.uint8)
+        frames = [base.copy() for _ in range(8)]
+        out = list(module.deflicker_stream(zip(frames, frames, strict=True)))
+        assert len(out) == 8
+        assert all(frame.shape == base.shape and frame.dtype == np.uint8 for frame in out)
+    finally:
+        monkeypatch.undo()
+        importlib.reload(deflicker_module)
