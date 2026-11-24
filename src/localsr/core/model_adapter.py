@@ -11,6 +11,7 @@ from localsr.core.model_catalog import CATALOG_BY_FILENAME, file_matches_checksu
 from localsr.core.preparation import PreparationTimeout, bounded_preparation
 from localsr.image_models.heart import heart_support
 from localsr.image_models.nerve import nerve_support
+from localsr.image_models.pulse import pulse_support
 
 # Reading a checkpoint is a local file read; a drive that stopped answering would
 # otherwise hold the job for ever.
@@ -20,10 +21,10 @@ UNVERIFIED_CHECKPOINT_ENV = "LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS"
 RISKY_CHECKPOINT_SUFFIXES = {".ckpt", ".pt", ".pth"}
 
 # Spandrel's own registry plus architectures LocalSR vendors under permissive
-# licences (NERVE and HEART, #154). A copy, so Spandrel's global registry stays
+# licences (NERVE, HEART, PULSE). A copy, so Spandrel's global registry stays
 # unchanged; the added architectures are detected after Spandrel's own.
 MODEL_REGISTRY = spandrel.MAIN_REGISTRY.copy()
-MODEL_REGISTRY.add(nerve_support(), heart_support())
+MODEL_REGISTRY.add(nerve_support(), heart_support(), pulse_support())
 
 
 def _unsupported_model_message(state_dict) -> str:
