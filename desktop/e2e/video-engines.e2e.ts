@@ -34,7 +34,17 @@ test('FlashVSR is chosen from the library on a Mac that can run it, with its own
   await expect(page.locator('#video-engine')).toHaveCount(0);
   await expect(page.locator('.model-output-note')).toHaveCount(0);
 
-  const library = await openUpscalerLibrary(page);
+  const videoLink = page.getByRole('button', { name: 'SeedVR2, FlashVSR in the model library' });
+  await expect(videoLink).toBeVisible();
+  await expect(videoLink).toHaveText('SeedVR2, FlashVSR…');
+  await page.getByRole('button', { name: 'About Video models' }).click();
+  const mainTip = page.getByRole('tooltip').filter({ visible: true });
+  await expect(mainTip).toContainText('Several frames at once:');
+  await expect(mainTip).toContainText('Frame by frame:');
+
+  await videoLink.click();
+  const library = page.getByRole('dialog', { name: 'Model library' });
+  await expect(library).toBeVisible();
   await expect(library.locator('.list-head').nth(0)).toContainText('Frame by frame');
   await expect(library.locator('.list-head').nth(0)).toContainText('sorted by quality');
   await expect(library.locator('.list-head').nth(1)).toContainText('Several frames at once · Labs');
@@ -42,7 +52,26 @@ test('FlashVSR is chosen from the library on a Mac that can run it, with its own
     'use neighbouring frames · much slower',
   );
 
-  await library.getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ }).click();
+  const flashRow = library.getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ });
+  await expect(flashRow).toHaveAttribute('aria-pressed', 'true');
+  await expect(flashRow).toBeInViewport();
+  await expect(flashRow).toContainText('Quality: 3 out of 4');
+  await expect(flashRow).toContainText('Speed: 1 out of 4');
+
+  const seedRow = library.getByRole('button', { name: /^SeedVR2-3B — Labs/ });
+  await expect(seedRow).toContainText('Quality: 4 out of 4');
+  await expect(seedRow).toContainText('Speed: 0 out of 4');
+
+  await library.getByRole('button', { name: 'About Frame by frame' }).click();
+  await expect(library.getByRole('tooltip').filter({ visible: true })).toContainText(
+    'Frame by frame: each frame is upscaled on its own.',
+  );
+  await library.getByRole('button', { name: 'About Several frames at once' }).click();
+  await expect(library.getByRole('tooltip').filter({ visible: true })).toContainText(
+    'Several frames at once: the model also looks at the neighbouring frames',
+  );
+
+  await flashRow.click();
   await library.getByRole('button', { name: 'Use for this job' }).click();
   await expect(library).toHaveCount(0);
 
@@ -85,6 +114,7 @@ test('on the CPU of the same Mac the library says what FlashVSR needs, and SeedV
 }) => {
   await openApp(page, { ...mac, settings: { ...mac.settings, device_id: 'cpu' } });
   await showPane(page, 'enhance');
+  await expect(page.locator('.video-models-link')).toHaveText(/SeedVR2…/);
   const library = await openUpscalerLibrary(page);
   const flashRow = library.getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ });
   await expect(flashRow.locator('.pill.bad')).toHaveText('Unavailable');
@@ -105,6 +135,14 @@ test('a saved FlashVSR choice that cannot run here says why and cannot start', a
     settings: { ...mac.settings, device_id: 'cpu', selected_video_model_id: 'flashvsr_v11' },
   });
   await showPane(page, 'enhance');
+  await expect(page.locator('.video-models-link')).toHaveCount(0);
+  await expect(
+    page.locator('.plan-note').getByRole('button', { name: 'About Video models' }),
+  ).toBeVisible();
+  await page.locator('.plan-note').getByRole('button', { name: 'About Video models' }).click();
+  await expect(page.getByRole('tooltip').filter({ visible: true })).toContainText(
+    'Several frames at once:',
+  );
   await expect(page.locator('.inline-warning')).toHaveText(
     'FlashVSR cannot run on this device. Choose a frame-by-frame model or a compatible CUDA, ROCm or Metal device.',
   );
@@ -123,6 +161,7 @@ test('on a Windows PC each video model is judged by its own rule in the library'
     installed: ['span_photo_x4'],
   });
   await showPane(page, 'enhance');
+  await expect(page.locator('.video-models-link')).toHaveCount(0);
   await expect(page.locator('.model-output-note')).toHaveCount(0);
 
   const library = await openUpscalerLibrary(page);
@@ -156,6 +195,7 @@ test('in Photo upscale the library shows no video rows in For this job', async (
     },
   });
   await showPane(page, 'enhance');
+  await expect(page.locator('.video-models-link')).toHaveCount(0);
   const library = await openUpscalerLibrary(page);
   await expect(library.getByText('Several frames at once · Labs')).toHaveCount(0);
   await expect(library.getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ })).toHaveCount(0);

@@ -506,17 +506,7 @@
             class="live-checkbox"
             class:checked={Boolean(settings.low_priority)}
             aria-hidden="true"
-            >{#if settings.low_priority}<svg
-                viewBox="0 0 12 12"
-                width="10"
-                height="10"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"><path d="M2.5 6.2 5 8.7 9.5 3.5" /></svg
-              >{/if}</span
-          ><span class="live-setting-label">Run at low priority</span></span
+          ></span><span class="live-setting-label">Run at low priority</span></span
         ><HelpTip
           label="Run at low priority"
           text="Keeps other apps responsive while LocalSR works. Jobs take longer, on a Mac about twice as long. It applies to the running job and the whole queue, and you can switch it during a job. Settings holds the default for the next start of LocalSR."

@@ -85,6 +85,8 @@ def build_manifest() -> dict:
     for model in VIDEO_MODEL_CATALOG:
         entry = asdict(model)
         entry["files"] = [asdict(file) for file in model.files]
+        entry["quality_tier"] = int(model.quality_tier)
+        entry["speed_tier"] = int(model.speed_tier)
         entry.update(_license_policy(model.license_name, "allowed"))
         entry["engine_id"] = f"localsr.video.{model.engine_kind}"
         entry["support_tier"] = "labs"

@@ -10,9 +10,13 @@ from unittest.mock import patch
 import pytest
 
 from localsr.core.model_catalog import (
+    AUDIO_MODEL_CATALOG,
     CATALOG_BY_ID,
     FACE_DETECTOR_MODEL,
+    INTERPOLATION_MODEL_CATALOG,
     MODEL_CATALOG,
+    VIDEO_CATALOG_BY_ID,
+    VIDEO_MODEL_CATALOG,
     CatalogModel,
     ModelDownloadCancelled,
     ModelDownloadError,
@@ -253,6 +257,25 @@ def test_spandrel_compatible_models_metadata():
     assert nafnet_deblur.memory_factor == 0.75
     assert nafnet_deblur.quality_tier == QualityTier.HIGH
     assert "Single-image camera motion deblurring model" in nafnet_deblur.description
+
+
+def test_video_model_catalog_tiers():
+    seed_fp16 = VIDEO_CATALOG_BY_ID["seedvr2_3b"]
+    seed_fp8 = VIDEO_CATALOG_BY_ID["seedvr2_3b_fp8"]
+    flash = VIDEO_CATALOG_BY_ID["flashvsr_v11"]
+    assert (seed_fp16.quality_tier, seed_fp16.speed_tier) == (4, 0)
+    assert (seed_fp8.quality_tier, seed_fp8.speed_tier) == (4, 0)
+    assert (flash.quality_tier, flash.speed_tier) == (3, 1)
+
+    slowest_image_speed = min(model.speed_tier for model in MODEL_CATALOG)
+    for model in VIDEO_MODEL_CATALOG:
+        assert 1 <= model.quality_tier <= 4
+        assert 0 <= model.speed_tier <= 3
+        assert model.speed_tier <= slowest_image_speed
+
+    for model in (*INTERPOLATION_MODEL_CATALOG, *AUDIO_MODEL_CATALOG):
+        assert model.quality_tier == 0
+        assert model.speed_tier == 0
 
 
 def test_model_purpose_enum():

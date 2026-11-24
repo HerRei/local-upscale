@@ -50,6 +50,51 @@ test.describe('Settings: hardware', () => {
     await expect(page.locator('#settings-device optgroup')).toHaveCount(0);
   });
 
+  test('Run at low priority and Safe memory mode share one checkbox box style', async ({
+    page,
+  }) => {
+    await openApp(page, upscale);
+    await openAdvanced(page);
+    const lowPriorityBox = page.locator('#low-priority .live-checkbox');
+    const safeMemoryRow = page.locator('.check-row', { hasText: 'Safe memory mode' });
+    const safeMemoryBox = safeMemoryRow.locator('input[type="checkbox"]');
+
+    const measure = async () => {
+      const [low, safe] = await Promise.all([
+        lowPriorityBox.evaluate((el) => {
+          const rect = el.getBoundingClientRect();
+          const style = getComputedStyle(el);
+          return {
+            width: rect.width,
+            height: rect.height,
+            x: rect.x,
+            borderRadius: style.borderRadius,
+            borderTopColor: style.borderTopColor,
+            backgroundColor: style.backgroundColor,
+          };
+        }),
+        safeMemoryBox.evaluate((el) => {
+          const rect = el.getBoundingClientRect();
+          const style = getComputedStyle(el);
+          return {
+            width: rect.width,
+            height: rect.height,
+            x: rect.x,
+            borderRadius: style.borderRadius,
+            borderTopColor: style.borderTopColor,
+            backgroundColor: style.backgroundColor,
+          };
+        }),
+      ]);
+      expect(low).toEqual(safe);
+    };
+
+    await measure();
+    await page.locator('#low-priority').click();
+    await safeMemoryBox.check();
+    await measure();
+  });
+
   test('a saved GPU that is gone shows as the CPU, and Start sends the CPU', async ({ page }) => {
     await openApp(page, {
       ...upscale,

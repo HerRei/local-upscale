@@ -20,12 +20,13 @@ Two things change:
   (image models, the default, never labelled on the plan row) and *several frames at once*
   (SeedVR2, FlashVSR). "Whole clips" was rejected: in everyday use a clip is the whole video.
 - **Same list, own sub-list.** In "For this job" the video models follow the frame-by-frame
-  models under their own list head. They have no quality and speed tiers, are Labs and take
-  hours, so ranking them among the others would mislead.
+  models under their own list head. They keep their own sub-list, and show the same quality and
+  speed dots on the image models' scales (speed 0 = slower than any frame-by-frame model).
 - **Quick and Best stay frame-by-frame recipes.** A video model is always "chosen by you".
 - **Nothing about unavailable models in the main panel**, unless the unavailable model is
   the chosen one (a saved setting, a recipe, a changed device). Then one warning line under
-  the plan says why and Start is off. Reasons otherwise live in the library.
+  the plan says why and Start is off. Reasons otherwise live in the library. The plan row names
+  the video models that can run here in a link beside "N more models".
 - **An unavailable video model cannot be taken** ("Use for this job" is off), as an Edit
   model that is too heavy cannot. It can still be downloaded, as Edit models can.
 - **The settings fields keep their meaning**: an image model is

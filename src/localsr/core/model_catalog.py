@@ -827,6 +827,10 @@ class CatalogVideoModel:
     temporal_window: int
     temporal_overlap: int
     summary: str = ""
+    # The library's dots, on the image models' scales: quality 1 to 4, speed 0 to 3.
+    # Speed 0 is slower than any frame-by-frame model. Quality 0 means not rated.
+    quality_tier: int = 0
+    speed_tier: int = 0
 
     @property
     def total_size_bytes(self) -> int:
@@ -887,6 +891,8 @@ VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
         min_vram_gb=16,
         temporal_window=9,
         temporal_overlap=2,
+        quality_tier=QualityTier.ULTRA,
+        speed_tier=0,
     ),
     CatalogVideoModel(
         model_id="seedvr2_3b_fp8",
@@ -918,6 +924,8 @@ VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
         min_vram_gb=12,
         temporal_window=9,
         temporal_overlap=2,
+        quality_tier=QualityTier.ULTRA,
+        speed_tier=0,
     ),
     CatalogVideoModel(
         model_id="flashvsr_v11",
@@ -963,6 +971,8 @@ VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
         # 37 frames + 4 repeated = 41 = 8*5 + 1: the stream yields exactly 37 frames.
         temporal_window=37,
         temporal_overlap=8,
+        quality_tier=QualityTier.MAXIMUM,
+        speed_tier=SpeedTier.SLOW,
     ),
 )
 VIDEO_CATALOG_BY_ID = {model.model_id: model for model in VIDEO_MODEL_CATALOG}

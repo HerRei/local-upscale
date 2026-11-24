@@ -945,7 +945,8 @@ input:focus-visible {
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
-.try-others {
+.try-others,
+.video-models-link {
   position: relative;
   display: flex;
   align-items: center;
@@ -953,7 +954,8 @@ input:focus-visible {
 }
 /* The anchor is only as wide as the link, so the text needs a width of its own; the link
    row does not wrap, the text does. */
-.try-others .help-tip-text {
+.try-others .help-tip-text,
+.video-models-link .help-tip-text {
   right: 0;
   left: auto;
   width: min(280px, 80vw);
@@ -1807,21 +1809,57 @@ input[type='number'],
   outline-offset: 2px;
   border-radius: var(--radius);
 }
+/* One drawn checkbox for the whole app. "Run at low priority" cannot be an <input>: the
+   fieldset that locks the settings during a job would disable it. So its box and every real
+   checkbox share this rule instead of the platform's look. Switches have their own. */
+:where(input[type='checkbox']:not(.switch)),
 .live-checkbox {
+  position: relative;
   flex: none;
-  display: grid;
-  place-items: center;
+  display: inline-block;
+  box-sizing: border-box;
   width: 13px;
   height: 13px;
-  /* The same outer margins as a native checkbox, so the box lines up with the rows above. */
-  margin: 0 3px 0 4px;
-  border: 1px solid var(--control-accent);
+  /* Fix the margin at zero specificity (WebKit's UA default is 3px 2px, Chromium's 3px 3px 3px 4px)
+     so .live-checkbox lines up on every engine while .trial-row input { margin: 0 } still wins. */
+  margin: 3px 3px 3px 4px;
+  border: 1px solid var(--accent-line);
   border-radius: var(--radius);
   background: var(--recess);
-  color: var(--base);
+  appearance: none;
+  -webkit-appearance: none;
 }
+.live-checkbox {
+  /* The same outer margins as an <input>, so the box lines up with the rows around it. */
+  margin: 0 3px 0 4px;
+}
+:where(input[type='checkbox']:not(.switch)):checked,
 .live-checkbox.checked {
+  border-color: var(--control-accent);
   background: var(--control-accent);
+}
+:where(input[type='checkbox']:not(.switch)):checked::before,
+.live-checkbox.checked::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--base);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 6.2 5 8.7 9.5 3.5'/%3E%3C/svg%3E")
+    center / 10px 10px no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 6.2 5 8.7 9.5 3.5'/%3E%3C/svg%3E")
+    center / 10px 10px no-repeat;
+}
+:where(input[type='checkbox']:not(.switch)):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+:where(input[type='checkbox']:not(.switch)):disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+/* A locked pane dims the whole label, box included; the box is not dimmed a second time. */
+.processing-settings:disabled label input[type='checkbox'] {
+  opacity: 1;
 }
 .path-text {
   overflow-wrap: anywhere;
@@ -3298,6 +3336,7 @@ input[type='number'],
 }
 .plan-links {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -3307,11 +3346,13 @@ input[type='number'],
   font-size: calc(12px * var(--ui-scale));
 }
 .plan-links .link-button,
-.plan-links .try-others {
+.plan-links .try-others,
+.plan-links .video-models-link {
   flex: none;
   white-space: nowrap;
 }
-.plan-links .try-others {
+.plan-links .try-others,
+.plan-links .video-models-link {
   margin-left: auto;
 }
 .plan-note {
@@ -3323,6 +3364,10 @@ input[type='number'],
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
   line-height: 1.4;
+}
+.plan-note:has(.help-tip) {
+  display: block;
+  overflow: visible;
 }
 .plan-end {
   display: flex;
@@ -3573,6 +3618,7 @@ input[type='number'],
   border-right: 1px solid var(--hairline);
 }
 .list-head {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3583,9 +3629,13 @@ input[type='number'],
   font-size: calc(11px * var(--ui-scale));
   font-weight: 600;
 }
-.list-head span {
+.list-head > span {
   font-weight: 500;
   letter-spacing: 0;
+}
+.list-head .help-tip-text {
+  right: 16px;
+  left: 16px;
 }
 .trial-hint {
   margin: 0;

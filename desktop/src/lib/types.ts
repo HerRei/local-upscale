@@ -132,6 +132,9 @@ export interface CatalogVideoModel {
   temporal_window: number;
   temporal_overlap: number;
   summary?: string;
+  /** The library's dots, rated for video models only: quality 1–4, speed 0–3. */
+  quality_tier?: number;
+  speed_tier?: number;
   commercial_use_allowed: boolean | null;
   automated_download_allowed: boolean;
   terms_acceptance_required: boolean;

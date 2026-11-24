@@ -103,7 +103,14 @@
   import { applyWorkerEnvelope, resultPreviewForSelectedMedia } from './lib/workerEvents';
   import { formatBytes, formatDuration, formatVideoClock } from './lib/format';
   import { plainEngineError, recommendedEngineOffer } from './lib/engines';
-  import { videoAvailability, videoModelShortName, videoModelsForJob } from './lib/videoEngines';
+  import {
+    FRAME_BY_FRAME_TIP,
+    SEVERAL_FRAMES_TIP,
+    videoAvailability,
+    videoEngineName,
+    videoModelShortName,
+    videoModelsForJob,
+  } from './lib/videoEngines';
   import { demoSnapshot } from './lib/demo';
   import { modal } from './lib/modal';
   import {
@@ -583,6 +590,7 @@
   let libraryContext: {
     slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit' | 'try';
     fix?: Exclude<FixKind, 'faces'>;
+    select?: string;
   } = { slot: 'browse' };
   let settingsOpen = false;
   let settingsSection: SettingsSection = 'general';
@@ -2248,12 +2256,13 @@
   function openLibrary(
     slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit' | 'try',
     fix = settings.fix_stages.at(-1)?.fix,
+    select?: string,
   ): void {
     // Restore's model is the fix itself, so with a chip on it is chosen like one.
     libraryContext =
       slot === 'fix' || ((slot === 'primary' || slot === 'try') && restoring && fix)
-        ? { slot, fix }
-        : { slot };
+        ? { slot, fix, select }
+        : { slot, select };
     // Try others… keeps the settings the plan card shows now, whatever the
     // library changes before the runs are queued.
     trialBase =
@@ -4955,6 +4964,17 @@
                             model.model_id !== stage.videoModel?.model_id,
                         ).length
                       : 0}
+                  {@const runnableVideoModels =
+                    changeSlot === 'primary' && stage.model
+                      ? videoModelsForJob(snapshot.catalog, settings.task, videoTask).filter(
+                          (model) => !videoAvailable[model.model_id],
+                        )
+                      : []}
+                  {@const videoNames = [
+                    ...new Set(
+                      runnableVideoModels.map((model) => videoEngineName(model.engine_kind)),
+                    ),
+                  ].join(', ')}
                   {@const moreModelCount =
                     changeSlot && settings.task !== 'edit'
                       ? modelsAvailableBeyondSelection(
@@ -5111,7 +5131,9 @@
                         >
                       {/if}
                     </div>
-                    {#if moreModelCount || tryOthers}<div class="plan-links">
+                    {#if moreModelCount || tryOthers || runnableVideoModels.length}<div
+                        class="plan-links"
+                      >
                         {#if moreModelCount}<button
                             class="link-button"
                             type="button"
@@ -5135,6 +5157,25 @@
                               text="Runs this image once per model you pick, with the same settings. Each result is kept as its own file, and Showing in the preview lets you flip between them."
                             /></span
                           >{/if}
+                        {#if runnableVideoModels.length}<span class="video-models-link"
+                            ><button
+                              class="link-button"
+                              type="button"
+                              aria-label={`${videoNames} in the model library`}
+                              on:click={() =>
+                                openLibrary(
+                                  'primary',
+                                  stage.fix,
+                                  (
+                                    runnableVideoModels.find((model) => model.installed) ??
+                                    runnableVideoModels[0]
+                                  ).model_id,
+                                )}>{videoNames}…</button
+                            ><HelpTip
+                              label="Video models"
+                              text={`${SEVERAL_FRAMES_TIP} ${FRAME_BY_FRAME_TIP}`}
+                            /></span
+                          >{/if}
                       </div>{/if}
                     {#if meta || warning || stage.custom !== undefined}<p
                         class="plan-note"
@@ -5145,7 +5186,12 @@
                         {#if stage.custom !== undefined}<span class="path-text"
                             >{settings.custom_model_path ||
                               'Safetensors is strongly recommended.'}</span
-                          >{:else}{meta}{#if meta && warning}{' · '}{/if}{#if warning}<span
+                          >{:else}{#if stage.videoModel}<span class="label-with-tip"
+                              >{meta}<HelpTip
+                                label="Video models"
+                                text={`${SEVERAL_FRAMES_TIP} ${FRAME_BY_FRAME_TIP}`}
+                              /></span
+                            >{:else}{meta}{/if}{#if meta && warning}{' · '}{/if}{#if warning}<span
                               >{warning}</span
                             >{/if}{/if}
                       </p>{/if}
@@ -5586,6 +5632,7 @@
       quality: activeQuality,
       slot: libraryContext.slot,
       fix: libraryContext.fix,
+      select: libraryContext.select,
     }}
     device={activeDevice}
     downloads={activeDownloads}

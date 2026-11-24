@@ -101,6 +101,11 @@ pub struct CatalogVideoModel {
     pub temporal_overlap: u32,
     #[serde(default)]
     pub summary: String,
+    /// The library's dots for video models; 0 where a model is not rated.
+    #[serde(default)]
+    pub quality_tier: u32,
+    #[serde(default)]
+    pub speed_tier: u32,
     pub commercial_use_allowed: Option<bool>,
     pub automated_download_allowed: bool,
     pub terms_acceptance_required: bool,
