@@ -639,7 +639,7 @@ test.describe('contrast and targets', () => {
       labsRow.locator('.pill.labs'),
     ])
       expect(await contrastOnPage(label)).toBeGreaterThanOrEqual(4.5);
-    const bestRow = library.getByRole('button', { name: /PULSE-96x12/ });
+    const bestRow = library.getByRole('button', { name: /LocalSR Photo M/ });
     await bestRow.click();
     expect(await contrastOnPage(bestRow.locator('.pill.best'))).toBeGreaterThanOrEqual(4.5);
   });

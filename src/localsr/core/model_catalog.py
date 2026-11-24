@@ -430,7 +430,7 @@ MODEL_CATALOG = (
         model_id="localsr_quick_x4_v1",
         role="Fast everyday photos; Neural Engine and tiny download",
         stage="upscale",
-        name="4xLocalSRPhoto PULSE-64x8 (Photo S)",
+        name="LocalSR Photo S (PULSE 64×8)",
         filename="4xLocalSRPhoto_PULSE-64x8.safetensors",
         description=(
             "Compact ×4 photo upscaler (PULSE, 0.62M parameters) trained on CC0 photos. "
@@ -461,7 +461,7 @@ MODEL_CATALOG = (
         model_id="localsr_best_x4_v1",
         role="Detailed photos and soft camera shots; Neural Engine",
         stage="upscale",
-        name="4xLocalSRPhoto PULSE-96x12 (Photo M)",
+        name="LocalSR Photo M (PULSE 96×12)",
         filename="4xLocalSRPhoto_PULSE-96x12.safetensors",
         description=(
             "×4 photo upscaler (PULSE, 2.03M parameters) trained on CC0 photos including a "
