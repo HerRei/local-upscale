@@ -1,8 +1,8 @@
 # PULSE vendored code — attribution
 
 This directory contains the PULSE inference network and a Spandrel loader for
-it, so that LocalSR's own models (`localsr-quick-x4-v1` and
-`localsr-best-x4-v1`) as well as users' own PULSE checkpoints load cleanly.
+it, so that LocalSR's own models (`4xLocalSRPhoto_PULSE-64x8` and
+`4xLocalSRPhoto_PULSE-96x12`) as well as users' own PULSE checkpoints load cleanly.
 
 ## `arch.py`: the network (MIT)
 
@@ -24,8 +24,8 @@ it, so that LocalSR's own models (`localsr-quick-x4-v1` and
 ## Weights and training data
 
 Weights are not bundled in the application package. The catalog downloads the
-pinned `localsr-quick-x4-v1.safetensors` and `localsr-best-x4-v1.safetensors`
-files from `HerRei/localsr-models` release `v1` (MIT) with size and SHA-256
+pinned `4xLocalSRPhoto_PULSE-64x8.safetensors` and `4xLocalSRPhoto_PULSE-96x12.safetensors`
+files from `HerRei/localsr-models` release `v1` (weights CC BY 4.0, see `LICENSE-WEIGHTS` there) with size and SHA-256
 verification, and users may also load their own PULSE `.safetensors`
 checkpoints.
 

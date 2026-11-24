@@ -121,7 +121,7 @@ own terms; this file is a distribution notice, not a replacement for their licen
   LocalSR's modifications are in `src/localsr/image_models/heart/NOTICE.md`. No HEART weights
   are included; users load their own checkpoints.
 - **PULSE architecture and LocalSR ×4 models**: `pulse_arch.py` and the optional
-  `localsr-quick-x4-v1` / `localsr-best-x4-v1` weights (`HerRei/localsr-models` release `v1`, MIT)
+  `4xLocalSRPhoto_PULSE-64x8` / `4xLocalSRPhoto_PULSE-96x12` weights (`HerRei/localsr-models` release `v1`, CC BY 4.0; attribution: "LocalSR models by Hermes Reisner (https://github.com/HerRei/localsr-models), CC BY 4.0")
   follow Philip Hofmann's PULSE layout specification (`huggingface.co/Phips/PULSE`, MIT) as an
   independent reimplementation trained on `Phips/lucid-cc0-v2-hc` (CC0 photos from pxhere).
   Attribution and MIT text are in `src/localsr/image_models/pulse/NOTICE.md`; weights are optional

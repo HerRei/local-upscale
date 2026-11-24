@@ -147,12 +147,15 @@ checkpoint rights.
 
 ### LocalSR Quick ×4 and LocalSR Best ×4 (`localsr_quick_x4_v1`, `localsr_best_x4_v1`)
 
-- Exact upstream assets: `localsr-quick-x4-v1.safetensors` and `localsr-best-x4-v1.safetensors`
+- Exact upstream assets: `4xLocalSRPhoto_PULSE-64x8.safetensors` and `4xLocalSRPhoto_PULSE-96x12.safetensors`
   from LocalSR's own [localsr-models `v1` release](https://github.com/HerRei/localsr-models/releases/tag/v1).
 - Sizes: `2,479,832` and `8,142,696` bytes.
-- SHA-256: `853741ef91cfc165776c533fe2a4ac058f8913a429beb2ef3146154d71335378` and
-  `0756cc240843bd3472d7a7b0547e011e14d1b5339b68fb93b0a7246564dfd7f6`.
-- Code and checkpoint terms: [MIT](https://github.com/HerRei/localsr-models/blob/main/LICENSE).
+- SHA-256: `73e4b540753cbe8ba2897cef2c6c3e8e51436835fa6c67217a997c3e1b13ea17` and
+  `5446207377284658a3c306dd5eac0aa2662f4f9344ee10f59ea3ab4ec67c18c1`.
+- Weights: [CC BY 4.0](https://github.com/HerRei/localsr-models/blob/main/LICENSE-WEIGHTS); commercial use
+  allowed with attribution: *LocalSR models by Hermes Reisner
+  (https://github.com/HerRei/localsr-models), CC BY 4.0*. The PULSE code is MIT
+  ([LICENSE](https://github.com/HerRei/localsr-models/blob/main/LICENSE)).
 - Training data: Philip Hofmann's
   [`lucid-cc0-v2-hc`](https://huggingface.co/datasets/Phips/lucid-cc0-v2-hc) (CC0 photographs from
   pxhere); nothing else was used for training. DINOv2 (Apache-2.0) was used as a training loss only

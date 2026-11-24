@@ -139,15 +139,15 @@ def test_one_cpu_tile_through_the_engine_matches_the_network(checkpoints, tmp_pa
 
 @pytest.mark.skipif(
     not (OWN_DIR / "pulse_arch.py").exists()
-    or not (OWN_DIR / "localsr-quick-x4-v1.safetensors").exists()
-    or not (OWN_DIR / "localsr-best-x4-v1.safetensors").exists(),
+    or not (OWN_DIR / "4xLocalSRPhoto_PULSE-64x8.safetensors").exists()
+    or not (OWN_DIR / "4xLocalSRPhoto_PULSE-96x12.safetensors").exists(),
     reason="local .own/ reference files are not present",
 )
 @pytest.mark.parametrize(
     ("filename", "dim", "n_blocks"),
     [
-        ("localsr-quick-x4-v1.safetensors", 64, 8),
-        ("localsr-best-x4-v1.safetensors", 96, 12),
+        ("4xLocalSRPhoto_PULSE-64x8.safetensors", 64, 8),
+        ("4xLocalSRPhoto_PULSE-96x12.safetensors", 96, 12),
     ],
 )
 def test_vendored_pulse_loads_real_files_and_matches_reference(filename, dim, n_blocks):

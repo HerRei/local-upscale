@@ -263,35 +263,35 @@ def test_spandrel_compatible_models_metadata():
     # 5. LocalSR Quick and Best (PULSE)
     localsr_quick = CATALOG_BY_ID.get("localsr_quick_x4_v1")
     assert localsr_quick is not None
-    assert localsr_quick.name == "LocalSR Quick ×4"
+    assert localsr_quick.name == "4xLocalSRPhoto PULSE-64x8 (Photo S)"
     assert localsr_quick.architecture == "PULSE"
     assert localsr_quick.scale == 4
     assert localsr_quick.purposes == (ModelPurpose.PHOTO,)
-    assert localsr_quick.size_bytes == 2_479_832
+    assert localsr_quick.size_bytes == 2_479_984
     assert (
-        localsr_quick.sha256 == "853741ef91cfc165776c533fe2a4ac058f8913a429beb2ef3146154d71335378"
+        localsr_quick.sha256 == "73e4b540753cbe8ba2897cef2c6c3e8e51436835fa6c67217a997c3e1b13ea17"
     )
     assert (
         localsr_quick.download_url
-        == "https://github.com/HerRei/localsr-models/releases/download/v1/localsr-quick-x4-v1.safetensors"
+        == "https://github.com/HerRei/localsr-models/releases/download/v1/4xLocalSRPhoto_PULSE-64x8.safetensors"
     )
-    assert localsr_quick.license_name == "MIT"
+    assert localsr_quick.license_name == "CC BY 4.0"
     assert localsr_quick.author == "Hermes Reisner · LocalSR"
     assert localsr_quick.source_url == "https://github.com/HerRei/localsr-models"
 
     localsr_best = CATALOG_BY_ID.get("localsr_best_x4_v1")
     assert localsr_best is not None
-    assert localsr_best.name == "LocalSR Best ×4"
+    assert localsr_best.name == "4xLocalSRPhoto PULSE-96x12 (Photo M)"
     assert localsr_best.architecture == "PULSE"
     assert localsr_best.scale == 4
     assert localsr_best.purposes == (ModelPurpose.PHOTO,)
-    assert localsr_best.size_bytes == 8_142_696
-    assert localsr_best.sha256 == "0756cc240843bd3472d7a7b0547e011e14d1b5339b68fb93b0a7246564dfd7f6"
+    assert localsr_best.size_bytes == 8_142_848
+    assert localsr_best.sha256 == "5446207377284658a3c306dd5eac0aa2662f4f9344ee10f59ea3ab4ec67c18c1"
     assert (
         localsr_best.download_url
-        == "https://github.com/HerRei/localsr-models/releases/download/v1/localsr-best-x4-v1.safetensors"
+        == "https://github.com/HerRei/localsr-models/releases/download/v1/4xLocalSRPhoto_PULSE-96x12.safetensors"
     )
-    assert localsr_best.license_name == "MIT"
+    assert localsr_best.license_name == "CC BY 4.0"
     assert localsr_best.author == "Hermes Reisner · LocalSR"
     assert localsr_best.source_url == "https://github.com/HerRei/localsr-models"
 
