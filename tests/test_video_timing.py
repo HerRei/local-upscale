@@ -389,3 +389,180 @@ def test_cancel_during_remux_preserves_existing_destination(tmp_path):
         )
     assert output.read_bytes() == b"existing user output"
     assert not list(tmp_path.glob(".localsr-*.tmp"))
+
+
+def _write_non_monotonic_vp9_mp4(
+    path,
+    pts_ticks=(0, 1001, 1001, 3003, 2900, 5005, 6006, 7007),
+    dts_ticks=(0, 500, 1001, 2002, 2900, 5005, 6006, 7007),
+):
+    with av.open(str(path), "w") as container:
+        stream = container.add_stream("libvpx-vp9", rate=Fraction(30000, 1001))
+        stream.width, stream.height, stream.pix_fmt = 48, 32, "yuv420p"
+        stream.time_base = Fraction(1, 30000)
+        stream.codec_context.time_base = Fraction(1, 30000)
+        stream.options = {"lossless": "1", "lag-in-frames": "0"}
+        for index, (pts, dts) in enumerate(zip(pts_ticks, dts_ticks, strict=True)):
+            rgb = np.full((32, 48, 3), (index * 30) % 256, dtype=np.uint8)
+            frame = av.VideoFrame.from_ndarray(rgb, format="rgb24")
+            frame.pts, frame.time_base = index * 1001, Fraction(1, 30000)
+            for packet in stream.encode(frame):
+                packet.pts = pts
+                packet.dts = dts
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+    return path
+
+
+def _write_non_monotonic_h264_mp4(path):
+    raw = path.with_name(f"{path.stem}-raw{path.suffix}")
+    ffmpeg(
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=64x48:rate=30000/1001,trim=end_frame=8",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:sample_rate=48000:duration=0.4",
+        "-c:v",
+        "libx264",
+        "-bf",
+        "0",
+        "-video_track_timescale",
+        "30000",
+        "-c:a",
+        "aac",
+        "-shortest",
+        raw,
+    )
+    ffmpeg(
+        "-y",
+        "-i",
+        raw,
+        "-c:v",
+        "copy",
+        "-bsf:v",
+        r"setts=pts=if(eq(N\,2)\,1001\,if(eq(N\,4)\,2900\,PTS)):dts=N*100",
+        "-c:a",
+        "copy",
+        path,
+    )
+    raw.unlink()
+    return path
+
+
+def test_non_monotonic_source_pts_encode_succeeds_without_drift(tmp_path, caplog):
+    source = _write_non_monotonic_vp9_mp4(tmp_path / "non-monotonic.mp4")
+    output = tmp_path / "output.mp4"
+    with caplog.at_level("INFO", logger="localsr.core.video_io"):
+        result = run_standard(source, output)
+    assert result.frames_processed == 8
+    out_times = timestamps(output)
+    assert len(out_times) == 8
+    assert all(left < right for left, right in zip(out_times, out_times[1:], strict=False))
+    # Subsequent well-formed frames keep their source timestamps instead of drifting.
+    assert out_times[5:] == pytest.approx([5005 / 30000, 6006 / 30000, 7007 / 30000], abs=0.001)
+    assert any("Retimed 2" in record.message for record in caplog.records)
+
+
+def test_h264_non_monotonic_pts_end_to_end_with_audio(tmp_path):
+    from localsr.core.external_ffmpeg import load_external_ffmpeg
+
+    binary = shutil.which("ffmpeg")
+    if not binary:
+        pytest.skip("FFmpeg needed to create H.264 MP4 fixture")
+    source = _write_non_monotonic_h264_mp4(tmp_path / "h264-non-monotonic.mp4")
+    output = tmp_path / "output.mp4"
+    result = run_standard(
+        source,
+        output,
+        external_ffmpeg=load_external_ffmpeg(binary),
+        temporary_directory=str(tmp_path),
+    )
+    assert result.frames_processed == 8
+    out_times = timestamps(output)
+    assert len(out_times) == 8
+    assert all(left < right for left, right in zip(out_times, out_times[1:], strict=False))
+    assert out_times[5:] == pytest.approx([5005 / 30000, 6006 / 30000, 7007 / 30000], abs=0.002)
+    with av.open(str(output)) as container:
+        assert len(container.streams.audio) == 1
+
+
+@pytest.mark.parametrize("target", ["x2", "fps60"])
+def test_non_monotonic_source_pts_works_with_interpolation(tmp_path, target):
+    from test_frame_interpolation import RecordingSynthesizer
+
+    source = _write_non_monotonic_vp9_mp4(tmp_path / f"non-monotonic-{target}.mp4")
+    output = tmp_path / f"interp-{target}.mp4"
+    run_video_job(
+        VideoJobConfig(
+            str(source),
+            "test",
+            str(output),
+            SimpleNamespace(scale=1),
+            "cpu",
+            "fp32",
+            64,
+            4,
+            False,
+            interpolation=target,
+        ),
+        IdentityEngine(),
+        threading.Event(),
+        synthesizer=RecordingSynthesizer(),
+    )
+    out_times = timestamps(output)
+    assert len(out_times) >= 8
+    assert all(left < right for left, right in zip(out_times, out_times[1:], strict=False))
+
+
+def test_non_monotonic_source_pts_partial_result_and_compare_pairing(tmp_path, caplog):
+    source = _write_non_monotonic_vp9_mp4(tmp_path / "non-monotonic-partial.mp4")
+    output = tmp_path / "output.mp4"
+    cancel = threading.Event()
+    paired_sources = []
+    paired_enhanced = []
+
+    class CancellingEngine(IdentityEngine):
+        def process_frame(self, *, img_tensor, **kwargs):
+            if len(paired_enhanced) == 4:
+                cancel.set()
+                raise InterruptedError("cancelled mid-job")
+            return super().process_frame(img_tensor=img_tensor, **kwargs)
+
+    result = run_video_job(
+        VideoJobConfig(
+            str(source),
+            "test",
+            str(output),
+            SimpleNamespace(scale=1),
+            "cpu",
+            "fp32",
+            64,
+            4,
+            False,
+            keep_partial=True,
+        ),
+        CancellingEngine(),
+        cancel,
+        source_frame_cb=lambda idx, total, rgb: paired_sources.append((idx, total, rgb.shape)),
+        enhanced_frame_cb=lambda idx, total, rgb: paired_enhanced.append((idx, total, rgb.shape)),
+    )
+    assert result.partial is True
+    assert result.kept_frames >= 1
+    assert result.kept_seconds > 0.0
+    assert [item[0] for item in paired_enhanced] == list(range(len(paired_enhanced)))
+    assert paired_sources[: len(paired_enhanced)] == paired_enhanced
+    partial_times = timestamps(result.output_path)
+    assert all(left < right for left, right in zip(partial_times, partial_times[1:], strict=False))
+
+    # Trimming before an out-of-range non-increasing frame does not log a retime.
+    caplog.clear()
+    with caplog.at_level("INFO", logger="localsr.core.video_io"):
+        trimmed = list(decode_timed_frames(str(source), start_frame=0, end_frame=1))
+    assert len(trimmed) == 2
+    assert trimmed[1].duration > 0
+    assert not [r for r in caplog.records if "Retimed" in r.message]
