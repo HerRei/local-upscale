@@ -102,7 +102,6 @@
   let frameVideo: HTMLVideoElement | undefined;
   let animationId: number | undefined;
   let preparationQueue = Promise.resolve();
-  let playbackStartedAt = 0;
 
   function updateTransport(): void {
     if (sync && sync.duration > 0) {
@@ -138,17 +137,9 @@
       frameVideo = master;
       frameId = master.requestVideoFrameCallback(update);
     }
-    // Keep animation-frame checks active while playback settles (audio pipeline startup on
-    // WebKit can delay master frame callbacks) and whenever an unfinished/shorter side can
-    // stop emitting frames before sync.duration.
-    if (
-      !master?.requestVideoFrameCallback ||
-      sync.limited ||
-      performance.now() - playbackStartedAt < 500 ||
-      (master && Number.isFinite(master.duration) && sync.time >= master.duration - 0.2)
-    ) {
-      animationId = requestAnimationFrame(update);
-    }
+    // A stalled master may stop emitting video frames without a waiting event.
+    // Keep a watchdog running so followers do not run away when that happens.
+    animationId = requestAnimationFrame(update);
   }
   function rebuild(): void {
     const time = sync && sync.duration > 0 ? sync.time : desiredTime;
@@ -188,7 +179,6 @@
   }
   async function start(): Promise<void> {
     wantedPlayback = true;
-    playbackStartedAt = performance.now();
     try {
       await sync?.play();
     } catch (error) {
