@@ -66,6 +66,8 @@ def test_catalog_has_all_curated_models():
         "nafnet_sidd_width64",
         "esrgan_hfa2k_x4",
         "realplksr_hfa2k_anime_x4",
+        "localsr_quick_x4_v1",
+        "localsr_best_x4_v1",
         "span_photo_x4",
         "realplksr_nomoswebphoto_x4",
         "realesrgan_x2plus",
@@ -81,11 +83,11 @@ def test_catalog_has_all_curated_models():
     ]
     catalog_ids = [model.model_id for model in MODEL_CATALOG]
     assert catalog_ids == expected_ids
-    assert len(MODEL_CATALOG) == 20
+    assert len(MODEL_CATALOG) == 22
 
     # Verify uniqueness of IDs and filenames
-    assert len({model.model_id for model in MODEL_CATALOG}) == 20
-    assert len({model.filename for model in MODEL_CATALOG}) == 20
+    assert len({model.model_id for model in MODEL_CATALOG}) == 22
+    assert len({model.filename for model in MODEL_CATALOG}) == 22
 
 
 def test_recent_same_size_rewrite_cannot_reuse_a_checksum_verdict(tmp_path, monkeypatch):
@@ -257,6 +259,41 @@ def test_spandrel_compatible_models_metadata():
     assert nafnet_deblur.memory_factor == 0.75
     assert nafnet_deblur.quality_tier == QualityTier.HIGH
     assert "Single-image camera motion deblurring model" in nafnet_deblur.description
+
+    # 5. LocalSR Quick and Best (PULSE)
+    localsr_quick = CATALOG_BY_ID.get("localsr_quick_x4_v1")
+    assert localsr_quick is not None
+    assert localsr_quick.name == "LocalSR Quick ×4"
+    assert localsr_quick.architecture == "PULSE"
+    assert localsr_quick.scale == 4
+    assert localsr_quick.purposes == (ModelPurpose.PHOTO,)
+    assert localsr_quick.size_bytes == 2_479_832
+    assert (
+        localsr_quick.sha256 == "853741ef91cfc165776c533fe2a4ac058f8913a429beb2ef3146154d71335378"
+    )
+    assert (
+        localsr_quick.download_url
+        == "https://github.com/HerRei/localsr-models/releases/download/v1/localsr-quick-x4-v1.safetensors"
+    )
+    assert localsr_quick.license_name == "MIT"
+    assert localsr_quick.author == "Hermes Reisner · LocalSR"
+    assert localsr_quick.source_url == "https://github.com/HerRei/localsr-models"
+
+    localsr_best = CATALOG_BY_ID.get("localsr_best_x4_v1")
+    assert localsr_best is not None
+    assert localsr_best.name == "LocalSR Best ×4"
+    assert localsr_best.architecture == "PULSE"
+    assert localsr_best.scale == 4
+    assert localsr_best.purposes == (ModelPurpose.PHOTO,)
+    assert localsr_best.size_bytes == 8_142_696
+    assert localsr_best.sha256 == "0756cc240843bd3472d7a7b0547e011e14d1b5339b68fb93b0a7246564dfd7f6"
+    assert (
+        localsr_best.download_url
+        == "https://github.com/HerRei/localsr-models/releases/download/v1/localsr-best-x4-v1.safetensors"
+    )
+    assert localsr_best.license_name == "MIT"
+    assert localsr_best.author == "Hermes Reisner · LocalSR"
+    assert localsr_best.source_url == "https://github.com/HerRei/localsr-models"
 
 
 def test_video_model_catalog_tiers():

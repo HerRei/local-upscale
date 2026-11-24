@@ -145,6 +145,22 @@ checkpoint rights.
 - Terms: [Apache-2.0](https://github.com/XPixelGroup/HAT/blob/main/LICENSE); the official
   repository publishes the pretrained models with no separate asset terms.
 
+### LocalSR Quick ×4 and LocalSR Best ×4 (`localsr_quick_x4_v1`, `localsr_best_x4_v1`)
+
+- Exact upstream assets: `localsr-quick-x4-v1.safetensors` and `localsr-best-x4-v1.safetensors`
+  from LocalSR's own [localsr-models `v1` release](https://github.com/HerRei/localsr-models/releases/tag/v1).
+- Sizes: `2,479,832` and `8,142,696` bytes.
+- SHA-256: `853741ef91cfc165776c533fe2a4ac058f8913a429beb2ef3146154d71335378` and
+  `0756cc240843bd3472d7a7b0547e011e14d1b5339b68fb93b0a7246564dfd7f6`.
+- Code and checkpoint terms: [MIT](https://github.com/HerRei/localsr-models/blob/main/LICENSE).
+- Training data: Philip Hofmann's
+  [`lucid-cc0-v2-hc`](https://huggingface.co/datasets/Phips/lucid-cc0-v2-hc) (CC0 photographs from
+  pxhere); nothing else was used for training. DINOv2 (Apache-2.0) was used as a training loss only
+  and is not part of the weights.
+- Architecture: independent MIT reimplementation of Philip Hofmann's
+  [PULSE](https://huggingface.co/Phips/PULSE) specification (`src/localsr/image_models/pulse/NOTICE.md`).
+  The weights come from LocalSR's own training runs, not Philip Hofmann's checkpoints.
+
 ### SPAN NomosUni and RealPLKSR Denoise (`span_photo_x4`, `denoise_realplksr_1x`)
 
 - Exact assets: `4xNomosUni_span_multijpg.pth` and `1xDeNoise_realplksr_otf.pth` from Philip
@@ -276,6 +292,10 @@ Spandrel 0.4.2 (MIT) loads most own checkpoints. Two newer architectures by Phil
   [Rift73/DRFT](https://github.com/Rift73/DRFT) MIT, and
   [dslisleedh/SST](https://github.com/dslisleedh/SST) MIT), with its MIT Spandrel loader from
   PR #334. Notices and modifications: `src/localsr/image_models/heart/NOTICE.md`.
+- **PULSE**: independent MIT reimplementation of Philip Hofmann's
+  [PULSE](https://huggingface.co/Phips/PULSE) specification from
+  [HerRei/localsr-models](https://github.com/HerRei/localsr-models) release `v1` (`pulse_arch.py`),
+  with a LocalSR Spandrel loader. Notices and modifications: `src/localsr/image_models/pulse/NOTICE.md`.
 
 The architecture code licence says nothing about a checkpoint's terms: each checkpoint's
 author sets those.

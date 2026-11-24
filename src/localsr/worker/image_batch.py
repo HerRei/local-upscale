@@ -2,7 +2,7 @@
 
 The desktop sends queued photos that share one model and every setting as one
 batch. On the Neural Engine route, for a model the Neural Engine runs (SPAN,
-Real-ESRGAN's RRDBNet, FBCNN), their tiles share one queue: two Neural Engine
+Real-ESRGAN's RRDBNet, FBCNN, PULSE), their tiles share one queue: two Neural Engine
 runners and, on AC power, two Core ML GPU runners pull from it at one fixed
 input shape, every photo is stitched on its own, and finished photos are saved
 by several encoder threads.
@@ -60,9 +60,9 @@ from localsr.worker.image_job import save_output
 from localsr.worker.job_progress import ImageJobProgress
 
 # Fixed input side per architecture, including tile core and overlap.
-BATCH_SIDES = {"SPAN": 384, "ESRGAN": 384, "FBCNN": 576}
+BATCH_SIDES = {"SPAN": 384, "ESRGAN": 384, "FBCNN": 576, "PULSE": 384}
 # Encoder thread counts accommodate the throughput of each architecture.
-ENCODERS = {"SPAN": 6}
+ENCODERS = {"SPAN": 6, "PULSE": 6}
 DEFAULT_ENCODERS = 4
 # What differs between the photos of one batch; everything else must be equal.
 _PHOTO_FIELDS = frozenset(

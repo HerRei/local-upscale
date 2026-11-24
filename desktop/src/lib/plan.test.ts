@@ -41,14 +41,12 @@ describe('model library resolution', () => {
       choosePresetModel(snapshot, 'upscale', 'best', 'photo', {
         'upscale/photo/best': 'fbcnn_color',
       })?.model_id,
-    ).toBe('realplksr_nomoswebphoto_x4');
+    ).toBe('localsr_best_x4_v1');
   });
 
   it('never lets Quick or Best pick a checkpoint with unresolved rights', () => {
     const snapshot = demoSnapshot();
-    const best = snapshot.catalog.models.find(
-      (model) => model.model_id === 'realplksr_nomoswebphoto_x4',
-    )!;
+    const best = snapshot.catalog.models.find((model) => model.model_id === 'localsr_best_x4_v1')!;
     snapshot.catalog.models.push({
       ...best,
       model_id: 'tempting_unverified_x4',
@@ -58,9 +56,7 @@ describe('model library resolution', () => {
       rights_status: 'unresolved',
       support_tier: 'labs',
     });
-    expect(choosePresetModel(snapshot, 'upscale', 'best')?.model_id).toBe(
-      'realplksr_nomoswebphoto_x4',
-    );
+    expect(choosePresetModel(snapshot, 'upscale', 'best')?.model_id).toBe('localsr_best_x4_v1');
   });
 
   it('maps fix chips to restoration checkpoints by quality', () => {
@@ -203,11 +199,11 @@ describe('model library resolution', () => {
       fixes: ['noise', 'blur'],
       preset_pins: {},
     };
-    expect(presetDownload('quick', snapshot, ui)).toBe('292 MB download');
+    expect(presetDownload('quick', snapshot, ui)).toBe('290 MB download');
 
-    snapshot.catalog.models.find((m) => m.model_id === 'span_photo_x4')!.installed = true;
+    snapshot.catalog.models.find((m) => m.model_id === 'localsr_quick_x4_v1')!.installed = true;
     expect(presetDownload('quick', snapshot, ui)).toBe('287 MB download');
-    expect(presetDownload('best', snapshot, ui)).toBe('730 MB download');
+    expect(presetDownload('best', snapshot, ui)).toBe('710 MB download');
 
     const sameSize = { ...ui, task: 'denoise' as const, output_scale: 1 };
     expect(presetDownload('quick', snapshot, sameSize)).toBe('287 MB download');

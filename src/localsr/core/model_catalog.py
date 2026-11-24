@@ -427,6 +427,68 @@ MODEL_CATALOG = (
         commercial_use_status="allowed",
     ),
     CatalogModel(
+        model_id="localsr_quick_x4_v1",
+        role="Fast everyday photos; Neural Engine and tiny download",
+        stage="upscale",
+        name="LocalSR Quick ×4",
+        filename="localsr-quick-x4-v1.safetensors",
+        description=(
+            "Compact ×4 photo upscaler (PULSE, 0.62M parameters) trained on CC0 photos. "
+            "Runs entirely on Apple's Neural Engine."
+        ),
+        size_bytes=2_479_832,
+        sha256="853741ef91cfc165776c533fe2a4ac058f8913a429beb2ef3146154d71335378",
+        download_url=(
+            "https://github.com/HerRei/localsr-models/releases/download/v1/"
+            "localsr-quick-x4-v1.safetensors"
+        ),
+        architecture="PULSE",
+        native_scale=4,
+        purposes=(ModelPurpose.PHOTO,),
+        quality_tier=QualityTier.HIGH,
+        speed_tier=SpeedTier.FAST,
+        recommended_halo=32,
+        source_url="https://github.com/HerRei/localsr-models",
+        license_name="MIT",
+        author="Hermes Reisner · LocalSR",
+        memory_factor=0.50,
+        time_factor=0.35,
+        speed_factor=0.98,
+        vram_estimate_mb=500,
+        commercial_use_status="allowed",
+    ),
+    CatalogModel(
+        model_id="localsr_best_x4_v1",
+        role="Detailed photos and soft camera shots; Neural Engine",
+        stage="upscale",
+        name="LocalSR Best ×4",
+        filename="localsr-best-x4-v1.safetensors",
+        description=(
+            "×4 photo upscaler (PULSE, 2.03M parameters) trained on CC0 photos including a "
+            "camera lens-blur regime. Runs entirely on Apple's Neural Engine."
+        ),
+        size_bytes=8_142_696,
+        sha256="0756cc240843bd3472d7a7b0547e011e14d1b5339b68fb93b0a7246564dfd7f6",
+        download_url=(
+            "https://github.com/HerRei/localsr-models/releases/download/v1/"
+            "localsr-best-x4-v1.safetensors"
+        ),
+        architecture="PULSE",
+        native_scale=4,
+        purposes=(ModelPurpose.PHOTO,),
+        quality_tier=QualityTier.ULTRA,
+        speed_tier=SpeedTier.MEDIUM,
+        recommended_halo=32,
+        source_url="https://github.com/HerRei/localsr-models",
+        license_name="MIT",
+        author="Hermes Reisner · LocalSR",
+        memory_factor=0.65,
+        time_factor=0.55,
+        speed_factor=0.88,
+        vram_estimate_mb=700,
+        commercial_use_status="allowed",
+    ),
+    CatalogModel(
         model_id="span_photo_x4",
         role="Fast everyday photos; seconds even on CPU",
         stage="upscale",
@@ -469,7 +531,7 @@ MODEL_CATALOG = (
         architecture="RealPLKSR",
         native_scale=4,
         purposes=(ModelPurpose.PHOTO, ModelPurpose.GENERAL),
-        quality_tier=QualityTier.ULTRA,
+        quality_tier=QualityTier.MAXIMUM,
         speed_tier=SpeedTier.MEDIUM,
         recommended_halo=16,
         source_url="https://huggingface.co/Phips/4xNomosWebPhoto_RealPLKSR",

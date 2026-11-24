@@ -657,6 +657,43 @@ def test_real_conversion_runs_and_matches_pytorch(tmp_path, monkeypatch):
     assert converted.model.active_unit in {NEURAL_ENGINE, CORE_ML_GPU}
 
 
+@pytest.mark.skipif(not coreml_available(), reason="needs Core ML on Apple silicon")
+def test_real_pulse_conversion_runs_and_matches_pytorch(tmp_path, monkeypatch):
+    from localsr.core.model_adapter import MODEL_REGISTRY
+    from localsr.image_models.pulse import PULSE
+
+    monkeypatch.setenv(coreml_runtime.CACHE_ENV, str(tmp_path))
+    monkeypatch.setattr(
+        coreml_runtime._CoreMLImage,
+        "_time",
+        staticmethod(lambda function, synchronize=None, repeats=2: 1.0),
+    )
+    torch.manual_seed(0)
+    network = PULSE(dim=16, scale=4, n_blocks=2).eval()
+    original = (
+        spandrel.ModelLoader(registry=MODEL_REGISTRY)
+        .load_from_state_dict(network.state_dict())
+        .eval()
+    )
+    assert original.architecture.name == "PULSE"
+    converted = CoreMLImageDescriptor(
+        original, units=(NEURAL_ENGINE, CORE_ML_GPU), identity="pulse"
+    )
+    sample = image(24, 24)[None]
+    converted.prepare_tiles(16, 4)
+    output = converted(sample)
+    expected = padded_reference(original, sample, 32)
+    assert output.shape == expected.shape == (1, 3, 96, 96)
+    error = float(torch.mean((output.clamp(0, 1) - expected.clamp(0, 1)) ** 2))
+    assert error < 1e-4
+    verdicts = json.loads(next(tmp_path.glob("PULSE-*/verdicts.json")).read_text())
+    assert verdicts[next(iter(verdicts))]["accepted"]
+    if importlib.util.find_spec("CoreML") is not None:
+        state = next(iter(converted.model.states.values()))
+        assert isinstance(state["runner"], coreml_runtime._NativeRunner)
+    assert converted.model.active_unit in {NEURAL_ENGINE, CORE_ML_GPU}
+
+
 def test_gate_times_fallback_on_fallback_device(fake_coreml, monkeypatch):
     devices = []
     converted = CoreMLImageDescriptor(fake_coreml.original, units=(NEURAL_ENGINE,), identity="sync")

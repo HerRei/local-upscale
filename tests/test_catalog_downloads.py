@@ -36,6 +36,8 @@ def test_catalog_has_pinned_optional_downloads():
         "nafnet_sidd_width64",
         "esrgan_hfa2k_x4",
         "realplksr_hfa2k_anime_x4",
+        "localsr_quick_x4_v1",
+        "localsr_best_x4_v1",
         "span_photo_x4",
         "realplksr_nomoswebphoto_x4",
         "realesrgan_x2plus",
@@ -49,7 +51,7 @@ def test_catalog_has_pinned_optional_downloads():
         "realwebphoto_v4_dat2_x4",
         "ddcolor_modelscope",
     ]
-    assert len({model.filename for model in MODEL_CATALOG}) == 20
+    assert len({model.filename for model in MODEL_CATALOG}) == 22
     upstream_hat = [
         model
         for model in MODEL_CATALOG

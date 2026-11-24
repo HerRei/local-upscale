@@ -120,6 +120,12 @@ own terms; this file is a distribution notice, not a replacement for their licen
   Copyright (c) 2024 The ChaiNNer Organization) at commit `2778b9f8`. All licence texts and
   LocalSR's modifications are in `src/localsr/image_models/heart/NOTICE.md`. No HEART weights
   are included; users load their own checkpoints.
+- **PULSE architecture and LocalSR ×4 models**: `pulse_arch.py` and the optional
+  `localsr-quick-x4-v1` / `localsr-best-x4-v1` weights (`HerRei/localsr-models` release `v1`, MIT)
+  follow Philip Hofmann's PULSE layout specification (`huggingface.co/Phips/PULSE`, MIT) as an
+  independent reimplementation trained on `Phips/lucid-cc0-v2-hc` (CC0 photos from pxhere).
+  Attribution and MIT text are in `src/localsr/image_models/pulse/NOTICE.md`; weights are optional
+  checksum-pinned downloads and are not included in installers.
 - **Curated checkpoints** — each catalog entry shows its author, source, and license before
   download. CC-BY checkpoints require attribution. The official Real-ESRGAN ×2 project/asset is
   recorded as BSD-3-Clause and the official FBCNN project/model-zoo asset as Apache-2.0. The HAT-S

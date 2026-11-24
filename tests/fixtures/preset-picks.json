@@ -1,6 +1,34 @@
 {
   "models": [
     {
+      "model_id": "localsr_quick_x4_v1",
+      "purposes": [
+        "photo"
+      ],
+      "native_scale": 4,
+      "quality_tier": 2,
+      "speed_tier": 3,
+      "speed_factor": 1.5,
+      "memory_factor": 0.4,
+      "size_bytes": 2479832,
+      "commercial_use_allowed": true,
+      "preset_eligible": true
+    },
+    {
+      "model_id": "localsr_best_x4_v1",
+      "purposes": [
+        "photo"
+      ],
+      "native_scale": 4,
+      "quality_tier": 4,
+      "speed_tier": 2,
+      "speed_factor": 0.88,
+      "memory_factor": 0.65,
+      "size_bytes": 8142696,
+      "commercial_use_allowed": true,
+      "preset_eligible": true
+    },
+    {
       "model_id": "span_photo_x4",
       "purposes": [
         "photo",
@@ -151,12 +179,28 @@
       "content": "photo",
       "quality": "quick",
       "without": [],
+      "expected": "localsr_quick_x4_v1"
+    },
+    {
+      "content": "photo",
+      "quality": "quick",
+      "without": [
+        "localsr_quick_x4_v1"
+      ],
       "expected": "span_photo_x4"
     },
     {
       "content": "photo",
       "quality": "best",
       "without": [],
+      "expected": "localsr_best_x4_v1"
+    },
+    {
+      "content": "photo",
+      "quality": "best",
+      "without": [
+        "localsr_best_x4_v1"
+      ],
       "expected": "realplksr_nomoswebphoto_x4"
     },
     {
@@ -220,7 +264,18 @@
       "content": "photo",
       "quality": "quick",
       "without": [
+        "localsr_quick_x4_v1",
         "span_photo_x4"
+      ],
+      "expected": "localsr_best_x4_v1"
+    },
+    {
+      "content": "photo",
+      "quality": "quick",
+      "without": [
+        "localsr_quick_x4_v1",
+        "span_photo_x4",
+        "localsr_best_x4_v1"
       ],
       "expected": "realplksr_nomoswebphoto_x4"
     },
@@ -228,15 +283,18 @@
       "content": "photo",
       "quality": "best",
       "without": [
+        "localsr_best_x4_v1",
         "realplksr_nomoswebphoto_x4"
       ],
-      "expected": "span_photo_x4"
+      "expected": "localsr_quick_x4_v1"
     },
     {
       "content": "photo",
       "quality": "best",
       "without": [
+        "localsr_best_x4_v1",
         "realplksr_nomoswebphoto_x4",
+        "localsr_quick_x4_v1",
         "span_photo_x4"
       ],
       "expected": "general_x4"

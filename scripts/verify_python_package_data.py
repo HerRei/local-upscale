@@ -18,6 +18,7 @@ REQUIRED_SUFFIXES = (
     "localsr/image_models/ddcolor/NOTICE.md",
     "localsr/image_models/heart/NOTICE.md",
     "localsr/image_models/nerve/NOTICE.md",
+    "localsr/image_models/pulse/NOTICE.md",
     "localsr/video_models/rife/NOTICE.md",
     "localsr/video_models/flashvsr/NOTICE.md",
     "localsr/video_models/flashvsr/LICENSE",

@@ -80,7 +80,7 @@ def test_spandrel_alone_does_not_know_nerve_or_heart_and_registry_stays_unchange
 
     own = [support.architecture.id for support in spandrel.MAIN_REGISTRY.architectures("detection")]
     ours = [support.architecture.id for support in MODEL_REGISTRY.architectures("detection")]
-    assert ours == [*own, "NERVE", "HEART"]
+    assert ours == [*own, "NERVE", "HEART", "PULSE"]
 
 
 @pytest.mark.parametrize(
