@@ -174,8 +174,21 @@ describe('an unfinished side', () => {
     ]);
     expect(sync.frames).toBe(2);
     sync.seekFrame(1);
-    expect(kept.currentTime).toBeCloseTo(0.0555);
-    expect(original.currentTime).toBeCloseTo(0.0555);
+    expect(kept.currentTime).toBeCloseTo(0.05);
+    expect(original.currentTime).toBeCloseTo(0.05);
+  });
+  it('clamps to kept_frames / fps when container kept_seconds includes audio overhang', () => {
+    const original = player(3);
+    const kept = player(1.5);
+    const sync = new CompareVideoSync([
+      { video: original, fps: 30 },
+      { video: kept, fps: 30, kept: { seconds: 1.5, frames: 30 } },
+    ]);
+    expect(sync.duration).toBeCloseTo(1);
+    expect(sync.frames).toBe(30);
+    sync.seekFrame(29);
+    expect(original.currentTime).toBeCloseTo(29.5 / 30);
+    expect(kept.currentTime).toBeCloseTo(29.5 / 30);
   });
   it('pairs frames by the file’s own length when the player reports a longer one', () => {
     // Two frames of a 30 fps video; the player gives the clip as 0.10 s long.
@@ -277,4 +290,49 @@ it('detects insufficient data in a frame check even before a waiting event arriv
   players[1].readyState = 4;
   await sync.ready(players[1]);
   expect(players.every((video) => !video.paused)).toBe(true);
+});
+
+it('rate-limits drift seeks during playback without pausing master while follower seeks', async () => {
+  const { players, sync, advance } = setup();
+  await sync.play();
+  advance(100);
+  players[0].currentTime = 0.5;
+  players[1].currentTime = 0.4;
+  sync.tick();
+  expect(players[1].currentTime).toBe(0.5);
+  expect(sync.playing).toBe(true);
+  expect(players[0].paused).toBe(false);
+  // Follower enters seeking and temporarily drops readyState while decoding: master stays playing.
+  players[1].seeking = true;
+  players[1].readyState = 2;
+  advance(50);
+  players[0].currentTime = 0.55;
+  sync.tick();
+  expect(sync.playing).toBe(true);
+  expect(players[0].paused).toBe(false);
+  // Seek finishes within cooldown: another drift inside the cooldown window does not re-seek every tick.
+  players[1].seeking = false;
+  players[1].readyState = 4;
+  players[1].currentTime = 0.5;
+  advance(100);
+  players[0].currentTime = 0.65;
+  sync.tick();
+  expect(players[1].currentTime).toBe(0.5);
+  // After cooldown expires, drift correction runs again.
+  advance(500);
+  players[0].currentTime = 1.15;
+  sync.tick();
+  expect(players[1].currentTime).toBe(1.15);
+});
+
+it('aligns both sides to the middle of the current frame on pause', async () => {
+  const players = [player(4), player(4)];
+  const sync = new CompareVideoSync(players.map((video) => ({ video, fps: 30 })));
+  await sync.play();
+  players[0].currentTime = 1.001;
+  players[1].currentTime = 0.999;
+  sync.pause();
+  expect(players.every((v) => v.paused)).toBe(true);
+  expect(players[0].currentTime).toBeCloseTo(30.5 / 30);
+  expect(players[1].currentTime).toBeCloseTo(30.5 / 30);
 });

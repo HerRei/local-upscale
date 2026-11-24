@@ -156,14 +156,14 @@ describe('video comparison player', () => {
     const on = screen.getByRole('button', { name: 'Next frame' }) as HTMLButtonElement;
     expect(back.getAttribute('aria-disabled')).toBe('true');
     await fireEvent.click(on);
-    // The middle of the second kept frame on both sides, by the file's own frame rate.
-    expect(videos[0].currentTime).toBeCloseTo(0.0555);
-    expect(videos[1].currentTime).toBeCloseTo(0.0555);
+    // The middle of the second kept frame on both sides, from keptFrames / fps.
+    expect(videos[0].currentTime).toBeCloseTo(0.05);
+    expect(videos[1].currentTime).toBeCloseTo(0.05);
     expect(transport.textContent).toContain('Frame 2');
     expect(on.getAttribute('aria-disabled')).toBe('true');
     await fireEvent.input(scrubber, { target: { value: '1' } });
-    expect(videos[0].currentTime).toBeCloseTo(0.0185);
-    expect(videos[1].currentTime).toBeCloseTo(0.0185);
+    expect(videos[0].currentTime).toBeCloseTo(0.5 / 30);
+    expect(videos[1].currentTime).toBeCloseTo(0.5 / 30);
   });
 
   it('steps by the kept file’s own rate when the player reports a longer clip', async () => {

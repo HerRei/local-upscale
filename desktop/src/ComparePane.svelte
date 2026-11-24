@@ -82,6 +82,8 @@
   let sync: CompareVideoSync | undefined;
   let playing = false;
   let currentTime = 0;
+  let desiredTime = 0;
+  let wantedPlayback = false;
   let duration = 0;
   let playbackRate = 1;
   // Frames of the clock's span and the one shown; an unfinished side can end the span early.
@@ -100,10 +102,15 @@
   let frameVideo: HTMLVideoElement | undefined;
   let animationId: number | undefined;
   let preparationQueue = Promise.resolve();
+  let playbackStartedAt = 0;
 
   function updateTransport(): void {
-    playing = sync?.requestedPlayback ?? false;
-    currentTime = sync?.time ?? 0;
+    if (sync && sync.duration > 0) {
+      wantedPlayback = sync.requestedPlayback;
+      desiredTime = sync.time;
+    }
+    playing = sync?.requestedPlayback ?? wantedPlayback;
+    currentTime = sync?.time ?? desiredTime;
     duration = sync?.duration ?? 0;
     frames = sync?.frames ?? 0;
     frame = sync?.frame ?? 0;
@@ -130,15 +137,26 @@
     if (master?.requestVideoFrameCallback) {
       frameVideo = master;
       frameId = master.requestVideoFrameCallback(update);
-    } else animationId = requestAnimationFrame(update);
+    }
+    // Keep animation-frame checks active while playback settles (audio pipeline startup on
+    // WebKit can delay master frame callbacks) and whenever an unfinished/shorter side can
+    // stop emitting frames before sync.duration.
+    if (
+      !master?.requestVideoFrameCallback ||
+      sync.limited ||
+      performance.now() - playbackStartedAt < 500 ||
+      (master && Number.isFinite(master.duration) && sync.time >= master.duration - 0.2)
+    ) {
+      animationId = requestAnimationFrame(update);
+    }
   }
   function rebuild(): void {
-    const time = sync?.time ?? 0;
-    const resume = sync?.requestedPlayback ?? false;
+    const time = sync && sync.duration > 0 ? sync.time : desiredTime;
+    const resume = wantedPlayback;
     sync?.pause();
     stopClock();
     sync = new CompareVideoSync(
-      items.flatMap((item, index) => {
+      items.flatMap((item) => {
         const video = players.get(item.key);
         return video && sources[item.key]?.loaded
           ? [
@@ -158,9 +176,19 @@
     sync.rate(playbackRate);
     sync.seek(time);
     updateTransport();
-    if (resume && !destroyed) void start();
+    const active = shownLayout === 'slider' ? items.slice(0, 2) : items;
+    const allLoaded =
+      active.length > 0 &&
+      active.every(
+        (item) =>
+          sources[item.key]?.loaded ||
+          (sources[item.key]?.status !== 'ready' && sources[item.key]?.status !== 'loading'),
+      );
+    if (resume && allLoaded && !destroyed) void start();
   }
   async function start(): Promise<void> {
+    wantedPlayback = true;
+    playbackStartedAt = performance.now();
     try {
       await sync?.play();
     } catch (error) {
@@ -172,6 +200,7 @@
   }
   function togglePlayback(): void {
     if (playing) {
+      wantedPlayback = false;
       sync?.pause();
       stopClock();
       updateTransport();
@@ -188,6 +217,7 @@
     clock();
   }
   function step(direction: -1 | 1): void {
+    wantedPlayback = false;
     sync?.step(direction);
     stopClock();
     updateTransport();
@@ -232,7 +262,6 @@
       }
     };
     video.addEventListener('waiting', stalled);
-    video.addEventListener('seeking', stalled);
     video.addEventListener('canplay', ready);
     video.addEventListener('seeked', ready);
     video.addEventListener('loadeddata', loaded);
@@ -240,12 +269,15 @@
     return {
       destroy() {
         video.removeEventListener('waiting', stalled);
-        video.removeEventListener('seeking', stalled);
         video.removeEventListener('canplay', ready);
         video.removeEventListener('seeked', ready);
         video.removeEventListener('loadeddata', loaded);
         video.removeEventListener('ended', clock);
-        players.delete(key);
+        if (players.get(key) === video) {
+          players.delete(key);
+          if (!destroyed && sources[key]?.loaded)
+            sources = { ...sources, [key]: { ...sources[key], loaded: false } };
+        }
         release(video);
         rebuild();
       },
@@ -296,6 +328,8 @@
     if (requestId) void cancelVideo(requestId).catch(() => {});
     sync?.pause();
     stopClock();
+    desiredTime = 0;
+    wantedPlayback = false;
     for (const player of players.values()) release(player);
     sources = Object.fromEntries(
       entries.map((item) => [
@@ -441,6 +475,8 @@
     if (requestId) void cancelVideo(requestId).catch(() => {});
     sync?.pause();
     stopClock();
+    desiredTime = 0;
+    wantedPlayback = false;
     for (const player of players.values()) release(player);
     clearTimeout(regionTimer);
     void regionQueue
