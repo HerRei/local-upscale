@@ -4625,7 +4625,9 @@ describe('LocalSR desktop interface', () => {
     await user.click(
       screen.getByRole('button', { name: /^Download \d+(\.\d+)? MB, then upscale$/ }),
     );
-    await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith('span_photo_x4', false));
+    await waitFor(() =>
+      expect(api.downloadModel).toHaveBeenCalledWith('localsr_quick_x4_v1', false),
+    );
   });
 
   it('offers the illustration model as a download on Start when it is not installed', async () => {
@@ -8951,7 +8953,7 @@ describe('Size decides', () => {
       expect(lastSaved()).toMatchObject({
         task: 'upscale',
         quality: 'quick',
-        selected_model_id: 'span_photo_x4',
+        selected_model_id: 'localsr_quick_x4_v1',
       }),
     );
   });

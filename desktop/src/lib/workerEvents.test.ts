@@ -104,7 +104,7 @@ describe('desktop state', () => {
 
   it('uses the catalog ranking for Quick and Best', () => {
     const snapshot = demoSnapshot();
-    expect(choosePresetModel(snapshot, 'upscale', 'quick')?.model_id).toBe('span_photo_x4');
+    expect(choosePresetModel(snapshot, 'upscale', 'quick')?.model_id).toBe('localsr_quick_x4_v1');
     expect(choosePresetModel(snapshot, 'upscale', 'best')?.model_id).toBe(
       'realplksr_nomoswebphoto_x4',
     );

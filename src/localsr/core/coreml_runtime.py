@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 NEURAL_ENGINE = "CPU_AND_NE"
 CORE_ML_GPU = "CPU_AND_GPU"
 
-# SPAN, RRDBNet and FBCNN map to the Neural Engine. RealPLKSR's 17x17
+# SPAN, RRDBNet, FBCNN and PULSE map to the Neural Engine. RealPLKSR's 17x17
 # partial convolutions fall back to the CPU on the Neural Engine, and the Neural
 # Engine's compiler did not finish loading the 400x400 program in over 10 minutes
 # (M1 Pro, macOS 27.2), so its Core ML route uses the GPU, which loads it in 3 s.
@@ -55,6 +55,7 @@ COMPUTE_UNITS = {
     "SPAN": (NEURAL_ENGINE, CORE_ML_GPU),
     "ESRGAN": (NEURAL_ENGINE, CORE_ML_GPU),
     "FBCNN": (NEURAL_ENGINE, CORE_ML_GPU),
+    "PULSE": (NEURAL_ENGINE, CORE_ML_GPU),
     "PLKSR": (CORE_ML_GPU,),
 }
 # The Neural Engine uses far less energy than the GPU, so keep it unless the

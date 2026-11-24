@@ -9,7 +9,7 @@ test('video Same size, Fix chips and video recipes', async ({ page }) => {
     worker: 'ready',
     features: ['image_multi_fix', 'video_interpolation'],
     installed: [
-      'span_photo_x4',
+      'localsr_quick_x4_v1',
       'denoise_realplksr_1x',
       'scunet_color_real_psnr',
       'fbcnn_color',
@@ -19,7 +19,7 @@ test('video Same size, Fix chips and video recipes', async ({ page }) => {
       task: 'video',
       video_task: 'upscale',
       selected_video_model_id: 'frame_by_frame',
-      selected_model_id: 'span_photo_x4',
+      selected_model_id: 'localsr_quick_x4_v1',
       output_scale: 4,
     },
     recipes: [
@@ -100,7 +100,7 @@ test('video Same size, Fix chips and video recipes', async ({ page }) => {
   // Switch back to 4× via Size; add Blur under Fix and start.
   await page.getByRole('radio', { name: '4×' }).click();
   await page.getByRole('button', { name: 'Blur', exact: true }).click();
-  await expect(stages).toContainText('SPAN');
+  await expect(stages).toContainText('LocalSR Quick');
 
   await page.getByRole('button', { name: 'Start selected video' }).click();
   await expect.poll(async () => (await hostCalls(page, 'start_jobs')).length).toBe(2);
@@ -133,12 +133,12 @@ test('video Same size with nothing picked disables Start until a fix or video op
     video: true,
     worker: 'ready',
     features: ['image_multi_fix', 'video_interpolation'],
-    installed: ['span_photo_x4', 'scunet_color_real_psnr', 'nafnet_gopro_deblur'],
+    installed: ['localsr_quick_x4_v1', 'scunet_color_real_psnr', 'nafnet_gopro_deblur'],
     settings: {
       task: 'video',
       video_task: 'upscale',
       selected_video_model_id: 'frame_by_frame',
-      selected_model_id: 'span_photo_x4',
+      selected_model_id: 'localsr_quick_x4_v1',
       output_scale: 4,
     },
   });

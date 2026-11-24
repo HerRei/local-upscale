@@ -203,9 +203,9 @@ describe('model library resolution', () => {
       fixes: ['noise', 'blur'],
       preset_pins: {},
     };
-    expect(presetDownload('quick', snapshot, ui)).toBe('292 MB download');
+    expect(presetDownload('quick', snapshot, ui)).toBe('290 MB download');
 
-    snapshot.catalog.models.find((m) => m.model_id === 'span_photo_x4')!.installed = true;
+    snapshot.catalog.models.find((m) => m.model_id === 'localsr_quick_x4_v1')!.installed = true;
     expect(presetDownload('quick', snapshot, ui)).toBe('287 MB download');
     expect(presetDownload('best', snapshot, ui)).toBe('730 MB download');
 

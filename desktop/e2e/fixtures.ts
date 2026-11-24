@@ -1,14 +1,14 @@
 import type { Scenario } from './fake-host';
 
 const FEATURES = ['image_multi_fix', 'video_interpolation'];
-const SPAN = 'span_photo_x4';
+const QUICK = 'localsr_quick_x4_v1';
 
 /** One photo, Quick upscale selected, no worker (the app's browser preview). */
 export const upscale: Scenario = {
   photos: 1,
   task: 'upscale',
-  installed: [SPAN],
-  settings: { quality: 'quick', content: 'photo', selected_model_id: SPAN },
+  installed: [QUICK],
+  settings: { quality: 'quick', content: 'photo', selected_model_id: QUICK },
   features: FEATURES,
 };
 

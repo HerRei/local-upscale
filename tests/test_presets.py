@@ -212,14 +212,14 @@ class TestPresetRankingFormulas:
 
 
 class TestStandardCatalogRankings:
-    def test_photo_fast_preset_selects_span_photo_x4(self):
+    def test_photo_fast_preset_selects_localsr_quick_x4_v1(self):
         selected = select_model_for_preset(MODEL_CATALOG, Preset.FAST, purpose=ModelPurpose.PHOTO)
-        assert selected.model_id == "span_photo_x4"
+        assert selected.model_id == "localsr_quick_x4_v1"
 
         selected_quick = select_model_for_preset(
             MODEL_CATALOG, PresetMode.QUICK_UPSCALE, purpose=ModelPurpose.PHOTO
         )
-        assert selected_quick.model_id == "span_photo_x4"
+        assert selected_quick.model_id == "localsr_quick_x4_v1"
 
     def test_photo_ultra_preset_selects_realplksr_nomos8k(self):
         selected = select_model_for_preset(MODEL_CATALOG, Preset.ULTRA, purpose=ModelPurpose.PHOTO)
@@ -302,7 +302,7 @@ class TestStandardCatalogRankings:
                 assert all(model.preset_eligible for model in ranked)
         assert (
             select_model_for_preset(MODEL_CATALOG, Preset.FAST, purpose=ModelPurpose.PHOTO).model_id
-            == "span_photo_x4"
+            == "localsr_quick_x4_v1"
         )
         assert (
             select_model_for_preset(MODEL_CATALOG, Preset.QUALITY, purpose=ModelPurpose.PHOTO)
