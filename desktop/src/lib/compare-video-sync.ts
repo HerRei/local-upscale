@@ -250,7 +250,7 @@ export class CompareVideoSync {
       const now = this.now();
       for (const [index, { video: entry, fps }] of this.entries.entries()) {
         const target = Math.min(this.time, length(entry));
-        const threshold = Math.max(0.5 / (fps > 0 ? fps : 30), 0.06);
+        const threshold = 0.5 / (fps > 0 ? fps : 30);
         const last = this.lastCorrection.get(entry);
         if (
           !entry.seeking &&
@@ -322,9 +322,8 @@ export class CompareVideoSync {
       if (video.seeking) continue;
       const halfFrame = 0.5 / (fps > 0 ? fps : 30);
       const drift = Math.abs(video.currentTime - target);
-      // During playback, ignore normal ~1-2 frame browser decode/timer jitter so unnecessary
-      // GOP seeks do not knock the follower ~45 ms behind while decoding.
-      const threshold = this.playing ? Math.max(halfFrame, 0.05) : halfFrame;
+      // Rate-limit corrections below so normal decode jitter cannot cause a seek on every tick.
+      const threshold = halfFrame;
       const last = this.lastCorrection.get(video);
       if (drift <= threshold) {
         if (last && !this.correcting.has(video) && now - last.at > 1000) {

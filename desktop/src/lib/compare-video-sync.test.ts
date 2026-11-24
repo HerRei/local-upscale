@@ -302,6 +302,16 @@ it('detects insufficient data in a frame check even before a waiting event arriv
   expect(players.every((video) => !video.paused)).toBe(true);
 });
 
+it('corrects playback drift beyond half a follower frame', async () => {
+  const players = [player(4), player(4)];
+  const sync = new CompareVideoSync(players.map((video) => ({ video, fps: 30 })));
+  await sync.play();
+  players[0].currentTime = 1;
+  players[1].currentTime = 0.98;
+  sync.tick();
+  expect(players[1].currentTime).toBe(1);
+});
+
 it('rate-limits drift seeks during playback without pausing master while follower seeks', async () => {
   const { players, sync, advance } = setup();
   await sync.play();
