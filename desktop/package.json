@@ -18,13 +18,13 @@
     "e2e:update": "playwright test --grep @visual --update-snapshots"
   },
   "dependencies": {
-    "@tauri-apps/api": "2.12.4",
+    "@tauri-apps/api": "2.12.5",
     "svelte": "5.57.3"
   },
   "devDependencies": {
-    "@playwright/test": "1.63.0",
+    "@playwright/test": "1.65.1",
     "@sveltejs/vite-plugin-svelte": "7.3.1",
-    "@tauri-apps/cli": "2.12.4",
+    "@tauri-apps/cli": "2.12.5",
     "@testing-library/svelte": "^5.4.2",
     "@testing-library/user-event": "^14.6.9",
     "@types/node": "26.6.6",
@@ -36,7 +36,7 @@
     "prettier-plugin-svelte": "4.1.1",
     "svelte-check": "4.7.8",
     "typescript": "6.0.3",
-    "vite": "8.3.5",
+    "vite": "8.3.8",
     "vitest": "5.1.0"
   }
 }
