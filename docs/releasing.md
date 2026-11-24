@@ -36,9 +36,30 @@ Before building a candidate on the Mac:
    upgrade `av` or `opencv*` this way: they are the licensing-clean builds from
    `packaging/ffmpeg/install_media_runtime.py`. When their pinned versions change,
    rerun that script. Either way `verify_codec_allowlist.py` must pass.
+   The release venv is its own clean venv (`uv venv .venv` in the release worktree), never
+   the shared development venv: that one has PyPI's `opencv-python-headless`, which bundles
+   FFmpeg. See [Release venv](#release-venv) for the macOS minimum.
 3. `release_macos_beta.sh` writes `mac-environment.txt` (the venv's `uv pip freeze`)
    next to the build. Diff it against the previous release's copy and put the diff
    in the release PR.
+
+### Release venv
+
+The app's minimum is macOS 14 (`LSMinimumSystemVersion`, set by `build_tauri_preview.py`),
+but uv and pip install the newest wheel the release Mac accepts. On a Mac with macOS 26
+that is `mlx` and `mlx-metal` for macOS 26, whose Metal library macOS 14 and 15 cannot
+load: 0.6.0's engine stopped at start on those Macs
+([#183](https://github.com/HerRei/local-upscale/issues/183)). Install packages with
+platform-specific wheels for the minimum:
+
+```
+MACOSX_DEPLOYMENT_TARGET=14.0 uv pip install --python .venv/bin/python \
+  --python-platform aarch64-apple-darwin -e '.[video,face,package,macos-release]'
+```
+
+`verify_macos_deployment.py` checks every Mach-O file and Metal library against the
+minimum, in the venv before the build and in the app after it; `release_macos_beta.sh`
+stops when one needs a newer macOS.
 
 ## macOS beta
 

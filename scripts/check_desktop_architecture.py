@@ -57,6 +57,7 @@ MACOS_RELEASE_GATES = {
     "stapled tickets": "xcrun stapler staple",
     "Gatekeeper assessment": "spctl --assess",
     "codec allowlist": "verify_codec_allowlist.py",
+    "minimum macOS of native files": "verify_macos_deployment.py",
     "worker smoke": "packaging/smoke_worker.py",
     "host smoke": "--headless-smoke-test",
     "signed update archive": "beta_update_signing.py sign",

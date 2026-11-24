@@ -43,6 +43,10 @@ echo "commit $COMMIT engine $LOCALSR_ENGINE_ID"
 
 step "verify licensing-clean media runtime"
 python scripts/verify_codec_allowlist.py --python-env "$(command -v python)" > "$OUT/runtime-policy.json"
+# Wheels for a newer macOS than the app's minimum (the installer picks the newest one for
+# the release Mac) would ship native files older Macs cannot load (#183, MLX in 0.6.0).
+python scripts/verify_macos_deployment.py --minimum 14.0 \
+  --tree "$(python -c 'import sysconfig; print(sysconfig.get_paths()["platlib"])')" > "$OUT/venv-deployment.json"
 # Record the exact environment; the release PR carries its diff against the last release.
 uv pip freeze --python "$(command -v python)" > "$OUT/mac-environment.txt"
 
@@ -52,6 +56,7 @@ APP="$OUT/$APP_NAME"
 rm -rf "$APP" && ditto "desktop/src-tauri/target/release/bundle/macos/$APP_NAME" "$APP"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $SHORT_VERSION" -c "Set :CFBundleVersion $SHORT_VERSION" "$APP/Contents/Info.plist"
 python scripts/verify_codec_allowlist.py --tree "$APP" > "$OUT/app-policy.json"
+python scripts/verify_macos_deployment.py --tree "$APP" > "$OUT/app-deployment.json"
 
 step "Developer ID signing"
 python scripts/sign_macos_keychain.py "$APP" --identity "$IDENTITY" --report "$OUT/signing-report.json"
