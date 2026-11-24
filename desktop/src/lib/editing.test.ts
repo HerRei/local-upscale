@@ -3,6 +3,7 @@ import rawModels from '../../../src/localsr/core/edit_catalog.json';
 import { demoSnapshot } from './demo';
 import {
   CUSTOM_EDIT_FAMILIES,
+  EDIT_FAMILIES,
   EDIT_GIB,
   customEditFamilySpec,
   editDevice,
@@ -134,5 +135,14 @@ describe('Edit helpers', () => {
     expect(recommendAnyEditModel(models, capabilities, gpu('mps', 16))?.model_id).toBe(
       'flux2_klein_4b_q4_0',
     );
+  });
+});
+
+describe('Mage-Flow summary', () => {
+  it('says CPU only on a Mac and nothing elsewhere', async () => {
+    const { detectPlatform } = await import('./platform');
+    const summary = EDIT_FAMILIES.find((family) => family.id === 'mage-flow-edit-turbo')!.summary;
+    if (detectPlatform() === 'macos') expect(summary).toBe('4-step editor (CPU only) · MIT');
+    else expect(summary).toBe('4-step editor · MIT');
   });
 });

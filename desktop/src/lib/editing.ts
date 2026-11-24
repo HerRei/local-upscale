@@ -1,4 +1,5 @@
 import type { Fit } from './plan';
+import { detectPlatform } from './platform';
 import type { CapabilityInfo, DeviceInfo, EditModel, UiSettings } from './types';
 
 export const EDIT_GIB = 1024 ** 3;
@@ -18,7 +19,8 @@ export const EDIT_FAMILIES: { id: string; label: string; summary: string }[] = [
   {
     id: 'mage-flow-edit-turbo',
     label: 'Mage-Flow-Edit-Turbo',
-    summary: '4-step editor (CPU on Mac) · MIT',
+    // Mage-Flow runs on the CPU only on a Mac; elsewhere it uses the GPU like the others.
+    summary: `4-step editor${detectPlatform() === 'macos' ? ' (CPU only)' : ''} · MIT`,
   },
 ];
 
