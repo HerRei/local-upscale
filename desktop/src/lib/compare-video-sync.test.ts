@@ -177,6 +177,16 @@ describe('an unfinished side', () => {
     expect(kept.currentTime).toBeCloseTo(0.05);
     expect(original.currentTime).toBeCloseTo(0.05);
   });
+  it('uses the measured duration and frame count when the result fps is unknown', () => {
+    const sync = new CompareVideoSync([
+      { video: player(3), fps: 30 },
+      { video: player(1), fps: 0, kept: { seconds: 1, frames: 24 } },
+    ]);
+    expect(sync.duration).toBe(1);
+    expect(sync.frames).toBe(24);
+    sync.seekFrame(23);
+    expect(sync.time).toBeCloseTo(23.5 / 24);
+  });
   it('clamps to kept_frames / fps when container kept_seconds includes audio overhang', () => {
     const original = player(3);
     const kept = player(1.5);
