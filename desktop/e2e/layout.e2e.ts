@@ -631,15 +631,17 @@ test.describe('contrast and targets', () => {
     await emit(page, 'native-menu-action', 'view.models');
     const library = page.getByRole('dialog', { name: 'Model library' });
     await library.getByRole('button', { name: /^Upscale photos/ }).click();
-    const row = library.getByRole('button', { name: /RealPLKSR ×4 NomosWebPhoto/ });
-    await row.click();
-    const checks = [
+    const labsRow = library.getByRole('button', { name: /RealPLKSR ×4 NomosWebPhoto/ });
+    await labsRow.click();
+    for (const label of [
       library.locator('.rail-item.active small'),
-      row.locator('.meter').first(),
-      row.locator('.pill.labs'),
-      row.locator('.pill.best'),
-    ];
-    for (const label of checks) expect(await contrastOnPage(label)).toBeGreaterThanOrEqual(4.5);
+      labsRow.locator('.meter').first(),
+      labsRow.locator('.pill.labs'),
+    ])
+      expect(await contrastOnPage(label)).toBeGreaterThanOrEqual(4.5);
+    const bestRow = library.getByRole('button', { name: /LocalSR Best ×4/ });
+    await bestRow.click();
+    expect(await contrastOnPage(bestRow.locator('.pill.best'))).toBeGreaterThanOrEqual(4.5);
   });
 
   test('help tips and the Model card links are at least 24 px targets', async ({ page }) => {

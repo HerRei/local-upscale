@@ -4205,8 +4205,8 @@ describe('LocalSR desktop interface', () => {
       expect(api.saveSettings).toHaveBeenLastCalledWith(
         expect.objectContaining({
           quality: 'best',
-          selected_model_id: 'realplksr_nomoswebphoto_x4',
-          halo: 16,
+          selected_model_id: 'localsr_best_x4_v1',
+          halo: 32,
           fix_stages: [{ fix: 'noise' as const, model_id: 'scunet_color_real_psnr' }],
           preset_pins: { 'fix/noise/best': 'scunet_color_real_psnr' },
         }),
@@ -4551,7 +4551,7 @@ describe('LocalSR desktop interface', () => {
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          selected_model_id: 'realplksr_nomoswebphoto_x4',
+          selected_model_id: 'localsr_best_x4_v1',
           quality: 'best',
         }),
       ),
@@ -4584,7 +4584,7 @@ describe('LocalSR desktop interface', () => {
     await user.click(screen.getByRole('button', { name: 'Back to Best' }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ selected_model_id: 'realplksr_nomoswebphoto_x4', halo: 16 }),
+        expect.objectContaining({ selected_model_id: 'localsr_best_x4_v1', halo: 32 }),
       ),
     );
   });
@@ -4652,7 +4652,7 @@ describe('LocalSR desktop interface', () => {
       expect(api.saveSettings).toHaveBeenLastCalledWith(
         expect.objectContaining({
           quality: 'best',
-          selected_model_id: 'realplksr_nomoswebphoto_x4',
+          selected_model_id: 'localsr_best_x4_v1',
         }),
       ),
     );
@@ -4784,7 +4784,7 @@ describe('Several fixes in one pass', () => {
     expect(document.activeElement).toBe(move('Move the noise fix earlier'));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
-        selected_model_id: 'realplksr_nomoswebphoto_x4',
+        selected_model_id: 'localsr_best_x4_v1',
         fixes: ['blur', 'noise', 'jpeg'],
         fix_stages: [blur, { fix: 'noise', model_id: 'nafnet_sidd_width64' }, jpeg],
       }),
@@ -4799,7 +4799,7 @@ describe('Several fixes in one pass', () => {
     await user.click(within(library).getByRole('button', { name: 'Use for Noise · Best' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
-        selected_model_id: 'realplksr_nomoswebphoto_x4',
+        selected_model_id: 'localsr_best_x4_v1',
         fix_stages: [blur, { fix: 'noise', model_id: 'scunet_color_real_psnr' }, jpeg],
         preset_pins: { 'fix/noise/best': 'scunet_color_real_psnr' },
       }),
@@ -5043,7 +5043,7 @@ describe('Several fixes in one pass', () => {
     expect(recipe.stages).toEqual([
       { kind: 'restore', model_id: 'nafnet_sidd_width64', fix: 'noise' },
       { kind: 'restore', model_id: 'nafnet_gopro_deblur', fix: 'blur' },
-      { kind: 'upscale', model_id: 'realplksr_nomoswebphoto_x4' },
+      { kind: 'upscale', model_id: 'localsr_best_x4_v1' },
     ]);
     const saved = await screen.findByRole('button', { name: /^Two fixes/ });
     expect(saved.getAttribute('aria-pressed')).toBe('true');

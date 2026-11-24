@@ -535,7 +535,7 @@
       "purposes": [
         "photo"
       ],
-      "quality_tier": 3,
+      "quality_tier": 4,
       "recommended_halo": 32,
       "redistribution_allowed": false,
       "rights_status": "verified",
@@ -623,7 +623,7 @@
         "photo",
         "general"
       ],
-      "quality_tier": 4,
+      "quality_tier": 3,
       "recommended_halo": 16,
       "redistribution_allowed": true,
       "rights_status": "attribution",
