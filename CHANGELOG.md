@@ -2,6 +2,14 @@
 
 ## [0.6.0-beta] - Unreleased
 
+- **LocalSR's own models.** Quick and Best for photos are now LocalSR's own x4 upscalers
+  (localsr-quick-x4-v1 and localsr-best-x4-v1, MIT), trained only on public-domain (CC0)
+  photos and running fully on the Neural Engine. On a sealed test set of 99 photos Quick
+  beats the SPAN model it replaces on every measure at the same speed; Best matches
+  NomosWebPhoto on detail with 2.6 dB more fidelity and runs about four times as fast
+  (27 s instead of 99 s for a 12 MP photo on an M1 Pro). Both models, their numbers and the
+  technical report are at github.com/HerRei/localsr-models. The previous models stay in the
+  model library; Illustration presets are unchanged.
 - **Settings.** One Settings window (⌘, on a Mac; File > Settings… elsewhere) holds every
   app-wide choice: appearance, default hardware, low priority, notifications and sound,
   the menu bar icon, the model folder, caches, External FFmpeg, updates and crash
