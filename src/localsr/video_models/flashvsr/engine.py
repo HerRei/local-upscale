@@ -9,8 +9,11 @@ blending across 128 px tile overlaps.
 from __future__ import annotations
 
 import gc
+import math
+import os
 import re
 import sys
+import tempfile
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -21,6 +24,7 @@ import numpy as np
 from PIL import Image
 
 from localsr.core.hardware import _mps_memory, _system_memory
+from localsr.core.output_writer import default_work_directory
 
 OUTPUT_SCALE = 4
 SPATIAL_MULTIPLE = 128
@@ -29,6 +33,7 @@ MIN_TILE_SIDE = 512
 TILE_OVERLAP = 128
 BUDGET_FRACTION = 0.85
 FLOAT16_CANVAS_ELEMENTS = 150_000_000
+MEMMAP_CANVAS_BYTES = 256 * 1024 * 1024
 
 # FlashVSR outputs 8n - 3 frames when fed 8n + 1 frames (n >= 3).
 # Window 37 + 4 repeated tail frames = 41 = 8*5 + 1, yielding 37 outputs with
@@ -158,21 +163,18 @@ def _has_cuda() -> bool:
     return bool(getattr(getattr(torch, "version", None), "cuda", None))
 
 
-def _low_memory_message(backend: str, detail: str) -> str:
+def _low_memory_message(backend: str, detail: str, *, max_resolution: int | None = None) -> str:
+    if max_resolution is not None:
+        advice = (
+            f"Choose an output resolution of {max_resolution} px or less, or frame-by-frame video."
+        )
+    else:
+        advice = "Close other applications or choose Frame-by-frame video."
     if backend == "rocm":
-        return (
-            f"Not enough AMD ROCm GPU memory for FlashVSR: {detail}. "
-            "Close other applications or choose Frame-by-frame video."
-        )
+        return f"Not enough AMD ROCm GPU memory for FlashVSR: {detail}. {advice}"
     if backend == "cuda":
-        return (
-            f"Not enough NVIDIA CUDA GPU memory for FlashVSR: {detail}. "
-            "Close other applications or choose Frame-by-frame video."
-        )
-    return (
-        f"Not enough Apple Silicon unified memory for FlashVSR: {detail}. "
-        "Close other applications or choose Frame-by-frame video."
-    )
+        return f"Not enough NVIDIA CUDA GPU memory for FlashVSR: {detail}. {advice}"
+    return f"Not enough Apple Silicon unified memory for FlashVSR: {detail}. {advice}"
 
 
 def compute_axis_starts(length: int, tile_len: int, overlap: int = TILE_OVERLAP) -> list[int]:
@@ -222,10 +224,8 @@ def _choose_tile_dimensions(
     pad_h: int,
     max_area: int,
     max_tile_side: int,
-    *,
-    backend: str = "mps",
-) -> tuple[int, int]:
-    """Select uniform tile dimensions (tw, th) in multiples of 128 px."""
+) -> tuple[int, int] | None:
+    """Select uniform tile dimensions (tw, th) in multiples of 128 px, or None."""
     if pad_w <= max_tile_side and pad_h <= max_tile_side and pad_w * pad_h <= max_area:
         return pad_w, pad_h
 
@@ -251,32 +251,133 @@ def _choose_tile_dimensions(
                 best_score = score
                 best_dims = (tw, th)
 
-    if best_dims is None:
-        raise RuntimeError(
-            _low_memory_message(
-                backend,
-                "no valid tile size fits within the available memory budget",
-            )
-        )
     return best_dims
 
 
+def _canvas_buffer_bytes(out_width: int, out_height: int, n_in: int) -> int:
+    canvas_elem_bytes = 2 if n_in * out_width * out_height > FLOAT16_CANVAS_ELEMENTS else 4
+    canvas_bytes = n_in * out_width * out_height * 3 * canvas_elem_bytes
+    weight_bytes = out_width * out_height * 4
+    return canvas_bytes + weight_bytes
+
+
+def _use_memmap_canvas(out_width: int, out_height: int, n_in: int) -> bool:
+    return _canvas_buffer_bytes(out_width, out_height, n_in) > MEMMAP_CANVAS_BYTES
+
+
 def _host_buffer_bytes(
+    tile_width: int,
+    tile_height: int,
     out_width: int,
     out_height: int,
-    pad_width: int,
-    pad_height: int,
     n_in: int,
     *,
     include_canvas: bool,
 ) -> int:
-    lq_bytes = n_in * pad_width * pad_height * 3
-    if not include_canvas:
-        return lq_bytes
-    canvas_elem_bytes = 2 if n_in * out_width * out_height > FLOAT16_CANVAS_ELEMENTS else 4
-    canvas_bytes = n_in * out_width * out_height * 3 * canvas_elem_bytes
-    weight_bytes = out_width * out_height * 4
-    return lq_bytes + canvas_bytes + weight_bytes
+    """Host RAM held concurrently on unified memory: one tile's LQ + output, plus RAM canvas."""
+    tile_bytes = n_in * tile_width * tile_height * 3 * 5
+    if not include_canvas or _use_memmap_canvas(out_width, out_height, n_in):
+        return tile_bytes
+    return tile_bytes + _canvas_buffer_bytes(out_width, out_height, n_in)
+
+
+def _plan_tile_dims(
+    out_width: int,
+    out_height: int,
+    *,
+    n_frames: int,
+    fixed_bytes: float,
+    scaled_per_pixel: float,
+    unified_memory: bool,
+    budget_bytes: int,
+    max_tile_side: int,
+) -> tuple[tuple[int, int, int, int, int] | None, str]:
+    pad_w = ceil_multiple(out_width, SPATIAL_MULTIPLE)
+    pad_h = ceil_multiple(out_height, SPATIAL_MULTIPLE)
+
+    single_host = (
+        _host_buffer_bytes(
+            pad_w,
+            pad_h,
+            out_width,
+            out_height,
+            n_frames,
+            include_canvas=False,
+        )
+        if unified_memory
+        else 0
+    )
+    single_max_area = int((budget_bytes - single_host - fixed_bytes) / scaled_per_pixel)
+    if pad_w <= max_tile_side and pad_h <= max_tile_side and pad_w * pad_h <= single_max_area:
+        return (pad_w, pad_h, pad_w, pad_h, single_max_area), ""
+
+    canvas_host = (
+        _canvas_buffer_bytes(out_width, out_height, n_frames)
+        if unified_memory and not _use_memmap_canvas(out_width, out_height, n_frames)
+        else 0
+    )
+    tile_host_per_pixel = float(15 * n_frames) if unified_memory else 0.0
+    max_area = int(
+        (budget_bytes - canvas_host - fixed_bytes) / (scaled_per_pixel + tile_host_per_pixel)
+    )
+    if max_area < MIN_TILE_SIDE * MIN_TILE_SIDE:
+        return None, "the memory budget leaves less than a 512x512 output tile"
+    dims = _choose_tile_dimensions(pad_w, pad_h, max_area, max_tile_side)
+    if dims is None:
+        return None, "no valid tile size fits within the available memory budget"
+    tw, th = dims
+    return (pad_w, pad_h, tw, th, max_area), ""
+
+
+def _scaled_output_dimensions(out_width: int, out_height: int, resolution: int) -> tuple[int, int]:
+    shorter = min(out_width, out_height)
+    ratio = float(resolution) / float(shorter)
+    return max(2, int(out_width * ratio) // 2 * 2), max(2, int(out_height * ratio) // 2 * 2)
+
+
+def _max_fitting_resolution(
+    out_width: int,
+    out_height: int,
+    *,
+    n_frames: int,
+    fixed_bytes: float,
+    scaled_per_pixel: float,
+    unified_memory: bool,
+    budget_bytes: int,
+    max_tile_side: int,
+) -> int | None:
+    shorter = min(out_width, out_height)
+    max_even = ((shorter - 1) // 2) * 2
+    if max_even < 2:
+        return None
+
+    def fits(res: int) -> bool:
+        cand_w, cand_h = _scaled_output_dimensions(out_width, out_height, res)
+        planned, _ = _plan_tile_dims(
+            cand_w,
+            cand_h,
+            n_frames=n_frames,
+            fixed_bytes=fixed_bytes,
+            scaled_per_pixel=scaled_per_pixel,
+            unified_memory=unified_memory,
+            budget_bytes=budget_bytes,
+            max_tile_side=max_tile_side,
+        )
+        return planned is not None
+
+    if not fits(2):
+        return None
+    lo, hi = 1, max_even // 2
+    best = 2
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        res = mid * 2
+        if fits(res):
+            best = res
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best
 
 
 def plan_tiles(
@@ -317,10 +418,10 @@ def plan_tiles(
         ys = compute_axis_starts(pad_h, th, TILE_OVERLAP)
         host_bytes = (
             _host_buffer_bytes(
+                tw,
+                th,
                 out_width,
                 out_height,
-                pad_w,
-                pad_h,
                 n_frames,
                 include_canvas=len(xs) * len(ys) > 1,
             )
@@ -329,38 +430,29 @@ def plan_tiles(
         )
         max_area = int((budget_bytes - host_bytes - fixed_bytes) / scaled_per_pixel)
     else:
-        single_host = (
-            _host_buffer_bytes(out_width, out_height, pad_w, pad_h, n_frames, include_canvas=False)
-            if unified_memory
-            else 0
+        planned, detail = _plan_tile_dims(
+            out_width,
+            out_height,
+            n_frames=n_frames,
+            fixed_bytes=fixed_bytes,
+            scaled_per_pixel=scaled_per_pixel,
+            unified_memory=unified_memory,
+            budget_bytes=budget_bytes,
+            max_tile_side=max_tile_side,
         )
-        single_max_area = int((budget_bytes - single_host - fixed_bytes) / scaled_per_pixel)
-        if pad_w <= max_tile_side and pad_h <= max_tile_side and pad_w * pad_h <= single_max_area:
-            tw, th = pad_w, pad_h
-            max_area = single_max_area
-        else:
-            multi_host = (
-                _host_buffer_bytes(
-                    out_width, out_height, pad_w, pad_h, n_frames, include_canvas=True
-                )
-                if unified_memory
-                else 0
+        if planned is None:
+            max_res = _max_fitting_resolution(
+                out_width,
+                out_height,
+                n_frames=n_frames,
+                fixed_bytes=fixed_bytes,
+                scaled_per_pixel=scaled_per_pixel,
+                unified_memory=unified_memory,
+                budget_bytes=budget_bytes,
+                max_tile_side=max_tile_side,
             )
-            max_area = int((budget_bytes - multi_host - fixed_bytes) / scaled_per_pixel)
-            if max_area < MIN_TILE_SIDE * MIN_TILE_SIDE:
-                raise RuntimeError(
-                    _low_memory_message(
-                        backend,
-                        "the memory budget leaves less than a 512x512 output tile",
-                    )
-                )
-            tw, th = _choose_tile_dimensions(
-                pad_w,
-                pad_h,
-                max_area,
-                max_tile_side,
-                backend=backend,
-            )
+            raise RuntimeError(_low_memory_message(backend, detail, max_resolution=max_res))
+        pad_w, pad_h, tw, th, max_area = planned
         xs = compute_axis_starts(pad_w, tw, TILE_OVERLAP)
         ys = compute_axis_starts(pad_h, th, TILE_OVERLAP)
 
@@ -412,31 +504,84 @@ def model_size(in_width: int, in_height: int, out_width: int, out_height: int) -
     return in_width * OUTPUT_SCALE, in_height * OUTPUT_SCALE
 
 
-def upscale_and_pad_frames(
+def upscale_and_pad_tile(
     frames: Sequence[np.ndarray],
     out_w: int,
     out_h: int,
-    pad_width: int,
-    pad_height: int,
+    tile: FlashVSRTile,
     *,
     resample: Image.Resampling = Image.Resampling.BICUBIC,
 ) -> np.ndarray:
-    """Resize RGB uint8 frames to (out_h, out_w) and edge-replicate pad to the padded size."""
+    """Crop, resize, and edge-replicate pad source frames on demand for one output tile."""
     in_h, in_w = frames[0].shape[:2]
-    pad_right = pad_width - out_w
-    pad_bottom = pad_height - out_h
+    vis_w = min(tile.width, out_w - tile.x)
+    vis_h = min(tile.height, out_h - tile.y)
+    if vis_w <= 0 or vis_h <= 0:
+        raise ValueError(
+            f"Tile {(tile.x, tile.y, tile.width, tile.height)} lies outside {(out_w, out_h)}"
+        )
 
-    stacked = np.empty((len(frames), pad_height, pad_width, 3), dtype=np.uint8)
+    scale_x = float(in_w) / float(out_w)
+    scale_y = float(in_h) / float(out_h)
+    fx0 = float(tile.x) * scale_x
+    fy0 = float(tile.y) * scale_y
+    fx1 = float(tile.x + vis_w) * scale_x
+    fy1 = float(tile.y + vis_h) * scale_y
+
+    support = 3.0 if resample == Image.Resampling.LANCZOS else 2.0
+    margin_x = int(math.ceil(support * max(1.0, scale_x))) + 2
+    margin_y = int(math.ceil(support * max(1.0, scale_y))) + 2
+
+    # Align source crop to exact rational steps when the step is small (e.g. 4x, 2x, 1.5x)
+    # so Pillow resizes with the same phase grid as the full-frame path.
+    gcd_x = math.gcd(in_w, out_w)
+    gcd_y = math.gcd(in_h, out_h)
+    in_step_x, out_step_x = in_w // gcd_x, out_w // gcd_x
+    in_step_y, out_step_y = in_h // gcd_y, out_h // gcd_y
+    use_aligned = in_step_x <= 64 and in_step_y <= 64
+
+    if use_aligned:
+        sx0 = max(0, ((int(math.floor(fx0)) - margin_x) // in_step_x) * in_step_x)
+        sy0 = max(0, ((int(math.floor(fy0)) - margin_y) // in_step_y) * in_step_y)
+        sx1 = min(
+            in_w,
+            ((int(math.ceil(fx1)) + margin_x + in_step_x - 1) // in_step_x) * in_step_x,
+        )
+        sy1 = min(
+            in_h,
+            ((int(math.ceil(fy1)) + margin_y + in_step_y - 1) // in_step_y) * in_step_y,
+        )
+        crop_out_w = (sx1 - sx0) * out_step_x // in_step_x
+        crop_out_h = (sy1 - sy0) * out_step_y // in_step_y
+        off_x = tile.x - (sx0 * out_step_x // in_step_x)
+        off_y = tile.y - (sy0 * out_step_y // in_step_y)
+        box = None
+    else:
+        sx0 = max(0, int(math.floor(fx0)) - margin_x)
+        sy0 = max(0, int(math.floor(fy0)) - margin_y)
+        sx1 = min(in_w, int(math.ceil(fx1)) + margin_x)
+        sy1 = min(in_h, int(math.ceil(fy1)) + margin_y)
+        crop_out_w, crop_out_h = vis_w, vis_h
+        off_x, off_y = 0, 0
+        box = (fx0 - sx0, fy0 - sy0, fx1 - sx0, fy1 - sy0)
+
+    pad_right = tile.width - vis_w
+    pad_bottom = tile.height - vis_h
+    tile_lq = np.empty((len(frames), tile.height, tile.width, 3), dtype=np.uint8)
     for idx, frame in enumerate(frames):
         if frame.shape != (in_h, in_w, 3):
             raise ValueError(
                 f"Expected frame shape {(in_h, in_w, 3)}, got {frame.shape} at index {idx}"
             )
-        up = np.asarray(Image.fromarray(frame).resize((out_w, out_h), resample), dtype=np.uint8)
-        if pad_right > 0 or pad_bottom > 0:
-            up = np.pad(up, ((0, pad_bottom), (0, pad_right), (0, 0)), mode="edge")
-        stacked[idx] = up
-    return stacked
+        cropped = Image.fromarray(frame[sy0:sy1, sx0:sx1])
+        resized = cropped.resize((crop_out_w, crop_out_h), resample, box=box)
+        resized_arr = np.asarray(resized, dtype=np.uint8)
+        tile_lq[idx, :vis_h, :vis_w, :] = resized_arr[off_y : off_y + vis_h, off_x : off_x + vis_w]
+        if pad_right > 0:
+            tile_lq[idx, :vis_h, vis_w:, :] = tile_lq[idx, :vis_h, vis_w - 1 : vis_w, :]
+        if pad_bottom > 0:
+            tile_lq[idx, vis_h:, :, :] = tile_lq[idx, vis_h - 1 : vis_h, :, :]
+    return tile_lq
 
 
 def _to_output(frame: np.ndarray, width: int, height: int) -> np.ndarray:
@@ -481,8 +626,77 @@ def _resolve_device_and_backend(device: str) -> tuple[str, str]:
     )
 
 
+class _BlendAccumulator:
+    """Host-RAM or disk-backed (memmap) accumulator for multi-tile blending."""
+
+    def __init__(
+        self,
+        n_in: int,
+        out_h: int,
+        out_w: int,
+        canvas_dtype: np.dtype[Any],
+        *,
+        use_memmap: bool,
+        temporary_directory: str | os.PathLike | None = None,
+    ) -> None:
+        self._tmpdir: tempfile.TemporaryDirectory[str] | None = None
+        if not use_memmap:
+            self.canvas: np.ndarray = np.zeros((n_in, out_h, out_w, 3), dtype=canvas_dtype)
+            self.weight_sum: np.ndarray = np.zeros((out_h, out_w), dtype=np.float32)
+            return
+
+        base_dir = (
+            Path(temporary_directory)
+            if temporary_directory is not None
+            else default_work_directory()
+        )
+        base_dir.mkdir(parents=True, exist_ok=True)
+        self._tmpdir = tempfile.TemporaryDirectory(prefix="localsr-flashvsr-", dir=base_dir)
+        try:
+            root = Path(self._tmpdir.name)
+            self.canvas = np.memmap(
+                root / "canvas.dat",
+                dtype=canvas_dtype,
+                mode="w+",
+                shape=(n_in, out_h, out_w, 3),
+            )
+            self.weight_sum = np.memmap(
+                root / "weight_sum.dat",
+                dtype=np.float32,
+                mode="w+",
+                shape=(out_h, out_w),
+            )
+        except BaseException:
+            self.close()
+            raise
+
+    def __enter__(self) -> _BlendAccumulator:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        for attr in ("canvas", "weight_sum"):
+            arr = getattr(self, attr, None)
+            if arr is None:
+                continue
+            delattr(self, attr)
+            if isinstance(arr, np.memmap):
+                mmap_obj = getattr(arr, "_mmap", None)
+                if mmap_obj is not None and not mmap_obj.closed:
+                    mmap_obj.close()
+            del arr
+        if self._tmpdir is not None:
+            tmpdir = self._tmpdir
+            self._tmpdir = None
+            tmpdir.cleanup()
+
+
 class FlashVSREngine:
     """One job's worth of FlashVSR v1.1 Tiny state (MLX on MPS or PyTorch on CUDA/ROCm) and tiling."""
+
+    temporary_directory: str | os.PathLike | None = None
 
     def __init__(
         self,
@@ -499,6 +713,7 @@ class FlashVSREngine:
         self._budget_bytes_override: int | None = None
         self._tile_size_override: tuple[int, int] | None = None
         self._upscale_resample: Image.Resampling = Image.Resampling.BICUBIC
+        self.temporary_directory = None
 
         if self._backend == "mps":
             import mlx.core as mx
@@ -659,6 +874,7 @@ class FlashVSREngine:
         cancel_event: threading.Event | None = None,
         progress_callback: Callable[[str, int, int], None] | None = None,
         tile_callback: Callable[..., None] | None = None,
+        temporary_directory: str | os.PathLike | None = None,
     ) -> list[np.ndarray]:
         """Upscale a temporal window of RGB uint8 frames to `resolution` (shorter edge)."""
         del batch_size, temporal_overlap
@@ -693,15 +909,8 @@ class FlashVSREngine:
             tile_size_override=getattr(self, "_tile_size_override", None),
         )
 
+        resample = getattr(self, "_upscale_resample", Image.Resampling.BICUBIC)
         report("preparing_clip", 0, 0)
-        lq_padded = upscale_and_pad_frames(
-            frames,
-            out_w,
-            out_h,
-            plan.padded_width,
-            plan.padded_height,
-            resample=getattr(self, "_upscale_resample", Image.Resampling.BICUBIC),
-        )
 
         num_tiles = len(plan.tiles)
         if num_tiles == 1:
@@ -713,8 +922,10 @@ class FlashVSREngine:
             def single_step(step: int, total_steps: int) -> None:
                 report("enhancing", step, total_steps)
 
-            tile_out = self._run_tile(lq_padded, n_in, n_pad, tile, seed, single_step)
-            del lq_padded
+            lq_tile = upscale_and_pad_tile(frames, out_w, out_h, tile, resample=resample)
+            check_cancelled()
+            tile_out = self._run_tile(lq_tile, n_in, n_pad, tile, seed, single_step)
+            del lq_tile
             check_cancelled()
             cropped = np.rint(tile_out[:, :out_h, :out_w, :]).astype(np.uint8)
             del tile_out
@@ -723,68 +934,87 @@ class FlashVSREngine:
             report("finishing", 1, 1)
             return [_to_output(cropped[idx], final_w, final_h) for idx in range(n_in)]
 
-        # Keep the blended canvas in float32 unless very large (>= ~1.8 GB) to avoid swap.
+        # Keep the blended canvas in float32 unless very large (> 150M elements) to avoid
+        # excessive size, and spill large windows to disk-backed memmap instead of unified RAM.
         canvas_dtype = np.float16 if n_in * out_h * out_w > FLOAT16_CANVAS_ELEMENTS else np.float32
-        canvas = np.zeros((n_in, out_h, out_w, 3), dtype=canvas_dtype)
-        weight_sum = np.zeros((out_h, out_w), dtype=np.float32)
+        scratch_dir = (
+            temporary_directory
+            if temporary_directory is not None
+            else getattr(self, "temporary_directory", None)
+        )
+        use_memmap = _use_memmap_canvas(out_w, out_h, n_in)
 
-        for tile_idx, tile in enumerate(plan.tiles):
-            check_cancelled()
-            vis_w = min(tile.width, out_w - tile.x)
-            vis_h = min(tile.height, out_h - tile.y)
-            if tile_callback is not None and vis_w > 0 and vis_h > 0:
-                tile_callback(
-                    "enhancing",
-                    "started",
-                    tile_idx,
-                    num_tiles,
-                    tile.x,
-                    tile.y,
-                    vis_w,
-                    vis_h,
-                    out_w,
-                    out_h,
-                )
+        with _BlendAccumulator(
+            n_in,
+            out_h,
+            out_w,
+            np.dtype(canvas_dtype),
+            use_memmap=use_memmap,
+            temporary_directory=scratch_dir,
+        ) as acc:
+            for tile_idx, tile in enumerate(plan.tiles):
+                check_cancelled()
+                vis_w = min(tile.width, out_w - tile.x)
+                vis_h = min(tile.height, out_h - tile.y)
+                if tile_callback is not None and vis_w > 0 and vis_h > 0:
+                    tile_callback(
+                        "enhancing",
+                        "started",
+                        tile_idx,
+                        num_tiles,
+                        tile.x,
+                        tile.y,
+                        vis_w,
+                        vis_h,
+                        out_w,
+                        out_h,
+                    )
 
-            def tile_step(step: int, total_steps: int, idx: int = tile_idx) -> None:
-                report("enhancing", idx * total_steps + step, num_tiles * total_steps)
+                def tile_step(step: int, total_steps: int, idx: int = tile_idx) -> None:
+                    report("enhancing", idx * total_steps + step, num_tiles * total_steps)
 
-            lq_slice = lq_padded[:, tile.y : tile.y + tile.height, tile.x : tile.x + tile.width, :]
-            tile_out = self._run_tile(lq_slice, n_in, n_pad, tile, seed, tile_step)
-            del lq_slice
-            check_cancelled()
+                lq_tile = upscale_and_pad_tile(frames, out_w, out_h, tile, resample=resample)
+                check_cancelled()
+                tile_out = self._run_tile(lq_tile, n_in, n_pad, tile, seed, tile_step)
+                del lq_tile
+                check_cancelled()
 
-            if vis_w > 0 and vis_h > 0:
-                w_crop = tile.weights[:vis_h, :vis_w]
-                canvas[:, tile.y : tile.y + vis_h, tile.x : tile.x + vis_w, :] += (
-                    tile_out[:, :vis_h, :vis_w, :] * w_crop[None, :, :, None]
-                ).astype(canvas_dtype)
-                weight_sum[tile.y : tile.y + vis_h, tile.x : tile.x + vis_w] += w_crop
-            del tile_out
+                if vis_w > 0 and vis_h > 0:
+                    w_crop = tile.weights[:vis_h, :vis_w]
+                    w_3d = w_crop[:, :, None]
+                    y0, y1 = tile.y, tile.y + vis_h
+                    x0, x1 = tile.x, tile.x + vis_w
+                    for frame_idx in range(n_in):
+                        acc.canvas[frame_idx, y0:y1, x0:x1, :] += (
+                            tile_out[frame_idx, :vis_h, :vis_w, :] * w_3d
+                        ).astype(canvas_dtype)
+                    acc.weight_sum[y0:y1, x0:x1] += w_crop
+                del tile_out
 
-            if tile_callback is not None and vis_w > 0 and vis_h > 0:
-                tile_callback(
-                    "enhancing",
-                    "completed",
-                    tile_idx + 1,
-                    num_tiles,
-                    tile.x,
-                    tile.y,
-                    vis_w,
-                    vis_h,
-                    out_w,
-                    out_h,
-                )
+                if tile_callback is not None and vis_w > 0 and vis_h > 0:
+                    tile_callback(
+                        "enhancing",
+                        "completed",
+                        tile_idx + 1,
+                        num_tiles,
+                        tile.x,
+                        tile.y,
+                        vis_w,
+                        vis_h,
+                        out_w,
+                        out_h,
+                    )
 
-        del lq_padded
-        if np.any(weight_sum <= 0):
-            raise RuntimeError("FlashVSR tile plan left uncovered output pixels.")
-        # Normalise one frame at a time: a whole-window float32 copy is several GB at 4K.
-        weights = weight_sum[:, :, None]
-        result = []
-        for idx in range(n_in):
-            frame = np.clip(canvas[idx].astype(np.float32) / weights, 0.0, 255.0)
-            result.append(_to_output(np.rint(frame).astype(np.uint8), final_w, final_h))
-        del canvas, weight_sum, weights
+            if np.any(acc.weight_sum <= 0):
+                raise RuntimeError("FlashVSR tile plan left uncovered output pixels.")
+            # Normalise one frame at a time: a whole-window float32 copy is several GB at 4K.
+            weights = acc.weight_sum[:, :, None]
+            result = []
+            for idx in range(n_in):
+                check_cancelled()
+                frame = np.clip(acc.canvas[idx].astype(np.float32) / weights, 0.0, 255.0)
+                result.append(_to_output(np.rint(frame).astype(np.uint8), final_w, final_h))
+                del frame
+            del weights
         report("finishing", 1, 1)
         return result
