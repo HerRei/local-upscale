@@ -19,6 +19,21 @@ CATALOG_BASE_URL = (
 HAT_SOURCE_URL = "https://github.com/XPixelGroup/HAT"
 PROJECT_URL = "https://github.com/HerRei/local-upscale"
 
+LICENSE_URLS: dict[str, str] = {
+    "Apache-2.0": "https://www.apache.org/licenses/LICENSE-2.0",
+    "BSD-3-Clause": "https://opensource.org/license/bsd-3-clause",
+    "CC BY 4.0": "https://creativecommons.org/licenses/by/4.0/",
+    "CC-BY-4.0": "https://creativecommons.org/licenses/by/4.0/",
+    "CC BY-NC-SA 4.0": "https://creativecommons.org/licenses/by-nc-sa/4.0/",
+    "MIT": "https://opensource.org/license/mit",
+    "MIT OR Apache-2.0": "https://opensource.org/license/mit",
+}
+
+
+def license_url_for(license_name: str) -> str:
+    """Canonical license text URL for known catalog licenses, or empty when unverified."""
+    return LICENSE_URLS.get(license_name.strip(), "")
+
 
 class ModelPurpose(StrEnum):
     GENERAL = "general"
@@ -152,6 +167,10 @@ class CatalogModel:
     @property
     def purpose(self) -> ModelPurpose:
         return self.purposes[0] if self.purposes else ModelPurpose.GENERAL
+
+    @property
+    def license_url(self) -> str:
+        return license_url_for(self.license_name)
 
 
 # The detector is infrastructure for the optional face-aware path rather than
@@ -835,6 +854,10 @@ class CatalogVideoModel:
     @property
     def total_size_bytes(self) -> int:
         return sum(file.size_bytes for file in self.files)
+
+    @property
+    def license_url(self) -> str:
+        return license_url_for(self.license_name)
 
 
 # Immutable revision-pinned URLs: numz/SeedVR2_comfyUI at commit

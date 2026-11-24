@@ -85,10 +85,21 @@ pub struct EditModel {
     pub default_steps: u32,
     #[serde(default = "default_cfg_scale")]
     pub cfg_scale: f64,
+    #[serde(default)]
+    pub author: String,
+    #[serde(default)]
     pub license_name: String,
+    #[serde(default)]
     pub license_url: String,
+    #[serde(default)]
     pub source_url: String,
+    #[serde(default)]
+    pub commercial_use_allowed: Option<bool>,
+    #[serde(default)]
+    pub attribution_required: bool,
+    #[serde(default)]
     pub terms_acceptance_required: bool,
+    #[serde(default)]
     pub automated_download_allowed: bool,
     #[serde(default)]
     pub installed: bool,
@@ -289,9 +300,12 @@ pub fn custom_edit_model(custom: &CustomEditModel) -> Option<EditModel> {
         min_vram_gb,
         default_steps: spec.default_steps,
         cfg_scale: spec.cfg_scale,
+        author: String::new(),
         license_name: "Your own file".into(),
         license_url: String::new(),
         source_url: String::new(),
+        commercial_use_allowed: None,
+        attribution_required: false,
         terms_acceptance_required: false,
         automated_download_allowed: false,
         installed,
@@ -876,6 +890,11 @@ mod tests {
             }
             // Only openly licensed bundles are offered.
             assert!(matches!(model.license_name.as_str(), "Apache-2.0" | "MIT"));
+            assert!(!model.author.is_empty());
+            assert!(model.source_url.starts_with("https://"));
+            assert!(model.license_url.starts_with("https://"));
+            assert_eq!(model.commercial_use_allowed, Some(true));
+            assert_eq!(model.attribution_required, model.license_name != "MIT");
             assert!(!model.terms_acceptance_required);
         }
     }
