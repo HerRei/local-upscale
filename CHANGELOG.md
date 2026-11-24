@@ -10,6 +10,10 @@
   (27 s instead of 99 s for a 12 MP photo on an M1 Pro). Both models, their numbers and the
   technical report are at github.com/HerRei/localsr-models. The previous models stay in the
   model library; Illustration presets are unchanged.
+- **First launch.** A two-page setup: first privacy (update checks, the anonymous count and
+  crash reports, each with a plain explanation and a link to what LocalSR sends and why),
+  then the look of the app, the menu bar or tray icon and a sound when a file finishes.
+  Nothing is sent before Done, and everything can be changed later in Settings.
 - **Settings.** One Settings window (⌘, on a Mac; File > Settings… elsewhere) holds every
   app-wide choice: appearance, default hardware, low priority, notifications and sound,
   the menu bar icon, the model folder, caches, External FFmpeg, updates and crash
@@ -93,7 +97,10 @@
   `apt` installs into the applications menu and removes with `apt remove`. It reports new
   versions instead of updating itself, and downloads the CUDA or ROCm engine inside the
   app. The AppImage stays (#165).
-- **Fixes.** The live preview of Colour plus upscaling stays in colour. Stopping a large
+- **Fixes.** Comparing videos no longer stutters, stops where an unfinished part ends and
+  keeps its position and audio choice when you switch between Slider and Boxes; while
+  playing in the Mac app the two sides can still be a few frames apart, and paused or
+  stepped frames always match. The live preview of Colour plus upscaling stays in colour. Stopping a large
   photo with "keep the finished part" gives it the time to save instead of restarting the
   engine after a few seconds, and kept parts always appear in Outputs. LocalSR's own
   OpenCV now includes optical flow, which de-flicker and video colour need.
