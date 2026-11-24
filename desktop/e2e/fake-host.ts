@@ -573,30 +573,32 @@ function hostScript(scenario: Scenario): void {
         snapshot.settings[args.name] = args.value;
         emit('state-changed', null);
         return null;
-      case 'set_privacy_choice':
-        snapshot.settings.appearance = args.appearance;
-        snapshot.settings.colour_blind_palette = args.colourBlindPalette;
-        snapshot.settings.check_updates_at_launch = args.checkAtLaunch;
-        snapshot.settings.anonymous_update_count = args.anonymousCount;
-        snapshot.settings.crash_reports = args.crashReports;
-        snapshot.settings.privacy_choice_made = true;
-        if (!args.crashReports) crashReports = [];
+      case 'set_privacy_choice': {
+        const choices = args.choices;
+        Object.assign(snapshot.settings, {
+          appearance: choices.appearance,
+          colour_blind_palette: choices.colourBlindPalette,
+          contrast: choices.contrast,
+          check_updates_at_launch: choices.checkAtLaunch,
+          anonymous_update_count: choices.anonymousCount,
+          crash_reports: choices.crashReports,
+          completion_sound: choices.completionSound,
+          privacy_choice_made: true,
+        });
+        if (choices.showInMenuBar !== null)
+          snapshot.settings.show_in_menu_bar = choices.showInMenuBar;
+        if (choices.completionSound) snapshot.settings.notify_on_finish = true;
+        if (!choices.crashReports) crashReports = [];
         try {
           sessionStorage.setItem(
             'localsr.fakeHost.setupSettings',
-            JSON.stringify({
-              appearance: args.appearance,
-              colour_blind_palette: args.colourBlindPalette,
-              check_updates_at_launch: args.checkAtLaunch,
-              anonymous_update_count: args.anonymousCount,
-              crash_reports: args.crashReports,
-              privacy_choice_made: true,
-            }),
+            JSON.stringify(snapshot.settings),
           );
         } catch {
           /* sessionStorage unavailable */
         }
         return null;
+      }
       case 'save_settings':
         snapshot.settings = structuredClone(args.settings);
         return null;

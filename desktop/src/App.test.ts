@@ -124,6 +124,9 @@ const api = vi.hoisted(() => ({
     async (_choices: {
       appearance: UiSettings['appearance'];
       colourBlindPalette: boolean;
+      contrast: NonNullable<UiSettings['contrast']>;
+      showInMenuBar: boolean | null;
+      completionSound: boolean;
       checkAtLaunch: boolean;
       anonymousCount: boolean;
       crashReports: boolean;
@@ -191,6 +194,7 @@ const api = vi.hoisted(() => ({
   saveRecipe: vi.fn(async (_recipe: Recipe) => undefined),
   deleteRecipe: vi.fn(async () => undefined),
   updateStatus: vi.fn(async () => ({
+    managed_by_store: false,
     configured: false,
     channel: 'beta',
     target: '',
@@ -419,6 +423,7 @@ describe('Appearance from the host', () => {
     snapshot.settings.viewer_background = 'grey';
     const user = await mountWith(snapshot);
     const dialog = await screen.findByRole('dialog', { name: 'Welcome to LocalSR' });
+    await user.click(within(dialog).getByRole('button', { name: 'Continue' }));
     await user.click(within(dialog).getByRole('radio', { name: 'Light' }));
     expect(document.documentElement.dataset).toMatchObject({
       theme: 'light',
@@ -452,6 +457,7 @@ describe('Update switches', () => {
       if (unconfigured) api.updateStatus.mockImplementation(unconfigured);
     });
     api.updateStatus.mockResolvedValue({
+      managed_by_store: false,
       configured: true,
       channel: 'beta',
       target: 'darwin-aarch64-mps-native',
@@ -6724,112 +6730,133 @@ it('saves Run at low priority, Show in menu bar and Notify via setPreference eve
 });
 
 describe('first-launch setup screen', () => {
-  it('shows defaults, previews appearance live, saves all choices on Continue, and closes', async () => {
+  it('shows defaults, previews live, saves everything on Done', async () => {
     const snapshot = readySnapshot();
     snapshot.settings.privacy_choice_made = false;
     const user = await mountWith(snapshot);
     const dialog = await screen.findByRole('dialog', { name: 'Welcome to LocalSR' });
-
-    const dark = within(dialog).getByRole('radio', { name: 'Dark' });
-    const light = within(dialog).getByRole('radio', { name: 'Light' });
-    const system = within(dialog).getByRole('radio', { name: 'Match System' });
-    const colourBlind = within(dialog).getByRole('switch', {
-      name: 'Colour-blind friendly colours',
-    }) as HTMLInputElement;
-    const checkUpdates = within(dialog).getByRole('switch', {
-      name: 'Check for updates automatically',
-    }) as HTMLInputElement;
-    const anonymousCount = within(dialog).getByRole('switch', {
-      name: 'Send an anonymous count with each update check',
-    }) as HTMLInputElement;
-    const crashReports = within(dialog).getByRole('switch', {
-      name: 'Offer to report crashes',
-    }) as HTMLInputElement;
-
-    expect(dark.getAttribute('aria-checked')).toBe('true');
-    expect(light.getAttribute('aria-checked')).toBe('false');
-    expect(system.getAttribute('aria-checked')).toBe('false');
-    expect(colourBlind.checked).toBe(false);
-    expect(checkUpdates.checked).toBe(true);
-    expect(anonymousCount.checked).toBe(false);
-    expect(crashReports.checked).toBe(false);
-    expect(document.documentElement.dataset.theme).toBe('dark');
-    expect(document.documentElement.dataset.palette).toBe('default');
-
-    await user.click(light);
-    expect(document.documentElement.dataset.theme).toBe('light');
-    expect(light.getAttribute('aria-checked')).toBe('true');
-
-    await user.click(colourBlind);
-    expect(document.documentElement.dataset.palette).toBe('colour-blind');
-    expect(api.setPrivacyChoice).not.toHaveBeenCalled();
-
-    await user.click(checkUpdates);
-    await user.click(anonymousCount);
-    await user.click(crashReports);
+    expect(
+      (
+        within(dialog).getByRole('switch', {
+          name: 'Check for updates when LocalSR starts',
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(true);
     await user.click(within(dialog).getByRole('button', { name: 'Continue' }));
-
-    await waitFor(() =>
-      expect(api.setPrivacyChoice).toHaveBeenCalledWith({
-        appearance: 'light',
-        colourBlindPalette: true,
-        checkAtLaunch: false,
-        anonymousCount: true,
-        crashReports: true,
-      }),
-    );
+    await user.click(within(dialog).getByRole('radio', { name: 'Light' }));
+    await user.click(within(dialog).getByRole('switch', { name: 'Colour-blind friendly colours' }));
+    await user.click(within(dialog).getByRole('switch', { name: 'High contrast' }));
+    expect(document.documentElement.dataset).toMatchObject({
+      theme: 'light',
+      palette: 'colour-blind',
+      contrast: 'high',
+    });
+    expect(api.setPrivacyChoice).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(api.setPrivacyChoice).toHaveBeenCalledTimes(1));
+    expect(api.setPrivacyChoice).toHaveBeenCalledWith({
+      appearance: 'light',
+      colourBlindPalette: true,
+      contrast: 'high',
+      checkAtLaunch: true,
+      anonymousCount: false,
+      crashReports: false,
+      showInMenuBar: true,
+      completionSound: false,
+    });
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: 'Welcome to LocalSR' })).toBeNull(),
     );
   });
 
-  it('follows a sensible keyboard focus order and ignores Escape', async () => {
+  it('saves the tray choice in the atomic setup command', async () => {
     const snapshot = readySnapshot();
     snapshot.settings.privacy_choice_made = false;
     const user = await mountWith(snapshot);
     const dialog = await screen.findByRole('dialog', { name: 'Welcome to LocalSR' });
-
-    const expectedOrder = [
-      within(dialog).getByRole('radio', { name: 'Dark' }),
-      within(dialog).getByRole('radio', { name: 'Light' }),
-      within(dialog).getByRole('radio', { name: 'Match System' }),
-      within(dialog).getByRole('switch', { name: 'Colour-blind friendly colours' }),
-      within(dialog).getByRole('switch', { name: /Show LocalSR in the (menu bar|system tray)/ }),
-      within(dialog).getByRole('switch', { name: 'Check for updates automatically' }),
-      within(dialog).getByRole('switch', {
-        name: 'Send an anonymous count with each update check',
-      }),
-      within(dialog).getByRole('switch', { name: 'Offer to report crashes' }),
-      within(dialog).getByRole('button', { name: 'Continue' }),
-    ];
-
-    for (const control of expectedOrder) {
-      await user.tab();
-      expect(document.activeElement).toBe(control);
-    }
-    await user.tab();
-    expect(document.activeElement).toBe(expectedOrder[0]);
-
-    await user.keyboard('{Escape}');
-    expect(screen.getByRole('dialog', { name: 'Welcome to LocalSR' })).toBeTruthy();
-  });
-
-  it('asks at first launch whether to show LocalSR in the menu bar', async () => {
-    const snapshot = readySnapshot();
-    snapshot.settings.privacy_choice_made = false;
-    const user = await mountWith(snapshot);
-    const dialog = await screen.findByRole('dialog', { name: 'Welcome to LocalSR' });
-    const toggle = within(dialog).getByRole('switch', {
-      name: /Show LocalSR in the (menu bar|system tray)/,
-    }) as HTMLInputElement;
-    expect(toggle.checked).toBe(true);
-    await user.click(toggle);
     await user.click(within(dialog).getByRole('button', { name: 'Continue' }));
+    await user.click(within(dialog).getByRole('switch', { name: /Show LocalSR in the/ }));
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
     await waitFor(() =>
-      expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ show_in_menu_bar: false }),
+      expect(api.setPrivacyChoice).toHaveBeenCalledWith(
+        expect.objectContaining({ showInMenuBar: false }),
       ),
     );
+    expect(api.saveSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({ show_in_menu_bar: false }),
+    );
+  });
+
+  it('keeps choices on page two if saving fails', async () => {
+    const snapshot = readySnapshot();
+    snapshot.settings.privacy_choice_made = false;
+    api.setPrivacyChoice.mockRejectedValueOnce(new Error('save failed'));
+    const user = await mountWith(snapshot);
+    const dialog = await screen.findByRole('dialog', { name: 'Welcome to LocalSR' });
+    await user.click(within(dialog).getByRole('button', { name: 'Continue' }));
+    await user.click(
+      within(dialog).getByRole('switch', { name: 'Play a sound when a file finishes' }),
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    expect((await within(dialog).findByRole('alert')).textContent).toContain('save failed');
+    expect(
+      (
+        within(dialog).getByRole('switch', {
+          name: 'Play a sound when a file finishes',
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(true);
+  });
+
+  it('enables finish notifications when sound is chosen', async () => {
+    const snapshot = readySnapshot();
+    snapshot.settings.privacy_choice_made = false;
+    snapshot.settings.notify_on_finish = false;
+    const user = await mountWith(snapshot);
+    const dialog = await screen.findByRole('dialog', { name: 'Welcome to LocalSR' });
+    await user.click(within(dialog).getByRole('button', { name: 'Continue' }));
+    await user.click(
+      within(dialog).getByRole('switch', { name: 'Play a sound when a file finishes' }),
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    await waitFor(() =>
+      expect(api.setPrivacyChoice).toHaveBeenCalledWith(
+        expect.objectContaining({ completionSound: true }),
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Welcome to LocalSR' })).toBeNull(),
+    );
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(
+      (
+        within(settingsDialog).getByRole('switch', {
+          name: 'Notify when a file finishes',
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(true);
+    expect(
+      (
+        within(settingsDialog).getByRole('switch', {
+          name: 'Play a sound with the notification',
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(true);
+  });
+
+  it('shows only crash reports for a Store build', async () => {
+    const snapshot = readySnapshot();
+    snapshot.settings.privacy_choice_made = false;
+    const original = api.updateStatus.getMockImplementation();
+    onTestFinished(() => {
+      if (original) api.updateStatus.mockImplementation(original);
+    });
+    api.updateStatus.mockResolvedValue({ ...(await api.updateStatus()), managed_by_store: true });
+    await mountWith(snapshot);
+    const dialog = await screen.findByRole('dialog', { name: 'Welcome to LocalSR' });
+    expect(within(dialog).getAllByRole('switch')).toHaveLength(1);
+    expect(within(dialog).getByRole('switch', { name: 'Offer to report crashes' })).toBeTruthy();
   });
 
   it('does not show after a choice', async () => {
@@ -7836,7 +7863,7 @@ describe('Engine manager UI and recommendation card', () => {
     return snapshot;
   }
 
-  it('shows the GPU engine recommendation card only after first-launch setup Continue, and remembers Not now', async () => {
+  it('shows the GPU engine recommendation card only after first-launch setup, and remembers Not now', async () => {
     const snapshot = windowsCpuSnapshot();
     snapshot.settings.privacy_choice_made = false;
 
@@ -7845,6 +7872,7 @@ describe('Engine manager UI and recommendation card', () => {
     expect(screen.queryByText(/can run LocalSR much faster/)).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await user.click(screen.getByRole('button', { name: 'Done' }));
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: 'Welcome to LocalSR' })).toBeNull(),
     );
@@ -8171,7 +8199,7 @@ describe('Engine manager UI and recommendation card', () => {
 });
 
 describe('Linux AppImage menu prompt', () => {
-  it('offers to add LocalSR to the applications menu only after setup Continue, and remembers Not now', async () => {
+  it('offers to add LocalSR to the applications menu only after first-launch setup, and remembers Not now', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.settings.privacy_choice_made = false;
     snapshot.linux_menu_offer = true;
@@ -8181,6 +8209,7 @@ describe('Linux AppImage menu prompt', () => {
     expect(screen.queryByText('Add LocalSR to your applications menu?')).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await user.click(screen.getByRole('button', { name: 'Done' }));
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: 'Welcome to LocalSR' })).toBeNull(),
     );
