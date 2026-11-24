@@ -1335,6 +1335,9 @@ class WorkerServer:
         )
         window = min(window, max(1, int(getattr(engine, "max_temporal_window", window))))
         overlap = min(overlap, window - 1)
+        scratch_dir = data.get("temporary_directory") or data.get("scratch_directory")
+        if scratch_dir is not None and hasattr(engine, "temporary_directory"):
+            engine.temporary_directory = scratch_dir
         memory.configure(memory.latest.output_width, memory.latest.output_height, window)
 
         decode_iter = decode_timed_frames(

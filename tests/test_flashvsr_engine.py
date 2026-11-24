@@ -315,17 +315,63 @@ def test_low_memory_budget_refuses_below_512x512():
     )
     with pytest.raises(RuntimeError, match="512x512") as exc_info:
         plan_tiles(1024, 1024, budget_bytes=too_small_budget)
+    msg = str(exc_info.value)
     # Must not trigger SeedVR2's "out of memory" message rewrite in WorkerServer.
-    assert "out of memory" not in str(exc_info.value).lower()
+    assert "out of memory" not in msg.lower()
+    # Refusal must name the largest output resolution (shorter edge, px) that fits.
+    match = pytest.importorskip("re").search(
+        r"Choose an output resolution of (\d+) px or less, or frame-by-frame video\.",
+        msg,
+    )
+    assert match is not None, f"Unexpected refusal message: {msg}"
+    max_res = int(match.group(1))
+    assert plan_tiles(max_res, max_res, budget_bytes=too_small_budget).tiles
+    with pytest.raises(RuntimeError):
+        plan_tiles(max_res + 2, max_res + 2, budget_bytes=too_small_budget)
+
+    # When not even 128x128 fits, no impossible resolution is suggested.
+    tiny_budget = flashvsr_engine.FIXED_MEMORY_BYTES + 1000
+    with pytest.raises(RuntimeError, match="Close other applications") as tiny_exc:
+        plan_tiles(1024, 1024, budget_bytes=tiny_budget)
+    assert "out of memory" not in str(tiny_exc.value).lower()
 
 
-def test_plan_tiles_accounts_for_window_length_and_unified_host_buffers():
-    # On a 16 GB Mac (10.8 GB budget), 4K at 37 frames needs ~2.80 GB of unified host buffers
-    # plus 41-frame MLX tensors, leaving < 512x512 and refusing cleanly before OOM/swap.
-    with pytest.raises(RuntimeError, match="512x512"):
-        plan_tiles(3840, 2160, n_frames=37, budget_bytes=10_800_000_000)
+def test_plan_tiles_accounts_for_window_length_and_unified_host_buffers(monkeypatch):
+    # On a 16 GB Mac (~10.8 GB budget from mps_recommended_working_set_bytes), on-demand LQ
+    # and disk-backed canvas keep host RAM per tile small, so 4K and 5760x7680 at 37 frames
+    # plan valid tiles >= 512x512 instead of failing on full-frame host buffers.
+    monkeypatch.setattr(
+        flashvsr_engine,
+        "mps_recommended_working_set_bytes",
+        lambda: 12_713_115_648,
+    )
+    for out_w, out_h in ((3840, 2160), (5760, 7680)):
+        plan = plan_tiles(out_w, out_h, n_frames=37)
+        assert plan.tile_width >= flashvsr_engine.MIN_TILE_SIDE
+        assert plan.tile_height >= flashvsr_engine.MIN_TILE_SIDE
+        assert plan.tile_width * plan.tile_height <= plan.max_tile_area
+        weight_canvas = np.zeros((plan.padded_height, plan.padded_width), dtype=np.float32)
+        for tile in plan.tiles:
+            weight_canvas[tile.y : tile.y + tile.height, tile.x : tile.x + tile.width] += (
+                tile.weights
+            )
+        assert np.allclose(weight_canvas, 1.0, atol=1e-6)
 
-    # On a 32 GB Mac (20 GB budget), longer windows shrink max_tile_area via both n_pad and buffers.
+    # A 61-frame window on the same 16 GB Mac still exceeds 512x512 and names a fitting resolution.
+    with pytest.raises(RuntimeError, match="Choose an output resolution of") as exc_61:
+        plan_tiles(5760, 7680, n_frames=61)
+    import re as _re
+
+    match = _re.search(r"of (\d+) px or less", str(exc_61.value))
+    assert match is not None
+    fitting_res = int(match.group(1))
+    fitting_w, fitting_h = flashvsr_engine.output_size(1440, 1920, fitting_res)
+    assert plan_tiles(fitting_w, fitting_h, n_frames=61).tiles
+    next_w, next_h = flashvsr_engine.output_size(1440, 1920, fitting_res + 2)
+    with pytest.raises(RuntimeError):
+        plan_tiles(next_w, next_h, n_frames=61)
+
+    # On a 32 GB Mac (20 GB budget), longer windows shrink max_tile_area via both n_pad and tile RAM.
     plan_37 = plan_tiles(3840, 2160, n_frames=37, budget_bytes=20_000_000_000)
     plan_61 = plan_tiles(3840, 2160, n_frames=61, budget_bytes=20_000_000_000)
     assert plan_61.max_tile_area < plan_37.max_tile_area
@@ -729,3 +775,143 @@ def test_float_to_uint8_rounds_instead_of_truncating_on_float16_canvas(monkeypat
     tiled_frames = _synthetic_frames(2, width=224, height=128)
     tiled_out = tiled_engine.process_frames(tiled_frames)
     assert np.all(tiled_out[0] == 200)
+
+
+@pytest.mark.parametrize(
+    ("in_w", "in_h", "resolution", "tile_override", "resample"),
+    [
+        (224, 128, 0, (512, 384), Image.Resampling.BICUBIC),
+        (97, 61, 0, (256, 256), Image.Resampling.BICUBIC),
+        (320, 240, 360, (256, 256), Image.Resampling.BICUBIC),
+        (224, 128, 0, (512, 384), Image.Resampling.NEAREST),
+    ],
+)
+def test_on_demand_tile_lq_matches_full_frame_slice(
+    in_w: int,
+    in_h: int,
+    resolution: int,
+    tile_override: tuple[int, int],
+    resample: Image.Resampling,
+):
+    frames = _synthetic_frames(4, width=in_w, height=in_h)
+    final_w, final_h = flashvsr_engine.output_size(in_w, in_h, resolution)
+    out_w, out_h = flashvsr_engine.model_size(in_w, in_h, final_w, final_h)
+    plan = plan_tiles(
+        out_w,
+        out_h,
+        n_frames=len(frames),
+        budget_bytes=20_000_000_000,
+        tile_size_override=tile_override,
+    )
+
+    pad_right = plan.padded_width - out_w
+    pad_bottom = plan.padded_height - out_h
+    full_padded = np.empty((len(frames), plan.padded_height, plan.padded_width, 3), dtype=np.uint8)
+    for idx, frame in enumerate(frames):
+        up = np.asarray(Image.fromarray(frame).resize((out_w, out_h), resample), dtype=np.uint8)
+        if pad_right > 0 or pad_bottom > 0:
+            up = np.pad(up, ((0, pad_bottom), (0, pad_right), (0, 0)), mode="edge")
+        full_padded[idx] = up
+
+    engine, calls = _stub_engine(budget_bytes=20_000_000_000, tile_size_override=tile_override)
+    engine._upscale_resample = resample
+    engine.process_frames(frames, resolution=resolution)
+
+    assert len(calls) == len(plan.tiles)
+    for tile, call in zip(plan.tiles, calls, strict=True):
+        expected_slice = full_padded[
+            :, tile.y : tile.y + tile.height, tile.x : tile.x + tile.width, :
+        ]
+        # Convert [-1, 1] stub input back to uint8 for direct pixel comparison.
+        actual_u8 = np.rint(
+            (np.transpose(call["lq_video"][0, :, : len(frames)], (1, 2, 3, 0)) + 1.0) * 127.5
+        ).astype(np.uint8)
+        assert actual_u8.shape == expected_slice.shape
+        max_diff = int(np.max(np.abs(actual_u8.astype(np.int16) - expected_slice.astype(np.int16))))
+        assert max_diff <= 1
+
+
+@pytest.mark.parametrize("use_float16_canvas", [False, True])
+def test_memmap_accumulator_matches_ram_and_cleans_up(tmp_path, monkeypatch, use_float16_canvas):
+    frames = _synthetic_frames(4, width=224, height=128)
+    if use_float16_canvas:
+        monkeypatch.setattr(flashvsr_engine, "FLOAT16_CANVAS_ELEMENTS", 1)
+
+    ram_engine, _ = _stub_engine(budget_bytes=20_000_000_000, tile_size_override=(512, 384))
+    ram_engine._upscale_resample = Image.Resampling.BICUBIC
+    ram_out = ram_engine.process_frames(frames)
+
+    monkeypatch.setattr(flashvsr_engine, "MEMMAP_CANVAS_BYTES", 1)
+    seen_during_run: list[list[str]] = []
+    mm_engine, _ = _stub_engine(budget_bytes=20_000_000_000, tile_size_override=(512, 384))
+    mm_engine._upscale_resample = Image.Resampling.BICUBIC
+    mm_engine.temporary_directory = tmp_path
+    orig_pipeline = mm_engine.pipeline
+
+    def spy_pipeline(**kwargs):
+        seen_during_run.append(sorted(p.name for p in tmp_path.glob("localsr-flashvsr-*/*")))
+        return orig_pipeline(**kwargs)
+
+    mm_engine.pipeline = spy_pipeline
+    mm_out = mm_engine.process_frames(frames)
+
+    assert len(seen_during_run) == 4
+    assert all(names == ["canvas.dat", "weight_sum.dat"] for names in seen_during_run)
+    assert list(tmp_path.iterdir()) == []
+    for r_frame, m_frame in zip(ram_out, mm_out, strict=True):
+        np.testing.assert_array_equal(m_frame, r_frame)
+
+
+def test_memmap_temp_files_removed_on_error_and_cancel(tmp_path, monkeypatch):
+    monkeypatch.setattr(flashvsr_engine, "MEMMAP_CANVAS_BYTES", 1)
+    frames = _synthetic_frames(2, width=224, height=128)
+
+    # Error mid-tiling removes temp files.
+    err_engine, _ = _stub_engine(budget_bytes=20_000_000_000, tile_size_override=(512, 384))
+    err_calls = 0
+    orig_err_pipe = err_engine.pipeline
+
+    def failing_pipeline(**kwargs):
+        nonlocal err_calls
+        err_calls += 1
+        assert list(tmp_path.glob("localsr-flashvsr-*/*.dat"))
+        if err_calls == 2:
+            raise RuntimeError("simulated tile failure")
+        return orig_err_pipe(**kwargs)
+
+    err_engine.pipeline = failing_pipeline
+    with pytest.raises(RuntimeError, match="simulated tile failure"):
+        err_engine.process_frames(frames, temporary_directory=tmp_path)
+    assert list(tmp_path.iterdir()) == []
+
+    # Cancel between tiles removes temp files.
+    cancel_tiles = threading.Event()
+    cancel_engine, _ = _stub_engine(
+        budget_bytes=20_000_000_000,
+        tile_size_override=(512, 384),
+        cancel_after_tile=0,
+        cancel_event=cancel_tiles,
+    )
+    with pytest.raises(InterruptedError):
+        cancel_engine.process_frames(
+            frames,
+            cancel_event=cancel_tiles,
+            temporary_directory=tmp_path,
+        )
+    assert list(tmp_path.iterdir()) == []
+
+    # Cancel mid-step removes temp files.
+    cancel_step = threading.Event()
+    step_engine, _ = _stub_engine(
+        budget_bytes=20_000_000_000,
+        tile_size_override=(512, 384),
+        cancel_event=cancel_step,
+        cancel_in_step=True,
+    )
+    with pytest.raises(InterruptedError):
+        step_engine.process_frames(
+            frames,
+            cancel_event=cancel_step,
+            temporary_directory=tmp_path,
+        )
+    assert list(tmp_path.iterdir()) == []

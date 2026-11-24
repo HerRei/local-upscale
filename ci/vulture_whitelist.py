@@ -159,6 +159,8 @@ last_lq_cur_idx
 DecoderResult
 
 # Public dataclass/engine attributes on FlashVSREngine and FlashVSRTilePlan (inspected by tests).
+padded_width
+padded_height
 tile_width
 tile_height
 max_tile_area
