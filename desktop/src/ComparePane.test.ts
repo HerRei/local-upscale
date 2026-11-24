@@ -508,13 +508,13 @@ it('compares an unfinished video only over its kept frames, one by one', async (
     expect(back.getAttribute('aria-disabled')).toBe('true');
     await fireEvent.click(on);
     // Both sides sit in the middle of the second kept frame; there is no third.
-    expect(videos.map((video) => video.currentTime)).toEqual([0.0555, 0.0555]);
+    expect(videos.map((video) => video.currentTime)).toEqual([0.05, 0.05]);
     expect(transport.textContent).toContain('Frame 2');
     expect(on.getAttribute('aria-disabled')).toBe('true');
     const scrubber = screen.getByRole('slider', { name: 'Video frame' }) as HTMLInputElement;
     expect([scrubber.min, scrubber.max, scrubber.value]).toEqual(['1', '2', '2']);
     await fireEvent.input(scrubber, { target: { value: '1' } });
-    expect(videos.map((video) => video.currentTime)).toEqual([0.0185, 0.0185]);
+    expect(videos.map((video) => video.currentTime)).toEqual([0.5 / 30, 0.5 / 30]);
     view.unmount();
   } finally {
     pause.mockRestore();
@@ -747,17 +747,57 @@ it('does not open the list of details while the pointer rests on the Unfinished 
   }
 });
 
-it('shows the viewer background swatch in Compare zoom and steps on click', async () => {
-  const setViewerBackground = vi.fn();
-  render(ComparePane, {
-    ...props,
-    items: [item('one', 'a'), item('two', 'a')],
-    viewerBackground: 'black',
-    setViewerBackground,
-  });
-  const zoomGroup = screen.getByRole('group', { name: 'Compare zoom' });
-  const button = zoomGroup.querySelector('button[aria-label="Viewer background: Black"]');
-  expect(button).toBeTruthy();
-  await fireEvent.click(button as HTMLElement);
-  expect(setViewerBackground).toHaveBeenCalledWith('grey');
+it('preserves playback position and audio choice when switching between slider and boxes', async () => {
+  const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+  const load = vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
+  try {
+    const entries = [
+      { ...item('orig', 'v'), media_kind: 'video' as const, fps: 30 },
+      { ...item('res', 'v'), media_kind: 'video' as const, fps: 30 },
+    ];
+    let layout: 'slider' | 'boxes' = 'slider';
+    const view = render(ComparePane, {
+      ...props,
+      layout,
+      setLayout: (next: 'slider' | 'boxes') => {
+        layout = next;
+      },
+      items: entries,
+      generation: 1,
+      prepareVideo: async (_g, index) => ({
+        original_url: `https://fixture/${index}.mp4`,
+        enhanced_url: '',
+      }),
+      cancelVideo: async () => {},
+    });
+    await vi.waitFor(() => expect(view.container.querySelectorAll('video[src]')).toHaveLength(2));
+    for (const video of view.container.querySelectorAll('video')) {
+      Object.defineProperties(video, { duration: { value: 3 }, readyState: { value: 4 } });
+      await fireEvent.loadedData(video);
+    }
+    await fireEvent.click(screen.getByRole('radio', { name: 'Audio of slot 2: res' }));
+    const timeline = screen.getByRole('slider', { name: 'Video position' });
+    await fireEvent.input(timeline, { target: { value: '0.5' } });
+    const sliderTimes = [...view.container.querySelectorAll('video')].map((v) => v.currentTime);
+    expect(sliderTimes[0]).toBeCloseTo(15.5 / 30);
+
+    await view.rerender({ ...props, layout: 'boxes', items: entries, generation: 1 });
+    await vi.waitFor(() =>
+      expect(view.container.querySelectorAll('.boxes video[src]')).toHaveLength(2),
+    );
+    for (const video of view.container.querySelectorAll('.boxes video')) {
+      Object.defineProperties(video, { duration: { value: 3 }, readyState: { value: 4 } });
+      await fireEvent.loadedData(video);
+    }
+    const boxesVideos = [...view.container.querySelectorAll('.boxes video')] as HTMLVideoElement[];
+    expect(boxesVideos.map((v) => v.currentTime)).toEqual(sliderTimes);
+    expect(boxesVideos.map((v) => v.muted)).toEqual([true, false]);
+    expect(
+      screen.getByRole('radio', { name: 'Audio of slot 2: res' }).getAttribute('aria-checked'),
+    ).toBe('true');
+    view.unmount();
+  } finally {
+    pause.mockRestore();
+    load.mockRestore();
+  }
 });

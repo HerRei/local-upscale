@@ -76,14 +76,18 @@
     compare,
   );
   $: single = !enhancedSrc;
-  // Steps go by the result's frames. A kept part has its own exact rate, frames over
-  // seconds as measured in the file; the player's idea of its length can differ from that.
+  // Steps go by the result's frames. A kept part's length is kept_frames / fps when both
+  // are known, so audio overhang in the container does not stretch the frame grid.
+  $: keptDuration =
+    keptFrames > 0 && fps > 0 ? keptFrames / fps : keptSeconds > 0 ? keptSeconds : 0;
   $: frameRate =
-    keptFrames > 0 && keptSeconds > 0
-      ? keptFrames / keptSeconds
-      : keptFrames > 0 && duration > 0 && duration < 1
-        ? keptFrames / duration
-        : fps;
+    keptFrames > 0 && fps > 0
+      ? fps
+      : keptFrames > 0 && keptSeconds > 0
+        ? keptFrames / keptSeconds
+        : keptFrames > 0 && duration > 0 && duration < 1
+          ? keptFrames / duration
+          : fps;
   $: frameCount =
     keptFrames > 0
       ? keptFrames
@@ -258,8 +262,11 @@
   }
 
   function updateDuration(): void {
-    duration = commonDuration(original?.duration ?? 0, enhanced?.duration ?? 0);
+    const common = commonDuration(original?.duration ?? 0, enhanced?.duration ?? 0);
+    duration =
+      keptDuration > 0 && common > 0 ? Math.min(common, keptDuration) : common || keptDuration;
   }
+  $: if (keptDuration >= 0 && (originalLoaded || enhancedLoaded)) updateDuration();
 
   async function togglePlayback(): Promise<void> {
     playbackError = '';
@@ -309,6 +316,13 @@
 
   function updateTime(): void {
     currentTime = Math.min(enhanced.currentTime || 0, duration || Number.POSITIVE_INFINITY);
+    if (keptDuration > 0 && !enhanced.paused && (enhanced.currentTime || 0) >= keptDuration) {
+      enhanced.pause();
+      original?.pause();
+      playing = false;
+      seekFrame(frameCount - 1);
+      return;
+    }
     if (!original) return;
     const decision = synchronizationDecision(
       enhanced.currentTime,

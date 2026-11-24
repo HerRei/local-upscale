@@ -132,3 +132,12 @@ export const videoUnfinished: Scenario = {
   videoPartial: true,
   task: 'video',
 };
+
+/** Real PyAV test clips (30/24/60 fps, 1s unfinished, audio overhang) with burned-in frame counters. */
+export const videoSync: Scenario = {
+  pairs: true,
+  photos: 0,
+  video: true,
+  videoSyncCompare: true,
+  task: 'video',
+};

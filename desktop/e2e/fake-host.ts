@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
 
 /**
@@ -17,10 +20,14 @@ export interface Scenario {
   videoCompare?: boolean;
   /** With `videoCompare`: a third result, stopped after two frames and kept. */
   videoPartial?: boolean;
+  /** Real PyAV clips (30/24/60 fps, 1s unfinished, audio overhang) with frame counters. */
+  videoSyncCompare?: boolean;
   /** With `running`: the host can keep the finished part of the photo that runs. */
   keepPartial?: boolean;
   /** Populated by installFakeHost only for video Compare. */
   playbackFixtures?: string[];
+  /** Populated by installFakeHost for `videoSyncCompare`. */
+  playbackFixtureMap?: Record<string, string>;
   /** Catalog model ids marked as installed. */
   installed?: string[];
   settings?: Record<string, unknown>;
@@ -301,13 +308,14 @@ function hostScript(scenario: Scenario): void {
         path: '/fixture/alpine-lake.mp4',
         name: 'Alpine lake.mp4',
         kind: 'video',
-        width: 1920,
-        height: 1080,
-        fps: 24,
-        frame_count: 288,
+        width: scenario.videoSyncCompare ? 128 : 1920,
+        height: scenario.videoSyncCompare ? 72 : 1080,
+        fps: scenario.videoSyncCompare ? 30 : 24,
+        frame_count: scenario.videoSyncCompare ? 90 : 288,
         has_audio: scenario.videoHasAudio ?? true,
-        duration_seconds: scenario.videoCompare ? 4 : 12,
+        duration_seconds: scenario.videoSyncCompare ? 3 : scenario.videoCompare ? 4 : 12,
         ...(scenario.videoCompare ? { selected: false, width: 32, height: 18, fps: 15 } : {}),
+        ...(scenario.videoSyncCompare ? { selected: false } : {}),
       });
     }
     Object.assign(s.settings, { task: scenario.task ?? '' }, scenario.settings ?? {});
@@ -512,6 +520,92 @@ function hostScript(scenario: Scenario): void {
           },
         ]
       : []),
+    ...(scenario.videoSyncCompare
+      ? [
+          {
+            media_id: 'video-1',
+            results: [
+              ...[
+                { id: 'video-30', label: '30 fps result', fps: 30, dur: 3 },
+                { id: 'video-24', label: '24 fps result', fps: 24, dur: 3 },
+                { id: 'video-60', label: '60 fps result', fps: 60, dur: 3 },
+              ].map((entry, idx) => ({
+                job_id: entry.id,
+                completed_at: 10 + idx,
+                status: 'completed',
+                kind: 'video',
+                output_path: `/fixture/${entry.id}.mp4`,
+                output_name: `${entry.id}.mp4`,
+                available: true,
+                model_id: entry.id,
+                model_label: entry.label,
+                scale: 1,
+                prompt: '',
+                max_dimension: 0,
+                stages: [],
+                notes: '',
+                elapsed_seconds: 1,
+                output_fps: entry.fps,
+                output_duration_seconds: entry.dur,
+                ui: null,
+              })),
+              ...[
+                {
+                  id: 'video-part-1s',
+                  label: 'Stopped 1s result',
+                  fps: 30,
+                  dur: 1,
+                  keptSeconds: 1,
+                  keptFrames: 30,
+                },
+                {
+                  id: 'video-part-overhang',
+                  label: 'Stopped overhang result',
+                  fps: 30,
+                  dur: 1.5,
+                  keptSeconds: 1.5,
+                  keptFrames: 30,
+                },
+                {
+                  id: 'video-part-24',
+                  label: 'Stopped 24 fps result',
+                  fps: 24,
+                  dur: 1,
+                  keptSeconds: 1,
+                  keptFrames: 24,
+                },
+              ].map((entry, idx) => ({
+                job_id: entry.id,
+                completed_at: 20 + idx,
+                status: 'completed',
+                kind: 'video',
+                output_path: `/fixture/${entry.id}.mp4`,
+                output_name: `${entry.id}.mp4`,
+                available: true,
+                model_id: entry.id,
+                model_label: entry.label,
+                scale: 2,
+                prompt: '',
+                max_dimension: 0,
+                stages: [],
+                notes: '',
+                elapsed_seconds: 10,
+                output_fps: entry.fps,
+                output_duration_seconds: entry.dur,
+                partial: true,
+                kept_seconds: entry.keptSeconds,
+                kept_frames: entry.keptFrames,
+                ui: null,
+              })),
+            ],
+            total_count: 6,
+            completed_count: 6,
+            available_count: 6,
+            default_result_id: 'video-part-1s',
+            next_before: null,
+          },
+        ]
+      : []),
   ];
 
   function compareSlots(picks: Json[]): Json[] {
@@ -630,6 +724,29 @@ function hostScript(scenario: Scenario): void {
         return null;
       }
       case 'prepare_video_comparison': {
+        if (scenario.videoSyncCompare) {
+          const map = scenario.playbackFixtureMap!;
+          if (args.compareSlot === undefined) {
+            return {
+              original_path: '',
+              enhanced_path: '',
+              original_url: map.original,
+              enhanced_url: args.resultId ? (map[args.resultId] ?? '') : '',
+              playback_note: '',
+            };
+          }
+          const slot = snapshot.runtime.compare.slots[args.compareSlot];
+          if (args.compareGeneration !== snapshot.runtime.compare.generation || !slot)
+            throw new Error('Stale Compare request');
+          const key = slot.pick.kind === 'original' ? 'original' : (slot.pick.job_id ?? 'original');
+          return {
+            original_path: '',
+            enhanced_path: '',
+            original_url: map[key] ?? '',
+            enhanced_url: '',
+            playback_note: '',
+          };
+        }
         const fixtureOf = (jobId: string) =>
           scenario.playbackFixtures![jobId === 'video-60' ? 1 : jobId === 'video-part' ? 2 : 0];
         // Preview: the source against the result it shows.
@@ -873,12 +990,29 @@ const videoFixtures = [
   'data:video/mp4;base64,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',
 ];
 
+function loadSyncFixtures(): Record<string, string> {
+  const dir = resolve(dirname(fileURLToPath(import.meta.url)), 'video-fixtures');
+  const mp4 = (name: string) =>
+    'data:video/mp4;base64,' + readFileSync(resolve(dir, name)).toString('base64');
+  return {
+    original: mp4('orig_30.mp4'),
+    'video-30': mp4('res_30.mp4'),
+    'video-24': mp4('res_24.mp4'),
+    'video-60': mp4('res_60.mp4'),
+    'video-part-1s': mp4('part_30_1s.mp4'),
+    'video-part-overhang': mp4('part_30_overhang.mp4'),
+    'video-part-24': mp4('part_24_1s.mp4'),
+  };
+}
+
 /** Install the fake Tauri bridge before the page loads. */
 export async function installFakeHost(page: Page, scenario: Scenario): Promise<void> {
-  await page.addInitScript(
-    hostScript,
-    scenario.videoCompare ? { ...scenario, playbackFixtures: videoFixtures } : scenario,
-  );
+  const enriched: Scenario = {
+    ...scenario,
+    ...(scenario.videoCompare ? { playbackFixtures: videoFixtures } : {}),
+    ...(scenario.videoSyncCompare ? { playbackFixtureMap: loadSyncFixtures() } : {}),
+  };
+  await page.addInitScript(hostScript, enriched);
 }
 
 export async function hostCalls(page: Page, command: string): Promise<HostCall[]> {
