@@ -80,9 +80,12 @@ export interface EditModel {
   min_vram_gb: number;
   default_steps: number;
   cfg_scale: number;
+  author?: string;
   license_name: string;
   license_url: string;
   source_url: string;
+  commercial_use_allowed?: boolean | null;
+  attribution_required?: boolean;
   terms_acceptance_required: boolean;
   automated_download_allowed: boolean;
   installed: boolean;
@@ -137,6 +140,8 @@ export interface CatalogVideoModel {
   speed_tier?: number;
   commercial_use_allowed: boolean | null;
   automated_download_allowed: boolean;
+  redistribution_allowed?: boolean;
+  attribution_required?: boolean;
   terms_acceptance_required: boolean;
   engine_id: string;
   support_tier: string;

@@ -152,6 +152,7 @@
   });
   let termsAccepted = false;
   let showHeavyEdit = false;
+  let selectedOwnPath = '';
   let trialIds: string[] = [];
   let trialEstimates: TrialEstimate[] = [];
   let estimateKey = '';
@@ -183,8 +184,11 @@
   $: editGpu = editDevice(snapshot.capabilities, settings);
   $: editLimit = editSizeLimit(snapshot.capabilities, editGpu);
   $: editFit = (model: EditModel) => editFitFor(model, snapshot.capabilities, editGpu);
+  $: installedVideoModels = videoModels.filter((model) => model.installed);
+  $: installedInterpolationModels = interpolationModels.filter((model) => model.installed);
   $: installedAudioModels = audioModels.filter((model) => model.installed);
   $: installedEditModels = editModels.filter((model) => model.installed);
+  $: ownModels = customModels(settings);
   // Variants that cannot run here stay out of the way until asked for.
   $: onMac = editGpu?.id === 'mps';
   $: editFamilies = EDIT_FAMILIES.map((family) => {
@@ -295,7 +299,11 @@
       count: models.filter((model) => model.native_scale === 1 && !model.purposes.includes('face'))
         .length,
     },
-    { id: 'video' as GroupId, label: 'Video (Labs)', count: videoModels.length },
+    {
+      id: 'video' as GroupId,
+      label: 'Video (Labs)',
+      count: videoModels.length + interpolationModels.length,
+    },
     ...(audioModels.length
       ? [{ id: 'audio' as GroupId, label: 'Audio', count: audioModels.length }]
       : []),
@@ -305,6 +313,8 @@
       label: 'Installed',
       count:
         models.filter((model) => model.installed).length +
+        installedVideoModels.length +
+        installedInterpolationModels.length +
         installedAudioModels.length +
         installedEditModels.length,
     },
@@ -343,6 +353,8 @@
     models
       .filter((model) => model.installed)
       .reduce((total, model) => total + model.size_bytes, 0) +
+    installedVideoModels.reduce((total, model) => total + model.total_size_bytes, 0) +
+    installedInterpolationModels.reduce((total, model) => total + model.total_size_bytes, 0) +
     installedAudioModels.reduce((total, model) => total + model.total_size_bytes, 0) +
     installedEditModels.reduce((total, model) => total + model.total_size_bytes, 0);
   $: selectedEdit =
@@ -357,9 +369,18 @@
   $: selectedAudio =
     audioModels.find((model) => model.model_id === selectedId) ??
     (group === 'audio' ? audioModels[0] : undefined);
-  $: selectedVideo = videoModels.find((model) => model.model_id === selectedId);
+  $: selectedInterpolation = interpolationModels.find((model) => model.model_id === selectedId);
+  $: selectedVideo =
+    videoModels.find((model) => model.model_id === selectedId) ??
+    (group === 'video' && !selectedInterpolation ? videoModels[0] : undefined);
+  $: selectedOwn =
+    group === 'own'
+      ? (ownModels.find((model) => model.path === selectedOwnPath) ??
+        ownModels.find((model) => model.path === settings.custom_model_path) ??
+        ownModels[0])
+      : undefined;
   $: selected =
-    selectedEdit || selectedAudio || selectedVideo
+    selectedEdit || selectedAudio || selectedVideo || selectedInterpolation || selectedOwn
       ? undefined
       : (models.find((model) => model.model_id === selectedId) ?? rows[0]);
   // The accelerator the selected hardware will use for a model: the Neural Engine on a Mac,
@@ -432,7 +453,10 @@
   }
 
   function selectByModelId(modelId: string): void {
-    if (videoModels.some((item) => item.model_id === modelId)) {
+    if (
+      videoModels.some((item) => item.model_id === modelId) ||
+      interpolationModels.some((item) => item.model_id === modelId)
+    ) {
       group = 'video';
       selectedId = modelId;
       termsAccepted = false;
@@ -501,6 +525,23 @@
     return model.vram_estimate_mb >= 1000
       ? `about ${(model.vram_estimate_mb / 1000).toFixed(model.vram_estimate_mb % 1000 ? 1 : 0)} GB`
       : `about ${model.vram_estimate_mb} MB`;
+  }
+
+  function commercialUseLabel(model: {
+    commercial_use_allowed?: boolean | null;
+    attribution_required?: boolean;
+  }): string {
+    return model.commercial_use_allowed === true
+      ? model.attribution_required
+        ? 'Allowed · attribution kept'
+        : 'Allowed'
+      : model.commercial_use_allowed === false
+        ? 'Not allowed'
+        : 'Rights unresolved';
+  }
+
+  function ownFileName(path: string): string {
+    return path.split(/[\\/]/).pop() || path;
   }
 </script>
 
@@ -728,6 +769,34 @@
             </div>
           </button>
         {/snippet}
+        {#snippet interpolationRow(model: CatalogVideoModel)}
+          {@const dl = downloadMap.get(model.model_id)}
+          {@const dlError = downloadErrors[model.model_id]}
+          <button
+            class="row"
+            type="button"
+            class:selected={selectedInterpolation?.model_id === model.model_id}
+            aria-pressed={selectedInterpolation?.model_id === model.model_id}
+            on:click={() => selectRow(model)}
+          >
+            <div>
+              <div class="name">{model.name}</div>
+              <div class="role">{videoModelSummary(model)}</div>
+              <div class="pills">
+                <span class="pill labs">Labs</span><span class="pill">{model.license_name}</span>
+              </div>
+            </div>
+            <div></div>
+            <div class="right">
+              <b>{formatBytes(model.total_size_bytes)}</b>{#if dl}<span
+                  class:downloading={dl.status === 'downloading'}
+                  >{dl.status === 'queued' ? 'Waiting' : `${Math.round(dl.progress)}%`}</span
+                >{:else if dlError}<span class="error">Failed</span>{:else if model.installed}<span
+                  class="ok">Installed</span
+                >{:else}<span>Not downloaded</span>{/if}
+            </div>
+          </button>
+        {/snippet}
         {#if context.slot === 'try'}
           <div class="list-head">For this job<span>Pick 2 to 4 installed models</span></div>
           {#if trialModels.filter((model) => model.installed && !trialReason(model)).length < 2}
@@ -780,6 +849,18 @@
           {#each videoModels as model (model.model_id)}
             {@render videoRow(model)}
           {/each}
+          {#if interpolationModels.length}
+            <div class="list-head">
+              Frame interpolation · Labs<span
+                >{interpolationModels.length === 1
+                  ? '1 model'
+                  : `${interpolationModels.length} models`}</span
+              >
+            </div>
+            {#each interpolationModels as model (model.model_id)}
+              {@render interpolationRow(model)}
+            {/each}
+          {/if}
         {:else if group === 'audio'}
           <div class="list-head">
             Audio<span>{audioModels.length === 1 ? '1 model' : `${audioModels.length} models`}</span
@@ -903,7 +984,7 @@
           >
         {:else if group === 'own'}
           <div class="list-head">Your own file</div>
-          {#each customModels(settings) as model (model.path)}
+          {#each ownModels as model (model.path)}
             <div class="own-file">
               <div class="name">{model.name}</div>
               <div class="role">{model.path}</div>
@@ -935,6 +1016,12 @@
                     customName = model.name;
                   }}>Rename</button
                 >
+                {#if ownModels.length > 1}<button
+                    class="button"
+                    type="button"
+                    aria-pressed={selectedOwn?.path === model.path}
+                    on:click={() => (selectedOwnPath = model.path)}>Details</button
+                  >{/if}
               {/if}
             </div>
           {/each}
@@ -1056,6 +1143,48 @@
             {/each}
           {/if}
           {#if group === 'installed'}
+            {#each installedVideoModels as model (model.model_id)}
+              <div
+                class="row installed-row"
+                class:selected={selectedVideo?.model_id === model.model_id}
+              >
+                <button class="row-select" type="button" on:click={() => selectRow(model)}>
+                  <div class="name">{model.name}</div>
+                  <div class="role">Video · {videoEngineName(model.engine_kind)}</div>
+                </button>
+                <div class="right">
+                  <b>{formatBytes(model.total_size_bytes)}</b><span class="ok">Verified</span>
+                </div>
+                <button
+                  class="button compact ghost danger"
+                  type="button"
+                  disabled={busy}
+                  aria-label={`Remove ${model.name}`}
+                  on:click={() => void remove(model)}>Remove</button
+                >
+              </div>
+            {/each}
+            {#each installedInterpolationModels as model (model.model_id)}
+              <div
+                class="row installed-row"
+                class:selected={selectedInterpolation?.model_id === model.model_id}
+              >
+                <button class="row-select" type="button" on:click={() => selectRow(model)}>
+                  <div class="name">{model.name}</div>
+                  <div class="role">Frame interpolation</div>
+                </button>
+                <div class="right">
+                  <b>{formatBytes(model.total_size_bytes)}</b><span class="ok">Verified</span>
+                </div>
+                <button
+                  class="button compact ghost danger"
+                  type="button"
+                  disabled={busy}
+                  aria-label={`Remove ${model.name}`}
+                  on:click={() => void remove(model)}>Remove</button
+                >
+              </div>
+            {/each}
             {#each installedAudioModels as model (model.model_id)}
               <div
                 class="row installed-row"
@@ -1099,7 +1228,7 @@
               </div>
             {/each}
           {/if}
-          {#if !rows.length && !(group === 'job' && jobVideoModels.length) && !(group === 'installed' && installedEditModels.length)}
+          {#if !rows.length && !(group === 'job' && jobVideoModels.length) && !(group === 'installed' && (installedVideoModels.length || installedInterpolationModels.length || installedAudioModels.length || installedEditModels.length))}
             <p class="library-empty">
               Nothing verified is listed here yet. Import your own file, or suggest a model on the
               project page.
@@ -1109,6 +1238,54 @@
       </section>
 
       <aside class="detail" aria-label="Model details">
+        {#snippet licenseAndSource(
+          modelId: string,
+          licenseName: string,
+          author: string,
+          sourceUrl: string,
+        )}
+          <div>
+            <dt>License</dt>
+            <dd>
+              <button class="link-button" type="button" on:click={() => void openLicense(modelId)}
+                >{licenseName} ↗</button
+              >
+            </dd>
+          </div>
+          <div>
+            <dt>Source</dt>
+            <dd>
+              {#if author}
+                <button
+                  class="link-button"
+                  type="button"
+                  title={sourceUrl}
+                  aria-label={`${author} · model source`}
+                  on:click={() => void openSource(modelId)}
+                  ><FileName name={author} /><span class="source-link">{' · model source ↗'}</span
+                  ></button
+                >
+              {:else}
+                <button
+                  class="link-button"
+                  type="button"
+                  title={sourceUrl}
+                  on:click={() => void openSource(modelId)}>Model source ↗</button
+                >
+              {/if}
+            </dd>
+          </div>
+        {/snippet}
+        {#snippet integrityAndRights(commercialText: string)}
+          <div>
+            <dt>Integrity</dt>
+            <dd>SHA-256 checked before use</dd>
+          </div>
+          <div>
+            <dt>Commercial use</dt>
+            <dd>{commercialText}</dd>
+          </div>
+        {/snippet}
         {#if context.slot === 'try'}
           <div class="trial-summary" aria-live="polite">
             <h3>{trialIds.length === 1 ? '1 model picked' : `${trialIds.length} models picked`}</h3>
@@ -1172,6 +1349,26 @@
                 ?.reason}
             </div>
           {/if}
+          <dl class="kv">
+            {@render licenseAndSource(
+              selectedVideo.model_id,
+              selectedVideo.license_name,
+              selectedVideo.author,
+              selectedVideo.source_url,
+            )}
+            {#if selectedVideo.files.length === 1}
+              <div>
+                <dt>File</dt>
+                <dd><FileName name={selectedVideo.files[0].filename} /></dd>
+              </div>
+            {:else if selectedVideo.files.length > 1}
+              <div>
+                <dt>Files</dt>
+                <dd>{selectedVideo.files.length} files</dd>
+              </div>
+            {/if}
+            {@render integrityAndRights(commercialUseLabel(selectedVideo))}
+          </dl>
           <div class="actions">
             {#if !selectedVideo.installed}
               {@const dl = downloadMap.get(selectedVideo.model_id)}
@@ -1204,6 +1401,79 @@
               >
             {/if}
           </div>
+        {:else if selectedInterpolation && group !== 'own'}
+          <div>
+            <h3>{selectedInterpolation.name}</h3>
+            <div class="role">
+              {selectedInterpolation.author} · {selectedInterpolation.license_name}
+            </div>
+          </div>
+          <p class="model-description">{selectedInterpolation.description}</p>
+          <dl class="facts">
+            <div>
+              <dt>Download</dt>
+              <dd>{formatBytes(selectedInterpolation.total_size_bytes)}</dd>
+            </div>
+            <div>
+              <dt>Memory</dt>
+              <dd>{selectedInterpolation.min_unified_memory_gb} GB unified</dd>
+            </div>
+            <div>
+              <dt>Works on</dt>
+              <dd>{selectedInterpolation.temporal_window} frames at once</dd>
+            </div>
+          </dl>
+          <dl class="kv">
+            {@render licenseAndSource(
+              selectedInterpolation.model_id,
+              selectedInterpolation.license_name,
+              selectedInterpolation.author,
+              selectedInterpolation.source_url,
+            )}
+            {#if selectedInterpolation.files.length === 1}
+              <div>
+                <dt>File</dt>
+                <dd><FileName name={selectedInterpolation.files[0].filename} /></dd>
+              </div>
+            {:else if selectedInterpolation.files.length > 1}
+              <div>
+                <dt>Files</dt>
+                <dd>{selectedInterpolation.files.length} files</dd>
+              </div>
+            {/if}
+            {@render integrityAndRights(commercialUseLabel(selectedInterpolation))}
+          </dl>
+          <div class="actions">
+            {#if !selectedInterpolation.installed}
+              {@const dl = downloadMap.get(selectedInterpolation.model_id)}
+              {@const dlError = downloadErrors[selectedInterpolation.model_id]}
+              {#if dlError}<p class="download-error" role="alert">{dlError}</p>{/if}
+              <button
+                class="button primary"
+                type="button"
+                disabled={busy}
+                on:click={() => void download(selectedInterpolation)}
+                >{downloadButtonLabel(dl, selectedInterpolation.total_size_bytes)}</button
+              >
+              {#if dl?.status === 'downloading'}
+                <progress
+                  class="download-progress"
+                  value={dl.progress}
+                  max="100"
+                  aria-label={`${selectedInterpolation.name} download progress`}
+                ></progress>
+              {/if}
+            {:else}
+              <div class="installed-badge">✓ Installed · integrity checked before use</div>
+              <button
+                class="button danger ghost"
+                type="button"
+                disabled={busy}
+                on:click={() => void remove(selectedInterpolation)}
+                >Remove from this computer</button
+              >
+            {/if}
+          </div>
         {:else if selectedAudio && group !== 'own'}
           <div>
             <h3>{selectedAudio.name}</h3>
@@ -1227,42 +1497,24 @@
             </div>
           </dl>
           <dl class="kv">
-            <div>
-              <dt>License</dt>
-              <dd>
-                <button
-                  class="link-button"
-                  type="button"
-                  on:click={() => void openLicense(selectedAudio.model_id)}
-                  >{selectedAudio.license_name} ↗</button
-                >
-              </dd>
-            </div>
-            <div>
-              <dt>Source</dt>
-              <dd>
-                <button
-                  class="link-button"
-                  type="button"
-                  title={selectedAudio.source_url}
-                  aria-label={`${selectedAudio.author} · model source`}
-                  on:click={() => void openSource(selectedAudio.model_id)}
-                  ><FileName name={selectedAudio.author} /><span class="source-link"
-                    >{' · model source ↗'}</span
-                  ></button
-                >
-              </dd>
-            </div>
-            <div>
-              <dt>Integrity</dt>
-              <dd>SHA-256 checked before use</dd>
-            </div>
-            <div>
-              <dt>Commercial use</dt>
-              <dd>
-                {selectedAudio.commercial_use_allowed === true ? 'Allowed' : 'See license'}
-              </dd>
-            </div>
+            {@render licenseAndSource(
+              selectedAudio.model_id,
+              selectedAudio.license_name,
+              selectedAudio.author,
+              selectedAudio.source_url,
+            )}
+            {#if selectedAudio.files.length === 1}
+              <div>
+                <dt>File</dt>
+                <dd><FileName name={selectedAudio.files[0].filename} /></dd>
+              </div>
+            {:else if selectedAudio.files.length > 1}
+              <div>
+                <dt>Files</dt>
+                <dd>{selectedAudio.files.length} files</dd>
+              </div>
+            {/if}
+            {@render integrityAndRights(commercialUseLabel(selectedAudio))}
           </dl>
           <div class="actions">
             {#if !selectedAudio.installed}
@@ -1346,6 +1598,10 @@
                 <dd>Your own file</dd>
               </div>
               <div>
+                <dt>Source</dt>
+                <dd>Your own file</dd>
+              </div>
+              <div>
                 <dt>Format</dt>
                 <dd>Custom · {selectedEdit.files.length} files</dd>
               </div>
@@ -1358,27 +1614,12 @@
                 <dd>Kept in place</dd>
               </div>
             {:else}
-              <div>
-                <dt>License</dt>
-                <dd>
-                  <button
-                    class="link-button"
-                    type="button"
-                    on:click={() => void openLicense(selectedEdit.model_id)}
-                    >{selectedEdit.license_name} ↗</button
-                  >
-                </dd>
-              </div>
-              <div>
-                <dt>Source</dt>
-                <dd>
-                  <button
-                    class="link-button"
-                    type="button"
-                    on:click={() => void openSource(selectedEdit.model_id)}>Model source ↗</button
-                  >
-                </dd>
-              </div>
+              {@render licenseAndSource(
+                selectedEdit.model_id,
+                selectedEdit.license_name,
+                selectedEdit.author ?? '',
+                selectedEdit.source_url,
+              )}
               <div>
                 <dt>Format</dt>
                 <dd>GGUF {selectedEdit.quantization} · {selectedEdit.files.length} files</dd>
@@ -1387,18 +1628,14 @@
                 <dt>Runtime</dt>
                 <dd>stable-diffusion.cpp · {editRuntimeLabel(editGpu)}</dd>
               </div>
-              <div>
-                <dt>Integrity</dt>
-                <dd>SHA-256 checked before use</dd>
-              </div>
-              <div>
-                <dt>Commercial use</dt>
-                <dd>
-                  {selectedEdit.terms_acceptance_required
-                    ? 'Research license · review the terms'
-                    : 'Allowed'}
-                </dd>
-              </div>
+              {@render integrityAndRights(
+                selectedEdit.terms_acceptance_required
+                  ? 'Research license · review the terms'
+                  : commercialUseLabel({
+                      ...selectedEdit,
+                      commercial_use_allowed: selectedEdit.commercial_use_allowed ?? true,
+                    }),
+              )}
             {/if}
           </dl>
           <div class="actions">
@@ -1509,32 +1746,12 @@
             </div>
           {/if}
           <dl class="kv">
-            <div>
-              <dt>License</dt>
-              <dd>
-                <button
-                  class="link-button"
-                  type="button"
-                  on:click={() => void openLicense(selected.model_id)}
-                  >{selected.license_name} ↗</button
-                >
-              </dd>
-            </div>
-            <div>
-              <dt>Source</dt>
-              <dd>
-                <button
-                  class="link-button"
-                  type="button"
-                  title={selected.source_url}
-                  aria-label={`${selected.author} · model source`}
-                  on:click={() => void openSource(selected.model_id)}
-                  ><FileName name={selected.author} /><span class="source-link"
-                    >{' · model source ↗'}</span
-                  ></button
-                >
-              </dd>
-            </div>
+            {@render licenseAndSource(
+              selected.model_id,
+              selected.license_name,
+              selected.author,
+              selected.source_url,
+            )}
             <div>
               <dt>Architecture</dt>
               <dd>{selected.architecture} · Spandrel</dd>
@@ -1543,22 +1760,7 @@
               <dt>File</dt>
               <dd><FileName name={selected.filename} /></dd>
             </div>
-            <div>
-              <dt>Integrity</dt>
-              <dd>SHA-256 checked before use</dd>
-            </div>
-            <div>
-              <dt>Commercial use</dt>
-              <dd>
-                {selected.commercial_use_allowed === true
-                  ? selected.attribution_required
-                    ? 'Allowed · attribution kept'
-                    : 'Allowed'
-                  : selected.commercial_use_allowed === false
-                    ? 'Not allowed'
-                    : 'Rights unresolved'}
-              </dd>
-            </div>
+            {@render integrityAndRights(commercialUseLabel(selected))}
           </dl>
           <div class="actions">
             {#if !selected.installed && selected.automated_download_allowed}
@@ -1663,6 +1865,33 @@
               {/if}
             {/if}
           </div>
+        {:else if selectedOwn}
+          <div>
+            <h3>{selectedOwn.name}</h3>
+            <div class="role">Your own file</div>
+          </div>
+          <p class="model-description">
+            You are responsible for the model's licence. LocalSR does not download or share it, and
+            your file stays where it is.
+          </p>
+          <dl class="kv">
+            <div>
+              <dt>License</dt>
+              <dd>Your own file</dd>
+            </div>
+            <div>
+              <dt>Source</dt>
+              <dd>Your own file</dd>
+            </div>
+            <div>
+              <dt>File</dt>
+              <dd><FileName name={ownFileName(selectedOwn.path)} /></dd>
+            </div>
+            <div>
+              <dt>Storage</dt>
+              <dd>Kept in place</dd>
+            </div>
+          </dl>
         {:else if group !== 'own'}
           <p class="model-description">
             Select a model to see what it is for and where it comes from.

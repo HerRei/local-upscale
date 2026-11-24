@@ -91,9 +91,13 @@ pub struct CatalogVideoModel {
     pub family: String,
     pub engine_kind: String,
     pub files: Vec<ModelFile>,
+    #[serde(default)]
     pub license_name: String,
+    #[serde(default)]
     pub license_url: String,
+    #[serde(default)]
     pub author: String,
+    #[serde(default)]
     pub source_url: String,
     pub min_unified_memory_gb: u64,
     pub min_vram_gb: u64,
@@ -106,8 +110,15 @@ pub struct CatalogVideoModel {
     pub quality_tier: u32,
     #[serde(default)]
     pub speed_tier: u32,
+    #[serde(default)]
     pub commercial_use_allowed: Option<bool>,
+    #[serde(default)]
     pub automated_download_allowed: bool,
+    #[serde(default)]
+    pub redistribution_allowed: bool,
+    #[serde(default)]
+    pub attribution_required: bool,
+    #[serde(default)]
     pub terms_acceptance_required: bool,
     pub engine_id: String,
     pub support_tier: String,
@@ -1134,6 +1145,57 @@ mod tests {
             older.as_object_mut().unwrap().remove("preset_eligible");
             let older: CatalogModel = serde_json::from_value(older).unwrap();
             assert!(older.preset_eligible, "{}", model.model_id);
+        }
+    }
+
+    #[test]
+    fn video_interpolation_and_audio_models_deserialize_attribution_and_defaults() {
+        let catalog: serde_json::Value =
+            serde_json::from_str(include_str!("../resources/model-catalog.json")).unwrap();
+        for section in ["video_models", "interpolation_models", "audio_models"] {
+            let entries = catalog[section].as_array().unwrap();
+            assert!(!entries.is_empty(), "{section} must not be empty");
+            for entry in entries {
+                let model: CatalogVideoModel = serde_json::from_value(entry.clone()).unwrap();
+                assert!(!model.author.is_empty(), "{}", model.model_id);
+                assert!(
+                    model.source_url.starts_with("https://"),
+                    "{}",
+                    model.model_id
+                );
+                assert!(!model.license_name.is_empty(), "{}", model.model_id);
+                assert!(
+                    model.license_url.starts_with("https://"),
+                    "{}",
+                    model.model_id
+                );
+                assert_eq!(
+                    model.attribution_required,
+                    !matches!(model.license_name.as_str(), "MIT" | "MIT OR Apache-2.0"),
+                    "{}",
+                    model.model_id
+                );
+
+                let mut minimal = entry.clone();
+                let obj = minimal.as_object_mut().unwrap();
+                for key in [
+                    "author",
+                    "source_url",
+                    "license_name",
+                    "license_url",
+                    "commercial_use_allowed",
+                    "automated_download_allowed",
+                    "redistribution_allowed",
+                    "attribution_required",
+                    "terms_acceptance_required",
+                ] {
+                    obj.remove(key);
+                }
+                let fallback: CatalogVideoModel = serde_json::from_value(minimal).unwrap();
+                assert_eq!(fallback.author, "");
+                assert!(!fallback.attribution_required);
+                assert!(!fallback.redistribution_allowed);
+            }
         }
     }
 
