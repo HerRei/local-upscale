@@ -181,6 +181,7 @@ fn menu_layout(recipes: &[Recipe]) -> Vec<SubmenuLayout> {
         ),
     ];
 
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut window_items = vec![
         LayoutEntry::Minimize,
         LayoutEntry::Maximize,
