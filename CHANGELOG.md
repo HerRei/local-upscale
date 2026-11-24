@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.6.0-beta] - Unreleased
+## [0.6.0-beta] - 2026-11-24
 
 - **LocalSR's own models.** Two x4 photo upscalers by Hermes Reisner, LocalSR Photo S and
   Photo M (4xLocalSRPhoto_PULSE-64x8 and 4xLocalSRPhoto_PULSE-96x12, weights CC BY 4.0),
