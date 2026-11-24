@@ -105,7 +105,9 @@ describe('desktop state', () => {
   it('uses the catalog ranking for Quick and Best', () => {
     const snapshot = demoSnapshot();
     expect(choosePresetModel(snapshot, 'upscale', 'quick')?.model_id).toBe('localsr_quick_x4_v1');
-    expect(choosePresetModel(snapshot, 'upscale', 'best')?.model_id).toBe('localsr_best_x4_v1');
+    expect(choosePresetModel(snapshot, 'upscale', 'best')?.model_id).toBe(
+      'realplksr_nomoswebphoto_x4',
+    );
   });
 
   it('picks what the shared fixture expects, as presets.py does', () => {
@@ -131,7 +133,9 @@ describe('desktop state', () => {
 
   it('never lets a slow specialist become a preset, however it ranks', () => {
     const snapshot = demoSnapshot();
-    const best = snapshot.catalog.models.find((model) => model.model_id === 'localsr_best_x4_v1')!;
+    const best = snapshot.catalog.models.find(
+      (model) => model.model_id === 'realplksr_nomoswebphoto_x4',
+    )!;
     // Stronger and larger than Best: it would win the Best ranking if presets could pick it.
     snapshot.catalog.models.push({
       ...best,
@@ -140,7 +144,9 @@ describe('desktop state', () => {
       size_bytes: best.size_bytes * 10,
       preset_eligible: false,
     });
-    expect(choosePresetModel(snapshot, 'upscale', 'best')?.model_id).toBe('localsr_best_x4_v1');
+    expect(choosePresetModel(snapshot, 'upscale', 'best')?.model_id).toBe(
+      'realplksr_nomoswebphoto_x4',
+    );
     // A pin is the user's own choice and still works.
     expect(
       choosePresetModel(snapshot, 'upscale', 'best', 'photo', {

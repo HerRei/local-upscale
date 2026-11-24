@@ -86,7 +86,7 @@ def test_display_names_read_like_the_library_rows() -> None:
 
 
 def test_presets_skip_checkpoints_with_unresolved_rights() -> None:
-    base = CATALOG_BY_ID.get("localsr_best_x4_v1")
+    base = CATALOG_BY_ID.get("realplksr_nomoswebphoto_x4")
     assert base is not None
     tempting = replace(
         base,

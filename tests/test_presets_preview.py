@@ -17,7 +17,7 @@ def test_quick_and_best_rank_distinct_catalog_models():
     )
 
     assert quick[0].model_id == "localsr_quick_x4_v1"
-    assert best[0].model_id == "localsr_best_x4_v1"
+    assert best[0].model_id == "realplksr_nomoswebphoto_x4"
 
 
 def test_face_purpose_ranks_face_restoration_model():
