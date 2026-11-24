@@ -104,10 +104,9 @@ Frames are compared one by one:
   edge two files can round the same time to different frames; in the middle each side shows
   the frame that holds that time.
 - The grid is the fastest side's frame rate. With an unfinished side it is that side's own
-  rate, `kept_frames / kept_seconds` as the host measured them in the file, and the clock
-  ends at `kept_seconds`. The player's idea of the clip's length is not used for either: it
-  can be longer than the frames (an audio tail, a rounded last frame), and a nominal 30 fps
-  would count a third frame in a clip of two. With two unfinished sides, frames and length
+  rate, using the result fps and `kept_frames` when known; the clock ends at
+  `kept_frames / fps`. Otherwise it falls back to the measured kept duration. Container
+  duration can exceed the video frames because of an audio tail or a rounded last frame. With two unfinished sides, frames and length
   come from the one that ends first. A side that runs a whole multiple faster (an
   interpolated result) refines the grid by that multiple.
 - At the end of playback every side is put on the last kept frame; the longer side had

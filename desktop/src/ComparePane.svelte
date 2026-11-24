@@ -129,7 +129,7 @@
       .map((item) => players.get(item.key))
       .find((player) => player && !player.paused);
     const update = () => {
-      frameId = animationId = undefined;
+      stopClock();
       sync?.tick();
       updateTransport();
       clock();
@@ -162,7 +162,7 @@
           ? [
               {
                 video,
-                fps: item.fps || 30,
+                fps: item.fps || 0,
                 audible: item.key === audioKey,
                 kept: item.unfinished && {
                   seconds: item.unfinished.seconds,
@@ -242,8 +242,8 @@
     const stalled = () => {
       if (!sources[key]?.loaded) return;
       sync?.stall(video);
-      stopClock();
       updateTransport();
+      clock();
     };
     const ready = () => {
       if (!sources[key]?.loaded) return;
