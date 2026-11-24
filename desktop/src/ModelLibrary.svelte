@@ -1254,7 +1254,7 @@
           </div>
           <div>
             <dt>Source</dt>
-            <dd>
+            <dd class="source-value">
               {#if author}
                 <button
                   class="link-button"
@@ -1262,8 +1262,7 @@
                   title={sourceUrl}
                   aria-label={`${author} · model source`}
                   on:click={() => void openSource(modelId)}
-                  ><FileName name={author} /><span class="source-link">{' · model source ↗'}</span
-                  ></button
+                  >{author}<span class="source-link">{' · model source ↗'}</span></button
                 >
               {:else}
                 <button

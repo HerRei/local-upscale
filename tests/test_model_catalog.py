@@ -276,7 +276,7 @@ def test_spandrel_compatible_models_metadata():
         == "https://github.com/HerRei/localsr-models/releases/download/v1/4xLocalSRPhoto_PULSE-64x8.safetensors"
     )
     assert localsr_quick.license_name == "CC BY 4.0"
-    assert localsr_quick.author == "Hermes Reisner · LocalSR"
+    assert localsr_quick.author == "Hermes Reisner"
     assert localsr_quick.source_url == "https://github.com/HerRei/localsr-models"
 
     localsr_best = CATALOG_BY_ID.get("localsr_best_x4_v1")
@@ -292,7 +292,7 @@ def test_spandrel_compatible_models_metadata():
         == "https://github.com/HerRei/localsr-models/releases/download/v1/4xLocalSRPhoto_PULSE-96x12.safetensors"
     )
     assert localsr_best.license_name == "CC BY 4.0"
-    assert localsr_best.author == "Hermes Reisner · LocalSR"
+    assert localsr_best.author == "Hermes Reisner"
     assert localsr_best.source_url == "https://github.com/HerRei/localsr-models"
 
 

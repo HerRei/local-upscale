@@ -3736,6 +3736,8 @@ input[type='number'],
 }
 .list-more:hover {
   color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 .custom-edit-link {
   margin-top: 4px;
@@ -3921,6 +3923,14 @@ input[type='number'],
 .kv dd .source-link {
   flex: none;
   white-space: pre;
+}
+/* The author is never cut: a long name wraps onto a second line instead. */
+.kv dd.source-value {
+  white-space: normal;
+}
+.kv dd.source-value .link-button {
+  display: inline;
+  text-align: right;
 }
 .fit {
   display: flex;
