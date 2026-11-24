@@ -2,14 +2,15 @@
 
 ## [0.6.0-beta] - Unreleased
 
-- **LocalSR's own models.** Quick and Best for photos are now LocalSR's own x4 upscalers
-  (4xLocalSRPhoto_PULSE-64x8 and 4xLocalSRPhoto_PULSE-96x12, weights CC BY 4.0), trained only on public-domain (CC0)
-  photos and running fully on the Neural Engine. On a sealed test set of 99 photos Quick
-  beats the SPAN model it replaces on every measure at the same speed; Best matches
-  NomosWebPhoto on detail with 2.6 dB more fidelity and runs about four times as fast
-  (27 s instead of 99 s for a 12 MP photo on an M1 Pro). Both models, their numbers and the
-  technical report are at github.com/HerRei/localsr-models. The previous models stay in the
-  model library; Illustration presets are unchanged.
+- **LocalSR's own models.** Two x4 photo upscalers by Hermes Reisner, LocalSR Photo S and
+  Photo M (4xLocalSRPhoto_PULSE-64x8 and 4xLocalSRPhoto_PULSE-96x12, weights CC BY 4.0),
+  trained only on public-domain (CC0) photos and running fully on the Neural Engine. On a
+  sealed test set of 99 photos Photo S beats the SPAN model on every measure at the same
+  speed, so it is now the Quick preset for photos. Photo M shows no clear difference in
+  detail from NomosWebPhoto, with 2.6 dB more fidelity, and runs about four times as fast
+  (27 s instead of 99 s for a 12 MP photo on an M1 Pro); Best stays NomosWebPhoto, and
+  Photo M is in the model library as the faster choice. Both models, their numbers and the
+  technical report are at github.com/HerRei/localsr-models.
 - **First launch.** A two-page setup: first privacy (update checks, the anonymous count and
   crash reports, each with a plain explanation and a link to what LocalSR sends and why),
   then the look of the app, the menu bar or tray icon and a sound when a file finishes.

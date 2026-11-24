@@ -4458,10 +4458,10 @@ describe('LocalSR desktop interface', () => {
     expect(library.querySelector('.detail .fit')?.textContent).toMatch(
       /Runs well here · Neural Engine/,
     );
-    // The file and the author keep their ends when the details column is narrow.
+    // The file keeps its end when the details column is narrow; the author is shown in full.
     const file = mac.catalog.models.find((model) => model.model_id === 'span_photo_x4')!;
     expect(library.querySelector(`.kv .file-name[title="${file.filename}"]`)).toBeTruthy();
-    expect(library.querySelector(`.kv .file-name[title="${file.author}"]`)).toBeTruthy();
+    expect(library.querySelector('.kv dd.source-value')?.textContent).toContain(file.author);
     cleanup();
 
     const pc = readySnapshot([image('photo', true)]);

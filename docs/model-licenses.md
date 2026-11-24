@@ -145,7 +145,7 @@ checkpoint rights.
 - Terms: [Apache-2.0](https://github.com/XPixelGroup/HAT/blob/main/LICENSE); the official
   repository publishes the pretrained models with no separate asset terms.
 
-### LocalSR Quick ×4 and LocalSR Best ×4 (`localsr_quick_x4_v1`, `localsr_best_x4_v1`)
+### LocalSR Photo S and Photo M by Hermes Reisner (`localsr_quick_x4_v1`, `localsr_best_x4_v1`)
 
 - Exact upstream assets: `4xLocalSRPhoto_PULSE-64x8.safetensors` and `4xLocalSRPhoto_PULSE-96x12.safetensors`
   from LocalSR's own [localsr-models `v1` release](https://github.com/HerRei/localsr-models/releases/tag/v1).
