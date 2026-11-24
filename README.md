@@ -68,6 +68,11 @@ Hofmann. The library also has HAT, Real-ESRGAN, SwinIR, NAFNet, SCUNet, FBCNN
 and DDColor, and each model shows its size, licence and source before you download it.
 [Model guide](docs/models/README.md) · [Model licences](docs/model-licenses.md).
 
+<!-- release-candidate -->
+v0.6.1-beta is in preparation; the downloads below are still v0.6.0-beta.
+[Draft release notes](docs/releases/v0.6.1-beta.md).
+<!-- /release-candidate -->
+
 ## Download
 
 ### Which file do I need?

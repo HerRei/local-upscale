@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.6.1-beta] - Unreleased
+
+A hotfix for 0.6.0.
+
+- **Hotfix: the Mac engine starts again on macOS 14 and 15.** 0.6.0 contained a part of
+  MLX (the library behind FlashVSR) that only macOS 26 can load, so on older macOS the
+  engine stopped right at start with "The inference engine ended unexpectedly" (#183).
+  0.6.1 ships the macOS 14 build of MLX, and a release check now refuses any file that
+  needs a newer macOS than LocalSR supports. If MLX ever fails to start, only FlashVSR
+  is turned off; the rest of LocalSR keeps working.
+- **Videos with repeated timestamps.** Some videos have frames with the same or an
+  earlier timestamp than the frame before (cuts without re-encoding, screen recordings,
+  some phone videos). LocalSR stopped with "Video presentation timestamps must
+  increase"; it now processes them (#177).
+- **Release tooling.** The media runtime builds in a uv venv and behind mirrors whose
+  certificate Python cannot check (#181), and signing takes the Windows and Linux
+  packages from the draft release instead of 45 GB of CI artifacts (#180).
+
 ## [0.6.0-beta] - 2026-11-24
 
 - **LocalSR's own models.** Two x4 photo upscalers by Hermes Reisner, LocalSR Photo S and
