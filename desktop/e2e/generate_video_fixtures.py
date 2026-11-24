@@ -57,7 +57,7 @@ def make_video(
         while pos < total_samples:
             n = min(chunk, total_samples - pos)
             t = (np.arange(pos, pos + n) / sr).astype(np.float32)
-            samples = (0.05 * np.sin(2 * math.pi * 440.0 * t)).reshape(1, -1)
+            samples = (0.001 * np.sin(2 * math.pi * 440.0 * t)).reshape(1, -1)
             aframe = av.AudioFrame.from_ndarray(samples, format="fltp", layout="mono")
             aframe.sample_rate = sr
             aframe.pts = pos
