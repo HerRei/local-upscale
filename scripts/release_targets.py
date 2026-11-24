@@ -260,18 +260,31 @@ def download_table(release_version: str) -> str:
         ("Linux, NVIDIA", f"all `{package('linux-x86_64-cuda')}.part-*` files, joined"),
     ]
     return (
-        "## Which file do I need?\n\n| Computer | Download |\n|---|---|\n"
+        "## Which file do I need?\n\n"
+        + "Download one file for your computer; it is all you need. The Mac version includes "
+        + "everything. On Windows and Linux, LocalSR checks your graphics card when it first "
+        + "starts and offers the faster engine for it (NVIDIA CUDA, DirectML for AMD and Intel "
+        + "graphics on Windows, AMD ROCm on Linux), then downloads and installs that engine "
+        + "itself.\n\n"
+        + "| Computer | Download |\n|---|---|\n"
         + "".join(f"| {computer} | {download} |\n" for computer, download in main_rows)
-        + "\nThe app offers the faster GPU engine after setup.\n\n"
-        + "## Offline and advanced downloads\n\n"
+        + "\n## Offline and advanced downloads\n\n"
+        + "Only for a computer without internet access, or to install the GPU edition in one "
+        + "go. Everyone else can skip this.\n\n"
         + "| Computer | Download |\n|---|---|\n"
         + "".join(f"| {computer} | {download} |\n" for computer, download in offline_rows)
         + "\nTo import an engine offline, download the `*.engine-payload.json` manifest, "
         + "its `.engine.tar.gz.part-*` files and their `.sig` signature files into one folder, "
         + "then open **Advanced -> Engine -> Change… -> Import engine from file…** "
         + "and choose the `*.engine-payload.json` file.\n\n"
-        + "The other files (signatures, checksums and source archives) "
-        + "are for verification and updates.\n"
+        + "### What are all the other files?\n\n"
+        + "- `*.engine-payload.json`, `*.engine-update.json` and `*.engine.tar.gz.part-*`: "
+        + "the GPU engines that the app downloads by itself.\n"
+        + "- `*.app.tar.gz` and `*.sig`: update files and their signatures, which the app "
+        + "checks before it installs an update.\n"
+        + "- `*.sha256` and `SHA256SUMS`: checksums to check a download by hand.\n"
+        + "- `*source-and-notices.tar.gz`: the source code and licence notices for each "
+        + "package.\n"
     )
 
 
