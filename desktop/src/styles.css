@@ -4803,3 +4803,9 @@ label.setting-label {
     opacity: 1 !important;
   }
 }
+
+/* The privacy link in the first-launch note reads as a link, not as more note text. */
+.setup-note .link-button {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}

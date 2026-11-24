@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher, tick } from 'svelte';
+  import * as api from './lib/api';
   import { modal } from './lib/modal';
   import type { UiSettings } from './lib/types';
   import ThemePicker from './ThemePicker.svelte';
@@ -151,6 +152,9 @@
           You can change all of this later in Settings → {storeBuild
             ? 'Privacy'
             : 'Privacy & updates'}.
+          <button type="button" class="link-button" on:click={() => void api.openPrivacyPage()}
+            >What LocalSR sends, and why</button
+          >
         </p>
         <div class="setup-buttons">
           <button type="button" class="button primary" on:click={() => go(2)}>Continue</button>

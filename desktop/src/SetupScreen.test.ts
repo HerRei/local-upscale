@@ -35,7 +35,7 @@ it('shows privacy defaults without descriptions, then navigates and retains choi
       .getAllByRole('button')
       .filter((el) => el.tagName === 'BUTTON')
       .map((el) => el.textContent?.trim()),
-  ).toEqual(['Continue']);
+  ).toEqual(['What LocalSR sends, and why', 'Continue']);
   for (const item of screen.getAllByRole('switch'))
     expect((item as HTMLInputElement).checked).toBe(true);
   expect(screen.queryAllByRole('radio')).toHaveLength(0);
@@ -203,6 +203,7 @@ it('traps focus in each page and ignores Escape', async () => {
     screen.getByRole('switch', { name: 'Send an anonymous count with each update check' }),
     screen.getByRole('button', { name: 'About Offer to report crashes' }),
     screen.getByRole('switch', { name: 'Offer to report crashes' }),
+    screen.getByRole('button', { name: 'What LocalSR sends, and why' }),
     screen.getByRole('button', { name: 'Continue' }),
   ];
   for (const control of [...privacyOrder, privacyOrder[0]]) {
@@ -231,4 +232,14 @@ it('traps focus in each page and ignores Escape', async () => {
   }
   await user.keyboard('{Escape}');
   expect(within(dialog).getByRole('heading', { name: 'Look and feel' })).toBeTruthy();
+});
+
+it('opens the website privacy page from the first page', async () => {
+  platform('MacIntel');
+  const api = await import('./lib/api');
+  const open = vi.spyOn(api, 'openPrivacyPage').mockResolvedValue();
+  const user = userEvent.setup();
+  render(SetupScreen);
+  await user.click(screen.getByRole('button', { name: 'What LocalSR sends, and why' }));
+  expect(open).toHaveBeenCalledTimes(1);
 });

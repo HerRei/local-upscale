@@ -242,6 +242,10 @@ export async function openDownloadPage(): Promise<void> {
 }
 
 /** In-app tutorial for loading a custom checkpoint file. */
+export async function openPrivacyPage(): Promise<void> {
+  if (isTauri()) await invoke('open_privacy_page');
+}
+
 export async function openCustomModelTutorial(): Promise<void> {
   if (isTauri()) await invoke('open_custom_model_tutorial');
 }

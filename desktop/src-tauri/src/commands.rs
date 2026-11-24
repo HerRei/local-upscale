@@ -3203,6 +3203,14 @@ pub fn open_custom_model_tutorial() -> AppResult<()> {
         .map_err(|error| AppError::Config(format!("could not open the tutorial: {error}")))
 }
 
+pub(crate) const PRIVACY_PAGE_URL: &str = "https://herrei.github.io/localsr/privacy/";
+
+#[tauri::command]
+pub fn open_privacy_page() -> AppResult<()> {
+    open::that_detached(PRIVACY_PAGE_URL)
+        .map_err(|error| AppError::Config(format!("could not open the privacy page: {error}")))
+}
+
 /// FFmpeg stays the user's own action: LocalSR never downloads or bundles it.
 #[tauri::command]
 pub fn open_ffmpeg_download_page() -> AppResult<()> {
