@@ -639,6 +639,11 @@ class Builder:
         if self.system == "Darwin":
             flag = f"-mmacosx-version-min={MACOS_DEPLOYMENT_TARGET}"
             options += [f"--extra-cflags={flag}", f"--extra-cxxflags={flag}"]
+            if platform.machine() == "arm64":
+                # libvpx 1.16 knows Darwin up to 25; on a newer macOS its guess falls back to
+                # generic-gnu and links with GNU ld options. The deployment target above still
+                # decides the oldest macOS the library runs on.
+                options.append("--target=arm64-darwin25-gcc")
         signature = {"sha256": self.sources["libvpx"]["sha256"], "options": options}
         if self.stamp_ok("libvpx", signature):
             return
