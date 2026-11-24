@@ -47,19 +47,22 @@ MPS_CALIBRATED_PAD_FRAMES = 41
 FIXED_MEMORY_BYTES = 5_470_412_928
 PER_PIXEL_MEMORY_BYTES = 13_942.7
 
-# CUDA / ROCm PyTorch bfloat16 memory model: budget = 0.85 * available_vram (from torch.cuda.mem_get_info);
-# host buffers (lq_padded, canvas) live in system RAM, not VRAM, so only VRAM scales with n_pad.
-# max_tile_area = (budget - ROCM_FIXED_MEMORY_BYTES) / scaled_per_pixel.
-# Fitted from flashvsr-mlx ROCM.md bfloat16 measurements on AMD Radeon RX 9060 XT (16 GB, gfx1200,
-# 29 output frames / n_pad = 33 for 896x512 and 768x1408) with KV-cache/LQ release before decoding
-# and TCDecoder cache release (reused for NVIDIA CUDA):
-#   512x256  (  131,072 px, n_pad = 65): peak =  5.2 GB
-#   896x512  (  458,752 px, n_pad = 33): peak =  8.6 GB
-#   768x1408 (1,081,344 px, n_pad = 33): peak = 11.4 GB
-# Linear fit for peak ≈ 4.9 GB + 6.3 kB per output pixel at n_pad = 33.
-ROCM_CALIBRATED_PAD_FRAMES = 33
-ROCM_FIXED_MEMORY_BYTES = 4_900_000_000
-ROCM_PER_PIXEL_MEMORY_BYTES = 6_300.0
+# CUDA / ROCm PyTorch bfloat16 memory model (gather attention, the packaged path): host buffers
+# (lq_padded, canvas) live in system RAM, so only VRAM scales with n_pad.
+# max_tile_area = (budget - ROCM_FIXED_MEMORY_BYTES) / scaled_per_pixel, budget =
+# DISCRETE_BUDGET_FRACTION * free VRAM (torch.cuda.mem_get_info).
+# Measured with LocalSR's engine on an AMD Radeon RX 9060 XT (16 GB, gfx1200, PyTorch 2.14.1+rocm7.2),
+# 37-frame window (n_pad = 41), torch.cuda.max_memory_allocated:
+#   512x256  (  131,072 px): 5.76 GB allocated, 6.00 GB reserved
+#   896x512  (  458,752 px): 8.07 GB allocated, 8.37 GB reserved
+#   768x1408 (1,081,344 px): 12.10 GB allocated but 16.2 GB reserved, with out-of-memory retries that
+#                            made it 10x slower per pixel: the allocator needs headroom beyond the
+#                            allocated peak, hence the lower budget fraction for discrete GPUs.
+# Linear fit through the first two: 4.84 GB + 7.04 kB per output pixel at n_pad = 41.
+ROCM_CALIBRATED_PAD_FRAMES = 41
+ROCM_FIXED_MEMORY_BYTES = 4_840_000_000
+ROCM_PER_PIXEL_MEMORY_BYTES = 7_040.0
+DISCRETE_BUDGET_FRACTION = 0.70
 
 _MEMORY_MODELS = {
     "mps": (FIXED_MEMORY_BYTES, PER_PIXEL_MEMORY_BYTES, MPS_CALIBRATED_PAD_FRAMES, True),
@@ -303,7 +306,8 @@ def plan_tiles(
             if backend in ("rocm", "cuda")
             else mps_recommended_working_set_bytes()
         )
-        budget_bytes = int(raw_budget * BUDGET_FRACTION)
+        fraction = DISCRETE_BUDGET_FRACTION if backend in ("rocm", "cuda") else BUDGET_FRACTION
+        budget_bytes = int(raw_budget * fraction)
 
     if tile_size_override is not None:
         tw, th = tile_size_override
