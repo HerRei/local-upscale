@@ -406,7 +406,35 @@ pub(crate) fn partial_output_seconds(requested: &Path, reported: &Path) -> Optio
         return None;
     };
     let duration = name.strip_prefix(&format!("{stem}_partial_"))?;
-    parse_minutes_seconds(duration, 'm', 's')
+    parse_minutes_seconds(without_copy_number(duration), 'm', 's')
+}
+
+/// `<name>_partial.<ext>` or `<name>_partial-N.<ext>` beside the requested photo: where the
+/// engine saves the finished tiles of a stopped photo (`partial_image.partial_output_path`).
+pub(crate) fn is_partial_photo_output(requested: &Path, reported: &Path) -> bool {
+    if requested.parent() != reported.parent() || requested.extension() != reported.extension() {
+        return false;
+    }
+    let (Some(stem), Some(name)) = (
+        requested.file_stem().and_then(|s| s.to_str()),
+        reported.file_stem().and_then(|s| s.to_str()),
+    ) else {
+        return false;
+    };
+    name.strip_prefix(&format!("{stem}_partial"))
+        .is_some_and(|rest| rest.is_empty() || without_copy_number(rest).is_empty())
+}
+
+/// Drops the `-N` the engine appends when a kept part's name is already taken.
+fn without_copy_number(text: &str) -> &str {
+    match text.rsplit_once('-') {
+        Some((head, number))
+            if !number.is_empty() && number.bytes().all(|c| c.is_ascii_digit()) =>
+        {
+            head
+        }
+        _ => text,
+    }
 }
 
 fn parse_minutes_seconds(text: &str, sep: char, suffix: char) -> Option<u64> {
@@ -539,6 +567,45 @@ pub fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ResultSumma
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn kept_parts_with_a_copy_number_are_recognised() {
+        use crate::results::{is_partial_photo_output, partial_output_seconds};
+        use std::path::Path;
+        let video = Path::new("/out/clip_x4.mp4");
+        assert_eq!(
+            partial_output_seconds(video, Path::new("/out/clip_x4_partial_0m07s-2.mp4")),
+            partial_output_seconds(video, Path::new("/out/clip_x4_partial_0m07s.mp4"))
+        );
+        assert!(
+            partial_output_seconds(video, Path::new("/out/clip_x4_partial_0m07s.mp4")).is_some()
+        );
+        let photo = Path::new("/out/photo_x4.png");
+        assert!(is_partial_photo_output(
+            photo,
+            Path::new("/out/photo_x4_partial.png")
+        ));
+        assert!(is_partial_photo_output(
+            photo,
+            Path::new("/out/photo_x4_partial-3.png")
+        ));
+        assert!(!is_partial_photo_output(
+            photo,
+            Path::new("/out/photo_x4_partial.jpg")
+        ));
+        assert!(!is_partial_photo_output(
+            photo,
+            Path::new("/elsewhere/photo_x4_partial.png")
+        ));
+        assert!(!is_partial_photo_output(
+            photo,
+            Path::new("/out/photo_x4_partialx.png")
+        ));
+        assert!(!is_partial_photo_output(
+            photo,
+            Path::new("/out/other_partial.png")
+        ));
+    }
+
     use serde_json::json;
 
     #[test]

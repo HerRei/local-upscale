@@ -1646,11 +1646,21 @@ fn wrong_output(state: &AppState, envelope: &WorkerEnvelope) -> AppResult<Option
     if requested.as_deref().map(Path::new) == Some(Path::new(&reported)) {
         return Ok(None);
     }
+    let partial = envelope.data.get("partial").and_then(Value::as_bool) == Some(true);
     if kind == "video_job_completed"
-        && envelope.data.get("partial").and_then(Value::as_bool) == Some(true)
+        && partial
         && requested
             .as_deref()
             .is_some_and(|path| partial_output(Path::new(path), Path::new(&reported)))
+    {
+        return Ok(None);
+    }
+    // A photo stopped with "keep the finished part" saves its finished tiles beside it.
+    if kind == "job_completed"
+        && partial
+        && requested.as_deref().is_some_and(|path| {
+            crate::results::is_partial_photo_output(Path::new(path), Path::new(&reported))
+        })
     {
         return Ok(None);
     }

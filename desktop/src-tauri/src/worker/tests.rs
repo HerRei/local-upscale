@@ -1546,6 +1546,38 @@ fn a_completion_must_name_the_output_the_host_requested() {
 }
 
 #[test]
+fn a_kept_photo_part_beside_the_requested_output_is_accepted() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = running_batch(directory.path());
+    assert!(accept_envelope(&state, &envelope("job_started", json!({"job_id": "a"}))).unwrap());
+    let kept = |name: &str, partial: bool| {
+        envelope(
+            "job_completed",
+            json!({
+                "job_id": "a",
+                "output_path": directory.path().join("out").join(name).to_string_lossy(),
+                "partial": partial,
+            }),
+        )
+    };
+    for name in ["a_partial.png", "a_partial-2.png"] {
+        assert!(
+            refuse_wrong_result(&state, &kept(name, true))
+                .unwrap()
+                .is_none(),
+            "{name} is where a stopped photo keeps its finished tiles"
+        );
+    }
+    // Only when the engine says the result is partial, and only beside the request.
+    assert!(refuse_wrong_result(&state, &kept("a_partial.png", false))
+        .unwrap()
+        .is_some());
+    assert!(refuse_wrong_result(&state, &kept("b_partial.png", true))
+        .unwrap()
+        .is_some());
+}
+
+#[test]
 fn a_completion_with_the_wrong_output_fails_its_job_and_the_engine_restarts() {
     let directory = tempfile::tempdir().unwrap();
     let state = running_batch(directory.path());
