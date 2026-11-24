@@ -1392,7 +1392,15 @@ pub(crate) fn cancel_jobs_checked(state: &AppState, keep_partial: bool) -> AppRe
     let active = lock(&state.runtime)?.active_job_id.clone();
     // A second request while the first is still being carried out changes nothing.
     if !active.is_empty() && !cancellation.is_cancelling(&active) {
-        cancellation.request(&active, std::time::Instant::now());
+        let now = std::time::Instant::now();
+        cancellation.request(&active, now);
+        // Keeping the finished part means saving it, which for a large photo (filling in
+        // and writing hundreds of megapixels) takes far longer than a plain stop. The
+        // engine is given the saving time from the start instead of being restarted.
+        let keeping = keep_partial && lock(&state.runtime)?.can_keep_partial == Some(true);
+        if keeping {
+            cancellation.partial_finalizing(&active, now);
+        }
         // Photos of a batch that never started were cancelled with the queue above.
         for id in &cancellation.job_ids {
             lock(&state.database)?.mark_cancelling(id)?;
