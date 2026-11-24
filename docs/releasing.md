@@ -121,11 +121,14 @@ Windows installers and Linux AppImages carry their update identity and update th
 ([Updates](updates.md)); its feed entry is written and signed on the Mac, after the
 macOS build, from the workflow runs at the same commit:
 
-1. Download both runs into one folder: `gh run download <run> -D
-   build/release-<version>/platforms` for the Windows and the Linux run. Every
-   artifact lands in its target's folder (`windows-x86_64-cpu`, …). With the Linux
-   CUDA and ROCm AppImages and their engine packages this is roughly 45 GB; signing
-   signing needs room for one more copy of the largest package.
+1. Run both workflows with `release_tag` set to the draft release, then gather their files:
+   `python scripts/fetch_release_platforms.py --tag v<version> --run <windows run> --run
+   <linux run> --out build/release-<version>/platforms`. It downloads only the runs'
+   `reports-<target>` artifacts (a few MB) and takes the packages, parts and engine packages
+   from the draft release, checked against GitHub's digests, into one folder per target
+   (`windows-x86_64-cpu`, …). The full run artifacts (about 45 GB) are no longer needed;
+   `gh run download` still works as a fallback. Signing needs room for one more copy of the
+   largest package.
 2. `python scripts/beta_update_signing.py platforms build/release-<version>/platforms
    --feed build/release-<version>/beta.json --commit <sha>` checks every package
    against its checksum file, its installed smoke report (version and update
