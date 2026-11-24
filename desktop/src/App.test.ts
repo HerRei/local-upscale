@@ -2115,6 +2115,11 @@ describe('LocalSR desktop interface', () => {
     const flashRow = within(library).getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ });
     expect(flashRow.getAttribute('aria-pressed')).toBe('true');
     expect(within(flashRow).getByText('Chosen')).toBeTruthy();
+    expect(flashRow.textContent).toContain('Quality: 3 out of 4');
+    expect(flashRow.textContent).toContain('Speed: 1 out of 4');
+    const seedRow = within(library).getByRole('button', { name: /^SeedVR2-3B — Labs/ });
+    expect(seedRow.textContent).toContain('Quality: 4 out of 4');
+    expect(seedRow.textContent).toContain('Speed: 0 out of 4');
     await user.click(within(library).getByRole('button', { name: 'Close model library' }));
 
     // Video Same size has no video rows in For this job and no Use for this job in Video (Labs).

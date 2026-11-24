@@ -193,6 +193,11 @@ describe('per-model availability and library helpers', () => {
     const state = videoAvailability(shipped, macEngine, mac(16), 'mps');
     expect(Object.keys(state)).toContain('flashvsr_v11');
     expect(ids(state)).toEqual([]);
+
+    const byId = Object.fromEntries(shipped.map((model) => [model.model_id, model]));
+    expect([byId.seedvr2_3b.quality_tier, byId.seedvr2_3b.speed_tier]).toEqual([4, 0]);
+    expect([byId.seedvr2_3b_fp8.quality_tier, byId.seedvr2_3b_fp8.speed_tier]).toEqual([4, 0]);
+    expect([byId.flashvsr_v11.quality_tier, byId.flashvsr_v11.speed_tier]).toEqual([3, 1]);
   });
 
   it('lets an engine this version does not know run when the worker lists it', () => {

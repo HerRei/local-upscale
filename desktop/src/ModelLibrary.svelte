@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { customModels } from './lib/customModels';
   import { keptTrialSettings, trialIncompatibility, trialTime } from './lib/modelTrials';
   import {
@@ -14,9 +15,12 @@
   import { chooseFixModel, fixQuality, rememberedFixModel } from './lib/fixStages';
   import { formatBytes } from './lib/format';
   import FileName from './FileName.svelte';
+  import HelpTip from './HelpTip.svelte';
   import { modal } from './lib/modal';
   import { fitLine, runsOnAccelerator } from './lib/neuralEngine';
   import {
+    FRAME_BY_FRAME_TIP,
+    SEVERAL_FRAMES_TIP,
     videoAvailability,
     videoEngineName,
     videoModelSummary,
@@ -60,6 +64,8 @@
     quality: Quality | '';
     slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit' | 'try';
     fix?: Exclude<FixKind, 'faces'>;
+    /** A model to open on instead of the one the job uses now. */
+    select?: string;
   };
   export let device: DeviceInfo | undefined;
   export let downloads: ModelDownloadStatus[] = [];
@@ -124,11 +130,12 @@
       ? context.fix
       : undefined;
   // A fix or temporal video picker opens on the model the job uses now.
-  let selectedId =
-    context.slot === 'primary' &&
-    context.task === 'video' &&
-    context.videoTask !== 'denoise' &&
-    settings.selected_video_model_id !== 'frame_by_frame'
+  let selectedId = context.select
+    ? context.select
+    : context.slot === 'primary' &&
+        context.task === 'video' &&
+        context.videoTask !== 'denoise' &&
+        settings.selected_video_model_id !== 'frame_by_frame'
       ? settings.selected_video_model_id
       : context.fix === undefined
         ? ''
@@ -139,6 +146,10 @@
                 (context.task === 'video' && context.videoTask === 'denoise'))
             ? settings.selected_model_id
             : '';
+  let listEl: HTMLElement | undefined;
+  onMount(() => {
+    listEl?.querySelector('.row.selected')?.scrollIntoView?.({ block: 'center' });
+  });
   let termsAccepted = false;
   let showHeavyEdit = false;
   let trialIds: string[] = [];
@@ -657,7 +668,26 @@
         {/each}
       </nav>
 
-      <section class="list" aria-label="Models">
+      <section class="list" aria-label="Models" bind:this={listEl}>
+        {#snippet meters(quality: number, speed: number)}
+          <div class="meters">
+            <div class="meter">
+              Quality<span class="visually-hidden">: {quality} out of 4</span><span
+                class="dots"
+                aria-hidden="true"
+                >{#each [1, 2, 3, 4] as tier}<i class:f={quality >= tier}></i>{/each}</span
+              >
+            </div>
+            <div class="meter">
+              Speed<span class="visually-hidden">: {Math.min(speed, 3)} out of 4</span><span
+                class="dots"
+                aria-hidden="true"
+                >{#each [1, 2, 3, 4] as tier}<i class:f={speed >= tier && tier <= 3}
+                  ></i>{/each}</span
+              >
+            </div>
+          </div>
+        {/snippet}
         {#snippet videoRow(model: CatalogVideoModel)}
           {@const dl = downloadMap.get(model.model_id)}
           {@const dlError = downloadErrors[model.model_id]}
@@ -683,6 +713,11 @@
                   >{/if}
               </div>
             </div>
+            <!-- On the frame-by-frame models' scales; a model without a rating keeps the gap. -->
+            {#if model.quality_tier}{@render meters(
+                model.quality_tier,
+                model.speed_tier ?? 0,
+              )}{:else}<div></div>{/if}
             <div class="right">
               <b>{formatBytes(model.total_size_bytes)}</b>{#if dl}<span
                   class:downloading={dl.status === 'downloading'}
@@ -920,13 +955,13 @@
           </div>
         {:else}
           <div class="list-head">
-            {group === 'job'
-              ? jobVideoModels.length
-                ? 'Frame by frame'
-                : 'For this job'
-              : group === 'installed'
-                ? `INSTALLED · ${formatBytes(installedBytes)}`
-                : groups.find((item) => item.id === group)?.label}<span
+            {#if group === 'job' && jobVideoModels.length}<div class="label-with-tip">
+                Frame by frame<HelpTip label="Frame by frame" text={FRAME_BY_FRAME_TIP} />
+              </div>{:else}{group === 'job'
+                ? 'For this job'
+                : group === 'installed'
+                  ? `INSTALLED · ${formatBytes(installedBytes)}`
+                  : groups.find((item) => item.id === group)?.label}{/if}<span
               >{group === 'job' ? 'sorted by quality' : ''}</span
             >
           </div>
@@ -991,25 +1026,7 @@
                     </div>
                   {/if}
                 </div>
-                <div class="meters">
-                  <div class="meter">
-                    Quality<span class="visually-hidden">: {model.quality_tier} out of 4</span><span
-                      class="dots"
-                      aria-hidden="true"
-                      >{#each [1, 2, 3, 4] as tier}<i class:f={model.quality_tier >= tier}
-                        ></i>{/each}</span
-                    >
-                  </div>
-                  <div class="meter">
-                    Speed<span class="visually-hidden"
-                      >: {Math.min(model.speed_tier, 3)} out of 4</span
-                    ><span class="dots" aria-hidden="true"
-                      >{#each [1, 2, 3, 4] as tier}<i
-                          class:f={model.speed_tier >= tier && tier <= 3}
-                        ></i>{/each}</span
-                    >
-                  </div>
-                </div>
+                {@render meters(model.quality_tier, model.speed_tier)}
                 <div class="right">
                   <b>{formatBytes(model.size_bytes)}</b>{#if downloadMap.get(model.model_id)}
                     {@const dl = downloadMap.get(model.model_id)}<span
@@ -1026,7 +1043,13 @@
           {/each}
           {#if group === 'job' && jobVideoModels.length}
             <div class="list-head">
-              Several frames at once · Labs<span>use neighbouring frames · much slower</span>
+              <div class="label-with-tip">
+                Several frames at once · Labs<HelpTip
+                  label="Several frames at once"
+                  text={SEVERAL_FRAMES_TIP}
+                />
+              </div>
+              <span>use neighbouring frames · much slower</span>
             </div>
             {#each jobVideoModels as model (model.model_id)}
               {@render videoRow(model)}

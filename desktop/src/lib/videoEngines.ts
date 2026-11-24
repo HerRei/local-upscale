@@ -28,6 +28,12 @@ export function videoEngineName(kind: string): string {
   return kind === 'seedvr2' ? 'SeedVR2' : kind === 'flashvsr' ? 'FlashVSR' : kind;
 }
 
+/** The two ways a video is upscaled, as the "?" tips next to those words explain them. */
+export const FRAME_BY_FRAME_TIP =
+  'Frame by frame: each frame is upscaled on its own. Fast, but fine detail can shimmer from one frame to the next.';
+export const SEVERAL_FRAMES_TIP =
+  'Several frames at once: the model also looks at the neighbouring frames, so detail stays steadier in motion. Much slower: a video can take hours. Still experimental (Labs).';
+
 /** Catalog name before the tier suffix (` — Labs`). */
 export function videoModelShortName(model: Pick<CatalogVideoModel, 'name'>): string {
   return model.name.split(' — ')[0];
