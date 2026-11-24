@@ -243,6 +243,25 @@ class ImageJobRunner:
                     else image.get("grayscale", False),
                     "tensor": torch.from_numpy(np.array(restored, copy=True)).float().div_(255.0),
                 }
+                if info.architecture != "DDColor":
+                    _, height, width = restored.shape
+                    progress.preview.submit(
+                        job_id=progress.job_id,
+                        preview_kind="tile",
+                        pixels=restored,
+                        force=True,
+                        output_x=0,
+                        output_y=0,
+                        output_width=int(width),
+                        output_height=int(height),
+                        image_width=int(width),
+                        image_height=int(height),
+                        active_tile_size=max(int(width), int(height)),
+                        stage_index=index,
+                    )
+                flush_preview = getattr(progress.preview, "flush", None)
+                if callable(flush_preview):
+                    flush_preview()
                 progress.complete(index, stage)
                 return working_image
         except InterruptedError:

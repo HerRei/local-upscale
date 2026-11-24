@@ -62,6 +62,8 @@
   export let videoFps = 0;
   /** Live tiles of a running job; off once a saved result was chosen for this image. */
   export let showLiveTiles = true;
+  /** Full-image result from an earlier stage (for example colour before upscaling). */
+  export let stagePreview = '';
   /** Why a pair is shown as a single result, for example a different framing. */
   export let comparisonNote = '';
   export let completedVideoOutput: string;
@@ -209,6 +211,10 @@
   let progressiveJobId = '';
   let progressiveFrame = -1;
   let progressiveStage = 0;
+  let stageBasePreview = '';
+  let stageBaseStage = -1;
+  let stageTilesDrawn = 0;
+  let progressiveGridTile: OutputTile | null = null;
   let videoSourceFrame = -1;
   let videoSourcePreview = '';
   let progressiveOutputWidth = 0;
@@ -229,7 +235,12 @@
   let disposed = false;
 
   $: sourcePreview = selectedMedia?.preview_data_url ?? '';
-  $: displayedSourcePreview = (processing && videoSourcePreview) || sourcePreview;
+  $: activeStagePreview = stageBasePreview || stagePreview;
+  $: displayedSourcePreview =
+    (processing &&
+      (videoSourcePreview ||
+        (showLiveTiles && !resultPreview && !pairShown ? activeStagePreview : ''))) ||
+    sourcePreview;
   $: deferredPreview = Boolean(
     videoEngineBusy &&
     selectedMedia &&
@@ -351,11 +362,17 @@
     if (!videoEngineBusy) void repairSelectedPreview();
   }
 
-  export function resetProgressivePreview(jobId = '', frame = -1): void {
+  export function resetProgressivePreview(jobId = '', frame = -1, preserveStageBase = false): void {
     if (jobId !== progressiveJobId || frame !== videoSourceFrame) {
       videoSourceFrame = -1;
       videoSourcePreview = '';
     }
+    if (!preserveStageBase) {
+      stageBasePreview = '';
+      stageBaseStage = -1;
+    }
+    stageTilesDrawn = 0;
+    progressiveGridTile = null;
     progressiveFrame = frame;
     progressiveStage = 0;
     progressiveGeneration += 1;
@@ -371,6 +388,17 @@
     if (progressiveCanvas && context) {
       context.clearRect(0, 0, progressiveCanvas.width, progressiveCanvas.height);
     }
+  }
+
+  function isFullImageTile(tile: OutputTile): boolean {
+    return (
+      tile.image_width > 0 &&
+      tile.image_height > 0 &&
+      tile.output_x === 0 &&
+      tile.output_y === 0 &&
+      tile.output_width === tile.image_width &&
+      tile.output_height === tile.image_height
+    );
   }
 
   export function queueVideoSource(message: WorkerEnvelope, activeJobId: string): void {
@@ -399,9 +427,43 @@
     const phase = String(data.phase ?? '');
     const frame = Number(data.frame_index ?? -1);
     const stage = numeric(data.stage_index);
-    if (jobId === progressiveJobId && stage < progressiveStage) return;
+    const tile = tileFromData(data);
+    const encoded = typeof data.jpeg_base64 === 'string' ? data.jpeg_base64 : '';
+    const fullImage = phase === 'completed' && Boolean(encoded) && isFullImageTile(tile);
+    if (jobId === progressiveJobId && stage < progressiveStage) {
+      if (fullImage && stage > stageBaseStage && frame <= progressiveFrame) {
+        stageBasePreview = `data:image/jpeg;base64,${encoded}`;
+        stageBaseStage = stage;
+        if (stageTilesDrawn === 0 && progressiveOutputWidth > 0) {
+          progressiveOutputWidth = 0;
+          progressiveOutputHeight = 0;
+          const generation = progressiveGeneration;
+          progressivePendingCount += 1;
+          progressiveWork = progressiveWork
+            .then(async () => {
+              await ensureProgressiveCanvas(
+                progressiveGridTile ?? tile,
+                jobId,
+                generation,
+                Boolean(data.processing_stage),
+              );
+            })
+            .catch((error) => console.error('Could not update stage preview', error))
+            .finally(() => {
+              if (generation === progressiveGeneration) {
+                progressivePendingCount = Math.max(0, progressivePendingCount - 1);
+              }
+            });
+        }
+      }
+      return;
+    }
     if (stage > progressiveStage) {
-      resetProgressivePreview(jobId, frame);
+      resetProgressivePreview(
+        jobId,
+        frame,
+        jobId === progressiveJobId && frame === progressiveFrame,
+      );
       progressiveStage = stage;
     }
     if (frame >= 0 && frame < progressiveFrame) return;
@@ -412,12 +474,16 @@
     if (!progressiveJobId) progressiveJobId = jobId;
     if (jobId !== progressiveJobId) return;
 
+    if (fullImage && stage >= stageBaseStage) {
+      stageBasePreview = `data:image/jpeg;base64,${encoded}`;
+      stageBaseStage = stage;
+    }
+
     const now = typeof performance === 'undefined' ? Date.now() : performance.now();
     if (phase === 'started') {
       // Geometry is cheap; never sample it together with JPEG decoding. Fast
       // restoration models can finish several tiles within one display frame.
       // Keep the newest model position even while older JPEGs are decoding.
-      const tile = tileFromData(data);
       const percentage = tilePercentages(
         tile,
         boundedPreviewSize({ width: tile.image_width, height: tile.image_height }),
@@ -435,7 +501,7 @@
       // Completion metadata has no pixels. It must not consume the display
       // throttle before the asynchronous JPEG arrives a few milliseconds later.
       if (!data.jpeg_base64) {
-        const percentage = tilePercentages(tileFromData(data), progressiveCanvas);
+        const percentage = tilePercentages(tile, progressiveCanvas);
         if (
           percentage &&
           percentage.x === activeTileX &&
@@ -452,8 +518,9 @@
       // while preserving input responsiveness; completion always loads the
       // authoritative full output image.
       if (
-        (lastProgressivePaintAt > 0 && now - lastProgressivePaintAt < 75) ||
-        progressivePendingCount >= 3
+        !fullImage &&
+        ((lastProgressivePaintAt > 0 && now - lastProgressivePaintAt < 75) ||
+          progressivePendingCount >= 3)
       ) {
         return;
       }
@@ -532,6 +599,7 @@
       const image = await loadHtmlImage(`data:image/jpeg;base64,${encoded}`);
       if (generation !== progressiveGeneration || jobId !== progressiveJobId) return;
       context.drawImage(image, destination.x, destination.y, destination.width, destination.height);
+      stageTilesDrawn += 1;
     }
     // JPEG encoding is asynchronous: a previous tile can arrive after the
     // next tile started. Keep that newer model tile's outline visible.
@@ -579,10 +647,12 @@
       progressiveVisible = true;
       return true;
     }
+    progressiveGridTile = tile;
+    const stageBase = stageBasePreview || stagePreview;
     context.fillStyle = themeColor('--preview-canvas-background');
     context.fillRect(0, 0, size.width, size.height);
     try {
-      const source = await loadHtmlImage(sourcePreview);
+      const source = await loadHtmlImage(stageBase || sourcePreview);
       if (generation !== progressiveGeneration || jobId !== progressiveJobId) return false;
       if (source) context.drawImage(source, 0, 0, size.width, size.height);
     } catch {
@@ -590,8 +660,9 @@
       // preview is being repaired independently.
     }
     // Image restoration is 1×, while upscalers can be 2×/4×. Paint the
-    // pending grid from the worker's actual output bounds for both tasks.
-    if (!overlappingRegions) paintTileGrid(context, tile, size, true);
+    // pending grid from the worker's actual output bounds for both tasks,
+    // unless an earlier stage already established a full-image base preview.
+    if (!overlappingRegions && !stageBase) paintTileGrid(context, tile, size, true);
     progressiveOutputWidth = tile.image_width;
     progressiveOutputHeight = tile.image_height;
     progressiveVisible = true;

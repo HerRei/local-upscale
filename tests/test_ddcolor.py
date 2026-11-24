@@ -532,3 +532,369 @@ def test_video_frames_run_ddcolor_on_the_whole_frame(tmp_path):
     )
     assert out.shape == (3, 200, 300)
     assert out.dtype == np.uint8
+
+
+def _patch_fixed_ab_ddcolor(monkeypatch):
+    class _FixedAbModel(DDColor):
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            out = torch.zeros((x.shape[0], 2, x.shape[2], x.shape[3]), device=x.device)
+            out[:, 0] = 35.0
+            out[:, 1] = 25.0
+            return out
+
+    from localsr.image_models.ddcolor import engine as dd_engine
+
+    monkeypatch.setattr(
+        dd_engine,
+        "load_ddcolor_descriptor",
+        lambda state_dict, input_size=(64, 64): dd_engine.DDColorDescriptor(
+            _FixedAbModel(
+                encoder_name="convnext-t",
+                input_size=(64, 64),
+                nf=32,
+                num_output_channels=2,
+                num_queries=8,
+                dec_layers=2,
+                depths=(1, 1, 1, 1),
+                dims=(16, 32, 64, 128),
+                hidden_dim=16,
+                nheads=4,
+                dim_feedforward=32,
+            ),
+            infer_ddcolor_config(state_dict, input_size=(64, 64)),
+        ),
+    )
+
+
+def test_colour_then_upscale_flushes_colourised_stage_preview_before_upscale_tiles(
+    tmp_path, monkeypatch
+):
+    import base64
+    import io
+    import time
+
+    from localsr.core.live_preview import LatestPreviewEncoder
+    from localsr.core.model_adapter import NormalizedModelInfo
+    from localsr.worker.server import WorkerServer
+
+    ckpt_path = _save_small_checkpoint(tmp_path / "small_ddcolor.pth")
+    _patch_fixed_ab_ddcolor(monkeypatch)
+
+    in_path = tmp_path / "gray.png"
+    out_path = tmp_path / "out.png"
+    Image.fromarray(np.full((48, 64), 128, dtype=np.uint8), mode="L").save(in_path)
+
+    upscale_path = tmp_path / "upscale.pth"
+    upscale_path.write_bytes(b"stub")
+    adapter = ModelAdapter(allow_unverified_checkpoints=True)
+    colour_info = adapter.inspect(str(ckpt_path))
+    upscale_info = NormalizedModelInfo(
+        architecture="SPAN",
+        scale=2,
+        in_channels=3,
+        out_channels=3,
+        tiling_supported=True,
+        half_supported=False,
+        size_requirements_min=1,
+        size_requirements_mult=1,
+        filename="upscale.pth",
+        warnings=[],
+    )
+    adapter.inspect = lambda path: colour_info if path == str(ckpt_path) else upscale_info
+
+    class _Passthrough2xModel(torch.nn.Module):
+        def forward(self, tile_tensor: torch.Tensor) -> torch.Tensor:
+            return torch.nn.functional.interpolate(tile_tensor, scale_factor=2, mode="nearest")
+
+    engine = InferenceEngine(adapter)
+    real_load = engine.load_model
+
+    def load_model(path, device_str, precision_str, model_info, safe_memory=True):
+        if path == str(upscale_path):
+            stub = _Passthrough2xModel()
+            engine._loaded_models[path] = (stub, torch.device("cpu"), torch.float32)
+            engine._active_path = path
+            engine._loaded_device = torch.device("cpu")
+            engine._loaded_precision = torch.float32
+            return torch.device("cpu"), torch.float32
+        return real_load(path, device_str, precision_str, model_info, safe_memory=safe_memory)
+
+    engine.load_model = load_model
+
+    # Simulate the encoder thread taking 30 ms to encode Stage 0 while Stage 1 runs immediately
+    # with a single-tile force=True submit, which would evict Stage 0 if not flushed.
+    from localsr.core import live_preview as live_preview_module
+
+    real_encode = live_preview_module.encode_preview_jpeg
+
+    def delayed_encode(pixels, max_dimension, quality):
+        time.sleep(0.2)
+        return real_encode(pixels, max_dimension, quality)
+
+    monkeypatch.setattr(live_preview_module, "encode_preview_jpeg", delayed_encode)
+
+    events: list[dict] = []
+    lock = threading.Lock()
+
+    def emit_msg(message):
+        with lock:
+            events.append(json.loads(message.to_json()))
+
+    def emit_preview(packet):
+        with lock:
+            events.append(
+                {
+                    "type": "live_preview_frame",
+                    "data": {
+                        "job_id": packet.job_id,
+                        "sequence": packet.sequence,
+                        "preview_kind": packet.preview_kind,
+                        "jpeg_base64": packet.jpeg_base64,
+                        "output_x": packet.output_x,
+                        "output_y": packet.output_y,
+                        "output_width": packet.output_width,
+                        "output_height": packet.output_height,
+                        "image_width": packet.image_width,
+                        "image_height": packet.image_height,
+                        "stage_index": packet.stage_index,
+                    },
+                }
+            )
+
+    runner = ImageJobRunner(
+        engine=engine,
+        model_adapter=adapter,
+        cancel_event=threading.Event(),
+        emit=emit_msg,
+        emit_preview=emit_preview,
+        preview_factory=LatestPreviewEncoder,
+    )
+    runner.run(
+        "colour-upscale",
+        {
+            "job_id": "colour-upscale",
+            "image_path": str(in_path),
+            "model_path": str(upscale_path),
+            "output_path": str(out_path),
+            "scratch_directory": str(tmp_path / "scratch"),
+            "output_format": "png",
+            "device": "cpu",
+            "precision": "fp32",
+            "tile_size": 128,
+            "halo": 0,
+            "jpeg_quality": 95,
+            "preserve_metadata": True,
+            "safe_memory": True,
+            "output_scale": 2,
+            "preview_enabled": True,
+            "preview_max_fps": 2.0,
+            "preview_max_dimension": 320,
+            "stages": [
+                {
+                    "kind": "restore",
+                    "role": "fix",
+                    "fix": "colour",
+                    "model_id": "ddcolor_modelscope",
+                    "model_path": str(ckpt_path),
+                },
+                {
+                    "kind": "upscale",
+                    "role": "primary",
+                    "model_id": "stub_2x",
+                    "model_path": str(upscale_path),
+                },
+            ],
+        },
+    )
+    stage0_done_idx = next(
+        idx
+        for idx, ev in enumerate(events)
+        if ev["type"] == "stage_completed" and ev["data"]["stage_index"] == 0
+    )
+    previews = [ev for ev in events if ev["type"] == "live_preview_frame"]
+    stage0_previews = [
+        (idx, ev["data"])
+        for idx, ev in enumerate(events)
+        if ev["type"] == "live_preview_frame" and ev["data"]["stage_index"] == 0
+    ]
+    assert len(stage0_previews) == 1
+    assert stage0_previews[0][0] < stage0_done_idx
+    stage0_data = stage0_previews[0][1]
+    assert stage0_data["output_x"] == 0 and stage0_data["output_y"] == 0
+    assert stage0_data["output_width"] == 64 and stage0_data["output_height"] == 48
+    assert stage0_data["image_width"] == 64 and stage0_data["image_height"] == 48
+    for preview in previews:
+        with Image.open(io.BytesIO(base64.b64decode(preview["data"]["jpeg_base64"]))) as decoded:
+            assert decoded.mode == "RGB"
+            arr = np.asarray(decoded, dtype=np.float32) / 255.0
+            assert mean_lab_chroma(rgb_to_lab(arr)[:, :, 1:]) > 10.0
+
+    # Colour without upscale and batch fallback both preserve opaque RGB colourised frames.
+    del WorkerServer
+
+
+def test_colour_without_upscale_and_batch_fallback_emit_opaque_colourised_previews(
+    tmp_path, monkeypatch, capsys
+):
+    import base64
+    import io
+
+    import localsr.worker.server as server_module
+    from localsr.core.model_adapter import NormalizedModelInfo
+    from localsr.worker.server import WorkerServer
+
+    ckpt_path = _save_small_checkpoint(tmp_path / "small_ddcolor.pth")
+    _patch_fixed_ab_ddcolor(monkeypatch)
+
+    in_a = tmp_path / "gray_a.png"
+    in_b = tmp_path / "gray_b.png"
+    Image.fromarray(np.full((48, 64), 110, dtype=np.uint8), mode="L").save(in_a)
+    Image.fromarray(np.full((48, 64), 140, dtype=np.uint8), mode="L").save(in_b)
+
+    upscale_path = tmp_path / "upscale.pth"
+    upscale_path.write_bytes(b"stub")
+
+    server = WorkerServer()
+    real_inspect = server.model_adapter.inspect
+    server.model_adapter.allow_unverified_checkpoints = True
+    colour_info = real_inspect(str(ckpt_path))
+    upscale_info = NormalizedModelInfo(
+        architecture="SPAN",
+        scale=2,
+        in_channels=3,
+        out_channels=3,
+        tiling_supported=True,
+        half_supported=False,
+        size_requirements_min=1,
+        size_requirements_mult=1,
+        filename="upscale.pth",
+        warnings=[],
+    )
+    server.model_adapter.inspect = lambda path: (
+        colour_info if path == str(ckpt_path) else upscale_info
+    )
+
+    class _Passthrough2xModel(torch.nn.Module):
+        def forward(self, tile_tensor: torch.Tensor) -> torch.Tensor:
+            return torch.nn.functional.interpolate(tile_tensor, scale_factor=2, mode="nearest")
+
+    real_load = server.engine.load_model
+
+    def load_model(path, device_str, precision_str, model_info, safe_memory=True):
+        if path == str(upscale_path):
+            stub = _Passthrough2xModel()
+            server.engine._loaded_models[path] = (stub, torch.device("cpu"), torch.float32)
+            server.engine._active_path = path
+            server.engine._loaded_device = torch.device("cpu")
+            server.engine._loaded_precision = torch.float32
+            return torch.device("cpu"), torch.float32
+        return real_load(path, device_str, precision_str, model_info, safe_memory=safe_memory)
+
+    server.engine.load_model = load_model
+    monkeypatch.setattr(server_module.WorkerServer, "_check_approved_checkpoint", lambda *_: None)
+
+    # 1. Colour without upscale (1x passthrough after colour stage).
+    out_1x = tmp_path / "out_1x.png"
+    server._run_image_job(
+        {
+            "job_id": "colour-only",
+            "image_path": str(in_a),
+            "model_path": str(upscale_path),
+            "output_path": str(out_1x),
+            "scratch_directory": str(tmp_path / "scratch1"),
+            "output_format": "png",
+            "device": "cpu",
+            "precision": "fp32",
+            "tile_size": 128,
+            "halo": 0,
+            "jpeg_quality": 95,
+            "preserve_metadata": True,
+            "safe_memory": True,
+            "output_scale": 1,
+            "preview_enabled": True,
+            "preview_max_fps": 2.0,
+            "preview_max_dimension": 320,
+            "allow_unverified_checkpoint": True,
+            "stages": [
+                {
+                    "kind": "restore",
+                    "role": "fix",
+                    "fix": "colour",
+                    "model_id": "ddcolor_modelscope",
+                    "model_path": str(ckpt_path),
+                },
+                {
+                    "kind": "upscale",
+                    "role": "primary",
+                    "model_id": "stub_2x",
+                    "model_path": str(upscale_path),
+                },
+            ],
+        }
+    )
+    msgs_1x = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    previews_1x = [m["data"] for m in msgs_1x if m["type"] == "live_preview_frame"]
+    assert len(previews_1x) == 1
+    with Image.open(io.BytesIO(base64.b64decode(previews_1x[0]["jpeg_base64"]))) as decoded:
+        assert decoded.mode == "RGB"
+        assert (
+            mean_lab_chroma(rgb_to_lab(np.asarray(decoded, dtype=np.float32) / 255.0)[:, :, 1:])
+            > 10.0
+        )
+
+    # 2. Batch path with Colour + Upscale falls back cleanly to per-photo ImageJobRunner.
+    batch_jobs = [
+        {
+            "job_id": f"batch-{idx}",
+            "image_path": str(path),
+            "model_path": str(upscale_path),
+            "output_path": str(tmp_path / f"batch_out_{idx}.png"),
+            "scratch_directory": str(tmp_path / f"scratch_b{idx}"),
+            "output_format": "png",
+            "device": "cpu",
+            "precision": "fp32",
+            "tile_size": 128,
+            "halo": 0,
+            "jpeg_quality": 95,
+            "preserve_metadata": True,
+            "safe_memory": True,
+            "output_scale": 2,
+            "preview_enabled": True,
+            "preview_max_fps": 2.0,
+            "preview_max_dimension": 320,
+            "allow_unverified_checkpoint": True,
+            "stages": [
+                {
+                    "kind": "restore",
+                    "role": "fix",
+                    "fix": "colour",
+                    "model_id": "ddcolor_modelscope",
+                    "model_path": str(ckpt_path),
+                },
+                {
+                    "kind": "upscale",
+                    "role": "primary",
+                    "model_id": "stub_2x",
+                    "model_path": str(upscale_path),
+                },
+            ],
+        }
+        for idx, path in enumerate((in_a, in_b))
+    ]
+    server._run_image_batch(batch_jobs)
+    msgs_batch = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    for job_id in ("batch-0", "batch-1"):
+        stage0_frames = [
+            m["data"]
+            for m in msgs_batch
+            if m["type"] == "live_preview_frame"
+            and m["data"]["job_id"] == job_id
+            and m["data"]["stage_index"] == 0
+        ]
+        assert len(stage0_frames) == 1
+        with Image.open(io.BytesIO(base64.b64decode(stage0_frames[0]["jpeg_base64"]))) as decoded:
+            assert decoded.mode == "RGB"
+            assert (
+                mean_lab_chroma(rgb_to_lab(np.asarray(decoded, dtype=np.float32) / 255.0)[:, :, 1:])
+                > 10.0
+            )

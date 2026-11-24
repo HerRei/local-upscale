@@ -315,6 +315,14 @@
   let previewPane: PreviewPane | undefined;
   let inspectorScroll: HTMLDivElement | undefined;
   let lastLivePreviewSequence = 0;
+  let stageBasePreview = '';
+  let stageBaseJobId = '';
+  let stageBaseSequence = 0;
+  $: if (snapshot.runtime.active_job_id !== stageBaseJobId) {
+    stageBasePreview = '';
+    stageBaseSequence = 0;
+    stageBaseJobId = snapshot.runtime.active_job_id;
+  }
   let diagnostics = '';
   let reportOpen = false;
   let reportDiagnostics = '';
@@ -1755,6 +1763,18 @@
         return;
       }
       const sequence = Number(message.data.sequence ?? 0);
+      const encoded = typeof message.data.jpeg_base64 === 'string' ? message.data.jpeg_base64 : '';
+      if (
+        jobId === snapshot.runtime.active_job_id &&
+        String(message.data.preview_kind ?? '') === 'tile' &&
+        encoded &&
+        isFullImageFrame(message.data) &&
+        sequence > stageBaseSequence
+      ) {
+        stageBasePreview = `data:image/jpeg;base64,${encoded}`;
+        stageBaseJobId = jobId;
+        stageBaseSequence = sequence;
+      }
       if (
         jobId !== snapshot.runtime.active_job_id ||
         (activeJobMediaId && selectedMedia?.id !== activeJobMediaId) ||
@@ -4304,8 +4324,24 @@
     previewPane?.resetView();
   }
 
+  function isFullImageFrame(data: Record<string, unknown>): boolean {
+    const imageWidth = Number(data.image_width ?? 0);
+    const imageHeight = Number(data.image_height ?? 0);
+    return (
+      imageWidth > 0 &&
+      imageHeight > 0 &&
+      Number(data.output_x ?? 0) === 0 &&
+      Number(data.output_y ?? 0) === 0 &&
+      Number(data.output_width ?? 0) === imageWidth &&
+      Number(data.output_height ?? 0) === imageHeight
+    );
+  }
+
   function resetProgressivePreview(jobId = ''): void {
     lastLivePreviewSequence = 0;
+    stageBasePreview = '';
+    stageBaseJobId = jobId;
+    stageBaseSequence = 0;
     previewPane?.resetProgressivePreview(jobId);
   }
 
@@ -4503,6 +4539,9 @@
           )}
           {videoEngineBusy}
           activeTileSize={snapshot.runtime.active_tile_size}
+          stagePreview={!activeJobMediaId || selectedMedia?.id === activeJobMediaId
+            ? stageBasePreview
+            : ''}
           {selectedMedia}
           resultPreview={shownView.resultPreview}
           referenceIsResult={shownView.referenceIsResult}

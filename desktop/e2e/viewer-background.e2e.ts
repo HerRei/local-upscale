@@ -159,3 +159,123 @@ test('viewer background white compare boxes @visual', async ({ page }) => {
   await page.evaluate(() => document.fonts.ready);
   await expect(page).toHaveScreenshot('viewer-bg-white-compare-boxes.png');
 });
+
+test('colour plus upscale live preview keeps an opaque colourised base without a checkerboard', async ({
+  page,
+}) => {
+  await openApp(page, {
+    ...withOutputs,
+    photos: 1,
+    running: true,
+    settings: { ...withOutputs.settings, appearance: 'light', viewer_background: 'checker' },
+  });
+  await showPane(page, 'preview');
+
+  const { blueBase, greenTile } = await page.evaluate(() => {
+    const makeJpeg = (fill: string) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 64;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = fill;
+      ctx.fillRect(0, 0, 64, 64);
+      return canvas.toDataURL('image/jpeg', 0.95).split(',')[1];
+    };
+    return { blueBase: makeJpeg('rgb(50, 110, 220)'), greenTile: makeJpeg('rgb(40, 190, 80)') };
+  });
+
+  await emit(page, 'worker-message', {
+    type: 'live_preview_frame',
+    data: {
+      job_id: 'job-photo-1',
+      sequence: 1,
+      stage_index: 0,
+      preview_kind: 'tile',
+      output_x: 0,
+      output_y: 0,
+      output_width: 1600,
+      output_height: 1067,
+      image_width: 1600,
+      image_height: 1067,
+      jpeg_base64: blueBase,
+    },
+  });
+  await emit(page, 'worker-message', {
+    type: 'tile_update',
+    data: {
+      job_id: 'job-photo-1',
+      stage_index: 1,
+      phase: 'started',
+      active_tile_size: 256,
+      output_x: 0,
+      output_y: 0,
+      output_width: 1024,
+      output_height: 1024,
+      image_width: 6400,
+      image_height: 4268,
+    },
+  });
+  await emit(page, 'worker-message', {
+    type: 'live_preview_frame',
+    data: {
+      job_id: 'job-photo-1',
+      sequence: 2,
+      stage_index: 1,
+      preview_kind: 'tile',
+      output_x: 0,
+      output_y: 0,
+      output_width: 1024,
+      output_height: 1024,
+      image_width: 6400,
+      image_height: 4268,
+      jpeg_base64: greenTile,
+    },
+  });
+
+  const canvas = page.locator('canvas.progressive-image');
+  await expect(canvas).toHaveClass(/visible/);
+  await expect(page.locator('.preview-pane .canvas-well')).toHaveCSS('background-image', 'none');
+
+  await expect
+    .poll(async () =>
+      canvas.evaluate((el) => {
+        const ctx = (el as HTMLCanvasElement).getContext('2d')!;
+        const sample = (x: number, y: number) => Array.from(ctx.getImageData(x, y, 1, 1).data);
+        return {
+          finishedTile: sample(64, 64),
+          unfinishedCellA: sample(500, 128),
+          unfinishedCellB: sample(756, 128),
+        };
+      }),
+    )
+    .toMatchObject({
+      finishedTile: expect.any(Array),
+      unfinishedCellA: expect.any(Array),
+      unfinishedCellB: expect.any(Array),
+    });
+
+  const pixels = await canvas.evaluate((el) => {
+    const ctx = (el as HTMLCanvasElement).getContext('2d')!;
+    const sample = (x: number, y: number) => Array.from(ctx.getImageData(x, y, 1, 1).data);
+    return {
+      finishedTile: sample(64, 64),
+      unfinishedCellA: sample(500, 128),
+      unfinishedCellB: sample(756, 128),
+    };
+  });
+
+  // Finished tile is opaque green (stage 1 upscaled output).
+  expect(pixels.finishedTile[3]).toBe(255);
+  expect(pixels.finishedTile[1]).toBeGreaterThan(pixels.finishedTile[0] + 80);
+  expect(pixels.finishedTile[1]).toBeGreaterThan(pixels.finishedTile[2] + 50);
+
+  // Unfinished cells are opaque blue (stage 0 colourised base) and match each other (no checkerboard).
+  for (const cell of [pixels.unfinishedCellA, pixels.unfinishedCellB]) {
+    expect(cell[3]).toBe(255);
+    expect(cell[2]).toBeGreaterThan(cell[0] + 80);
+    expect(cell[2]).toBeGreaterThan(cell[1] + 40);
+  }
+  expect(Math.abs(pixels.unfinishedCellA[0] - pixels.unfinishedCellB[0])).toBeLessThanOrEqual(4);
+  expect(Math.abs(pixels.unfinishedCellA[1] - pixels.unfinishedCellB[1])).toBeLessThanOrEqual(4);
+  expect(Math.abs(pixels.unfinishedCellA[2] - pixels.unfinishedCellB[2])).toBeLessThanOrEqual(4);
+});

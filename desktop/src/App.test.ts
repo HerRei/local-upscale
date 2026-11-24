@@ -3939,6 +3939,114 @@ describe('LocalSR desktop interface', () => {
     expect(stage?.style.top).toBe('50%');
   });
 
+  it('preserves the colourised stage preview across media switching before the upscaler tiles run', async () => {
+    class DecodedImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      private value = '';
+
+      set src(value: string) {
+        this.value = value;
+        queueMicrotask(() => this.onload?.());
+      }
+
+      get src(): string {
+        return this.value;
+      }
+    }
+    vi.stubGlobal('Image', DecodedImage);
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+      fillStyle: '',
+      fillRect: vi.fn(),
+      clearRect: vi.fn(),
+      drawImage: vi.fn(),
+    } as unknown as CanvasRenderingContext2D);
+
+    const first = image('bw', true);
+    first.name = 'bw.png';
+    first.width = 1982;
+    first.height = 1361;
+    first.preview_data_url = 'data:image/jpeg;base64,bw-source';
+    const second = image('other', false);
+    second.name = 'other.png';
+    const snapshot = readySnapshot([first, second]);
+    snapshot.settings.task = 'upscale';
+    snapshot.jobs = [
+      {
+        id: 'job-colour-upscale',
+        media_id: 'bw',
+        media_name: 'bw.png',
+        media_kind: 'image',
+        status: 'running',
+        output_path: '',
+        progress: 0,
+        error: '',
+        created_at: 1,
+        model_id: 'span_photo_x4',
+      },
+    ];
+    snapshot.runtime.active_job_id = 'job-colour-upscale';
+    api.selectMedia.mockImplementation(async (id: string) => {
+      snapshot.media.forEach((item) => (item.selected = item.id === id));
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    });
+    const user = await mountWith(snapshot);
+
+    const listener = api.listenForWorker.mock.calls[0]?.[0] as
+      ((message: WorkerEnvelope) => void) | undefined;
+    expect(listener).toBeTypeOf('function');
+    listener?.({ type: 'job_started', data: { job_id: 'job-colour-upscale' } });
+
+    // User clicks another photo while stage 0 (colour) completes.
+    await user.click(screen.getByRole('button', { name: /^other\.png/ }));
+    await waitFor(() => expect(document.title).toContain('other.png'));
+    listener?.({
+      type: 'live_preview_frame',
+      data: {
+        job_id: 'job-colour-upscale',
+        sequence: 1,
+        stage_index: 0,
+        preview_kind: 'tile',
+        output_x: 0,
+        output_y: 0,
+        output_width: 1982,
+        output_height: 1361,
+        image_width: 1982,
+        image_height: 1361,
+        jpeg_base64: 'colourised-stage0',
+      },
+    });
+
+    // User switches back to the running photo as stage 1 (upscale) begins.
+    await user.click(screen.getByRole('button', { name: /^bw\.png/ }));
+    await waitFor(() => expect(document.title).toContain('bw.png'));
+    listener?.({
+      type: 'tile_update',
+      data: {
+        job_id: 'job-colour-upscale',
+        stage_index: 1,
+        phase: 'started',
+        active_tile_size: 256,
+        output_x: 0,
+        output_y: 0,
+        output_width: 1024,
+        output_height: 1024,
+        image_width: 7928,
+        image_height: 5444,
+      },
+    });
+
+    const canvas = screen.getByLabelText('Progressive tiled preview') as HTMLCanvasElement;
+    await waitFor(() => expect(canvas.classList.contains('visible')).toBe(true));
+    const context = canvas.getContext('2d')!;
+    const drawImage = vi.mocked(context.drawImage);
+    const fillRect = vi.mocked(context.fillRect);
+    await waitFor(() => expect(drawImage).toHaveBeenCalledTimes(1));
+    const drawnImage = drawImage.mock.calls[0][0] as { src: string };
+    expect(drawnImage.src).toBe('data:image/jpeg;base64,colourised-stage0');
+    expect(fillRect).toHaveBeenCalledTimes(1);
+  });
+
   it('shows the resolved plan and downloads a missing stage before starting', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.settings.task = 'upscale';

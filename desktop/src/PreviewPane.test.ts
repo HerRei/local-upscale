@@ -992,3 +992,241 @@ it('shows the viewer background swatch in the preview zoom bar and steps on clic
   await fireEvent.click(button as HTMLElement);
   expect(setViewerBackground).toHaveBeenCalledWith('grey');
 });
+
+it('uses the colourised stage preview as the opaque base for the upscaling stage without a checkerboard', async () => {
+  const fillRect = vi.fn();
+  const drawImage = vi.fn();
+  const clearRect = vi.fn();
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+    fillStyle: '',
+    fillRect,
+    clearRect,
+    drawImage,
+  } as unknown as CanvasRenderingContext2D);
+  const drawnSources: string[] = [];
+  vi.stubGlobal(
+    'Image',
+    class {
+      onload?: () => void;
+      private currentSrc = '';
+      get src() {
+        return this.currentSrc;
+      }
+      set src(value: string) {
+        this.currentSrc = value;
+        drawnSources.push(value);
+        this.onload?.();
+      }
+    },
+  );
+  const selectedMedia: MediaItem = {
+    id: 'bw-photo',
+    path: '/bw-photo.png',
+    name: 'bw-photo.png',
+    kind: 'image',
+    width: 1982,
+    height: 1361,
+    frame_count: 1,
+    fps: 0,
+    duration_seconds: 0,
+    preview_data_url: 'data:image/jpeg;base64,bw-source',
+    probe_status: 'ready',
+    error: '',
+    selected: true,
+  };
+  const { component, container } = render(PreviewPane, {
+    selectedMedia,
+    resultPreview: '',
+    completedVideoOutput: '',
+    processing: true,
+  });
+
+  // Stage 0 (colour) finishes with a full-image colourised frame.
+  component.queueProgressiveTile(
+    {
+      type: 'tile_update',
+      data: {
+        job_id: 'colour-upscale',
+        stage_index: 0,
+        phase: 'started',
+        active_tile_size: 1982,
+        output_x: 0,
+        output_y: 0,
+        output_width: 1982,
+        output_height: 1361,
+        image_width: 1982,
+        image_height: 1361,
+      },
+    },
+    'colour-upscale',
+  );
+  component.queueProgressiveTile(
+    {
+      type: 'tile_update',
+      data: {
+        job_id: 'colour-upscale',
+        stage_index: 0,
+        phase: 'completed',
+        active_tile_size: 1982,
+        output_x: 0,
+        output_y: 0,
+        output_width: 1982,
+        output_height: 1361,
+        image_width: 1982,
+        image_height: 1361,
+        jpeg_base64: 'colourised-stage0',
+      },
+    },
+    'colour-upscale',
+  );
+  await waitFor(() => expect(drawImage).toHaveBeenCalledTimes(2));
+
+  fillRect.mockClear();
+  drawImage.mockClear();
+  drawnSources.length = 0;
+
+  // Stage 1 (4x upscale) starts and paints one sampled tile; unfinished/skipped tiles
+  // must show the colourised stage 0 base directly without a checkerboard grid.
+  component.queueProgressiveTile(
+    {
+      type: 'tile_update',
+      data: {
+        job_id: 'colour-upscale',
+        stage_index: 1,
+        phase: 'started',
+        active_tile_size: 256,
+        output_x: 0,
+        output_y: 0,
+        output_width: 1024,
+        output_height: 1024,
+        image_width: 7928,
+        image_height: 5444,
+      },
+    },
+    'colour-upscale',
+  );
+  component.queueProgressiveTile(
+    {
+      type: 'tile_update',
+      data: {
+        job_id: 'colour-upscale',
+        stage_index: 1,
+        phase: 'completed',
+        active_tile_size: 256,
+        output_x: 0,
+        output_y: 0,
+        output_width: 1024,
+        output_height: 1024,
+        image_width: 7928,
+        image_height: 5444,
+        jpeg_base64: 'upscaled-tile0',
+      },
+    },
+    'colour-upscale',
+  );
+  await waitFor(() => expect(drawImage).toHaveBeenCalledTimes(2));
+  expect(drawnSources).toEqual([
+    'data:image/jpeg;base64,colourised-stage0',
+    'data:image/jpeg;base64,upscaled-tile0',
+  ]);
+  // Only the single opaque canvas background fillRect, no paintTileGrid checkerboard.
+  expect(fillRect).toHaveBeenCalledTimes(1);
+  expect(container.querySelector('.source-image')?.getAttribute('src')).toBe(
+    'data:image/jpeg;base64,colourised-stage0',
+  );
+});
+
+it('updates the stage 1 base if the colourised stage 0 frame arrives after stage 1 started', async () => {
+  const fillRect = vi.fn();
+  const drawImage = vi.fn();
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+    fillStyle: '',
+    fillRect,
+    clearRect: vi.fn(),
+    drawImage,
+  } as unknown as CanvasRenderingContext2D);
+  const drawnSources: string[] = [];
+  vi.stubGlobal(
+    'Image',
+    class {
+      onload?: () => void;
+      private currentSrc = '';
+      get src() {
+        return this.currentSrc;
+      }
+      set src(value: string) {
+        this.currentSrc = value;
+        drawnSources.push(value);
+        this.onload?.();
+      }
+    },
+  );
+  const selectedMedia: MediaItem = {
+    id: 'bw-photo',
+    path: '/bw-photo.png',
+    name: 'bw-photo.png',
+    kind: 'image',
+    width: 1982,
+    height: 1361,
+    frame_count: 1,
+    fps: 0,
+    duration_seconds: 0,
+    preview_data_url: 'data:image/jpeg;base64,bw-source',
+    probe_status: 'ready',
+    error: '',
+    selected: true,
+  };
+  const { component } = render(PreviewPane, {
+    selectedMedia,
+    resultPreview: '',
+    completedVideoOutput: '',
+    processing: true,
+  });
+
+  component.queueProgressiveTile(
+    {
+      type: 'tile_update',
+      data: {
+        job_id: 'late-stage0',
+        stage_index: 1,
+        phase: 'started',
+        active_tile_size: 256,
+        output_x: 0,
+        output_y: 0,
+        output_width: 1024,
+        output_height: 1024,
+        image_width: 7928,
+        image_height: 5444,
+      },
+    },
+    'late-stage0',
+  );
+  await waitFor(() => expect(drawImage).toHaveBeenCalledTimes(1));
+
+  fillRect.mockClear();
+  drawImage.mockClear();
+  drawnSources.length = 0;
+
+  component.queueProgressiveTile(
+    {
+      type: 'tile_update',
+      data: {
+        job_id: 'late-stage0',
+        stage_index: 0,
+        phase: 'completed',
+        active_tile_size: 1982,
+        output_x: 0,
+        output_y: 0,
+        output_width: 1982,
+        output_height: 1361,
+        image_width: 1982,
+        image_height: 1361,
+        jpeg_base64: 'colourised-stage0',
+      },
+    },
+    'late-stage0',
+  );
+  await waitFor(() => expect(drawImage).toHaveBeenCalledTimes(1));
+  expect(drawnSources).toEqual(['data:image/jpeg;base64,colourised-stage0']);
+  expect(fillRect).toHaveBeenCalledTimes(1);
+});
