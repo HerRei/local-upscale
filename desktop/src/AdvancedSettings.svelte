@@ -379,7 +379,7 @@
               /> De-flicker · Labs</label
             ><HelpTip
               label="De-flicker"
-              text="Evens out brightness flicker in the original video and the shimmer that frame-by-frame upscaling adds in still areas. It decides from the original, so motion, cuts and real light changes pass through. Adds a little time per frame. Off by default."
+              text="Evens out brightness flicker in the original video and the shimmer that frame-by-frame upscaling adds in still areas. It decides from the original, so motion, cuts and real light changes pass through. Adds about 40 ms per frame. Off by default."
             />
           </div>
           <p class="model-description">

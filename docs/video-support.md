@@ -154,6 +154,7 @@ De-flicker is off by default and remains Labs. Since 0.6.0 it decides everything
 - **Source flicker.** Each frame is compared with its three neighbours on each side, aligned by optical flow on a small copy (longer side at most 320 px). Per block of a 16 × 12 grid the median brightness ratio gives a smooth gain map, which is applied to the output. A median keeps real light changes as steps; a small dead zone leaves clean clips untouched; gains stay within 0.8 to 1.25.
 - **Shimmer in still areas.** Where the original does not change (judged on a copy of at most 640 px, against its noise level), the output is blended with the previous output frame; a global brightness change is carried over instead of blended away. Motion gets no blending.
 - Scene cuts reset both parts. The output-size work runs on the GPU when the job uses one.
+- Cost, measured on an M1 Pro: about 37 ms per frame at 1080p output and 45 ms at 4K (the earlier median filter: 250 ms and 880 ms).
 
 On test clips it removed about 40 % of the still-area shimmer (the earlier median filter: about 30 %), most of an injected exposure flicker (PSNR against the clean clip 31.2 → 35.3 dB), and left a 35 % light step and hard cuts unchanged.
 
