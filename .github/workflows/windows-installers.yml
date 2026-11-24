@@ -237,7 +237,7 @@ jobs:
           # A throwaway credential for this run only, from the system random generator.
           $bytes = New-Object byte[] 24
           [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
-          $secure = ConvertTo-SecureString ([Convert]::ToBase64String($bytes) + "Aa1+") -AsPlainText -Force
+          $secure = ConvertTo-SecureString ([Convert]::ToBase64String($bytes) + "Aa1+") -AsPlainText -Force  # ggignore: random per run, not a stored secret
           New-LocalUser -Name $user -Password $secure -PasswordNeverExpires | Out-Null
           if ((Get-LocalGroupMember -Group Administrators).Name -match "\\$user$") { throw "$user must not be an administrator" }
           $credential = New-Object System.Management.Automation.PSCredential(".\$user", $secure)
