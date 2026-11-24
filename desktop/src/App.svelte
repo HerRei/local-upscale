@@ -54,7 +54,7 @@
   import UpdatePanel from './UpdatePanel.svelte';
   import SetupScreen from './SetupScreen.svelte';
   import WelcomeNotice from './WelcomeNotice.svelte';
-  import { startUpdateWatcher, updateDialogOpen } from './lib/updates';
+  import { startUpdateWatcher, updateDialogOpen, updateState } from './lib/updates';
   import { redactDiagnostics, redactDiagnosticText, reportUrl } from './lib/report';
   import BenchmarkStudio from './BenchmarkStudio.svelte';
   import { customModels, defaultCustomModelName } from './lib/customModels';
@@ -448,6 +448,8 @@
   }
   let setupAppearance: UiSettings['appearance'] = 'dark';
   let setupColourBlind = false;
+  let setupContrast: NonNullable<UiSettings['contrast']> = 'system';
+  let setupSound = false;
   let setupCheckAtLaunch = true;
   let setupMenuBar = true;
   let setupAnonymousCount = true;
@@ -458,23 +460,28 @@
   function previewSetupTheme(
     appearance: UiSettings['appearance'],
     colourBlindPalette: boolean,
+    contrast: NonNullable<UiSettings['contrast']>,
   ): void {
     setupAppearance = appearance;
     setupColourBlind = colourBlindPalette;
+    setupContrast = contrast;
     themeForRefresh({
       ...snapshot.settings,
       appearance,
       colour_blind_palette: colourBlindPalette,
+      contrast,
     });
   }
 
-  async function continuePrivacy(choices: {
+  async function finishSetup(choices: {
     appearance: UiSettings['appearance'];
     colourBlind: boolean;
     checkAtLaunch: boolean;
     anonymousCount: boolean;
     crashReports: boolean;
-    menuBar?: boolean;
+    menuBar: boolean | null;
+    contrast: NonNullable<UiSettings['contrast']>;
+    sound: boolean;
   }): Promise<void> {
     privacySaving = true;
     privacyError = '';
@@ -482,6 +489,9 @@
       await api.setPrivacyChoice({
         appearance: choices.appearance,
         colourBlindPalette: choices.colourBlind,
+        contrast: choices.contrast,
+        showInMenuBar: choices.menuBar,
+        completionSound: choices.sound,
         checkAtLaunch: choices.checkAtLaunch,
         anonymousCount: choices.anonymousCount,
         crashReports: choices.crashReports,
@@ -492,6 +502,10 @@
           ...snapshot.settings,
           appearance: choices.appearance,
           colour_blind_palette: choices.colourBlind,
+          contrast: choices.contrast,
+          show_in_menu_bar: choices.menuBar ?? snapshot.settings.show_in_menu_bar,
+          completion_sound: choices.sound,
+          notify_on_finish: choices.sound ? true : snapshot.settings.notify_on_finish,
           privacy_choice_made: true,
           check_updates_at_launch: choices.checkAtLaunch,
           anonymous_update_count: choices.anonymousCount,
@@ -499,11 +513,6 @@
         },
       };
       themeForRefresh(snapshot.settings);
-      if (
-        choices.menuBar !== undefined &&
-        choices.menuBar !== (snapshot.settings.show_in_menu_bar ?? true)
-      )
-        updateSettings({ show_in_menu_bar: choices.menuBar });
       if (choices.checkAtLaunch) {
         const status = await api.updateStatus();
         if (status.configured && !status.managed_by_store && status.stage === 'idle') {
@@ -1561,6 +1570,9 @@
         normalizeLoadedSettings();
         setupAppearance = snapshot.settings.appearance ?? 'dark';
         setupColourBlind = snapshot.settings.colour_blind_palette ?? false;
+        setupContrast = snapshot.settings.contrast ?? 'system';
+        setupMenuBar = snapshot.settings.show_in_menu_bar ?? true;
+        setupSound = snapshot.settings.completion_sound ?? false;
         setupCheckAtLaunch = snapshot.settings.check_updates_at_launch ?? true;
         setupAnonymousCount = snapshot.settings.anonymous_update_count ?? true;
         setupCrashReports = snapshot.settings.crash_reports ?? true;
@@ -1698,6 +1710,7 @@
               ...latest.settings,
               appearance: setupAppearance,
               colour_blind_palette: setupColourBlind,
+              contrast: setupContrast,
             }
           : latest.settings,
       );
@@ -5869,14 +5882,18 @@
   <SetupScreen
     bind:appearance={setupAppearance}
     bind:colourBlind={setupColourBlind}
+    bind:contrast={setupContrast}
+    bind:sound={setupSound}
+    storeBuild={Boolean($updateState.managed_by_store)}
     bind:checkAtLaunch={setupCheckAtLaunch}
     bind:anonymousCount={setupAnonymousCount}
     bind:crashReports={setupCrashReports}
     bind:menuBar={setupMenuBar}
     saving={privacySaving}
     error={privacyError}
-    on:preview={(event) => previewSetupTheme(event.detail.appearance, event.detail.colourBlind)}
-    on:continue={(event) => void continuePrivacy(event.detail)}
+    on:preview={(event) =>
+      previewSetupTheme(event.detail.appearance, event.detail.colourBlind, event.detail.contrast)}
+    on:finish={(event) => void finishSetup(event.detail)}
   />
 {/if}
 

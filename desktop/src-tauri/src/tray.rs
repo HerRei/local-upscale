@@ -347,7 +347,10 @@ fn build_tray_menu<R: Runtime>(
 fn snapshot_from_state(state: &crate::state::AppState) -> Option<TraySnapshot> {
     let (visible, monochrome) = {
         let settings = lock(&state.settings).ok()?;
-        (settings.show_in_menu_bar, settings.menu_bar_icon_monochrome)
+        (
+            settings.show_in_menu_bar && settings.privacy_choice_made,
+            settings.menu_bar_icon_monochrome,
+        )
     };
     if !visible {
         return Some(TraySnapshot {
@@ -556,6 +559,20 @@ pub fn handle_menu_event(app: &AppHandle, id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tray_visibility_waits_for_setup_and_respects_choice() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::paths::AppPaths::under(dir.path());
+        std::fs::create_dir_all(&paths.next_root).unwrap();
+        std::fs::create_dir_all(&paths.model_root).unwrap();
+        let state = crate::state::AppState::from_paths(paths).unwrap();
+        assert!(!snapshot_from_state(&state).unwrap().visible);
+        lock(&state.settings).unwrap().privacy_choice_made = true;
+        assert!(snapshot_from_state(&state).unwrap().visible);
+        lock(&state.settings).unwrap().show_in_menu_bar = false;
+        assert!(!snapshot_from_state(&state).unwrap().visible);
+    }
 
     fn sample_snapshot() -> TraySnapshot {
         TraySnapshot {

@@ -176,13 +176,16 @@ export const setPreference = (
 export interface SetupChoices {
   appearance: UiSettings['appearance'];
   colourBlindPalette: boolean;
+  contrast: NonNullable<UiSettings['contrast']>;
+  showInMenuBar: boolean | null;
+  completionSound: boolean;
   checkAtLaunch: boolean;
   anonymousCount: boolean;
   crashReports: boolean;
 }
 
 export const setPrivacyChoice = (choices: SetupChoices): Promise<void> =>
-  invoke('set_privacy_choice', { ...choices });
+  invoke('set_privacy_choice', { choices });
 export const startJobs = (input: StartBatchInput): Promise<void> => invoke('start_jobs', { input });
 export const startEdit = (input: StartEditInput): Promise<void> => invoke('start_edit', { input });
 export const openEditLink = (modelId: string, link: 'license' | 'source'): Promise<void> =>
@@ -239,6 +242,10 @@ export async function openDownloadPage(): Promise<void> {
 }
 
 /** In-app tutorial for loading a custom checkpoint file. */
+export async function openPrivacyPage(): Promise<void> {
+  if (isTauri()) await invoke('open_privacy_page');
+}
+
 export async function openCustomModelTutorial(): Promise<void> {
   if (isTauri()) await invoke('open_custom_model_tutorial');
 }

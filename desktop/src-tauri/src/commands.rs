@@ -616,35 +616,27 @@ pub fn set_preference(
     Ok(())
 }
 
-struct SetupChoices {
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SetupChoices {
     appearance: String,
     colour_blind_palette: bool,
+    contrast: String,
     check_at_launch: bool,
     anonymous_count: bool,
     crash_reports: bool,
+    show_in_menu_bar: Option<bool>,
+    completion_sound: bool,
 }
 
 /// Save the first-launch choices together, even while processing is active.
 #[tauri::command]
-pub fn set_privacy_choice(
+pub(crate) fn set_privacy_choice(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
-    appearance: String,
-    colour_blind_palette: bool,
-    check_at_launch: bool,
-    anonymous_count: bool,
-    crash_reports: bool,
+    choices: SetupChoices,
 ) -> AppResult<()> {
-    apply_privacy_choice(
-        &state,
-        SetupChoices {
-            appearance,
-            colour_blind_palette,
-            check_at_launch,
-            anonymous_count,
-            crash_reports,
-        },
-    )?;
+    apply_privacy_choice(&state, choices)?;
     emit_state_changed(&app);
     Ok(())
 }
@@ -653,35 +645,32 @@ fn apply_privacy_choice(state: &AppState, choices: SetupChoices) -> AppResult<()
     if !matches!(choices.appearance.as_str(), "dark" | "light" | "system") {
         return Err(AppError::Validation("unknown appearance".into()));
     }
+    if !matches!(choices.contrast.as_str(), "system" | "standard" | "high") {
+        return Err(AppError::Validation("unknown contrast".into()));
+    }
     let _io = lock(&state.settings_io)?;
     let previous = {
         let mut settings = lock(&state.settings)?;
-        let previous = (
-            settings.appearance.clone(),
-            settings.colour_blind_palette,
-            settings.check_updates_at_launch,
-            settings.anonymous_update_count,
-            settings.crash_reports,
-            settings.privacy_choice_made,
-        );
+        let previous = settings.clone();
         settings.appearance = choices.appearance;
         settings.colour_blind_palette = choices.colour_blind_palette;
+        settings.contrast = choices.contrast;
         settings.check_updates_at_launch = choices.check_at_launch;
         settings.anonymous_update_count = choices.anonymous_count;
         settings.crash_reports = choices.crash_reports;
+        settings.completion_sound = choices.completion_sound;
+        if let Some(show) = choices.show_in_menu_bar {
+            settings.show_in_menu_bar = show;
+        }
+        if choices.completion_sound {
+            settings.notify_on_finish = true;
+        }
         settings.privacy_choice_made = true;
         previous
     };
     if let Err(error) = state.write_settings() {
         if let Ok(mut settings) = lock(&state.settings) {
-            (
-                settings.appearance,
-                settings.colour_blind_palette,
-                settings.check_updates_at_launch,
-                settings.anonymous_update_count,
-                settings.crash_reports,
-                settings.privacy_choice_made,
-            ) = previous;
+            *settings = previous;
         }
         return Err(error);
     }
@@ -3212,6 +3201,14 @@ pub(crate) const CUSTOM_MODEL_TUTORIAL_URL: &str =
 pub fn open_custom_model_tutorial() -> AppResult<()> {
     open::that_detached(CUSTOM_MODEL_TUTORIAL_URL)
         .map_err(|error| AppError::Config(format!("could not open the tutorial: {error}")))
+}
+
+pub(crate) const PRIVACY_PAGE_URL: &str = "https://herrei.github.io/localsr/privacy/";
+
+#[tauri::command]
+pub fn open_privacy_page() -> AppResult<()> {
+    open::that_detached(PRIVACY_PAGE_URL)
+        .map_err(|error| AppError::Config(format!("could not open the privacy page: {error}")))
 }
 
 /// FFmpeg stays the user's own action: LocalSR never downloads or bundles it.

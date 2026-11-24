@@ -276,6 +276,7 @@ pub fn run() {
             commands::open_user_guide,
             commands::open_download_page,
             commands::open_custom_model_tutorial,
+            commands::open_privacy_page,
             commands::reveal_result,
             commands::use_result_as_input,
             commands::open_output_directory,

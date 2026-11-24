@@ -174,7 +174,7 @@ details are in [platform support](docs/platforms.md).
 
 ## What leaves your computer
 
-On a fresh install, LocalSR shows a short setup screen for appearance (Dark, Light or Match System, plus colour-blind friendly colours), automatic update checks, the anonymous update count, and crash reports (all three on by default, and you can switch each off there). Nothing goes over the network until you choose Continue. The update check reads a feed on GitHub Pages. If enabled, the count sends the app version, platform and channel to the developer's server without an ID. You can change any of these later in the View, LocalSR and Help menus, the Software Update dialog, or Performance & Diagnostics.
+On a fresh install, LocalSR shows a two-page setup: first privacy, with automatic update checks, the anonymous update count and crash reports (all three on by default, and you can switch each off there), then look and feel, with theme, colour-blind friendly colours, high contrast, the menu bar icon and the finish sound. Nothing goes over the network until you finish the setup. The update check reads a feed on GitHub Pages. If enabled, the count sends the app version, platform and channel to the developer's server without an ID. You can change any of these later in Settings.
 
 Crash reports are on by default for new installs and can be turned off in the first-launch setup or later. When enabled, they are stored only on your computer and are never sent automatically; you can review a report and choose to open a GitHub issue. A report contains app and system versions, the device kind and running task and model, and redacted error details. Native host crashes such as segmentation faults may not be captured.
 
