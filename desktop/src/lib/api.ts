@@ -176,13 +176,16 @@ export const setPreference = (
 export interface SetupChoices {
   appearance: UiSettings['appearance'];
   colourBlindPalette: boolean;
+  contrast: NonNullable<UiSettings['contrast']>;
+  showInMenuBar: boolean | null;
+  completionSound: boolean;
   checkAtLaunch: boolean;
   anonymousCount: boolean;
   crashReports: boolean;
 }
 
 export const setPrivacyChoice = (choices: SetupChoices): Promise<void> =>
-  invoke('set_privacy_choice', { ...choices });
+  invoke('set_privacy_choice', { choices });
 export const startJobs = (input: StartBatchInput): Promise<void> => invoke('start_jobs', { input });
 export const startEdit = (input: StartEditInput): Promise<void> => invoke('start_edit', { input });
 export const openEditLink = (modelId: string, link: 'license' | 'source'): Promise<void> =>

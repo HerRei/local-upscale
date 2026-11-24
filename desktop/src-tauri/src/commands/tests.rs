@@ -511,6 +511,9 @@ fn setup_choices_save_while_a_job_runs_and_roll_back_on_error() {
         &state,
         SetupChoices {
             appearance: "sepia".into(),
+            contrast: "system".into(),
+            show_in_menu_bar: None,
+            completion_sound: false,
             colour_blind_palette: false,
             check_at_launch: true,
             anonymous_count: false,
@@ -524,6 +527,9 @@ fn setup_choices_save_while_a_job_runs_and_roll_back_on_error() {
         &state,
         SetupChoices {
             appearance: "light".into(),
+            contrast: "system".into(),
+            show_in_menu_bar: None,
+            completion_sound: false,
             colour_blind_palette: true,
             check_at_launch: false,
             anonymous_count: true,
@@ -544,6 +550,9 @@ fn setup_choices_save_while_a_job_runs_and_roll_back_on_error() {
         &state,
         SetupChoices {
             appearance: "dark".into(),
+            contrast: "system".into(),
+            show_in_menu_bar: None,
+            completion_sound: false,
             colour_blind_palette: false,
             check_at_launch: true,
             anonymous_count: false,
@@ -557,6 +566,55 @@ fn setup_choices_save_while_a_job_runs_and_roll_back_on_error() {
     assert!(!mem.check_updates_at_launch);
     assert!(mem.anonymous_update_count);
     assert!(mem.crash_reports);
+}
+
+#[test]
+fn setup_choices_validate_and_preserve_notification_and_tray_preferences() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(dir.path());
+    fs::create_dir_all(&paths.next_root).unwrap();
+    fs::create_dir_all(&paths.model_root).unwrap();
+    let state = AppState::from_paths(paths).unwrap();
+    let choices = |contrast: &str, tray: Option<bool>, sound: bool| SetupChoices {
+        appearance: "light".into(),
+        colour_blind_palette: true,
+        contrast: contrast.into(),
+        check_at_launch: false,
+        anonymous_count: false,
+        crash_reports: false,
+        show_in_menu_bar: tray,
+        completion_sound: sound,
+    };
+    assert!(apply_privacy_choice(&state, choices("loud", Some(false), true)).is_err());
+    assert!(!lock(&state.settings).unwrap().privacy_choice_made);
+    assert!(!state.paths.settings.exists());
+    lock(&state.settings).unwrap().notify_on_finish = false;
+    apply_privacy_choice(&state, choices("high", Some(false), true)).unwrap();
+    let saved = crate::settings::load(&state.paths).0;
+    assert_eq!(saved.appearance, "light");
+    assert!(saved.colour_blind_palette);
+    assert_eq!(saved.contrast, "high");
+    assert!(
+        !saved.check_updates_at_launch && !saved.anonymous_update_count && !saved.crash_reports
+    );
+    assert!(
+        !saved.show_in_menu_bar
+            && saved.completion_sound
+            && saved.notify_on_finish
+            && saved.privacy_choice_made
+    );
+    lock(&state.settings).unwrap().notify_on_finish = false;
+    apply_privacy_choice(&state, choices("standard", None, false)).unwrap();
+    let saved = crate::settings::load(&state.paths).0;
+    assert!(!saved.show_in_menu_bar && !saved.completion_sound && !saved.notify_on_finish);
+    let before = lock(&state.settings).unwrap().clone();
+    fs::write(&state.paths.settings, b"{ not json").unwrap();
+    assert!(apply_privacy_choice(&state, choices("system", Some(true), true)).is_err());
+    let after = lock(&state.settings).unwrap().clone();
+    assert_eq!(
+        serde_json::to_value(before).unwrap(),
+        serde_json::to_value(after).unwrap()
+    );
 }
 
 #[test]

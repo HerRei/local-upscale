@@ -31,8 +31,7 @@ select described below:
    - Not extra tiles: high contrast exists in dark and in light, so tiles would need five
      entries and Match System could no longer follow light/dark and contrast separately.
    - The three tiles preview the contrast that is active, so the picker shows what you get.
-   - Not in the first-run setup: the default already follows the computer, and there is no
-     system signal for colour blindness, which is why only that switch is asked there.
+   - First-run setup includes a high contrast switch with live preview; off follows the computer.
    - Not in the native menu: appearance items were moved out of it into Settings
      (`native_menu.rs:369-372` asserts they stay out).
 2. **High contrast is a token theme.** `styles.css` has no colours outside its token
@@ -100,7 +99,7 @@ Both are host-owned preferences like `appearance`: saved by `set_preference`, ne
 by a full settings save, allowed while a job runs. A settings file without them, or with an
 unknown value, loads the default (same pattern as `deserialize_appearance`,
 `types.rs:528-537`). `UiSettings` does not deny unknown fields, so an older build reads a
-newer file. The first-run command `set_privacy_choice` is unchanged.
+newer file. The first-run command `set_privacy_choice` also saves contrast and the other setup choices atomically.
 
 ## 1. High contrast
 

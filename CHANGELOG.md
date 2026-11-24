@@ -59,7 +59,7 @@
   each side stay within a fixed height however long the model chain is.
 - **Menu bar.** An icon in the menu bar or system tray shows what is running, how many
   files wait and the progress, with Pause and Resume, and a notification for each
-  finished file. New installs choose it in the first-launch setup; on a Mac the icon
+  finished file. First-launch setup starts with privacy, then asks about the icon and finish sound; on a Mac the icon
   can be monochrome or in colour (#112).
 - **Compare results.** Each side of a comparison lists how it was made: models and
   fixes in order, scale, size, time, device and date (#145).
