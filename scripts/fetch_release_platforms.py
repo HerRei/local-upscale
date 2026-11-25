@@ -122,12 +122,17 @@ def fetch_assets(tag: str, folder: Path, wanted: list[dict], repo: str) -> int:
             if digest and sha256(local) != digest:
                 raise SystemExit(f"{folder.name}/{name} differs from the release's copy")
             continue
-        gh("release", "download", tag, "--repo", repo, "-p", name, "-D", str(folder))
-        if not local.is_file():
-            raise SystemExit(f"{name} was not downloaded from {tag}")
-        if digest and sha256(local) != digest:
-            local.unlink()
-            raise SystemExit(f"{name} does not match the digest GitHub recorded for it")
+        # Download next to the target and move it in only once it is complete and checked: a
+        # cut-off download must not stay behind under the final name, where the next run
+        # would take it for a report's copy and refuse it as different.
+        with tempfile.TemporaryDirectory(prefix=".fetch-", dir=folder) as partial:
+            gh("release", "download", tag, "--repo", repo, "-p", name, "-D", partial)
+            downloaded = Path(partial) / name
+            if not downloaded.is_file():
+                raise SystemExit(f"{name} was not downloaded from {tag}")
+            if digest and sha256(downloaded) != digest:
+                raise SystemExit(f"{name} does not match the digest GitHub recorded for it")
+            downloaded.replace(local)
         fetched += 1
     return fetched
 

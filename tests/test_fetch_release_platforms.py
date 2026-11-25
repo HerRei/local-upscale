@@ -54,3 +54,48 @@ def test_a_report_copy_that_differs_from_the_release_is_refused(tmp_path):
         assert "differs" in str(error)
     else:
         raise AssertionError("a differing checksum file was accepted")
+
+
+def test_a_cut_off_download_leaves_nothing_behind_and_the_next_run_fetches_it(
+    tmp_path, monkeypatch
+):
+    import hashlib
+
+    content = b"the whole package"
+    asset = {"name": "a.tar.gz", "digest": "sha256:" + hashlib.sha256(content).hexdigest()}
+    attempts = []
+
+    def fake_gh(*arguments):
+        folder = Path(arguments[arguments.index("-D") + 1])
+        attempts.append(folder)
+        if len(attempts) == 1:
+            (folder / "a.tar.gz").write_bytes(b"")  # gh created the file, then was cut off
+            raise SystemExit("download interrupted")
+        (folder / "a.tar.gz").write_bytes(content)
+        return ""
+
+    monkeypatch.setattr(fetch, "gh", fake_gh)
+    try:
+        fetch.fetch_assets("v0", tmp_path, [asset], "x/y")
+    except SystemExit:
+        pass
+    assert sorted(p.name for p in tmp_path.iterdir()) == []
+    assert fetch.fetch_assets("v0", tmp_path, [asset], "x/y") == 1
+    assert (tmp_path / "a.tar.gz").read_bytes() == content
+
+
+def test_a_download_with_the_wrong_digest_is_not_kept(tmp_path, monkeypatch):
+    asset = {"name": "a.tar.gz", "digest": "sha256:" + "0" * 64}
+
+    def fake_gh(*arguments):
+        (Path(arguments[arguments.index("-D") + 1]) / "a.tar.gz").write_bytes(b"other")
+        return ""
+
+    monkeypatch.setattr(fetch, "gh", fake_gh)
+    try:
+        fetch.fetch_assets("v0", tmp_path, [asset], "x/y")
+    except SystemExit as error:
+        assert "does not match" in str(error)
+    else:
+        raise AssertionError("a download with the wrong digest was accepted")
+    assert not (tmp_path / "a.tar.gz").exists()
