@@ -132,6 +132,7 @@ custom_files  # EditJobRequest
 
 # ctypes structure field written for Windows to read (core/gpu_guard.py job object).
 LimitFlags  # JOBOBJECT_BASIC_LIMIT_INFORMATION
+_fields_  # ctypes Structure layout (scripts/verify_appimage_gstreamer.py GList)
 
 ImageBatchRequest  # protocol/messages.py: additive batch envelope built by the Rust host
 
