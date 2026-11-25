@@ -120,6 +120,9 @@
       "minimumSystemVersion": "12.0"
     },
     "linux": {
+      "appimage": {
+        "bundleMediaFramework": true
+      },
       "deb": {
         "depends": ["libc6 (>= 2.35)", "ocl-icd-libopencl1"],
         "section": "graphics"

@@ -419,3 +419,57 @@ def test_unversioned_copies_of_distribution_libraries_are_swapped_and_checked(
     assert (lib / "libelf.so").read_text() == "ubuntu libelf"
     assert (lib / "libdrm.so.2").read_text() == "almalinux libdrm.so.2"
     assert build_source_bundle.verify_distribution_copies(files, engine) == files
+
+
+class _Response:
+    def __init__(self, body: bytes):
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def read(self) -> bytes:
+        return self.body
+
+
+def _http_error(code: int):
+    import urllib.error
+
+    return urllib.error.HTTPError("https://snapshot.example/x", code, "status", {}, None)
+
+
+def test_snapshot_reads_retry_server_errors_and_treat_404_as_absent(monkeypatch):
+    # snapshot.ubuntu.com answered 503 during the 0.6.1 Linux builds and ended them.
+    answers = [_http_error(503), _http_error(503), _Response(b"source")]
+    sleeps = []
+
+    def urlopen(_url, timeout):
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(build_source_bundle.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(build_source_bundle.time, "sleep", sleeps.append)
+    assert build_source_bundle._snapshot_read("https://snapshot.example/x", 60) == b"source"
+    assert sleeps == list(build_source_bundle.SNAPSHOT_RETRY_SECONDS[:2])
+
+    answers[:] = [_http_error(404)]
+    assert build_source_bundle._snapshot_read("https://snapshot.example/x", 60) is None
+
+
+def test_snapshot_reads_give_up_after_the_retries(monkeypatch):
+    calls = []
+
+    def urlopen(_url, timeout):
+        calls.append(_url)
+        raise _http_error(503)
+
+    monkeypatch.setattr(build_source_bundle.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(build_source_bundle.time, "sleep", lambda _s: None)
+    with pytest.raises(SystemExit, match="kept failing"):
+        build_source_bundle._snapshot_read("https://snapshot.example/x", 60)
+    assert len(calls) == len(build_source_bundle.SNAPSHOT_RETRY_SECONDS) + 1
