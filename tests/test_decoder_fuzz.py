@@ -61,6 +61,26 @@ def test_fuzz_harness_enforces_timeout_memory_and_crash_detection(tmp_path: Path
     assert not hungry.ok
     assert hungry.reason == "memory_limit"
 
+    # A launcher stub spawning a child process (as Windows venv python.exe does)
+    # must still have its descendant RSS caught and killed.
+    child_code = (
+        "import time; buf = bytearray(96 * 1024 * 1024); "
+        "buf[::4096] = b'x' * (len(buf) // 4096); time.sleep(2)"
+    )
+    nested_hungry = fuzzer.run_decoder_subprocess(
+        "image_load",
+        dummy,
+        timeout_seconds=5.0,
+        memory_limit_bytes=32 * 1024 * 1024,
+        command=[
+            sys.executable,
+            "-c",
+            f"import subprocess, sys; raise SystemExit(subprocess.call([sys.executable, '-c', {child_code!r}]))",
+        ],
+    )
+    assert not nested_hungry.ok
+    assert nested_hungry.reason == "memory_limit"
+
     crash = fuzzer.run_decoder_subprocess(
         "video_probe",
         dummy,

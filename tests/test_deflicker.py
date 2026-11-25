@@ -434,15 +434,19 @@ def test_run_video_job_rejects_deflicker_with_hdr_preservation(tmp_path: Path, m
 def test_deflicker_imports_and_runs_without_opencv_optical_flow(monkeypatch):
     """Packaged OpenCV builds may lack the video module; the worker must still start."""
     import importlib
+    import sys
 
     import cv2
 
-    import localsr.core.deflicker as deflicker_module
+    import localsr.core as core_pkg
 
     monkeypatch.delattr(cv2, "DISOpticalFlow_create", raising=False)
     monkeypatch.delattr(cv2, "DISOPTICAL_FLOW_PRESET_FAST", raising=False)
-    module = importlib.reload(deflicker_module)
+    # Import into a temporary module slot instead of reloading in-place so existing
+    # module-level references (e.g. AnalysisFrame) stay valid under --random-order.
+    saved = sys.modules.pop("localsr.core.deflicker", None)
     try:
+        module = importlib.import_module("localsr.core.deflicker")
         rng = np.random.default_rng(3)
         base = rng.integers(40, 200, (48, 64, 3), dtype=np.uint8)
         frames = [base.copy() for _ in range(8)]
@@ -450,5 +454,8 @@ def test_deflicker_imports_and_runs_without_opencv_optical_flow(monkeypatch):
         assert len(out) == 8
         assert all(frame.shape == base.shape and frame.dtype == np.uint8 for frame in out)
     finally:
-        monkeypatch.undo()
-        importlib.reload(deflicker_module)
+        if saved is not None:
+            sys.modules["localsr.core.deflicker"] = saved
+            core_pkg.deflicker = saved
+        else:
+            sys.modules.pop("localsr.core.deflicker", None)
