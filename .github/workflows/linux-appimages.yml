@@ -281,7 +281,7 @@ jobs:
           ls -la /mnt/lsr/out
           df -h / /mnt
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ matrix.id }}
           path: /mnt/lsr/out/*
@@ -290,7 +290,7 @@ jobs:
           compression-level: 0
       # The reports alone, a few MB: signing takes the packages from the draft release
       # (scripts/fetch_release_platforms.py, #180).
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: reports-${{ matrix.id }}
           path: |
