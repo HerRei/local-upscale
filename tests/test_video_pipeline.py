@@ -1615,50 +1615,35 @@ def test_colour_preparation_is_counted_before_the_first_frame(tmp_path):
 
 
 def test_video_colour_is_skipped_with_a_note_when_the_video_has_colour(tmp_path):
-    import subprocess
     from types import SimpleNamespace
 
     from localsr.core.video_pipeline import _video_has_colour
 
+    def _write_clip(path: Path, *, colourful: bool) -> None:
+        with av.open(str(path), mode="w", format="mp4") as container:
+            stream = container.add_stream("libvpx-vp9", rate=24)
+            stream.width, stream.height, stream.pix_fmt = 96, 64, "yuv420p"
+            stream.options = {"lossless": "1", "lag-in-frames": "0"}
+            for index in range(8):
+                rgb = np.empty((64, 96, 3), dtype=np.uint8)
+                if colourful:
+                    rgb[:, :32] = [220, 40, 40]
+                    rgb[:, 32:64] = [40, 200, 60]
+                    rgb[:, 64:] = [40, 80, 220]
+                else:
+                    rgb[...] = 80 + index * 10
+                for packet in stream.encode(av.VideoFrame.from_ndarray(rgb, format="rgb24")):
+                    container.mux(packet)
+            for packet in stream.encode():
+                container.mux(packet)
+
     source = tmp_path / "colourful.mp4"
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-v",
-            "error",
-            "-y",
-            "-f",
-            "lavfi",
-            "-i",
-            "testsrc2=size=96x64:rate=24",
-            "-frames:v",
-            "8",
-            "-pix_fmt",
-            "yuv420p",
-            str(source),
-        ],
-        check=True,
-        stdin=subprocess.DEVNULL,
-    )
+    _write_clip(source, colourful=True)
     assert _video_has_colour(
         SimpleNamespace(video_path=str(source), start_frame=0, hdr_mode="reject")
     )
     grey = tmp_path / "grey.mp4"
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-v",
-            "error",
-            "-y",
-            "-i",
-            str(source),
-            "-vf",
-            "format=gray,format=yuv420p",
-            str(grey),
-        ],
-        check=True,
-        stdin=subprocess.DEVNULL,
-    )
+    _write_clip(grey, colourful=False)
     assert not _video_has_colour(
         SimpleNamespace(video_path=str(grey), start_frame=0, hdr_mode="reject")
     )

@@ -44,7 +44,7 @@ class FuzzOutcome:
 
 
 def _apply_os_memory_limit(memory_limit_bytes: int) -> None:
-    """Apply an OS address-space limit when the kernel permits lowering it."""
+    """Apply an OS virtual address-space guard when the kernel permits lowering it."""
     try:
         import resource
     except ImportError:
@@ -52,13 +52,47 @@ def _apply_os_memory_limit(memory_limit_bytes: int) -> None:
     limit = getattr(resource, "RLIMIT_AS", None)
     if limit is None:
         return
+    # RLIMIT_AS caps virtual address space rather than RSS; PyTorch, OpenBLAS, and
+    # LibRaw map multi-gigabyte shared/arena regions before touching physical pages.
+    virtual_limit = max(memory_limit_bytes * 8, 4 * 1024 * 1024 * 1024)
     try:
         _, hard = resource.getrlimit(limit)
-        target = memory_limit_bytes if hard < 0 else min(memory_limit_bytes, hard)
+        target = virtual_limit if hard < 0 else min(virtual_limit, hard)
         resource.setrlimit(limit, (target, hard))
     except (OSError, ValueError):
         # macOS Darwin refuses RLIMIT_AS below existing Mach VM regions.
         pass
+
+
+def _tree_rss_bytes(ps_proc: psutil.Process) -> int:
+    """Sum RSS across ``ps_proc`` and its children (Windows venv launchers spawn a child)."""
+    processes = [ps_proc]
+    try:
+        processes.extend(ps_proc.children(recursive=True))
+    except psutil.Error:
+        pass
+    total = 0
+    for member in processes:
+        try:
+            total += member.memory_info().rss
+        except psutil.Error:
+            pass
+    return total
+
+
+def _kill_process_tree(proc: subprocess.Popen[str], ps_proc: psutil.Process | None) -> None:
+    if ps_proc is not None:
+        try:
+            children = ps_proc.children(recursive=True)
+        except psutil.Error:
+            children = []
+        for child in children:
+            try:
+                child.kill()
+            except psutil.Error:
+                pass
+    proc.kill()
+    proc.communicate()
 
 
 def _run_one(decoder: str, path: str, memory_limit_bytes: int) -> int:
@@ -229,6 +263,12 @@ def run_decoder_subprocess(
     pythonpath = env.get("PYTHONPATH", "")
     if src_dir not in pythonpath.split(os.pathsep):
         env["PYTHONPATH"] = f"{src_dir}{os.pathsep}{pythonpath}" if pythonpath else src_dir
+    # Keep OpenMP / OpenBLAS / glibc thread arenas single-threaded in the fuzz child so
+    # virtual address space stays small under RLIMIT_AS on Linux.
+    env.setdefault("OMP_NUM_THREADS", "1")
+    env.setdefault("OPENBLAS_NUM_THREADS", "1")
+    env.setdefault("MKL_NUM_THREADS", "1")
+    env.setdefault("MALLOC_ARENA_MAX", "2")
 
     proc = subprocess.Popen(
         command,
@@ -262,13 +302,9 @@ def run_decoder_subprocess(
             )
 
         if ps_proc is not None:
-            try:
-                rss = ps_proc.memory_info().rss
-            except psutil.Error:
-                rss = 0
+            rss = _tree_rss_bytes(ps_proc)
             if rss > memory_limit_bytes:
-                proc.kill()
-                proc.communicate()
+                _kill_process_tree(proc, ps_proc)
                 return FuzzOutcome(
                     ok=False,
                     decoder=decoder,
@@ -279,8 +315,7 @@ def run_decoder_subprocess(
                 )
 
         if time.monotonic() - started > timeout_seconds:
-            proc.kill()
-            proc.communicate()
+            _kill_process_tree(proc, ps_proc)
             return FuzzOutcome(
                 ok=False,
                 decoder=decoder,

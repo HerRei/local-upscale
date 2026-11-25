@@ -878,7 +878,9 @@ def test_video_cancel_request_respects_keep_partial_flag(tmp_path, monkeypatch, 
     messages = []
     monkeypatch.setattr(server_module, "send_message", messages.append)
 
-    req = worker_request(tmp_path, job_id="video-cancel-job")
+    # Use CPU here because the test swaps in a real InferenceEngine, whereas
+    # worker_request() defaults to "mps" and fails on non-Apple-GPU runners.
+    req = worker_request(tmp_path, job_id="video-cancel-job", device="cpu")
     req["video_path"] = str(source)
     req["output_video_path"] = str(out_dir / "output.mp4")
     req["temporary_directory"] = str(scratch_dir)

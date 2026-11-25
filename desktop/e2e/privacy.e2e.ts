@@ -32,7 +32,7 @@ test('setup saves nothing before Done', async ({ page }) => {
 test('first launch setup previews live, saves choices, and persists across reload', async ({
   page,
 }) => {
-  await installFakeHost(page, { privacyPending: true });
+  await installFakeHost(page, { privacyPending: true, platform: 'MacIntel' });
   await page.goto('/');
   const setup = page.getByRole('dialog', { name: 'Welcome to LocalSR' });
   await setup

@@ -124,21 +124,61 @@ def _stub_engine(
 
 
 def test_resolve_video_engine_flashvsr_with_and_without_mlx(monkeypatch):
-    if sys.platform == "darwin":
+    import platform as std_platform
+
+    if (
+        sys.platform == "darwin"
+        and std_platform.machine().lower() == "arm64"
+        and video_engines.mlx_installed()
+        and video_engines.mlx_usable()
+    ):
         factory = resolve_video_engine("flashvsr")
         assert factory is FlashVSREngine
         assert "flashvsr" in _video_engines()
         assert "video_flashvsr" in _engine_features()
 
+    monkeypatch.setattr(video_engines.sys, "platform", "darwin")
+    monkeypatch.setattr(video_engines.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(video_engines, "mlx_installed", lambda: True)
+    monkeypatch.setattr(video_engines, "mlx_usable", lambda: True)
+    assert resolve_video_engine("flashvsr") is FlashVSREngine
+    assert "flashvsr" in _video_engines()
+    assert "video_flashvsr" in _engine_features()
+
+    monkeypatch.undo()
+    monkeypatch.setattr(video_engines.sys, "platform", "darwin")
+    monkeypatch.setattr(video_engines.platform, "machine", lambda: "arm64")
     monkeypatch.setitem(sys.modules, "mlx.core", None)
     with pytest.raises(TemporalEngineUnavailable, match="MLX"):
         resolve_video_engine("flashvsr")
     assert "flashvsr" not in _video_engines()
 
     monkeypatch.undo()
+    monkeypatch.setattr(video_engines.sys, "platform", "darwin")
+    monkeypatch.setattr(video_engines.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(video_engines, "mlx_installed", lambda: True)
+    monkeypatch.delitem(sys.modules, "mlx.core", raising=False)
+    video_engines._mlx_child_check.cache_clear()
+    try:
+        monkeypatch.setattr(
+            video_engines.subprocess,
+            "run",
+            lambda *args, **kwargs: SimpleNamespace(returncode=1, stderr=b"Metal failed"),
+        )
+        with pytest.raises(TemporalEngineUnavailable, match="could not start MLX"):
+            resolve_video_engine("flashvsr")
+        assert "flashvsr" not in _video_engines()
+    finally:
+        video_engines._mlx_child_check.cache_clear()
+
+    monkeypatch.undo()
     monkeypatch.setattr(video_engines.sys, "platform", "linux")
+    import torch
+
+    monkeypatch.setattr(torch, "version", SimpleNamespace(cuda=None, hip=None), raising=False)
     with pytest.raises(TemporalEngineUnavailable, match="Apple Silicon"):
         resolve_video_engine("flashvsr")
+    assert "flashvsr" not in _video_engines()
 
 
 def test_validate_video_job_accepts_flashvsr():
@@ -392,13 +432,18 @@ def test_engine_rejects_non_mps_and_release_clears_pipeline():
 def test_vendored_pipeline_loads_safetensors_without_torch_load(monkeypatch):
     import torch
 
-    from localsr.video_models.flashvsr.mlx_flashvsr.dit import WAN_1_3B_CONFIG
-    from localsr.video_models.flashvsr.mlx_flashvsr.model import WanModel
-    from localsr.video_models.flashvsr.mlx_flashvsr.pipeline import FlashVSRTinyPipeline
-
     pkg_dir = Path(__file__).parents[1] / "src" / "localsr" / "video_models" / "flashvsr"
     assert (pkg_dir / "posi_prompt.safetensors").is_file()
     assert not list(pkg_dir.rglob("*.pth"))
+
+    if not video_engines.mlx_installed():
+        pytest.skip("MLX is only available on Apple Silicon (macOS arm64)")
+    if not video_engines.mlx_usable():
+        pytest.skip("MLX is not usable on this Mac")
+
+    from localsr.video_models.flashvsr.mlx_flashvsr.dit import WAN_1_3B_CONFIG
+    from localsr.video_models.flashvsr.mlx_flashvsr.model import WanModel
+    from localsr.video_models.flashvsr.mlx_flashvsr.pipeline import FlashVSRTinyPipeline
 
     monkeypatch.setattr(
         torch,
