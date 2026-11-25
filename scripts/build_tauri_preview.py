@@ -503,6 +503,48 @@ def prune_patent_encumbered_media(appdir: Path) -> list[Path]:
     return removed
 
 
+# What WebKitGTK needs to play the VP9/WebM playback copies (issue #185). 0.6.0 shipped
+# GStreamer's core without any plugins; on a system whose plugins are elsewhere (Arch,
+# Fedora) or built for a newer GStreamer, video previews froze the app. GStreamer 1.20
+# has videoconvert and videoscale; newer ones merge them into videoconvertscale.
+LINUX_GSTREAMER_REQUIRED_PLUGINS = (
+    "coreelements",
+    "typefindfunctions",
+    "playback",
+    "app",
+    "matroska",
+    "vpx",
+    "autodetect",
+    "audioconvert",
+    "audioresample",
+    "volume",
+)
+
+
+def verify_linux_gstreamer_bundle(appdir: Path) -> None:
+    """Fail unless the AppDir plays video with its own GStreamer plugins only."""
+    plugin_dir = appdir / "usr" / "lib" / "gstreamer-1.0"
+    present = {
+        plugin.name.removeprefix("libgst").split(".so", 1)[0]
+        for plugin in plugin_dir.glob("libgst*.so*")
+    }
+    missing = [name for name in LINUX_GSTREAMER_REQUIRED_PLUGINS if name not in present]
+    if not present & {"videoconvertscale", "videoconvert"}:
+        missing.append("videoconvert")
+    problems = []
+    if missing:
+        problems.append(f"GStreamer plugins missing from {plugin_dir}: {', '.join(missing)}")
+    if not any(path.is_file() for path in appdir.rglob("gst-plugin-scanner")):
+        problems.append("gst-plugin-scanner is missing")
+    hooks = sorted((appdir / "apprun-hooks").glob("*gstreamer*"))
+    apprun = appdir / "AppRun"
+    apprun_text = apprun.read_text(errors="replace") if apprun.is_file() else ""
+    if not hooks or not any(hook.name in apprun_text for hook in hooks):
+        problems.append("AppRun does not load a GStreamer hook that points at the bundled plugins")
+    if problems:
+        raise SystemExit("The AppImage cannot play video previews:\n- " + "\n- ".join(problems))
+
+
 def remove_host_provided_libraries(appdir: Path) -> list[Path]:
     """Remove driver and host-graphics libraries that linuxdeploy must never bundle.
 
@@ -632,6 +674,20 @@ def _repack_linux_appimages_with_system_mksquashfs(bundle_root: Path) -> list[Pa
             f"Removed {len(removed)} patent-encumbered media plugin/library files from the AppDir.",
             flush=True,
         )
+    verify_linux_gstreamer_bundle(appdir)
+    playback = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "verify_appimage_gstreamer.py"),
+            "--appdir",
+            str(appdir),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if playback.returncode != 0:
+        raise SystemExit(playback.stdout + playback.stderr)
+    print(playback.stdout.strip(), flush=True)
     for library in remove_host_provided_libraries(appdir):
         print(f"Removed host-provided {library.relative_to(appdir)} from the AppDir.", flush=True)
     copies = remove_engine_library_copies(appdir)

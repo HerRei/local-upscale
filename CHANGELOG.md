@@ -21,6 +21,11 @@ A hotfix for 0.6.0.
   CPU now always uses full precision there: half precision on the CPU took many minutes
   for a single tile. If LocalSR has run on the CPU since 0.6.0 although your computer
   has a GPU, choose the GPU again under Settings.
+- **Linux: videos froze the app (#185).** The AppImage contained GStreamer, which
+  plays video in the app window, but none of its plugins. On distributions that keep
+  their plugins elsewhere (Arch, CachyOS, Fedora) or ship a newer GStreamer, adding a
+  video froze LocalSR. The AppImage now brings its own royalty-free plugins and uses
+  only those, and every Linux build plays a test video with them before it is released.
 - **Release tooling.** The media runtime builds in a uv venv and behind mirrors whose
   certificate Python cannot check (#181), and signing takes the Windows and Linux
   packages from the draft release instead of 45 GB of CI artifacts (#180).

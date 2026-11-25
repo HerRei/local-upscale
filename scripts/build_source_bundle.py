@@ -27,6 +27,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -248,6 +249,32 @@ def dsc_files(dsc: str) -> list[tuple[str, str]]:
     return files
 
 
+# snapshot.ubuntu.com answers 503 now and then (it broke the 0.6.1 Linux builds); a 503
+# for a .dsc must not count as "not in this snapshot", and one for a source archive must
+# not end the build.
+SNAPSHOT_RETRY_SECONDS = (10, 30, 60, 120)
+
+
+def _snapshot_read(url: str, timeout: float) -> bytes | None:
+    """The body at url, None when snapshot says it is not there; retries server errors."""
+    delays = iter(SNAPSHOT_RETRY_SECONDS)
+    while True:
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as response:
+                return response.read()
+        except urllib.error.HTTPError as error:
+            if error.code < 500:
+                return None
+            failure: Exception = error
+        except (urllib.error.URLError, TimeoutError) as error:
+            failure = error
+        delay = next(delays, None)
+        if delay is None:
+            raise SystemExit(f"{url} kept failing; last: {failure}")
+        print(f"{url}: {failure}; retrying in {delay} s", file=sys.stderr, flush=True)
+        time.sleep(delay)
+
+
 def snapshot_source(source: str, version: str, destination: Path) -> None:
     """Fetch an exact source package version from snapshot.ubuntu.com, verifying digests."""
     plain = version.split(":", 1)[-1]
@@ -257,16 +284,16 @@ def snapshot_source(source: str, version: str, destination: Path) -> None:
         stamp = (now - datetime.timedelta(days=days)).strftime("%Y%m%dT%H%M%SZ")
         for component in ("main", "universe", "restricted", "multiverse"):
             base = f"{SNAPSHOT_ARCHIVE}/{stamp}/pool/{component}/{prefix}/{source}/"
-            try:
-                with urllib.request.urlopen(f"{base}{source}_{plain}.dsc", timeout=60) as response:
-                    dsc = response.read()
-            except urllib.error.HTTPError:
+            dsc = _snapshot_read(f"{base}{source}_{plain}.dsc", timeout=60)
+            if dsc is None:
                 continue
             (destination / f"{source}_{plain}.dsc").write_bytes(dsc)
             for digest, name in dsc_files(dsc.decode("utf-8", "replace")):
                 target = destination / name
-                with urllib.request.urlopen(base + name, timeout=600) as response:
-                    target.write_bytes(response.read())
+                body = _snapshot_read(base + name, timeout=600)
+                if body is None:
+                    raise SystemExit(f"{base}{name} is listed in its .dsc but missing")
+                target.write_bytes(body)
                 if sha256(target) != digest:
                     raise SystemExit(f"{name} from {base} does not match its .dsc digest")
             return

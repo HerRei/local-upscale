@@ -1,3 +1,5 @@
+#[cfg(target_os = "linux")]
+mod appimage_gstreamer;
 mod cache_cleanup;
 mod cancellation;
 mod catalog;
@@ -74,6 +76,8 @@ pub fn fuzz_parse_engine_manifest(bytes: &[u8]) -> std::io::Result<()> {
 static EARLY_OPEN_INTENTS: std::sync::Mutex<Vec<LaunchIntent>> = std::sync::Mutex::new(Vec::new());
 
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    appimage_gstreamer::use_own_registry();
     // No UI, profile or worker: other updater processes query the file they are
     // about to replace, rather than trusting their own running package version.
     if env::args_os()
