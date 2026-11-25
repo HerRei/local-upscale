@@ -212,14 +212,14 @@ class TestPresetRankingFormulas:
 
 
 class TestStandardCatalogRankings:
-    def test_photo_fast_preset_selects_span_photo_x4(self):
+    def test_photo_fast_preset_selects_localsr_quick_x4_v1(self):
         selected = select_model_for_preset(MODEL_CATALOG, Preset.FAST, purpose=ModelPurpose.PHOTO)
-        assert selected.model_id == "span_photo_x4"
+        assert selected.model_id == "localsr_quick_x4_v1"
 
         selected_quick = select_model_for_preset(
             MODEL_CATALOG, PresetMode.QUICK_UPSCALE, purpose=ModelPurpose.PHOTO
         )
-        assert selected_quick.model_id == "span_photo_x4"
+        assert selected_quick.model_id == "localsr_quick_x4_v1"
 
     def test_photo_ultra_preset_selects_realplksr_nomos8k(self):
         selected = select_model_for_preset(MODEL_CATALOG, Preset.ULTRA, purpose=ModelPurpose.PHOTO)
@@ -238,11 +238,15 @@ class TestStandardCatalogRankings:
 
     def test_illustration_presets_pick_the_illustration_models(self):
         quick = "realesrgan_x4plus_anime_6b"
-        best = "realplksr_hfa2k_anime_x4"
+        best = "esrgan_hfa2k_x4"
         for purpose in (ModelPurpose.ILLUSTRATION, "illustration", "anime"):
             assert (
                 select_model_for_preset(MODEL_CATALOG, Preset.FAST, purpose=purpose).model_id
                 == quick
+            )
+            assert (
+                select_model_for_preset(MODEL_CATALOG, Preset.QUALITY, purpose=purpose).model_id
+                == best
             )
             assert (
                 select_model_for_preset(MODEL_CATALOG, Preset.ULTRA, purpose=purpose).model_id
@@ -253,6 +257,8 @@ class TestStandardCatalogRankings:
                 select_model_for_preset(MODEL_CATALOG, mode, purpose="illustration").model_id
                 == expected
             )
+        # RealPLKSR HFA2k remains listed in the catalog for library users, not as a preset.
+        assert any(m.model_id == "realplksr_hfa2k_anime_x4" for m in MODEL_CATALOG)
 
     def test_photo_presets_never_pick_an_illustration_model(self):
         for mode in (PresetMode.QUICK_UPSCALE, PresetMode.BEST_UPSCALE):
@@ -296,7 +302,7 @@ class TestStandardCatalogRankings:
                 assert all(model.preset_eligible for model in ranked)
         assert (
             select_model_for_preset(MODEL_CATALOG, Preset.FAST, purpose=ModelPurpose.PHOTO).model_id
-            == "span_photo_x4"
+            == "localsr_quick_x4_v1"
         )
         assert (
             select_model_for_preset(MODEL_CATALOG, Preset.QUALITY, purpose=ModelPurpose.PHOTO)

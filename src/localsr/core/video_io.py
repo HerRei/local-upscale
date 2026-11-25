@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import glob
 import heapq
+import logging
 import os
 import tempfile
 import threading
@@ -38,10 +39,12 @@ from .media_codecs import (
     stream_copy_supported,
     validate_output,
 )
-from .output_publish import OutputExistsError, owned_temporary, publish_output
+from .output_publish import DiscardOnStop, OutputExistsError, owned_temporary, publish_output
 from .pixel_budget import MAX_INPUT_PIXELS, require_pixel_budget
-from .video_audio import add_opus_stream, needs_audio_transcode, opus_packets
+from .video_audio import add_converted_audio_stream, needs_audio_transcode, opus_packets
 from .video_normalization import display_frames, square_pixel_width
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -401,33 +404,58 @@ def decode_timed_frames(
         container,
         stream,
     ):
-        pending = None
-        for index, frame in enumerate(display_frames(container, stream, cancel_event)):
-            if cancel_event is not None and cancel_event.is_set():
-                raise InterruptedError("video job cancelled")
-            if index < start:
-                continue
-            if frame.pts is None or frame.time_base is None:
-                raise ValueError(
-                    "Video frame has no presentation timestamp; remux the source first."
+        pending: TimedVideoFrame | None = None
+        origin: Fraction | None = None
+        base_time_base: Fraction | None = None
+        retimed_count = 0
+        try:
+            for index, frame in enumerate(display_frames(container, stream, cancel_event)):
+                if cancel_event is not None and cancel_event.is_set():
+                    raise InterruptedError("video job cancelled")
+                if index < start:
+                    continue
+                if frame.pts is None or frame.time_base is None:
+                    raise ValueError(
+                        "Video frame has no presentation timestamp; remux the source first."
+                    )
+                timestamp = frame.pts * frame.time_base
+                if origin is None:
+                    origin = timestamp
+                    base_time_base = frame.time_base
+                if end_frame is not None and index > end_frame:
+                    if pending is not None:
+                        interval = timestamp - pending.timestamp
+                        yield replace(pending, duration=interval) if interval > 0 else pending
+                    return
+                if pending is not None:
+                    assert origin is not None and base_time_base is not None
+                    if timestamp <= pending.timestamp or round(
+                        (timestamp - origin) / base_time_base
+                    ) <= round((pending.timestamp - origin) / base_time_base):
+                        # Bump by one source time-base tick rather than a full frame
+                        # interval so subsequent valid frames keep their source PTS and
+                        # audio stays in sync.
+                        timestamp = pending.timestamp + base_time_base
+                        retimed_count += 1
+                    interval = timestamp - pending.timestamp
+                    yield replace(pending, duration=interval)
+                    pending = None
+                rgb = _frame_rgb(stream, frame, hdr_mode)
+                duration = getattr(frame, "duration", 0) or 0
+                interval = (
+                    duration * frame.time_base if duration > 0 else 1 / (stream.average_rate or 25)
                 )
-            timestamp = frame.pts * frame.time_base
+                pending = TimedVideoFrame(
+                    index, rgb, timestamp, Fraction(interval), frame.time_base
+                )
             if pending is not None:
-                interval = timestamp - pending.timestamp
-                if interval <= 0:
-                    raise ValueError("Video presentation timestamps must increase.")
-                yield replace(pending, duration=interval)
-                pending = None
-            if end_frame is not None and index > end_frame:
-                return
-            rgb = _frame_rgb(stream, frame, hdr_mode)
-            duration = getattr(frame, "duration", 0) or 0
-            interval = (
-                duration * frame.time_base if duration > 0 else 1 / (stream.average_rate or 25)
-            )
-            pending = TimedVideoFrame(index, rgb, timestamp, Fraction(interval), frame.time_base)
-        if pending is not None:
-            yield pending
+                yield pending
+        finally:
+            if retimed_count:
+                logger.info(
+                    "Retimed %d frame(s) with non-increasing presentation timestamps.",
+                    retimed_count,
+                )
 
 
 def validate_hdr_encoder(
@@ -449,6 +477,35 @@ def validate_hdr_encoder(
         raise VideoStageError("HDR encode", str(error)) from error
 
 
+def count_video_frames(path: str) -> int:
+    """The frames of a written video: its stream's own count, else its packets, read
+    without decoding. A kept part of two frames has no frame rate a probe could use."""
+    with av.open(str(path)) as container:
+        if not container.streams.video:
+            return 0
+        stream = container.streams.video[0]
+        if stream.frames:
+            return int(stream.frames)
+        return sum(1 for packet in container.demux(stream) if packet.size)
+
+
+def partial_destination(destination: Path, seconds: float) -> Path:
+    """`<name>_partial_<m>m<ss>s.<ext>` beside the requested output, numbered when that
+    name is taken: a kept part is never lost to an earlier one of the same length."""
+    whole = int(seconds)
+    stem = f"{destination.stem}_partial_{whole // 60}m{whole % 60:02d}s"
+    candidate = destination.with_name(f"{stem}{destination.suffix}")
+    number = 2
+    while os.path.lexists(candidate):
+        candidate = destination.with_name(f"{stem}-{number}{destination.suffix}")
+        number += 1
+    return candidate
+
+
+def _should_keep_partial(keep_partial: bool | Callable[[], bool]) -> bool:
+    return bool(keep_partial()) if callable(keep_partial) else bool(keep_partial)
+
+
 def _system_stream_export(
     frames,
     destination: Path,
@@ -461,7 +518,7 @@ def _system_stream_export(
     audio_source: str | None,
     cancel_event: threading.Event | None,
     temporary_directory: str | None,
-    keep_partial: bool = False,
+    keep_partial: bool | Callable[[], bool] = False,
     stage_callback=None,
     subtitle_source: str | None = None,
     reencode_audio: bool = False,
@@ -469,6 +526,7 @@ def _system_stream_export(
 ) -> str:
     """Pipe restored frames to the system encoder while the next ones are restored."""
     final = _owned_output_temporary(destination, "external", temporary_directory)
+    can_keep_partial = bool(keep_partial)
     stopped = False
     last_end = 0.0
     origin = None
@@ -477,14 +535,18 @@ def _system_stream_export(
         nonlocal stopped, last_end, origin
         try:
             for frame in frames:
-                if not keep_partial and cancel_event is not None and cancel_event.is_set():
+                if (
+                    cancel_event is not None
+                    and cancel_event.is_set()
+                    and not _should_keep_partial(keep_partial)
+                ):
                     raise InterruptedError("video job cancelled")
                 if origin is None:
                     origin = frame.timestamp
                 last_end = float(frame.timestamp - origin + frame.duration)
                 yield frame
         except InterruptedError:
-            if not keep_partial or origin is None:
+            if not _should_keep_partial(keep_partial) or origin is None:
                 raise
             stopped = True
             if stage_callback is not None:
@@ -497,28 +559,29 @@ def _system_stream_export(
         ) as scratch:
             wav = (
                 system.source_audio(Path(audio_source), Path(scratch) / "audio.wav", cancel_event)
-                if audio_source and not keep_partial
+                if audio_source and not can_keep_partial
                 else None
             )
             system.encode_frames(
-                available_frames() if keep_partial else frames,
+                available_frames() if can_keep_partial else frames,
                 final,
                 video_codec=video_codec,
                 container=container_format,
                 crf=crf,
                 fps=fps,
                 audio=wav,
-                cancel_event=None if keep_partial else cancel_event,
+                cancel_event=None if can_keep_partial else cancel_event,
             )
         if stopped:
-            seconds = int(last_end)
-            destination = destination.with_name(
-                f"{destination.stem}_partial_{seconds // 60}m{seconds % 60:02d}s{destination.suffix}"
-            )
-        final_cancel_event = None if stopped else cancel_event
+            destination = partial_destination(destination, float(last_end))
+        final_cancel_event = (
+            None
+            if stopped or cancel_event is None
+            else DiscardOnStop(cancel_event, lambda: _should_keep_partial(keep_partial))
+        )
         source = Path(audio_source) if audio_source else None
         subtitles = Path(subtitle_source) if subtitle_source else None
-        if keep_partial and (
+        if can_keep_partial and (
             (source is not None and source.is_file())
             or (subtitles is not None and subtitles.is_file())
         ):
@@ -723,6 +786,16 @@ def encode_video(
         raise
 
 
+def _close_encoder(container, stream, mux):
+    """Drain the encoder on its owning thread before closing its container."""
+    try:
+        if stream is not None:
+            for packet in stream.encode():
+                mux(packet)
+    finally:
+        container.close()
+
+
 def _encode_video(
     frames,
     destination_path: str,
@@ -749,7 +822,7 @@ def _encode_video(
     stage_callback: Callable[[str], None] | None = None,
     stream_to_system: bool = False,
     replace_existing: bool = False,
-    keep_partial: bool = False,
+    keep_partial: bool | Callable[[], bool] = False,
 ) -> str:
     """Encode an iterable of (rgb_uint8_HxWx3) frames into a video file.
 
@@ -803,6 +876,9 @@ def _encode_video(
     encoded_temporary = _owned_output_temporary(destination, "video", temporary_directory)
     mux_temporary = _owned_output_temporary(destination, "mux", temporary_directory)
     output_container = None
+    stream = None
+    mux = None
+    frame = None
     try:
         fps_fraction = (
             Fraction(str(float(fps))).limit_denominator(100_000) if fps else Fraction(25, 1)
@@ -857,7 +933,11 @@ def _encode_video(
             nonlocal stopped
             try:
                 for item in chain((first,), iterator):
-                    if not keep_partial and cancel_event is not None and cancel_event.is_set():
+                    if (
+                        cancel_event is not None
+                        and cancel_event.is_set()
+                        and not _should_keep_partial(keep_partial)
+                    ):
                         stopped = True
                         return
                     yield item
@@ -909,22 +989,23 @@ def _encode_video(
             for packet in stream.encode(frame):
                 mux(packet)
             frame_count += 1
-        if stopped and (not keep_partial or not frame_count):
+        if stopped and (not _should_keep_partial(keep_partial) or not frame_count):
             raise InterruptedError("video job cancelled")
         if stopped and stage_callback is not None:
             stage_callback("partial_finalizing")
-        for packet in stream.encode():
-            mux(packet)
-        output_container.close()
-        output_container = None
+        frame = None  # drop the last frame before the encoder closes
+        try:
+            _close_encoder(output_container, stream, mux)
+        finally:
+            output_container = None
 
         if stopped:
-            duration = float(last_end)
-            seconds = int(duration)
-            destination = destination.with_name(
-                f"{destination.stem}_partial_{seconds // 60}m{seconds % 60:02d}s{destination.suffix}"
-            )
-        final_cancel_event = None if stopped else cancel_event
+            destination = partial_destination(destination, float(last_end))
+        final_cancel_event = (
+            None
+            if stopped or cancel_event is None
+            else DiscardOnStop(cancel_event, lambda: _should_keep_partial(keep_partial))
+        )
 
         def publish(temporary: Path) -> None:
             if replace_existing:
@@ -961,9 +1042,10 @@ def _encode_video(
     except BaseException as error:
         raise VideoStageError("encode", str(error)) from error
     finally:
+        frame = None  # drop any active frame before flushing and closing the encoder
         if output_container is not None:
             try:
-                output_container.close()
+                _close_encoder(output_container, stream if mux is not None else None, mux)
             except Exception:
                 pass
         for temporary in (encoded_temporary, mux_temporary):
@@ -1092,7 +1174,9 @@ def _remux_source_streams(
                 or needs_audio_transcode(stream, container_format)
                 or (reencode_audio and normalize_container(container_format) != "mkv")
             ):
-                converted_audio[stream.index] = add_opus_stream(output_container, stream)
+                converted_audio[stream.index] = add_converted_audio_stream(
+                    output_container, stream, container_format
+                )
                 continue
             try:
                 auxiliary_outputs[stream.index] = output_container.add_stream_from_template(stream)

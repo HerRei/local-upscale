@@ -228,3 +228,13 @@ def test_a_pipe_as_a_source_is_refused_before_it_is_opened(tmp_path):
     # A missing file or a folder keeps the reader's own message.
     validate_image_job(image_request(image_path=str(tmp_path / "missing.png")))
     validate_image_job(image_request(image_path=str(tmp_path)))
+
+
+@pytest.mark.parametrize(
+    "make_request,validate",
+    [(image_request, validate_image_job), (video_request, validate_video_job)],
+)
+def test_checkpoint_digest_must_be_sha256(make_request, validate):
+    validate(make_request(approved_checkpoint_sha256="a" * 64))
+    with pytest.raises(InvalidRequest, match="approved_checkpoint_sha256"):
+        validate(make_request(approved_checkpoint_sha256="not-a-sha256"))

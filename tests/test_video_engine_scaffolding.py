@@ -152,6 +152,29 @@ def test_seedvr2_catalog_bundles_are_pinned_and_complete():
         assert model.temporal_window % 4 == 1  # SeedVR2's 4n+1 clip rule
 
 
+def test_flashvsr_catalog_bundle_is_pinned_and_complete():
+    from localsr.core.model_catalog import VIDEO_CATALOG_BY_ID
+
+    model = VIDEO_CATALOG_BY_ID["flashvsr_v11"]
+    assert model.engine_kind == "flashvsr"
+    assert {file.role for file in model.files} == {"dit", "lq_proj", "tcdecoder"}
+    assert {file.filename for file in model.files} == {
+        "diffusion_pytorch_model_streaming_dmd.safetensors",
+        "LQ_proj_in.ckpt",
+        "TCDecoder.ckpt",
+    }
+    for file in model.files:
+        assert len(file.sha256) == 64
+        assert file.download_url.startswith(
+            "https://huggingface.co/JunhaoZhuang/FlashVSR-v1.1/resolve/"
+            "2aa7e1f3ab50e743537d1eca243fb0bff442b336/"
+        )
+        assert file.download_url.split("/")[-1].split("?")[0] == file.filename
+    assert model.license_name == "Apache-2.0"
+    assert (model.temporal_window + 4) % 8 == 1  # 8n+1 input frames give 8n-3 outputs
+    assert 0 < model.temporal_overlap < model.temporal_window
+
+
 def test_video_job_request_defaults_stay_frame_by_frame_compatible():
     request = VideoJobRequest(
         job_id="j",

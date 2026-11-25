@@ -303,6 +303,47 @@ def configure_warnings(output: str) -> list[str]:
 # Sources
 
 
+def _download(url: str, partial: Path) -> None:
+    """Download with Python, or with curl when Python cannot verify the server's
+    certificate (uv's Python and some Xiph mirrors, #181). Either way the archive's
+    pinned SHA-256 decides whether it is used."""
+    request = urllib.request.Request(url, headers={"User-Agent": "LocalSR-build/1"})
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            with partial.open("wb") as out:
+                shutil.copyfileobj(response, out)
+        return
+    except OSError as exc:
+        curl = shutil.which("curl")
+        if curl is None or "CERTIFICATE_VERIFY_FAILED" not in str(exc):
+            raise
+        log(f"Python could not verify {url} ({exc}); retrying with curl")
+    partial.unlink(missing_ok=True)
+    completed = subprocess.run(
+        [
+            curl,
+            "--fail",
+            "--location",
+            "--silent",
+            "--show-error",
+            "--proto",
+            "=https",
+            "--max-time",
+            "600",
+            "-A",
+            "LocalSR-build/1",
+            "-o",
+            str(partial),
+            url,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise OSError(f"curl exit {completed.returncode}: {completed.stderr.strip()}")
+
+
 def fetch_source(entry: dict, cache: Path) -> Path:
     """Return a verified archive path, downloading it into the cache if absent."""
     cache.mkdir(parents=True, exist_ok=True)
@@ -320,10 +361,7 @@ def fetch_source(entry: dict, cache: Path) -> Path:
         partial = target.with_name(target.name + ".part")
         log(f"downloading {entry['name']} from {url}")
         try:
-            request = urllib.request.Request(url, headers={"User-Agent": "LocalSR-build/1"})
-            with urllib.request.urlopen(request, timeout=120) as response:
-                with partial.open("wb") as out:
-                    shutil.copyfileobj(response, out)
+            _download(url, partial)
         except OSError as exc:
             errors.append(f"{url}: {exc}")
             partial.unlink(missing_ok=True)
@@ -639,6 +677,11 @@ class Builder:
         if self.system == "Darwin":
             flag = f"-mmacosx-version-min={MACOS_DEPLOYMENT_TARGET}"
             options += [f"--extra-cflags={flag}", f"--extra-cxxflags={flag}"]
+            if platform.machine() == "arm64":
+                # libvpx 1.16 knows Darwin up to 25; on a newer macOS its guess falls back to
+                # generic-gnu and links with GNU ld options. The deployment target above still
+                # decides the oldest macOS the library runs on.
+                options.append("--target=arm64-darwin25-gcc")
         signature = {"sha256": self.sources["libvpx"]["sha256"], "options": options}
         if self.stamp_ok("libvpx", signature):
             return

@@ -46,12 +46,38 @@ pub(crate) fn set_helper_overrides(command: &mut Command) -> std::io::Result<()>
     Ok(())
 }
 
+#[derive(Clone, Debug, PartialEq)]
 struct WorkerCommand {
     program: PathBuf,
     arguments: Vec<String>,
     working_directory: Option<PathBuf>,
     python_path: Option<PathBuf>,
     installed_engine_id: Option<String>,
+}
+
+/// The worker command a start verified, and the pending install it ran, if any.
+#[derive(Clone, Debug)]
+pub(crate) struct VerifiedRun {
+    command: WorkerCommand,
+    install_token: Option<String>,
+}
+
+#[cfg(test)]
+impl VerifiedRun {
+    pub(crate) fn for_test(
+        program: PathBuf,
+        installed_engine_id: Option<String>,
+        install_token: Option<String>,
+    ) -> Self {
+        Self {
+            command: installed_worker_command(
+                program,
+                installed_engine_id,
+                std::path::Path::new("work"),
+            ),
+            install_token,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -184,6 +210,20 @@ fn spawn_failure_fallback<'a>(
     })
 }
 
+fn confirm_engine_start(state: &AppState, id: &str, token: &str) {
+    let retired = {
+        let Ok(_engine_files) = lock(&state.worker.engine_files) else {
+            return;
+        };
+        crate::updates::confirm_engine_start(&state.paths.next_root, id, token)
+    };
+    match retired {
+        Ok(Some(retired)) => crate::updates::remove_engine_tree_if_real(&retired),
+        Ok(None) => {}
+        Err(error) => eprintln!("LocalSR could not retire the previous engine: {error}"),
+    }
+}
+
 fn activate_bundled_fallback(state: &AppState, failed_id: &str) -> AppResult<()> {
     lock(&state.worker.failed_engines)?.insert(failed_id.to_owned());
     state
@@ -194,6 +234,7 @@ fn activate_bundled_fallback(state: &AppState, failed_id: &str) -> AppResult<()>
 }
 
 pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
+    let engine_files = lock(&state.worker.engine_files)?;
     if state.worker.shutting_down.load(Ordering::SeqCst) {
         return Ok(());
     }
@@ -201,9 +242,13 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         return Ok(());
     }
 
-    let low_priority = lock(&state.settings)?.low_priority;
+    let low_priority = effective_low_priority(&state);
     *lock(&state.edit_runtime)? = String::new();
     let specification = resolve_worker_command(&state, &app)?;
+    let pending_start = specification.installed_engine_id.as_ref().and_then(|id| {
+        crate::updates::pending_engine_token(&state.paths.next_root, id)
+            .map(|token| (id.clone(), token))
+    });
     state.worker.using_installed_engine.store(
         specification.installed_engine_id.is_some(),
         Ordering::SeqCst,
@@ -225,10 +270,10 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
     // The engine starts FFmpeg and the system media helper. Stopping the engine has
     // to stop them too, so they stay in its process group (or Job Object).
     lead_own_group(&mut command);
-    if let Some(directory) = specification.working_directory {
+    if let Some(directory) = &specification.working_directory {
         command.current_dir(directory);
     }
-    if let Some(path) = specification.python_path {
+    if let Some(path) = &specification.python_path {
         command.env("PYTHONPATH", path);
         command.env("PYTHONUTF8", "1");
     }
@@ -249,6 +294,17 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                     .crashed_engine
                     .store(crashed_engine, Ordering::SeqCst);
             }
+            if specification
+                .installed_engine_id
+                .as_deref()
+                .is_some_and(|id| {
+                    crate::updates::restore_verified_engine_backup(&state.paths.next_root, id)
+                        .unwrap_or(false)
+                })
+            {
+                drop(engine_files);
+                return start_worker(state, app);
+            }
             let id = spawn_failure_fallback(
                 specification.installed_engine_id.as_deref(),
                 bundled_engine_executable(&app).is_some(),
@@ -267,6 +323,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                         .into();
             }
             emit_state_changed(&app);
+            drop(engine_files);
             return start_worker(state, app);
         }
     };
@@ -289,6 +346,11 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
     state.worker.finished_job.store(false, Ordering::SeqCst);
     let (sender, receiver) = mpsc::channel::<String>();
     *lock(&state.worker.sender)? = Some(sender);
+    *lock(&state.worker.verified_run)? = Some(VerifiedRun {
+        command: specification.clone(),
+        install_token: pending_start.as_ref().map(|(_, token)| token.clone()),
+    });
+    drop(engine_files);
     {
         let mut runtime = lock(&state.runtime)?;
         runtime.worker = "starting".into();
@@ -318,7 +380,9 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
     let reader_drained = drained.clone();
     let overflowed = Arc::new(AtomicBool::new(false));
     let reader_overflowed = overflowed.clone();
+    let starting_install = pending_start.clone();
     thread::spawn(move || {
+        let mut pending_start = pending_start;
         let mut event_gate = WorkerEventGate::default();
         let mut reader = BufReader::new(stdout);
         let mut line = Vec::new();
@@ -341,6 +405,16 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                     }
                     if event_gate.should_forward(&envelope, Instant::now()) {
                         handle_worker_envelope(&reader_state, &reader_app, envelope, generation);
+                        if reader_state.worker.engine_ready_seen.load(Ordering::SeqCst) {
+                            if let Some((id, token)) = pending_start.take() {
+                                // Deleting the backup takes a while; the reader keeps
+                                // forwarding worker messages meanwhile.
+                                let confirm_state = reader_state.clone();
+                                thread::spawn(move || {
+                                    confirm_engine_start(&confirm_state, &id, &token)
+                                });
+                            }
+                        }
                     }
                 }
                 Err(_) => {
@@ -541,6 +615,10 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         emit_state_changed(&app);
 
         let failed = forced_jobs.is_empty() && !requested_restart;
+        let failed_to_start = specification
+            .installed_engine_id
+            .as_deref()
+            .filter(|_| !state.worker.engine_ready_seen.load(Ordering::SeqCst));
         let finished_job = state.worker.finished_job.swap(false, Ordering::SeqCst);
         if let Some(delay) = restart_delay(
             &state.worker.restart_count,
@@ -552,13 +630,24 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
             if let Err(error) = start_worker(state.clone(), app.clone()) {
                 give_up_on_engine(&state, &app, error.to_string());
             }
-        } else if let Some(id) = bundled_fallback_id(
-            specification
-                .installed_engine_id
-                .as_deref()
-                .filter(|_| !state.worker.engine_ready_seen.load(Ordering::SeqCst)),
-            bundled_engine_executable(&app).is_some(),
-        ) {
+        } else if failed_to_start.is_some()
+            && starting_install.as_ref().is_some_and(|(id, token)| {
+                let Ok(_engine_files) = lock(&state.worker.engine_files) else {
+                    return false;
+                };
+                crate::updates::pending_engine_token(&state.paths.next_root, id).as_ref()
+                    == Some(token)
+                    && crate::updates::restore_verified_engine_backup(&state.paths.next_root, id)
+                        .unwrap_or(false)
+            })
+        {
+            state.worker.restart_count.store(0, Ordering::SeqCst);
+            if let Err(error) = start_worker(state.clone(), app.clone()) {
+                give_up_on_engine(&state, &app, error.to_string());
+            }
+        } else if let Some(id) =
+            bundled_fallback_id(failed_to_start, bundled_engine_executable(&app).is_some())
+        {
             if let Err(error) = activate_bundled_fallback(&state, id) {
                 give_up_on_engine(&state, &app, error.to_string());
                 return;
@@ -588,6 +677,22 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
     });
 
     Ok(())
+}
+
+/// The priority the engine runs at now: the choice made in Advanced, else the default.
+pub fn effective_low_priority(state: &AppState) -> bool {
+    let chosen = state
+        .run_low_priority
+        .lock()
+        .ok()
+        .and_then(|choice| *choice);
+    chosen.unwrap_or_else(|| {
+        state
+            .settings
+            .lock()
+            .map(|settings| settings.low_priority)
+            .unwrap_or(false)
+    })
 }
 
 pub fn apply_low_priority(state: &AppState, low_priority: bool) {
@@ -715,6 +820,28 @@ pub fn dispatch_next(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
     dispatch_next_locked(state, app)
 }
 
+pub fn pause_queue(state: &AppState, app: &AppHandle) {
+    let Ok(_scheduler) = lock(&state.scheduler) else {
+        return;
+    };
+    set_queue_paused_locked(state, true);
+    emit_state_changed(app);
+}
+
+pub fn resume_queue(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    set_queue_paused_locked(state, false);
+    emit_state_changed(app);
+    dispatch_next_locked(state, app)
+}
+
+pub(crate) fn set_queue_paused_locked(state: &AppState, paused: bool) {
+    state.worker.queue_paused.store(paused, Ordering::SeqCst);
+    if let Ok(mut runtime) = state.runtime.lock() {
+        runtime.queue_paused = paused;
+    }
+}
+
 pub fn dispatch_next_locked(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
     if begin_dispatch(state, cfg!(target_os = "macos"))? {
         emit_state_changed(app);
@@ -744,6 +871,9 @@ enum Dispatch {
 
 fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
     if !lock(&state.runtime)?.active_job_id.is_empty() {
+        return Ok(Dispatch::Idle);
+    }
+    if state.worker.queue_paused.load(Ordering::SeqCst) {
         return Ok(Dispatch::Idle);
     }
     let Some(pending) = lock(&state.database)?.next_queued_job()? else {
@@ -792,6 +922,7 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
         _ => vec![first.clone()],
     };
     {
+        let can_keep_partial = job_can_keep_partial(state, &message);
         let mut runtime = lock(&state.runtime)?;
         if runtime.worker != "ready" {
             // The engine stopped meanwhile. Nothing was sent, so the folders made for it go.
@@ -800,6 +931,7 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
             return Ok(Dispatch::Idle);
         }
         runtime.begin_active_job(first.clone());
+        runtime.can_keep_partial = Some(can_keep_partial);
         runtime.active_batch_job_ids = if ids.len() > 1 { ids } else { Vec::new() };
         runtime.status_title = "Queued".into();
         runtime.status_detail = "Sending the next item to the inference engine.".into();
@@ -819,6 +951,111 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
         return Err(error);
     }
     Ok(Dispatch::Sent)
+}
+
+/// The status line after a stop that kept the finished part.
+fn stopped_title(data: &Value) -> String {
+    let tiles = integer(data, "total_tiles");
+    if tiles > 0 {
+        let done = data["finished_tiles"].as_array().map_or(0, Vec::len);
+        return format!("Stopped, kept {done} of {tiles} tiles");
+    }
+    let kept = seconds(data, "kept_seconds");
+    let frames = integer(data, "kept_frames");
+    if kept < 1.0 && frames > 0 {
+        return format!(
+            "Stopped, kept {frames} {}",
+            if frames == 1 { "frame" } else { "frames" }
+        );
+    }
+    let duration = kept.floor() as u64;
+    format!("Stopped, kept {}:{:02}", duration / 60, duration % 60)
+}
+
+/// What results.rs shows of a kept part, from the completion message.
+fn partial_record(data: &Value) -> Value {
+    if integer(data, "total_tiles") > 0 {
+        json!({
+            "finished_tiles": data["finished_tiles"].clone(),
+            "total_tiles": integer(data, "total_tiles"),
+        })
+    } else {
+        json!({
+            "kept_seconds": seconds(data, "kept_seconds"),
+            "kept_frames": integer(data, "kept_frames"),
+        })
+    }
+}
+
+fn job_can_keep_partial(state: &AppState, message: &Value) -> bool {
+    // A photo keeps its finished tiles (the worker saves them only once one is done), on
+    // its own or in a batch, where one stop's choice holds for every photo.
+    if matches!(
+        message["type"].as_str(),
+        Some("job_request" | "image_batch_request")
+    ) {
+        // Face restoration works on the whole picture at once: nothing to keep.
+        let with_faces = |job: &Value| {
+            job["face_model_path"]
+                .as_str()
+                .is_some_and(|path| !path.is_empty())
+        };
+        let data = &message["data"];
+        return match data["jobs"].as_array() {
+            Some(jobs) => !jobs.iter().any(with_faces),
+            None => !with_faces(data),
+        };
+    }
+    if message["type"].as_str() != Some("video_job_request") {
+        return false;
+    }
+    let data = &message["data"];
+    let codec = data["video_codec"].as_str().unwrap_or("av1");
+    if matches!(codec, "av1" | "vp9" | "ffv1" | "auto") {
+        return true;
+    }
+    if !matches!(codec, "h264" | "hevc" | "prores") {
+        return false;
+    }
+    if !data["start_frame"].is_null() || !data["end_frame"].is_null() {
+        return false;
+    }
+    let container = data["container"].as_str().unwrap_or("mp4");
+    let hdr_mode = data["hdr_mode"].as_str().unwrap_or("reject");
+    let video_path = data["video_path"].as_str().unwrap_or_default();
+    let media = lock(&state.database)
+        .ok()
+        .and_then(|db| db.get_media_by_path(video_path).ok().flatten());
+    if hdr_mode == "preserve"
+        && media
+            .as_ref()
+            .is_some_and(|item| !item.hdr_format.is_empty())
+    {
+        return false;
+    }
+    if let Some(item) = media.as_ref() {
+        let scale = u32::try_from(data["output_scale"].as_u64().unwrap_or(1)).unwrap_or(1);
+        let out_w = item.width.saturating_mul(scale);
+        let out_h = item.height.saturating_mul(scale);
+        if out_w % 2 != 0 || out_h % 2 != 0 {
+            return false;
+        }
+    }
+    let caps = lock(&state.capabilities).ok();
+    let system = caps
+        .as_ref()
+        .and_then(|info| info.media.get("system_codecs"))
+        .filter(|value| !value.is_null());
+    let Some(system) = system else {
+        return false;
+    };
+    let has_codec = system["encode"]
+        .as_array()
+        .is_some_and(|list| list.iter().any(|entry| entry.as_str() == Some(codec)));
+    let has_container = system["containers"]
+        .as_array()
+        .is_some_and(|list| list.iter().any(|entry| entry.as_str() == Some(container)));
+    has_codec && has_container
 }
 
 /// Why the job stored as `request_json` cannot be written, or None when it fits.
@@ -875,7 +1112,7 @@ fn stop_queue_locked(state: &Arc<AppState>, reason: &str) -> AppResult<()> {
             }
             let _ = send(
                 state,
-                &json!({"type": "cancel_request", "data": {"job_id": active}}),
+                &json!({"type": "cancel_request", "data": {"job_id": active, "keep_partial": false}}),
             );
         }
     }
@@ -964,8 +1201,22 @@ pub fn shutdown(state: &AppState) {
     }
 }
 
-/// Stop the running worker and start a new one after switching engines.
-pub fn restart_for_engine_switch(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
+/// The installed engine the last worker was started from, running or not.
+pub(crate) fn last_run_engine_id(state: &AppState) -> Option<String> {
+    state
+        .worker
+        .verified_run
+        .lock()
+        .ok()?
+        .as_ref()?
+        .command
+        .installed_engine_id
+        .clone()
+}
+
+/// Stop the running worker and wait until it has exited. `shutting_down` stays
+/// set, so nothing restarts it until the caller does.
+pub(crate) fn stop_for_engine_switch(state: &AppState) -> AppResult<()> {
     shutdown(state);
     let start = Instant::now();
     while state.worker.pid.load(Ordering::SeqCst) != 0 {
@@ -976,6 +1227,12 @@ pub fn restart_for_engine_switch(state: &Arc<AppState>, app: &AppHandle) -> AppR
         }
         thread::sleep(Duration::from_millis(50));
     }
+    Ok(())
+}
+
+/// Stop the running worker and start a new one after switching engines.
+pub fn restart_for_engine_switch(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
+    stop_for_engine_switch(state)?;
     state.worker.shutting_down.store(false, Ordering::SeqCst);
     state.worker.restart_count.store(0, Ordering::SeqCst);
     state
@@ -1073,11 +1330,34 @@ fn handle_worker_envelope(
         return;
     }
     stop_if_disk_full(state, &envelope);
+    // The window learns with the start whether this job's finished part can be kept;
+    // the host decided that when it sent the job.
+    let mut envelope = envelope;
+    if envelope.message_type == "job_started" {
+        let keep = state
+            .runtime
+            .lock()
+            .ok()
+            .and_then(|runtime| runtime.can_keep_partial);
+        if let (Some(keep), Some(data)) = (keep, envelope.data.as_object_mut()) {
+            data.insert("can_keep_partial".into(), Value::Bool(keep));
+        }
+    }
     // Apply native state first so a frontend callback can immediately issue a
     // command against the state represented by this envelope.
     let _ = app.emit("worker-message", envelope.clone());
     if should_emit_state_changed(&envelope.message_type) {
         emit_state_changed(app);
+    } else if matches!(
+        envelope.message_type.as_str(),
+        "progress"
+            | "video_stage_progress"
+            | "video_frame_started"
+            | "video_frame_completed"
+            | "video_tile_progress"
+            | "benchmark_progress"
+    ) {
+        crate::tray::sync(app);
     }
 
     // Request the final full-image preview after updating native state.
@@ -1366,11 +1646,21 @@ fn wrong_output(state: &AppState, envelope: &WorkerEnvelope) -> AppResult<Option
     if requested.as_deref().map(Path::new) == Some(Path::new(&reported)) {
         return Ok(None);
     }
+    let partial = envelope.data.get("partial").and_then(Value::as_bool) == Some(true);
     if kind == "video_job_completed"
-        && envelope.data.get("partial").and_then(Value::as_bool) == Some(true)
+        && partial
         && requested
             .as_deref()
             .is_some_and(|path| partial_output(Path::new(path), Path::new(&reported)))
+    {
+        return Ok(None);
+    }
+    // A photo stopped with "keep the finished part" saves its finished tiles beside it.
+    if kind == "job_completed"
+        && partial
+        && requested.as_deref().is_some_and(|path| {
+            crate::results::is_partial_photo_output(Path::new(path), Path::new(&reported))
+        })
     {
         return Ok(None);
     }
@@ -1381,27 +1671,7 @@ fn wrong_output(state: &AppState, envelope: &WorkerEnvelope) -> AppResult<Option
 }
 
 fn partial_output(requested: &Path, reported: &Path) -> bool {
-    if requested.parent() != reported.parent() || requested.extension() != reported.extension() {
-        return false;
-    }
-    let (Some(stem), Some(name)) = (
-        requested.file_stem().and_then(|s| s.to_str()),
-        reported.file_stem().and_then(|s| s.to_str()),
-    ) else {
-        return false;
-    };
-    let Some(duration) = name.strip_prefix(&format!("{stem}_partial_")) else {
-        return false;
-    };
-    let Some((minutes, seconds)) = duration.strip_suffix('s').and_then(|s| s.split_once('m'))
-    else {
-        return false;
-    };
-    !minutes.is_empty()
-        && minutes.bytes().all(|c| c.is_ascii_digit())
-        && seconds.len() == 2
-        && seconds.bytes().all(|c| c.is_ascii_digit())
-        && seconds.parse::<u8>().is_ok_and(|s| s < 60)
+    crate::results::partial_output_seconds(requested, reported).is_some()
 }
 
 fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppResult<()> {
@@ -1443,9 +1713,22 @@ fn apply_background_photo(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> A
         }
         "job_completed" => {
             let output = string(data, "output_path");
+            let partial = data
+                .get("partial")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            // A kept part says so with its notes, as the shown photo's do.
+            let notes = match (partial, string(data, "notes")) {
+                (false, notes) => notes,
+                (true, notes) if notes.is_empty() => stopped_title(data),
+                (true, notes) => format!("{}. {notes}", stopped_title(data)),
+            };
             let database = lock(&state.database)?;
-            database.finish_job(&id, "completed", &output, &string(data, "notes"))?;
+            database.finish_job(&id, "completed", &output, &notes)?;
             database.record_job_duration(&id, seconds(data, "elapsed_seconds"))?;
+            if partial {
+                database.record_partial(&id, &partial_record(data))?;
+            }
             drop(database);
             let mut runtime = lock(&state.runtime)?;
             // The result shown after the batch belongs to last_output_path.
@@ -1542,8 +1825,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             }
             // Always the current value: the switch may have changed while the
             // engine was starting, before its pid and pipe existed.
-            let low_priority = lock(&state.settings)?.low_priority;
-            apply_low_priority(state, low_priority);
+            apply_low_priority(state, effective_low_priority(state));
             send(state, &json!({"type": "capabilities_request", "data": {}}))?;
             for path in lock(&state.database)?.pending_probe_paths()? {
                 send(state, &media_probe_request(state, &path))?;
@@ -1551,24 +1833,20 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
         }
         "capabilities_info" => {
             let capabilities = serde_json::from_value::<CapabilityInfo>(data.clone())?;
-            let choose = state.choose_device.swap(false, Ordering::SeqCst);
-            let current_missing = {
-                let settings = lock(&state.settings)?;
-                settings.device_id != "cpu"
-                    && !capabilities
-                        .devices
-                        .iter()
-                        .any(|device| device.id == settings.device_id)
-            };
-            if choose || current_missing {
-                let replacement =
-                    first_run_device(&capabilities.devices).unwrap_or_else(|| "cpu".into());
-                let mut settings = lock(&state.settings)?;
-                if (choose && settings.device_id == "cpu") || current_missing {
-                    settings.device_id = replacement;
-                    drop(settings);
-                    if let Err(error) = state.persist_settings() {
-                        eprintln!("Could not save the selected device: {error}");
+            // Only a first installation picks the device. A saved device the engine does not
+            // report this time stays saved: an engine start can miss the GPU for a moment (a
+            // full disk, a driver reset), and saving the CPU then kept every later run on
+            // the CPU after the GPU was back. Until it is back, `resolve_device` runs each
+            // job on the CPU and the interface shows the CPU.
+            if state.choose_device.swap(false, Ordering::SeqCst) {
+                if let Some(replacement) = first_run_device(&capabilities.devices) {
+                    let mut settings = lock(&state.settings)?;
+                    if settings.device_id == "cpu" {
+                        settings.device_id = replacement;
+                        drop(settings);
+                        if let Err(error) = state.persist_settings() {
+                            eprintln!("Could not save the selected device: {error}");
+                        }
                     }
                 }
             }
@@ -1702,6 +1980,10 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             let mut runtime = lock(&state.runtime)?;
             runtime.progress = progress;
             let editing = string(data, "unit") == "steps";
+            if !editing && data.get("completed_tiles").is_some() {
+                runtime.tiles_completed = integer(data, "completed_tiles");
+                runtime.tiles_total = integer(data, "total_tiles");
+            }
             // In a job of several stages the title keeps which one runs (two fixes can
             // both be "Restoring"); a one-stage job reads "Enhancing".
             let staged = runtime.status_title.contains(" · stage ")
@@ -1759,14 +2041,37 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 runtime.live_system_ram_available = integer(data, "system_ram_available");
             }
         }
+        "video_stage_progress" if string(data, "stage") == "deflickering" => {
+            // Between two upscaled frames: the progress and the estimate stay as they are.
+            let mut runtime = lock(&state.runtime)?;
+            if runtime.active_job_id == string(data, "job_id") {
+                runtime.status_title = video_stage_title("deflickering").into();
+                runtime.status_detail = format!(
+                    "Frame {} of {}{}",
+                    integer(data, "completed"),
+                    integer(data, "total"),
+                    eta_suffix(runtime.estimated_remaining_seconds)
+                );
+            }
+        }
         "video_stage_progress" => {
             let mut runtime = lock(&state.runtime)?;
             if runtime.active_job_id == string(data, "job_id") {
                 runtime.status_title = video_stage_title(&string(data, "stage")).into();
                 let frames_done = number(data, "frames_processed");
                 let frames_total = number(data, "total_frames");
+                if data.get("frames_processed").is_some() {
+                    runtime.frames_processed = integer(data, "frames_processed");
+                }
+                if data.get("total_frames").is_some() {
+                    runtime.total_frames = integer(data, "total_frames");
+                }
                 if frames_total > 0.0 {
                     runtime.progress = (frames_done / frames_total * 100.0).clamp(0.0, 100.0);
+                } else {
+                    // A step without frame counts (loading a model, reading frames) starts
+                    // fresh; the last step's 100 % would otherwise read as saving.
+                    runtime.progress = 0.0;
                 }
                 runtime.estimated_remaining_seconds = seconds(data, "estimated_remaining_seconds");
                 let steps = if integer(data, "total") > 0 {
@@ -1821,6 +2126,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
         }
         "video_frame_started" => {
             let mut runtime = lock(&state.runtime)?;
+            runtime.total_frames = integer(data, "total_frames");
             runtime.status_title = VIDEO_FRAMES_TITLE.into();
             runtime.status_detail = format!(
                 "Frame {} of {}{}",
@@ -1840,8 +2146,11 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             let total = integer(data, "total_frames") as f64;
             let fraction = frame + if count > 0.0 { done / count } else { 0.0 };
             let mut runtime = lock(&state.runtime)?;
+            runtime.total_frames = integer(data, "total_frames");
+            // Tiles finish a frame, not the job: interpolation, de-flicker and the
+            // encoder still follow, so tile progress stops short of the saving mark.
             runtime.progress = if total > 0.0 {
-                (fraction / total * 100.0).clamp(0.0, 100.0)
+                (fraction / total * 100.0).clamp(0.0, 99.0)
             } else {
                 0.0
             };
@@ -1882,6 +2191,8 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             };
             lock(&state.database)?.update_job_progress(&id, progress)?;
             let mut runtime = lock(&state.runtime)?;
+            runtime.frames_processed = integer(data, "frames_processed");
+            runtime.total_frames = integer(data, "total_frames");
             runtime.progress = progress;
             let elapsed = seconds(data, "elapsed_seconds");
             let remaining = seconds(data, "estimated_remaining_seconds");
@@ -2064,8 +2375,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
             let stopped = if partial {
-                let duration = seconds(data, "kept_seconds").floor() as u64;
-                format!("Stopped, kept {}:{:02}", duration / 60, duration % 60)
+                stopped_title(data)
             } else {
                 String::new()
             };
@@ -2078,6 +2388,9 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             }
             lock(&state.database)?.finish_job(&id, "completed", &output, &notes)?;
             lock(&state.database)?.record_job_duration(&id, seconds(data, "elapsed_seconds"))?;
+            if partial {
+                lock(&state.database)?.record_partial(&id, &partial_record(data))?;
+            }
             let mut runtime = lock(&state.runtime)?;
             runtime.take_active_job();
             // A video frame thumbnail is a live preview, not a completed
@@ -2182,8 +2495,29 @@ pub(crate) fn media_probe_request(state: &AppState, path: &str) -> serde_json::V
     })
 }
 
-pub(crate) fn codec_helper_command(state: &AppState, app: &AppHandle) -> AppResult<Command> {
-    let specification = resolve_worker_command(state, app)?;
+/// The command of the current worker run, which its start verified. Read-only:
+/// restoring a backup or marking an engine is left to the next worker start.
+fn codec_helper_specification(state: &AppState) -> AppResult<WorkerCommand> {
+    let run = lock(&state.worker.verified_run)?.clone().ok_or_else(|| {
+        AppError::Worker("The inference engine has not started yet. Try again shortly.".into())
+    })?;
+    if let Some(id) = &run.command.installed_engine_id {
+        let next_root = &state.paths.next_root;
+        // The marker disappears when this run confirms its install; any other
+        // token belongs to an install published after this run started.
+        let token = crate::updates::pending_engine_token(next_root, id);
+        let same_install = token.is_none() || token == run.install_token;
+        if !same_install || !crate::updates::installed_engine_looks_intact(next_root, id) {
+            return Err(AppError::Worker(
+                "The inference engine is being replaced. Try again when it has started.".into(),
+            ));
+        }
+    }
+    Ok(run.command)
+}
+
+pub(crate) fn codec_helper_command(state: &AppState, _app: &AppHandle) -> AppResult<Command> {
+    let specification = codec_helper_specification(state)?;
     let mut command = Command::new(specification.program);
     command.args(specification.arguments);
     set_helper_overrides(&mut command)?;
@@ -2195,7 +2529,12 @@ pub(crate) fn codec_helper_command(state: &AppState, app: &AppHandle) -> AppResu
             );
             command.env("LOCALSR_EXTERNAL_FFMPEG", path);
         }
-        settings.low_priority
+        let chosen = state
+            .run_low_priority
+            .lock()
+            .ok()
+            .and_then(|choice| *choice);
+        chosen.unwrap_or(settings.low_priority)
     } else {
         false
     };
@@ -2209,6 +2548,34 @@ pub(crate) fn codec_helper_command(state: &AppState, app: &AppHandle) -> AppResu
     command.env("PYTHONUNBUFFERED", "1");
     crate::process_priority::configure_command(&mut command, low_priority);
     Ok(command)
+}
+
+fn adopt_engine_installed_by_older_updater(state: &AppState, app: &AppHandle) {
+    let compiled_id = option_env!("LOCALSR_ENGINE_ID").unwrap_or("");
+    let backend = option_env!("LOCALSR_UPDATE_BACKEND").unwrap_or("");
+    let work_root = state.paths.work_root.clone();
+    crate::updates::adopt_engine_from_older_updater(
+        &state.paths.next_root,
+        compiled_id,
+        backend,
+        || {
+            if let Ok(mut runtime) = state.runtime.lock() {
+                runtime.status_title = "Checking the inference engine".into();
+                runtime.status_detail =
+                    "The engine the update installed is checked once before it is used.".into();
+            }
+            emit_state_changed(app);
+        },
+        |executable| {
+            crate::headless_smoke::run_worker_handshake(
+                executable,
+                Duration::from_secs(60),
+                true,
+                &work_root,
+            )
+            .is_ok()
+        },
+    );
 }
 
 pub fn installed_worker_path(state: &AppState, app: &AppHandle) -> AppResult<PathBuf> {
@@ -2280,12 +2647,16 @@ fn resolve_worker_command(state: &AppState, app: &AppHandle) -> AppResult<Worker
     let selected = if state.worker.use_bundled_fallback.load(Ordering::SeqCst) {
         bundled.map(|path| (path, None))
     } else {
-        let mut failed = lock(&state.worker.failed_engines)?;
-        let quick_failed = crate::updates::verify_active_engine_at_start(&state.paths, &mut failed);
-        // A failed copy is now in `failed`, so the normal choice skips it and keeps any
-        // other valid engine; only a fall back to the bundle is reported.
-        let choice = crate::updates::worker_engine_choice(&state.paths, bundled, &failed);
-        if quick_failed.is_some() && matches!(choice, Some((_, None))) {
+        // An edition without a bundled engine updated by 0.4.0 to 0.5.0 has that release's
+        // engine installed without metadata; record it before choosing.
+        if bundled.is_none() && !crate::distribution::managed_by_store() {
+            adopt_engine_installed_by_older_updater(state, app);
+        }
+        let mut failed = lock(&state.worker.failed_engines)?.clone();
+        let (choice, verification_failed) =
+            crate::updates::verified_worker_engine_choice(&state.paths, bundled, &mut failed);
+        lock(&state.worker.failed_engines)?.extend(failed);
+        if verification_failed && matches!(choice, Some((_, None))) {
             if let Ok(mut runtime) = state.runtime.lock() {
                 runtime.status_title = "Switched to bundled engine".into();
                 runtime.status_detail =
@@ -2539,6 +2910,9 @@ fn video_stage_title(stage: &str) -> &'static str {
         "loading_audio_denoise" => "Loading audio model",
         "audio_denoise" => "Audio cleanup",
         "loading_model" => "Loading video model",
+        "colour_preparing" => "Adding colour",
+        "deflickering" => "De-flickering",
+        "partial_finalizing" => "Saving the finished part",
         "loading_interpolation" => "Loading frame interpolation",
         "reading_frames" => "Reading video frames",
         "preparing_clip" => "Preparing clip",
@@ -2612,20 +2986,37 @@ fn with_completion_sound<R: tauri::Runtime>(
     })
 }
 
-fn finished_notice(state: &AppState, data: &Value) -> Option<&'static str> {
-    let more_work = state
-        .database
-        .lock()
-        .ok()
-        .and_then(|database| database.has_inflight_jobs().ok())
-        .unwrap_or(false);
-    if more_work {
+fn finished_notice(state: &AppState, data: &Value) -> Option<String> {
+    if !lock(&state.settings).is_ok_and(|settings| settings.notify_on_finish) {
         return None;
     }
+    let job_id = string(data, "job_id");
+    let file_name = (!job_id.is_empty())
+        .then(|| {
+            state
+                .database
+                .lock()
+                .ok()
+                .and_then(|database| database.job_media_name(&job_id).ok())
+                .flatten()
+        })
+        .flatten()
+        .or_else(|| {
+            let output_path = string(data, "output_path");
+            Path::new(&output_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned)
+        })
+        .filter(|name| !name.is_empty());
+    let base = match file_name {
+        Some(name) => format!("{name} is ready."),
+        None => "Your enhanced media is ready.".to_owned(),
+    };
     Some(if string(data, "notes").is_empty() {
-        "Your enhanced media is ready."
+        base
     } else {
-        "Your enhanced media is ready. A fix was skipped; open LocalSR for details."
+        format!("{base} A fix was skipped; open LocalSR for details.")
     })
 }
 

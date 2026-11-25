@@ -24,23 +24,13 @@ from localsr.core.model_catalog import (  # noqa: E402
 
 DEFAULT_OUTPUT = ROOT / "desktop" / "src-tauri" / "resources" / "model-catalog.json"
 
-LICENSE_URLS = {
-    "Apache-2.0": "https://www.apache.org/licenses/LICENSE-2.0",
-    "BSD-3-Clause": "https://opensource.org/license/bsd-3-clause",
-    "CC BY 4.0": "https://creativecommons.org/licenses/by/4.0/",
-    "CC-BY-4.0": "https://creativecommons.org/licenses/by/4.0/",
-    "CC BY-NC-SA 4.0": "https://creativecommons.org/licenses/by-nc-sa/4.0/",
-    "MIT": "https://opensource.org/license/mit",
-    "MIT OR Apache-2.0": "https://opensource.org/license/mit",
-}
 
-
-def _license_policy(name: str, commercial_status: str) -> dict:
+def _license_policy(name: str, commercial_status: str, license_url: str) -> dict:
     normalized = name.strip()
     unclear = "clarify" in normalized.lower() or commercial_status == "unclear"
     noncommercial = commercial_status == "not-allowed" or "NC" in normalized.upper()
     return {
-        "license_url": LICENSE_URLS.get(normalized, ""),
+        "license_url": license_url,
         # The app downloads from the publisher's pinned HTTPS URL; it does not
         # mirror a checkpoint merely because an upstream URL exists.
         "automated_download_allowed": not unclear,
@@ -58,7 +48,9 @@ def build_manifest() -> dict:
         entry["purposes"] = [purpose.value for purpose in model.purposes]
         entry["quality_tier"] = int(model.quality_tier)
         entry["speed_tier"] = int(model.speed_tier)
-        entry.update(_license_policy(model.license_name, model.commercial_use_status))
+        entry.update(
+            _license_policy(model.license_name, model.commercial_use_status, model.license_url)
+        )
         entry["engine_id"] = "localsr.pytorch-spandrel"
         # Two separate axes: `support_tier` is validation status (supported or
         # labs); `rights_status` is what the checkpoint's terms allow. Presets
@@ -85,8 +77,10 @@ def build_manifest() -> dict:
     for model in VIDEO_MODEL_CATALOG:
         entry = asdict(model)
         entry["files"] = [asdict(file) for file in model.files]
-        entry.update(_license_policy(model.license_name, "allowed"))
-        entry["engine_id"] = "localsr.video.seedvr2"
+        entry["quality_tier"] = int(model.quality_tier)
+        entry["speed_tier"] = int(model.speed_tier)
+        entry.update(_license_policy(model.license_name, "allowed", model.license_url))
+        entry["engine_id"] = f"localsr.video.{model.engine_kind}"
         entry["support_tier"] = "labs"
         video_models.append(entry)
 
@@ -94,7 +88,7 @@ def build_manifest() -> dict:
     for model in INTERPOLATION_MODEL_CATALOG:
         entry = asdict(model)
         entry["files"] = [asdict(file) for file in model.files]
-        entry.update(_license_policy(model.license_name, "allowed"))
+        entry.update(_license_policy(model.license_name, "allowed", model.license_url))
         entry["engine_id"] = "localsr.video.rife"
         entry["support_tier"] = "labs"
         interpolation_models.append(entry)
@@ -103,7 +97,7 @@ def build_manifest() -> dict:
     for model in AUDIO_MODEL_CATALOG:
         entry = asdict(model)
         entry["files"] = [asdict(file) for file in model.files]
-        entry.update(_license_policy(model.license_name, "allowed"))
+        entry.update(_license_policy(model.license_name, "allowed", model.license_url))
         entry["engine_id"] = f"localsr.audio.{model.engine_kind}"
         entry["support_tier"] = "supported"
         audio_models.append(entry)

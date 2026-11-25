@@ -101,10 +101,17 @@ fn packaged_worker_path() -> Result<PathBuf, String> {
     let bundled = worker_candidates(&executable, worker_name, appdir.as_deref(), product_name)
         .into_iter()
         .find(|path| path.is_file());
-    let installed = crate::paths::AppPaths::discover()
-        .ok()
-        .and_then(|paths| crate::updates::active_engine(&paths));
-    crate::updates::choose_host_engine(bundled, installed).ok_or_else(|| {
+    let selected = match crate::paths::AppPaths::discover() {
+        Ok(paths) => crate::updates::verified_worker_engine_choice(
+            &paths,
+            bundled,
+            &mut std::collections::HashSet::new(),
+        )
+        .0
+        .map(|(path, _)| path),
+        Err(_) => bundled,
+    };
+    selected.ok_or_else(|| {
         "the installed desktop host is missing its bundled inference engine".to_owned()
     })
 }
@@ -137,6 +144,19 @@ fn worker_candidates(
     // headless path useful for local package diagnostics on macOS.
     if let Some(contents) = parent.parent() {
         candidates.push(contents.join("Resources").join("engine").join(worker_name));
+    }
+    // A system package (.deb) installs the host in /usr/bin and Tauri's resources in
+    // /usr/lib/<productName>, the same layout an AppImage has below APPDIR.
+    if parent.file_name().is_some_and(|name| name == "bin") {
+        if let Some(prefix) = parent.parent() {
+            candidates.push(
+                prefix
+                    .join("lib")
+                    .join(product_name)
+                    .join("engine")
+                    .join(worker_name),
+            );
+        }
     }
     if let Some(appdir) = appdir {
         // Tauri stores AppImage resources in APPDIR/usr/lib/<productName>.
@@ -485,6 +505,17 @@ mod tests {
         assert!(candidates.contains(&PathBuf::from(
             "/tmp/.mount_LocalSR/usr/lib/localsr-next/engine/localsr-worker"
         )));
+    }
+
+    #[test]
+    fn packaged_worker_candidates_cover_a_system_package_layout() {
+        let candidates = worker_candidates(
+            Path::new("/usr/bin/localsr-next"),
+            "localsr-worker",
+            None,
+            "LocalSR",
+        );
+        assert!(candidates.contains(&PathBuf::from("/usr/lib/LocalSR/engine/localsr-worker")));
     }
 
     #[test]

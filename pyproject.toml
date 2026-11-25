@@ -1,6 +1,6 @@
 [project]
 name = "localsr"
-version = "0.5.2-beta"
+version = "0.6.1-beta"
 description = "A local-first desktop application for image and video restoration using Tauri, PyTorch, and Spandrel."
 authors = [{name = "Hermes Reisner"}]
 readme = "README.md"
@@ -60,6 +60,8 @@ video = [
     "psutil",
     "tqdm",
     "gguf",
+    # FlashVSR (Labs) on Apple silicon: the MLX port runs the model on Metal.
+    "mlx>=0.32.4,<0.33; sys_platform == 'darwin' and platform_machine == 'arm64'",
     # Audio cleanup for videos. Not a base dependency: the DirectML build ships
     # onnxruntime-directml under another name, and its release check would fail.
     "onnxruntime>=1.24",
@@ -119,7 +121,11 @@ where = ["src"]
 [tool.setuptools.package-data]
 "localsr.core" = ["benchmark_references.json", "edit_catalog.json"]
 "localsr.image_models.ddcolor" = ["*.md"]
+"localsr.image_models.heart" = ["*.md"]
+"localsr.image_models.nerve" = ["*.md"]
+"localsr.image_models.pulse" = ["*.md"]
 "localsr.video_models.rife" = ["*.md"]
+"localsr.video_models.flashvsr" = ["*.safetensors", "*.md", "LICENSE", "LICENSES/*.txt"]
 "localsr.video_models.seedvr2" = [
     "*.safetensors",
     "*.md",

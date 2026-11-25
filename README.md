@@ -7,12 +7,10 @@ with your original. The models run on your computer, and your photos stay there 
 There is also a small [phone app](#phone-app) for Android and iPhone that upscales
 photos on the phone itself.
 
-[Download](https://herrei.github.io/localsr/download/) ·
-[Phone app](https://herrei.github.io/localsr/phone/) ·
-[Try it in your browser](https://herrei.github.io/localsr/demo/) ·
-[Website](https://herrei.github.io/localsr/) ·
-[User guide](https://herrei.github.io/localsr/guide/) ·
-[Changelog](CHANGELOG.md)
+Get it from the [download page](https://herrei.github.io/localsr/download/), or
+[try it in your browser](https://herrei.github.io/localsr/demo/) first. The
+[user guide](https://herrei.github.io/localsr/guide/) explains the app, and the
+[changelog](CHANGELOG.md) lists what changed in each version.
 
 | Original detail | LocalSR, 4× with Quick |
 | --- | --- |
@@ -42,7 +40,7 @@ at the moment), and the app shows you each licence before it downloads anything.
 - Enlarge photos and artwork by 2×, 3× or 4×. Quick is a good start, and Best
   spends more time on photo detail.
 - Clean up noise, blur and JPEG artifacts first, or add colour to black-and-white
-  photos, then enlarge.
+  photos and videos, then enlarge.
 - Compare the original and the result with a slider, or hold M to see the
   original.
 - Enhance video frame by frame, with the source timing, rotation and audio kept.
@@ -54,9 +52,7 @@ at the moment), and the app shows you each licence before it downloads anything.
 
 LocalSR also has a built-in benchmark. It times a real upscaling model on fixed
 test images, through the same inference engine the app uses for your own files,
-and reports how many megapixels per second your CPU or GPU can upscale. Local AI
-benchmarks can be hard to grasp, so it's good to have one built around a real
-use case.
+and reports how many megapixels per second your CPU or GPU can upscale.
 
 It opens JPEG, PNG, WebP, TIFF, AVIF, GIF, JPEG 2000 and camera RAW files, and
 on the Mac also HEIC and JPEG XL. It saves PNG, JPEG, TIFF or WebP, or on the Mac
@@ -66,47 +62,60 @@ saved as AV1, VP9 or FFV1, or on the Mac also as HEVC or ProRes. [Video support]
 Quick uses SPAN NomosUni and Best uses RealPLKSR NomosWebPhoto, both by Philip
 Hofmann. The library also has HAT, Real-ESRGAN, SwinIR, NAFNet, SCUNet, FBCNN
 and DDColor, and each model shows its size, licence and source before you download it.
-[Model guide](docs/models/README.md) · [Model licences](docs/model-licenses.md).
+The [model guide](docs/models/README.md) describes them, and
+[model licences](docs/model-licenses.md) lists each licence.
 
 ## Download
 
 ### Which file do I need?
 
+Download one file for your computer; it is all you need. The Mac version includes everything. On Windows and Linux, LocalSR checks your graphics card when it first starts and offers the faster engine for it (NVIDIA CUDA, DirectML for AMD and Intel graphics on Windows, AMD ROCm on Linux), then downloads and installs that engine itself.
+
 | Computer | Download |
 |---|---|
-| Mac (M1 or newer) | `LocalSR-v0.5.2-beta-macOS-arm64.dmg` |
-| Windows | `LocalSR-v0.5.2-beta-Windows-CPU-x86_64.exe` |
-| Linux | `LocalSR-v0.5.2-beta-Linux-CPU-x86_64.AppImage` |
-
-The app offers the faster GPU engine after setup.
+| Mac (M1 or newer) | `LocalSR-v0.6.1-beta-macOS-arm64.dmg` |
+| Windows | `LocalSR-v0.6.1-beta-Windows-CPU-x86_64.exe` |
+| Linux | `LocalSR-v0.6.1-beta-Linux-CPU-x86_64.AppImage`, or `LocalSR-v0.6.1-beta-Linux-CPU-amd64.deb` on Ubuntu and Debian |
 
 ### Offline and advanced downloads
 
+Only for a computer without internet access, or to install the GPU edition in one go. Everyone else can skip this.
+
 | Computer | Download |
 |---|---|
-| Windows, AMD or Intel graphics | `LocalSR-v0.5.2-beta-Windows-DirectML-x86_64.exe` |
-| Windows, NVIDIA | `LocalSR-v0.5.2-beta-Windows-CUDA-x86_64.exe` and all `LocalSR-v0.5.2-beta-Windows-CUDA-x86_64.engine.tar.gz.part-*` files in the same folder |
-| Linux, AMD | all `LocalSR-v0.5.2-beta-Linux-ROCm-x86_64.AppImage.part-*` files, joined |
-| Linux, NVIDIA | all `LocalSR-v0.5.2-beta-Linux-CUDA-x86_64.AppImage.part-*` files, joined |
+| Windows, AMD or Intel graphics | `LocalSR-v0.6.1-beta-Windows-DirectML-x86_64.exe` |
+| Windows, NVIDIA | `LocalSR-v0.6.1-beta-Windows-CUDA-x86_64.exe` and all `LocalSR-v0.6.1-beta-Windows-CUDA-x86_64.engine.tar.gz.part-*` files in the same folder |
+| Linux, AMD | all `LocalSR-v0.6.1-beta-Linux-ROCm-x86_64.AppImage.part-*` files, joined |
+| Linux, NVIDIA | all `LocalSR-v0.6.1-beta-Linux-CUDA-x86_64.AppImage.part-*` files, joined |
 
 To import an engine offline, download the `*.engine-payload.json` manifest, its `.engine.tar.gz.part-*` files and their `.sig` signature files into one folder, then open **Advanced -> Engine -> Change… -> Import engine from file…** and choose the `*.engine-payload.json` file.
 
-The other files (signatures, checksums and source archives) are for verification and updates.
+### What are all the other files?
+
+- `*.engine-payload.json`, `*.engine-update.json` and `*.engine.tar.gz.part-*`: the GPU engines that the app downloads by itself.
+- `*.app.tar.gz` and `*.sig`: update files and their signatures, which the app checks before it installs an update.
+- `*.sha256` and `SHA256SUMS`: checksums to check a download by hand.
+- `*source-and-notices.tar.gz`: the source code and licence notices for each package.
 
 The [download page](https://herrei.github.io/localsr/download/) has the installers
 for each platform:
 
-- **macOS v0.5.0-beta:** Apple Silicon (M1 or newer) and macOS 14 or later. Intel
+- **macOS v0.6.1-beta:** Apple Silicon (M1 or newer) and macOS 14 or later. Intel
   Macs are not supported. Signed and notarized, and it updates itself.
-- **Windows v0.5.0-beta:** Windows 10 or 11 on x86-64. Choose CPU, DirectML
-  or CUDA above. The installers are unsigned, so SmartScreen warns first: choose
-  **More info**, then **Run anyway**. Setup installs for your account without
-  administrator rights, lets you choose a folder, add a desktop shortcut and launch
+- **Windows v0.6.1-beta:** Windows 10 or 11 on x86-64. The standard installer
+  offers the GPU engine after setup; the DirectML and CUDA installers are for offline use. The installers are unsigned, so SmartScreen warns first: choose
+  **More info**, then **Run anyway**. Setup installs for your account (Just me, no
+  administrator rights) or for everyone on the computer, lets you choose a folder, add a desktop shortcut and launch
   LocalSR when done; uninstall keeps downloaded models and settings by default.
-- **Linux v0.5.0-beta:** x86-64 AppImage. Choose CPU, CUDA or ROCm above. The CPU
+- **Linux v0.6.1-beta:** x86-64 AppImage. The CPU AppImage offers the CUDA or ROCm
+  engine after setup; the CUDA and ROCm AppImages are for offline use. The CPU
   AppImage runs Intel graphics through OpenVINO once Intel's compute driver
   (`intel-opencl-icd`) is installed. After first setup, it offers once to add
-  LocalSR to your applications menu, removable later from the Help menu.
+  LocalSR to your applications menu, removable later from the Help menu. From
+  0.6.0-beta, Ubuntu 22.04+ and Debian 12+ can install the CPU edition as a .deb
+  with `sudo apt install ./LocalSR-v<version>-Linux-CPU-amd64.deb`. It adds its
+  own menu entry and downloads the CUDA or ROCm engine inside the app. It reports
+  new versions; install the new .deb with apt the same way.
 
 The CUDA edition needs an NVIDIA RTX 20 series or newer and driver 580 or
 newer. On Windows, older NVIDIA cards can use DirectML.
@@ -119,10 +128,9 @@ brew install --cask herrei/tap/localsr
 
 The Mac app takes about 1.2 GB, because it brings its own Python and PyTorch.
 Models download when you choose them: Quick is 4.5 MB, most others are under
-500 MB, and the editing models are 5 to 26 GB. You can change the model folder
-under Advanced settings to store models on another drive. Matching files already in
-the new folder are reused. Different files, model file symlinks, or links back to files being moved stop
-the move. Replace model file symlinks with the files before moving. I test upscaling on a Mac with 16 GB of memory.
+500 MB, and the editing models are 5 to 26 GB. To keep models on another drive,
+change the model folder under Advanced settings. I test upscaling on a Mac with
+16 GB of memory.
 
 LocalSR is only published on
 [GitHub Releases](https://github.com/HerRei/local-upscale/releases), on
@@ -165,25 +173,36 @@ details are in [platform support](docs/platforms.md).
 
 ## What leaves your computer
 
-On a fresh install, LocalSR shows a short setup screen for appearance (Dark, Light or Match System, plus colour-blind friendly colours), automatic update checks, the anonymous update count, and crash reports (all three on by default, and you can switch each off there). Nothing goes over the network until you choose Continue. The update check reads a feed on GitHub Pages. If enabled, the count sends the app version, platform and channel to the developer's server without an ID. You can change any of these later in the View, LocalSR and Help menus, the Software Update dialog, or Performance & Diagnostics.
+There is no account, and your images and videos are never uploaded.
 
-Crash reports are on by default for new installs and can be turned off in the first-launch setup or later. When enabled, they are stored only on your computer and are never sent automatically; you can review a report and choose to open a GitHub issue. A report contains app and system versions, the device kind and running task and model, and redacted error details. Native host crashes such as segmentation faults may not be captured.
+A fresh install starts with a two-page setup, and nothing goes over the network
+before you finish it. The first page covers privacy: automatic update checks, an
+anonymous update count and crash reports. All three are on by default, and you
+can switch each one off there or later in Settings. The second page sets the
+look: theme, colour-blind friendly colours, high contrast, the menu bar icon and
+the finish sound. Installs that already made these choices keep them.
 
-There is no account, and your images and videos are never uploaded. When enabled, at launch the
-app reads its update feed on GitHub Pages (for the beta,
-`herrei.github.io/localsr/updates/beta.json`) and can update itself, on the Mac,
-on Windows and as a Linux AppImage. After a check it
-sends one anonymous count with the app version, platform and channel to my Mac
-mini at `macmini-ci.tail34a4e0.ts.net`, without an install ID or cookies. Both are
-on by default; the first launch shows both switches before anything is sent, and
-installs that already chose keep their setting. Turn either on or off in the LocalSR menu on the Mac, the Help menu
-on Windows and Linux, or the Software Update dialog; **Check for Updates…** still
-works when you ask. The Microsoft Store edition does neither.
+- **Update check:** at launch, LocalSR reads its update feed on GitHub Pages
+  (for the beta, `herrei.github.io/localsr/updates/beta.json`) and can update
+  itself on the Mac, on Windows and as a Linux AppImage. **Check for Updates…**
+  still works when you ask. Updates come from GitHub Releases, and the app checks
+  their signature before it replaces anything.
+- **Anonymous count:** after a check, the app sends the app version, platform
+  and channel to my Mac mini at `macmini-ci.tail34a4e0.ts.net`, without an
+  install ID or cookies.
+- **Crash reports:** stored only on your computer and never sent automatically.
+  You can read a report and choose to open a GitHub issue with it. A report holds
+  the app and system versions, the device kind, the running task and model, and
+  redacted error details. Native crashes such as segmentation faults may not be
+  captured.
 
-Updates come from GitHub Releases, and the app checks their signature before it
-replaces anything. Models download from their authors on GitHub or Hugging Face
-when you choose them. The face-detection model downloads the first time a
-face-aware job runs. Once your models are downloaded, LocalSR works offline.
+The update switches are also in the LocalSR menu on the Mac, the Help menu on
+Windows and Linux, and the Software Update dialog. The Microsoft Store edition
+neither checks for updates nor sends the count.
+
+Models download from their authors on GitHub or Hugging Face when you choose
+them, and the face-detection model downloads the first time a face-aware job
+runs. Once your models are downloaded, LocalSR works offline.
 [Privacy details](https://herrei.github.io/localsr/privacy/).
 
 ## FAQ
@@ -195,14 +214,16 @@ version, no account and no advertising, and the code is MIT licensed.
 custom checkpoint for upscaling and restoration. `.pth`, `.pt` and `.ckpt`
 files can run code when they load, so the app only uses one after you tick
 *Allow this pickle-based checkpoint*. Do that only for files from a publisher
-you trust. For editing, **Use your own edit model…** in the model library lets
+you trust. The app remembers approval for that file’s SHA-256; changed files need approval again.
+You can name and select your checkpoints in the model library. For editing, **Use your own edit model…** in the model library lets
 you pick local GGUF/safetensors component files for Qwen Image Edit 2511,
 Qwen Image 2.1, FLUX.2 klein, or Mage-Flow-Edit-Turbo.
 
 **How do I uninstall it?** On a Mac, move LocalSR to the Trash and delete
 `~/Library/Application Support/LocalSR` and `~/Library/Caches/LocalSR`. On
 Windows, uninstall it under Apps and delete `%LOCALAPPDATA%\LocalSR`. On Linux,
-delete the AppImage and `${XDG_DATA_HOME:-~/.local/share}/LocalSR`. The
+delete the AppImage or run `sudo apt remove localsr`, then delete
+`${XDG_DATA_HOME:-~/.local/share}/LocalSR`. The
 [guide](https://herrei.github.io/localsr/guide/) has the details.
 
 ## Build from source
@@ -217,9 +238,9 @@ cd desktop && npm run tauri -- dev
 
 The interface is Svelte in Tauri, with a Rust host for the queue, settings and
 updates, and a separate Python worker that runs PyTorch and spandrel. Run
-`./local-ci.sh` for the local checks. [Desktop guide](desktop/README.md) ·
-[Worker protocol](protocol/README.md) · [Command line](docs/automation.md) ·
-[Releasing](docs/releasing.md).
+`./local-ci.sh` for the local checks. More in the
+[desktop guide](desktop/README.md), the [worker protocol](protocol/README.md),
+the [command line](docs/automation.md) and [releasing](docs/releasing.md) docs.
 
 The iPhone and Android app is a separate Swift project built with Skip, in
 [mobile/](mobile/README.md).

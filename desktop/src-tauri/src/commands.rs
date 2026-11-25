@@ -450,6 +450,9 @@ pub(crate) fn save_settings_checked(state: &AppState, settings: UiSettings) -> A
             .grants
             .check_model_file(Path::new(&settings.custom_model_path))?;
     }
+    for model in &settings.custom_models {
+        state.grants.check_model_file(Path::new(&model.path))?;
+    }
     for path in settings.custom_edit_model.non_empty_paths() {
         state.grants.check_model_file(Path::new(path))?;
     }
@@ -472,19 +475,23 @@ fn replace_settings(state: &AppState, mut settings: UiSettings) -> AppResult<()>
 }
 
 fn reconcile_persisted_grants(state: &AppState) -> AppResult<()> {
-    let (output_directory, custom_model_path, custom_edit_model) = {
+    let (output_directory, custom_model_path, custom_models, custom_edit_model) = {
         let current = lock(&state.settings)?;
         (
             current.output_directory.clone(),
             current.custom_model_path.clone(),
+            current.custom_models.clone(),
             current.custom_edit_model.clone(),
         )
     };
     let recipes = lock(&state.recipes)?.clone();
     state.grants.reconcile_outputs(&output_directory);
-    state
-        .grants
-        .reconcile_models(&custom_model_path, &custom_edit_model, &recipes);
+    state.grants.reconcile_models(
+        &custom_model_path,
+        &custom_models,
+        &custom_edit_model,
+        &recipes,
+    );
     Ok(())
 }
 
@@ -498,17 +505,26 @@ fn persist_or_restore(state: &AppState, restore: impl FnOnce(&AppState)) -> AppR
     written
 }
 
-/// The update switches change only through set_update_switch. A full settings save
-/// carries the window's copy, which an older refresh may have left behind; it must
-/// never turn an opt-out back on.
+/// Preferences changed via set_preference (and host flags) are preserved across a
+/// full settings save, which may carry an older copy from the window.
 fn keep_update_switches(current: &UiSettings, incoming: &mut UiSettings) {
+    incoming.trusted_checkpoint_sha256 = current.trusted_checkpoint_sha256.clone();
     incoming.appearance = current.appearance.clone();
     incoming.colour_blind_palette = current.colour_blind_palette;
+    incoming.contrast = current.contrast.clone();
+    incoming.viewer_background = current.viewer_background.clone();
+    incoming.interface_scale = current.interface_scale;
     incoming.check_updates_at_launch = current.check_updates_at_launch;
     incoming.anonymous_update_count = current.anonymous_update_count;
     incoming.privacy_choice_made = current.privacy_choice_made;
     incoming.crash_reports = current.crash_reports;
     incoming.low_priority = current.low_priority;
+    incoming.show_in_menu_bar = current.show_in_menu_bar;
+    incoming.notify_on_finish = current.notify_on_finish;
+    incoming.completion_sound = current.completion_sound;
+    incoming.menu_bar_icon_monochrome = current.menu_bar_icon_monochrome;
+    incoming.auto_cache_cleanup = current.auto_cache_cleanup;
+    incoming.stopped_job_result = current.stopped_job_result.clone();
     incoming.skipped_update_version = current.skipped_update_version.clone();
     incoming.model_directory = current.model_directory.clone();
     incoming.gpu_download_notice_dismissed = current.gpu_download_notice_dismissed;
@@ -587,78 +603,41 @@ pub fn uninstall_linux_menu(state: State<'_, Arc<AppState>>, app: AppHandle) -> 
     Ok(())
 }
 
-/// Persist menu appearance changes independently of processing settings.
-pub fn change_appearance(state: &AppState, app: &AppHandle, action: &str) {
-    if let Err(error) = apply_appearance(state, action) {
-        eprintln!("LocalSR: could not save appearance: {error}");
-    }
-    refresh_update_switches(app);
-}
-
-fn apply_appearance(state: &AppState, action: &str) -> AppResult<()> {
-    let _io = lock(&state.settings_io)?;
-    let previous = {
-        let mut settings = lock(&state.settings)?;
-        let previous = (settings.appearance.clone(), settings.colour_blind_palette);
-        match action {
-            "dark" | "light" | "system" => settings.appearance = action.into(),
-            "colour-blind" => settings.colour_blind_palette = !settings.colour_blind_palette,
-            _ => return Err(AppError::Validation("unknown appearance".into())),
-        }
-        previous
-    };
-    if let Err(error) = state.write_settings() {
-        let mut settings = lock(&state.settings)?;
-        settings.appearance = previous.0;
-        settings.colour_blind_palette = previous.1;
-        return Err(error);
-    }
-    Ok(())
-}
-
-/// Set one update switch. It may change while jobs run: it does not touch them.
+/// Set one app-wide preference. It may change while jobs run: it does not touch them.
 #[tauri::command]
-pub fn set_update_switch(
+pub fn set_preference(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
     name: String,
-    value: bool,
+    value: Value,
 ) -> AppResult<()> {
-    let result = apply_update_switch(&state, &name, |_| value);
-    refresh_update_switches(&app);
-    result
+    apply_preference(&state, &name, &value)?;
+    emit_state_changed(&app);
+    Ok(())
 }
 
-struct SetupChoices {
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SetupChoices {
     appearance: String,
     colour_blind_palette: bool,
+    contrast: String,
     check_at_launch: bool,
     anonymous_count: bool,
     crash_reports: bool,
+    show_in_menu_bar: Option<bool>,
+    completion_sound: bool,
 }
 
 /// Save the first-launch choices together, even while processing is active.
 #[tauri::command]
-pub fn set_privacy_choice(
+pub(crate) fn set_privacy_choice(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
-    appearance: String,
-    colour_blind_palette: bool,
-    check_at_launch: bool,
-    anonymous_count: bool,
-    crash_reports: bool,
+    choices: SetupChoices,
 ) -> AppResult<()> {
-    apply_privacy_choice(
-        &state,
-        SetupChoices {
-            appearance,
-            colour_blind_palette,
-            check_at_launch,
-            anonymous_count,
-            crash_reports,
-        },
-    )?;
-    refresh_update_switches(&app);
+    apply_privacy_choice(&state, choices)?;
+    emit_state_changed(&app);
     Ok(())
 }
 
@@ -666,109 +645,146 @@ fn apply_privacy_choice(state: &AppState, choices: SetupChoices) -> AppResult<()
     if !matches!(choices.appearance.as_str(), "dark" | "light" | "system") {
         return Err(AppError::Validation("unknown appearance".into()));
     }
+    if !matches!(choices.contrast.as_str(), "system" | "standard" | "high") {
+        return Err(AppError::Validation("unknown contrast".into()));
+    }
     let _io = lock(&state.settings_io)?;
     let previous = {
         let mut settings = lock(&state.settings)?;
-        let previous = (
-            settings.appearance.clone(),
-            settings.colour_blind_palette,
-            settings.check_updates_at_launch,
-            settings.anonymous_update_count,
-            settings.crash_reports,
-            settings.privacy_choice_made,
-        );
+        let previous = settings.clone();
         settings.appearance = choices.appearance;
         settings.colour_blind_palette = choices.colour_blind_palette;
+        settings.contrast = choices.contrast;
         settings.check_updates_at_launch = choices.check_at_launch;
         settings.anonymous_update_count = choices.anonymous_count;
         settings.crash_reports = choices.crash_reports;
+        settings.completion_sound = choices.completion_sound;
+        if let Some(show) = choices.show_in_menu_bar {
+            settings.show_in_menu_bar = show;
+        }
+        if choices.completion_sound {
+            settings.notify_on_finish = true;
+        }
         settings.privacy_choice_made = true;
         previous
     };
     if let Err(error) = state.write_settings() {
         if let Ok(mut settings) = lock(&state.settings) {
-            (
-                settings.appearance,
-                settings.colour_blind_palette,
-                settings.check_updates_at_launch,
-                settings.anonymous_update_count,
-                settings.crash_reports,
-                settings.privacy_choice_made,
-            ) = previous;
+            *settings = previous;
         }
         return Err(error);
     }
     let enabled = lock(&state.settings)?.crash_reports;
     crate::crash_reports::configure_hook(&state.paths, enabled);
-    if !enabled {
-        crate::crash_reports::delete_all(&state.paths)?;
-    }
     Ok(())
 }
 
-/// The menu's own click: flip the saved value, whatever the window shows.
-pub fn toggle_update_switch(state: &AppState, app: &AppHandle, name: &str) {
-    if let Err(error) = apply_update_switch(state, name, |current| !current) {
-        eprintln!("LocalSR: could not save {name}: {error}");
-    }
-    refresh_update_switches(app);
-}
-
-/// Change one switch and write it, as one step: other writers wait, so two quick clicks
-/// are two flips and no older copy of the settings lands after this one.
-fn apply_update_switch(
-    state: &AppState,
-    name: &str,
-    change: impl FnOnce(bool) -> bool,
-) -> AppResult<()> {
+/// Change one preference and write it, as one step: other writers wait, so two quick
+/// changes apply in order and no older copy of the settings lands after this one.
+fn apply_preference(state: &AppState, name: &str, value: &Value) -> AppResult<()> {
     let _io = lock(&state.settings_io)?;
     let previous = {
         let mut settings = lock(&state.settings)?;
-        let field = match name {
-            "check_updates_at_launch" => &mut settings.check_updates_at_launch,
-            "anonymous_update_count" => &mut settings.anonymous_update_count,
-            "crash_reports" => &mut settings.crash_reports,
-            "low_priority" => &mut settings.low_priority,
-            _ => {
-                return Err(AppError::Validation(format!(
-                    "unknown update switch: {name}"
-                )))
-            }
+        let previous = settings.clone();
+        let bool_value = || {
+            value
+                .as_bool()
+                .ok_or_else(|| AppError::Validation(format!("expected boolean for {name}")))
         };
-        let previous = *field;
-        *field = change(previous);
+        match name {
+            "check_updates_at_launch" => settings.check_updates_at_launch = bool_value()?,
+            "anonymous_update_count" => settings.anonymous_update_count = bool_value()?,
+            "crash_reports" => settings.crash_reports = bool_value()?,
+            "low_priority" => settings.low_priority = bool_value()?,
+            "show_in_menu_bar" => settings.show_in_menu_bar = bool_value()?,
+            "notify_on_finish" => settings.notify_on_finish = bool_value()?,
+            "completion_sound" => settings.completion_sound = bool_value()?,
+            "menu_bar_icon_monochrome" => settings.menu_bar_icon_monochrome = bool_value()?,
+            "colour_blind_palette" => settings.colour_blind_palette = bool_value()?,
+            "auto_cache_cleanup" => settings.auto_cache_cleanup = bool_value()?,
+            "stopped_job_result" => {
+                let choice = value
+                    .as_str()
+                    .filter(|s| matches!(*s, "ask" | "keep" | "discard"))
+                    .ok_or_else(|| AppError::Validation("unknown stopped job result".into()))?;
+                settings.stopped_job_result = choice.into();
+            }
+            "appearance" => {
+                let appearance = value
+                    .as_str()
+                    .filter(|s| matches!(*s, "dark" | "light" | "system"))
+                    .ok_or_else(|| AppError::Validation("unknown appearance".into()))?;
+                settings.appearance = appearance.into();
+            }
+            "contrast" => {
+                let contrast = value
+                    .as_str()
+                    .filter(|s| matches!(*s, "system" | "standard" | "high"))
+                    .ok_or_else(|| AppError::Validation("unknown contrast".into()))?;
+                settings.contrast = contrast.into();
+            }
+            "viewer_background" => {
+                let background = value
+                    .as_str()
+                    .filter(|s| matches!(*s, "checker" | "black" | "grey" | "white"))
+                    .ok_or_else(|| AppError::Validation("unknown viewer background".into()))?;
+                settings.viewer_background = background.into();
+            }
+            "interface_scale" => {
+                let scale = value
+                    .as_u64()
+                    .and_then(|n| u32::try_from(n).ok())
+                    .filter(|n| matches!(*n, 100 | 110 | 125))
+                    .ok_or_else(|| {
+                        AppError::Validation(
+                            "interface scale must be 100, 110, or 125 percent".into(),
+                        )
+                    })?;
+                settings.interface_scale = scale;
+            }
+            _ => {
+                return Err(AppError::Validation(format!("unknown preference: {name}")));
+            }
+        }
         previous
     };
     if let Err(error) = state.write_settings() {
         // Shown and used must match what is on disk.
         if let Ok(mut settings) = lock(&state.settings) {
-            match name {
-                "check_updates_at_launch" => settings.check_updates_at_launch = previous,
-                "anonymous_update_count" => settings.anonymous_update_count = previous,
-                "crash_reports" => settings.crash_reports = previous,
-                "low_priority" => settings.low_priority = previous,
-                _ => {}
-            }
+            *settings = previous;
         }
         return Err(error);
     }
     if name == "crash_reports" {
         let enabled = lock(&state.settings)?.crash_reports;
         crate::crash_reports::configure_hook(&state.paths, enabled);
-        if !enabled {
-            crate::crash_reports::delete_all(&state.paths)?;
-        }
     } else if name == "low_priority" {
+        // A new default also ends the choice made in Advanced for this session.
+        *lock(&state.run_low_priority)? = None;
         let enabled = lock(&state.settings)?.low_priority;
         crate::worker::apply_low_priority(state, enabled);
     }
     Ok(())
 }
 
-/// The menu sets its own check mark when clicked; it and the window show what is saved.
-fn refresh_update_switches(app: &AppHandle) {
-    native_menu::reconcile(app);
-    emit_state_changed(app);
+/// Low priority for the work of this session, running and waiting jobs alike, without
+/// changing the saved default.
+#[tauri::command]
+pub fn set_run_low_priority(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    enabled: bool,
+) -> AppResult<()> {
+    set_run_low_priority_checked(&state, enabled);
+    emit_state_changed(&app);
+    Ok(())
+}
+
+pub(crate) fn set_run_low_priority_checked(state: &AppState, enabled: bool) {
+    if let Ok(mut choice) = state.run_low_priority.lock() {
+        *choice = Some(enabled);
+    }
+    crate::worker::apply_low_priority(state, enabled);
 }
 
 #[tauri::command]
@@ -780,8 +796,7 @@ pub fn save_recipe(
     crate::updates::ensure_not_installing(&state)?;
     let _scheduler = lock(&state.scheduler)?;
     save_recipe_checked(&state, recipe)?;
-    let switches = native_menu::switches(&*lock(&state.settings)?);
-    native_menu::rebuild(&app, &lock(&state.recipes)?, switches).map_err(|error| {
+    native_menu::rebuild(&app, &lock(&state.recipes)?).map_err(|error| {
         AppError::Config(format!(
             "could not refresh the native presets menu: {error}"
         ))
@@ -905,16 +920,6 @@ fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
             "recipe fix kinds must be known, unique and on restoration stages".into(),
         ));
     }
-    if recipe.task == "video"
-        && recipe
-            .stages
-            .iter()
-            .any(|stage| stage.fix.as_deref() == Some("colour"))
-    {
-        return Err(AppError::Validation(
-            "Colour is only available for photos, not video.".into(),
-        ));
-    }
     let kinds: Vec<&str> = recipe
         .stages
         .iter()
@@ -988,8 +993,7 @@ pub fn delete_recipe(state: State<'_, Arc<AppState>>, app: AppHandle, id: String
     crate::updates::ensure_not_installing(&state)?;
     let _scheduler = lock(&state.scheduler)?;
     delete_recipe_checked(&state, &id)?;
-    let switches = native_menu::switches(&*lock(&state.settings)?);
-    native_menu::rebuild(&app, &lock(&state.recipes)?, switches).map_err(|error| {
+    native_menu::rebuild(&app, &lock(&state.recipes)?).map_err(|error| {
         AppError::Config(format!(
             "could not refresh the native presets menu: {error}"
         ))
@@ -1004,23 +1008,28 @@ pub(crate) fn delete_recipe_checked(state: &AppState, id: &str) -> AppResult<()>
 }
 
 #[tauri::command]
-pub fn start_jobs(
+pub async fn start_jobs(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
     input: StartBatchInput,
 ) -> AppResult<()> {
-    if state
-        .updates
-        .installing
-        .load(std::sync::atomic::Ordering::SeqCst)
-    {
-        return Err(AppError::Validation("An update is being installed".into()));
-    }
-    let _scheduler = lock(&state.scheduler)?;
-    start_jobs_checked(&state, input)?;
-    worker::dispatch_next_locked(&state, &app)?;
-    emit_state_changed(&app);
-    Ok(())
+    let state = Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        if state
+            .updates
+            .installing
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(AppError::Validation("An update is being installed".into()));
+        }
+        let _scheduler = lock(&state.scheduler)?;
+        start_jobs_checked(&state, input)?;
+        worker::dispatch_next_locked(&state, &app)?;
+        emit_state_changed(&app);
+        Ok(())
+    })
+    .await
+    .map_err(|error| AppError::Config(format!("Could not start jobs: {error}")))?
 }
 
 pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -> AppResult<()> {
@@ -1068,6 +1077,7 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
     let output_directory = prepare_output_directory(state, &input.output_directory)?;
     check_output_room(&output_directory, &input, platform_path_limit())?;
     let selection = resolve_model_selection(state, &input)?;
+    validate_checkpoint_engine(&selection, lock(&state.engine)?.as_ref())?;
     let media = {
         let database = lock(&state.database)?;
         let inflight_media: HashSet<String> = database
@@ -1176,19 +1186,210 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
 
 /// "Try again" after the host gave up restarting the inference engine.
 #[tauri::command]
-pub fn retry_engine(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
-    worker::retry_engine(&state, &app)
+pub async fn retry_engine(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || worker::retry_engine(&state, &app))
+        .await
+        .map_err(|error| AppError::Worker(error.to_string()))?
+}
+
+/// Queue only the failed job again on CPU, keeping `settings.device_id` unchanged.
+#[tauri::command]
+pub async fn retry_job_on_cpu(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    job_id: String,
+) -> AppResult<()> {
+    let state = Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        if state
+            .updates
+            .installing
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(AppError::Validation("An update is being installed".into()));
+        }
+        let _scheduler = lock(&state.scheduler)?;
+        retry_job_on_cpu_checked(&state, &job_id)?;
+        worker::dispatch_next_locked(&state, &app)?;
+        emit_state_changed(&app);
+        Ok(())
+    })
+    .await
+    .map_err(|error| AppError::Config(format!("Could not retry job on CPU: {error}")))?
+}
+
+fn check_retry_checkpoint_consent(state: &AppState, request: &Value) -> AppResult<()> {
+    let data = &request["data"];
+    let approved = data["approved_checkpoint_sha256"].as_str();
+    let allowed = data["allow_unverified_checkpoint"]
+        .as_bool()
+        .unwrap_or(false);
+    if approved.is_none() && !allowed {
+        return Ok(());
+    }
+    let confirm_again = || {
+        AppError::Validation(
+            "Confirm your own model again in the model library before retrying.".into(),
+        )
+    };
+    let model_path = data["model_path"]
+        .as_str()
+        .filter(|path| !path.is_empty())
+        .ok_or_else(confirm_again)?;
+    let approved = approved.ok_or_else(confirm_again)?;
+    let path = Path::new(model_path);
+    state
+        .grants
+        .check_model_file(path)
+        .map_err(|_| confirm_again())?;
+    let digest = catalog::sha256_file(path).map_err(|_| confirm_again())?;
+    let trusted = lock(&state.settings)?
+        .trusted_checkpoint_sha256
+        .contains(&digest);
+    if digest != approved || !trusted {
+        return Err(confirm_again());
+    }
+    Ok(())
+}
+
+pub(crate) fn retry_job_on_cpu_checked(state: &AppState, job_id: &str) -> AppResult<()> {
+    if state
+        .updates
+        .installing
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return Err(AppError::Validation("An update is being installed".into()));
+    }
+    ensure_not_moving_models(state)?;
+    let cpu_device = resolve_device(state, "cpu")?;
+    let source = lock(&state.database)?
+        .job_for_cpu_retry(job_id)?
+        .ok_or_else(|| AppError::Validation("The failed job could not be found.".into()))?;
+    if source.status != "failed" {
+        return Err(AppError::Validation(
+            "Only a failed job can be retried on CPU.".into(),
+        ));
+    }
+    let mut request: Value = serde_json::from_str(&source.request_json)?;
+    // The stored request carries the approval it was started with; an own checkpoint
+    // that can run code must still be granted and approved as it is now.
+    check_retry_checkpoint_consent(state, &request)?;
+    let database = lock(&state.database)?;
+    let request_type = request["type"].as_str().unwrap_or("");
+    let output_key = match request_type {
+        "job_request" => "output_path",
+        "video_job_request" => "output_video_path",
+        "edit_job_request" => {
+            return Err(AppError::Validation("Image editing requires a GPU.".into()));
+        }
+        _ => {
+            return Err(AppError::Validation(
+                "This job type cannot be retried on CPU.".into(),
+            ));
+        }
+    };
+    let media = database
+        .get_media(&source.media_id)?
+        .ok_or_else(|| AppError::Validation("The source media item no longer exists.".into()))?;
+    state.grants.check_media_input(Path::new(&media.path))?;
+    if media.probe_status != "ready" || !Path::new(&media.path).is_file() {
+        return Err(AppError::Validation(format!(
+            "{} is no longer available",
+            media.name
+        )));
+    }
+    let original_output = request["data"][output_key]
+        .as_str()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| AppError::Validation("The failed job has no output path.".into()))?
+        .to_owned();
+    let output_path = Path::new(&original_output);
+    let output_parent = output_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| AppError::Validation("The failed job has no output folder.".into()))?;
+    state.grants.check_output_folder(output_parent)?;
+
+    let new_job_id = Uuid::new_v4().to_string();
+    let media_id = source.media_id.clone();
+    let ui_json = source.ui_json;
+    database.admit_jobs(&[media_id.as_str()], |reserved| {
+        let retry_output = reserve_retry_output(output_path, reserved);
+        request["data"]["job_id"] = Value::String(new_job_id.clone());
+        request["data"]["device"] = Value::String(cpu_device.clone());
+        request["data"]["neural_engine"] = Value::Bool(false);
+        request["data"][output_key] = Value::String(retry_output.to_string_lossy().into_owned());
+        Ok(vec![NewJob {
+            id: new_job_id.clone(),
+            media_id: media_id.clone(),
+            request_json: serde_json::to_string(&request)?,
+            ui_json: ui_json.clone(),
+        }])
+    })?;
+    Ok(())
+}
+
+fn reserve_retry_output(original: &Path, reserved: &mut ReservedOutputs) -> PathBuf {
+    if !original.exists() && reserved.insert(original) {
+        return original.to_path_buf();
+    }
+    let parent = original.parent().unwrap_or_else(|| Path::new(""));
+    let stem = original
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("output");
+    let ext = original
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    let mut counter = 1_u32;
+    loop {
+        let filename = if ext.is_empty() {
+            format!("{stem}_{counter}")
+        } else {
+            format!("{stem}_{counter}.{ext}")
+        };
+        let candidate = parent.join(filename);
+        if !candidate.exists() && reserved.insert(&candidate) {
+            return candidate;
+        }
+        counter = counter.saturating_add(1);
+    }
 }
 
 #[tauri::command]
-pub fn cancel_jobs(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
+pub fn cancel_jobs(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    keep_partial: bool,
+) -> AppResult<()> {
+    cancel_jobs_checked(&state, keep_partial)?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
+pub(crate) fn cancel_jobs_checked(state: &AppState, keep_partial: bool) -> AppResult<()> {
     let _scheduler = lock(&state.scheduler)?;
+    state
+        .worker
+        .queue_paused
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    lock(&state.runtime)?.queue_paused = false;
     let mut cancellation = lock(&state.worker.cancellation)?;
     lock(&state.database)?.cancel_queued_jobs()?;
     let active = lock(&state.runtime)?.active_job_id.clone();
     // A second request while the first is still being carried out changes nothing.
     if !active.is_empty() && !cancellation.is_cancelling(&active) {
-        cancellation.request(&active, std::time::Instant::now());
+        let now = std::time::Instant::now();
+        cancellation.request(&active, now);
+        // Keeping the finished part means saving it, which for a large photo (filling in
+        // and writing hundreds of megapixels) takes far longer than a plain stop. The
+        // engine is given the saving time from the start instead of being restarted.
+        let keeping = keep_partial && lock(&state.runtime)?.can_keep_partial == Some(true);
+        if keeping {
+            cancellation.partial_finalizing(&active, now);
+        }
         // Photos of a batch that never started were cancelled with the queue above.
         for id in &cancellation.job_ids {
             lock(&state.database)?.mark_cancelling(id)?;
@@ -1201,11 +1402,10 @@ pub fn cancel_jobs(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult
                     .into();
         }
         worker::send(
-            &state,
-            &json!({"type": "cancel_request", "data": {"job_id": active}}),
+            state,
+            &json!({"type": "cancel_request", "data": {"job_id": active, "keep_partial": keep_partial}}),
         )?;
     }
-    emit_state_changed(&app);
     Ok(())
 }
 
@@ -1253,28 +1453,39 @@ pub fn cancel_jobs_for_media(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
     media_id: String,
+    keep_partial: bool,
+) -> AppResult<()> {
+    cancel_jobs_for_media_checked(&state, &media_id, keep_partial)?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
+pub(crate) fn cancel_jobs_for_media_checked(
+    state: &AppState,
+    media_id: &str,
+    keep_partial: bool,
 ) -> AppResult<()> {
     let _scheduler = lock(&state.scheduler)?;
     let mut cancellation = lock(&state.worker.cancellation)?;
-    let active = lock(&state.database)?.cancel_jobs_for_media(&media_id)?;
+    let active = lock(&state.database)?.cancel_jobs_for_media(media_id)?;
     if let Some(active) = active {
-        cancellation.request(&active, std::time::Instant::now());
-        {
-            let mut runtime = lock(&state.runtime)?;
-            if runtime.active_job_id == active {
-                runtime.status_title = "Cancelling".into();
-                runtime.status_detail =
-                    "Stopping this image's run at the next model step. Other images stay queued."
-                        .into();
+        if !cancellation.is_cancelling(&active) {
+            cancellation.request(&active, std::time::Instant::now());
+            {
+                let mut runtime = lock(&state.runtime)?;
+                if runtime.active_job_id == active {
+                    runtime.status_title = "Cancelling".into();
+                    runtime.status_detail =
+                        "Stopping this image's run at the next model step. Other images stay queued."
+                            .into();
+                }
             }
+            worker::send(
+                state,
+                &json!({"type": "cancel_request", "data": {"job_id": active, "keep_partial": keep_partial}}),
+            )?;
         }
-        worker::send(
-            &state,
-            &json!({"type": "cancel_request", "data": {"job_id": active}}),
-        )?;
     }
-    drop(cancellation);
-    emit_state_changed(&app);
     Ok(())
 }
 
@@ -2517,7 +2728,11 @@ pub fn open_result(state: State<'_, Arc<AppState>>, path: String) -> AppResult<(
 
 #[tauri::command]
 pub fn reveal_result(state: State<'_, Arc<AppState>>, path: String) -> AppResult<()> {
-    let authorized = authorized_result(&state, &path)?;
+    reveal_result_path(&state, &path)
+}
+
+pub(crate) fn reveal_result_path(state: &AppState, path: &str) -> AppResult<()> {
+    let authorized = authorized_result(state, path)?;
     let parent = authorized
         .parent()
         .ok_or_else(|| AppError::Validation("output directory is unavailable".into()))?;
@@ -2716,6 +2931,58 @@ pub async fn choose_custom_model(
         .map_err(|error| AppError::Validation(format!("that is not a file path: {error}")))?;
     state.grants.grant_model_file(&path);
     Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+fn custom_checkpoint_trusted(state: &AppState, path: &Path) -> AppResult<bool> {
+    state.grants.check_model_file(path)?;
+    let digest = catalog::sha256_file(path)?;
+    Ok(lock(&state.settings)?
+        .trusted_checkpoint_sha256
+        .contains(&digest))
+}
+
+fn set_custom_checkpoint_consent(state: &AppState, path: &Path, allow: bool) -> AppResult<bool> {
+    state.grants.check_model_file(path)?;
+    if !matches!(extension(path).as_deref(), Some("pth" | "pt" | "ckpt")) {
+        return Err(AppError::Validation(
+            "Only pickle-based checkpoints need confirmation.".into(),
+        ));
+    }
+    let digest = catalog::sha256_file(path)?;
+    let _io = lock(&state.settings_io)?;
+    let previous = lock(&state.settings)?.trusted_checkpoint_sha256.clone();
+    {
+        let mut settings = lock(&state.settings)?;
+        settings
+            .trusted_checkpoint_sha256
+            .retain(|item| item != &digest);
+        if allow {
+            settings.trusted_checkpoint_sha256.push(digest);
+        }
+    }
+    if let Err(error) = state.write_settings() {
+        lock(&state.settings)?.trusted_checkpoint_sha256 = previous;
+        return Err(error);
+    }
+    Ok(allow)
+}
+
+#[tauri::command]
+pub async fn checkpoint_consent(
+    state: State<'_, Arc<AppState>>,
+    path: String,
+    allow: Option<bool>,
+) -> AppResult<bool> {
+    let state = Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = Path::new(&path);
+        match allow {
+            Some(value) => set_custom_checkpoint_consent(&state, path, value),
+            None => custom_checkpoint_trusted(&state, path),
+        }
+    })
+    .await
+    .map_err(|error| AppError::Config(format!("Could not check checkpoint: {error}")))?
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -2934,6 +3201,14 @@ pub(crate) const CUSTOM_MODEL_TUTORIAL_URL: &str =
 pub fn open_custom_model_tutorial() -> AppResult<()> {
     open::that_detached(CUSTOM_MODEL_TUTORIAL_URL)
         .map_err(|error| AppError::Config(format!("could not open the tutorial: {error}")))
+}
+
+pub(crate) const PRIVACY_PAGE_URL: &str = "https://herrei.github.io/localsr/privacy/";
+
+#[tauri::command]
+pub fn open_privacy_page() -> AppResult<()> {
+    open::that_detached(PRIVACY_PAGE_URL)
+        .map_err(|error| AppError::Config(format!("could not open the privacy page: {error}")))
 }
 
 /// FFmpeg stays the user's own action: LocalSR never downloads or bundles it.
@@ -3275,7 +3550,8 @@ fn resolve_device(state: &AppState, requested: &str) -> AppResult<String> {
         return Ok("cpu".into());
     }
     Err(AppError::Validation(
-        "The selected device is not available on this computer. Choose another one in Advanced settings.".into(),
+        "The selected device is not available on this computer. Choose another one in Settings."
+            .into(),
     ))
 }
 
@@ -3528,7 +3804,7 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
         && !external_codecs
     {
         return Err(AppError::Validation(
-            "H.264 and HEVC export use the codecs of this system or an FFmpeg installed on this computer. Install FFmpeg and select it under Advanced settings → Video, or choose AV1, VP9 or FFV1.".into(),
+            "H.264 and HEVC export use the codecs of this system or an FFmpeg installed on this computer. Install FFmpeg and select it under Settings → Storage, or choose AV1, VP9 or FFV1.".into(),
         ));
     }
     if input.media_ids.is_empty() || input.media_ids.len() > MAX_MEDIA_ITEMS {
@@ -3596,6 +3872,7 @@ enum ModelSelection {
     Image {
         model_id: String,
         path: String,
+        approved_checkpoint_sha256: Option<String>,
         preprocess: Vec<ResolvedImageStage>,
         face_path: Option<String>,
         face_model_id: String,
@@ -3612,6 +3889,29 @@ enum ModelSelection {
         temporal_overlap: u32,
         audio_denoise: Option<ResolvedBundle>,
     },
+}
+
+fn validate_checkpoint_engine(
+    selection: &ModelSelection,
+    engine: Option<&crate::types::EngineInfo>,
+) -> AppResult<()> {
+    if matches!(
+        selection,
+        ModelSelection::Image {
+            approved_checkpoint_sha256: Some(_),
+            ..
+        }
+    ) && !engine.is_some_and(|engine| {
+        engine
+            .features
+            .iter()
+            .any(|feature| feature == "checkpoint_sha256_consent")
+    }) {
+        return Err(AppError::Validation(
+            "Update the inference engine before using this pickle-based checkpoint.".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// A downloaded multi-file bundle used by an optional video pipeline stage.
@@ -3631,11 +3931,6 @@ struct ResolvedImageStage {
 
 fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResult<ModelSelection> {
     validate_fix_selections(&input.fix_stages)?;
-    if input.task == "video" && input.fix_stages.iter().any(|stage| stage.fix == "colour") {
-        return Err(AppError::Validation(
-            "Colour is only available for photos, not video.".into(),
-        ));
-    }
     let restoring =
         input.task == "denoise" || (input.task == "video" && input.video_task == "denoise");
     if !input.fix_stages.is_empty()
@@ -3674,6 +3969,7 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
         });
     }
 
+    let mut approved_checkpoint_sha256 = None;
     let (path, selected_model) = if skip_upscale {
         // At 1×, the upscaling model is never loaded or required.
         (String::new(), None)
@@ -3690,7 +3986,16 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
             ));
         }
         let extension = extension(&path).unwrap_or_default();
-        if extension != "safetensors" && !input.allow_unsafe_pickle_model {
+        if extension != "safetensors" && input.allow_unsafe_pickle_model {
+            let digest = catalog::sha256_file(&path)?;
+            if lock(&state.settings)?
+                .trusted_checkpoint_sha256
+                .contains(&digest)
+            {
+                approved_checkpoint_sha256 = Some(digest);
+            }
+        }
+        if extension != "safetensors" && approved_checkpoint_sha256.is_none() {
             return Err(AppError::Validation(
                 "pickle-based checkpoints require the explicit unsafe checkpoint confirmation"
                     .into(),
@@ -3709,11 +4014,6 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
             .find(|model| model.model_id == input.model_id)
             .ok_or_else(|| AppError::Validation("unknown image model".into()))?;
         validate_model_for_task(model, if restoring { "denoise" } else { &input.task })?;
-        if input.task == "video" && model.purposes.iter().any(|purpose| purpose == "colorize") {
-            return Err(AppError::Validation(
-                "Colour is only available for photos, not video.".into(),
-            ));
-        }
         if !restoring && input.output_scale > model.native_scale {
             return Err(AppError::Validation(format!(
                 "the selected model supports output scales up to {}×",
@@ -3814,6 +4114,7 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
             input.model_id.clone()
         },
         path,
+        approved_checkpoint_sha256,
         preprocess,
         face_path,
         face_model_id: selected_model
@@ -3915,6 +4216,7 @@ fn build_job_message(
         ModelSelection::Image {
             model_id,
             path,
+            approved_checkpoint_sha256,
             preprocess,
             face_path,
             face_model_id,
@@ -3953,12 +4255,14 @@ fn build_job_message(
                     *skip_upscale,
                     input,
                 ),
-                "allow_unverified_checkpoint": input.allow_unsafe_pickle_model
+                "allow_unverified_checkpoint": input.allow_unsafe_pickle_model,
+                "approved_checkpoint_sha256": approved_checkpoint_sha256
             }
         })),
         ModelSelection::Image {
             model_id,
             path,
+            approved_checkpoint_sha256,
             preprocess,
             face_path,
             face_model_id,
@@ -4025,6 +4329,7 @@ fn build_job_message(
                         input,
                     ),
                     "allow_unverified_checkpoint": input.allow_unsafe_pickle_model,
+                    "approved_checkpoint_sha256": approved_checkpoint_sha256,
                     "preview_enabled": input.enable_live_preview,
                     "preview_max_fps": 2.0,
                     "preview_max_dimension": 320,
@@ -4595,16 +4900,7 @@ mod tests;
 pub fn list_crash_reports(
     state: State<'_, Arc<AppState>>,
 ) -> Vec<crate::crash_reports::StoredReport> {
-    if state
-        .settings
-        .lock()
-        .map(|s| s.crash_reports)
-        .unwrap_or(false)
-    {
-        crate::crash_reports::list(&state.paths)
-    } else {
-        Vec::new()
-    }
+    crate::crash_reports::list(&state.paths)
 }
 #[tauri::command]
 pub fn delete_crash_report(state: State<'_, Arc<AppState>>, id: String) -> AppResult<()> {
@@ -4637,5 +4933,5 @@ pub fn record_frontend_error(state: State<'_, Arc<AppState>>, message: String, s
 
 #[cfg(test)]
 pub(crate) fn test_crash_switch(state: &AppState, value: bool) -> AppResult<()> {
-    apply_update_switch(state, "crash_reports", |_| value)
+    apply_preference(state, "crash_reports", &Value::Bool(value))
 }

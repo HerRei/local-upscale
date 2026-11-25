@@ -247,7 +247,8 @@ def test_download_table_uses_registered_suffixes():
     for target in registry["targets"]:
         assert f"LocalSR-v1.2.3-beta-{target['suffix']}" in table
     main_section, offline_section = table.split("## Offline and advanced downloads", 1)
-    assert "The app offers the faster GPU engine after setup." in main_section
+    assert "downloads and installs that engine itself." in main_section
+    assert "What are all the other files?" in offline_section
     assert "LocalSR-v1.2.3-beta-macOS-arm64.dmg" in main_section
     assert "LocalSR-v1.2.3-beta-Windows-CPU-x86_64.exe" in main_section
     assert "LocalSR-v1.2.3-beta-Linux-CPU-x86_64.AppImage" in main_section
@@ -256,9 +257,14 @@ def test_download_table_uses_registered_suffixes():
 
 
 def test_readme_download_table_matches_registry():
+    # While a candidate is prepared the README still offers the published release's files.
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    shown = (
+        bump_version.published_version(ROOT) if "<!-- release-candidate -->" in readme else VERSION
+    )
     expected = (
-        bump_version.download_table(VERSION)
+        bump_version.download_table(shown)
         .replace("## Which file", "### Which file", 1)
         .replace("## Offline and advanced downloads", "### Offline and advanced downloads", 1)
     )
-    assert expected in (ROOT / "README.md").read_text(encoding="utf-8")
+    assert expected in readme

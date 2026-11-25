@@ -95,6 +95,8 @@ class LatestPreviewEncoder:
         self._sequence = 0
         self._queue: queue.Queue[_PendingPreview] = queue.Queue(maxsize=1)
         self._stop = threading.Event()
+        self._condition = threading.Condition()
+        self._in_flight = False
         self._thread: threading.Thread | None = None
 
     def submit(
@@ -120,18 +122,20 @@ class LatestPreviewEncoder:
             pixels=np.ascontiguousarray(pixels).copy(),
             metadata={key: int(value) for key, value in metadata.items()},
         )
-        try:
-            self._queue.put_nowait(pending)
-        except queue.Full:
-            try:
-                self._queue.get_nowait()
-            except queue.Empty:  # pragma: no cover - another consumer won the race
-                pass
+        with self._condition:
             try:
                 self._queue.put_nowait(pending)
-            except queue.Full:  # pragma: no cover - bounded defensive race
-                return False
-        self._ensure_thread()
+            except queue.Full:
+                try:
+                    self._queue.get_nowait()
+                except queue.Empty:  # pragma: no cover - another consumer won the race
+                    pass
+                try:
+                    self._queue.put_nowait(pending)
+                except queue.Full:  # pragma: no cover - bounded defensive race
+                    return False
+            self._ensure_thread()
+            self._condition.notify_all()
         return True
 
     def clear(self) -> None:
@@ -141,10 +145,25 @@ class LatestPreviewEncoder:
             except queue.Empty:
                 return
 
+    def flush(self, timeout: float = 2.0) -> bool:
+        """Wait until any submitted preview frame has been encoded and emitted."""
+        if not self.enabled or self._stop.is_set() or self._thread is None:
+            return True
+        deadline = time.monotonic() + max(0.0, timeout)
+        with self._condition:
+            while (not self._queue.empty() or self._in_flight) and not self._stop.is_set():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._condition.wait(timeout=remaining)
+        return True
+
     def close(self) -> None:
         """Discard pending work immediately; never wait on the inference thread."""
         self._stop.set()
-        self.clear()
+        with self._condition:
+            self.clear()
+            self._condition.notify_all()
 
     def _ensure_thread(self) -> None:
         if self._thread is not None:
@@ -154,10 +173,18 @@ class LatestPreviewEncoder:
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            try:
-                pending = self._queue.get(timeout=0.1)
-            except queue.Empty:
-                continue
+            with self._condition:
+                while self._queue.empty() and not self._stop.is_set():
+                    self._condition.wait(timeout=0.1)
+                if self._stop.is_set():
+                    self._in_flight = False
+                    self._condition.notify_all()
+                    return
+                try:
+                    pending = self._queue.get_nowait()
+                except queue.Empty:  # pragma: no cover - defensive under condition
+                    continue
+                self._in_flight = True
             try:
                 encoded = encode_preview_jpeg(
                     pending.pixels,
@@ -178,3 +205,7 @@ class LatestPreviewEncoder:
             except (OSError, TypeError, ValueError) as error:
                 if self._warn is not None and not self._stop.is_set():
                     self._warn(f"Live preview skipped a frame: {error}")
+            finally:
+                with self._condition:
+                    self._in_flight = False
+                    self._condition.notify_all()

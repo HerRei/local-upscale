@@ -131,6 +131,113 @@ describe('video comparison player', () => {
     expect(videos[1].getAttribute('src')).toBeNull();
   });
 
+  it('counts a clip of under a second in frames and steps both sides one frame at a time', async () => {
+    // A stopped job kept two frames (0.074 s) of a two-second source.
+    const rendered = render(VideoComparison, {
+      originalSrc: 'asset://localhost/original.mov',
+      enhancedSrc: 'asset://localhost/kept_partial.mp4',
+      fps: 30,
+      keptFrames: 2,
+    });
+    const videos = rendered.container.querySelectorAll('video');
+    Object.defineProperty(videos[0], 'duration', { configurable: true, value: 2 });
+    Object.defineProperty(videos[1], 'duration', { configurable: true, value: 0.074 });
+    await fireEvent.loadedMetadata(videos[0]);
+    await fireEvent.loadedMetadata(videos[1]);
+
+    const transport = screen.getByRole('group', { name: 'Video playback controls' });
+    expect(transport.textContent).toContain('Frame 1');
+    expect(transport.textContent).toContain('2 frames');
+    expect(transport.textContent).not.toContain(' s');
+    const scrubber = screen.getByRole('slider', { name: 'Video frame' }) as HTMLInputElement;
+    expect([scrubber.min, scrubber.max, scrubber.value]).toEqual(['1', '2', '1']);
+
+    const back = screen.getByRole('button', { name: 'Previous frame' }) as HTMLButtonElement;
+    const on = screen.getByRole('button', { name: 'Next frame' }) as HTMLButtonElement;
+    expect(back.getAttribute('aria-disabled')).toBe('true');
+    await fireEvent.click(on);
+    // The middle of the second kept frame on both sides, from keptFrames / fps.
+    expect(videos[0].currentTime).toBeCloseTo(0.05);
+    expect(videos[1].currentTime).toBeCloseTo(0.05);
+    expect(transport.textContent).toContain('Frame 2');
+    expect(on.getAttribute('aria-disabled')).toBe('true');
+    await fireEvent.input(scrubber, { target: { value: '1' } });
+    expect(videos[0].currentTime).toBeCloseTo(0.5 / 30);
+    expect(videos[1].currentTime).toBeCloseTo(0.5 / 30);
+  });
+
+  it('steps by the kept file’s own rate when the player reports a longer clip', async () => {
+    // Two frames of a 30 fps video (0.0667 s in the file); the player says 0.10 s.
+    const rendered = render(VideoComparison, {
+      originalSrc: 'asset://localhost/original.mov',
+      enhancedSrc: 'asset://localhost/kept_partial.mp4',
+      fps: 30,
+      keptFrames: 2,
+      keptSeconds: 2 / 30,
+    });
+    const videos = rendered.container.querySelectorAll('video');
+    Object.defineProperty(videos[0], 'duration', { configurable: true, value: 2 });
+    Object.defineProperty(videos[1], 'duration', { configurable: true, value: 0.1 });
+    await fireEvent.loadedMetadata(videos[0]);
+    await fireEvent.loadedMetadata(videos[1]);
+    expect(screen.getByRole('group', { name: 'Video playback controls' }).textContent).toContain(
+      '2 frames',
+    );
+    await fireEvent.click(screen.getByRole('button', { name: 'Next frame' }));
+    // Frame 1 of the 30 fps original; 0.075 s would be its frame 2.
+    expect(videos[0].currentTime).toBeCloseTo(0.05);
+    expect(videos[1].currentTime).toBeCloseTo(0.05);
+  });
+
+  it('steps back from the end of a longer video and dims a step button at an end', async () => {
+    const rendered = render(VideoComparison, {
+      originalSrc: 'asset://localhost/original.mp4',
+      enhancedSrc: 'asset://localhost/enhanced.mp4',
+      fps: 30,
+    });
+    const videos = rendered.container.querySelectorAll('video');
+    for (const video of videos)
+      Object.defineProperty(video, 'duration', { configurable: true, value: 2 });
+    await fireEvent.loadedMetadata(videos[0]);
+    await fireEvent.loadedMetadata(videos[1]);
+    const back = screen.getByRole('button', { name: 'Previous frame' });
+    const on = screen.getByRole('button', { name: 'Next frame' });
+    expect(back.getAttribute('aria-disabled')).toBe('true');
+    expect(on.getAttribute('aria-disabled')).toBe('false');
+    // Played to the end: the last frame, 59, shows.
+    videos[1].currentTime = 2;
+    await fireEvent.timeUpdate(videos[1]);
+    expect(on.getAttribute('aria-disabled')).toBe('true');
+    expect(back.getAttribute('aria-disabled')).toBe('false');
+    await fireEvent.click(back);
+    // One press goes to frame 58, not to the middle of the frame already shown.
+    expect(videos[0].currentTime).toBeCloseTo(58.5 / 30);
+    expect(videos[1].currentTime).toBeCloseTo(58.5 / 30);
+    // The arrow keys on the timeline go by frames too.
+    const timeline = screen.getByRole('slider', { name: 'Video position' });
+    await fireEvent.keyDown(timeline, { key: 'ArrowLeft' });
+    expect(videos[1].currentTime).toBeCloseTo(57.5 / 30);
+  });
+
+  it('keeps the clock for a longer video and offers frame steps only with a frame rate', async () => {
+    const rendered = render(VideoComparison, {
+      originalSrc: 'asset://localhost/original.mp4',
+      enhancedSrc: 'asset://localhost/enhanced.mp4',
+      fps: 24,
+    });
+    const videos = rendered.container.querySelectorAll('video');
+    for (const video of videos)
+      Object.defineProperty(video, 'duration', { configurable: true, value: 4 });
+    await fireEvent.loadedMetadata(videos[0]);
+    await fireEvent.loadedMetadata(videos[1]);
+    expect(screen.getByRole('slider', { name: 'Video position' })).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: 'Next frame' }));
+    expect(videos[0].currentTime).toBeCloseTo(1.5 / 24);
+    expect(videos[1].currentTime).toBeCloseTo(1.5 / 24);
+    await rendered.rerender({ fps: 0 });
+    expect(screen.queryByRole('button', { name: 'Next frame' })).toBeNull();
+  });
+
   it('keeps the original in step when the enhanced video pauses or stalls on its own', async () => {
     const rendered = render(VideoComparison, {
       originalSrc: 'asset://localhost/generated-original.mp4',
@@ -285,5 +392,20 @@ describe('video comparison slider', () => {
     ];
     expect(viewport).toBeTruthy();
     expect(Math.sign(high[0] - low[0])).toBe(Math.sign(high[1] - low[1]));
+  });
+
+  it('shows the viewer background swatch in Video zoom and steps on click', async () => {
+    const setViewerBackground = vi.fn();
+    render(VideoComparison, {
+      originalSrc: 'asset://o.mp4',
+      enhancedSrc: 'asset://e.mp4',
+      viewerBackground: 'black',
+      setViewerBackground,
+    });
+    const zoomGroup = screen.getByRole('group', { name: 'Video zoom' });
+    const button = zoomGroup.querySelector('button[aria-label="Viewer background: Black"]');
+    expect(button).toBeTruthy();
+    await fireEvent.click(button as HTMLElement);
+    expect(setViewerBackground).toHaveBeenCalledWith('grey');
   });
 });

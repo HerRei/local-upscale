@@ -25,7 +25,7 @@ from pathlib import Path
 SOURCE_SHA256 = "f2017c6101d7c2ef8d7bc3b414c37ff7f54d64413a1847d89970b6b7069b4e1a"
 SOURCE_DIRECTORY = "opencv-python-headless-4.10.0.84"
 OPTIONS = [
-    "-DBUILD_LIST=core,imgproc,dnn,objdetect,python3",
+    "-DBUILD_LIST=core,imgproc,video,dnn,objdetect,python3",
     "-DBUILD_SHARED_LIBS=OFF",
     "-DBUILD_TESTS=OFF",
     "-DBUILD_PERF_TESTS=OFF",

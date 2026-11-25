@@ -66,8 +66,8 @@ Most phone and camera videos use H.264 or HEVC. On macOS they open through the
 system codecs. Elsewhere, or for formats macOS cannot read, a user can install
 FFmpeg (for example `brew install ffmpeg`, `winget install Gyan.FFmpeg` or their
 Linux package manager). An FFmpeg on the PATH or in the usual locations is used
-automatically; selecting one under **Advanced settings → Video → External
-FFmpeg** picks a specific build. The notice that appears when a file needs it
+automatically; selecting one under **Settings → Storage → External FFmpeg** picks
+a specific build. The notice that appears when a file needs it
 shows the command for the actual distribution and can run it in a terminal.
 On Windows, PATH search uses absolute drive or network share folders and ignores the current folder.
 

@@ -19,11 +19,17 @@ import re
 from collections.abc import Iterable, Iterator
 from pathlib import Path, PurePath
 
+from prepare_engine_payload import (
+    BACKENDS,
+    LEGACY_PART_FIELDS,
+    LEGACY_UPDATE_FIELDS,
+    legacy_update_manifest,
+)
 from release_targets import (
     UPDATE_ARCH,
     engine_id,
+    feed_targets,
     platform_key,
-    targets,
     update_files,
     validate_manifest,
     version,
@@ -331,6 +337,41 @@ def _statement(
             raise ValueError(f"{key}: the signed release statement does not match the entry")
 
 
+def legacy_update_problem(data: bytes) -> str | None:
+    """Why the updaters of 0.4.0 and 0.5.0 would refuse this engine manifest, or None.
+
+    Their rules (engine_payload.rs install_manifest at v0.4.0-beta and v0.5.0-beta):
+    exactly the legacy fields, schema 1, format tar.gz.parts, an upper-case backend,
+    1 to 64 parts with exactly filename, size and sha256, and bounded counts and sizes.
+    """
+    try:
+        manifest = json.loads(data)
+    except ValueError as error:
+        return f"not JSON ({error})"
+    if not isinstance(manifest, dict) or set(manifest) != set(LEGACY_UPDATE_FIELDS):
+        extra = (
+            sorted(set(manifest) - set(LEGACY_UPDATE_FIELDS)) if isinstance(manifest, dict) else []
+        )
+        return f"fields must be exactly {list(LEGACY_UPDATE_FIELDS)} (unknown: {extra})"
+    parts = manifest["parts"]
+    if (
+        manifest["schema_version"] != 1
+        or manifest["format"] != "tar.gz.parts"
+        or manifest["backend"] not in BACKENDS
+        or not isinstance(parts, list)
+        or not 0 < len(parts) <= 64
+        or not isinstance(manifest["file_count"], int)
+        or not 0 < manifest["file_count"] <= 100_000
+        or not isinstance(manifest["unpacked_bytes"], int)
+        or not 0 < manifest["unpacked_bytes"] <= 100 * 1024**3
+    ):
+        return "schema, format, backend, part count, file count or size outside the legacy rules"
+    for part in parts:
+        if not isinstance(part, dict) or set(part) != set(LEGACY_PART_FIELDS):
+            return f"each part must have exactly {list(LEGACY_PART_FIELDS)}"
+    return None
+
+
 def _engine_manifest(
     key: str,
     contract: dict,
@@ -341,9 +382,10 @@ def _engine_manifest(
     target: dict,
     protocol: int,
     identity: str,
+    update_path: Path | None = None,
 ) -> None:
-    """The engine manifest the client will read lists the parts the feed names, and the
-    entry reserves room for the engine it unpacks."""
+    """The engine manifest lists the parts the feed names, the entry reserves room for the
+    engine it unpacks, and the feed's update form is one every supported client reads."""
     payload = json.loads(path.read_bytes())
     if (
         payload.get("schema_version") != 2
@@ -365,6 +407,20 @@ def _engine_manifest(
         )
     if contract["unpacked_size"] < payload.get("unpacked_bytes", 0):
         raise ValueError(f"{key}: unpacked_size is below the engine's unpacked size")
+    # Older clients update from the feed's manifest: it must be the legacy form of this one,
+    # in a shape every supported updater accepts.
+    if update_path is not None:
+        update = update_path.read_bytes()
+        problem = legacy_update_problem(update)
+        if problem:
+            raise ValueError(
+                f"{key}: updaters of 0.4.0 and 0.5.0 would refuse {update_path.name}: {problem}"
+            )
+        if update != legacy_update_manifest(payload):
+            raise ValueError(
+                f"{key}: the engine manifest the feed names ({update_path.name}) does not "
+                "describe the engine package"
+            )
 
 
 def verify_feed(
@@ -390,7 +446,8 @@ def verify_feed(
     protocol = current_protocol_version()
     channel = "beta" if "-" in release_version else "stable"
     platforms = feed.get("platforms")
-    expected = {platform_key(target): target for target in targets()}
+    # The .deb has no entry: apt installs its updates, so it only reads the CPU entry.
+    expected = {platform_key(target): target for target in feed_targets()}
     if not isinstance(platforms, dict) or set(platforms) != set(expected):
         raise ValueError(
             "the feed must have exactly one entry per release target: missing "
@@ -447,7 +504,9 @@ def verify_feed(
         engine = contract.get("engine")
         if not isinstance(engine, dict) or engine.get("id") != identity:
             raise ValueError(f"{key} has no engine package for {identity}")
-        _download(engine.get("manifest"), base, files["engine_manifest"], f"{key} engine manifest")
+        _download(
+            engine.get("manifest"), base, files["engine_update_manifest"], f"{key} engine manifest"
+        )
         engine_parts = engine.get("parts")
         if not isinstance(engine_parts, list) or not 0 < len(engine_parts) <= 64:
             raise ValueError(f"{key} must list between 1 and 64 engine parts")
@@ -466,6 +525,7 @@ def verify_feed(
             target=target,
             protocol=protocol,
             identity=identity,
+            update_path=local(files["engine_update_manifest"]),
         )
         package = [local(part["name"]) for part in parts] if parts else [local(name)]
         _signed_file(
@@ -508,7 +568,7 @@ def main() -> int:
             public_key=args.public_key.read_text().strip() if args.public_key else None,
             host=args.host,
         )
-        print(f"Verified {len(targets())} update targets and their signatures in {args.feed}")
+        print(f"Verified {len(feed_targets())} update targets and their signatures in {args.feed}")
     if args.output or args.manifest:
         if not (args.output and args.manifest):
             parser.error("checking a prepared release needs the output folder and --manifest")

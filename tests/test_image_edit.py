@@ -390,6 +390,48 @@ def test_vulkan_mapping_refuses_wrong_or_ambiguous_gpu(listing):
         image_edit.match_vulkan_device(listing, "NVIDIA GeForce RTX 4080")
 
 
+@pytest.mark.parametrize(
+    ("listing", "selected"),
+    [
+        # Issue #131: a Radeon 780M laptop, named generically on one side.
+        ("Vulkan0\tAMD Radeon 780M (RADV PHOENIX)\n", "AMD Radeon Graphics"),
+        ("Vulkan0\tAMD Radeon Graphics (RADV GFX1103_R1)\n", "AMD Radeon 780M"),
+        # Mesa's software renderer is not a second GPU.
+        (
+            "Vulkan0\tAMD Radeon 780M (RADV PHOENIX)\nVulkan1\tllvmpipe (LLVM 17.0.6, 256 bits)\n",
+            "AMD Radeon Graphics",
+        ),
+    ],
+)
+def test_vulkan_mapping_takes_the_only_gpu_when_one_name_is_generic(listing, selected):
+    assert image_edit.match_vulkan_device(listing, selected) == "Vulkan0"
+
+
+def test_vulkan_mapping_follows_gpus_narrowed_with_ggml_vk_visible_devices():
+    listing = "Vulkan0\tAMD Radeon RX 7600 (RADV NAVI33)\n"
+    with pytest.raises(ValueError, match="uniquely identify"):
+        image_edit.match_vulkan_device(listing, "AMD Radeon RX 7900 XTX")
+    assert (
+        image_edit.match_vulkan_device(listing, "AMD Radeon RX 7900 XTX", visible_devices_set=True)
+        == "Vulkan0"
+    )
+
+
+@pytest.mark.parametrize(
+    "listing",
+    [
+        # Another vendor is never taken for a generic name.
+        "Vulkan0\tIntel(R) Iris(R) Xe Graphics (TGL GT2)\n",
+        # Two AMD GPUs: the generic name does not say which.
+        "Vulkan0\tAMD Radeon 780M (RADV PHOENIX)\nVulkan1\tAMD Radeon RX 7600 (RADV NAVI33)\n",
+    ],
+)
+def test_vulkan_mapping_still_refuses_a_gpu_it_cannot_tell_apart(listing):
+    with pytest.raises(ValueError, match="Vulkan lists: 0: ") as error:
+        image_edit.match_vulkan_device(listing, "AMD Radeon Graphics")
+    assert "GGML_VK_VISIBLE_DEVICES" in str(error.value)
+
+
 @pytest.mark.parametrize("outcome", ["success", "failure", "cancel", "no_image"])
 def test_edit_job_lifecycle_with_tiny_files_and_no_model_runtime(monkeypatch, tmp_path, outcome):
     from PIL import Image

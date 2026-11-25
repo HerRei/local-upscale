@@ -1,6 +1,20 @@
 {
   "models": [
     {
+      "model_id": "localsr_quick_x4_v1",
+      "purposes": [
+        "photo"
+      ],
+      "native_scale": 4,
+      "quality_tier": 2,
+      "speed_tier": 3,
+      "speed_factor": 1.5,
+      "memory_factor": 0.4,
+      "size_bytes": 2479832,
+      "commercial_use_allowed": true,
+      "preset_eligible": true
+    },
+    {
       "model_id": "span_photo_x4",
       "purposes": [
         "photo",
@@ -56,6 +70,21 @@
       "speed_factor": 0.9,
       "memory_factor": 0.6,
       "size_bytes": 17938799,
+      "commercial_use_allowed": true,
+      "preset_eligible": true
+    },
+    {
+      "model_id": "esrgan_hfa2k_x4",
+      "purposes": [
+        "illustration",
+        "anime"
+      ],
+      "native_scale": 4,
+      "quality_tier": 3,
+      "speed_tier": 2,
+      "speed_factor": 0.55,
+      "memory_factor": 1.05,
+      "size_bytes": 33676982,
       "commercial_use_allowed": true,
       "preset_eligible": true
     },
@@ -136,6 +165,14 @@
       "content": "photo",
       "quality": "quick",
       "without": [],
+      "expected": "localsr_quick_x4_v1"
+    },
+    {
+      "content": "photo",
+      "quality": "quick",
+      "without": [
+        "localsr_quick_x4_v1"
+      ],
       "expected": "span_photo_x4"
     },
     {
@@ -154,7 +191,7 @@
       "content": "illustration",
       "quality": "best",
       "without": [],
-      "expected": "realplksr_hfa2k_anime_x4"
+      "expected": "esrgan_hfa2k_x4"
     },
     {
       "content": "illustration",
@@ -168,6 +205,15 @@
       "content": "illustration",
       "quality": "best",
       "without": [
+        "esrgan_hfa2k_x4"
+      ],
+      "expected": "realplksr_hfa2k_anime_x4"
+    },
+    {
+      "content": "illustration",
+      "quality": "best",
+      "without": [
+        "esrgan_hfa2k_x4",
         "realplksr_hfa2k_anime_x4"
       ],
       "expected": "realesrgan_x4plus_anime_6b"
@@ -176,6 +222,7 @@
       "content": "illustration",
       "quality": "best",
       "without": [
+        "esrgan_hfa2k_x4",
         "realesrgan_x4plus_anime_6b",
         "realplksr_hfa2k_anime_x4"
       ],
@@ -185,6 +232,7 @@
       "content": "illustration",
       "quality": "quick",
       "without": [
+        "esrgan_hfa2k_x4",
         "realesrgan_x4plus_anime_6b",
         "realplksr_hfa2k_anime_x4"
       ],
@@ -194,6 +242,7 @@
       "content": "photo",
       "quality": "quick",
       "without": [
+        "localsr_quick_x4_v1",
         "span_photo_x4"
       ],
       "expected": "realplksr_nomoswebphoto_x4"
@@ -204,13 +253,14 @@
       "without": [
         "realplksr_nomoswebphoto_x4"
       ],
-      "expected": "span_photo_x4"
+      "expected": "localsr_quick_x4_v1"
     },
     {
       "content": "photo",
       "quality": "best",
       "without": [
         "realplksr_nomoswebphoto_x4",
+        "localsr_quick_x4_v1",
         "span_photo_x4"
       ],
       "expected": "general_x4"

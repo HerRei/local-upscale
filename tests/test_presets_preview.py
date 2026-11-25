@@ -16,7 +16,7 @@ def test_quick_and_best_rank_distinct_catalog_models():
         output_scale=4,
     )
 
-    assert quick[0].model_id == "span_photo_x4"
+    assert quick[0].model_id == "localsr_quick_x4_v1"
     assert best[0].model_id == "realplksr_nomoswebphoto_x4"
 
 

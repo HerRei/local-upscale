@@ -43,6 +43,10 @@ echo "commit $COMMIT engine $LOCALSR_ENGINE_ID"
 
 step "verify licensing-clean media runtime"
 python scripts/verify_codec_allowlist.py --python-env "$(command -v python)" > "$OUT/runtime-policy.json"
+# Wheels for a newer macOS than the app's minimum (the installer picks the newest one for
+# the release Mac) would ship native files older Macs cannot load (#183, MLX in 0.6.0).
+python scripts/verify_macos_deployment.py --minimum 14.0 \
+  --tree "$(python -c 'import sysconfig; print(sysconfig.get_paths()["platlib"])')" > "$OUT/venv-deployment.json"
 # Record the exact environment; the release PR carries its diff against the last release.
 uv pip freeze --python "$(command -v python)" > "$OUT/mac-environment.txt"
 
@@ -52,6 +56,7 @@ APP="$OUT/$APP_NAME"
 rm -rf "$APP" && ditto "desktop/src-tauri/target/release/bundle/macos/$APP_NAME" "$APP"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $SHORT_VERSION" -c "Set :CFBundleVersion $SHORT_VERSION" "$APP/Contents/Info.plist"
 python scripts/verify_codec_allowlist.py --tree "$APP" > "$OUT/app-policy.json"
+python scripts/verify_macos_deployment.py --tree "$APP" > "$OUT/app-deployment.json"
 
 step "Developer ID signing"
 python scripts/sign_macos_keychain.py "$APP" --identity "$IDENTITY" --report "$OUT/signing-report.json"
@@ -105,12 +110,22 @@ ENGINE_OUT="$OUT/engine"
 rm -rf "$ENGINE_OUT" && mkdir -p "$ENGINE_OUT"
 ENGINE_PREFIX="LocalSR-v$VERSION-macOS-arm64.engine.tar.gz"
 ENGINE_MANIFEST="LocalSR-v$VERSION-macOS-arm64.engine-payload.json"
+# The feed names the update form, which every updater since 0.4.0 reads.
+ENGINE_UPDATE="LocalSR-v$VERSION-macOS-arm64.engine-update.json"
 python scripts/prepare_engine_payload.py --target macos-arm64-mps --output "$ENGINE_OUT" \
   --engine "$APP/Contents/Resources/engine" --version "$VERSION" --commit "$COMMIT" \
   --engine-id "$LOCALSR_ENGINE_ID"
-for file in "$ENGINE_OUT/$ENGINE_MANIFEST" "$ENGINE_OUT"/*.part-*; do
+for file in "$ENGINE_OUT/$ENGINE_MANIFEST" "$ENGINE_OUT/$ENGINE_UPDATE" "$ENGINE_OUT"/*.part-*; do
   python scripts/beta_update_signing.py sign "$file"
 done
+
+# The 0.5.2 incident (docs/postmortems/2026-11-23-updates-from-0.5.0.md): older releases'
+# own updaters, built from their tags, must accept this engine package, and this host must
+# start the engine they install. It works on links in its own folder, with a disposable key.
+step "updates from older releases with their own update code"
+python scripts/upgrade_check.py --target macos-arm64-mps --payload "$ENGINE_OUT" \
+  --version "$VERSION" --work "$OUT/upgrade-check" --cargo-target build/upgrade-check-target
+rm -rf "$OUT/upgrade-check"
 
 step "corresponding source and notices"
 rm -rf "$OUT/source"
@@ -123,10 +138,10 @@ tar -C "$OUT" -czf "$OUT/LocalSR-v$VERSION-source-and-notices.tar.gz" source
 
 step "checksums and feed entry"
 (cd "$OUT" && shasum -a 256 "LocalSR-v$VERSION-macOS-arm64.dmg" "LocalSR-v$VERSION-macOS-arm64.app.tar.gz" "LocalSR-v$VERSION-source-and-notices.tar.gz" > SHA256SUMS)
-(cd "$ENGINE_OUT" && shasum -a 256 "$ENGINE_MANIFEST" *.part-* >> "$OUT/SHA256SUMS")
-python3 - "$OUT" "$VERSION" "$COMMIT" "$LOCALSR_ENGINE_ID" "$HOST_BASE" "$ENGINE_MANIFEST" <<'PY'
+(cd "$ENGINE_OUT" && shasum -a 256 "$ENGINE_MANIFEST" "$ENGINE_UPDATE" *.part-* >> "$OUT/SHA256SUMS")
+python3 - "$OUT" "$VERSION" "$COMMIT" "$LOCALSR_ENGINE_ID" "$HOST_BASE" "$ENGINE_MANIFEST" "$ENGINE_UPDATE" <<'PY'
 import datetime, hashlib, json, os, sys, tarfile
-out, version, commit, engine_id, host, manifest_name = sys.argv[1:]
+out, version, commit, engine_id, host, manifest_name, update_name = sys.argv[1:]
 
 def sha256(path):
     digest = hashlib.sha256()
@@ -161,7 +176,7 @@ contract = {
     "sha256": sha256(update),
     "engine": {
         "id": engine_id,
-        "manifest": download_file(manifest_path, manifest_name),
+        "manifest": download_file(f"{out}/engine/{update_name}", update_name),
         "parts": parts,
     },
 }

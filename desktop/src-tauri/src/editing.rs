@@ -85,10 +85,21 @@ pub struct EditModel {
     pub default_steps: u32,
     #[serde(default = "default_cfg_scale")]
     pub cfg_scale: f64,
+    #[serde(default)]
+    pub author: String,
+    #[serde(default)]
     pub license_name: String,
+    #[serde(default)]
     pub license_url: String,
+    #[serde(default)]
     pub source_url: String,
+    #[serde(default)]
+    pub commercial_use_allowed: Option<bool>,
+    #[serde(default)]
+    pub attribution_required: bool,
+    #[serde(default)]
     pub terms_acceptance_required: bool,
+    #[serde(default)]
     pub automated_download_allowed: bool,
     #[serde(default)]
     pub installed: bool,
@@ -289,9 +300,12 @@ pub fn custom_edit_model(custom: &CustomEditModel) -> Option<EditModel> {
         min_vram_gb,
         default_steps: spec.default_steps,
         cfg_scale: spec.cfg_scale,
+        author: String::new(),
         license_name: "Your own file".into(),
         license_url: String::new(),
         source_url: String::new(),
+        commercial_use_allowed: None,
+        attribution_required: false,
         terms_acceptance_required: false,
         automated_download_allowed: false,
         installed,
@@ -376,7 +390,14 @@ fn skip_gguf_value<R: Read>(reader: &mut R, value_type: u32, depth: u8) -> std::
 /// Inspect GGUF metadata and tensor headers to identify the editing model family.
 pub fn detect_gguf_edit_family(path: &Path) -> Option<&'static str> {
     let file = File::open(path).ok()?;
-    let mut reader = BufReader::new(file);
+    detect_gguf_edit_family_reader(BufReader::new(file))
+}
+
+pub fn detect_gguf_edit_family_bytes(bytes: &[u8]) -> Option<&'static str> {
+    detect_gguf_edit_family_reader(std::io::Cursor::new(bytes))
+}
+
+fn detect_gguf_edit_family_reader<R: Read>(mut reader: R) -> Option<&'static str> {
     let mut magic = [0_u8; 4];
     reader.read_exact(&mut magic).ok()?;
     if &magic != b"GGUF" {
@@ -869,6 +890,11 @@ mod tests {
             }
             // Only openly licensed bundles are offered.
             assert!(matches!(model.license_name.as_str(), "Apache-2.0" | "MIT"));
+            assert!(!model.author.is_empty());
+            assert!(model.source_url.starts_with("https://"));
+            assert!(model.license_url.starts_with("https://"));
+            assert_eq!(model.commercial_use_allowed, Some(true));
+            assert_eq!(model.attribution_required, model.license_name != "MIT");
             assert!(!model.terms_acceptance_required);
         }
     }
@@ -1093,5 +1119,28 @@ mod tests {
         let err = verify_custom_edit_load(&fail_cli, &custom).unwrap_err();
         assert!(err.contains("the VAE"));
         assert!(!err.contains("private-"));
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn gguf_family_parser_never_panics_on_arbitrary_bytes(data in proptest::collection::vec(proptest::arbitrary::any::<u8>(), 0..512)) {
+            let _ = detect_gguf_edit_family_bytes(&data);
+        }
+
+        #[test]
+        fn gguf_family_parser_handles_mutated_headers(
+            tail in proptest::collection::vec(proptest::arbitrary::any::<u8>(), 0..256),
+            version in 0_u32..6,
+            tensors in 0_u64..16,
+            kvs in 0_u64..16,
+        ) {
+            let mut bytes = Vec::with_capacity(24 + tail.len());
+            bytes.extend_from_slice(b"GGUF");
+            bytes.extend_from_slice(&version.to_le_bytes());
+            bytes.extend_from_slice(&tensors.to_le_bytes());
+            bytes.extend_from_slice(&kvs.to_le_bytes());
+            bytes.extend_from_slice(&tail);
+            let _ = detect_gguf_edit_family_bytes(&bytes);
+        }
     }
 }

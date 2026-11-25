@@ -51,17 +51,10 @@ interface Variant {
   expected: string[];
 }
 
-const IMAGE = ['Output scale', 'Format', 'Preserve safe metadata and color profile'];
-const TAIL = [
-  'Save to',
-  'Model folder',
-  'Hardware',
-  'Interface text',
-  'Run at low priority',
-  'Memory pressure',
-];
+const IMAGE = ['Format', 'Preserve safe metadata and color profile'];
+const TAIL = ['Save to', 'Memory pressure'];
 const GRID = ['Tile', 'Halo', 'Precision', 'Safe memory mode'];
-const VIDEO = ['Container', 'Video format', 'External FFmpeg', 'Video quality · CRF'];
+const VIDEO = ['Container', 'Video format', 'Video quality · CRF'];
 
 const variants: Variant[] = [
   {
@@ -87,22 +80,14 @@ const variants: Variant[] = [
     settings: { task: 'video', video_interpolation: 'x2' },
     capabilities: mac,
     interpolation: true,
-    expected: [
-      'Output scale',
-      ...VIDEO,
-      'De-flicker · Labs',
-      'Frame rate',
-      'Interpolate',
-      ...TAIL,
-      ...GRID,
-    ],
+    expected: [...VIDEO, 'De-flicker · Labs', 'Frame rate', 'Interpolate', ...TAIL, ...GRID],
   },
   {
     name: 'video frame by frame elsewhere',
     settings: { task: 'video', video_interpolation: 'off' },
     capabilities: other,
     interpolation: true,
-    expected: ['Output scale', ...VIDEO, 'De-flicker · Labs', 'Frame rate', ...TAIL, ...GRID],
+    expected: [...VIDEO, 'De-flicker · Labs', 'Frame rate', ...TAIL, ...GRID],
   },
   {
     name: 'video restore frame by frame elsewhere',
@@ -196,6 +181,25 @@ describe('every labelled control in Advanced has a help tip or a reason not to',
     }
     for (const label of Object.keys(withoutTip)) expect(seen.has(label)).toBe(true);
   });
+
+  it('omits the app-wide settings moved to the Settings sheet', async () => {
+    const root = await open(variants[0]);
+    const fieldLabels = [...root.querySelectorAll('.field-label')].map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(fieldLabels).not.toContain('Engine');
+    for (const moved of [
+      'Model folder',
+      'Model cache',
+      'Interface text',
+      'Show sampled enhanced previews (max 2 fps)',
+      'Show in menu bar',
+      'Monochrome menu bar icon',
+      'Notify when a file finishes',
+    ]) {
+      expect(root.textContent).not.toContain(moved);
+    }
+  });
 });
 
 describe('the wording of the help tips', () => {
@@ -209,7 +213,7 @@ describe('the wording of the help tips', () => {
       }
       cleanup();
     }
-    expect(texts.size).toBeGreaterThan(20);
+    expect(texts.size).toBeGreaterThanOrEqual(20);
     for (const text of texts) {
       const words = text.trim().split(/\s+/).length;
       expect(words, text).toBeLessThanOrEqual(46);
@@ -220,8 +224,8 @@ describe('the wording of the help tips', () => {
 });
 
 describe('while a job runs, the whole Advanced section is locked', () => {
-  // Help tips, Refresh and Run at low priority stay usable; every other interactive thing must be
-  // disabled, so a control added later that sits outside the locked fieldset fails here.
+  // Help tips, Refresh and Run at low priority stay usable; every other interactive thing must
+  // be disabled, so a control added later that sits outside the locked fieldset fails here.
   const usable = (element: Element) =>
     element.classList.contains('help-tip') ||
     element.classList.contains('memory-refresh') ||

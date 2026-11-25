@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { openApp, showPane } from './app';
+import { contrastOnPage, openApp, showPane } from './app';
 import { emit, hostCalls, type Scenario } from './fake-host';
 import { ready, upscale, video, windows, withOutputs } from './fixtures';
 
@@ -378,6 +378,7 @@ test.describe('overflow and alignment', () => {
     await showPane(page, 'enhance');
     await page.getByRole('button', { name: /^Advanced/ }).click();
     const select = await box(page.locator('#edit-size'));
+    // The Hardware select sits in the same column as the other selects.
     expect(Math.abs((await left(page.locator('#device'))) - select.x)).toBeLessThan(0.5);
     const steps = await box(page.locator('#edit-steps'));
     const seed = await box(page.locator('#edit-seed'));
@@ -506,7 +507,7 @@ test.describe('overflow and alignment', () => {
     await openApp(page, ready);
     await showPane(page, 'enhance');
     await page.getByRole('button', { name: /^Advanced/ }).click();
-    const column = page.locator('#device');
+    const column = page.locator('#format');
     await column.scrollIntoViewIfNeeded();
     expect(Math.abs((await left(page.locator('#halo-size'))) - (await left(column)))).toBeLessThan(
       0.5,
@@ -524,6 +525,11 @@ test.describe('overflow and alignment', () => {
     });
     await showPane(page, 'enhance');
     await page.getByRole('button', { name: /^Advanced/ }).click();
+    // The FFmpeg actions live in Settings > Storage; Advanced links there.
+    await page
+      .locator('.field-row', { hasText: 'External FFmpeg' })
+      .getByRole('button', { name: 'Change…' })
+      .click();
     const find = page.getByRole('button', { name: 'Find installed', exact: true });
     await find.scrollIntoViewIfNeeded();
     const unset = page.getByRole('button', { name: 'Don’t use', exact: true });
@@ -607,32 +613,6 @@ test.describe('overflow and alignment', () => {
 });
 
 test.describe('contrast and targets', () => {
-  /** WCAG contrast of an element's text against the backgrounds it is drawn on. */
-  const contrastOnPage = (locator: Locator) =>
-    locator.evaluate((element) => {
-      const rgba = (value: string) => (value.match(/[\d.]+/g) ?? []).map(Number);
-      const layers: number[][] = [];
-      for (let node: Element | null = element; node; node = node.parentElement) {
-        const [r, g, b, a = 1] = rgba(getComputedStyle(node).backgroundColor);
-        if (a > 0) layers.push([r, g, b, a]);
-        if (a >= 1) break;
-      }
-      let back = [0, 0, 0];
-      for (const [r, g, b, a] of layers.reverse())
-        back = [r * a + back[0] * (1 - a), g * a + back[1] * (1 - a), b * a + back[2] * (1 - a)];
-      const style = getComputedStyle(element);
-      const [fr, fg, fb, fa = 1] = rgba(style.color);
-      const alpha = fa * Number(style.opacity);
-      const fore = [fr, fg, fb].map((c, i) => c * alpha + back[i] * (1 - alpha));
-      const lum = (rgb: number[]) =>
-        rgb
-          .map((c) => c / 255)
-          .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
-          .reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0);
-      const [hi, lo] = [lum(fore), lum(back)].sort((x, y) => y - x);
-      return (hi + 0.05) / (lo + 0.05);
-    });
-
   test('library rows carry a fit line that stays readable', async ({ page }) => {
     await openApp(page, ready);
     await emit(page, 'native-menu-action', 'view.models');

@@ -7,7 +7,7 @@ the verified formats are listed in [Testing](testing.md).
 
 ## Media contract
 
-- LocalSR includes only royalty-free or patent-expired media formats; see [media formats and licensing](licensing-media.md). Decode SDR and BT.2020 non-constant-luminance HLG/PQ through PyAV. The desktop defaults to Automatic (hardware HEVC for SDR MP4 on macOS, AV1 otherwise); the Python API defaults to AV1 in MP4. Export AV1 (MP4 or MKV), VP9 (MP4 or MKV) or lossless FFV1 (MKV) as 8-bit YUV420P, or 10-bit YUV420P10LE for preserved HDR. On macOS, H.264, HEVC and AAC go through the system codecs (`localsr-media`, AVFoundation). Other formats LocalSR does not include (WMV, DivX, FLV, H.263), and every such format on Windows and Linux, use an FFmpeg the user installed, found automatically or selected under Advanced settings; otherwise they fail with an actionable message. High-bit-depth SDR preservation is not implemented.
+- LocalSR includes only royalty-free or patent-expired media formats; see [media formats and licensing](licensing-media.md). Decode SDR and BT.2020 non-constant-luminance HLG/PQ through PyAV. The desktop defaults to Automatic (hardware HEVC for SDR MP4 on macOS, AV1 otherwise); the Python API defaults to AV1 in MP4. Export AV1 (MP4 or MKV), VP9 (MP4 or MKV) or lossless FFV1 (MKV) as 8-bit YUV420P, or 10-bit YUV420P10LE for preserved HDR. On macOS, H.264, HEVC and AAC go through the system codecs (`localsr-media`, AVFoundation). Other formats LocalSR does not include (WMV, DivX, FLV, H.263), and every such format on Windows and Linux, use an FFmpeg the user installed, found automatically or selected under **Settings → Storage** (with a shortcut in Advanced settings); otherwise they fail with an actionable message. High-bit-depth SDR preservation is not implemented.
 - Preserve each frame's presentation timestamp and interval by default, including variable frame rate. Trims are inclusive frame indices; audio starts at the actual selected timestamp. Unknown/non-increasing timestamps fail explicitly.
 - Normalize 90°, 180°, 270° rotation and orthogonal mirrors before inference, previews, and export. Camera MOV track translations are rebased to the rotated image bounds. Perspective, scaling and non-right-angle transforms still fail explicitly.
 - Decodable audio the output container accepts is copied unchanged (MP4: MP3, Opus, FLAC, ALAC, AC-3; MKV: any decodable track). Other decodable audio is converted to 48 kHz Opus, preserving timing and channel layout. Copied audio has packet-level trim precision; converted audio has sample-level trimming plus Opus encoder padding. Unsupported subtitles and audio that can neither be copied nor decoded produce a warning and are omitted, unless a user-installed FFmpeg converts them.
@@ -149,9 +149,20 @@ desktop controls still need acceptance on macOS.
 
 ### De-flicker
 
-De-flicker is off by default. It blends toward the local temporal median only where neighboring RGB samples differ by at most 12 levels, at half strength. Motion and scene cuts with larger differences bypass filtering. It is deliberately conservative, not optical-flow restoration, and remains Labs. Representative low-contrast motion still needs visual acceptance.
+De-flicker is off by default and remains Labs. Since 0.6.0 it decides everything from the original video, not from the upscaled frames, and works with every frame-by-frame model (`src/localsr/core/deflicker.py`):
+
+- **Source flicker.** Each frame is compared with its three neighbours on each side, aligned by optical flow on a small copy (longer side at most 320 px). Per block of a 16 × 12 grid the median brightness ratio gives a smooth gain map, which is applied to the output. A median keeps real light changes as steps; a small dead zone leaves clean clips untouched; gains stay within 0.8 to 1.25.
+- **Shimmer in still areas.** Where the original does not change (judged on a copy of at most 640 px, against its noise level), the output is blended with the previous output frame; a global brightness change is carried over instead of blended away. Motion gets no blending.
+- Scene cuts reset both parts. The output-size work runs on the GPU when the job uses one.
+- Cost, measured on an M1 Pro: about 37 ms per frame at 1080p output and 45 ms at 4K (the earlier median filter: 250 ms and 880 ms).
+
+On test clips it removed about 40 % of the still-area shimmer (the earlier median filter: about 30 %), most of an injected exposure flicker (PSNR against the clean clip 31.2 → 35.3 dB), and left a 35 % light step and hard cuts unchanged.
 
 SeedVR2 uses the same timed decoding and encoding contract. The worker applies trim bounds, preserves compatible audio on trims, and enforces output frame counts across context overlap. Unsupported image-engine tile, halo, precision, safe-memory, and de-flicker controls are hidden for this engine in the desktop UI.
+
+### FlashVSR v1.1 (Labs)
+
+FlashVSR v1.1 Tiny processes 37-frame windows (with 8 frames of run-up from the previous window) in one diffusion step and decodes with its own TCDecoder. It runs on Apple silicon Macs with 16 GB or more unified memory through MLX, and on AMD ROCm (Linux) and NVIDIA CUDA (Linux and Windows) with 12 GB or more VRAM through PyTorch using pure-PyTorch block-sparse gather attention (no Triton or runtime compiler). Large frames are split automatically into 128-aligned tiles sized to available GPU memory, and outputs follow the chosen resolution up to 4× directly (larger sizes resize the 4× output). DirectML, Intel XPU, OpenVINO, and CPU are not supported for FlashVSR, and HDR preservation remains disabled. CUDA has not been run on NVIDIA hardware yet.
 
 The 3B FP16 and FP8 variants support NVIDIA CUDA and AMD ROCm through the
 [vendored upstream implementation](https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler).

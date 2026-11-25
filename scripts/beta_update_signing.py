@@ -31,13 +31,13 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
-from prepare_engine_payload import validate_payload
+from prepare_engine_payload import legacy_update_manifest, validate_payload
 from release_targets import (
     UPDATE_ARCH,
     engine_id,
     expected_update_identity,
+    feed_targets,
     protocol_version,
-    targets,
     update_files,
     version,
 )
@@ -291,6 +291,14 @@ def _check_target(downloads: Path, target: dict, release_version: str, commit: s
         expected_protocol_version=protocol_version(),
         expected_engine_id=identity,
     )
+    # The feed names the legacy form, which older updaters read; it must describe exactly
+    # this package (prepare_engine_payload.legacy_update_manifest).
+    update_path = _regular(directory / files["engine_update_manifest"])
+    update_bytes = update_path.read_bytes()
+    if update_bytes != legacy_update_manifest(manifest):
+        raise ValueError(
+            f"{target['id']}: {update_path.name} is not the update form of the engine manifest"
+        )
     # Where the smoke test installed the engine manifest (Windows CUDA), the published
     # engine package must be that one, not merely a valid one.
     installed = smoke.get("engine_payload_sha256")
@@ -312,17 +320,9 @@ def _check_target(downloads: Path, target: dict, release_version: str, commit: s
         "manifest_digest": (hashlib.sha256(manifest_bytes).hexdigest(), len(manifest_bytes)),
         "manifest": manifest,
         "engine_parts": engine_parts,
+        "update_path": update_path,
+        "update_digest": (hashlib.sha256(update_bytes).hexdigest(), len(update_bytes)),
     }
-
-
-def _copy_range(stream, destination: Path, count: int) -> None:
-    with destination.open("xb") as output:
-        while count:
-            chunk = stream.read(min(CHUNK, count))
-            if not chunk:
-                raise ValueError(f"{destination.name} ended early")
-            output.write(chunk)
-            count -= len(chunk)
 
 
 def _snapshot(sources: list[Path], destination: Path, expected: tuple[str, int]) -> None:
@@ -416,7 +416,8 @@ def platform_entries(
     protocol = protocol_version()
     checked = [
         _check_target(downloads, target, release_version, commit)
-        for target in targets()
+        # The .deb has no feed entry: apt installs its updates (release_targets.py).
+        for target in feed_targets()
         if target["platform"] != "macos"
     ]
     entries: dict[str, dict] = {}
@@ -445,27 +446,28 @@ def platform_entries(
         for item in checked:
             target, directory, files = item["target"], item["directory"], item["files"]
             name = files["update_package"]
-            # The whole package, joined from its parts if it has them; the part copies
-            # are cut from that checked copy, so every signature covers checked bytes.
-            whole = workspace / name
-            _snapshot(item["package"], whole, item["digest"])
+            # Sign each checked part before creating the joined package copy, so the
+            # workspace never needs both a whole package and an additional part.
             parts = []
             if item["part_digests"]:
-                with whole.open("rb") as stream:
-                    for path, known in zip(item["package"], item["part_digests"], strict=True):
-                        piece = workspace / path.name
-                        _copy_range(stream, piece, known[1])
-                        if _sha256([piece]) != known:
-                            raise ValueError(f"{path.name} changed after it was checked")
-                        parts.append(download(path.name, known, sign_copy(piece, directory)))
+                for path, known in zip(item["package"], item["part_digests"], strict=True):
+                    piece = workspace / path.name
+                    _snapshot([path], piece, known)
+                    parts.append(download(path.name, known, sign_copy(piece, directory)))
+            whole = workspace / name
+            _snapshot(item["package"], whole, item["digest"])
             whole_signature = sign_copy(whole, directory)
             manifest_copy = workspace / item["manifest_path"].name
             _snapshot([item["manifest_path"]], manifest_copy, item["manifest_digest"])
+            # The full manifest is signed for offline import; the feed names the update form.
+            sign_copy(manifest_copy, directory)
+            update_copy = workspace / item["update_path"].name
+            _snapshot([item["update_path"]], update_copy, item["update_digest"])
             engine_files = [
                 download(
-                    item["manifest_path"].name,
-                    item["manifest_digest"],
-                    sign_copy(manifest_copy, directory),
+                    item["update_path"].name,
+                    item["update_digest"],
+                    sign_copy(update_copy, directory),
                 )
             ]
             for path, part in zip(item["engine_parts"], item["manifest"]["parts"], strict=True):

@@ -1,12 +1,12 @@
 # Known limitations
 
-These apply to v0.5.2-beta. Please read them before starting a long job.
+These apply to v0.6.1-beta. Please read them before starting a long job.
 
 ## Platforms
 
-- Published packages: macOS on Apple Silicon (v0.5.2-beta); Windows CPU, DirectML
+- Published packages: macOS on Apple Silicon (v0.6.1-beta); Windows CPU, DirectML
   and NVIDIA CUDA installers and Linux CPU, AMD ROCm and NVIDIA CUDA AppImages
-  (v0.5.2-beta; image editing is tested only on the Mac). The CUDA and
+  (v0.6.1-beta; image editing is tested only on the Mac). The CUDA and
   DirectML editions are **untested**: CUDA has never run on an NVIDIA GPU (the app
   labels it Labs), and
   DirectML's NAFNet denoising results still miss the accuracy tolerance. Intel XPU
@@ -122,7 +122,7 @@ These apply to v0.5.2-beta. Please read them before starting a long job.
 - No weights are bundled. Each model downloads from its author's release when
   you choose it, so the first use of a model needs a network connection. By
   default, models are stored in `LocalSR/models`; you can move the model folder
-  to another drive under Advanced settings (engine and temporary work files stay
+  to another drive under **Settings → Storage** (engine and temporary work files stay
   in the app folder).
 - Custom `.safetensors` checkpoints are accepted. Pickle-based `.pth`, `.pt` and
   `.ckpt` files can run code when loaded and are refused unless you tick

@@ -23,6 +23,10 @@ use crate::{
 };
 
 pub struct WorkerControl {
+    /// Serializes worker launch and publication or rollback of an engine.
+    pub engine_files: Mutex<()>,
+    /// The command the current worker run was verified and started with.
+    pub(crate) verified_run: Mutex<Option<crate::worker::VerifiedRun>>,
     pub cancellation: Mutex<crate::cancellation::Cancellation>,
     pub sender: Mutex<Option<std::sync::mpsc::Sender<String>>>,
     pub generation: AtomicU64,
@@ -44,11 +48,14 @@ pub struct WorkerControl {
     pub failed_engines: Mutex<HashSet<String>>,
     pub use_bundled_fallback: AtomicBool,
     pub engine_ready_seen: AtomicBool,
+    pub queue_paused: AtomicBool,
 }
 
 impl Default for WorkerControl {
     fn default() -> Self {
         Self {
+            engine_files: Mutex::new(()),
+            verified_run: Mutex::new(None),
             cancellation: Mutex::new(crate::cancellation::Cancellation::default()),
             sender: Mutex::new(None),
             generation: AtomicU64::new(0),
@@ -62,6 +69,7 @@ impl Default for WorkerControl {
             failed_engines: Mutex::new(HashSet::new()),
             use_bundled_fallback: AtomicBool::new(false),
             engine_ready_seen: AtomicBool::new(false),
+            queue_paused: AtomicBool::new(false),
         }
     }
 }
@@ -111,6 +119,10 @@ pub struct AppState {
     /// Cached result of Windows DXGI GPU probing so `snapshot()` enumerates at most once.
     gpu_download_notice_cache: Mutex<Option<Option<String>>>,
     engine_recommendation_cache: Mutex<Option<crate::types::EngineRecommendation>>,
+    pub tray_state: Mutex<Option<crate::tray::TraySnapshot>>,
+    /// Low priority chosen in Advanced for the work of this session; the saved setting
+    /// is only the default. None follows the default.
+    pub run_low_priority: Mutex<Option<bool>>,
 }
 
 impl AppState {
@@ -120,9 +132,6 @@ impl AppState {
 
     pub(crate) fn from_paths(paths: AppPaths) -> AppResult<Self> {
         let mut notices = Vec::new();
-        if let Ok(id) = std::fs::read_to_string(paths.next_root.join("active-engine.txt")) {
-            crate::engine_manager::recover_interrupted_reimport(&paths.next_root, id.trim())?;
-        }
         // The safety copy is a convenience: a full disk or a damaged queue must not keep
         // the app from starting. No update step depends on it.
         if let Err(error) =
@@ -148,6 +157,9 @@ impl AppState {
             ));
         }
         let first_run = !settings::has_existing_settings(&paths);
+        if settings::is_future_schema(&paths) {
+            notices.push("Your settings come from a newer LocalSR. This version uses defaults and will not save settings changes.".into());
+        }
         let (settings, recipes) = settings::load(&paths);
         let model_root = effective_model_root(&paths, &settings);
         let catalog = load_catalog_in(&model_root)?;
@@ -192,6 +204,8 @@ impl AppState {
             moving_models: AtomicBool::new(false),
             gpu_download_notice_cache: Mutex::new(None),
             engine_recommendation_cache: Mutex::new(None),
+            tray_state: Mutex::new(None),
+            run_low_priority: Mutex::new(None),
         })
     }
 
@@ -244,6 +258,8 @@ impl AppState {
         let linux_menu_offer =
             crate::integrations::offer_linux_menu(settings.linux_menu_prompt_dismissed);
         let linux_menu_installed = crate::integrations::linux_menu_installed();
+        let linux_menu_available =
+            crate::integrations::running_in_appimage() || linux_menu_installed;
         let engines = crate::engine_manager::snapshot_for(
             self,
             &crate::updates::UpdateConfig::load(),
@@ -268,6 +284,7 @@ impl AppState {
             gpu_download_notice,
             linux_menu_offer,
             linux_menu_installed,
+            linux_menu_available,
             engines,
         })
     }
@@ -367,6 +384,7 @@ pub fn lock<T>(mutex: &Mutex<T>) -> AppResult<MutexGuard<'_, T>> {
 
 pub fn emit_state_changed<R: tauri::Runtime>(app: &AppHandle<R>) {
     let _ = app.emit("state-changed", ());
+    crate::tray::sync(app);
 }
 
 #[cfg(test)]
@@ -431,6 +449,19 @@ mod tests {
         std::fs::create_dir_all(&paths.next_root).unwrap();
         std::fs::write(&paths.database, content).unwrap();
         paths
+    }
+
+    #[test]
+    fn newer_settings_get_one_startup_notice() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        std::fs::create_dir_all(&paths.next_root).unwrap();
+        std::fs::write(&paths.settings, r#"{"schema_version":3}"#).unwrap();
+        let state = AppState::from_paths(paths).unwrap();
+        let notices = state.take_startup_notices();
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].contains("newer LocalSR"));
+        assert!(state.take_startup_notices().is_empty());
     }
 
     #[test]

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import type { DeviceInfo, VideoMemoryStatus } from './lib/types';
+  import type { CatalogVideoModel, DeviceInfo, VideoMemoryStatus } from './lib/types';
+  import { videoEngineName } from './lib/videoEngines';
 
   export let lowMemory = true;
   export let device: DeviceInfo | undefined = undefined;
@@ -8,10 +9,26 @@
   export let running = false;
   export let outputDimensions = '';
   export let disabled = false;
+  /** The selected video model; its engine decides what the panel explains. */
+  export let model:
+    Pick<CatalogVideoModel, 'engine_kind' | 'temporal_window' | 'temporal_overlap'> | undefined =
+    undefined;
+  /** The engine that produced `memory`, when that is known; otherwise the selected one. */
+  export let memoryEngine = '';
   const dispatch = createEventDispatcher<{ change: boolean }>();
   const gib = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
   $: shared = device?.id.startsWith('mps');
   $: separateGpu = device?.id.startsWith('cuda');
+  $: engine = model?.engine_kind ?? 'seedvr2';
+  $: flash = engine === 'flashvsr';
+  $: flashReadings = (memoryEngine || engine) === 'flashvsr';
+  // FlashVSR has no VAE and no clips: it decodes with its own decoder, window by window.
+  const flashLabels: Record<string, string> = {
+    preparing_clip: 'Preparing window',
+    encoding: 'Encoding',
+    decoding: 'Decoding',
+    finishing: 'Finishing window',
+  };
   const labels: Record<string, string> = {
     loading_audio_denoise: 'Loading audio model',
     audio_denoise: 'Audio cleanup',
@@ -26,51 +43,83 @@
   };
 </script>
 
-<div class="memory-panel" class:failed={memory?.oom} aria-label="SeedVR2 memory">
-  {#if separateGpu}<label class="memory-choice"
-      ><input
-        type="checkbox"
-        checked={lowMemory}
-        {disabled}
-        on:change={(event) => dispatch('change', event.currentTarget.checked)}
-      /> Reduce GPU memory</label
+<div
+  class="memory-panel"
+  class:failed={memory?.oom}
+  aria-label={`${videoEngineName(engine)} memory`}
+>
+  {#if flash}
+    <strong
+      >{shared ? 'Apple GPU · automatic memory management' : 'Automatic memory management'}</strong
     >
-  {:else}<strong>{shared ? 'Apple GPU · automatic memory management' : 'SeedVR2 memory'}</strong
-    >{/if}
-  <p>
-    {(lowMemory && separateGpu) || shared || device?.id === 'cpu'
-      ? 'Up to 5 frames per clip · 128 px VAE tiles.'
-      : 'Up to 9 frames per clip · 512 px VAE tiles.'}
-    {#if lowMemory && separateGpu}
-      32 diffusion blocks and intermediate tensors offload to CPU. Uses more system RAM and can be
-      slower.{:else if separateGpu}
-      CPU block and tensor offload is off. Larger tiles and clips use substantially more GPU memory.{:else if shared}
-      Uses shared system memory with small tiles and short clips automatically. CPU block offload is
-      not used. Safe memory mode belongs to frame-by-frame models.{:else if device?.id.startsWith('xpu') || device?.id.startsWith('directml')}
-      SeedVR2 offload is not implemented for this backend. Use a supported CUDA/ROCm or Apple GPU
-      backend.{/if}
-    Smaller tiles and shorter clips can affect seams and temporal consistency.
-  </p>
-  <p>
-    Requested output: <strong>{outputDimensions || 'Choose a video'}</strong>. Memory saving keeps
-    this size.
-  </p>
-  <p>
-    {#if device?.total_memory}{gib(device.total_memory)}
-      {shared ? 'shared memory' : 'device capacity'}.{' '}{/if}Capacity is not a guarantee that a
-    clip fits; output dimensions and clip length also matter.
-  </p>
+    <p>
+      Large frames are split into {shared
+        ? "tiles sized to this Mac's memory, so there is no memory setting."
+        : 'tiles sized to the GPU memory, so there is no memory setting.'}
+      The video is processed in windows of {model?.temporal_window} frames; each starts with {model?.temporal_overlap}
+      frames of run-up from the window before.
+    </p>
+    <p>
+      Requested output: <strong>{outputDimensions || 'Choose a video'}</strong>. Jobs on large
+      frames can take hours.
+    </p>
+  {:else}
+    {#if separateGpu}<label class="memory-choice"
+        ><input
+          type="checkbox"
+          checked={lowMemory}
+          {disabled}
+          on:change={(event) => dispatch('change', event.currentTarget.checked)}
+        /> Reduce GPU memory</label
+      >
+    {:else}<strong>{shared ? 'Apple GPU · automatic memory management' : 'SeedVR2 memory'}</strong
+      >{/if}
+    <p>
+      {(lowMemory && separateGpu) || shared || device?.id === 'cpu'
+        ? 'Up to 5 frames per clip · 128 px VAE tiles.'
+        : 'Up to 9 frames per clip · 512 px VAE tiles.'}
+      {#if lowMemory && separateGpu}
+        32 diffusion blocks and intermediate tensors offload to CPU. Uses more system RAM and can be
+        slower.{:else if separateGpu}
+        CPU block and tensor offload is off. Larger tiles and clips use substantially more GPU
+        memory.{:else if shared}
+        Uses shared system memory with small tiles and short clips automatically. CPU block offload
+        is not used. Safe memory mode belongs to frame-by-frame models.{:else if device?.id.startsWith('xpu') || device?.id.startsWith('directml')}
+        SeedVR2 offload is not implemented for this backend. Use a supported CUDA/ROCm or Apple GPU
+        backend.{/if}
+      Smaller tiles and shorter clips can affect seams and temporal consistency.
+    </p>
+    <p>
+      Requested output: <strong>{outputDimensions || 'Choose a video'}</strong>. Memory saving keeps
+      this size.
+    </p>
+    <p>
+      {#if device?.total_memory}{gib(device.total_memory)}
+        {shared ? 'shared memory' : 'device capacity'}.{' '}{/if}Capacity is not a guarantee that a
+      clip fits; output dimensions and clip length also matter.
+    </p>
+  {/if}
   {#if memory}
     <div class="reading-title">
       <strong>{memory.oom ? 'Out of memory' : running ? 'Live memory' : 'Last job memory'}</strong
-      ><span>{labels[memory.stage] ?? memory.stage}</span>
+      ><span
+        >{(flashReadings ? flashLabels[memory.stage] : undefined) ??
+          labels[memory.stage] ??
+          memory.stage}</span
+      >
     </div>
     <p>
-      {memory.output_width} × {memory.output_height} · up to {memory.clip_frames} frames/clip · {memory.shared_memory
-        ? 'automatic memory management'
-        : memory.low_memory
-          ? 'memory saving'
-          : 'standard'}
+      {#if flashReadings}
+        {memory.output_width} × {memory.output_height} · {memory.clip_frames
+          ? `windows of ${memory.clip_frames} frames · `
+          : ''}automatic memory management
+      {:else}
+        {memory.output_width} × {memory.output_height} · up to {memory.clip_frames} frames/clip · {memory.shared_memory
+          ? 'automatic memory management'
+          : memory.low_memory
+            ? 'memory saving'
+            : 'standard'}
+      {/if}
     </p>
     <dl>
       {#if memory.gpu_sample_available}
@@ -102,7 +151,9 @@
       </div>
     </dl>
     <p class="explanation">
-      Reserved memory includes allocated tensors and PyTorch's cache. {memory.oom
+      {flashReadings
+        ? ''
+        : "Reserved memory includes allocated tensors and PyTorch's cache. "}{memory.oom
         ? 'Readings captured at failure.'
         : running
           ? 'Measured every second.'

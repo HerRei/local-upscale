@@ -47,6 +47,25 @@ def run(command: list[str], **kwargs) -> None:
     subprocess.run(command, check=True, **kwargs)
 
 
+def pip_install(python: str, *arguments: str) -> None:
+    """Install into ``python``'s environment with pip, or with uv when it has no pip
+    (a venv made by ``uv venv``)."""
+    has_pip = (
+        subprocess.run(
+            [python, "-m", "pip", "--version"], capture_output=True, check=False
+        ).returncode
+        == 0
+    )
+    if has_pip:
+        run([python, "-m", "pip", "install", *arguments])
+        return
+    uv = shutil.which("uv")
+    if uv is None:
+        raise SystemExit(f"{python} has no pip and uv is not on PATH")
+    translated = ["--reinstall" if item == "--force-reinstall" else item for item in arguments]
+    run([uv, "pip", "install", "--python", python, *translated])
+
+
 def sha256(path: Path) -> str:
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
@@ -113,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         if not build_python.exists():
             run([python, "-m", "venv", str(build_env)])
-        run([str(build_python), "-m", "pip", "install", "--quiet", *OPENCV_BUILD_REQUIREMENTS])
+        pip_install(str(build_python), "--quiet", *OPENCV_BUILD_REQUIREMENTS)
         run(
             [
                 sys.executable,
@@ -140,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
             if item.is_file():
                 shutil.copy2(item, corresponding / item.name)
 
-    run([python, "-m", "pip", "install", "--no-deps", "--force-reinstall", *map(str, wheels)])
+    pip_install(python, "--no-deps", "--force-reinstall", *map(str, wheels))
     run(
         [
             sys.executable,

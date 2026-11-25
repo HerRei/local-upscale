@@ -10,9 +10,13 @@ from unittest.mock import patch
 import pytest
 
 from localsr.core.model_catalog import (
+    AUDIO_MODEL_CATALOG,
     CATALOG_BY_ID,
     FACE_DETECTOR_MODEL,
+    INTERPOLATION_MODEL_CATALOG,
     MODEL_CATALOG,
+    VIDEO_CATALOG_BY_ID,
+    VIDEO_MODEL_CATALOG,
     CatalogModel,
     ModelDownloadCancelled,
     ModelDownloadError,
@@ -60,7 +64,10 @@ def test_catalog_has_all_curated_models():
         "hat_l_x4_face",
         "denoise_realplksr_1x",
         "nafnet_sidd_width64",
+        "esrgan_hfa2k_x4",
         "realplksr_hfa2k_anime_x4",
+        "localsr_quick_x4_v1",
+        "localsr_best_x4_v1",
         "span_photo_x4",
         "realplksr_nomoswebphoto_x4",
         "realesrgan_x2plus",
@@ -76,11 +83,11 @@ def test_catalog_has_all_curated_models():
     ]
     catalog_ids = [model.model_id for model in MODEL_CATALOG]
     assert catalog_ids == expected_ids
-    assert len(MODEL_CATALOG) == 19
+    assert len(MODEL_CATALOG) == 22
 
     # Verify uniqueness of IDs and filenames
-    assert len({model.model_id for model in MODEL_CATALOG}) == 19
-    assert len({model.filename for model in MODEL_CATALOG}) == 19
+    assert len({model.model_id for model in MODEL_CATALOG}) == 22
+    assert len({model.filename for model in MODEL_CATALOG}) == 22
 
 
 def test_recent_same_size_rewrite_cannot_reuse_a_checksum_verdict(tmp_path, monkeypatch):
@@ -183,6 +190,19 @@ def test_catalog_attributes_and_integrity():
 
 
 def test_spandrel_compatible_models_metadata():
+    esrgan_hfa2k = CATALOG_BY_ID.get("esrgan_hfa2k_x4")
+    assert esrgan_hfa2k is not None
+    assert esrgan_hfa2k.name == "ESRGAN 4x HFA2k — Best"
+    assert esrgan_hfa2k.architecture == "ESRGAN"
+    assert esrgan_hfa2k.scale == 4
+    assert ModelPurpose.ILLUSTRATION in esrgan_hfa2k.purposes
+    assert "4xHFA2k/4xHFA2k.pth" in esrgan_hfa2k.download_url
+    assert esrgan_hfa2k.quality_tier == QualityTier.MAXIMUM
+    assert esrgan_hfa2k.speed_tier == SpeedTier.MEDIUM
+    assert esrgan_hfa2k.license_name == "CC BY 4.0"
+    assert esrgan_hfa2k.commercial_use_status == "allowed"
+    assert esrgan_hfa2k.preset_eligible
+
     # 1. RealPLKSR Anime
     anime = CATALOG_BY_ID.get("realplksr_hfa2k_anime_x4")
     assert anime is not None
@@ -239,6 +259,60 @@ def test_spandrel_compatible_models_metadata():
     assert nafnet_deblur.memory_factor == 0.75
     assert nafnet_deblur.quality_tier == QualityTier.HIGH
     assert "Single-image camera motion deblurring model" in nafnet_deblur.description
+
+    # 5. LocalSR Quick and Best (PULSE)
+    localsr_quick = CATALOG_BY_ID.get("localsr_quick_x4_v1")
+    assert localsr_quick is not None
+    assert localsr_quick.name == "LocalSR Photo S"
+    assert localsr_quick.architecture == "PULSE"
+    assert localsr_quick.scale == 4
+    assert localsr_quick.purposes == (ModelPurpose.PHOTO,)
+    assert localsr_quick.size_bytes == 2_479_984
+    assert (
+        localsr_quick.sha256 == "73e4b540753cbe8ba2897cef2c6c3e8e51436835fa6c67217a997c3e1b13ea17"
+    )
+    assert (
+        localsr_quick.download_url
+        == "https://github.com/HerRei/localsr-models/releases/download/v1/4xLocalSRPhoto_PULSE-64x8.safetensors"
+    )
+    assert localsr_quick.license_name == "CC BY 4.0"
+    assert localsr_quick.author == "Hermes Reisner"
+    assert localsr_quick.source_url == "https://github.com/HerRei/localsr-models"
+
+    localsr_best = CATALOG_BY_ID.get("localsr_best_x4_v1")
+    assert localsr_best is not None
+    assert localsr_best.name == "LocalSR Photo M"
+    assert localsr_best.architecture == "PULSE"
+    assert localsr_best.scale == 4
+    assert localsr_best.purposes == (ModelPurpose.PHOTO,)
+    assert localsr_best.size_bytes == 8_142_848
+    assert localsr_best.sha256 == "5446207377284658a3c306dd5eac0aa2662f4f9344ee10f59ea3ab4ec67c18c1"
+    assert (
+        localsr_best.download_url
+        == "https://github.com/HerRei/localsr-models/releases/download/v1/4xLocalSRPhoto_PULSE-96x12.safetensors"
+    )
+    assert localsr_best.license_name == "CC BY 4.0"
+    assert localsr_best.author == "Hermes Reisner"
+    assert localsr_best.source_url == "https://github.com/HerRei/localsr-models"
+
+
+def test_video_model_catalog_tiers():
+    seed_fp16 = VIDEO_CATALOG_BY_ID["seedvr2_3b"]
+    seed_fp8 = VIDEO_CATALOG_BY_ID["seedvr2_3b_fp8"]
+    flash = VIDEO_CATALOG_BY_ID["flashvsr_v11"]
+    assert (seed_fp16.quality_tier, seed_fp16.speed_tier) == (4, 0)
+    assert (seed_fp8.quality_tier, seed_fp8.speed_tier) == (4, 0)
+    assert (flash.quality_tier, flash.speed_tier) == (3, 1)
+
+    slowest_image_speed = min(model.speed_tier for model in MODEL_CATALOG)
+    for model in VIDEO_MODEL_CATALOG:
+        assert 1 <= model.quality_tier <= 4
+        assert 0 <= model.speed_tier <= 3
+        assert model.speed_tier <= slowest_image_speed
+
+    for model in (*INTERPOLATION_MODEL_CATALOG, *AUDIO_MODEL_CATALOG):
+        assert model.quality_tier == 0
+        assert model.speed_tier == 0
 
 
 def test_model_purpose_enum():

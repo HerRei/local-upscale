@@ -387,27 +387,31 @@ def test_video_job_protocol_messages_include_video_specific_types():
 
 
 def test_deflicker_reduces_low_amplitude_static_flicker():
-    """Reduce subtle static flicker without treating hard cuts as outliers."""
+    """Reduce subtle output shimmer on a static source without breaking cuts."""
     from localsr.core.video_pipeline import _deflicker_frames
 
-    # Five frames where the middle one is a bright outlier.
-    frame_base = np.full((4, 4, 3), 50, dtype=np.uint8)
-    frame_outlier = np.full((4, 4, 3), 60, dtype=np.uint8)
-    frames = [
-        frame_base.copy(),
-        frame_base.copy(),
-        frame_outlier,
-        frame_base.copy(),
-        frame_base.copy(),
+    rng = np.random.default_rng(17)
+    src = np.full((24, 24, 3), 100, dtype=np.uint8)
+    raw = [
+        np.clip(100.0 + rng.normal(0.0, 6.0, (24, 24, 3)), 0, 255).round().astype(np.uint8)
+        for _ in range(10)
     ]
     cancel = threading.Event()
-    result = list(_deflicker_frames(iter(frames), window=3, cancel_event=cancel))
-    assert len(result) == 5
-    assert 50 < result[2].mean() < 60
+    result = list(
+        _deflicker_frames(zip(raw, [src] * 10, strict=True), window=3, cancel_event=cancel)
+    )
+    assert len(result) == 10
+    raw_diff = float(
+        np.mean([np.abs(raw[i].astype(np.float32) - raw[i - 1]).mean() for i in range(1, 10)])
+    )
+    out_diff = float(
+        np.mean([np.abs(result[i].astype(np.float32) - result[i - 1]).mean() for i in range(1, 10)])
+    )
+    assert out_diff < raw_diff * 0.65
 
 
 def test_deflicker_preserves_genuine_motion():
-    """When a value changes and stays changed, the median should track it."""
+    """When a value steps and stays changed, deflicker preserves the step."""
     from localsr.core.video_pipeline import _deflicker_frames
 
     frames = [
@@ -425,17 +429,16 @@ def test_deflicker_preserves_genuine_motion():
     assert result[-1].mean() > 80
 
 
-def test_deflicker_window_one_is_passthrough():
-    """A window of 1 means no de-flicker — frames pass through unchanged."""
+def test_deflicker_window_is_accepted_for_compatibility():
+    """``window`` stays accepted for request compatibility and does not alter output."""
     from localsr.core.video_pipeline import _deflicker_frames
 
-    frames = [np.full((4, 4, 3), v, dtype=np.uint8) for v in (10, 50, 200)]
-    cancel = threading.Event()
-    result = list(_deflicker_frames(iter(frames), window=1, cancel_event=cancel))
-    assert len(result) == 3
-    assert result[0].mean() == 10
-    assert result[1].mean() == 50
-    assert result[2].mean() == 200
+    frames = [np.full((16, 16, 3), 40, dtype=np.uint8) for _ in range(5)]
+    out_one = list(_deflicker_frames(iter(frames), window=1, cancel_event=threading.Event()))
+    out_nine = list(_deflicker_frames(iter(frames), window=9, cancel_event=threading.Event()))
+    assert len(out_one) == len(out_nine) == 5
+    for a, b in zip(out_one, out_nine, strict=True):
+        np.testing.assert_array_equal(a, b)
 
 
 def test_deflicker_keeps_only_a_bounded_streaming_window():
@@ -995,6 +998,7 @@ def test_worker_server_runs_video_job_with_stages_payload(tmp_path, monkeypatch)
             inference_seconds=0.1,
             partial=False,
             kept_seconds=0.0,
+            kept_frames=0,
             notes=[],
         )
 
@@ -1174,6 +1178,7 @@ def test_worker_server_1x_upscale_skips_inspecting_sr_model(tmp_path, monkeypatc
             inference_seconds=0.1,
             partial=False,
             kept_seconds=0.0,
+            kept_frames=0,
             notes=[],
         )
 
@@ -1292,3 +1297,476 @@ def test_stopped_subtitle_packet_is_cut_at_both_ends():
     assert result is packet
     assert packet.pts == 0
     assert packet.duration == 1000
+
+
+def test_encoder_shutdown_flushes_before_close_even_on_failure():
+    from localsr.core.video_io import _close_encoder
+
+    events = []
+
+    class Stream:
+        def encode(self):
+            events.append("flush")
+            return ["packet"]
+
+    class Container:
+        def close(self):
+            events.append("close")
+
+    def mux(packet):
+        events.append(packet)
+        raise ValueError("mux failed")
+
+    with pytest.raises(ValueError, match="mux failed"):
+        _close_encoder(Container(), Stream(), mux)
+    assert events == ["flush", "packet", "close"]
+
+
+def test_encode_video_flushes_encoder_before_close_when_frame_loop_fails(monkeypatch, tmp_path):
+    import localsr.core.video_io as video_io
+
+    events = []
+    real_close = video_io._close_encoder
+
+    def tracked_close(container, stream, mux):
+        events.append("close_encoder")
+        return real_close(container, stream, mux)
+
+    monkeypatch.setattr(video_io, "_close_encoder", tracked_close)
+
+    def failing_frames():
+        yield np.zeros((32, 48, 3), dtype=np.uint8)
+        raise RuntimeError("boom mid-encode")
+
+    with pytest.raises(video_io.VideoStageError, match="boom mid-encode"):
+        video_io._encode_video(
+            failing_frames(),
+            str(tmp_path / "failed.mp4"),
+            fps=24,
+            video_codec="av1",
+            width=48,
+            height=32,
+        )
+    assert events == ["close_encoder"]
+    assert not list(tmp_path.iterdir())
+
+
+def test_video_colour_preserves_timing_and_audio_with_sparse_keyframes(tmp_path):
+    from types import SimpleNamespace
+
+    source = _make_synthetic_video_with_audio(tmp_path / "colour-input.mp4", frames=24, fps=24)
+    output = tmp_path / "colour-output.mp4"
+    info = SimpleNamespace(architecture="DDColor", scale=1, in_channels=3, out_channels=3)
+
+    class StubEngine:
+        def __init__(self):
+            self.calls = 0
+
+        def load_model(self, *args):
+            pass
+
+        def switch_model(self, *args):
+            pass
+
+        def process_frame(self, *, img_tensor, **kwargs):
+            self.calls += 1
+            rgb = (img_tensor.numpy() * 255).astype(np.uint8)
+            rgb[0] = np.maximum(rgb[0], 150)
+            return rgb
+
+    engine = StubEngine()
+    config = VideoJobConfig(
+        video_path=str(source),
+        model_path="ddcolor.pth",
+        output_video_path=str(output),
+        model_info=info,
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=0,
+        safe_memory=False,
+        output_scale=1,
+        audio_path=str(source),
+        video_codec="vp9",
+    )
+    result = run_video_job(config, engine, threading.Event())
+    assert result.frames_processed == 24
+    source_frames = list(decode_timed_frames(str(source)))
+    output_frames = list(decode_timed_frames(str(output)))
+    assert len(output_frames) == 24
+    assert [float(frame.timestamp) for frame in output_frames] == pytest.approx(
+        [float(frame.timestamp) for frame in source_frames], abs=0.001
+    )
+    assert [float(frame.duration) for frame in output_frames] == pytest.approx(
+        [float(frame.duration) for frame in source_frames], abs=0.001
+    )
+    assert probe_video(str(output)).fps == pytest.approx(24, abs=0.1)
+    with av.open(str(output)) as container:
+        assert any(stream.type == "audio" for stream in container.streams)
+    assert engine.calls < 24
+
+
+def test_video_colour_runs_between_other_fixes_before_upscale(tmp_path):
+    from types import SimpleNamespace
+
+    from localsr.core.video_pipeline import VideoFixStage
+
+    source = _make_synthetic_video_with_audio(tmp_path / "ordered-input.mp4", frames=8, fps=8)
+    output = tmp_path / "ordered-output.mp4"
+    fix_info = SimpleNamespace(architecture="Dummy", scale=1, in_channels=3, out_channels=3)
+    colour_info = SimpleNamespace(architecture="DDColor", scale=1, in_channels=3, out_channels=3)
+    up_info = SimpleNamespace(architecture="Dummy", scale=2, in_channels=3, out_channels=3)
+
+    class StageEngine:
+        current = ""
+        colour_calls = 0
+        after_colour_calls = 0
+
+        def load_model(self, *args):
+            pass
+
+        def switch_model(self, path):
+            self.current = path
+
+        def process_frame(self, *, img_tensor, **kwargs):
+            pixels = (img_tensor.numpy() * 255).clip(0, 255).astype(np.uint8)
+            if self.current == "before":
+                pixels[:] = 100
+            elif self.current == "colour":
+                self.colour_calls += 1
+                assert pixels.mean() == pytest.approx(100, abs=1)
+                pixels[0] = 180
+                pixels[1:] = 70
+            elif self.current == "after":
+                self.after_colour_calls += 1
+                assert pixels[0].mean() > pixels[1].mean() + 20
+            elif self.current == "up":
+                pixels = np.repeat(np.repeat(pixels, 2, axis=1), 2, axis=2)
+            return pixels
+
+    engine = StageEngine()
+    config = VideoJobConfig(
+        video_path=str(source),
+        model_path="up",
+        output_video_path=str(output),
+        model_info=up_info,
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=0,
+        safe_memory=False,
+        output_scale=2,
+        audio_path=str(source),
+        video_codec="vp9",
+        preprocess_stages=(
+            VideoFixStage("before", fix_info, fix="noise"),
+            VideoFixStage("colour", colour_info, fix="colour"),
+            VideoFixStage("after", fix_info, fix="blur"),
+        ),
+    )
+    events = []
+    run_video_job(
+        config,
+        engine,
+        threading.Event(),
+        frame_started_cb=lambda index, total: events.append(("start", index)),
+        source_frame_cb=lambda index, total, pixels: events.append(("source", index)),
+    )
+    assert events == [
+        event for index in range(8) for event in (("start", index), ("source", index))
+    ]
+    assert engine.colour_calls == 1
+    assert engine.after_colour_calls == 8
+    probe = probe_video(str(output))
+    assert (probe.width, probe.height) == (FRAME_WIDTH * 2, FRAME_HEIGHT * 2)
+    assert len(list(decode_timed_frames(str(output)))) == 8
+
+
+def test_video_colour_is_refused_with_hdr_preservation(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    import localsr.core.video_pipeline as video_pipeline
+
+    source = _make_synthetic_video_with_audio(tmp_path / "hdr-colour.mp4", frames=4, fps=24)
+    real_probe = video_pipeline.probe_video
+
+    def hdr_probe(path):
+        return replace(real_probe(path), hdr_format="PQ")
+
+    monkeypatch.setattr(video_pipeline, "probe_video", hdr_probe)
+    monkeypatch.setattr(video_pipeline, "validate_hdr_encoder", lambda *args: None)
+    info = SimpleNamespace(architecture="DDColor", scale=1, in_channels=3, out_channels=3)
+    config = VideoJobConfig(
+        video_path=str(source),
+        model_path="ddcolor.pth",
+        output_video_path=str(tmp_path / "out.mkv"),
+        model_info=info,
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=0,
+        safe_memory=False,
+        output_scale=1,
+        hdr_mode="preserve",
+    )
+    with pytest.raises(ValueError, match="Colour is not yet supported with HDR"):
+        run_video_job(config, SimpleNamespace(), threading.Event())
+
+
+def test_the_frame_loop_is_reported_after_audio_cleanup(tmp_path):
+    """After audio cleanup reaches 100 %, the frame loop must announce itself, or the
+    app keeps the audio step's 100 % and shows "Saving the result" while models load."""
+    from types import SimpleNamespace
+
+    source = _make_synthetic_video_with_audio(tmp_path / "steps.mp4", frames=6, fps=24)
+    info = SimpleNamespace(architecture="DDColor", scale=1, in_channels=3, out_channels=3)
+
+    class StubEngine:
+        def __init__(self):
+            self.calls = 0
+            self.notes = []
+
+        def load_model(self, *args):
+            pass
+
+        def switch_model(self, *args):
+            pass
+
+        def add_note(self, note):
+            self.notes.append(note)
+
+        def process_frame(self, *, img_tensor, **kwargs):
+            self.calls += 1
+            return (img_tensor.numpy() * 255).astype(np.uint8)
+
+    stages = []
+    config = VideoJobConfig(
+        video_path=str(source),
+        model_path="ddcolor.pth",
+        output_video_path=str(tmp_path / "out.mp4"),
+        model_info=info,
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=0,
+        safe_memory=False,
+        output_scale=1,
+        audio_path=str(source),
+        video_codec="vp9",
+    )
+    run_video_job(
+        config,
+        StubEngine(),
+        threading.Event(),
+        stage_cb=lambda stage, *counts: stages.append(stage),
+    )
+    assert "reading_frames" in stages
+
+
+def test_colour_preparation_is_counted_before_the_first_frame(tmp_path):
+    from types import SimpleNamespace
+
+    source = _make_synthetic_video_with_audio(tmp_path / "grey.mp4", frames=6, fps=24)
+    info = SimpleNamespace(architecture="DDColor", scale=1, in_channels=3, out_channels=3)
+
+    class StubEngine:
+        def __init__(self):
+            self.calls = 0
+            self.notes = []
+
+        def load_model(self, *args):
+            pass
+
+        def switch_model(self, *args):
+            pass
+
+        def add_note(self, note):
+            self.notes.append(note)
+
+        def process_frame(self, *, img_tensor, **kwargs):
+            self.calls += 1
+            return (img_tensor.numpy() * 255).astype(np.uint8)
+
+    calls = []
+    config = VideoJobConfig(
+        video_path=str(source),
+        model_path="ddcolor.pth",
+        output_video_path=str(tmp_path / "out.mp4"),
+        model_info=info,
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=0,
+        safe_memory=False,
+        output_scale=1,
+        video_codec="vp9",
+    )
+    run_video_job(
+        config,
+        StubEngine(),
+        threading.Event(),
+        stage_cb=lambda stage, *counts: calls.append((stage, *counts)),
+    )
+    counted = [call for call in calls if call[0] == "colour_preparing"]
+    assert counted, calls
+    assert [call[1] for call in counted] == list(range(1, len(counted) + 1))
+    assert all(call[2] == 6 for call in counted)
+
+
+def test_video_colour_is_skipped_with_a_note_when_the_video_has_colour(tmp_path):
+    from types import SimpleNamespace
+
+    from localsr.core.video_pipeline import _video_has_colour
+
+    def _write_clip(path: Path, *, colourful: bool) -> None:
+        with av.open(str(path), mode="w", format="mp4") as container:
+            stream = container.add_stream("libvpx-vp9", rate=24)
+            stream.width, stream.height, stream.pix_fmt = 96, 64, "yuv420p"
+            stream.options = {"lossless": "1", "lag-in-frames": "0"}
+            for index in range(8):
+                rgb = np.empty((64, 96, 3), dtype=np.uint8)
+                if colourful:
+                    rgb[:, :32] = [220, 40, 40]
+                    rgb[:, 32:64] = [40, 200, 60]
+                    rgb[:, 64:] = [40, 80, 220]
+                else:
+                    rgb[...] = 80 + index * 10
+                for packet in stream.encode(av.VideoFrame.from_ndarray(rgb, format="rgb24")):
+                    container.mux(packet)
+            for packet in stream.encode():
+                container.mux(packet)
+
+    source = tmp_path / "colourful.mp4"
+    _write_clip(source, colourful=True)
+    assert _video_has_colour(
+        SimpleNamespace(video_path=str(source), start_frame=0, hdr_mode="reject")
+    )
+    grey = tmp_path / "grey.mp4"
+    _write_clip(grey, colourful=False)
+    assert not _video_has_colour(
+        SimpleNamespace(video_path=str(grey), start_frame=0, hdr_mode="reject")
+    )
+
+    info = SimpleNamespace(architecture="DDColor", scale=1, in_channels=3, out_channels=3)
+
+    class StubEngine:
+        def __init__(self):
+            self.calls = 0
+            self.notes = []
+
+        def load_model(self, *args):
+            pass
+
+        def switch_model(self, *args):
+            pass
+
+        def add_note(self, note):
+            self.notes.append(note)
+
+        def process_frame(self, *, img_tensor, **kwargs):
+            self.calls += 1
+            return (img_tensor.numpy() * 255).astype(np.uint8)
+
+    engine = StubEngine()
+    loaded = []
+    engine.load_model = lambda path, *args, **kwargs: loaded.append(path)
+    warnings = []
+    config = VideoJobConfig(
+        video_path=str(source),
+        model_path="ddcolor.pth",
+        output_video_path=str(tmp_path / "out.mp4"),
+        model_info=info,
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=0,
+        safe_memory=False,
+        output_scale=1,
+        video_codec="vp9",
+    )
+    result = run_video_job(config, engine, threading.Event(), warning_callback=warnings.append)
+    assert result.frames_processed == 8
+    assert engine.calls == 0
+    assert warnings == ["This video already has colour, so Colour was skipped."]
+    assert engine.notes == warnings
+    # The skipped DDColor is never loaded onto the graphics card.
+    assert "ddcolor.pth" not in loaded
+
+
+def test_stopped_video_job_discards_partial_and_cleans_scratch_when_keep_partial_is_false(
+    synthetic_video, tmp_path
+):
+    adapter = DummyAdapter(2)
+    cancel = threading.Event()
+    out_dir = tmp_path / "out"
+    scratch_dir = tmp_path / "scratch"
+    out_dir.mkdir()
+    scratch_dir.mkdir()
+    config = VideoJobConfig(
+        video_path=str(synthetic_video),
+        model_path="dummy",
+        output_video_path=str(out_dir / "output.mp4"),
+        model_info=adapter.model_info,
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=4,
+        safe_memory=False,
+        temporary_directory=str(scratch_dir),
+    )
+
+    def stop(index, total):
+        if index >= 4:
+            cancel.set()
+
+    with pytest.raises(InterruptedError):
+        run_video_job(
+            config,
+            InferenceEngine(adapter),
+            cancel,
+            frame_started_cb=stop,
+            keep_partial=False,
+        )
+    assert list(out_dir.iterdir()) == []
+    assert list(scratch_dir.iterdir()) == []
+
+
+def test_deflicker_reports_each_frame_it_smooths():
+    import threading
+
+    from localsr.core.video_pipeline import _deflicker_frames
+
+    frames = [np.full((4, 4, 3), value, dtype=np.uint8) for value in (10, 12, 11, 13, 10)]
+    reported = []
+    out = list(_deflicker_frames(iter(frames), 3, threading.Event(), reported.append))
+    assert len(out) == 5
+    assert reported == [0, 1, 2, 3, 4]
+
+
+def test_deflicker_hands_on_its_held_back_frame_when_a_stop_keeps_the_finished_part():
+    """Bug hunt 2026-11-23: 20 finished frames, 19 in the kept part."""
+    import threading
+
+    from localsr.core.video_pipeline import _deflicker_frames
+
+    cancel = threading.Event()
+    frames = [np.full((4, 4, 3), 10 + index, dtype=np.uint8) for index in range(5)]
+
+    def upstream():
+        yield from frames
+        cancel.set()
+        raise InterruptedError("stopped")
+
+    kept = []
+    with pytest.raises(InterruptedError):
+        for frame in _deflicker_frames(upstream(), 3, cancel, keep=lambda: True):
+            kept.append(frame)
+    assert len(kept) == 5
+
+    discarded = []
+    cancel.clear()
+    with pytest.raises(InterruptedError):
+        for frame in _deflicker_frames(upstream(), 3, cancel, keep=lambda: False):
+            discarded.append(frame)
+    assert len(discarded) == 2  # the 3 held-back look-ahead frames go with the discarded job

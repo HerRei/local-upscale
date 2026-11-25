@@ -174,6 +174,20 @@ def test_release_workflows_keep_the_update_identity_and_updater_files(name: str)
     assert any("installed update identity" in violation for violation in violations)
 
 
+def test_the_linux_workflow_keeps_the_debian_package_gates() -> None:
+    name = "linux-appimages.yml"
+    workflow = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+    gates = architecture.RELEASE_PACKAGE_WORKFLOWS[name]
+    # Without its own identity the .deb would try to replace files apt owns; without
+    # the apt smoke nothing proves it installs, starts and uninstalls.
+    stripped = workflow.replace("verify_deb_dependencies.py", "true").replace(
+        "--update-target linux-x86_64-cpu-deb", "--update-target linux-x86_64-cpu"
+    )
+    violations = architecture.release_package_violations(name, stripped, gates)
+    assert any("Debian package dependency check" in violation for violation in violations)
+    assert any("Debian package apt smoke" in violation for violation in violations)
+
+
 def test_rejects_workflows_on_self_hosted_runners(tmp_path: Path) -> None:
     workflows = tmp_path / ".github" / "workflows"
     workflows.mkdir(parents=True)

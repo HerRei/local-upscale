@@ -2,6 +2,8 @@
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   const dispatch = createEventDispatcher<{ compatibilityneeded: void }>();
   import { comparisonFromKey, comparisonFromPointer } from './lib/comparison';
+  import BackgroundSwitch from './BackgroundSwitch.svelte';
+  import type { ViewerBackground } from './lib/viewerBackground';
   import VideoTransport from './VideoTransport.svelte';
   import { commonDuration, synchronizationDecision } from './lib/video-sync';
   import {
@@ -22,6 +24,13 @@
   export let compare = 50;
   // Chosen in the preview header; holding M there shows the original.
   export let view: 'original' | 'split' | 'enhanced' = 'split';
+  /** Frames per second of the result (or of the source alone); 0 hides the frame steps. */
+  export let fps = 0;
+  /** What a stopped job kept, as the host measured it in the file: frames and seconds. */
+  export let keptFrames = 0;
+  export let keptSeconds = 0;
+  export let viewerBackground: ViewerBackground = 'checker';
+  export let setViewerBackground: (value: ViewerBackground) => void = () => {};
 
   const RATES = [0.5, 1, 1.5, 2];
 
@@ -67,6 +76,26 @@
     compare,
   );
   $: single = !enhancedSrc;
+  // Steps go by the result's frames. A kept part's length is kept_frames / fps when both
+  // are known, so audio overhang in the container does not stretch the frame grid.
+  $: keptDuration =
+    keptFrames > 0 && fps > 0 ? keptFrames / fps : keptSeconds > 0 ? keptSeconds : 0;
+  $: frameRate =
+    keptFrames > 0 && fps > 0
+      ? fps
+      : keptFrames > 0 && keptSeconds > 0
+        ? keptFrames / keptSeconds
+        : keptFrames > 0 && duration > 0 && duration < 1
+          ? keptFrames / duration
+          : fps;
+  $: frameCount =
+    keptFrames > 0
+      ? keptFrames
+      : frameRate > 0 && duration > 0
+        ? Math.max(1, Math.ceil(duration * frameRate - 1e-6))
+        : 0;
+  // At the very end the last frame shows: the index stays on it.
+  $: frameIndex = Math.max(0, Math.min(frameCount - 1, Math.floor(currentTime * frameRate + 1e-6)));
   $: clip = single
     ? 0
     : view === 'original'
@@ -233,8 +262,11 @@
   }
 
   function updateDuration(): void {
-    duration = commonDuration(original?.duration ?? 0, enhanced?.duration ?? 0);
+    const common = commonDuration(original?.duration ?? 0, enhanced?.duration ?? 0);
+    duration =
+      keptDuration > 0 && common > 0 ? Math.min(common, keptDuration) : common || keptDuration;
   }
+  $: if (keptDuration >= 0 && (originalLoaded || enhancedLoaded)) updateDuration();
 
   async function togglePlayback(): Promise<void> {
     playbackError = '';
@@ -265,12 +297,32 @@
     if (enhanced) enhanced.currentTime = Math.min(target, finiteDuration(enhanced));
   }
 
+  /** The middle of a frame, so both sides show the frame that holds this time. */
+  function seekFrame(index: number): void {
+    if (!frameCount) return;
+    seek((Math.max(0, Math.min(frameCount - 1, Math.round(index))) + 0.5) / frameRate);
+  }
+
+  function step(direction: -1 | 1): void {
+    enhanced.pause();
+    original?.pause();
+    playing = false;
+    seekFrame(frameIndex + direction);
+  }
+
   function finiteDuration(video: HTMLVideoElement): number {
     return Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
   }
 
   function updateTime(): void {
     currentTime = Math.min(enhanced.currentTime || 0, duration || Number.POSITIVE_INFINITY);
+    if (keptDuration > 0 && !enhanced.paused && (enhanced.currentTime || 0) >= keptDuration) {
+      enhanced.pause();
+      original?.pause();
+      playing = false;
+      seekFrame(frameCount - 1);
+      return;
+    }
     if (!original) return;
     const decision = synchronizationDecision(
       enhanced.currentTime,
@@ -427,6 +479,10 @@
       toggle={togglePlayback}
       {seek}
       {nextRate}
+      step={frameCount ? step : undefined}
+      frames={frameCount}
+      frame={frameIndex}
+      {seekFrame}
     />
     <div class="zoom-hud" class:shown={pointerOver} role="group" aria-label="Video zoom">
       <button
@@ -452,6 +508,7 @@
         title="One source pixel per screen pixel"
         on:click={actualSize}>1:1</button
       >
+      <BackgroundSwitch value={viewerBackground} set={setViewerBackground} />
     </div>
   </div>
   {#if playbackError}

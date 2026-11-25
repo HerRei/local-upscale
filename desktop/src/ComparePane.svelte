@@ -9,10 +9,14 @@
   import type { VideoComparisonSources } from './lib/types';
   import { CompareVideoSync } from './lib/compare-video-sync';
   import VideoTransport from './VideoTransport.svelte';
+  import BackgroundSwitch from './BackgroundSwitch.svelte';
+  import type { ViewerBackground } from './lib/viewerBackground';
   import FileName from './FileName.svelte';
   import HelpTip from './HelpTip.svelte';
+  import UnfinishedTiles from './UnfinishedTiles.svelte';
   import { comparisonFromKey, comparisonFromPointer } from './lib/comparison';
-  import { boxColumns, sliderBlock, type CompareItem } from './lib/compareOutputs';
+  import { boxColumns, detailLines, sliderBlock, type CompareItem } from './lib/compareOutputs';
+  import { formatMediaTime } from './lib/video-sync';
   import {
     clampPan,
     comparisonGeometry,
@@ -41,6 +45,8 @@
   /** As a tab of the main area there is no Done: the tabs are the way out. */
   export let asTab = false;
   export let compactHidden = false;
+  export let viewerBackground: ViewerBackground = 'checker';
+  export let setViewerBackground: (value: ViewerBackground) => void = () => {};
 
   const BAR = 26;
   let well: HTMLDivElement | undefined;
@@ -76,9 +82,19 @@
   let sync: CompareVideoSync | undefined;
   let playing = false;
   let currentTime = 0;
+  let desiredTime = 0;
+  let wantedPlayback = false;
   let duration = 0;
   let playbackRate = 1;
-  let muted = false;
+  // Frames of the clock's span and the one shown; an unfinished side can end the span early.
+  let frames = 0;
+  let frame = 0;
+  let limited = false;
+  /**
+   * The side whose sound plays: a slot's key, or 'off'. Slot 1 at first; from then on the
+   * choice belongs to that result and stays with it when the slots are swapped.
+   */
+  let audioChoice = '';
   let preparationKey = '';
   let preparationRevision = 0;
   let requestId = '';
@@ -88,9 +104,16 @@
   let preparationQueue = Promise.resolve();
 
   function updateTransport(): void {
-    playing = sync?.requestedPlayback ?? false;
-    currentTime = sync?.time ?? 0;
+    if (sync && sync.duration > 0) {
+      wantedPlayback = sync.requestedPlayback;
+      desiredTime = sync.time;
+    }
+    playing = sync?.requestedPlayback ?? wantedPlayback;
+    currentTime = sync?.time ?? desiredTime;
     duration = sync?.duration ?? 0;
+    frames = sync?.frames ?? 0;
+    frame = sync?.frame ?? 0;
+    limited = sync?.limited ?? false;
   }
   function stopClock(): void {
     if (frameId !== undefined) frameVideo?.cancelVideoFrameCallback(frameId);
@@ -105,7 +128,7 @@
       .map((item) => players.get(item.key))
       .find((player) => player && !player.paused);
     const update = () => {
-      frameId = animationId = undefined;
+      stopClock();
       sync?.tick();
       updateTransport();
       clock();
@@ -113,28 +136,49 @@
     if (master?.requestVideoFrameCallback) {
       frameVideo = master;
       frameId = master.requestVideoFrameCallback(update);
-    } else animationId = requestAnimationFrame(update);
+    }
+    // A stalled master may stop emitting video frames without a waiting event.
+    // Keep a watchdog running so followers do not run away when that happens.
+    animationId = requestAnimationFrame(update);
   }
   function rebuild(): void {
-    const time = sync?.time ?? 0;
-    const resume = sync?.requestedPlayback ?? false;
+    const time = sync && sync.duration > 0 ? sync.time : desiredTime;
+    const resume = wantedPlayback;
     sync?.pause();
     stopClock();
     sync = new CompareVideoSync(
-      items.flatMap((item, index) => {
+      items.flatMap((item) => {
         const video = players.get(item.key);
         return video && sources[item.key]?.loaded
-          ? [{ video, fps: item.fps || 30, audible: index === 0 }]
+          ? [
+              {
+                video,
+                fps: item.fps || 0,
+                audible: item.key === audioKey,
+                kept: item.unfinished && {
+                  seconds: item.unfinished.seconds,
+                  frames: item.unfinished.frames,
+                },
+              },
+            ]
           : [];
       }),
     );
     sync.rate(playbackRate);
-    sync.mute(muted);
     sync.seek(time);
     updateTransport();
-    if (resume && !destroyed) void start();
+    const active = shownLayout === 'slider' ? items.slice(0, 2) : items;
+    const allLoaded =
+      active.length > 0 &&
+      active.every(
+        (item) =>
+          sources[item.key]?.loaded ||
+          (sources[item.key]?.status !== 'ready' && sources[item.key]?.status !== 'loading'),
+      );
+    if (resume && allLoaded && !destroyed) void start();
   }
   async function start(): Promise<void> {
+    wantedPlayback = true;
     try {
       await sync?.play();
     } catch (error) {
@@ -146,15 +190,31 @@
   }
   function togglePlayback(): void {
     if (playing) {
+      wantedPlayback = false;
       sync?.pause();
       stopClock();
       updateTransport();
     } else void start();
   }
   function seek(seconds: number): void {
-    sync?.seek(seconds);
+    sync?.scrub(seconds);
     updateTransport();
     clock();
+  }
+  function seekFrame(index: number): void {
+    sync?.seekFrame(index);
+    updateTransport();
+    clock();
+  }
+  function step(direction: -1 | 1): void {
+    wantedPlayback = false;
+    sync?.step(direction);
+    stopClock();
+    updateTransport();
+  }
+  function chooseAudio(choice: string): void {
+    audioChoice = choice;
+    sync?.audio(choice === 'off' ? null : (players.get(choice) ?? null));
   }
   function nextRate(): void {
     const rates = [0.5, 1, 1.5, 2];
@@ -172,8 +232,8 @@
     const stalled = () => {
       if (!sources[key]?.loaded) return;
       sync?.stall(video);
-      stopClock();
       updateTransport();
+      clock();
     };
     const ready = () => {
       if (!sources[key]?.loaded) return;
@@ -192,7 +252,6 @@
       }
     };
     video.addEventListener('waiting', stalled);
-    video.addEventListener('seeking', stalled);
     video.addEventListener('canplay', ready);
     video.addEventListener('seeked', ready);
     video.addEventListener('loadeddata', loaded);
@@ -200,12 +259,15 @@
     return {
       destroy() {
         video.removeEventListener('waiting', stalled);
-        video.removeEventListener('seeking', stalled);
         video.removeEventListener('canplay', ready);
         video.removeEventListener('seeked', ready);
         video.removeEventListener('loadeddata', loaded);
         video.removeEventListener('ended', clock);
-        players.delete(key);
+        if (players.get(key) === video) {
+          players.delete(key);
+          if (!destroyed && sources[key]?.loaded)
+            sources = { ...sources, [key]: { ...sources[key], loaded: false } };
+        }
         release(video);
         rebuild();
       },
@@ -256,6 +318,8 @@
     if (requestId) void cancelVideo(requestId).catch(() => {});
     sync?.pause();
     stopClock();
+    desiredTime = 0;
+    wantedPlayback = false;
     for (const player of players.values()) release(player);
     sources = Object.fromEntries(
       entries.map((item) => [
@@ -319,6 +383,9 @@
     );
   }
   $: videos = items[0]?.media_kind === 'video';
+  $: if (audioChoice !== 'off' && !items.some((item) => item.key === audioChoice))
+    audioChoice = items[0]?.key ?? '';
+  $: audioKey = audioChoice === 'off' ? '' : audioChoice;
   $: prepareVideos(
     JSON.stringify([
       videos,
@@ -393,10 +460,13 @@
 
   onDestroy(() => {
     destroyed = true;
+    clearTimeout(detailsTimer);
     preparationRevision++;
     if (requestId) void cancelVideo(requestId).catch(() => {});
     sync?.pause();
     stopClock();
+    desiredTime = 0;
+    wantedPlayback = false;
     for (const player of players.values()) release(player);
     clearTimeout(regionTimer);
     void regionQueue
@@ -481,7 +551,8 @@
     canvasHeight = Math.max(1, rect.height);
   }
 
-  function boxStyle(item: CompareItem, ...deps: unknown[]): string {
+  /** A box's own fitted size and its share of the common pan. */
+  function boxView(item: CompareItem, ...deps: unknown[]) {
     void deps;
     const fit = fitSize(
       cell,
@@ -492,7 +563,52 @@
       { x: (panX * fit.width) / fitted.width, y: (panY * fit.height) / fitted.height },
       panBounds(cell, fit, zoom),
     );
+    return { fit, pan };
+  }
+  function boxStyle(item: CompareItem, ...deps: unknown[]): string {
+    const { fit, pan } = boxView(item, ...deps);
     return `width:${fit.width}px;height:${fit.height}px;left:50%;top:50%;transform:translate(calc(-50% + ${pan.x}px), calc(-50% + ${pan.y}px)) scale(${zoom})`;
+  }
+
+  // An unfinished photo's mark shows its finished tiles while hovered or focused with the
+  // keyboard; a click keeps them shown.
+  let tilesHovered = '';
+  let tilesPinned = '';
+  $: tilesLit = (key: string) => tilesHovered === key || tilesPinned === key;
+
+  // The details strip keeps its height: a fact that does not fit its line is cut, and the
+  // full list opens above the strip on hover, on focus of More, or on a click of it.
+  let clipped: Record<string, boolean> = {};
+  let detailsHovered = '';
+  let detailsPinned = '';
+  let detailsTimer: ReturnType<typeof setTimeout> | undefined;
+  // Every change of what a column shows is measured again; only the key is read.
+  function clipWatch(node: HTMLElement, watched: { key: string; [shown: string]: unknown }) {
+    let key = watched.key;
+    const measure = () => {
+      const cut = [...node.querySelectorAll<HTMLElement>('[data-clip]')].some(
+        (element) => element.scrollWidth > element.clientWidth + 1,
+      );
+      if (Boolean(clipped[key]) !== cut) clipped = { ...clipped, [key]: cut };
+    };
+    const observer =
+      typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(measure);
+    observer?.observe(node);
+    measure();
+    return {
+      update(next: { key: string; [shown: string]: unknown }) {
+        key = next.key;
+        void tick().then(measure);
+      },
+      destroy() {
+        observer?.disconnect();
+      },
+    };
+  }
+  function hoverDetails(key: string): void {
+    clearTimeout(detailsTimer);
+    if (!key) detailsHovered = '';
+    else detailsTimer = setTimeout(() => (detailsHovered = key), 350);
   }
 
   function setZoom(
@@ -624,8 +740,10 @@
   function windowKey(event: KeyboardEvent): void {
     if (videos && !event.defaultPrevented && !event.metaKey && !event.ctrlKey && !event.altKey) {
       const target = event.target instanceof Element ? event.target : null;
+      // Also with the focus nowhere: WebKit leaves it there after a click on a button.
       if (
-        target?.closest('.compare-pane') &&
+        target &&
+        (target === document.body || target.closest('.compare-pane')) &&
         !target.closest('input, textarea, select, [contenteditable]')
       ) {
         if (event.key === ' ' && !target.closest('button')) {
@@ -635,8 +753,7 @@
         }
         if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
           event.preventDefault();
-          sync?.step(event.key === 'ArrowLeft' ? -1 : 1);
-          updateTransport();
+          step(event.key === 'ArrowLeft' ? -1 : 1);
           return;
         }
       }
@@ -644,11 +761,25 @@
     if (event.key !== 'Escape' || event.defaultPrevented) return;
     const target = event.target instanceof Element ? event.target : null;
     if (target?.closest('[aria-modal="true"], [role="listbox"]')) return;
+    // An open list of details closes first, wherever the focus is: it opens on hover too,
+    // and WebKit does not focus a button that is clicked.
+    if (clipped[detailsHovered] || clipped[detailsPinned]) {
+      event.preventDefault();
+      hoverDetails('');
+      detailsPinned = '';
+      return;
+    }
     close();
+  }
+  /** A list kept open by a click on More closes with a click anywhere else. */
+  function windowPointerDown(event: PointerEvent): void {
+    if (!detailsPinned) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target?.closest('.details-more')) detailsPinned = '';
   }
 </script>
 
-<svelte:window on:keydown={windowKey} />
+<svelte:window on:keydown={windowKey} on:pointerdown={windowPointerDown} />
 
 <section class="preview-pane compare-pane" class:compact-hidden={compactHidden}>
   <div class="preview-header compare-header" data-tauri-drag-region>
@@ -781,7 +912,7 @@
                 use:videoPlayer={item.key}
                 src={state(item, sources).url || undefined}
                 aria-label={`${index + 1}: ${item.label}`}
-                muted={index > 0 || muted}
+                muted={item.key !== audioKey}
                 playsinline
                 preload="auto"
                 style={index ? `clip-path: inset(0 0 0 ${geometry.imagePercent}%)` : ''}
@@ -827,6 +958,19 @@
             {/if}
           {/if}
         </div>
+        {#if !videos}
+          {#each items.slice(0, 2) as item, index (item.key)}
+            {#if item.unfinished?.tiles && item.status === 'ready'}<UnfinishedTiles
+                {...item.unfinished.tiles}
+                fit={fitted}
+                {zoom}
+                pan={{ x: panX, y: panY }}
+                clipLeft={index ? geometry.imagePercent : 0}
+                clipRight={index ? 0 : 100 - geometry.imagePercent}
+                lit={tilesLit(item.key)}
+              />{/if}
+          {/each}
+        {/if}
         {#each items.slice(0, 2) as item, index (item.key)}
           {#if videos ? state(item, sources).status !== 'ready' || !state(item, sources).loaded : item.status !== 'ready'}<div
               class="slot-state"
@@ -899,7 +1043,7 @@
                       use:videoPlayer={item.key}
                       src={state(item, sources).url || undefined}
                       aria-label={`${index + 1}: ${item.label}`}
-                      muted={index > 0 || muted}
+                      muted={item.key !== audioKey}
                       playsinline
                       preload="auto"
                       on:error={() => videoError(item, index)}
@@ -921,6 +1065,12 @@
                     {/if}
                   {/if}
                 </div>
+                {#if !videos && item.unfinished?.tiles && item.status === 'ready'}<UnfinishedTiles
+                    {...item.unfinished.tiles}
+                    {...boxView(item, fitted, panX, panY, zoom, cell)}
+                    {zoom}
+                    lit={tilesLit(item.key)}
+                  />{/if}
               </div>
             </div>
           {/each}
@@ -947,6 +1097,7 @@
             on:click={() => setZoom(zoom * 1.25)}>+</button
           >
           <button class:active={Math.abs(zoom - 1) < 0.001} on:click={() => setZoom(1)}>Fit</button>
+          <BackgroundSwitch value={viewerBackground} set={setViewerBackground} />
         </div>
       {/if}
     </div>
@@ -960,12 +1111,35 @@
           toggle={togglePlayback}
           {seek}
           {nextRate}
-          {muted}
-          mute={() => {
-            muted = !muted;
-            sync?.mute(muted);
-          }}
-        />
+          {step}
+          {frames}
+          {frame}
+          {seekFrame}
+        >
+          <div class="transport-audio" role="radiogroup" aria-label="Audio">
+            <span aria-hidden="true">Audio</span>
+            {#each boxes as item, index (item.key)}
+              <button
+                type="button"
+                role="radio"
+                aria-checked={audioKey === item.key}
+                class:active={audioKey === item.key}
+                aria-label={`Audio of slot ${index + 1}: ${item.label}`}
+                title={`Play the audio of slot ${index + 1}: ${item.label}`}
+                on:click={() => chooseAudio(item.key)}>{index + 1}</button
+              >
+            {/each}
+            <button
+              type="button"
+              role="radio"
+              aria-checked={!audioKey}
+              class:active={!audioKey}
+              aria-label="No audio"
+              title="No audio"
+              on:click={() => chooseAudio('off')}>Off</button
+            >
+          </div>
+        </VideoTransport>
         <div class="zoom-hud" role="group" aria-label="Compare zoom">
           <button
             aria-label="Zoom out"
@@ -979,13 +1153,97 @@
             on:click={() => setZoom(zoom * 1.25)}>+</button
           >
           <button class:active={Math.abs(zoom - 1) < 0.001} on:click={() => setZoom(1)}>Fit</button>
+          <BackgroundSwitch value={viewerBackground} set={setViewerBackground} />
         </div>
       </div>
+      {#if limited}<span class="compare-slots-note" role="status"
+          >Playback ends where the unfinished result ends, after {duration < 1
+            ? `${frames} ${frames === 1 ? 'frame' : 'frames'}`
+            : formatMediaTime(duration)}.</span
+        >{/if}
       {#each items.filter((item) => state(item, sources).note) as item (item.key)}<span
           class="compare-slots-note">{state(item, sources).note}</span
         >{/each}
     {/if}
   </div>
+  {#if items.length >= 2}
+    <div
+      class="compare-details"
+      style={`grid-template-columns: repeat(${boxes.length}, minmax(0, 1fr));`}
+    >
+      {#each boxes as item, index (item.key)}
+        {@const facts = item.details ?? []}
+        {@const mark = item.unfinished}
+        {@const open = clipped[item.key] && [detailsHovered, detailsPinned].includes(item.key)}
+        <!-- Hovering only opens what the More button opens too. -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="details-column"
+          class:end={index > 0 && index >= boxes.length / 2}
+          use:clipWatch={{ key: item.key, facts, mark, label: item.label }}
+          on:pointerenter={() => hoverDetails(item.key)}
+          on:pointerleave={() => hoverDetails('')}
+        >
+          <div role="group" aria-label={`Slot ${index + 1} details`}>
+            <div class="details-title">
+              <b class="slot-number">{index + 1}</b>
+              <strong data-clip>{item.label}</strong>
+              {#if clipped[item.key]}<button
+                  type="button"
+                  class="link-button details-more"
+                  aria-expanded={open}
+                  aria-label={`All details of slot ${index + 1}`}
+                  on:focus={(event) => {
+                    if (event.currentTarget.matches(':focus-visible')) detailsHovered = item.key;
+                  }}
+                  on:blur={() => {
+                    detailsHovered = '';
+                    detailsPinned = '';
+                  }}
+                  on:click={() => (detailsPinned = detailsPinned === item.key ? '' : item.key)}
+                  >More</button
+                >{/if}
+            </div>
+            {#if mark}
+              {#if mark.tiles && !videos}<button
+                  type="button"
+                  class="unfinished-mark"
+                  data-clip
+                  aria-pressed={tilesPinned === item.key}
+                  aria-label={`${mark.label}. Show the finished tiles`}
+                  title="Show the finished tiles · click to keep them shown"
+                  on:pointerenter={() => {
+                    // The tiles show on the canvas, where the list of details would open.
+                    hoverDetails('');
+                    tilesHovered = item.key;
+                  }}
+                  on:pointerleave={() => {
+                    tilesHovered = '';
+                    hoverDetails(item.key);
+                  }}
+                  on:focus={(event) => {
+                    if (event.currentTarget.matches(':focus-visible')) tilesHovered = item.key;
+                  }}
+                  on:blur={() => (tilesHovered = '')}
+                  on:click={() => (tilesPinned = tilesPinned === item.key ? '' : item.key)}
+                  >{mark.label}</button
+                >{:else}<span class="unfinished-mark" data-clip>{mark.label}</span>{/if}
+            {/if}
+            {#each detailLines(facts, mark ? 3 : 4) as line}<span class="details-line" data-clip
+                >{#each line as fact}<span>{fact}</span>{/each}</span
+              >{/each}
+          </div>
+          {#if open}
+            <div class="details-full">
+              <strong>{item.label}</strong>
+              {#if mark}<span>{mark.label}</span>{/if}
+              {#each facts as fact}<span>{fact}</span>{/each}
+            </div>
+          {/if}
+        </div>
+      {/each}
+    </div>
+  {/if}
 </section>
 
 <style>
@@ -1007,7 +1265,7 @@
     left: 10%;
     max-width: 80%;
   }
-  .compare-pane > div:last-child {
+  .compare-pane > div:nth-child(3) {
     position: relative;
     min-height: 0;
   }
@@ -1015,11 +1273,107 @@
     position: relative;
     inset: auto;
   }
-  .compare-pane > div:last-child:not(.video-comparison) > .compare-well {
+  .compare-pane > div:nth-child(3):not(.video-comparison) > .compare-well {
     height: 100%;
   }
   .compare-pane {
-    grid-template-rows: 52px auto 1fr;
+    grid-template-rows: 52px auto minmax(0, 1fr) auto;
+  }
+  /* A title and at most four lines per slot, whatever the job recorded: a line that does
+     not fit is cut, and the full list opens above the strip. */
+  .compare-details {
+    display: grid;
+    border-top: 1px solid var(--hairline-faint);
+    background: var(--header-bg);
+    font-size: calc(11px * var(--ui-scale));
+    line-height: 1.3;
+  }
+  .details-column {
+    position: relative;
+    min-width: 0;
+    padding: 6px 16px;
+  }
+  .details-column > [role='group'] {
+    display: grid;
+    grid-auto-rows: min-content;
+    gap: 2px;
+    justify-items: start;
+    min-width: 0;
+  }
+  .details-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+  }
+  .details-title strong,
+  .details-line,
+  .unfinished-mark {
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .details-title strong {
+    flex: 0 1 auto;
+  }
+  .details-more {
+    flex: none;
+    margin-left: auto;
+    color: var(--secondary);
+    font-size: inherit;
+  }
+  .details-line {
+    color: var(--secondary);
+  }
+  .details-line > span + span {
+    margin-left: 12px;
+  }
+  /* The same tag whether it is only a note (a video) or shows the finished tiles (a photo). */
+  .unfinished-mark {
+    padding: 0 5px;
+    border: 1px solid var(--chip-border);
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--text);
+    font-size: inherit;
+    line-height: inherit;
+  }
+  button.unfinished-mark {
+    cursor: pointer;
+  }
+  button.unfinished-mark:hover,
+  button.unfinished-mark[aria-pressed='true'] {
+    border-color: var(--accent-line);
+    background: var(--hover);
+  }
+  .details-full {
+    position: absolute;
+    z-index: 30;
+    left: 8px;
+    bottom: calc(100% + 4px);
+    display: grid;
+    gap: 3px;
+    width: max-content;
+    max-width: min(400px, calc(100vw - 48px));
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-surface);
+    background: var(--raised);
+    color: var(--text);
+    font-size: calc(11.5px * var(--ui-scale));
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+    pointer-events: none;
+  }
+  .details-column.end .details-full {
+    left: auto;
+    right: 8px;
+  }
+  .details-full span {
+    color: var(--secondary);
   }
   .compare-header span :global(.help-tip) {
     vertical-align: 0;
@@ -1121,6 +1475,10 @@
     color: var(--tertiary);
     font-size: calc(11px * var(--ui-scale));
   }
+  /* Under the transport, in line with it. */
+  .video-comparison > .compare-slots-note {
+    padding: 0 16px 6px;
+  }
   .original-chip.side {
     display: inline-flex;
     align-items: center;
@@ -1163,7 +1521,7 @@
     min-height: 0;
     display: grid;
     grid-template-rows: 26px 1fr;
-    background: var(--stage);
+    background: var(--viewer-bg, var(--stage));
   }
   .box-bar {
     display: flex;

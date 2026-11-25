@@ -111,11 +111,12 @@ def test_windows_smoke_uses_installed_host_without_starting_webview(
 
     def fake_run(command, **_kwargs):
         calls.append(command)
-        if "/S" in command:
+        if "/S" in command and any(value.startswith("/D=") for value in command):
             install_argument = next(value for value in command if value.startswith("/D="))
             install_dir = Path(install_argument.removeprefix("/D="))
             install_dir.mkdir(parents=True)
             write_pe(install_dir / "LocalSR.exe", 0x8664)
+            write_pe(install_dir / "uninstall.exe", 0x014C)
             worker = install_dir / "engine" / "localsr-worker.exe"
             write_pe(worker, 0x8664)
         elif command[1:] == ["--headless-smoke-test"]:
@@ -129,7 +130,17 @@ def test_windows_smoke_uses_installed_host_without_starting_webview(
     monkeypatch.setattr(smoke, "run", fake_run)
     smoke.smoke_windows(artifact, report, {}, 240)
 
-    assert calls[1][1:] == ["--headless-smoke-test"]
+    install_calls = [c for c in calls if "/S" in c and any(v.startswith("/D=") for v in c)]
+    assert len(install_calls) == 2
+    assert "/AllUsers" not in install_calls[0]
+    assert "/AllUsers" in install_calls[1]
+    assert [c[1:] for c in calls if c[1:] == ["--headless-smoke-test"]] == [
+        ["--headless-smoke-test"],
+        ["--headless-smoke-test"],
+    ]
+    uninstall_calls = [c for c in calls if Path(c[0]).name == "uninstall.exe"]
+    assert len(uninstall_calls) == 2
+    assert all(c[1] == "/S" and c[2].startswith("_?=") for c in uninstall_calls)
     evidence = json.loads(report.read_text(encoding="utf-8"))["package_architecture"]
     assert evidence["container"]["architecture"] == "x86"
     assert {item["architecture"] for item in evidence["native_payloads"]} == {"x86_64"}
@@ -300,3 +311,99 @@ def test_extract_appimage_payload_falls_back_when_unsquashfs_fails(
     assert calls[0][1] == "--appimage-offset"
     assert calls[1][0] == "/usr/bin/unsquashfs"
     assert calls[2][1] == "--appimage-extract"
+
+
+def fake_apt(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    leave_behind: bool = False,
+    package: str = "localsr",
+    ran_worker: Path | None = None,
+):
+    """apt and dpkg on a fake root: install lays the package out, remove deletes it."""
+    root = tmp_path / "root"
+    host = root / "usr/bin/localsr-next"
+    worker = root / "usr/lib/LocalSR/engine/localsr-worker"
+    menu = root / "usr/share/applications/LocalSR.desktop"
+    calls: list[list[str]] = []
+
+    def fake_run(command, *, env, **_kwargs):
+        calls.append(command)
+        stdout = b""
+        if command[:2] == ["dpkg-deb", "-f"]:
+            stdout = package.encode() + b"\n"
+        elif command[1:3] == ["apt-get", "install"]:
+            for path in (host, worker, menu):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"x")
+            host.chmod(0o755)
+            worker.chmod(0o755)
+        elif command[0] == "dpkg-query":
+            stdout = "\n".join(
+                str(path) for path in (root / "usr", host.parent, host, worker, menu)
+            ).encode()
+        elif command[0] == str(host):
+            Path(env["LOCALSR_SMOKE_REPORT"]).write_text(
+                json.dumps(
+                    {"passed": True, "worker": "ready", "worker_path": str(ran_worker or worker)}
+                )
+            )
+        elif command[1:3] == ["apt-get", "remove"]:
+            for path in (host, menu) if leave_behind else (host, worker, menu):
+                path.unlink()
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr=b"")
+
+    monkeypatch.setattr(smoke, "run", fake_run)
+    monkeypatch.delenv("LOCALSR_SMOKE_BACKEND", raising=False)
+    return calls, host
+
+
+def test_deb_smoke_installs_with_apt_runs_the_installed_host_and_removes_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    artifact = tmp_path / "LocalSR-v1.2.3-beta-Linux-CPU-amd64.deb"
+    artifact.write_bytes(b"deb")
+    calls, host = fake_apt(tmp_path, monkeypatch)
+
+    payload = smoke.smoke(artifact, tmp_path / "report.json")
+
+    assert payload["worker"] == "ready"
+    assert ["sudo", "apt-get", "install", "-y", str(artifact.resolve())] in calls
+    assert [str(host), "--headless-smoke-test"] in calls
+    assert calls[-1] == ["sudo", "apt-get", "remove", "-y", "localsr"]
+    assert not host.exists()
+
+
+def test_deb_smoke_fails_when_apt_remove_leaves_files(tmp_path: Path, monkeypatch) -> None:
+    artifact = tmp_path / "LocalSR.deb"
+    artifact.write_bytes(b"deb")
+    fake_apt(tmp_path, monkeypatch, leave_behind=True)
+
+    with pytest.raises(RuntimeError, match="left the package's files"):
+        smoke.smoke(artifact, tmp_path / "report.json")
+
+
+def test_deb_smoke_refuses_another_package_name(tmp_path: Path, monkeypatch) -> None:
+    artifact = tmp_path / "LocalSR.deb"
+    artifact.write_bytes(b"deb")
+    calls, _host = fake_apt(tmp_path, monkeypatch, package="local-sr")
+
+    with pytest.raises(RuntimeError, match="not localsr"):
+        smoke.smoke(artifact, tmp_path / "report.json")
+    assert not any("install" in command for command in calls)
+
+
+def test_deb_smoke_fails_when_the_host_runs_an_engine_apt_did_not_install(
+    tmp_path: Path, monkeypatch
+) -> None:
+    artifact = tmp_path / "LocalSR.deb"
+    artifact.write_bytes(b"deb")
+    build_tree = tmp_path / "build/worker-dist/engine/localsr-worker"
+    build_tree.parent.mkdir(parents=True)
+    build_tree.write_bytes(b"x")
+    calls, _host = fake_apt(tmp_path, monkeypatch, ran_worker=build_tree)
+
+    with pytest.raises(RuntimeError, match="not the engine apt installed"):
+        smoke.smoke(artifact, tmp_path / "report.json")
+    assert calls[-1] == ["sudo", "apt-get", "remove", "-y", "localsr"]

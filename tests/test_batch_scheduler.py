@@ -656,3 +656,43 @@ def test_on_cancel_photos_outside_an_encoder_are_reported_while_a_save_still_run
         release.set()
         worker.join(10)
     assert (0, "done") in outcomes and len(outcomes) == 6
+
+
+@pytest.mark.parametrize("keep", [True, False])
+def test_a_stop_that_keeps_saves_each_open_photo_with_finished_tiles_first(keep):
+    cancel = threading.Event()
+    photos, kept = [], []
+    lock = threading.Lock()
+
+    def open_photo(key):
+        photos.append(Photo(key, tiles=20))
+        return photos[-1]
+
+    def lane(photo, tile):
+        with lock:
+            if sum(len(p.stitched) for p in photos) >= 6:
+                cancel.set()
+        return photo.key, tile
+
+    def save_kept(key, photo):
+        assert not photo.closed and photo.stitched
+        kept.append((key, len(photo.stitched)))
+
+    outcomes, deferred = run(
+        range(5),
+        open_photo,
+        [lane] * 2,
+        cancel=cancel,
+        keep=lambda _key: keep,
+        kept=save_kept,
+    )
+    assert deferred == []
+    reported = {key for key, *_ in outcomes} | {key for key, _ in kept}
+    assert reported == set(range(5)), "every photo is reported exactly once"
+    assert not ({key for key, _ in kept} & {key for key, *_ in outcomes})
+    with_tiles = {photo.key for photo in photos if photo.stitched}
+    if keep:
+        assert {key for key, _ in kept} == with_tiles and with_tiles
+    else:
+        assert kept == []
+    assert all(photo.closed for photo in photos)

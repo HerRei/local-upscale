@@ -707,6 +707,135 @@ describe('image comparison', () => {
     expect(clip()).toBe(50);
   });
 
+  it('marks an unfinished photo and shows its finished tiles from the mark', async () => {
+    const tiles = {
+      tiles: [
+        [0, 0, 2000, 2000],
+        [2000, 0, 2000, 2000],
+      ] as [number, number, number, number][],
+      width: 8000,
+      height: 4000,
+    };
+    const { container, rerender } = await renderComparison();
+    expect(container.querySelector('.unfinished-chip')).toBeNull();
+    expect(container.querySelector('.unfinished-tiles')).toBeNull();
+    await rerender({
+      showingUnfinished: { id: 'kept', label: 'Unfinished · 2 of 8 tiles', tiles },
+    });
+    const mark = screen.getByRole('button', {
+      name: 'Unfinished · 2 of 8 tiles. Show the finished tiles',
+    });
+    expect(mark.textContent?.trim()).toBe('Unfinished · 2 of 8 tiles');
+    // Laid over the stage in pixels of the saved file, cut where the result is cut.
+    const marks = container.querySelector('.unfinished-tiles') as SVGElement;
+    expect(marks.getAttribute('viewBox')).toBe('0 0 8000 4000');
+    expect(marks.getAttribute('style')).toContain('width: 744px');
+    expect(marks.getAttribute('style')).toContain('clip-path: inset(0 0% 0 50%)');
+    expect(marks.classList.contains('lit')).toBe(false);
+    await fireEvent.pointerEnter(mark);
+    expect(marks.classList.contains('lit')).toBe(true);
+    await fireEvent.pointerLeave(mark);
+    expect(marks.classList.contains('lit')).toBe(false);
+    await fireEvent.click(mark);
+    expect(mark.getAttribute('aria-pressed')).toBe('true');
+    expect(marks.classList.contains('lit')).toBe(true);
+
+    // The Original has no mark: the chip gives way to the Original chip, the tiles are cut away.
+    await fireEvent.click(screen.getByRole('radio', { name: 'Original' }));
+    expect(container.querySelector('.unfinished-chip')).toBeNull();
+    expect(marks.getAttribute('style')).toContain('clip-path: inset(0 0% 0 100%)');
+    await fireEvent.click(screen.getByRole('radio', { name: 'Enhanced' }));
+    expect(container.querySelector('.unfinished-chip')).toBeTruthy();
+    await fireEvent.keyDown(window, { key: 'm' });
+    expect(container.querySelector('.unfinished-chip')).toBeNull();
+    await fireEvent.keyUp(window, { key: 'm' });
+
+    // Zoomed in, the marks grow with the picture instead of being scaled as a layer.
+    await fireEvent.wheel(container.querySelector('.canvas-well') as HTMLElement, {
+      deltaY: -100,
+      clientX: 400,
+      clientY: 300,
+    });
+    expect(parseFloat(marks.style.width)).toBeCloseTo(744 * 1.12);
+    expect(marks.getAttribute('style')).not.toContain('scale(');
+  });
+
+  const kept = (id: string, finished: number) => ({
+    id,
+    label: `Unfinished · ${finished} of 8 tiles`,
+    tiles: {
+      tiles: Array.from(
+        { length: finished },
+        (_, index) => [index * 1000, 0, 1000, 1000] as [number, number, number, number],
+      ),
+      width: 4000,
+      height: 2000,
+    },
+  });
+
+  it('marks the unfinished side of a pair of results, on the side it shows', async () => {
+    const { container, rerender } = await renderComparison();
+    await rerender({ ...pair, referenceUnfinished: kept('reference', 1) });
+    const marks = container.querySelector('.unfinished-tiles') as SVGElement;
+    // The reference shows left of the divider, so its tiles are cut from the right.
+    expect(marks.getAttribute('style')).toContain('clip-path: inset(0 50% 0 0%)');
+    expect(container.querySelector('.unfinished-chip')?.textContent).toContain(
+      'Unfinished · 1 of 8 tiles',
+    );
+    await fireEvent.click(screen.getByRole('radio', { name: 'Showing' }));
+    expect(container.querySelector('.unfinished-chip')).toBeNull();
+  });
+
+  it('gives each of two unfinished results its own mark over its side, and its own tiles', async () => {
+    const { container, rerender } = await renderComparison();
+    await rerender({
+      ...pair,
+      referenceUnfinished: kept('reference', 1),
+      showingUnfinished: kept('showing', 3),
+    });
+    const chips = () => [...container.querySelectorAll<HTMLElement>('.unfinished-chip')];
+    // Reference left, Showing right, as the labels under them.
+    expect(chips().map((chip) => chip.textContent?.trim())).toEqual([
+      'Unfinished · 1 of 8 tiles',
+      'Unfinished · 3 of 8 tiles',
+    ]);
+    expect(chips().map((chip) => chip.classList.contains('right'))).toEqual([false, true]);
+    const [showingTiles, referenceTiles] = [
+      ...container.querySelectorAll<SVGElement>('.unfinished-tiles'),
+    ];
+    expect(showingTiles.getAttribute('style')).toContain('clip-path: inset(0 0% 0 50%)');
+    expect(referenceTiles.getAttribute('style')).toContain('clip-path: inset(0 50% 0 0%)');
+    await fireEvent.pointerEnter(chips()[0]);
+    expect(referenceTiles.classList.contains('lit')).toBe(true);
+    expect(showingTiles.classList.contains('lit')).toBe(false);
+    await fireEvent.pointerLeave(chips()[0]);
+
+    // The Reference view still has the reference's mark, which shows its tiles.
+    await fireEvent.click(screen.getByRole('radio', { name: 'Reference' }));
+    expect(chips().map((chip) => chip.textContent?.trim())).toEqual(['Unfinished · 1 of 8 tiles']);
+    await fireEvent.click(chips()[0]);
+    expect(chips()[0].getAttribute('aria-pressed')).toBe('true');
+    expect(referenceTiles.classList.contains('lit')).toBe(true);
+    await fireEvent.click(screen.getByRole('radio', { name: 'Showing' }));
+    expect(chips().map((chip) => chip.textContent?.trim())).toEqual(['Unfinished · 3 of 8 tiles']);
+    expect(chips()[0].getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('ends a kept view of the tiles when another result takes the side', async () => {
+    const { container, rerender } = await renderComparison();
+    await rerender({ showingUnfinished: kept('first', 2) });
+    const chip = () => container.querySelector('.unfinished-chip') as HTMLElement;
+    await fireEvent.click(chip());
+    expect(chip().getAttribute('aria-pressed')).toBe('true');
+    // The same result again (a refresh of the list) stays as it was.
+    await rerender({ showingUnfinished: kept('first', 2) });
+    expect(chip().getAttribute('aria-pressed')).toBe('true');
+    // Another unfinished result of the same photo starts with only its line.
+    await rerender({ showingUnfinished: kept('second', 5) });
+    expect(chip().getAttribute('aria-pressed')).toBe('false');
+    expect(container.querySelector('.unfinished-tiles')?.classList.contains('lit')).toBe(false);
+  });
+
   it('shows the zoom controls only while the pointer is over the image', async () => {
     const { container } = await renderComparison();
     const zoom = screen.getByRole('group', { name: 'Preview zoom' });
@@ -795,6 +924,32 @@ it('hides the live tiles once a saved result was chosen while the image runs', a
   expect(container.querySelector('.progressive-image.visible')).toBeNull();
 });
 
+it('shows no chip over a video that is only waiting to play', () => {
+  const clip = {
+    id: 'clip',
+    path: '/clip.mp4',
+    name: 'clip.mp4',
+    kind: 'video',
+    width: 1920,
+    height: 1080,
+    frame_count: 48,
+    fps: 24,
+    duration_seconds: 2,
+    preview_data_url: 'data:image/jpeg;base64,source',
+    probe_status: 'ready',
+    error: '',
+    selected: true,
+  } as MediaItem;
+  const { container } = render(PreviewPane, {
+    selectedMedia: clip,
+    resultPreview: '',
+    completedVideoOutput: '',
+  });
+  expect(container.querySelector('.source-image')).toBeTruthy();
+  expect(container.textContent).not.toContain('processed locally');
+  expect(container.querySelector('.labs-chip, .unfinished-chip')).toBeNull();
+});
+
 it('keeps the preview header free of result choosers', () => {
   const { container } = render(PreviewPane, {
     selectedMedia: undefined,
@@ -805,4 +960,273 @@ it('keeps the preview header free of result choosers', () => {
   expect(container.querySelector('.preview-header')?.hasAttribute('data-tauri-drag-region')).toBe(
     true,
   );
+});
+
+it('shows the viewer background swatch in the preview zoom bar and steps on click', async () => {
+  const setViewerBackground = vi.fn();
+  const selectedMedia: MediaItem = {
+    id: 'bg-photo',
+    path: '/bg-photo.png',
+    name: 'bg-photo.png',
+    kind: 'image',
+    width: 400,
+    height: 300,
+    frame_count: 1,
+    fps: 0,
+    duration_seconds: 0,
+    preview_data_url: 'data:image/jpeg;base64,source',
+    probe_status: 'ready',
+    error: '',
+    selected: true,
+  };
+  render(PreviewPane, {
+    selectedMedia,
+    resultPreview: '',
+    completedVideoOutput: '',
+    viewerBackground: 'black',
+    setViewerBackground,
+  });
+  const zoomGroup = screen.getByRole('group', { name: 'Preview zoom' });
+  const button = zoomGroup.querySelector('button[aria-label="Viewer background: Black"]');
+  expect(button).toBeTruthy();
+  await fireEvent.click(button as HTMLElement);
+  expect(setViewerBackground).toHaveBeenCalledWith('grey');
+});
+
+it('uses the colourised stage preview as the opaque base for the upscaling stage without a checkerboard', async () => {
+  const fillRect = vi.fn();
+  const drawImage = vi.fn();
+  const clearRect = vi.fn();
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+    fillStyle: '',
+    fillRect,
+    clearRect,
+    drawImage,
+  } as unknown as CanvasRenderingContext2D);
+  const drawnSources: string[] = [];
+  vi.stubGlobal(
+    'Image',
+    class {
+      onload?: () => void;
+      private currentSrc = '';
+      get src() {
+        return this.currentSrc;
+      }
+      set src(value: string) {
+        this.currentSrc = value;
+        drawnSources.push(value);
+        this.onload?.();
+      }
+    },
+  );
+  const selectedMedia: MediaItem = {
+    id: 'bw-photo',
+    path: '/bw-photo.png',
+    name: 'bw-photo.png',
+    kind: 'image',
+    width: 1982,
+    height: 1361,
+    frame_count: 1,
+    fps: 0,
+    duration_seconds: 0,
+    preview_data_url: 'data:image/jpeg;base64,bw-source',
+    probe_status: 'ready',
+    error: '',
+    selected: true,
+  };
+  const { component, container } = render(PreviewPane, {
+    selectedMedia,
+    resultPreview: '',
+    completedVideoOutput: '',
+    processing: true,
+  });
+
+  // Stage 0 (colour) finishes with a full-image colourised frame.
+  component.queueProgressiveTile(
+    {
+      type: 'tile_update',
+      data: {
+        job_id: 'colour-upscale',
+        stage_index: 0,
+        phase: 'started',
+        active_tile_size: 1982,
+        output_x: 0,
+        output_y: 0,
+        output_width: 1982,
+        output_height: 1361,
+        image_width: 1982,
+        image_height: 1361,
+      },
+    },
+    'colour-upscale',
+  );
+  component.queueProgressiveTile(
+    {
+      type: 'tile_update',
+      data: {
+        job_id: 'colour-upscale',
+        stage_index: 0,
+        phase: 'completed',
+        active_tile_size: 1982,
+        output_x: 0,
+        output_y: 0,
+        output_width: 1982,
+        output_height: 1361,
+        image_width: 1982,
+        image_height: 1361,
+        jpeg_base64: 'colourised-stage0',
+      },
+    },
+    'colour-upscale',
+  );
+  await waitFor(() => expect(drawImage).toHaveBeenCalledTimes(2));
+
+  fillRect.mockClear();
+  drawImage.mockClear();
+  drawnSources.length = 0;
+
+  // Stage 1 (4x upscale) starts and paints one sampled tile; unfinished/skipped tiles
+  // must show the colourised stage 0 base directly without a checkerboard grid.
+  component.queueProgressiveTile(
+    {
+      type: 'tile_update',
+      data: {
+        job_id: 'colour-upscale',
+        stage_index: 1,
+        phase: 'started',
+        active_tile_size: 256,
+        output_x: 0,
+        output_y: 0,
+        output_width: 1024,
+        output_height: 1024,
+        image_width: 7928,
+        image_height: 5444,
+      },
+    },
+    'colour-upscale',
+  );
+  component.queueProgressiveTile(
+    {
+      type: 'tile_update',
+      data: {
+        job_id: 'colour-upscale',
+        stage_index: 1,
+        phase: 'completed',
+        active_tile_size: 256,
+        output_x: 0,
+        output_y: 0,
+        output_width: 1024,
+        output_height: 1024,
+        image_width: 7928,
+        image_height: 5444,
+        jpeg_base64: 'upscaled-tile0',
+      },
+    },
+    'colour-upscale',
+  );
+  await waitFor(() => expect(drawImage).toHaveBeenCalledTimes(2));
+  expect(drawnSources).toEqual([
+    'data:image/jpeg;base64,colourised-stage0',
+    'data:image/jpeg;base64,upscaled-tile0',
+  ]);
+  // Only the single opaque canvas background fillRect, no paintTileGrid checkerboard.
+  expect(fillRect).toHaveBeenCalledTimes(1);
+  expect(container.querySelector('.source-image')?.getAttribute('src')).toBe(
+    'data:image/jpeg;base64,colourised-stage0',
+  );
+});
+
+it('updates the stage 1 base if the colourised stage 0 frame arrives after stage 1 started', async () => {
+  const fillRect = vi.fn();
+  const drawImage = vi.fn();
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+    fillStyle: '',
+    fillRect,
+    clearRect: vi.fn(),
+    drawImage,
+  } as unknown as CanvasRenderingContext2D);
+  const drawnSources: string[] = [];
+  vi.stubGlobal(
+    'Image',
+    class {
+      onload?: () => void;
+      private currentSrc = '';
+      get src() {
+        return this.currentSrc;
+      }
+      set src(value: string) {
+        this.currentSrc = value;
+        drawnSources.push(value);
+        this.onload?.();
+      }
+    },
+  );
+  const selectedMedia: MediaItem = {
+    id: 'bw-photo',
+    path: '/bw-photo.png',
+    name: 'bw-photo.png',
+    kind: 'image',
+    width: 1982,
+    height: 1361,
+    frame_count: 1,
+    fps: 0,
+    duration_seconds: 0,
+    preview_data_url: 'data:image/jpeg;base64,bw-source',
+    probe_status: 'ready',
+    error: '',
+    selected: true,
+  };
+  const { component } = render(PreviewPane, {
+    selectedMedia,
+    resultPreview: '',
+    completedVideoOutput: '',
+    processing: true,
+  });
+
+  component.queueProgressiveTile(
+    {
+      type: 'tile_update',
+      data: {
+        job_id: 'late-stage0',
+        stage_index: 1,
+        phase: 'started',
+        active_tile_size: 256,
+        output_x: 0,
+        output_y: 0,
+        output_width: 1024,
+        output_height: 1024,
+        image_width: 7928,
+        image_height: 5444,
+      },
+    },
+    'late-stage0',
+  );
+  await waitFor(() => expect(drawImage).toHaveBeenCalledTimes(1));
+
+  fillRect.mockClear();
+  drawImage.mockClear();
+  drawnSources.length = 0;
+
+  component.queueProgressiveTile(
+    {
+      type: 'tile_update',
+      data: {
+        job_id: 'late-stage0',
+        stage_index: 0,
+        phase: 'completed',
+        active_tile_size: 1982,
+        output_x: 0,
+        output_y: 0,
+        output_width: 1982,
+        output_height: 1361,
+        image_width: 1982,
+        image_height: 1361,
+        jpeg_base64: 'colourised-stage0',
+      },
+    },
+    'late-stage0',
+  );
+  await waitFor(() => expect(drawImage).toHaveBeenCalledTimes(1));
+  expect(drawnSources).toEqual(['data:image/jpeg;base64,colourised-stage0']);
+  expect(fillRect).toHaveBeenCalledTimes(1);
 });

@@ -53,6 +53,7 @@ class DummyEngine:
         safe_memory,
         tile_callback=None,
         temporary_directory=None,
+        keep_partial=None,
     ):
         progress_callback(0, 4, tile_size)
         assert cancel_event.wait(timeout=2)
@@ -449,6 +450,7 @@ def test_a_video_reports_its_preparation_and_carries_the_route_it_gave_up_in_its
             inference_seconds=1.0,
             partial=False,
             kept_seconds=0.0,
+            kept_frames=0,
         )
 
     monkeypatch.setattr(server_module, "run_video_job", fake_video_job)
@@ -510,6 +512,7 @@ def test_video_worker_emits_one_authoritative_progress_event_with_eta(monkeypatc
             inference_seconds=19.0,
             partial=False,
             kept_seconds=0.0,
+            kept_frames=0,
         )
 
     monkeypatch.setattr(server_module, "LatestPreviewEncoder", FakePreviewEncoder)
@@ -801,3 +804,124 @@ def test_the_engine_offers_photo_batches():
     from localsr.worker.server import _engine_features
 
     assert "image_batch_v1" in _engine_features()
+
+
+def test_changed_approved_checkpoint_is_refused_even_with_a_cached_model(
+    tmp_path, monkeypatch, capsys
+):
+    import hashlib
+
+    server = WorkerServer()
+    checkpoint = tmp_path / "cached.pth"
+    checkpoint.write_bytes(b"changed")
+    server.engine._loaded_models[str(checkpoint)] = (object(), None, None)
+    monkeypatch.setattr(
+        server, "_run_job", lambda *_: pytest.fail("changed checkpoint must not run")
+    )
+    data = {
+        "job_id": "changed-model",
+        "model_path": str(checkpoint),
+        "output_path": str(tmp_path / "out.png"),
+        "allow_unverified_checkpoint": True,
+        "approved_checkpoint_sha256": hashlib.sha256(b"approved").hexdigest(),
+    }
+    server._run_image_job(data)
+    assert "checkpoint changed" in capsys.readouterr().out.lower()
+
+
+def test_checkpoint_cache_tracks_approved_digest(tmp_path, monkeypatch):
+    import hashlib
+
+    server = WorkerServer()
+    checkpoint = tmp_path / "model.pth"
+    checkpoint.write_bytes(b"first")
+    first = hashlib.sha256(b"first").hexdigest()
+    server.model_adapter.allow_unverified_checkpoints = True
+    server.model_adapter.approved_checkpoint = (str(checkpoint), first)
+    released = []
+    monkeypatch.setattr(server.engine, "release_model", released.append)
+    data = {"model_path": str(checkpoint), "approved_checkpoint_sha256": first}
+    server._check_approved_checkpoint(data)
+    server._check_approved_checkpoint(data)
+    assert released == [str(checkpoint)]
+    checkpoint.write_bytes(b"second")
+    second = hashlib.sha256(b"second").hexdigest()
+    server.model_adapter.approved_checkpoint = (str(checkpoint), second)
+    data["approved_checkpoint_sha256"] = second
+    server._check_approved_checkpoint(data)
+    assert released == [str(checkpoint), str(checkpoint)]
+
+
+@pytest.mark.parametrize("keep_partial", [False, True])
+def test_video_cancel_request_respects_keep_partial_flag(tmp_path, monkeypatch, keep_partial):
+    from pathlib import Path
+
+    from test_video_interpolation import patched_worker, worker_request
+    from test_video_pipeline import DummyAdapter
+    from test_video_timing import make_vfr
+
+    import localsr.worker.server as server_module
+    from localsr.core.inference import InferenceEngine
+    from localsr.core.video_pipeline import run_video_job as real_run
+
+    source = make_vfr(tmp_path / "source.mp4")
+    out_dir = tmp_path / "out"
+    scratch_dir = tmp_path / "scratch"
+    out_dir.mkdir()
+    scratch_dir.mkdir()
+
+    server, _bundle, _loaded, _captured = patched_worker(monkeypatch, tmp_path)
+    adapter = DummyAdapter(2)
+    adapter.inspect = lambda *_args: adapter.model_info
+    server.engine = InferenceEngine(adapter)
+    server.model_adapter = adapter
+    messages = []
+    monkeypatch.setattr(server_module, "send_message", messages.append)
+
+    # Use CPU here because the test swaps in a real InferenceEngine, whereas
+    # worker_request() defaults to "mps" and fails on non-Apple-GPU runners.
+    req = worker_request(tmp_path, job_id="video-cancel-job", device="cpu")
+    req["video_path"] = str(source)
+    req["output_video_path"] = str(out_dir / "output.mp4")
+    req["temporary_directory"] = str(scratch_dir)
+    req["video_codec"] = "vp9"
+    req["container"] = "mkv"
+    req["output_scale"] = 2
+
+    def run_and_cancel(**kwargs):
+        orig_started = kwargs.get("frame_started_cb")
+
+        def on_frame(index, total):
+            if orig_started:
+                orig_started(index, total)
+            if index >= 2:
+                server._read_line(
+                    json.dumps(
+                        {
+                            "type": "cancel_request",
+                            "data": {"job_id": req["job_id"], "keep_partial": keep_partial},
+                        }
+                    )
+                )
+
+        kwargs["frame_started_cb"] = on_frame
+        return real_run(**kwargs)
+
+    monkeypatch.setattr(server_module, "run_video_job", run_and_cancel)
+    server._activate_job(req["job_id"])
+    try:
+        server._run_video_job(req["job_id"], req)
+    finally:
+        server._deactivate_job(req["job_id"])
+
+    kinds = [type(m).__name__ for m in messages]
+    if keep_partial:
+        assert "VideoJobCompleted" in kinds
+        completed = next(m for m in messages if type(m).__name__ == "VideoJobCompleted")
+        assert completed.partial is True
+        assert Path(completed.output_path).is_file()
+    else:
+        assert "JobCancelled" in kinds
+        assert "VideoJobCompleted" not in kinds
+        assert list(out_dir.iterdir()) == []
+    assert list(scratch_dir.iterdir()) == []

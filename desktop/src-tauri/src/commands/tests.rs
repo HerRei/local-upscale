@@ -353,60 +353,100 @@ fn a_restore_recipe_ends_with_its_restore_model_and_only_restorations_name_a_fix
 }
 
 #[test]
-fn an_update_switch_is_written_at_once_and_rolled_back_when_writing_fails() {
-    let directory = tempfile::tempdir().unwrap();
-    let paths = crate::paths::AppPaths::under(directory.path());
-    fs::create_dir_all(&paths.next_root).unwrap();
-    fs::create_dir_all(&paths.model_root).unwrap();
-    let state = AppState::from_paths(paths).unwrap();
-    apply_update_switch(&state, "anonymous_update_count", |_| false).unwrap();
-    let (saved, _) = crate::settings::load(&state.paths);
-    assert!(!saved.anonymous_update_count);
-    // Two flips are two flips.
-    apply_update_switch(&state, "check_updates_at_launch", |current| !current).unwrap();
-    apply_update_switch(&state, "check_updates_at_launch", |current| !current).unwrap();
-    assert!(
-        crate::settings::load(&state.paths)
-            .0
-            .check_updates_at_launch
-    );
-    assert!(apply_update_switch(&state, "device_id", |_| true).is_err());
-    // An unreadable settings file refuses the write; memory goes back to match the disk.
-    fs::write(&state.paths.settings, b"{ not json").unwrap();
-    assert!(apply_update_switch(&state, "anonymous_update_count", |_| true).is_err());
-    assert!(!lock(&state.settings).unwrap().anonymous_update_count);
-}
-
-#[test]
-fn appearance_is_saved_during_a_job_and_restored_on_write_failure() {
+fn set_preference_round_trips_all_keys_rejects_bad_input_and_rolls_back_on_error() {
     let directory = tempfile::tempdir().unwrap();
     let paths = crate::paths::AppPaths::under(directory.path());
     fs::create_dir_all(&paths.next_root).unwrap();
     fs::create_dir_all(&paths.model_root).unwrap();
     let state = AppState::from_paths(paths).unwrap();
     lock(&state.runtime).unwrap().active_job_id = "running".into();
-    apply_appearance(&state, "light").unwrap();
-    apply_appearance(&state, "colour-blind").unwrap();
+
+    for (name, value) in [
+        ("check_updates_at_launch", serde_json::json!(false)),
+        ("anonymous_update_count", serde_json::json!(false)),
+        ("crash_reports", serde_json::json!(false)),
+        ("low_priority", serde_json::json!(true)),
+        ("show_in_menu_bar", serde_json::json!(false)),
+        ("notify_on_finish", serde_json::json!(false)),
+        ("completion_sound", serde_json::json!(true)),
+        ("menu_bar_icon_monochrome", serde_json::json!(false)),
+        ("colour_blind_palette", serde_json::json!(true)),
+        ("auto_cache_cleanup", serde_json::json!(false)),
+        ("stopped_job_result", serde_json::json!("keep")),
+        ("appearance", serde_json::json!("light")),
+        ("contrast", serde_json::json!("high")),
+        ("viewer_background", serde_json::json!("grey")),
+        ("interface_scale", serde_json::json!(125)),
+    ] {
+        apply_preference(&state, name, &value).unwrap();
+    }
+
     let saved = crate::settings::load(&state.paths).0;
-    assert_eq!(saved.appearance, "light");
+    assert!(!saved.check_updates_at_launch);
+    assert!(!saved.anonymous_update_count);
+    assert!(!saved.crash_reports);
+    assert!(saved.low_priority);
+    assert!(!saved.show_in_menu_bar);
+    assert!(!saved.notify_on_finish);
+    assert!(saved.completion_sound);
+    assert!(!saved.menu_bar_icon_monochrome);
     assert!(saved.colour_blind_palette);
-    let mut stale = UiSettings::default();
-    keep_update_switches(&saved, &mut stale);
-    assert_eq!(stale.appearance, "light");
-    assert!(stale.colour_blind_palette);
+    assert!(!saved.auto_cache_cleanup);
+    assert_eq!(saved.stopped_job_result, "keep");
+    assert_eq!(saved.appearance, "light");
+    assert_eq!(saved.contrast, "high");
+    assert_eq!(saved.viewer_background, "grey");
+    assert_eq!(saved.interface_scale, 125);
+
+    apply_preference(&state, "stopped_job_result", &serde_json::json!("discard")).unwrap();
+    assert_eq!(
+        crate::settings::load(&state.paths).0.stopped_job_result,
+        "discard"
+    );
+
+    // Reject unknown names and bad values.
+    assert!(apply_preference(&state, "device_id", &serde_json::json!("cpu")).is_err());
+    assert!(apply_preference(&state, "low_priority", &serde_json::json!("yes")).is_err());
+    assert!(apply_preference(&state, "stopped_job_result", &serde_json::json!("always")).is_err());
+    assert!(apply_preference(&state, "stopped_job_result", &serde_json::json!(true)).is_err());
+    assert!(apply_preference(&state, "appearance", &serde_json::json!("sepia")).is_err());
+    assert!(apply_preference(&state, "appearance", &serde_json::json!(123)).is_err());
+    assert!(apply_preference(&state, "contrast", &serde_json::json!("loud")).is_err());
+    assert!(apply_preference(&state, "contrast", &serde_json::json!(true)).is_err());
+    assert!(apply_preference(&state, "viewer_background", &serde_json::json!("blue")).is_err());
+    assert!(apply_preference(&state, "interface_scale", &serde_json::json!(150)).is_err());
+    assert!(apply_preference(&state, "interface_scale", &serde_json::json!("125")).is_err());
+    let still_saved = crate::settings::load(&state.paths).0;
+    assert_eq!(still_saved.contrast, "high");
+    assert_eq!(still_saved.viewer_background, "grey");
+
+    // An unreadable settings file refuses the write; memory goes back to match the disk.
     fs::write(&state.paths.settings, b"{ not json").unwrap();
-    assert!(apply_appearance(&state, "dark").is_err());
-    assert_eq!(lock(&state.settings).unwrap().appearance, "light");
-    assert!(apply_appearance(&state, "unknown").is_err());
+    assert!(apply_preference(&state, "anonymous_update_count", &serde_json::json!(true)).is_err());
+    assert!(apply_preference(&state, "appearance", &serde_json::json!("dark")).is_err());
+    assert!(apply_preference(&state, "interface_scale", &serde_json::json!(100)).is_err());
+    let mem = lock(&state.settings).unwrap();
+    assert!(!mem.anonymous_update_count);
+    assert_eq!(mem.appearance, "light");
+    assert_eq!(mem.interface_scale, 125);
 }
 
 #[test]
-fn a_full_settings_save_never_changes_the_update_switches() {
+fn a_full_settings_save_never_changes_host_owned_preferences() {
     let current = UiSettings {
         anonymous_update_count: false,
+        appearance: "light".into(),
+        colour_blind_palette: true,
+        contrast: "high".into(),
+        viewer_background: "white".into(),
+        interface_scale: 125,
+        completion_sound: true,
+        menu_bar_icon_monochrome: false,
+        auto_cache_cleanup: false,
+        stopped_job_result: "discard".into(),
         ..UiSettings::default()
     };
-    // A window copy from an older refresh still has the count on.
+    // A window copy from an older refresh still has defaults for host-owned preferences.
     let mut incoming = UiSettings {
         tile_size: UiSettings::default().tile_size + 64,
         ..UiSettings::default()
@@ -414,17 +454,29 @@ fn a_full_settings_save_never_changes_the_update_switches() {
     keep_update_switches(&current, &mut incoming);
     assert!(!incoming.anonymous_update_count);
     assert!(incoming.check_updates_at_launch);
+    assert_eq!(incoming.appearance, "light");
+    assert!(incoming.colour_blind_palette);
+    assert_eq!(incoming.contrast, "high");
+    assert_eq!(incoming.viewer_background, "white");
+    assert_eq!(incoming.interface_scale, 125);
+    assert!(incoming.completion_sound);
+    assert!(!incoming.menu_bar_icon_monochrome);
+    assert!(!incoming.auto_cache_cleanup);
+    assert_eq!(incoming.stopped_job_result, "discard");
     assert_eq!(incoming.tile_size, UiSettings::default().tile_size + 64);
-    // Settings saved before 0.3.3 check at launch, as before.
+
+    // Settings saved before 0.3.3 check at launch, and before 0.6.0 auto-clean cache / stopped_job_result.
     let mut saved = serde_json::to_value(UiSettings::default()).unwrap();
-    saved
-        .as_object_mut()
-        .unwrap()
-        .remove("check_updates_at_launch");
-    saved.as_object_mut().unwrap().remove("crash_reports");
+    let map = saved.as_object_mut().unwrap();
+    map.remove("check_updates_at_launch");
+    map.remove("crash_reports");
+    map.remove("auto_cache_cleanup");
+    map.remove("stopped_job_result");
     let loaded = serde_json::from_value::<UiSettings>(saved).unwrap();
     assert!(loaded.check_updates_at_launch);
     assert!(!loaded.crash_reports);
+    assert!(loaded.auto_cache_cleanup);
+    assert_eq!(loaded.stopped_job_result, "ask");
 }
 
 #[test]
@@ -437,7 +489,7 @@ fn crash_reports_switch_saves_while_a_job_runs_and_full_save_keeps_it() {
     // New installs start with crash reports on; turning them off must stick.
     assert!(crate::settings::load(&state.paths).0.crash_reports);
     lock(&state.runtime).unwrap().active_job_id = "running".into();
-    apply_update_switch(&state, "crash_reports", |_| false).unwrap();
+    apply_preference(&state, "crash_reports", &serde_json::json!(false)).unwrap();
     let saved = crate::settings::load(&state.paths).0;
     assert!(!saved.crash_reports);
     let mut stale = UiSettings::default();
@@ -459,6 +511,9 @@ fn setup_choices_save_while_a_job_runs_and_roll_back_on_error() {
         &state,
         SetupChoices {
             appearance: "sepia".into(),
+            contrast: "system".into(),
+            show_in_menu_bar: None,
+            completion_sound: false,
             colour_blind_palette: false,
             check_at_launch: true,
             anonymous_count: false,
@@ -472,6 +527,9 @@ fn setup_choices_save_while_a_job_runs_and_roll_back_on_error() {
         &state,
         SetupChoices {
             appearance: "light".into(),
+            contrast: "system".into(),
+            show_in_menu_bar: None,
+            completion_sound: false,
             colour_blind_palette: true,
             check_at_launch: false,
             anonymous_count: true,
@@ -492,6 +550,9 @@ fn setup_choices_save_while_a_job_runs_and_roll_back_on_error() {
         &state,
         SetupChoices {
             appearance: "dark".into(),
+            contrast: "system".into(),
+            show_in_menu_bar: None,
+            completion_sound: false,
             colour_blind_palette: false,
             check_at_launch: true,
             anonymous_count: false,
@@ -505,6 +566,55 @@ fn setup_choices_save_while_a_job_runs_and_roll_back_on_error() {
     assert!(!mem.check_updates_at_launch);
     assert!(mem.anonymous_update_count);
     assert!(mem.crash_reports);
+}
+
+#[test]
+fn setup_choices_validate_and_preserve_notification_and_tray_preferences() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(dir.path());
+    fs::create_dir_all(&paths.next_root).unwrap();
+    fs::create_dir_all(&paths.model_root).unwrap();
+    let state = AppState::from_paths(paths).unwrap();
+    let choices = |contrast: &str, tray: Option<bool>, sound: bool| SetupChoices {
+        appearance: "light".into(),
+        colour_blind_palette: true,
+        contrast: contrast.into(),
+        check_at_launch: false,
+        anonymous_count: false,
+        crash_reports: false,
+        show_in_menu_bar: tray,
+        completion_sound: sound,
+    };
+    assert!(apply_privacy_choice(&state, choices("loud", Some(false), true)).is_err());
+    assert!(!lock(&state.settings).unwrap().privacy_choice_made);
+    assert!(!state.paths.settings.exists());
+    lock(&state.settings).unwrap().notify_on_finish = false;
+    apply_privacy_choice(&state, choices("high", Some(false), true)).unwrap();
+    let saved = crate::settings::load(&state.paths).0;
+    assert_eq!(saved.appearance, "light");
+    assert!(saved.colour_blind_palette);
+    assert_eq!(saved.contrast, "high");
+    assert!(
+        !saved.check_updates_at_launch && !saved.anonymous_update_count && !saved.crash_reports
+    );
+    assert!(
+        !saved.show_in_menu_bar
+            && saved.completion_sound
+            && saved.notify_on_finish
+            && saved.privacy_choice_made
+    );
+    lock(&state.settings).unwrap().notify_on_finish = false;
+    apply_privacy_choice(&state, choices("standard", None, false)).unwrap();
+    let saved = crate::settings::load(&state.paths).0;
+    assert!(!saved.show_in_menu_bar && !saved.completion_sound && !saved.notify_on_finish);
+    let before = lock(&state.settings).unwrap().clone();
+    fs::write(&state.paths.settings, b"{ not json").unwrap();
+    assert!(apply_privacy_choice(&state, choices("system", Some(true), true)).is_err());
+    let after = lock(&state.settings).unwrap().clone();
+    assert_eq!(
+        serde_json::to_value(before).unwrap(),
+        serde_json::to_value(after).unwrap()
+    );
 }
 
 #[test]
@@ -1443,6 +1553,7 @@ fn image_jobs_request_a_bounded_nonblocking_progressive_preview() {
         selected: true,
     };
     let selection = ModelSelection::Image {
+        approved_checkpoint_sha256: None,
         model_id: "model".into(),
         path: "/models/upscaler.safetensors".into(),
         preprocess: Vec::new(),
@@ -1603,6 +1714,7 @@ fn image_recipe_serializes_restore_upscale_and_fused_face_in_order() {
         selected: true,
     };
     let selection = ModelSelection::Image {
+        approved_checkpoint_sha256: None,
         model_id: "upscale".into(),
         path: "/models/upscale.pth".into(),
         preprocess: vec![ResolvedImageStage {
@@ -2155,6 +2267,7 @@ fn interpolation_settings_are_validated_and_default_to_off() {
 #[test]
 fn hdr_preservation_refuses_interpolation_only_for_hdr_sources() {
     let selection = ModelSelection::Image {
+        approved_checkpoint_sha256: None,
         model_id: "span_photo_x4".into(),
         path: "/models/span.pth".into(),
         preprocess: Vec::new(),
@@ -2529,6 +2642,7 @@ fn start_requests_from_an_older_window_default_to_no_interpolation() {
 #[test]
 fn a_start_that_cannot_be_written_is_refused_before_anything_is_queued() {
     let selection = ModelSelection::Image {
+        approved_checkpoint_sha256: None,
         model_id: "model".into(),
         path: "/models/m.pth".into(),
         preprocess: Vec::new(),
@@ -2683,7 +2797,7 @@ fn low_priority_switch_saves_while_a_job_runs_and_notifies_the_engine() {
     *lock(&state.worker.sender).unwrap() = Some(sender);
     lock(&state.runtime).unwrap().active_job_id = "running".into();
 
-    apply_update_switch(&state, "low_priority", |_| true).unwrap();
+    apply_preference(&state, "low_priority", &serde_json::json!(true)).unwrap();
     let saved = crate::settings::load(&state.paths).0;
     assert!(saved.low_priority);
 
@@ -2700,6 +2814,37 @@ fn low_priority_switch_saves_while_a_job_runs_and_notifies_the_engine() {
     old.as_object_mut().unwrap().remove("low_priority");
     let loaded = serde_json::from_value::<UiSettings>(old).unwrap();
     assert!(!loaded.low_priority);
+}
+
+#[test]
+fn menu_bar_and_finish_notification_switches_save_while_running_and_default_on() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(directory.path());
+    fs::create_dir_all(&paths.next_root).unwrap();
+    fs::create_dir_all(&paths.model_root).unwrap();
+    let state = AppState::from_paths(paths).unwrap();
+    assert!(crate::settings::load(&state.paths).0.show_in_menu_bar);
+    assert!(crate::settings::load(&state.paths).0.notify_on_finish);
+
+    lock(&state.runtime).unwrap().active_job_id = "running".into();
+    apply_preference(&state, "show_in_menu_bar", &serde_json::json!(false)).unwrap();
+    apply_preference(&state, "notify_on_finish", &serde_json::json!(false)).unwrap();
+    let saved = crate::settings::load(&state.paths).0;
+    assert!(!saved.show_in_menu_bar);
+    assert!(!saved.notify_on_finish);
+
+    let mut stale = UiSettings::default();
+    keep_update_switches(&saved, &mut stale);
+    assert!(!stale.show_in_menu_bar);
+    assert!(!stale.notify_on_finish);
+
+    let mut old = serde_json::to_value(UiSettings::default()).unwrap();
+    let map = old.as_object_mut().unwrap();
+    map.remove("show_in_menu_bar");
+    map.remove("notify_on_finish");
+    let loaded = serde_json::from_value::<UiSettings>(old).unwrap();
+    assert!(loaded.show_in_menu_bar);
+    assert!(loaded.notify_on_finish);
 }
 
 #[test]
@@ -3815,7 +3960,7 @@ fn custom_edit_model_requires_grants_checks_sd_cli_and_persists_paths_in_place()
 }
 
 #[test]
-fn colour_fix_is_resolved_for_photos_and_rejected_for_video() {
+fn colour_fix_is_resolved_for_photos_and_video() {
     use crate::types::FixStageSelection;
 
     let directory = tempfile::tempdir().unwrap();
@@ -3872,5 +4017,418 @@ fn colour_fix_is_resolved_for_photos_and_rejected_for_video() {
         fix: "colour".into(),
         model_id: "ddcolor_modelscope".into(),
     }];
-    assert!(resolve_model_selection(&state, &video_job).is_err());
+    match resolve_model_selection(&state, &video_job).unwrap() {
+        ModelSelection::Image { preprocess, .. } => {
+            assert_eq!(preprocess.len(), 1);
+            assert_eq!(preprocess[0].fix, "colour");
+        }
+        _ => panic!("expected video plan with colour fix"),
+    }
+    video_job.video_task = "denoise".into();
+    video_job.output_scale = 1;
+    video_job.model_id = "ddcolor_modelscope".into();
+    match resolve_model_selection(&state, &video_job).unwrap() {
+        ModelSelection::Image {
+            model_id,
+            preprocess,
+            ..
+        } => {
+            assert_eq!(model_id, "ddcolor_modelscope");
+            assert!(preprocess.is_empty());
+        }
+        _ => panic!("expected video restore with colour"),
+    }
+    let recipe: Recipe = serde_json::from_value(json!({
+        "id": "colour-video", "name": "Colour video", "task": "video",
+        "video_task": "denoise", "video_model_id": "frame_by_frame",
+        "model_id": "ddcolor_modelscope", "output_scale": 1,
+        "tile_size": 128, "halo": 16, "precision": "fp32", "safe_memory": true,
+        "stages": [{"kind":"restore", "model_id":"ddcolor_modelscope", "fix":"colour"}]
+    }))
+    .unwrap();
+    assert!(validate_recipe_stages(&recipe).is_ok());
+}
+
+#[test]
+fn custom_checkpoint_consent_is_persisted_by_digest_and_changes_require_new_consent() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(dir.path());
+    let checkpoint = dir.path().join("my_model.pth");
+    fs::write(&checkpoint, b"first").unwrap();
+    let state = AppState::from_paths(paths.clone()).unwrap();
+    state.grants.grant_model_file(&checkpoint);
+    assert!(!custom_checkpoint_trusted(&state, &checkpoint).unwrap());
+    set_custom_checkpoint_consent(&state, &checkpoint, true).unwrap();
+    assert!(custom_checkpoint_trusted(&state, &checkpoint).unwrap());
+    let state = AppState::from_paths(paths).unwrap();
+    state.grants.grant_model_file(&checkpoint);
+    assert!(custom_checkpoint_trusted(&state, &checkpoint).unwrap());
+    fs::write(&checkpoint, b"changed").unwrap();
+    assert!(!custom_checkpoint_trusted(&state, &checkpoint).unwrap());
+}
+
+#[test]
+fn custom_checkpoint_job_requires_matching_approval_and_safe_format_does_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = AppState::from_paths(AppPaths::under(dir.path())).unwrap();
+    let checkpoint = dir.path().join("custom.ckpt");
+    fs::write(&checkpoint, b"first").unwrap();
+    state.grants.grant_model_file(&checkpoint);
+    let mut request = input("upscale");
+    request.model_id = "__custom__".into();
+    request.custom_model_path = checkpoint.to_string_lossy().into_owned();
+    request.allow_unsafe_pickle_model = true;
+    assert!(resolve_model_selection(&state, &request).is_err());
+    set_custom_checkpoint_consent(&state, &checkpoint, true).unwrap();
+    let selected = resolve_model_selection(&state, &request).unwrap();
+    match selected {
+        ModelSelection::Image {
+            approved_checkpoint_sha256,
+            ..
+        } => {
+            assert_eq!(
+                approved_checkpoint_sha256,
+                Some(catalog::sha256_file(&checkpoint).unwrap())
+            );
+        }
+        _ => panic!("expected image model"),
+    }
+    request.allow_unsafe_pickle_model = false;
+    assert!(resolve_model_selection(&state, &request).is_err());
+    request.allow_unsafe_pickle_model = true;
+    fs::write(&checkpoint, b"changed").unwrap();
+    assert!(resolve_model_selection(&state, &request).is_err());
+    let safe = dir.path().join("safe.safetensors");
+    fs::write(&safe, b"fixture").unwrap();
+    state.grants.grant_model_file(&safe);
+    request.custom_model_path = safe.to_string_lossy().into_owned();
+    request.allow_unsafe_pickle_model = false;
+    assert!(resolve_model_selection(&state, &request).is_ok());
+}
+
+#[test]
+fn saved_custom_model_names_and_grants_survive_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(dir.path());
+    let file = dir.path().join("my_model.pth");
+    fs::write(&file, b"fixture").unwrap();
+    let state = AppState::from_paths(paths.clone()).unwrap();
+    state.grants.grant_model_file(&file);
+    let mut settings = lock(&state.settings).unwrap().clone();
+    settings.custom_models.push(crate::types::CustomModel {
+        path: file.to_string_lossy().into_owned(),
+        name: "My model".into(),
+    });
+    save_settings_checked(&state, settings).unwrap();
+    let restarted = AppState::from_paths(paths).unwrap();
+    assert_eq!(
+        lock(&restarted.settings).unwrap().custom_models[0].name,
+        "My model"
+    );
+    assert!(restarted.grants.check_model_file(&file).is_ok());
+}
+
+#[test]
+fn remembered_pickle_consent_requires_an_engine_that_checks_the_digest() {
+    let selection = ModelSelection::Image {
+        model_id: "__custom__".into(),
+        path: "/models/checkpoint.pth".into(),
+        approved_checkpoint_sha256: Some("a".repeat(64)),
+        preprocess: vec![],
+        face_path: None,
+        face_model_id: String::new(),
+        native_scale: 4,
+        skip_upscale: false,
+        interpolation: None,
+        audio_denoise: None,
+    };
+    let mut engine = crate::types::EngineInfo {
+        protocol_version: 1,
+        minimum_protocol_version: 1,
+        engine_id: "test".into(),
+        engine_version: "old".into(),
+        features: vec!["image".into()],
+        model_formats: vec![],
+        video_engines: vec![],
+    };
+    assert!(validate_checkpoint_engine(&selection, Some(&engine)).is_err());
+    engine.features.push("checkpoint_sha256_consent".into());
+    assert!(validate_checkpoint_engine(&selection, Some(&engine)).is_ok());
+}
+
+#[test]
+fn retry_job_on_cpu_queues_only_the_failed_job_on_cpu_without_changing_device_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let photo = dir.path().join("photo.png");
+    let out_dir = dir.path().join("out");
+    fs::write(&photo, b"fixture").unwrap();
+    fs::create_dir_all(&out_dir).unwrap();
+
+    let paths = AppPaths::under(&dir.path().join("app"));
+    let state = AppState::from_paths(paths).unwrap();
+    {
+        let mut settings = lock(&state.settings).unwrap();
+        settings.device_id = "mps".into();
+        settings.neural_engine = true;
+        settings.output_directory = out_dir.to_string_lossy().into_owned();
+        settings.output_scale = 2;
+    }
+    state.grants.grant_media_file(&photo);
+    state.grants.grant_output_folder(&out_dir);
+    {
+        let mut caps = lock(&state.capabilities).unwrap();
+        caps.system_ram_total = 16 * 1024 * 1024 * 1024;
+        caps.devices = vec![
+            crate::types::DeviceInfo {
+                id: "mps".into(),
+                device_type: "mps".into(),
+                name: "Apple GPU".into(),
+                total_memory: 8 * 1024 * 1024 * 1024,
+                free_memory: 4 * 1024 * 1024 * 1024,
+                supports_fp16: true,
+                is_integrated: true,
+                recommended_tile_sizes: vec![128, 256],
+                neural_engine: true,
+            },
+            crate::types::DeviceInfo {
+                id: "cpu".into(),
+                device_type: "cpu".into(),
+                name: "CPU".into(),
+                total_memory: 16 * 1024 * 1024 * 1024,
+                free_memory: 8 * 1024 * 1024 * 1024,
+                supports_fp16: false,
+                is_integrated: false,
+                recommended_tile_sizes: vec![128, 256],
+                neural_engine: false,
+            },
+        ];
+    }
+
+    let media_id = Uuid::new_v4().to_string();
+    let failed_job_id = Uuid::new_v4().to_string();
+    let out_file = out_dir.join("photo_upscaled_2x.png");
+    let request_json = json!({
+        "type": "job_request",
+        "data": {
+            "job_id": failed_job_id,
+            "image_path": photo.to_string_lossy(),
+            "model_path": "/models/span.safetensors",
+            "output_path": out_file.to_string_lossy(),
+            "output_format": "png",
+            "device": "mps",
+            "neural_engine": true,
+            "output_scale": 2
+        }
+    })
+    .to_string();
+    {
+        let db = lock(&state.database).unwrap();
+        let photo_str = photo.to_str().unwrap();
+        db.insert_media(&media_id, photo_str, "photo.png", "image")
+            .unwrap();
+        db.update_media_probe(
+            photo_str, "image", 64, 64, 1, 0.0, 0.0, "preview", "", "", false,
+        )
+        .unwrap();
+        db.insert_job(&failed_job_id, &media_id, &request_json)
+            .unwrap();
+        db.finish_job(&failed_job_id, "failed", "", "GPU driver reset")
+            .unwrap();
+    }
+
+    retry_job_on_cpu_checked(&state, &failed_job_id).unwrap();
+
+    // App-wide device_id and neural_engine stay unchanged.
+    {
+        let settings = lock(&state.settings).unwrap();
+        assert_eq!(settings.device_id, "mps");
+        assert!(settings.neural_engine);
+    }
+
+    let queued = lock(&state.database)
+        .unwrap()
+        .next_queued_job()
+        .unwrap()
+        .expect("retried job should be queued");
+    assert_ne!(queued.id, failed_job_id);
+    let queued_req: Value = serde_json::from_str(&queued.request_json).unwrap();
+    assert_eq!(queued_req["data"]["job_id"], queued.id);
+    assert_eq!(queued_req["data"]["device"], "cpu");
+    assert_eq!(queued_req["data"]["neural_engine"], false);
+    assert_eq!(queued_req["data"]["output_scale"], 2);
+    assert_eq!(
+        queued_req["data"]["output_path"],
+        out_file.to_string_lossy().as_ref()
+    );
+
+    // Retrying a job that is not failed is rejected.
+    let err = retry_job_on_cpu_checked(&state, &queued.id).unwrap_err();
+    assert!(err.to_string().contains("failed"));
+}
+
+#[test]
+fn cancel_jobs_and_cancel_jobs_for_media_forward_keep_partial_and_cancel_queued() {
+    use std::sync::mpsc;
+
+    for keep_partial in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
+        let (sender, receiver) = mpsc::channel();
+        *lock(&state.worker.sender).unwrap() = Some(sender);
+
+        {
+            let db = lock(&state.database).unwrap();
+            db.insert_media("m1", "/in/clip1.mp4", "clip1.mp4", "video")
+                .unwrap();
+            db.insert_media("m2", "/in/clip2.mp4", "clip2.mp4", "video")
+                .unwrap();
+            db.insert_job(
+                "j1",
+                "m1",
+                &json!({"type": "video_job_request", "data": {"job_id": "j1"}}).to_string(),
+            )
+            .unwrap();
+            db.set_job_status("j1", "running").unwrap();
+            db.insert_job(
+                "j2",
+                "m2",
+                &json!({"type": "video_job_request", "data": {"job_id": "j2"}}).to_string(),
+            )
+            .unwrap();
+        }
+        lock(&state.runtime).unwrap().active_job_id = "j1".into();
+        lock(&state.worker.cancellation).unwrap().job_ids = vec!["j1".into()];
+
+        cancel_jobs_checked(&state, keep_partial).unwrap();
+
+        let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+        assert_eq!(sent["type"], "cancel_request");
+        assert_eq!(sent["data"]["job_id"], "j1");
+        assert_eq!(sent["data"]["keep_partial"], keep_partial);
+
+        let jobs = lock(&state.database).unwrap().list_jobs().unwrap();
+        assert_eq!(
+            jobs.iter().find(|j| j.id == "j1").unwrap().status,
+            "cancelling"
+        );
+        assert_eq!(
+            jobs.iter().find(|j| j.id == "j2").unwrap().status,
+            "cancelled"
+        );
+    }
+
+    for keep_partial in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
+        let (sender, receiver) = mpsc::channel();
+        *lock(&state.worker.sender).unwrap() = Some(sender);
+
+        {
+            let db = lock(&state.database).unwrap();
+            db.insert_media("m1", "/in/clip1.mp4", "clip1.mp4", "video")
+                .unwrap();
+            db.insert_media("m2", "/in/clip2.mp4", "clip2.mp4", "video")
+                .unwrap();
+            db.insert_job(
+                "j1",
+                "m1",
+                &json!({"type": "video_job_request", "data": {"job_id": "j1"}}).to_string(),
+            )
+            .unwrap();
+            db.set_job_status("j1", "running").unwrap();
+            db.insert_job(
+                "j1-q",
+                "m1",
+                &json!({"type": "video_job_request", "data": {"job_id": "j1-q"}}).to_string(),
+            )
+            .unwrap();
+            db.insert_job(
+                "j2",
+                "m2",
+                &json!({"type": "video_job_request", "data": {"job_id": "j2"}}).to_string(),
+            )
+            .unwrap();
+        }
+        lock(&state.runtime).unwrap().active_job_id = "j1".into();
+
+        cancel_jobs_for_media_checked(&state, "m1", keep_partial).unwrap();
+
+        let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+        assert_eq!(sent["type"], "cancel_request");
+        assert_eq!(sent["data"]["job_id"], "j1");
+        assert_eq!(sent["data"]["keep_partial"], keep_partial);
+
+        let jobs = lock(&state.database).unwrap().list_jobs().unwrap();
+        assert_eq!(
+            jobs.iter().find(|j| j.id == "j1").unwrap().status,
+            "cancelling"
+        );
+        assert_eq!(
+            jobs.iter().find(|j| j.id == "j1-q").unwrap().status,
+            "cancelled"
+        );
+        assert_eq!(jobs.iter().find(|j| j.id == "j2").unwrap().status, "queued");
+    }
+}
+
+#[test]
+fn retry_on_cpu_rechecks_the_approval_of_an_own_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let checkpoint = dir.path().join("mine.pth");
+    fs::write(&checkpoint, b"pickled weights").unwrap();
+    let paths = AppPaths::under(&dir.path().join("app"));
+    let state = AppState::from_paths(paths).unwrap();
+    let digest = catalog::sha256_file(&checkpoint).unwrap();
+    let request = |approved: Option<&str>| {
+        json!({"type": "job_request", "data": {
+            "model_path": checkpoint.to_string_lossy(),
+            "allow_unverified_checkpoint": approved.is_some(),
+            "approved_checkpoint_sha256": approved,
+        }})
+    };
+    // No own checkpoint in the request: nothing to check.
+    let catalog_job =
+        json!({"type": "job_request", "data": {"model_path": "/models/span.safetensors"}});
+    assert!(check_retry_checkpoint_consent(&state, &catalog_job).is_ok());
+
+    // Not granted any more: refused.
+    lock(&state.settings).unwrap().trusted_checkpoint_sha256 = vec![digest.clone()];
+    assert!(check_retry_checkpoint_consent(&state, &request(Some(&digest))).is_err());
+
+    state.grants.grant_model_file(&checkpoint);
+    assert!(check_retry_checkpoint_consent(&state, &request(Some(&digest))).is_ok());
+
+    // Approval withdrawn: refused.
+    lock(&state.settings)
+        .unwrap()
+        .trusted_checkpoint_sha256
+        .clear();
+    let error = check_retry_checkpoint_consent(&state, &request(Some(&digest))).unwrap_err();
+    assert!(error.to_string().contains("Confirm your own model again"));
+
+    // The file changed since it was approved: refused, even if the new file is trusted.
+    fs::write(&checkpoint, b"other weights").unwrap();
+    let changed = catalog::sha256_file(&checkpoint).unwrap();
+    lock(&state.settings).unwrap().trusted_checkpoint_sha256 = vec![digest.clone(), changed];
+    assert!(check_retry_checkpoint_consent(&state, &request(Some(&digest))).is_err());
+
+    // A flag without a digest is never enough.
+    let mut flag_only = request(None);
+    flag_only["data"]["allow_unverified_checkpoint"] = json!(true);
+    assert!(check_retry_checkpoint_consent(&state, &flag_only).is_err());
+}
+
+#[test]
+fn low_priority_from_advanced_lasts_for_the_session_and_a_new_default_ends_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = AppState::from_paths(AppPaths::under(&dir.path().join("app"))).unwrap();
+    assert!(!crate::worker::effective_low_priority(&state));
+    set_run_low_priority_checked(&state, true);
+    assert!(crate::worker::effective_low_priority(&state));
+    // The saved default is untouched.
+    assert!(!lock(&state.settings).unwrap().low_priority);
+    // Choosing a default in Settings ends the session choice.
+    apply_preference(&state, "low_priority", &json!(false)).unwrap();
+    assert!(lock(&state.run_low_priority).unwrap().is_none());
+    assert!(!crate::worker::effective_low_priority(&state));
 }

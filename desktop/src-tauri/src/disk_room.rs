@@ -297,17 +297,17 @@ pub fn request_need(
             let kind = data["model_kind"].as_str().unwrap_or("spandrel_image");
             let (output_width, output_height) = if kind == "spandrel_image" {
                 (width.saturating_mul(scale), height.saturating_mul(scale))
-            } else if kind == "seedvr2" {
+            } else {
+                // Temporal engines (SeedVR2, FlashVSR) size their output by the shorter edge,
+                // rounded down to even dimensions just like the worker.
                 let shortest = width.min(height);
                 let target = data["target_resolution"].as_u64().unwrap_or(0);
                 let target = if target == 0 { shortest } else { target };
                 let grown = target as f64 / shortest as f64;
                 (
-                    (width as f64 * grown).round_ties_even() as u64,
-                    (height as f64 * grown).round_ties_even() as u64,
+                    (((width as f64 * grown) as u64) / 2 * 2).max(2),
+                    (((height as f64 * grown) as u64) / 2 * 2).max(2),
                 )
-            } else {
-                return None;
             };
             Some((
                 folder.to_path_buf(),
@@ -396,18 +396,28 @@ mod tests {
 
     #[test]
     fn temporal_video_uses_target_resolution_for_disk_need() {
-        let request = json!({"type": "video_job_request", "data": {
-            "output_video_path": "/out/a.mp4", "output_scale": 4,
-            "model_kind": "seedvr2", "target_resolution": 1080}});
-        let mut clip = media(1920, 1080);
-        clip.frame_count = 300;
-        let (folder, need) = request_need(&request, Some(&clip), 4).unwrap();
-        let volume = Volume {
-            free: 8_100_000_000,
-            total: 10_000_000_000,
-            system: true,
-        };
-        assert!(refusal(&folder, need, &volume).is_none());
+        for kind in ["seedvr2", "flashvsr"] {
+            let request = json!({"type": "video_job_request", "data": {
+                "output_video_path": "/out/a.mp4", "output_scale": 4,
+                "model_kind": kind, "target_resolution": 1080}});
+            let mut clip = media(1920, 1080);
+            clip.frame_count = 300;
+            let (folder, need) = request_need(&request, Some(&clip), 4).unwrap();
+            let volume = Volume {
+                free: 8_100_000_000,
+                total: 10_000_000_000,
+                system: true,
+            };
+            assert!(refusal(&folder, need, &volume).is_none(), "{kind}");
+        }
+        // 854x480 at 1080p matches the worker's even-side floor rounding (1920x1080).
+        let req_854 = json!({"type": "video_job_request", "data": {
+            "output_video_path": "/out/a.mp4",
+            "model_kind": "flashvsr", "target_resolution": 1080}});
+        let mut clip_854 = media(854, 480);
+        clip_854.frame_count = 300;
+        let (_, need_854) = request_need(&req_854, Some(&clip_854), 4).unwrap();
+        assert_eq!(need_854, video_bytes(1920, 1080, 300, false));
     }
 
     #[test]

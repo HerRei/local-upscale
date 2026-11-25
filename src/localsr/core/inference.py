@@ -7,6 +7,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from .memory_errors import DeviceOutOfMemoryError
 from .output_writer import OutputWriter
 from .tiling import generate_tiles, make_tile
 
@@ -274,6 +275,55 @@ def _onnx_route(device_str: str):
     return None
 
 
+_ACCELERATORS = frozenset({"mps", "cuda", "xpu"})
+
+
+def _model_modules(model) -> list[torch.nn.Module]:
+    """The torch modules behind a cached model: Spandrel, Core ML and DDColor wrappers
+    all keep theirs in ``model`` (a Core ML wrapper's holds its PyTorch fallback)."""
+    module = model if isinstance(model, torch.nn.Module) else getattr(model, "model", None)
+    return [module] if isinstance(module, torch.nn.Module) else []
+
+
+def _park_tensors(model, target: torch.device) -> list[tuple]:
+    """Move a model's accelerator weights and buffers to ``target``; returns how to undo it.
+
+    Each parameter keeps its identity (only its data moves), so wrappers that hold the
+    module keep working once the data is back. Copies are exact in both directions.
+    """
+    moved: list[tuple] = []
+    for module in _model_modules(model):
+        for owner in module.modules():
+            for name, parameter in owner._parameters.items():
+                if parameter is not None and parameter.device.type in _ACCELERATORS:
+                    moved.append((owner, "parameter", name, parameter.device))
+                    parameter.data = parameter.data.to(target)
+            for name, buffer in owner._buffers.items():
+                if buffer is not None and buffer.device.type in _ACCELERATORS:
+                    moved.append((owner, "buffer", name, buffer.device))
+                    owner._buffers[name] = buffer.to(target)
+    return moved
+
+
+def _restore_tensors(moved: list[tuple]) -> None:
+    for owner, kind, name, device in moved:
+        if kind == "parameter":
+            parameter = owner._parameters[name]
+            parameter.data = parameter.data.to(device)
+        else:
+            owner._buffers[name] = owner._buffers[name].to(device)
+
+
+def _stop(writer, finished, total: int, keep_partial) -> InterruptedError:
+    """The exception a stop raises in the tile loop: TilesStopped with the finished tiles
+    when the stop keeps them and there are some, else a plain InterruptedError."""
+    from localsr.core.partial_image import TilesStopped
+
+    if finished and keep_partial is not None and keep_partial():
+        return TilesStopped(writer, list(finished), total)
+    return InterruptedError("Cancelled")
+
+
 class InferenceEngine:
     def __init__(self, model_adapter):
         self.model_adapter = model_adapter
@@ -293,6 +343,39 @@ class InferenceEngine:
         self.status_callback: Callable[[str], None] | None = None
         # Sentences a backend wants on the finished result (a route it gave up).
         self.notes: list[str] = []
+        # Weights moved to system memory while frame interpolation needs the GPU memory.
+        self._parked: dict[str, list[tuple]] = {}
+        self._park_lock = threading.RLock()
+
+    def park_models(self) -> bool:
+        """Move every cached model's GPU weights to system memory and free the GPU cache.
+
+        Video frame interpolation calls this when a frame pair does not fit next to the
+        models. The next model call brings them back first, with the same values, so
+        only speed changes. Returns whether anything was moved.
+        """
+        with self._park_lock:
+            moved_any = False
+            devices: set[torch.device] = set()
+            for path, (model, _device, _precision) in self._loaded_models.items():
+                moved = _park_tensors(model, torch.device("cpu"))
+                if moved:
+                    self._parked.setdefault(path, []).extend(moved)
+                    devices.update(device for *_, device in moved)
+                    moved_any = True
+            gc.collect()
+            for device in devices:
+                _clear_device_cache(device)
+            return moved_any
+
+    def _unpark(self) -> None:
+        """Return parked weights to their devices before a model runs."""
+        if not self._parked:
+            return
+        with self._park_lock:
+            for moved in self._parked.values():
+                _restore_tensors(moved)
+            self._parked.clear()
 
     def add_note(self, message: str) -> None:
         if message not in self.notes:
@@ -326,6 +409,7 @@ class InferenceEngine:
         desired path. Image pipelines still use process_image(), which
         calls this internally.
         """
+        self._unpark()
         onnx_route = _onnx_route(device_str)
         architecture = str(getattr(model_info, "architecture", ""))
         if onnx_route is not None and (architecture == "DDColor" or onnx_route.kind == "NPU"):
@@ -356,9 +440,15 @@ class InferenceEngine:
         device = (
             torch.device("cpu") if onnx_route is not None else _resolve_torch_device(device_str)
         )
+        # The CPU runs FP32 whatever precision was asked for: PyTorch has no fast FP16 path
+        # on the CPU, and a 4x photo in FP16 there ran on one core for many minutes a tile
+        # (a GPU setting that fell back to the CPU kept its FP16 choice).
         precision = (
             torch.float16
-            if precision_str == "fp16" and model_info.half_supported and onnx_route is None
+            if precision_str == "fp16"
+            and model_info.half_supported
+            and onnx_route is None
+            and device.type != "cpu"
             else torch.float32
         )
         coreml_units: tuple[str, ...] = ()
@@ -451,6 +541,7 @@ class InferenceEngine:
     def release_model(self, path: str | None = None) -> None:
         """Release one cached model, or all of them when path is None."""
         if path is not None:
+            self._parked.pop(path, None)
             entry = self._loaded_models.pop(path, None)
             self._loaded_backend_ids.pop(path, None)
             del entry
@@ -459,6 +550,7 @@ class InferenceEngine:
             self._sync_legacy_fields()
             gc.collect()
         else:
+            self._parked.clear()
             for _, (model, _, _) in self._loaded_models.items():
                 del model
             self._loaded_models.clear()
@@ -510,6 +602,7 @@ class InferenceEngine:
         """
 
         architecture = getattr(model_info, "architecture", "Model")
+        self._unpark()
 
         def run(region):
             if cancel_event is not None and cancel_event.is_set():
@@ -802,6 +895,7 @@ class InferenceEngine:
         OutputWriter is avoided here because video frames are transient —
         the encoder streams them straight out.
         """
+        self._unpark()
         if device is None:
             device = self._loaded_device
         if precision is None:
@@ -811,6 +905,14 @@ class InferenceEngine:
             raise RuntimeError("Model is not loaded. Call load_model() first.")
 
         _, h, w = img_tensor.shape
+        if getattr(model_info, "architecture", "") == "DDColor" and not float_output:
+            # DDColor predicts colour for the whole picture; tiling it as an upscaler
+            # would feed its two colour channels into an RGB tile.
+            from localsr.image_models.ddcolor import colorize_tensor
+
+            result = colorize_tensor(model, img_tensor, device=device, cancel_event=cancel_event)
+            progress_callback(1, 1, max(w, h))
+            return result.rgb
         scale = model_info.scale
         out_channels = model_info.out_channels
         output_dtype = np.float32 if float_output else np.uint8
@@ -901,8 +1003,9 @@ class InferenceEngine:
 
                     current_tile_size = current_tile_size // 2
                     if current_tile_size < min_tile_size:
-                        raise RuntimeError(
-                            "Out of memory. Reduced tile size to minimum and still failed."
+                        raise DeviceOutOfMemoryError(
+                            "Out of memory. Reduced tile size to minimum and still failed.",
+                            device_type=device.type,
                         ) from e
 
                     if tile_callback is not None:
@@ -980,7 +1083,14 @@ class InferenceEngine:
         safe_memory: bool = True,
         tile_callback: Callable[..., None] | None = None,
         temporary_directory: str | None = None,
+        keep_partial: Callable[[], bool] | None = None,
     ) -> OutputWriter:
+        """Run the model over the image in tiles.
+
+        A stop raises InterruptedError; when ``keep_partial`` says the finished part is kept
+        and a tile is finished, it raises TilesStopped with the output and those tiles.
+        """
+        from localsr.core.partial_image import TilesStopped
 
         device, precision = self.load_model(
             model_path, device_str, precision_str, model_info, safe_memory=safe_memory
@@ -1017,11 +1127,11 @@ class InferenceEngine:
                     tiles = list(generate_tiles(w, h, current_tile_size, halo, scale))
                     total_tiles = len(tiles)
                     self.prepare_tiles(current_tile_size, halo)
+                    finished: list[tuple[int, int, int, int]] = []
 
                     for i, t in enumerate(tiles):
                         if cancel_event.is_set():
-                            writer.cleanup()
-                            raise InterruptedError("Cancelled")
+                            raise _stop(writer, finished, total_tiles, keep_partial)
 
                         if tile_callback is not None:
                             tile_callback(
@@ -1035,18 +1145,22 @@ class InferenceEngine:
                                 current_tile_size,
                             )
 
-                        out_core_np = self.run_tile(
-                            t,
-                            img_tensor,
-                            model_info,
-                            device,
-                            precision,
-                            halo,
-                            model,
-                            cancel_event=cancel_event,
-                        )
+                        try:
+                            out_core_np = self.run_tile(
+                                t,
+                                img_tensor,
+                                model_info,
+                                device,
+                                precision,
+                                halo,
+                                model,
+                                cancel_event=cancel_event,
+                            )
+                        except InterruptedError:
+                            raise _stop(writer, finished, total_tiles, keep_partial) from None
 
                         writer.write_tile(out_core_np, t.out_x, t.out_y)
+                        finished.append((t.out_x, t.out_y, t.out_w, t.out_h))
 
                         if tile_callback is not None:
                             tile_callback(
@@ -1081,8 +1195,9 @@ class InferenceEngine:
                         current_tile_size = current_tile_size // 2
                         if current_tile_size < min_tile_size:
                             writer.cleanup()
-                            raise RuntimeError(
-                                "Out of memory. Reduced tile size to minimum and still failed."
+                            raise DeviceOutOfMemoryError(
+                                "Out of memory. Reduced tile size to minimum and still failed.",
+                                device_type=device.type,
                             ) from e
 
                         if tile_callback is not None:
@@ -1110,6 +1225,8 @@ class InferenceEngine:
 
             writer.cleanup()
             raise RuntimeError("Failed to process image.")
+        except TilesStopped:
+            raise  # the caller saves the finished tiles, then cleans the writer up
         except Exception:
             writer.cleanup()
             raise

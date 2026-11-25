@@ -62,7 +62,10 @@
       >
     </div>
     <div class="text">
-      {#if status.stage === 'available'}
+      {#if status.stage === 'available' && status.managed_by_package_manager}
+        <b>LocalSR {status.version} is available</b>
+        <span>Download the new .deb and install it with apt.</span>
+      {:else if status.stage === 'available'}
         <b>LocalSR {status.version} is available</b>
         <span
           >{status.size ? `${(status.size / 1024 ** 2).toFixed(0)} MB · ` : ''}Settings, recipes and
@@ -77,16 +80,28 @@
       {:else}
         <b>LocalSR {status.version} is ready to install</b>
         <span
-          >{processing
-            ? 'It installs as soon as the current queue finishes.'
-            : 'LocalSR restarts to finish the update.'}</span
+          >{status.settings_recovery
+            ? 'Settings could not be read. Open Details to recover them before updating.'
+            : processing
+              ? 'It installs as soon as the current queue finishes.'
+              : 'LocalSR restarts to finish the update.'}</span
         >
       {/if}
       {#if error}<span class="error" role="alert">{error}</span>{/if}
     </div>
     <div class="buttons">
       {#if status.stage === 'available'}
-        <button class="notice-button primary" type="button" on:click={start}>Update</button>
+        {#if status.managed_by_package_manager}
+          <!-- apt owns the installed files: the new .deb comes from the download page. -->
+          <button
+            class="notice-button primary"
+            type="button"
+            on:click={() => api.openDownloadPage().catch((error) => updateError.set(String(error)))}
+            >Download</button
+          >
+        {:else}
+          <button class="notice-button primary" type="button" on:click={start}>Update</button>
+        {/if}
         <button class="notice-button" type="button" on:click={skip}>Skip This Version</button>
         <button
           class="notice-button"

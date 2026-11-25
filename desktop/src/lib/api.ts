@@ -34,6 +34,14 @@ export async function refreshSnapshot(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('get_snapshot');
 }
 
+export async function getCacheSize(): Promise<number> {
+  return isTauri() ? invoke<number>('cache_size') : 0;
+}
+
+export async function clearCache(): Promise<number> {
+  return isTauri() ? invoke<number>('clear_cache') : 0;
+}
+
 export async function chooseMediaFiles(): Promise<string[]> {
   if (!isTauri()) return [];
   return invoke<string[]>('choose_media_files');
@@ -118,6 +126,11 @@ export async function listenForEngineStatus(
   return listen<EngineDownloadStatus>('engine-status', (event) => handler(event.payload));
 }
 
+export async function checkpointConsent(path: string, allow?: boolean): Promise<boolean> {
+  if (!isTauri()) return false;
+  return invoke<boolean>('checkpoint_consent', { path, allow: allow ?? null });
+}
+
 export async function chooseCustomModel(): Promise<string | null> {
   if (!isTauri()) return null;
   return invoke<string | null>('choose_custom_model');
@@ -132,21 +145,47 @@ export const clearResults = (): Promise<void> => invoke('clear_results');
 export const saveSettings = (settings: UiSettings): Promise<void> =>
   invoke('save_settings', { settings });
 
-/** One update switch, saved by the host on its own: a full settings save never changes it. */
-export const setUpdateSwitch = (
-  name: 'check_updates_at_launch' | 'anonymous_update_count' | 'crash_reports' | 'low_priority',
-  value: boolean,
-): Promise<void> => invoke('set_update_switch', { name, value });
+export type PreferenceName =
+  | 'check_updates_at_launch'
+  | 'anonymous_update_count'
+  | 'crash_reports'
+  | 'low_priority'
+  | 'show_in_menu_bar'
+  | 'notify_on_finish'
+  | 'completion_sound'
+  | 'menu_bar_icon_monochrome'
+  | 'colour_blind_palette'
+  | 'contrast'
+  | 'viewer_background'
+  | 'auto_cache_cleanup'
+  | 'stopped_job_result'
+  | 'appearance'
+  | 'interface_scale';
+
+/** One app-wide preference, saved by the host on its own: a full settings save never changes it. */
+export const setPreference = (
+  name: PreferenceName,
+  value:
+    | boolean
+    | UiSettings['appearance']
+    | UiSettings['interface_scale']
+    | NonNullable<UiSettings['contrast']>
+    | NonNullable<UiSettings['viewer_background']>
+    | NonNullable<UiSettings['stopped_job_result']>,
+): Promise<void> => invoke('set_preference', { name, value });
 export interface SetupChoices {
   appearance: UiSettings['appearance'];
   colourBlindPalette: boolean;
+  contrast: NonNullable<UiSettings['contrast']>;
+  showInMenuBar: boolean | null;
+  completionSound: boolean;
   checkAtLaunch: boolean;
   anonymousCount: boolean;
   crashReports: boolean;
 }
 
 export const setPrivacyChoice = (choices: SetupChoices): Promise<void> =>
-  invoke('set_privacy_choice', { ...choices });
+  invoke('set_privacy_choice', { choices });
 export const startJobs = (input: StartBatchInput): Promise<void> => invoke('start_jobs', { input });
 export const startEdit = (input: StartEditInput): Promise<void> => invoke('start_edit', { input });
 export const openEditLink = (modelId: string, link: 'license' | 'source'): Promise<void> =>
@@ -170,7 +209,14 @@ export async function chooseEditModelFile(
 export const saveCustomEditModel = (custom: CustomEditModel, runtimePath: string): Promise<void> =>
   invoke('save_custom_edit_model', { custom, runtimePath });
 export const retryEngine = (): Promise<void> => invoke('retry_engine');
-export const cancelJobs = (): Promise<void> => invoke('cancel_jobs');
+export const retryJobOnCpu = (jobId: string): Promise<void> =>
+  invoke('retry_job_on_cpu', { jobId });
+/** Low priority for this session's work, without changing the saved default. */
+export const setRunLowPriority = (enabled: boolean): Promise<void> =>
+  invoke('set_run_low_priority', { enabled });
+
+export const cancelJobs = (keepPartial = false): Promise<void> =>
+  invoke('cancel_jobs', { keepPartial });
 export const startBenchmark = (device: string): Promise<void> =>
   invoke('start_benchmark', { input: { device } });
 export const exportBenchmark = async (): Promise<boolean> => {
@@ -196,6 +242,10 @@ export async function openDownloadPage(): Promise<void> {
 }
 
 /** In-app tutorial for loading a custom checkpoint file. */
+export async function openPrivacyPage(): Promise<void> {
+  if (isTauri()) await invoke('open_privacy_page');
+}
+
 export async function openCustomModelTutorial(): Promise<void> {
   if (isTauri()) await invoke('open_custom_model_tutorial');
 }
@@ -314,8 +364,8 @@ export const estimateModelTrials = (
   modelIds: string[],
   baseSettings: StartBatchInput,
 ): Promise<TrialEstimate[]> => invoke('estimate_model_trials', { mediaId, modelIds, baseSettings });
-export const cancelJobsForMedia = (mediaId: string): Promise<void> =>
-  invoke('cancel_jobs_for_media', { mediaId });
+export const cancelJobsForMedia = (mediaId: string, keepPartial = false): Promise<void> =>
+  invoke('cancel_jobs_for_media', { mediaId, keepPartial });
 export const probePath = (path: string): Promise<void> => invoke('probe_path', { path });
 export const downloadModel = (modelId: string, acceptedTerms: boolean): Promise<void> =>
   invoke('download_model', { modelId, acceptedTerms });
@@ -397,6 +447,8 @@ export async function openModelSource(modelId: string): Promise<void> {
 export interface UpdateStatus {
   configured: boolean;
   managed_by_store: boolean;
+  /** The .deb: apt installs new versions, the app only reports them. */
+  managed_by_package_manager: boolean;
   channel: string;
   target: string;
   stage: string;

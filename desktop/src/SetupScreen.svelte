@@ -1,70 +1,70 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, tick } from 'svelte';
+  import * as api from './lib/api';
   import { modal } from './lib/modal';
   import type { UiSettings } from './lib/types';
+  import ThemePicker from './ThemePicker.svelte';
+  import HelpTip from './HelpTip.svelte';
 
   type Appearance = UiSettings['appearance'];
-
+  type Contrast = NonNullable<UiSettings['contrast']>;
   export let appearance: Appearance = 'dark';
   export let colourBlind = false;
+  export let contrast: Contrast = 'system';
   export let checkAtLaunch = true;
-  export let anonymousCount = false;
-  export let crashReports = false;
+  export let anonymousCount = true;
+  export let crashReports = true;
+  export let menuBar = true;
+  export let sound = false;
+  export let storeBuild = false;
   export let saving = false;
   export let error = '';
-
+  let step: 1 | 2 = 1;
+  let heading: HTMLHeadingElement;
+  const os = /Mac/.test(navigator.platform)
+    ? 'macos'
+    : /Win/.test(navigator.platform)
+      ? 'windows'
+      : 'linux';
+  const trayName: 'menu bar' | 'system tray' | null = os === 'macos' ? 'menu bar' : 'system tray';
+  const menu = os === 'macos' ? 'LocalSR' : 'Help';
+  const trayTip =
+    os === 'macos'
+      ? 'An icon in the menu bar shows what is running and how many files wait, with Pause and Resume.'
+      : os === 'windows'
+        ? 'An icon in the system tray shows what is running and how many files wait, with Pause and Resume. Windows may keep it behind the ^ arrow next to the clock.'
+        : 'An icon in the system tray shows what is running and how many files wait, with Pause and Resume. Some desktops, such as GNOME without an extension, do not show tray icons.';
   const dispatch = createEventDispatcher<{
-    preview: { appearance: Appearance; colourBlind: boolean };
-    continue: {
+    preview: { appearance: Appearance; colourBlind: boolean; contrast: Contrast };
+    finish: {
       appearance: Appearance;
       colourBlind: boolean;
+      contrast: Contrast;
       checkAtLaunch: boolean;
       anonymousCount: boolean;
       crashReports: boolean;
+      menuBar: boolean | null;
+      sound: boolean;
     };
   }>();
-
-  const APPEARANCES: { id: Appearance; label: string }[] = [
-    { id: 'dark', label: 'Dark' },
-    { id: 'light', label: 'Light' },
-    { id: 'system', label: 'Match System' },
-  ];
-
-  let tileButtons: HTMLButtonElement[] = [];
-
-  function chooseAppearance(next: Appearance): void {
-    appearance = next;
-    dispatch('preview', { appearance, colourBlind });
+  function preview(): void {
+    dispatch('preview', { appearance, colourBlind, contrast });
   }
-
-  function toggleColourBlind(event: Event): void {
-    colourBlind = (event.currentTarget as HTMLInputElement).checked;
-    dispatch('preview', { appearance, colourBlind });
+  async function go(next: 1 | 2): Promise<void> {
+    step = next;
+    await tick();
+    heading.focus();
   }
-
-  function onThemeKeydown(event: KeyboardEvent): void {
-    const step =
-      event.key === 'ArrowRight' || event.key === 'ArrowDown'
-        ? 1
-        : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
-          ? -1
-          : 0;
-    if (!step) return;
-    event.preventDefault();
-    const current = APPEARANCES.findIndex((item) => item.id === appearance);
-    const nextIndex =
-      ((current < 0 ? 0 : current) + step + APPEARANCES.length) % APPEARANCES.length;
-    chooseAppearance(APPEARANCES[nextIndex].id);
-    tileButtons[nextIndex]?.focus();
-  }
-
-  function submit(): void {
-    dispatch('continue', {
+  function finish(): void {
+    dispatch('finish', {
       appearance,
       colourBlind,
+      contrast,
       checkAtLaunch,
       anonymousCount,
       crashReports,
+      menuBar: trayName === null ? null : menuBar,
+      sound,
     });
   }
 </script>
@@ -78,168 +78,180 @@
     tabindex="-1"
     use:modal
   >
-    <h2 id="setup-title">Welcome to LocalSR</h2>
-    <p class="setup-intro">
-      Choose how LocalSR looks and what it checks or records. You can change these later in the
-      menu.
-    </p>
-
-    <section class="setup-section" aria-labelledby="setup-appearance-heading">
-      <h3 id="setup-appearance-heading">Appearance</h3>
-      <div class="setup-theme-grid" role="radiogroup" aria-labelledby="setup-appearance-heading">
-        {#each APPEARANCES as option, index}
-          <button
-            type="button"
-            class="setup-theme-tile"
-            class:active={appearance === option.id}
-            role="radio"
-            aria-checked={appearance === option.id}
-            bind:this={tileButtons[index]}
-            on:click={() => chooseAppearance(option.id)}
-            on:keydown={onThemeKeydown}
-          >
-            {#if option.id === 'system'}
-              <div class="setup-mock setup-mock-system" aria-hidden="true">
-                <div
-                  class="setup-mock-half left"
-                  data-theme="dark"
-                  data-palette={colourBlind ? 'colour-blind' : 'default'}
-                >
-                  <div class="setup-mock-bar"><span></span><span></span><span></span></div>
-                  <div class="setup-mock-body">
-                    <div class="setup-mock-sidebar"><i></i><i class="dim"></i></div>
-                    <div class="setup-mock-stage"><div class="setup-mock-frame"></div></div>
-                  </div>
-                </div>
-                <div
-                  class="setup-mock-half right"
-                  data-theme="light"
-                  data-palette={colourBlind ? 'colour-blind' : 'default'}
-                >
-                  <div class="setup-mock-bar"></div>
-                  <div class="setup-mock-body">
-                    <div class="setup-mock-stage"><div class="setup-mock-frame"></div></div>
-                    <div class="setup-mock-inspector">
-                      <i></i><i class="short"></i><span class="setup-mock-cta"></span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            {:else}
-              <div
-                class="setup-mock"
-                aria-hidden="true"
-                data-theme={option.id}
-                data-palette={colourBlind ? 'colour-blind' : 'default'}
-              >
-                <div class="setup-mock-bar"><span></span><span></span><span></span></div>
-                <div class="setup-mock-body">
-                  <div class="setup-mock-sidebar"><i></i><i class="dim"></i></div>
-                  <div class="setup-mock-stage">
-                    <div class="setup-mock-frame"><span class="setup-mock-split"></span></div>
-                  </div>
-                  <div class="setup-mock-inspector">
-                    <i></i><i class="short"></i><span class="setup-mock-cta"></span>
-                  </div>
-                </div>
-              </div>
-            {/if}
-            <span class="setup-theme-label">
-              <span class="setup-theme-dot" aria-hidden="true"></span>
-              <span>{option.label}</span>
-            </span>
-          </button>
-        {/each}
-      </div>
-
-      <div class="setup-toggle-row setup-appearance-toggle">
-        <label class="setup-toggle-label" for="setup-colour-blind"
-          >Colour-blind friendly colours</label
-        >
-        <input
-          id="setup-colour-blind"
-          class="setup-switch"
-          type="checkbox"
-          role="switch"
-          checked={colourBlind}
-          on:change={toggleColourBlind}
-        />
-      </div>
-    </section>
-
-    <section class="setup-section" aria-labelledby="setup-updates-heading">
-      <h3 id="setup-updates-heading">Updates</h3>
-      <div class="setup-toggle-row">
-        <div class="setup-toggle-copy">
-          <label class="setup-toggle-label" for="setup-check-updates"
-            >Check for updates automatically</label
-          >
-          <p class="setup-toggle-desc" id="setup-check-updates-desc">
-            The update check reads the feed on GitHub Pages.
-          </p>
-        </div>
-        <input
-          id="setup-check-updates"
-          class="setup-switch"
-          type="checkbox"
-          role="switch"
-          aria-describedby="setup-check-updates-desc"
-          bind:checked={checkAtLaunch}
-        />
-      </div>
-
-      <div class="setup-toggle-row">
-        <div class="setup-toggle-copy">
-          <label class="setup-toggle-label" for="setup-anonymous-count"
-            >Send an anonymous count with each update check</label
-          >
-          <p class="setup-toggle-desc" id="setup-anonymous-count-desc">
-            When a check happens, this sends the app version, platform and channel to the
-            developer's server, with no ID.
-          </p>
-        </div>
-        <input
-          id="setup-anonymous-count"
-          class="setup-switch"
-          type="checkbox"
-          role="switch"
-          aria-describedby="setup-anonymous-count-desc"
-          bind:checked={anonymousCount}
-        />
-      </div>
-    </section>
-
-    <section class="setup-section" aria-labelledby="setup-crashes-heading">
-      <h3 id="setup-crashes-heading">Crash reports</h3>
-      <div class="setup-toggle-row">
-        <div class="setup-toggle-copy">
-          <label class="setup-toggle-label" for="setup-crash-reports">Offer to report crashes</label
-          >
-          <p class="setup-toggle-desc" id="setup-crash-reports-desc">
-            If LocalSR crashes, it asks you next time whether to send a short report. You see
-            everything before it is sent, and nothing is sent automatically.
-          </p>
-        </div>
-        <input
-          id="setup-crash-reports"
-          class="setup-switch"
-          type="checkbox"
-          role="switch"
-          aria-describedby="setup-crash-reports-desc"
-          bind:checked={crashReports}
-        />
-      </div>
-    </section>
-
-    {#if error}
-      <p class="setup-error" role="alert">{error}</p>
-    {/if}
-
-    <div class="modal-actions">
-      <button type="button" class="button primary" disabled={saving} on:click={submit}>
-        {saving ? 'Saving…' : 'Continue'}
-      </button>
+    <div class="setup-head">
+      <h2 id="setup-title">Welcome to LocalSR</h2>
+      <span class="setup-step" aria-label="Step {step} of 2">{step} of 2</span>
     </div>
+    {#if step === 1}
+      <h3 bind:this={heading} tabindex="-1">Privacy</h3>
+      <p class="setup-intro">
+        Your photos and videos stay on this computer. Nothing is sent until you finish setup.
+      </p>
+      <section class="setup-section">
+        {#if !storeBuild}
+          <div class="setting-row">
+            <div class="setting-copy">
+              <span class="label-with-tip"
+                ><label class="setting-label" for="setup-check-updates"
+                  >Check for updates when LocalSR starts</label
+                ><HelpTip
+                  label="Check for updates when LocalSR starts"
+                  text={`Reads the update feed on GitHub Pages once at launch and tells you when a newer version exists. Nothing about you or your files is sent; GitHub sees your IP address, as any website does. With this off, Check for Updates… in the ${menu} menu still works.`}
+                /></span
+              >
+            </div>
+            <input
+              id="setup-check-updates"
+              class="switch"
+              type="checkbox"
+              role="switch"
+              bind:checked={checkAtLaunch}
+            />
+          </div>
+          <div class="setting-row">
+            <div class="setting-copy">
+              <span class="label-with-tip"
+                ><label class="setting-label" for="setup-anonymous-count"
+                  >Send an anonymous count with each update check</label
+                ><HelpTip
+                  label="Send an anonymous count with each update check"
+                  text="After an update check, sends the app version, platform and release channel to the developer's server. No ID, no cookies, nothing about your files, and your IP address is not stored. It shows how many copies of LocalSR are in use."
+                /></span
+              >
+            </div>
+            <input
+              id="setup-anonymous-count"
+              class="switch"
+              type="checkbox"
+              role="switch"
+              bind:checked={anonymousCount}
+            />
+          </div>
+        {/if}
+        <div class="setting-row">
+          <div class="setting-copy">
+            <span class="label-with-tip"
+              ><label class="setting-label" for="setup-crash-reports">Offer to report crashes</label
+              ><HelpTip
+                label="Offer to report crashes"
+                text="After a crash, LocalSR asks at the next start whether you want to report it. Reports stay on this computer and are never sent automatically: you read the report first and decide whether to open a GitHub issue with it. File names and paths are removed."
+              /></span
+            >
+          </div>
+          <input
+            id="setup-crash-reports"
+            class="switch"
+            type="checkbox"
+            role="switch"
+            bind:checked={crashReports}
+          />
+        </div>
+      </section>
+      <div class="setup-footer">
+        <p class="setup-note">
+          You can change all of this later in Settings → {storeBuild
+            ? 'Privacy'
+            : 'Privacy & updates'}.
+          <button type="button" class="link-button" on:click={() => void api.openPrivacyPage()}
+            >What LocalSR sends, and why</button
+          >
+        </p>
+        <div class="setup-buttons">
+          <button type="button" class="button primary" on:click={() => go(2)}>Continue</button>
+        </div>
+      </div>
+    {:else}
+      <h3 bind:this={heading} tabindex="-1">Look and feel</h3>
+      <span id="setup-theme-label" class="visually-hidden">Theme</span>
+      <ThemePicker
+        {appearance}
+        {colourBlind}
+        labelledBy="setup-theme-label"
+        on:choose={(event) => {
+          appearance = event.detail;
+          preview();
+        }}
+      />
+      <div class="setting-row setup-appearance-toggle">
+        <label class="setting-label" for="setup-colour-blind">Colour-blind friendly colours</label
+        ><input
+          id="setup-colour-blind"
+          class="switch"
+          type="checkbox"
+          role="switch"
+          bind:checked={colourBlind}
+          on:change={preview}
+        />
+      </div>
+      <div class="setting-row">
+        <div class="setting-copy">
+          <span class="label-with-tip"
+            ><label class="setting-label" for="setup-contrast">High contrast</label><HelpTip
+              label="High contrast"
+              text="Stronger text, borders and focus outlines. Also turns on by itself when your computer asks for more contrast."
+            /></span
+          >
+        </div>
+        <input
+          id="setup-contrast"
+          class="switch"
+          type="checkbox"
+          role="switch"
+          checked={contrast === 'high'}
+          on:change={(event) => {
+            contrast = event.currentTarget.checked ? 'high' : 'system';
+            preview();
+          }}
+        />
+      </div>
+      <section class="setup-section">
+        {#if trayName !== null}<div class="setting-row">
+            <div class="setting-copy">
+              <span class="label-with-tip"
+                ><label class="setting-label" for="setup-menu-bar"
+                  >Show LocalSR in the {trayName}</label
+                ><HelpTip label={`Show LocalSR in the ${trayName}`} text={trayTip} /></span
+              >
+            </div>
+            <input
+              id="setup-menu-bar"
+              class="switch"
+              type="checkbox"
+              role="switch"
+              bind:checked={menuBar}
+            />
+          </div>{/if}
+        <div class="setting-row">
+          <div class="setting-copy">
+            <span class="label-with-tip"
+              ><label class="setting-label" for="setup-sound"
+                >Play a sound when a file finishes</label
+              ><HelpTip
+                label="Play a sound when a file finishes"
+                text="Plays your system's notification sound with the notification that a file is finished or has failed. Notifications stay on for this; if your computer mutes them, there is no sound."
+              /></span
+            >
+          </div>
+          <input
+            id="setup-sound"
+            class="switch"
+            type="checkbox"
+            role="switch"
+            bind:checked={sound}
+          />
+        </div>
+      </section>
+      {#if error}<p class="setup-error" role="alert">{error}</p>{/if}
+      <div class="setup-footer">
+        <p class="setup-note">You can change all of this later in Settings.</p>
+        <div class="setup-buttons">
+          <button type="button" class="button" disabled={saving} on:click={() => go(1)}>Back</button
+          ><button type="button" class="button primary" disabled={saving} on:click={finish}
+            >{saving ? 'Saving…' : 'Done'}</button
+          >
+        </div>
+      </div>
+    {/if}
   </div>
 </div>
 
@@ -248,6 +260,23 @@
     width: min(600px, calc(100vw - 40px));
     padding: 20px 22px;
   }
+  .setup-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .setup-step,
+  .setup-note {
+    color: var(--secondary);
+    font-size: calc(11.5px * var(--ui-scale));
+  }
+  h3 {
+    margin: 0 0 10px;
+    font-size: calc(12px * var(--ui-scale));
+    font-weight: 600;
+    color: var(--text);
+    outline: none;
+  }
   .setup-intro {
     margin: 0 0 14px;
   }
@@ -255,243 +284,28 @@
     padding-top: 12px;
     border-top: 1px solid var(--border);
   }
-  .setup-section + .setup-section {
-    margin-top: 12px;
-  }
-  .setup-section h3 {
-    margin: 0 0 10px;
-    font-size: calc(12px * var(--ui-scale));
-    font-weight: 600;
-    color: var(--text);
-  }
-  .setup-theme-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 10px;
-  }
-  .setup-theme-tile {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 8px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-surface);
-    background: var(--recess);
-    color: var(--secondary);
-    text-align: left;
-  }
-  .setup-theme-tile:hover {
-    background: var(--hover);
-  }
-  .setup-theme-tile.active {
-    border-color: var(--accent-line);
-    background: var(--accent-fill);
-    color: var(--text);
-  }
-  .setup-mock {
-    width: 100%;
-    height: 68px;
-    display: grid;
-    grid-template-rows: 10px 1fr;
-    overflow: hidden;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--base);
-  }
-  .setup-mock-bar {
-    display: flex;
-    align-items: center;
-    gap: 3px;
-    padding: 0 5px;
-    background: var(--chrome);
-    border-bottom: 1px solid var(--border);
-  }
-  .setup-mock-bar span {
-    width: 4px;
-    height: 4px;
-    border-radius: 50%;
-    background: var(--tertiary);
-    opacity: 0.7;
-  }
-  .setup-mock-body {
-    display: grid;
-    grid-template-columns: 24% 1fr 28%;
-    min-height: 0;
-  }
-  .setup-mock-sidebar {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 6px 5px;
-    background: var(--panel);
-    border-right: 1px solid var(--border);
-  }
-  .setup-mock-sidebar i,
-  .setup-mock-inspector i {
-    display: block;
-    height: 4px;
-    border-radius: 1px;
-    background: var(--hover);
-  }
-  .setup-mock-sidebar i.dim {
-    width: 72%;
-    background: var(--chrome);
-  }
-  .setup-mock-stage {
-    display: grid;
-    place-items: center;
-    padding: 6px;
-    background: var(--stage);
-  }
-  .setup-mock-frame {
-    position: relative;
-    width: 100%;
-    height: 100%;
-    border: 1px solid var(--border);
-    border-radius: 1px;
-    background: var(--preview-canvas-background);
-  }
-  .setup-mock-split {
-    position: absolute;
-    inset: 0 auto 0 50%;
-    width: 1px;
-    background: var(--border);
-  }
-  .setup-mock-inspector {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 6px 5px;
-    background: var(--panel);
-    border-left: 1px solid var(--border);
-  }
-  .setup-mock-inspector i.short {
-    width: 65%;
-  }
-  .setup-mock-cta {
-    margin-top: auto;
-    height: 6px;
-    border-radius: 1px;
-    background: var(--accent);
-  }
-  .setup-mock-system {
-    display: grid;
-    grid-template-rows: 1fr;
-    grid-template-columns: 1fr 1fr;
-  }
-  .setup-mock-half {
-    display: grid;
-    grid-template-rows: 10px 1fr;
-    min-width: 0;
-    background: var(--base);
-  }
-  .setup-mock-half.left {
-    border-right: 1px solid var(--border);
-  }
-  .setup-mock-half.left .setup-mock-body {
-    grid-template-columns: 44% 1fr;
-  }
-  .setup-mock-half.left .setup-mock-stage {
-    padding-right: 0;
-  }
-  .setup-mock-half.left .setup-mock-frame {
-    border-right: 0;
-  }
-  .setup-mock-half.right .setup-mock-body {
-    grid-template-columns: 1fr 52%;
-  }
-  .setup-mock-half.right .setup-mock-stage {
-    padding-left: 0;
-  }
-  .setup-mock-half.right .setup-mock-frame {
-    border-left: 0;
-  }
-  .setup-theme-label {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: calc(12px * var(--ui-scale));
-    font-weight: 500;
-  }
-  .setup-theme-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    border: 1px solid var(--accent-line);
-    flex-shrink: 0;
-  }
-  .setup-theme-tile.active .setup-theme-dot {
-    background: var(--text);
-    border-color: var(--text);
-  }
-  .setup-toggle-row {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-  }
-  .setup-toggle-row + .setup-toggle-row {
-    margin-top: 10px;
-  }
   .setup-appearance-toggle {
     align-items: center;
     margin-top: 10px;
   }
-  .setup-toggle-copy {
-    min-width: 0;
+  .setup-footer {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 16px;
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
   }
-  .setup-toggle-label {
-    display: block;
-    font-size: calc(12.5px * var(--ui-scale));
-    font-weight: 500;
-    color: var(--text);
-    cursor: pointer;
+  .setup-note {
+    margin: 0;
   }
-  .setup-toggle-desc {
-    margin: 2px 0 0;
-    font-size: calc(11.5px * var(--ui-scale));
-    line-height: 1.4;
-    color: var(--secondary);
-  }
-  .setup-switch {
-    position: relative;
-    flex-shrink: 0;
-    width: 34px;
-    height: 18px;
-    margin: 1px 0 0;
-    border: 1px solid var(--accent-line);
-    border-radius: 999px;
-    background: var(--recess);
-    appearance: none;
-    -webkit-appearance: none;
-    cursor: pointer;
-  }
-  .setup-switch::before {
-    content: '';
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: var(--text);
-    transition: transform 0.14s ease;
-  }
-  .setup-switch:checked {
-    background: var(--text);
-    border-color: var(--text);
-  }
-  .setup-switch:checked::before {
-    background: var(--base);
-    transform: translateX(16px);
+  .setup-buttons {
+    display: flex;
+    margin-left: auto;
+    gap: 8px;
   }
   .setup-error {
     margin: 10px 0 0;
     color: var(--danger-text);
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .setup-switch::before {
-      transition: none;
-    }
   }
 </style>

@@ -145,6 +145,25 @@ checkpoint rights.
 - Terms: [Apache-2.0](https://github.com/XPixelGroup/HAT/blob/main/LICENSE); the official
   repository publishes the pretrained models with no separate asset terms.
 
+### LocalSR Photo S and Photo M by Hermes Reisner (`localsr_quick_x4_v1`, `localsr_best_x4_v1`)
+
+- Exact upstream assets: `4xLocalSRPhoto_PULSE-64x8.safetensors` and `4xLocalSRPhoto_PULSE-96x12.safetensors`
+  from LocalSR's own [localsr-models `v1` release](https://github.com/HerRei/localsr-models/releases/tag/v1).
+- Sizes: `2,479,832` and `8,142,696` bytes.
+- SHA-256: `73e4b540753cbe8ba2897cef2c6c3e8e51436835fa6c67217a997c3e1b13ea17` and
+  `5446207377284658a3c306dd5eac0aa2662f4f9344ee10f59ea3ab4ec67c18c1`.
+- Weights: [CC BY 4.0](https://github.com/HerRei/localsr-models/blob/main/LICENSE-WEIGHTS); commercial use
+  allowed with attribution: *LocalSR models by Hermes Reisner
+  (https://github.com/HerRei/localsr-models), CC BY 4.0*. The PULSE code is MIT
+  ([LICENSE](https://github.com/HerRei/localsr-models/blob/main/LICENSE)).
+- Training data: Philip Hofmann's
+  [`lucid-cc0-v2-hc`](https://huggingface.co/datasets/Phips/lucid-cc0-v2-hc) (CC0 photographs from
+  pxhere); nothing else was used for training. DINOv2 (Apache-2.0) was used as a training loss only
+  and is not part of the weights.
+- Architecture: independent MIT reimplementation of Philip Hofmann's
+  [PULSE](https://huggingface.co/Phips/PULSE) specification (`src/localsr/image_models/pulse/NOTICE.md`).
+  The weights come from LocalSR's own training runs, not Philip Hofmann's checkpoints.
+
 ### SPAN NomosUni and RealPLKSR Denoise (`span_photo_x4`, `denoise_realplksr_1x`)
 
 - Exact assets: `4xNomosUni_span_multijpg.pth` and `1xDeNoise_realplksr_otf.pth` from Philip
@@ -218,6 +237,22 @@ checkpoint licence above is verified; clearance of every training image is not.
 Both are library models: no preset picks them on its own (`preset_eligible=False`), because
 they take about ten times as long as Best. A model pinned to Best by the user is still used.
 
+### ESRGAN HFA2k (`esrgan_hfa2k_x4`)
+
+- Exact asset: `4xHFA2k.pth` from Philip Hofmann's
+  [`4xHFA2k` GitHub release](https://github.com/Phhofm/models/releases/tag/4xHFA2k)
+  (also indexed on [OpenModelDB](https://openmodeldb.info/models/4x-HFA2k)).
+- Size: `33,676,982` bytes.
+- SHA-256: `74fa66be8d316a7db40292e9c1dd13ffced8e838bd4351284dc0d7422e1a0743`.
+- Terms: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), declared directly in both the
+  GitHub release notes (`License: CC BY 4.0`) and the OpenModelDB entry (`CC-BY-4.0`). The RRDBNet
+  (ESRGAN) base checkpoint is `RealESRGAN_x4plus.pth` (BSD-3-Clause).
+- Selection evidence (23 November 2026): downloaded from that release, hashed, loaded by Spandrel
+  0.4.2 as `ESRGAN`, and evaluated on MPS against the synthetic illustration suite
+  (`tests/fixtures/illustration/`): mean colour error `0.71` / `0.74` CIEDE2000 (PNG / JPEG q75),
+  saturation change `+0.20%` / `+0.05%` (HSV) and `-0.28%` / `+0.17%` (Lab), and `100%` QR module
+  correctness from 1 to 6 px/module.
+
 ### DDColor (`ddcolor_modelscope`)
 
 - Exact upstream asset: `pytorch_model.bin` from
@@ -236,6 +271,37 @@ they take about ten times as long as Best. A model pinned to Best by the user is
 
 The two HAT face checkpoints stay outside this policy and require a verified manual import.
 No restoration weights are bundled with the application.
+
+### Architecture code for your own checkpoints
+
+Spandrel 0.4.2 (MIT) loads most own checkpoints. Two newer architectures by Philip Hofmann
+(`Phips` / `Phhofm`) that are not yet in a released Spandrel package are vendored directly:
+
+- **NERVE** (#154): the network from
+  [chaiNNer-org/spandrel#333](https://github.com/chaiNNer-org/spandrel/pull/333) at commit
+  `3429b70e043a96838b5f10d2fe275e56f69e5c69` (upstream
+  [Phhofm/traiNNer-redux](https://github.com/Phhofm/traiNNer-redux) `nerve_arch.py` at
+  `9ecb9adf80160d4bf85f0e7c6d95ffdb8bba315b` and
+  [Phips/NERVE](https://huggingface.co/Phips/NERVE), Apache-2.0), with its MIT Spandrel loader
+  from PR #333. Notices and modifications: `src/localsr/image_models/nerve/NOTICE.md`.
+- **HEART** (#154): the network from
+  [chaiNNer-org/spandrel#334](https://github.com/chaiNNer-org/spandrel/pull/334) at commit
+  `2778b9f8231fd3fcc766aff83d37c50c6f45e146` (upstream
+  [Phhofm/traiNNer-redux](https://github.com/Phhofm/traiNNer-redux) `heart_arch.py` at
+  `cb3f6f256b9131109d00893bad53abb4d08e033b` and
+  [Phips/HEART](https://huggingface.co/Phips/HEART), Apache-2.0; building blocks from
+  [XPixelGroup/HAT](https://github.com/XPixelGroup/HAT) Apache-2.0,
+  [2minkyulee/i-LN](https://github.com/2minkyulee/i-LN) Apache-2.0,
+  [Rift73/DRFT](https://github.com/Rift73/DRFT) MIT, and
+  [dslisleedh/SST](https://github.com/dslisleedh/SST) MIT), with its MIT Spandrel loader from
+  PR #334. Notices and modifications: `src/localsr/image_models/heart/NOTICE.md`.
+- **PULSE**: independent MIT reimplementation of Philip Hofmann's
+  [PULSE](https://huggingface.co/Phips/PULSE) specification from
+  [HerRei/localsr-models](https://github.com/HerRei/localsr-models) release `v1` (`pulse_arch.py`),
+  with a LocalSR Spandrel loader. Notices and modifications: `src/localsr/image_models/pulse/NOTICE.md`.
+
+The architecture code licence says nothing about a checkpoint's terms: each checkpoint's
+author sets those.
 
 ## Frame interpolation
 

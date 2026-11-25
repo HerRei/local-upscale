@@ -2,9 +2,10 @@
   import { tick } from 'svelte';
   import FileName from './FileName.svelte';
   import { MAX_SLOTS, pickKey, pickKindBlock, type OutputGroup } from './lib/compareOutputs';
+  import { unfinishedLabel } from './lib/unfinished';
   import { editDimensions } from './lib/editing';
   import { followAllowed } from './lib/rowRun';
-  import { formatBytes, formatDuration } from './lib/format';
+  import { formatBytes, formatDuration, formatVideoClock } from './lib/format';
   import type { ComparePick, MediaItem, ResultSummary } from './lib/types';
   export let groups: OutputGroup[];
   export let picks: ComparePick[];
@@ -60,12 +61,14 @@
       result.kind === 'edit' && result.max_dimension
         ? editDimensions(source.width, source.height, result.max_dimension)
         : [0, 0];
+    const unfinished = unfinishedLabel(result, source.duration_seconds, source.fps);
     return [
+      unfinished,
       capitalize(result.ui?.quality ?? ''),
       result.scale ? `${result.scale}×` : '',
       width ? `${width} × ${height}` : '',
-      result.kind === 'video' && result.output_duration_seconds
-        ? `${Math.floor(Math.round(result.output_duration_seconds) / 60)}:${String(Math.round(result.output_duration_seconds) % 60).padStart(2, '0')}`
+      !unfinished && result.kind === 'video' && result.output_duration_seconds
+        ? formatVideoClock(result.output_duration_seconds)
         : '',
       result.kind === 'video' && result.output_fps
         ? `${Number(result.output_fps.toFixed(2))} fps`

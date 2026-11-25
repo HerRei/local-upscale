@@ -687,7 +687,14 @@ def test_system_export_leaves_nothing_but_the_output(tmp_path, fail):
     assert {path.name for path in tmp_path.iterdir()} == expected
 
 
-def test_stopped_streamed_system_export_keeps_playable_video_and_trimmed_audio(tmp_path, bridge):
+@pytest.mark.parametrize(
+    ("codec", "container"),
+    # .mov cannot carry Opus: a kept part of a QuickTime export gets PCM (bug hunt 11-23).
+    [("hevc", "mp4"), ("hevc", "mov"), ("prores", "mov")],
+)
+def test_stopped_streamed_system_export_keeps_playable_video_and_trimmed_audio(
+    tmp_path, bridge, codec, container
+):
     import threading
 
     from test_video_timing import ffmpeg
@@ -716,11 +723,12 @@ def test_stopped_streamed_system_export_keeps_playable_video_and_trimmed_audio(t
 
     output = encode_video(
         stopped_frames(),
-        str(tmp_path / "output.mp4"),
+        str(tmp_path / f"output.{container}"),
         fps=25,
         width=frames[0].rgb.shape[1],
         height=frames[0].rgb.shape[0],
-        video_codec="hevc",
+        video_codec=codec,
+        container_format=container,
         external_ffmpeg=bridge,
         stream_to_system=True,
         audio_source=str(source),

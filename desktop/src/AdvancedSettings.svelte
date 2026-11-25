@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { chooseExternalFFmpeg, detectExternalFFmpeg } from './lib/api';
   import { editDevice, editSizeLimit, editingDevices } from './lib/editing';
   import { detectedFfmpeg, systemCodecs } from './lib/ffmpeg';
   import {
@@ -12,19 +11,15 @@
   } from './lib/outputFormats';
   import { onDestroy } from 'svelte';
   import HelpTip from './HelpTip.svelte';
-  import FileName from './FileName.svelte';
-  import { isRestoreTask } from './lib/plan';
-  import { engineDisplayName } from './lib/engines';
   import { hardwareChoices, hardwarePatch, selectedHardware } from './lib/neuralEngine';
   import { groupedHardware, optionLabel } from './lib/hardwareRoutes';
   import type {
     CapabilityInfo,
     CatalogModel,
+    CatalogVideoModel,
     EditModel,
-    EngineManagerSnapshot,
     InterpolationOrder,
     InterpolationTarget,
-    ModelMoveProgress,
     UiSettings,
     VideoCodec,
   } from './lib/types';
@@ -33,21 +28,17 @@
   export let selectedModel: CatalogModel | undefined;
   export let editModel: EditModel | undefined = undefined;
   export let capabilities: CapabilityInfo;
-  export let engines: EngineManagerSnapshot | undefined = undefined;
   export let usingTemporalVideo: boolean;
+  /** The selected video model of a temporal job; its engine decides the Labs note. */
+  export let videoModel: Pick<CatalogVideoModel, 'engine_kind'> | undefined = undefined;
   export let preservingHdr = false;
   export let interpolationSupported = false;
-  export let defaultModelDirectory = '';
-  export let modelDirectoryMissing = false;
-  export let movingModels = false;
-  export let modelMoveProgress: ModelMoveProgress | null = null;
   export let updateSettings: (patch: Partial<UiSettings>) => void;
-  export let setLowPriority: (value: boolean) => void = (value) =>
-    updateSettings({ low_priority: value });
   export let chooseOutput: () => Promise<void>;
-  export let chooseModelFolder: () => Promise<void> = async () => undefined;
-  export let resetModelFolder: () => Promise<void> = async () => undefined;
-  export let onOpenEngineManager: () => void = () => undefined;
+  /** The saved defaults from Settings; hardware and low priority here apply to this session. */
+  export let defaults: UiSettings | undefined = undefined;
+  export let onUseDefaults: () => void = () => undefined;
+  export let onOpenFfmpegSettings: () => void = () => undefined;
   /** Resolves true when the host took the request, false when it refused (and said so). */
   export let refreshCapabilities: () => Promise<boolean>;
 
@@ -62,24 +53,35 @@
   $: npuRunning =
     npuSelected &&
     selectedHardware(settings, capabilities, selectedModel?.architecture) === settings.device_id;
-  $: hardwareGroups = groupedHardware(
-    settings.task === 'edit'
-      ? editingDevices(capabilities)
+  function hardwareGroupsFor(choice: UiSettings) {
+    return groupedHardware(
+      choice.task === 'edit'
+        ? editingDevices(capabilities)
+        : usingTemporalVideo
+          ? capabilities.devices
+          : hardwareChoices(capabilities, selectedModel?.architecture),
+    );
+  }
+  function hardwareValueFor(choice: UiSettings): string {
+    return choice.task === 'edit'
+      ? (editDevice(capabilities, choice)?.id ?? '')
       : usingTemporalVideo
-        ? capabilities.devices
-        : hardwareChoices(capabilities, selectedModel?.architecture),
-  );
-  $: hardwareValue =
-    settings.task === 'edit'
-      ? (editDevice(capabilities, settings)?.id ?? '')
-      : usingTemporalVideo
-        ? settings.device_id
-        : selectedHardware(settings, capabilities, selectedModel?.architecture);
+        ? choice.device_id
+        : selectedHardware(choice, capabilities, selectedModel?.architecture);
+  }
+  $: hardwareGroups = hardwareGroupsFor(settings);
+  $: hardwareValue = hardwareValueFor(settings);
   // A long entry (a GPU with its route) takes the row's full width, so the closed menu shows
   // the whole name and route instead of cutting them.
   $: hardwareStacked = hardwareGroups.some((group) =>
     group.options.some((option) => option.label.length > 22),
   );
+  $: defaultHardware = defaults
+    ? optionLabel(hardwareGroups, hardwareValueFor(defaults)) || hardwareValueFor(defaults)
+    : '';
+  $: hardwareDiffers = Boolean(defaults) && hardwareValueFor(defaults!) !== hardwareValue;
+  $: priorityDiffers =
+    Boolean(defaults) && Boolean(defaults!.low_priority) !== Boolean(settings.low_priority);
   let advanced = false;
   let refreshing = false;
   let refreshed = false;
@@ -100,7 +102,6 @@
     }
   }
   onDestroy(() => clearTimeout(refreshedTimer));
-  let ffmpegNote = '';
 
   $: codec = settings.video_codec ?? 'auto';
   // Mirrors automatic_video_codec in the worker: the Mac's hardware HEVC
@@ -113,6 +114,8 @@
   $: externalCodec = codec === 'h264' || codec === 'hevc';
   $: system = systemCodecs(capabilities);
   $: foundFfmpeg = detectedFfmpeg(capabilities);
+  $: ffmpegDisplay =
+    settings.external_ffmpeg_path || (foundFfmpeg.length ? `Found (${foundFfmpeg[0]})` : 'None');
   $: codecSuffix = system
     ? `via ${system.label}`
     : foundFfmpeg.length
@@ -148,33 +151,6 @@
   function chooseContainer(value: UiSettings['video_container']): void {
     updateSettings(containerPatch(value, codec));
   }
-
-  async function findFFmpeg(): Promise<void> {
-    try {
-      const found = await detectExternalFFmpeg();
-      if (found.length) {
-        updateSettings({ external_ffmpeg_path: found[0] });
-        ffmpegNote = found.length > 1 ? `Also found: ${found.slice(1).join(', ')}` : '';
-      } else {
-        ffmpegNote =
-          'No FFmpeg was found. Install it (for example with Homebrew, winget or your package manager), then choose it here.';
-      }
-    } catch (error) {
-      ffmpegNote = String(error);
-    }
-  }
-
-  async function pickFFmpeg(): Promise<void> {
-    try {
-      const path = await chooseExternalFFmpeg(settings.external_ffmpeg_path ?? '');
-      if (path) {
-        updateSettings({ external_ffmpeg_path: path });
-        ffmpegNote = '';
-      }
-    } catch (error) {
-      ffmpegNote = String(error);
-    }
-  }
 </script>
 
 <section class="control-section">
@@ -191,13 +167,7 @@
         stroke-linejoin="round"
         ><path d={advanced ? 'M3 7.5 6 4.5 9 7.5' : 'M3 4.5 6 7.5 9 4.5'} /></svg
       ></b
-    ><small
-      >{settings.task === 'edit'
-        ? 'Size, steps, seed, hardware'
-        : isRestoreTask(settings)
-          ? 'Format, hardware'
-          : 'Scale, format, hardware'}</small
-    ></button
+    ><small>{settings.task === 'edit' ? 'Size, steps, seed' : 'Format, tiles'}</small></button
   >
   {#if advanced}
     <div class="advanced-controls">
@@ -265,29 +235,6 @@
             ? `${editModel.name} is tuned for ${editModel.default_steps} steps.`
             : 'More steps take longer.'} The same seed with the same prompt and image repeats a result.
         </p>
-      {:else if !isRestoreTask(settings) && !(usingTemporalVideo && settings.video_target_resolution)}
-        {@const minScale = 2}
-        {@const maxScale = usingTemporalVideo ? 4 : (selectedModel?.native_scale ?? 4)}
-        <div class="field-row">
-          <span class="label-with-tip"
-            ><label for="scale">Output scale</label><HelpTip
-              label="Output scale"
-              text={usingTemporalVideo
-                ? 'How many times larger the result is than the original when Output resolution is set to match scale.'
-                : settings.task === 'video'
-                  ? `How many times larger the result is than the original. A 2× or 3× choice on a ${selectedModel?.native_scale ?? 4}× model resizes down afterwards. To keep the size, use Restore.`
-                  : `How many times larger the result is than the original. The model always works at its own ${selectedModel?.native_scale ?? 4}× scale; a smaller choice resizes that result down afterwards, so it saves no time. To keep the size, use Restore.`}
-            /></span
-          ><select
-            id="scale"
-            value={settings.output_scale}
-            on:change={(event) =>
-              updateSettings({ output_scale: Number(event.currentTarget.value) })}
-            >{#each Array.from({ length: Math.max(1, maxScale - minScale + 1) }, (_, index) => index + minScale) as scale}<option
-                value={scale}>{scale}×</option
-              >{/each}</select
-          >
-        </div>
       {/if}
       {#if settings.task !== 'video' && settings.task !== 'edit'}
         <div class="field-row">
@@ -389,48 +336,20 @@
             disk space.
           </p>
         {/if}
-        <div class="directory-field">
-          <button
-            type="button"
-            class="directory-hit"
-            aria-label="Choose FFmpeg"
-            on:click={pickFFmpeg}
-          ></button>
-          <div class="directory-text">
-            <span class="label-with-tip"
-              ><small>External FFmpeg</small><HelpTip
-                label="External FFmpeg"
-                text="FFmpeg is a free video program that you install yourself. Leave this empty unless a video will not open or an export format asks for it; LocalSR uses the one it finds on this computer."
-              /></span
-            >
-            <span class="directory-path"
-              ><FileName
-                name={settings.external_ffmpeg_path ||
-                  (foundFfmpeg.length ? `Found automatically: ${foundFfmpeg[0]}` : 'Not used')}
-              /></span
+        <div class="field-row">
+          <span class="label-with-tip"
+            ><span class="field-label">External FFmpeg</span><HelpTip
+              label="External FFmpeg"
+              text="FFmpeg is a free video program that you install yourself. Leave this empty unless a video will not open or an export format asks for it; LocalSR uses the one it finds on this computer."
+            /></span
+          >
+          <div class="engine-value">
+            <span class="engine-active-label" title={ffmpegDisplay}>{ffmpegDisplay}</span>
+            <button type="button" class="link-button" on:click={onOpenFfmpegSettings}
+              >Change…</button
             >
           </div>
-          <b>Choose…</b>
         </div>
-        <div class="eyebrow-actions">
-          <button class="link-button" on:click={findFFmpeg}>Find installed</button>
-          {#if settings.external_ffmpeg_path}<button
-              class="link-button"
-              on:click={() => updateSettings({ external_ffmpeg_path: '' })}>Don’t use</button
-            >{/if}
-        </div>
-        <p class="model-description">
-          {#if system}
-            Optional. On this computer, H.264 and HEVC videos open and export through {system.label}'s
-            own codecs. FFmpeg is only needed for other formats (WMV, DivX, FLV) and for H.264/HEVC
-            in MKV; one found on this computer is used automatically.
-          {:else}
-            Optional. An FFmpeg found on this computer is used automatically; select one here to use
-            a different build. It is needed for H.264/HEVC export and for opening most phone and
-            camera videos.
-          {/if}
-          LocalSR never downloads or bundles FFmpeg.{#if ffmpegNote}<br />{ffmpegNote}{/if}
-        </p>
         <div class="range-row">
           <div class="range-head">
             <span class="label-with-tip"
@@ -460,11 +379,11 @@
               /> De-flicker · Labs</label
             ><HelpTip
               label="De-flicker"
-              text="For clips whose still areas shimmer from frame to frame. Where nothing moves, each frame is blended halfway with the median of itself and its two neighbors."
+              text="Evens out brightness flicker in the original video and the shimmer that frame-by-frame upscaling adds in still areas. It decides from the original, so motion, cuts and real light changes pass through. Adds about 40 ms per frame. Off by default."
             />
           </div>
           <p class="model-description">
-            Gentle smoothing in static regions. Moving details and scene cuts bypass the filter.
+            Steadies flicker and still-area shimmer. Motion and scene cuts pass through.
           </p>
           <div class="field-row">
             <span class="label-with-tip"
@@ -513,8 +432,13 @@
           {/if}
         {:else}
           <p class="model-description">
-            SeedVR2 · Labs. Uses its own temporal processing and memory settings; longer clips and
-            hardware limits are still being validated.
+            {#if videoModel?.engine_kind === 'flashvsr'}
+              FlashVSR · Labs. One-step diffusion upscaling that works best up to 4× the source.
+              Memory is managed automatically; jobs on large frames can take hours.
+            {:else}
+              SeedVR2 · Labs. Uses its own temporal processing and memory settings; longer clips and
+              hardware limits are still being validated.
+            {/if}
           </p>
         {/if}
         <p class="model-description">
@@ -541,71 +465,6 @@
         </div>
         <b>Choose…</b>
       </div>
-      <div class="directory-field">
-        <button
-          type="button"
-          class="directory-hit"
-          disabled={movingModels}
-          aria-label={`Model folder ${settings.model_directory || defaultModelDirectory || 'Default folder'}`}
-          on:click={chooseModelFolder}
-        ></button>
-        <div class="directory-text">
-          <span class="label-with-tip"
-            ><small>Model folder</small><HelpTip
-              label="Model folder"
-              text="Where downloaded models and bundles are stored. Changing it checks free space and moves installed models there. Engine and temporary work files stay in the app folder."
-            /></span
-          ><span
-            class="directory-path"
-            title={movingModels
-              ? modelMoveProgress
-                ? `Moving ${modelMoveProgress.moved_files} of ${modelMoveProgress.total_files} files…`
-                : 'Moving files…'
-              : settings.model_directory || defaultModelDirectory || 'Default folder'}
-            >{movingModels
-              ? modelMoveProgress
-                ? `Moving ${modelMoveProgress.moved_files} of ${modelMoveProgress.total_files} files…`
-                : 'Moving files…'
-              : settings.model_directory || defaultModelDirectory || 'Default folder'}</span
-          >
-        </div>
-        <b
-          >{movingModels
-            ? modelMoveProgress
-              ? `${Math.round(modelMoveProgress.progress)}%`
-              : '0%'
-            : 'Choose…'}</b
-        >
-      </div>
-      {#if movingModels}
-        <progress
-          class="download-progress"
-          max="100"
-          value={modelMoveProgress?.progress ?? 0}
-          aria-label="Moving models"
-        ></progress>
-      {:else if !modelDirectoryMissing && settings.model_directory}
-        <div class="eyebrow-actions">
-          <button type="button" class="link-button" on:click={resetModelFolder}
-            >Reset to default</button
-          >
-        </div>
-      {/if}
-      {#if engines?.supported && !engines.managed_by_store}
-        <div class="field-row engine-row">
-          <span class="label-with-tip"
-            ><span class="field-label">Engine</span><HelpTip
-              label="Engine"
-              text="The inference runtime LocalSR uses on this computer. Switch to a GPU engine for faster processing, or import an offline engine file."
-            /></span
-          >
-          <div class="engine-value">
-            <span class="engine-active-label">{engineDisplayName(engines.active_backend)}</span>
-            <button type="button" class="link-button" on:click={onOpenEngineManager}>Change…</button
-            >
-          </div>
-        </div>
-      {/if}
       <div class="field-row" class:stacked={hardwareStacked}>
         <span class="label-with-tip"
           ><label for="device">Hardware</label><HelpTip
@@ -628,40 +487,42 @@
               >{:else}<option value={group.options[0].id}>{group.name}</option>{/if}{/each}</select
         >
       </div>
-      {#if !usingTemporalVideo && settings.task !== 'edit' && onnxGpu && !npuSelected}
-        <p class="model-description">
-          {#if settings.device_id.startsWith('directml:')}DirectML has not been tested on real
-            hardware yet.{/if}
-          The first time a model runs on this GPU, LocalSR checks once that it gives the same result as
-          the CPU.
-          {#if settings.device_id.startsWith('directml:')}Choose a smaller tile if shared memory is
-            tight.{/if}
-        </p>
-      {:else if !usingTemporalVideo && npuSelected}
-        <p class="model-description">
-          The NPU runs SPAN, Real-ESRGAN, FBCNN and NAFNet models; others run on the CPU. LocalSR
-          compiles a model once for the NPU, which can take a minute, and checks once that its
-          result matches the CPU's.
+      <!-- Not an <input> or <label>: this stays clickable and full-strength while a job locks the settings above. -->
+      <div class="check-line">
+        <span
+          id="low-priority"
+          role="checkbox"
+          tabindex="0"
+          aria-checked={Boolean(settings.low_priority)}
+          class="check-row live-setting"
+          on:click={() => updateSettings({ low_priority: !settings.low_priority })}
+          on:keydown={(event) => {
+            if (event.key === ' ' || event.key === 'Enter') {
+              event.preventDefault();
+              updateSettings({ low_priority: !settings.low_priority });
+            }
+          }}
+          ><span
+            class="live-checkbox"
+            class:checked={Boolean(settings.low_priority)}
+            aria-hidden="true"
+          ></span><span class="live-setting-label">Run at low priority</span></span
+        ><HelpTip
+          label="Run at low priority"
+          text="Keeps other apps responsive while LocalSR works. Jobs take longer, on a Mac about twice as long. It applies to the running job and the whole queue, and you can switch it during a job. Settings holds the default for the next start of LocalSR."
+        />
+      </div>
+      {#if hardwareDiffers || priorityDiffers}
+        <p class="model-description" id="advanced-session-choice">
+          For this session only. Default in Settings: {[
+            hardwareDiffers ? defaultHardware : '',
+            priorityDiffers ? (defaults?.low_priority ? 'low priority' : 'normal priority') : '',
+          ]
+            .filter(Boolean)
+            .join(', ')}.
+          <button type="button" class="link-button" on:click={onUseDefaults}>Use default</button>
         </p>
       {/if}
-      <div class="field-row">
-        <span class="label-with-tip"
-          ><label for="interface-scale">Interface text</label><HelpTip
-            label="Interface text"
-            text="Enlarges the app's text and controls. The pictures you edit and their results are not affected."
-          /></span
-        ><select
-          id="interface-scale"
-          value={String(settings.interface_scale)}
-          on:change={(event) =>
-            updateSettings({
-              interface_scale: Number(event.currentTarget.value) as UiSettings['interface_scale'],
-            })}
-          ><option value="100">100%</option><option value="110">110%</option><option value="125"
-            >125%</option
-          ></select
-        >
-      </div>
       {#if !usingTemporalVideo && settings.task !== 'edit'}
         <div class="field-grid">
           <div>
@@ -715,54 +576,6 @@
             text="Leaves more memory to the rest of the computer: LocalSR takes a smaller share of the GPU's memory and clears its cache after every tile. A little slower. Turn it on if the computer gets sluggish or a job runs out of memory."
           />
         </div>{/if}
-      {#if settings.task !== 'edit'}<div class="check-line">
-          <label class="check-row"
-            ><input
-              type="checkbox"
-              checked={settings.enable_live_preview}
-              on:change={(event) =>
-                updateSettings({ enable_live_preview: event.currentTarget.checked })}
-            /> Show sampled enhanced previews (max 2 fps)</label
-          ><HelpTip
-            label="Enhanced previews"
-            text="Shows the result in the preview while a job runs, as reduced pictures at most twice a second. They are made on the side, and the job does not wait for them."
-          />
-        </div>{/if}
-      <!-- Not an <input> or <label>: this stays clickable and full-strength while a job locks the settings above. -->
-      <div class="check-line">
-        <span
-          id="low-priority"
-          role="checkbox"
-          tabindex="0"
-          aria-checked={Boolean(settings.low_priority)}
-          class="check-row live-setting"
-          on:click={() => setLowPriority(!settings.low_priority)}
-          on:keydown={(event) => {
-            if (event.key === ' ' || event.key === 'Enter') {
-              event.preventDefault();
-              setLowPriority(!settings.low_priority);
-            }
-          }}
-          ><span
-            class="live-checkbox"
-            class:checked={Boolean(settings.low_priority)}
-            aria-hidden="true"
-            >{#if settings.low_priority}<svg
-                viewBox="0 0 12 12"
-                width="10"
-                height="10"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"><path d="M2.5 6.2 5 8.7 9.5 3.5" /></svg
-              >{/if}</span
-          ><span class="live-setting-label">Run at low priority</span></span
-        ><HelpTip
-          label="Run at low priority"
-          text="Lets other apps stay responsive while LocalSR works. Jobs take longer: on a Mac about twice as long, even when nothing else is running. You can switch it during a job. On Linux, switching it off takes full effect the next time the engine starts."
-        />
-      </div>
       <div class="hardware-card">
         <span class="label-with-tip"
           >{capabilities.system_memory_pressure_level === 'unknown'

@@ -118,6 +118,41 @@ fn directml_is_selected_only_on_the_first_installation() {
 }
 
 #[test]
+fn an_engine_start_without_the_saved_gpu_keeps_it_saved() {
+    // A full disk made one engine start report only the CPU; the CPU was saved and every
+    // later run stayed on the CPU after the GPU was back.
+    let directory = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(directory.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    state.choose_device.store(false, Ordering::SeqCst);
+    lock(&state.settings).unwrap().device_id = "mps".into();
+    state.persist_settings().unwrap();
+    let report = |ids: &[&str]| {
+        envelope(
+            "capabilities_info",
+            serde_json::to_value(CapabilityInfo {
+                devices: ids
+                    .iter()
+                    .map(|id| DeviceInfo {
+                        id: (*id).into(),
+                        ..DeviceInfo::default()
+                    })
+                    .collect(),
+                ..CapabilityInfo::default()
+            })
+            .unwrap(),
+        )
+    };
+
+    apply_worker_envelope(&state, &report(&["cpu"])).unwrap();
+    assert_eq!(lock(&state.settings).unwrap().device_id, "mps");
+    assert_eq!(crate::settings::load(&paths).0.device_id, "mps");
+
+    apply_worker_envelope(&state, &report(&["mps", "cpu"])).unwrap();
+    assert_eq!(lock(&state.settings).unwrap().device_id, "mps");
+}
+
+#[test]
 fn video_stages_have_titles_including_frame_interpolation() {
     assert_eq!(
         video_stage_title("loading_interpolation"),
@@ -819,7 +854,8 @@ fn percentages_and_times_from_the_engine_stay_in_range() {
     )
     .unwrap();
     let runtime = lock(&state.runtime).unwrap();
-    assert_eq!(runtime.progress, 100.0);
+    // Out-of-range tile reports clamp; tiles never reach the saving mark on their own.
+    assert_eq!(runtime.progress, 99.0);
     assert_eq!(runtime.estimated_remaining_seconds, 0.0);
 }
 
@@ -1292,21 +1328,29 @@ fn frame_messages_of_a_video_share_one_status_title() {
 }
 
 #[test]
-fn the_finished_notice_waits_until_the_queue_is_done() {
+fn finished_notice_names_the_completed_file_and_respects_the_notification_setting() {
     let directory = tempfile::tempdir().unwrap();
     let state = batch_state(directory.path());
-    let done = json!({"job_id": "a"});
-    assert_eq!(finished_notice(&state, &done), None);
-    lock(&state.database).unwrap().cancel_queued_jobs().unwrap();
+    let done = json!({"job_id": "a", "output_path": "/out/a_upscaled.png"});
     assert_eq!(
-        finished_notice(&state, &done),
-        Some("Your enhanced media is ready.")
+        finished_notice(&state, &done).as_deref(),
+        Some("a is ready.")
     );
-    assert!(
-        finished_notice(&state, &json!({"notes": "Blur fix skipped"}))
-            .unwrap()
-            .contains("A fix was skipped")
+    assert_eq!(
+        finished_notice(&state, &json!({"job_id": "a", "notes": "Blur fix skipped"})).as_deref(),
+        Some("a is ready. A fix was skipped; open LocalSR for details.")
     );
+    assert_eq!(
+        finished_notice(
+            &state,
+            &json!({"job_id": "missing", "output_path": "/out/photo_4x.png"})
+        )
+        .as_deref(),
+        Some("photo_4x.png is ready.")
+    );
+
+    lock(&state.settings).unwrap().notify_on_finish = false;
+    assert_eq!(finished_notice(&state, &done), None);
 }
 
 fn ready_for_batches(state: &AppState) {
@@ -1534,6 +1578,38 @@ fn a_completion_must_name_the_output_the_host_requested() {
     );
     // The same completion again is a message about a job that has ended.
     assert!(!accept_envelope(&state, &done(&requested)).unwrap());
+}
+
+#[test]
+fn a_kept_photo_part_beside_the_requested_output_is_accepted() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = running_batch(directory.path());
+    assert!(accept_envelope(&state, &envelope("job_started", json!({"job_id": "a"}))).unwrap());
+    let kept = |name: &str, partial: bool| {
+        envelope(
+            "job_completed",
+            json!({
+                "job_id": "a",
+                "output_path": directory.path().join("out").join(name).to_string_lossy(),
+                "partial": partial,
+            }),
+        )
+    };
+    for name in ["a_partial.png", "a_partial-2.png"] {
+        assert!(
+            refuse_wrong_result(&state, &kept(name, true))
+                .unwrap()
+                .is_none(),
+            "{name} is where a stopped photo keeps its finished tiles"
+        );
+    }
+    // Only when the engine says the result is partial, and only beside the request.
+    assert!(refuse_wrong_result(&state, &kept("a_partial.png", false))
+        .unwrap()
+        .is_some());
+    assert!(refuse_wrong_result(&state, &kept("b_partial.png", true))
+        .unwrap()
+        .is_some());
 }
 
 #[test]
@@ -2357,5 +2433,265 @@ fn relative_helper_overrides_resolve_from_host_directory() {
     assert_eq!(
         helper_override_path(std::ffi::OsStr::new("~/tools/helper"), Path::new("/host")),
         PathBuf::from("~/tools/helper")
+    );
+}
+
+fn write_installed_engine(
+    next_root: &std::path::Path,
+    id: &str,
+    content: &[u8],
+) -> crate::updates::EngineMeta {
+    let engine = next_root.join("engines").join(id).join("engine");
+    std::fs::create_dir_all(&engine).unwrap();
+    std::fs::write(
+        engine.join(crate::updates::worker_executable_name()),
+        content,
+    )
+    .unwrap();
+    let meta = crate::updates::EngineMeta {
+        id: id.into(),
+        backend: "rocm".into(),
+        os: std::env::consts::OS.into(),
+        arch: std::env::consts::ARCH.into(),
+        protocol_version: crate::types::PROTOCOL_VERSION,
+        handshake_passed: true,
+        verified_install: true,
+        version: String::from_utf8(content.to_vec()).unwrap(),
+        files: crate::updates::test_engine_files(next_root, id),
+    };
+    crate::updates::write_engine_meta(next_root, &meta).unwrap();
+    meta
+}
+
+#[test]
+fn codec_helper_reuses_the_verified_worker_run_and_never_changes_engine_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(directory.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let id = "gpu";
+    write_installed_engine(&paths.next_root, id, b"old");
+    let source = tempfile::tempdir().unwrap();
+    let new = write_installed_engine(source.path(), id, b"new");
+    let files = new.files.clone();
+    crate::updates::stage_engine_with(
+        &paths.next_root,
+        id,
+        |destination| {
+            std::fs::create_dir(destination)?;
+            std::fs::write(
+                destination.join(crate::updates::worker_executable_name()),
+                b"new",
+            )?;
+            Ok(files)
+        },
+        |_| Ok(()),
+    )
+    .unwrap()
+    .publish(Some(&new), None)
+    .unwrap();
+    let pointer = paths.next_root.join("active-engine.txt");
+    std::fs::write(&pointer, id).unwrap();
+    let token = crate::updates::pending_engine_token(&paths.next_root, id).unwrap();
+    let worker = paths
+        .next_root
+        .join("engines")
+        .join(id)
+        .join("engine")
+        .join(crate::updates::worker_executable_name());
+    let backup = paths.next_root.join("engines/.previous-gpu");
+    let unchanged = |content: &[u8]| {
+        assert_eq!(std::fs::read(&worker).unwrap(), content);
+        assert!(backup.is_dir());
+        assert!(
+            crate::updates::read_engine_meta(&paths.next_root, id)
+                .unwrap()
+                .verified_install
+        );
+        assert!(pointer.is_file());
+        assert!(state.worker.failed_engines.lock().unwrap().is_empty());
+    };
+
+    // Same-size damage after the worker start check: the helper must neither
+    // restore the backup nor mark the engine; the next worker start does that.
+    *state.worker.verified_run.lock().unwrap() = Some(VerifiedRun::for_test(
+        worker.clone(),
+        Some(id.into()),
+        Some(token.clone()),
+    ));
+    std::fs::write(&worker, b"bad").unwrap();
+    assert_eq!(codec_helper_specification(&state).unwrap().program, worker);
+    unchanged(b"bad");
+
+    // A later install replaced the engine this run verified.
+    *state.worker.verified_run.lock().unwrap() = Some(VerifiedRun::for_test(
+        worker.clone(),
+        Some(id.into()),
+        Some("earlier-install".into()),
+    ));
+    assert!(codec_helper_specification(&state).is_err());
+    unchanged(b"bad");
+
+    // A size change is refused without changing anything either.
+    *state.worker.verified_run.lock().unwrap() = Some(VerifiedRun::for_test(
+        worker.clone(),
+        Some(id.into()),
+        Some(token),
+    ));
+    std::fs::write(&worker, b"short!").unwrap();
+    assert!(codec_helper_specification(&state).is_err());
+    unchanged(b"short!");
+
+    // Without a verified worker run there is nothing to reuse.
+    *state.worker.verified_run.lock().unwrap() = None;
+    assert!(codec_helper_specification(&state).is_err());
+    unchanged(b"short!");
+}
+
+#[test]
+fn a_video_step_without_frame_counts_does_not_keep_the_last_step_at_100_percent() {
+    // Audio cleanup ends at 100 %; loading the video model next must not look like saving.
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    lock(&state.runtime).unwrap().active_job_id = "a".into();
+    apply_worker_envelope(
+        &state,
+        &envelope(
+            "video_stage_progress",
+            json!({"job_id": "a", "stage": "audio_denoise", "frames_processed": 10, "total_frames": 10}),
+        ),
+    )
+    .unwrap();
+    assert_eq!(lock(&state.runtime).unwrap().progress, 100.0);
+    apply_worker_envelope(
+        &state,
+        &envelope(
+            "video_stage_progress",
+            json!({"job_id": "a", "stage": "loading_model"}),
+        ),
+    )
+    .unwrap();
+    let runtime = lock(&state.runtime).unwrap();
+    assert_eq!(runtime.status_title, "Loading video model");
+    assert_eq!(runtime.progress, 0.0);
+}
+
+#[test]
+fn pause_and_resume_hold_and_dispatch_the_existing_queue() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    ready_for_batches(&state);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+
+    set_queue_paused_locked(&state, true);
+    assert!(state.worker.queue_paused.load(Ordering::SeqCst));
+    assert!(lock(&state.runtime).unwrap().queue_paused);
+    assert!(!begin_dispatch(&state, false).unwrap());
+    assert!(receiver.try_recv().is_err());
+    assert_eq!(status(&state, "a"), "queued");
+
+    set_queue_paused_locked(&state, false);
+    assert!(!state.worker.queue_paused.load(Ordering::SeqCst));
+    assert!(!lock(&state.runtime).unwrap().queue_paused);
+    assert!(begin_dispatch(&state, false).unwrap());
+    let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+    assert_eq!(sent["data"]["job_id"], "a");
+    assert_eq!(status(&state, "a"), "starting");
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
+
+#[test]
+fn the_last_tile_does_not_read_as_saving_and_colour_preparation_is_named() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    lock(&state.runtime).unwrap().active_job_id = "a".into();
+    apply_worker_envelope(
+        &state,
+        &envelope(
+            "video_tile_progress",
+            json!({"frame_index": 14, "total_frames": 15, "completed_tiles": 4, "total_tiles": 4}),
+        ),
+    )
+    .unwrap();
+    assert!(lock(&state.runtime).unwrap().progress < 99.5);
+    apply_worker_envelope(
+        &state,
+        &envelope(
+            "video_stage_progress",
+            json!({"job_id": "a", "stage": "colour_preparing", "completed": 3, "total": 13}),
+        ),
+    )
+    .unwrap();
+    let runtime = lock(&state.runtime).unwrap();
+    assert_eq!(runtime.status_title, "Adding colour");
+    assert!(runtime.status_detail.starts_with("3 / 13"));
+}
+
+#[test]
+fn de_flickering_is_named_and_keeps_the_progress_and_estimate() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    {
+        let mut runtime = lock(&state.runtime).unwrap();
+        runtime.active_job_id = "a".into();
+        runtime.progress = 42.0;
+        runtime.estimated_remaining_seconds = 90.0;
+    }
+    apply_worker_envelope(
+        &state,
+        &envelope(
+            "video_stage_progress",
+            json!({"job_id": "a", "stage": "deflickering", "completed": 6, "total": 52}),
+        ),
+    )
+    .unwrap();
+    let runtime = lock(&state.runtime).unwrap();
+    assert_eq!(runtime.status_title, "De-flickering");
+    assert_eq!(runtime.status_detail, "Frame 6 of 52 · ETA 1:30");
+    assert_eq!(runtime.progress, 42.0);
+    assert_eq!(runtime.estimated_remaining_seconds, 90.0);
+}
+
+#[test]
+fn videos_and_photos_can_keep_their_finished_part() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    let video = |kind: &str| {
+        json!({"type": "video_job_request", "data": {
+            "model_kind": kind, "video_codec": "av1", "container": "mkv", "video_path": "/v.mov"
+        }})
+    };
+    assert!(job_can_keep_partial(&state, &video("spandrel_image")));
+    assert!(job_can_keep_partial(&state, &video("seedvr2")));
+    let photo = json!({"type": "job_request", "data": {"image_path": "/p.jpg"}});
+    assert!(job_can_keep_partial(&state, &photo));
+    let batch = json!({"type": "image_batch_request", "data": {"jobs": []}});
+    assert!(job_can_keep_partial(&state, &batch));
+    // Face restoration runs on the whole picture: there are no finished tiles to keep.
+    let faces = json!({"type": "job_request", "data": {"face_model_path": "/m/face.pth"}});
+    assert!(!job_can_keep_partial(&state, &faces));
+    let batch_faces = json!({"type": "image_batch_request", "data": {"jobs": [
+        {"face_model_path": ""}, {"face_model_path": "/m/face.pth"}
+    ]}});
+    assert!(!job_can_keep_partial(&state, &batch_faces));
+}
+
+#[test]
+fn a_kept_part_is_named_in_frames_below_a_second_and_in_tiles_for_a_photo() {
+    assert_eq!(
+        stopped_title(&json!({"kept_seconds": 0.074, "kept_frames": 2})),
+        "Stopped, kept 2 frames"
+    );
+    assert_eq!(
+        stopped_title(&json!({"kept_seconds": 75.4, "kept_frames": 1885})),
+        "Stopped, kept 1:15"
+    );
+    assert_eq!(
+        stopped_title(&json!({"finished_tiles": [[0, 0, 8, 8], [8, 0, 8, 8]], "total_tiles": 6})),
+        "Stopped, kept 2 of 6 tiles"
+    );
+    assert_eq!(
+        partial_record(&json!({"kept_seconds": 0.074, "kept_frames": 2})),
+        json!({"kept_seconds": 0.074, "kept_frames": 2})
     );
 }

@@ -104,7 +104,7 @@ describe('desktop state', () => {
 
   it('uses the catalog ranking for Quick and Best', () => {
     const snapshot = demoSnapshot();
-    expect(choosePresetModel(snapshot, 'upscale', 'quick')?.model_id).toBe('span_photo_x4');
+    expect(choosePresetModel(snapshot, 'upscale', 'quick')?.model_id).toBe('localsr_quick_x4_v1');
     expect(choosePresetModel(snapshot, 'upscale', 'best')?.model_id).toBe(
       'realplksr_nomoswebphoto_x4',
     );
@@ -223,6 +223,68 @@ describe('desktop state', () => {
     });
     expect(snapshot.runtime.status_title).toBe('Stopped, kept 0:42');
     expect(snapshot.runtime.last_output_path).toBe('/output/result_partial_0m42s.mp4');
+  });
+
+  it('counts a kept part of under a second in frames, never as 0:00', () => {
+    const stopped = (data: Record<string, unknown>) =>
+      applyWorkerEnvelope(demoSnapshot(), {
+        type: 'video_job_completed',
+        data: { job_id: 'job-1', output_path: '/output/clip_partial.mp4', partial: true, ...data },
+      }).runtime.status_title;
+    expect(stopped({ kept_seconds: 0.074, kept_frames: 2 })).toBe('Stopped, kept 2 frames');
+    expect(stopped({ kept_seconds: 0.033, kept_frames: 1 })).toBe('Stopped, kept 1 frame');
+    // Without a frame count the frame rate of the result gives it.
+    expect(stopped({ kept_seconds: 0.5, output_fps: 24 })).toBe('Stopped, kept 12 frames');
+    expect(stopped({ kept_seconds: 0.5 })).toBe('Stopped, kept under a second');
+    expect(stopped({})).toBe('Stopped, kept the finished part');
+  });
+
+  it('says how many tiles a stopped photo kept', () => {
+    const stopped = (data: Record<string, unknown>) =>
+      applyWorkerEnvelope(demoSnapshot(), {
+        type: 'job_completed',
+        data: { job_id: 'job-1', output_path: '/output/photo_partial.png', partial: true, ...data },
+      }).runtime.status_title;
+    expect(
+      stopped({
+        finished_tiles: [
+          [0, 0, 512, 512],
+          [512, 0, 512, 512],
+        ],
+        total_tiles: 12,
+      }),
+    ).toBe('Stopped, kept 2 of 12 tiles');
+    expect(stopped({})).toBe('Stopped, kept the finished part');
+  });
+
+  it('counts the finished tiles of a photo stage, and none for the steps of an edit', () => {
+    let snapshot = applyWorkerEnvelope(demoSnapshot(), {
+      type: 'job_started',
+      data: { job_id: 'job-1', can_keep_partial: true },
+    });
+    const progress = (data: Record<string, unknown>) =>
+      (snapshot = applyWorkerEnvelope(snapshot, {
+        type: 'progress',
+        data: { job_id: 'job-1', percentage: 10, ...data },
+      }));
+    progress({ completed_tiles: 3, total_tiles: 40 });
+    expect(snapshot.runtime.tiles_completed).toBe(3);
+    expect(snapshot.runtime.tiles_total).toBe(40);
+    // The next stage has no finished tile until it reports one.
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'stage_started',
+      data: { job_id: 'job-1', stage_kind: 'upscale', stage_index: 1, stage_count: 2 },
+    });
+    expect(snapshot.runtime.tiles_completed).toBe(0);
+    progress({ completed_tiles: 7, total_tiles: 40, unit: 'steps' });
+    expect(snapshot.runtime.tiles_completed).toBe(0);
+    progress({ completed_tiles: 5, total_tiles: 40 });
+    // A message that only names a phase carries no count and must not take the count away.
+    progress({ detail: 'Saving the result' });
+    expect(snapshot.runtime.tiles_completed).toBe(5);
+    expect(snapshot.runtime.tiles_total).toBe(40);
+    snapshot = applyWorkerEnvelope(snapshot, { type: 'job_cancelled', data: { job_id: 'job-1' } });
+    expect(snapshot.runtime.tiles_completed).toBe(0);
   });
 
   it('shows which engine runs the active job', () => {
@@ -795,4 +857,39 @@ it('tracks the audio cleanup phase title, chunk progress and ETA', () => {
   expect(snapshot.runtime.status_detail).toContain('Chunk 2 of 4');
   expect(snapshot.runtime.status_detail).toContain('ETA');
   expect(snapshot.runtime.throughput_unit).toBe('');
+});
+
+describe('stopping a video', () => {
+  it('takes the host decision about keeping from job_started and counts frames before the current one', () => {
+    let snapshot = demoSnapshot();
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'job_started',
+      data: { job_id: 'v1', can_keep_partial: false },
+    });
+    expect(snapshot.runtime.can_keep_partial).toBe(false);
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'video_frame_started',
+      data: { job_id: 'v1', frame_index: 4, total_frames: 10 },
+    });
+    expect(snapshot.runtime.frames_processed).toBe(4);
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'job_started',
+      data: { job_id: 'v2', can_keep_partial: true },
+    });
+    expect(snapshot.runtime.can_keep_partial).toBe(true);
+    expect(snapshot.runtime.frames_processed).toBe(0);
+  });
+
+  it('names de-flickering and keeps the progress', () => {
+    let snapshot = demoSnapshot();
+    snapshot = applyWorkerEnvelope(snapshot, { type: 'job_started', data: { job_id: 'v1' } });
+    snapshot.runtime.progress = 40;
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'video_stage_progress',
+      data: { job_id: 'v1', stage: 'deflickering', completed: 6, total: 52 },
+    });
+    expect(snapshot.runtime.status_title).toBe('De-flickering');
+    expect(snapshot.runtime.status_detail).toContain('Frame 6 of 52');
+    expect(snapshot.runtime.progress).toBe(40);
+  });
 });

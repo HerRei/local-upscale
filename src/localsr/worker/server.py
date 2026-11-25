@@ -128,9 +128,14 @@ def _encode_chw_jpeg(image, max_dimension: int, quality: int = 78) -> str:
 
 
 def _video_engines() -> list[str]:
-    from localsr.core.video_engines import seedvr2_runtime_issue
+    from localsr.core.video_engines import flashvsr_runtime_issue, seedvr2_runtime_issue
 
-    return ["spandrel_image"] + (["seedvr2"] if seedvr2_runtime_issue() is None else [])
+    engines = ["spandrel_image"]
+    if seedvr2_runtime_issue() is None:
+        engines.append("seedvr2")
+    if flashvsr_runtime_issue() is None:
+        engines.append("flashvsr")
+    return engines
 
 
 # The most photos one batch request carries; the desktop sends at most this many.
@@ -145,6 +150,7 @@ def _engine_features() -> list[str]:
     features = [
         "image",
         "image_multi_fix",
+        "checkpoint_sha256_consent",
         "image_batch_v1",
         "video_frame",
         "camera_raw",
@@ -158,6 +164,8 @@ def _engine_features() -> list[str]:
     ]
     if "seedvr2" in _video_engines():
         features.append("video_seedvr2")
+    if "flashvsr" in _video_engines():
+        features.append("video_flashvsr")
     if importlib.util.find_spec("cv2") is not None:
         try:
             cv2 = importlib.import_module("cv2")
@@ -245,9 +253,13 @@ class WorkerServer:
         self.active_job_id = None
         self.active_batch_job_ids: set[str] = set()
         self.pending_cancel_job_ids: set[str] = set()
+        self.pending_cancel_keep_partial: dict[str, bool] = {}
+        # Keeping the finished part is always an explicit choice; any other stop discards.
+        self.active_cancel_keep_partial = False
         self.model_adapter = ModelAdapter()
         self.model_store = ModelStore()
         self.engine = InferenceEngine(self.model_adapter)
+        self.approved_model_cache: dict[str, str] = {}
         self.result_previews = ResultPreviewService(send_message)
         from localsr.worker.compare_regions import RegionService
 
@@ -256,6 +268,18 @@ class WorkerServer:
         self.restart_after_job = False
         # The last device report, so a refresh during a job needs no new look at the drivers.
         self.last_capabilities: dict | None = None
+
+    def _check_approved_checkpoint(self, data: dict) -> None:
+        digest = data.get("approved_checkpoint_sha256")
+        if not digest:
+            return
+        path = data["model_path"]
+        # A cached descriptor must not skip the per-job digest check. If a new
+        # digest was approved at the same path, discard the old descriptor too.
+        self.model_adapter._checkpoint_trust(path)
+        if self.approved_model_cache.get(path) != digest:
+            self.engine.release_model(path)
+            self.approved_model_cache[path] = digest
 
     def _answer_capabilities_during_job(self) -> bool:
         """Answer a hardware refresh while a job runs; the main loop is busy until it ends.
@@ -274,27 +298,50 @@ class WorkerServer:
         ).start()
         return True
 
-    def _request_cancel(self, requested_job_id: str) -> None:
+    def _request_cancel(self, requested_job_id: str, keep_partial: bool = False) -> None:
         """Remember cancellation even if the matching job is still queued."""
         if not requested_job_id:
             return
         with self.state_lock:
             self.pending_cancel_job_ids.add(requested_job_id)
+            self.pending_cancel_keep_partial[requested_job_id] = keep_partial
             if requested_job_id in self.active_batch_job_ids:
                 # The desktop cancels a whole queue: every photo of the batch,
                 # also those that later run on their own, is cancelled.
                 self.pending_cancel_job_ids |= self.active_batch_job_ids
+                self.active_cancel_keep_partial = keep_partial
                 self.cancel_event.set()
             elif requested_job_id == self.active_job_id:
+                self.active_cancel_keep_partial = keep_partial
                 self.cancel_event.set()
+
+    def _keep_partial_for_job(self, job_id: str) -> bool:
+        with self.state_lock:
+            if self.shutdown_event.is_set():
+                return False
+            if job_id == self.active_job_id:
+                return self.active_cancel_keep_partial
+            return self.pending_cancel_keep_partial.get(job_id, False)
+
+    def _batch_keeps_partial(self) -> bool:
+        """A batch is stopped as one queue: its stop's choice holds for every photo."""
+        with self.state_lock:
+            return not self.shutdown_event.is_set() and self.active_cancel_keep_partial
 
     def _activate_job(self, job_id: str) -> None:
         with self.state_lock:
             cancelled = job_id in self.pending_cancel_job_ids
             self.active_job_id = job_id
-            if cancelled or self.shutdown_event.is_set():
+            if self.shutdown_event.is_set():
+                self.active_cancel_keep_partial = False
+                self.cancel_event.set()
+            elif cancelled:
+                self.active_cancel_keep_partial = self.pending_cancel_keep_partial.get(
+                    job_id, False
+                )
                 self.cancel_event.set()
             else:
+                self.active_cancel_keep_partial = False
                 self.cancel_event.clear()
 
     def _clear_cancel_unless_shutting_down(self) -> None:
@@ -305,17 +352,22 @@ class WorkerServer:
         with self.state_lock:
             self.active_job_id = None
             self.pending_cancel_job_ids.discard(job_id)
+            self.pending_cancel_keep_partial.pop(job_id, None)
+            self.active_cancel_keep_partial = False
             self._clear_cancel_unless_shutting_down()
 
     def _activate_batch(self, job_ids: list[str]) -> None:
         with self.state_lock:
             self.active_batch_job_ids = set(job_ids)
             if self.shutdown_event.is_set():
+                self.active_cancel_keep_partial = False
                 self.cancel_event.set()
             elif self.active_batch_job_ids & self.pending_cancel_job_ids:
                 self.pending_cancel_job_ids |= self.active_batch_job_ids
+                self.active_cancel_keep_partial = False
                 self.cancel_event.set()
             else:
+                self.active_cancel_keep_partial = False
                 self.cancel_event.clear()
 
     def _deactivate_batch(self, job_ids: list[str]) -> None:
@@ -323,6 +375,9 @@ class WorkerServer:
             self.active_job_id = None
             self.active_batch_job_ids = set()
             self.pending_cancel_job_ids.difference_update(job_ids)
+            for job_id in job_ids:
+                self.pending_cancel_keep_partial.pop(job_id, None)
+            self.active_cancel_keep_partial = False
             self._clear_cancel_unless_shutting_down()
 
     def reader_thread_func(self):
@@ -385,11 +440,17 @@ class WorkerServer:
             return
         self.message_queue.put(msg)
         if request_type == "shutdown_request":
+            with self.state_lock:
+                self.active_cancel_keep_partial = False
             self.shutdown_event.set()
             self.cancel_event.set()
         elif request_type == "cancel_request":
             requested_job_id = data.get("job_id") if isinstance(data, dict) else None
-            self._request_cancel(requested_job_id if isinstance(requested_job_id, str) else "")
+            keep_partial = data.get("keep_partial") if isinstance(data, dict) else None
+            self._request_cancel(
+                requested_job_id if isinstance(requested_job_id, str) else "",
+                keep_partial=keep_partial if isinstance(keep_partial, bool) else False,
+            )
 
     def _restart_if_required(self) -> None:
         """After a lost device, exit as soon as the failure is reported. Freeing the sessions
@@ -542,6 +603,7 @@ class WorkerServer:
                     with self.state_lock:
                         if requested_job_id != self.active_job_id:
                             self.pending_cancel_job_ids.discard(requested_job_id)
+                            self.pending_cancel_keep_partial.pop(requested_job_id, None)
 
                 elif req_type == "image_batch_request":
                     self._run_image_batch(data.get("jobs"))
@@ -603,6 +665,13 @@ class WorkerServer:
                     previous_checkpoint_policy = getattr(
                         self.model_adapter, "allow_unverified_checkpoints", False
                     )
+                    previous_approved_checkpoint = getattr(
+                        self.model_adapter, "approved_checkpoint", None
+                    )
+                    digest = data.get("approved_checkpoint_sha256")
+                    self.model_adapter.approved_checkpoint = (
+                        (data["model_path"], digest) if digest else None
+                    )
                     requested_checkpoint_policy = data.get("allow_unverified_checkpoint")
                     self.model_adapter.allow_unverified_checkpoints = (
                         previous_checkpoint_policy
@@ -613,6 +682,7 @@ class WorkerServer:
                     try:
                         self._activate_job(job_id)
                         send_message(JobStarted(job_id=job_id))
+                        self._check_approved_checkpoint(data)
                         self._run_video_job(job_id, data)
                     except Exception as e:  # noqa: BLE001
                         traceback.print_exc(file=sys.stderr)
@@ -621,7 +691,9 @@ class WorkerServer:
                             JobFailed(
                                 job_id=job_id,
                                 restart_required=self.restart_after_job,
-                                **failure_fields(e, data.get("output_video_path")),
+                                **failure_fields(
+                                    e, data.get("output_video_path"), video_request=data
+                                ),
                             )
                         )
                         self._restart_if_required()
@@ -629,6 +701,7 @@ class WorkerServer:
                         self._deactivate_job(job_id)
                         self.model_adapter.release()
                         self.model_adapter.allow_unverified_checkpoints = previous_checkpoint_policy
+                        self.model_adapter.approved_checkpoint = previous_approved_checkpoint
                         self.engine.release_model()
                         # Exception frames and model references have been released;
                         # return their cached allocations to other applications too.
@@ -872,6 +945,9 @@ class WorkerServer:
         previous_checkpoint_policy = getattr(
             self.model_adapter, "allow_unverified_checkpoints", False
         )
+        previous_approved_checkpoint = getattr(self.model_adapter, "approved_checkpoint", None)
+        digest = data.get("approved_checkpoint_sha256")
+        self.model_adapter.approved_checkpoint = (data["model_path"], digest) if digest else None
         requested_checkpoint_policy = data.get("allow_unverified_checkpoint")
         self.model_adapter.allow_unverified_checkpoints = (
             previous_checkpoint_policy
@@ -883,6 +959,7 @@ class WorkerServer:
             self._activate_job(job_id)
             if not announced:
                 send_message(JobStarted(job_id=job_id))
+            self._check_approved_checkpoint(data)
             self._run_job(job_id, data)
         # The process boundary must turn any inference/I/O failure
         # into a job_failed message instead of killing the worker.
@@ -901,6 +978,7 @@ class WorkerServer:
             self._deactivate_job(job_id)
             self.model_adapter.release()
             self.model_adapter.allow_unverified_checkpoints = previous_checkpoint_policy
+            self.model_adapter.approved_checkpoint = previous_approved_checkpoint
             # Release the face model from the engine cache if it
             # was loaded for this job. The general model stays
             # cached for the next image.
@@ -947,10 +1025,14 @@ class WorkerServer:
 
         self._activate_batch(ids)
         previous_checkpoint_policy = self.model_adapter.allow_unverified_checkpoints
+        previous_approved_checkpoint = getattr(self.model_adapter, "approved_checkpoint", None)
+        digest = jobs[0].get("approved_checkpoint_sha256")
+        self.model_adapter.approved_checkpoint = (jobs[0]["model_path"], digest) if digest else None
         requested_checkpoint_policy = jobs[0].get("allow_unverified_checkpoint")
         if requested_checkpoint_policy is not None:
             self.model_adapter.allow_unverified_checkpoints = bool(requested_checkpoint_policy)
         try:
+            self._check_approved_checkpoint(jobs[0])
             returned = ImageBatchRunner(
                 engine=self.engine,
                 model_adapter=self.model_adapter,
@@ -958,6 +1040,7 @@ class WorkerServer:
                 emit=emit,
                 emit_preview=self._emit_live_preview,
                 preview_factory=LatestPreviewEncoder,
+                keep_partial=self._batch_keeps_partial,
             ).run(jobs)
         except Exception as error:  # noqa: BLE001 - the process boundary, as for one job
             traceback.print_exc(file=sys.stderr)
@@ -982,6 +1065,7 @@ class WorkerServer:
         finally:
             self.model_adapter.release()
             self.model_adapter.allow_unverified_checkpoints = previous_checkpoint_policy
+            self.model_adapter.approved_checkpoint = previous_approved_checkpoint
         try:
             self._restart_if_required()
             for data in returned:
@@ -999,6 +1083,7 @@ class WorkerServer:
             emit=send_message,
             emit_preview=self._emit_live_preview,
             preview_factory=LatestPreviewEncoder,
+            keep_partial=lambda: self._keep_partial_for_job(job_id),
         ).run(job_id, data)
 
     @staticmethod
@@ -1158,7 +1243,7 @@ class WorkerServer:
             temporary_directory=data.get("temporary_directory"),
             output_video_path=output_path,
             cancel_event=self.cancel_event,
-            stage_cb=lambda stage: report(stage),
+            stage_cb=lambda stage, *counts: report(stage, *counts),
             progress_cb=lambda done, total, elapsed, rem: (
                 memory.phase("audio_denoise"),
                 send_message(
@@ -1250,6 +1335,9 @@ class WorkerServer:
         )
         window = min(window, max(1, int(getattr(engine, "max_temporal_window", window))))
         overlap = min(overlap, window - 1)
+        scratch_dir = data.get("temporary_directory") or data.get("scratch_directory")
+        if scratch_dir is not None and hasattr(engine, "temporary_directory"):
+            engine.temporary_directory = scratch_dir
         memory.configure(memory.latest.output_width, memory.latest.output_height, window)
 
         decode_iter = decode_timed_frames(
@@ -1362,6 +1450,7 @@ class WorkerServer:
             )
 
         published = False
+        written_path = None
         try:
             first_chunk = read_chunk(window)
             if not first_chunk:
@@ -1375,9 +1464,10 @@ class WorkerServer:
                 emitted = 0
                 previous_tail = first_chunk[-overlap:] if overlap > 0 else []
                 first_chunk.clear()
+                # The frames of a finished window always go to the encoder: on Discard
+                # it stops reading them, on Keep they belong to the finished part. A
+                # stop takes effect between windows.
                 for frame in first_out:
-                    if self.cancel_event.is_set():
-                        raise InterruptedError("video job cancelled")
                     preview_encoder.submit(
                         job_id=job_id,
                         preview_kind="video",
@@ -1402,8 +1492,6 @@ class WorkerServer:
                     output = process_chunk(chunk, list(previous_tail))
                     previous_tail = chunk[-overlap:] if overlap > 0 else []
                     for frame in output:
-                        if self.cancel_event.is_set():
-                            raise InterruptedError("video job cancelled")
                         preview_encoder.submit(
                             job_id=job_id,
                             preview_kind="video",
@@ -1419,7 +1507,7 @@ class WorkerServer:
                         yield frame
                     output.clear()
 
-            encode_video(
+            written_path = encode_video(
                 all_frames(),
                 output_path,
                 fps=float(fps),
@@ -1444,6 +1532,7 @@ class WorkerServer:
                 ),
                 sdr_bt709=bool(probe.hdr_format and data.get("hdr_mode") == "tone_map"),
                 temporary_directory=data.get("temporary_directory"),
+                keep_partial=lambda: self._keep_partial_for_job(job_id),
             )
             published = True
         except InterruptedError:
@@ -1458,6 +1547,11 @@ class WorkerServer:
             decode_iter.close()
             preview_encoder.close()
             source_encoder.close()
+            if engine is not None and hasattr(engine, "close"):
+                try:
+                    engine.close()
+                except Exception:  # noqa: BLE001
+                    pass
             engine = None  # noqa: F841 — releases the models
             try:
                 import torch
@@ -1476,10 +1570,21 @@ class WorkerServer:
 
         memory.sample()
         elapsed = _time.monotonic() - started_at
+        partial = bool(written_path) and str(written_path) != str(output_path)
+        kept_seconds = 0.0
+        kept_frames = 0
+        if partial:
+            from localsr.core.video_io import count_video_frames, probe_video
+
+            kept_seconds = probe_video(str(written_path)).duration_seconds
+            kept_frames = count_video_frames(str(written_path))
         send_message(
             VideoJobCompleted(
                 job_id=job_id,
-                output_path=output_path,
+                output_path=str(written_path) if partial else output_path,
+                partial=partial,
+                kept_seconds=kept_seconds,
+                kept_frames=kept_frames,
                 frames_processed=state["done"],
                 elapsed_seconds=float(elapsed),
                 inference_seconds=float(elapsed),
@@ -1581,6 +1686,8 @@ class WorkerServer:
                 status_callback=lambda message: send_message(
                     EngineStatus(job_id=job_id, message=message)
                 ),
+                # A route change mid-job belongs on the finished result too.
+                note_callback=lambda message: self.engine.add_note(message),
             ),
         )
 
@@ -1629,7 +1736,11 @@ class WorkerServer:
         # are not single-image checkpoints. An engine this build cannot
         # serve fails the job with a status-bar-ready message instead of a
         # stack trace, and frame-by-frame stays available.
-        from localsr.core.video_engines import resolve_video_engine, seedvr2_runtime_issue
+        from localsr.core.video_engines import (
+            flashvsr_runtime_issue,
+            resolve_video_engine,
+            seedvr2_runtime_issue,
+        )
 
         if data.get("video_codec") == "auto":
             from localsr.core.media_bridge import automatic_video_codec, load_media_bridge
@@ -1658,6 +1769,24 @@ class WorkerServer:
                 "for Intel/DirectML, or a compatible CUDA, ROCm or Metal engine for SeedVR2."
             )
         if model_kind == "seedvr2" and (issue := seedvr2_runtime_issue()):
+            raise ValueError(issue)
+        if model_kind == "flashvsr":
+            raw_device = str(data.get("device", ""))
+            backend = raw_device.split(":", 1)[0]
+            if backend == "cuda":
+                import re
+
+                if not re.fullmatch(r"cuda(?::\d+)?", raw_device):
+                    raise ValueError(
+                        f"Invalid FlashVSR CUDA/ROCm device: {raw_device!r}. "
+                        "Choose frame-by-frame video for CPU or other backends."
+                    )
+            elif backend not in {"mps", "auto"}:
+                raise ValueError(
+                    "FlashVSR runs on Apple Silicon GPU (mps), NVIDIA CUDA, or AMD ROCm GPU only. "
+                    "Choose frame-by-frame video for CPU or other backends."
+                )
+        if model_kind == "flashvsr" and (issue := flashvsr_runtime_issue()):
             raise ValueError(issue)
         engine_factory = resolve_video_engine(model_kind)
         if engine_factory is not None:
@@ -1708,10 +1837,6 @@ class WorkerServer:
         preprocess_stages: list[VideoFixStage] = []
         for stage in pipeline.preprocess_stages:
             stage_info = self.model_adapter.inspect(stage.model_path)
-            if stage.fix == "colour" or getattr(stage_info, "architecture", "") == "DDColor":
-                raise ValueError(
-                    "Photo colorization is only available for still images, not video."
-                )
             if int(getattr(stage_info, "scale", 0)) != 1:
                 raise ValueError(
                     "A preprocessing restoration checkpoint must have native scale 1×."
@@ -1739,10 +1864,6 @@ class WorkerServer:
         else:
             model_path = str(data["model_path"])
             info = self.model_adapter.inspect(model_path)
-            if getattr(info, "architecture", "") == "DDColor" or (pipeline.primary.fix == "colour"):
-                raise ValueError(
-                    "Photo colorization is only available for still images, not video."
-                )
             if data.get("output_scale") == 1 and int(getattr(info, "scale", 1)) > 1:
                 face_model_path = None
                 primary_time_factor = 0.0
@@ -1930,7 +2051,9 @@ class WorkerServer:
                 warning_callback=lambda message: send_message(
                     LogMessage(level="warning", message=message)
                 ),
-                stage_cb=lambda stage: send_message(VideoStageProgress(job_id=job_id, stage=stage)),
+                stage_cb=lambda stage, completed=0, total=0: send_message(
+                    VideoStageProgress(job_id=job_id, stage=stage, completed=completed, total=total)
+                ),
                 audio_progress_cb=lambda done, total, elapsed, remaining: send_message(
                     VideoStageProgress(
                         job_id=job_id,
@@ -1945,6 +2068,7 @@ class WorkerServer:
                     )
                 ),
                 synthesizer=synthesizer,
+                keep_partial=lambda: self._keep_partial_for_job(job_id),
             )
         except InterruptedError:
             preview_encoder.close()
@@ -1962,6 +2086,7 @@ class WorkerServer:
                 output_path=result.output_path,
                 partial=result.partial,
                 kept_seconds=result.kept_seconds,
+                kept_frames=result.kept_frames,
                 frames_processed=result.frames_processed,
                 elapsed_seconds=result.elapsed_seconds,
                 inference_seconds=result.inference_seconds,

@@ -19,10 +19,7 @@ export function recipeFixStages(
 ): FixStageSelection[] {
   if (recipe.task !== 'upscale' && recipe.task !== 'denoise' && recipe.task !== 'video') return [];
   const stages = recipe.stages ?? [];
-  const chip = recipe.fixes?.find(
-    (fix): fix is Exclude<FixKind, 'faces'> =>
-      fix !== 'faces' && (recipe.task !== 'video' || fix !== 'colour'),
-  );
+  const chip = recipe.fixes?.find((fix): fix is Exclude<FixKind, 'faces'> => fix !== 'faces');
   const restoring = isRestoreRecipe(recipe);
   const primary = restoring
     ? stages.length - 1
@@ -35,20 +32,8 @@ export function recipeFixStages(
     const fixes = model
       ? fixesOf(model).filter((fix): fix is Exclude<FixKind, 'faces'> => fix !== 'faces')
       : [];
-    const fix =
-      stage.fix ??
-      (index === primary
-        ? chip && fixes.includes(chip)
-          ? chip
-          : undefined
-        : chip && (!model || fixes.includes(chip))
-          ? chip
-          : fixes[0]);
-    if (
-      fix &&
-      (recipe.task !== 'video' || fix !== 'colour') &&
-      !result.some((selection) => selection.fix === fix)
-    )
+    const fix = stage.fix ?? (chip && (!model || fixes.includes(chip)) ? chip : fixes[0]);
+    if (fix && !result.some((selection) => selection.fix === fix))
       result.push({ fix, model_id: stage.model_id });
   });
   return result;

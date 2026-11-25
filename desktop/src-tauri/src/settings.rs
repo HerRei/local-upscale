@@ -50,9 +50,11 @@ pub fn load(paths: &AppPaths) -> (UiSettings, Vec<Recipe>) {
     if paths.legacy_settings.exists() || effective_document_path(paths).is_some() {
         settings.privacy_choice_made = true;
     }
-    if let Ok(contents) = fs::read_to_string(&paths.legacy_settings) {
-        if let Ok(value) = serde_json::from_str::<Value>(&contents) {
-            import_legacy_settings(&mut settings, &value);
+    if !is_future_schema(paths) {
+        if let Ok(contents) = fs::read_to_string(&paths.legacy_settings) {
+            if let Ok(value) = serde_json::from_str::<Value>(&contents) {
+                import_legacy_settings(&mut settings, &value);
+            }
         }
     }
     (settings, Vec::new())
@@ -221,6 +223,9 @@ fn import_legacy_settings(settings: &mut UiSettings, value: &Value) {
 pub fn save(paths: &AppPaths, settings: &UiSettings, recipes: &[Recipe]) -> AppResult<()> {
     // Never overwrite an unreadable or future-version document with defaults. A version-1
     // file is kept by the profile backup taken when this version first started.
+    if is_future_schema(paths) {
+        return Ok(());
+    }
     if needs_recovery(paths) {
         return Err(AppError::Config("Settings need recovery. The original file has been preserved; open Check for Updates… and press Recover settings before saving changes.".into()));
     }
@@ -237,8 +242,17 @@ pub fn save(paths: &AppPaths, settings: &UiSettings, recipes: &[Recipe]) -> AppR
     Ok(())
 }
 
+pub fn is_future_schema(paths: &AppPaths) -> bool {
+    effective_document_path(paths)
+        .and_then(|path| fs::read_to_string(path).ok())
+        .and_then(|contents| serde_json::from_str::<Value>(&contents).ok())
+        .and_then(|value| value.get("schema_version")?.as_u64())
+        .is_some_and(|version| version > SCHEMA_VERSION)
+}
+
 pub fn needs_recovery(paths: &AppPaths) -> bool {
-    effective_document_path(paths).is_some_and(|path| read_document(&path).is_none())
+    !is_future_schema(paths)
+        && effective_document_path(paths).is_some_and(|path| read_document(&path).is_none())
 }
 
 pub fn recover_defaults(paths: &AppPaths) -> AppResult<()> {
@@ -330,6 +344,37 @@ mod tests {
     }
 
     #[test]
+    fn menu_bar_and_finish_notifications_default_on_and_round_trip() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        assert!(load(&paths).0.show_in_menu_bar);
+        assert!(load(&paths).0.notify_on_finish);
+
+        fs::create_dir_all(&paths.next_root).unwrap();
+        fs::write(
+            &paths.settings,
+            r#"{"schema_version":2,"ui":{},"recipes":[]}"#,
+        )
+        .unwrap();
+        let (mut settings, recipes) = load(&paths);
+        assert!(settings.show_in_menu_bar);
+        assert!(settings.notify_on_finish);
+        assert!(settings.menu_bar_icon_monochrome);
+        assert!(settings.auto_cache_cleanup);
+
+        settings.show_in_menu_bar = false;
+        settings.notify_on_finish = false;
+        settings.menu_bar_icon_monochrome = false;
+        settings.auto_cache_cleanup = false;
+        save(&paths, &settings, &recipes).unwrap();
+        let (reloaded, _) = load(&paths);
+        assert!(!reloaded.show_in_menu_bar);
+        assert!(!reloaded.notify_on_finish);
+        assert!(!reloaded.menu_bar_icon_monochrome);
+        assert!(!reloaded.auto_cache_cleanup);
+    }
+
+    #[test]
     fn appearance_defaults_round_trips_and_rejects_unknown_values() {
         let defaults: UiSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(defaults.appearance, "dark");
@@ -345,6 +390,26 @@ mod tests {
         assert!(restored.colour_blind_palette);
         let unknown: UiSettings = serde_json::from_str(r#"{"appearance":"sepia"}"#).unwrap();
         assert_eq!(unknown.appearance, "dark");
+    }
+
+    #[test]
+    fn contrast_and_viewer_background_default_round_trip_and_reject_unknown_values() {
+        let defaults: UiSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(defaults.contrast, "system");
+        assert_eq!(defaults.viewer_background, "checker");
+        let settings = UiSettings {
+            contrast: "high".into(),
+            viewer_background: "grey".into(),
+            ..defaults
+        };
+        let restored: UiSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.contrast, "high");
+        assert_eq!(restored.viewer_background, "grey");
+        let unknown: UiSettings =
+            serde_json::from_str(r#"{"contrast":"max","viewer_background":"pink"}"#).unwrap();
+        assert_eq!(unknown.contrast, "system");
+        assert_eq!(unknown.viewer_background, "checker");
     }
 
     #[test]
@@ -536,10 +601,26 @@ mod tests {
         fs::create_dir_all(&paths.next_root).unwrap();
         let original = r#"{"schema_version":3,"ui":{},"recipes":[]}"#;
         fs::write(&paths.settings, original).unwrap();
-        assert!(needs_recovery(&paths));
+        assert!(!needs_recovery(&paths));
         let (settings, recipes) = load(&paths);
-        assert!(save(&paths, &settings, &recipes).is_err());
+        assert!(save(&paths, &settings, &recipes).is_ok());
+        recover_defaults(&paths).unwrap();
         assert_eq!(fs::read_to_string(&paths.settings).unwrap(), original);
+    }
+
+    #[test]
+    fn future_previous_copy_is_preserved_without_recovery() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        fs::create_dir_all(&paths.next_root).unwrap();
+        let original = r#"{"schema_version":3,"ui":{},"recipes":[]}"#;
+        fs::write(previous_copy(&paths), original).unwrap();
+        assert!(!needs_recovery(&paths));
+        let (settings, recipes) = load(&paths);
+        save(&paths, &settings, &recipes).unwrap();
+        recover_defaults(&paths).unwrap();
+        assert_eq!(fs::read_to_string(previous_copy(&paths)).unwrap(), original);
+        assert!(!paths.settings.exists());
     }
 
     #[test]
@@ -632,10 +713,7 @@ mod recovery_tests {
 
     #[test]
     fn an_unreadable_previous_copy_is_protected_like_an_unreadable_settings_file() {
-        for original in [
-            &br#"{broken"#[..],
-            &br#"{"schema_version":3,"ui":{},"recipes":[]}"#[..],
-        ] {
+        for original in [&br#"{broken"#[..], &br#"{}"#[..]] {
             let root = tempfile::tempdir().unwrap();
             let paths = AppPaths::under(root.path());
             fs::create_dir_all(&paths.next_root).unwrap();

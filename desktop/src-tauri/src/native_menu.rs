@@ -1,68 +1,19 @@
 use tauri::{
-    menu::{CheckMenuItemBuilder, IsMenuItem, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
+    menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     App, AppHandle, Emitter, Manager, Runtime,
 };
 
-use crate::types::{Recipe, UiSettings};
-
-/// The two update switches the menu shows with a check mark.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Switches {
-    pub appearance: String,
-    pub colour_blind_palette: bool,
-    pub check_at_launch: bool,
-    pub update_count: bool,
-    pub crash_reports: bool,
-}
-
-pub fn switches(settings: &UiSettings) -> Switches {
-    Switches {
-        appearance: settings.appearance.clone(),
-        colour_blind_palette: settings.colour_blind_palette,
-        check_at_launch: settings.check_updates_at_launch,
-        update_count: settings.anonymous_update_count,
-        crash_reports: settings.crash_reports,
-    }
-}
+use crate::types::Recipe;
 
 pub const EVENT_NAME: &str = "native-menu-action";
 const REPORT_PROBLEM_ID: &str = "help.report-problem";
+pub const SETTINGS_ID: &str = "app.settings";
+pub const SETTINGS_ACCELERATOR: &str = "CmdOrCtrl+,";
 
-#[cfg(any(target_os = "linux", test))]
-fn linux_menu_item(is_appimage: bool, installed: bool) -> Option<(&'static str, &'static str)> {
-    if installed {
-        Some(("help.remove-desktop-menu", "Remove from Applications Menu"))
-    } else if is_appimage {
-        Some(("help.add-desktop-menu", "Add to Applications Menu"))
-    } else {
-        None
-    }
-}
-
-/// The update entries in menu order: macOS shows them in the LocalSR menu, Windows and
-/// Linux at the end of Help. The two switches exist only in builds that check a signed
-/// feed themselves (crate::updates::checks_for_updates); the others, such as Store
-/// builds, neither check at launch nor send the count.
-fn update_items(switchable: bool) -> &'static [&'static str] {
-    if switchable {
-        &[
-            "app.updates",
-            "app.check-updates-at-launch",
-            "app.update-count",
-        ]
-    } else {
-        &["app.updates"]
-    }
-}
-
-/// The saved setting a switch's menu entry flips.
-fn switch_setting(id: &str) -> Option<&'static str> {
-    match id {
-        "app.check-updates-at-launch" => Some("check_updates_at_launch"),
-        "app.update-count" => Some("anonymous_update_count"),
-        "help.crash-reports" => Some("crash_reports"),
-        _ => None,
-    }
+/// The update entry in menu order: macOS shows it in the LocalSR menu, Windows and
+/// Linux at the end of Help.
+fn update_items() -> &'static [&'static str] {
+    &["app.updates"]
 }
 
 const PREVIOUS_RESULT_ACCELERATOR: &str = "CmdOrCtrl+Alt+Left";
@@ -97,303 +48,274 @@ pub fn set_comparison_labels(app: &AppHandle, reference_is_result: bool) {
     }
 }
 
-pub fn install<R: Runtime>(
-    app: &App<R>,
-    recipes: &[Recipe],
-    switches: Switches,
-) -> tauri::Result<()> {
-    install_for_manager(app, recipes, switches)
+pub fn install<R: Runtime>(app: &App<R>, recipes: &[Recipe]) -> tauri::Result<()> {
+    install_for_manager(app, recipes)
 }
 
-pub fn rebuild<R: Runtime>(
-    app: &AppHandle<R>,
-    recipes: &[Recipe],
-    switches: Switches,
-) -> tauri::Result<()> {
-    install_for_manager(app, recipes, switches)
+pub fn rebuild<R: Runtime>(app: &AppHandle<R>, recipes: &[Recipe]) -> tauri::Result<()> {
+    install_for_manager(app, recipes)
 }
 
 fn install_for_manager<R: Runtime, M: Manager<R>>(
     manager: &M,
     recipes: &[Recipe],
-    switches: Switches,
 ) -> tauri::Result<()> {
-    let add_media = MenuItemBuilder::with_id("file.add-media", "Add Media…")
-        .accelerator("CmdOrCtrl+O")
-        .build(manager)?;
-    let add_folder = MenuItemBuilder::with_id("file.add-folder", "Add Folder…")
-        .accelerator("CmdOrCtrl+Shift+O")
-        .build(manager)?;
-    let open_output = MenuItemBuilder::with_id("file.open-output", "Open Output Folder")
-        .accelerator("CmdOrCtrl+E")
-        .build(manager)?;
-    let clear = MenuItemBuilder::with_id("file.clear", "Clear Media Queue").build(manager)?;
-    let start = MenuItemBuilder::with_id("file.start", "Start Processing")
-        .accelerator("CmdOrCtrl+R")
-        .build(manager)?;
-    // Queue-wide, as the footer's Cancel queue; "Cancel runs for this image"
-    // is the per-image action in the window.
-    let cancel = MenuItemBuilder::with_id("file.cancel", "Cancel Queue")
-        .accelerator("CmdOrCtrl+.")
-        .build(manager)?;
-    let integrations =
-        MenuItemBuilder::with_id("file.integrations", "System Integrations…").build(manager)?;
-    let file_menu = SubmenuBuilder::new(manager, "File")
-        .item(&add_media)
-        .item(&add_folder)
-        .item(&open_output)
-        .separator()
-        .item(&clear)
-        .separator()
-        .item(&start)
-        .item(&cancel)
-        .separator()
-        .item(&integrations)
-        .build()?;
-
-    let quick = MenuItemBuilder::with_id("preset.quick", "Quick Preset (Fast)")
-        .accelerator("CmdOrCtrl+1")
-        .build(manager)?;
-    let best = MenuItemBuilder::with_id("preset.best", "Best Quality Preset")
-        .accelerator("CmdOrCtrl+2")
-        .build(manager)?;
-    let mut presets_builder = SubmenuBuilder::new(manager, "Presets")
-        .item(&quick)
-        .item(&best);
-    if !recipes.is_empty() {
-        presets_builder = presets_builder.separator();
-    }
-    for (index, recipe) in recipes.iter().take(7).enumerate() {
-        let item =
-            MenuItemBuilder::with_id(format!("preset.recipe.{}", recipe.id), recipe.name.clone())
-                .accelerator(format!("CmdOrCtrl+{}", index + 3))
-                .build(manager)?;
-        presets_builder = presets_builder.item(&item);
-    }
-    let presets_menu = presets_builder.build()?;
-
-    let fit = MenuItemBuilder::with_id("view.fit", "Fit to Window")
-        .accelerator("CmdOrCtrl+0")
-        .build(manager)?;
-    let actual = MenuItemBuilder::with_id("view.actual", "Actual Pixels (1:1)")
-        .accelerator("CmdOrCtrl+Alt+0")
-        .build(manager)?;
-    // Same choices as the preview header's Original | Split | Enhanced switch.
-    let show_original =
-        MenuItemBuilder::with_id("view.compare-original", "Show Original").build(manager)?;
-    let show_split =
-        MenuItemBuilder::with_id("view.compare-split", "Show Split Comparison").build(manager)?;
-    let show_enhanced =
-        MenuItemBuilder::with_id("view.compare-enhanced", "Show Enhanced").build(manager)?;
-    // Older and newer saved result on the Showing side. Arrows, not brackets:
-    // on Swiss German and German Mac keyboards brackets need Option already.
-    let previous = MenuItemBuilder::with_id("view.previous-result", "Previous Result")
-        .accelerator(PREVIOUS_RESULT_ACCELERATOR)
-        .build(manager)?;
-    let next = MenuItemBuilder::with_id("view.next-result", "Next Result")
-        .accelerator(NEXT_RESULT_ACCELERATOR)
-        .build(manager)?;
-    let refresh = MenuItemBuilder::with_id("view.refresh-hardware", "Refresh Hardware Status")
-        .build(manager)?;
-    // A single ampersand is interpreted as a Windows mnemonic by the native
-    // menu library and disappears on macOS, leaving an awkward double space.
-    let diagnostics = MenuItemBuilder::with_id("view.performance", "Performance and Diagnostics…")
-        .accelerator("CmdOrCtrl+Shift+D")
-        .build(manager)?;
-    let models = MenuItemBuilder::with_id("view.models", "Models…")
-        .accelerator("CmdOrCtrl+Shift+M")
-        .build(manager)?;
-    let dark = CheckMenuItemBuilder::with_id("view.appearance.dark", "Dark")
-        .checked(switches.appearance == "dark")
-        .build(manager)?;
-    let light = CheckMenuItemBuilder::with_id("view.appearance.light", "Light")
-        .checked(switches.appearance == "light")
-        .build(manager)?;
-    let system = CheckMenuItemBuilder::with_id("view.appearance.system", "Match System")
-        .checked(switches.appearance == "system")
-        .build(manager)?;
-    let appearance = SubmenuBuilder::new(manager, "Appearance")
-        .item(&dark)
-        .item(&light)
-        .item(&system)
-        .build()?;
-    let colour_blind =
-        CheckMenuItemBuilder::with_id("view.colour-blind", "Colour-Blind Friendly Colours")
-            .checked(switches.colour_blind_palette)
-            .build(manager)?;
-    let view_menu = SubmenuBuilder::new(manager, "View")
-        .item(&appearance)
-        .item(&colour_blind)
-        .separator()
-        .item(&fit)
-        .item(&actual)
-        .separator()
-        .item(&show_original)
-        .item(&show_split)
-        .item(&show_enhanced)
-        .item(&previous)
-        .item(&next)
-        .separator()
-        .item(&models)
-        .separator()
-        .item(&refresh)
-        .item(&diagnostics)
-        .build()?;
-
-    let guide = MenuItemBuilder::with_id("help.guide", "LocalSR User Guide").build(manager)?;
-    let report = MenuItemBuilder::with_id(REPORT_PROBLEM_ID, "Report a problem…").build(manager)?;
-    let crash_reports =
-        CheckMenuItemBuilder::with_id("help.crash-reports", "Offer to Report Crashes")
-            .checked(switches.crash_reports)
-            .build(manager)?;
-    let github = MenuItemBuilder::with_id("help.github", "LocalSR on GitHub").build(manager)?;
-    let updates = MenuItemBuilder::with_id("app.updates", "Check for Updates…").build(manager)?;
-    let check_at_launch =
-        CheckMenuItemBuilder::with_id("app.check-updates-at-launch", "Check for Updates at Launch")
-            .checked(switches.check_at_launch)
-            .build(manager)?;
-    let update_count =
-        CheckMenuItemBuilder::with_id("app.update-count", "Send Anonymous Update Count")
-            .checked(switches.update_count)
-            .build(manager)?;
-    let update_entries: Vec<&dyn IsMenuItem<R>> =
-        update_items(crate::updates::checks_for_updates())
-            .iter()
-            .map(|id| match *id {
-                "app.check-updates-at-launch" => &check_at_launch as &dyn IsMenuItem<R>,
-                "app.update-count" => &update_count,
-                _ => &updates,
-            })
-            .collect();
-    #[cfg(target_os = "macos")]
-    let help_menu = SubmenuBuilder::new(manager, "Help")
-        .item(&guide)
-        .item(&report)
-        .item(&crash_reports)
-        .item(&github)
-        .build()?;
-    #[cfg(not(target_os = "macos"))]
-    let help_menu = {
-        #[cfg(target_os = "linux")]
-        let linux_menu_entry = linux_menu_item(
-            crate::integrations::running_in_appimage(),
-            crate::integrations::linux_menu_installed(),
-        )
-        .map(|(id, label)| MenuItemBuilder::with_id(id, label).build(manager))
-        .transpose()?;
-        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
-        let mut builder = SubmenuBuilder::new(manager, "Help")
-            .item(&guide)
-            .item(&report)
-            .item(&crash_reports)
-            .item(&github);
-        #[cfg(target_os = "linux")]
-        if let Some(entry) = linux_menu_entry.as_ref() {
-            builder = builder.item(entry);
-        }
-        builder.separator().items(&update_entries).build()?
-    };
-
-    #[cfg(target_os = "macos")]
-    let menu_builder = {
-        let app_menu = SubmenuBuilder::new(manager, "LocalSR")
-            .about(Some(tauri::menu::AboutMetadata {
-                credits: Some(
-                    "This software uses libraries from the FFmpeg project under the LGPLv2.1. \
-                     LocalSR does not own FFmpeg. Corresponding source and third-party notices \
-                     are published with each download."
-                        .into(),
-                ),
-                ..Default::default()
-            }))
-            .items(&update_entries)
-            .separator()
-            .services()
-            .separator()
-            .hide()
-            .hide_others()
-            .show_all()
-            .separator()
-            .quit()
-            .build()?;
-        MenuBuilder::new(manager).item(&app_menu)
-    };
-    #[cfg(not(target_os = "macos"))]
-    let menu_builder = MenuBuilder::new(manager);
-
-    let window_menu = SubmenuBuilder::new(manager, "Window")
-        .minimize()
-        .maximize()
-        .separator()
-        .close_window();
-    // Closing the window only hides it on macOS, so the menu needs a way back to it.
-    #[cfg(target_os = "macos")]
-    let window_menu = window_menu
-        .separator()
-        .item(&MenuItemBuilder::with_id("window.main", "LocalSR").build(manager)?);
-    let window_menu = window_menu.build()?;
-    let menu = menu_builder
-        .item(&file_menu)
-        .item(&presets_menu)
-        .item(&view_menu)
-        .item(&window_menu)
-        .item(&help_menu)
-        .build()?;
+    let menu = build_menu(manager, recipes)?;
     manager.app_handle().set_menu(menu)?;
     Ok(())
 }
 
-/// Show the saved update switches. The rebuild runs on the UI thread and reads the settings
-/// there, so when several overlap, the last one shows the newest state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum LayoutEntry {
+    Item {
+        id: String,
+        label: String,
+        accelerator: Option<String>,
+    },
+    Separator,
+    // The app menu exists on macOS only; elsewhere the window's own controls do this.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    About,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    Services,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    Hide,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    HideOthers,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    ShowAll,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    Quit,
+    Minimize,
+    Maximize,
+    CloseWindow,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SubmenuLayout {
+    title: &'static str,
+    items: Vec<LayoutEntry>,
+}
+
+fn entry(id: &str, label: &str, accelerator: Option<&str>) -> LayoutEntry {
+    LayoutEntry::Item {
+        id: id.to_owned(),
+        label: label.to_owned(),
+        accelerator: accelerator.map(str::to_owned),
+    }
+}
+
+fn menu_layout(recipes: &[Recipe]) -> Vec<SubmenuLayout> {
+    #[cfg_attr(target_os = "macos", allow(unused_mut))]
+    let mut file_items = vec![
+        entry("file.add-media", "Add Media…", Some("CmdOrCtrl+O")),
+        entry("file.add-folder", "Add Folder…", Some("CmdOrCtrl+Shift+O")),
+        entry(
+            "file.open-output",
+            "Open Output Folder",
+            Some("CmdOrCtrl+E"),
+        ),
+        LayoutEntry::Separator,
+        entry("file.clear", "Clear Media Queue", None),
+        LayoutEntry::Separator,
+        entry("file.start", "Start Processing", Some("CmdOrCtrl+R")),
+        // Queue-wide, as the footer's Cancel queue; "Cancel runs for this image"
+        // is the per-image action in the window.
+        entry("file.cancel", "Cancel Queue", Some("CmdOrCtrl+.")),
+    ];
+    #[cfg(not(target_os = "macos"))]
+    {
+        file_items.push(LayoutEntry::Separator);
+        file_items.push(entry(SETTINGS_ID, "Settings…", Some(SETTINGS_ACCELERATOR)));
+    }
+
+    let mut presets_items = vec![
+        entry("preset.quick", "Quick Preset (Fast)", Some("CmdOrCtrl+1")),
+        entry("preset.best", "Best Quality Preset", Some("CmdOrCtrl+2")),
+    ];
+    if !recipes.is_empty() {
+        presets_items.push(LayoutEntry::Separator);
+    }
+    for (index, recipe) in recipes.iter().take(7).enumerate() {
+        presets_items.push(LayoutEntry::Item {
+            id: format!("preset.recipe.{}", recipe.id),
+            label: recipe.name.clone(),
+            accelerator: Some(format!("CmdOrCtrl+{}", index + 3)),
+        });
+    }
+
+    let view_items = vec![
+        entry("view.fit", "Fit to Window", Some("CmdOrCtrl+0")),
+        entry(
+            "view.actual",
+            "Actual Pixels (1:1)",
+            Some("CmdOrCtrl+Alt+0"),
+        ),
+        LayoutEntry::Separator,
+        // Same choices as the preview header's Original | Split | Enhanced switch.
+        entry("view.compare-original", "Show Original", None),
+        entry("view.compare-split", "Show Split Comparison", None),
+        entry("view.compare-enhanced", "Show Enhanced", None),
+        // Older and newer saved result on the Showing side. Arrows, not brackets:
+        // on Swiss German and German Mac keyboards brackets need Option already.
+        entry(
+            "view.previous-result",
+            "Previous Result",
+            Some(PREVIOUS_RESULT_ACCELERATOR),
+        ),
+        entry(
+            "view.next-result",
+            "Next Result",
+            Some(NEXT_RESULT_ACCELERATOR),
+        ),
+        LayoutEntry::Separator,
+        entry("view.models", "Models…", Some("CmdOrCtrl+Shift+M")),
+        LayoutEntry::Separator,
+        entry("view.refresh-hardware", "Refresh Hardware Status", None),
+        // A single ampersand is interpreted as a Windows mnemonic by the native
+        // menu library and disappears on macOS, leaving an awkward double space.
+        entry(
+            "view.performance",
+            "Performance and Diagnostics…",
+            Some("CmdOrCtrl+Shift+D"),
+        ),
+    ];
+
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+    let mut window_items = vec![
+        LayoutEntry::Minimize,
+        LayoutEntry::Maximize,
+        LayoutEntry::Separator,
+        LayoutEntry::CloseWindow,
+    ];
+    // Closing the window only hides it on macOS, so the menu needs a way back to it.
+    #[cfg(target_os = "macos")]
+    {
+        window_items.push(LayoutEntry::Separator);
+        window_items.push(entry("window.main", "LocalSR", None));
+    }
+
+    #[cfg_attr(target_os = "macos", allow(unused_mut))]
+    let mut help_items = vec![
+        entry("help.guide", "LocalSR User Guide", None),
+        entry(REPORT_PROBLEM_ID, "Report a problem…", None),
+        entry("help.github", "LocalSR on GitHub", None),
+    ];
+    #[cfg(not(target_os = "macos"))]
+    {
+        help_items.push(LayoutEntry::Separator);
+        help_items.push(entry(update_items()[0], "Check for Updates…", None));
+    }
+
+    vec![
+        #[cfg(target_os = "macos")]
+        SubmenuLayout {
+            title: "LocalSR",
+            items: vec![
+                LayoutEntry::About,
+                LayoutEntry::Separator,
+                entry(SETTINGS_ID, "Settings…", Some(SETTINGS_ACCELERATOR)),
+                LayoutEntry::Separator,
+                entry(update_items()[0], "Check for Updates…", None),
+                LayoutEntry::Separator,
+                LayoutEntry::Services,
+                LayoutEntry::Separator,
+                LayoutEntry::Hide,
+                LayoutEntry::HideOthers,
+                LayoutEntry::ShowAll,
+                LayoutEntry::Separator,
+                LayoutEntry::Quit,
+            ],
+        },
+        SubmenuLayout {
+            title: "File",
+            items: file_items,
+        },
+        SubmenuLayout {
+            title: "Presets",
+            items: presets_items,
+        },
+        SubmenuLayout {
+            title: "View",
+            items: view_items,
+        },
+        SubmenuLayout {
+            title: "Window",
+            items: window_items,
+        },
+        SubmenuLayout {
+            title: "Help",
+            items: help_items,
+        },
+    ]
+}
+
+fn build_menu<R: Runtime, M: Manager<R>>(
+    manager: &M,
+    recipes: &[Recipe],
+) -> tauri::Result<Menu<R>> {
+    let mut menu_builder = MenuBuilder::new(manager);
+    for submenu in menu_layout(recipes) {
+        let mut builder = SubmenuBuilder::new(manager, submenu.title);
+        for item in submenu.items {
+            builder = match item {
+                LayoutEntry::Item {
+                    id,
+                    label,
+                    accelerator,
+                } => {
+                    let mut item_builder = MenuItemBuilder::with_id(id, label);
+                    if let Some(accel) = accelerator {
+                        item_builder = item_builder.accelerator(accel);
+                    }
+                    let built = item_builder.build(manager)?;
+                    builder.item(&built)
+                }
+                LayoutEntry::Separator => builder.separator(),
+                LayoutEntry::About => builder.about(Some(tauri::menu::AboutMetadata {
+                    credits: Some(
+                        "This software uses libraries from the FFmpeg project under the LGPLv2.1. \
+                         LocalSR does not own FFmpeg. Corresponding source and third-party notices \
+                         are published with each download."
+                            .into(),
+                    ),
+                    ..Default::default()
+                })),
+                LayoutEntry::Services => builder.services(),
+                LayoutEntry::Hide => builder.hide(),
+                LayoutEntry::HideOthers => builder.hide_others(),
+                LayoutEntry::ShowAll => builder.show_all(),
+                LayoutEntry::Quit => builder.quit(),
+                LayoutEntry::Minimize => builder.minimize(),
+                LayoutEntry::Maximize => builder.maximize(),
+                LayoutEntry::CloseWindow => builder.close_window(),
+            };
+        }
+        let built = builder.build()?;
+        menu_builder = menu_builder.item(&built);
+    }
+    menu_builder.build()
+}
+
+/// Rebuild the native menu so the saved recipes stay current. The rebuild runs on the
+/// UI thread, so when several overlap, the last one shows the newest state.
 pub fn reconcile(app: &AppHandle) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         let Some(state) = handle.try_state::<std::sync::Arc<crate::state::AppState>>() else {
             return;
         };
-        let Ok(switches) = crate::state::lock(&state.settings).map(|settings| switches(&settings))
-        else {
-            return;
-        };
         let Ok(recipes) = crate::state::lock(&state.recipes).map(|recipes| recipes.clone()) else {
             return;
         };
-        if let Err(error) = rebuild(&handle, &recipes, switches) {
-            eprintln!("LocalSR: could not refresh the update switches in the menu: {error}");
+        if let Err(error) = rebuild(&handle, &recipes) {
+            eprintln!("LocalSR: could not refresh the menu: {error}");
         }
     });
 }
 
-fn appearance_action(id: &str) -> Option<&'static str> {
-    match id {
-        "view.appearance.dark" => Some("dark"),
-        "view.appearance.light" => Some("light"),
-        "view.appearance.system" => Some("system"),
-        "view.colour-blind" => Some("colour-blind"),
-        _ => None,
-    }
-}
-
 pub fn dispatch(app: &AppHandle, id: &str) {
-    if let Some(action) = appearance_action(id) {
-        let app = app.clone();
-        tauri::async_runtime::spawn_blocking(move || {
-            if let Some(state) = app.try_state::<std::sync::Arc<crate::state::AppState>>() {
-                crate::commands::change_appearance(&state, &app, action);
-            }
-        });
-        return;
-    }
-    // The update switches are the host's own settings: it flips the saved value, so a
-    // window that has not caught up cannot send the opposite.
-    if let Some(name) = switch_setting(id) {
-        // Off the menu's thread: saving writes a file.
-        let app = app.clone();
-        tauri::async_runtime::spawn_blocking(move || {
-            if let Some(state) = app.try_state::<std::sync::Arc<crate::state::AppState>>() {
-                crate::commands::toggle_update_switch(&state, &app, name);
-            }
-        });
+    if crate::tray::handle_menu_event(app, id) {
         return;
     }
     if id == "window.main" {
@@ -415,62 +337,78 @@ pub fn dispatch(app: &AppHandle, id: &str) {
 mod tests {
     use super::*;
 
+    fn collect_menu_ids(submenus: &[SubmenuLayout]) -> Vec<String> {
+        submenus
+            .iter()
+            .flat_map(|sub| sub.items.iter())
+            .filter_map(|entry| match entry {
+                LayoutEntry::Item { id, .. } => Some(id.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[test]
     fn report_problem_has_a_stable_menu_id() {
         assert_eq!(REPORT_PROBLEM_ID, "help.report-problem");
-        assert_eq!(switch_setting(REPORT_PROBLEM_ID), None);
     }
 
     #[test]
-    fn the_update_switches_follow_the_check_wherever_a_build_checks_its_feed() {
-        // Help menu on Windows and Linux, the LocalSR menu on macOS: the same entries.
-        assert_eq!(
-            update_items(true),
-            [
-                "app.updates",
-                "app.check-updates-at-launch",
-                "app.update-count"
-            ]
-        );
-        // A build without an update identity (or a Store build) keeps only the check.
-        assert_eq!(update_items(false), ["app.updates"]);
+    fn update_items_keeps_only_the_update_check() {
+        assert_eq!(update_items(), ["app.updates"]);
     }
 
     #[test]
-    fn each_switch_flips_its_own_saved_setting() {
-        assert_eq!(
-            switch_setting("app.check-updates-at-launch"),
-            Some("check_updates_at_launch")
-        );
-        assert_eq!(
-            switch_setting("app.update-count"),
-            Some("anonymous_update_count")
-        );
-        assert_eq!(switch_setting("help.crash-reports"), Some("crash_reports"));
-        assert_eq!(switch_setting("app.updates"), None);
-        for id in update_items(true) {
-            assert!(*id == "app.updates" || switch_setting(id).is_some());
-        }
-    }
-
-    #[test]
-    fn appearance_actions_and_check_marks_follow_settings() {
-        for choice in ["dark", "light", "system"] {
-            assert_eq!(
-                appearance_action(&format!("view.appearance.{choice}")),
-                Some(choice)
+    fn settings_item_exists_with_shortcut_and_removed_ids_are_absent() {
+        let submenus = menu_layout(&[]);
+        let ids = collect_menu_ids(&submenus);
+        assert!(ids.contains(&SETTINGS_ID.to_owned()));
+        assert_eq!(SETTINGS_ID, "app.settings");
+        assert_eq!(SETTINGS_ACCELERATOR, "CmdOrCtrl+,");
+        for removed in [
+            "file.integrations",
+            "view.appearance.dark",
+            "view.appearance.light",
+            "view.appearance.system",
+            "view.colour-blind",
+            "help.crash-reports",
+            "app.check-updates-at-launch",
+            "app.update-count",
+            "help.add-desktop-menu",
+            "help.remove-desktop-menu",
+        ] {
+            assert!(
+                !ids.contains(&removed.to_owned()),
+                "unexpected id: {removed}"
             );
-            let settings = UiSettings {
-                appearance: choice.into(),
-                colour_blind_palette: true,
-                ..UiSettings::default()
-            };
-            let shown = switches(&settings);
-            assert_eq!(shown.appearance, choice);
-            assert!(shown.colour_blind_palette);
         }
-        assert_eq!(appearance_action("view.colour-blind"), Some("colour-blind"));
-        assert_eq!(appearance_action("view.fit"), None);
+
+        #[cfg(target_os = "macos")]
+        {
+            let app_menu = submenus.iter().find(|s| s.title == "LocalSR").unwrap();
+            assert_eq!(
+                &app_menu.items[..5],
+                &[
+                    LayoutEntry::About,
+                    LayoutEntry::Separator,
+                    entry(SETTINGS_ID, "Settings…", Some(SETTINGS_ACCELERATOR)),
+                    LayoutEntry::Separator,
+                    entry("app.updates", "Check for Updates…", None),
+                ]
+            );
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let file_menu = submenus.iter().find(|s| s.title == "File").unwrap();
+            let tail = &file_menu.items[file_menu.items.len() - 2..];
+            assert_eq!(
+                tail,
+                &[
+                    LayoutEntry::Separator,
+                    entry(SETTINGS_ID, "Settings…", Some(SETTINGS_ACCELERATOR)),
+                ]
+            );
+        }
     }
 
     #[test]
@@ -490,22 +428,5 @@ mod tests {
         // muda 0.20 reads "Left"/"Right" as the arrow keys (accelerator/mod.rs).
         assert_eq!(super::PREVIOUS_RESULT_ACCELERATOR, "CmdOrCtrl+Alt+Left");
         assert_eq!(super::NEXT_RESULT_ACCELERATOR, "CmdOrCtrl+Alt+Right");
-    }
-
-    #[test]
-    fn linux_help_menu_shows_add_for_uninstalled_appimage_and_remove_when_installed() {
-        assert_eq!(super::linux_menu_item(false, false), None);
-        assert_eq!(
-            super::linux_menu_item(true, false),
-            Some(("help.add-desktop-menu", "Add to Applications Menu"))
-        );
-        assert_eq!(
-            super::linux_menu_item(true, true),
-            Some(("help.remove-desktop-menu", "Remove from Applications Menu"))
-        );
-        assert_eq!(
-            super::linux_menu_item(false, true),
-            Some(("help.remove-desktop-menu", "Remove from Applications Menu"))
-        );
     }
 }

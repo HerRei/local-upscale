@@ -6,14 +6,14 @@ fetched on demand.
 
 | Package | Engine | Status | Tested on |
 | --- | --- | --- | --- |
-| macOS · Apple Silicon | MPS | Published (v0.5.2-beta) | MacBook Pro M1 Pro, 16 GB |
-| Windows · x86-64 | CPU | Published (v0.5.2-beta) · not code-signed | Windows 11 virtual machine, 4 cores (v0.2.0-beta); earlier builds: Core i7-8550U |
-| Windows · x86-64 | DirectML (AMD, Intel, NVIDIA GPUs, integrated ones included) | Published (v0.5.2-beta) · **untested** · not code-signed | Earlier test builds: Intel UHD 620, driver 24.20.100.6286 |
+| macOS · Apple Silicon | MPS | Published (v0.6.1-beta) | MacBook Pro M1 Pro, 16 GB |
+| Windows · x86-64 | CPU | Published (v0.6.1-beta) · not code-signed | Windows 11 virtual machine, 4 cores (v0.2.0-beta); earlier builds: Core i7-8550U |
+| Windows · x86-64 | DirectML (AMD, Intel, NVIDIA GPUs, integrated ones included) | Published (v0.6.1-beta) · **untested** · not code-signed | Earlier test builds: Intel UHD 620, driver 24.20.100.6286 |
 | Windows · x86-64 | OpenVINO (Intel GPUs), in the DirectML download | From v0.3.2-beta · **untested** · not code-signed | Not yet run on Windows |
-| Windows · x86-64 | NVIDIA CUDA | Published (v0.5.2-beta) · **untested** · not code-signed | Not yet run on an NVIDIA GPU |
-| Linux · x86-64 | CPU | Published (v0.5.2-beta) | Earlier builds: Fedora 44 |
-| Linux · x86-64 | AMD ROCm | Published (v0.5.2-beta) | Earlier builds: Radeon RX 9060 XT 16 GB, ROCm 7.2 |
-| Linux · x86-64 | NVIDIA CUDA | Published (v0.5.2-beta) · **untested** | Not yet run on an NVIDIA GPU |
+| Windows · x86-64 | NVIDIA CUDA | Published (v0.6.1-beta) · **untested** · not code-signed | Not yet run on an NVIDIA GPU |
+| Linux · x86-64 | CPU | Published (v0.6.1-beta) | Earlier builds: Fedora 44 |
+| Linux · x86-64 | AMD ROCm | Published (v0.6.1-beta) | Earlier builds: Radeon RX 9060 XT 16 GB, ROCm 7.2 |
+| Linux · x86-64 | NVIDIA CUDA | Published (v0.6.1-beta) · **untested** | Not yet run on an NVIDIA GPU |
 | Linux · x86-64 | OpenVINO (Intel GPUs), in the CPU download | From v0.3.2-beta | Intel Arc Graphics (Arrow Lake, Core Ultra 7 270K Plus), Fedora 44, see below |
 | Linux · x86-64 | Intel XPU | Withheld | — |
 
@@ -22,7 +22,7 @@ machine with that package: images, video with audio, cancellation, worker
 recovery, benchmarks and, where applicable, an installed upgrade. It does not
 mean every model and resolution works on every GPU of that family.
 
-The Windows and Linux packages of v0.5.2-beta were built on GitHub-hosted runners
+The Windows and Linux packages of v0.6.1-beta were built on GitHub-hosted runners
 (`.github/workflows/windows-installers.yml` and `linux-appimages.yml`) with the
 allowlisted LGPL media runtime, passed the codec policy and an automated smoke test
 of the installed app, and ship with their corresponding-source bundles. The Windows
@@ -86,6 +86,15 @@ one. The CUDA and ROCm downloads exceed GitHub's 2 GB file limit and come in par
   selected model will use, or says the model is unsupported on the Neural Engine.
   *Apple GPU (Metal)* keeps every model on MPS, and `LOCALSR_DISABLE_COREML=1` does
   the same for the worker and the command line.
+  **Settings → Storage** shows the size of regenerable model caches, can clear them
+  while no job is running, and lets you turn automatic startup cleanup on or off
+  (**Remove unused caches automatically**). At desktop startup when automatic cleanup
+  is on, LocalSR removes entries older than 30 days, then removes the oldest until
+  these caches total at most 5 GiB. Dates
+  use the latest file access or modification time available from the filesystem;
+  filesystems that do not update access times can treat recently used entries as old.
+  The cleanup keeps Core ML verdicts and GPU crash records. The next model run may
+  take longer while its compiled program is rebuilt.
   Measured on the M1 Pro (2026-10-24, 256 px tiles): per tile, SPAN ran 2.0× as
   fast as MPS FP32, Real-ESRGAN anime 6B 3.4×, FBCNN 2.4× and RealPLKSR 1.3×.
   Whole images match the MPS output at 52 to 62 dB for SPAN, Real-ESRGAN and FBCNN
@@ -147,7 +156,17 @@ lets you choose a folder, add a
 desktop shortcut and launch LocalSR when done, and keeps downloaded models and
 settings by default on uninstall. SmartScreen warns because the installers are
 unsigned. On Linux, the AppImage offers once after setup to add LocalSR to your
-applications menu (removable from the Help menu).
+applications menu (removable from **Settings → General → Applications menu**).
+
+From 0.6.0-beta, Ubuntu 22.04 or newer and Debian 12 or newer (x86-64) can
+install the CPU edition as a .deb: `sudo apt install
+./LocalSR-v<version>-Linux-CPU-amd64.deb`, and `sudo apt remove localsr` removes
+it. apt installs the system's WebKitGTK 4.1 and GTK 3 with it. The package adds
+its own applications menu entry, so it never shows the AppImage's menu offer.
+LocalSR reports a new version and opens the download page; install the new .deb
+with apt the same way, because the app never replaces files that apt manages. The
+CUDA and ROCm engines download inside the app (Advanced -> Engine), into
+`${XDG_DATA_HOME:-~/.local/share}/LocalSR`, which `apt remove` keeps.
 
 ## In-app engine switching (Windows and Linux)
 
@@ -164,7 +183,7 @@ to try it again. Microsoft Store builds receive both app and engine updates
 from the Store and do not support in-app engine switching. On direct Windows and
 Linux builds, LocalSR offers the detected GPU engine after the first-launch setup
 screen and keeps engine switching, download, removal and offline file import in
-**Advanced -> Engine -> Change…**.
+**Settings → Performance → Engine → Change…**.
 
 ## Memory guidance
 

@@ -29,13 +29,22 @@ slot's arrow to move slot 3 or 4 into slot 2. Items from different inputs can
 be compared in boxes; the slider requires its first two slots to belong to the
 same input.
 
+Below the comparison, each visible slot lists the available job details: models and
+fixes in order, scale, output dimensions, time, requested device and completion date.
+The device is the requested setting; the engine can use a different route. Older jobs
+may have fewer details. Output dimensions appear when they can be read from the file.
+The strip keeps one height, a title and four lines per slot: a line that does not fit is
+cut, and **More** on the slot's title line (or hovering the slot) opens the full list.
+
 Remove a pick with its **×** button or untick it in Outputs; **Clear** removes
 the output history after confirmation; **Unpick all** removes all picks. Zoom
 and pan are linked across boxes. Use the zoom controls or the mouse wheel, drag
 to pan, and choose **Fit** to reset zoom. For images, at fit size Compare
 uses previews; when zoom exceeds a preview's available detail, LocalSR loads
 the visible region from the saved file at full resolution. Loading and file
-errors are shown on the affected item.
+errors are shown on the affected item. The swatch at the end of the zoom bar (or
+**Settings > Appearance > Viewer background**) switches the background behind the
+picture between checkerboard, black, neutral grey and white.
 
 ## Video playback
 
@@ -45,8 +54,10 @@ with letterboxing when aspects differ, and zoom and pan stay linked.
 
 One transport below the players controls every ready side: **Space** plays or
 pauses, the timeline seeks by time, and the speed button cycles playback rates.
-Audio comes only from slot 1; **Mute** silences it. Left/Right steps by one frame
-of the highest frame rate among the picks (the divider keeps its arrow keys).
+One side sounds: **Audio** offers each slot by its number and **Off**; slot 1 sounds
+at first. The frame buttons beside Play, and Left/Right, step by one frame of the
+highest frame rate among the picks (the divider keeps its arrow keys); every side
+then shows the frame that holds that moment.
 The timeline spans the longest video; shorter videos hold their last frame.
 If a player buffers, every player waits and resumes together.
 
@@ -55,6 +66,22 @@ Each side shows loading or an unavailable message independently. Conversion wait
 until a running video job finishes, then retries. A compatible copy may be SDR and at
 most 1280 pixels; source and saved output are unchanged. Closing Compare or
 changing picks releases the players.
+
+## Unfinished results
+
+A job that was stopped with **Keep finished part** is listed like any other result and
+marked **Unfinished**, with what it kept: `0:05 of 0:12` for a video, frames when that is
+under a second, `12 of 40 tiles` for a photo.
+
+An unfinished photo is a full-size picture: the finished tiles are enhanced and the rest
+is left as in the original. A thin dashed line shows where the finished part ends. Point
+at the Unfinished mark (the chip in Preview, the tag in a slot's details in Compare), or
+focus it with the keyboard, to dim the rest and outline every finished tile; a click keeps
+them shown.
+
+With an unfinished video in Compare, playback and the timeline end where its kept part
+ends, so every frame shown is compared with its own source frame. Under a second the
+transport counts frames instead of time.
 
 ## Preview and result history
 

@@ -90,6 +90,14 @@ own terms; this file is a distribution notice, not a replacement for their licen
   OpenCV Zoo with an exact size and SHA-256 rather than bundled in the application.
 - **SeedVR2 video integration** — vendored adapter code is covered by the included
   `src/localsr/video_models/seedvr2/NOTICE.md` and `vendor/LICENSE`; model bundles remain external.
+- **FlashVSR video integration (Labs)**: an MLX port of the FlashVSR v1.1 Tiny pipeline
+  (Apache-2.0, OpenImagingLab/FlashVSR, built on DiffSynth-Studio and Wan2.1, both Apache-2.0),
+  with the TCDecoder from TAEHV (MIT, copyright 2025 Ollin Boer Bohan) and attention code
+  adapted from MLX (MIT, copyright 2023 Apple Inc.). The license texts and the list of changes
+  are in `src/localsr/video_models/flashvsr/NOTICE.md`. The FlashVSR v1.1 weights (Apache-2.0)
+  are an optional, checksum-pinned download and are not included in installers.
+- **MLX** (Apple silicon packages only): the `mlx` and `mlx-metal` wheels, MIT, copyright 2023
+  Apple Inc.; they run FlashVSR on the GPU.
 - **RIFE frame interpolation** — the IFNet network code from Practical-RIFE (MIT, copyright
   2021 hzwer), with the license text in `src/localsr/video_models/rife/NOTICE.md`. The RIFE 4.26
   checkpoint (MIT, per the Practical-RIFE README) is an optional, checksum-pinned download and is
@@ -99,6 +107,25 @@ own terms; this file is a distribution notice, not a replacement for their licen
   Inc. copyright), with the license text and modifications listed in
   `src/localsr/image_models/ddcolor/NOTICE.md`. The DDColor checkpoint (`ddcolor_modelscope`, Apache-2.0) is an optional, checksum-pinned download and is not included
   in installers. Source: https://github.com/piddnad/DDColor.
+- **NERVE architecture**: the NERVE network by Philip Hofmann (`Phhofm/traiNNer-redux` at
+  `9ecb9adf` and `huggingface.co/Phips/NERVE`, Apache-2.0) and its Spandrel loader from
+  `chaiNNer-org/spandrel#333` (`Phhofm/spandrel`, MIT, Copyright (c) 2024 The ChaiNNer
+  Organization) at commit `3429b70e`. Both licence texts and LocalSR's modifications are in
+  `src/localsr/image_models/nerve/NOTICE.md`. No NERVE weights are included; users load their
+  own checkpoints.
+- **HEART architecture**: the HEART network by Philip Hofmann (`Phhofm/traiNNer-redux` at
+  `cb3f6f25` and `huggingface.co/Phips/HEART`, Apache-2.0, incorporating `XPixelGroup/HAT` under
+  Apache-2.0, `2minkyulee/i-LN` under Apache-2.0, `Rift73/DRFT` under MIT, and `dslisleedh/SST`
+  under MIT) and its Spandrel loader from `chaiNNer-org/spandrel#334` (`Phhofm/spandrel`, MIT,
+  Copyright (c) 2024 The ChaiNNer Organization) at commit `2778b9f8`. All licence texts and
+  LocalSR's modifications are in `src/localsr/image_models/heart/NOTICE.md`. No HEART weights
+  are included; users load their own checkpoints.
+- **PULSE architecture and LocalSR ×4 models**: `pulse_arch.py` and the optional
+  `4xLocalSRPhoto_PULSE-64x8` / `4xLocalSRPhoto_PULSE-96x12` weights (`HerRei/localsr-models` release `v1`, CC BY 4.0; attribution: "LocalSR models by Hermes Reisner (https://github.com/HerRei/localsr-models), CC BY 4.0")
+  follow Philip Hofmann's PULSE layout specification (`huggingface.co/Phips/PULSE`, MIT) as an
+  independent reimplementation trained on `Phips/lucid-cc0-v2-hc` (CC0 photos from pxhere).
+  Attribution and MIT text are in `src/localsr/image_models/pulse/NOTICE.md`; weights are optional
+  checksum-pinned downloads and are not included in installers.
 - **Curated checkpoints** — each catalog entry shows its author, source, and license before
   download. CC-BY checkpoints require attribution. The official Real-ESRGAN ×2 project/asset is
   recorded as BSD-3-Clause and the official FBCNN project/model-zoo asset as Apache-2.0. The HAT-S

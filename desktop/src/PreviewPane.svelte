@@ -7,6 +7,10 @@
   import MediaIllustration from './MediaIllustration.svelte';
   import PreviewActivity from './PreviewActivity.svelte';
   import SplitComparison from './SplitComparison.svelte';
+  import UnfinishedTiles from './UnfinishedTiles.svelte';
+  import BackgroundSwitch from './BackgroundSwitch.svelte';
+  import type { ViewerBackground } from './lib/viewerBackground';
+  import type { PaneUnfinished } from './lib/unfinished';
   import type { ComparisonSide } from './lib/results';
   import * as api from './lib/api';
   import { comparisonFromKey, comparisonFromPointer } from './lib/comparison';
@@ -51,13 +55,22 @@
   /** The result a pair is still waiting for: the picture stays as it was, no divider or view options. */
   export let loadingLabel = '';
   export let singleFrame: { width: number; height: number } | null = null;
+  /** A side shows a stopped job's kept part: its mark and, for a photo, its finished tiles. */
+  export let showingUnfinished: PaneUnfinished | null = null;
+  export let referenceUnfinished: PaneUnfinished | null = null;
+  /** Frame rate of the video shown. */
+  export let videoFps = 0;
   /** Live tiles of a running job; off once a saved result was chosen for this image. */
   export let showLiveTiles = true;
+  /** Full-image result from an earlier stage (for example colour before upscaling). */
+  export let stagePreview = '';
   /** Why a pair is shown as a single result, for example a different framing. */
   export let comparisonNote = '';
   export let completedVideoOutput: string;
   export let videoResultId = '';
   export let compactHidden = false;
+  export let viewerBackground: ViewerBackground = 'checker';
+  export let setViewerBackground: (value: ViewerBackground) => void = () => {};
   // The status bar reports the job; the pane only says which live frame it shows.
   export let liveFrame = -1;
   $: liveFrame = progressiveFrame;
@@ -163,6 +176,24 @@
     ? { src: referencePreview, label: referenceLabel, state: referenceState, error: referenceError }
     : undefined;
   $: dividerPercent = Math.round(100 - comparison.enhancedPercent);
+  // A mark shows while its side does. Hovering it, or focusing it with the keyboard, shows
+  // that side's finished tiles; a click keeps them shown for as long as the same result
+  // holds the side. Between two results each mark sits over its own side, like the labels.
+  type MarkSide = 'reference' | 'showing';
+  $: resultShown = Boolean((resultPreview && !loading) || videoComparison?.enhanced_url);
+  $: marks = (
+    [
+      ['reference', referenceIsResult && shownView !== 'enhanced' ? referenceUnfinished : null],
+      ['showing', shownView !== 'original' ? showingUnfinished : null],
+    ] as [MarkSide, PaneUnfinished | null][]
+  ).flatMap(([side, mark]) => (mark && resultShown && !holdingOriginal ? [{ side, mark }] : []));
+  let tilesPinned: Record<MarkSide, string> = { reference: '', showing: '' };
+  let tilesHovered: MarkSide | '' = '';
+  let tilesFocused: MarkSide | '' = '';
+  $: tilesLit = (side: MarkSide, mark: PaneUnfinished) =>
+    tilesPinned[side] === mark.id || tilesHovered === side || tilesFocused === side;
+  $: if (tilesHovered && !marks.some((entry) => entry.side === tilesHovered)) tilesHovered = '';
+  $: if (tilesFocused && !marks.some((entry) => entry.side === tilesFocused)) tilesFocused = '';
   $: liveTilesShown = progressiveVisible && !resultPreview && showLiveTiles && !pairShown;
   $: frameKey = singleFrame ? `${singleFrame.width}x${singleFrame.height}` : '';
   let laidOutFrame = '';
@@ -180,6 +211,10 @@
   let progressiveJobId = '';
   let progressiveFrame = -1;
   let progressiveStage = 0;
+  let stageBasePreview = '';
+  let stageBaseStage = -1;
+  let stageTilesDrawn = 0;
+  let progressiveGridTile: OutputTile | null = null;
   let videoSourceFrame = -1;
   let videoSourcePreview = '';
   let progressiveOutputWidth = 0;
@@ -200,7 +235,12 @@
   let disposed = false;
 
   $: sourcePreview = selectedMedia?.preview_data_url ?? '';
-  $: displayedSourcePreview = (processing && videoSourcePreview) || sourcePreview;
+  $: activeStagePreview = stageBasePreview || stagePreview;
+  $: displayedSourcePreview =
+    (processing &&
+      (videoSourcePreview ||
+        (showLiveTiles && !resultPreview && !pairShown ? activeStagePreview : ''))) ||
+    sourcePreview;
   $: deferredPreview = Boolean(
     videoEngineBusy &&
     selectedMedia &&
@@ -322,11 +362,17 @@
     if (!videoEngineBusy) void repairSelectedPreview();
   }
 
-  export function resetProgressivePreview(jobId = '', frame = -1): void {
+  export function resetProgressivePreview(jobId = '', frame = -1, preserveStageBase = false): void {
     if (jobId !== progressiveJobId || frame !== videoSourceFrame) {
       videoSourceFrame = -1;
       videoSourcePreview = '';
     }
+    if (!preserveStageBase) {
+      stageBasePreview = '';
+      stageBaseStage = -1;
+    }
+    stageTilesDrawn = 0;
+    progressiveGridTile = null;
     progressiveFrame = frame;
     progressiveStage = 0;
     progressiveGeneration += 1;
@@ -342,6 +388,17 @@
     if (progressiveCanvas && context) {
       context.clearRect(0, 0, progressiveCanvas.width, progressiveCanvas.height);
     }
+  }
+
+  function isFullImageTile(tile: OutputTile): boolean {
+    return (
+      tile.image_width > 0 &&
+      tile.image_height > 0 &&
+      tile.output_x === 0 &&
+      tile.output_y === 0 &&
+      tile.output_width === tile.image_width &&
+      tile.output_height === tile.image_height
+    );
   }
 
   export function queueVideoSource(message: WorkerEnvelope, activeJobId: string): void {
@@ -370,9 +427,43 @@
     const phase = String(data.phase ?? '');
     const frame = Number(data.frame_index ?? -1);
     const stage = numeric(data.stage_index);
-    if (jobId === progressiveJobId && stage < progressiveStage) return;
+    const tile = tileFromData(data);
+    const encoded = typeof data.jpeg_base64 === 'string' ? data.jpeg_base64 : '';
+    const fullImage = phase === 'completed' && Boolean(encoded) && isFullImageTile(tile);
+    if (jobId === progressiveJobId && stage < progressiveStage) {
+      if (fullImage && stage > stageBaseStage && frame <= progressiveFrame) {
+        stageBasePreview = `data:image/jpeg;base64,${encoded}`;
+        stageBaseStage = stage;
+        if (stageTilesDrawn === 0 && progressiveOutputWidth > 0) {
+          progressiveOutputWidth = 0;
+          progressiveOutputHeight = 0;
+          const generation = progressiveGeneration;
+          progressivePendingCount += 1;
+          progressiveWork = progressiveWork
+            .then(async () => {
+              await ensureProgressiveCanvas(
+                progressiveGridTile ?? tile,
+                jobId,
+                generation,
+                Boolean(data.processing_stage),
+              );
+            })
+            .catch((error) => console.error('Could not update stage preview', error))
+            .finally(() => {
+              if (generation === progressiveGeneration) {
+                progressivePendingCount = Math.max(0, progressivePendingCount - 1);
+              }
+            });
+        }
+      }
+      return;
+    }
     if (stage > progressiveStage) {
-      resetProgressivePreview(jobId, frame);
+      resetProgressivePreview(
+        jobId,
+        frame,
+        jobId === progressiveJobId && frame === progressiveFrame,
+      );
       progressiveStage = stage;
     }
     if (frame >= 0 && frame < progressiveFrame) return;
@@ -383,12 +474,16 @@
     if (!progressiveJobId) progressiveJobId = jobId;
     if (jobId !== progressiveJobId) return;
 
+    if (fullImage && stage >= stageBaseStage) {
+      stageBasePreview = `data:image/jpeg;base64,${encoded}`;
+      stageBaseStage = stage;
+    }
+
     const now = typeof performance === 'undefined' ? Date.now() : performance.now();
     if (phase === 'started') {
       // Geometry is cheap; never sample it together with JPEG decoding. Fast
       // restoration models can finish several tiles within one display frame.
       // Keep the newest model position even while older JPEGs are decoding.
-      const tile = tileFromData(data);
       const percentage = tilePercentages(
         tile,
         boundedPreviewSize({ width: tile.image_width, height: tile.image_height }),
@@ -406,7 +501,7 @@
       // Completion metadata has no pixels. It must not consume the display
       // throttle before the asynchronous JPEG arrives a few milliseconds later.
       if (!data.jpeg_base64) {
-        const percentage = tilePercentages(tileFromData(data), progressiveCanvas);
+        const percentage = tilePercentages(tile, progressiveCanvas);
         if (
           percentage &&
           percentage.x === activeTileX &&
@@ -423,8 +518,9 @@
       // while preserving input responsiveness; completion always loads the
       // authoritative full output image.
       if (
-        (lastProgressivePaintAt > 0 && now - lastProgressivePaintAt < 75) ||
-        progressivePendingCount >= 3
+        !fullImage &&
+        ((lastProgressivePaintAt > 0 && now - lastProgressivePaintAt < 75) ||
+          progressivePendingCount >= 3)
       ) {
         return;
       }
@@ -503,6 +599,7 @@
       const image = await loadHtmlImage(`data:image/jpeg;base64,${encoded}`);
       if (generation !== progressiveGeneration || jobId !== progressiveJobId) return;
       context.drawImage(image, destination.x, destination.y, destination.width, destination.height);
+      stageTilesDrawn += 1;
     }
     // JPEG encoding is asynchronous: a previous tile can arrive after the
     // next tile started. Keep that newer model tile's outline visible.
@@ -550,10 +647,12 @@
       progressiveVisible = true;
       return true;
     }
+    progressiveGridTile = tile;
+    const stageBase = stageBasePreview || stagePreview;
     context.fillStyle = themeColor('--preview-canvas-background');
     context.fillRect(0, 0, size.width, size.height);
     try {
-      const source = await loadHtmlImage(sourcePreview);
+      const source = await loadHtmlImage(stageBase || sourcePreview);
       if (generation !== progressiveGeneration || jobId !== progressiveJobId) return false;
       if (source) context.drawImage(source, 0, 0, size.width, size.height);
     } catch {
@@ -561,8 +660,9 @@
       // preview is being repaired independently.
     }
     // Image restoration is 1×, while upscalers can be 2×/4×. Paint the
-    // pending grid from the worker's actual output bounds for both tasks.
-    if (!overlappingRegions) paintTileGrid(context, tile, size, true);
+    // pending grid from the worker's actual output bounds for both tasks,
+    // unless an earlier stage already established a full-image base preview.
+    if (!overlappingRegions && !stageBase) paintTileGrid(context, tile, size, true);
     progressiveOutputWidth = tile.image_width;
     progressiveOutputHeight = tile.image_height;
     progressiveVisible = true;
@@ -950,8 +1050,13 @@
             sourceWidth={selectedMedia.width}
             sourceHeight={selectedMedia.height}
             enhancedSrc={videoComparison.enhanced_url}
+            fps={videoFps}
+            keptFrames={videoComparison.enhanced_url ? (showingUnfinished?.frames ?? 0) : 0}
+            keptSeconds={videoComparison.enhanced_url ? (showingUnfinished?.seconds ?? 0) : 0}
             bind:compare
             view={shownView}
+            {viewerBackground}
+            {setViewerBackground}
             on:compatibilityneeded={compatiblePlayback}
           />
         {/key}
@@ -1003,8 +1108,24 @@
         {#if loading}<div class="pair-loading">
             <PreviewActivity media={selectedMedia} loading={loadingLabel} />
           </div>{/if}
-        {#if selectedMedia?.kind === 'video'}<span class="labs-chip">Video · processed locally</span
-          >{/if}
+        {#if resultPreview && !loading}
+          {#if showingUnfinished?.tiles}<UnfinishedTiles
+              {...showingUnfinished.tiles}
+              fit={{ width: stageWidth, height: stageHeight }}
+              {zoom}
+              pan={{ x: panX, y: panY }}
+              clipLeft={resultClip}
+              lit={tilesLit('showing', showingUnfinished)}
+            />{/if}
+          {#if referenceUnfinished?.tiles && referenceIsResult && !holdingOriginal}<UnfinishedTiles
+              {...referenceUnfinished.tiles}
+              fit={{ width: stageWidth, height: stageHeight }}
+              {zoom}
+              pan={{ x: panX, y: panY }}
+              clipRight={100 - resultClip}
+              lit={tilesLit('reference', referenceUnfinished)}
+            />{/if}
+        {/if}
         {#if selectedMedia?.kind !== 'video'}<div
             class="zoom-hud"
             class:shown={pointerOverCanvas}
@@ -1032,6 +1153,7 @@
               title="One source pixel per screen pixel"
               on:click={() => setZoom(actualPixelZoom)}>1:1</button
             >
+            <BackgroundSwitch value={viewerBackground} set={setViewerBackground} />
           </div>{/if}
       {:else}
         {#if deferredPreview}
@@ -1063,6 +1185,52 @@
           </div>
         {/if}
       {/if}
+      {#each marks as { side, mark } (side)}
+        {#if mark.tiles && !videoComparison}
+          <button
+            type="button"
+            class="unfinished-chip"
+            class:right={side === 'showing' && referenceIsResult}
+            class:paired={referenceIsResult}
+            aria-pressed={tilesPinned[side] === mark.id}
+            aria-label={`${mark.label}. Show the finished tiles`}
+            title="Show the finished tiles · click to keep them shown"
+            on:pointerdown|stopPropagation
+            on:pointerenter={() => (tilesHovered = side)}
+            on:pointerleave={() => (tilesHovered = '')}
+            on:focus={(event) =>
+              (tilesFocused = event.currentTarget.matches(':focus-visible') ? side : '')}
+            on:blur={() => (tilesFocused = '')}
+            on:click={() =>
+              (tilesPinned = {
+                ...tilesPinned,
+                [side]: tilesPinned[side] === mark.id ? '' : mark.id,
+              })}
+          >
+            <svg viewBox="0 0 11 11" aria-hidden="true"
+              ><rect x="0.5" y="0.5" width="4" height="4" /><rect
+                x="6.5"
+                y="0.5"
+                width="4"
+                height="4"
+              /><rect x="0.5" y="6.5" width="4" height="4" /><rect
+                class="open"
+                x="6.5"
+                y="6.5"
+                width="4"
+                height="4"
+              /></svg
+            >{mark.label}
+          </button>
+        {:else}
+          <span
+            class="unfinished-chip"
+            class:right={side === 'showing' && referenceIsResult}
+            class:paired={referenceIsResult}
+            role="status">{mark.label}</span
+          >
+        {/if}
+      {/each}
       {#if videoPreparation}
         <div class="playback-preparation" role="status" on:pointerdown|stopPropagation>
           <span class="playback-spinner" aria-hidden="true"></span>
@@ -1101,6 +1269,54 @@
     display: grid;
     place-items: center;
     pointer-events: none;
+  }
+  /* Where the Original chip sits; the two never show together. Between two results the
+     Showing side's mark moves to the right corner, over its side. */
+  .unfinished-chip {
+    position: absolute;
+    z-index: 6;
+    left: 14px;
+    top: 14px;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    max-width: calc(100% - 28px);
+    padding: 4px 8px;
+    overflow: hidden;
+    border: 1px solid var(--chip-border);
+    border-radius: var(--radius);
+    background: var(--chip-bg);
+    color: var(--chip-text);
+    font-size: calc(11px * var(--ui-scale));
+    line-height: 1.3;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .unfinished-chip.right {
+    left: auto;
+    right: 14px;
+  }
+  .unfinished-chip.paired {
+    max-width: calc(50% - 20px);
+  }
+  button.unfinished-chip {
+    cursor: pointer;
+  }
+  button.unfinished-chip:hover,
+  button.unfinished-chip[aria-pressed='true'] {
+    border-color: var(--accent-line);
+    color: var(--text);
+  }
+  .unfinished-chip svg {
+    flex: none;
+    width: 11px;
+    height: 11px;
+    fill: currentColor;
+    stroke: currentColor;
+    stroke-width: 1;
+  }
+  .unfinished-chip svg .open {
+    fill: none;
   }
   .playback-preparation {
     position: absolute;

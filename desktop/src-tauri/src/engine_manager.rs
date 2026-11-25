@@ -33,7 +33,7 @@ use crate::{
         self, acquire, active_engine_id, channel, engine_executable_path,
         engine_meta_valid_for_host, invalid, key, read_engine_meta, require_space, safe_file_name,
         safe_id, signature, validate_contract_for_backend, verify_file, verify_statement_for_entry,
-        write_engine_meta, DownloadFile, EngineMeta, EngineUpdate, ReleaseContract, UpdateConfig,
+        DownloadFile, EngineMeta, EngineUpdate, ReleaseContract, UpdateConfig,
     },
     worker,
 };
@@ -226,8 +226,9 @@ pub(crate) async fn fetch_feed_json(
 }
 
 /// Extract and signature-verify all engine packages of the feed for `os`/`arch` and
-/// `config.kind`. Unlike app updates, entries for any backend of this OS/arch are listed,
-/// and `version == installed_version` is accepted alongside newer versions.
+/// `config.kind` (`native` for the .deb, which has no entries of its own). Unlike app
+/// updates, entries for any backend of this OS/arch are listed, and
+/// `version == installed_version` is accepted alongside newer versions.
 pub(crate) fn parse_feed_engines_for(
     raw_json: &serde_json::Value,
     config: &UpdateConfig,
@@ -236,6 +237,7 @@ pub(crate) fn parse_feed_engines_for(
     os: &str,
     arch: &str,
 ) -> AppResult<Vec<VerifiedCatalogEntry>> {
+    let config = &config.feed_config();
     let feed_version = raw_json["version"]
         .as_str()
         .ok_or_else(|| invalid("Update feed is missing a release version"))?;
@@ -357,14 +359,13 @@ pub(crate) fn list_installed_engines_for(
     let bundled_backend = effective_bundled_backend(config);
     let mut installed = Vec::new();
     let engines_root = paths.next_root.join("engines");
-    if let Ok(entries) = fs::read_dir(&engines_root) {
+    if let Ok(entries) =
+        updates::real_engine_directory(&engines_root).and_then(|()| fs::read_dir(&engines_root))
+    {
         let mut dirs: Vec<_> = entries.flatten().collect();
         dirs.sort_by_key(|entry| entry.file_name());
         for entry in dirs {
-            let Ok(meta_fs) = fs::symlink_metadata(entry.path()) else {
-                continue;
-            };
-            if meta_fs.file_type().is_symlink() || !meta_fs.file_type().is_dir() {
+            if updates::real_engine_directory(&entry.path()).is_err() {
                 continue;
             }
             let id = entry.file_name().to_string_lossy().into_owned();
@@ -377,6 +378,7 @@ pub(crate) fn list_installed_engines_for(
                 && meta.as_ref().is_some_and(|meta| {
                     engine_meta_valid_for_host(meta, os, arch)
                         && meta.id == id
+                        && updates::engine_update_matches_host(&entry.path())
                         && updates::quick_verify_engine_files(&paths.next_root, &id, meta)
                 });
             let backend = meta
@@ -966,6 +968,7 @@ pub(crate) async fn install_engine_for(
         let arch_owned = arch.to_string();
         let version_owned = entry.version;
         tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
+            recover_before_staging(&state_for_commit, &engine_id_for_install)?;
             let staged = updates::stage_verified_engine(
                 &next_root,
                 &engine_id_for_install,
@@ -1067,6 +1070,7 @@ pub(crate) fn use_engine_for(
     let _busy = acquire(&state.engines.busy)?;
     let _scheduler = lock(&state.scheduler)?;
     ensure_no_running_jobs(state)?;
+    let engine_files = lock(&state.worker.engine_files)?;
 
     let bundled_path = state
         .bundled_engine_path
@@ -1096,6 +1100,7 @@ pub(crate) fn use_engine_for(
     }
 
     lock(&state.worker.failed_engines)?.remove(&chosen.id);
+    drop(engine_files);
     if backend != "cpu" {
         state.choose_device.store(true, Ordering::SeqCst);
     }
@@ -1170,20 +1175,23 @@ pub(crate) fn remove_engine_in(
             "Cannot remove the currently active engine. Switch to another engine first.",
         ));
     }
-    let engine_root = state.paths.next_root.join("engines").join(id);
-    let meta = fs::symlink_metadata(&engine_root)
-        .map_err(|_| invalid("The selected engine is not installed"))?;
-    if meta.file_type().is_symlink() || !meta.file_type().is_dir() {
-        return Err(invalid("The selected engine path is invalid"));
+    let _engine_files = lock(&state.worker.engine_files)?;
+    let engine_root = updates::engine_install_root(&state.paths.next_root, id)?;
+    let backup = updates::engine_backup_path(&state.paths.next_root.join("engines"), id);
+    let has_backup = updates::engine_directory_exists(&backup)?;
+    updates::check_engine_tree_is_real(&engine_root)?;
+    if has_backup {
+        updates::check_engine_tree_is_real(&backup)?;
+        fs::remove_dir_all(&backup)?;
     }
     fs::remove_dir_all(&engine_root)?;
-    let cache = state
-        .paths
-        .next_root
-        .join("updates")
-        .join("engine-cache")
-        .join(id);
-    if cache.exists() {
+    let updates_root = state.paths.next_root.join("updates");
+    let cache_root = updates_root.join("engine-cache");
+    let cache = cache_root.join(id);
+    if updates::real_engine_directory(&updates_root).is_ok()
+        && updates::real_engine_directory(&cache_root).is_ok()
+        && updates::check_engine_tree_is_real(&cache).is_ok()
+    {
         let _ = fs::remove_dir_all(cache);
     }
     if let Some(app) = app {
@@ -1193,9 +1201,16 @@ pub(crate) fn remove_engine_in(
 }
 
 #[tauri::command]
-pub fn remove_engine(state: State<'_, Arc<AppState>>, app: AppHandle, id: String) -> AppResult<()> {
+pub async fn remove_engine(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    id: String,
+) -> AppResult<()> {
+    let state = state.inner().clone();
     let config = UpdateConfig::load();
-    remove_engine_in(&state, Some(&app), &config, &id)
+    tauri::async_runtime::spawn_blocking(move || remove_engine_in(&state, Some(&app), &config, &id))
+        .await
+        .map_err(|error| invalid(error.to_string()))?
 }
 
 pub(crate) fn verify_engine_for(
@@ -1225,6 +1240,9 @@ pub(crate) fn verify_engine_for(
             )
             .as_deref()
                 == Some(id));
+    // A worker start can restore a backup over this engine; read, check and mark
+    // one copy. Lock order: scheduler, then engine_files, as in use_engine_for.
+    let engine_files = lock(&state.worker.engine_files)?;
     let verification = match read_engine_meta(&state.paths.next_root, id) {
         Some(meta) if engine_meta_valid_for_host(&meta, os, arch) && meta.id == id => {
             updates::full_verify_engine_files(&state.paths.next_root, id, &meta)
@@ -1233,32 +1251,68 @@ pub(crate) fn verify_engine_for(
             "Engine verification metadata is missing or invalid",
         )),
     };
-    if let Err(error) = verification {
+    let Err(error) = verification else {
+        return Ok(());
+    };
+    // Like a worker start, fall back to a verified previous copy of this id. A
+    // worker started from the folder stops first: Windows locks it.
+    let engines = state.paths.next_root.join("engines");
+    let mut stopped = false;
+    let mut restored = false;
+    if updates::engine_directory_exists(&updates::engine_backup_path(&engines, id))? {
+        stopped = worker::last_run_engine_id(state).as_deref() == Some(id);
+        if stopped {
+            worker::stop_for_engine_switch(state)?;
+        }
+        restored = updates::restore_verified_engine_backup(&state.paths.next_root, id)
+            .unwrap_or_else(|restore| {
+                eprintln!("LocalSR could not restore the previous engine copy: {restore}");
+                false
+            });
+    }
+    if !restored {
         updates::mark_engine_needs_reinstall(&state.paths.next_root, id);
-        if was_active {
-            updates::deactivate_active_engine(&state.paths)?;
-            lock(&state.worker.failed_engines)?.insert(id.to_owned());
-            if let Some(app) = app {
-                if let Ok(mut runtime) = state.runtime.lock() {
-                    runtime.status_title = "Switched to bundled engine".into();
-                    runtime.status_detail =
-                        "The installed engine failed verification; using the bundled engine instead."
-                            .into();
-                }
-                let _ = worker::restart_for_engine_switch(state, app);
-            } else {
-                state
-                    .worker
-                    .use_bundled_fallback
-                    .store(true, Ordering::SeqCst);
+    }
+    let fall_back = !restored && was_active;
+    if fall_back {
+        // Report, but carry on: a worker stopped above must be started again.
+        if let Err(deactivate) = updates::deactivate_active_engine(&state.paths) {
+            eprintln!("LocalSR could not deactivate the failed engine: {deactivate}");
+        }
+        if let Ok(mut failed) = state.worker.failed_engines.lock() {
+            failed.insert(id.to_owned());
+        }
+    }
+    // Starting the worker takes engine_files itself.
+    drop(engine_files);
+    if stopped {
+        state.worker.shutting_down.store(false, Ordering::SeqCst);
+    }
+    if let Some(app) = app {
+        if fall_back {
+            if let Ok(mut runtime) = state.runtime.lock() {
+                runtime.status_title = "Switched to bundled engine".into();
+                runtime.status_detail =
+                    "The installed engine failed verification; using the bundled engine instead."
+                        .into();
             }
         }
-        if let Some(app) = app {
-            emit_state_changed(app);
+        if fall_back || stopped {
+            let _ = worker::restart_for_engine_switch(state, app);
         }
-        return Err(error);
+        emit_state_changed(app);
+    } else if fall_back {
+        state
+            .worker
+            .use_bundled_fallback
+            .store(true, Ordering::SeqCst);
     }
-    Ok(())
+    if restored {
+        return Err(invalid(format!(
+            "{error}. The previous working copy of this engine was restored."
+        )));
+    }
+    Err(error)
 }
 
 #[tauri::command]
@@ -1409,12 +1463,44 @@ fn verify_imported_files(
 }
 
 pub(crate) fn recover_interrupted_reimport(next_root: &Path, id: &str) -> AppResult<()> {
+    recover_engine_copy(next_root, id).map(|_| ())
+}
+
+/// Finish an interrupted install of `id`. Returns whether recovery itself
+/// hash-checked the copy that is now installed, so a start need not hash it again.
+pub(crate) fn recover_engine_copy(next_root: &Path, id: &str) -> AppResult<bool> {
+    recover_engine_copy_for(next_root, id, std::env::consts::OS, std::env::consts::ARCH)
+}
+
+pub(crate) fn recover_engine_copy_for(
+    next_root: &Path,
+    id: &str,
+    os: &str,
+    arch: &str,
+) -> AppResult<bool> {
     if !safe_id(id) {
-        return Ok(());
+        return Ok(false);
     }
-    let root = next_root.join("engines").join(id);
-    if !root.is_dir() {
-        return Ok(());
+    let engines = next_root.join("engines");
+    if !updates::engine_directory_exists(&engines)? {
+        return Ok(false);
+    }
+    let root = engines.join(id);
+    let root_exists = updates::engine_directory_exists(&root)?;
+    if updates::engine_directory_exists(&updates::engine_backup_path(&engines, id))? {
+        let ready = read_engine_meta(next_root, id).is_some_and(|meta| {
+            meta.id == id
+                && engine_meta_valid_for_host(&meta, os, arch)
+                && updates::engine_update_matches_host(&root)
+                && updates::quick_verify_engine_files(next_root, id, &meta)
+        });
+        if !ready {
+            return updates::restore_verified_engine_backup_for(next_root, id, os, arch);
+        }
+        return Ok(false);
+    }
+    if !root_exists {
+        return Ok(false);
     }
     let mut backups = Vec::new();
     for entry in fs::read_dir(&root)? {
@@ -1424,31 +1510,142 @@ pub(crate) fn recover_interrupted_reimport(next_root: &Path, id: &str) -> AppRes
         if name
             .strip_prefix(".backup-")
             .is_some_and(|suffix| uuid::Uuid::parse_str(suffix).is_ok())
-            && entry.file_type()?.is_dir()
         {
-            backups.push(entry.path());
+            let backup = entry.path();
+            updates::check_engine_tree_is_real(&backup)?;
+            backups.push(backup);
         }
     }
     let engine = root.join("engine");
-    // A crash can leave metadata for either side of the swap. Neither copy may
-    // be trusted until a verified reinstall has written new metadata.
-    if !backups.is_empty() {
+    if backups.is_empty() {
+        return Ok(false);
+    }
+    // Older versions backed up only the payload. Use its old metadata if it
+    // still verifies the copy that will occupy the installed path.
+    let verifies = |directory: &Path| {
+        read_engine_meta(next_root, id).is_some_and(|meta| {
+            meta.id == id
+                && engine_meta_valid_for_host(&meta, os, arch)
+                && updates::check_engine_directory_files(directory, &meta, true)
+        })
+    };
+    let existing = updates::engine_directory_exists(&engine)?;
+    let engine_verified = existing && verifies(&engine);
+    let restore = if existing {
+        !engine_verified && backups.len() == 1 && verifies(&backups[0])
+    } else {
+        backups.len() == 1
+    };
+    let verified = match (restore, existing) {
+        (true, true) => true,
+        (true, false) => verifies(&backups[0]),
+        (false, _) => engine_verified,
+    };
+    if !verified {
         match fs::remove_file(root.join("meta.json")) {
             Ok(()) => (),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
             Err(error) => return Err(error.into()),
         }
     }
-    if engine.exists() {
-        for backup in backups {
-            fs::remove_dir_all(backup)?;
+    if restore {
+        if existing {
+            let retired = root.join(format!(".retired-{}", uuid::Uuid::new_v4()));
+            updates::rename_engine_directory(&engine, &retired)?;
+            updates::rename_engine_directory(&backups[0], &engine)?;
+            if updates::check_engine_tree_is_real(&retired).is_ok() {
+                let _ = fs::remove_dir_all(retired);
+            }
+        } else {
+            updates::rename_engine_directory(&backups[0], &engine)?;
         }
-    } else if backups.len() == 1 {
-        fs::rename(&backups[0], engine)?;
+    } else if existing {
+        // Leftovers do not affect the installed copy; a failed removal is
+        // retried at the next start.
+        for backup in backups {
+            if let Err(error) = fs::remove_dir_all(&backup) {
+                eprintln!(
+                    "LocalSR could not remove the old engine backup {}: {error}",
+                    backup.display()
+                );
+            }
+        }
     } else if backups.len() > 1 {
         return Err(invalid("Multiple engine backups need manual recovery"));
     }
-    Ok(())
+    Ok(verified)
+}
+
+pub(crate) fn recover_interrupted_engine_installs(next_root: &Path) {
+    let engines = next_root.join("engines");
+    let Ok(entries) =
+        updates::real_engine_directory(&engines).and_then(|()| fs::read_dir(&engines))
+    else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if let Some(id) = name.strip_prefix(".previous-") {
+            if let Err(error) = recover_interrupted_reimport(next_root, id) {
+                eprintln!("LocalSR could not recover engine {id}: {error}");
+            }
+        } else if name
+            .strip_prefix(".retired-")
+            .is_some_and(|suffix| uuid::Uuid::parse_str(suffix).is_ok())
+        {
+            updates::remove_engine_tree_if_real(&entry.path());
+        }
+    }
+}
+
+/// Finish an interrupted install of `id` under `engine_files`, so it cannot race a
+/// worker start doing the same.
+fn recover_before_staging(state: &AppState, id: &str) -> AppResult<()> {
+    let _engine_files = lock(&state.worker.engine_files)?;
+    recover_interrupted_reimport(&state.paths.next_root, id)
+}
+
+/// Startup recovery: finish interrupted swaps, delete retired copies and, while
+/// no install or import runs, staging folders a stopped install left behind.
+pub(crate) fn recover_engine_files_at_startup(state: &AppState) {
+    let Ok(_engine_files) = lock(&state.worker.engine_files) else {
+        return;
+    };
+    recover_interrupted_engine_installs(&state.paths.next_root);
+    if let (Ok(_engines), Ok(_updates)) =
+        (acquire(&state.engines.busy), acquire(&state.updates.busy))
+    {
+        remove_abandoned_engine_staging(&state.paths.next_root);
+    }
+}
+
+fn remove_abandoned_engine_staging(next_root: &Path) {
+    let engines = next_root.join("engines");
+    let Ok(entries) =
+        updates::real_engine_directory(&engines).and_then(|()| fs::read_dir(&engines))
+    else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let staging = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.strip_prefix(".import-"))
+            .is_some_and(|suffix| uuid::Uuid::parse_str(suffix).is_ok());
+        // A linked folder is left alone; remove_dir_all does not follow links
+        // inside a real one.
+        if staging && updates::real_engine_directory(&entry.path()).is_ok() {
+            if let Err(error) = fs::remove_dir_all(entry.path()) {
+                eprintln!(
+                    "LocalSR could not remove the unfinished engine install {}: {error}",
+                    entry.path().display()
+                );
+            }
+        }
+    }
 }
 
 fn commit_installed_engine(
@@ -1457,38 +1654,102 @@ fn commit_installed_engine(
     staged: updates::StagedEngine,
     meta: &EngineMeta,
 ) -> AppResult<()> {
+    let restart = app.map(|app| move || worker::restart_for_engine_switch(state, app));
+    commit_installed_engine_with(
+        state,
+        staged,
+        meta,
+        restart
+            .as_ref()
+            .map(|restart| restart as &dyn Fn() -> AppResult<()>),
+    )
+}
+
+/// `restart` stops any worker and starts the selected engine; `None` without an app.
+fn commit_installed_engine_with(
+    state: &Arc<AppState>,
+    staged: updates::StagedEngine,
+    meta: &EngineMeta,
+    restart: Option<&dyn Fn() -> AppResult<()>>,
+) -> AppResult<()> {
     let _scheduler = lock(&state.scheduler)?;
     ensure_no_running_jobs(state)?;
+    // Windows cannot rename a folder whose worker or libraries are in use, so a
+    // worker started from the target stops before the swap. Deciding under
+    // engine_files means no start can slip in between; a supervisor waiting to
+    // restart that engine sees shutting_down and stays off until the restart
+    // below or the rollback starts it again. A dying worker sets pid 0 without
+    // taking engine_files.
+    let engine_files = lock(&state.worker.engine_files)?;
+    let stopped = worker::last_run_engine_id(state).as_deref() == Some(meta.id.as_str());
+    let stop = if stopped {
+        worker::stop_for_engine_switch(state)
+    } else {
+        Ok(())
+    };
     let pointer = state.paths.next_root.join("active-engine.txt");
     let old_pointer = fs::read(&pointer).ok();
-    let metadata = state
-        .paths
-        .next_root
-        .join("engines")
-        .join(&meta.id)
-        .join("meta.json");
-    let old_metadata = fs::read(&metadata).ok();
-    staged.commit_with(|_| {
-        let result = (|| -> AppResult<()> {
-            write_engine_meta(&state.paths.next_root, meta)?;
-            update_storage::write_atomic(&pointer, meta.id.as_bytes())?;
-            lock(&state.worker.failed_engines)?.remove(&meta.id);
-            if let Some(app) = app {
-                worker::restart_for_engine_switch(state, app)?;
-            }
-            Ok(())
-        })();
-        if result.is_err() {
-            for (path, previous) in [(&pointer, old_pointer), (&metadata, old_metadata)] {
-                if let Some(bytes) = previous {
-                    let _ = update_storage::write_atomic(path, &bytes);
-                } else {
-                    let _ = fs::remove_file(path);
+    let swap = match stop.and_then(|()| staged.publish(Some(meta), None)) {
+        Ok(swap) => swap,
+        Err(error) => {
+            drop(engine_files);
+            if stopped {
+                state.worker.shutting_down.store(false, Ordering::SeqCst);
+                if let Some(restart) =
+                    restart.filter(|_| state.worker.pid.load(Ordering::SeqCst) == 0)
+                {
+                    if let Err(error) = restart() {
+                        eprintln!("LocalSR could not restart the previous engine: {error}");
+                    }
                 }
             }
+            return Err(error);
         }
-        result
-    })?;
+    };
+    let activate = update_storage::write_atomic(&pointer, meta.id.as_bytes()).and_then(|()| {
+        lock(&state.worker.failed_engines)?.remove(&meta.id);
+        Ok(())
+    });
+    drop(engine_files);
+    let result = activate.and_then(|()| {
+        if let Some(restart) = restart {
+            restart()?;
+            // A start that cannot use the new engine falls back to another one
+            // and still succeeds; the previous selection is restored instead.
+            if worker::last_run_engine_id(state).as_deref() != Some(meta.id.as_str()) {
+                return Err(invalid(
+                    "The new engine did not start; the previous engine was restored",
+                ));
+            }
+        } else if stopped {
+            state.worker.shutting_down.store(false, Ordering::SeqCst);
+        }
+        Ok(())
+    });
+    if let Err(error) = result {
+        {
+            let _engine_files = lock(&state.worker.engine_files)?;
+            if let Err(restore) = swap.rollback() {
+                eprintln!("LocalSR could not restore the previous engine: {restore}");
+            }
+            let restored_pointer = if let Some(bytes) = old_pointer {
+                update_storage::write_atomic(&pointer, &bytes)
+            } else {
+                updates::deactivate_active_engine(&state.paths)
+            };
+            if let Err(restore) = restored_pointer {
+                eprintln!("LocalSR could not restore the active engine selection: {restore}");
+            }
+        }
+        state.worker.shutting_down.store(false, Ordering::SeqCst);
+        // Restart whatever runs: it may be a fallback chosen for the new engine.
+        if let Some(restart) = restart {
+            if let Err(error) = restart() {
+                eprintln!("LocalSR could not restart the previous engine: {error}");
+            }
+        }
+        return Err(error);
+    }
     Ok(())
 }
 
@@ -1646,6 +1907,7 @@ pub(crate) fn import_engine_for(
 
     let source_dir_owned = source_dir.to_path_buf();
     let manifest_bytes_owned = manifest_bytes;
+    recover_before_staging(state, &engine_id)?;
     let staged = updates::stage_engine_with(
         &state.paths.next_root,
         &engine_id,

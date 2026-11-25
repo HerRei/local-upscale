@@ -5,9 +5,13 @@
 # network and the same files.
 #
 # Modified for LocalSR: inference only (the training branches, the unused conv_bn helper
-# and the module-level CUDA device are removed); the warp grid is cached per module
-# instead of in a global dict and sampled in FP32 (as in HolyWu/vs-rife); the encoder
-# features of a frame pair can be passed in, so several timesteps reuse them.
+# and the module-level CUDA device are removed); the warp grid is built per call
+# instead of cached in a global dict and sampled in FP32 (as in HolyWu/vs-rife); the encoder
+# features of a frame pair can be passed in, so several timesteps reuse them; IFNet.forward
+# downsamples each block input on its own instead of concatenating them at full resolution
+# first. Bilinear resizing works per channel, so the frames are the same (bit for bit on
+# Apple GPUs, within float rounding on the CPU), and a 4320 x 5760 frame no longer needs
+# 1.4 to 3 GiB blocks that a 16 GB Mac's graphics memory cannot hold next to the models.
 
 import torch
 import torch.nn as nn
@@ -66,6 +70,24 @@ class IFBlock(nn.Module):
         self.convblock = nn.Sequential(*(ResConv(c) for _ in range(8)))
         self.lastconv = nn.Sequential(nn.ConvTranspose2d(c, 4 * 13, 4, 2, 1), nn.PixelShuffle(2))
 
+    def low(self, inputs, flow=None, scale=1):
+        """``forward`` before its final upsampling, from inputs already downsampled by ``scale``.
+
+        ``forward`` concatenates its inputs and then downsamples them. Bilinear resizing
+        treats every channel on its own, so downsampling each input first gives the same
+        values without the full-resolution concatenation.
+        """
+        if flow is not None:
+            inputs = [
+                *inputs,
+                F.interpolate(flow, scale_factor=1.0 / scale, mode="bilinear", align_corners=False)
+                * 1.0
+                / scale,
+            ]
+        feat = self.conv0(torch.cat(inputs, 1))
+        feat = self.convblock(feat)
+        return self.lastconv(feat)
+
     def forward(self, x, flow=None, scale=1):
         x = F.interpolate(x, scale_factor=1.0 / scale, mode="bilinear", align_corners=False)
         if flow is not None:
@@ -94,73 +116,125 @@ class IFNet(nn.Module):
         self.block3 = IFBlock(8 + 4 + 8 + 8, c=64)
         self.block4 = IFBlock(8 + 4 + 8 + 8, c=32)
         self.encode = Head()
-        self._grids: dict[tuple[str, tuple[int, ...]], torch.Tensor] = {}
 
-    def warp(self, image, flow):
-        # Sampled in FP32, as vs-rife does: half-precision grid coordinates in [-1, 1]
-        # are only good to about a pixel across a 4K frame.
+    @staticmethod
+    def _sampler(image, flow):
+        """A function that samples channels of ``image`` along ``flow``.
+
+        Sampled in FP32, as vs-rife does: half-precision grid coordinates in [-1, 1] are
+        only good to about a pixel across a 4K frame. The sample grid is built in
+        grid_sample's (N, H, W, 2) layout from the flow plus the base coordinates (the
+        published grid + flow), so no full-resolution base grid is kept between calls.
+        """
         dtype = image.dtype
-        image, flow = image.float(), flow.float()
-        key = (str(flow.device), tuple(flow.shape))
-        grid = self._grids.get(key)
-        if grid is None:
-            horizontal = (
-                torch.linspace(-1.0, 1.0, flow.shape[3], device=flow.device)
-                .view(1, 1, 1, flow.shape[3])
-                .expand(flow.shape[0], -1, flow.shape[2], -1)
-            )
-            vertical = (
-                torch.linspace(-1.0, 1.0, flow.shape[2], device=flow.device)
-                .view(1, 1, flow.shape[2], 1)
-                .expand(flow.shape[0], -1, -1, flow.shape[3])
-            )
-            grid = torch.cat([horizontal, vertical], 1)
-            self._grids = {key: grid}
-        flow = torch.cat(
-            [
-                flow[:, 0:1, :, :] / ((image.shape[3] - 1.0) / 2.0),
-                flow[:, 1:2, :, :] / ((image.shape[2] - 1.0) / 2.0),
-            ],
-            1,
-        )
-        sample = (grid + flow).permute(0, 2, 3, 1)
-        return F.grid_sample(
-            input=image, grid=sample, mode="bilinear", padding_mode="border", align_corners=True
-        ).to(dtype)
+        flow = flow.float()
+        height, width = flow.shape[2], flow.shape[3]
+        across = flow[:, 0] / ((image.shape[3] - 1.0) / 2.0)
+        across.add_(torch.linspace(-1.0, 1.0, width, device=flow.device).view(1, 1, width))
+        down = flow[:, 1] / ((image.shape[2] - 1.0) / 2.0)
+        down.add_(torch.linspace(-1.0, 1.0, height, device=flow.device).view(1, height, 1))
+        sample = torch.stack([across, down], -1)
+        del across, down
+
+        def sampled(planes):
+            return F.grid_sample(
+                input=planes.float(),
+                grid=sample,
+                mode="bilinear",
+                padding_mode="border",
+                align_corners=True,
+            ).to(dtype)
+
+        return sampled
+
+    def warp(self, image, flow, factor=None):
+        """``image`` sampled along ``flow``; resized by ``factor`` channel by channel if given.
+
+        Sampling and bilinear resizing treat every channel on its own, so the resized
+        result equals resizing the whole warped image, without holding it.
+        """
+        sampled = self._sampler(image, flow)
+        if factor is None:
+            return sampled(image)
+        return torch.cat([_resize(sampled(plane), factor) for plane in image.split(1, 1)], 1)
 
     def forward(self, img0, img1, timestep, scale_list, f0=None, f1=None):
-        """Return the frame at ``timestep`` (a scalar in (0, 1)) between img0 and img1."""
-        timestep = (img0[:, :1].clone() * 0 + 1) * timestep
+        """Return the frame at ``timestep`` (a scalar in (0, 1)) between img0 and img1.
+
+        The same computation as Practical-RIFE's IFNet.forward, ordered so that only a few
+        full-resolution planes exist at once: every block input is made and downsampled
+        one plane at a time, only the last block's warped frames are kept at full
+        resolution, and the flow update and the final blend work in place.
+        """
         if f0 is None:
             f0 = self.encode(img0[:, :3])
         if f1 is None:
             f1 = self.encode(img1[:, :3])
-        warped_img0 = img0
-        warped_img1 = img1
+        blocks = [self.block0, self.block1, self.block2, self.block3, self.block4]
+        full_timestep = (img0[:, :1].clone() * 0 + 1) * timestep
+        timesteps = [_resize(full_timestep, 1.0 / scale) for scale in scale_list[: len(blocks)]]
+        del full_timestep
         flow = None
         mask = None
-        feat = None
-        block = [self.block0, self.block1, self.block2, self.block3, self.block4]
-        for i in range(5):
+        tmp = None
+        low_img0 = low_img1 = None
+        previous_scale = 1
+        for i, block in enumerate(blocks):
+            scale = scale_list[i]
             if flow is None:
-                flow, mask, feat = block[i](
-                    torch.cat((img0[:, :3], img1[:, :3], f0, f1, timestep), 1),
-                    None,
-                    scale=scale_list[i],
-                )
+                inputs = [
+                    _resize(img0[:, :3], 1.0 / scale),
+                    _resize(img1[:, :3], 1.0 / scale),
+                    _resize(f0, 1.0 / scale),
+                    _resize(f1, 1.0 / scale),
+                    timesteps[i],
+                ]
+                tmp = block.low(inputs, None, scale=scale)
+                flow = _resize(tmp[:, :4], scale).mul_(scale)
             else:
-                wf0 = self.warp(f0, flow[:, :2])
-                wf1 = self.warp(f1, flow[:, 2:4])
-                fd, m0, feat = block[i](
-                    torch.cat(
-                        (warped_img0[:, :3], warped_img1[:, :3], wf0, wf1, timestep, mask, feat), 1
-                    ),
-                    flow,
-                    scale=scale_list[i],
+                # The previous block's features, at full resolution in the original, are
+                # only ever downsampled for this block.
+                feat = torch.cat(
+                    [
+                        _resize(_resize(plane, previous_scale), 1.0 / scale)
+                        for plane in tmp[:, 5:].split(1, 1)
+                    ],
+                    1,
                 )
-                mask = m0
-                flow = flow + fd
-            warped_img0 = self.warp(img0, flow[:, :2])
-            warped_img1 = self.warp(img1, flow[:, 2:4])
+                inputs = [
+                    low_img0,
+                    low_img1,
+                    self.warp(f0, flow[:, :2], 1.0 / scale),
+                    self.warp(f1, flow[:, 2:4], 1.0 / scale),
+                    timesteps[i],
+                    _resize(mask, 1.0 / scale),
+                    feat,
+                ]
+                tmp = block.low(inputs, flow, scale=scale)
+                del inputs, feat
+                # flow + upsampled update, one plane at a time and in place.
+                for plane in range(4):
+                    flow[:, plane : plane + 1].add_(
+                        _resize(tmp[:, plane : plane + 1], scale).mul_(scale)
+                    )
+            mask = _resize(tmp[:, 4:5], scale)
+            previous_scale = scale
+            if i + 1 < len(blocks):
+                # Before the last block the warped frames only feed the next block.
+                following = 1.0 / scale_list[i + 1]
+                low_img0 = self.warp(img0, flow[:, :2], following)[:, :3]
+                low_img1 = self.warp(img1, flow[:, 2:4], following)[:, :3]
+        # warped_img0 * mask + warped_img1 * (1 - mask), with warped_img1 made one plane
+        # at a time and added in place.
         mask = torch.sigmoid(mask)
-        return warped_img0 * mask + warped_img1 * (1 - mask)
+        merged = self.warp(img0, flow[:, :2]).mul_(mask)
+        inverse = 1 - mask
+        del mask
+        sampled = self._sampler(img1, flow[:, 2:4])
+        for plane in range(merged.shape[1]):
+            merged[:, plane : plane + 1].add_(sampled(img1[:, plane : plane + 1]).mul_(inverse))
+        return merged
+
+
+def _resize(tensor, factor):
+    return F.interpolate(tensor, scale_factor=factor, mode="bilinear", align_corners=False)

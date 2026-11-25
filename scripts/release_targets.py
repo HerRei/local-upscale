@@ -15,9 +15,11 @@ REGISTRY = ROOT / "ci" / "tauri-targets.json"
 PUBLIC_KEY = ROOT / "packaging" / "updates" / "production.pub"
 # UpdateConfig::target() in desktop/src-tauri/src/updates.rs builds the same key from
 # std::env::consts: <os>-<arch>-<backend>-<kind>, with "darwin" for macOS.
+# `deb` is a Debian package that apt installs and updates: it has no feed entry of its own
+# and reads the `native` entries of its engine's target (UpdateConfig::feed_config()).
 UPDATE_OS = {"macos": "darwin", "windows": "windows", "linux": "linux"}
 UPDATE_ARCH = {"arm64": "aarch64", "x86_64": "x86_64"}
-UPDATE_KINDS = {"native", "portable"}
+UPDATE_KINDS = {"native", "portable", "deb"}
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 # Bump when this hashing recipe itself changes; release tooling edits are not engine inputs.
 ENGINE_ID_SCHEME = 1
@@ -36,6 +38,35 @@ def _valid_update(target: dict) -> bool:
     )
 
 
+def _check_system_package(entry: dict, by_id: dict[str, dict]) -> None:
+    """A .deb, and only a .deb, packages another target's engine and has no feed entry.
+
+    apt owns its files, so it never installs an update itself; it learns about new
+    versions from the signed `native` entry of the target whose worker it ships.
+    """
+    is_deb = entry["update"]["kind"] == "deb"
+    base_id = entry.get("engine_target")
+    has_feed_entry = entry.get("feed", True)
+    if is_deb != (base_id is not None) or has_feed_entry is not (not is_deb):
+        raise ValueError(
+            f"{entry['id']}: a deb package, and only it, reuses another target's engine "
+            "(engine_target) and has no feed entry (feed: false)"
+        )
+    if not is_deb:
+        return
+    base = by_id.get(base_id)
+    if (
+        base is None
+        or base.get("engine_target")
+        or base["update"] != {"backend": entry["update"]["backend"], "kind": "native"}
+        or any(base[key] != entry[key] for key in ("platform", "architecture", "backend", "index"))
+    ):
+        raise ValueError(
+            f"{entry['id']} must reuse the engine of a native target with the same platform, "
+            "architecture and backend"
+        )
+
+
 def targets() -> list[dict]:
     data = json.loads(REGISTRY.read_text(encoding="utf-8"))
     entries = data["targets"]
@@ -44,10 +75,18 @@ def targets() -> list[dict]:
     for entry in entries:
         if not _valid_update(entry):
             raise ValueError(f"{entry['id']} has no valid update identity (backend, kind)")
+    by_id = {entry["id"]: entry for entry in entries}
+    for entry in entries:
+        _check_system_package(entry, by_id)
     keys = [platform_key(entry) for entry in entries]
     if len(set(keys)) != len(keys):
         raise ValueError("two release targets share an update platform key")
     return entries
+
+
+def feed_targets() -> list[dict]:
+    """The targets with their own signed feed entry: every one but the .deb."""
+    return [entry for entry in targets() if entry.get("feed", True)]
 
 
 def target(target_id: str) -> dict:
@@ -80,7 +119,10 @@ def engine_id(entry: dict, commit: str, *, root: Path = ROOT) -> str:
     Hash sorted paths and content digests, with text line endings normalized. The
     local package version is informational; the worker protocol governs compatibility.
     Keep this input list in step with the worker spec and the locked build recipe.
+    A .deb ships its engine target's worker, so it has that target's engine id.
     """
+    if entry.get("engine_target"):
+        entry = target(entry["engine_target"])
     if not COMMIT_RE.fullmatch(commit):
         raise ValueError(f"release commit must be a full lowercase SHA, not {commit!r}")
     inputs = [
@@ -183,6 +225,9 @@ def update_files(entry: dict, release_version: str) -> dict[str, str]:
         "update_package": f"{stem}.app.tar.gz" if entry["platform"] == "macos" else package,
         "engine_prefix": f"{stem}.engine.tar.gz",
         "engine_manifest": f"{stem}.engine-payload.json",
+        # The same engine package described the way every updater since 0.4.0 reads it;
+        # the feed names this one (prepare_engine_payload.legacy_update_manifest).
+        "engine_update_manifest": f"{stem}.engine-update.json",
         "payload_backend": entry["update"]["backend"].upper(),
         "worker": "localsr-worker.exe" if entry["platform"] == "windows" else "localsr-worker",
     }
@@ -198,7 +243,11 @@ def download_table(release_version: str) -> str:
     main_rows = [
         ("Mac (M1 or newer)", f"`{package('macos-arm64-mps')}`"),
         ("Windows", f"`{package('windows-x86_64-cpu')}`"),
-        ("Linux", f"`{package('linux-x86_64-cpu')}`"),
+        (
+            "Linux",
+            f"`{package('linux-x86_64-cpu')}`, or `{package('linux-x86_64-cpu-deb')}` "
+            "on Ubuntu and Debian",
+        ),
     ]
     offline_rows = [
         ("Windows, AMD or Intel graphics", f"`{package('windows-x86_64-directml')}`"),
@@ -211,18 +260,31 @@ def download_table(release_version: str) -> str:
         ("Linux, NVIDIA", f"all `{package('linux-x86_64-cuda')}.part-*` files, joined"),
     ]
     return (
-        "## Which file do I need?\n\n| Computer | Download |\n|---|---|\n"
+        "## Which file do I need?\n\n"
+        + "Download one file for your computer; it is all you need. The Mac version includes "
+        + "everything. On Windows and Linux, LocalSR checks your graphics card when it first "
+        + "starts and offers the faster engine for it (NVIDIA CUDA, DirectML for AMD and Intel "
+        + "graphics on Windows, AMD ROCm on Linux), then downloads and installs that engine "
+        + "itself.\n\n"
+        + "| Computer | Download |\n|---|---|\n"
         + "".join(f"| {computer} | {download} |\n" for computer, download in main_rows)
-        + "\nThe app offers the faster GPU engine after setup.\n\n"
-        + "## Offline and advanced downloads\n\n"
+        + "\n## Offline and advanced downloads\n\n"
+        + "Only for a computer without internet access, or to install the GPU edition in one "
+        + "go. Everyone else can skip this.\n\n"
         + "| Computer | Download |\n|---|---|\n"
         + "".join(f"| {computer} | {download} |\n" for computer, download in offline_rows)
         + "\nTo import an engine offline, download the `*.engine-payload.json` manifest, "
         + "its `.engine.tar.gz.part-*` files and their `.sig` signature files into one folder, "
         + "then open **Advanced -> Engine -> Change… -> Import engine from file…** "
         + "and choose the `*.engine-payload.json` file.\n\n"
-        + "The other files (signatures, checksums and source archives) "
-        + "are for verification and updates.\n"
+        + "### What are all the other files?\n\n"
+        + "- `*.engine-payload.json`, `*.engine-update.json` and `*.engine.tar.gz.part-*`: "
+        + "the GPU engines that the app downloads by itself.\n"
+        + "- `*.app.tar.gz` and `*.sig`: update files and their signatures, which the app "
+        + "checks before it installs an update.\n"
+        + "- `*.sha256` and `SHA256SUMS`: checksums to check a download by hand.\n"
+        + "- `*source-and-notices.tar.gz`: the source code and licence notices for each "
+        + "package.\n"
     )
 
 

@@ -12,6 +12,7 @@ loading. Restoration weights are not included in installers.
 | HAT-S | 4× | General photo upscaling | 81.1 MB | Apache-2.0 |
 | HAT-L ImageNet | 4× | Larger general photo model | 165.8 MB | Apache-2.0 |
 | RealPLKSR NomosWebPhoto | 4× | Degraded web photos | 29.7 MB | CC BY 4.0 |
+| ESRGAN HFA2k | 4× | Best anime and illustration | 33.7 MB | CC BY 4.0 |
 | RealPLKSR HFA2k | 4× | Anime video frames · Labs | 29.7 MB | CC BY 4.0 |
 | Real-ESRGAN x2plus | 2× | Native 2× upscaling | 67.1 MB | BSD-3-Clause |
 | RealPLKSR Denoise | 1× | Fast photo denoising | 29.6 MB | CC BY 4.0 |
@@ -37,8 +38,10 @@ options run.
 
 For photos, **Quick** selects SPAN NomosUni and **Best** selects RealPLKSR
 NomosWebPhoto. For illustrations, **Quick** selects Real-ESRGAN Anime 6B and
-**Best** selects RealPLKSR HFA2k, which can soften fine lines and screentones,
-darken white paper and reduce colour saturation on some manga and comic scans.
+**Best** selects ESRGAN HFA2k, which preserves flat colours, white paper, QR codes
+and fine line art. RealPLKSR HFA2k stays in the library; it can soften fine lines
+and screentones, darken white paper and reduce colour saturation on some manga and
+comic scans.
 Photo models remain a choice in the library. HAT-S is
 the smaller stock HAT option. No preset picks the two DAT2 models on its own: on an M1
 Pro they take about ten times as long as Best (around 73 seconds per input megapixel;
@@ -48,24 +51,25 @@ tile borders differ more from a whole-image run than Best's. Model choice
 changes speed, memory use and visual results; compare a representative crop before
 processing a large folder.
 
-## Photo colorization (DDColor)
+## Colour (DDColor)
 
 Under **Restore first** (and **Restore** at 1×), the **Colour** option adds colour to
 black-and-white photos using DDColor-L (911.9 MB). Colours are a guess. LocalSR converts the photo to Lab, runs
 DDColor on the luminance channel of the photo resized to 512×512, resizes the predicted colour
 channels back, and combines them with the original full-resolution luminance so
 sharpness and fine detail stay intact. Already colourful photos still run with a
-note in the job details. Colour is for still photos only; video Restore first does
-not offer it. On DirectML, OpenVINO, and the Apple Neural Engine route, DDColor
+note in the job details. Videos use the same model on selected frames and carry colour
+between frames, resetting at cuts. On DirectML, OpenVINO, and the Apple Neural Engine route, DDColor
 runs on the CPU or PyTorch Apple GPU instead.
 
 ## Author credit and checkpoint terms
 
-SPAN NomosUni, RealPLKSR Denoise, NomosWebPhoto and HFA2k are models by
-**Philip Hofmann (Phips / Phhofm)**. NomosWebPhoto and HFA2k explicitly declare
+SPAN NomosUni, RealPLKSR Denoise, NomosWebPhoto, ESRGAN HFA2k and RealPLKSR HFA2k are models by
+**Philip Hofmann (Phips / Phhofm)**. NomosWebPhoto, ESRGAN HFA2k and RealPLKSR HFA2k explicitly declare
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) on their
-[model](https://huggingface.co/Phips/4xNomosWebPhoto_RealPLKSR)
-[cards](https://huggingface.co/Phips/4xHFA2k_ludvae_realplksr_dysample).
+[NomosWebPhoto](https://huggingface.co/Phips/4xNomosWebPhoto_RealPLKSR),
+[ESRGAN HFA2k](https://github.com/Phhofm/models/releases/tag/4xHFA2k) and
+[RealPLKSR HFA2k](https://huggingface.co/Phips/4xHFA2k_ludvae_realplksr_dysample) pages.
 The license permits sharing and commercial use with attribution and its other
 conditions. LocalSR downloads the publisher's checkpoint files unchanged.
 
@@ -99,9 +103,21 @@ boundaries, read [video support](../video-support.md).
 
 Supported `.safetensors` checkpoints can be imported. Unverified pickle or
 TorchScript files are blocked by default. For files whose publisher you trust,
-tick **Allow this pickle-based checkpoint** in the app; on the command line, set
+tick **Allow this pickle-based checkpoint** in the app. Approval is remembered by SHA-256,
+so a changed file needs approval again. A compatible up-to-date engine is required for
+pickle-based checkpoints. Safetensors files need no tick. Your checkpoints
+appear in **Your own file** in the model library, where you can rename and select them.
+On the command line, set
 `LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS=1`. Check your model's license, architecture,
 scale and colour assumptions before using it.
+
+Own checkpoints can use any architecture that Spandrel 0.4.2 loads (ESRGAN, SPAN,
+RealPLKSR, SwinIR, HAT, DAT, SCUNet, NAFNet and many more), plus **NERVE** and
+**HEART** (#154), whose loaders LocalSR includes itself because Spandrel 0.4.2 does
+not yet ship them. Both support FP16; on a Mac they run through PyTorch on the Apple
+GPU rather than the Neural Engine, and on an Intel NPU they run on the CPU. On
+DirectML and OpenVINO GPUs they go through the same ONNX export and first-tile
+check as other architectures.
 If a checkpoint cannot be recognized, LocalSR reports when its keys suggest a
 MoSR or MoESR model that this version cannot load. Other unrecognized models
 show a general unsupported architecture message.

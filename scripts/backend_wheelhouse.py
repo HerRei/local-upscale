@@ -189,7 +189,8 @@ def main() -> None:
         or platform.machine().lower() not in {"x86_64", "amd64"}
     ):
         parser.error("wheelhouse must be built and installed on its named target platform")
-    lock = ROOT / "requirements/locks" / f"{args.target}.txt"
+    lock_id = target.get("engine_target", args.target)
+    lock = ROOT / "requirements/locks" / f"{lock_id}.txt"
     directory, manifest = prepare(lock, args.cache_root.resolve(), args.target)
     subprocess.run(
         [

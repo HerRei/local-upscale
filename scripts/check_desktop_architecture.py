@@ -31,12 +31,23 @@ UPDATE_GATES = {
     "update build identity": "release_targets.py --update-env",
     "installed update identity": "--update-target",
     "updater engine payload": "prepare_engine_payload.py",
+    # Older releases' own updaters must take this release (the 0.5.2 incident).
+    "update from older releases": "upgrade_check.py",
+}
+# The CPU .deb: its own identity (apt installs its updates), its Depends, and an install,
+# start and removal with apt.
+DEBIAN_PACKAGE_GATES = {
+    "Debian package build": "--bundles deb",
+    "Debian package update identity": "--update-env linux-x86_64-cpu-deb",
+    "Debian package dependency check": "verify_deb_dependencies.py",
+    "Debian package apt smoke": "--update-target linux-x86_64-cpu-deb",
 }
 RELEASE_PACKAGE_WORKFLOWS = {
     "linux-appimages.yml": {
         "glibc ceiling": "verify_appimage_libc.py",
         "offline window check": "verify_appimage_window.py",
         **UPDATE_GATES,
+        **DEBIAN_PACKAGE_GATES,
     },
     "windows-installers.yml": UPDATE_GATES,
 }
@@ -46,10 +57,12 @@ MACOS_RELEASE_GATES = {
     "stapled tickets": "xcrun stapler staple",
     "Gatekeeper assessment": "spctl --assess",
     "codec allowlist": "verify_codec_allowlist.py",
+    "minimum macOS of native files": "verify_macos_deployment.py",
     "worker smoke": "packaging/smoke_worker.py",
     "host smoke": "--headless-smoke-test",
     "signed update archive": "beta_update_signing.py sign",
     "signed release statement": "beta_update_signing.py statement",
+    "update from older releases": "upgrade_check.py",
     "corresponding source bundle": "build_source_bundle.py",
 }
 

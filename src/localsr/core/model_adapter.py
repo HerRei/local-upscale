@@ -7,8 +7,11 @@ from math import lcm
 import spandrel
 import torch
 
-from localsr.core.model_catalog import CATALOG_BY_FILENAME, file_matches_checksum
+from localsr.core.model_catalog import CATALOG_BY_FILENAME, file_matches_checksum, file_sha256
 from localsr.core.preparation import PreparationTimeout, bounded_preparation
+from localsr.image_models.heart import heart_support
+from localsr.image_models.nerve import nerve_support
+from localsr.image_models.pulse import pulse_support
 
 # Reading a checkpoint is a local file read; a drive that stopped answering would
 # otherwise hold the job for ever.
@@ -16,6 +19,12 @@ MODEL_READ_SECONDS = 180.0
 
 UNVERIFIED_CHECKPOINT_ENV = "LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS"
 RISKY_CHECKPOINT_SUFFIXES = {".ckpt", ".pt", ".pth"}
+
+# Spandrel's own registry plus architectures LocalSR vendors under permissive
+# licences (NERVE, HEART, PULSE). A copy, so Spandrel's global registry stays
+# unchanged; the added architectures are detected after Spandrel's own.
+MODEL_REGISTRY = spandrel.MAIN_REGISTRY.copy()
+MODEL_REGISTRY.add(nerve_support(), heart_support(), pulse_support())
 
 
 def _unsupported_model_message(state_dict) -> str:
@@ -88,7 +97,8 @@ class _DirectMLDescriptor:
 
 class ModelAdapter:
     def __init__(self, *, allow_unverified_checkpoints: bool | None = None):
-        self.loader = spandrel.ModelLoader()
+        self.loader = spandrel.ModelLoader(registry=MODEL_REGISTRY)
+        self.approved_checkpoint: tuple[str, str] | None = None
         self.parsed = None
         self.parsed_path = None
         self.status_callback: Callable[[str], None] | None = None
@@ -154,6 +164,21 @@ class ModelAdapter:
                 )
             return "catalog-verified"
         if suffix in RISKY_CHECKPOINT_SUFFIXES:
+            if self.approved_checkpoint:
+                # A job that carries an approval may load exactly that file, as approved.
+                if candidate != os.path.abspath(self.approved_checkpoint[0]):
+                    raise CheckpointSecurityError(
+                        "Only the checkpoint you confirmed can load in this job."
+                    )
+                try:
+                    matches = file_sha256(candidate) == self.approved_checkpoint[1]
+                except OSError:
+                    matches = False
+                if not matches:
+                    raise CheckpointSecurityError(
+                        "The approved checkpoint changed. Confirm it again."
+                    )
+                return "explicitly-trusted"
             if not self.allow_unverified_checkpoints:
                 raise CheckpointSecurityError(
                     "LocalSR blocks unverified .pth, .pt, and .ckpt checkpoints because they may "

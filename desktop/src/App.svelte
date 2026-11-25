@@ -1,5 +1,6 @@
 <script lang="ts">
   import { detectPlatform } from './lib/platform';
+  import { downloadSummary } from './lib/downloadSummary';
   import { createThemeController } from './lib/theme';
 
   import { tabFromKey } from './lib/keyboard';
@@ -16,11 +17,13 @@
   import ComparePane from './ComparePane.svelte';
   import {
     outputGroups,
+    resultDetails,
     pickKey,
     toggleSlot,
     swapSlots,
     type CompareItem,
   } from './lib/compareOutputs';
+  import { keptTilesText, unfinishedMark, type PaneUnfinished } from './lib/unfinished';
   import {
     ORIGINAL,
     alignedFraming,
@@ -47,12 +50,14 @@
   import LinuxMenuNotice from './LinuxMenuNotice.svelte';
   import EngineRecommendationCard from './EngineRecommendationCard.svelte';
   import EngineManagerDialog from './EngineManagerDialog.svelte';
+  import SettingsSheet from './SettingsSheet.svelte';
   import UpdatePanel from './UpdatePanel.svelte';
   import SetupScreen from './SetupScreen.svelte';
   import WelcomeNotice from './WelcomeNotice.svelte';
-  import { startUpdateWatcher, updateDialogOpen } from './lib/updates';
+  import { startUpdateWatcher, updateDialogOpen, updateState } from './lib/updates';
   import { redactDiagnostics, redactDiagnosticText, reportUrl } from './lib/report';
   import BenchmarkStudio from './BenchmarkStudio.svelte';
+  import { customModels, defaultCustomModelName } from './lib/customModels';
   import CustomEditModelModal from './CustomEditModelModal.svelte';
   import * as api from './lib/api';
   import ModelLibrary from './ModelLibrary.svelte';
@@ -84,7 +89,6 @@
     pendingDownloads,
     presetSlot,
     resolvePlan,
-    skipsUpscaleModel,
   } from './lib/plan';
   import {
     UNSTABLE_FIX_MODELS,
@@ -97,8 +101,16 @@
     toggleFixStage,
   } from './lib/fixStages';
   import { applyWorkerEnvelope, resultPreviewForSelectedMedia } from './lib/workerEvents';
-  import { formatBytes, formatDuration } from './lib/format';
+  import { formatBytes, formatDuration, formatVideoClock } from './lib/format';
   import { plainEngineError, recommendedEngineOffer } from './lib/engines';
+  import {
+    FRAME_BY_FRAME_TIP,
+    SEVERAL_FRAMES_TIP,
+    videoAvailability,
+    videoEngineName,
+    videoModelShortName,
+    videoModelsForJob,
+  } from './lib/videoEngines';
   import { demoSnapshot } from './lib/demo';
   import { modal } from './lib/modal';
   import {
@@ -130,6 +142,7 @@
     Quality,
     Recipe,
     ResultSummary,
+    SettingsSection,
     StartBatchInput,
     TaskKind,
     UiSettings,
@@ -188,6 +201,7 @@
       label: pick.kind === 'original' ? 'Original' : result?.model_label || 'Earlier result',
       meta: result
         ? [
+            result.partial ? 'Unfinished' : '',
             result.ui?.quality,
             result.scale ? `${result.scale}×` : '',
             result.elapsed_seconds ? formatDuration(result.elapsed_seconds) : '',
@@ -195,6 +209,17 @@
             .filter(Boolean)
             .join(' · ')
         : `${media?.width ?? 0} × ${media?.height ?? 0}`,
+      details: result
+        ? resultDetails(result, slot?.width, slot?.height)
+        : media?.width && media?.height
+          ? [`Size: ${media.width} × ${media.height}`]
+          : [],
+      unfinished: unfinishedMark(result, {
+        duration: media?.duration_seconds,
+        fps: media?.fps,
+        decoded: slot,
+        source: media,
+      }),
       width: slot?.width || media?.width || 1,
       height: slot?.height || media?.height || 1,
       preview_data_url: slot?.preview_data_url ?? '',
@@ -297,6 +322,14 @@
   let previewPane: PreviewPane | undefined;
   let inspectorScroll: HTMLDivElement | undefined;
   let lastLivePreviewSequence = 0;
+  let stageBasePreview = '';
+  let stageBaseJobId = '';
+  let stageBaseSequence = 0;
+  $: if (snapshot.runtime.active_job_id !== stageBaseJobId) {
+    stageBasePreview = '';
+    stageBaseSequence = 0;
+    stageBaseJobId = snapshot.runtime.active_job_id;
+  }
   let diagnostics = '';
   let reportOpen = false;
   let reportDiagnostics = '';
@@ -415,7 +448,10 @@
   }
   let setupAppearance: UiSettings['appearance'] = 'dark';
   let setupColourBlind = false;
+  let setupContrast: NonNullable<UiSettings['contrast']> = 'system';
+  let setupSound = false;
   let setupCheckAtLaunch = true;
+  let setupMenuBar = true;
   let setupAnonymousCount = true;
   let setupCrashReports = true;
   let privacySaving = false;
@@ -424,21 +460,28 @@
   function previewSetupTheme(
     appearance: UiSettings['appearance'],
     colourBlindPalette: boolean,
+    contrast: NonNullable<UiSettings['contrast']>,
   ): void {
     setupAppearance = appearance;
     setupColourBlind = colourBlindPalette;
+    setupContrast = contrast;
     themeForRefresh({
+      ...snapshot.settings,
       appearance,
       colour_blind_palette: colourBlindPalette,
+      contrast,
     });
   }
 
-  async function continuePrivacy(choices: {
+  async function finishSetup(choices: {
     appearance: UiSettings['appearance'];
     colourBlind: boolean;
     checkAtLaunch: boolean;
     anonymousCount: boolean;
     crashReports: boolean;
+    menuBar: boolean | null;
+    contrast: NonNullable<UiSettings['contrast']>;
+    sound: boolean;
   }): Promise<void> {
     privacySaving = true;
     privacyError = '';
@@ -446,6 +489,9 @@
       await api.setPrivacyChoice({
         appearance: choices.appearance,
         colourBlindPalette: choices.colourBlind,
+        contrast: choices.contrast,
+        showInMenuBar: choices.menuBar,
+        completionSound: choices.sound,
         checkAtLaunch: choices.checkAtLaunch,
         anonymousCount: choices.anonymousCount,
         crashReports: choices.crashReports,
@@ -456,6 +502,10 @@
           ...snapshot.settings,
           appearance: choices.appearance,
           colour_blind_palette: choices.colourBlind,
+          contrast: choices.contrast,
+          show_in_menu_bar: choices.menuBar ?? snapshot.settings.show_in_menu_bar,
+          completion_sound: choices.sound,
+          notify_on_finish: choices.sound ? true : snapshot.settings.notify_on_finish,
           privacy_choice_made: true,
           check_updates_at_launch: choices.checkAtLaunch,
           anonymous_update_count: choices.anonymousCount,
@@ -496,6 +546,40 @@
     /** What the question counts; the Inputs by default. */
     countOf?: () => number;
   } | null = null;
+  let stopPrompt: {
+    scope: 'queue' | 'media';
+    mediaId: string;
+    jobId: string;
+    fileName: string;
+  } | null = null;
+  let stopDontAskAgain = false;
+  $: if (stopPrompt && snapshot.runtime.active_job_id !== stopPrompt.jobId) {
+    stopPrompt = null;
+    stopDontAskAgain = false;
+  }
+  $: stopPromptBody = (() => {
+    if (!stopPrompt) return '';
+    const activeJob = snapshot.jobs.find((job) => job.id === stopPrompt?.jobId);
+    const media = activeJob
+      ? snapshot.media.find((item) => item.id === activeJob.media_id)
+      : undefined;
+    if (activeJob?.media_kind === 'image') {
+      const finished = snapshot.runtime.tiles_completed ?? 0;
+      const tiles = keptTilesText(finished, snapshot.runtime.tiles_total ?? 0);
+      return `${tiles ? `${tiles} ${finished === 1 ? 'is' : 'are'} finished.` : 'Part of the photo is finished.'} If you keep it, the photo is saved at full size with the rest left as in the original.`;
+    }
+    const done = snapshot.runtime.frames_processed ?? 0;
+    const totalFrames = snapshot.runtime.total_frames || media?.frame_count || 0;
+    const totalDuration = media?.duration_seconds ?? 0;
+    if (done > 0 && totalFrames > 0 && totalDuration > 0) {
+      const finished = Math.min(totalDuration, Math.max(0, (done / totalFrames) * totalDuration));
+      // Under a second a clock would read 0:00, so the frames are counted.
+      return finished < 1
+        ? `${done} of ${totalFrames} frames ${done === 1 ? 'is' : 'are'} finished.`
+        : `${formatVideoClock(finished)} of ${formatVideoClock(totalDuration)} is finished.`;
+    }
+    return 'Part of the video is finished.';
+  })();
   // The Clear question counts the list as it is when answered, not as it was when asked.
   $: if (modalConfirm?.titleFor) {
     const left = modalConfirm.countOf ? modalConfirm.countOf() : snapshot.media.length;
@@ -513,6 +597,7 @@
   let stagedAutoStartIds: string[] = [];
   let handlingLaunchIntents = false;
   let lastImageTask: Exclude<TaskKind, 'video'> = 'upscale';
+  let upscalerBeforeSameSize = '';
   let livePreviewWarning = '';
   let preparing = false;
   let preparingCancelled = false;
@@ -522,10 +607,56 @@
   let libraryContext: {
     slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit' | 'try';
     fix?: Exclude<FixKind, 'faces'>;
+    select?: string;
   } = { slot: 'browse' };
+  let settingsOpen = false;
+  let settingsSection: SettingsSection = 'general';
+  let settingsFocusTarget: 'hardware' | 'ffmpeg' | null = null;
+  function openSettings(
+    section: SettingsSection = 'general',
+    focusTarget: 'hardware' | 'ffmpeg' | null = null,
+  ): void {
+    settingsSection = section;
+    settingsFocusTarget = focusTarget;
+    settingsOpen = true;
+  }
   let startingJob = false;
   let requestingCancel = false;
   let movingModels = false;
+  let cacheSize: number | null = null;
+  let clearingCache = false;
+
+  async function loadCacheSize(): Promise<void> {
+    try {
+      cacheSize = await api.getCacheSize();
+    } catch (error) {
+      cacheSize = null;
+      showModal('Could not read the cache', String(error));
+    }
+  }
+
+  /** Clearing is safe but slows the next start of each model, so it asks first. */
+  async function askClearCache(): Promise<void> {
+    if (clearingCache) return;
+    const size = cacheSize ? ` (${formatBytes(cacheSize)})` : '';
+    showModal(
+      'Clear the model cache?',
+      `This deletes the compiled model copies${size}. Your models, settings and results stay. Each model starts more slowly once, while its copy is rebuilt.`,
+    );
+    modalConfirm = { label: 'Clear cache', run: clearCache };
+  }
+
+  async function clearCache(): Promise<void> {
+    if (clearingCache) return;
+    clearingCache = true;
+    try {
+      cacheSize = await api.clearCache();
+    } catch (error) {
+      showModal('Could not clear the cache', String(error));
+    } finally {
+      clearingCache = false;
+    }
+  }
   let modelMoveProgress: ModelMoveProgress | null = null;
   // Between two jobs of a queue the host already runs the next one while the window still
   // shows none: its row is queued or starting until the next refresh brings it up.
@@ -546,6 +677,8 @@
       : 'Waiting for the engine to stop'
   } (up to ${snapshot.runtime.cancel_grace_seconds || 8} s).`;
   let stopWasOn = false;
+  /** Jobs that ended as a kept, unfinished result in this session. */
+  const keptJobIds = new Set<string>();
   let stopRunSince: number | null = null;
   let stoppedNote = '';
   $: trackStop(cancelling, runSince);
@@ -558,13 +691,23 @@
       const own = snapshot.jobs.filter(
         (job) => stopRunSince !== null && job.created_at >= stopRunSince,
       );
-      stoppedNote = `Stopped. ${own.filter((job) => job.status === 'completed').length} of ${own.length} finished.`;
+      // A kept part is saved as a completed job; it is not a finished one.
+      const kept = own.filter((job) => keptJobIds.has(job.id)).length;
+      const finished = own.filter(
+        (job) => job.status === 'completed' && !keptJobIds.has(job.id),
+      ).length;
+      stoppedNote = `Stopped. ${finished} of ${own.length} finished${kept ? `, ${kept} kept unfinished` : ''}.`;
     }
     stopWasOn = now;
   }
   $: if (snapshot.runtime.active_job_id && !cancelling) stoppedNote = '';
 
-  $: settings = withListedDevice(snapshot.settings, snapshot.capabilities);
+  /** Hardware and low priority chosen in Advanced for this session; Settings saves the
+   * defaults. A new default in Settings ends the session choice for that setting. */
+  let sessionChoice: Partial<Pick<UiSettings, 'device_id' | 'neural_engine' | 'low_priority'>> = {};
+  const sessionKeys = ['device_id', 'neural_engine', 'low_priority'] as const;
+  $: defaultSettings = withListedDevice(snapshot.settings, snapshot.capabilities);
+  $: settings = withListedDevice({ ...snapshot.settings, ...sessionChoice }, snapshot.capabilities);
   // Editing bundle, device and capacity checks.
   $: editModels = snapshot.edit.models;
   $: editingDevice = editDevice(snapshot.capabilities, settings);
@@ -612,9 +755,7 @@
   // The fixes this job runs, in order. In Restore the last one is the model itself.
   $: imageFixes =
     !usingTemporalVideo && settings.task !== 'edit' && Boolean(settings.task)
-      ? settings.task === 'video'
-        ? settings.fix_stages.filter((selection) => selection.fix !== 'colour')
-        : settings.fix_stages
+      ? settings.fix_stages
       : [];
   // Engines without image_multi_fix run one fix at a time.
   $: fixPlanSupported =
@@ -623,22 +764,46 @@
     settings.task === 'video' &&
     !restoring &&
     settings.selected_video_model_id !== 'frame_by_frame';
-  $: skipUpscale = skipsUpscaleModel(settings);
-  $: noVideoRestoreModel =
-    settings.task === 'video' &&
-    restoring &&
-    imageFixes.length === 0 &&
-    settings.selected_model_id !== '__custom__';
-  $: temporalUnavailableReason = !snapshot.engine?.video_engines.includes('seedvr2')
-    ? 'This installation supports frame-by-frame video. SeedVR2 requires a compatible CUDA, ROCm or Metal engine.'
-    : /^(directml|xpu|openvino)(:|$)/.test(settings.device_id)
-      ? 'SeedVR2 cannot run on this device. Choose frame-by-frame video or a compatible CUDA, ROCm or Metal device.'
+  $: noRestoreModel =
+    restoring && imageFixes.length === 0 && settings.selected_model_id !== '__custom__';
+  $: sizeUpscaler = restoring
+    ? upscalerBeforeSameSize === '__custom__'
+      ? undefined
+      : upscalerBeforeSameSize
+        ? snapshot.catalog.models.find((model) => model.model_id === upscalerBeforeSameSize)
+        : choosePresetModel(
+            snapshot,
+            settings.task === 'video' ? 'video' : 'upscale',
+            fixQuality(activeQuality),
+            settings.content,
+            settings.preset_pins,
+            'upscale',
+          )
+    : selectedModel;
+  $: sizeMaxScale = sizeUpscaler?.native_scale ?? 4;
+  $: sizeResult =
+    selectedMedia && selectedMedia.width > 0 && selectedMedia.height > 0
+      ? restoring
+        ? `${selectedMedia.width} × ${selectedMedia.height}`
+        : `${selectedMedia.width * settings.output_scale} × ${selectedMedia.height * settings.output_scale}`
       : '';
-  $: seedMemory = snapshot.runtime.video_memory;
-  $: selectedMemory =
-    snapshot.jobs.find((job) => job.id === seedMemory?.job_id)?.media_id === selectedMedia?.id
-      ? seedMemory
-      : undefined;
+  // Each video model is judged by its own engine: the worker must list it and the device must suit it.
+  $: videoAvailable = videoAvailability(
+    snapshot.catalog.video_models,
+    snapshot.engine,
+    snapshot.capabilities,
+    settings.device_id,
+  );
+  $: temporalUnavailableReason =
+    (selectedVideoModel && videoAvailable[selectedVideoModel.model_id]?.reason) ?? '';
+  $: flashVideo = usingTemporalVideo && selectedVideoModel?.engine_kind === 'flashvsr';
+  $: videoMemory = snapshot.runtime.video_memory;
+  $: videoMemoryJob = snapshot.jobs.find((job) => job.id === videoMemory?.job_id);
+  $: selectedMemory = videoMemoryJob?.media_id === selectedMedia?.id ? videoMemory : undefined;
+  // Readings stay in the terms of the engine that produced them, whichever is selected now.
+  $: videoMemoryEngine =
+    snapshot.catalog.video_models.find((model) => model.model_id === videoMemoryJob?.model_id)
+      ?.engine_kind ?? '';
   $: preservingHdr =
     settings.task === 'video' &&
     settings.video_hdr_mode === 'preserve' &&
@@ -647,7 +812,6 @@
   $: hdrPreservationAvailable = supportsHdrPreservation(settings);
   $: hdrModelCompatible = !preservingHdr || hdrPreservationAvailable;
   $: licenseReviewModel =
-    !skipUpscale &&
     !usingTemporalVideo &&
     selectedModel &&
     ['realplksr_hfa2k_anime_x4', 'realplksr_nomoswebphoto_x4'].includes(selectedModel.model_id)
@@ -669,6 +833,18 @@
     activeDownloads.map((item) => [item.model_id, item]),
   );
   $: activeDownload = activeDownloads[0]?.model_id ?? '';
+  // Downloads own the status line while no job runs: one title, one bar for all of them.
+  $: downloadStatus = snapshot.runtime.active_job_id
+    ? null
+    : downloadSummary(activeDownloads, (id) => {
+        const model = snapshot.catalog.models.find((item) => item.model_id === id);
+        if (model) return { name: model.name, size: model.size_bytes };
+        const other = [
+          ...snapshot.catalog.video_models,
+          ...(snapshot.catalog.audio_models ?? []),
+        ].find((item) => item.model_id === id);
+        return other ? { name: other.name, size: other.total_size_bytes } : undefined;
+      });
   $: benchmarkRunning = snapshot.runtime.active_job_id.startsWith('benchmark-');
   $: benchmarkModel = snapshot.catalog.models.find((model) => model.model_id === 'span_photo_x4');
   $: benchmarkStartBlockReason =
@@ -704,13 +880,15 @@
     ((Boolean(settings.deflicker) && !preservingHdr) ||
       ((settings.video_interpolation ?? 'off') !== 'off' && interpolationSupported) ||
       (Boolean(settings.video_clean_audio) && !audioDisabled));
-  $: hasNothingToRun = noVideoRestoreModel && !hasVideoOnlyWork;
-  const nothingToRunReason =
-    'Nothing to run. Pick what to fix, or turn on De-flicker, Frame rate or Clean up audio.';
+  $: hasNothingToRun = noRestoreModel && !hasVideoOnlyWork;
+  $: nothingToRunReason =
+    settings.task === 'video'
+      ? 'Nothing to run. Pick what to fix, or turn on De-flicker, Frame rate or Clean up audio.'
+      : 'Nothing to run. Pick what to fix, or choose a larger size.';
   $: modelReady =
     settings.task === 'edit'
       ? editReady
-      : noVideoRestoreModel
+      : noRestoreModel
         ? hasVideoOnlyWork
         : usingTemporalVideo
           ? !temporalUnavailableReason && Boolean(selectedVideoModel?.installed)
@@ -760,7 +938,7 @@
   $: activityModel =
     settings.task === 'edit'
       ? (editModel?.name ?? 'Editing model')
-      : noVideoRestoreModel
+      : noRestoreModel
         ? (plan.find((s) => s.interpolationModel)?.interpolationModel?.name ??
           plan.find((s) => s.audioModel)?.audioModel?.name ??
           (settings.deflicker ? 'De-flicker' : 'Video'))
@@ -962,6 +1140,26 @@
   $: pairLoadingLabel = loadingTarget
     ? (resultRows.find((row) => row.job_id === loadingTarget)?.model_label ?? 'result')
     : '';
+  // A stopped job's kept result is marked Unfinished wherever it shows. A photo's finished
+  // tiles are measured in pixels of its saved file, which the decoded side reports.
+  $: showingRow = pairShown
+    ? resultRows.find((row) => row.job_id === choice.showing)
+    : bulkHistories
+        .find((entry) => entry.media_id === completedImageJob?.media_id)
+        ?.results.find((row) => row.output_path === completedImageJob?.output_path);
+  $: againstRow = referenceIsResult
+    ? resultRows.find((row) => row.job_id === choice.against)
+    : undefined;
+  const paneMark = (
+    row: ResultSummary | undefined,
+    about: Parameters<typeof unfinishedMark>[1],
+  ): PaneUnfinished | null => {
+    const mark = unfinishedMark(row, about);
+    return row && mark ? { id: row.job_id, ...mark } : null;
+  };
+  $: videoMark = completedVideoOutput
+    ? paneMark(videoResult, { duration: selectedMedia?.duration_seconds, fps: selectedMedia?.fps })
+    : null;
   $: paneView = {
     mediaId: selectedImage?.id ?? '',
     resultPreview,
@@ -970,6 +1168,13 @@
     referenceLabel: referenceIsResult ? (againstSide?.label ?? 'Original') : 'Original',
     showingLabel: showingSide?.label ?? '',
     singleFrame,
+    showingUnfinished:
+      videoMark ??
+      paneMark(showingRow, {
+        decoded: pairShown ? showingSide : undefined,
+        source: selectedImage,
+      }),
+    referenceUnfinished: paneMark(againstRow, { decoded: againstSide, source: selectedImage }),
   };
   let heldView = paneView;
   $: if (!loadingTarget) heldView = paneView;
@@ -983,6 +1188,8 @@
           referenceLabel: 'Original',
           showingLabel: '',
           singleFrame: null,
+          showingUnfinished: null,
+          referenceUnfinished: null,
         }
       : loadingTarget
         ? heldView
@@ -1070,7 +1277,7 @@
   $: outputDimensions = selectedMedia
     ? settings.task === 'edit'
       ? `${editDimensions(selectedMedia.width, selectedMedia.height, Math.min(settings.edit_max_dimension, editSizeAllowed)).join(' × ')} · edited`
-      : restoring || skipUpscale
+      : restoring
         ? `${selectedMedia.width} × ${selectedMedia.height} · original size`
         : usingTemporalVideo &&
             settings.video_target_resolution &&
@@ -1106,8 +1313,9 @@
   // Settings saved before the model library exist without a quality; infer it
   // from the selection so Quick/Best light up correctly after an update.
   $: activeQuality = ((): Quality => {
+    if (usingTemporalVideo) return 'custom';
     if (settings.quality) return settings.quality;
-    if (usingTemporalVideo || settings.selected_model_id === '__custom__') return 'custom';
+    if (settings.selected_model_id === '__custom__') return 'custom';
     if (settings.fix_stages.length) return 'custom';
     if (bestModel && settings.selected_model_id === bestModel.model_id) return 'best';
     if (quickModel && settings.selected_model_id === quickModel.model_id) return 'quick';
@@ -1123,9 +1331,7 @@
   $: downloads = pendingDownloads(plan);
   $: planNeedsFile = plan.some((stage) => stage.needsFile);
   $: planMissing = plan.some((stage) => stage.missing);
-  $: fixChips = (
-    settings.task === 'video' ? ['noise', 'blur', 'jpeg'] : ['noise', 'blur', 'jpeg', 'colour']
-  ) as FixKind[];
+  $: fixChips = ['noise', 'blur', 'jpeg', 'colour'] as FixKind[];
   $: prepareReady =
     !snapshot.runtime.active_job_id &&
     !activeDownload &&
@@ -1151,9 +1357,7 @@
   $: canPrepareAll = prepareReady && allReady(queueableMedia);
   $: startVerb =
     settings.task === 'video'
-      ? restoring
-        ? 'restore video'
-        : 'start video'
+      ? 'start video'
       : settings.task === 'denoise'
         ? 'restore'
         : settings.task === 'edit'
@@ -1194,8 +1398,7 @@
                     settings.task === 'video' && (settings.video_interpolation ?? 'off') !== 'off',
                   ),
                   settings.device_id,
-                  !skipUpscale &&
-                    selectedModel?.architecture !== 'DDColor' &&
+                  selectedModel?.architecture !== 'DDColor' &&
                     imageFixes.some((selection) => selection.fix === 'colour'),
                 )
         }`
@@ -1204,15 +1407,22 @@
   // until the next job starts, also while the engine restarts after it (a driver reset) and
   // the status line moves on to "Starting engine" and "Ready".
   let lastFailure = '';
-  $: if (snapshot.runtime.active_job_id) lastFailure = '';
-  else if (snapshot.runtime.status_title === 'Could not finish')
+  let lastFailureJobId = '';
+  $: if (snapshot.runtime.active_job_id) {
+    lastFailure = '';
+    lastFailureJobId = '';
+  } else if (snapshot.runtime.status_title === 'Could not finish') {
     lastFailure = snapshot.runtime.status_detail;
+  }
   let failureNote: HTMLElement | undefined;
-  // A GPU or NPU that failed (a rejected check, a driver reset) is fixed by the CPU; editing
-  // needs a GPU, so it gets no such button.
+  $: failedJobIdForRetry =
+    lastFailureJobId || snapshot.jobs.find((job) => job.status === 'failed')?.id || '';
+  // A GPU or NPU that failed (a rejected check, a driver reset) can be retried once on the CPU;
+  // editing needs a GPU, so it gets no such button.
   $: acceleratorFailure =
     settings.task !== 'edit' &&
     settings.device_id !== 'cpu' &&
+    Boolean(failedJobIdForRetry) &&
     /\b[GN]PU\b|graphics driver/.test(lastFailure);
   // What the engine said about the route (a check, a slow GPU, a partial CPU fallback): progress
   // ticks replace the detail line, so the note keeps its own line until the job ends.
@@ -1240,15 +1450,11 @@
       : null;
   $: taskCaption = !settings.task
     ? ''
-    : restoring
-      ? settings.task === 'video'
-        ? 'Removes noise, blur and JPEG artifacts at the same size.'
-        : 'Removes noise, blur and JPEG artifacts or adds colour, at the same size.'
-      : settings.task === 'edit'
-        ? 'Describe a change in words.'
-        : selectedMedia?.kind === 'video' || settings.task === 'video'
-          ? 'Enlarges video, SDR or HDR.'
-          : 'Enlarges photos and artwork with new detail.';
+    : settings.task === 'edit'
+      ? 'Describe a change in words.'
+      : selectedMedia?.kind === 'video' || settings.task === 'video'
+        ? 'Enlarges videos, fixes them, or both. Edit is for photos.'
+        : 'Enlarges photos and artwork, fixes them, or both.';
   $: benchmarkHardware = snapshot.capabilities.devices.find(
     (device) => device.id === benchmarkDevice,
   );
@@ -1309,7 +1515,7 @@
       : incompatibleNote;
   // What the primary button says it does to all: "Upscale all 52", "Start all 5 videos".
   $: allPhrase = `${
-    startVerb === 'start video' ? 'start' : startVerb === 'restore video' ? 'restore' : startVerb
+    startVerb === 'start video' ? 'start' : startVerb
   } all ${queueableMedia.length}${settings.task === 'video' ? ' videos' : ''}`;
   const lockedTitle = 'Finish or cancel the run to change settings.';
   $: lockReason = cancelling
@@ -1335,7 +1541,10 @@
                     : 'The current settings are not ready to start.');
 
   let themeForRefresh: (
-    settings: Pick<UiSettings, 'appearance' | 'colour_blind_palette'>,
+    settings: Pick<
+      UiSettings,
+      'appearance' | 'colour_blind_palette' | 'contrast' | 'viewer_background'
+    >,
   ) => void = () => {};
 
   onMount(() => {
@@ -1361,6 +1570,9 @@
         normalizeLoadedSettings();
         setupAppearance = snapshot.settings.appearance ?? 'dark';
         setupColourBlind = snapshot.settings.colour_blind_palette ?? false;
+        setupContrast = snapshot.settings.contrast ?? 'system';
+        setupMenuBar = snapshot.settings.show_in_menu_bar ?? true;
+        setupSound = snapshot.settings.completion_sound ?? false;
         setupCheckAtLaunch = snapshot.settings.check_updates_at_launch ?? true;
         setupAnonymousCount = snapshot.settings.anonymous_update_count ?? true;
         setupCrashReports = snapshot.settings.crash_reports ?? true;
@@ -1476,16 +1688,30 @@
       ) {
         latest.runtime.result_preview_data_url = snapshot.runtime.result_preview_data_url;
       }
+      // The window counts a photo's finished tiles from its progress; the host's snapshot
+      // has no such count to replace it with.
+      if (
+        latest.runtime.active_job_id &&
+        latest.runtime.active_job_id === snapshot.runtime.active_job_id
+      ) {
+        latest.runtime.tiles_completed ??= snapshot.runtime.tiles_completed;
+        latest.runtime.tiles_total ??= snapshot.runtime.tiles_total;
+      }
       snapshot = latest;
       if (!latest.settings.crash_reports) {
-        crashReports = [];
         crashNotice = false;
-      } else if (modalKind === 'performance') {
+      }
+      if (modalKind === 'performance') {
         void refreshCrashReports();
       }
       themeForRefresh(
         latest.settings.privacy_choice_made === false
-          ? { appearance: setupAppearance, colour_blind_palette: setupColourBlind }
+          ? {
+              ...latest.settings,
+              appearance: setupAppearance,
+              colour_blind_palette: setupColourBlind,
+              contrast: setupContrast,
+            }
           : latest.settings,
       );
       chooseInitialModel();
@@ -1558,6 +1784,18 @@
         return;
       }
       const sequence = Number(message.data.sequence ?? 0);
+      const encoded = typeof message.data.jpeg_base64 === 'string' ? message.data.jpeg_base64 : '';
+      if (
+        jobId === snapshot.runtime.active_job_id &&
+        String(message.data.preview_kind ?? '') === 'tile' &&
+        encoded &&
+        isFullImageFrame(message.data) &&
+        sequence > stageBaseSequence
+      ) {
+        stageBasePreview = `data:image/jpeg;base64,${encoded}`;
+        stageBaseJobId = jobId;
+        stageBaseSequence = sequence;
+      }
       if (
         jobId !== snapshot.runtime.active_job_id ||
         (activeJobMediaId && selectedMedia?.id !== activeJobMediaId) ||
@@ -1613,6 +1851,11 @@
     const offScreen =
       messageJob !== snapshot.runtime.active_job_id &&
       (snapshot.runtime.active_batch_job_ids ?? []).includes(messageJob);
+    if (
+      (message.type === 'job_completed' || message.type === 'video_job_completed') &&
+      message.data.partial
+    )
+      keptJobIds.add(messageJob);
     snapshot = applyWorkerEnvelope(snapshot, message);
     // A pinned pair keeps its zoom, pan and divider while other runs start and finish.
     const pinned = Boolean(selectedMedia && pairChoices[selectedMedia.id]?.pinned);
@@ -1630,6 +1873,7 @@
     } else if (!offScreen && (message.type === 'job_cancelled' || message.type === 'job_failed')) {
       livePreviewWarning = '';
       resetProgressivePreview();
+      if (message.type === 'job_failed') lastFailureJobId = messageJob;
     }
     if (message.type === 'media_info') {
       if (
@@ -1777,17 +2021,15 @@
       patch.selected_video_model_id = 'frame_by_frame';
       patch.output_scale = 1;
       patch.enable_face_model = false;
-      const stages = current.fix_stages
-        .filter((selection) => selection.fix !== 'colour')
-        .map((selection) => {
-          const own = byId(selection.model_id);
-          if (own && fitsFix(own, selection.fix)) return selection;
-          return {
-            ...selection,
-            model_id:
-              chooseFixModel(snapshot, selection.fix, quality, current.preset_pins)?.model_id ?? '',
-          };
-        });
+      const stages = current.fix_stages.map((selection) => {
+        const own = byId(selection.model_id);
+        if (own && fitsFix(own, selection.fix)) return selection;
+        return {
+          ...selection,
+          model_id:
+            chooseFixModel(snapshot, selection.fix, quality, current.preset_pins)?.model_id ?? '',
+        };
+      });
       patch.fix_stages = stages;
       patch.fixes = stages.map((selection) => selection.fix);
       const last = stages.at(-1);
@@ -1797,8 +2039,26 @@
         if (lastModel) patch.halo = lastModel.recommended_halo;
       }
       changed = true;
+    } else if (
+      current.task === 'denoise' &&
+      current.fix_stages.length === 0 &&
+      current.selected_model_id !== '__custom__' &&
+      current.selected_model_id
+    ) {
+      const picked = byId(current.selected_model_id);
+      const fit = picked
+        ? (['noise', 'blur', 'jpeg', 'colour'] as const).find((fix) => fitsFix(picked, fix))
+        : undefined;
+      if (fit && picked) {
+        patch.fix_stages = [{ fix: fit, model_id: picked.model_id }];
+        patch.fixes = [fit];
+        patch.halo = picked.recommended_halo;
+      } else {
+        patch.selected_model_id = '';
+      }
+      changed = true;
     } else if (current.task === 'video' && current.video_task === 'denoise') {
-      const videoStages = current.fix_stages.filter((selection) => selection.fix !== 'colour');
+      const videoStages = current.fix_stages;
       const hasVideoOption =
         Boolean(current.deflicker) ||
         (current.video_interpolation ?? 'off') !== 'off' ||
@@ -1810,7 +2070,7 @@
       ) {
         const picked = byId(current.selected_model_id);
         const fit = picked
-          ? (['noise', 'blur', 'jpeg'] as const).find((fix) => fitsFix(picked, fix))
+          ? (['noise', 'blur', 'jpeg', 'colour'] as const).find((fix) => fitsFix(picked, fix))
           : undefined;
         if (fit && picked) {
           patch.fix_stages = [{ fix: fit, model_id: picked.model_id }];
@@ -1837,14 +2097,18 @@
       return;
     }
     if (!task || snapshot.settings.selected_model_id) return;
-    if (task === 'video' && snapshot.settings.video_task === 'denoise') return;
+    if (isRestoreTask(snapshot.settings)) return;
     resolveRecipe({ quality: snapshot.settings.quality || 'quick' }, { keepVideoEngine: true });
   }
 
   // Quick and Best describe the result; the model behind them is named once, under Model.
-  function qualityBlurb(quality: 'quick' | 'best'): string {
-    if (restoring) return quality === 'quick' ? 'Fast clean-up' : 'Most careful, slower';
-    if (settings.task === 'video')
+  function qualityBlurb(
+    quality: 'quick' | 'best',
+    isRestoring = restoring,
+    task = settings.task,
+  ): string {
+    if (isRestoring) return quality === 'quick' ? 'Fast clean-up' : 'Most careful, slower';
+    if (task === 'video')
       return quality === 'quick' ? 'Fast, frame by frame' : 'More detail, slower';
     return quality === 'quick' ? 'Fast, clean result' : 'Finest detail, slower';
   }
@@ -1908,29 +2172,23 @@
           }),
     };
     if (isRestoring) {
-      // Restore's model is its last fix; for photos without a fix it is the preset's or your own.
+      // Same size's model is its last fix, or your own file when nothing is ticked.
       const final = fix_stages.at(-1);
       const kept =
         keepPrimary &&
         (final
           ? final.model_id === current.selected_model_id
-          : task !== 'video' || !current.selected_model_id);
+          : current.selected_model_id === '__custom__');
       if (!kept) {
-        const model = final
-          ? byId(final.model_id)
-          : choosePresetModel(
-              snapshot,
-              task,
-              quality,
-              current.content,
-              current.preset_pins,
-              currentVideoTask,
-            );
-        const id = final ? final.model_id : (model?.model_id ?? '');
-        patchSettings.selected_model_id = id;
-        if (model) patchSettings.halo = model.recommended_halo;
-        // A pick by hand that cannot fix the problem gives way to the preset's model.
-        if (keepPrimary && final && chosen.has(final.fix)) patchSettings.quality = quality;
+        if (final) {
+          const model = byId(final.model_id);
+          patchSettings.selected_model_id = final.model_id;
+          if (model) patchSettings.halo = model.recommended_halo;
+          // A pick by hand that cannot fix the problem gives way to the preset's model.
+          if (keepPrimary && chosen.has(final.fix)) patchSettings.quality = quality;
+        } else {
+          patchSettings.selected_model_id = '';
+        }
       }
       if (task === 'video') patchSettings.selected_video_model_id = 'frame_by_frame';
       patchSettings.output_scale = 1;
@@ -1948,8 +2206,8 @@
           );
       if (primary) {
         patchSettings.selected_model_id = primary.model_id;
-        // Quick and Best are frame-by-frame recipes; a saved SeedVR2 choice
-        // survives only the initial resolution and task changes.
+        // Quick and Best are frame-by-frame recipes; a saved SeedVR2 or FlashVSR
+        // choice survives only the initial resolution and task changes.
         if (!options.keepVideoEngine) patchSettings.selected_video_model_id = 'frame_by_frame';
         const minScale = 2;
         if (
@@ -1970,7 +2228,7 @@
 
   function setContent(content: UiSettings['content']): void {
     if (settings.content === content) return;
-    resolveRecipe({ content, quality: activeQuality }, { keepScale: skipUpscale });
+    resolveRecipe({ content, quality: activeQuality }, { keepScale: true });
   }
 
   function toggleFix(fix: FixKind): void {
@@ -2031,12 +2289,13 @@
   function openLibrary(
     slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit' | 'try',
     fix = settings.fix_stages.at(-1)?.fix,
+    select?: string,
   ): void {
     // Restore's model is the fix itself, so with a chip on it is chosen like one.
     libraryContext =
       slot === 'fix' || ((slot === 'primary' || slot === 'try') && restoring && fix)
-        ? { slot, fix }
-        : { slot };
+        ? { slot, fix, select }
+        : { slot, select };
     // Try others… keeps the settings the plan card shows now, whatever the
     // library changes before the runs are queued.
     trialBase =
@@ -2198,12 +2457,16 @@
     else await start();
   }
 
-  /** The failure's shortcut. The button goes away with the GPU, so the keyboard moves to the
-   *  Hardware menu that now says CPU, or to the error itself while Advanced is closed. */
-  async function useTheCpu(): Promise<void> {
-    updateSettings(hardwarePatch('cpu'));
-    await tick();
-    (document.getElementById('device') ?? failureNote)?.focus();
+  /** Re-queue only the failed job on CPU, leaving the saved device preference unchanged. */
+  async function retryOnCpu(): Promise<void> {
+    const jobId = failedJobIdForRetry;
+    if (!jobId) return;
+    await attempt('Could not retry on CPU', async () => {
+      await api.retryJobOnCpu(jobId);
+      lastFailure = '';
+      lastFailureJobId = '';
+      if (api.isTauri()) await refresh();
+    });
   }
 
   function supportsHdrPreservation(candidate: UiSettings): boolean {
@@ -2236,28 +2499,151 @@
   }
 
   /**
-   * The update switches are saved by the host on its own and may change during a job.
+   * App-wide preferences are saved by the host on its own and may change during a job.
    * The window shows the host's value afterwards, also when saving failed.
    */
-  function setUpdateSwitch(
-    name: 'check_updates_at_launch' | 'anonymous_update_count' | 'crash_reports' | 'low_priority',
-    value: boolean,
-  ): void {
-    if (!api.isTauri()) {
-      snapshot = { ...snapshot, settings: { ...snapshot.settings, [name]: value } };
-      return;
+  /** Advanced: hardware and low priority hold for this session, the rest is saved. */
+  function chooseInAdvanced(patch: Partial<UiSettings>): void {
+    const rest: Partial<UiSettings> = { ...patch };
+    let next = { ...sessionChoice };
+    for (const key of sessionKeys) {
+      if (!(key in patch)) continue;
+      delete rest[key];
+      if (patch[key] === snapshot.settings[key]) {
+        const { [key]: _dropped, ...kept } = next;
+        next = kept;
+      } else {
+        next = { ...next, [key]: patch[key] };
+      }
     }
-    void api
-      .setUpdateSwitch(name, value)
-      .catch((error) => showModal('Could not save settings', String(error)))
-      .finally(() => {
-        scheduleRefresh();
-        if (name === 'crash_reports') void refreshCrashReports();
-      });
+    if ('low_priority' in patch) {
+      void api
+        .setRunLowPriority(Boolean(patch.low_priority))
+        .catch((error) => showModal('Could not change the priority', String(error)));
+    }
+    sessionChoice = next;
+    if (Object.keys(rest).length) updateSettings(rest);
   }
 
-  function setTask(task: TaskKind, nextVideoTask?: 'upscale' | 'denoise'): void {
+  function useDefaultsForSession(): void {
+    if ('low_priority' in sessionChoice) {
+      void api
+        .setRunLowPriority(Boolean(snapshot.settings.low_priority))
+        .catch((error) => showModal('Could not change the priority', String(error)));
+    }
+    sessionChoice = {};
+  }
+
+  /** Settings: a new default also replaces the session choice for that setting. */
+  function updateDefaults(patch: Partial<UiSettings>): void {
+    let next = { ...sessionChoice };
+    for (const key of sessionKeys) {
+      if (key in patch) {
+        const { [key]: _dropped, ...kept } = next;
+        next = kept;
+      }
+    }
+    sessionChoice = next;
+    updateSettings(patch);
+  }
+
+  async function setPreference(
+    name: api.PreferenceName,
+    value:
+      | boolean
+      | UiSettings['appearance']
+      | UiSettings['interface_scale']
+      | NonNullable<UiSettings['contrast']>
+      | NonNullable<UiSettings['viewer_background']>
+      | NonNullable<UiSettings['stopped_job_result']>,
+  ): Promise<void> {
+    if (!api.isTauri()) {
+      snapshot = { ...snapshot, settings: { ...snapshot.settings, [name]: value } };
+      if (
+        name === 'appearance' ||
+        name === 'colour_blind_palette' ||
+        name === 'contrast' ||
+        name === 'viewer_background'
+      ) {
+        themeForRefresh(snapshot.settings);
+      }
+      return;
+    }
+    try {
+      await api.setPreference(name, value);
+      if (name === 'low_priority') {
+        const { low_priority: _ended, ...kept } = sessionChoice;
+        sessionChoice = kept;
+      }
+      snapshot = { ...snapshot, settings: { ...snapshot.settings, [name]: value } };
+      if (
+        name === 'appearance' ||
+        name === 'colour_blind_palette' ||
+        name === 'contrast' ||
+        name === 'viewer_background'
+      ) {
+        themeForRefresh(snapshot.settings);
+      }
+    } catch (error) {
+      showModal('Could not save settings', String(error));
+    } finally {
+      scheduleRefresh();
+      if (name === 'crash_reports') void refreshCrashReports();
+    }
+  }
+
+  function setSize(scale: 1 | 2 | 3 | 4): void {
+    if (scale === 1) {
+      if (restoring) return;
+      const remembered = activeQuality === 'custom' ? settings.selected_model_id : '';
+      setTask(settings.task === 'video' ? 'video' : 'denoise', 'denoise');
+      upscalerBeforeSameSize = remembered;
+      return;
+    }
+    if (restoring) {
+      setTask(settings.task === 'video' ? 'video' : 'upscale', 'upscale', {
+        scale,
+        modelId: upscalerBeforeSameSize,
+      });
+      return;
+    }
+    if (settings.output_scale !== scale) updateSettings({ output_scale: scale });
+  }
+
+  function radioGroupKeydown(event: KeyboardEvent): void {
+    const step =
+      event.key === 'ArrowRight' || event.key === 'ArrowDown'
+        ? 1
+        : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+          ? -1
+          : 0;
+    if (!step && event.key !== 'Home' && event.key !== 'End') return;
+    const button = event.currentTarget as HTMLButtonElement;
+    const group = button.closest('[role="radiogroup"]');
+    if (!group) return;
+    const buttons = Array.from(
+      group.querySelectorAll<HTMLButtonElement>('button[role="radio"]:not(:disabled)'),
+    );
+    if (!buttons.length) return;
+    event.preventDefault();
+    const current = buttons.indexOf(button);
+    const nextIndex =
+      event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? buttons.length - 1
+          : ((current < 0 ? 0 : current) + step + buttons.length) % buttons.length;
+    buttons[nextIndex].focus();
+    buttons[nextIndex].click();
+  }
+
+  function setTask(
+    task: TaskKind,
+    nextVideoTask?: 'upscale' | 'denoise',
+    enlarge?: { scale: number; modelId: string },
+  ): void {
     if (selectedMedia && (task === 'video') !== (selectedMedia.kind === 'video')) return;
+    upscalerBeforeSameSize = '';
     if (task !== 'video') lastImageTask = task;
     if (task === 'edit') {
       // Editing leaves the upscale and restore setup untouched for when you switch back.
@@ -2266,48 +2652,70 @@
       ensureEditModel();
       return;
     }
+    const wasRestoring = restoring;
+    const prevQuality = activeQuality;
     const targetVideoTask = task === 'video' ? (nextVideoTask ?? videoTask) : undefined;
     const targetRestoring =
       task === 'denoise' || (task === 'video' && targetVideoTask === 'denoise');
-    const switchingToVideoRestore =
-      targetRestoring && task === 'video' && !(settings.task === 'video' && restoring);
-    const videoFixes = settings.fix_stages.filter((selection) => selection.fix !== 'colour');
-    const needsDefaultNoise = switchingToVideoRestore && videoFixes.length === 0;
+    // Colour picked for photos is not carried to a video: on a colour video it would
+    // replace the real colours, so a video gets Colour only when it is chosen there.
+    const enteringVideo = task === 'video' && settings.task !== 'video';
+    const videoFixes = enteringVideo
+      ? settings.fix_stages.filter((selection) => selection.fix !== 'colour')
+      : settings.fix_stages;
     const models = modelsForTask(snapshot, task, targetVideoTask);
-    // Keep a manual choice that still fits the task; otherwise the active
-    // recipe (Quick until one is chosen) resolves the plan for the new task.
-    const kept =
-      activeQuality === 'custom'
-        ? models.find((model) => model.model_id === settings.selected_model_id)
+    const enlargeCustom =
+      !targetRestoring && enlarge?.modelId === '__custom__' && Boolean(settings.custom_model_path);
+    const enlargeCatalog =
+      !targetRestoring && enlarge?.modelId && !enlargeCustom
+        ? models.find((model) => model.model_id === enlarge.modelId)
         : undefined;
+    // Keep a manual choice that still fits the task (or the upscaler remembered before Same size);
+    // otherwise the active recipe (Quick until one is chosen) resolves the plan for the new task.
+    const kept = enlargeCustom
+      ? undefined
+      : enlargeCatalog
+        ? enlargeCatalog
+        : prevQuality === 'custom'
+          ? models.find((model) => model.model_id === settings.selected_model_id)
+          : undefined;
+    const keptId = enlargeCustom ? '__custom__' : (kept?.model_id ?? '');
+    const targetScale = enlarge
+      ? enlarge.scale
+      : settings.output_scale >= 2
+        ? settings.output_scale
+        : 4;
     updateSettings({
       task,
       ...(task === 'video' ? { video_task: targetVideoTask } : {}),
+      ...(videoFixes !== settings.fix_stages
+        ? { fix_stages: videoFixes, fixes: videoFixes.map((selection) => selection.fix) }
+        : {}),
       ...(targetRestoring ? { selected_video_model_id: 'frame_by_frame' } : {}),
-      selected_model_id: kept?.model_id ?? '',
+      ...(enlargeCustom || enlargeCatalog ? { quality: 'custom' } : {}),
+      ...(enlargeCatalog ? { halo: enlargeCatalog.recommended_halo } : {}),
+      selected_model_id: keptId,
       output_scale: targetRestoring
         ? 1
-        : Math.min(kept?.native_scale ?? 4, Math.max(2, settings.output_scale)),
+        : Math.min(kept?.native_scale ?? 4, Math.max(2, targetScale)),
       enable_face_model: false,
     });
     termsAccepted = {};
-    if (!kept || needsDefaultNoise) {
-      const nextFixStages: FixStageSelection[] = needsDefaultNoise
-        ? [
-            {
-              fix: 'noise',
-              model_id: kept && fitsFix(kept, 'noise') ? kept.model_id : '',
-            },
-          ]
-        : settings.fix_stages;
+    if (!keptId) {
+      const fallbackQuality =
+        wasRestoring !== targetRestoring
+          ? fixQuality(prevQuality)
+          : prevQuality === 'quick' || prevQuality === 'best'
+            ? prevQuality
+            : 'quick';
       resolveRecipe(
         {
-          quality: activeQuality === 'quick' || activeQuality === 'best' ? activeQuality : 'quick',
-          fix_stages: nextFixStages,
-          fixes: nextFixStages.map((selection) => selection.fix),
+          quality: fallbackQuality,
+          fix_stages: videoFixes,
+          fixes: videoFixes.map((selection) => selection.fix),
           ...(task === 'video' ? { video_task: targetVideoTask } : {}),
         },
-        { keepVideoEngine: !targetRestoring },
+        { keepVideoEngine: !targetRestoring, keepScale: true },
       );
     }
   }
@@ -2739,6 +3147,23 @@
     }
   }
 
+  async function removeLinuxMenu(): Promise<void> {
+    if (linuxMenuBusy) return;
+    linuxMenuBusy = true;
+    try {
+      await api.uninstallLinuxMenu();
+      snapshot = {
+        ...snapshot,
+        linux_menu_installed: false,
+        settings: { ...snapshot.settings, linux_menu_prompt_dismissed: true },
+      };
+    } catch (error) {
+      showModal('Could not remove from applications menu', String(error));
+    } finally {
+      linuxMenuBusy = false;
+    }
+  }
+
   async function dismissLinuxMenu(): Promise<void> {
     snapshot = {
       ...snapshot,
@@ -2765,40 +3190,127 @@
     }
   }
 
+  let consentPath = '';
+  let consentRequest = 0;
+  $: if (!settingsLocked && settings.custom_model_path !== consentPath) {
+    consentPath = settings.custom_model_path;
+    void refreshCheckpointConsent(consentPath);
+  }
+
+  async function refreshCheckpointConsent(path: string): Promise<void> {
+    const request = ++consentRequest;
+    if (!path || path.toLowerCase().endsWith('.safetensors')) return;
+    updateSettings({ allow_unsafe_pickle_model: false });
+    try {
+      const allowed = await api.checkpointConsent(path);
+      if (request === consentRequest && settings.custom_model_path === path) {
+        if (settingsLocked) consentPath = '';
+        else updateSettings({ allow_unsafe_pickle_model: allowed });
+      }
+    } catch {
+      if (request === consentRequest && settings.custom_model_path === path) {
+        if (settingsLocked) consentPath = '';
+        else updateSettings({ allow_unsafe_pickle_model: false });
+      }
+    }
+  }
+
+  async function changeCheckpointConsent(allow: boolean): Promise<void> {
+    const path = settings.custom_model_path;
+    const request = ++consentRequest;
+    try {
+      const allowed = await api.checkpointConsent(path, allow);
+      if (request === consentRequest && settings.custom_model_path === path)
+        updateSettings({ allow_unsafe_pickle_model: allowed });
+    } catch (error) {
+      if (request === consentRequest && settings.custom_model_path === path) {
+        updateSettings({ allow_unsafe_pickle_model: false });
+        showModal('Could not save checkpoint confirmation', String(error));
+      }
+    }
+  }
+
+  function selectCustomModel(path: string): void {
+    const models = customModels(settings);
+    if (!models.some((model) => model.path === path)) {
+      models.push({ path, name: defaultCustomModelName(path) });
+    }
+    updateSettings({
+      selected_model_id: '__custom__',
+      ...(settings.task === 'video' && settings.selected_video_model_id !== 'frame_by_frame'
+        ? { selected_video_model_id: 'frame_by_frame' }
+        : {}),
+      custom_model_path: path,
+      custom_models: models,
+      allow_unsafe_pickle_model: false,
+      enable_face_model: false,
+      quality: 'custom',
+      ...(restoring ? { fix_stages: [], fixes: [] } : {}),
+    });
+    if (consentPath === path) void refreshCheckpointConsent(path);
+    libraryOpen = false;
+    termsAccepted = {};
+  }
+
+  function renameCustomModel(path: string, name: string): void {
+    updateSettings({
+      custom_models: customModels(settings).map((model) =>
+        model.path === path
+          ? { ...model, name: name.trim() || defaultCustomModelName(path) }
+          : model,
+      ),
+    });
+  }
+
   async function chooseCustomModel(): Promise<void> {
     const path = await api.chooseCustomModel().catch((error) => {
       showModal('Could not choose the model', String(error));
       return null;
     });
-    if (path) {
-      updateSettings({
-        selected_model_id: '__custom__',
-        custom_model_path: path,
-        allow_unsafe_pickle_model: false,
-        enable_face_model: false,
-        quality: 'custom',
-        // In Restore your own checkpoint is the model, not one of the fixes.
-        ...(restoring
-          ? {
-              fix_stages: [],
-              fixes: [],
-            }
-          : {}),
-      });
-      libraryOpen = false;
-      termsAccepted = {};
-    }
+    if (path) selectCustomModel(path);
   }
 
-  function selectVideoEngine(modelId: string): void {
-    updateSettings({ selected_video_model_id: modelId });
+  function useVideoModelForJob(model: CatalogVideoModel | undefined): void {
+    if (!model) return;
+    updateSettings({
+      selected_video_model_id: model.model_id,
+      quality: 'custom',
+      output_scale: Math.min(4, Math.max(2, settings.output_scale)),
+      enable_face_model: false,
+    });
     termsAccepted = {};
+    libraryOpen = false;
   }
 
   function selectPrimaryModel(modelId: string): void {
     const model = snapshot.catalog.models.find((candidate) => candidate.model_id === modelId);
+    if (restoring && model) {
+      const fix = fixesOf(model).find(
+        (entry): entry is Exclude<FixKind, 'faces'> => entry !== 'faces',
+      );
+      if (fix) {
+        updateSettings({
+          selected_model_id: modelId,
+          ...(settings.task === 'video' && settings.selected_video_model_id !== 'frame_by_frame'
+            ? { selected_video_model_id: 'frame_by_frame' }
+            : {}),
+          fix_stages: [{ fix, model_id: modelId }],
+          fixes: [fix],
+          halo: model.recommended_halo,
+          output_scale: 1,
+          allow_unsafe_pickle_model: false,
+          enable_face_model: false,
+          quality: 'custom',
+        });
+        termsAccepted = {};
+        return;
+      }
+    }
     updateSettings({
       selected_model_id: modelId,
+      ...(settings.task === 'video' && settings.selected_video_model_id !== 'frame_by_frame'
+        ? { selected_video_model_id: 'frame_by_frame' }
+        : {}),
       output_scale: restoring
         ? 1
         : model
@@ -2815,11 +3327,12 @@
 
   function applyPreset(kind: 'quick' | 'best'): void {
     if (!settings.task || settings.task === 'edit') {
-      showModal('Choose a task', 'Select Upscale, Restore or Video before applying a preset.');
+      showModal('Choose a task', 'Choose a task before applying a preset.');
       return;
     }
-    // A 1× job stays at 1×: Quick and Best then only swap the fix models.
-    resolveRecipe({ quality: kind }, { keepScale: skipUpscale });
+    upscalerBeforeSameSize = '';
+    // Keep the current size: Quick and Best choose the upscaler and every fix model.
+    resolveRecipe({ quality: kind }, { keepScale: true });
   }
 
   function dismissDownloadError(modelId: string): void {
@@ -2882,13 +3395,12 @@
         quality: settings.quality,
         content: settings.content,
         recipe_name: snapshot.recipes.find((recipe) => activeRecipeIds.has(recipe.id))?.name ?? '',
-        fixes:
-          task === 'video' ? settings.fixes.filter((fix) => fix !== 'colour') : [...settings.fixes],
+        fixes: [...settings.fixes],
       },
       batch_mode: batchMode,
       task,
       video_task: videoTask,
-      model_id: noVideoRestoreModel ? '' : settings.selected_model_id,
+      model_id: noRestoreModel ? '' : settings.selected_model_id,
       video_model_id: settings.selected_video_model_id,
       fix_stages: usingTemporalVideo ? [] : imageFixes,
       custom_model_path: settings.custom_model_path,
@@ -3016,10 +3528,10 @@
   }
 
   // Only when it differs from Cancel queue, or names what a trial is doing.
-  $: selectedInflight = selectedImage
+  $: selectedInflight = selectedMedia
     ? snapshot.jobs.filter(
         (job) =>
-          job.media_id === selectedImage?.id &&
+          job.media_id === selectedMedia?.id &&
           ['queued', 'starting', 'running', 'cancelling'].includes(job.status),
       ).length
     : 0;
@@ -3035,11 +3547,48 @@
   let cancellingImage = false;
   let retryingEngine = false;
 
-  async function cancelSelectedImage(): Promise<void> {
-    if (!selectedImage) return;
+  function activeJobSupportsPartial(): boolean {
+    const activeId = snapshot.runtime.active_job_id;
+    if (!activeId) return false;
+    const activeJob = snapshot.jobs.find((job) => job.id === activeId);
+    if (!activeJob) return false;
+    // A photo is kept only when the host says so; an older host never does.
+    if (activeJob.media_kind !== 'video') return snapshot.runtime.can_keep_partial === true;
+    if (snapshot.runtime.can_keep_partial !== undefined) {
+      return snapshot.runtime.can_keep_partial;
+    }
+    const codec = settings.video_codec ?? 'auto';
+    if (codec === 'h264' || codec === 'hevc' || codec === 'prores') {
+      const system = systemCodecs(snapshot.capabilities);
+      const container = settings.video_container ?? 'mp4';
+      const media = snapshot.media.find((item) => item.id === activeJob.media_id);
+      const preserving =
+        (settings.video_hdr_mode ?? 'tone_map') === 'preserve' && Boolean(media?.hdr_format);
+      if (
+        !system ||
+        preserving ||
+        !system.encode.includes(codec) ||
+        !system.containers.includes(container)
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** Something is finished that could be kept: a frame of a video, a tile of a photo. */
+  function activeJobCanKeepPartial(): boolean {
+    if (!activeJobSupportsPartial()) return false;
+    const activeJob = snapshot.jobs.find((job) => job.id === snapshot.runtime.active_job_id);
+    return activeJob?.media_kind === 'video'
+      ? (snapshot.runtime.frames_processed ?? 0) > 0
+      : (snapshot.runtime.tiles_completed ?? 0) > 0;
+  }
+
+  async function performCancelSelectedImage(mediaId: string, keepPartial: boolean): Promise<void> {
     cancellingImage = true;
     try {
-      await api.cancelJobsForMedia(selectedImage.id);
+      await api.cancelJobsForMedia(mediaId, keepPartial);
       await refresh();
     } catch (error) {
       showModal('Could not cancel', String(error));
@@ -3048,17 +3597,82 @@
     }
   }
 
-  async function cancelWork(): Promise<void> {
+  async function cancelSelectedImage(): Promise<void> {
+    if (!selectedMedia || stopPrompt) return;
+    const activeId = snapshot.runtime.active_job_id;
+    const stopsActive = Boolean(activeId && activeJobMediaId === selectedMedia.id);
+    const choice = settings.stopped_job_result ?? 'ask';
+    if (stopsActive && activeJobCanKeepPartial() && choice === 'ask') {
+      stopDontAskAgain = false;
+      stopPrompt = {
+        scope: 'media',
+        mediaId: selectedMedia.id,
+        jobId: activeId,
+        fileName: selectedMedia.name,
+      };
+      return;
+    }
+    const keepPartial = stopsActive && activeJobSupportsPartial() && choice === 'keep';
+    await performCancelSelectedImage(selectedMedia.id, keepPartial);
+  }
+
+  async function performCancelWork(keepPartial: boolean): Promise<void> {
     if (cancelling) return;
     requestingCancel = true;
     discardRuntimePulse();
     try {
-      await api.cancelJobs();
+      await api.cancelJobs(keepPartial);
       await refresh();
     } catch (error) {
       showModal('Could not cancel', String(error));
     } finally {
       requestingCancel = false;
+    }
+  }
+
+  async function cancelWork(): Promise<void> {
+    if (cancelling || stopPrompt) return;
+    const activeId = snapshot.runtime.active_job_id;
+    const choice = settings.stopped_job_result ?? 'ask';
+    if (activeId && activeJobCanKeepPartial() && choice === 'ask') {
+      const activeJob = snapshot.jobs.find((job) => job.id === activeId);
+      const media = activeJob
+        ? snapshot.media.find((item) => item.id === activeJob.media_id)
+        : undefined;
+      stopDontAskAgain = false;
+      stopPrompt = {
+        scope: 'queue',
+        mediaId: activeJob?.media_id ?? '',
+        jobId: activeId,
+        fileName:
+          media?.name ||
+          activeJob?.media_name ||
+          (activeJob?.media_kind === 'image' ? 'this photo' : 'this video'),
+      };
+      return;
+    }
+    const keepPartial = activeJobSupportsPartial() && choice === 'keep';
+    await performCancelWork(keepPartial);
+  }
+
+  function closeStopModal(): void {
+    stopPrompt = null;
+    stopDontAskAgain = false;
+  }
+
+  async function confirmStopModal(keepPartial: boolean): Promise<void> {
+    const prompt = stopPrompt;
+    const remember = stopDontAskAgain;
+    if (!prompt) return;
+    stopPrompt = null;
+    stopDontAskAgain = false;
+    if (remember) {
+      await setPreference('stopped_job_result', keepPartial ? 'keep' : 'discard');
+    }
+    if (prompt.scope === 'media') {
+      await performCancelSelectedImage(prompt.mediaId, keepPartial);
+    } else {
+      await performCancelWork(keepPartial);
     }
   }
 
@@ -3106,7 +3720,7 @@
       quality: activeQuality,
       content: settings.content,
       fixes: settings.fixes.filter((fix) => fix !== 'faces'),
-      stages: noVideoRestoreModel
+      stages: noRestoreModel
         ? []
         : [
             ...recipeFixPrefix.map((selection) => ({
@@ -3165,6 +3779,7 @@
       );
       return;
     }
+    upscalerBeforeSameSize = '';
     const fix_stages = recipeFixStages(recipe, snapshot.catalog);
     const recipeModel = snapshot.catalog.models.find((model) => model.model_id === recipe.model_id);
     const targetRestoring = isRestoreRecipe(recipe);
@@ -3390,9 +4005,11 @@
     // A dialog takes the input until it is answered; only Cancel, which ends work, still acts.
     if (
       (modalTitle ||
+        stopPrompt ||
         reportOpen ||
         settings.privacy_choice_made === false ||
         libraryOpen ||
+        settingsOpen ||
         ffmpegNotice ||
         $updateDialogOpen) &&
       action !== 'file.cancel'
@@ -3425,10 +4042,7 @@
           break;
         case 'file.cancel':
           if (preparing) await cancelPreparation();
-          else await api.cancelJobs();
-          break;
-        case 'file.integrations':
-          await showIntegrations();
+          else await cancelWork();
           break;
         case 'preset.quick':
           applyPreset('quick');
@@ -3470,13 +4084,8 @@
         case 'help.report-problem':
           await showReport();
           break;
-        case 'help.add-desktop-menu':
-          await api.installLinuxMenu();
-          await refresh();
-          break;
-        case 'help.remove-desktop-menu':
-          await api.uninstallLinuxMenu();
-          await refresh();
+        case 'app.settings':
+          openSettings('general');
           break;
         case 'app.updates':
           updateDialogOpen.set(true);
@@ -3488,7 +4097,7 @@
   }
 
   function showPerformance(): void {
-    if (settings.crash_reports) void refreshCrashReports();
+    void refreshCrashReports();
     if (!benchmarkDevice)
       benchmarkDevice =
         snapshot.capabilities.devices.find((device) => device.id !== 'cpu')?.id ?? 'cpu';
@@ -3500,8 +4109,12 @@
   }
 
   async function showIntegrations(): Promise<void> {
-    integration = await api.integrationStatus();
-    showModal('System Integrations', integration.summary, 'integrations');
+    try {
+      integration = await api.integrationStatus();
+      showModal('System Integrations', integration.summary, 'integrations');
+    } catch (error) {
+      showModal('System Integrations', String(error));
+    }
   }
 
   async function changeIntegrations(install: boolean): Promise<void> {
@@ -3585,7 +4198,7 @@
     if (settingsLocked) {
       showModal(
         'Settings are locked',
-        'Wait for the running job to finish, then select FFmpeg under Advanced settings → Video.',
+        'Wait for the running job to finish, then select FFmpeg under Settings → Storage.',
       );
       return;
     }
@@ -3733,8 +4346,24 @@
     previewPane?.resetView();
   }
 
+  function isFullImageFrame(data: Record<string, unknown>): boolean {
+    const imageWidth = Number(data.image_width ?? 0);
+    const imageHeight = Number(data.image_height ?? 0);
+    return (
+      imageWidth > 0 &&
+      imageHeight > 0 &&
+      Number(data.output_x ?? 0) === 0 &&
+      Number(data.output_y ?? 0) === 0 &&
+      Number(data.output_width ?? 0) === imageWidth &&
+      Number(data.output_height ?? 0) === imageHeight
+    );
+  }
+
   function resetProgressivePreview(jobId = ''): void {
     lastLivePreviewSequence = 0;
+    stageBasePreview = '';
+    stageBaseJobId = jobId;
+    stageBaseSequence = 0;
     previewPane?.resetProgressivePreview(jobId);
   }
 
@@ -3786,12 +4415,6 @@
 
   <UpdatePanel
     processing={settingsLocked || inflightMediaIds.size > 0 || Boolean(activeDownload)}
-    anonymousUpdateCount={settings.anonymous_update_count ?? false}
-    completionSound={settings.completion_sound ?? false}
-    on:completionsound={(event) => updateSettings({ completion_sound: event.detail })}
-    checkAtLaunch={settings.check_updates_at_launch ?? true}
-    on:anonymouscount={(event) => setUpdateSwitch('anonymous_update_count', event.detail)}
-    on:checkatlaunch={(event) => setUpdateSwitch('check_updates_at_launch', event.detail)}
   />
   <WelcomeNotice
     anonymousUpdateCount={settings.anonymous_update_count ?? false}
@@ -3918,6 +4541,8 @@
           removeItem={(key) =>
             setComparePicks(comparePicks.filter((pick) => pickKey(pick) !== key))}
           close={() => (mainTab = 'preview')}
+          viewerBackground={snapshot.settings.viewer_background ?? 'checker'}
+          setViewerBackground={(value) => void setPreference('viewer_background', value)}
           asTab
         >
           <svelte:fragment slot="tabs">{@render paneTabs()}</svelte:fragment>
@@ -3926,6 +4551,8 @@
         <PreviewPane
           bind:this={previewPane}
           bind:liveFrame
+          viewerBackground={snapshot.settings.viewer_background ?? 'checker'}
+          setViewerBackground={(value) => void setPreference('viewer_background', value)}
           editing={settings.task === 'edit'}
           processing={Boolean(
             activeJobMediaId &&
@@ -3934,6 +4561,9 @@
           )}
           {videoEngineBusy}
           activeTileSize={snapshot.runtime.active_tile_size}
+          stagePreview={!activeJobMediaId || selectedMedia?.id === activeJobMediaId
+            ? stageBasePreview
+            : ''}
           {selectedMedia}
           resultPreview={shownView.resultPreview}
           referenceIsResult={shownView.referenceIsResult}
@@ -3945,6 +4575,9 @@
           showingState={showingSide?.state ?? 'ready'}
           showingError={showingSide?.error ?? ''}
           singleFrame={shownView.singleFrame}
+          showingUnfinished={shownView.showingUnfinished}
+          referenceUnfinished={shownView.referenceUnfinished}
+          videoFps={(completedVideoOutput && videoResult?.output_fps) || selectedMedia?.fps || 0}
           loadingLabel={pairLoadingLabel}
           {comparisonNote}
           showLiveTiles={selectedMedia?.kind === 'video' ? !videoChoice.pinned : !choice.pinned}
@@ -3971,7 +4604,13 @@
                   ? editFamilyLabel(editModel.family)
                   : 'Choose a model'
                 : settings.task
-                  ? `${activeQuality === 'custom' ? 'Custom' : activeQuality === 'best' ? 'Best' : 'Quick'}${restoring ? '' : settings.content === 'illustration' ? ' · Illustration' : ' · Photo'}`
+                  ? `${activeQuality === 'custom' ? 'Custom' : activeQuality === 'best' ? 'Best' : 'Quick'}${
+                      usingTemporalVideo
+                        ? ''
+                        : restoring
+                          ? ' · Same size'
+                          : ` · ${settings.content === 'illustration' ? 'Illustration' : 'Photo'} · ${settings.output_scale}×`
+                    }`
                   : 'Choose a task'}</span
         >
       </div>
@@ -3994,35 +4633,19 @@
         >
           <section class="control-section">
             <span class="eyebrow">Task</span>
-            <!-- A selected video runs Upscale or Restore inside the video task. -->
-            <div class="seg-inline task-switch" role="group" aria-label="Task">
+            <div class="seg-inline" role="group" aria-label="Task">
               <button
-                aria-pressed={settings.task === 'upscale' ||
-                  (settings.task === 'video' && !restoring)}
-                class:active={settings.task === 'upscale' ||
-                  (settings.task === 'video' && !restoring)}
-                on:click={() =>
-                  setTask(
-                    selectedMedia?.kind === 'video' || settings.task === 'video'
-                      ? 'video'
-                      : 'upscale',
-                    'upscale',
-                  )}>Upscale</button
-              >
-              <button
-                aria-pressed={restoring}
-                class:active={restoring}
-                on:click={() =>
-                  setTask(
-                    selectedMedia?.kind === 'video' || settings.task === 'video'
-                      ? 'video'
-                      : 'denoise',
-                    'denoise',
-                  )}>Restore</button
+                aria-pressed={Boolean(settings.task) && settings.task !== 'edit'}
+                class:active={Boolean(settings.task) && settings.task !== 'edit'}
+                on:click={() => {
+                  // A video has this one task; pressing it again must not reset the setup.
+                  if (settings.task !== 'video')
+                    setTask(settings.output_scale === 1 ? 'denoise' : 'upscale');
+                }}>Upscale & restore</button
               >
               <button
                 aria-pressed={settings.task === 'edit'}
-                disabled={selectedMedia?.kind === 'video' || settings.task === 'video'}
+                disabled={selectedMedia?.kind === 'video'}
                 class:active={settings.task === 'edit'}
                 on:click={() => setTask('edit')}>Edit</button
               >
@@ -4066,7 +4689,7 @@
                   video is preserved.
                 </p>
                 {#if !hdrModelCompatible}<p class="inline-warning">
-                    Select Frame-by-frame and a HAT model for HDR preservation.
+                    Choose a HAT model for HDR preservation.
                   </p>{/if}
               {:else}
                 <p class="model-description">
@@ -4083,16 +4706,16 @@
             </section>
           {/if}
 
-          {#if settings.task === 'video' && selectedMedia?.audio_warning}
-            <section class="control-section" aria-label="Audio compatibility">
-              <span class="eyebrow">Audio compatibility</span>
-              <p class="model-description">{selectedMedia.audio_warning}</p>
-            </section>
-          {/if}
-
           {#if settings.task === 'video'}
             <section class="control-section" aria-label="Audio">
-              <span class="eyebrow">Audio</span>
+              <div class="eyebrow eyebrow-row">
+                <span class="label-with-tip"
+                  >Audio{#if selectedMedia?.audio_warning}<HelpTip
+                      label="this video's audio"
+                      text={selectedMedia.audio_warning}
+                    />{/if}</span
+                >
+              </div>
               <div class="check-line">
                 <label class="check-row"
                   ><input
@@ -4156,18 +4779,16 @@
                     class:active={activeQuality === 'quick'}
                     aria-pressed={activeQuality === 'quick'}
                     on:click={() => applyPreset('quick')}
-                    ><b>Quick</b><span>{qualityBlurb('quick')}</span>{#if quickDownload}<small
-                        >{quickDownload}</small
-                      >{/if}</button
+                    ><b>Quick</b><span>{qualityBlurb('quick', restoring, settings.task)}</span
+                    >{#if quickDownload}<small>{quickDownload}</small>{/if}</button
                   >
                   <button
                     class="best"
                     class:active={activeQuality === 'best'}
                     aria-pressed={activeQuality === 'best'}
                     on:click={() => applyPreset('best')}
-                    ><b>Best</b><span>{qualityBlurb('best')}</span>{#if bestDownload}<small
-                        >{bestDownload}</small
-                      >{/if}</button
+                    ><b>Best</b><span>{qualityBlurb('best', restoring, settings.task)}</span
+                    >{#if bestDownload}<small>{bestDownload}</small>{/if}</button
                   >
                 </div>
                 <div class="recipe-tools">
@@ -4206,8 +4827,8 @@
                           ><b>{recipe.name}</b><span
                             >{isRestoreRecipe(recipe)
                               ? recipe.task === 'video'
-                                ? 'video restore'
-                                : 'restore'
+                                ? 'video · same size'
+                                : 'same size'
                               : `${recipe.task} · ${recipe.output_scale}×`} · {recipe.precision.toUpperCase()}</span
                           ></button
                         ><button
@@ -4250,27 +4871,12 @@
             {#if !usingTemporalVideo && settings.task !== 'edit'}
               <section
                 class="control-section"
-                aria-label={restoring
-                  ? 'What to fix'
-                  : settings.task === 'video'
-                    ? 'Your video'
-                    : 'Your image'}
+                aria-label={settings.task === 'video' ? 'Your video' : 'Your image'}
               >
-                {#if restoring}
-                  <div class="eyebrow eyebrow-row">
-                    <span class="label-with-tip"
-                      >What to fix<HelpTip
-                        label="What to fix"
-                        text={settings.task === 'video'
-                          ? 'Each problem you pick gets its own fix, in the order listed under Model. The size stays the same. With nothing picked, only De-flicker, Frame rate and Clean up audio run. To enlarge the video as well, use Upscale and pick the same problems under Restore first.'
-                          : 'Each problem you pick gets its own fix, in the order listed under Model. The size stays the same. To enlarge the picture as well, use Upscale and pick the same problems under Restore first.'}
-                      /></span
-                    >
-                  </div>
-                {:else}
-                  <span class="eyebrow"
-                    >{settings.task === 'video' ? 'Your video' : 'Your image'}</span
-                  >
+                <span class="eyebrow"
+                  >{settings.task === 'video' ? 'Your video' : 'Your image'}</span
+                >
+                {#if !restoring}
                   <div class="field-heading">
                     <span class="field-label" id="content-label">Content</span><HelpTip
                       label="Content"
@@ -4283,6 +4889,7 @@
                       aria-checked={settings.content !== 'illustration'}
                       class:active={settings.content !== 'illustration'}
                       title="Uses a model made for photographs"
+                      on:keydown={radioGroupKeydown}
                       on:click={() => setContent('photo')}>Photo</button
                     >
                     <button
@@ -4290,30 +4897,31 @@
                       aria-checked={settings.content === 'illustration'}
                       class:active={settings.content === 'illustration'}
                       title="Uses a model made for drawings and anime"
+                      on:keydown={radioGroupKeydown}
                       on:click={() => setContent('illustration')}>Illustration</button
                     >
                   </div>
-                  <div class="field-heading">
-                    <span class="field-label" id="fix-label">Restore first</span><HelpTip
-                      label="Restore first"
-                      text={settings.task === 'video'
-                        ? "Runs the Restore task before upscaling. Each problem you pick is fixed at the original size, in the order listed under Model, then the result is enlarged. ↑ and ↓ change the order; a fix's Change… picks its model, which LocalSR remembers for that problem."
-                        : "Runs the Restore task before upscaling. Each problem you pick is fixed at the original size, in the order listed under Model, then the result is enlarged. ↑ and ↓ change the order; a fix's Change… picks its model, which LocalSR remembers for that problem. Colour adds colour to black-and-white photos."}
-                    />
-                  </div>
                 {/if}
-                <div
-                  class="chips"
-                  role="group"
-                  aria-label={restoring ? 'What to fix' : 'Restore first'}
-                >
+                <div class="field-heading">
+                  <span class="field-label" id="fix-label">Fix</span><HelpTip
+                    label="Fix"
+                    text={`Each problem you pick gets its own fix at the original size, in the order listed under Model. Quick picks a fast model for each problem, Best the most careful one. ↑ and ↓ change the order; a fix's Change… picks its model, which LocalSR remembers for that problem. ${
+                      settings.task === 'video'
+                        ? 'Colour adds colour to black-and-white videos and keeps it steady from frame to frame.'
+                        : 'Colour adds colour to black-and-white photos.'
+                    }`}
+                  />
+                </div>
+                <div class="chips" role="group" aria-label="Fix">
                   {#each fixChips as fix (fix)}
                     <button
                       class="chip"
                       type="button"
                       class:on={settings.fixes.includes(fix)}
                       aria-pressed={settings.fixes.includes(fix)}
-                      title={fix === 'colour' ? 'Adds colour to black-and-white photos' : ''}
+                      title={fix === 'colour'
+                        ? `Adds colour to black-and-white ${settings.task === 'video' ? 'videos' : 'photos'}`
+                        : ''}
                       on:click={() => toggleFix(fix)}
                       >{#if settings.fixes.includes(fix)}<svg
                           xmlns="http://www.w3.org/2000/svg"
@@ -4327,6 +4935,31 @@
                           stroke-linejoin="round"
                           aria-hidden="true"><path d="m5 12 5 5L20 7" /></svg
                         >{/if}{FIX_LABELS[fix]}</button
+                    >
+                  {/each}
+                </div>
+                <div class="field-heading">
+                  <span class="field-label" id="size-label">Size</span><HelpTip
+                    label="Size"
+                    text={settings.task === 'video'
+                      ? `Same size keeps the resolution and runs only the fixes you picked. With nothing picked, only De-flicker, Frame rate and Clean up audio run. 2× to 4× enlarges the result after the fixes. A 2× or 3× choice on a ${sizeMaxScale}× model resizes down afterwards.`
+                      : `Same size keeps the pixel size and runs only the fixes you picked. 2× to 4× enlarges the result after the fixes. The model always works at its own ${sizeMaxScale}× scale; a smaller choice resizes that result down afterwards, so it saves no time.`}
+                  />{#if sizeResult}<span class="field-value">{sizeResult}</span>{/if}
+                </div>
+                <div class="seg-inline size-switch" role="radiogroup" aria-labelledby="size-label">
+                  {#each [1, 2, 3, 4] as const as scale (scale)}
+                    {@const active = (restoring ? 1 : settings.output_scale) === scale}
+                    <button
+                      role="radio"
+                      aria-checked={active}
+                      class:active
+                      disabled={scale > sizeMaxScale}
+                      title={scale > sizeMaxScale
+                        ? `This model enlarges up to ${sizeMaxScale}×.`
+                        : undefined}
+                      on:keydown={radioGroupKeydown}
+                      on:click={() => setSize(scale)}
+                      >{scale === 1 ? 'Same size' : `${scale}×`}</button
                     >
                   {/each}
                 </div>
@@ -4346,7 +4979,7 @@
                       type="button"
                       on:click={() => applyPreset('best')}>Back to Best</button
                     >{/if}
-                  {#if !noVideoRestoreModel && !plan.some((stage) => stage.role === 'primary')}<button
+                  {#if !noRestoreModel && !plan.some((stage) => stage.role === 'primary')}<button
                       class="link-button"
                       type="button"
                       on:click={() => openLibrary(settings.task === 'edit' ? 'edit' : 'primary')}
@@ -4354,34 +4987,6 @@
                     >{/if}
                 </span>
               </div>
-              {#if settings.task === 'video' && !restoring}
-                <label class="field-label" for="video-engine">Video engine</label>
-                <select
-                  id="video-engine"
-                  value={settings.selected_video_model_id}
-                  on:change={(event) => selectVideoEngine(event.currentTarget.value)}
-                >
-                  <option value="frame_by_frame">Frame-by-frame · compatible</option>
-                  {#each snapshot.catalog.video_models as model}<option
-                      value={model.model_id}
-                      disabled={Boolean(temporalUnavailableReason)}
-                      >{model.name}{temporalUnavailableReason
-                        ? ' · Unavailable'
-                        : model.installed
-                          ? ' · Installed'
-                          : ''}</option
-                    >{/each}
-                </select>
-                {#if temporalUnavailableReason}<p class="model-output-note" role="status">
-                    {temporalUnavailableReason}
-                  </p>{/if}
-                {#if selectedMedia?.hdr_format && !hdrPreservationAvailable}
-                  <p class="model-output-note" role="status">
-                    SDR output selected. This model cannot preserve HDR.
-                  </p>
-                {/if}
-              {/if}
-
               <div
                 class="plan"
                 class:movable={imageFixes.length > 1}
@@ -4398,11 +5003,30 @@
                   {@const changeSlot =
                     stage.role === 'fix'
                       ? stage.fix !== 'colour' && stage.fix && 'fix'
-                      : stage.role === 'primary' && !stage.videoModel
+                      : stage.role === 'primary'
                         ? stage.editModel
                           ? 'edit'
                           : 'primary'
                         : undefined}
+                  {@const moreVideoCount =
+                    changeSlot === 'primary'
+                      ? videoModelsForJob(snapshot.catalog, settings.task, videoTask).filter(
+                          (model) =>
+                            !videoAvailable[model.model_id] &&
+                            model.model_id !== stage.videoModel?.model_id,
+                        ).length
+                      : 0}
+                  {@const runnableVideoModels =
+                    changeSlot === 'primary' && stage.model
+                      ? videoModelsForJob(snapshot.catalog, settings.task, videoTask).filter(
+                          (model) => !videoAvailable[model.model_id],
+                        )
+                      : []}
+                  {@const videoNames = [
+                    ...new Set(
+                      runnableVideoModels.map((model) => videoEngineName(model.engine_kind)),
+                    ),
+                  ].join(', ')}
                   {@const moreModelCount =
                     changeSlot && settings.task !== 'edit'
                       ? modelsAvailableBeyondSelection(
@@ -4414,13 +5038,13 @@
                             videoTask,
                           ),
                           stage.model?.model_id ?? '',
-                        )
+                        ) + moreVideoCount
                       : 0}
                   {@const tryOthers = stage.role === 'primary' && canTryOthers}
                   {@const name = stage.model
                     ? displayName(stage.model)
                     : stage.videoModel
-                      ? stage.videoModel.name
+                      ? videoModelShortName(stage.videoModel)
                       : stage.interpolationModel
                         ? stage.interpolationModel.name.split(' — ')[0]
                         : stage.audioModel
@@ -4429,7 +5053,9 @@
                             ? editFamilyLabel(stage.editModel.family)
                             : stage.missing
                               ? 'No model for this fix'
-                              : 'Your checkpoint'}
+                              : (customModels(settings).find(
+                                  (model) => model.path === settings.custom_model_path,
+                                )?.name ?? 'Checkpoint')}
                   <!-- Licenses live in the model library; only exceptions show here. -->
                   {@const meta = stage.editModel
                     ? `${editVariantName(stage.editModel)}${
@@ -4449,7 +5075,7 @@
                           .filter(Boolean)
                           .join(' · ')
                       : stage.videoModel
-                        ? 'Labs'
+                        ? 'Labs · several frames at once'
                         : stage.interpolationModel
                           ? [
                               settings.video_interpolation && settings.video_interpolation !== 'off'
@@ -4458,6 +5084,9 @@
                                     selectedMedia?.fps ?? 0,
                                   )
                                 : '',
+                              settings.video_interpolation_order === 'before_upscale'
+                                ? 'before upscaling'
+                                : 'after upscaling',
                               'Labs',
                             ]
                               .filter(Boolean)
@@ -4483,7 +5112,9 @@
                           class="label-with-tip"
                           >{stage.label}<HelpTip
                             label="Colour"
-                            text="Adds colour to black-and-white photos. The colours are the model's guess. A photo that already has colour is recoloured too."
+                            text={settings.task === 'video'
+                              ? "Adds colour to black-and-white videos. Colours are the model's guess and are carried between frames so they stay steady."
+                              : "Adds colour to black-and-white photos. The colours are the model's guess. A photo that already has colour is recoloured too."}
                           /></span
                         >{:else}{stage.label}{/if}</span
                     >
@@ -4516,6 +5147,27 @@
                               on:click={() => void moveFix(stage.fix!, 1)}>↓</button
                             >{/if}
                         </span>
+                      {:else if stage.kind === 'interpolate'}
+                        <!-- Interpolation runs first (before upscaling) or last (after it). -->
+                        <span class="plan-moves">
+                          {#if settings.video_interpolation_order === 'before_upscale'}<button
+                              class="move-button"
+                              type="button"
+                              title="Interpolate after upscaling (faster)"
+                              aria-label="Interpolate after upscaling"
+                              on:click={() =>
+                                updateSettings({ video_interpolation_order: 'after_upscale' })}
+                              >↓</button
+                            >{:else}<button
+                              class="move-button"
+                              type="button"
+                              title="Interpolate before upscaling (smoother, slower)"
+                              aria-label="Interpolate before upscaling"
+                              on:click={() =>
+                                updateSettings({ video_interpolation_order: 'before_upscale' })}
+                              >↑</button
+                            >{/if}
+                        </span>
                       {/if}
                       {#if changeSlot}<button
                           class="link-button"
@@ -4531,7 +5183,9 @@
                         >
                       {/if}
                     </div>
-                    {#if moreModelCount || tryOthers}<div class="plan-links">
+                    {#if moreModelCount || tryOthers || runnableVideoModels.length}<div
+                        class="plan-links"
+                      >
                         {#if moreModelCount}<button
                             class="link-button"
                             type="button"
@@ -4555,6 +5209,25 @@
                               text="Runs this image once per model you pick, with the same settings. Each result is kept as its own file, and Showing in the preview lets you flip between them."
                             /></span
                           >{/if}
+                        {#if runnableVideoModels.length}<span class="video-models-link"
+                            ><button
+                              class="link-button"
+                              type="button"
+                              aria-label={`${videoNames} in the model library`}
+                              on:click={() =>
+                                openLibrary(
+                                  'primary',
+                                  stage.fix,
+                                  (
+                                    runnableVideoModels.find((model) => model.installed) ??
+                                    runnableVideoModels[0]
+                                  ).model_id,
+                                )}>{videoNames}…</button
+                            ><HelpTip
+                              label="Video models"
+                              text={`${SEVERAL_FRAMES_TIP} ${FRAME_BY_FRAME_TIP}`}
+                            /></span
+                          >{/if}
                       </div>{/if}
                     {#if meta || warning || stage.custom !== undefined}<p
                         class="plan-note"
@@ -4565,7 +5238,12 @@
                         {#if stage.custom !== undefined}<span class="path-text"
                             >{settings.custom_model_path ||
                               'Safetensors is strongly recommended.'}</span
-                          >{:else}{meta}{#if meta && warning}{' · '}{/if}{#if warning}<span
+                          >{:else}{#if stage.videoModel}<span class="label-with-tip"
+                              >{meta}<HelpTip
+                                label="Video models"
+                                text={`${SEVERAL_FRAMES_TIP} ${FRAME_BY_FRAME_TIP}`}
+                              /></span
+                            >{:else}{meta}{/if}{#if meta && warning}{' · '}{/if}{#if warning}<span
                               >{warning}</span
                             >{/if}{/if}
                       </p>{/if}
@@ -4584,9 +5262,7 @@
                                 type="checkbox"
                                 checked={settings.allow_unsafe_pickle_model}
                                 on:change={(event) =>
-                                  updateSettings({
-                                    allow_unsafe_pickle_model: event.currentTarget.checked,
-                                  })}
+                                  void changeCheckpointConsent(event.currentTarget.checked)}
                               /> Allow this pickle-based checkpoint. It may execute code inside the inference
                               worker.</label
                             >
@@ -4645,6 +5321,14 @@
               {#if hasNothingToRun}
                 <p class="inline-warning" role="status">{nothingToRunReason}</p>
               {/if}
+              {#if usingTemporalVideo && temporalUnavailableReason}
+                <p class="inline-warning" role="status">{temporalUnavailableReason}</p>
+              {/if}
+              {#if settings.task === 'video' && !restoring && selectedMedia?.hdr_format && !hdrPreservationAvailable}
+                <p class="model-output-note" role="status">
+                  SDR output selected. This model cannot preserve HDR.
+                </p>
+              {/if}
               {#if !fixPlanSupported && snapshot.engine}<p class="inline-warning" role="status">
                   This engine runs one fix at a time. Update LocalSR to run several.
                 </p>{/if}
@@ -4667,7 +5351,11 @@
                 {/if}
               {/if}
               {#if activeQuality === 'custom' && settings.task !== 'edit'}
-                <p class="model-note">Chosen by you. Pick Quick or Best to go back.</p>
+                <p class="model-note">
+                  {usingTemporalVideo
+                    ? 'Chosen by you. Fix, Same size, De-flicker and Frame rate need a frame-by-frame model: pick Quick or Best to go back.'
+                    : 'Chosen by you. Pick Quick or Best to go back.'}
+                </p>
               {:else if downloads.stages.length}
                 <p class="model-note">
                   Models download once when you start and stay on this computer. Your {settings.task ===
@@ -4677,8 +5365,12 @@
                 </p>
               {/if}
               {#if usingTemporalVideo}
-                {#if !skipUpscale}
+                <!-- The FlashVSR panel describes this Mac; where FlashVSR cannot run, the line
+                   under the engine menu says why instead. -->
+                {#if !(flashVideo && temporalUnavailableReason)}
                   <VideoMemory
+                    model={selectedVideoModel}
+                    memoryEngine={videoMemoryEngine}
                     lowMemory={settings.video_low_memory ?? true}
                     device={snapshot.capabilities.devices.find(
                       (device) => device.id === settings.device_id,
@@ -4695,20 +5387,39 @@
                 <div class="field-row">
                   <label for="video-resolution">Output resolution</label><select
                     id="video-resolution"
-                    value={settings.video_target_resolution ?? 0}
-                    on:change={(event) =>
-                      updateSettings({
-                        video_target_resolution: Number(event.currentTarget.value),
-                      })}
-                    ><option value={0}>Match {settings.output_scale}× scale</option
-                    >{#each [256, 512, 720, 1080, 1440, 2160] as resolution}<option
-                        value={resolution}>{resolution} px · shorter edge</option
+                    value={settings.video_target_resolution
+                      ? String(settings.video_target_resolution)
+                      : `x${Math.min(4, Math.max(2, settings.output_scale))}`}
+                    on:change={(event) => {
+                      const chosen = event.currentTarget.value;
+                      if (chosen.startsWith('x')) {
+                        updateSettings({
+                          output_scale: Number(chosen.slice(1)),
+                          video_target_resolution: 0,
+                        });
+                      } else {
+                        updateSettings({
+                          video_target_resolution: Number(chosen),
+                        });
+                      }
+                    }}
+                    >{#each [2, 3, 4] as scale}<option value={`x${scale}`}
+                        >{selectedMedia && selectedMedia.width > 0 && selectedMedia.height > 0
+                          ? `${scale}× · ${selectedMedia.width * scale} × ${selectedMedia.height * scale}`
+                          : `${scale}×`}</option
+                      >{/each}{#each [256, 512, 720, 1080, 1440, 2160] as resolution}<option
+                        value={String(resolution)}>{resolution} px · shorter edge</option
                       >{/each}</select
                   >
                 </div>
                 <p class="model-description">
-                  Smaller output uses less memory. For a first test, try 256 or 512 px. This can
-                  reduce the size of a large source video.
+                  {#if flashVideo}
+                    Smaller output takes less time. For a first test, try 256 or 512 px. FlashVSR
+                    works best up to 4× the source: above that, it runs at 4× and resizes the rest.
+                  {:else}
+                    Smaller output uses less memory. For a first test, try 256 or 512 px. This can
+                    reduce the size of a large source video.
+                  {/if}
                 </p>
                 {#if selectedMedia && settings.video_target_resolution && settings.video_target_resolution < Math.min(selectedMedia.width, selectedMedia.height)}
                   <p class="notice">
@@ -4729,8 +5440,8 @@
               >
                 <p>{lastFailure}</p>
                 {#if acceleratorFailure}
-                  <button class="button" type="button" on:click={() => void useTheCpu()}
-                    >Use the CPU</button
+                  <button class="button" type="button" on:click={() => void retryOnCpu()}
+                    >Retry on CPU</button
                   >
                 {/if}
               </section>
@@ -4760,20 +5471,15 @@
               {selectedModel}
               {editModel}
               capabilities={snapshot.capabilities}
-              engines={snapshot.engines}
               {usingTemporalVideo}
+              videoModel={usingTemporalVideo ? selectedVideoModel : undefined}
               {preservingHdr}
               {interpolationSupported}
-              defaultModelDirectory={snapshot.default_model_directory ?? ''}
-              modelDirectoryMissing={Boolean(snapshot.model_directory_missing)}
-              {movingModels}
-              {modelMoveProgress}
-              {updateSettings}
-              setLowPriority={(value) => setUpdateSwitch('low_priority', value)}
+              updateSettings={chooseInAdvanced}
+              defaults={defaultSettings}
+              onUseDefaults={useDefaultsForSession}
               {chooseOutput}
-              {chooseModelFolder}
-              {resetModelFolder}
-              onOpenEngineManager={() => void openEngineManager()}
+              onOpenFfmpegSettings={() => openSettings('storage', 'ffmpeg')}
               refreshCapabilities={async () => {
                 try {
                   await api.refreshCapabilities();
@@ -4801,7 +5507,9 @@
               ? 'Stopping…'
               : saving
                 ? 'Saving the result'
-                : snapshot.runtime.status_title}{snapshot.runtime.active_job_id &&
+                : downloadStatus
+                  ? `${downloadStatus.title} · ${Math.round(downloadStatus.percent)}%`
+                  : snapshot.runtime.status_title}{snapshot.runtime.active_job_id &&
           snapshot.runtime.progress > 0 &&
           !saving &&
           !cancelling
@@ -4815,8 +5523,14 @@
             : activityDetail || stoppedNote || idleSummary || runningStatusDetail}
           >{booting
             ? 'Opening the trusted desktop control plane.'
-            : activityDetail || stoppedNote || idleSummary || runningStatusDetail}</span
+            : activityDetail ||
+              (downloadStatus
+                ? activeDownloads.length > 1
+                  ? downloadStatus.names
+                  : 'Checked against its pinned checksum before use.'
+                : stoppedNote || idleSummary || runningStatusDetail)}</span
         >
+        {#if settings.low_priority}<span class="status-note">Low priority</span>{/if}
         {#if hardwareNote}<span class="status-note" title={hardwareNote}>{hardwareNote}</span>{/if}
         {#if hardwareHint}<span class="status-note" title={hardwareHint.text}
             >{hardwareHint.text}
@@ -4855,6 +5569,15 @@
         aria-valuenow={Math.round(snapshot.runtime.progress)}
       >
         <i style={`width:${snapshot.runtime.progress}%`}></i>
+      </div>{:else if downloadStatus}<div
+        class="progress"
+        role="progressbar"
+        aria-label="Download progress"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow={Math.round(downloadStatus.percent)}
+      >
+        <i style={`width:${downloadStatus.percent}%`}></i>
       </div>{/if}
     <div class="status-actions">
       {#if snapshot.runtime.engine_retry}<button
@@ -4894,8 +5617,11 @@
           <button
             class="button"
             disabled={cancelling || cancellingImage}
-            title="Cancel this image's queued runs and stop its running one. Other images stay queued; finished results stay."
-            on:click={() => void cancelSelectedImage()}>Cancel runs for this image</button
+            title="Cancel this file's queued runs and stop its running one. Other files stay queued; finished results stay."
+            on:click={() => void cancelSelectedImage()}
+            >{selectedMedia?.kind === 'video'
+              ? 'Cancel runs for this file'
+              : 'Cancel runs for this image'}</button
           >
         {/if}
         <button class="button danger" disabled={cancelling} on:click={cancelWork}
@@ -4935,9 +5661,7 @@
           title={singleHint || undefined}
           on:click={() => start()}
           >{settings.task === 'video'
-            ? restoring
-              ? 'Restore selected video'
-              : 'Start selected video'
+            ? 'Start selected video'
             : settings.task === 'denoise'
               ? 'Restore selected'
               : settings.task === 'edit'
@@ -4960,6 +5684,7 @@
       quality: activeQuality,
       slot: libraryContext.slot,
       fix: libraryContext.fix,
+      select: libraryContext.select,
     }}
     device={activeDevice}
     downloads={activeDownloads}
@@ -4976,6 +5701,7 @@
     trialBusy={startingJob || preparing}
     {runTrials}
     useForJob={useModelForJob}
+    useVideoForJob={useVideoModelForJob}
     rememberFix={rememberFixModel}
     forgetFix={forgetFixModel}
     {useEditModel}
@@ -4984,9 +5710,59 @@
     importFile={(model, accepted) => runDownload(model, accepted)}
     remove={removeModel}
     chooseCustom={chooseCustomModel}
+    {selectCustomModel}
+    {renameCustomModel}
     openCustomEdit={() => (customEditOpen = true)}
     openLicense={openAnyLicense}
     openSource={openAnySource}
+  />
+{/if}
+
+{#if settingsOpen}
+  <SettingsSheet
+    settings={defaultSettings}
+    capabilities={snapshot.capabilities}
+    engines={snapshot.engines}
+    section={settingsSection}
+    focusTarget={settingsFocusTarget}
+    {settingsLocked}
+    defaultModelDirectory={snapshot.default_model_directory ?? ''}
+    modelDirectoryMissing={Boolean(snapshot.model_directory_missing)}
+    {movingModels}
+    {modelMoveProgress}
+    {cacheSize}
+    cacheBusy={clearingCache ||
+      settingsLocked ||
+      Boolean(snapshot.runtime.active_job_id) ||
+      Boolean(snapshot.runtime.active_batch_job_ids?.length)}
+    linuxMenuAvailable={Boolean(snapshot.linux_menu_available)}
+    linuxMenuOffer={Boolean(snapshot.linux_menu_offer)}
+    linuxMenuInstalled={Boolean(snapshot.linux_menu_installed)}
+    {linuxMenuBusy}
+    setPreference={(name, value) => void setPreference(name, value)}
+    updateSettings={updateDefaults}
+    {chooseModelFolder}
+    {resetModelFolder}
+    clearCache={askClearCache}
+    loadCacheSize={() => void loadCacheSize()}
+    refreshCapabilities={async () => {
+      try {
+        await api.refreshCapabilities();
+        return true;
+      } catch (error) {
+        showModal('Could not refresh the hardware', String(error));
+        return false;
+      }
+    }}
+    onOpenEngineManager={() => void openEngineManager()}
+    onOpenIntegrations={() => void showIntegrations()}
+    onOpenUpdates={() => updateDialogOpen.set(true)}
+    onInstallLinuxMenu={acceptLinuxMenu}
+    onUninstallLinuxMenu={removeLinuxMenu}
+    onClose={() => {
+      settingsOpen = false;
+      settingsFocusTarget = null;
+    }}
   />
 {/if}
 
@@ -5106,14 +5882,57 @@
   <SetupScreen
     bind:appearance={setupAppearance}
     bind:colourBlind={setupColourBlind}
+    bind:contrast={setupContrast}
+    bind:sound={setupSound}
+    storeBuild={Boolean($updateState.managed_by_store)}
     bind:checkAtLaunch={setupCheckAtLaunch}
     bind:anonymousCount={setupAnonymousCount}
     bind:crashReports={setupCrashReports}
+    bind:menuBar={setupMenuBar}
     saving={privacySaving}
     error={privacyError}
-    on:preview={(event) => previewSetupTheme(event.detail.appearance, event.detail.colourBlind)}
-    on:continue={(event) => void continuePrivacy(event.detail)}
+    on:preview={(event) =>
+      previewSetupTheme(event.detail.appearance, event.detail.colourBlind, event.detail.contrast)}
+    on:finish={(event) => void finishSetup(event.detail)}
   />
+{/if}
+
+{#if stopPrompt}
+  <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
+  <div
+    class="modal-backdrop"
+    role="presentation"
+    on:click={(event) => {
+      if (event.target === event.currentTarget) closeStopModal();
+    }}
+  >
+    <div
+      class="modal stop-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="stop-modal-title"
+      tabindex="-1"
+      use:modal={closeStopModal}
+    >
+      <h2 id="stop-modal-title">Stop {stopPrompt.fileName}?</h2>
+      <p class="modal-message">{stopPromptBody}</p>
+      <label class="stop-dont-ask">
+        <input type="checkbox" bind:checked={stopDontAskAgain} />
+        <span>Don't ask again</span>
+      </label>
+      <div class="modal-actions">
+        <button type="button" class="button" on:click={() => void confirmStopModal(false)}
+          >Discard</button
+        >
+        <button
+          type="button"
+          class="button primary"
+          data-autofocus
+          on:click={() => void confirmStopModal(true)}>Keep finished part</button
+        >
+      </div>
+    </div>
+  </div>
 {/if}
 
 {#if modalTitle}
@@ -5132,14 +5951,19 @@
       <p class="modal-message">{modalMessage}</p>
       {#if modalKind === 'performance'}
         <section class="crash-reports-panel" aria-label="Crash reports">
-          <label class="crash-reports-toggle"
-            ><input
-              type="checkbox"
-              checked={settings.crash_reports ?? false}
-              on:change={(event) => setUpdateSwitch('crash_reports', event.currentTarget.checked)}
-            /> Offer to Report Crashes</label
-          >
-          <p>Turning this off deletes all stored crash reports immediately.</p>
+          {#if !settings.crash_reports}
+            <div class="crash-reports-row">
+              <span>Crash reports are off. Turn them on in Settings.</span>
+              <button
+                type="button"
+                class="button"
+                on:click={() => {
+                  closeModal();
+                  openSettings('privacy');
+                }}>Open Settings</button
+              >
+            </div>
+          {/if}
           <div class="crash-reports-row">
             <span>Stored crash reports: {crashReports.length}</span>
             <div class="crash-reports-actions">

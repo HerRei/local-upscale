@@ -1,3 +1,6 @@
+#[cfg(target_os = "linux")]
+mod appimage_gstreamer;
+mod cache_cleanup;
 mod cancellation;
 mod catalog;
 mod commands;
@@ -30,6 +33,7 @@ mod queue_timing;
 mod results;
 mod settings;
 mod state;
+mod tray;
 mod types;
 mod update_storage;
 mod updates;
@@ -53,6 +57,16 @@ pub(crate) fn compiled_context() -> tauri::Context<tauri::Wry> {
     tauri::generate_context!()
 }
 
+#[doc(hidden)]
+pub fn fuzz_detect_gguf_edit_family(bytes: &[u8]) -> Option<&'static str> {
+    editing::detect_gguf_edit_family_bytes(bytes)
+}
+
+#[doc(hidden)]
+pub fn fuzz_parse_engine_manifest(bytes: &[u8]) -> std::io::Result<()> {
+    engine_payload::parse_manifest(bytes).map(|_| ())
+}
+
 /// Files macOS asked us to open before the setup hook created the app state.
 ///
 /// When the app is launched by opening a document, `application:openURLs:` is
@@ -62,6 +76,8 @@ pub(crate) fn compiled_context() -> tauri::Context<tauri::Wry> {
 static EARLY_OPEN_INTENTS: std::sync::Mutex<Vec<LaunchIntent>> = std::sync::Mutex::new(Vec::new());
 
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    appimage_gstreamer::use_own_registry();
     // No UI, profile or worker: other updater processes query the file they are
     // about to replace, rather than trusting their own running package version.
     if env::args_os()
@@ -131,6 +147,9 @@ pub fn run() {
         })
         .setup(move |app| {
             let state = Arc::new(AppState::new()?);
+            if let Err(error) = cache_cleanup::cleanup_at_start(&state) {
+                eprintln!("LocalSR could not clean the model cache: {error}");
+            }
             // A Windows installer that finished while LocalSR was closed.
             updates::confirm_pending_install(
                 &state.paths.next_root,
@@ -152,16 +171,25 @@ pub fn run() {
                 show_startup_notices(app.handle(), &state);
             }
             *lock(&state.bundled_engine_path)? = worker::bundled_engine_executable(app.handle());
-            let switches = native_menu::switches(&*lock(&state.settings)?);
-            native_menu::install(app, &lock(&state.recipes)?, switches)?;
+            native_menu::install(app, &lock(&state.recipes)?)?;
+            tray::install(app.handle());
             fit_main_window(app.handle());
-            if let Err(error) = worker::start_worker(state.clone(), app.handle().clone()) {
-                if let Ok(mut runtime) = state.runtime.lock() {
-                    runtime.worker = "failed".into();
-                    runtime.status_title = "Engine unavailable".into();
-                    runtime.status_detail = error.to_string();
+            let startup_state = state.clone();
+            let startup_app = app.handle().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                if !crate::distribution::managed_by_store() {
+                    engine_manager::recover_engine_files_at_startup(&startup_state);
                 }
-            }
+                if let Err(error) = worker::start_worker(startup_state.clone(), startup_app.clone())
+                {
+                    if let Ok(mut runtime) = startup_state.runtime.lock() {
+                        runtime.worker = "failed".into();
+                        runtime.status_title = "Engine unavailable".into();
+                        runtime.status_detail = error.to_string();
+                    }
+                    crate::state::emit_state_changed(&startup_app);
+                }
+            });
             if smoke_test {
                 start_smoke_monitor(app.handle().clone(), state);
             }
@@ -192,6 +220,8 @@ pub fn run() {
             commands::delete_crash_report,
             commands::delete_all_crash_reports,
             commands::record_frontend_error,
+            cache_cleanup::cache_size,
+            cache_cleanup::clear_cache,
             commands::bootstrap,
             commands::get_snapshot,
             commands::open_model_license,
@@ -209,13 +239,15 @@ pub fn run() {
             commands::install_linux_menu,
             commands::uninstall_linux_menu,
             commands::choose_custom_model,
+            commands::checkpoint_consent,
             commands::choose_benchmark_export,
             commands::select_media,
             commands::remove_media,
             commands::clear_media,
             commands::clear_results,
             commands::save_settings,
-            commands::set_update_switch,
+            commands::set_preference,
+            commands::set_run_low_priority,
             commands::set_privacy_choice,
             commands::save_recipe,
             commands::delete_recipe,
@@ -231,6 +263,7 @@ pub fn run() {
             commands::request_compare_regions,
             commands::clear_compare_regions,
             commands::retry_engine,
+            commands::retry_job_on_cpu,
             commands::cancel_jobs,
             commands::cancel_jobs_for_media,
             commands::start_model_trials,
@@ -247,6 +280,7 @@ pub fn run() {
             commands::open_user_guide,
             commands::open_download_page,
             commands::open_custom_model_tutorial,
+            commands::open_privacy_page,
             commands::reveal_result,
             commands::use_result_as_input,
             commands::open_output_directory,

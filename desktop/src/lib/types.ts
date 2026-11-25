@@ -1,4 +1,5 @@
 export type TaskKind = 'upscale' | 'denoise' | 'edit' | 'video';
+export type SettingsSection = 'general' | 'appearance' | 'performance' | 'storage' | 'privacy';
 export type MediaKind = 'image' | 'video' | 'unknown';
 export type JobStatus =
   | 'queued'
@@ -79,9 +80,12 @@ export interface EditModel {
   min_vram_gb: number;
   default_steps: number;
   cfg_scale: number;
+  author?: string;
   license_name: string;
   license_url: string;
   source_url: string;
+  commercial_use_allowed?: boolean | null;
+  attribution_required?: boolean;
   terms_acceptance_required: boolean;
   automated_download_allowed: boolean;
   installed: boolean;
@@ -131,8 +135,13 @@ export interface CatalogVideoModel {
   temporal_window: number;
   temporal_overlap: number;
   summary?: string;
+  /** The library's dots, rated for video models only: quality 1–4, speed 0–3. */
+  quality_tier?: number;
+  speed_tier?: number;
   commercial_use_allowed: boolean | null;
   automated_download_allowed: boolean;
+  redistribution_allowed?: boolean;
+  attribution_required?: boolean;
   terms_acceptance_required: boolean;
   engine_id: string;
   support_tier: string;
@@ -307,6 +316,8 @@ export interface RecipeStage {
 export interface UiSettings {
   appearance: 'dark' | 'light' | 'system';
   colour_blind_palette: boolean;
+  contrast?: 'system' | 'standard' | 'high';
+  viewer_background?: 'checker' | 'black' | 'grey' | 'white';
   interface_scale: 100 | 110 | 125;
   batch_mode: boolean;
   task: TaskKind | '';
@@ -315,6 +326,8 @@ export interface UiSettings {
   selected_video_model_id: string;
   fix_stages: FixStageSelection[];
   custom_model_path: string;
+  custom_models?: { path: string; name: string }[];
+  trusted_checkpoint_sha256?: string[];
   output_scale: number;
   output_directory: string;
   output_format: 'png' | 'jpg' | 'tif' | 'webp' | 'heic';
@@ -371,6 +384,11 @@ export interface UiSettings {
   model_directory?: string;
   gpu_download_notice_dismissed?: boolean;
   linux_menu_prompt_dismissed?: boolean;
+  show_in_menu_bar?: boolean;
+  notify_on_finish?: boolean;
+  menu_bar_icon_monochrome?: boolean;
+  auto_cache_cleanup?: boolean;
+  stopped_job_result?: 'ask' | 'keep' | 'discard';
 }
 
 export interface ModelMoveProgress {
@@ -450,6 +468,13 @@ export interface RuntimeStatus {
   hardware_note: string;
   /** How long a cancelled job may take to stop before the engine is restarted. */
   cancel_grace_seconds?: number;
+  queue_paused?: boolean;
+  frames_processed?: number;
+  total_frames?: number;
+  /** Tiles of the running photo stage that are finished, counted here from its progress. */
+  tiles_completed?: number;
+  tiles_total?: number;
+  can_keep_partial?: boolean;
 }
 
 export interface BenchmarkRender {
@@ -607,6 +632,7 @@ export interface AppSnapshot {
   gpu_download_notice?: string | null;
   linux_menu_offer?: boolean;
   linux_menu_installed?: boolean;
+  linux_menu_available?: boolean;
   engines?: EngineManagerSnapshot;
 }
 
@@ -679,6 +705,16 @@ export interface ResultSummary {
   size_bytes?: number;
   output_duration_seconds?: number;
   output_fps?: number;
+  /** Stopped before the end and kept: a video's first frames, or a photo's finished tiles. */
+  partial?: boolean;
+  /** Video: seconds kept (0.074 for two frames). */
+  kept_seconds?: number;
+  /** Video: frames kept. */
+  kept_frames?: number;
+  /** Photo: the finished tiles as [x, y, width, height] in pixels of the saved file. */
+  finished_tiles?: [number, number, number, number][];
+  /** Photo: the tiles the job had. */
+  total_tiles?: number;
   /** Completed and its file exists. */
   available: boolean;
   model_id: string;
@@ -692,6 +728,9 @@ export interface ResultSummary {
   notes: string;
   /** Run time including loading and saving; 0 when unknown. */
   elapsed_seconds: number;
+  /** Requested device and Neural Engine preference, if recorded. */
+  device?: string;
+  neural_engine?: boolean;
   ui: ResultUi | null;
 }
 export interface MediaResults {

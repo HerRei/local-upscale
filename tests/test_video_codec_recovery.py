@@ -253,6 +253,8 @@ def test_cancellation_and_full_disk_never_retry(tmp_path, error):
 
 
 def test_automatic_recovers_when_the_helper_cannot_start(tmp_path):
+    import av
+
     notes = []
     output = tmp_path / "out.mp4"
     encode_video(
@@ -267,6 +269,9 @@ def test_automatic_recovers_when_the_helper_cannot_start(tmp_path):
         note_callback=notes.append,
     )
     assert output.exists()
+    with av.open(str(output)) as result:
+        assert result.streams.video[0].codec_context.codec.canonical_name == "av1"
+        assert len(list(result.decode(video=0))) == 4
     assert len(notes) == 1
     assert list(tmp_path.iterdir()) == [output]
 

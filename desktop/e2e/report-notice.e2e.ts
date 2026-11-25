@@ -12,7 +12,9 @@ test('skip hides the offered version', async ({ page }) => {
 });
 
 test('report previews diagnostics and opens the prefilled issue', async ({ page }) => {
-  await openApp(page, { diagnosticSummary: JSON.stringify({ platform: 'linux', file: '/home/alice/photo.jpg' }) });
+  await openApp(page, {
+    diagnosticSummary: JSON.stringify({ platform: 'linux', file: '/home/alice/photo.jpg' }),
+  });
   await emit(page, 'native-menu-action', 'help.report-problem');
   const dialog = page.getByRole('dialog', { name: 'Report a problem' });
   await expect(dialog).toBeVisible();
@@ -30,7 +32,10 @@ test('report previews diagnostics and opens the prefilled issue', async ({ page 
 test('the diagnostics view opens the report dialog', async ({ page }) => {
   await openApp(page, {});
   await emit(page, 'native-menu-action', 'view.performance');
-  await page.getByRole('dialog', { name: 'Performance & Diagnostics' }).getByRole('button', { name: 'Report a problem…' }).click();
+  await page
+    .getByRole('dialog', { name: 'Performance & Diagnostics' })
+    .getByRole('button', { name: 'Report a problem…' })
+    .click();
   await expect(page.getByRole('dialog', { name: 'Report a problem' })).toBeVisible();
   await expect(page.getByRole('dialog', { name: 'Performance & Diagnostics' })).toHaveCount(0);
 });

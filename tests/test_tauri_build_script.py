@@ -266,17 +266,75 @@ def test_linuxdeploy_removes_plugin_copied_host_libraries_before_packaging(
     assert tool.read_text() == original
 
 
+def _playable_gstreamer(appdir: Path, plugins=None, hook: bool = True) -> None:
+    """The GStreamer part of an AppDir as linuxdeploy-plugin-gstreamer leaves it."""
+    plugin_dir = appdir / "usr" / "lib" / "gstreamer-1.0"
+    plugin_dir.mkdir(parents=True, exist_ok=True)
+    names = (
+        [*build.LINUX_GSTREAMER_REQUIRED_PLUGINS, "videoconvert", "videoscale"]
+        if plugins is None
+        else plugins
+    )
+    for name in names:
+        (plugin_dir / f"libgst{name}.so").write_text("plugin", encoding="utf-8")
+    scanner = appdir / "usr" / "lib" / "gstreamer1.0" / "gstreamer-1.0" / "gst-plugin-scanner"
+    scanner.parent.mkdir(parents=True, exist_ok=True)
+    scanner.write_text("scanner", encoding="utf-8")
+    hooks = appdir / "apprun-hooks"
+    hooks.mkdir(exist_ok=True)
+    apprun = "#!/bin/sh\n"
+    if hook:
+        (hooks / "linuxdeploy-plugin-gstreamer.sh").write_text("export X=1\n", encoding="utf-8")
+        apprun += 'source "$this_dir"/apprun-hooks/"linuxdeploy-plugin-gstreamer.sh"\n'
+    (appdir / "AppRun").write_text(apprun, encoding="utf-8")
+
+
+def test_an_appdir_with_its_own_gstreamer_plugins_passes(tmp_path: Path) -> None:
+    _playable_gstreamer(tmp_path)
+    build.verify_linux_gstreamer_bundle(tmp_path)
+    # GStreamer 1.22 and newer merge videoconvert and videoscale.
+    newer = tmp_path / "newer"
+    _playable_gstreamer(newer, [*build.LINUX_GSTREAMER_REQUIRED_PLUGINS, "videoconvertscale"])
+    build.verify_linux_gstreamer_bundle(newer)
+
+
+def test_an_appdir_with_gstreamer_core_but_no_plugins_fails(tmp_path: Path) -> None:
+    # 0.6.0: WebKitGTK and libgstreamer were bundled without any plugin (issue #185).
+    (tmp_path / "usr" / "lib").mkdir(parents=True)
+    (tmp_path / "usr" / "lib" / "libgstreamer-1.0.so.0").write_text("core", encoding="utf-8")
+    (tmp_path / "AppRun").write_text("#!/bin/sh\n", encoding="utf-8")
+    with pytest.raises(SystemExit) as error:
+        build.verify_linux_gstreamer_bundle(tmp_path)
+    message = str(error.value)
+    assert "playback" in message and "vpx" in message and "videoconvert" in message
+    assert "gst-plugin-scanner" in message and "hook" in message
+
+
+def test_an_appdir_without_the_gstreamer_hook_fails(tmp_path: Path) -> None:
+    _playable_gstreamer(tmp_path, hook=False)
+    with pytest.raises(SystemExit, match="hook"):
+        build.verify_linux_gstreamer_bundle(tmp_path)
+    missing_vpx = tmp_path / "no-vpx"
+    _playable_gstreamer(
+        missing_vpx,
+        [n for n in build.LINUX_GSTREAMER_REQUIRED_PLUGINS if n != "vpx"] + ["videoconvert"],
+    )
+    with pytest.raises(SystemExit, match="vpx"):
+        build.verify_linux_gstreamer_bundle(missing_vpx)
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="Linux packaging specific")
 def test_repacks_linux_appimage_payload_with_system_gzip(monkeypatch, tmp_path: Path) -> None:
     appimage_dir = tmp_path / "bundle" / "appimage"
     appdir = appimage_dir / "LocalSR.AppDir"
     (appdir / "usr" / "lib" / "LocalSR" / "engine").mkdir(parents=True)
-    (appdir / "AppRun").write_text("#!/bin/sh\n", encoding="utf-8")
+    _playable_gstreamer(appdir)
     image = appimage_dir / "LocalSR.AppImage"
     runtime = b"ELF-runtime-prefix"
     image.write_bytes(runtime + b"hsqs-old-zstd-payload")
     commands: list[list[str]] = []
     policy_checks: list[list[str]] = []
+    playback_checks: list[list[str]] = []
 
     def fake_run(command, **kwargs):
         if command[0] == str(image):
@@ -284,6 +342,9 @@ def test_repacks_linux_appimage_payload_with_system_gzip(monkeypatch, tmp_path: 
         if str(command[1]).endswith("verify_codec_allowlist.py"):
             policy_checks.append(command)
             return SimpleNamespace(returncode=0, stdout="PASS", stderr="")
+        if str(command[1]).endswith("verify_appimage_gstreamer.py"):
+            playback_checks.append(command)
+            return SimpleNamespace(returncode=0, stdout="played", stderr="")
         commands.append(command)
         Path(command[2]).write_bytes(b"hsqs-gzip-payload")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -300,6 +361,7 @@ def test_repacks_linux_appimage_payload_with_system_gzip(monkeypatch, tmp_path: 
 
     assert repacked == [image]
     assert policy_checks and policy_checks[0][-2:] == ["--tree", str(appdir)]
+    assert playback_checks and playback_checks[0][-2:] == ["--appdir", str(appdir)]
     assert image.read_bytes() == runtime + b"hsqs-gzip-payload"
     assert image.stat().st_mode & 0o111
     assert commands == [
@@ -519,18 +581,30 @@ def test_nsis_installer_uses_localsr_icons() -> None:
         assert (config_path.parent / nsis[name]).is_file()
 
 
-def test_nsis_editions_install_for_the_current_user() -> None:
-    # "both" pulls in NSIS MultiUser, which replaces a silent /D= folder with its own
-    # default; per-user installs keep /D= and need no administrator rights.
+def test_nsis_editions_offer_both_modes_with_per_user_default_and_preserve_install_dir() -> None:
     config_path = ROOT / "desktop/src-tauri/tauri.conf.json"
     nsis = json.loads(config_path.read_text(encoding="utf-8"))["bundle"]["windows"]["nsis"]
-    assert nsis["installMode"] == "currentUser"
+    assert nsis["installMode"] == "both"
+    template_path = (config_path.parent / nsis["template"]).resolve()
+    assert template_path == ROOT / "packaging/windows/installer.nsi"
+    template = template_path.read_text(encoding="utf-8")
+    # Tauri's MultiUser.nsh replaces /D= and forces elevation upfront; the custom
+    # template keeps RequestExecutionLevel user, elevates on demand, and preserves /D=.
+    assert "MultiUser.nsh" not in template
+    assert "RequestExecutionLevel user" in template
+    assert "CustomInstallDir" in template
+    assert 'StrCpy $InstallMode "CurrentUser"' in template
+    assert "Page custom PageInstallMode PageLeaveInstallMode" in template
+    assert "ShellExecuteW" in template
+    assert "/AllUsers" in template
+    assert "!insertmacro NSIS_HOOK_POSTINSTALL" in template
+    assert "!insertmacro NSIS_HOOK_PREUNINSTALL" in template
+    assert "!insertmacro NSIS_HOOK_POSTUNINSTALL" in template
     for hook in (
         config_path.parent / nsis["installerHooks"],
         ROOT / "packaging/windows/engine-payload.nsh",
     ):
         text = hook.read_text(encoding="utf-8")
-        assert "MULTIUSER" not in text
         assert '!include "${__FILEDIR__}\\common.nsh"' in text
 
 
@@ -546,6 +620,16 @@ def test_nsis_shows_version_launch_and_optional_appdata_removal() -> None:
         'LangString deleteAppData ${LANG_ENGLISH} "Remove downloaded models and settings"'
         in english
     )
+    for key in (
+        "installModeTitle",
+        "installModeSubtitle",
+        "installModeTop",
+        "installModeCurrentUser",
+        "installModeAllUsers",
+    ):
+        assert f"LangString {key} ${{LANG_ENGLISH}}" in english
+    assert "Just me" in english
+    assert "Everyone on this computer" in english
 
     common = (ROOT / "packaging/windows/common.nsh").read_text(encoding="utf-8")
     assert 'MUI_WELCOMEPAGE_TITLE "Welcome to ${PRODUCTNAME} ${VERSION} Setup"' in common

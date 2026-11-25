@@ -267,6 +267,20 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn a_keep_stop_gets_the_saving_time_from_the_start() {
+        let now = Instant::now();
+        let mut control = Cancellation {
+            job_id: "photo".into(),
+            job_ids: vec!["photo".into()],
+            ..Cancellation::default()
+        };
+        control.request("photo", now);
+        control.partial_finalizing("photo", now);
+        assert!(!control.expired(now + CANCEL_GRACE * 4));
+        assert!(control.expired(now + PARTIAL_FINALIZE_GRACE));
+    }
+
+    #[test]
     fn partial_finalization_has_its_own_bounded_deadline() {
         let now = Instant::now();
         let mut control = Cancellation {

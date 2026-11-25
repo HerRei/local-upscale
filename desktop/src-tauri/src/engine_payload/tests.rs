@@ -984,3 +984,36 @@ fn parses_schema_1_and_2_manifests_and_records_installed_file_digests() {
         .collect();
     assert_eq!(files[1].sha256, expected_worker_sha);
 }
+
+proptest::proptest! {
+    #[test]
+    fn manifest_parser_never_panics_on_arbitrary_bytes(data in proptest::collection::vec(proptest::arbitrary::any::<u8>(), 0..512)) {
+        let _ = parse_manifest(&data);
+    }
+
+    #[test]
+    fn manifest_parser_handles_mutated_fields(
+        schema in 0_u32..4,
+        backend in "[A-Za-z0-9_]{0,12}",
+        version in "[0-9a-z.-]{0,16}",
+        os in "[a-z]{0,10}",
+        arch in "[a-z0-9_]{0,10}",
+        file_count in 0_u64..200_000,
+        unpacked in 0_u64..200_000,
+    ) {
+        let doc = serde_json::json!({
+            "schema_version": schema,
+            "format": "tar.gz.parts",
+            "backend": backend,
+            "version": version,
+            "os": os,
+            "arch": arch,
+            "protocol_version": 1,
+            "engine_id": "linux-x86_64-cpu-test",
+            "file_count": file_count,
+            "unpacked_bytes": unpacked,
+            "parts": [{"filename": "p.part-0001", "size": 1, "sha256": "0".repeat(64)}],
+        });
+        let _ = parse_manifest(&serde_json::to_vec(&doc).unwrap());
+    }
+}

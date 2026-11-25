@@ -79,7 +79,7 @@ describe('several fixes in one pass', () => {
     expect(restore.map((stage) => [stage.role, stage.fix, stage.label])).toEqual([
       ['fix', 'blur', 'Fix blur'],
       ['fix', 'jpeg', 'Fix JPEG'],
-      ['primary', 'noise', 'Restore'],
+      ['primary', 'noise', 'Fix noise'],
     ]);
 
     const restoreColour = resolvePlan(
@@ -137,7 +137,7 @@ describe('several fixes in one pass', () => {
     expect(title(0, 1)).toBe('Enhancing');
   });
 
-  it('adds colour as a photo-only fix stage and excludes it from video plans', () => {
+  it('adds colour as a fix stage for photos and video', () => {
     const snapshot = demoSnapshot();
     const withColour = toggleFixStage([], 'colour');
     expect(withColour).toEqual([{ fix: 'colour', model_id: '' }]);
@@ -167,6 +167,6 @@ describe('several fixes in one pass', () => {
       },
       { faceEnabled: false, usingTemporalVideo: false },
     );
-    expect(videoPlan.map((stage) => stage.fix)).toEqual([undefined]);
+    expect(videoPlan.map((stage) => stage.fix)).toEqual(['colour', undefined]);
   });
 });

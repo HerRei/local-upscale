@@ -39,6 +39,7 @@ desktop/src-tauri/gen/
 # The SeedVR2 text-conditioning embeddings are source, not downloaded weights.
 !src/localsr/video_models/seedvr2/pos_emb.safetensors
 !src/localsr/video_models/seedvr2/neg_emb.safetensors
+!src/localsr/video_models/flashvsr/posi_prompt.safetensors
 /test-results.xml
 
 # Local agent transcripts and scratch work

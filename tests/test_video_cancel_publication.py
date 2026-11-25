@@ -6,6 +6,7 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
+import av
 import numpy as np
 import pytest
 from test_video_interpolation import patched_worker, worker_request
@@ -77,7 +78,7 @@ def test_cancel_during_the_container_close_publishes_nothing(tmp_path, monkeypat
     assert _leftovers(tmp_path) == []
 
 
-def _run_temporal(tmp_path, monkeypatch, wrap_encode):
+def _run_temporal(tmp_path, monkeypatch, wrap_encode, keep=False):
     source = make_vfr(tmp_path / "source.mp4")
     output = tmp_path / "output.mp4"
     messages = []
@@ -87,7 +88,11 @@ def _run_temporal(tmp_path, monkeypatch, wrap_encode):
     monkeypatch.setattr(
         video_io, "encode_video", lambda *a, **k: wrap_encode(real_encode, cancel, *a, **k)
     )
-    worker = SimpleNamespace(cancel_event=cancel, _emit_live_preview=lambda _: None)
+    worker = SimpleNamespace(
+        cancel_event=cancel,
+        _emit_live_preview=lambda _: None,
+        _keep_partial_for_job=lambda _job: keep,
+    )
     server_module.WorkerServer._run_temporal_video_job(
         worker,
         "job",
@@ -129,6 +134,26 @@ def test_temporal_job_cancelled_after_publication_reports_the_saved_output(tmp_p
     assert completed.output_path == str(output)
 
 
+def test_temporal_job_stopped_with_keep_reports_the_finished_part(tmp_path, monkeypatch):
+    def encode(real, cancel, frames, *args, **kwargs):
+        def cancel_after_two():
+            for index, frame in enumerate(frames):
+                if index == 2:
+                    cancel.set()
+                yield frame
+
+        return real(cancel_after_two(), *args, **kwargs)
+
+    output, kinds, messages = _run_temporal(tmp_path, monkeypatch, encode, keep=True)
+    assert "VideoJobCompleted" in kinds and "JobCancelled" not in kinds
+    completed = next(m for m in messages if type(m).__name__ == "VideoJobCompleted")
+    assert completed.partial
+    assert completed.output_path != str(output)
+    assert Path(completed.output_path).is_file()
+    assert "_partial_" in Path(completed.output_path).name
+    assert not output.exists()
+
+
 def _frame_by_frame_server(monkeypatch, tmp_path, fake_run):
     server, _bundle, _loaded, _captured = patched_worker(monkeypatch, tmp_path)
     messages = []
@@ -153,6 +178,7 @@ def test_frame_by_frame_job_cancelled_after_publication_reports_the_saved_output
             inference_seconds=1.0,
             partial=False,
             kept_seconds=0.0,
+            kept_frames=0,
         )
 
     _server, kinds, messages = _frame_by_frame_server(monkeypatch, tmp_path, run_then_cancel)
@@ -218,3 +244,122 @@ def test_streamed_system_stop_closes_input_and_publishes_partial(tmp_path, monke
     assert calls == ["partial_finalizing", 2]
     assert result.endswith("out_partial_0m01s.mp4")
     assert Path(result).read_bytes() == b"videoaudio"
+
+
+@pytest.mark.parametrize("keep", [True, False])
+def test_temporal_stop_right_after_the_first_window_keeps_that_window(tmp_path, monkeypatch, keep):
+    """Bug hunt 2026-11-23: a stop after SeedVR's first window threw its frames away."""
+
+    def encode(real, cancel, frames, *args, **kwargs):
+        cancel.set()  # the window is done; the encoder has not read a frame yet
+        return real(frames, *args, **kwargs)
+
+    output, kinds, messages = _run_temporal(tmp_path, monkeypatch, encode, keep=keep)
+    if not keep:
+        assert "JobCancelled" in kinds and "VideoJobCompleted" not in kinds
+        assert not any(path.name.startswith("output") for path in tmp_path.iterdir())
+        return
+    completed = next(m for m in messages if type(m).__name__ == "VideoJobCompleted")
+    assert completed.partial
+    with av.open(completed.output_path) as container:
+        written = sum(1 for _ in container.decode(video=0))
+    assert written > 0
+    assert written == completed.frames_processed
+
+
+def test_a_stop_that_keeps_after_the_last_frame_saves_the_whole_video(tmp_path):
+    """Argon 11-23: every frame was written, then Keep; the finished video must not be lost."""
+    cancel = threading.Event()
+
+    def frames_then_stop():
+        yield from _frames()
+        cancel.set()
+
+    destination = tmp_path / "out.mp4"
+    written = encode_video(
+        frames_then_stop(),
+        str(destination),
+        fps=5.0,
+        width=64,
+        height=64,
+        cancel_event=cancel,
+        keep_partial=True,
+    )
+    assert written == str(destination)
+    with av.open(written) as container:
+        assert sum(1 for _ in container.decode(video=0)) == 3
+
+
+def test_a_kept_part_with_the_name_of_an_earlier_one_gets_a_number(tmp_path):
+    """Hermes, 11-23: a second kept part of the same length found the name taken and the
+    whole kept part was lost ("already exists ... this result was not saved")."""
+    names = []
+    for _ in range(2):
+        cancel = threading.Event()
+
+        def stopped_after_two(cancel=cancel):
+            frames = _frames()
+            yield next(frames)
+            yield next(frames)
+            cancel.set()
+            raise InterruptedError("stopped")
+
+        names.append(
+            encode_video(
+                stopped_after_two(),
+                str(tmp_path / "clip_video_4x.mkv"),
+                fps=5.0,
+                width=64,
+                height=64,
+                container_format="mkv",
+                cancel_event=cancel,
+                keep_partial=True,
+            )
+        )
+    assert [Path(name).name for name in names] == [
+        "clip_video_4x_partial_0m00s.mkv",
+        "clip_video_4x_partial_0m00s-2.mkv",
+    ]
+    assert all(Path(name).is_file() for name in names)
+
+
+@pytest.mark.parametrize("keep", [True, False])
+def test_frame_by_frame_deflicker_stop_honours_keep_and_discard(tmp_path, keep):
+    from localsr.core.video_pipeline import VideoJobConfig, run_video_job
+
+    source = make_vfr(tmp_path / "source.mp4")
+    output = tmp_path / "out.mp4"
+    cancel = threading.Event()
+
+    class StopAfterSixEngine(IdentityEngine):
+        def process_frame(self, *, img_tensor, **kwargs):
+            self.calls = getattr(self, "calls", 0) + 1
+            if self.calls == 6:
+                cancel.set()
+            return super().process_frame(img_tensor=img_tensor, **kwargs)
+
+    config = VideoJobConfig(
+        video_path=str(source),
+        model_path="identity.pth",
+        output_video_path=str(output),
+        model_info=SimpleNamespace(scale=1),
+        device_str="cpu",
+        precision_str="fp32",
+        tile_size=64,
+        halo=4,
+        safe_memory=False,
+        deflicker=True,
+        keep_partial=keep,
+    )
+    if not keep:
+        with pytest.raises(InterruptedError):
+            run_video_job(config=config, engine=StopAfterSixEngine(), cancel_event=cancel)
+        assert not output.exists()
+        assert not list(tmp_path.glob("out_partial_*"))
+        return
+
+    result = run_video_job(config=config, engine=StopAfterSixEngine(), cancel_event=cancel)
+    assert result.partial
+    assert Path(result.output_path).is_file()
+    assert result.kept_frames == 6
+    assert not output.exists()

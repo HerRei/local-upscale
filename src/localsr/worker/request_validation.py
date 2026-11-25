@@ -9,6 +9,7 @@ a multi-gigabyte allocation or a raw Python error halfway through.
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -49,6 +50,7 @@ _JOB_FIELDS = (
     Field("face_model_path", "str", nullable=True),
     Field("face_fidelity", "number", minimum=0, maximum=1),
     Field("allow_unverified_checkpoint", "bool", nullable=True),
+    Field("approved_checkpoint_sha256", "str", nullable=True, non_empty=True),
     Field("preview_enabled", "bool"),
     Field("preview_max_fps", "number", above=0, maximum=5),
     Field("preview_max_dimension", "int", minimum=64, maximum=640),
@@ -86,7 +88,7 @@ VIDEO_JOB_FIELDS = _JOB_FIELDS + (
     Field("end_frame", "int", nullable=True, minimum=0),
     Field("deflicker", "bool"),
     Field("deflicker_window", "int", minimum=1, maximum=9),
-    Field("model_kind", "choice", choices=("spandrel_image", "seedvr2")),
+    Field("model_kind", "choice", choices=("spandrel_image", "seedvr2", "flashvsr")),
     Field("bundle_dir", "str", nullable=True),
     Field("temporal_window", "int", minimum=0),
     Field("temporal_overlap", "int", minimum=0),
@@ -185,13 +187,21 @@ def _check_paths(source: str, output: str) -> None:
         raise InvalidRequest(str(error)) from None
 
 
+def _check_checkpoint_digest(data: dict[str, Any]) -> None:
+    digest = data.get("approved_checkpoint_sha256")
+    if digest is not None and not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise InvalidRequest('The request has an invalid "approved_checkpoint_sha256".')
+
+
 def validate_image_job(data: Any) -> None:
     validate_fields(data, IMAGE_JOB_FIELDS, "image job request")
+    _check_checkpoint_digest(data)
     _check_paths(data["image_path"], data["output_path"])
 
 
 def validate_video_job(data: Any) -> None:
     validate_fields(data, VIDEO_JOB_FIELDS, "video job request")
+    _check_checkpoint_digest(data)
     _check_paths(data["video_path"], data["output_video_path"])
 
 

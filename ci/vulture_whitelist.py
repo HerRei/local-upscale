@@ -7,6 +7,7 @@
 # catalog entries are emitted through dataclasses.asdict() or the catalog export.
 VIDEO  # ModelPurpose enum member used by catalog data and the desktop
 allow_unverified_checkpoint
+approved_checkpoint_sha256
 client_name
 client_version
 completed_frames
@@ -131,6 +132,7 @@ custom_files  # EditJobRequest
 
 # ctypes structure field written for Windows to read (core/gpu_guard.py job object).
 LimitFlags  # JOBOBJECT_BASIC_LIMIT_INFORMATION
+_fields_  # ctypes Structure layout (scripts/verify_appimage_gstreamer.py GList)
 
 ImageBatchRequest  # protocol/messages.py: additive batch envelope built by the Rust host
 
@@ -143,3 +145,23 @@ inter_op_num_threads
 
 # Protocol field set by the Rust host for the audio cleanup model (protocol/messages.py).
 audio_denoise_model_id
+
+# Fields of a kept photo's job_completed, read by the host from the JSON (protocol/messages.py).
+finished_tiles
+total_tiles
+
+# Vendored mlx_flashvsr symbols kept unmodified for parity with the upstream port.
+compatibility_mode
+return_KV
+_cross_kv_initialized
+clear_cross_kv
+timesteps
+last_lq_cur_idx
+DecoderResult
+
+# Public dataclass/engine attributes on FlashVSREngine and FlashVSRTilePlan (inspected by tests).
+padded_width
+padded_height
+tile_width
+tile_height
+max_tile_area

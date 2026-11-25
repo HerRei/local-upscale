@@ -72,6 +72,21 @@
       }
     },
     {
+      "id": "linux-x86_64-cpu-deb",
+      "platform": "linux",
+      "architecture": "x86_64",
+      "backend": "CPU",
+      "index": "cpu",
+      "suffix": "Linux-CPU-amd64.deb",
+      "signing": "sha256",
+      "update": {
+        "backend": "cpu",
+        "kind": "deb"
+      },
+      "engine_target": "linux-x86_64-cpu",
+      "feed": false
+    },
+    {
       "id": "linux-x86_64-cuda",
       "platform": "linux",
       "architecture": "x86_64",

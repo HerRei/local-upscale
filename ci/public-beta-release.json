@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "version": "0.5.2-beta",
+  "version": "0.6.1-beta",
   "channel": "beta",
   "contact": "hermes.reisner@gmail.com",
   "download_page": "https://herrei.github.io/localsr/download/",
@@ -54,6 +54,15 @@
       "coverage": "main-path",
       "package": "published",
       "signing": "sha256-and-update-signature"
+    },
+    {
+      "id": "linux-x86_64-cpu-deb",
+      "platform": "linux",
+      "architecture": "x86_64",
+      "backend": "CPU",
+      "coverage": "main-path",
+      "package": "published",
+      "signing": "sha256"
     },
     {
       "id": "linux-x86_64-cuda",

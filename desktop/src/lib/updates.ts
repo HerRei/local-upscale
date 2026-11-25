@@ -4,6 +4,7 @@ import * as api from './api';
 export const emptyUpdateStatus: api.UpdateStatus = {
   configured: false,
   managed_by_store: false,
+  managed_by_package_manager: false,
   channel: 'beta',
   target: '',
   stage: 'idle',

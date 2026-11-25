@@ -68,6 +68,7 @@ class JobRequest:
     face_model_path: str | None = None
     face_fidelity: float = 0.7
     allow_unverified_checkpoint: bool | None = None
+    approved_checkpoint_sha256: str | None = None
     preview_enabled: bool = True
     preview_max_fps: float = 2.0
     preview_max_dimension: int = 320
@@ -141,6 +142,7 @@ class VideoJobRequest:
     face_model_path: str | None = None
     face_fidelity: float = 0.7
     deflicker: bool = False
+    # Kept in the request schema for compatibility; ignored by the new deflicker engine.
     deflicker_window: int = 3
     # Temporal-engine routing. "spandrel_image" is the frame-by-frame path;
     # any other kind names vendored engine code and carries its bundle.
@@ -160,6 +162,7 @@ class VideoJobRequest:
     # downsample each restored frame when a smaller 2×/3× output is requested.
     output_scale: int | None = None
     allow_unverified_checkpoint: bool | None = None
+    approved_checkpoint_sha256: str | None = None
     preview_enabled: bool = True
     preview_max_fps: float = 2.0
     preview_max_dimension: int = 320
@@ -472,6 +475,11 @@ class JobCompleted:
     output_path: str = ""
     # What the user should know about a job that finished, such as a skipped fix.
     notes: str = ""
+    # A photo stopped with its finished part kept: the tiles done, as [x, y, width,
+    # height] in the saved image's pixels, of how many.
+    partial: bool = False
+    finished_tiles: list[list[int]] = field(default_factory=list)
+    total_tiles: int = 0
 
     def to_json(self) -> str:
         return json.dumps({"type": "job_completed", "data": asdict(self)})
@@ -699,6 +707,7 @@ class VideoJobCompleted:
     notes: str = ""
     partial: bool = False
     kept_seconds: float = 0.0
+    kept_frames: int = 0
 
     def to_json(self) -> str:
         return json.dumps({"type": "video_job_completed", "data": asdict(self)})

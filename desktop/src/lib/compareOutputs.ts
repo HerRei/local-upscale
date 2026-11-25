@@ -1,4 +1,49 @@
 import type { ComparePick, MediaItem, MediaResults, ResultSummary } from './types';
+import { formatDuration } from './format';
+import type { UnfinishedMark } from './unfinished';
+
+/** Only facts saved with the job or read from the output itself. */
+export function resultDetails(result: ResultSummary, width = 0, height = 0): string[] {
+  const labels = (result.stages ?? [])
+    .map((stage) => stage.model_label)
+    .filter((label) => label && label !== 'Unknown model');
+  if (!labels.length && result.model_label && result.model_label !== 'Unknown model')
+    labels.push(result.model_label);
+  const fixNames: Record<string, string> = {
+    noise: 'Noise',
+    jpeg: 'JPEG artifacts',
+    blur: 'Blur',
+    colour: 'Colour',
+    faces: 'Faces',
+  };
+  const fixes = (result.ui?.fixes ?? []).map((fix) => fixNames[fix]).filter(Boolean);
+  const date = result.completed_at > 0 ? new Date(result.completed_at) : null;
+  return [
+    labels.length ? `Models: ${labels.join(' → ')}` : '',
+    fixes.length ? `Fixes: ${fixes.join(' → ')}` : '',
+    result.scale ? `Scale: ${result.scale}×` : '',
+    width > 0 && height > 0 ? `Output: ${width} × ${height}` : '',
+    result.elapsed_seconds > 0 ? `Time: ${formatDuration(result.elapsed_seconds)}` : '',
+    result.device
+      ? `Requested device: ${result.device}${result.device === 'mps' && result.neural_engine ? ' · Neural Engine enabled' : ''}`
+      : '',
+    date && !Number.isNaN(date.getTime()) ? `Date: ${date.toLocaleDateString()}` : '',
+  ].filter(Boolean);
+}
+
+/**
+ * The facts on as many lines as the details strip has. Models and fixes, which can be
+ * long, take a line each; the short facts share what is left, in their order.
+ */
+export function detailLines(facts: string[], lines = 4): string[][] {
+  const long = facts.filter((fact) => /^(Models|Fixes):/.test(fact)).slice(0, lines - 1);
+  const short = facts.filter((fact) => !long.includes(fact));
+  const each = Math.max(1, Math.ceil(short.length / Math.max(1, lines - long.length)));
+  const packed: string[][] = long.map((fact) => [fact]);
+  for (let index = 0; index < short.length; index += each)
+    packed.push(short.slice(index, index + each));
+  return packed;
+}
 
 export interface OutputGroup {
   media: MediaItem;
@@ -77,6 +122,9 @@ export interface CompareItem {
   media_name: string;
   label: string;
   meta: string;
+  details?: string[];
+  /** A stopped job's kept result: its mark, and what the view needs to show the kept part. */
+  unfinished?: UnfinishedMark;
   preview_data_url: string;
   preview_width?: number;
   preview_height?: number;

@@ -1,6 +1,6 @@
 # Releasing
 
-Current release: **v0.5.2-beta** for macOS, Windows and Linux. Release notes live in
+Current release: **v0.6.1-beta** for macOS, Windows and Linux. Release notes live in
 [`releases/`](releases/), one file per tag; that file is the GitHub release
 body.
 
@@ -36,9 +36,30 @@ Before building a candidate on the Mac:
    upgrade `av` or `opencv*` this way: they are the licensing-clean builds from
    `packaging/ffmpeg/install_media_runtime.py`. When their pinned versions change,
    rerun that script. Either way `verify_codec_allowlist.py` must pass.
+   The release venv is its own clean venv (`uv venv .venv` in the release worktree), never
+   the shared development venv: that one has PyPI's `opencv-python-headless`, which bundles
+   FFmpeg. See [Release venv](#release-venv) for the macOS minimum.
 3. `release_macos_beta.sh` writes `mac-environment.txt` (the venv's `uv pip freeze`)
    next to the build. Diff it against the previous release's copy and put the diff
    in the release PR.
+
+### Release venv
+
+The app's minimum is macOS 14 (`LSMinimumSystemVersion`, set by `build_tauri_preview.py`),
+but uv and pip install the newest wheel the release Mac accepts. On a Mac with macOS 26
+that is `mlx` and `mlx-metal` for macOS 26, whose Metal library macOS 14 and 15 cannot
+load: 0.6.0's engine stopped at start on those Macs
+([#183](https://github.com/HerRei/local-upscale/issues/183)). Install packages with
+platform-specific wheels for the minimum:
+
+```
+MACOSX_DEPLOYMENT_TARGET=14.0 uv pip install --python .venv/bin/python \
+  --python-platform aarch64-apple-darwin -e '.[video,face,package,macos-release]'
+```
+
+`verify_macos_deployment.py` checks every Mach-O file and Metal library against the
+minimum, in the venv before the build and in the app after it; `release_macos_beta.sh`
+stops when one needs a newer macOS.
 
 ## macOS beta
 
@@ -77,15 +98,16 @@ After the build:
 Public installers, source bundles and updater files use
 `https://github.com/HerRei/local-upscale/releases/download/v<version>/`.
 
-1. Upload the DMG, the update archive and its signature, the engine payload and
-   its parts, the source bundle, the `.sha256` files and `SHA256SUMS` to the
-   **draft** GitHub release. Publish only after verifying its exact files.
+1. Create the **draft** GitHub release, then attach the DMG, update archive and
+   its signature, engine payload and parts, source bundle, `.sha256` files and
+   `SHA256SUMS`. Add the Windows and Linux entries and attach their packages and
+   signatures ([Windows and Linux updates](#windows-and-linux-updates)).
 2. Download the draft release's files and verify them with
-   `shasum -a 256 -c SHA256SUMS`.
-3. Install the previous version on a test Mac and confirm that the update
-   downloads, installs and relaunches on the new version.
-4. Add the Windows and Linux entries ([Windows and Linux updates](#windows-and-linux-updates)).
-5. Copy `build/release-<version>/beta.json` to the website's `updates/beta.json`,
+   `shasum -a 256 -c SHA256SUMS`. Verify the full prepared release and signatures
+   as described below before publishing.
+3. Publish the release. Install the previous version on each platform and confirm
+   that the update downloads, installs and relaunches on the new version.
+4. Copy `build/release-<version>/beta.json` to the website's `updates/beta.json`,
    update `release.json` and run `localsr/tools/sync_release.py` and
    `validate_site.py`, then publish. GitHub Pages caches the feed for ten minutes.
 
@@ -95,15 +117,18 @@ The updater signing key is managed by `scripts/beta_update_signing.py`; see
 
 ### Windows and Linux updates
 
-Every Windows and Linux package carries its update identity and updates itself
+Windows installers and Linux AppImages carry their update identity and update themselves
 ([Updates](updates.md)); its feed entry is written and signed on the Mac, after the
 macOS build, from the workflow runs at the same commit:
 
-1. Download both runs into one folder: `gh run download <run> -D
-   build/release-<version>/platforms` for the Windows and the Linux run. Every
-   artifact lands in its target's folder (`windows-x86_64-cpu`, …). With the Linux
-   CUDA and ROCm AppImages and their engine packages this is roughly 45 GB; signing
-   a split AppImage needs room for one more copy of it.
+1. Run both workflows with `release_tag` set to the draft release, then gather their files:
+   `python scripts/fetch_release_platforms.py --tag v<version> --run <windows run> --run
+   <linux run> --out build/release-<version>/platforms`. It downloads only the runs'
+   `reports-<target>` artifacts (a few MB) and takes the packages, parts and engine packages
+   from the draft release, checked against GitHub's digests, into one folder per target
+   (`windows-x86_64-cpu`, …). The full run artifacts (about 45 GB) are no longer needed;
+   `gh run download` still works as a fallback. Signing needs room for one more copy of the
+   largest package.
 2. `python scripts/beta_update_signing.py platforms build/release-<version>/platforms
    --feed build/release-<version>/beta.json --commit <sha>` checks every package
    against its checksum file, its installed smoke report (version and update
@@ -111,16 +136,19 @@ macOS build, from the workflow runs at the same commit:
    then signs private copies of exactly those files with the Keychain key, adds the
    entries with their signed release statements next to the macOS entry, and prints
    the `.sig` files it wrote. The copies need room for the largest package once more.
-3. `python scripts/verify_prepared_release.py --feed
+3. Nothing is signed for the .deb: apt installs its updates. It reads the signed
+   `linux-x86_64-cpu-native` entry to report a new version and the `native` engine
+   entries to download GPU engines, so the feed has no entry for it.
+4. `python scripts/verify_prepared_release.py --feed
    build/release-<version>/beta.json --commit <sha> --files build/release-<version>
    --files build/release-<version>/platforms` must pass: one entry per release
-   target, with its backend, kind, protocol, engine id and engine package, and every
+   target except the .deb, with its backend, kind, protocol, engine id and engine package, and every
    statement and signature verified against the public key over the local files.
-4. Attach the packages, their parts and engine packages from the same runs
+5. Attach the packages, their parts and engine packages from the same runs
    (`release_tag`, or `attach-release-assets.yml`), and upload the printed `.sig`
    files from the Mac to the release. The signatures cover the exact files of those
    runs; a rerun produces different files and needs new signatures.
-5. Install the previous version on a Windows machine and from an AppImage on Linux
+6. Install the previous version on a Windows machine and from an AppImage on Linux
    and confirm that the update downloads, installs and relaunches, before the feed
    goes live.
 
@@ -134,8 +162,23 @@ release; otherwise the files stay run artifacts for 14 days, and
 Each build gets its update identity from `scripts/release_targets.py --update-env`
 and writes its schema 2 engine package (`<package>.engine-payload.json` with
 `version`, `os`, `arch`, `protocol_version` and `engine_id`, plus its
-`.engine.tar.gz.part-*` files) next to the package; the updater signatures are
-made on the Mac ([Windows and Linux updates](#windows-and-linux-updates)).
+`.engine.tar.gz.part-*` files) next to the package, and the update form of that
+manifest (`<package>.engine-update.json`, see [Older releases](#older-releases));
+the updater signatures are made on the Mac
+([Windows and Linux updates](#windows-and-linux-updates)).
+
+The CPU Linux job also builds `LocalSR-v<version>-Linux-CPU-amd64.deb` (package
+`localsr`) from the same worker, with Tauri's deb bundler and the `deb` identity
+(`release_targets.py --update-env linux-x86_64-cpu-deb`: the CPU engine id, kind
+`deb`). The extracted package gets the AppImage's codec, NVIDIA, glibc 2.35 and
+source bundle checks (`LocalSR-v<version>-Linux-CPU-deb-source-and-notices.tar.gz`),
+and `verify_deb_dependencies.py` checks that every system library it links comes
+with its Depends: Tauri adds WebKitGTK 4.1 and GTK 3, `tauri.conf.json` adds
+`libc6 (>= 2.35)` and the OpenCL loader that the AppImage bundles. The smoke test
+installs it with `sudo apt-get install`, starts the installed host headless, removes
+it with `sudo apt-get remove` and fails if a file it installed is left. The .deb and
+its checksum are attached with the AppImages; it is never split, it has no updater
+file or engine package, and the feed has no entry for it.
 
 ### Targets
 
@@ -143,7 +186,7 @@ made on the Mac ([Windows and Linux updates](#windows-and-linux-updates)).
 | --- | --- | --- |
 | macOS, Apple Silicon | MPS | Torch 2.13, built and signed on a Mac with `release_macos_beta.sh` |
 | Windows 10/11, x86-64 | CPU, CUDA, DirectML | Torch 2.13; CUDA ships as an installer plus verified external engine payloads; DirectML through ONNX Runtime |
-| Linux, x86-64 | CPU, CUDA, AMD ROCm | separate Torch 2.13 distributions |
+| Linux, x86-64 | CPU, CUDA, AMD ROCm | separate Torch 2.13 distributions; the CPU edition also as a .deb for Ubuntu 22.04+ and Debian 12+ |
 
 Intel XPU is listed under `withheld_targets`; see
 [media formats and licensing](licensing-media.md).
@@ -175,10 +218,40 @@ The installed host's smoke report must also show the edition's update identity
 (`smoke_tauri_installer.py --update-target`), so a package built without its updater
 key cannot reach a release.
 
+Older releases must be able to update to this one, with their own code
+(`upgrade_check.py`, see [Older releases](#older-releases)): in the Windows CUDA
+and Linux CPU jobs and in `release_macos_beta.sh`.
+
 `scripts/check_desktop_architecture.py` fails when either workflow loses one of
 these gates, its update identity or its engine package, starts on anything but a
 manual run, or lets a job other than the attach job write to releases, and when
 `release_macos_beta.sh` loses its signing, notarization or smoke tests.
+
+### Older releases
+
+Every installed release updates with the code it shipped, not with this release's.
+On 2026-11-23 every 0.5.0 install refused the update to 0.5.2: the feed named a
+schema 2 engine manifest, which the updaters of 0.4.0 and 0.5.0 reject, and no test
+had run an older updater ([post-mortem](postmortems/2026-11-23-updates-from-0.5.0.md)).
+So:
+
+- The feed names `<package>.engine-update.json`: the engine manifest in the form every
+  updater since 0.4.0 reads (exactly `schema_version` 1, `format`, `backend`,
+  `file_count`, `unpacked_bytes` and `parts`). It is derived from the schema 2 manifest
+  and signed with it; the version, platform and engine identity it leaves out are bound
+  by the signed release statement. `verify_prepared_release.py` refuses a feed whose
+  manifest an older updater would refuse. Never add a field to that form, to the
+  release statement or to anything else an older updater parses strictly.
+- `scripts/upgrade_check.py` checks out each release in `OLDER_RELEASES`, builds its
+  update code with `scripts/upgrade_check/old_release_probe.rs` injected and runs it on
+  this release's engine package, signed with a disposable key: the contract check, the
+  release statement and the engine installation. This release's host must then record
+  that engine and start it. Run it locally with `--as-in-0.5.2` to see it fail the way
+  0.5.2 did.
+- After publishing, add the new tag to `OLDER_RELEASES`. If a release changes the update
+  functions the probe calls, give that release its own probe rather than dropping it.
+- A change to the feed, the release statement, the engine manifest or the engine folder
+  layout is reviewed for what every installed release will do with it.
 
 ### Signing
 

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Install or mount a Tauri preview package and verify its bundled worker boots."""
+"""Install or mount a Tauri preview package and verify its bundled worker boots.
+
+A .deb is installed and removed with apt on the runner itself (sudo).
+"""
 
 from __future__ import annotations
 
@@ -197,33 +200,60 @@ def record_windows_payload_architectures(
     report.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def smoke_windows(artifact: Path, report: Path, env: dict[str, str], timeout: float) -> None:
-    with temporary_directory(prefix="localsr-next-installer-") as temporary:
-        install_dir = Path(temporary) / "app"
+def _smoke_windows_install(
+    artifact: Path,
+    install_dir: Path,
+    report: Path,
+    env: dict[str, str],
+    timeout: float,
+    *,
+    install_args: tuple[str, ...] = (),
+) -> None:
+    report.unlink(missing_ok=True)
+    run(
+        [str(artifact), "/S", *install_args, f"/D={install_dir}"],
+        env=env,
+        timeout=timeout,
+    )
+    executable = installed_windows_executable(install_dir)
+    # A Windows service or CI runner may run in Session 0, with no
+    # interactive desktop. Exercise the installed Rust host and bundled worker before
+    # WebView initialization so this acceptance test does not require an
+    # interactive desktop.
+    run([str(executable), "--headless-smoke-test"], env=env, timeout=timeout)
+    validate_report(report)
+    record_windows_payload_architectures(artifact, install_dir, executable, report)
+    payload_path = install_dir / "engine-payload.json"
+    if payload_path.is_file():
+        data = json.loads(report.read_text())
+        data["engine_payload"] = json.loads(payload_path.read_text())
+        data["engine_payload_sha256"] = hashlib.sha256(payload_path.read_bytes()).hexdigest()
+        report.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    verify_backend(report, env, timeout)
+    uninstallers = sorted(install_dir.glob("[Uu]ninstall*.exe")) + sorted(
+        install_dir.glob("unins*.exe")
+    )
+    if uninstallers:
         run(
-            [str(artifact), "/S", f"/D={install_dir}"],
+            [str(uninstallers[0]), "/S", f"_?={install_dir}"],
             env=env,
             timeout=timeout,
+            check=False,
         )
-        executable = installed_windows_executable(install_dir)
-        # A Windows service or CI runner may run in Session 0, with no
-        # interactive desktop. Exercise the installed Rust host and bundled worker before
-        # WebView initialization so this acceptance test does not require an
-        # interactive desktop.
-        run([str(executable), "--headless-smoke-test"], env=env, timeout=timeout)
-        record_windows_payload_architectures(artifact, install_dir, executable, report)
-        payload_path = install_dir / "engine-payload.json"
-        if payload_path.is_file():
-            data = json.loads(report.read_text())
-            data["engine_payload"] = json.loads(payload_path.read_text())
-            data["engine_payload_sha256"] = hashlib.sha256(payload_path.read_bytes()).hexdigest()
-            report.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
-        verify_backend(report, env, timeout)
-        uninstallers = sorted(install_dir.glob("[Uu]ninstall*.exe")) + sorted(
-            install_dir.glob("unins*.exe")
+    shutil.rmtree(install_dir, ignore_errors=True)
+
+
+def smoke_windows(artifact: Path, report: Path, env: dict[str, str], timeout: float) -> None:
+    with temporary_directory(prefix="localsr-next-installer-") as temporary:
+        _smoke_windows_install(artifact, Path(temporary) / "user", report, env, timeout)
+        _smoke_windows_install(
+            artifact,
+            Path(temporary) / "all",
+            report,
+            env,
+            timeout,
+            install_args=("/AllUsers",),
         )
-        if uninstallers:
-            run([str(uninstallers[0]), "/S"], env=env, timeout=timeout, check=False)
 
 
 def find_appimage_offset(artifact: Path) -> int | None:
@@ -426,6 +456,47 @@ def resolve_artifact(pattern: str) -> Path:
     return matches[0]
 
 
+def deb_host_and_files(listing: list[str]) -> tuple[Path, list[Path]]:
+    """The installed host and every file and link of the package, from `dpkg-query -L`."""
+    paths = [Path(line) for line in listing if line.strip()]
+    files = [path for path in paths if path.is_symlink() or path.is_file()]
+    hosts = [
+        path
+        for path in files
+        if path.parent.name == "bin"
+        and path.parent.parent.name == "usr"
+        and os.access(path, os.X_OK)
+    ]
+    if len(hosts) != 1:
+        raise RuntimeError(f"the .deb must install one program in /usr/bin, not {hosts}")
+    if not any(path.suffix == ".desktop" and path.parent.name == "applications" for path in files):
+        raise RuntimeError("the .deb installs no applications menu entry")
+    return hosts[0], files
+
+
+def smoke_deb(artifact: Path, report: Path, env: dict[str, str], timeout: float) -> None:
+    """Install the .deb with apt as users do, start the installed host, remove it with apt."""
+    package = run(["dpkg-deb", "-f", str(artifact), "Package"], env=env, timeout=timeout)
+    package_name = package.stdout.decode().strip()
+    if package_name != "localsr":
+        raise RuntimeError(f"the .deb is named {package_name!r}, not localsr")
+    # apt resolves the declared Depends, as `sudo apt install ./file.deb` does.
+    run(["sudo", "apt-get", "install", "-y", str(artifact.resolve())], env=env, timeout=timeout)
+    try:
+        listing = run(["dpkg-query", "-L", package_name], env=env, timeout=timeout)
+        host, files = deb_host_and_files(listing.stdout.decode().splitlines())
+        run([str(host), "--headless-smoke-test"], env=env, timeout=timeout)
+        worker = json.loads(report.read_text(encoding="utf-8")).get("worker_path")
+        if not worker or Path(worker).resolve() not in {path.resolve() for path in files}:
+            raise RuntimeError(f"the installed host ran {worker!r}, not the engine apt installed")
+        verify_backend(report, env, timeout)
+    finally:
+        run(["sudo", "apt-get", "remove", "-y", package_name], env=env, timeout=timeout)
+    remaining = [str(path) for path in files if path.is_symlink() or path.exists()]
+    if remaining:
+        raise RuntimeError(f"apt remove left the package's files behind: {remaining[:20]}")
+
+
 def smoke(artifact: Path, report: Path, timeout: float = 240.0) -> dict[str, object]:
     report = report.resolve()
     report.parent.mkdir(parents=True, exist_ok=True)
@@ -444,6 +515,8 @@ def smoke(artifact: Path, report: Path, timeout: float = 240.0) -> dict[str, obj
                 smoke_windows(artifact, report, env, timeout)
             elif suffix == ".appimage":
                 smoke_linux(artifact, report, env, timeout)
+            elif suffix == ".deb":
+                smoke_deb(artifact, report, env, timeout)
             else:
                 raise RuntimeError(f"unsupported Tauri package type: {artifact.name}")
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:

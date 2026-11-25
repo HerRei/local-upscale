@@ -10,6 +10,7 @@ import { demoSnapshot } from './lib/demo';
 import { applyWorkerEnvelope } from './lib/workerEvents';
 import type {
   AppSnapshot,
+  ComparePick,
   DeviceInfo,
   EngineDownloadStatus,
   JobRecord,
@@ -66,6 +67,9 @@ const api = vi.hoisted(() => ({
   isTauri: vi.fn(() => true),
   bootstrap: vi.fn(),
   refreshSnapshot: vi.fn(),
+  getCacheSize: vi.fn(async () => 0),
+  clearCache: vi.fn(async () => 0),
+  setRunLowPriority: vi.fn(async () => undefined),
   chooseMediaFiles: vi.fn(async (): Promise<string[]> => []),
   chooseMediaFolder: vi.fn(
     async (): Promise<{ paths: string[]; outputDirectory: string } | null> => null,
@@ -92,13 +96,25 @@ const api = vi.hoisted(() => ({
         undefined,
   ),
   chooseCustomModel: vi.fn(async () => null),
+  checkpointConsent: vi.fn(async (_path: string, _allow?: boolean) => false),
   addMedia: vi.fn(async (_paths: string[], _replace: boolean): Promise<void> => undefined),
   selectMedia: vi.fn(async (_id: string): Promise<void> => undefined),
   removeMedia: vi.fn(async () => undefined),
   clearMedia: vi.fn(async () => undefined),
   clearResults: vi.fn(async () => undefined),
   saveSettings: vi.fn(async (_settings: UiSettings): Promise<void> => undefined),
-  setUpdateSwitch: vi.fn(async (_name: string, _value: boolean): Promise<void> => undefined),
+  setPreference: vi.fn(
+    async (
+      _name: string,
+      _value:
+        | boolean
+        | UiSettings['appearance']
+        | UiSettings['interface_scale']
+        | NonNullable<UiSettings['contrast']>
+        | NonNullable<UiSettings['viewer_background']>
+        | UiSettings['stopped_job_result'],
+    ): Promise<void> => undefined,
+  ),
   listCrashReports: vi.fn(
     async (): Promise<{ id: string; report: { message: string; os: string } }[]> => [],
   ),
@@ -108,14 +124,18 @@ const api = vi.hoisted(() => ({
     async (_choices: {
       appearance: UiSettings['appearance'];
       colourBlindPalette: boolean;
+      contrast: NonNullable<UiSettings['contrast']>;
+      showInMenuBar: boolean | null;
+      completionSound: boolean;
       checkAtLaunch: boolean;
       anonymousCount: boolean;
       crashReports: boolean;
     }): Promise<void> => undefined,
   ),
   startJobs: vi.fn(async (_input: StartBatchInput) => undefined),
-  cancelJobs: vi.fn(async () => undefined),
+  cancelJobs: vi.fn(async (_keepPartial?: boolean) => undefined),
   retryEngine: vi.fn(async (): Promise<void> => undefined),
+  retryJobOnCpu: vi.fn(async (_jobId: string): Promise<void> => undefined),
   startBenchmark: vi.fn(async () => undefined),
   exportBenchmark: vi.fn(async () => true),
   cancelVideoComparison: vi.fn(async () => {}),
@@ -134,7 +154,7 @@ const api = vi.hoisted(() => ({
     original_url: 'asset://localhost/compare.mp4',
     enhanced_url: '',
   })),
-  requestCompare: vi.fn(async (): Promise<void> => undefined),
+  requestCompare: vi.fn(async (_picks: ComparePick[]): Promise<void> => undefined),
   startModelTrials: vi.fn(
     async (_mediaId: string, _modelIds: string[], _base: StartBatchInput): Promise<string[]> => [],
   ),
@@ -145,7 +165,9 @@ const api = vi.hoisted(() => ({
       _base: StartBatchInput,
     ): Promise<TrialEstimate[]> => [],
   ),
-  cancelJobsForMedia: vi.fn(async (_mediaId: string): Promise<void> => undefined),
+  cancelJobsForMedia: vi.fn(
+    async (_mediaId: string, _keepPartial?: boolean): Promise<void> => undefined,
+  ),
   refreshCapabilities: vi.fn(async () => undefined),
   probePath: vi.fn(async () => undefined),
   detectExternalFFmpeg: vi.fn(async (): Promise<string[]> => []),
@@ -172,6 +194,7 @@ const api = vi.hoisted(() => ({
   saveRecipe: vi.fn(async (_recipe: Recipe) => undefined),
   deleteRecipe: vi.fn(async () => undefined),
   updateStatus: vi.fn(async () => ({
+    managed_by_store: false,
     configured: false,
     channel: 'beta',
     target: '',
@@ -318,9 +341,14 @@ async function mountWith(snapshot: AppSnapshot): Promise<ReturnType<typeof userE
   api.bootstrap.mockResolvedValue(structuredClone(snapshot));
   api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
   render(App);
-  // While idle the status bar shows what Start will produce, so wait for the title.
+  // While idle the status bar shows what Start will produce, or the running downloads.
   await waitFor(() =>
-    expect(document.querySelector('.status-copy strong')?.textContent ?? '').toMatch(/^Ready/),
+    expect(document.querySelector('.status-copy strong')?.textContent ?? '').toMatch(
+      snapshot.runtime.active_job_id ||
+        !(snapshot.runtime.downloads?.length || snapshot.runtime.download_model_id)
+        ? /^Ready/
+        : /^Downloading /,
+    ),
   );
   return userEvent.setup();
 }
@@ -368,17 +396,53 @@ describe('Appearance from the host', () => {
     );
     expect(api.saveSettings).not.toHaveBeenCalled();
   });
+
+  it('updates viewer background from the zoom swatch and high contrast from Settings', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+
+    await user.click(screen.getByRole('button', { name: 'Viewer background: Checkerboard' }));
+    await waitFor(() =>
+      expect(api.setPreference).toHaveBeenCalledWith('viewer_background', 'black'),
+    );
+    expect(document.documentElement.dataset.viewerBg).toBe('black');
+
+    await chooseMenuItem('app.settings');
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(dialog).getByRole('tab', { name: 'Appearance' }));
+    await user.click(within(dialog).getByRole('switch', { name: 'High contrast' }));
+    await waitFor(() => expect(api.setPreference).toHaveBeenCalledWith('contrast', 'high'));
+    // The theme follows once the awaited host call returns.
+    await waitFor(() => expect(document.documentElement.dataset.contrast).toBe('high'));
+  });
+
+  it('keeps saved contrast and viewer background during first-run theme preview', async () => {
+    const snapshot = readySnapshot();
+    snapshot.settings.privacy_choice_made = false;
+    snapshot.settings.contrast = 'high';
+    snapshot.settings.viewer_background = 'grey';
+    const user = await mountWith(snapshot);
+    const dialog = await screen.findByRole('dialog', { name: 'Welcome to LocalSR' });
+    await user.click(within(dialog).getByRole('button', { name: 'Continue' }));
+    await user.click(within(dialog).getByRole('radio', { name: 'Light' }));
+    expect(document.documentElement.dataset).toMatchObject({
+      theme: 'light',
+      contrast: 'high',
+      viewerBg: 'grey',
+    });
+  });
 });
 
 describe('Completion sound switch', () => {
-  it('saves the chosen value', async () => {
+  it('saves the chosen value from Settings', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     const user = await mountWith(snapshot);
-    await chooseMenuItem('app.updates');
-    await user.click(await screen.findByLabelText('Play a sound when a job finishes'));
-    expect(api.saveSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ completion_sound: true }),
+    await chooseMenuItem('app.settings');
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(
+      within(dialog).getByRole('switch', { name: 'Play a sound with the notification' }),
     );
+    expect(api.setPreference).toHaveBeenCalledWith('completion_sound', true);
   });
 });
 
@@ -393,6 +457,7 @@ describe('Update switches', () => {
       if (unconfigured) api.updateStatus.mockImplementation(unconfigured);
     });
     api.updateStatus.mockResolvedValue({
+      managed_by_store: false,
       configured: true,
       channel: 'beta',
       target: 'darwin-aarch64-mps-native',
@@ -405,28 +470,29 @@ describe('Update switches', () => {
       settings_recovery: false,
     });
     const user = await mountWith(snapshot);
-    await chooseMenuItem('app.updates');
+    await chooseMenuItem('app.settings');
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(dialog).getByRole('tab', { name: 'Privacy & updates' }));
     await user.click(
-      await screen.findByLabelText(
-        'After an update check, send an anonymous count: app version, platform and channel only. No install ID, cookies, files or settings.',
-      ),
+      await within(dialog).findByRole('switch', {
+        name: 'Send an anonymous count with each update check',
+      }),
     );
-    await user.click(screen.getByLabelText('Check for updates when LocalSR starts'));
-    expect(api.setUpdateSwitch.mock.calls).toEqual([
+    await user.click(
+      within(dialog).getByRole('switch', { name: 'Check for updates when LocalSR starts' }),
+    );
+    expect(api.setPreference.mock.calls).toEqual([
       ['anonymous_update_count', true], // off until the user turns it on
       ['check_updates_at_launch', true], // it started off in this test
     ]);
     expect(api.saveSettings).not.toHaveBeenCalledWith(
       expect.objectContaining({ anonymous_update_count: true }),
     );
-    // The menu's own items are the host's: the window does not act on them.
-    await chooseMenuItem('app.update-count');
-    expect(api.setUpdateSwitch).toHaveBeenCalledTimes(2);
   });
 });
 
 describe('Edit task', () => {
-  it('sits beside Upscale and Restore, takes a prompt and sends one editing job', async () => {
+  it('sits beside Upscale & restore, takes a prompt and sends one editing job', async () => {
     // 36 GB: the Qwen editor fits within the share of memory a default may use.
     const user = await mountWith(editSnapshot(36));
     await chooseTask(user, /^Edit$/);
@@ -721,10 +787,13 @@ it.each(['realplksr_nomoswebphoto_x4', 'realplksr_hfa2k_anime_x4'])(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  api.bootstrap.mockReset();
+  api.refreshSnapshot.mockReset();
   api.isTauri.mockReturnValue(true);
   api.addMedia.mockResolvedValue(undefined);
   api.selectMedia.mockResolvedValue(undefined);
   api.saveSettings.mockResolvedValue(undefined);
+  api.checkpointConsent.mockReset().mockResolvedValue(false);
   api.startJobs.mockResolvedValue(undefined);
   api.startBenchmark.mockReset().mockResolvedValue(undefined);
   api.downloadModel.mockReset().mockResolvedValue(undefined);
@@ -761,6 +830,7 @@ beforeEach(() => {
   api.estimateModelTrials.mockReset().mockResolvedValue([]);
   api.cancelJobsForMedia.mockReset().mockResolvedValue(undefined);
   api.retryEngine.mockReset().mockResolvedValue(undefined);
+  api.retryJobOnCpu.mockReset().mockResolvedValue(undefined);
   api.listCrashReports.mockReset().mockResolvedValue([]);
   api.deleteCrashReport.mockReset().mockResolvedValue(undefined);
   api.deleteAllCrashReports.mockReset().mockResolvedValue(undefined);
@@ -1160,6 +1230,33 @@ describe('LocalSR desktop interface', () => {
     expect(dialog.queryByRole('alert')).toBeNull();
   });
 
+  it('shows one title and one progress bar for all model downloads', async () => {
+    const snapshot = demoSnapshot();
+    const [first, second] = snapshot.catalog.models;
+    snapshot.runtime.downloads = [
+      {
+        model_id: first.model_id,
+        status: 'downloading',
+        progress: 50,
+        downloaded_bytes: first.size_bytes / 2,
+        total_bytes: first.size_bytes,
+      },
+      { model_id: second.model_id, status: 'queued', progress: 0 },
+    ];
+    await mountWith(snapshot);
+    const expected = Math.round(
+      (first.size_bytes / 2 / (first.size_bytes + second.size_bytes)) * 100,
+    );
+    expect(document.querySelector('.status-copy strong')?.textContent).toBe(
+      `Downloading 2 models · ${expected}%`,
+    );
+    expect(document.querySelector('.status-detail')?.textContent).toBe(
+      `${first.name}, ${second.name}`,
+    );
+    const bar = screen.getByRole('progressbar', { name: 'Download progress' });
+    expect(bar.getAttribute('aria-valuenow')).toBe(String(expected));
+  });
+
   it('explains why benchmark startup waits for another model download', async () => {
     const snapshot = readySnapshot();
     snapshot.runtime.download_model_id = 'seedvr2_3b_fp8';
@@ -1345,11 +1442,11 @@ describe('LocalSR desktop interface', () => {
 
   it('keeps advanced controls in a dedicated scroll region', async () => {
     const user = await mountWith(readySnapshot([image('first', true)]));
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
 
     const inspector = screen.getByRole('region', { name: 'Enhancement settings' });
     expect(inspector.classList.contains('inspector-scroll')).toBe(true);
-    expect(screen.getByLabelText('Interface text')).toBeTruthy();
+    expect(screen.getByLabelText('Format')).toBeTruthy();
     expect(screen.getByRole('checkbox', { name: /Safe memory mode/i })).toBeTruthy();
   });
 
@@ -1362,8 +1459,7 @@ describe('LocalSR desktop interface', () => {
       media.probe_status = 'pending';
       const snapshot = readySnapshot([media]);
       snapshot.settings.batch_mode = batch;
-      const user = await mountWith(snapshot);
-      await chooseTask(user, /^Upscale$/);
+      await mountWith(snapshot);
       expect(screen.getByRole('heading', { name: 'Preparing preview…' })).toBeTruthy();
       expect(screen.getAllByText('Preparing preview…').length).toBe(2);
       expect(screen.queryByText('Inspecting…')).toBeNull();
@@ -1409,8 +1505,7 @@ describe('LocalSR desktop interface', () => {
     const snapshot = readySnapshot([media]);
     snapshot.settings.task = 'video';
     snapshot.settings.batch_mode = true;
-    const user = await mountWith(snapshot);
-    await chooseTask(user, /^Upscale$/);
+    await mountWith(snapshot);
     const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
     callback({
       type: 'media_probe_progress',
@@ -1451,12 +1546,30 @@ describe('LocalSR desktop interface', () => {
     });
     expect(await screen.findByRole('region', { name: 'HDR conversion' })).toBeTruthy();
     expect(screen.getByText(/exported as 8-bit SDR/)).toBeTruthy();
-    expect(screen.getByRole('region', { name: 'Audio compatibility' })).toBeTruthy();
+    // The note about this video's audio is a tip on the Audio heading, not a section of its own.
+    expect(screen.queryByRole('region', { name: 'Audio compatibility' })).toBeNull();
+    const audioTip = within(screen.getByRole('region', { name: 'Audio' })).getByRole('button', {
+      name: "About this video's audio",
+    });
+    expect(
+      document.getElementById(audioTip.getAttribute('aria-describedby') ?? '')?.textContent,
+    ).toBe('Standard audio will be kept. The extra track will be omitted.');
     expect(screen.queryByText('Converting HDR to an SDR preview')).toBeNull();
     expect(
       screen.getByRole('button', { name: 'Start selected video' }).hasAttribute('disabled'),
     ).toBe(false);
   });
+
+  async function pickUpscalerInLibrary(
+    user: ReturnType<typeof userEvent.setup>,
+    rowName: RegExp,
+  ): Promise<void> {
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: rowName }));
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
+  }
 
   it('switches SeedVR2 to SDR, preserves the custom HDR option, and submits the chosen resolution', async () => {
     const media = { ...video('hdr', true), width: 2160, height: 3840, hdr_format: 'HLG' as const };
@@ -1477,11 +1590,11 @@ describe('LocalSR desktop interface', () => {
     const user = await mountWith(snapshot);
     const hdr = screen.getByLabelText('Colour output') as HTMLSelectElement;
     expect(hdr.value).toBe('preserve');
-    await user.selectOptions(screen.getByLabelText('Video engine'), 'seedvr2_3b');
+    await pickUpscalerInLibrary(user, /^SeedVR2-3B — Labs/);
     expect(hdr.value).toBe('tone_map');
     expect(hdr.querySelector<HTMLOptionElement>('option[value="preserve"]')!.disabled).toBe(true);
     expect(screen.getByText('SDR output selected. This model cannot preserve HDR.')).toBeTruthy();
-    expect((screen.getByLabelText('Output resolution') as HTMLSelectElement).selectedIndex).toBe(0);
+    expect((screen.getByLabelText('Output resolution') as HTMLSelectElement).value).toBe('x4');
     await user.selectOptions(screen.getByLabelText('Output resolution'), '512');
     expect(screen.getAllByText('512 × 910 · SDR').length).toBeGreaterThan(0);
     const memory = screen.getByRole('checkbox', { name: 'Reduce GPU memory' }) as HTMLInputElement;
@@ -1496,7 +1609,7 @@ describe('LocalSR desktop interface', () => {
         video_low_memory: false,
       }),
     );
-    await user.selectOptions(screen.getByLabelText('Video engine'), 'frame_by_frame');
+    await pickUpscalerInLibrary(user, /^HAT-S ×4/);
     expect(hdr.value).toBe('preserve');
     api.chooseCustomModel.mockResolvedValueOnce('/models/mine.safetensors' as never);
     await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
@@ -1569,14 +1682,14 @@ describe('LocalSR desktop interface', () => {
 
   it('exposes image recipes, hardware controls, and installed face companions', async () => {
     const user = await mountWith(readySnapshot());
-    await chooseTask(user, /^Upscale$/);
+    await chooseTask(user, /^Upscale & restore$/);
 
     expect(screen.getByRole('button', { name: /^Quick\s*Fast, clean result/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /^Best\s*Finest detail, slower/i })).toBeTruthy();
     expect(screen.getByRole('list', { name: 'Stages' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Change the upscaler' })).toBeTruthy();
 
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     const hardware = screen.getByLabelText('Hardware');
     expect(within(hardware).getByRole('option', { name: 'Apple GPU (Metal)' })).toBeTruthy();
     expect(within(hardware).getByRole('option', { name: 'CPU' })).toBeTruthy();
@@ -1606,20 +1719,32 @@ describe('LocalSR desktop interface', () => {
     },
   );
 
-  it('labels experimental engines separately from standard video', async () => {
-    const user = await mountWith(readySnapshot([video('clip', true)]));
-    await chooseTask(user, /^Upscale$/);
+  it('chooses temporal video models from the library and keeps frame-by-frame options hidden', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    const user = await mountWith(snapshot);
 
-    const engine = screen.getByLabelText('Video engine');
-    expect(within(engine).getByRole('option', { name: /Frame-by-frame/i })).toBeTruthy();
-    expect(within(engine).getByRole('option', { name: /SeedVR2-3B — Labs/i })).toBeTruthy();
+    expect(screen.queryByLabelText('Video engine')).toBeNull();
+    expect(document.querySelectorAll('.model-output-note')).toHaveLength(0);
+    const oldModelId = (api.saveSettings.mock.calls.at(-1)?.[0] as UiSettings).selected_model_id;
 
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     expect(screen.getByLabelText('Container')).toBeTruthy();
     expect(screen.getByLabelText(/Video quality · CRF/i)).toBeTruthy();
     expect(screen.getByRole('checkbox', { name: /De-flicker · Labs/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Start selected video' })).toBeTruthy();
-    await user.selectOptions(engine, 'seedvr2_3b');
+
+    await pickUpscalerInLibrary(user, /^SeedVR2-3B — Labs/);
+    expect(api.saveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        selected_video_model_id: 'seedvr2_3b',
+        quality: 'custom',
+        selected_model_id: oldModelId,
+      }),
+    );
+    const stages = screen.getByRole('list', { name: 'Stages' });
+    expect(within(stages).getByText('SeedVR2-3B')).toBeTruthy();
+    expect(within(stages).getByText('Labs · several frames at once')).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Your video' })).toBeNull();
     expect(screen.queryByRole('checkbox', { name: /De-flicker · Labs/i })).toBeNull();
     expect(screen.queryByRole('checkbox', { name: /Safe memory mode/i })).toBeNull();
   });
@@ -1639,16 +1764,27 @@ describe('LocalSR desktop interface', () => {
         enable_face_model: false,
       });
       const user = await mountWith(snapshot);
-      await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
-      const engine = screen.getByLabelText('Video engine');
-      await user.selectOptions(engine, 'seedvr2_3b');
-      await user.selectOptions(engine, 'frame_by_frame');
+      await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
+      await pickUpscalerInLibrary(user, /^SeedVR2-3B — Labs/);
+      await pickUpscalerInLibrary(user, /^HAT-L ×4 ImageNet/);
       expect(
         (screen.getByRole('checkbox', { name: /De-flicker · Labs/i }) as HTMLInputElement).checked,
       ).toBe(deflicker);
       expect((screen.getByLabelText('Frame rate') as HTMLSelectElement).value).toBe('x2');
       expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ deflicker, video_interpolation: 'x2', enable_face_model: false }),
+        expect.objectContaining({
+          selected_video_model_id: 'frame_by_frame',
+          deflicker,
+          video_interpolation: 'x2',
+          enable_face_model: false,
+        }),
+      );
+      await user.click(screen.getByRole('button', { name: /^Quick/ }));
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ selected_video_model_id: 'frame_by_frame' }),
+      );
+      expect(screen.getByRole('button', { name: /^Quick/ }).getAttribute('aria-pressed')).toBe(
+        'true',
       );
     },
   );
@@ -1658,7 +1794,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.task = 'video';
     snapshot.engine!.features = ['video_frame'];
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     expect((screen.getByLabelText('Frame rate') as HTMLSelectElement).disabled).toBe(true);
   });
 
@@ -1668,7 +1804,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.video_hdr_mode = 'preserve';
     snapshot.settings.selected_model_id = 'hat_s_x4';
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     const rate = screen.getByLabelText('Frame rate') as HTMLSelectElement;
     expect(rate.disabled).toBe(false);
     await user.selectOptions(rate, 'x2');
@@ -1719,8 +1855,7 @@ describe('LocalSR desktop interface', () => {
     const snapshot = readySnapshot([video('clip', true)]);
     snapshot.catalog.interpolation_models.forEach((model) => (model.installed = true));
     const user = await mountWith(snapshot);
-    await chooseTask(user, /^Upscale$/);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     const rate = screen.getByLabelText('Frame rate') as HTMLSelectElement;
     expect(rate.value).toBe('off');
     expect(screen.queryByLabelText('Interpolate')).toBeNull();
@@ -1744,6 +1879,35 @@ describe('LocalSR desktop interface', () => {
     );
   });
 
+  it('moves interpolation before or after upscaling from the plan list', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.settings.task = 'video';
+    snapshot.settings.video_interpolation = 'x2';
+    snapshot.settings.video_interpolation_order = 'after_upscale';
+    snapshot.catalog.interpolation_models.forEach((model) => (model.installed = true));
+    const user = await mountWith(snapshot);
+    const stages = screen.getByRole('list', { name: 'Stages' });
+    expect(within(stages).getByText(/after upscaling/)).toBeTruthy();
+    expect(
+      within(stages).queryByRole('button', { name: 'Interpolate after upscaling' }),
+    ).toBeNull();
+    await user.click(within(stages).getByRole('button', { name: 'Interpolate before upscaling' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ video_interpolation_order: 'before_upscale' }),
+      ),
+    );
+    await waitFor(() => expect(within(stages).getByText(/before upscaling/)).toBeTruthy());
+    const rows = within(stages).getAllByRole('listitem');
+    const order = rows.map((row) => row.textContent ?? '');
+    expect(order.findIndex((text) => text.includes('RIFE'))).toBeLessThan(
+      order.findIndex((text) => /Upscale/.test(text)),
+    );
+    expect(
+      within(stages).getByRole('button', { name: 'Interpolate after upscaling' }),
+    ).toBeTruthy();
+  });
+
   it('downloads the interpolation model when Start needs it', async () => {
     const snapshot = readySnapshot([video('clip', true)]);
     snapshot.settings.task = 'video';
@@ -1760,8 +1924,8 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.video_interpolation = 'x2';
     snapshot.catalog.interpolation_models.forEach((model) => (model.installed = true));
     const user = await mountWith(snapshot);
-    await user.selectOptions(screen.getByLabelText('Video engine'), 'seedvr2_3b');
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await pickUpscalerInLibrary(user, /^SeedVR2-3B — Labs/);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     expect(screen.queryByLabelText('Frame rate')).toBeNull();
     expect(screen.queryByText('Interpolate 2×')).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Start selected video' }));
@@ -1790,19 +1954,247 @@ describe('LocalSR desktop interface', () => {
         model.installed = false;
       });
       const user = await mountWith(snapshot);
-      const option = screen.getByRole('option', { name: /SeedVR2-3B — Labs.*Unavailable/ });
-      expect((option as HTMLOptionElement).disabled).toBe(true);
+      expect(document.querySelector('.inline-warning')?.textContent).toMatch(/SeedVR2/);
       expect(
         screen.getByRole('button', { name: 'Start selected video' }).matches(':disabled'),
       ).toBe(true);
       expect(screen.queryByRole('button', { name: /^Download / })).toBeNull();
-      await user.selectOptions(screen.getByLabelText('Video engine'), 'frame_by_frame');
+      await pickUpscalerInLibrary(user, /^SPAN ×4/);
       expect(
         screen.getByRole('button', { name: 'Start selected video' }).matches(':disabled'),
       ).toBe(false);
       expect(api.downloadModel).not.toHaveBeenCalled();
     },
   );
+
+  /** A Mac whose engine also lists FlashVSR, with this much unified memory. */
+  function flashSnapshot(unifiedGb: number): AppSnapshot {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.settings.task = 'video';
+    snapshot.engine!.video_engines.push('flashvsr');
+    snapshot.capabilities.system_ram_total = unifiedGb * 1024 ** 3;
+    return snapshot;
+  }
+
+  it('runs FlashVSR on the Apple GPU of a 16 GB Mac and describes it in its own terms', async () => {
+    const user = await mountWith(flashSnapshot(16));
+    expect(document.querySelectorAll('.model-output-note')).toHaveLength(0);
+
+    await user.click(await screen.findByRole('button', { name: 'Change the upscaler' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ }));
+    expect(
+      (within(library).getByRole('button', { name: 'Use for this job' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
+
+    const memory = screen.getByLabelText('FlashVSR memory');
+    expect(memory.textContent).toMatch(
+      /windows of 37 frames; each starts with 8\s+frames of run-up/,
+    );
+    expect(memory.textContent).not.toMatch(/SeedVR2|VAE|per clip|offload/);
+    expect(screen.queryByRole('checkbox', { name: 'Reduce GPU memory' })).toBeNull();
+    expect(screen.getByLabelText('Output resolution')).toBeTruthy();
+    expect(screen.getByText(/above that, it runs at 4× and resizes the rest/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
+    expect(screen.getByText(/^FlashVSR · Labs\. One-step diffusion upscaling/)).toBeTruthy();
+    expect(screen.queryByText(/^SeedVR2 · Labs/)).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: /De-flicker · Labs/i })).toBeNull();
+
+    // SeedVR2 keeps its own panel and note.
+    await pickUpscalerInLibrary(user, /^SeedVR2-3B — Labs/);
+    expect(screen.getByLabelText('SeedVR2 memory').textContent).toMatch(
+      /Up to 5 frames per clip · 128 px VAE tiles\./,
+    );
+    expect(screen.getByText(/^SeedVR2 · Labs\. Uses its own temporal processing/)).toBeTruthy();
+
+    await pickUpscalerInLibrary(user, /^FlashVSR v1\.1 — Labs/);
+    await user.click(screen.getByRole('button', { name: 'Start selected video' }));
+    expect(api.startJobs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        video_model_id: 'flashvsr_v11',
+        fix_stages: [],
+        deflicker: false,
+        video_interpolation: 'off',
+        video_hdr_mode: 'tone_map',
+      }),
+    );
+  });
+
+  it.each([
+    ['the CPU', 'cpu', 16, true, 'Unavailable', /^FlashVSR cannot run on this device\./],
+    [
+      'an 8 GB CUDA GPU',
+      'cuda:0',
+      16,
+      true,
+      'Needs 12 GB',
+      /^FlashVSR needs 12 GB of GPU memory\. This GPU has 8 GB\.$/,
+    ],
+    [
+      'a Mac with 8 GB',
+      'mps',
+      8,
+      true,
+      'Needs 16 GB',
+      /^FlashVSR needs 16 GB of memory\. This Mac has 8 GB\.$/,
+    ],
+    [
+      'an engine that does not list it',
+      'mps',
+      16,
+      false,
+      'Unavailable',
+      /^FlashVSR needs the MLX runtime/,
+    ],
+  ] as const)(
+    'keeps FlashVSR unavailable on %s without taking SeedVR2 with it',
+    async (_name, deviceId, unifiedGb, listed, tag, reason) => {
+      const snapshot = flashSnapshot(unifiedGb);
+      if (!listed) snapshot.engine!.video_engines = ['spandrel_image', 'seedvr2'];
+      if (deviceId === 'cuda:0') {
+        snapshot.capabilities.devices.push({
+          ...gpu('cuda:0', 'cuda', 'GPU'),
+          total_memory: 8 * 1024 ** 3,
+        });
+      }
+      snapshot.settings.device_id = deviceId;
+      snapshot.settings.selected_video_model_id = 'flashvsr_v11';
+      const user = await mountWith(snapshot);
+      // A saved FlashVSR choice cannot start and says why; the panel that describes this Mac
+      // stays away.
+      const warning = document.querySelector('.inline-warning');
+      expect(warning?.textContent?.trim()).toMatch(reason);
+      expect(
+        screen.getByRole('button', { name: 'Start selected video' }).matches(':disabled'),
+      ).toBe(true);
+      expect(screen.queryByLabelText('FlashVSR memory')).toBeNull();
+
+      await user.click(await screen.findByRole('button', { name: 'Change the upscaler' }));
+      const library = screen.getByRole('dialog', { name: 'Model library' });
+      const flashRow = within(library).getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ });
+      expect(within(flashRow).getByText(tag)).toBeTruthy();
+      expect(within(library).getByText(reason)).toBeTruthy();
+      expect(
+        (within(library).getByRole('button', { name: 'Use for this job' }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(true);
+
+      await user.click(within(library).getByRole('button', { name: /^SeedVR2-3B — Labs/ }));
+      const useButton = within(library).getByRole('button', {
+        name: 'Use for this job',
+      }) as HTMLButtonElement;
+      expect(useButton.disabled).toBe(false);
+      await user.click(useButton);
+      await waitFor(() =>
+        expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull(),
+      );
+      expect(
+        screen.getByRole('button', { name: 'Start selected video' }).matches(':disabled'),
+      ).toBe(false);
+      expect(document.querySelector('.inline-warning')).toBeNull();
+    },
+  );
+
+  it('shows old temporal settings with quality quick as Custom', async () => {
+    const oldSettingsSnapshot = flashSnapshot(16);
+    oldSettingsSnapshot.settings.quality = 'quick';
+    oldSettingsSnapshot.settings.selected_video_model_id = 'seedvr2_3b';
+    await mountWith(oldSettingsSnapshot);
+    expect(document.querySelector('.enhance-pane .pane-heading span')?.textContent).toBe('Custom');
+    expect(screen.getByRole('button', { name: /^Quick/ }).getAttribute('aria-pressed')).toBe(
+      'false',
+    );
+    expect(
+      within(screen.getByRole('list', { name: 'Stages' })).getByText('SeedVR2-3B'),
+    ).toBeTruthy();
+  });
+
+  it('selects the active video model and marks it Chosen when opening the library', async () => {
+    const flashJob = flashSnapshot(16);
+    flashJob.settings.selected_video_model_id = 'flashvsr_v11';
+    const user = await mountWith(flashJob);
+    await user.click(await screen.findByRole('button', { name: 'Change the upscaler' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    const flashRow = within(library).getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ });
+    expect(flashRow.getAttribute('aria-pressed')).toBe('true');
+    expect(within(flashRow).getByText('Chosen')).toBeTruthy();
+    expect(flashRow.textContent).toContain('Quality: 3 out of 4');
+    expect(flashRow.textContent).toContain('Speed: 1 out of 4');
+    const seedRow = within(library).getByRole('button', { name: /^SeedVR2-3B — Labs/ });
+    expect(seedRow.textContent).toContain('Quality: 4 out of 4');
+    expect(seedRow.textContent).toContain('Speed: 0 out of 4');
+    await user.click(within(library).getByRole('button', { name: 'Close model library' }));
+
+    // Video Same size has no video rows in For this job and no Use for this job in Video (Labs).
+    await user.click(screen.getByRole('button', { name: /^Quick/ }));
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    const restoreLib = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(restoreLib).queryByText('Several frames at once · Labs')).toBeNull();
+    await user.click(within(restoreLib).getByRole('button', { name: /Video \(Labs\)/ }));
+    await user.click(within(restoreLib).getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ }));
+    expect(within(restoreLib).queryByRole('button', { name: 'Use for this job' })).toBeNull();
+  });
+
+  it('omits video rows from For this job and Use for this job in Photo upscale', async () => {
+    const photoSnap = readySnapshot([image('photo', true)]);
+    photoSnap.settings.task = 'upscale';
+    const photoUser = await mountWith(photoSnap);
+    await photoUser.click(await screen.findByRole('button', { name: 'Change the upscaler' }));
+    const photoLib = screen.getByRole('dialog', { name: 'Model library' });
+    expect(within(photoLib).queryByText('Several frames at once · Labs')).toBeNull();
+    await photoUser.click(within(photoLib).getByRole('button', { name: /Video \(Labs\)/ }));
+    await photoUser.click(within(photoLib).getByRole('button', { name: /^SeedVR2-3B — Labs/ }));
+    expect(within(photoLib).queryByRole('button', { name: 'Use for this job' })).toBeNull();
+  });
+
+  it('counts runnable video models in N more models under the plan row', async () => {
+    const seedOnlyMac = readySnapshot([video('clip', true)]);
+    seedOnlyMac.settings.task = 'video';
+    seedOnlyMac.capabilities.system_ram_total = 16 * 1024 ** 3;
+    const user = await mountWith(seedOnlyMac);
+    const seedOnlyButton = await screen.findByRole('button', {
+      name: /\d+ more models? in the library/,
+    });
+    const seedOnlyCount = Number(seedOnlyButton.textContent!.match(/(\d+)/)![1]);
+
+    // When FlashVSR becomes runnable on this Mac, the count grows by 1.
+    const switched = structuredClone(seedOnlyMac);
+    switched.engine!.video_engines.push('flashvsr');
+    api.refreshSnapshot.mockResolvedValue(switched);
+    (api.listenForStateChange.mock.calls[0][0] as () => void)();
+    await waitFor(() => {
+      const text = screen.getByRole('button', {
+        name: /\d+ more models? in the library/,
+      }).textContent!;
+      expect(Number(text.match(/(\d+)/)![1])).toBe(seedOnlyCount + 1);
+    });
+    void user;
+  });
+
+  it('marks an unavailable video model in the library and says why', async () => {
+    const snapshot = flashSnapshot(8);
+    snapshot.catalog.video_models.forEach((model) => (model.installed = false));
+    const user = await mountWith(snapshot);
+    expect(document.querySelectorAll('.model-output-note')).toHaveLength(0);
+    await chooseMenuItem('view.models');
+    const library = await screen.findByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /Video \(Labs\)/ }));
+    expect(within(library).getByText('3 models')).toBeTruthy();
+    expect(within(library).queryByText('SeedVR2 engines')).toBeNull();
+    const row = within(library).getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ });
+    expect(within(row).getByText('Needs 16 GB')).toBeTruthy();
+    expect(within(library).getAllByText(/^Needs 16 GB$|^Unavailable$/)).toHaveLength(1);
+    await user.click(row);
+    expect(
+      within(library).getByText('FlashVSR needs 16 GB of memory. This Mac has 8 GB.'),
+    ).toBeTruthy();
+    expect(within(library).getByText('FlashVSR')).toBeTruthy();
+  });
 
   it('shows the precision of the CPU for a model the selected NPU does not run', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
@@ -1824,7 +2216,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.precision = 'fp32';
     snapshot.settings.quality = 'custom';
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     const precision = screen.getByLabelText('Precision') as HTMLSelectElement;
     expect(precision.value).toBe('fp32');
   });
@@ -1871,24 +2263,48 @@ describe('LocalSR desktop interface', () => {
     expect(region.querySelectorAll('.help-tip').length).toBeGreaterThan(0);
   });
 
-  it('disables media-incompatible task cards', async () => {
+  it('shows the same two tasks for photos, videos and no media; a video greys out Edit', async () => {
+    const tasks = (): HTMLButtonElement[] =>
+      Array.from(screen.getByRole('group', { name: 'Task' }).querySelectorAll('button'));
+    const shown = (): unknown[] =>
+      tasks().map((b) => [b.textContent, b.getAttribute('aria-pressed'), b.disabled]);
+
     await mountWith(readySnapshot([image('photo', true)]));
-    expect(screen.getByText('Enlarges photos and artwork with new detail.')).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Restore' }) as HTMLButtonElement).disabled).toBe(
-      false,
-    );
+    expect(screen.getByText('Enlarges photos and artwork, fixes them, or both.')).toBeTruthy();
+    expect(shown()).toEqual([
+      ['Upscale & restore', 'true', false],
+      ['Edit', 'false', false],
+    ]);
+    expect(screen.queryByRole('button', { name: /^Restore$/ })).toBeNull();
 
     cleanup();
-    await mountWith(readySnapshot([video('clip', true)]));
-    // A selected video turns Upscale into video upscaling, enables Restore, and keeps Edit disabled.
-    expect((screen.getByRole('button', { name: 'Upscale' }) as HTMLButtonElement).disabled).toBe(
-      false,
-    );
-    expect(screen.getByText('Enlarges video, SDR or HDR.')).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Restore' }) as HTMLButtonElement).disabled).toBe(
-      false,
-    );
-    expect((screen.getByRole('button', { name: 'Edit' }) as HTMLButtonElement).disabled).toBe(true);
+    const user = await mountWith(readySnapshot([video('clip', true)]));
+    expect(shown()).toEqual([
+      ['Upscale & restore', 'true', false],
+      ['Edit', 'false', true],
+    ]);
+    expect(
+      screen.getByText('Enlarges videos, fixes them, or both. Edit is for photos.'),
+    ).toBeTruthy();
+    expect(screen.getByRole('group', { name: 'Fix' })).toBeTruthy();
+    expect(screen.getByRole('radiogroup', { name: 'Size' })).toBeTruthy();
+    // Pressing the task a video already has changes nothing.
+    api.saveSettings.mockClear();
+    await user.click(tasks()[0]);
+    expect(api.saveSettings).not.toHaveBeenCalled();
+    expect(shown()[0]).toEqual(['Upscale & restore', 'true', false]);
+
+    // With the video removed the row stays, and Edit can be chosen again.
+    cleanup();
+    const empty = readySnapshot([]);
+    empty.settings.task = 'video';
+    const emptyUser = await mountWith(empty);
+    expect(shown()).toEqual([
+      ['Upscale & restore', 'true', false],
+      ['Edit', 'false', false],
+    ]);
+    await emptyUser.click(tasks()[1]);
+    await waitFor(() => expect(tasks()[1].getAttribute('aria-pressed')).toBe('true'));
   });
 
   it.each([
@@ -1919,8 +2335,8 @@ describe('LocalSR desktop interface', () => {
         expect(api.openDownloadPage).toHaveBeenCalledTimes(1);
       }
       // The hint moved: Advanced does not repeat it.
-      await chooseTask(user, /^Upscale$/);
-      await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+      await chooseTask(user, /^Upscale & restore$/);
+      await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
       expect(screen.getAllByText(text)).toHaveLength(1);
     },
   );
@@ -2004,9 +2420,18 @@ describe('LocalSR desktop interface', () => {
       },
     ];
     const user = await mountWith(snapshot);
-    await chooseTask(user, /^Upscale$/);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
-    const hardware = screen.getByLabelText('Hardware');
+    await chooseTask(user, /^Upscale & restore$/);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Appearance' }));
+    // The saved scale is a number; the menu must still show the matching option.
+    expect(
+      (within(settingsDialog).getByLabelText('Interface text') as HTMLSelectElement).selectedIndex,
+    ).toBe(0);
+
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Performance' }));
+    const hardware = within(settingsDialog).getByLabelText('Hardware');
 
     for (const name of [
       'Apple GPU (Metal)',
@@ -2027,18 +2452,24 @@ describe('LocalSR desktop interface', () => {
         expect.objectContaining({ device_id: 'directml:0' }),
       ),
     );
-    expect(screen.getByText(/DirectML has not been tested on real hardware yet/)).toBeTruthy();
-    expect(screen.getByText(/checks once that it gives the same result as the CPU/)).toBeTruthy();
-    // The saved scale is a number; the menu must still show the matching option.
-    expect((screen.getByLabelText('Interface text') as HTMLSelectElement).selectedIndex).toBe(0);
+    expect(
+      within(settingsDialog).getByText(/DirectML has not been tested on real hardware yet/),
+    ).toBeTruthy();
+    expect(
+      within(settingsDialog).getByText(/checks once that it gives the same result as the CPU/),
+    ).toBeTruthy();
     // ONNX Runtime GPU routes always run FP32: the control says so and cannot change it.
     const precision = screen.getByLabelText('Precision') as HTMLSelectElement;
     expect(precision.disabled).toBe(true);
     expect(precision.value).toBe('fp32');
 
     await user.selectOptions(hardware, 'openvino:8680677d060000000002000000000000');
-    await waitFor(() => expect(screen.queryByText(/DirectML has not been tested/)).toBeNull());
-    expect(screen.getByText(/checks once that it gives the same result as the CPU/)).toBeTruthy();
+    await waitFor(() =>
+      expect(within(settingsDialog).queryByText(/DirectML has not been tested/)).toBeNull(),
+    );
+    expect(
+      within(settingsDialog).getByText(/checks once that it gives the same result as the CPU/),
+    ).toBeTruthy();
     expect((screen.getByLabelText('Precision') as HTMLSelectElement).disabled).toBe(true);
   });
 
@@ -2046,10 +2477,13 @@ describe('LocalSR desktop interface', () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.settings.device_id = 'cuda:7';
     const user = await mountWith(snapshot);
-    await chooseTask(user, /^Upscale$/);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
-    const hardware = screen.getByLabelText('Hardware') as HTMLSelectElement;
+    await chooseTask(user, /^Upscale & restore$/);
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Performance' }));
+    const hardware = within(settingsDialog).getByLabelText('Hardware') as HTMLSelectElement;
     expect(hardware.selectedOptions[0]?.textContent).toBe('CPU');
+    await user.click(within(settingsDialog).getByRole('button', { name: 'Done' }));
     await user.click(screen.getByRole('button', { name: 'Upscale selected' }));
     await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
     expect(api.startJobs).toHaveBeenCalledWith(expect.objectContaining({ device: 'cpu' }));
@@ -2085,9 +2519,16 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.device_id = 'directml:0';
     snapshot.settings.selected_model_id = 'span_photo_x4';
     const user = await mountWith(snapshot);
-    await chooseTask(user, /^Upscale$/);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
-    const hardware = screen.getByLabelText('Hardware') as HTMLSelectElement;
+    await chooseTask(user, /^Upscale & restore$/);
+    // The status line names the GPU as the menu and the engine do.
+    expect(document.querySelector('.status-detail')?.textContent).toMatch(
+      /· Intel UHD Graphics 620 \(DirectML\)$/,
+    );
+
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Performance' }));
+    const hardware = within(settingsDialog).getByLabelText('Hardware') as HTMLSelectElement;
 
     const groups = [...hardware.querySelectorAll('optgroup')];
     expect(groups.map((group) => group.label)).toEqual(['Intel UHD Graphics 620']);
@@ -2099,15 +2540,8 @@ describe('LocalSR desktop interface', () => {
     for (const name of ['CPU', 'NVIDIA GeForce RTX 3060', 'Intel AI Boost (NPU)']) {
       expect(within(hardware).getByRole('option', { name })).toBeTruthy();
     }
-    // The closed menu shows the whole name and route: the menu gets the row's full width,
-    // and its tooltip repeats the entry.
     expect(hardware.selectedOptions[0].textContent).toBe('Intel UHD Graphics 620 · DirectML');
     expect(hardware.title).toBe('Intel UHD Graphics 620 · DirectML');
-    expect(hardware.closest('.field-row')?.classList.contains('stacked')).toBe(true);
-    // The status line names the GPU as the menu and the engine do.
-    expect(document.querySelector('.status-detail')?.textContent).toMatch(
-      /· Intel UHD Graphics 620 \(DirectML\)$/,
-    );
 
     await user.selectOptions(hardware, 'openvino:8680');
     await waitFor(() =>
@@ -2122,16 +2556,16 @@ describe('LocalSR desktop interface', () => {
         expect.objectContaining({ device_id: 'openvino:80d1' }),
       ),
     );
-    expect(screen.getByText(/compiles a model once for the NPU/)).toBeTruthy();
+    expect(within(settingsDialog).getByText(/compiles a model once for the NPU/)).toBeTruthy();
   });
 
-  it('keeps short Hardware entries beside their label', async () => {
+  it('keeps short Hardware entries without optgroups in Settings', async () => {
     const user = await mountWith(readySnapshot([image('photo', true)]));
-    await chooseTask(user, /^Upscale$/);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
-    const hardware = screen.getByLabelText('Hardware') as HTMLSelectElement;
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Performance' }));
+    const hardware = within(settingsDialog).getByLabelText('Hardware') as HTMLSelectElement;
     expect(hardware.querySelector('optgroup')).toBeNull();
-    expect(hardware.closest('.field-row')?.classList.contains('stacked')).toBe(false);
   });
 
   it('keeps the engine route note for the whole job, through a snapshot refresh', async () => {
@@ -2174,7 +2608,7 @@ describe('LocalSR desktop interface', () => {
     await waitFor(() => expect(document.querySelector('.status-note')).toBeNull());
   });
 
-  it('shows the last failure above Advanced and offers the CPU when a GPU caused it', async () => {
+  it('shows the last failure above Advanced and offers Retry on CPU when a GPU caused it', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.capabilities.devices.push(
       gpu('directml:0', 'directml', 'Intel(R) UHD Graphics 620 (DirectML)'),
@@ -2191,7 +2625,7 @@ describe('LocalSR desktop interface', () => {
     let failure = await screen.findByRole('alert', { name: 'Last error' });
     expect(failure.textContent).toContain('The output folder is not writable.');
     // Not a GPU's fault: the CPU would not help.
-    expect(within(failure).queryByRole('button', { name: 'Use the CPU' })).toBeNull();
+    expect(within(failure).queryByRole('button', { name: 'Retry on CPU' })).toBeNull();
 
     const rejection =
       'RealESRGAN gives different results on Intel UHD Graphics 620 (DirectML) than on the CPU, so LocalSR does not use that GPU for this model. Select the CPU for it.';
@@ -2200,17 +2634,14 @@ describe('LocalSR desktop interface', () => {
     callback({ type: 'job_failed', data: { job_id: 'job-2', error_message: rejection } });
     failure = await screen.findByRole('alert', { name: 'Last error' });
     expect(failure.textContent).toContain('Select the CPU for it.');
-    await user.click(within(failure).getByRole('button', { name: 'Use the CPU' }));
-    await waitFor(() =>
-      expect(api.saveSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ device_id: 'cpu' }),
-      ),
+    await user.click(within(failure).getByRole('button', { name: 'Retry on CPU' }));
+    await waitFor(() => expect(api.retryJobOnCpu).toHaveBeenCalledWith('job-2'));
+    // Must NOT change the app-wide hardware default or open Settings.
+    expect(api.saveSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({ device_id: 'cpu' }),
     );
-    expect(
-      within(screen.getByRole('alert', { name: 'Last error' })).queryByRole('button', {
-        name: 'Use the CPU',
-      }),
-    ).toBeNull();
+    expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole('alert', { name: 'Last error' })).toBeNull());
   });
 
   const driverReset =
@@ -2238,7 +2669,7 @@ describe('LocalSR desktop interface', () => {
     return snapshot;
   }
 
-  it('keeps a GPU failure and its CPU shortcut while the engine restarts after it', async () => {
+  it('keeps a GPU failure and its Retry on CPU button while the engine restarts after it', async () => {
     const snapshot = onTheGpu();
     await mountWith(snapshot);
     const callback = await failOnTheGpu();
@@ -2260,30 +2691,23 @@ describe('LocalSR desktop interface', () => {
     }
     const failure = screen.getByRole('alert', { name: 'Last error' });
     expect(failure.textContent).toContain('device removed or reset');
-    expect(within(failure).getByRole('button', { name: 'Use the CPU' })).toBeTruthy();
+    expect(within(failure).getByRole('button', { name: 'Retry on CPU' })).toBeTruthy();
     // The next job starts without it.
     callback({ type: 'job_started', data: { job_id: 'job-2' } });
     await waitFor(() => expect(screen.queryByRole('alert', { name: 'Last error' })).toBeNull());
   });
 
-  it('keeps keyboard focus on a control after Use the CPU', async () => {
-    const user = await mountWith(onTheGpu());
-    await failOnTheGpu();
-    let failure = screen.getByRole('alert', { name: 'Last error' });
-    await user.click(within(failure).getByRole('button', { name: 'Use the CPU' }));
-    // Advanced is closed: the error stays and takes the focus.
-    await waitFor(() => expect(document.activeElement).toBe(failure));
-    cleanup();
-
+  it('re-queues only the failed job on Retry on CPU without changing device_id or opening anything else', async () => {
     const open = await mountWith(onTheGpu());
-    await chooseTask(open, /^Upscale$/);
-    await open.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await chooseTask(open, /^Upscale & restore$/);
     await failOnTheGpu();
-    failure = screen.getByRole('alert', { name: 'Last error' });
-    await open.click(within(failure).getByRole('button', { name: 'Use the CPU' }));
-    // Advanced is open: the Hardware menu that now says CPU takes it.
-    await waitFor(() => expect(document.activeElement?.id).toBe('device'));
-    expect((document.activeElement as HTMLSelectElement).value).toBe('cpu');
+    const failure = screen.getByRole('alert', { name: 'Last error' });
+    await open.click(within(failure).getByRole('button', { name: 'Retry on CPU' }));
+    await waitFor(() => expect(api.retryJobOnCpu).toHaveBeenCalledWith('job-1'));
+    expect(api.saveSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({ device_id: 'cpu' }),
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   describe('Try again for an engine the host gave up on', () => {
@@ -2480,7 +2904,7 @@ describe('LocalSR desktop interface', () => {
       }
       snapshot.settings.device_id = device;
       const user = await mountWith(snapshot);
-      await chooseTask(user, /^Upscale$/);
+      await chooseTask(user, /^Upscale & restore$/);
 
       const start = screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement;
       expect(start.disabled).toBe(false);
@@ -2595,10 +3019,12 @@ describe('LocalSR desktop interface', () => {
         '1 video item can be queued with this setup; select the other media type to configure it separately.';
       const start = screen.getByRole('button', { name: 'Start selected video' });
       expect(start.getAttribute('title')).toBe(why);
-      expect(screen.getByRole('button', { name: /^Restore$/ }).hasAttribute('disabled')).toBe(
+      expect((screen.getByRole('button', { name: 'Edit' }) as HTMLButtonElement).disabled).toBe(
+        true,
+      );
+      expect((screen.getByRole('radio', { name: 'Same size' }) as HTMLButtonElement).disabled).toBe(
         false,
       );
-      expect(screen.getByRole('button', { name: /^Edit$/ }).hasAttribute('disabled')).toBe(true);
       await user.click(start);
       await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
       expect(api.startJobs).toHaveBeenCalledWith(
@@ -2668,8 +3094,10 @@ describe('LocalSR desktop interface', () => {
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ task: 'upscale' })),
     );
-    expect(screen.getByRole('button', { name: /^Upscale$/ }).classList).toContain('active');
-    expect((screen.getByRole('button', { name: /^Restore$/ }) as HTMLButtonElement).disabled).toBe(
+    expect(screen.getByRole('button', { name: /^Upscale & restore$/ }).classList).toContain(
+      'active',
+    );
+    expect((screen.getByRole('radio', { name: 'Same size' }) as HTMLButtonElement).disabled).toBe(
       false,
     );
     expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ task: 'upscale' }));
@@ -2824,6 +3252,7 @@ describe('LocalSR desktop interface', () => {
   it('keeps controls locked through cancellation and unlocks after the worker stops', async () => {
     const current = readySnapshot([video('clip', true)]);
     current.settings.task = 'video';
+    current.settings.selected_model_id = 'span_photo_x4';
     current.runtime.active_job_id = 'running-video';
     api.bootstrap.mockResolvedValue(structuredClone(current));
     api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
@@ -2835,13 +3264,17 @@ describe('LocalSR desktop interface', () => {
     const cancel = await screen.findByRole('button', { name: 'Cancel' });
     await user.click(cancel);
     expect(screen.getByRole('button', { name: 'Stopping…' }).matches(':disabled')).toBe(true);
-    expect(screen.getByLabelText('Video engine').matches(':disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Change the upscaler' }).matches(':disabled')).toBe(
+      true,
+    );
     current.runtime.active_job_id = '';
     current.runtime.status_title = 'Cancelled';
     const refresh = api.listenForStateChange.mock.calls[0][0] as () => void;
     refresh();
     await waitFor(() =>
-      expect(screen.getByLabelText('Video engine').matches(':disabled')).toBe(false),
+      expect(screen.getByRole('button', { name: 'Change the upscaler' }).matches(':disabled')).toBe(
+        false,
+      ),
     );
     expect(api.cancelJobs).toHaveBeenCalledTimes(1);
   });
@@ -3517,6 +3950,114 @@ describe('LocalSR desktop interface', () => {
     expect(stage?.style.top).toBe('50%');
   });
 
+  it('preserves the colourised stage preview across media switching before the upscaler tiles run', async () => {
+    class DecodedImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      private value = '';
+
+      set src(value: string) {
+        this.value = value;
+        queueMicrotask(() => this.onload?.());
+      }
+
+      get src(): string {
+        return this.value;
+      }
+    }
+    vi.stubGlobal('Image', DecodedImage);
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+      fillStyle: '',
+      fillRect: vi.fn(),
+      clearRect: vi.fn(),
+      drawImage: vi.fn(),
+    } as unknown as CanvasRenderingContext2D);
+
+    const first = image('bw', true);
+    first.name = 'bw.png';
+    first.width = 1982;
+    first.height = 1361;
+    first.preview_data_url = 'data:image/jpeg;base64,bw-source';
+    const second = image('other', false);
+    second.name = 'other.png';
+    const snapshot = readySnapshot([first, second]);
+    snapshot.settings.task = 'upscale';
+    snapshot.jobs = [
+      {
+        id: 'job-colour-upscale',
+        media_id: 'bw',
+        media_name: 'bw.png',
+        media_kind: 'image',
+        status: 'running',
+        output_path: '',
+        progress: 0,
+        error: '',
+        created_at: 1,
+        model_id: 'span_photo_x4',
+      },
+    ];
+    snapshot.runtime.active_job_id = 'job-colour-upscale';
+    api.selectMedia.mockImplementation(async (id: string) => {
+      snapshot.media.forEach((item) => (item.selected = item.id === id));
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    });
+    const user = await mountWith(snapshot);
+
+    const listener = api.listenForWorker.mock.calls[0]?.[0] as
+      ((message: WorkerEnvelope) => void) | undefined;
+    expect(listener).toBeTypeOf('function');
+    listener?.({ type: 'job_started', data: { job_id: 'job-colour-upscale' } });
+
+    // User clicks another photo while stage 0 (colour) completes.
+    await user.click(screen.getByRole('button', { name: /^other\.png/ }));
+    await waitFor(() => expect(document.title).toContain('other.png'));
+    listener?.({
+      type: 'live_preview_frame',
+      data: {
+        job_id: 'job-colour-upscale',
+        sequence: 1,
+        stage_index: 0,
+        preview_kind: 'tile',
+        output_x: 0,
+        output_y: 0,
+        output_width: 1982,
+        output_height: 1361,
+        image_width: 1982,
+        image_height: 1361,
+        jpeg_base64: 'colourised-stage0',
+      },
+    });
+
+    // User switches back to the running photo as stage 1 (upscale) begins.
+    await user.click(screen.getByRole('button', { name: /^bw\.png/ }));
+    await waitFor(() => expect(document.title).toContain('bw.png'));
+    listener?.({
+      type: 'tile_update',
+      data: {
+        job_id: 'job-colour-upscale',
+        stage_index: 1,
+        phase: 'started',
+        active_tile_size: 256,
+        output_x: 0,
+        output_y: 0,
+        output_width: 1024,
+        output_height: 1024,
+        image_width: 7928,
+        image_height: 5444,
+      },
+    });
+
+    const canvas = screen.getByLabelText('Progressive tiled preview') as HTMLCanvasElement;
+    await waitFor(() => expect(canvas.classList.contains('visible')).toBe(true));
+    const context = canvas.getContext('2d')!;
+    const drawImage = vi.mocked(context.drawImage);
+    const fillRect = vi.mocked(context.fillRect);
+    await waitFor(() => expect(drawImage).toHaveBeenCalledTimes(1));
+    const drawnImage = drawImage.mock.calls[0][0] as { src: string };
+    expect(drawnImage.src).toBe('data:image/jpeg;base64,colourised-stage0');
+    expect(fillRect).toHaveBeenCalledTimes(1);
+  });
+
   it('shows the resolved plan and downloads a missing stage before starting', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.settings.task = 'upscale';
@@ -3586,7 +4127,7 @@ describe('LocalSR desktop interface', () => {
         }),
       ),
     );
-    expect(screen.getByText('Quick · Illustration')).toBeTruthy();
+    expect(screen.getByText('Quick · Illustration · 4×')).toBeTruthy();
     // An illustration model is picked outright, with no note about a stand-in.
     expect(screen.queryByText(/fully verified illustration/)).toBeNull();
     expect(screen.queryByRole('button', { name: /\(Labs\) for this job/ })).toBeNull();
@@ -3598,7 +4139,7 @@ describe('LocalSR desktop interface', () => {
         expect.objectContaining({
           quality: 'best',
           content: 'illustration',
-          model_id: 'realplksr_hfa2k_anime_x4',
+          model_id: 'esrgan_hfa2k_x4',
         }),
       ),
     );
@@ -3748,15 +4289,15 @@ describe('LocalSR desktop interface', () => {
     );
   });
 
-  it('lets Restore choose its model per problem and retains the last fix as primary', async () => {
+  it('lets Same size choose its model per problem and retains the last fix as primary', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     const user = await mountWith(snapshot);
-    await chooseTask(user, /^Restore/);
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
     await user.click(screen.getByRole('button', { name: /^Best/ }));
     await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
     await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
-    expect(within(library).getByText('Choosing for Restore · Noise')).toBeTruthy();
+    expect(within(library).getByText('Choosing for Same size · Noise')).toBeTruthy();
     expect(within(library).queryByRole('button', { name: /FBCNN/ })).toBeNull();
     await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
     await user.click(within(library).getByRole('button', { name: 'Use for Noise · Best' }));
@@ -3791,15 +4332,31 @@ describe('LocalSR desktop interface', () => {
     ).toBeTruthy();
   });
 
-  it('Back to the default in Restore also replaces a model picked by hand', async () => {
+  it('Back to the default at Same size also replaces a model picked by hand', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
+    Object.assign(snapshot.settings, {
+      task: 'denoise',
+      output_scale: 1,
+      quality: 'custom',
+      selected_model_id: '__custom__',
+      custom_model_path: '/models/mine.safetensors',
+      custom_models: [{ path: '/models/mine.safetensors', name: 'mine' }],
+    });
     const user = await mountWith(snapshot);
-    await chooseTask(user, /^Restore/);
     await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
     let library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
     await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          selected_model_id: 'scunet_color_real_psnr',
+          fixes: ['noise'],
+          fix_stages: [{ fix: 'noise', model_id: 'scunet_color_real_psnr' }],
+          quality: 'custom',
+        }),
+      ),
+    );
     await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
     library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: 'Use for Noise' }));
@@ -3825,7 +4382,7 @@ describe('LocalSR desktop interface', () => {
         'Can add artifacts to sharp pictures and line art. Skipped if the result is unstable.',
       ),
     ).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'About Restore first' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'About Fix' })).toBeTruthy();
   });
 
   it('names the fix of a recipe saved before fix chips existed', async () => {
@@ -3901,10 +4458,10 @@ describe('LocalSR desktop interface', () => {
     expect(library.querySelector('.detail .fit')?.textContent).toMatch(
       /Runs well here · Neural Engine/,
     );
-    // The file and the author keep their ends when the details column is narrow.
+    // The file keeps its end when the details column is narrow; the author is shown in full.
     const file = mac.catalog.models.find((model) => model.model_id === 'span_photo_x4')!;
     expect(library.querySelector(`.kv .file-name[title="${file.filename}"]`)).toBeTruthy();
-    expect(library.querySelector(`.kv .file-name[title="${file.author}"]`)).toBeTruthy();
+    expect(library.querySelector('.kv dd.source-value')?.textContent).toContain(file.author);
     cleanup();
 
     const pc = readySnapshot([image('photo', true)]);
@@ -3931,7 +4488,7 @@ describe('LocalSR desktop interface', () => {
     ).toBeTruthy();
   });
 
-  it('explains the NPU in Advanced and names a missing compiler in the status line', async () => {
+  it('explains the NPU in Settings and names a missing compiler in the status line', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.capabilities.devices = [
       {
@@ -3949,9 +4506,12 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.device_id = 'openvino:80d1';
     snapshot.settings.selected_model_id = 'span_photo_x4';
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     expect((screen.getByLabelText('Precision') as HTMLSelectElement).value).toBe('fp16');
-    expect(screen.getByText(/compiles a model once for the NPU/)).toBeTruthy();
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Performance' }));
+    expect(within(settingsDialog).getByText(/compiles a model once for the NPU/)).toBeTruthy();
     cleanup();
 
     const missing = readySnapshot([image('photo', true)]);
@@ -3968,7 +4528,7 @@ describe('LocalSR desktop interface', () => {
       ),
     ).toBeTruthy();
     expect(within(status).queryByRole('button', { name: 'Download page' })).toBeNull();
-    await user2.click(screen.getByRole('button', { name: /Advanced.*Scale, format, hardware/i }));
+    await user2.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     expect(document.querySelector('.advanced-controls')?.textContent).not.toMatch(
       /NPU compiler|intel-driver-compiler-npu|current Intel NPU driver/,
     );
@@ -4071,7 +4631,9 @@ describe('LocalSR desktop interface', () => {
     await user.click(
       screen.getByRole('button', { name: /^Download \d+(\.\d+)? MB, then upscale$/ }),
     );
-    await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith('span_photo_x4', false));
+    await waitFor(() =>
+      expect(api.downloadModel).toHaveBeenCalledWith('localsr_quick_x4_v1', false),
+    );
   });
 
   it('offers the illustration model as a download on Start when it is not installed', async () => {
@@ -4106,11 +4668,11 @@ describe('LocalSR desktop interface', () => {
         expect.objectContaining({
           quality: 'best',
           content: 'illustration',
-          selected_model_id: 'realplksr_hfa2k_anime_x4',
+          selected_model_id: 'esrgan_hfa2k_x4',
         }),
       ),
     );
-    expect(screen.getByText('Best · Illustration')).toBeTruthy();
+    expect(screen.getByText('Best · Illustration · 4×')).toBeTruthy();
   });
 });
 
@@ -4171,7 +4733,6 @@ it('asks for FFmpeg before starting an H.264 export instead of failing later', a
   snapshot.settings.video_codec = 'h264';
   snapshot.settings.external_ffmpeg_path = '';
   const user = await mountWith(snapshot);
-  await chooseTask(user, /^Upscale$/);
   await user.click(screen.getByRole('button', { name: 'Start selected video' }));
   expect(
     await screen.findByRole('dialog', { name: 'H.264 and HEVC export needs FFmpeg' }),
@@ -4337,10 +4898,10 @@ describe('Several fixes in one pass', () => {
     );
   });
 
-  it('runs the fixes before the last one first in Restore, whose last fix is its model', async () => {
+  it('runs the fixes before the last one first at Same size, whose last fix is its model', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     const user = await mountWith(snapshot);
-    await chooseTask(user, /^Restore/);
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
     await user.click(screen.getByRole('button', { name: /^Quick/ }));
     await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
     await user.click(screen.getByRole('button', { name: 'JPEG artifacts', pressed: false }));
@@ -4354,11 +4915,11 @@ describe('Several fixes in one pass', () => {
         fix_stages: [jpeg, { fix: 'noise', model_id: 'denoise_realplksr_1x' }],
       }),
     );
-    expect(labels()).toEqual(['Fix JPEG', 'Restore']);
+    expect(labels()).toEqual(['Fix JPEG', 'Fix noise']);
     // A fix before the model is chosen like one before an upscale; the model stays.
     await user.click(screen.getByRole('button', { name: 'Change the JPEG fix model' }));
     const fixLibrary = screen.getByRole('dialog', { name: 'Model library' });
-    expect(within(fixLibrary).getByText('Choosing for Restore · JPEG artifacts')).toBeTruthy();
+    expect(within(fixLibrary).getByText('Choosing for Same size · JPEG artifacts')).toBeTruthy();
     await user.click(
       within(fixLibrary).getByRole('button', { name: 'Use for JPEG artifacts · Quick' }),
     );
@@ -4372,7 +4933,7 @@ describe('Several fixes in one pass', () => {
     await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
     expect(
       within(screen.getByRole('dialog', { name: 'Model library' })).getByText(
-        'Choosing for Restore · Noise',
+        'Choosing for Same size · Noise',
       ),
     ).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Close model library' }));
@@ -4386,7 +4947,7 @@ describe('Several fixes in one pass', () => {
         fix_stages: [{ fix: 'noise', model_id: 'denoise_realplksr_1x' }, jpeg],
       }),
     );
-    expect(labels()).toEqual(['Fix noise', 'Restore']);
+    expect(labels()).toEqual(['Fix noise', 'Fix JPEG']);
 
     // The host answers the save with the settings it holds.
     snapshot.settings = structuredClone(lastSaved());
@@ -4412,22 +4973,31 @@ describe('Several fixes in one pass', () => {
     );
   });
 
-  it('keeps a model picked by hand when it fixes the first problem chosen in Restore', async () => {
-    const user = await mountWith(readySnapshot([image('photo', true)]));
-    await chooseTask(user, /^Restore/);
+  it('turns Use for this job at Same size into its problem chip', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    Object.assign(snapshot.settings, {
+      task: 'denoise',
+      output_scale: 1,
+      quality: 'custom',
+      selected_model_id: '__custom__',
+      custom_model_path: '/models/mine.safetensors',
+      custom_models: [{ path: '/models/mine.safetensors', name: 'mine' }],
+    });
+    const user = await mountWith(snapshot);
     await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
     await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
         quality: 'custom',
+        output_scale: 1,
         selected_model_id: 'scunet_color_real_psnr',
+        fixes: ['noise'],
         fix_stages: [{ fix: 'noise', model_id: 'scunet_color_real_psnr' }],
       }),
     );
-    // A problem it cannot fix brings a model that can, as one fix did before.
+    // A problem it cannot fix brings a model that can.
     await user.click(screen.getByRole('button', { name: 'Noise', pressed: true }));
     await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
     await waitFor(() =>
@@ -4438,9 +5008,9 @@ describe('Several fixes in one pass', () => {
     );
   });
 
-  it('lets your own checkpoint be the Restore model without a fix in front of it', async () => {
+  it('lets your own checkpoint be the Same size model without a fix in front of it', async () => {
     const user = await mountWith(readySnapshot([image('photo', true)]));
-    await chooseTask(user, /^Restore/);
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
     await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
     await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
     api.chooseCustomModel.mockResolvedValueOnce('/models/mine.safetensors' as never);
@@ -4454,6 +5024,7 @@ describe('Several fixes in one pass', () => {
         fixes: [],
       }),
     );
+    expect(labels()).toEqual(['Fix']);
     expect(screen.getByRole('button', { name: 'Blur', pressed: false })).toBeTruthy();
   });
 
@@ -4517,8 +5088,8 @@ describe('Several fixes in one pass', () => {
         fixes: [],
         stages: [{ kind: 'restore' as const, model_id: 'scunet_color_real_psnr' }],
       },
-      fix_stages: [],
-      fixes: [],
+      fix_stages: [{ fix: 'noise', model_id: 'scunet_color_real_psnr' }],
+      fixes: ['noise'],
     },
     {
       name: 'Upscale with a fix and Faces',
@@ -4745,12 +5316,12 @@ describe('Several fixes in one pass', () => {
     const user = await mountWith(snapshot);
     await waitFor(() => expect(lastSaved()).toMatchObject({ enable_face_model: false, fixes: [] }));
     expect(screen.queryByRole('button', { name: 'Faces' })).toBeNull();
-    await chooseTask(user, /^Restore/);
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
     await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({ enable_face_model: false, fixes: ['noise'] }),
     );
-    await chooseTask(user, /^Upscale$/);
+    await user.click(screen.getByRole('radio', { name: '4×' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
         task: 'upscale',
@@ -5215,6 +5786,12 @@ describe('Comparing saved results', () => {
     expect(document.querySelector('.compare-pane')).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
     expect(document.querySelectorAll('.compare-pane video')).toHaveLength(2);
+    expect(
+      within(screen.getByRole('group', { name: 'Slot 1 details' })).getByText('Models: slow'),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByRole('group', { name: 'Slot 2 details' })).getByText('Models: fast'),
+    ).toBeTruthy();
     expect(screen.getByRole('slider', { name: 'Divider between slot 1 and slot 2' })).toBeTruthy();
     expect(screen.getAllByRole('group', { name: 'Video playback controls' })).toHaveLength(1);
     await waitFor(() =>
@@ -5226,6 +5803,86 @@ describe('Comparing saved results', () => {
     expect(document.querySelectorAll('video')).toHaveLength(0);
     expect(pause).toHaveBeenCalled();
     expect(load).toHaveBeenCalled();
+  });
+
+  it('compares two photo outputs of one source in slider and boxes with job details and omits missing fields', async () => {
+    const first = row('first', {
+      model_label: 'Upscale',
+      stages: [
+        { kind: 'restore', model_id: 'fix', model_label: 'Fix' },
+        { kind: 'upscale', model_id: 'up', model_label: 'Upscale' },
+      ],
+      ui: { quality: 'best', content: 'photo', recipe_name: '', fixes: ['blur', 'noise'] },
+      scale: 4,
+      elapsed_seconds: 95,
+      device: 'mps',
+      neural_engine: true,
+      completed_at: 1_700_000_000_000,
+    });
+    const older = row('older', {
+      model_label: 'Legacy',
+      stages: [],
+      ui: null,
+      scale: 0,
+      elapsed_seconds: 0,
+      device: '',
+      completed_at: 0,
+    });
+    const snapshot = pairHost(readySnapshot([image('photo', true)]));
+    snapshot.jobs = [completedJob('first'), completedJob('older')];
+    const sizes: Record<string, { width: number; height: number }> = {
+      first: { width: 2560, height: 1920 },
+      older: { width: 1280, height: 960 },
+    };
+    api.requestCompare.mockImplementation(async (picks) => {
+      snapshot.runtime.compare = {
+        generation: 1,
+        slots: picks.map((pick) => {
+          const size = pick.kind === 'output' ? sizes[pick.job_id] : { width: 640, height: 480 };
+          return {
+            pick,
+            media_kind: 'image',
+            status: 'ready',
+            preview_data_url: `data:image/png;base64,${pick.kind === 'output' ? pick.job_id : 'orig'}`,
+            error: '',
+            width: size.width,
+            height: size.height,
+            preview_width: size.width,
+            preview_height: size.height,
+          };
+        }),
+      };
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    });
+    api.listAllMediaResults.mockResolvedValue([historyOf('photo', [first, older])]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+    await user.click(await screen.findByRole('checkbox', { name: 'Upscale, photo.png' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Legacy, photo.png' }));
+    await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
+    expect(screen.getByRole('slider', { name: 'Divider between slot 1 and slot 2' })).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.getByRole('group', { name: 'Slot 1 details' }).textContent).toContain(
+        'Output: 2560 × 1920',
+      ),
+    );
+    const slot1 = screen.getByRole('group', { name: 'Slot 1 details' });
+    expect(slot1.textContent).toContain('Models: Fix → Upscale');
+    expect(slot1.textContent).toContain('Fixes: Blur → Noise');
+    expect(slot1.textContent).toContain('Scale: 4×');
+    expect(slot1.textContent).toContain('Time: 1:35');
+    expect(slot1.textContent).toContain('Requested device: mps · Neural Engine enabled');
+    expect(slot1.textContent).toContain(
+      `Date: ${new Date(1_700_000_000_000).toLocaleDateString()}`,
+    );
+    const slot2 = screen.getByRole('group', { name: 'Slot 2 details' });
+    expect(slot2.textContent).toContain('Models: Legacy');
+    expect(slot2.textContent).toContain('Output: 1280 × 960');
+    expect(slot2.textContent).not.toMatch(/unknown|Fixes:|Scale:|Time:|Requested device:|Date:/i);
+    await user.click(screen.getByRole('radio', { name: 'Boxes' }));
+    expect(document.querySelectorAll('.compare-pane .boxes .box')).toHaveLength(2);
+    expect(screen.getByRole('group', { name: 'Slot 1 details' })).toBeTruthy();
+    expect(screen.getByRole('group', { name: 'Slot 2 details' })).toBeTruthy();
   });
 
   it('ticks grouped originals and outputs into Compare in order and keeps them across tabs', async () => {
@@ -5459,7 +6116,7 @@ describe('Comparing saved results', () => {
     ];
     const user = await mountWith(snapshot);
     await user.click(await screen.findByRole('button', { name: 'Cancel runs for this image' }));
-    expect(api.cancelJobsForMedia).toHaveBeenCalledWith('photo');
+    expect(api.cancelJobsForMedia).toHaveBeenCalledWith('photo', false);
     expect(api.cancelJobs).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Cancel queue' })).toBeTruthy();
   });
@@ -5469,7 +6126,7 @@ describe('Comparing saved results', () => {
     snapshot.settings.batch_mode = false;
     snapshot.catalog.models.forEach((model) => (model.installed = false));
     const user = await mountWith(snapshot);
-    await chooseTask(user, /^Upscale$/);
+    await chooseTask(user, /^Upscale & restore$/);
     await user.click(
       await screen.findByRole('button', { name: 'Try other upscalers on this image' }),
     );
@@ -5488,7 +6145,7 @@ describe('Comparing saved results', () => {
       })),
     );
     const user = await mountWith(snapshot);
-    await chooseTask(user, /^Upscale$/);
+    await chooseTask(user, /^Upscale & restore$/);
     await user.click(
       await screen.findByRole('button', { name: 'Try other upscalers on this image' }),
     );
@@ -5547,7 +6204,7 @@ describe('Dialogs and refused host calls', () => {
 
   it('gives an error dialog the keyboard: Tab stays in, Escape closes, focus returns', async () => {
     const user = await mountWith(readySnapshot([image('photo', true)]));
-    await chooseTask(user, /^Upscale$/);
+    await chooseTask(user, /^Upscale & restore$/);
     api.startJobs.mockRejectedValueOnce('No GPU.');
     const start = screen.getByRole('button', { name: 'Upscale selected' });
     start.focus();
@@ -6016,15 +6673,18 @@ it('explains why the menu cannot start when the worker is unavailable', async ()
   );
 });
 
-it('mentions video when asking for a task before applying a preset', async () => {
+it('asks for a task before applying a preset', async () => {
   await mountWith(readySnapshot());
   await chooseMenuItem('preset.quick');
-  expect(screen.getByRole('dialog', { name: 'Choose a task' }).textContent).toContain('Video');
+  expect(screen.getByRole('dialog', { name: 'Choose a task' }).textContent).toContain(
+    'Choose a task before applying a preset.',
+  );
 });
 
 it('does not ask for a catalog model under Your own file', async () => {
   const user = await mountWith(readySnapshot([image('photo', true)]));
-  await chooseTask(user, /^Restore/);
+  await user.click(screen.getByRole('radio', { name: 'Same size' }));
+  await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
   await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
   await user.click(screen.getByRole('button', { name: /Your own file/ }));
   expect(
@@ -6034,11 +6694,10 @@ it('does not ask for a catalog model under Your own file', async () => {
   expect(api.openCustomModelTutorial).toHaveBeenCalledTimes(1);
 });
 
-it('saves Run at low priority via setUpdateSwitch even while a job is running', async () => {
+it('saves Run at low priority, Show in menu bar and Notify via setPreference even while a job is running', async () => {
   const snapshot = readySnapshot([image('photo', true)]);
   snapshot.settings.task = 'upscale';
   const user = await mountWith(snapshot);
-  await user.click(screen.getByRole('button', { name: /Advanced/ }));
   // Start a job so processing settings lock.
   const running = structuredClone(snapshot);
   running.runtime.active_job_id = 'job-1';
@@ -6049,102 +6708,155 @@ it('saves Run at low priority via setUpdateSwitch even while a job is running', 
       true,
     ),
   );
-  // user-event skips any descendant of fieldset[disabled], even non-form spans; fireEvent matches a real browser.
-  await fireEvent.click(screen.getByRole('checkbox', { name: 'Run at low priority' }));
-  expect(api.setUpdateSwitch).toHaveBeenCalledWith('low_priority', true);
+
+  await chooseMenuItem('app.settings');
+  const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+  await user.click(within(settingsDialog).getByRole('switch', { name: /Show LocalSR in the/ }));
+  expect(api.setPreference).toHaveBeenCalledWith('show_in_menu_bar', false);
+  await user.click(
+    within(settingsDialog).getByRole('switch', { name: 'Notify when a file finishes' }),
+  );
+  expect(api.setPreference).toHaveBeenCalledWith('notify_on_finish', false);
+
+  await user.click(within(settingsDialog).getByRole('tab', { name: 'Performance' }));
+  await user.click(within(settingsDialog).getByRole('switch', { name: 'Run at low priority' }));
+  expect(api.setPreference).toHaveBeenCalledWith('low_priority', true);
   expect(api.saveSettings).not.toHaveBeenCalledWith(
     expect.objectContaining({ low_priority: true }),
+  );
+  await waitFor(() =>
+    expect(document.querySelector('.status-bar .status-note')?.textContent).toBe('Low priority'),
   );
 });
 
 describe('first-launch setup screen', () => {
-  it('shows defaults, previews appearance live, saves all choices on Continue, and closes', async () => {
+  it('shows defaults, previews live, saves everything on Done', async () => {
     const snapshot = readySnapshot();
     snapshot.settings.privacy_choice_made = false;
     const user = await mountWith(snapshot);
     const dialog = await screen.findByRole('dialog', { name: 'Welcome to LocalSR' });
-
-    const dark = within(dialog).getByRole('radio', { name: 'Dark' });
-    const light = within(dialog).getByRole('radio', { name: 'Light' });
-    const system = within(dialog).getByRole('radio', { name: 'Match System' });
-    const colourBlind = within(dialog).getByRole('switch', {
-      name: 'Colour-blind friendly colours',
-    }) as HTMLInputElement;
-    const checkUpdates = within(dialog).getByRole('switch', {
-      name: 'Check for updates automatically',
-    }) as HTMLInputElement;
-    const anonymousCount = within(dialog).getByRole('switch', {
-      name: 'Send an anonymous count with each update check',
-    }) as HTMLInputElement;
-    const crashReports = within(dialog).getByRole('switch', {
-      name: 'Offer to report crashes',
-    }) as HTMLInputElement;
-
-    expect(dark.getAttribute('aria-checked')).toBe('true');
-    expect(light.getAttribute('aria-checked')).toBe('false');
-    expect(system.getAttribute('aria-checked')).toBe('false');
-    expect(colourBlind.checked).toBe(false);
-    expect(checkUpdates.checked).toBe(true);
-    expect(anonymousCount.checked).toBe(false);
-    expect(crashReports.checked).toBe(false);
-    expect(document.documentElement.dataset.theme).toBe('dark');
-    expect(document.documentElement.dataset.palette).toBe('default');
-
-    await user.click(light);
-    expect(document.documentElement.dataset.theme).toBe('light');
-    expect(light.getAttribute('aria-checked')).toBe('true');
-
-    await user.click(colourBlind);
-    expect(document.documentElement.dataset.palette).toBe('colour-blind');
-    expect(api.setPrivacyChoice).not.toHaveBeenCalled();
-
-    await user.click(checkUpdates);
-    await user.click(anonymousCount);
-    await user.click(crashReports);
+    expect(
+      (
+        within(dialog).getByRole('switch', {
+          name: 'Check for updates when LocalSR starts',
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(true);
     await user.click(within(dialog).getByRole('button', { name: 'Continue' }));
-
-    await waitFor(() =>
-      expect(api.setPrivacyChoice).toHaveBeenCalledWith({
-        appearance: 'light',
-        colourBlindPalette: true,
-        checkAtLaunch: false,
-        anonymousCount: true,
-        crashReports: true,
-      }),
-    );
+    await user.click(within(dialog).getByRole('radio', { name: 'Light' }));
+    await user.click(within(dialog).getByRole('switch', { name: 'Colour-blind friendly colours' }));
+    await user.click(within(dialog).getByRole('switch', { name: 'High contrast' }));
+    expect(document.documentElement.dataset).toMatchObject({
+      theme: 'light',
+      palette: 'colour-blind',
+      contrast: 'high',
+    });
+    expect(api.setPrivacyChoice).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(api.setPrivacyChoice).toHaveBeenCalledTimes(1));
+    expect(api.setPrivacyChoice).toHaveBeenCalledWith({
+      appearance: 'light',
+      colourBlindPalette: true,
+      contrast: 'high',
+      checkAtLaunch: true,
+      anonymousCount: false,
+      crashReports: false,
+      showInMenuBar: true,
+      completionSound: false,
+    });
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: 'Welcome to LocalSR' })).toBeNull(),
     );
   });
 
-  it('follows a sensible keyboard focus order and ignores Escape', async () => {
+  it('saves the tray choice in the atomic setup command', async () => {
     const snapshot = readySnapshot();
     snapshot.settings.privacy_choice_made = false;
     const user = await mountWith(snapshot);
     const dialog = await screen.findByRole('dialog', { name: 'Welcome to LocalSR' });
+    await user.click(within(dialog).getByRole('button', { name: 'Continue' }));
+    await user.click(within(dialog).getByRole('switch', { name: /Show LocalSR in the/ }));
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    await waitFor(() =>
+      expect(api.setPrivacyChoice).toHaveBeenCalledWith(
+        expect.objectContaining({ showInMenuBar: false }),
+      ),
+    );
+    expect(api.saveSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({ show_in_menu_bar: false }),
+    );
+  });
 
-    const expectedOrder = [
-      within(dialog).getByRole('radio', { name: 'Dark' }),
-      within(dialog).getByRole('radio', { name: 'Light' }),
-      within(dialog).getByRole('radio', { name: 'Match System' }),
-      within(dialog).getByRole('switch', { name: 'Colour-blind friendly colours' }),
-      within(dialog).getByRole('switch', { name: 'Check for updates automatically' }),
-      within(dialog).getByRole('switch', {
-        name: 'Send an anonymous count with each update check',
-      }),
-      within(dialog).getByRole('switch', { name: 'Offer to report crashes' }),
-      within(dialog).getByRole('button', { name: 'Continue' }),
-    ];
+  it('keeps choices on page two if saving fails', async () => {
+    const snapshot = readySnapshot();
+    snapshot.settings.privacy_choice_made = false;
+    api.setPrivacyChoice.mockRejectedValueOnce(new Error('save failed'));
+    const user = await mountWith(snapshot);
+    const dialog = await screen.findByRole('dialog', { name: 'Welcome to LocalSR' });
+    await user.click(within(dialog).getByRole('button', { name: 'Continue' }));
+    await user.click(
+      within(dialog).getByRole('switch', { name: 'Play a sound when a file finishes' }),
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    expect((await within(dialog).findByRole('alert')).textContent).toContain('save failed');
+    expect(
+      (
+        within(dialog).getByRole('switch', {
+          name: 'Play a sound when a file finishes',
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(true);
+  });
 
-    for (const control of expectedOrder) {
-      await user.tab();
-      expect(document.activeElement).toBe(control);
-    }
-    await user.tab();
-    expect(document.activeElement).toBe(expectedOrder[0]);
+  it('enables finish notifications when sound is chosen', async () => {
+    const snapshot = readySnapshot();
+    snapshot.settings.privacy_choice_made = false;
+    snapshot.settings.notify_on_finish = false;
+    const user = await mountWith(snapshot);
+    const dialog = await screen.findByRole('dialog', { name: 'Welcome to LocalSR' });
+    await user.click(within(dialog).getByRole('button', { name: 'Continue' }));
+    await user.click(
+      within(dialog).getByRole('switch', { name: 'Play a sound when a file finishes' }),
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    await waitFor(() =>
+      expect(api.setPrivacyChoice).toHaveBeenCalledWith(
+        expect.objectContaining({ completionSound: true }),
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Welcome to LocalSR' })).toBeNull(),
+    );
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(
+      (
+        within(settingsDialog).getByRole('switch', {
+          name: 'Notify when a file finishes',
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(true);
+    expect(
+      (
+        within(settingsDialog).getByRole('switch', {
+          name: 'Play a sound with the notification',
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(true);
+  });
 
-    await user.keyboard('{Escape}');
-    expect(screen.getByRole('dialog', { name: 'Welcome to LocalSR' })).toBeTruthy();
+  it('shows only crash reports for a Store build', async () => {
+    const snapshot = readySnapshot();
+    snapshot.settings.privacy_choice_made = false;
+    const original = api.updateStatus.getMockImplementation();
+    onTestFinished(() => {
+      if (original) api.updateStatus.mockImplementation(original);
+    });
+    api.updateStatus.mockResolvedValue({ ...(await api.updateStatus()), managed_by_store: true });
+    await mountWith(snapshot);
+    const dialog = await screen.findByRole('dialog', { name: 'Welcome to LocalSR' });
+    expect(within(dialog).getAllByRole('switch')).toHaveLength(1);
+    expect(within(dialog).getByRole('switch', { name: 'Offer to report crashes' })).toBeTruthy();
   });
 
   it('does not show after a choice', async () => {
@@ -6284,7 +6996,7 @@ describe('crash reports', () => {
     ).toBeNull();
   });
 
-  it('does not show the crash notice when crash reports are off', async () => {
+  it('does not show the crash notice when crash reports are off, but keeps stored reports in Diagnostics', async () => {
     const snap = readySnapshot();
     snap.settings.crash_reports = false;
     api.listCrashReports.mockResolvedValue([sampleReport]);
@@ -6292,14 +7004,20 @@ describe('crash reports', () => {
     expect(
       screen.queryByRole('dialog', { name: 'LocalSR quit unexpectedly last time.' }),
     ).toBeNull();
+    nativeMenu?.('view.performance');
+    const dialog = await screen.findByRole('dialog', { name: 'Performance & Diagnostics' });
+    expect(within(dialog).getByText('Stored crash reports: 1')).toBeTruthy();
+    expect(
+      within(dialog).getByText('Crash reports are off. Turn them on in Settings.'),
+    ).toBeTruthy();
   });
 
-  it('manages crash reports and opt-in toggle from Performance & Diagnostics', async () => {
+  it('manages crash reports in Performance & Diagnostics and links to Settings when off', async () => {
     const snap = readySnapshot();
     snap.settings.crash_reports = true;
     api.listCrashReports.mockResolvedValue([sampleReport]);
     const user = await mountWith(snap);
-    const notice = await screen.findByRole('dialog', {
+    await screen.findByRole('dialog', {
       name: 'LocalSR quit unexpectedly last time.',
     });
     await user.keyboard('{Escape}');
@@ -6312,17 +7030,39 @@ describe('crash reports', () => {
     nativeMenu?.('view.performance');
     const dialog = await screen.findByRole('dialog', { name: 'Performance & Diagnostics' });
     const section = within(dialog).getByRole('region', { name: 'Crash reports' });
-    expect(
-      within(section).getByText('Turning this off deletes all stored crash reports immediately.'),
-    ).toBeTruthy();
+    expect(within(section).queryByLabelText('Offer to Report Crashes')).toBeNull();
     expect(within(section).getByText('Stored crash reports: 1')).toBeTruthy();
-
-    await user.click(within(section).getByLabelText('Offer to Report Crashes'));
-    await waitFor(() => expect(api.setUpdateSwitch).toHaveBeenCalledWith('crash_reports', false));
 
     api.listCrashReports.mockResolvedValueOnce([]).mockResolvedValue([]);
     await user.click(within(section).getByRole('button', { name: 'Delete All' }));
     await waitFor(() => expect(api.deleteAllCrashReports).toHaveBeenCalledTimes(1));
+    await user.keyboard('{Escape}');
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Performance & Diagnostics' })).toBeNull(),
+    );
+
+    // Toggle crash reports off in Settings -> Privacy & updates, then re-open Diagnostics.
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Privacy & updates' }));
+    await user.click(
+      within(settingsDialog).getByRole('switch', { name: 'Offer to report crashes' }),
+    );
+    await waitFor(() => expect(api.setPreference).toHaveBeenCalledWith('crash_reports', false));
+    await user.click(within(settingsDialog).getByRole('button', { name: 'Done' }));
+
+    nativeMenu?.('view.performance');
+    const offDialog = await screen.findByRole('dialog', { name: 'Performance & Diagnostics' });
+    expect(
+      within(offDialog).getByText('Crash reports are off. Turn them on in Settings.'),
+    ).toBeTruthy();
+    await user.click(within(offDialog).getByRole('button', { name: 'Open Settings' }));
+    const reopened = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(
+      within(reopened)
+        .getByRole('tab', { name: 'Privacy & updates' })
+        .getAttribute('aria-selected'),
+    ).toBe('true');
   });
 
   it('toggles Clean up audio with help tip, downloads DeepFilterNet3 on start, disables when silent, and saves in recipes', async () => {
@@ -6554,10 +7294,10 @@ describe('Concurrent model downloads in the Model Library', () => {
   });
 });
 
-describe('video restore, Restore first, and 1× removal', () => {
+describe('video Same size, Fix, and Output resolution', () => {
   const lastSaved = (): UiSettings => api.saveSettings.mock.calls.at(-1)![0] as UiSettings;
 
-  it('switches a selected video to Restore with Noise on, saves a restore recipe, and starts jobs', async () => {
+  it('switches a selected video to Same size without auto-ticking Noise, saves a recipe, and starts jobs', async () => {
     const snapshot = readySnapshot([video('clip', true)]);
     snapshot.catalog.models.forEach((m) => (m.installed = true));
     Object.assign(snapshot.settings, {
@@ -6575,17 +7315,19 @@ describe('video restore, Restore first, and 1× removal', () => {
     });
     api.refreshSnapshot.mockImplementation(async () => structuredClone(persisted));
 
-    // Toggle Restore for video: turns Noise on when nothing is picked
-    await user.click(screen.getByRole('button', { name: /^Restore$/ }));
+    // Switch video to Same size: nothing ticks itself.
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
         task: 'video',
         video_task: 'denoise',
-        fixes: ['noise'],
+        fixes: [],
+        selected_model_id: '',
       }),
     );
 
-    // Turn on JPEG artifacts (prefix fix) before Noise (primary restore) for video Restore
+    // Tick Noise, then JPEG artifacts (prefix fix) before Noise (primary restore).
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
     await user.click(screen.getByRole('button', { name: 'JPEG artifacts' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
@@ -6595,7 +7337,7 @@ describe('video restore, Restore first, and 1× removal', () => {
       }),
     );
 
-    // Save recipe as a video restore recipe
+    // Save recipe as a video same-size recipe.
     await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
     await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Video Restore Fix');
     await user.click(screen.getByRole('button', { name: 'Save' }));
@@ -6618,8 +7360,8 @@ describe('video restore, Restore first, and 1× removal', () => {
       fix: 'noise',
     });
 
-    // Start selected video with restore + prefix fix
-    await user.click(screen.getByRole('button', { name: 'Restore selected video' }));
+    // Start selected video with Same size + prefix fix.
+    await user.click(screen.getByRole('button', { name: 'Start selected video' }));
     await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
     expect(api.startJobs.mock.calls.at(-1)![0]).toMatchObject({
       task: 'video',
@@ -6631,7 +7373,7 @@ describe('video restore, Restore first, and 1× removal', () => {
     });
   });
 
-  it('removes 1× from video Upscale and runs video Restore options-only without a chip', async () => {
+  it('removes Output scale from Advanced and runs video Same size options-only without a chip', async () => {
     const snapshot = readySnapshot([video('clip', true)]);
     snapshot.catalog.models.forEach((m) => (m.installed = true));
     Object.assign(snapshot.settings, {
@@ -6646,19 +7388,13 @@ describe('video restore, Restore first, and 1× removal', () => {
     });
     const user = await mountWith(snapshot);
 
-    // Output scale in video Upscale starts at 2×; Quality has no 1× HelpTip.
+    // Output scale is gone from Advanced; summary reads Format, tiles.
     await user.click(screen.getByRole('button', { name: /Advanced/ }));
-    const scaleSelect = screen.getByLabelText('Output scale') as HTMLSelectElement;
-    expect(Array.from(scaleSelect.options).map((o) => o.value)).toEqual(['2', '3', '4']);
-    expect(screen.queryByRole('button', { name: 'About Quality' })).toBeNull();
-
-    // Switch to video Restore: Noise starts on, Output scale hides, Advanced says Format, hardware.
-    await user.click(screen.getByRole('button', { name: /^Restore$/ }));
     expect(screen.queryByLabelText('Output scale')).toBeNull();
-    expect(screen.getByText('Format, hardware')).toBeTruthy();
+    expect(screen.getByText('Format, tiles')).toBeTruthy();
 
-    // Untick Noise: no restore model runs, Start is disabled with "Nothing to run..."
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: true }));
+    // Switch to Same size with nothing ticked: Noise stays off, Start disabled with video note.
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
         task: 'video',
@@ -6667,13 +7403,16 @@ describe('video restore, Restore first, and 1× removal', () => {
         selected_model_id: '',
       }),
     );
+    expect(screen.getByRole('button', { name: 'Noise' }).getAttribute('aria-pressed')).toBe(
+      'false',
+    );
     expect(
       screen.getByText(
         'Nothing to run. Pick what to fix, or turn on De-flicker, Frame rate or Clean up audio.',
       ),
     ).toBeTruthy();
     const startBtn = screen.getByRole('button', {
-      name: 'Restore selected video',
+      name: 'Start selected video',
     }) as HTMLButtonElement;
     expect(startBtn.disabled).toBe(true);
     expect(screen.queryByRole('list', { name: 'Stages' })?.textContent?.trim()).toBe('');
@@ -6692,8 +7431,8 @@ describe('video restore, Restore first, and 1× removal', () => {
     });
   });
 
-  it('migrates saved Upscale 1× and no-chip video Restore states on load and keeps Restore first chip order and HelpTips', async () => {
-    // 1) Saved photo Upscale 1× loads as Restore with the same fixes and last fix as model.
+  it('migrates saved Upscale 1×, no-chip denoise states on load, and keeps Fix/Size tips and order', async () => {
+    // 1) Saved photo Upscale 1× loads as Same size with the same fixes and last fix as model.
     const photo1x = readySnapshot([image('photo', true)]);
     Object.assign(photo1x.settings, {
       task: 'upscale',
@@ -6713,34 +7452,31 @@ describe('video restore, Restore first, and 1× removal', () => {
         enable_face_model: false,
       }),
     );
-    expect(
-      screen.getByText('Removes noise, blur and JPEG artifacts or adds colour, at the same size.'),
-    ).toBeTruthy();
-    const restoreChips = Array.from(
-      screen.getByRole('group', { name: 'What to fix' }).querySelectorAll('button'),
+    expect(screen.getByRole('radio', { name: 'Same size' }).getAttribute('aria-checked')).toBe(
+      'true',
+    );
+    const sameSizeChips = Array.from(
+      screen.getByRole('group', { name: 'Fix' }).querySelectorAll('button'),
     ).map((b) => b.textContent?.trim());
-    expect(restoreChips).toEqual(['Noise', 'Blur', 'JPEG artifacts', 'Colour']);
-    await user1.click(screen.getByRole('button', { name: 'About What to fix' }));
+    expect(sameSizeChips).toEqual(['Noise', 'Blur', 'JPEG artifacts', 'Colour']);
+    await user1.click(screen.getByRole('button', { name: 'About Fix' }));
     expect(screen.getByRole('tooltip').textContent).toBe(
-      'Each problem you pick gets its own fix, in the order listed under Model. The size stays the same. To enlarge the picture as well, use Upscale and pick the same problems under Restore first.',
+      "Each problem you pick gets its own fix at the original size, in the order listed under Model. Quick picks a fast model for each problem, Best the most careful one. ↑ and ↓ change the order; a fix's Change… picks its model, which LocalSR remembers for that problem. Colour adds colour to black-and-white photos.",
     );
 
-    // Upscale uses the exact same chip order (without Colour for video).
-    await user1.click(screen.getByRole('button', { name: /^Upscale$/ }));
+    // Enlarging uses the same Fix chips.
+    await user1.click(screen.getByRole('radio', { name: '4×' }));
     const upscaleChips = Array.from(
-      screen.getByRole('group', { name: 'Restore first' }).querySelectorAll('button'),
+      screen.getByRole('group', { name: 'Fix' }).querySelectorAll('button'),
     ).map((b) => b.textContent?.trim());
     expect(upscaleChips).toEqual(['Noise', 'Blur', 'JPEG artifacts', 'Colour']);
-    await user1.click(screen.getByRole('button', { name: 'About Restore first' }));
-    expect(screen.getByRole('tooltip').textContent).toContain(
-      'Runs the Restore task before upscaling.',
-    );
-    expect(screen.getByRole('tooltip').textContent).toContain(
-      'Colour adds colour to black-and-white photos.',
+    await user1.click(screen.getByRole('button', { name: 'About Size' }));
+    expect(screen.getByRole('tooltip').textContent).toBe(
+      'Same size keeps the pixel size and runs only the fixes you picked. 2× to 4× enlarges the result after the fixes. The model always works at its own 4× scale; a smaller choice resizes that result down afterwards, so it saves no time.',
     );
     cleanup();
 
-    // 2) Saved video Upscale 1× loads as video Restore, and recipes at 1× display "restore"/"video restore" without scale.
+    // 2) Saved video Upscale 1× loads as video Same size, and recipes at 1× display "same size" / "video · same size".
     const video1x = readySnapshot([video('clip', true)]);
     Object.assign(video1x.settings, {
       task: 'video',
@@ -6796,21 +7532,21 @@ describe('video restore, Restore first, and 1× removal', () => {
       }),
     );
     const oldPhotoBtn = screen.getByRole('button', { name: /^Old photo 1x/ });
-    expect(oldPhotoBtn.textContent).toContain('restore · FP32');
+    expect(oldPhotoBtn.textContent).toContain('same size · FP32');
     expect(oldPhotoBtn.textContent).not.toContain('1×');
     const oldVidBtn = screen.getByRole('button', { name: /^Old video 1x/ });
-    expect(oldVidBtn.textContent).toContain('video restore · FP16');
+    expect(oldVidBtn.textContent).toContain('video · same size · FP16');
     expect(oldVidBtn.textContent).not.toContain('1×');
     expect(oldVidBtn.getAttribute('aria-pressed')).toBe('false');
     await user2.click(oldVidBtn);
     await waitFor(() => expect(oldVidBtn.getAttribute('aria-pressed')).toBe('true'));
-    await user2.click(screen.getByRole('button', { name: 'About What to fix' }));
+    await user2.click(screen.getByRole('button', { name: 'About Size' }));
     expect(screen.getByRole('tooltip').textContent).toContain(
       'With nothing picked, only De-flicker, Frame rate and Clean up audio run.',
     );
     cleanup();
 
-    // 3) Saved no-chip video Restore gets the chip its model fits, else Noise.
+    // 3) Saved no-chip video denoise gets the chip its model fits, else Noise.
     const noChipVideo = readySnapshot([video('clip', true)]);
     Object.assign(noChipVideo.settings, {
       task: 'video',
@@ -6862,8 +7598,10 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     );
     const user = await mountWith(current);
     api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
-    await user.click(screen.getByRole('button', { name: /Advanced/ }));
-    await user.click(screen.getByRole('button', { name: /^Model folder / }));
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Storage' }));
+    await user.click(within(settingsDialog).getByRole('button', { name: /^Model folder / }));
     await waitFor(() => expect(api.setModelDirectory).toHaveBeenCalled());
     api.takeLaunchIntents
       .mockResolvedValueOnce([
@@ -6878,7 +7616,7 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1), { timeout: 3000 });
   });
 
-  it('chooses and resets the model folder from Advanced settings', async () => {
+  it('chooses and resets the model folder from Settings', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.settings.task = 'upscale';
     snapshot.default_model_directory = '/Users/demo/Library/Application Support/LocalSR/models';
@@ -6889,16 +7627,20 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     api.chooseModelDirectory.mockResolvedValueOnce('/Volumes/SSD/models');
     api.refreshSnapshot.mockResolvedValueOnce(moved).mockResolvedValueOnce(snapshot);
 
-    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Storage' }));
 
-    await user.click(screen.getByRole('button', { name: /^Model folder / }));
+    await user.click(within(settingsDialog).getByRole('button', { name: /^Model folder / }));
     await waitFor(() => expect(api.setModelDirectory).toHaveBeenCalledWith('/Volumes/SSD/models'));
-    expect(await screen.findByText('/Volumes/SSD/models')).toBeTruthy();
+    expect(await within(settingsDialog).findByText('/Volumes/SSD/models')).toBeTruthy();
 
-    await user.click(screen.getByRole('button', { name: 'Reset to default' }));
+    await user.click(within(settingsDialog).getByRole('button', { name: 'Reset to default' }));
     await waitFor(() => expect(api.resetModelDirectory).toHaveBeenCalledTimes(1));
     expect(
-      await screen.findByText('/Users/demo/Library/Application Support/LocalSR/models'),
+      await within(settingsDialog).findByText(
+        '/Users/demo/Library/Application Support/LocalSR/models',
+      ),
     ).toBeTruthy();
   });
 
@@ -6932,7 +7674,7 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     await waitFor(() => expect(api.resetModelDirectory).toHaveBeenCalledTimes(1));
   });
 
-  it('shows moving progress inside the card, sets header to Moving models, and disables Upscale selected', async () => {
+  it('shows moving progress inside the card, prevents closing Settings, and disables Upscale selected', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.settings.task = 'upscale';
     snapshot.settings.quality = 'quick';
@@ -6963,8 +7705,10 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     );
 
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced/ }));
-    await user.click(screen.getByRole('button', { name: /^Model folder / }));
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Storage' }));
+    await user.click(within(settingsDialog).getByRole('button', { name: /^Model folder / }));
 
     moveHandler?.({
       moved_bytes: 47,
@@ -6975,9 +7719,14 @@ describe('Model folder and Windows CPU GPU download notice', () => {
       current_file: 'model.pth',
     });
 
-    expect(await screen.findByText('Moving 7 of 15 files…')).toBeTruthy();
-    expect(screen.getByText('47%')).toBeTruthy();
-    expect(document.querySelector('progress.download-progress')).toBeTruthy();
+    expect(await within(settingsDialog).findByText('Moving 7 of 15 files…')).toBeTruthy();
+    expect(within(settingsDialog).getByText('47%')).toBeTruthy();
+    expect(settingsDialog.querySelector('progress.download-progress')).toBeTruthy();
+    expect(
+      (within(settingsDialog).getByRole('button', { name: 'Done' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeTruthy();
     expect(document.querySelector('.enhance-pane .pane-heading span')?.textContent).toBe(
       'Moving models',
     );
@@ -6991,6 +7740,9 @@ describe('Model folder and Windows CPU GPU download notice', () => {
         (screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement).disabled,
       ).toBe(false),
     );
+    expect(
+      (within(settingsDialog).getByRole('button', { name: 'Done' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
   });
 
   it('shows the dismissable GPU download notice, opens the download page, and remembers dismissal', async () => {
@@ -7017,7 +7769,7 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     ).toBeNull();
   });
 
-  it('offers Colour under Fix first and Restore for photos, with title, HelpTip, Colour label, and hides it for video', async () => {
+  it('offers Colour under Fix for photos and video across sizes', async () => {
     const snapshot = readySnapshot([image('photo', true), video('clip')]);
     const user = await mountWith(snapshot);
     const prevSelect = api.selectMedia.getMockImplementation();
@@ -7057,7 +7809,7 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     expect(screen.queryByRole('button', { name: 'Change the colour fix model' })).toBeNull();
     expect(screen.getByText('DDColor')).toBeTruthy();
 
-    // Best uses the same model, and Restore at 1x runs it as the Restore model labelled "Colour".
+    // Best uses the same model, and Same size runs it as the primary row labelled "Colour".
     await user.click(screen.getByRole('button', { name: /^Best/ }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
@@ -7067,7 +7819,7 @@ describe('Model folder and Windows CPU GPU download notice', () => {
       ),
     );
 
-    await chooseTask(user, /^Restore/);
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
     expect(screen.getByRole('button', { name: 'Colour', pressed: true })).toBeTruthy();
     const stages = screen.getByRole('list', { name: 'Stages' });
     expect(within(stages).getByText('Colour')).toBeTruthy();
@@ -7082,11 +7834,24 @@ describe('Model folder and Windows CPU GPU download notice', () => {
       ),
     );
 
-    // Switching to a video does not offer Colour in Fix first (Upscale or Restore).
+    // Switching to a video keeps Colour available under Fix, but the photo's
+    // Colour choice is not carried over: a colour video would be recoloured.
     await user.click(screen.getByRole('button', { name: /▶\s*clip\.mp4/ }));
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Colour' })).toBeNull());
-    await user.click(screen.getByRole('button', { name: /^Upscale/ }));
-    expect(screen.queryByRole('button', { name: 'Colour' })).toBeNull();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Colour' })).toBeTruthy());
+    expect(screen.getByRole('button', { name: 'Colour' }).getAttribute('aria-pressed')).toBe(
+      'false',
+    );
+    expect(api.saveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ task: 'video', fixes: [] }),
+    );
+    await user.click(screen.getByRole('radio', { name: '4×' }));
+    expect(screen.getByRole('button', { name: 'Colour' }).getAttribute('title')).toBe(
+      'Adds colour to black-and-white videos',
+    );
+    await user.click(screen.getByRole('button', { name: 'About Fix' }));
+    expect(screen.getByRole('tooltip').textContent).toContain(
+      'Colour adds colour to black-and-white videos and keeps it steady from frame to frame.',
+    );
   });
 });
 
@@ -7098,7 +7863,7 @@ describe('Engine manager UI and recommendation card', () => {
     return snapshot;
   }
 
-  it('shows the GPU engine recommendation card only after first-launch setup Continue, and remembers Not now', async () => {
+  it('shows the GPU engine recommendation card only after first-launch setup, and remembers Not now', async () => {
     const snapshot = windowsCpuSnapshot();
     snapshot.settings.privacy_choice_made = false;
 
@@ -7107,6 +7872,7 @@ describe('Engine manager UI and recommendation card', () => {
     expect(screen.queryByText(/can run LocalSR much faster/)).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await user.click(screen.getByRole('button', { name: 'Done' }));
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: 'Welcome to LocalSR' })).toBeNull(),
     );
@@ -7122,10 +7888,12 @@ describe('Engine manager UI and recommendation card', () => {
     await waitFor(() => expect(api.dismissGpuDownloadNotice).toHaveBeenCalledTimes(1));
     expect(screen.queryByText(cardText)).toBeNull();
 
-    // Still reachable via Advanced settings -> Engine -> Change…
-    await user.click(screen.getByRole('button', { name: /Advanced/ }));
-    expect(screen.getByText('Engine')).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    // Still reachable via Settings -> Performance -> Engine -> Change…
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Performance' }));
+    expect(within(settingsDialog).getByText('Engine')).toBeTruthy();
+    await user.click(within(settingsDialog).getByRole('button', { name: 'Change…' }));
     const dialog = await screen.findByRole('dialog', { name: 'Engine' });
     expect(within(dialog).getByText('NVIDIA CUDA')).toBeTruthy();
     expect(within(dialog).getByText('Recommended')).toBeTruthy();
@@ -7141,6 +7909,7 @@ describe('Engine manager UI and recommendation card', () => {
     updateState.set({
       configured: true,
       managed_by_store: false,
+      managed_by_package_manager: false,
       channel: 'beta',
       target: 'windows-x86_64-cpu-native',
       stage: 'available',
@@ -7163,8 +7932,10 @@ describe('Engine manager UI and recommendation card', () => {
     snapshot.engines!.recommendation = { backend: 'cpu', adapter_name: null };
 
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced/ }));
-    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Performance' }));
+    await user.click(within(settingsDialog).getByRole('button', { name: 'Change…' }));
     const dialog = await screen.findByRole('dialog', { name: 'Engine' });
     expect(
       within(dialog).getByText('Choose the engine LocalSR uses on this computer.'),
@@ -7267,8 +8038,10 @@ describe('Engine manager UI and recommendation card', () => {
     afterImport.engines!.catalog[0].active = true;
 
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced/ }));
-    await user.click(screen.getByRole('button', { name: 'Change…' }));
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Performance' }));
+    await user.click(within(settingsDialog).getByRole('button', { name: 'Change…' }));
 
     const dialog = await screen.findByRole('dialog', { name: 'Engine' });
     const list = within(dialog).getByRole('list', { name: 'Available engines' });
@@ -7426,7 +8199,7 @@ describe('Engine manager UI and recommendation card', () => {
 });
 
 describe('Linux AppImage menu prompt', () => {
-  it('offers to add LocalSR to the applications menu only after setup Continue, and remembers Not now', async () => {
+  it('offers to add LocalSR to the applications menu only after first-launch setup, and remembers Not now', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.settings.privacy_choice_made = false;
     snapshot.linux_menu_offer = true;
@@ -7436,6 +8209,7 @@ describe('Linux AppImage menu prompt', () => {
     expect(screen.queryByText('Add LocalSR to your applications menu?')).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await user.click(screen.getByRole('button', { name: 'Done' }));
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: 'Welcome to LocalSR' })).toBeNull(),
     );
@@ -7448,15 +8222,9 @@ describe('Linux AppImage menu prompt', () => {
     expect(screen.queryByText('Add LocalSR to your applications menu?')).toBeNull();
   });
 
-  it('installs the applications menu entry when accepted and supports Help menu removal', async () => {
-    let menuHandler: ((action: string) => void) | undefined;
-    api.listenForNativeMenu.mockImplementationOnce(async (handler) => {
-      menuHandler = handler;
-      return () => undefined;
-    });
+  it('installs the applications menu entry when accepted and removes it from Settings', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.linux_menu_offer = true;
-    api.refreshSnapshot.mockResolvedValueOnce(structuredClone(snapshot));
 
     const user = await mountWith(snapshot);
     const banner = screen
@@ -7467,7 +8235,948 @@ describe('Linux AppImage menu prompt', () => {
     await waitFor(() => expect(api.installLinuxMenu).toHaveBeenCalledTimes(1));
     expect(screen.queryByText('Add LocalSR to your applications menu?')).toBeNull();
 
-    menuHandler?.('help.remove-desktop-menu');
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('button', { name: 'Remove' }));
     await waitFor(() => expect(api.uninstallLinuxMenu).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('custom checkpoint library', () => {
+  it('names a checkpoint, renames it and selects it from the custom group', async () => {
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    api.chooseCustomModel.mockResolvedValueOnce('/models/my_model.safetensors' as never);
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
+    await user.click(screen.getByRole('button', { name: /Your own file/ }));
+    await user.click(screen.getByRole('button', { name: 'Choose checkpoint…' }));
+    expect(await screen.findByText('my model')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
+    await user.click(screen.getByRole('button', { name: /Your own file/ }));
+    await user.click(screen.getByRole('button', { name: 'Rename my model' }));
+    const name = screen.getByRole('textbox', { name: 'Model name' });
+    await user.clear(name);
+    await user.type(name, 'My favourite');
+    await user.click(screen.getByRole('button', { name: 'Save name' }));
+    expect(api.saveSettings.mock.calls.at(-1)?.[0]).toMatchObject({
+      custom_models: [{ path: '/models/my_model.safetensors', name: 'My favourite' }],
+    });
+    await user.click(screen.getByRole('button', { name: 'Use My favourite' }));
+    expect(await screen.findByText('My favourite')).toBeTruthy();
+  });
+});
+
+describe('remembered custom checkpoint consent', () => {
+  it('checks consent again when reselecting the same checkpoint', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    Object.assign(snapshot.settings, {
+      selected_model_id: '__custom__',
+      custom_model_path: '/models/mine.pth',
+      custom_models: [{ path: '/models/mine.pth', name: 'Mine' }],
+      quality: 'custom',
+    });
+    api.checkpointConsent.mockResolvedValue(true);
+    const user = await mountWith(snapshot);
+    await waitFor(() => expect(api.checkpointConsent).toHaveBeenCalledWith('/models/mine.pth'));
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
+    await user.click(screen.getByRole('button', { name: /Your own file/ }));
+    await user.click(screen.getByRole('button', { name: 'Use Mine' }));
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('checkbox', { name: /Allow this pickle-based/ }) as HTMLInputElement)
+          .checked,
+      ).toBe(true),
+    );
+  });
+});
+
+describe('older custom checkpoint settings', () => {
+  it('shows a cleaned filename when the saved entry has no name', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      selected_model_id: '__custom__',
+      custom_model_path: '/models/old_checkpoint.pth',
+      custom_models: [{ path: '/models/old_checkpoint.pth' }],
+      quality: 'custom',
+    });
+    await mountWith(snapshot);
+    expect(await screen.findByText('old checkpoint')).toBeTruthy();
+  });
+});
+
+describe('checkpoint consent after a running job', () => {
+  it('checks remembered consent once settings unlock', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      selected_model_id: '__custom__',
+      custom_model_path: '/models/mine.pth',
+      custom_models: [{ path: '/models/mine.pth', name: 'Mine' }],
+      quality: 'custom',
+      allow_unsafe_pickle_model: false,
+    });
+    snapshot.runtime.active_job_id = 'running';
+    api.checkpointConsent.mockResolvedValue(true);
+    await mountWith(snapshot);
+    await waitFor(() => expect(api.listenForStateChange).toHaveBeenCalled());
+    const stopped = structuredClone(snapshot);
+    stopped.runtime.active_job_id = '';
+    api.refreshSnapshot.mockResolvedValue(stopped);
+    (api.listenForStateChange.mock.calls[0][0] as () => void)();
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('checkbox', { name: /Allow this pickle-based/ }) as HTMLInputElement)
+          .checked,
+      ).toBe(true),
+    );
+  });
+});
+
+describe('Settings sheet', () => {
+  it('opens from app.settings and is ignored while another dialog or first-launch setup is open', async () => {
+    const setupSnap = readySnapshot([image('photo', true)]);
+    setupSnap.settings.privacy_choice_made = false;
+    await mountWith(setupSnap);
+    expect(await screen.findByRole('dialog', { name: 'Welcome to LocalSR' })).toBeTruthy();
+    await chooseMenuItem('app.settings');
+    expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull();
+    cleanup();
+
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    await chooseMenuItem('view.models');
+    expect(await screen.findByRole('dialog', { name: 'Model library' })).toBeTruthy();
+    await chooseMenuItem('app.settings');
+    expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
+
+    await chooseMenuItem('app.settings');
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(dialog).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull());
+  });
+
+  it('stacks System Integrations above Settings and routes External FFmpeg Change… to Storage with focus', async () => {
+    const snap = readySnapshot([video('clip', true)]);
+    snap.settings.task = 'video';
+    const user = await mountWith(snap);
+
+    // Clicking External FFmpeg Change… in Advanced opens Settings > Storage with #settings-ffmpeg focused.
+    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    const ffmpegRow = screen.getByText('External FFmpeg').closest('.field-row') as HTMLElement;
+    await user.click(within(ffmpegRow).getByRole('button', { name: 'Change…' }));
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(document.activeElement?.id).toBe('settings-ffmpeg');
+
+    // Opening System Integrations from Settings > General stacks above Settings and closes back to it on Esc.
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'General' }));
+    await user.click(within(settingsDialog).getByRole('button', { name: 'Manage…' }));
+    const integrationsDialog = await screen.findByRole('dialog', { name: 'System Integrations' });
+    expect(integrationsDialog).toBeTruthy();
+    await user.keyboard('{Escape}');
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'System Integrations' })).toBeNull(),
+    );
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeTruthy();
+  });
+});
+
+describe('Hardware and low priority in Advanced', () => {
+  it('apply to this session and the next start without changing the defaults in Settings', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.device_id = 'mps';
+    snapshot.settings.low_priority = false;
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
+    await user.selectOptions(screen.getByLabelText('Hardware'), 'cpu');
+    await user.click(screen.getByRole('checkbox', { name: 'Run at low priority' }));
+    expect(api.setRunLowPriority).toHaveBeenCalledWith(true);
+    expect(api.saveSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({ device_id: 'cpu' }),
+    );
+    expect(api.setPreference).not.toHaveBeenCalledWith('low_priority', true);
+    expect(document.getElementById('advanced-session-choice')?.textContent).toContain(
+      'For this session only',
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Upscale selected' }));
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalled());
+    const input = api.startJobs.mock.calls.at(-1)?.[0] as { device: string };
+    expect(input.device).toBe('cpu');
+
+    // Settings still shows the defaults.
+    await chooseMenuItem('app.settings');
+    const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settingsDialog).getByRole('tab', { name: 'Performance' }));
+    expect(
+      (
+        within(settingsDialog).getByRole('switch', {
+          name: 'Run at low priority',
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(false);
+  });
+});
+
+describe('Clearing the model cache', () => {
+  it('asks first, and only Clear cache clears', async () => {
+    api.getCacheSize.mockResolvedValue(3 * 1024 * 1024 * 1024);
+    api.clearCache.mockResolvedValue(0);
+    const user = await mountWith(readySnapshot([]));
+    await chooseMenuItem('app.settings');
+    const settings = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(settings).getByRole('tab', { name: 'Storage' }));
+    await user.click(await within(settings).findByRole('button', { name: 'Clear cache' }));
+    const question = await screen.findByRole('dialog', { name: 'Clear the model cache?' });
+    expect(question.textContent).toContain('3.0 GB');
+    await user.click(within(question).getByRole('button', { name: 'Cancel' }));
+    expect(api.clearCache).not.toHaveBeenCalled();
+
+    await user.click(within(settings).getByRole('button', { name: 'Clear cache' }));
+    const again = await screen.findByRole('dialog', { name: 'Clear the model cache?' });
+    await user.click(within(again).getByRole('button', { name: 'Clear cache' }));
+    await waitFor(() => expect(api.clearCache).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('Stopping a running job', () => {
+  function runningVideoSnapshot(overrides: Partial<AppSnapshot['runtime']> = {}) {
+    const clip = {
+      ...video('clip', true),
+      name: 'alpine-lake.mp4',
+      frame_count: 288,
+      fps: 24,
+      duration_seconds: 12,
+    };
+    const snapshot = readySnapshot([clip]);
+    snapshot.settings.task = 'video';
+    snapshot.settings.stopped_job_result = 'ask';
+    snapshot.runtime = {
+      ...snapshot.runtime,
+      active_job_id: 'video-job-1',
+      progress: 40,
+      frames_processed: 115,
+      total_frames: 288,
+      can_keep_partial: true,
+      ...overrides,
+    };
+    snapshot.jobs = [
+      {
+        id: 'video-job-1',
+        media_id: 'clip',
+        media_name: 'alpine-lake.mp4',
+        media_kind: 'video',
+        status: 'running',
+        progress: 40,
+        output_path: '',
+        error: '',
+        created_at: 1,
+      },
+    ];
+    return snapshot;
+  }
+
+  it('asks whether to keep or discard for a keepable video with ask, and Esc keeps the job running', async () => {
+    const user = await mountWith(runningVideoSnapshot());
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Stop alpine-lake.mp4?' });
+    expect(dialog.textContent).toContain('0:05 of 0:12 is finished.');
+    expect(api.cancelJobs).not.toHaveBeenCalled();
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(api.cancelJobs).not.toHaveBeenCalled();
+    expect(api.setPreference).not.toHaveBeenCalled();
+  });
+
+  it('falls back to Part of the video is finished when duration is unknown, and backdrop click keeps running', async () => {
+    const snap = runningVideoSnapshot({ total_frames: 0 });
+    snap.media[0].duration_seconds = 0;
+    snap.media[0].frame_count = 0;
+    const user = await mountWith(snap);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Stop alpine-lake.mp4?' });
+    expect(dialog.textContent).toContain('Part of the video is finished.');
+
+    const backdrop = dialog.parentElement as HTMLElement;
+    await fireEvent.click(backdrop);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(api.cancelJobs).not.toHaveBeenCalled();
+  });
+
+  it('asks after real frame messages, where each finished frame is followed at once by the next start', async () => {
+    // The window keeps only the newest progress message per 100 ms, so a frame's
+    // completed message is usually replaced by the next frame's start.
+    const snap = runningVideoSnapshot({ frames_processed: 0, can_keep_partial: undefined });
+    const user = await mountWith(snap);
+    const emitWorker = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+    for (let frame = 0; frame < 5; frame += 1) {
+      emitWorker({
+        type: 'video_frame_completed',
+        data: { job_id: 'video-job-1', frames_processed: frame + 1, total_frames: 288 },
+      });
+      emitWorker({
+        type: 'video_frame_started',
+        data: { job_id: 'video-job-1', frame_index: frame + 1, total_frames: 288 },
+      });
+      emitWorker({
+        type: 'video_tile_progress',
+        data: {
+          job_id: 'video-job-1',
+          frame_index: frame + 1,
+          completed_tiles: 3,
+          total_tiles: 80,
+          total_frames: 288,
+        },
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(await screen.findByRole('dialog', { name: 'Stop alpine-lake.mp4?' })).toBeTruthy();
+    expect(api.cancelJobs).not.toHaveBeenCalled();
+  });
+
+  it('counts a finished part of under a second in frames', async () => {
+    const user = await mountWith(runningVideoSnapshot({ frames_processed: 2 }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Stop alpine-lake.mp4?' });
+    expect(dialog.textContent).toContain('2 of 288 frames are finished.');
+    expect(dialog.textContent).not.toContain('0:00');
+  });
+
+  it('asks for a video-model job (SeedVR) too', async () => {
+    const snap = runningVideoSnapshot();
+    snap.jobs[0].model_id = snap.catalog.video_models[0]?.model_id ?? 'seedvr2_3b';
+    snap.runtime.video_memory = {
+      peak_bytes: 1,
+    } as unknown as AppSnapshot['runtime']['video_memory'];
+    const user = await mountWith(snap);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(await screen.findByRole('dialog', { name: 'Stop alpine-lake.mp4?' })).toBeTruthy();
+  });
+
+  it('Discard and Keep finished part call cancelJobs with keepPartial false/true and save preference when Dont ask again is ticked', async () => {
+    const user = await mountWith(runningVideoSnapshot());
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Stop alpine-lake.mp4?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Discard' }));
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(false));
+    expect(api.setPreference).not.toHaveBeenCalled();
+
+    cleanup();
+    api.cancelJobs.mockClear();
+    api.setPreference.mockClear();
+
+    const user2 = await mountWith(runningVideoSnapshot());
+    await user2.click(screen.getByRole('button', { name: 'Cancel' }));
+    const dialog2 = await screen.findByRole('dialog', { name: 'Stop alpine-lake.mp4?' });
+    await user2.click(within(dialog2).getByRole('checkbox', { name: "Don't ask again" }));
+    await user2.click(within(dialog2).getByRole('button', { name: 'Keep finished part' }));
+    await waitFor(() =>
+      expect(api.setPreference).toHaveBeenCalledWith('stopped_job_result', 'keep'),
+    );
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(true));
+  });
+
+  it('opens the modal for Cancel runs for this file on an active keepable video in a queue', async () => {
+    const snap = runningVideoSnapshot();
+    const second = { ...video('clip2'), name: 'second.mp4' };
+    snap.media.push(second);
+    snap.jobs.push({
+      id: 'video-job-2',
+      media_id: 'clip2',
+      media_name: 'second.mp4',
+      media_kind: 'video',
+      status: 'queued',
+      progress: 0,
+      output_path: '',
+      error: '',
+      created_at: 2,
+    });
+    const user = await mountWith(snap);
+    await user.click(await screen.findByRole('button', { name: 'Cancel runs for this file' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Stop alpine-lake.mp4?' });
+    await user.click(within(dialog).getByRole('checkbox', { name: "Don't ask again" }));
+    await user.click(within(dialog).getByRole('button', { name: 'Discard' }));
+    await waitFor(() =>
+      expect(api.setPreference).toHaveBeenCalledWith('stopped_job_result', 'discard'),
+    );
+    await waitFor(() => expect(api.cancelJobsForMedia).toHaveBeenCalledWith('clip', false));
+  });
+
+  it('cancels at once without modal for photos, 0 finished frames, FFV1-master, temporal engines, or keep/discard settings', async () => {
+    // Photo job cancels at once.
+    const photoSnap = readySnapshot([image('photo', true)]);
+    photoSnap.settings.stopped_job_result = 'ask';
+    photoSnap.runtime.active_job_id = 'img-1';
+    photoSnap.jobs = [
+      {
+        id: 'img-1',
+        media_id: 'photo',
+        media_name: 'photo.png',
+        media_kind: 'image',
+        status: 'running',
+        progress: 50,
+        output_path: '',
+        error: '',
+        created_at: 1,
+      },
+    ];
+    let user = await mountWith(photoSnap);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(false));
+    cleanup();
+    api.cancelJobs.mockClear();
+
+    // 0 finished frames cancels at once.
+    user = await mountWith(runningVideoSnapshot({ frames_processed: 0 }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(false));
+    cleanup();
+    api.cancelJobs.mockClear();
+
+    // Non-keepable video (FFV1-master or temporal) cancels at once.
+    user = await mountWith(runningVideoSnapshot({ can_keep_partial: false }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(false));
+    cleanup();
+    api.cancelJobs.mockClear();
+
+    // Setting 'keep' cancels at once with keepPartial true.
+    const keepSnap = runningVideoSnapshot();
+    keepSnap.settings.stopped_job_result = 'keep';
+    user = await mountWith(keepSnap);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(true));
+    cleanup();
+    api.cancelJobs.mockClear();
+
+    // Setting 'discard' cancels at once with keepPartial false.
+    const discardSnap = runningVideoSnapshot();
+    discardSnap.settings.stopped_job_result = 'discard';
+    user = await mountWith(discardSnap);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(false));
+  });
+});
+
+describe('Stopping a running photo', () => {
+  function runningPhotoSnapshot(overrides: Partial<AppSnapshot['runtime']> = {}) {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.stopped_job_result = 'ask';
+    snapshot.runtime = {
+      ...snapshot.runtime,
+      active_job_id: 'img-1',
+      progress: 30,
+      can_keep_partial: true,
+      ...overrides,
+    };
+    snapshot.jobs = [
+      {
+        id: 'img-1',
+        media_id: 'photo',
+        media_name: 'photo.png',
+        media_kind: 'image',
+        status: 'running',
+        progress: 30,
+        output_path: '',
+        error: '',
+        created_at: 1,
+      },
+    ];
+    return snapshot;
+  }
+  /** The engine's tile count, as the window receives it (one pulse per 100 ms is kept). */
+  async function reportTiles(completed: number, total: number, unit?: string): Promise<void> {
+    const emitWorker = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+    emitWorker({
+      type: 'progress',
+      data: {
+        job_id: 'img-1',
+        percentage: 30,
+        completed_tiles: completed,
+        total_tiles: total,
+        ...(unit ? { unit } : {}),
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+
+  it('asks once a tile is finished, says how many are, and keeps or discards as answered', async () => {
+    const user = await mountWith(runningPhotoSnapshot());
+    await reportTiles(12, 40);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Stop photo.png?' });
+    expect(dialog.textContent).toContain(
+      '12 of 40 tiles are finished. If you keep it, the photo is saved at full size with the rest left as in the original.',
+    );
+    expect(api.cancelJobs).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole('button', { name: 'Keep finished part' }));
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(true));
+    expect(api.setPreference).not.toHaveBeenCalled();
+  });
+
+  it('says "is" of a single finished tile', async () => {
+    const user = await mountWith(runningPhotoSnapshot());
+    await reportTiles(1, 40);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Stop photo.png?' });
+    expect(dialog.textContent).toContain('1 of 40 tiles is finished. If you keep it,');
+  });
+
+  it('keeps the tile count through a refresh of the snapshot, which has none', async () => {
+    const user = await mountWith(runningPhotoSnapshot());
+    await reportTiles(3, 40);
+    (api.listenForStateChange.mock.calls[0][0] as () => void)();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Stop photo.png?' });
+    expect(dialog.textContent).toContain('3 of 40 tiles are finished.');
+    await user.click(within(dialog).getByRole('button', { name: 'Discard' }));
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(false));
+  });
+
+  it('cancels at once before the first tile, for the steps of an edit, and when the host cannot keep a photo', async () => {
+    // No tile is finished yet: there is nothing to keep.
+    let user = await mountWith(runningPhotoSnapshot());
+    await reportTiles(0, 40);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(false));
+    cleanup();
+    api.cancelJobs.mockClear();
+    api.listenForWorker.mockClear();
+
+    // An Edit counts steps, not tiles.
+    user = await mountWith(runningPhotoSnapshot());
+    await reportTiles(12, 40, 'steps');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(false));
+    cleanup();
+    api.cancelJobs.mockClear();
+    api.listenForWorker.mockClear();
+
+    // A host that does not keep photos says nothing, or says no.
+    for (const can_keep_partial of [undefined, false]) {
+      user = await mountWith(runningPhotoSnapshot({ can_keep_partial }));
+      await reportTiles(12, 40);
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(screen.queryByRole('dialog')).toBeNull();
+      await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(false));
+      cleanup();
+      api.cancelJobs.mockClear();
+      api.listenForWorker.mockClear();
+    }
+  });
+
+  it('follows the saved answer without asking', async () => {
+    const keep = runningPhotoSnapshot();
+    keep.settings.stopped_job_result = 'keep';
+    let user = await mountWith(keep);
+    await reportTiles(12, 40);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(true));
+    cleanup();
+    api.cancelJobs.mockClear();
+    api.listenForWorker.mockClear();
+
+    const discard = runningPhotoSnapshot();
+    discard.settings.stopped_job_result = 'discard';
+    user = await mountWith(discard);
+    await reportTiles(12, 40);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(api.cancelJobs).toHaveBeenCalledWith(false));
+  });
+
+  it('says what was kept when the stopped photo is saved, not that it finished', async () => {
+    const current = runningPhotoSnapshot();
+    current.settings.stopped_job_result = 'keep';
+    api.bootstrap.mockResolvedValue(structuredClone(current));
+    api.refreshSnapshot.mockImplementation(async () => structuredClone(current));
+    render(App);
+    const user = userEvent.setup();
+    const strong = () => document.querySelector('.status-copy strong')?.textContent ?? '';
+    await waitFor(() => expect(strong()).toMatch(/^Ready/));
+    await reportTiles(12, 40);
+    // The host marks the job as stopping and, once the engine has saved the part, as completed.
+    api.cancelJobs.mockImplementation(async () => {
+      current.jobs[0].status = 'cancelling';
+    });
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(strong()).toBe('Stopping…'));
+    current.runtime.active_job_id = '';
+    current.jobs[0] = { ...current.jobs[0], status: 'completed', output_path: '/out/photo.png' };
+    (api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void)({
+      type: 'job_completed',
+      data: {
+        job_id: 'img-1',
+        output_path: '/out/photo_partial.png',
+        partial: true,
+        finished_tiles: Array.from({ length: 12 }, (_, index) => [index * 256, 0, 256, 256]),
+        total_tiles: 40,
+      },
+    });
+    await waitFor(() => expect(strong()).toBe('Stopped, kept 12 of 40 tiles'));
+    await waitFor(() =>
+      expect(document.querySelector('.status-detail')!.textContent).toBe(
+        'Stopped. 0 of 1 finished, 1 kept unfinished.',
+      ),
+    );
+  });
+});
+
+describe('Size decides', () => {
+  const lastSaved = (): UiSettings => api.saveSettings.mock.calls.at(-1)![0] as UiSettings;
+  const headerText = () =>
+    document.querySelector('.enhance-pane .pane-heading span')?.textContent?.trim() ?? '';
+
+  it('switches photo between 4×, Same size (with and without fixes) and 2×', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+
+    // Noise ticked, Size -> Same size: Content and Upscale row gone, last row Fix noise, Restore selected.
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'denoise',
+        output_scale: 1,
+        selected_model_id: 'denoise_realplksr_1x',
+      }),
+    );
+    expect(screen.queryByRole('radiogroup', { name: 'Content' })).toBeNull();
+    const stages = screen.getByRole('list', { name: 'Stages' });
+    expect(within(stages).queryByText(/Upscale/)).toBeNull();
+    expect(within(stages).getByText('Fix noise')).toBeTruthy();
+    expect(headerText()).toBe('Quick · Same size');
+    expect(screen.getByText('Fast clean-up')).toBeTruthy();
+    expect(screen.getByText('Most careful, slower')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Restore selected' })).toBeTruthy();
+
+    // Untick Noise at Same size: nothing to run, Start disabled, no card download lines, no header Change….
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: true }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        fix_stages: [],
+        selected_model_id: '',
+      }),
+    );
+    expect(screen.getByRole('button', { name: 'Noise' }).getAttribute('aria-pressed')).toBe(
+      'false',
+    );
+    expect(
+      screen.getByText('Nothing to run. Pick what to fix, or choose a larger size.'),
+    ).toBeTruthy();
+    const startBtn = screen.getByRole('button', { name: 'Restore selected' }) as HTMLButtonElement;
+    expect(startBtn.disabled).toBe(true);
+    expect(document.querySelectorAll('.recipe-grid small')).toHaveLength(0);
+    expect(
+      within(screen.getByRole('region', { name: 'Model plan' })).queryByRole('button', {
+        name: 'Change…',
+      }),
+    ).toBeNull();
+
+    // Tick Blur: Start enabled, row Fix blur, selected_model_id nafnet_gopro_deblur.
+    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: 'nafnet_gopro_deblur',
+      }),
+    );
+    expect(startBtn.disabled).toBe(false);
+    expect(within(stages).getByText('Fix blur')).toBeTruthy();
+
+    // Size -> 2×: Blur stays ticked, Content back, row Upscale ×2, header Quick · Photo · 2×.
+    await user.click(screen.getByRole('radio', { name: '2×' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'upscale',
+        output_scale: 2,
+        fixes: ['blur'],
+      }),
+    );
+    expect(screen.getByRole('radiogroup', { name: 'Content' })).toBeTruthy();
+    expect(within(stages).getByText('Upscale ×2')).toBeTruthy();
+    expect(headerText()).toBe('Quick · Photo · 2×');
+
+    // Best then Illustration at 2× keep output_scale at 2.
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
+    await waitFor(() => expect(lastSaved()).toMatchObject({ quality: 'best', output_scale: 2 }));
+    await user.click(screen.getByRole('radio', { name: 'Illustration' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({ content: 'illustration', output_scale: 2 }),
+    );
+  });
+
+  it('clamps scale to a 2× upscaler and disables 3× and 4× with a tooltip', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /Real-ESRGAN ×2/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: 'realesrgan_x2plus',
+        output_scale: 2,
+      }),
+    );
+    for (const label of ['3×', '4×']) {
+      const radio = screen.getByRole('radio', { name: label }) as HTMLButtonElement;
+      expect(radio.disabled).toBe(true);
+      expect(radio.getAttribute('title')).toBe('This model enlarges up to 2×.');
+    }
+  });
+
+  it('remembers a hand-picked upscaler across Same size and forgets it when a preset is clicked there', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        selected_model_id: 'hat_l_x4_imagenet',
+        quality: 'custom',
+      }),
+    );
+
+    // Same size falls to best (not quick), keeping nafnet_sidd_width64.
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'denoise',
+        quality: 'best',
+        selected_model_id: 'nafnet_sidd_width64',
+      }),
+    );
+
+    // Back to 4× brings the hand-picked upscaler and Model · chosen by you.
+    await user.click(screen.getByRole('radio', { name: '4×' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'upscale',
+        output_scale: 4,
+        quality: 'custom',
+        selected_model_id: 'hat_l_x4_imagenet',
+      }),
+    );
+    expect(screen.getByText('Model · chosen by you')).toBeTruthy();
+
+    // Clicking Quick at Same size forgets the remembered upscaler.
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
+    await user.click(screen.getByRole('button', { name: /^Quick/ }));
+    await user.click(screen.getByRole('radio', { name: '4×' }));
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'upscale',
+        quality: 'quick',
+        selected_model_id: 'localsr_quick_x4_v1',
+      }),
+    );
+  });
+
+  it('switches fix models between Quick and Best, shows Same size downloads, and honours Use for Noise · Quick', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    for (const id of ['denoise_realplksr_1x', 'nafnet_sidd_width64']) {
+      snapshot.catalog.models.find((m) => m.model_id === id)!.installed = false;
+    }
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
+    expect(
+      within(screen.getByRole('button', { name: /^Quick/ })).getByText('28 MB download'),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByRole('button', { name: /^Best/ })).getByText('443 MB download'),
+    ).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
+    expect(
+      within(screen.getByRole('list', { name: 'Stages' })).getByText('NAFNet SIDD Width64'),
+    ).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: /^Quick/ }));
+    expect(
+      within(screen.getByRole('list', { name: 'Stages' })).getByText('RealPLKSR Denoise'),
+    ).toBeTruthy();
+
+    // Pin SCUNet Color for Noise · Quick, switch Best -> Quick, then Back to the default.
+    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    let library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /SCUNet Color/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for Noise · Quick' }));
+    const stages = screen.getByRole('list', { name: 'Stages' });
+    expect(within(stages).getByText('SCUNet Color')).toBeTruthy();
+    expect(within(stages).getByText(/Your pick/)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: /^Best/ }));
+    expect(within(stages).getByText('NAFNet SIDD Width64')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: /^Quick/ }));
+    expect(within(stages).getByText('SCUNet Color')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: 'Back to the default' }));
+    expect(within(stages).getByText('RealPLKSR Denoise')).toBeTruthy();
+    expect(lastSaved().preset_pins).toEqual({});
+  });
+
+  it('handles video Same size with interpolation only and all video options off', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.catalog.interpolation_models.forEach((m) => (m.installed = true));
+    Object.assign(snapshot.settings, {
+      task: 'video',
+      video_task: 'upscale',
+      output_scale: 4,
+      video_clean_audio: false,
+      deflicker: false,
+      video_interpolation: 'off',
+    });
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
+    const startBtn = screen.getByRole('button', {
+      name: 'Start selected video',
+    }) as HTMLButtonElement;
+    expect(screen.getByRole('button', { name: 'Noise' }).getAttribute('aria-pressed')).toBe(
+      'false',
+    );
+    expect(startBtn.disabled).toBe(true);
+    expect(
+      screen.getByText(
+        'Nothing to run. Pick what to fix, or turn on De-flicker, Frame rate or Clean up audio.',
+      ),
+    ).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    await user.selectOptions(screen.getByLabelText('Frame rate'), 'x2');
+    await waitFor(() => expect(startBtn.disabled).toBe(false));
+    await user.click(startBtn);
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+    expect(api.startJobs.mock.calls.at(-1)![0]).toMatchObject({
+      task: 'video',
+      video_task: 'denoise',
+      model_id: '',
+      fix_stages: [],
+      video_interpolation: 'x2',
+    });
+  });
+
+  it('keeps 2× and Same size across a round trip through Edit', async () => {
+    const snapshot = editSnapshot(36);
+    const user = await mountWith(snapshot);
+
+    await user.click(screen.getByRole('radio', { name: '2×' }));
+    await chooseTask(user, /^Edit$/);
+    await chooseTask(user, /^Upscale & restore$/);
+    await waitFor(() => expect(lastSaved()).toMatchObject({ task: 'upscale', output_scale: 2 }));
+    expect(screen.getByRole('radio', { name: '2×' }).getAttribute('aria-checked')).toBe('true');
+
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
+    await chooseTask(user, /^Edit$/);
+    await chooseTask(user, /^Upscale & restore$/);
+    await waitFor(() => expect(lastSaved()).toMatchObject({ task: 'denoise', output_scale: 1 }));
+    expect(screen.getByRole('radio', { name: 'Same size' }).getAttribute('aria-checked')).toBe(
+      'true',
+    );
+  });
+
+  it('applies a task: denoise recipe and migrates loaded no-chip photo denoise settings', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.recipes = [
+      {
+        id: 'denoise-r',
+        name: 'Clean photo',
+        task: 'denoise',
+        quality: 'quick',
+        model_id: 'denoise_realplksr_1x',
+        output_scale: 1,
+        tile_size: 256,
+        halo: 8,
+        precision: 'fp16',
+        safe_memory: false,
+        fixes: ['noise'],
+        stages: [{ kind: 'restore', model_id: 'denoise_realplksr_1x', fix: 'noise' }],
+      },
+    ];
+    const user = await mountWith(snapshot);
+    const recipeBtn = screen.getByRole('button', { name: /^Clean photo/ });
+    expect(recipeBtn.textContent).toContain('same size · FP16');
+    await user.click(recipeBtn);
+    expect(screen.getByRole('radio', { name: 'Same size' }).getAttribute('aria-checked')).toBe(
+      'true',
+    );
+    cleanup();
+
+    const loaded = readySnapshot([image('photo', true)]);
+    Object.assign(loaded.settings, {
+      task: 'denoise',
+      output_scale: 1,
+      selected_model_id: 'denoise_realplksr_1x',
+      fixes: [],
+      fix_stages: [],
+    });
+    await mountWith(loaded);
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({
+        task: 'denoise',
+        fixes: ['noise'],
+        fix_stages: [{ fix: 'noise', model_id: 'denoise_realplksr_1x' }],
+      }),
+    );
+    expect(screen.getByRole('button', { name: 'Noise' }).getAttribute('aria-pressed')).toBe('true');
+    expect(
+      within(screen.getByRole('list', { name: 'Stages' })).getByText('Fix noise'),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Restore selected' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it('shows scale choices in Output resolution when SeedVR2 is chosen and hides Size', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    snapshot.settings.task = 'video';
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /^SeedVR2-3B — Labs/ }));
+    await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
+
+    expect(screen.queryByRole('radiogroup', { name: 'Size' })).toBeNull();
+    const res = screen.getByLabelText('Output resolution') as HTMLSelectElement;
+    expect(Array.from(res.options).map((o) => o.value)).toEqual([
+      'x2',
+      'x3',
+      'x4',
+      '256',
+      '512',
+      '720',
+      '1080',
+      '1440',
+      '2160',
+    ]);
+    await user.selectOptions(res, 'x3');
+    await waitFor(() =>
+      expect(lastSaved()).toMatchObject({ output_scale: 3, video_target_resolution: 0 }),
+    );
+    await user.selectOptions(res, '512');
+    await waitFor(() => expect(lastSaved()).toMatchObject({ video_target_resolution: 512 }));
+    expect(
+      screen.getByText(
+        'Chosen by you. Fix, Same size, De-flicker and Frame rate need a frame-by-frame model: pick Quick or Best to go back.',
+      ),
+    ).toBeTruthy();
   });
 });

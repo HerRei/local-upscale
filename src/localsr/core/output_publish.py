@@ -22,6 +22,22 @@ class OutputExistsError(FileExistsError):
         )
 
 
+class DiscardOnStop:
+    """The stop signal of the steps after the last frame or tile: set only when the stop
+    discards. A stop that keeps the finished part lets a result that is already complete
+    be saved under its own name, instead of being thrown away at the last moment."""
+
+    def __init__(self, cancel_event: threading.Event, keep) -> None:
+        self._cancel = cancel_event
+        self._keep = keep
+
+    def is_set(self) -> bool:
+        if not self._cancel.is_set():
+            return False
+        keep = self._keep() if callable(self._keep) else bool(self._keep)
+        return not keep
+
+
 def publish_output(
     temporary: str | os.PathLike,
     destination: str | os.PathLike,

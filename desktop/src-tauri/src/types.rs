@@ -91,9 +91,13 @@ pub struct CatalogVideoModel {
     pub family: String,
     pub engine_kind: String,
     pub files: Vec<ModelFile>,
+    #[serde(default)]
     pub license_name: String,
+    #[serde(default)]
     pub license_url: String,
+    #[serde(default)]
     pub author: String,
+    #[serde(default)]
     pub source_url: String,
     pub min_unified_memory_gb: u64,
     pub min_vram_gb: u64,
@@ -101,8 +105,20 @@ pub struct CatalogVideoModel {
     pub temporal_overlap: u32,
     #[serde(default)]
     pub summary: String,
+    /// The library's dots for video models; 0 where a model is not rated.
+    #[serde(default)]
+    pub quality_tier: u32,
+    #[serde(default)]
+    pub speed_tier: u32,
+    #[serde(default)]
     pub commercial_use_allowed: Option<bool>,
+    #[serde(default)]
     pub automated_download_allowed: bool,
+    #[serde(default)]
+    pub redistribution_allowed: bool,
+    #[serde(default)]
+    pub attribution_required: bool,
+    #[serde(default)]
     pub terms_acceptance_required: bool,
     pub engine_id: String,
     pub support_tier: String,
@@ -338,6 +354,13 @@ impl CustomEditModel {
     }
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct CustomModel {
+    pub path: String,
+    pub name: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct UiSettings {
@@ -347,6 +370,16 @@ pub struct UiSettings {
     )]
     pub appearance: String,
     pub colour_blind_palette: bool,
+    #[serde(
+        default = "default_contrast",
+        deserialize_with = "deserialize_contrast"
+    )]
+    pub contrast: String,
+    #[serde(
+        default = "default_viewer_background",
+        deserialize_with = "deserialize_viewer_background"
+    )]
+    pub viewer_background: String,
     pub interface_scale: u32,
     pub batch_mode: bool,
     pub task: String,
@@ -356,6 +389,8 @@ pub struct UiSettings {
     pub selected_video_model_id: String,
     pub fix_stages: Vec<FixStageSelection>,
     pub custom_model_path: String,
+    pub custom_models: Vec<CustomModel>,
+    pub trusted_checkpoint_sha256: Vec<String>,
     pub output_scale: u32,
     pub output_directory: String,
     pub output_format: String,
@@ -441,6 +476,23 @@ pub struct UiSettings {
     pub gpu_download_notice_dismissed: bool,
     #[serde(default)]
     pub linux_menu_prompt_dismissed: bool,
+    // Menu bar / tray icon and per-file completion notification.
+    #[serde(default = "default_true")]
+    pub show_in_menu_bar: bool,
+    #[serde(default = "default_true")]
+    pub notify_on_finish: bool,
+    // macOS: a template (black or white) icon like the system's; false shows the app icon.
+    #[serde(default = "default_true")]
+    pub menu_bar_icon_monochrome: bool,
+    // Remove unused compiled model caches (older than 30 days or over 5 GB) on startup.
+    #[serde(default = "default_true")]
+    pub auto_cache_cleanup: bool,
+    // What happens when stopping a running video job: ask, keep, or discard.
+    #[serde(
+        default = "default_stopped_job_result",
+        deserialize_with = "deserialize_stopped_job_result"
+    )]
+    pub stopped_job_result: String,
 }
 
 fn default_true() -> bool {
@@ -484,6 +536,29 @@ fn default_appearance() -> String {
     "dark".into()
 }
 
+fn default_contrast() -> String {
+    "system".into()
+}
+
+fn default_viewer_background() -> String {
+    "checker".into()
+}
+
+fn default_stopped_job_result() -> String {
+    "ask".into()
+}
+
+fn deserialize_stopped_job_result<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    Ok(if matches!(value.as_str(), "ask" | "keep" | "discard") {
+        value
+    } else {
+        default_stopped_job_result()
+    })
+}
+
 fn deserialize_appearance<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<String, D::Error> {
@@ -495,11 +570,39 @@ fn deserialize_appearance<'de, D: serde::Deserializer<'de>>(
     })
 }
 
+fn deserialize_contrast<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    Ok(
+        if matches!(value.as_str(), "system" | "standard" | "high") {
+            value
+        } else {
+            default_contrast()
+        },
+    )
+}
+
+fn deserialize_viewer_background<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    Ok(
+        if matches!(value.as_str(), "checker" | "black" | "grey" | "white") {
+            value
+        } else {
+            default_viewer_background()
+        },
+    )
+}
+
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
             appearance: default_appearance(),
             colour_blind_palette: false,
+            contrast: default_contrast(),
+            viewer_background: default_viewer_background(),
             interface_scale: 100,
             batch_mode: false,
             task: String::new(),
@@ -508,6 +611,8 @@ impl Default for UiSettings {
             selected_video_model_id: "frame_by_frame".into(),
             fix_stages: Vec::new(),
             custom_model_path: String::new(),
+            custom_models: Vec::new(),
+            trusted_checkpoint_sha256: Vec::new(),
             output_scale: 4,
             output_directory: String::new(),
             output_format: "png".into(),
@@ -556,6 +661,11 @@ impl Default for UiSettings {
             model_directory: String::new(),
             gpu_download_notice_dismissed: false,
             linux_menu_prompt_dismissed: false,
+            show_in_menu_bar: true,
+            notify_on_finish: true,
+            menu_bar_icon_monochrome: true,
+            auto_cache_cleanup: true,
+            stopped_job_result: default_stopped_job_result(),
         }
     }
 }
@@ -622,6 +732,19 @@ pub struct RuntimeStatus {
     /// How long a cancelled job may take to stop before the engine is restarted.
     #[serde(default)]
     pub cancel_grace_seconds: u64,
+    #[serde(default)]
+    pub queue_paused: bool,
+    #[serde(default)]
+    pub frames_processed: u64,
+    #[serde(default)]
+    pub total_frames: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub can_keep_partial: Option<bool>,
+    /// Tiles finished of the running photo stage, for the stop question.
+    #[serde(default)]
+    pub tiles_completed: u64,
+    #[serde(default)]
+    pub tiles_total: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -739,6 +862,13 @@ impl BenchmarkResult {
 impl RuntimeStatus {
     /// Makes `id` the running job or benchmark; the route note belonged to the one before.
     pub fn begin_active_job(&mut self, id: String) {
+        if self.active_job_id != id {
+            self.frames_processed = 0;
+            self.total_frames = 0;
+            self.can_keep_partial = None;
+            self.tiles_completed = 0;
+            self.tiles_total = 0;
+        }
         self.active_job_id = id;
         self.hardware_note.clear();
     }
@@ -747,6 +877,11 @@ impl RuntimeStatus {
     /// send, a killed or crashed engine), and returns its id. Its route note goes with it.
     pub fn take_active_job(&mut self) -> String {
         self.hardware_note.clear();
+        self.frames_processed = 0;
+        self.total_frames = 0;
+        self.can_keep_partial = None;
+        self.tiles_completed = 0;
+        self.tiles_total = 0;
         std::mem::take(&mut self.active_job_id)
     }
 }
@@ -785,6 +920,12 @@ impl Default for RuntimeStatus {
             hardware_note: String::new(),
             engine_retry: false,
             cancel_grace_seconds: 0,
+            queue_paused: false,
+            frames_processed: 0,
+            total_frames: 0,
+            can_keep_partial: None,
+            tiles_completed: 0,
+            tiles_total: 0,
         }
     }
 }
@@ -898,6 +1039,8 @@ pub struct AppSnapshot {
     #[serde(default)]
     pub linux_menu_installed: bool,
     #[serde(default)]
+    pub linux_menu_available: bool,
+    #[serde(default)]
     pub engines: EngineManagerSnapshot,
 }
 
@@ -1002,6 +1145,57 @@ mod tests {
             older.as_object_mut().unwrap().remove("preset_eligible");
             let older: CatalogModel = serde_json::from_value(older).unwrap();
             assert!(older.preset_eligible, "{}", model.model_id);
+        }
+    }
+
+    #[test]
+    fn video_interpolation_and_audio_models_deserialize_attribution_and_defaults() {
+        let catalog: serde_json::Value =
+            serde_json::from_str(include_str!("../resources/model-catalog.json")).unwrap();
+        for section in ["video_models", "interpolation_models", "audio_models"] {
+            let entries = catalog[section].as_array().unwrap();
+            assert!(!entries.is_empty(), "{section} must not be empty");
+            for entry in entries {
+                let model: CatalogVideoModel = serde_json::from_value(entry.clone()).unwrap();
+                assert!(!model.author.is_empty(), "{}", model.model_id);
+                assert!(
+                    model.source_url.starts_with("https://"),
+                    "{}",
+                    model.model_id
+                );
+                assert!(!model.license_name.is_empty(), "{}", model.model_id);
+                assert!(
+                    model.license_url.starts_with("https://"),
+                    "{}",
+                    model.model_id
+                );
+                assert_eq!(
+                    model.attribution_required,
+                    !matches!(model.license_name.as_str(), "MIT" | "MIT OR Apache-2.0"),
+                    "{}",
+                    model.model_id
+                );
+
+                let mut minimal = entry.clone();
+                let obj = minimal.as_object_mut().unwrap();
+                for key in [
+                    "author",
+                    "source_url",
+                    "license_name",
+                    "license_url",
+                    "commercial_use_allowed",
+                    "automated_download_allowed",
+                    "redistribution_allowed",
+                    "attribution_required",
+                    "terms_acceptance_required",
+                ] {
+                    obj.remove(key);
+                }
+                let fallback: CatalogVideoModel = serde_json::from_value(minimal).unwrap();
+                assert_eq!(fallback.author, "");
+                assert!(!fallback.attribution_required);
+                assert!(!fallback.redistribution_allowed);
+            }
         }
     }
 

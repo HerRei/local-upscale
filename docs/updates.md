@@ -11,14 +11,12 @@ is disabled.
 Windows and Linux. It opens Software Update: choose the Stable or Beta channel,
 check for a compatible release, read its notes and total download size, download
 it, and install and restart. The beta also checks its feed once at launch and shows
-a notice when a newer build exists. **Check for Updates at Launch**, next to
-**Check for Updates…**, or the matching box in the update dialog, turns that launch
-check off from the next launch (setting `check_updates_at_launch`); asking with
-**Check for Updates…** still works. Both switches can change while jobs run, and the
-menu shows them only in builds that check a signed feed (`checks_for_updates()`: a
-direct build compiled with its update identity). The host saves them on their own
-(`set_update_switch`); a full settings save never changes them, so a window that has
-not caught up cannot turn an opt-out back on. Downloads can run while jobs are
+a notice when a newer build exists. **Check for updates when LocalSR starts** in
+**Settings → Privacy & updates** turns that launch check off from the next launch
+(setting `check_updates_at_launch`); asking with **Check for Updates…** still
+works. App-wide preferences are saved on their own (`set_preference`); a full
+settings save never overwrites them, so a window that has not caught up cannot
+turn an opt-out back on. Downloads can run while jobs are
 processing; installation waits until the queue, any cancellation and any model
 download have finished, and the native host enforces that as well as the interface.
 
@@ -71,6 +69,15 @@ How the verified package is installed depends on the edition:
   run from its AppImage (no `APPIMAGE`, or the host outside `APPDIR`) refuses the
   update, and the AppImage's folder must be writable.
 - **Portable Linux host** (`portable` kind): see [Feed format](#feed-format).
+- **Debian package** (`deb` kind): apt owns the files under `/usr`, so the app never
+  downloads or installs an app update (`download_update` and `install_update` refuse).
+  It has no feed entry: a check reads and verifies the signed `native` entry of the
+  same backend (`UpdateConfig::feed_config()`, `linux-x86_64-cpu-native`) and only
+  reports the version, with the download page as its action
+  (`managed_by_package_manager` in the status). Engine downloads read the `native`
+  engine entries the same way and install into the app-data folder. The launch check,
+  the count (`t=linux-x86_64-cpu-deb`) and the Help menu switches work as for an
+  AppImage; the AppImage's applications-menu offer does not appear.
 
 ### Anonymous update-check count
 
@@ -80,9 +87,8 @@ for example `v=0.1.6-beta&t=darwin-aarch64-mps-native&c=beta` or
 `t=windows-x86_64-cuda-native`. It carries no install or user ID and no cookies,
 times out after five seconds and never affects the check. The usage counter counts active
 installs per day without storing the IP address (see `packaging/hosting/stats/`).
-Turn it off with **Send Anonymous Update Count** (LocalSR menu on macOS, Help menu
-on Windows and Linux) or **Send an anonymous update-check count** in the update
-dialog (setting `anonymous_update_count`). With the launch check off, the count is
+Turn it off with **Send an anonymous count with each update check** in
+**Settings → Privacy & updates** (setting `anonymous_update_count`). With the launch check off, the count is
 sent only after a check you ask for. Store editions and loopback test feeds never
 send it; `LOCALSR_USAGE_PING` points a build at another HTTPS endpoint.
 
@@ -97,7 +103,7 @@ means rebuilding the Rust host.
 | `LOCALSR_UPDATE_FEED` | HTTPS directory containing `stable.json` and `beta.json` |
 | `LOCALSR_UPDATE_BACKEND` | The package's engine: `cpu`, `cuda`, `rocm`, `directml`, `mps` |
 | `LOCALSR_ENGINE_ID` | Immutable identity of the bundled engine build |
-| `LOCALSR_UPDATE_KIND` | `native` for Tauri updater artifacts, `portable` for the unpacked Linux host |
+| `LOCALSR_UPDATE_KIND` | `native` for Tauri updater artifacts, `portable` for the unpacked Linux host, `deb` for the Debian package (updated by apt) |
 
 Each release target in `ci/tauri-targets.json` names its update `backend` and
 `kind`. The Windows and Linux workflows set the variables with
@@ -118,6 +124,7 @@ The platform key in a feed is `<os>-<architecture>-<backend>-<kind>`:
 | Windows CUDA, CPU, DirectML | `windows-x86_64-cuda-native`, `windows-x86_64-cpu-native`, `windows-x86_64-directml-native` |
 | Linux CPU, CUDA, ROCm AppImage | `linux-x86_64-cpu-native`, `linux-x86_64-cuda-native`, `linux-x86_64-rocm-native` |
 | Unpacked Linux host | `linux-x86_64-<backend>-portable` |
+| Linux CPU .deb | `linux-x86_64-cpu-deb` (no feed entry; reads `linux-x86_64-cpu-native`) |
 
 The Stable channel rejects prereleases, and both channels reject entries whose
 backend, package kind or worker protocol do not match the installed build. The
@@ -229,15 +236,17 @@ who do need that engine:
 ```json
 {
   "id": "new-engine-id",
-  "manifest": { "name": "worker.engine-payload.json", "url": "…", "size": 1234, "sha256": "…", "signature": "…" },
+  "manifest": { "name": "worker.engine-update.json", "url": "…", "size": 1234, "sha256": "…", "signature": "…" },
   "parts": [
     { "name": "worker.engine.tar.gz.part-0001", "url": "…", "size": 123456, "sha256": "…", "signature": "…" }
   ]
 }
 ```
 
-The manifest uses `schema_version: 2` (the client also reads `schema_version: 1`
-from previously published feeds) and `format: tar.gz.parts` with the backend
+The feed names the update form of the engine manifest, `schema_version: 1`, because
+every installed release since 0.4.0 reads that form and refuses any other field
+([releasing](releasing.md#older-releases)). The full manifest beside it, used for
+offline import and by the installers, uses `schema_version: 2` and `format: tar.gz.parts` with the backend
 (`CUDA`, `ROCM`, `CPU`, `MPS` or `DIRECTML`), `version`, `os` (`windows`, `linux`
 or `macos`), `arch` (`x86_64` or `aarch64`), `protocol_version`, `engine_id`,
 file count, unpacked size and per-part checksums. Every part and the manifest are
@@ -330,9 +339,7 @@ database including its WAL, and copies the profile to `LocalSR/next/backups`. A
 version marker makes the next app version back up existing data before it opens
 or migrates the database. Downloaded models are never moved or removed.
 
-Settings that cannot be read, or that come from a newer version, are never
-overwritten by a routine save. The app offers to keep the original as a recovery
-copy and start with defaults; recipes in that file can be recovered by hand.
+Settings that cannot be read are never overwritten by a routine save. The app offers to keep the original as a recovery copy and start with defaults; recipes in that file can be recovered by hand. Settings from a newer version are left untouched, and this version uses defaults without saving changes. They do not block an update.
 
 An AppImage or portable Linux update runs a startup smoke check of the new host
 before removing the previous one, restores it if the check fails, and rolls back at
@@ -416,33 +423,46 @@ or AppImage:
   restarts. `import_engine` installs a downloaded `*.engine-payload.json` and its
   parts from disk using companion `.sig` files (or matching verified catalog
   signatures). Both verify minisign signatures and SHA-256 digests, unpack the
-  engine, run the worker protocol handshake, hold the job lock while swapping the
-  engine and activating `active-engine.txt`, write host metadata (`meta.json`)
-  including every extracted file's relative path, size and SHA-256 digest, and
-  keep the previous backup until activation succeeds. For schema 2 manifests,
+  engine and run its protocol handshake in a staging folder. Under the job lock,
+  LocalSR renames the payload and its `meta.json` together and activates the
+  engine through `active-engine.txt`. The metadata records every extracted file's
+  relative path, size and SHA-256 digest. For a same-ID replacement, LocalSR keeps
+  the previous payload and metadata until the replacement completes its first
+  normal worker handshake. A start that finds an incomplete or invalid replacement
+  can restore the previous copy after verifying it. An app-update rollback also
+  restores the previous engine when the update replaced it. For schema 2 manifests,
   `import_engine` also refuses packages for another OS, architecture or protocol
   version, or a version older than the installed version of that backend. Both
   test a staged engine before replacing an existing one. Installed engine folders
   need metadata from a verified install before they can be selected. Older
-  metadata from a handshake alone is not enough. These engines show **Needs
-  reinstall**; choose **Use** to download and install the signed engine again. An
-  interrupted replacement restores its backup at startup or on the next import
-  and discards ambiguous metadata, so that engine needs reinstall too. If a job
+  metadata from a handshake alone is insufficient. These engines show **Needs
+  reinstall**. Choose **Use** to download and install the signed engine again.
+  Recovery also handles older backups that contain only a payload. LocalSR can
+  start a recovered payload when the remaining metadata verifies it. If a job
   starts during a download or handshake, the swap is refused before replacing the
   active engine and can be retried once the job ends. Network fetches are refused
   before `privacy_choice_made`, in Store editions, while jobs run, or when free
   disk space is insufficient.
 - **Switching, verification, fallback and app updates.** `use_engine` switches
   between installed engines and the bundled CPU fallback; `remove_engine`
-  deletes an inactive engine folder. At worker start, LocalSR runs a quick check
-  that every recorded engine file is present at its recorded size. The **Verify**
-  button in the Engine dialog runs `verify_engine` for a full SHA-256 check of
-  every recorded file. If either check fails, the engine is marked **Needs
-  reinstall**, `active-engine.txt` is cleared if it was active, and LocalSR
+  deletes an inactive engine folder. Listing, starting, verifying, staging and
+  removing engines require real directories under `engines/`. LocalSR refuses
+  symbolic links and Windows reparse points, including junctions. At every worker
+  start, LocalSR checks file sizes and hashes the worker executable, native
+  libraries, Python code and archives such as `base_library.zip`, and the native
+  editing helper. It rejects code files missing from the recorded file list.
+  Startup verification runs in the background with the bundled engine available
+  as fallback. The **Verify** button runs a full SHA-256 check of every recorded
+  file. If verification fails and no previous copy can be recovered at startup,
+  LocalSR marks the engine **Needs reinstall**, clears its active selection and
   falls back to the bundled engine. Failed installed engines are excluded until
-  the user selects Use or reimports them, and the restart limit also applies to
-  the bundled engine. App updates keep the user's chosen backend and update that
-  backend's engine alongside the host.
+  the user selects Use or reimports them. App updates keep the user's chosen backend
+  and update that backend's engine alongside the host.
+
+  The publisher signs the payload manifest and archive parts. LocalSR derives the
+  per-file hashes during verified extraction and saves them in app data. Later
+  checks compare the engine files with that local record. Authenticating the record
+  independently would require a signed file list or a trust anchor outside app data.
 - **Interface.** After the first-launch setup screen's Continue, if the recommended
   GPU engine is not installed, LocalSR offers one dismissable card to download it
   (remembered via `gpu_download_notice_dismissed`). The same engines, progress,

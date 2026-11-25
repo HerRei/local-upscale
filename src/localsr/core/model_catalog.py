@@ -19,6 +19,21 @@ CATALOG_BASE_URL = (
 HAT_SOURCE_URL = "https://github.com/XPixelGroup/HAT"
 PROJECT_URL = "https://github.com/HerRei/local-upscale"
 
+LICENSE_URLS: dict[str, str] = {
+    "Apache-2.0": "https://www.apache.org/licenses/LICENSE-2.0",
+    "BSD-3-Clause": "https://opensource.org/license/bsd-3-clause",
+    "CC BY 4.0": "https://creativecommons.org/licenses/by/4.0/",
+    "CC-BY-4.0": "https://creativecommons.org/licenses/by/4.0/",
+    "CC BY-NC-SA 4.0": "https://creativecommons.org/licenses/by-nc-sa/4.0/",
+    "MIT": "https://opensource.org/license/mit",
+    "MIT OR Apache-2.0": "https://opensource.org/license/mit",
+}
+
+
+def license_url_for(license_name: str) -> str:
+    """Canonical license text URL for known catalog licenses, or empty when unverified."""
+    return LICENSE_URLS.get(license_name.strip(), "")
+
 
 class ModelPurpose(StrEnum):
     GENERAL = "general"
@@ -152,6 +167,10 @@ class CatalogModel:
     @property
     def purpose(self) -> ModelPurpose:
         return self.purposes[0] if self.purposes else ModelPurpose.GENERAL
+
+    @property
+    def license_url(self) -> str:
+        return license_url_for(self.license_name)
 
 
 # The detector is infrastructure for the optional face-aware path rather than
@@ -348,6 +367,35 @@ MODEL_CATALOG = (
         vram_estimate_mb=4000,
     ),
     CatalogModel(
+        model_id="esrgan_hfa2k_x4",
+        role="Best anime and illustration; keeps colours and fine lines",
+        stage="upscale",
+        name="ESRGAN 4x HFA2k — Best",
+        filename="4xHFA2k.pth",
+        description=(
+            "23-block ESRGAN ×4 upscaler trained on high-frequency anime frames (HFA2k) with "
+            "light JPEG and blur degradations. Keeps flat colours, paper whites, QR codes, and "
+            "crisp line art."
+        ),
+        size_bytes=33_676_982,
+        sha256="74fa66be8d316a7db40292e9c1dd13ffced8e838bd4351284dc0d7422e1a0743",
+        download_url="https://github.com/Phhofm/models/releases/download/4xHFA2k/4xHFA2k.pth",
+        architecture="ESRGAN",
+        native_scale=4,
+        purposes=(ModelPurpose.ILLUSTRATION, ModelPurpose.ANIME),
+        quality_tier=QualityTier.MAXIMUM,
+        speed_tier=SpeedTier.MEDIUM,
+        recommended_halo=16,
+        source_url="https://github.com/Phhofm/models/releases/tag/4xHFA2k",
+        license_name="CC BY 4.0",
+        author="Philip Hofmann",
+        memory_factor=1.05,
+        time_factor=1.0,
+        speed_factor=0.55,
+        vram_estimate_mb=1800,
+        commercial_use_status="allowed",
+    ),
+    CatalogModel(
         model_id="realplksr_hfa2k_anime_x4",
         role="Anime and illustration · high quality",
         stage="upscale",
@@ -376,6 +424,68 @@ MODEL_CATALOG = (
         time_factor=0.85,
         speed_factor=0.85,
         vram_estimate_mb=800,
+        commercial_use_status="allowed",
+    ),
+    CatalogModel(
+        model_id="localsr_quick_x4_v1",
+        role="Fast everyday photos; Neural Engine and tiny download",
+        stage="upscale",
+        name="LocalSR Photo S",
+        filename="4xLocalSRPhoto_PULSE-64x8.safetensors",
+        description=(
+            "Compact ×4 photo upscaler (PULSE, 0.62M parameters) trained on CC0 photos. "
+            "Runs entirely on Apple's Neural Engine."
+        ),
+        size_bytes=2_479_984,
+        sha256="73e4b540753cbe8ba2897cef2c6c3e8e51436835fa6c67217a997c3e1b13ea17",
+        download_url=(
+            "https://github.com/HerRei/localsr-models/releases/download/v1/"
+            "4xLocalSRPhoto_PULSE-64x8.safetensors"
+        ),
+        architecture="PULSE",
+        native_scale=4,
+        purposes=(ModelPurpose.PHOTO,),
+        quality_tier=QualityTier.HIGH,
+        speed_tier=SpeedTier.FAST,
+        recommended_halo=32,
+        source_url="https://github.com/HerRei/localsr-models",
+        license_name="CC BY 4.0",
+        author="Hermes Reisner",
+        memory_factor=0.50,
+        time_factor=0.35,
+        speed_factor=0.98,
+        vram_estimate_mb=500,
+        commercial_use_status="allowed",
+    ),
+    CatalogModel(
+        model_id="localsr_best_x4_v1",
+        role="Detailed photos and soft camera shots; Neural Engine",
+        stage="upscale",
+        name="LocalSR Photo M",
+        filename="4xLocalSRPhoto_PULSE-96x12.safetensors",
+        description=(
+            "×4 photo upscaler (PULSE, 2.03M parameters) trained on CC0 photos including a "
+            "camera lens-blur regime. Runs entirely on Apple's Neural Engine."
+        ),
+        size_bytes=8_142_848,
+        sha256="5446207377284658a3c306dd5eac0aa2662f4f9344ee10f59ea3ab4ec67c18c1",
+        download_url=(
+            "https://github.com/HerRei/localsr-models/releases/download/v1/"
+            "4xLocalSRPhoto_PULSE-96x12.safetensors"
+        ),
+        architecture="PULSE",
+        native_scale=4,
+        purposes=(ModelPurpose.PHOTO,),
+        quality_tier=QualityTier.MAXIMUM,
+        speed_tier=SpeedTier.MEDIUM,
+        recommended_halo=32,
+        source_url="https://github.com/HerRei/localsr-models",
+        license_name="CC BY 4.0",
+        author="Hermes Reisner",
+        memory_factor=0.65,
+        time_factor=0.55,
+        speed_factor=0.88,
+        vram_estimate_mb=700,
         commercial_use_status="allowed",
     ),
     CatalogModel(
@@ -798,10 +908,18 @@ class CatalogVideoModel:
     temporal_window: int
     temporal_overlap: int
     summary: str = ""
+    # The library's dots, on the image models' scales: quality 1 to 4, speed 0 to 3.
+    # Speed 0 is slower than any frame-by-frame model. Quality 0 means not rated.
+    quality_tier: int = 0
+    speed_tier: int = 0
 
     @property
     def total_size_bytes(self) -> int:
         return sum(file.size_bytes for file in self.files)
+
+    @property
+    def license_url(self) -> str:
+        return license_url_for(self.license_name)
 
 
 # Immutable revision-pinned URLs: numz/SeedVR2_comfyUI at commit
@@ -816,6 +934,17 @@ _SEEDVR2_VAE = ModelFile(
     size_bytes=501_324_814,
     sha256="20678548f420d98d26f11442d3528f8b8c94e57ee046ef93dbb7633da8612ca1",
     download_url=f"{_SEEDVR2_BASE}/ema_vae_fp16.safetensors?download=true",
+)
+
+# Immutable revision-pinned URLs: JunhaoZhuang/FlashVSR-v1.1 at commit
+# 2aa7e1f3ab50e743537d1eca243fb0bff442b336 (model card: Apache-2.0). Sizes and SHA-256
+# digests are the HuggingFace LFS metadata of that revision. The Tiny pipeline does not
+# use the repository's Wan2.1 VAE, so the bundle leaves it out. The two .ckpt files are
+# pickles; the engine loads them with torch.load(weights_only=True) after the bundle's
+# SHA-256 check.
+_FLASHVSR_BASE = (
+    "https://huggingface.co/JunhaoZhuang/FlashVSR-v1.1/resolve/"
+    "2aa7e1f3ab50e743537d1eca243fb0bff442b336"
 )
 
 VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
@@ -847,6 +976,8 @@ VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
         min_vram_gb=16,
         temporal_window=9,
         temporal_overlap=2,
+        quality_tier=QualityTier.ULTRA,
+        speed_tier=0,
     ),
     CatalogVideoModel(
         model_id="seedvr2_3b_fp8",
@@ -878,6 +1009,55 @@ VIDEO_MODEL_CATALOG: tuple[CatalogVideoModel, ...] = (
         min_vram_gb=12,
         temporal_window=9,
         temporal_overlap=2,
+        quality_tier=QualityTier.ULTRA,
+        speed_tier=0,
+    ),
+    CatalogVideoModel(
+        model_id="flashvsr_v11",
+        name="FlashVSR v1.1 — Labs",
+        description=(
+            "Experimental one-step diffusion video upscaling (Tiny pipeline) for Apple silicon "
+            "(MLX), AMD ROCm on Linux and NVIDIA CUDA. Tiles large frames, so jobs can take "
+            "hours. Needs 16 GB unified or 12 GB GPU memory. SDR output only."
+        ),
+        family="flashvsr_v11",
+        engine_kind="flashvsr",
+        files=(
+            ModelFile(
+                role="dit",
+                filename="diffusion_pytorch_model_streaming_dmd.safetensors",
+                size_bytes=5_676_070_392,
+                sha256="bd28180edcf3446c028e32fc6b731a80bf7e4da2ab4caac3186b9499964d37be",
+                download_url=(
+                    f"{_FLASHVSR_BASE}/diffusion_pytorch_model_streaming_dmd.safetensors"
+                    "?download=true"
+                ),
+            ),
+            ModelFile(
+                role="lq_proj",
+                filename="LQ_proj_in.ckpt",
+                size_bytes=575_694_948,
+                sha256="d6d011cdaaba6a52645086caa08fa04124e746f6ca568140a24007591142bfd2",
+                download_url=f"{_FLASHVSR_BASE}/LQ_proj_in.ckpt?download=true",
+            ),
+            ModelFile(
+                role="tcdecoder",
+                filename="TCDecoder.ckpt",
+                size_bytes=189_018_333,
+                sha256="e224bdcf2f52745cbf4d393ff5374c2ba09e90285d5d19062d2bf63b915b6161",
+                download_url=f"{_FLASHVSR_BASE}/TCDecoder.ckpt?download=true",
+            ),
+        ),
+        license_name="Apache-2.0",
+        author="Junhao Zhuang et al. · OpenImagingLab",
+        source_url="https://github.com/OpenImagingLab/FlashVSR",
+        min_unified_memory_gb=16,
+        min_vram_gb=12,
+        # 37 frames + 4 repeated = 41 = 8*5 + 1: the stream yields exactly 37 frames.
+        temporal_window=37,
+        temporal_overlap=8,
+        quality_tier=QualityTier.MAXIMUM,
+        speed_tier=SpeedTier.SLOW,
     ),
 )
 VIDEO_CATALOG_BY_ID = {model.model_id: model for model in VIDEO_MODEL_CATALOG}

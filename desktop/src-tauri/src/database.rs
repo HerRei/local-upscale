@@ -30,6 +30,14 @@ pub struct PendingJob {
     pub request_json: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct RetryJobSource {
+    pub media_id: String,
+    pub status: String,
+    pub request_json: String,
+    pub ui_json: String,
+}
+
 /// A scratch folder an earlier run made for a job and recorded with it, and the
 /// output that job was asked to write.
 #[derive(Clone, Debug)]
@@ -192,6 +200,18 @@ impl Database {
         if !has_scratch {
             connection.execute(
                 "ALTER TABLE jobs ADD COLUMN scratch_path TEXT NOT NULL DEFAULT ''",
+                [],
+            )?;
+        }
+        // What a job stopped with its finished part kept left behind (results.rs reads it).
+        let has_partial: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('jobs') WHERE name='partial_json')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_partial {
+            connection.execute(
+                "ALTER TABLE jobs ADD COLUMN partial_json TEXT NOT NULL DEFAULT ''",
                 [],
             )?;
         }
@@ -607,7 +627,10 @@ impl Database {
             crate::results::SUMMARY_COLUMNS
         ))?;
         let rows = statement.query_map([], |row| {
-            Ok((row.get::<_, String>(10)?, summary_from_row(row)?))
+            Ok((
+                row.get::<_, String>(crate::results::SUMMARY_COLUMN_COUNT)?,
+                summary_from_row(row)?,
+            ))
         })?;
         for row in rows {
             let (id, result) = row?;
@@ -833,6 +856,37 @@ impl Database {
             .optional()?)
     }
 
+    pub fn queued_job_count(&self) -> AppResult<usize> {
+        let count: i64 = self.connection.query_row(
+            "SELECT COUNT(*) FROM jobs WHERE status='queued'",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(usize::try_from(count.max(0)).unwrap_or(0))
+    }
+
+    pub fn job_media_name(&self, id: &str) -> AppResult<Option<String>> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT media.name FROM jobs JOIN media ON media.id = jobs.media_id WHERE jobs.id=?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn active_job_tray_info(&self, id: &str) -> AppResult<Option<(String, String)>> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT media.name, jobs.request_json FROM jobs JOIN media ON media.id = jobs.media_id WHERE jobs.id=?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?)
+    }
+
     /// The first queued jobs in queue order, for a photo batch.
     pub fn queued_job_window(&self, limit: usize) -> AppResult<Vec<PendingJob>> {
         let mut statement = self.connection.prepare(
@@ -900,6 +954,24 @@ impl Database {
         Ok(())
     }
 
+    pub fn job_for_cpu_retry(&self, id: &str) -> AppResult<Option<RetryJobSource>> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT media_id, status, request_json, COALESCE(ui_json, '') FROM jobs WHERE id=?1",
+                [id],
+                |row| {
+                    Ok(RetryJobSource {
+                        media_id: row.get(0)?,
+                        status: row.get(1)?,
+                        request_json: row.get(2)?,
+                        ui_json: row.get(3)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
     pub fn update_job_progress(&self, id: &str, progress: f64) -> AppResult<()> {
         self.connection.execute(
             "UPDATE jobs SET status=CASE WHEN status='cancelling' THEN status ELSE 'running' END,
@@ -916,6 +988,15 @@ impl Database {
             "UPDATE jobs SET status=?2, progress=?3, output_path=?4, error=?5, updated_at=?6 WHERE id=?1
              AND status NOT IN ('completed','failed','cancelled','interrupted')",
             params![id, status, progress, output, error, now_millis()],
+        )?;
+        Ok(())
+    }
+
+    /// The kept part of a stopped job: frames and seconds of a video, tiles of a photo.
+    pub fn record_partial(&self, id: &str, partial: &serde_json::Value) -> AppResult<()> {
+        self.connection.execute(
+            "UPDATE jobs SET partial_json=?2 WHERE id=?1 AND status='completed'",
+            params![id, partial.to_string()],
         )?;
         Ok(())
     }

@@ -41,8 +41,24 @@ datas = spandrel_datas + [
         "localsr/video_models/seedvr2",
     ),
     (
+        str(SOURCE / "localsr" / "video_models" / "flashvsr"),
+        "localsr/video_models/flashvsr",
+    ),
+    (
         str(SOURCE / "localsr" / "image_models" / "ddcolor" / "NOTICE.md"),
         "localsr/image_models/ddcolor",
+    ),
+    (
+        str(SOURCE / "localsr" / "image_models" / "heart" / "NOTICE.md"),
+        "localsr/image_models/heart",
+    ),
+    (
+        str(SOURCE / "localsr" / "image_models" / "nerve" / "NOTICE.md"),
+        "localsr/image_models/nerve",
+    ),
+    (
+        str(SOURCE / "localsr" / "image_models" / "pulse" / "NOTICE.md"),
+        "localsr/image_models/pulse",
     ),
     (
         str(SOURCE / "localsr" / "video_models" / "rife" / "NOTICE.md"),
@@ -140,11 +156,23 @@ if sys.platform == "darwin" and find_spec("coremltools") is not None:
         "pyobjc-core", "pyobjc-framework-Cocoa", "pyobjc-framework-CoreML",
     ):
         datas += copy_metadata(distribution)
+mlx_hidden = []
+if sys.platform == "darwin" and find_spec("mlx") is not None:
+    # FlashVSR (Labs) runs on Metal through MLX. libmlx loads mlx.metallib from its own
+    # directory, so the package keeps its layout; headers and CMake files stay out.
+    mlx_datas, mlx_binaries, mlx_hidden = collect_all(
+        "mlx", exclude_datas=["include/**", "lib/cmake/**", "share/**"]
+    )
+    if not any(Path(entry[0]).name == "mlx.metallib" for entry in mlx_datas):
+        raise RuntimeError("The MLX Metal library (mlx.metallib) must be bundled")
+    datas += mlx_datas + copy_metadata("mlx") + copy_metadata("mlx-metal")
+    spandrel_binaries += mlx_binaries
 hiddenimports = sorted(
     set(
         spandrel_hidden
         + onnx_hidden
         + coreml_hidden
+        + mlx_hidden
         + collect_submodules("spandrel")
         + [
             "PIL._tkinter_finder",
@@ -305,6 +333,21 @@ if openvino_package_libraries:
         if (duplicate.is_file() or duplicate.is_symlink()) and (plugin_directory / name).exists():
             duplicate.unlink()
             print(f"Removed the top-level copy of {name}")
+
+# The mlx module loads the top-level copy of libmlx.dylib (PyInstaller sets its library path
+# to @loader_path/..), and libmlx loads mlx.metallib from its own directory. Left in mlx/lib,
+# importing mlx.core aborts the worker (SIGTRAP in mlx::core::metal::Device) before the
+# handshake. A link would be copied as a second 214 MB file by the app bundler, so the
+# library moves to the top level; the copy of libmlx.dylib in mlx/lib is never loaded.
+if sys.platform == "darwin" and find_spec("mlx") is not None:
+    internal = Path(DISTPATH) / "engine" / "_internal"
+    metallib = internal / "mlx" / "lib" / "mlx.metallib"
+    if not (internal / "libmlx.dylib").is_file():
+        raise RuntimeError("Expected libmlx.dylib at the top level of the engine folder")
+    if not metallib.is_file():
+        raise RuntimeError(f"The MLX Metal library is missing: {metallib}")
+    metallib.replace(internal / "mlx.metallib")
+    print("Moved mlx.metallib next to the libmlx.dylib that Python loads")
 
 # Fail the build if any bundled media component falls outside the codec policy
 # (GPL/patent-licensed codecs such as x264, x265, H.264, HEVC or AAC). Private,

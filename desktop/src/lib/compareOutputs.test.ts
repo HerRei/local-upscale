@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { outputGroups } from './compareOutputs';
+import { detailLines, outputGroups, resultDetails } from './compareOutputs';
 import type { ComparePick, MediaItem, MediaResults, ResultSummary } from './types';
 
 describe('Outputs list histories', () => {
@@ -32,6 +32,96 @@ describe('Outputs list histories', () => {
       pick: { kind: 'output', media_id: 'a', job_id: 'old' },
       result: histories[2].results[2],
     });
+  });
+});
+
+it('formats recorded details in order and leaves absent older fields out', () => {
+  const saved = {
+    stages: [
+      { kind: 'restore', model_id: 'a', model_label: 'Fix' },
+      { kind: 'upscale', model_id: 'b', model_label: 'Upscale' },
+    ],
+    ui: { fixes: ['blur', 'noise'] },
+    scale: 4,
+    elapsed_seconds: 31,
+    device: 'cuda:0',
+    completed_at: 1700000000000,
+  } as ResultSummary;
+  expect(resultDetails(saved, 400, 300)).toEqual([
+    'Models: Fix → Upscale',
+    'Fixes: Blur → Noise',
+    'Scale: 4×',
+    'Output: 400 × 300',
+    'Time: 31s',
+    'Requested device: cuda:0',
+    `Date: ${new Date(saved.completed_at).toLocaleDateString()}`,
+  ]);
+  expect(
+    resultDetails({
+      model_label: 'SPAN',
+      device: 'mps',
+      neural_engine: true,
+    } as ResultSummary),
+  ).toEqual(['Models: SPAN', 'Requested device: mps · Neural Engine enabled']);
+  expect(
+    resultDetails({
+      model_label: 'SPAN',
+      device: 'mps',
+      neural_engine: false,
+    } as ResultSummary),
+  ).toEqual(['Models: SPAN', 'Requested device: mps']);
+  expect(resultDetails({ model_label: 'Unknown model' } as ResultSummary)).toEqual([]);
+  expect(
+    resultDetails({
+      kind: 'video',
+      model_label: 'Frame by frame',
+      partial: true,
+      kept_seconds: 5,
+      output_duration_seconds: 12,
+    } as ResultSummary),
+    // The Unfinished mark heads the slot's details; it is not one of the facts.
+  ).toEqual(['Models: Frame by frame']);
+});
+
+describe('the lines of the details strip', () => {
+  const facts = [
+    'Models: NAFNet GoPro Deblur → SPAN ×4 NomosUni',
+    'Fixes: Blur',
+    'Scale: 4×',
+    'Output: 5760 × 7680',
+    'Time: 1:40',
+    'Requested device: mps · Neural Engine enabled',
+    'Date: 11/23/2026',
+  ];
+  it('gives models and fixes a line each and shares the rest over what is left', () => {
+    expect(detailLines(facts)).toEqual([
+      [facts[0]],
+      [facts[1]],
+      [facts[2], facts[3], facts[4]],
+      [facts[5], facts[6]],
+    ]);
+    // Without fixes the short facts spread over three lines.
+    expect(detailLines(facts.filter((fact) => !fact.startsWith('Fixes')))).toEqual([
+      [facts[0]],
+      [facts[2], facts[3]],
+      [facts[4], facts[5]],
+      [facts[6]],
+    ]);
+    expect(detailLines(['Size: 1440 × 1920'])).toEqual([['Size: 1440 × 1920']]);
+    expect(detailLines([])).toEqual([]);
+  });
+  it('never takes more lines than the strip has, whatever a job recorded', () => {
+    const long = `Models: ${Array.from({ length: 40 }, (_, index) => `Model ${index}`).join(' → ')}`;
+    for (const lines of [3, 4]) {
+      for (let count = 0; count <= 12; count += 1) {
+        const many = [long, 'Fixes: Noise → JPEG artifacts → Blur → Colour → Faces'].concat(
+          Array.from({ length: count }, (_, index) => `Fact ${index}: value`),
+        );
+        const packed = detailLines(many, lines);
+        expect(packed.length).toBeLessThanOrEqual(lines);
+        expect(packed.flat()).toEqual(many);
+      }
+    }
   });
 });
 

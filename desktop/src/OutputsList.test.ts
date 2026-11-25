@@ -278,3 +278,90 @@ it('disables the opposite media kind in both directions and resets after Unpick 
   expect(imageBox().disabled).toBe(false);
   expect(videoBox().disabled).toBe(false);
 });
+
+it('flags kept partial video results with Unfinished and kept vs total duration', () => {
+  const clip = {
+    ...media,
+    id: 'v',
+    name: 'clip.mp4',
+    kind: 'video',
+    duration_seconds: 12,
+  } as MediaItem;
+  const outputs = [
+    result('v-part', {
+      kind: 'video',
+      model_label: 'Frame by frame',
+      output_name: 'clip_partial_0m05s.mp4',
+      output_duration_seconds: 12,
+      output_fps: 24,
+      size_bytes: 1024,
+      partial: true,
+      kept_seconds: 5,
+      ui: null,
+    }),
+    result('v-part-unknown', {
+      kind: 'video',
+      model_label: 'Frame by frame',
+      output_duration_seconds: 0,
+      partial: true,
+      kept_seconds: 0,
+      ui: null,
+    }),
+  ];
+  render(OutputsList, {
+    ...props([]),
+    groups: outputGroups([clip], [{ media_id: 'v', results: outputs }] as MediaResults[]),
+  });
+  const rows = [...document.querySelectorAll<HTMLElement>('.media-copy')];
+  expect(rows[1].textContent).toContain('Unfinished · 0:05 of 0:12');
+  expect(rows[2].textContent).toContain('Unfinished');
+});
+
+it('counts a short kept video in frames and marks an unfinished photo with its tiles', () => {
+  const clip = {
+    ...media,
+    id: 'v',
+    name: 'clip.mov',
+    kind: 'video',
+    duration_seconds: 2,
+    fps: 27,
+  } as MediaItem;
+  const histories = [
+    {
+      media_id: 'v',
+      results: [
+        result('v-two-frames', {
+          kind: 'video',
+          output_fps: 27,
+          partial: true,
+          kept_seconds: 0.074,
+          kept_frames: 2,
+          ui: null,
+        }),
+      ],
+    },
+    {
+      media_id: 'a',
+      results: [
+        result('p-part', {
+          output_name: 'Lake_upscaled_4x_partial.png',
+          partial: true,
+          finished_tiles: [
+            [0, 0, 1024, 1024],
+            [1024, 0, 1024, 1024],
+            [2048, 0, 1024, 1024],
+          ],
+          total_tiles: 35,
+        }),
+      ],
+    },
+  ] as MediaResults[];
+  render(OutputsList, { ...props([]), groups: outputGroups([clip, media], histories) });
+  const rows = [...document.querySelectorAll<HTMLElement>('.media-copy')].map(
+    (row) => row.textContent ?? '',
+  );
+  // Two frames of a two-second clip, never "0:00 of 0:02".
+  expect(rows[1]).toContain('Unfinished · 2 of 54 frames');
+  expect(rows[1]).not.toContain('0:00');
+  expect(rows[3]).toContain('Unfinished · 3 of 35 tiles · Quick · 4×');
+});
