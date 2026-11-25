@@ -440,9 +440,15 @@ class InferenceEngine:
         device = (
             torch.device("cpu") if onnx_route is not None else _resolve_torch_device(device_str)
         )
+        # The CPU runs FP32 whatever precision was asked for: PyTorch has no fast FP16 path
+        # on the CPU, and a 4x photo in FP16 there ran on one core for many minutes a tile
+        # (a GPU setting that fell back to the CPU kept its FP16 choice).
         precision = (
             torch.float16
-            if precision_str == "fp16" and model_info.half_supported and onnx_route is None
+            if precision_str == "fp16"
+            and model_info.half_supported
+            and onnx_route is None
+            and device.type != "cpu"
             else torch.float32
         )
         coreml_units: tuple[str, ...] = ()
