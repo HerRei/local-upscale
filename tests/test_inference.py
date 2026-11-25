@@ -525,3 +525,25 @@ def test_parking_frees_gpu_memory_and_gives_the_same_frame():
     actual = engine.process_frame(frame, *args)
     assert adapter.model.conv.weight.device.type == "mps"
     np.testing.assert_array_equal(actual, expected)
+
+
+def test_the_cpu_runs_fp32_when_fp16_was_asked_for():
+    # A GPU setting saved with FP16 that fell back to the CPU kept FP16 there, and PyTorch's
+    # FP16 path on the CPU took many minutes for one tile of a 4x photo.
+    adapter = _WeightedAdapter(_WeightedModel())
+    adapter.model_info.half_supported = True
+    engine = InferenceEngine(adapter)
+    device, precision = engine.load_model("a", "cpu", "fp16", adapter.model_info)
+    assert device.type == "cpu"
+    assert precision == torch.float32
+    assert adapter.model.conv.weight.dtype == torch.float32
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="needs an Apple GPU")
+def test_a_gpu_keeps_fp16():
+    adapter = _WeightedAdapter(_WeightedModel())
+    adapter.model_info.half_supported = True
+    engine = InferenceEngine(adapter)
+    engine.neural_engine_enabled = False
+    _device, precision = engine.load_model("a", "mps", "fp16", adapter.model_info)
+    assert precision == torch.float16

@@ -118,6 +118,41 @@ fn directml_is_selected_only_on_the_first_installation() {
 }
 
 #[test]
+fn an_engine_start_without_the_saved_gpu_keeps_it_saved() {
+    // A full disk made one engine start report only the CPU; the CPU was saved and every
+    // later run stayed on the CPU after the GPU was back.
+    let directory = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(directory.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    state.choose_device.store(false, Ordering::SeqCst);
+    lock(&state.settings).unwrap().device_id = "mps".into();
+    state.persist_settings().unwrap();
+    let report = |ids: &[&str]| {
+        envelope(
+            "capabilities_info",
+            serde_json::to_value(CapabilityInfo {
+                devices: ids
+                    .iter()
+                    .map(|id| DeviceInfo {
+                        id: (*id).into(),
+                        ..DeviceInfo::default()
+                    })
+                    .collect(),
+                ..CapabilityInfo::default()
+            })
+            .unwrap(),
+        )
+    };
+
+    apply_worker_envelope(&state, &report(&["cpu"])).unwrap();
+    assert_eq!(lock(&state.settings).unwrap().device_id, "mps");
+    assert_eq!(crate::settings::load(&paths).0.device_id, "mps");
+
+    apply_worker_envelope(&state, &report(&["mps", "cpu"])).unwrap();
+    assert_eq!(lock(&state.settings).unwrap().device_id, "mps");
+}
+
+#[test]
 fn video_stages_have_titles_including_frame_interpolation() {
     assert_eq!(
         video_stage_title("loading_interpolation"),

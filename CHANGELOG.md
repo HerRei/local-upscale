@@ -14,6 +14,13 @@ A hotfix for 0.6.0.
   earlier timestamp than the frame before (cuts without re-encoding, screen recordings,
   some phone videos). LocalSR stopped with "Video presentation timestamps must
   increase"; it now processes them (#177).
+- **Stuck on the CPU after the GPU went missing once.** When the engine started once
+  without the GPU (for example while the disk was full), LocalSR saved the CPU as the
+  device and kept every later run on the CPU, even after the GPU was back. It now keeps
+  your device and only runs on the CPU while the GPU is missing. Work that runs on the
+  CPU now always uses full precision there: half precision on the CPU took many minutes
+  for a single tile. If LocalSR has run on the CPU since 0.6.0 although your computer
+  has a GPU, choose the GPU again under Settings.
 - **Release tooling.** The media runtime builds in a uv venv and behind mirrors whose
   certificate Python cannot check (#181), and signing takes the Windows and Linux
   packages from the draft release instead of 45 GB of CI artifacts (#180).

@@ -1833,24 +1833,20 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
         }
         "capabilities_info" => {
             let capabilities = serde_json::from_value::<CapabilityInfo>(data.clone())?;
-            let choose = state.choose_device.swap(false, Ordering::SeqCst);
-            let current_missing = {
-                let settings = lock(&state.settings)?;
-                settings.device_id != "cpu"
-                    && !capabilities
-                        .devices
-                        .iter()
-                        .any(|device| device.id == settings.device_id)
-            };
-            if choose || current_missing {
-                let replacement =
-                    first_run_device(&capabilities.devices).unwrap_or_else(|| "cpu".into());
-                let mut settings = lock(&state.settings)?;
-                if (choose && settings.device_id == "cpu") || current_missing {
-                    settings.device_id = replacement;
-                    drop(settings);
-                    if let Err(error) = state.persist_settings() {
-                        eprintln!("Could not save the selected device: {error}");
+            // Only a first installation picks the device. A saved device the engine does not
+            // report this time stays saved: an engine start can miss the GPU for a moment (a
+            // full disk, a driver reset), and saving the CPU then kept every later run on
+            // the CPU after the GPU was back. Until it is back, `resolve_device` runs each
+            // job on the CPU and the interface shows the CPU.
+            if state.choose_device.swap(false, Ordering::SeqCst) {
+                if let Some(replacement) = first_run_device(&capabilities.devices) {
+                    let mut settings = lock(&state.settings)?;
+                    if settings.device_id == "cpu" {
+                        settings.device_id = replacement;
+                        drop(settings);
+                        if let Err(error) = state.persist_settings() {
+                            eprintln!("Could not save the selected device: {error}");
+                        }
                     }
                 }
             }
