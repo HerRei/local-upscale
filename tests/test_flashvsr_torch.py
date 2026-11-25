@@ -114,6 +114,12 @@ def _load_fork_modules(monkeypatch: pytest.MonkeyPatch):
     ):
         monkeypatch.delitem(sys.modules, unused, raising=False)
 
+    # The fork picks its attention at import. Importing the vendored SeedVR2 code earlier in
+    # the session leaves a flash_attn stub whose flash_attn_func is None (its
+    # ensure_flash_attn_safe), which the fork would take for a working FlashAttention 2.
+    for attention in ("flash_attn", "flash_attn_interface", "sageattention"):
+        monkeypatch.delitem(sys.modules, attention, raising=False)
+
     block_sparse_stub = types.ModuleType("block_sparse_attn")
     block_sparse_stub.block_sparse_attn_func = lambda *_a, **_kw: pytest.fail(  # type: ignore[attr-defined]
         "block_sparse_attn_func should not be called under CPU reference test"
