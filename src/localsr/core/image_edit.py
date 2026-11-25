@@ -82,25 +82,69 @@ def probe_runtime(runtime: Path, option: str):
     )
 
 
-def match_vulkan_device(devices: str, selected_name: str) -> str:
+SOFTWARE_VULKAN_DEVICES = ("llvmpipe", "lavapipe", "swiftshader")
+GPU_VENDORS = {
+    "amd": "amd",
+    "radeon": "amd",
+    "nvidia": "nvidia",
+    "geforce": "nvidia",
+    "intel": "intel",
+}
+
+
+def match_vulkan_device(
+    devices: str, selected_name: str, *, visible_devices_set: bool = False
+) -> str:
+    """The Vulkan id of the GPU PyTorch selected, never a different card.
+
+    PyTorch and the Vulkan driver often name the same AMD GPU differently: ROCm may
+    report "AMD Radeon Graphics" where Mesa says "AMD Radeon 780M (RADV PHOENIX)", or
+    the other way round (issue #131). When the names differ, the only real Vulkan GPU
+    is still taken if it comes from the same vendor and one of the two names carries no
+    model number, or if the user narrowed Vulkan to it with GGML_VK_VISIBLE_DEVICES.
+    """
+
     def normalize(name):
         # Mesa may append a driver description to the actual card name.
         name = re.sub(r"\([^)]*\)", "", name)
         return " ".join(re.findall(r"[a-z0-9]+", name.lower()))
 
-    matches = []
+    def vendor(name):
+        return next(
+            (GPU_VENDORS[word] for word in normalize(name).split() if word in GPU_VENDORS), None
+        )
+
+    def generic(name):
+        return not re.search(r"\d", normalize(name))
+
+    gpus = []
     for line in devices.splitlines():
         identifier, separator, description = line.partition("\t")
         if separator and re.fullmatch(r"Vulkan\d+", identifier):
-            if normalize(description) == normalize(selected_name):
-                matches.append(identifier)
-    if len(matches) != 1:
-        raise ValueError(
-            "The Vulkan runtime cannot uniquely identify the selected GPU. "
-            "Use a CUDA/ROCm native runtime, or expose only that Vulkan GPU "
-            "with GGML_VK_VISIBLE_DEVICES. No model was loaded."
-        )
-    return matches[0]
+            gpus.append((identifier, description))
+    named = [
+        identifier
+        for identifier, description in gpus
+        if normalize(description) == normalize(selected_name)
+    ]
+    if len(named) == 1:
+        return named[0]
+    hardware = [
+        (identifier, description)
+        for identifier, description in gpus
+        if not any(word in description.lower() for word in SOFTWARE_VULKAN_DEVICES)
+    ]
+    if not named and len(hardware) == 1:
+        identifier, description = hardware[0]
+        same_gpu = vendor(description) is not None and vendor(description) == vendor(selected_name)
+        if visible_devices_set or (same_gpu and (generic(description) or generic(selected_name))):
+            return identifier
+    listed = "; ".join(f"{index}: {description}" for index, (_id, description) in enumerate(gpus))
+    raise ValueError(
+        f"The Vulkan runtime cannot uniquely identify the selected GPU ({selected_name}). "
+        f"Vulkan lists: {listed or 'no GPU'}. Use a CUDA/ROCm native runtime, or start "
+        "LocalSR with GGML_VK_VISIBLE_DEVICES set to that GPU's number. No model was loaded."
+    )
 
 
 def resolve_edit_gpu(runtime: Path, device: str, backend: str) -> str:
@@ -113,7 +157,11 @@ def resolve_edit_gpu(runtime: Path, device: str, backend: str) -> str:
         listing = probe_runtime(runtime, "--list-devices")
         if listing.returncode != 0:
             raise ValueError("The native Vulkan runtime cannot enumerate GPUs. Check the driver.")
-        return match_vulkan_device(listing.stdout, torch.cuda.get_device_name(index))
+        return match_vulkan_device(
+            listing.stdout,
+            torch.cuda.get_device_name(index),
+            visible_devices_set=bool(os.environ.get("GGML_VK_VISIBLE_DEVICES", "").strip()),
+        )
     return f"{'ROCm' if torch.version.hip else 'CUDA'}{index}"
 
 
