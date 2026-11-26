@@ -191,6 +191,11 @@ describe('SettingsSheet', () => {
       await user.click(screen.getByRole('switch', { name: 'Run at low priority' }));
       expect(props.setPreference).toHaveBeenCalledWith('low_priority', true);
 
+      await user.click(
+        screen.getByRole('switch', { name: 'Keep the computer awake while working' }),
+      );
+      expect(props.setPreference).toHaveBeenCalledWith('keep_awake', false);
+
       // Storage
       await user.click(screen.getByRole('tab', { name: 'Storage' }));
       expect(props.loadCacheSize).toHaveBeenCalled();
@@ -261,6 +266,11 @@ describe('SettingsSheet', () => {
     expect(
       (screen.getByRole('switch', { name: 'Run at low priority' }) as HTMLInputElement).disabled,
     ).toBe(false);
+    const keepAwake = screen.getByRole('switch', {
+      name: 'Keep the computer awake while working',
+    }) as HTMLInputElement;
+    expect(keepAwake.disabled).toBe(false);
+    expect(keepAwake.checked).toBe(true);
 
     await user.click(screen.getByRole('tab', { name: 'Storage' }));
     const modelFolder = screen.getByRole('button', { name: /^Model folder / }) as HTMLButtonElement;
@@ -285,6 +295,18 @@ describe('SettingsSheet', () => {
       (screen.getByRole('switch', { name: 'High contrast' }) as HTMLInputElement).disabled,
     ).toBe(false);
     expect((screen.getByLabelText('Viewer background') as HTMLSelectElement).disabled).toBe(false);
+
+    cleanup();
+    const missingSettings = { ...demoSnapshot().settings };
+    delete missingSettings.keep_awake;
+    renderSheet({ settings: missingSettings, section: 'performance' });
+    expect(
+      (
+        screen.getByRole('switch', {
+          name: 'Keep the computer awake while working',
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(true);
   });
 
   it('defaults High contrast and Viewer background when fields are missing, turns High contrast off to system, and shows the background tip', async () => {

@@ -394,6 +394,7 @@ export interface UiSettings {
   notify_on_finish?: boolean;
   menu_bar_icon_monochrome?: boolean;
   auto_cache_cleanup?: boolean;
+  keep_awake?: boolean;
   stopped_job_result?: 'ask' | 'keep' | 'discard';
 }
 

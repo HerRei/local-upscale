@@ -629,6 +629,27 @@
               on:change={(event) => setPreference('low_priority', event.currentTarget.checked)}
             />
           </div>
+
+          <div class="setting-row">
+            <div class="setting-copy">
+              <label class="setting-label" for="settings-keep-awake"
+                >Keep the computer awake while working</label
+              >
+              <p class="setting-desc" id="settings-keep-awake-desc">
+                Prevents idle sleep until the queue finishes. The display can still sleep, and
+                closing the lid still sleeps.
+              </p>
+            </div>
+            <input
+              id="settings-keep-awake"
+              class="switch"
+              type="checkbox"
+              role="switch"
+              aria-describedby="settings-keep-awake-desc"
+              checked={settings.keep_awake ?? true}
+              on:change={(event) => setPreference('keep_awake', event.currentTarget.checked)}
+            />
+          </div>
         {:else if section === 'storage'}
           <h3 class="settings-section-heading">Storage</h3>
           <div class="setting-block settings-block">

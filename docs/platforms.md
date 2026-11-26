@@ -200,3 +200,5 @@ Tiling keeps large images within budget; the *Safe memory* option lowers the
 tile size further. Video adds the decoder, encoder and preview buffers on top.
 When a job does not fit, LocalSR reports the allocation failure and recovers the
 worker; it does not lift GPU limits or reduce the output size silently.
+
+**Settings → Performance → Keep the computer awake while working** (`keep_awake`, on by default) prevents idle system sleep while jobs are queued or running (`caffeinate -i` on macOS, `SetThreadExecutionState` on Windows, and `systemd-inhibit` on Linux when available) without blocking display sleep or lid-close sleep.

@@ -94,6 +94,7 @@ export function demoSnapshot(): AppSnapshot {
       notify_on_finish: true,
       menu_bar_icon_monochrome: true,
       auto_cache_cleanup: true,
+      keep_awake: true,
       stopped_job_result: 'ask',
     },
     recipes: [],

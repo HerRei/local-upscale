@@ -626,6 +626,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                 settle_stopped_jobs(&database, &active_ids, &forced, &interruption);
             }
         }
+        crate::stay_awake::sync(&state);
         emit_state_changed(&app);
 
         let failed = forced_jobs.is_empty() && !requested_restart;
@@ -845,6 +846,7 @@ pub fn pause_queue(state: &AppState, app: &AppHandle) {
         return;
     };
     set_queue_paused_locked(state, true);
+    crate::stay_awake::sync(state);
     emit_state_changed(app);
 }
 
@@ -873,14 +875,16 @@ pub fn dispatch_next_locked(state: &Arc<AppState>, app: &AppHandle) -> AppResult
 /// true when something was sent or a job was failed, so the window needs to know.
 fn begin_dispatch(state: &Arc<AppState>, batches: bool) -> AppResult<bool> {
     let mut changed = false;
-    loop {
+    let outcome = loop {
         match dispatch_once(state, batches)? {
-            Dispatch::Sent => return Ok(true),
-            Dispatch::Idle => return Ok(changed),
+            Dispatch::Sent => break Ok(true),
+            Dispatch::Idle => break Ok(changed),
             // The job at the head of the queue failed; the next one is looked at.
             Dispatch::Failed => changed = true,
         }
-    }
+    };
+    crate::stay_awake::sync(state);
+    outcome
 }
 
 enum Dispatch {
@@ -1136,9 +1140,12 @@ fn stop_queue_locked(state: &Arc<AppState>, reason: &str) -> AppResult<()> {
             );
         }
     }
-    let mut runtime = lock(&state.runtime)?;
-    runtime.status_title = "Could not finish".into();
-    runtime.status_detail = format!("The queue stopped: the disk is full. {reason}");
+    {
+        let mut runtime = lock(&state.runtime)?;
+        runtime.status_title = "Could not finish".into();
+        runtime.status_detail = format!("The queue stopped: the disk is full. {reason}");
+    }
+    crate::stay_awake::sync(state);
     Ok(())
 }
 
@@ -1215,6 +1222,7 @@ fn supervisor_should_return(worker: &crate::state::WorkerControl, generation: u6
 pub fn shutdown(state: &AppState) {
     state.video_preview.shutdown();
     state.worker.shutting_down.store(true, Ordering::SeqCst);
+    state.stay_awake.release();
     let _ = send(state, &json!({"type": "shutdown_request", "data": {}}));
     if let Ok(mut sender) = state.worker.sender.lock() {
         *sender = None;
@@ -1554,6 +1562,20 @@ fn accept_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppResul
         "job_completed" | "video_job_completed"
     ) {
         state.worker.finished_job.store(true, Ordering::SeqCst);
+    }
+    if matches!(
+        envelope.message_type.as_str(),
+        "job_started"
+            | "job_completed"
+            | "video_job_completed"
+            | "job_cancelled"
+            | "job_failed"
+            | "benchmark_started"
+            | "benchmark_completed"
+            | "benchmark_cancelled"
+            | "benchmark_failed"
+    ) {
+        crate::stay_awake::sync(state);
     }
     Ok(true)
 }
@@ -2841,6 +2863,7 @@ fn set_worker_failure(state: &AppState, app: &AppHandle, detail: String) {
         runtime.status_detail = detail;
         runtime.engine_retry = false;
     }
+    crate::stay_awake::sync(state);
     emit_state_changed(app);
 }
 
@@ -2852,6 +2875,7 @@ fn give_up_on_engine(state: &AppState, app: &AppHandle, detail: String) {
         runtime.status_detail = detail;
         runtime.engine_retry = true;
     }
+    crate::stay_awake::sync(state);
     emit_state_changed(app);
 }
 

@@ -419,6 +419,7 @@ fn set_preference_round_trips_all_keys_rejects_bad_input_and_rolls_back_on_error
         ("anonymous_update_count", serde_json::json!(false)),
         ("crash_reports", serde_json::json!(false)),
         ("low_priority", serde_json::json!(true)),
+        ("keep_awake", serde_json::json!(false)),
         ("show_in_menu_bar", serde_json::json!(false)),
         ("notify_on_finish", serde_json::json!(false)),
         ("completion_sound", serde_json::json!(true)),
@@ -439,6 +440,7 @@ fn set_preference_round_trips_all_keys_rejects_bad_input_and_rolls_back_on_error
     assert!(!saved.anonymous_update_count);
     assert!(!saved.crash_reports);
     assert!(saved.low_priority);
+    assert!(!saved.keep_awake);
     assert!(!saved.show_in_menu_bar);
     assert!(!saved.notify_on_finish);
     assert!(saved.completion_sound);
@@ -460,6 +462,7 @@ fn set_preference_round_trips_all_keys_rejects_bad_input_and_rolls_back_on_error
     // Reject unknown names and bad values.
     assert!(apply_preference(&state, "device_id", &serde_json::json!("cpu")).is_err());
     assert!(apply_preference(&state, "low_priority", &serde_json::json!("yes")).is_err());
+    assert!(apply_preference(&state, "keep_awake", &serde_json::json!("yes")).is_err());
     assert!(apply_preference(&state, "stopped_job_result", &serde_json::json!("always")).is_err());
     assert!(apply_preference(&state, "stopped_job_result", &serde_json::json!(true)).is_err());
     assert!(apply_preference(&state, "appearance", &serde_json::json!("sepia")).is_err());
@@ -496,6 +499,7 @@ fn a_full_settings_save_never_changes_host_owned_preferences() {
         completion_sound: true,
         menu_bar_icon_monochrome: false,
         auto_cache_cleanup: false,
+        keep_awake: false,
         stopped_job_result: "discard".into(),
         ..UiSettings::default()
     };
@@ -515,6 +519,7 @@ fn a_full_settings_save_never_changes_host_owned_preferences() {
     assert!(incoming.completion_sound);
     assert!(!incoming.menu_bar_icon_monochrome);
     assert!(!incoming.auto_cache_cleanup);
+    assert!(!incoming.keep_awake);
     assert_eq!(incoming.stopped_job_result, "discard");
     assert_eq!(incoming.tile_size, UiSettings::default().tile_size + 64);
 
@@ -524,11 +529,13 @@ fn a_full_settings_save_never_changes_host_owned_preferences() {
     map.remove("check_updates_at_launch");
     map.remove("crash_reports");
     map.remove("auto_cache_cleanup");
+    map.remove("keep_awake");
     map.remove("stopped_job_result");
     let loaded = serde_json::from_value::<UiSettings>(saved).unwrap();
     assert!(loaded.check_updates_at_launch);
     assert!(!loaded.crash_reports);
     assert!(loaded.auto_cache_cleanup);
+    assert!(loaded.keep_awake);
     assert_eq!(loaded.stopped_job_result, "ask");
 }
 
@@ -4979,4 +4986,53 @@ fn plan_job_checked_resolves_stages_from_app_state() {
         edit_plan[0].edit_model_id.as_deref(),
         Some("qwen_edit_2511_q4_k_m")
     );
+}
+
+#[test]
+fn stay_awake_follows_queue_activity_preference_and_shutdown() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(directory.path());
+    fs::create_dir_all(&paths.next_root).unwrap();
+    fs::create_dir_all(&paths.model_root).unwrap();
+    let state = AppState::from_paths(paths).unwrap();
+    assert!(!state.stay_awake.is_held());
+
+    {
+        let database = lock(&state.database).unwrap();
+        database
+            .insert_media("m1", "/in/photo.png", "photo.png", "image")
+            .unwrap();
+        database
+            .insert_job(
+                "j1",
+                "m1",
+                r#"{"type":"job_request","data":{"output_path":"/out/photo.png"}}"#,
+            )
+            .unwrap();
+    }
+    crate::stay_awake::sync(&state);
+    assert!(state.stay_awake.is_held());
+
+    apply_preference(&state, "keep_awake", &json!(false)).unwrap();
+    assert!(!state.stay_awake.is_held());
+
+    apply_preference(&state, "keep_awake", &json!(true)).unwrap();
+    assert!(state.stay_awake.is_held());
+
+    cancel_jobs_checked(&state, false).unwrap();
+    assert!(!state.stay_awake.is_held());
+
+    lock(&state.database)
+        .unwrap()
+        .insert_job(
+            "j2",
+            "m1",
+            r#"{"type":"job_request","data":{"output_path":"/out/photo2.png"}}"#,
+        )
+        .unwrap();
+    crate::stay_awake::sync(&state);
+    assert!(state.stay_awake.is_held());
+
+    crate::worker::shutdown(&state);
+    assert!(!state.stay_awake.is_held());
 }
