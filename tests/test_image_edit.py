@@ -296,6 +296,96 @@ def test_bundle_verification_is_streamed_and_rejects_corruption(tmp_path):
         image_edit.verify_bundle(bundle, tmp_path, event)
 
 
+@pytest.fixture
+def bundle_files(tmp_path, monkeypatch):
+    """A one-file bundle that counts reads, with a clock far enough ahead for caching to apply."""
+    import hashlib
+    import time
+
+    image_edit._VERIFIED_BUNDLE_FILES.clear()
+    real_ns = time.time_ns
+    monkeypatch.setattr(image_edit.time, "time_ns", lambda: real_ns() + 3600 * 10**9)
+    reads = []
+    real_open = Path.open
+
+    def counting_open(self, *args, **kwargs):
+        if self.suffix == ".gguf" and args[:1] == ("rb",):
+            reads.append(self)
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", counting_open)
+
+    def write(content: bytes, sha256: str | None = None):
+        (tmp_path / "test.gguf").write_bytes(content)
+        return {
+            "files": [
+                {
+                    "role": "diffusion",
+                    "filename": "test.gguf",
+                    "size_bytes": len(content),
+                    "sha256": sha256 or hashlib.sha256(content).hexdigest(),
+                }
+            ]
+        }
+
+    yield write, reads
+    image_edit._VERIFIED_BUNDLE_FILES.clear()
+
+
+def test_second_bundle_verification_does_not_reread_unchanged_files(bundle_files, tmp_path):
+    write, reads = bundle_files
+    bundle = write(b"model bytes")
+    first, second = [], []
+    image_edit.verify_bundle(bundle, tmp_path, threading.Event(), first.append)
+    assert len(reads) == 1
+    paths = image_edit.verify_bundle(bundle, tmp_path, threading.Event(), second.append)
+    assert len(reads) == 1
+    assert paths["diffusion"].name == "test.gguf"
+    assert first[-1] == second[-1] == 1.0
+    event = threading.Event()
+    event.set()
+    with pytest.raises(InterruptedError):
+        image_edit.verify_bundle(bundle, tmp_path, event)
+
+
+def test_changed_mtime_or_size_hashes_again(bundle_files, tmp_path):
+    import os
+
+    write, reads = bundle_files
+    bundle = write(b"model bytes")
+    image_edit.verify_bundle(bundle, tmp_path, threading.Event())
+    stat = (tmp_path / "test.gguf").stat()
+    os.utime(tmp_path / "test.gguf", ns=(stat.st_atime_ns, stat.st_mtime_ns - 5 * 10**9))
+    image_edit.verify_bundle(bundle, tmp_path, threading.Event())
+    assert len(reads) == 2
+    image_edit.verify_bundle(bundle, tmp_path, threading.Event())
+    assert len(reads) == 2
+    bundle = write(b"longer model bytes")
+    image_edit.verify_bundle(bundle, tmp_path, threading.Event())
+    assert len(reads) == 3
+
+
+def test_failed_bundle_verification_is_not_cached(bundle_files, tmp_path):
+    write, reads = bundle_files
+    bundle = write(b"model bytes", sha256="0" * 64)
+    for attempt in (1, 2):
+        with pytest.raises(ValueError, match="checksum failed"):
+            image_edit.verify_bundle(bundle, tmp_path, threading.Event())
+        assert len(reads) == attempt
+    # A cached pass must not hide a different expected checksum either.
+    bundle = write(b"model bytes")
+    image_edit.verify_bundle(bundle, tmp_path, threading.Event())
+    bundle["files"][0]["sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="checksum failed"):
+        image_edit.verify_bundle(bundle, tmp_path, threading.Event())
+    # A size mismatch still fails before any read.
+    reads.clear()
+    bundle["files"][0]["size_bytes"] += 1
+    with pytest.raises(FileNotFoundError):
+        image_edit.verify_bundle(bundle, tmp_path, threading.Event())
+    assert not reads
+
+
 @pytest.mark.parametrize(
     "family, quant,gpu,backend",
     [
@@ -341,7 +431,7 @@ def test_native_command_preserves_quantization_and_model_specific_configuration(
                 backend
             ]
         )
-        assert command[command.index("--threads") + 1] == "2"
+        assert "--threads" not in command
     if family == "flux2-klein-4b":
         # Distilled: guidance 1, no vision projector, no model arguments.
         assert "--model-args" not in command and "--llm_vision" not in command

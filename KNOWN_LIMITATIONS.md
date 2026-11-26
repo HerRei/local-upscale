@@ -92,10 +92,10 @@ These apply to v0.6.1-beta. Please read them before starting a long job.
 - The two HAT face companions must be imported manually because their
   checkpoint rights are unresolved. Video face processing reuses masks across
   frames and is not motion tracking.
-- **Colour** (DDColor) under **Restore first** and **Restore** is for still photos
-  only; video **Restore first** does not offer it. On DirectML and OpenVINO devices
-  DDColor runs on the CPU, and on Apple Silicon with Neural Engine enabled it runs
-  on the Apple GPU via PyTorch.
+- **Colour** (DDColor) works on photos and black-and-white videos; a video that
+  already has colour skips it. Colour is refused on a video whose HDR is preserved.
+  On DirectML and OpenVINO devices DDColor runs on the CPU, and on Apple Silicon
+  with Neural Engine enabled it runs on the Apple GPU via PyTorch.
 - Colour needs a 912 MB model download. Colours are a guess; skies can come out pink.
 
 ## Image editing

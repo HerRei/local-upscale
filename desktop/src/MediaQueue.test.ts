@@ -223,7 +223,7 @@ describe('Removing while a batch runs', () => {
 });
 
 describe('row styles', () => {
-  it('stops the shine under reduced motion', async () => {
+  it('stops the shine under reduced motion and avoids width transitions on progress bars', async () => {
     const { readFileSync } = await import('node:fs');
     const css = readFileSync('src/styles.css', 'utf8');
     expect(css).toMatch(
@@ -232,5 +232,18 @@ describe('row styles', () => {
     expect(css).toMatch(
       /@media \(prefers-reduced-motion: reduce\) \{[^}]*\.row-progress i::after \{\s*animation: none/,
     );
+    expect(css).not.toMatch(/\.row-progress i \{[^}]*transition:\s*width/);
+    expect(css).not.toMatch(/\.progress i \{[^}]*transition:\s*width/);
+  });
+
+  it('decodes queue thumbnails asynchronously at an explicit size, never lazily', () => {
+    const item = { ...media(1), preview_data_url: 'data:image/jpeg;base64,thumb' };
+    const { container } = render(MediaQueue, { ...props([], 1), items: [item] });
+    const img = container.querySelector('.thumb img');
+    expect(img?.getAttribute('decoding')).toBe('async');
+    // Lazy loading never loads a thumbnail in a hidden list, so decode() would wait forever.
+    expect(img?.hasAttribute('loading')).toBe(false);
+    expect(img?.getAttribute('width')).toBe('44');
+    expect(img?.getAttribute('height')).toBe('44');
   });
 });

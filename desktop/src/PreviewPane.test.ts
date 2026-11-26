@@ -1230,3 +1230,31 @@ it('updates the stage 1 base if the colourised stage 0 frame arrives after stage
   expect(drawnSources).toEqual(['data:image/jpeg;base64,colourised-stage0']);
   expect(fillRect).toHaveBeenCalledTimes(1);
 });
+
+it('uses async decoding on preview images and pauses edit-sweep animation when off', () => {
+  const { container } = render(PreviewPane, {
+    selectedMedia: {
+      id: 'photo',
+      path: '/photo.png',
+      name: 'photo.png',
+      kind: 'image',
+      width: 1000,
+      height: 800,
+      frame_count: 1,
+      fps: 0,
+      duration_seconds: 0,
+      preview_data_url: 'data:image/jpeg;base64,source',
+      probe_status: 'ready',
+      error: '',
+      selected: true,
+    },
+    resultPreview: 'data:image/jpeg;base64,result',
+    completedVideoOutput: '',
+  });
+  for (const selector of ['.source-image', '.result-image']) {
+    expect(container.querySelector(selector)?.getAttribute('decoding')).toBe('async');
+  }
+  const source = readFileSync(resolve(process.cwd(), 'src/PreviewPane.svelte'), 'utf8');
+  expect(source).toMatch(/\.edit-sweep::before\s*\{[^}]*animation-play-state:\s*paused/);
+  expect(source).toMatch(/\.edit-sweep\.on::before\s*\{[^}]*animation-play-state:\s*running/);
+});

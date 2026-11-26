@@ -1594,38 +1594,37 @@
         ) {
           updateSettings({ video_hdr_mode: 'tone_map' });
         }
+        booting = false;
         await subscribe(() => api.listenForWorker(handleWorkerMessage));
-        await subscribe(() => api.listenForStateChange(scheduleRefresh));
-        await subscribe(() =>
-          api.listenForNativeMenu((action) => void handleNativeMenuAction(action)),
-        );
-        await subscribe(() => api.listenForLaunchIntent(() => void consumeLaunchIntents()));
-        await subscribe(() => api.listenForModelMove((progress) => (modelMoveProgress = progress)));
-        await subscribe(() => api.listenForEngineStatus(handleEngineStatus));
-        await subscribe(() =>
-          startUpdateWatcher(
-            (snapshot.settings.privacy_choice_made ?? true) &&
-              (snapshot.settings.check_updates_at_launch ?? true),
-          ).then((stop) => {
-            if (
-              !disposed &&
-              (snapshot.settings.privacy_choice_made ?? true) &&
-              (snapshot.settings.check_updates_at_launch ?? true) &&
-              snapshot.engines?.supported &&
-              !snapshot.engines.managed_by_store &&
-              !snapshot.engines.catalog.length
-            ) {
-              void refresh();
-            }
-            return stop;
-          }),
-        );
-        await subscribe(() =>
-          api.listenForFileDrops({
-            hover: (active) => (filesDragging = active),
-            drop: (paths) => void addDroppedMedia(paths),
-          }),
-        );
+        if (disposed) return;
+        const checkUpdatesAtLaunch =
+          (snapshot.settings.privacy_choice_made ?? true) &&
+          (snapshot.settings.check_updates_at_launch ?? true);
+        await Promise.all([
+          subscribe(() => api.listenForStateChange(scheduleRefresh)),
+          subscribe(() => api.listenForNativeMenu((action) => void handleNativeMenuAction(action))),
+          subscribe(() => api.listenForLaunchIntent(() => void consumeLaunchIntents())),
+          subscribe(() => api.listenForModelMove((progress) => (modelMoveProgress = progress))),
+          subscribe(() => api.listenForEngineStatus(handleEngineStatus)),
+          subscribe(() =>
+            startUpdateWatcher(checkUpdatesAtLaunch, () => {
+              if (
+                !disposed &&
+                snapshot.engines?.supported &&
+                !snapshot.engines.managed_by_store &&
+                !snapshot.engines.catalog.length
+              ) {
+                void refresh();
+              }
+            }),
+          ),
+          subscribe(() =>
+            api.listenForFileDrops({
+              hover: (active) => (filesDragging = active),
+              drop: (paths) => void addDroppedMedia(paths),
+            }),
+          ),
+        ]);
         if (!disposed) await consumeLaunchIntents();
       } catch (error) {
         document.documentElement.classList.remove('theme-loading');

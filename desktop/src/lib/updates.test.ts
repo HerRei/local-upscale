@@ -8,7 +8,8 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock('./api', () => api);
 
-import { startUpdateWatcher } from './updates';
+import { get } from 'svelte/store';
+import { startUpdateWatcher, updateState } from './updates';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -36,6 +37,27 @@ it('checks the feed at launch only while the setting is on', async () => {
 
   await startUpdateWatcher(true);
   expect(api.checkUpdateAtLaunch).toHaveBeenCalledWith('beta');
+});
+
+it('returns before the launch check resolves and updates state when it finishes', async () => {
+  let resolveCheck!: (value: { stage: string; version: string }) => void;
+  api.checkUpdateAtLaunch.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        resolveCheck = resolve;
+      }),
+  );
+  const onLaunchCheck = vi.fn();
+  const stop = await startUpdateWatcher(true, onLaunchCheck);
+  expect(typeof stop).toBe('function');
+  expect(api.checkUpdateAtLaunch).toHaveBeenCalledWith('beta');
+  expect(onLaunchCheck).not.toHaveBeenCalled();
+
+  resolveCheck({ stage: 'available', version: '0.6.3' });
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(get(updateState)).toMatchObject({ stage: 'available', version: '0.6.3' });
+  expect(onLaunchCheck).toHaveBeenCalledOnce();
 });
 
 it.each([

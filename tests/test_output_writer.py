@@ -20,6 +20,22 @@ def test_output_writer_context_manager():
     assert not os.path.exists(path)
 
 
+def test_write_tile_does_not_flush_and_close_keeps_the_data(monkeypatch):
+    writer = OutputWriter((3, 4, 4))
+    flushes = []
+    real_flush = writer.mmap.flush
+    monkeypatch.setattr(writer.mmap, "flush", lambda: flushes.append(1) or real_flush())
+    writer.write_tile(np.full((3, 2, 2), 7, dtype=np.uint8), 2, 2)
+    assert flushes == []
+    assert writer.get_array()[:, 2:4, 2:4].tolist() == np.full((3, 2, 2), 7).tolist()
+    writer.close()
+    assert flushes == [1]
+    with open(writer.temp_path, "rb") as handle:
+        data = np.frombuffer(handle.read(), dtype=np.uint8).reshape(3, 4, 4)
+    assert data[:, 2:4, 2:4].tolist() == np.full((3, 2, 2), 7).tolist()
+    writer.cleanup()
+
+
 def test_output_writer_manual_cleanup():
     writer = OutputWriter((3, 10, 10))
     path = writer.temp_path

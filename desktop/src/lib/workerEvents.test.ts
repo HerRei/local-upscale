@@ -893,3 +893,116 @@ describe('stopping a video', () => {
     expect(snapshot.runtime.progress).toBe(40);
   });
 });
+
+describe('structural sharing', () => {
+  const twoMedia = () => {
+    const snapshot = demoSnapshot();
+    snapshot.media = [
+      {
+        id: 'm1',
+        path: '/first.png',
+        name: 'first.png',
+        kind: 'image',
+        width: 100,
+        height: 100,
+        frame_count: 1,
+        fps: 0,
+        duration_seconds: 0,
+        preview_data_url: 'data:image/jpeg;base64,large-first',
+        probe_status: 'ready',
+        error: '',
+        selected: true,
+      },
+      {
+        id: 'm2',
+        path: '/second.png',
+        name: 'second.png',
+        kind: 'image',
+        width: 200,
+        height: 200,
+        frame_count: 1,
+        fps: 0,
+        duration_seconds: 0,
+        preview_data_url: 'data:image/jpeg;base64,large-second',
+        probe_status: 'pending',
+        error: '',
+        selected: false,
+      },
+    ];
+    return snapshot;
+  };
+
+  it('keeps media and unrelated snapshot branch identities on runtime events', () => {
+    const before = twoMedia();
+    const afterStart = applyWorkerEnvelope(before, {
+      type: 'job_started',
+      data: { job_id: 'job-1' },
+    });
+    expect(afterStart).not.toBe(before);
+    expect(afterStart.runtime).not.toBe(before.runtime);
+    expect(afterStart.media).toBe(before.media);
+    expect(afterStart.media[0]).toBe(before.media[0]);
+    expect(afterStart.media[1]).toBe(before.media[1]);
+    expect(afterStart.catalog).toBe(before.catalog);
+    expect(afterStart.jobs).toBe(before.jobs);
+    expect(afterStart.settings).toBe(before.settings);
+
+    const afterComplete = applyWorkerEnvelope(afterStart, {
+      type: 'job_completed',
+      data: { job_id: 'job-1', output_path: '/out/first.png' },
+    });
+    expect(afterComplete.media).toBe(before.media);
+    expect(afterComplete.media[0]).toBe(before.media[0]);
+    expect(afterComplete.media[1]).toBe(before.media[1]);
+    expect(afterComplete.runtime.last_output_path).toBe('/out/first.png');
+  });
+
+  it('copies only the matching media item on media events', () => {
+    const before = twoMedia();
+
+    const afterProgress = applyWorkerEnvelope(before, {
+      type: 'media_probe_progress',
+      data: { media_path: '/second.png', stage: 'decoding' },
+    });
+    expect(afterProgress).not.toBe(before);
+    expect(afterProgress.runtime).toBe(before.runtime);
+    expect(afterProgress.media).not.toBe(before.media);
+    expect(afterProgress.media[0]).toBe(before.media[0]);
+    expect(afterProgress.media[1]).not.toBe(before.media[1]);
+    expect(afterProgress.media[1].probe_stage).toBe('decoding');
+    expect(before.media[1].probe_stage).toBeUndefined();
+
+    const afterInfo = applyWorkerEnvelope(afterProgress, {
+      type: 'media_info',
+      data: {
+        media_path: '/second.png',
+        width: 400,
+        height: 300,
+        frame_count: 1,
+        fps: 0,
+        duration_seconds: 0,
+        jpeg_base64: 'updated-second',
+      },
+    });
+    expect(afterInfo.media[0]).toBe(before.media[0]);
+    expect(afterInfo.media[1].probe_status).toBe('ready');
+    expect(afterInfo.media[1].preview_data_url).toBe('data:image/jpeg;base64,updated-second');
+
+    const afterFail = applyWorkerEnvelope(afterInfo, {
+      type: 'media_probe_failed',
+      data: { media_path: '/second.png', error_message: 'corrupt file' },
+    });
+    expect(afterFail.media[0]).toBe(before.media[0]);
+    expect(afterFail.media[1].probe_status).toBe('failed');
+    expect(afterFail.media[1].error).toBe('corrupt file');
+  });
+
+  it('returns the exact same snapshot for unhandled event types', () => {
+    const before = twoMedia();
+    const after = applyWorkerEnvelope(before, {
+      type: 'unhandled_event_type',
+      data: { job_id: 'unknown', extra: 123 },
+    });
+    expect(after).toBe(before);
+  });
+});

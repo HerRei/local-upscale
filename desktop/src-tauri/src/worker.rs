@@ -1483,7 +1483,7 @@ const MAX_FAILED_STARTS: u32 = 3;
 /// How long to wait before starting the engine again after it stopped, or None when
 /// it has failed too often. A start counts as failed when the engine stopped on its
 /// own; its handshake does not clear the count, only a stable run or a finished job.
-/// A stop the host asked for restarts at once, after the first delay.
+/// A stop the host asked for restarts at once.
 fn restart_delay(
     failed_starts: &AtomicU32,
     ran: Duration,
@@ -1493,11 +1493,10 @@ fn restart_delay(
     if ran >= STABLE_RUN || finished_job {
         failed_starts.store(0, Ordering::SeqCst);
     }
-    let attempt = if failed {
-        failed_starts.fetch_add(1, Ordering::SeqCst) + 1
-    } else {
-        1
-    };
+    if !failed {
+        return Some(Duration::ZERO);
+    }
+    let attempt = failed_starts.fetch_add(1, Ordering::SeqCst) + 1;
     (attempt <= MAX_FAILED_STARTS).then(|| Duration::from_secs(u64::from(attempt)))
 }
 

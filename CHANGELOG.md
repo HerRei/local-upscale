@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.6.2-beta] - Unreleased
+
+A small speed and responsiveness update. Nothing changes in the results.
+
+- **Editing is much faster on NVIDIA and other GPUs (#194).** LocalSR started the
+  editing engine with only 2 CPU threads, a setting meant for Macs with little memory.
+  It now uses all of them, which a user measured at about twice as fast on a CUDA PC.
+  Where the text encoder and the decoder run (GPU or CPU) will be chosen by the
+  graphics memory in 0.7.0.
+- **Edits start sooner.** Every edit checked the whole 8 to 21 GB editing model again
+  before it began. LocalSR now checks it once per session and again only when a file
+  has changed.
+- **Large photos finish faster.** The result was written to disk after every tile;
+  it is now written once at the end.
+- **A calmer app while downloading and adding files.** A model download refreshed the
+  whole app state about 12 times a second, and every engine event copied all photo
+  previews. Downloads now only update their progress bar, and events copy only what
+  they change, so adding a large folder no longer freezes the window.
+- **Less work while idle.** The animation on the empty start screen stops while the
+  window is hidden, an invisible animation no longer runs, and progress bars no longer
+  animate their width on every update.
+- **Faster start when offline.** The update check at launch no longer delays drag and
+  drop or "Open with LocalSR".
+- **Faster engine restarts** after you stop a job or switch the engine (no 1 s pause).
+
 ## [0.6.1-beta] - 2026-11-25
 
 A hotfix for 0.6.0.

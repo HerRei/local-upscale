@@ -924,6 +924,7 @@
               class="source-image"
               src={items[0].preview_data_url}
               alt={`1: ${items[0].label}`}
+              decoding="async"
               draggable="false"
             />
             {#if currentCrop(items[0], 0, desiredRegions)}
@@ -932,6 +933,7 @@
                 style={cropStyle(items[0])}
                 src={items[0].region?.data_url}
                 alt=""
+                decoding="async"
                 draggable="false"
               />
             {/if}
@@ -940,6 +942,7 @@
               style={`clip-path: inset(0 0 0 ${geometry.imagePercent}%)`}
               src={items[1].preview_data_url}
               alt={`2: ${items[1].label}`}
+              decoding="async"
               draggable="false"
             />
             {#if currentCrop(items[1], 1, desiredRegions)}
@@ -952,6 +955,7 @@
                   style={cropStyle(items[1])}
                   src={items[1].region?.data_url}
                   alt=""
+                  decoding="async"
                   draggable="false"
                 />
               </div>
@@ -1052,6 +1056,7 @@
                     <img
                       src={item.preview_data_url}
                       alt={`${index + 1}: ${item.label}`}
+                      decoding="async"
                       draggable="false"
                     />
                     {#if currentCrop(item, index, desiredRegions)}
@@ -1060,6 +1065,7 @@
                         style={cropStyle(item)}
                         src={item.region?.data_url}
                         alt=""
+                        decoding="async"
                         draggable="false"
                       />
                     {/if}
