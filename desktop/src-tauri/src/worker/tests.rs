@@ -1,4 +1,5 @@
 use super::*;
+use base64::Engine;
 
 #[test]
 fn shutdown_supervisor_cleans_scratch() {
@@ -320,10 +321,12 @@ fn selected_image_comparison_ignores_late_results_while_another_job_runs() {
         runtime.comparison_media_id = "second".into();
         runtime.comparison_output_path = "/results/second.png".into();
     }
-    for (path, encoded) in [
-        ("/results/first.png", "old"),
-        ("/results/second.png", "correct"),
+    use base64::Engine;
+    for (path, bytes) in [
+        ("/results/first.png", b"old".as_slice()),
+        ("/results/second.png", b"correct".as_slice()),
     ] {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
         apply_worker_envelope(
             &state,
             &WorkerEnvelope {
@@ -337,15 +340,20 @@ fn selected_image_comparison_ignores_late_results_while_another_job_runs() {
         &state,
         &WorkerEnvelope {
             message_type: "preview_ready".into(),
-            data: json!({"image_path": "/results/first.png", "jpeg_base64": "late"}),
+            data: json!({
+                "image_path": "/results/first.png",
+                "jpeg_base64": base64::engine::general_purpose::STANDARD.encode(b"late")
+            }),
         },
     )
     .unwrap();
     let runtime = lock(&state.runtime).unwrap();
-    assert_eq!(
-        runtime.comparison_preview_data_url,
-        "data:image/jpeg;base64,correct"
-    );
+    let saved = crate::preview_cache::confined_preview_path(
+        &state.paths.preview_root,
+        &runtime.comparison_preview_data_url,
+    )
+    .expect("comparison preview must be a confined preview file URL");
+    assert_eq!(std::fs::read(saved).unwrap(), b"correct");
     assert_eq!(runtime.comparison_media_id, "second");
     assert!(runtime.result_preview_data_url.is_empty());
     assert_eq!(runtime.active_job_id, "running-third");
@@ -382,7 +390,7 @@ fn compare_answers_and_snapshots_revalidate_the_selected_job() {
         .remove(0)
     };
     let mut data = request["data"].clone();
-    data["jpeg_base64"] = json!("decoded");
+    data["jpeg_base64"] = json!(base64::engine::general_purpose::STANDARD.encode(b"decoded"));
     apply_worker_envelope(
         &state,
         &WorkerEnvelope {
@@ -440,14 +448,17 @@ fn pair_previews_reject_stale_success_and_failure_even_for_the_same_path() {
         runtime.comparison_pair.against.target_id = "job-b".into();
         runtime.comparison_pair.against.output_path = "/b.png".into();
     }
+    use base64::Engine;
+    let encoded_correct = base64::engine::general_purpose::STANDARD.encode(b"correct");
+    let encoded_stale = base64::engine::general_purpose::STANDARD.encode(b"stale");
     for (slot, target, path) in [
         ("showing", "job-a", "/a.png"),
         ("against", "job-b", "/b.png"),
     ] {
-        apply_worker_envelope(&state, &WorkerEnvelope { message_type:"preview_ready".into(), data:json!({"slot":slot,"target_id":target,"generation":2,"image_path":path,"jpeg_base64":"correct","width":800,"height":600,"preview_width":400,"preview_height":300}) }).unwrap();
+        apply_worker_envelope(&state, &WorkerEnvelope { message_type:"preview_ready".into(), data:json!({"slot":slot,"target_id":target,"generation":2,"image_path":path,"jpeg_base64":encoded_correct,"width":800,"height":600,"preview_width":400,"preview_height":300}) }).unwrap();
         for generation in [1, 3] {
             for kind in ["preview_ready", "preview_failed"] {
-                apply_worker_envelope(&state, &WorkerEnvelope { message_type:kind.into(), data:json!({"slot":slot,"target_id":target,"generation":generation,"image_path":path,"jpeg_base64":"stale","error_message":"stale"}) }).unwrap();
+                apply_worker_envelope(&state, &WorkerEnvelope { message_type:kind.into(), data:json!({"slot":slot,"target_id":target,"generation":generation,"image_path":path,"jpeg_base64":encoded_stale,"error_message":"stale"}) }).unwrap();
             }
         }
     }
@@ -456,7 +467,12 @@ fn pair_previews_reject_stale_success_and_failure_even_for_the_same_path() {
         &runtime.comparison_pair.showing,
         &runtime.comparison_pair.against,
     ] {
-        assert_eq!(slot.preview_data_url, "data:image/jpeg;base64,correct");
+        let saved = crate::preview_cache::confined_preview_path(
+            &state.paths.preview_root,
+            &slot.preview_data_url,
+        )
+        .expect("pair slot preview must be a confined preview file URL");
+        assert_eq!(std::fs::read(saved).unwrap(), b"correct");
         assert!(slot.error.is_empty());
         assert_eq!(
             (
@@ -1806,15 +1822,19 @@ fn the_last_photo_of_a_batch_gets_its_full_preview() {
     );
     assert!(completion_preview_request(&state, &done).is_some());
     apply_worker_envelope(&state, &done).unwrap();
+    use base64::Engine;
     apply(
         "preview_ready",
-        json!({"image_path": "/out/b.png", "jpeg_base64": "full-b"}),
+        json!({"image_path": "/out/b.png", "jpeg_base64": base64::engine::general_purpose::STANDARD.encode(b"full-b")}),
     )
     .unwrap();
-    assert_eq!(
-        lock(&state.runtime).unwrap().result_preview_data_url,
-        "data:image/jpeg;base64,full-b"
-    );
+    let url = lock(&state.runtime)
+        .unwrap()
+        .result_preview_data_url
+        .clone();
+    let saved = crate::preview_cache::confined_preview_path(&state.paths.preview_root, &url)
+        .expect("result preview must be a confined preview file URL");
+    assert_eq!(std::fs::read(saved).unwrap(), b"full-b");
 }
 
 #[test]
@@ -2781,4 +2801,283 @@ fn stay_awake_tracks_job_and_benchmark_envelopes() {
     )
     .unwrap());
     assert!(!state.stay_awake.is_held());
+}
+
+#[test]
+fn snapshot_size_with_50_media_items_does_not_grow_with_preview_bytes() {
+    use base64::Engine;
+
+    let build_snapshot_size = |raw_bytes_per_item: usize| -> usize {
+        let dir = tempfile::tempdir().unwrap();
+        let state =
+            Arc::new(AppState::from_paths(crate::paths::AppPaths::under(dir.path())).unwrap());
+        let db = lock(&state.database).unwrap();
+        for index in 0..50 {
+            let path = format!("/photos/item-{index:02}.jpg");
+            db.insert_media(
+                &format!("m{index}"),
+                &path,
+                &format!("item-{index:02}.jpg"),
+                "image",
+            )
+            .unwrap();
+        }
+        drop(db);
+        for index in 0..50 {
+            let mut payload = vec![0u8; raw_bytes_per_item];
+            payload[0] = index as u8;
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&payload);
+            apply_worker_envelope(
+                &state,
+                &envelope(
+                    "media_info",
+                    json!({
+                        "media_path": format!("/photos/item-{index:02}.jpg"),
+                        "media_kind": "image",
+                        "width": 1600,
+                        "height": 1067,
+                        "frame_count": 1,
+                        "fps": 0.0,
+                        "duration_seconds": 0.0,
+                        "jpeg_base64": encoded,
+                        "hdr_format": "",
+                        "audio_warning": "",
+                        "has_audio": true,
+                    }),
+                ),
+            )
+            .unwrap();
+        }
+        let snapshot = state.snapshot().unwrap();
+        for item in &snapshot.media {
+            assert!(
+                !item.preview_data_url.starts_with("data:"),
+                "expected file-backed preview URL, got {}",
+                &item.preview_data_url[..item.preview_data_url.len().min(32)]
+            );
+        }
+        serde_json::to_vec(&snapshot).unwrap().len()
+    };
+
+    let small_size = build_snapshot_size(64);
+    let large_size = build_snapshot_size(32 * 1024);
+    assert_eq!(
+        small_size, large_size,
+        "snapshot size must not grow with preview JPEG byte size"
+    );
+}
+
+#[test]
+fn old_data_urls_remain_accepted_until_replaced_by_file_url() {
+    use base64::Engine;
+
+    let dir = tempfile::tempdir().unwrap();
+    let state = Arc::new(AppState::from_paths(crate::paths::AppPaths::under(dir.path())).unwrap());
+    let path = "/photos/legacy.jpg";
+    {
+        let db = lock(&state.database).unwrap();
+        db.insert_media("legacy", path, "legacy.jpg", "image")
+            .unwrap();
+        db.update_media_probe(
+            path,
+            "image",
+            800,
+            600,
+            1,
+            0.0,
+            0.0,
+            "data:image/jpeg;base64,bGVnYWN5",
+            "",
+            "",
+            true,
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        state.snapshot().unwrap().media[0].preview_data_url,
+        "data:image/jpeg;base64,bGVnYWN5"
+    );
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode(b"fresh-jpeg-bytes");
+    apply_worker_envelope(
+        &state,
+        &envelope(
+            "media_info",
+            json!({
+                "media_path": path,
+                "media_kind": "image",
+                "width": 800,
+                "height": 600,
+                "frame_count": 1,
+                "fps": 0.0,
+                "duration_seconds": 0.0,
+                "jpeg_base64": encoded,
+                "hdr_format": "",
+                "audio_warning": "",
+                "has_audio": true,
+            }),
+        ),
+    )
+    .unwrap();
+    let updated = state.snapshot().unwrap().media[0].preview_data_url.clone();
+    assert!(!updated.starts_with("data:"));
+    assert!(!updated.is_empty());
+}
+
+#[test]
+fn preview_files_are_cleaned_on_remove_clear_results_clear_media_and_startup_sweep() {
+    use base64::Engine;
+
+    let dir = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(dir.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+
+    let shared_bytes = b"shared-thumbnail-bytes";
+    let unique_bytes = b"unique-thumbnail-bytes";
+    let result_bytes = b"completed-result-bytes";
+
+    {
+        let db = lock(&state.database).unwrap();
+        db.insert_media("m1", "/photos/1.jpg", "1.jpg", "image")
+            .unwrap();
+        db.insert_media("m2", "/photos/2.jpg", "2.jpg", "image")
+            .unwrap();
+        db.insert_media("m3", "/photos/3.jpg", "3.jpg", "image")
+            .unwrap();
+    }
+
+    for (path, bytes) in [
+        ("/photos/1.jpg", shared_bytes.as_slice()),
+        ("/photos/2.jpg", shared_bytes.as_slice()),
+        ("/photos/3.jpg", unique_bytes.as_slice()),
+    ] {
+        apply_worker_envelope(
+            &state,
+            &envelope(
+                "media_info",
+                json!({
+                    "media_path": path,
+                    "media_kind": "image",
+                    "width": 100,
+                    "height": 100,
+                    "frame_count": 1,
+                    "fps": 0.0,
+                    "duration_seconds": 0.0,
+                    "jpeg_base64": base64::engine::general_purpose::STANDARD.encode(bytes),
+                }),
+            ),
+        )
+        .unwrap();
+    }
+
+    let snap = state.snapshot().unwrap();
+    let shared_file = crate::preview_cache::confined_preview_path(
+        &paths.preview_root,
+        &snap.media[0].preview_data_url,
+    )
+    .unwrap();
+    let unique_file = crate::preview_cache::confined_preview_path(
+        &paths.preview_root,
+        &snap.media[2].preview_data_url,
+    )
+    .unwrap();
+    assert!(shared_file.is_file());
+    assert!(unique_file.is_file());
+    assert_eq!(
+        snap.media[0].preview_data_url,
+        snap.media[1].preview_data_url
+    );
+
+    // Removing m1 keeps shared_file because m2 still references it.
+    crate::commands::remove_media_checked(&state, "m1").unwrap();
+    assert!(shared_file.is_file());
+
+    // Removing m3 deletes unique_file because nothing else references it.
+    crate::commands::remove_media_checked(&state, "m3").unwrap();
+    assert!(!unique_file.exists());
+
+    // Simulate a completed result preview; clear_results deletes the result preview
+    // while keeping m2's input thumbnail.
+    {
+        let db = lock(&state.database).unwrap();
+        db.insert_job("job-2", "m2", "{}").unwrap();
+        db.finish_job("job-2", "completed", "/out/2.png", "")
+            .unwrap();
+    }
+    {
+        let mut runtime = lock(&state.runtime).unwrap();
+        runtime.last_output_path = "/out/2.png".into();
+        runtime.comparison_media_id = "m2".into();
+        runtime.comparison_output_path = "/out/2.png".into();
+    }
+    apply_worker_envelope(
+        &state,
+        &envelope(
+            "preview_ready",
+            json!({
+                "image_path": "/out/2.png",
+                "jpeg_base64": base64::engine::general_purpose::STANDARD.encode(result_bytes),
+            }),
+        ),
+    )
+    .unwrap();
+    let result_url = lock(&state.runtime)
+        .unwrap()
+        .result_preview_data_url
+        .clone();
+    let result_file =
+        crate::preview_cache::confined_preview_path(&paths.preview_root, &result_url).unwrap();
+    assert!(result_file.is_file());
+
+    crate::commands::clear_results_checked(&state).unwrap();
+    assert!(!result_file.exists());
+    assert!(shared_file.is_file());
+
+    // Write an unreferenced orphan file and an old legacy data: URL row, then restart AppState.
+    let orphan = paths.preview_root.join("orphan-preview.jpg");
+    std::fs::write(&orphan, b"orphan").unwrap();
+    {
+        let db = lock(&state.database).unwrap();
+        db.insert_media("m4", "/photos/4.jpg", "4.jpg", "image")
+            .unwrap();
+        db.update_media_probe(
+            "/photos/4.jpg",
+            "image",
+            10,
+            10,
+            1,
+            0.0,
+            0.0,
+            "data:image/jpeg;base64,bGVnYWN5",
+            "",
+            "",
+            true,
+        )
+        .unwrap();
+    }
+    drop(state);
+
+    let restarted = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    assert!(
+        !orphan.exists(),
+        "startup sweep must remove unreferenced file"
+    );
+    assert!(
+        shared_file.is_file(),
+        "startup sweep must keep referenced file"
+    );
+    assert_eq!(
+        restarted
+            .snapshot()
+            .unwrap()
+            .media
+            .iter()
+            .find(|m| m.id == "m4")
+            .unwrap()
+            .preview_data_url,
+        "data:image/jpeg;base64,bGVnYWN5"
+    );
+
+    crate::commands::clear_media_checked(&restarted).unwrap();
+    assert!(!shared_file.exists());
 }

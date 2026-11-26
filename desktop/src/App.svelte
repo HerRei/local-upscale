@@ -1891,7 +1891,7 @@
     if (message.type === 'media_info') {
       if (
         String(message.data.media_path ?? '') === selectedMedia?.path &&
-        message.data.jpeg_base64
+        (message.data.preview_url || message.data.jpeg_base64)
       ) {
         previewPane?.allowPreviewRetry();
       }

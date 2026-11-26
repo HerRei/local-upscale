@@ -144,6 +144,11 @@ impl AppState {
             ));
         }
         let (mut database, set_aside) = Database::open_or_set_aside(&paths.database)?;
+        if let Err(error) =
+            crate::preview_cache::sweep_unreferenced(&paths.preview_root, &database, None)
+        {
+            eprintln!("LocalSR could not clean unreferenced preview files: {error}");
+        }
         let worker = WorkerControl::default();
         for id in crate::cancellation::sweep_scratch(&database.take_interrupted_scratch(), &worker)
         {

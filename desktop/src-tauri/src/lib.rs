@@ -27,6 +27,7 @@ mod native_menu;
 mod output_names;
 mod paths;
 mod pipe_lines;
+mod preview_cache;
 mod process_priority;
 mod process_tree;
 mod programs;
@@ -171,6 +172,13 @@ pub fn run() {
                 lock(&state.launch_intents)?.append(&mut early);
             }
             app.manage(state.clone());
+            app.asset_protocol_scope()
+                .allow_directory(&state.paths.preview_root, false)
+                .map_err(|error| {
+                    crate::error::AppError::Config(format!(
+                        "could not authorize the preview cache: {error}"
+                    ))
+                })?;
             if !smoke_test {
                 show_startup_notices(app.handle(), &state);
             }

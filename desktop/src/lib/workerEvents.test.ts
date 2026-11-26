@@ -1033,6 +1033,51 @@ describe('structural sharing', () => {
     expect(afterFail.media[1].error).toBe('corrupt file');
   });
 
+  it('uses host-provided preview_url on media_info, video_frame_completed and live_preview_frame', () => {
+    const before = twoMedia();
+    const assetThumb = 'asset://localhost/%2Fcache%2Fpreviews%2Fthumb.jpg';
+    const afterInfo = applyWorkerEnvelope(before, {
+      type: 'media_info',
+      data: {
+        media_path: '/second.png',
+        width: 400,
+        height: 300,
+        frame_count: 1,
+        fps: 0,
+        duration_seconds: 0,
+        preview_url: assetThumb,
+      },
+    });
+    expect(afterInfo.media[1].preview_data_url).toBe(assetThumb);
+
+    const started = applyWorkerEnvelope(afterInfo, {
+      type: 'job_started',
+      data: { job_id: 'job-v' },
+    });
+    const frameUrl = 'asset://localhost/%2Fcache%2Fpreviews%2Fframe.jpg';
+    const afterFrame = applyWorkerEnvelope(started, {
+      type: 'video_frame_completed',
+      data: {
+        job_id: 'job-v',
+        frames_processed: 1,
+        total_frames: 10,
+        preview_url: frameUrl,
+      },
+    });
+    expect(afterFrame.runtime.result_preview_data_url).toBe(frameUrl);
+
+    const liveUrl = 'asset://localhost/%2Fcache%2Fpreviews%2Flive.jpg';
+    const afterLive = applyWorkerEnvelope(started, {
+      type: 'live_preview_frame',
+      data: {
+        job_id: 'job-v',
+        preview_kind: 'video',
+        preview_url: liveUrl,
+      },
+    });
+    expect(afterLive.runtime.result_preview_data_url).toBe(liveUrl);
+  });
+
   it('returns the exact same snapshot for unhandled event types', () => {
     const before = twoMedia();
     const after = applyWorkerEnvelope(before, {
