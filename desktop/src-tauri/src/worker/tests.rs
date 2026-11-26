@@ -912,7 +912,7 @@ fn a_stop_the_host_asked_for_never_counts_as_a_failed_start() {
     for _ in 0..10 {
         assert_eq!(
             restart_delay(&count, Duration::from_secs(1), false, false),
-            Some(Duration::from_secs(1))
+            Some(Duration::ZERO)
         );
     }
     assert_eq!(count.load(Ordering::SeqCst), 0);
