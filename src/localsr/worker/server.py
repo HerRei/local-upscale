@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 import base64
 import gc
 import importlib.util
 import io
 import json
+import math
 import os
 import queue
 import sys
@@ -10,31 +13,16 @@ import threading
 import time
 import traceback
 from pathlib import Path
-
-import numpy as np
-from PIL import Image
+from typing import TYPE_CHECKING, Any
 
 # Set MPS memory limits before torch is imported
 os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.62")
 os.environ.setdefault("PYTORCH_MPS_LOW_WATERMARK_RATIO", "0.52")
 
 from localsr import __version__
-from localsr.core.benchmark import (
-    MEASURED_FRAME_COUNT,
-    WARMUP_COUNT,
-    WORKLOAD_MODEL_ID,
-    WORKLOAD_VERSION,
-    run_benchmark,
-)
 from localsr.core.disk_space import failure_fields, require_video_room
 from localsr.core.eta import RemainingTime
-from localsr.core.hardware import get_capability_report, with_current_memory
 from localsr.core.image_formats import is_video_input
-from localsr.core.image_io import ImageManager
-from localsr.core.inference import InferenceEngine
-from localsr.core.live_preview import LatestPreviewEncoder, PreviewPacket
-from localsr.core.media_codecs import EXTERNAL_OUTPUT_CODECS
-from localsr.core.model_adapter import ModelAdapter
 from localsr.core.model_catalog import (
     AUDIO_CATALOG_BY_ID,
     CATALOG_BY_ID,
@@ -51,7 +39,6 @@ from localsr.core.preparation import (
     abandoned_work_running,
     bounded_preparation,
 )
-from localsr.core.video_pipeline import VideoFixStage, VideoJobConfig, run_video_job
 from localsr.protocol.messages import (
     MIN_PROTOCOL_VERSION,
     PROTOCOL_VERSION,
@@ -97,6 +84,45 @@ from localsr.worker.request_validation import (
 )
 from localsr.worker.result_preview import ResultPreviewService
 
+if TYPE_CHECKING:
+    import numpy as np
+
+    from localsr.core.live_preview import PreviewPacket
+
+# Loaded on first use so worker startup avoids importing numpy/PIL/torch/spandrel/av.
+# Kept at module scope so tests can monkeypatch them directly.
+LatestPreviewEncoder: Any = None
+run_video_job: Any = None
+with_current_memory: Any = None
+
+
+def _latest_preview_encoder():
+    global LatestPreviewEncoder
+    if LatestPreviewEncoder is None:
+        from localsr.core.live_preview import LatestPreviewEncoder as encoder_cls
+
+        LatestPreviewEncoder = encoder_cls
+    return LatestPreviewEncoder
+
+
+def _run_video_job_fn():
+    global run_video_job
+    if run_video_job is None:
+        from localsr.core.video_pipeline import run_video_job as runner
+
+        run_video_job = runner
+    return run_video_job
+
+
+def _with_current_memory_fn():
+    global with_current_memory
+    if with_current_memory is None:
+        from localsr.core.hardware import with_current_memory as fn
+
+        with_current_memory = fn
+    return with_current_memory
+
+
 # Prevent interleaved JSON Lines from concurrent worker threads.
 print_lock = threading.Lock()
 
@@ -108,6 +134,8 @@ def send_message(msg):
 
 
 def _encode_chw_jpeg(image, max_dimension: int, quality: int = 78) -> str:
+    from PIL import Image
+
     if hasattr(image, "detach"):
         array = image.detach().to("cpu").clamp(0, 1).mul(255).byte().numpy()
     else:
@@ -146,7 +174,7 @@ BUNDLE_CHECK_SECONDS = 600.0
 BUNDLE_LOAD_SECONDS = 900.0
 
 
-def _engine_features() -> list[str]:
+def _engine_features(video_engines: list[str] | None = None) -> list[str]:
     from localsr.core.steps import LIMITS, REQUIRED_STEP_FEATURES
 
     features = [
@@ -168,9 +196,10 @@ def _engine_features() -> list[str]:
         if feature not in features:
             features.append(feature)
     features.append("compare_regions")
-    if "seedvr2" in _video_engines():
+    engines = _video_engines() if video_engines is None else video_engines
+    if "seedvr2" in engines:
         features.append("video_seedvr2")
-    if "flashvsr" in _video_engines():
+    if "flashvsr" in engines:
         features.append("video_flashvsr")
     if importlib.util.find_spec("cv2") is not None:
         try:
@@ -234,14 +263,15 @@ class WorkerServer:
         return model, expected
 
     def _create_video_preview_encoders(self, job_id, data):
-        preview_encoder = LatestPreviewEncoder(
+        encoder_cls = _latest_preview_encoder()
+        preview_encoder = encoder_cls(
             lambda packet: self._emit_live_preview(packet),
             lambda message: send_message(LivePreviewWarning(job_id=job_id, message=message)),
             enabled=bool(data.get("preview_enabled", True)),
             max_fps=float(data.get("preview_max_fps", 2.0)),
             max_dimension=int(data.get("preview_max_dimension", 320)),
         )
-        source_encoder = LatestPreviewEncoder(
+        source_encoder = encoder_cls(
             self._emit_live_preview,
             enabled=bool(data.get("preview_enabled", True)),
             max_dimension=640,
@@ -255,6 +285,8 @@ class WorkerServer:
         # Set once stdin closed or a shutdown was requested; job activation never clears it.
         self.shutdown_event = threading.Event()
         self.state_lock = threading.Lock()
+        self._lazy_lock = threading.Lock()
+        self._warmup_started = False
         self.running = True
         self.active_job_id = None
         self.active_batch_job_ids: set[str] = set()
@@ -262,9 +294,9 @@ class WorkerServer:
         self.pending_cancel_keep_partial: dict[str, bool] = {}
         # Keeping the finished part is always an explicit choice; any other stop discards.
         self.active_cancel_keep_partial = False
-        self.model_adapter = ModelAdapter()
+        self._model_adapter: Any = None
         self.model_store = ModelStore()
-        self.engine = InferenceEngine(self.model_adapter)
+        self._engine: Any = None
         self.approved_model_cache: dict[str, str] = {}
         self.result_previews = ResultPreviewService(send_message)
         from localsr.worker.compare_regions import RegionService
@@ -276,6 +308,56 @@ class WorkerServer:
         self.last_capabilities: dict | None = None
         self._batch_save_pipeline = None
         self._batch_has_more = False
+
+    @property
+    def model_adapter(self):
+        if self._model_adapter is None:
+            with self._lazy_lock:
+                if self._model_adapter is None:
+                    from localsr.core.model_adapter import ModelAdapter
+
+                    self._model_adapter = ModelAdapter()
+        return self._model_adapter
+
+    @model_adapter.setter
+    def model_adapter(self, value) -> None:
+        with self._lazy_lock:
+            self._model_adapter = value
+
+    @property
+    def engine(self):
+        if self._engine is None:
+            adapter = self.model_adapter
+            with self._lazy_lock:
+                if self._engine is None:
+                    from localsr.core.inference import InferenceEngine
+
+                    self._engine = InferenceEngine(adapter)
+        return self._engine
+
+    @engine.setter
+    def engine(self, value) -> None:
+        with self._lazy_lock:
+            self._engine = value
+
+    def _start_warmup(self) -> None:
+        """Warm Spandrel's architecture registry and Torch off the ready path."""
+        with self._lazy_lock:
+            if self._warmup_started or self.shutdown_event.is_set():
+                return
+            self._warmup_started = True
+
+        def warm() -> None:
+            # Yield briefly so an immediate capabilities_request or shutdown_request
+            # is not serialized behind Spandrel's import lock.
+            if self.shutdown_event.wait(0.05):
+                return
+            try:
+                _ = self.engine
+            except Exception:  # noqa: BLE001 - first real job will surface any load error
+                pass
+
+        threading.Thread(target=warm, name="model-warmup", daemon=True).start()
 
     def _check_approved_checkpoint(self, data: dict) -> None:
         digest = data.get("approved_checkpoint_sha256")
@@ -298,9 +380,11 @@ class WorkerServer:
         report = self.last_capabilities
         if not busy or report is None:
             return False
+        refresh_memory = _with_current_memory_fn()
+
         # The readings can take a moment on macOS; the reader must stay free for a cancel.
         threading.Thread(
-            target=lambda: send_message(CapabilitiesInfo(**with_current_memory(report))),
+            target=lambda: send_message(CapabilitiesInfo(**refresh_memory(report))),
             name="capabilities-refresh",
             daemon=True,
         ).start()
@@ -501,6 +585,7 @@ class WorkerServer:
                 data = msg.get("data", {})
 
                 if req_type == "shutdown_request":
+                    self.shutdown_event.set()
                     self.running = False
                     break
 
@@ -527,19 +612,23 @@ class WorkerServer:
                             )
                         )
                         continue
+                    video_engines = _video_engines()
                     send_message(
                         EngineInfo(
                             protocol_version=PROTOCOL_VERSION,
                             minimum_protocol_version=MIN_PROTOCOL_VERSION,
                             engine_id="localsr.pytorch-spandrel",
                             engine_version=__version__,
-                            features=_engine_features(),
+                            features=_engine_features(video_engines),
                             model_formats=[".safetensors", ".pth", ".pt", ".ckpt"],
-                            video_engines=_video_engines(),
+                            video_engines=video_engines,
                         )
                     )
+                    self._start_warmup()
 
                 elif req_type == "capabilities_request":
+                    from localsr.core.hardware import get_capability_report
+
                     report = get_capability_report()
                     self.last_capabilities = report
                     send_message(CapabilitiesInfo(**report))
@@ -590,6 +679,8 @@ class WorkerServer:
                                 )
                             )
                         else:
+                            from localsr.core.image_io import ImageManager
+
                             report_probe("decoding_image")
                             preview_data = ImageManager().load(media_path)
                             tensor = preview_data["tensor"]
@@ -645,8 +736,10 @@ class WorkerServer:
                     self._activate_job(job_id)
                     try:
                         # Restoration caches and native Qwen weights must never coexist.
-                        self.model_adapter.release()
-                        self.engine.release_model()
+                        if self._model_adapter is not None:
+                            self._model_adapter.release()
+                        if self._engine is not None:
+                            self._engine.release_model()
                         gc.collect()
                         import torch
 
@@ -780,6 +873,14 @@ class WorkerServer:
 
     def _run_benchmark(self, job_id: str, data: dict) -> None:
         """Authenticate and execute the fixed, production-path benchmark."""
+        from localsr.core.benchmark import (
+            MEASURED_FRAME_COUNT,
+            WARMUP_COUNT,
+            WORKLOAD_MODEL_ID,
+            WORKLOAD_VERSION,
+            run_benchmark,
+        )
+
         # Benchmark scores describe the PyTorch device path; a first-use Core
         # ML conversion inside the warm-up would also distort them.
         self.engine.neural_engine_enabled = False
@@ -1193,7 +1294,7 @@ class WorkerServer:
                 cancel_event=self.cancel_event,
                 emit=emit,
                 emit_preview=self._emit_live_preview,
-                preview_factory=LatestPreviewEncoder,
+                preview_factory=_latest_preview_encoder(),
                 keep_partial=self._batch_keeps_partial,
             ).run(jobs)
         except Exception as error:  # noqa: BLE001 - the process boundary, as for one job
@@ -1253,7 +1354,7 @@ class WorkerServer:
             cancel_event=self.cancel_event,
             emit=send_message,
             emit_preview=self._emit_live_preview,
-            preview_factory=LatestPreviewEncoder,
+            preview_factory=_latest_preview_encoder(),
             keep_partial=lambda: self._keep_partial_for_job(job_id),
             save_pipeline=self._batch_save_pipeline,
             overlap_save=self._batch_has_more,
@@ -1338,6 +1439,7 @@ class WorkerServer:
         """
         import time as _time
 
+        from localsr.core.media_codecs import EXTERNAL_OUTPUT_CODECS
         from localsr.core.video_io import (
             probe_video,
             selected_frame_count,
@@ -1347,7 +1449,7 @@ class WorkerServer:
         output_path = data["output_video_path"]
         probe = probe_video(video_path)
         if data.get("fps") is not None:
-            if not np.isfinite(float(data["fps"])) or float(data["fps"]) <= 0:
+            if not math.isfinite(float(data["fps"])) or float(data["fps"]) <= 0:
                 raise ValueError("Video FPS override must be a finite positive number.")
             send_message(
                 LogMessage(
@@ -1979,6 +2081,7 @@ class WorkerServer:
             return
 
         from localsr.core.media_bridge import load_media_bridge
+        from localsr.core.video_pipeline import VideoFixStage, VideoJobConfig
 
         synthesizer = self._interpolation_synthesizer(job_id, data) if interpolating else None
         clean_audio = bool(data.get("audio_denoise", False)) and data.get("fps") is None
@@ -2119,7 +2222,7 @@ class WorkerServer:
         def display_pixels(pixels):
             # Bound the display proxy before copying or tone mapping a 16K HDR
             # output. The export continues to use the original float array.
-            stride = max(1, int(np.ceil(max(pixels.shape[:2]) / 640)))
+            stride = max(1, math.ceil(max(pixels.shape[:2]) / 640))
             proxy = pixels[::stride, ::stride]
             return tone_map_to_sdr(proxy, hdr_transfer, 9) if hdr_format else proxy
 
@@ -2219,7 +2322,7 @@ class WorkerServer:
 
         send_message(LogMessage(level="info", message="Starting video inference..."))
         try:
-            result = run_video_job(
+            result = _run_video_job_fn()(
                 config=config,
                 engine=self.engine,
                 cancel_event=self.cancel_event,
