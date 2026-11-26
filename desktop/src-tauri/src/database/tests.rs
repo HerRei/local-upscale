@@ -1139,3 +1139,62 @@ fn video_history_reads_source_timing_for_both_result_queries() {
         }
     }
 }
+
+#[test]
+fn old_0_6_1_requests_recover_after_crash_and_deserialize_into_typed_requests() {
+    let directory = tempfile::tempdir().unwrap();
+    let db_path = directory.path().join("queue.db");
+    let scratch = directory.path().join(".localsr-job-061");
+    std::fs::create_dir_all(&scratch).unwrap();
+
+    let running_061 = r#"{"type":"job_request","data":{"job_id":"061-running","image_path":"/in/a.png","model_path":"/models/span.pth","output_path":"/out/a_upscaled_4x.png","scratch_directory":"/work/061","output_format":"png","device":"mps","tile_size":256,"halo":32,"precision":"fp32","jpeg_quality":98,"preserve_metadata":true,"safe_memory":false,"neural_engine":true,"preview_enabled":true,"preview_max_fps":2.0,"preview_max_dimension":320,"output_scale":4,"face_model_path":null,"face_fidelity":0.7,"stages":[{"kind":"upscale","role":"primary","fix":null,"model_id":"span_photo_x4","model_path":"/models/span.pth"}],"allow_unverified_checkpoint":false,"approved_checkpoint_sha256":null}}"#;
+    let queued_061 = r#"{"type":"video_job_request","data":{"job_id":"061-queued","video_path":"/in/clip.mp4","hdr_mode":"tone_map","model_path":"/models/span.pth","output_video_path":"/out/clip_video_4x.mp4","container":"mp4","video_codec":"av1","external_ffmpeg":"","crf":18,"fps":null,"device":"cpu","tile_size":256,"halo":32,"precision":"fp32","safe_memory":false,"neural_engine":true,"keyframe_interval":null,"start_frame":null,"end_frame":null,"face_model_path":null,"face_fidelity":0.7,"deflicker":false,"deflicker_window":3,"model_kind":"spandrel_image","bundle_dir":null,"temporal_window":0,"temporal_overlap":0,"target_resolution":0,"output_scale":4,"stages":[{"kind":"upscale","role":"primary","fix":null,"model_id":"span_photo_x4","model_path":"/models/span.pth"}],"allow_unverified_checkpoint":false,"approved_checkpoint_sha256":null,"preview_enabled":true,"preview_max_fps":2.0,"preview_max_dimension":320,"interpolation":"off","interpolation_order":"after_upscale","interpolation_model_id":null,"interpolation_bundle_dir":null,"audio_denoise":false,"audio_denoise_model_id":null,"audio_denoise_bundle_dir":null,"run_alone":true}}"#;
+
+    {
+        let db = Database::open(&db_path).unwrap();
+        db.insert_media("m1", "/in/a.png", "a.png", "image")
+            .unwrap();
+        db.insert_media("m2", "/in/clip.mp4", "clip.mp4", "video")
+            .unwrap();
+        db.insert_job("061-running", "m1", running_061).unwrap();
+        db.set_job_status("061-running", "running").unwrap();
+        db.record_scratch("061-running", &scratch).unwrap();
+        db.insert_job("061-queued", "m2", queued_061).unwrap();
+    }
+
+    // Reopening the database recovers stale scratch and preserves queued 0.6.1 requests.
+    let mut reopened = Database::open(&db_path).unwrap();
+    let stale = reopened.take_interrupted_scratch();
+    assert_eq!(stale.len(), 1);
+    assert_eq!(stale[0].id, "061-running");
+    assert_eq!(
+        stale[0].output,
+        std::path::Path::new("/out/a_upscaled_4x.png")
+    );
+    assert_eq!(stale[0].scratch, scratch);
+
+    let unfinished = reopened.unfinished_requests().unwrap();
+    assert_eq!(unfinished.len(), 1);
+    let queued = reopened.next_queued_job().unwrap().unwrap();
+    assert_eq!(queued.id, "061-queued");
+    assert_eq!(
+        reopened.unfinished_output_paths().unwrap(),
+        [std::path::PathBuf::from("/out/clip_video_4x.mp4")]
+    );
+    assert!(reopened
+        .unfinished_job_needs_model(std::path::Path::new("/models/span.pth"))
+        .unwrap());
+
+    let parsed_running: crate::protocol::WorkerJobRequest =
+        serde_json::from_str(running_061).unwrap();
+    let parsed_queued: crate::protocol::WorkerJobRequest =
+        serde_json::from_str(&queued.request_json).unwrap();
+    assert!(matches!(
+        parsed_running,
+        crate::protocol::WorkerJobRequest::Job(_)
+    ));
+    assert!(matches!(
+        parsed_queued,
+        crate::protocol::WorkerJobRequest::Video(_)
+    ));
+}

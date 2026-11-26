@@ -111,7 +111,7 @@ pub(crate) fn start_edit_checked(
             let model = crate::editing::custom_edit_model(&custom).ok_or_else(|| {
                 AppError::Validation("Choose your custom editing model files first.".into())
             })?;
-            let mut files = serde_json::Map::new();
+            let mut files = std::collections::BTreeMap::new();
             for file in &model.files {
                 let path = match file.role.as_str() {
                     "diffusion" => &custom.diffusion_path,
@@ -120,9 +120,9 @@ pub(crate) fn start_edit_checked(
                     "vae" => &custom.vae_path,
                     _ => "",
                 };
-                files.insert(file.role.clone(), json!(path));
+                files.insert(file.role.clone(), path.to_owned());
             }
-            (model, String::new(), Some(Value::Object(files)))
+            (model, String::new(), Some(files))
         } else {
             let model = crate::editing::catalog_in(&state.model_root())?
                 .into_iter()
@@ -162,21 +162,49 @@ pub(crate) fn start_edit_checked(
         .unwrap_or_default()
         .to_string_lossy();
     let output = directory.join(format!("{stem}_localsr_edit_{}.png", &id[..8]));
-    let mut data = json!({
-        "job_id": id, "image_path": media.path, "output_path": output.to_string_lossy(),
-        "model_id": model.model_id,
-        "bundle_dir": bundle_dir,
-        "runtime_path": runtime.to_string_lossy(), "prompt": input.prompt,
-        "device": input.device, "max_dimension": input.max_dimension,
-        "steps": input.steps, "seed": input.seed, "accepted_terms": input.accepted_terms,
-    });
-    if let Some(files) = custom_files {
-        data["family"] = json!(model.family);
-        data["custom_files"] = files;
-    }
-    let request = json!({"type": "edit_job_request", "data": data});
+    let request = build_edit_request(
+        &id,
+        &media.path,
+        &output,
+        &model,
+        bundle_dir,
+        &runtime,
+        &input,
+        custom_files,
+    );
     lock(&state.database)?.insert_job(&id, &media.id, &serde_json::to_string(&request)?)?;
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_edit_request(
+    job_id: &str,
+    image_path: &str,
+    output: &Path,
+    model: &crate::editing::EditModel,
+    bundle_dir: String,
+    runtime: &Path,
+    input: &crate::editing::StartEditInput,
+    custom_files: Option<std::collections::BTreeMap<String, String>>,
+) -> crate::protocol::WorkerJobRequest {
+    crate::protocol::WorkerJobRequest::Edit(crate::protocol::EditJobRequest {
+        job_id: job_id.to_owned(),
+        image_path: image_path.to_owned(),
+        output_path: output.to_string_lossy().into_owned(),
+        model_id: model.model_id.clone(),
+        bundle_dir,
+        runtime_path: runtime.to_string_lossy().into_owned(),
+        prompt: input.prompt.clone(),
+        device: input.device.clone(),
+        max_dimension: input.max_dimension,
+        steps: input.steps,
+        seed: input.seed,
+        accepted_terms: input.accepted_terms,
+        scratch_directory: None,
+        output_temporary_directory: None,
+        family: custom_files.as_ref().map(|_| model.family.clone()),
+        custom_files,
+    })
 }
 
 /// The editing program to run: the one the host found at start-up or one the user
@@ -4465,7 +4493,25 @@ fn build_job_message(
     input: &StartBatchInput,
     selection: &ModelSelection,
 ) -> AppResult<Value> {
+    let request = build_job_request(job_id, media, output, scratch_directory, input, selection)?;
+    Ok(serde_json::to_value(request)?)
+}
+
+fn build_job_request(
+    job_id: &str,
+    media: &crate::types::MediaItem,
+    output: &Path,
+    scratch_directory: &Path,
+    input: &StartBatchInput,
+    selection: &ModelSelection,
+) -> AppResult<crate::protocol::WorkerJobRequest> {
+    use crate::protocol::{
+        HdrMode, ImageJobRequest, InterpolationMode, InterpolationOrder, OutputFormat, Precision,
+        VideoCodec, VideoContainer, VideoJobRequest, VideoModelKind, WorkerJobRequest,
+    };
+
     let output = output.to_string_lossy().into_owned();
+    let precision: Precision = input.precision.parse()?;
     match selection {
         ModelSelection::Image {
             model_id,
@@ -4477,41 +4523,43 @@ fn build_job_message(
             native_scale,
             skip_upscale,
             ..
-        } if input.task != "video" => Ok(json!({
-            "type": "job_request",
-            "data": {
-                "job_id": job_id,
-                "image_path": media.path,
-                "model_path": path,
-                "output_path": output,
-                "scratch_directory": scratch_directory.to_string_lossy(),
-                "output_format": input.output_format,
-                "device": input.device,
-                "tile_size": input.tile_size,
-                "halo": input.halo,
-                "precision": input.precision,
-                "jpeg_quality": input.jpeg_quality,
-                "preserve_metadata": input.preserve_metadata,
-                "safe_memory": input.safe_memory,
-                "neural_engine": input.neural_engine,
-                "preview_enabled": input.enable_live_preview,
-                "preview_max_fps": 2.0,
-                "preview_max_dimension": 320,
-                "output_scale": if input.task == "denoise" || *skip_upscale { 1 } else { input.output_scale.min(*native_scale).max(1) },
-                "face_model_path": face_path,
-                "face_fidelity": f64::from(input.face_fidelity) / 100.0,
-                "stages": image_pipeline_stages(
-                    preprocess,
-                    model_id,
-                    path,
-                    face_path.as_deref(),
-                    face_model_id,
-                    *skip_upscale,
-                    input,
-                ),
-                "allow_unverified_checkpoint": input.allow_unsafe_pickle_model,
-                "approved_checkpoint_sha256": approved_checkpoint_sha256
-            }
+        } if input.task != "video" => Ok(WorkerJobRequest::Job(ImageJobRequest {
+            job_id: job_id.to_owned(),
+            image_path: media.path.clone(),
+            model_path: path.clone(),
+            output_path: output,
+            scratch_directory: Some(scratch_directory.to_string_lossy().into_owned()),
+            output_temporary_directory: None,
+            output_format: input.output_format.parse::<OutputFormat>()?,
+            device: input.device.clone(),
+            tile_size: input.tile_size,
+            halo: input.halo,
+            precision,
+            jpeg_quality: input.jpeg_quality,
+            preserve_metadata: input.preserve_metadata,
+            safe_memory: input.safe_memory,
+            neural_engine: input.neural_engine,
+            preview_enabled: input.enable_live_preview,
+            preview_max_fps: 2.0,
+            preview_max_dimension: 320,
+            output_scale: Some(if input.task == "denoise" || *skip_upscale {
+                1
+            } else {
+                input.output_scale.min(*native_scale).max(1)
+            }),
+            face_model_path: face_path.clone(),
+            face_fidelity: f64::from(input.face_fidelity) / 100.0,
+            stages: Some(image_pipeline_stages(
+                preprocess,
+                model_id,
+                path,
+                face_path.as_deref(),
+                face_model_id,
+                *skip_upscale,
+                input,
+            )),
+            allow_unverified_checkpoint: Some(input.allow_unsafe_pickle_model),
+            approved_checkpoint_sha256: approved_checkpoint_sha256.clone(),
         })),
         ModelSelection::Image {
             model_id,
@@ -4541,59 +4589,85 @@ fn build_job_message(
             } else {
                 input.output_scale.min(*native_scale).max(1)
             };
-            let message = json!({
-                "type": "video_job_request",
-                "data": {
-                    "job_id": job_id,
-                    "video_path": media.path,
-                    "hdr_mode": if *skip_upscale && input.video_hdr_mode == "preserve" { "tone_map" } else { input.video_hdr_mode.as_str() },
-                    "model_path": path,
-                    "output_video_path": output,
-                    "container": input.video_container,
-                    "video_codec": input.video_codec,
-                    "external_ffmpeg": input.external_ffmpeg_path,
-                    "crf": input.video_crf,
-                    "fps": null,
-                    "device": input.device,
-                    "tile_size": input.tile_size,
-                    "halo": input.halo,
-                    "precision": input.precision,
-                    "safe_memory": input.safe_memory,
-                    "neural_engine": input.neural_engine,
-                    "keyframe_interval": null,
-                    "start_frame": null,
-                    "end_frame": null,
-                    "face_model_path": face_path,
-                    "face_fidelity": f64::from(input.face_fidelity) / 100.0,
-                    "deflicker": if temporal_at_1x { false } else { input.deflicker },
-                    "deflicker_window": input.deflicker_window,
-                    "model_kind": "spandrel_image",
-                    "bundle_dir": null,
-                    "temporal_window": 0,
-                    "temporal_overlap": 0,
-                    "target_resolution": 0,
-                    "output_scale": output_scale,
-                    "stages": image_pipeline_stages(
-                        preprocess,
-                        model_id,
-                        path,
-                        face_path.as_deref(),
-                        face_model_id,
-                        *skip_upscale,
-                        input,
-                    ),
-                    "allow_unverified_checkpoint": input.allow_unsafe_pickle_model,
-                    "approved_checkpoint_sha256": approved_checkpoint_sha256,
-                    "preview_enabled": input.enable_live_preview,
-                    "preview_max_fps": 2.0,
-                    "preview_max_dimension": 320,
-                    "interpolation": if interpolation.is_some() { input.video_interpolation.as_str() } else { "off" },
-                    "interpolation_order": input.video_interpolation_order,
-                    "interpolation_model_id": interpolation.as_ref().map(|resolved| resolved.model_id.clone()),
-                    "interpolation_bundle_dir": interpolation.as_ref().map(|resolved| resolved.bundle_dir.clone())
-                }
-            });
-            Ok(with_audio_denoise(message, audio_denoise.as_ref(), media))
+            let hdr_mode_str = if *skip_upscale && input.video_hdr_mode == "preserve" {
+                "tone_map"
+            } else {
+                input.video_hdr_mode.as_str()
+            };
+            let active_audio = audio_denoise.as_ref().filter(|_| media.has_audio);
+            Ok(WorkerJobRequest::Video(Box::new(VideoJobRequest {
+                job_id: job_id.to_owned(),
+                video_path: media.path.clone(),
+                hdr_mode: hdr_mode_str.parse::<HdrMode>()?,
+                model_path: path.clone(),
+                output_video_path: output,
+                container: input.video_container.parse::<VideoContainer>()?,
+                video_codec: input.video_codec.parse::<VideoCodec>()?,
+                external_ffmpeg: Some(input.external_ffmpeg_path.clone()),
+                crf: input.video_crf,
+                fps: None,
+                device: input.device.clone(),
+                tile_size: input.tile_size,
+                halo: input.halo,
+                precision,
+                safe_memory: input.safe_memory,
+                neural_engine: input.neural_engine,
+                keyframe_interval: None,
+                start_frame: None,
+                end_frame: None,
+                face_model_path: face_path.clone(),
+                face_fidelity: Some(f64::from(input.face_fidelity) / 100.0),
+                deflicker: if temporal_at_1x {
+                    false
+                } else {
+                    input.deflicker
+                },
+                deflicker_window: input.deflicker_window,
+                model_kind: VideoModelKind::SpandrelImage,
+                video_model_id: None,
+                bundle_dir: None,
+                temporal_window: 0,
+                temporal_overlap: 0,
+                target_resolution: 0,
+                video_low_memory: None,
+                output_scale: Some(output_scale),
+                stages: Some(image_pipeline_stages(
+                    preprocess,
+                    model_id,
+                    path,
+                    face_path.as_deref(),
+                    face_model_id,
+                    *skip_upscale,
+                    input,
+                )),
+                allow_unverified_checkpoint: Some(input.allow_unsafe_pickle_model),
+                approved_checkpoint_sha256: approved_checkpoint_sha256.clone(),
+                preview_enabled: input.enable_live_preview,
+                preview_max_fps: 2.0,
+                preview_max_dimension: 320,
+                interpolation: if interpolation.is_some() {
+                    input.video_interpolation.parse::<InterpolationMode>()?
+                } else {
+                    InterpolationMode::Off
+                },
+                interpolation_order: Some(
+                    input
+                        .video_interpolation_order
+                        .parse::<InterpolationOrder>()?,
+                ),
+                interpolation_model_id: interpolation
+                    .as_ref()
+                    .map(|resolved| resolved.model_id.clone()),
+                interpolation_bundle_dir: interpolation
+                    .as_ref()
+                    .map(|resolved| resolved.bundle_dir.clone()),
+                audio_denoise: active_audio.is_some(),
+                audio_denoise_model_id: active_audio.map(|resolved| resolved.model_id.clone()),
+                audio_denoise_bundle_dir: active_audio.map(|resolved| resolved.bundle_dir.clone()),
+                scratch_directory: None,
+                output_temporary_directory: None,
+                temporary_directory: None,
+            })))
         }
         ModelSelection::Temporal {
             model_id,
@@ -4611,72 +4685,58 @@ fn build_job_message(
                     .saturating_mul(u64::from(input.output_scale))
                     .min(u64::from(u32::MAX))
             };
-            let message = json!({
-                "type": "video_job_request",
-                "data": {
-                    "job_id": job_id,
-                    "video_path": media.path,
-                    "hdr_mode": input.video_hdr_mode,
-                    "model_path": "",
-                    "output_video_path": output,
-                    "container": input.video_container,
-                    "video_codec": input.video_codec,
-                    "external_ffmpeg": input.external_ffmpeg_path,
-                    "crf": input.video_crf,
-                    "fps": null,
-                    "device": input.device,
-                    "tile_size": input.tile_size,
-                    "halo": input.halo,
-                    "precision": input.precision,
-                    "safe_memory": input.safe_memory,
-                    "neural_engine": input.neural_engine,
-                    "keyframe_interval": null,
-                    "start_frame": null,
-                    "end_frame": null,
-                    "face_model_path": null,
-                    "deflicker": false,
-                    "deflicker_window": input.deflicker_window,
-                    "model_kind": engine_kind,
-                    "video_model_id": model_id,
-                    "bundle_dir": bundle_dir,
-                    "temporal_window": temporal_window,
-                    "temporal_overlap": temporal_overlap,
-                    "target_resolution": target,
-                    "video_low_memory": input.video_low_memory,
-                    "output_scale": input.output_scale,
-                    "allow_unverified_checkpoint": false,
-                    "preview_enabled": input.enable_live_preview,
-                    "preview_max_fps": 2.0,
-                    "preview_max_dimension": 320,
-                    "interpolation": "off"
-                }
-            });
-            Ok(with_audio_denoise(message, audio_denoise.as_ref(), media))
+            let active_audio = audio_denoise.as_ref().filter(|_| media.has_audio);
+            Ok(WorkerJobRequest::Video(Box::new(VideoJobRequest {
+                job_id: job_id.to_owned(),
+                video_path: media.path.clone(),
+                hdr_mode: input.video_hdr_mode.parse::<HdrMode>()?,
+                model_path: String::new(),
+                output_video_path: output,
+                container: input.video_container.parse::<VideoContainer>()?,
+                video_codec: input.video_codec.parse::<VideoCodec>()?,
+                external_ffmpeg: Some(input.external_ffmpeg_path.clone()),
+                crf: input.video_crf,
+                fps: None,
+                device: input.device.clone(),
+                tile_size: input.tile_size,
+                halo: input.halo,
+                precision,
+                safe_memory: input.safe_memory,
+                neural_engine: input.neural_engine,
+                keyframe_interval: None,
+                start_frame: None,
+                end_frame: None,
+                face_model_path: None,
+                face_fidelity: None,
+                deflicker: false,
+                deflicker_window: input.deflicker_window,
+                model_kind: engine_kind.parse::<VideoModelKind>()?,
+                video_model_id: Some(model_id.clone()),
+                bundle_dir: Some(bundle_dir.clone()),
+                temporal_window: *temporal_window,
+                temporal_overlap: *temporal_overlap,
+                target_resolution: target,
+                video_low_memory: Some(input.video_low_memory),
+                output_scale: Some(input.output_scale),
+                stages: None,
+                allow_unverified_checkpoint: Some(false),
+                approved_checkpoint_sha256: None,
+                preview_enabled: input.enable_live_preview,
+                preview_max_fps: 2.0,
+                preview_max_dimension: 320,
+                interpolation: InterpolationMode::Off,
+                interpolation_order: None,
+                interpolation_model_id: None,
+                interpolation_bundle_dir: None,
+                audio_denoise: active_audio.is_some(),
+                audio_denoise_model_id: active_audio.map(|resolved| resolved.model_id.clone()),
+                audio_denoise_bundle_dir: active_audio.map(|resolved| resolved.bundle_dir.clone()),
+                scratch_directory: None,
+                output_temporary_directory: None,
+                temporary_directory: None,
+            })))
         }
     }
-}
-
-fn with_audio_denoise(
-    mut message: serde_json::Value,
-    audio_denoise: Option<&ResolvedBundle>,
-    media: &crate::types::MediaItem,
-) -> serde_json::Value {
-    let active = audio_denoise.filter(|_| media.has_audio);
-    if let Some(data) = message
-        .get_mut("data")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        data.insert("audio_denoise".into(), json!(active.is_some()));
-        data.insert(
-            "audio_denoise_model_id".into(),
-            json!(active.map(|resolved| resolved.model_id.as_str())),
-        );
-        data.insert(
-            "audio_denoise_bundle_dir".into(),
-            json!(active.map(|resolved| resolved.bundle_dir.as_str())),
-        );
-    }
-    message
 }
 
 fn image_pipeline_stages(
@@ -4687,23 +4747,21 @@ fn image_pipeline_stages(
     face_model_id: &str,
     skip_upscale: bool,
     input: &StartBatchInput,
-) -> Vec<Value> {
+) -> Vec<crate::protocol::PipelineStageRequest> {
+    use crate::protocol::{PipelineStageRequest, StageExecution};
+
     let mut stages = Vec::with_capacity(crate::steps::registry().limits().max_recipe_stages);
     for stage in preprocess {
-        let mut entry = serde_json::Map::from_iter([
-            ("kind".into(), json!(stage.kind)),
-            ("role".into(), json!("fix")),
-            ("fix".into(), json!(stage.fix)),
-            ("model_id".into(), json!(stage.model_id)),
-            ("model_path".into(), json!(stage.path)),
-        ]);
-        if let Some(params) = &stage.params {
-            entry.insert("params".into(), Value::Object(params.clone()));
-        }
-        if let Some(mask_path) = &stage.mask_path {
-            entry.insert("mask_path".into(), json!(mask_path));
-        }
-        stages.push(Value::Object(entry));
+        stages.push(PipelineStageRequest {
+            kind: Some(stage.kind.to_owned()),
+            role: Some("fix".to_owned()),
+            fix: Some(stage.fix.clone()),
+            model_id: Some(stage.model_id.clone()),
+            model_path: Some(stage.path.clone()),
+            params: stage.params.clone(),
+            mask_path: stage.mask_path.clone(),
+            ..Default::default()
+        });
     }
     if skip_upscale {
         return stages;
@@ -4715,34 +4773,25 @@ fn image_pipeline_stages(
     } else {
         None
     };
-    let mut primary = serde_json::Map::from_iter([
-        (
-            "kind".into(),
-            json!(if restoring { "restore" } else { "upscale" }),
-        ),
-        ("role".into(), json!("primary")),
-        (
-            "fix".into(),
-            json!(primary_selection.map(|stage| stage.fix.as_str())),
-        ),
-        ("model_id".into(), json!(model_id)),
-        ("model_path".into(), json!(model_path)),
-    ]);
-    if let Some(params) = primary_selection.and_then(|stage| stage.params.as_ref()) {
-        primary.insert("params".into(), Value::Object(params.clone()));
-    }
-    if let Some(mask_path) = primary_selection.and_then(|stage| stage.mask_path.as_ref()) {
-        primary.insert("mask_path".into(), json!(mask_path));
-    }
-    stages.push(Value::Object(primary));
+    stages.push(PipelineStageRequest {
+        kind: Some(if restoring { "restore" } else { "upscale" }.to_owned()),
+        role: Some("primary".to_owned()),
+        fix: primary_selection.map(|stage| stage.fix.clone()),
+        model_id: Some(model_id.to_owned()),
+        model_path: Some(model_path.to_owned()),
+        params: primary_selection.and_then(|stage| stage.params.clone()),
+        mask_path: primary_selection.and_then(|stage| stage.mask_path.clone()),
+        ..Default::default()
+    });
     if let Some(path) = face_path {
-        stages.push(json!({
-            "kind": "face_restore",
-            "model_id": face_model_id,
-            "model_path": path,
-            "fidelity": f64::from(input.face_fidelity) / 100.0,
-            "execution": "fused-with-upscale",
-        }));
+        stages.push(PipelineStageRequest {
+            kind: Some("face_restore".to_owned()),
+            model_id: Some(face_model_id.to_owned()),
+            model_path: Some(path.to_owned()),
+            fidelity: Some(f64::from(input.face_fidelity) / 100.0),
+            execution: Some(StageExecution::FusedWithUpscale),
+            ..Default::default()
+        });
     }
     stages
 }

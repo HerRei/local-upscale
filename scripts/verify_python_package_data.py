@@ -10,6 +10,7 @@ from pathlib import Path
 
 REQUIRED_SUFFIXES = (
     "THIRD_PARTY_NOTICES.md",
+    "localsr/protocol/worker-protocol.schema.json",
     "localsr/video_models/seedvr2/configs_3b/main.yaml",
     "localsr/video_models/seedvr2/configs_7b/main.yaml",
     "localsr/video_models/seedvr2/neg_emb.safetensors",

@@ -162,7 +162,7 @@ fn multi_fix_serialization_preserves_five_stages_and_restore_primary_role() {
     })
     .collect();
     let mut options = input("upscale");
-    let stages = image_pipeline_stages(
+    let stages = serde_json::to_value(image_pipeline_stages(
         &prefix,
         "main",
         "/models/main",
@@ -170,7 +170,9 @@ fn multi_fix_serialization_preserves_five_stages_and_restore_primary_role() {
         "face",
         false,
         &options,
-    );
+    ))
+    .unwrap();
+    let stages = stages.as_array().unwrap();
     assert_eq!(stages.len(), 5);
     assert_eq!(
         stages
@@ -183,7 +185,7 @@ fn multi_fix_serialization_preserves_five_stages_and_restore_primary_role() {
     options.task = "denoise".into();
     options.fix_stages =
         serde_json::from_value(json!([{"fix":"noise","model_id":"noise"}])).unwrap();
-    let stages = image_pipeline_stages(
+    let stages = serde_json::to_value(image_pipeline_stages(
         &prefix[..2],
         "noise",
         "/models/noise",
@@ -191,7 +193,9 @@ fn multi_fix_serialization_preserves_five_stages_and_restore_primary_role() {
         "",
         false,
         &options,
-    );
+    ))
+    .unwrap();
+    let stages = stages.as_array().unwrap();
     assert_eq!(stages.len(), 3);
     assert_eq!(stages[2]["role"], "primary");
     assert_eq!(stages[2]["fix"], "noise");
@@ -4521,7 +4525,7 @@ fn stage_params_and_masks_are_forwarded_and_gated_by_engine_feature() {
         params: stage_with_params.params,
         mask_path: stage_with_params.mask_path,
     }];
-    let serialized = image_pipeline_stages(
+    let serialized = serde_json::to_value(image_pipeline_stages(
         &resolved,
         "main",
         "/models/main.pth",
@@ -4529,10 +4533,345 @@ fn stage_params_and_masks_are_forwarded_and_gated_by_engine_feature() {
         "",
         false,
         &input("upscale"),
-    );
+    ))
+    .unwrap();
+    let serialized = serialized.as_array().unwrap();
     assert_eq!(serialized[0]["params"], json!({"strength": 0.5}));
     assert_eq!(serialized[0]["mask_path"], "/tmp/mask.png");
     // Primary stage without params/mask_path omits those keys cleanly.
     assert!(serialized[1].get("params").is_none());
     assert!(serialized[1].get("mask_path").is_none());
+}
+
+#[test]
+fn typed_job_requests_match_fixtures_and_validate_against_schema() {
+    let schema: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../protocol/worker-protocol.schema.json"
+    ))
+    .unwrap();
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    let fixtures: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/job_request_samples.json"
+    ))
+    .unwrap();
+
+    let image_media = |path: &str, name: &str| crate::types::MediaItem {
+        id: "media".into(),
+        path: path.into(),
+        name: name.into(),
+        kind: "image".into(),
+        width: 1920,
+        height: 1080,
+        frame_count: 1,
+        fps: 0.0,
+        duration_seconds: 0.0,
+        preview_data_url: String::new(),
+        probe_status: "ready".into(),
+        hdr_format: String::new(),
+        audio_warning: String::new(),
+        has_audio: false,
+        error: String::new(),
+        selected: true,
+    };
+
+    let mut upscale_input = input("upscale");
+    upscale_input.model_id = "span_photo_x4".into();
+    upscale_input.enable_face_model = true;
+    upscale_input.face_fidelity = 65;
+    let upscale_selection = ModelSelection::Image {
+        model_id: "span_photo_x4".into(),
+        path: "/models/span.safetensors".into(),
+        approved_checkpoint_sha256: None,
+        preprocess: vec![
+            ResolvedImageStage {
+                kind: "restore",
+                fix: "blur".into(),
+                model_id: "nafnet_gopro_deblur".into(),
+                path: "/models/nafnet.pth".into(),
+                params: None,
+                mask_path: None,
+            },
+            ResolvedImageStage {
+                kind: "deblock",
+                fix: "jpeg".into(),
+                model_id: "fbcnn_color".into(),
+                path: "/models/fbcnn.pth".into(),
+                params: None,
+                mask_path: None,
+            },
+        ],
+        face_path: Some("/models/face.pth".into()),
+        face_model_id: "hat_l_x4_face".into(),
+        native_scale: 4,
+        skip_upscale: false,
+        interpolation: None,
+        audio_denoise: None,
+    };
+
+    let mut restore_input = input("denoise");
+    restore_input.model_id = "scunet_color_real_psnr".into();
+    restore_input.output_scale = 1;
+    restore_input.fix_stages = vec![
+        crate::types::FixStageSelection {
+            fix: "jpeg".into(),
+            model_id: "fbcnn_color".into(),
+            ..Default::default()
+        },
+        crate::types::FixStageSelection {
+            fix: "noise".into(),
+            model_id: "scunet_color_real_psnr".into(),
+            ..Default::default()
+        },
+    ];
+    let restore_selection = ModelSelection::Image {
+        model_id: "scunet_color_real_psnr".into(),
+        path: "/models/scunet.pth".into(),
+        approved_checkpoint_sha256: None,
+        preprocess: vec![ResolvedImageStage {
+            kind: "deblock",
+            fix: "jpeg".into(),
+            model_id: "fbcnn_color".into(),
+            path: "/models/fbcnn.pth".into(),
+            params: None,
+            mask_path: None,
+        }],
+        face_path: None,
+        face_model_id: String::new(),
+        native_scale: 1,
+        skip_upscale: false,
+        interpolation: None,
+        audio_denoise: None,
+    };
+
+    let mut params_input = input("upscale");
+    params_input.model_id = "span_photo_x4".into();
+    params_input.output_scale = 2;
+    let params_selection = ModelSelection::Image {
+        model_id: "span_photo_x4".into(),
+        path: "/models/span.safetensors".into(),
+        approved_checkpoint_sha256: None,
+        preprocess: vec![ResolvedImageStage {
+            kind: "restore",
+            fix: "noise".into(),
+            model_id: "scunet_color_real_psnr".into(),
+            path: "/models/scunet.pth".into(),
+            params: Some(serde_json::Map::from_iter([(
+                "strength".into(),
+                json!(0.5),
+            )])),
+            mask_path: Some("/in/mask.png".into()),
+        }],
+        face_path: None,
+        face_model_id: String::new(),
+        native_scale: 4,
+        skip_upscale: false,
+        interpolation: None,
+        audio_denoise: None,
+    };
+
+    let mut fbf_video_input = input("video");
+    fbf_video_input.model_id = "span_photo_x4".into();
+    fbf_video_input.deflicker = true;
+    fbf_video_input.deflicker_window = 5;
+    fbf_video_input.video_interpolation = "x2".into();
+    fbf_video_input.video_interpolation_order = "before_upscale".into();
+    fbf_video_input.video_clean_audio = true;
+    let fbf_video_selection = ModelSelection::Image {
+        model_id: "span_photo_x4".into(),
+        path: "/models/span.safetensors".into(),
+        approved_checkpoint_sha256: None,
+        preprocess: Vec::new(),
+        face_path: None,
+        face_model_id: String::new(),
+        native_scale: 4,
+        skip_upscale: false,
+        interpolation: Some(ResolvedBundle {
+            model_id: "rife_4_26".into(),
+            bundle_dir: "/models/rife_4_26".into(),
+        }),
+        audio_denoise: Some(ResolvedBundle {
+            model_id: "deepfilternet3".into(),
+            bundle_dir: "/models/deepfilternet3".into(),
+        }),
+    };
+
+    let mut temporal_input = input("video");
+    temporal_input.video_model_id = "seedvr2_3b".into();
+    temporal_input.video_target_resolution = 1080;
+    temporal_input.video_low_memory = true;
+    let temporal_selection = ModelSelection::Temporal {
+        model_id: "seedvr2_3b".into(),
+        engine_kind: "seedvr2".into(),
+        bundle_dir: "/models/seedvr2".into(),
+        temporal_window: 9,
+        temporal_overlap: 2,
+        audio_denoise: None,
+    };
+    let mut silent_video = video_media();
+    silent_video.has_audio = false;
+
+    let catalog_edit_model = crate::editing::EditModel {
+        model_id: "qwen_edit_2511_q2_k".into(),
+        name: "Qwen Image Edit 2511".into(),
+        family: "qwen-image-edit-2511".into(),
+        quantization: "Q2_K".into(),
+        files: Vec::new(),
+        min_unified_memory_gb: 24,
+        min_vram_gb: 8,
+        default_steps: 40,
+        cfg_scale: 2.5,
+        author: String::new(),
+        license_name: String::new(),
+        license_url: String::new(),
+        source_url: String::new(),
+        commercial_use_allowed: None,
+        attribution_required: false,
+        terms_acceptance_required: false,
+        automated_download_allowed: true,
+        installed: true,
+        total_size_bytes: 0,
+    };
+    let catalog_edit_input = crate::editing::StartEditInput {
+        media_id: "media".into(),
+        model_id: "qwen_edit_2511_q2_k".into(),
+        prompt: "Replace the sky with sunset clouds.".into(),
+        runtime_path: "/bin/sd-cli".into(),
+        device: "mps".into(),
+        max_dimension: 512,
+        steps: 40,
+        seed: 42,
+        accepted_terms: false,
+        output_directory: "/out".into(),
+    };
+    let custom_edit_model = crate::editing::EditModel {
+        model_id: "__custom__".into(),
+        family: "flux2-klein".into(),
+        ..catalog_edit_model.clone()
+    };
+    let custom_edit_input = crate::editing::StartEditInput {
+        media_id: "media".into(),
+        model_id: "__custom__".into(),
+        prompt: "Make it warmer.".into(),
+        runtime_path: "/bin/sd-cli".into(),
+        device: "mps".into(),
+        max_dimension: 768,
+        steps: 4,
+        seed: 7,
+        accepted_terms: false,
+        output_directory: "/out".into(),
+    };
+    let custom_files = std::collections::BTreeMap::from([
+        ("diffusion".into(), "/custom/flux.gguf".into()),
+        ("text_encoder".into(), "/custom/te.gguf".into()),
+        ("vae".into(), "/custom/vae.safetensors".into()),
+    ]);
+
+    let work = Path::new("/work/scratch");
+    let generated = [
+        (
+            "image_upscale_fixes_and_face",
+            build_job_message(
+                "sample-image-upscale",
+                &image_media("/in/photo.png", "photo.png"),
+                Path::new("/out/photo_upscaled_4x.png"),
+                work,
+                &upscale_input,
+                &upscale_selection,
+            )
+            .unwrap(),
+        ),
+        (
+            "image_same_size_restore",
+            build_job_message(
+                "sample-image-restore",
+                &image_media("/in/noisy.png", "noisy.png"),
+                Path::new("/out/noisy_denoised.png"),
+                work,
+                &restore_input,
+                &restore_selection,
+            )
+            .unwrap(),
+        ),
+        (
+            "image_stage_params_and_mask",
+            build_job_message(
+                "sample-image-stage-params",
+                &image_media("/in/masked.png", "masked.png"),
+                Path::new("/out/masked_upscaled_2x.png"),
+                work,
+                &params_input,
+                &params_selection,
+            )
+            .unwrap(),
+        ),
+        (
+            "video_interpolation_deflicker_audio",
+            build_job_message(
+                "sample-video-fbf",
+                &video_media(),
+                Path::new("/out/clip_video_4x.mp4"),
+                work,
+                &fbf_video_input,
+                &fbf_video_selection,
+            )
+            .unwrap(),
+        ),
+        (
+            "video_temporal_model",
+            build_job_message(
+                "sample-video-temporal",
+                &silent_video,
+                Path::new("/out/clip_video_1080px.mp4"),
+                work,
+                &temporal_input,
+                &temporal_selection,
+            )
+            .unwrap(),
+        ),
+        (
+            "edit_catalog_model",
+            serde_json::to_value(build_edit_request(
+                "sample-edit-catalog",
+                "/in/photo.png",
+                Path::new("/out/photo_localsr_edit_sample.png"),
+                &catalog_edit_model,
+                "/models/qwen-image-edit-2511".into(),
+                Path::new("/bin/sd-cli"),
+                &catalog_edit_input,
+                None,
+            ))
+            .unwrap(),
+        ),
+        (
+            "edit_custom_model",
+            serde_json::to_value(build_edit_request(
+                "sample-edit-custom",
+                "/in/photo.png",
+                Path::new("/out/photo_localsr_edit_custom.png"),
+                &custom_edit_model,
+                String::new(),
+                Path::new("/bin/sd-cli"),
+                &custom_edit_input,
+                Some(custom_files),
+            ))
+            .unwrap(),
+        ),
+    ];
+
+    assert_eq!(
+        generated.len(),
+        fixtures.as_object().unwrap().len(),
+        "fixture sample count must match Rust sample set"
+    );
+    for (name, sample) in generated {
+        let errors: Vec<String> = validator
+            .iter_errors(&sample)
+            .map(|error| error.to_string())
+            .collect();
+        assert!(errors.is_empty(), "{name} failed schema: {errors:?}");
+        assert_eq!(sample, fixtures[name], "{name} drifted from fixture");
+        let round_trip: crate::protocol::WorkerJobRequest =
+            serde_json::from_value(sample.clone()).unwrap();
+        assert_eq!(serde_json::to_value(round_trip).unwrap(), sample, "{name}");
+    }
 }

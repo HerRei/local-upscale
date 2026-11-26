@@ -188,6 +188,8 @@ def test_validate_video_job_accepts_flashvsr():
             "video_path": "in.mp4",
             "model_path": "",
             "output_video_path": "out.mp4",
+            "container": "mp4",
+            "crf": 18,
             "device": "mps",
             "tile_size": 128,
             "halo": 16,
