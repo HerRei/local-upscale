@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
@@ -28,6 +28,26 @@ export interface Scenario {
   playbackFixtures?: string[];
   /** Populated by installFakeHost for `videoSyncCompare`. */
   playbackFixtureMap?: Record<string, string>;
+  /** Populated by installFakeHost for combined Compare playback fixtures. */
+  compareFixtures?: Record<
+    string,
+    {
+      video_url: string;
+      width: number;
+      height: number;
+      duration: number;
+      keys: string[];
+      slots: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+        fps: number;
+        duration: number;
+        frames: number;
+      }[];
+    }
+  >;
   /** Catalog model ids marked as installed. */
   installed?: string[];
   settings?: Record<string, unknown>;
@@ -725,34 +745,65 @@ function hostScript(scenario: Scenario): void {
         };
         return null;
       }
+      case 'prepare_compare_video': {
+        if (args.generation !== snapshot.runtime.compare.generation)
+          throw new Error('Stale Compare request');
+        const slots = snapshot.runtime.compare.slots as {
+          pick: { kind: string; job_id?: string };
+        }[];
+        const keys = slots.map((slot) =>
+          slot.pick.kind === 'original' ? 'original' : (slot.pick.job_id ?? 'original'),
+        );
+        const prefix = scenario.videoSyncCompare ? 'sync_' : 'cmp_';
+        const lookup = prefix + [...new Set(keys)].sort().join('__');
+        const entry = scenario.compareFixtures?.[lookup];
+        if (!entry) throw new Error(`No combined Compare fixture for ${lookup}`);
+        const audioMap: Record<string, string> = scenario.videoSyncCompare
+          ? (scenario.playbackFixtureMap ?? {})
+          : {
+              original: scenario.playbackFixtures?.[0] ?? '',
+              'video-15': scenario.playbackFixtures?.[0] ?? '',
+              'video-60': scenario.playbackFixtures?.[1] ?? '',
+              'video-part': scenario.playbackFixtures?.[2] ?? '',
+            };
+        return {
+          playback_note: '',
+          video_path: '',
+          video_url: entry.video_url,
+          width: entry.width,
+          height: entry.height,
+          duration: entry.duration,
+          slots: keys.map((key) => {
+            const tileIndex = entry.keys.indexOf(key);
+            const tile = entry.slots[tileIndex];
+            return {
+              x: tile.x,
+              y: tile.y,
+              width: tile.width,
+              height: tile.height,
+              fps: tile.fps,
+              duration: tile.duration,
+              frames: tile.frames,
+              audio_path: '',
+              audio_url: audioMap[key] ?? '',
+            };
+          }),
+        };
+      }
       case 'prepare_video_comparison': {
         if (scenario.videoSyncCompare) {
           const map = scenario.playbackFixtureMap!;
-          if (args.compareSlot === undefined) {
-            return {
-              original_path: '',
-              enhanced_path: '',
-              original_url: map.original,
-              enhanced_url: args.resultId ? (map[args.resultId] ?? '') : '',
-              playback_note: '',
-            };
-          }
-          const slot = snapshot.runtime.compare.slots[args.compareSlot];
-          if (args.compareGeneration !== snapshot.runtime.compare.generation || !slot)
-            throw new Error('Stale Compare request');
-          const key = slot.pick.kind === 'original' ? 'original' : (slot.pick.job_id ?? 'original');
           return {
             original_path: '',
             enhanced_path: '',
-            original_url: map[key] ?? '',
-            enhanced_url: '',
+            original_url: map.original,
+            enhanced_url: args.resultId ? (map[args.resultId] ?? '') : '',
             playback_note: '',
           };
         }
         const fixtureOf = (jobId: string) =>
           scenario.playbackFixtures![jobId === 'video-60' ? 1 : jobId === 'video-part' ? 2 : 0];
-        // Preview: the source against the result it shows.
-        if (scenario.videoPartial && args.compareSlot === undefined)
+        if (scenario.videoPartial)
           return {
             original_path: '',
             enhanced_path: '',
@@ -760,18 +811,7 @@ function hostScript(scenario: Scenario): void {
             enhanced_url: args.resultId ? fixtureOf(args.resultId) : '',
             playback_note: '',
           };
-        if (!scenario.videoCompare || args.compareSlot === undefined)
-          throw new Error('No video playback fixture for this request');
-        const slot = snapshot.runtime.compare.slots[args.compareSlot];
-        if (args.compareGeneration !== snapshot.runtime.compare.generation || !slot)
-          throw new Error('Stale Compare request');
-        return {
-          original_path: '',
-          enhanced_path: '',
-          original_url: fixtureOf(slot.pick.job_id ?? ''),
-          enhanced_url: '',
-          playback_note: '',
-        };
+        throw new Error('No video playback fixture for this request');
       }
       case 'cancel_video_comparison':
         return null;
@@ -1007,12 +1047,76 @@ function loadSyncFixtures(): Record<string, string> {
   };
 }
 
+function loadCompareFixtures(): {
+  meta: NonNullable<Scenario['compareFixtures']>;
+  bytes: Record<string, Buffer>;
+} {
+  const dir = resolve(dirname(fileURLToPath(import.meta.url)), 'video-fixtures');
+  const meta: NonNullable<Scenario['compareFixtures']> = {};
+  const bytes: Record<string, Buffer> = {};
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith('.json') || (!name.startsWith('sync_') && !name.startsWith('cmp_')))
+      continue;
+    const stem = name.slice(0, -5);
+    const manifest = JSON.parse(readFileSync(resolve(dir, name), 'utf-8'));
+    bytes[`${stem}.webm`] = readFileSync(resolve(dir, `${stem}.webm`));
+    meta[stem] = {
+      video_url: `/__e2e_fixture__/${stem}.webm`,
+      width: manifest.width,
+      height: manifest.height,
+      duration: manifest.duration,
+      keys: manifest.keys,
+      slots: manifest.slots,
+    };
+  }
+  return { meta, bytes };
+}
+
 /** Install the fake Tauri bridge before the page loads. */
 export async function installFakeHost(page: Page, scenario: Scenario): Promise<void> {
+  const compare =
+    scenario.videoCompare || scenario.videoSyncCompare ? loadCompareFixtures() : undefined;
+  if (compare) {
+    await page.route('**/__e2e_fixture__/*', async (route) => {
+      const name = decodeURIComponent(
+        route.request().url().split('/__e2e_fixture__/').pop() ?? '',
+      );
+      const body = compare.bytes[name];
+      if (!body) {
+        await route.fulfill({ status: 404 });
+        return;
+      }
+      const range = route.request().headers()['range'];
+      if (range) {
+        const match = /^bytes=(\d+)-(\d*)$/.exec(range);
+        if (match) {
+          const start = Number(match[1]);
+          const end = match[2] ? Math.min(body.length - 1, Number(match[2])) : body.length - 1;
+          await route.fulfill({
+            status: 206,
+            contentType: 'video/webm',
+            headers: {
+              'Accept-Ranges': 'bytes',
+              'Content-Range': `bytes ${start}-${end}/${body.length}`,
+            },
+            body: body.subarray(start, end + 1),
+          });
+          return;
+        }
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'video/webm',
+        headers: { 'Accept-Ranges': 'bytes' },
+        body,
+      });
+    });
+  }
   const enriched: Scenario = {
     ...scenario,
     ...(scenario.videoCompare ? { playbackFixtures: videoFixtures } : {}),
     ...(scenario.videoSyncCompare ? { playbackFixtureMap: loadSyncFixtures() } : {}),
+    ...(compare ? { compareFixtures: compare.meta } : {}),
   };
   await page.addInitScript(hostScript, enriched);
 }

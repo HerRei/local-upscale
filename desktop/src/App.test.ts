@@ -151,8 +151,14 @@ const api = vi.hoisted(() => ({
   listMediaResults: vi.fn(async (mediaId: string): Promise<MediaResults> => historyOf(mediaId, [])),
   listAllMediaResults: vi.fn(async (): Promise<MediaResults[]> => []),
   prepareCompareVideo: vi.fn(async () => ({
-    original_url: 'asset://localhost/compare.mp4',
-    enhanced_url: '',
+    video_url: 'asset://localhost/compare.webm',
+    width: 1280,
+    height: 1444,
+    duration: 4,
+    slots: [
+      { x: 0, y: 0, width: 1280, height: 720, fps: 15, duration: 4, frames: 60, audio_url: '' },
+      { x: 0, y: 724, width: 1280, height: 720, fps: 60, duration: 4, frames: 240, audio_url: '' },
+    ],
   })),
   requestCompare: vi.fn(async (_picks: ComparePick[]): Promise<void> => undefined),
   startModelTrials: vi.fn(
@@ -5936,7 +5942,8 @@ describe('Comparing saved results', () => {
     await user.click(screen.getByRole('checkbox', { name: 'fast, clip.mp4' }));
     expect(document.querySelector('.compare-pane')).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
-    expect(document.querySelectorAll('.compare-pane video')).toHaveLength(2);
+    expect(document.querySelectorAll('.compare-pane video')).toHaveLength(1);
+    expect(document.querySelectorAll('.compare-pane .image-stage canvas')).toHaveLength(2);
     expect(
       within(screen.getByRole('group', { name: 'Slot 1 details' })).getByText('Models: slow'),
     ).toBeTruthy();
@@ -5949,7 +5956,8 @@ describe('Comparing saved results', () => {
       expect(document.activeElement?.getAttribute('aria-label')).toBe('Compare canvas'),
     );
     await user.click(screen.getByRole('checkbox', { name: 'Original, clip.mp4' }));
-    expect(document.querySelectorAll('.compare-pane .boxes video')).toHaveLength(3);
+    expect(document.querySelectorAll('.compare-pane video')).toHaveLength(1);
+    expect(document.querySelectorAll('.compare-pane .boxes canvas')).toHaveLength(3);
     await user.click(screen.getByRole('tab', { name: 'Preview' }));
     expect(document.querySelectorAll('video')).toHaveLength(0);
     expect(pause).toHaveBeenCalled();

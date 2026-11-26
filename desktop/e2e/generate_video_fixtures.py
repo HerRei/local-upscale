@@ -3,14 +3,24 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import math
+import re
+import sys
+import tempfile
 from pathlib import Path
 
 import av
 import numpy as np
 from PIL import Image, ImageDraw
 
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
+from localsr.core.video_playback import CompareSource, prepare_compare_playback
+
 OUT_DIR = Path(__file__).resolve().parent / "video-fixtures"
+FAKE_HOST = Path(__file__).resolve().parent / "fake-host.ts"
 
 
 def make_video(
@@ -90,6 +100,59 @@ def main() -> None:
                 f"dur={c.duration / 1_000_000:.3f}s, "
                 f"frames={vs.frames}, fps={float(vs.average_rate):.2f}"
             )
+
+    sync_sources = {
+        "original": (OUT_DIR / "orig_30.mp4", None),
+        "video-30": (OUT_DIR / "res_30.mp4", None),
+        "video-24": (OUT_DIR / "res_24.mp4", None),
+        "video-60": (OUT_DIR / "res_60.mp4", None),
+        "video-part-1s": (OUT_DIR / "part_30_1s.mp4", 30),
+        "video-part-overhang": (OUT_DIR / "part_30_overhang.mp4", 30),
+        "video-part-24": (OUT_DIR / "part_24_1s.mp4", 24),
+    }
+    for keys in [
+        ["original", "video-30"],
+        ["original", "video-24"],
+        ["original", "video-60"],
+        ["original", "video-part-1s"],
+        ["original", "video-part-overhang"],
+        ["original", "video-part-24"],
+    ]:
+        ordered = sorted(keys)
+        name = "sync_" + "__".join(ordered)
+        sources = [
+            CompareSource(sync_sources[k][0], kept_frames=sync_sources[k][1]) for k in ordered
+        ]
+        manifest = prepare_compare_playback(sources, OUT_DIR / f"{name}.webm")
+        (OUT_DIR / f"{name}.json").write_text(json.dumps({"keys": ordered, **manifest}))
+        print(f"{name}.webm: {(OUT_DIR / f'{name}.webm').stat().st_size} B")
+
+    b64_clips = re.findall(r"'data:video/mp4;base64,([^']+)'", FAKE_HOST.read_text())
+    assert len(b64_clips) == 3, f"expected 3 inline videoFixtures, got {len(b64_clips)}"
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_dir = Path(tmp)
+        for idx, b64 in enumerate(b64_clips):
+            (tmp_dir / f"fix_{idx}.mp4").write_bytes(base64.b64decode(b64))
+        cmp_sources = {
+            "original": (tmp_dir / "fix_0.mp4", None),
+            "video-15": (tmp_dir / "fix_0.mp4", None),
+            "video-60": (tmp_dir / "fix_1.mp4", None),
+            "video-part": (tmp_dir / "fix_2.mp4", 2),
+        }
+        for keys in [
+            ["video-15", "video-60"],
+            ["original", "video-15", "video-60"],
+            ["original", "video-part"],
+            ["original", "video-15", "video-60", "video-part"],
+        ]:
+            ordered = sorted(keys)
+            name = "cmp_" + "__".join(ordered)
+            sources = [
+                CompareSource(cmp_sources[k][0], kept_frames=cmp_sources[k][1]) for k in ordered
+            ]
+            manifest = prepare_compare_playback(sources, OUT_DIR / f"{name}.webm")
+            (OUT_DIR / f"{name}.json").write_text(json.dumps({"keys": ordered, **manifest}))
+            print(f"{name}.webm: {(OUT_DIR / f'{name}.webm').stat().st_size} B")
 
 
 if __name__ == "__main__":

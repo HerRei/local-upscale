@@ -21,8 +21,58 @@ type Entry = {
    */
   kept?: { seconds?: number; frames?: number };
 };
+type KeptRange = { seconds?: number; frames?: number };
+type TimingSpec = { fps: number; duration: number; kept?: KeptRange };
+type LimitInfo = { seconds: number; frames: number; rate: number };
+
 const length = (video: ComparePlayer) =>
   Number.isFinite(video.duration) ? Math.max(0, video.duration) : 0;
+
+function computeLimit(specs: TimingSpec[]): LimitInfo | undefined {
+  let first: LimitInfo | undefined;
+  for (const { duration: played, fps, kept } of specs) {
+    if (!kept) continue;
+    const frames = kept.frames && kept.frames > 0 ? Math.round(kept.frames) : 0;
+    const nominalFps = fps > 0 ? fps : 0;
+    const measured =
+      frames && nominalFps
+        ? frames / nominalFps
+        : kept.seconds && kept.seconds > 0
+          ? kept.seconds
+          : played;
+    const seconds = played > 0 ? Math.min(measured, played) : measured;
+    if (!(seconds > 0) || (first && first.seconds <= seconds)) continue;
+    const rate = frames ? nominalFps || frames / measured : 0;
+    first = { seconds, frames, rate };
+  }
+  return first;
+}
+
+function rateRefinement(specs: readonly { fps: number }[], rate: number): number {
+  const fastest = Math.max(1, ...specs.map((entry) => entry.fps || 30));
+  return Math.max(1, Math.round(fastest / rate));
+}
+
+function effectiveFrameRate(specs: readonly { fps: number }[], limit?: LimitInfo): number {
+  const rate = limit?.rate;
+  return rate
+    ? rate * rateRefinement(specs, rate)
+    : Math.max(1, ...specs.map((entry) => entry.fps || 30));
+}
+
+function totalFrames(
+  specs: readonly { fps: number }[],
+  duration: number,
+  limit?: LimitInfo,
+): number {
+  return limit?.rate
+    ? limit.frames * rateRefinement(specs, limit.rate)
+    : Math.max(1, Math.ceil(duration * effectiveFrameRate(specs, limit) - 1e-6));
+}
+
+function frameIndexAt(time: number, frames: number, frameRate: number): number {
+  return Math.max(0, Math.min(frames - 1, Math.floor(time * frameRate + 1e-6)));
+}
 export class CompareVideoSync {
   time = 0;
   playing = false;
@@ -53,25 +103,14 @@ export class CompareVideoSync {
    * both are known: container durations (both video.duration and host-probed kept_seconds)
    * can be longer than the kept video frames (e.g. audio overhang).
    */
-  private get limit(): { seconds: number; frames: number; rate: number } | undefined {
-    let first: { seconds: number; frames: number; rate: number } | undefined;
-    for (const { video, fps, kept } of this.entries) {
-      if (!kept) continue;
-      const frames = kept.frames && kept.frames > 0 ? Math.round(kept.frames) : 0;
-      const nominalFps = fps > 0 ? fps : 0;
-      const played = length(video);
-      const measured =
-        frames && nominalFps
-          ? frames / nominalFps
-          : kept.seconds && kept.seconds > 0
-            ? kept.seconds
-            : played;
-      const seconds = played > 0 ? Math.min(measured, played) : measured;
-      if (!(seconds > 0) || (first && first.seconds <= seconds)) continue;
-      const rate = frames ? nominalFps || frames / measured : 0;
-      first = { seconds, frames, rate };
-    }
-    return first;
+  private get limit(): LimitInfo | undefined {
+    return computeLimit(
+      this.entries.map(({ video, fps, kept }) => ({
+        duration: length(video),
+        fps,
+        kept,
+      })),
+    );
   }
   /** The longest side, or the shortest unfinished one: past its end there is nothing to compare. */
   get duration(): number {
@@ -81,30 +120,15 @@ export class CompareVideoSync {
   get limited(): boolean {
     return this.duration < this.longest;
   }
-  /**
-   * How many grid frames one frame of the limiting side holds. Its own rate is exact; a
-   * side that runs a whole multiple faster (an interpolated result) refines the grid,
-   * while a nominal rate that is only a little off (30 for 29.97) does not.
-   */
-  private refinement(rate: number): number {
-    const fastest = Math.max(1, ...this.entries.map((entry) => entry.fps || 30));
-    return Math.max(1, Math.round(fastest / rate));
-  }
   /** Frames per second that stepping counts in. */
   private get frameRate(): number {
-    const rate = this.limit?.rate;
-    return rate
-      ? rate * this.refinement(rate)
-      : Math.max(1, ...this.entries.map((entry) => entry.fps || 30));
+    return effectiveFrameRate(this.entries, this.limit);
   }
   get frames(): number {
-    const limit = this.limit;
-    return limit?.rate
-      ? limit.frames * this.refinement(limit.rate)
-      : Math.max(1, Math.ceil(this.duration * this.frameRate - 1e-6));
+    return totalFrames(this.entries, this.duration, this.limit);
   }
   get frame(): number {
-    return Math.max(0, Math.min(this.frames - 1, Math.floor(this.time * this.frameRate + 1e-6)));
+    return frameIndexAt(this.time, this.frames, this.frameRate);
   }
   private stop(): void {
     this.playing = false;
@@ -342,5 +366,243 @@ export class CompareVideoSync {
       video.currentTime = target;
     }
     if (this.playing && this.time >= this.duration) this.pause();
+  }
+}
+
+export interface CompareSlotTiming {
+  fps: number;
+  duration?: number;
+  kept?: KeptRange;
+}
+
+/**
+ * Single-clock transport for the combined Compare video, plus an optional muted-follower
+ * `<audio>` element that never stalls or alters the video clock.
+ */
+export class SingleVideoCompareSync {
+  time = 0;
+  playing = false;
+  speed = 1;
+  private wanted = false;
+  private blocked = false;
+  private audioPlayer: ComparePlayer | null = null;
+  private audioDuration = 0;
+  private revision = 0;
+
+  constructor(
+    private video: ComparePlayer,
+    private slots: CompareSlotTiming[],
+  ) {
+    this.video.muted = true;
+  }
+
+  get requestedPlayback(): boolean {
+    return this.wanted;
+  }
+
+  private get longest(): number {
+    return Math.max(length(this.video), ...this.slots.map((slot) => slot.duration || 0));
+  }
+
+  private get limit(): LimitInfo | undefined {
+    const played = length(this.video);
+    return computeLimit(
+      this.slots.map((slot) => ({
+        duration: played > 0 ? played : slot.duration || 0,
+        fps: slot.fps,
+        kept: slot.kept,
+      })),
+    );
+  }
+
+  get duration(): number {
+    const limit = this.limit?.seconds;
+    const played = length(this.video);
+    return limit !== undefined ? limit : played;
+  }
+
+  get limited(): boolean {
+    return this.duration > 0 && this.duration < this.longest;
+  }
+
+  private get frameRate(): number {
+    return effectiveFrameRate(this.slots, this.limit);
+  }
+
+  get frames(): number {
+    return totalFrames(this.slots, this.duration, this.limit);
+  }
+
+  get frame(): number {
+    return frameIndexAt(this.time, this.frames, this.frameRate);
+  }
+
+  setAudio(player: ComparePlayer | null, duration = 0): void {
+    if (this.audioPlayer && this.audioPlayer !== player) {
+      this.audioPlayer.pause();
+      this.audioPlayer.muted = true;
+    }
+    this.audioPlayer = player;
+    this.audioDuration = duration;
+    if (!player) return;
+    player.muted = false;
+    player.playbackRate = this.speed;
+    this.syncAudio();
+  }
+
+  private audioCap(): number {
+    const player = this.audioPlayer;
+    if (!player) return 0;
+    const playerLen = length(player);
+    const maxAudio =
+      this.audioDuration > 0 && playerLen > 0
+        ? Math.min(this.audioDuration, playerLen)
+        : playerLen || this.audioDuration;
+    return Math.min(this.duration, maxAudio);
+  }
+
+  syncAudio(): void {
+    const player = this.audioPlayer;
+    if (!player) return;
+    const cap = this.audioCap();
+    if (cap <= 0 || this.time >= cap) {
+      player.pause();
+      return;
+    }
+    player.playbackRate = this.speed;
+    if (!player.seeking && Math.abs(player.currentTime - this.time) > 0.06) {
+      player.currentTime = Math.min(this.time, cap);
+    }
+    if (this.playing && !this.video.paused && player.paused && player.readyState >= 2) {
+      void player.play().catch(() => {});
+    }
+  }
+
+  private stop(): void {
+    this.playing = false;
+    this.revision++;
+    this.video.pause();
+    this.audioPlayer?.pause();
+  }
+
+  pause(): void {
+    const wasActive = this.playing || this.wanted;
+    if ((this.playing || wasActive) && !this.video.seeking && this.time < length(this.video)) {
+      this.time = Math.max(0, Math.min(this.duration, this.video.currentTime));
+    }
+    this.wanted = false;
+    this.stop();
+    if (wasActive) {
+      if (this.time < this.duration || this.limited) {
+        this.seekFrame(this.frame);
+      } else {
+        this.time = this.duration;
+      }
+    }
+  }
+
+  finish(): void {
+    if (!this.playing && !this.wanted) return;
+    this.time = this.duration;
+    this.wanted = false;
+    this.stop();
+    if (this.limited) this.seekFrame(this.frames - 1);
+  }
+
+  async play(): Promise<void> {
+    this.wanted = true;
+    this.video.muted = true;
+    if (this.blocked || this.video.seeking || this.video.readyState < 3) return;
+    if (
+      this.duration &&
+      (this.time >= this.duration || (this.limited && this.frame >= this.frames - 1))
+    ) {
+      this.seek(0);
+      if (this.video.seeking || this.video.readyState < 3) return;
+    }
+    this.playing = true;
+    const revision = ++this.revision;
+    this.video.playbackRate = this.speed;
+    try {
+      await this.video.play();
+      if (revision !== this.revision && !this.playing) {
+        this.video.pause();
+        return;
+      }
+      this.syncAudio();
+    } catch (error) {
+      if (revision === this.revision) this.pause();
+      throw error;
+    }
+  }
+
+  seek(seconds: number): void {
+    this.time = Math.max(0, Math.min(this.duration, seconds));
+    const target = Math.min(this.time, length(this.video));
+    if (Math.abs(this.video.currentTime - target) > 0.0001) {
+      this.video.currentTime = target;
+    }
+    if (this.time >= length(this.video)) this.video.pause();
+    const audio = this.audioPlayer;
+    if (audio) {
+      const cap = this.audioCap();
+      if (cap <= 0 || this.time >= cap) {
+        audio.pause();
+      } else if (Math.abs(audio.currentTime - this.time) > 0.0001) {
+        audio.currentTime = Math.min(this.time, cap);
+      }
+    }
+  }
+
+  rate(value: number): void {
+    if (this.playing) this.tick();
+    this.speed = value;
+    this.video.playbackRate = value;
+    if (this.audioPlayer) this.audioPlayer.playbackRate = value;
+  }
+
+  seekFrame(index: number): void {
+    const frame = Math.max(0, Math.min(this.frames - 1, Math.round(index)));
+    this.seek((frame + 0.5) / this.frameRate);
+  }
+
+  scrub(seconds: number): void {
+    this.seekFrame(Math.floor(Math.max(0, seconds) * this.frameRate + 1e-6));
+  }
+
+  step(direction: number): void {
+    this.pause();
+    this.seekFrame(this.frame + direction);
+  }
+
+  stall(video: ComparePlayer): void {
+    if (video !== this.video) return;
+    if (this.playing) this.tick();
+    this.blocked = true;
+    this.stop();
+  }
+
+  async ready(video: ComparePlayer): Promise<void> {
+    if (video !== this.video) return;
+    if (!video.seeking && video.readyState >= 3) this.blocked = false;
+    if (this.wanted && !this.playing && !this.blocked) {
+      await this.play();
+    }
+  }
+
+  tick(): void {
+    if (this.playing) {
+      if (this.video.seeking || (this.video.readyState < 3 && this.time < length(this.video))) {
+        this.time = Math.min(this.duration, this.video.currentTime);
+        this.blocked = true;
+        this.stop();
+        return;
+      }
+      this.time = Math.min(this.duration, this.video.currentTime);
+      this.syncAudio();
+      if (this.time >= this.duration) this.pause();
+    } else if (!this.wanted && !this.video.seeking && this.time < length(this.video)) {
+      this.time = Math.min(this.duration, this.video.currentTime);
+    }
   }
 }

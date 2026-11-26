@@ -13,6 +13,7 @@ import type {
   Recipe,
   StartBatchInput,
   UiSettings,
+  CompareVideoSources,
   VideoComparisonSources,
   VideoComparisonProgress,
   WorkerEnvelope,
@@ -304,30 +305,53 @@ export const prepareVideoComparison = async (
       paths.enhanced_url ?? (paths.enhanced_path ? convertFileSrc(paths.enhanced_path) : ''),
   };
 };
-/** A slot index and generation, never a path, selects a host-authorised video. */
+/** One combined playback copy and per-side crop/audio descriptors for a Compare generation. */
 export const prepareCompareVideo = async (
   generation: number,
-  slot: number,
   requestId: string,
   forceCompatible = false,
   deferConversion = false,
-): Promise<VideoComparisonSources> => {
-  const paths = await invoke<{
-    original_path: string;
-    original_url?: string | null;
+): Promise<CompareVideoSources> => {
+  const result = await invoke<{
     playback_note: string;
-  }>('prepare_video_comparison', {
-    mediaId: '',
+    video_path: string;
+    video_url?: string | null;
+    width: number;
+    height: number;
+    duration: number;
+    slots: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      fps: number;
+      duration: number;
+      frames: number;
+      audio_path: string;
+      audio_url?: string | null;
+    }[];
+  }>('prepare_compare_video', {
+    generation,
     requestId,
     forceCompatible,
     deferConversion,
-    compareGeneration: generation,
-    compareSlot: slot,
   });
   return {
-    original_url: paths.original_url ?? convertFileSrc(paths.original_path),
-    enhanced_url: '',
-    playback_note: paths.playback_note,
+    playback_note: result.playback_note,
+    video_url: result.video_url ?? (result.video_path ? convertFileSrc(result.video_path) : ''),
+    width: result.width,
+    height: result.height,
+    duration: result.duration,
+    slots: result.slots.map((slot) => ({
+      x: slot.x,
+      y: slot.y,
+      width: slot.width,
+      height: slot.height,
+      fps: slot.fps,
+      duration: slot.duration,
+      frames: slot.frames,
+      audio_url: slot.audio_url ?? (slot.audio_path ? convertFileSrc(slot.audio_path) : ''),
+    })),
   };
 };
 export const cancelVideoComparison = (requestId: string): Promise<void> =>

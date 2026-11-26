@@ -704,6 +704,24 @@ impl Database {
         Ok(path)
     }
 
+    pub fn media_result_kept_frames(&self, media_id: &str, job_id: &str) -> AppResult<Option<u64>> {
+        let raw: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT partial_json FROM jobs WHERE id=?1 AND media_id=?2 AND hidden=0 AND status='completed'",
+                params![job_id, media_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(raw) = raw.filter(|s| !s.is_empty()) else {
+            return Ok(None);
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return Ok(None);
+        };
+        Ok(value["kept_frames"].as_u64().filter(|&n| n > 0))
+    }
+
     /// Cancel the queued jobs of one media and mark its active job as
     /// cancelling. Returns that active job, which the caller signals.
     pub fn cancel_jobs_for_media(&self, media_id: &str) -> AppResult<Option<String>> {
