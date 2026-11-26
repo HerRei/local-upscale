@@ -121,5 +121,6 @@ export function buildStartInput(
     video_clean_audio:
       settings.task === 'video' && !audioDisabled && Boolean(settings.video_clean_audio),
     video_audio_model: settings.video_audio_model ?? '',
+    output_bit_depth: settings.output_bit_depth ?? 8,
   };
 }

@@ -645,6 +645,7 @@ pub fn build_start_input(
             && !audio_disabled
             && settings.video_clean_audio,
         video_audio_model: settings.video_audio_model.clone(),
+        output_bit_depth: settings.output_bit_depth,
     }
 }
 
