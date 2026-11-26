@@ -303,20 +303,20 @@ test.describe('an unfinished video', () => {
     );
     await expect(compare.locator('.unfinished-mark')).toHaveText('Unfinished · 2 of 60 frames');
 
-    // One step: both sides in the middle of the second frame. There is no third.
+    // One step: single combined video in the middle of the second frame. There is no third.
     const next = transport.getByRole('button', { name: 'Next frame' });
     await next.click();
-    await expect.poll(() => framesShown(videos)).toEqual([1, 1]);
+    await expect.poll(() => framesShown(videos)).toEqual([1]);
     await expect(transport).toContainText('Frame 2');
     await expect(next).toHaveAttribute('aria-disabled', 'true');
     await page.keyboard.press('ArrowLeft');
-    await expect.poll(() => framesShown(videos)).toEqual([0, 0]);
+    await expect.poll(() => framesShown(videos)).toEqual([0]);
     await expect(transport).toContainText('Frame 1');
 
     // Playing ends on the last kept frame; the four-second original never runs on alone.
     await transport.getByRole('button', { name: 'Play comparison' }).click();
     await expect(transport.getByRole('button', { name: 'Play comparison' })).toBeVisible();
-    await expect.poll(() => framesShown(videos)).toEqual([1, 1]);
+    await expect.poll(() => framesShown(videos)).toEqual([1]);
     expect(
       await videos.evaluateAll((nodes) => nodes.every((node) => (node as HTMLVideoElement).paused)),
     ).toBe(true);
@@ -332,13 +332,17 @@ test.describe('an unfinished video', () => {
     await showPane(page, 'preview');
     const compare = page.locator('.compare-pane');
     const videos = compare.locator('video');
-    const muted = () =>
-      videos.evaluateAll((nodes) => nodes.map((node) => (node as HTMLVideoElement).muted));
+    const audioEl = compare.locator('audio');
+    const audioState = () =>
+      audioEl.evaluate((node) => ({
+        muted: (node as HTMLAudioElement).muted,
+        hasSrc: Boolean((node as HTMLAudioElement).getAttribute('src')),
+      }));
     const audio = compare.getByRole('radiogroup', { name: 'Audio' });
     await expect
       .poll(() =>
-        videos.evaluateAll((nodes) =>
-          nodes.every((node) => (node as HTMLVideoElement).readyState >= 3),
+        videos.evaluateAll(
+          (nodes) => nodes.length === 1 && (nodes[0] as HTMLVideoElement).readyState >= 3,
         ),
       )
       .toBe(true);
@@ -346,7 +350,7 @@ test.describe('an unfinished video', () => {
     await expect(
       audio.getByRole('radio', { name: 'Audio of slot 1: 15 fps result' }),
     ).toBeChecked();
-    expect(await muted()).toEqual([false, true]);
+    expect(await audioState()).toEqual({ muted: false, hasSrc: true });
     // Before any choice the sound already belongs to the result in slot 1: a swap moves
     // the picture, not what is heard.
     const swap = compare.getByRole('button', { name: 'Swap slots 1 and 2' });
@@ -354,21 +358,21 @@ test.describe('an unfinished video', () => {
     await expect(
       audio.getByRole('radio', { name: 'Audio of slot 2: 15 fps result' }),
     ).toBeChecked();
-    await expect.poll(muted).toEqual([true, false]);
+    await expect.poll(audioState).toEqual({ muted: false, hasSrc: true });
     await swap.click();
     await expect(
       audio.getByRole('radio', { name: 'Audio of slot 1: 15 fps result' }),
     ).toBeChecked();
     await audio.getByRole('radio', { name: 'Audio of slot 2: 60 fps result' }).click();
-    expect(await muted()).toEqual([true, false]);
+    await expect.poll(audioState).toEqual({ muted: false, hasSrc: true });
     // The choice follows the result when the slots are swapped.
     await compare.getByRole('button', { name: 'Swap slots 1 and 2' }).click();
     await expect(
       audio.getByRole('radio', { name: 'Audio of slot 1: 60 fps result' }),
     ).toBeChecked();
-    await expect.poll(muted).toEqual([false, true]);
+    await expect.poll(audioState).toEqual({ muted: false, hasSrc: true });
     await audio.getByRole('radio', { name: 'No audio' }).click();
-    expect(await muted()).toEqual([true, true]);
+    await expect.poll(audioState).toEqual({ muted: true, hasSrc: false });
 
     // With four players at the smallest window the transport still holds every control.
     await page.setViewportSize({ width: 880, height: 640 });
@@ -420,19 +424,19 @@ test.describe('an unfinished video', () => {
     await timeline.focus();
     for (const frame of [1, 2, 3]) {
       await page.keyboard.press('ArrowRight');
-      await expect.poll(sixtieths).toEqual([frame, frame]);
+      await expect.poll(sixtieths).toEqual([frame]);
     }
     await page.keyboard.press('ArrowLeft');
-    await expect.poll(sixtieths).toEqual([2, 2]);
+    await expect.poll(sixtieths).toEqual([2]);
     // At the end Next is dimmed and Previous goes back one frame at once.
     await page.keyboard.press('End');
-    await expect.poll(sixtieths).toEqual([239, 239]);
+    await expect.poll(sixtieths).toEqual([239]);
     await expect(compare.getByRole('button', { name: 'Next frame' })).toHaveAttribute(
       'aria-disabled',
       'true',
     );
     await compare.getByRole('button', { name: 'Previous frame' }).click();
-    await expect.poll(sixtieths).toEqual([238, 238]);
+    await expect.poll(sixtieths).toEqual([238]);
   });
 
   test('plays in the preview as its two frames, marked Unfinished', async ({ page }) => {

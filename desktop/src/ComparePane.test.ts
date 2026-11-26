@@ -3,6 +3,31 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, expect, it, vi } from 'vitest';
 import ComparePane from './ComparePane.svelte';
 import type { CompareItem } from './lib/compareOutputs';
+import type { CompareVideoSources } from './lib/types';
+
+function makeCombinedDescriptor(
+  count: number,
+  options: { durations?: number[]; fps?: number[] } = {},
+): CompareVideoSources {
+  const durations = options.durations ?? Array.from({ length: count }, () => 4);
+  const fps = options.fps ?? Array.from({ length: count }, () => 30);
+  return {
+    video_url: 'https://fixture/combined.webm',
+    width: 1280,
+    height: count * 724 - 4,
+    duration: Math.min(...durations),
+    slots: Array.from({ length: count }, (_, index) => ({
+      x: 0,
+      y: index * 724,
+      width: 1280,
+      height: 720,
+      fps: fps[index] ?? 30,
+      duration: durations[index] ?? 4,
+      frames: Math.round((durations[index] ?? 4) * (fps[index] ?? 30)),
+      audio_url: `https://fixture/audio-${index}.webm`,
+    })),
+  };
+}
 
 afterEach(cleanup);
 const item = (id: string, media: string, status: CompareItem['status'] = 'ready'): CompareItem => ({
@@ -161,10 +186,8 @@ it('sets async decoding on comparison images', () => {
 it('opens two videos in the image slider with one shared transport, then boxes for three, and releases sources', async () => {
   const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
   const load = vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
-  const prepareVideo = vi.fn(async (_generation: number, slot: number) => ({
-    original_url: `https://fixture/${slot}.mp4`,
-    enhanced_url: '',
-  }));
+  let slotCount = 2;
+  const prepareVideo = vi.fn(async () => makeCombinedDescriptor(slotCount));
   const cancelVideo = vi.fn(async () => {});
   const entries = [item('one', 'v'), item('two', 'v'), item('three', 'v')].map((entry) => ({
     ...entry,
@@ -180,20 +203,21 @@ it('opens two videos in the image slider with one shared transport, then boxes f
       cancelVideo,
     });
     expect(screen.getByRole('slider', { name: 'Divider between slot 1 and slot 2' })).toBeTruthy();
-    expect(view.container.querySelectorAll('video')).toHaveLength(2);
+    expect(view.container.querySelectorAll('video')).toHaveLength(1);
+    expect(view.container.querySelectorAll('.image-stage canvas')).toHaveLength(2);
     expect(screen.getAllByRole('group', { name: 'Video playback controls' })).toHaveLength(1);
     expect(screen.getByRole('group', { name: 'Slot 1 details' }).textContent).toContain('one');
     expect(screen.getByRole('group', { name: 'Slot 2 details' }).textContent).toContain('two');
-    await vi.waitFor(() => expect(prepareVideo).toHaveBeenCalledTimes(2));
-    expect(prepareVideo).toHaveBeenCalledWith(1, 0, expect.any(String), false, false);
-    const old = [...view.container.querySelectorAll('video')];
+    await vi.waitFor(() => expect(prepareVideo).toHaveBeenCalledTimes(1));
+    expect(prepareVideo).toHaveBeenCalledWith(1, expect.any(String), false, false);
+    const video = view.container.querySelector('video')!;
+    slotCount = 3;
     await view.rerender({ items: entries, generation: 2 });
-    expect(view.container.querySelectorAll('.boxes video')).toHaveLength(3);
+    expect(view.container.querySelectorAll('video')).toHaveLength(1);
+    expect(view.container.querySelectorAll('.boxes canvas')).toHaveLength(3);
     expect(screen.queryByRole('slider', { name: 'Divider between slot 1 and slot 2' })).toBeNull();
-    expect(old.every((video) => !video.hasAttribute('src'))).toBe(true);
-    const videos = [...view.container.querySelectorAll('video')];
     view.unmount();
-    expect(videos.every((video) => !video.hasAttribute('src'))).toBe(true);
+    expect(video.hasAttribute('src')).toBe(false);
     expect(view.container.querySelectorAll('video')).toHaveLength(0);
     expect(pause).toHaveBeenCalled();
     expect(load).toHaveBeenCalled();
@@ -203,16 +227,16 @@ it('opens two videos in the image slider with one shared transport, then boxes f
   }
 });
 
-it('leaves unavailable sides in their boxes while preparing other videos and retries deferred conversion when the job ends', async () => {
+it('defers playback conversion when the engine is busy and retries when the job ends', async () => {
   vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
   vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
   const prepareVideo = vi.fn(
-    async (_generation: number, slot: number, _request: string, _force = false, busy = false) => {
-      if (slot === 0 && busy)
+    async (_generation: number, _request: string, _force = false, busy = false) => {
+      if (busy)
         throw new Error(
           'This video needs a playback conversion. It will load when the current video is done.',
         );
-      return { original_url: `https://fixture/${slot}.mp4`, enhanced_url: '' };
+      return makeCombinedDescriptor(2);
     },
   );
   const entries = [item('one', 'v'), item('two', 'v')].map((entry) => ({
@@ -228,12 +252,18 @@ it('leaves unavailable sides in their boxes while preparing other videos and ret
       prepareVideo,
       cancelVideo: async () => {},
     });
-    await vi.waitFor(() => expect(prepareVideo).toHaveBeenCalledTimes(2));
-    expect(screen.getByText(/It will load when the current video is done/)).toBeTruthy();
-    expect(view.container.querySelectorAll('video[src]')).toHaveLength(1);
+    await vi.waitFor(() => expect(prepareVideo).toHaveBeenCalledTimes(1));
+    expect(
+      screen.getAllByText(/It will load when the current video is done/).length,
+    ).toBeGreaterThan(0);
+    expect(view.container.querySelector('video')?.hasAttribute('src')).toBe(false);
     await view.rerender({ engineBusy: false });
-    await vi.waitFor(() => expect(prepareVideo).toHaveBeenCalledTimes(4));
-    expect(view.container.querySelectorAll('video[src]')).toHaveLength(2);
+    await vi.waitFor(() => expect(prepareVideo).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() =>
+      expect(view.container.querySelector('video')?.getAttribute('src')).toBe(
+        'https://fixture/combined.webm',
+      ),
+    );
     view.unmount();
   } finally {
     vi.restoreAllMocks();
@@ -243,10 +273,10 @@ it('leaves unavailable sides in their boxes while preparing other videos and ret
 it('releases hidden Compare sources, cancels pending preparation and ignores a late descriptor', async () => {
   const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
   const load = vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
-  let finish!: (source: { original_url: string; enhanced_url: string }) => void;
+  let finish!: (source: CompareVideoSources) => void;
   const prepareVideo = vi.fn(
     () =>
-      new Promise<{ original_url: string; enhanced_url: string }>((resolve) => {
+      new Promise<CompareVideoSources>((resolve) => {
         finish = resolve;
       }),
   );
@@ -266,7 +296,7 @@ it('releases hidden Compare sources, cancels pending preparation and ignores a l
     await vi.waitFor(() => expect(prepareVideo).toHaveBeenCalledOnce());
     await view.rerender({ compactHidden: true });
     expect(cancelVideo).toHaveBeenCalledOnce();
-    finish({ original_url: 'https://fixture/late.mp4', enhanced_url: '' });
+    finish(makeCombinedDescriptor(2));
     await Promise.resolve();
     await Promise.resolve();
     expect(view.container.querySelectorAll('video[src]')).toHaveLength(0);
@@ -278,7 +308,7 @@ it('releases hidden Compare sources, cancels pending preparation and ignores a l
   }
 });
 
-it('drives the shared transport from video frame callbacks and cancels the clock on close', async () => {
+it('drives the shared transport and cropped canvases from one video clock and cancels on close', async () => {
   const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(function (
     this: HTMLMediaElement,
   ) {
@@ -290,6 +320,10 @@ it('drives the shared transport from video frame callbacks and cancels the clock
     Object.defineProperty(this, 'paused', { configurable: true, value: false });
   });
   const load = vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
+  const drawImage = vi.fn();
+  const getContext = vi
+    .spyOn(HTMLCanvasElement.prototype, 'getContext')
+    .mockReturnValue({ drawImage } as unknown as CanvasRenderingContext2D);
   let frame: VideoFrameRequestCallback | undefined;
   const request = vi.fn((callback: VideoFrameRequestCallback) => {
     frame = callback;
@@ -306,33 +340,61 @@ it('drives the shared transport from video frame callbacks and cancels the clock
       ...props,
       items: entries,
       generation: 1,
-      prepareVideo: async (_g, index) => ({
-        original_url: `https://fixture/${index}.mp4`,
-        enhanced_url: '',
-      }),
+      prepareVideo: async () => makeCombinedDescriptor(2, { fps: [15, 60] }),
       cancelVideo: async () => {},
     });
-    await vi.waitFor(() => expect(view.container.querySelectorAll('video[src]')).toHaveLength(2));
-    const videos = [...view.container.querySelectorAll('video')];
-    for (const video of videos) {
-      Object.defineProperties(video, {
-        duration: { value: 4 },
-        readyState: { value: 4 },
-        requestVideoFrameCallback: { value: request },
-        cancelVideoFrameCallback: { value: cancel },
-      });
-      await fireEvent.loadedData(video);
-    }
+    await vi.waitFor(() => expect(view.container.querySelector('video[src]')).toBeTruthy());
+    const video = view.container.querySelector('video')!;
+    const audioEl = view.container.querySelector('audio')!;
+    Object.defineProperties(video, {
+      duration: { value: 4 },
+      readyState: { value: 4 },
+      videoWidth: { value: 1280 },
+      videoHeight: { value: 1444 },
+      requestVideoFrameCallback: { value: request },
+      cancelVideoFrameCallback: { value: cancel },
+    });
+    Object.defineProperties(audioEl, {
+      duration: { value: 4 },
+      readyState: { value: 4 },
+    });
+    await fireEvent.loadedData(video);
+    // Both side canvases crop their distinct rectangles from the single combined video snapshot.
+    expect(drawImage).toHaveBeenCalledWith(video, 0, 0, 1280, 1444);
+    expect(drawImage).toHaveBeenCalledWith(
+      expect.any(HTMLCanvasElement),
+      0,
+      0,
+      1280,
+      720,
+      0,
+      0,
+      1280,
+      720,
+    );
+    expect(drawImage).toHaveBeenCalledWith(
+      expect.any(HTMLCanvasElement),
+      0,
+      724,
+      1280,
+      720,
+      0,
+      0,
+      1280,
+      720,
+    );
+
     const canvas = screen.getByRole('region', { name: 'Compare canvas' });
     await fireEvent.keyDown(canvas, { key: ' ' });
-    await vi.waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(play).toHaveBeenCalled());
     expect(request).toHaveBeenCalled();
-    videos[0].currentTime = 1;
-    videos[1].currentTime = 0.9;
+    drawImage.mockClear();
+    video.currentTime = 1;
     frame?.(0, {} as VideoFrameCallbackMetadata);
-    expect(videos[1].currentTime).toBe(1);
+    expect(drawImage).toHaveBeenCalledTimes(3);
     await fireEvent.click(screen.getByRole('button', { name: 'Playback speed' }));
-    expect(videos.map((video) => video.playbackRate)).toEqual([1.5, 1.5]);
+    expect(video.playbackRate).toBe(1.5);
+    expect(video.muted).toBe(true);
     // Slot 1 sounds until another side, or none, is chosen.
     const audio = screen.getByRole('radiogroup', { name: 'Audio' });
     const sounding = () =>
@@ -340,23 +402,26 @@ it('drives the shared transport from video frame callbacks and cancels the clock
         (radio) => radio.getAttribute('aria-checked') === 'true',
       );
     expect(sounding()).toEqual([true, false, false]);
-    expect(videos.map((video) => video.muted)).toEqual([false, true]);
+    expect(audioEl.getAttribute('src')).toBe('https://fixture/audio-0.webm');
+    expect(audioEl.muted).toBe(false);
     await fireEvent.click(screen.getByRole('radio', { name: 'Audio of slot 2: two' }));
     expect(sounding()).toEqual([false, true, false]);
-    expect(videos.map((video) => video.muted)).toEqual([true, false]);
+    expect(audioEl.getAttribute('src')).toBe('https://fixture/audio-1.webm');
+    expect(audioEl.muted).toBe(false);
     await fireEvent.click(screen.getByRole('radio', { name: 'No audio' }));
     expect(sounding()).toEqual([false, false, true]);
-    expect(videos.every((video) => video.muted)).toBe(true);
+    expect(audioEl.muted).toBe(true);
     // A step lands in the middle of the next frame of the fastest side.
     await fireEvent.keyDown(canvas, { key: 'ArrowRight' });
-    expect(videos.map((video) => video.currentTime)).toEqual([61.5 / 60, 61.5 / 60]);
+    expect(video.currentTime).toBeCloseTo(61.5 / 60);
     await fireEvent.click(screen.getByRole('button', { name: 'Previous frame' }));
-    expect(videos.map((video) => video.currentTime)).toEqual([60.5 / 60, 60.5 / 60]);
+    expect(video.currentTime).toBeCloseTo(60.5 / 60);
     await fireEvent.keyDown(canvas, { key: ' ' });
     view.unmount();
     expect(cancel).toHaveBeenCalledWith(1);
-    expect(videos.every((video) => !video.hasAttribute('src'))).toBe(true);
+    expect(video.hasAttribute('src')).toBe(false);
   } finally {
+    getContext.mockRestore();
     pause.mockRestore();
     play.mockRestore();
     load.mockRestore();
@@ -490,22 +555,16 @@ it('compares an unfinished video only over its kept frames, one by one', async (
       ...props,
       items: entries,
       generation: 1,
-      prepareVideo: async (_g, index) => ({
-        original_url: `https://fixture/${index}.mp4`,
-        enhanced_url: '',
-      }),
+      prepareVideo: async () => makeCombinedDescriptor(2, { durations: [2, 0.074], fps: [30, 30] }),
       cancelVideo: async () => {},
     });
-    await vi.waitFor(() => expect(view.container.querySelectorAll('video[src]')).toHaveLength(2));
-    const videos = [...view.container.querySelectorAll('video')];
-    // The original runs two seconds; the stopped job kept two frames of 0.037 s each.
-    for (const [index, video] of videos.entries()) {
-      Object.defineProperties(video, {
-        duration: { value: index ? 0.074 : 2 },
-        readyState: { value: 4 },
-      });
-      await fireEvent.loadedData(video);
-    }
+    await vi.waitFor(() => expect(view.container.querySelector('video[src]')).toBeTruthy());
+    const video = view.container.querySelector('video')!;
+    Object.defineProperties(video, {
+      duration: { value: 0.074 },
+      readyState: { value: 4 },
+    });
+    await fireEvent.loadedData(video);
     const transport = screen.getByRole('group', { name: 'Video playback controls' });
     expect(transport.textContent).toContain('Frame 1');
     expect(transport.textContent).toContain('2 frames');
@@ -517,14 +576,14 @@ it('compares an unfinished video only over its kept frames, one by one', async (
     const on = screen.getByRole('button', { name: 'Next frame' }) as HTMLButtonElement;
     expect(back.getAttribute('aria-disabled')).toBe('true');
     await fireEvent.click(on);
-    // Both sides sit in the middle of the second kept frame; there is no third.
-    expect(videos.map((video) => video.currentTime)).toEqual([0.05, 0.05]);
+    // The single clock sits in the middle of the second kept frame; there is no third.
+    expect(video.currentTime).toBeCloseTo(0.05);
     expect(transport.textContent).toContain('Frame 2');
     expect(on.getAttribute('aria-disabled')).toBe('true');
     const scrubber = screen.getByRole('slider', { name: 'Video frame' }) as HTMLInputElement;
     expect([scrubber.min, scrubber.max, scrubber.value]).toEqual(['1', '2', '2']);
     await fireEvent.input(scrubber, { target: { value: '1' } });
-    expect(videos.map((video) => video.currentTime)).toEqual([0.5 / 30, 0.5 / 30]);
+    expect(video.currentTime).toBeCloseTo(0.5 / 30);
     view.unmount();
   } finally {
     pause.mockRestore();
@@ -532,30 +591,32 @@ it('compares an unfinished video only over its kept frames, one by one', async (
   }
 });
 
-/** Two loaded players in the slider; `lengths` are what the players report. */
-async function loadedVideos(entries: CompareItem[], lengths: number[]) {
+/** Loaded combined player in the slider; `lengths` are the source durations per slot. */
+async function loadedVideos(entries: CompareItem[], lengths: number[], combinedLength?: number) {
   const view = render(ComparePane, {
     ...props,
     items: entries,
     generation: 1,
-    prepareVideo: async (_g, index) => ({
-      original_url: `https://fixture/${index}.mp4`,
-      enhanced_url: '',
-    }),
+    prepareVideo: async () =>
+      makeCombinedDescriptor(entries.length, {
+        durations: lengths,
+        fps: entries.map((e) => e.fps || 30),
+      }),
     cancelVideo: async () => {},
   });
-  await vi.waitFor(() =>
-    expect(view.container.querySelectorAll('video[src]')).toHaveLength(entries.length),
-  );
-  const videos = [...view.container.querySelectorAll('video')];
-  for (const [index, video] of videos.entries()) {
-    Object.defineProperties(video, {
-      duration: { value: lengths[index] },
-      readyState: { value: 4 },
-    });
-    await fireEvent.loadedData(video);
-  }
-  return { view, videos };
+  await vi.waitFor(() => expect(view.container.querySelector('video[src]')).toBeTruthy());
+  const video = view.container.querySelector('video')!;
+  const audio = view.container.querySelector('audio')!;
+  Object.defineProperties(video, {
+    duration: { value: combinedLength ?? Math.min(...lengths) },
+    readyState: { value: 4 },
+  });
+  Object.defineProperties(audio, {
+    duration: { value: Math.max(...lengths) },
+    readyState: { value: 4 },
+  });
+  await fireEvent.loadedData(video);
+  return { view, video, audio };
 }
 const clip = (id: string, fps = 30): CompareItem => ({
   ...item(id, 'v'),
@@ -575,7 +636,7 @@ it('pairs the frames of an unfinished video by the file’s length, not the play
   const restore = mockPlayers();
   try {
     // Two frames of a 30 fps video (0.0667 s in the file); the player reports 0.10 s.
-    const { view, videos } = await loadedVideos(
+    const { view, video } = await loadedVideos(
       [
         clip('original'),
         {
@@ -584,13 +645,13 @@ it('pairs the frames of an unfinished video by the file’s length, not the play
         },
       ],
       [2, 0.1],
+      0.1,
     );
     const transport = screen.getByRole('group', { name: 'Video playback controls' });
     expect(transport.textContent).toContain('2 frames');
     await fireEvent.click(screen.getByRole('button', { name: 'Next frame' }));
     // The middle of frame 1 of the 30 fps original, not 0.075 s in its frame 2.
-    expect(videos[0].currentTime).toBeCloseTo(0.05);
-    expect(videos[1].currentTime).toBeCloseTo(0.05);
+    expect(video.currentTime).toBeCloseTo(0.05);
     expect(transport.textContent).toContain('Frame 2');
     view.unmount();
   } finally {
@@ -601,7 +662,7 @@ it('pairs the frames of an unfinished video by the file’s length, not the play
 it('moves one frame per arrow key on the timeline, and dims a step button at an end', async () => {
   const restore = mockPlayers();
   try {
-    const { view, videos } = await loadedVideos([clip('one'), clip('two')], [4, 4]);
+    const { view, video } = await loadedVideos([clip('one'), clip('two')], [4, 4]);
     const timeline = screen.getByRole('slider', { name: 'Video position' });
     const back = screen.getByRole('button', { name: 'Previous frame' });
     const on = screen.getByRole('button', { name: 'Next frame' });
@@ -610,19 +671,17 @@ it('moves one frame per arrow key on the timeline, and dims a step button at an 
     // The timeline's own step, a hundredth of a second, is less than a frame.
     for (const frame of [1, 2, 3]) {
       expect(await fireEvent.keyDown(timeline, { key: 'ArrowRight' })).toBe(false);
-      expect(videos.map((video) => video.currentTime)).toEqual(
-        [0, 0].map(() => (frame + 0.5) / 30),
-      );
+      expect(video.currentTime).toBeCloseTo((frame + 0.5) / 30);
     }
     await fireEvent.keyDown(timeline, { key: 'ArrowLeft' });
-    expect(videos[0].currentTime).toBeCloseTo(2.5 / 30);
+    expect(video.currentTime).toBeCloseTo(2.5 / 30);
     expect(back.getAttribute('aria-disabled')).toBe('false');
     // Other keys stay with the timeline.
     expect(await fireEvent.keyDown(timeline, { key: 'Home' })).toBe(true);
     await fireEvent.input(timeline, { target: { value: '4' } });
     expect(on.getAttribute('aria-disabled')).toBe('true');
     await fireEvent.click(back);
-    expect(videos[0].currentTime).toBeCloseTo(118.5 / 30);
+    expect(video.currentTime).toBeCloseTo(118.5 / 30);
     view.unmount();
   } finally {
     restore();
@@ -633,22 +692,19 @@ it('keeps the sound with its result when the slots are swapped before any choice
   const restore = mockPlayers();
   try {
     const entries = [clip('one'), clip('two')];
-    const { view } = await loadedVideos(entries, [4, 4]);
+    const { view, audio } = await loadedVideos(entries, [4, 4]);
     const sounding = () =>
       screen
         .getAllByRole('radio')
         .filter((radio) => radio.closest('.transport-audio'))
         .filter((radio) => radio.getAttribute('aria-checked') === 'true')
         .map((radio) => radio.getAttribute('aria-label'));
-    const unmuted = () =>
-      [...view.container.querySelectorAll('video')]
-        .filter((video) => !video.muted)
-        .map((video) => video.getAttribute('aria-label'));
     expect(sounding()).toEqual(['Audio of slot 1: one']);
-    expect(unmuted()).toEqual(['1: one']);
+    expect(audio.getAttribute('src')).toBe('https://fixture/audio-0.webm');
+    expect(audio.muted).toBe(false);
     await view.rerender({ items: [entries[1], entries[0]] });
     expect(sounding()).toEqual(['Audio of slot 2: one']);
-    expect(unmuted()).toEqual(['2: one']);
+    expect(audio.muted).toBe(false);
     // A result that leaves hands the sound to slot 1.
     await view.rerender({ items: [entries[1], clip('three')] });
     expect(sounding()).toEqual(['Audio of slot 1: two']);
@@ -774,34 +830,28 @@ it('preserves playback position and audio choice when switching between slider a
       },
       items: entries,
       generation: 1,
-      prepareVideo: async (_g, index) => ({
-        original_url: `https://fixture/${index}.mp4`,
-        enhanced_url: '',
-      }),
+      prepareVideo: async () => makeCombinedDescriptor(2, { durations: [3, 3], fps: [30, 30] }),
       cancelVideo: async () => {},
     });
-    await vi.waitFor(() => expect(view.container.querySelectorAll('video[src]')).toHaveLength(2));
-    for (const video of view.container.querySelectorAll('video')) {
-      Object.defineProperties(video, { duration: { value: 3 }, readyState: { value: 4 } });
-      await fireEvent.loadedData(video);
-    }
+    await vi.waitFor(() => expect(view.container.querySelector('video[src]')).toBeTruthy());
+    const video = view.container.querySelector('video')!;
+    const audio = view.container.querySelector('audio')!;
+    Object.defineProperties(video, { duration: { value: 3 }, readyState: { value: 4 } });
+    Object.defineProperties(audio, { duration: { value: 3 }, readyState: { value: 4 } });
+    await fireEvent.loadedData(video);
     await fireEvent.click(screen.getByRole('radio', { name: 'Audio of slot 2: res' }));
     const timeline = screen.getByRole('slider', { name: 'Video position' });
     await fireEvent.input(timeline, { target: { value: '0.5' } });
-    const sliderTimes = [...view.container.querySelectorAll('video')].map((v) => v.currentTime);
-    expect(sliderTimes[0]).toBeCloseTo(15.5 / 30);
+    const sliderTime = video.currentTime;
+    expect(sliderTime).toBeCloseTo(15.5 / 30);
 
     await view.rerender({ ...props, layout: 'boxes', items: entries, generation: 1 });
     await vi.waitFor(() =>
-      expect(view.container.querySelectorAll('.boxes video[src]')).toHaveLength(2),
+      expect(view.container.querySelectorAll('.boxes canvas')).toHaveLength(2),
     );
-    for (const video of view.container.querySelectorAll('.boxes video')) {
-      Object.defineProperties(video, { duration: { value: 3 }, readyState: { value: 4 } });
-      await fireEvent.loadedData(video);
-    }
-    const boxesVideos = [...view.container.querySelectorAll('.boxes video')] as HTMLVideoElement[];
-    expect(boxesVideos.map((v) => v.currentTime)).toEqual(sliderTimes);
-    expect(boxesVideos.map((v) => v.muted)).toEqual([true, false]);
+    expect(video.currentTime).toBe(sliderTime);
+    expect(audio.getAttribute('src')).toBe('https://fixture/audio-1.webm');
+    expect(audio.muted).toBe(false);
     expect(
       screen.getByRole('radio', { name: 'Audio of slot 2: res' }).getAttribute('aria-checked'),
     ).toBe('true');

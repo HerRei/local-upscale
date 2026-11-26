@@ -3373,7 +3373,7 @@ fn ungranted_paths_are_refused_for_every_path_taking_command() {
         ),
         (
             "prepare_video_comparison",
-            resolve_video_comparison_inputs(&state, "ungranted-vid", None, None).map(drop),
+            resolve_video_comparison_inputs(&state, "ungranted-vid", None).map(drop),
         ),
         (
             "request_compare",

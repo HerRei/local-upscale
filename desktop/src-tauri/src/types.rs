@@ -1058,6 +1058,30 @@ pub struct VideoComparisonSources {
     pub enhanced_url: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct CompareVideoSlot {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub fps: f64,
+    pub duration: f64,
+    pub frames: u64,
+    pub audio_path: String,
+    pub audio_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CompareVideoSources {
+    pub playback_note: String,
+    pub video_path: String,
+    pub video_url: Option<String>,
+    pub width: u32,
+    pub height: u32,
+    pub duration: f64,
+    pub slots: Vec<CompareVideoSlot>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct StartBatchInput {
     /// Host-only: "Try others…" names each output after its model. The UI

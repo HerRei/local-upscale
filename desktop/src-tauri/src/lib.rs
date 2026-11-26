@@ -257,6 +257,7 @@ pub fn run() {
             commands::start_benchmark,
             commands::export_benchmark,
             commands::prepare_video_comparison,
+            commands::prepare_compare_video,
             commands::cancel_video_comparison,
             commands::request_image_comparison,
             commands::request_compare,

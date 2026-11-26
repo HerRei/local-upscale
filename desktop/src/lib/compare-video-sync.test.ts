@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CompareVideoSync, type ComparePlayer } from './compare-video-sync';
+import { CompareVideoSync, SingleVideoCompareSync, type ComparePlayer } from './compare-video-sync';
 
 function player(duration = 10): ComparePlayer {
   const video: ComparePlayer = {
@@ -355,4 +355,57 @@ it('aligns both sides to the middle of the current frame on pause', async () => 
   expect(players.every((v) => v.paused)).toBe(true);
   expect(players[0].currentTime).toBeCloseTo(30.5 / 30);
   expect(players[1].currentTime).toBeCloseTo(30.5 / 30);
+});
+
+describe('SingleVideoCompareSync', () => {
+  it('drives one muted combined video and syncs a separate audio follower by choice', async () => {
+    const video = player(3);
+    const audio = player(3);
+    const sync = new SingleVideoCompareSync(video, [
+      { fps: 30, duration: 3 },
+      { fps: 60, duration: 3 },
+    ]);
+    expect(video.muted).toBe(true);
+    sync.setAudio(audio, 3);
+    expect(audio.muted).toBe(false);
+    await sync.play();
+    expect(video.paused).toBe(false);
+    expect(audio.paused).toBe(false);
+    expect(video.muted).toBe(true);
+
+    sync.rate(1.5);
+    expect(video.playbackRate).toBe(1.5);
+    expect(audio.playbackRate).toBe(1.5);
+
+    sync.step(1);
+    expect(video.paused).toBe(true);
+    expect(audio.paused).toBe(true);
+    expect(video.currentTime).toBeCloseTo(1.5 / 60);
+    expect(audio.currentTime).toBeCloseTo(1.5 / 60);
+
+    sync.setAudio(null);
+    expect(audio.muted).toBe(true);
+    expect(audio.paused).toBe(true);
+  });
+
+  it('tracks unfinished kept frames even when the combined video is already truncated', async () => {
+    const video = player(1);
+    const audio = player(1.5);
+    const sync = new SingleVideoCompareSync(video, [
+      { fps: 30, duration: 3 },
+      { fps: 24, duration: 1.5, kept: { seconds: 1.5, frames: 24 } },
+    ]);
+    sync.setAudio(audio, 1);
+    expect(sync.duration).toBeCloseTo(1);
+    expect(sync.limited).toBe(true);
+    expect(sync.frames).toBe(24);
+
+    await sync.play();
+    video.currentTime = 1;
+    sync.tick();
+    expect(sync.playing).toBe(false);
+    expect(video.paused).toBe(true);
+    expect(audio.paused).toBe(true);
+    expect(video.currentTime).toBeCloseTo(23.5 / 24);
+  });
 });

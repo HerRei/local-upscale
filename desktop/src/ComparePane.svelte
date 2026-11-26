@@ -6,8 +6,9 @@
   import { onDestroy, onMount, tick } from 'svelte';
   import { visibleRegion, type Region } from './lib/compareRegions';
   import * as api from './lib/api';
-  import type { VideoComparisonSources } from './lib/types';
-  import { CompareVideoSync } from './lib/compare-video-sync';
+  import type { CompareVideoSlot } from './lib/types';
+  import { SingleVideoCompareSync } from './lib/compare-video-sync';
+  import { croppedBoxView, croppedSlotDraw, slotFrameSize } from './lib/compareVideoCrop';
   import VideoTransport from './VideoTransport.svelte';
   import BackgroundSwitch from './BackgroundSwitch.svelte';
   import type { ViewerBackground } from './lib/viewerBackground';
@@ -70,16 +71,34 @@
   let regionQueue = Promise.resolve();
   let destroyed = false;
 
-  type Source = {
-    url: string;
-    status: CompareItem['status'];
+  type VideoState = {
+    status: 'idle' | 'loading' | 'ready' | 'error';
     error: string;
     note: string;
+    url: string;
+    width: number;
+    height: number;
+    duration: number;
+    slots: CompareVideoSlot[];
     loaded: boolean;
   };
-  let sources: Record<string, Source> = {};
-  const players = new Map<string, HTMLVideoElement>();
-  let sync: CompareVideoSync | undefined;
+  const emptyVideoState = (): VideoState => ({
+    status: 'idle',
+    error: '',
+    note: '',
+    url: '',
+    width: 0,
+    height: 0,
+    duration: 0,
+    slots: [],
+    loaded: false,
+  });
+  let videoState: VideoState = emptyVideoState();
+  let combinedVideo: HTMLVideoElement | undefined;
+  let audioElement: HTMLAudioElement | undefined;
+  let stagingCanvas: HTMLCanvasElement | undefined;
+  const canvases = new Map<number, HTMLCanvasElement>();
+  let sync: SingleVideoCompareSync | undefined;
   let playing = false;
   let currentTime = 0;
   let desiredTime = 0;
@@ -102,6 +121,7 @@
   let frameVideo: HTMLVideoElement | undefined;
   let animationId: number | undefined;
   let preparationQueue = Promise.resolve();
+  let fallbackUsed = false;
 
   function updateTransport(): void {
     if (sync && sync.duration > 0) {
@@ -121,15 +141,57 @@
     frameId = animationId = undefined;
     frameVideo = undefined;
   }
+  function paintCanvas(
+    index: number,
+    canvas: HTMLCanvasElement,
+    source: CanvasImageSource,
+    sourceFrame: { width: number; height: number },
+  ): void {
+    const slot = videoState.slots[index];
+    if (!slot || slot.width <= 0 || slot.height <= 0) return;
+    const draw = croppedSlotDraw(slot, sourceFrame);
+    if (canvas.width !== draw.dw) canvas.width = draw.dw;
+    if (canvas.height !== draw.dh) canvas.height = draw.dh;
+    canvas
+      .getContext('2d')
+      ?.drawImage(source, draw.sx, draw.sy, draw.sw, draw.sh, draw.dx, draw.dy, draw.dw, draw.dh);
+  }
+  function snapshotCombinedFrame(): {
+    source: CanvasImageSource;
+    frame: { width: number; height: number };
+  } | null {
+    if (!combinedVideo || combinedVideo.readyState < 2 || !videoState.loaded) return null;
+    const frame = {
+      width: combinedVideo.videoWidth || videoState.width || 1,
+      height: combinedVideo.videoHeight || videoState.height || 1,
+    };
+    // Copy the live video element once into an offscreen staging canvas so every side
+    // crops from the exact same decoded frame even when WebKit updates AVPlayer async.
+    if (!stagingCanvas && typeof document !== 'undefined') {
+      stagingCanvas = document.createElement('canvas');
+    }
+    const stagingCtx = stagingCanvas?.getContext('2d');
+    if (stagingCanvas && stagingCtx) {
+      if (stagingCanvas.width !== frame.width) stagingCanvas.width = frame.width;
+      if (stagingCanvas.height !== frame.height) stagingCanvas.height = frame.height;
+      stagingCtx.drawImage(combinedVideo, 0, 0, frame.width, frame.height);
+      return { source: stagingCanvas, frame };
+    }
+    return { source: combinedVideo, frame };
+  }
+  function paintAll(): void {
+    const snap = snapshotCombinedFrame();
+    if (!snap) return;
+    for (const [index, canvas] of canvases) paintCanvas(index, canvas, snap.source, snap.frame);
+  }
   function clock(): void {
     stopClock();
     if (!sync?.playing || destroyed) return;
-    const master = items
-      .map((item) => players.get(item.key))
-      .find((player) => player && !player.paused);
+    const master = combinedVideo && !combinedVideo.paused ? combinedVideo : undefined;
     const update = () => {
       stopClock();
       sync?.tick();
+      paintAll();
       updateTransport();
       clock();
     };
@@ -137,54 +199,56 @@
       frameVideo = master;
       frameId = master.requestVideoFrameCallback(update);
     }
-    // A stalled master may stop emitting video frames without a waiting event.
-    // Keep a watchdog running so followers do not run away when that happens.
     animationId = requestAnimationFrame(update);
+  }
+  function applyAudioSelection(): void {
+    if (!sync) return;
+    const slot = audioSlotIndex >= 0 ? videoState.slots[audioSlotIndex] : undefined;
+    if (!audioKey || !slot?.audio_url || !audioElement) {
+      sync.setAudio(null);
+      return;
+    }
+    sync.setAudio(audioElement, slot.duration || videoState.duration);
   }
   function rebuild(): void {
     const time = sync && sync.duration > 0 ? sync.time : desiredTime;
     const resume = wantedPlayback;
     sync?.pause();
     stopClock();
-    sync = new CompareVideoSync(
-      items.flatMap((item) => {
-        const video = players.get(item.key);
-        return video && sources[item.key]?.loaded
-          ? [
-              {
-                video,
-                fps: item.fps || 0,
-                audible: item.key === audioKey,
-                kept: item.unfinished && {
-                  seconds: item.unfinished.seconds,
-                  frames: item.unfinished.frames,
-                },
-              },
-            ]
-          : [];
+    if (!combinedVideo || !videoState.loaded) {
+      sync = undefined;
+      updateTransport();
+      return;
+    }
+    sync = new SingleVideoCompareSync(
+      combinedVideo,
+      items.map((item, index) => {
+        const slot = videoState.slots[index];
+        return {
+          fps: item.fps || slot?.fps || 0,
+          duration: slot?.duration || videoState.duration || 0,
+          kept: item.unfinished && {
+            seconds: item.unfinished.seconds,
+            frames: item.unfinished.frames,
+          },
+        };
       }),
     );
     sync.rate(playbackRate);
     sync.seek(time);
+    applyAudioSelection();
+    paintAll();
     updateTransport();
-    const active = shownLayout === 'slider' ? items.slice(0, 2) : items;
-    const allLoaded =
-      active.length > 0 &&
-      active.every(
-        (item) =>
-          sources[item.key]?.loaded ||
-          (sources[item.key]?.status !== 'ready' && sources[item.key]?.status !== 'loading'),
-      );
-    if (resume && allLoaded && !destroyed) void start();
+    if (resume && !destroyed) void start();
   }
   async function start(): Promise<void> {
     wantedPlayback = true;
     try {
       await sync?.play();
     } catch (error) {
-      // A failed element is removed by its error event; the remaining slots still play.
       console.warn('Compare playback could not start', error);
     }
+    paintAll();
     updateTransport();
     clock();
   }
@@ -193,16 +257,19 @@
       wantedPlayback = false;
       sync?.pause();
       stopClock();
+      paintAll();
       updateTransport();
     } else void start();
   }
   function seek(seconds: number): void {
     sync?.scrub(seconds);
+    paintAll();
     updateTransport();
     clock();
   }
   function seekFrame(index: number): void {
     sync?.seekFrame(index);
+    paintAll();
     updateTransport();
     clock();
   }
@@ -210,11 +277,12 @@
     wantedPlayback = false;
     sync?.step(direction);
     stopClock();
+    paintAll();
     updateTransport();
   }
   function chooseAudio(choice: string): void {
     audioChoice = choice;
-    sync?.audio(choice === 'off' ? null : (players.get(choice) ?? null));
+    void tick().then(() => applyAudioSelection());
   }
   function nextRate(): void {
     const rates = [0.5, 1, 1.5, 2];
@@ -222,21 +290,41 @@
     sync?.rate(playbackRate);
     clock();
   }
-  function release(video: HTMLVideoElement): void {
-    video.pause();
-    video.removeAttribute('src');
-    video.load();
+  function release(media: HTMLMediaElement): void {
+    media.pause();
+    media.removeAttribute('src');
+    media.load();
   }
-  function videoPlayer(video: HTMLVideoElement, key: string) {
-    players.set(key, video);
+  function videoCanvas(canvas: HTMLCanvasElement, index: number) {
+    let slotIndex = index;
+    canvases.set(slotIndex, canvas);
+    const snap = snapshotCombinedFrame();
+    if (snap) paintCanvas(slotIndex, canvas, snap.source, snap.frame);
+    return {
+      update(nextIndex: number) {
+        if (nextIndex !== slotIndex) {
+          if (canvases.get(slotIndex) === canvas) canvases.delete(slotIndex);
+          slotIndex = nextIndex;
+          canvases.set(slotIndex, canvas);
+        }
+        const nextSnap = snapshotCombinedFrame();
+        if (nextSnap) paintCanvas(slotIndex, canvas, nextSnap.source, nextSnap.frame);
+      },
+      destroy() {
+        if (canvases.get(slotIndex) === canvas) canvases.delete(slotIndex);
+      },
+    };
+  }
+  function combinedPlayer(video: HTMLVideoElement) {
     const stalled = () => {
-      if (!sources[key]?.loaded) return;
+      if (!videoState.loaded) return;
       sync?.stall(video);
       updateTransport();
       clock();
     };
     const ready = () => {
-      if (!sources[key]?.loaded) return;
+      if (!videoState.loaded) return;
+      paintAll();
       void sync
         ?.ready(video)
         .then(() => {
@@ -246,66 +334,71 @@
         .catch(() => {});
     };
     const loaded = () => {
-      if (sources[key]) {
-        sources = { ...sources, [key]: { ...sources[key], loaded: true } };
-        rebuild();
-      }
+      if (videoState.status !== 'ready') return;
+      videoState = { ...videoState, loaded: true };
+      rebuild();
+    };
+    const ended = () => {
+      sync?.finish();
+      paintAll();
+      updateTransport();
+      stopClock();
     };
     video.addEventListener('waiting', stalled);
     video.addEventListener('canplay', ready);
     video.addEventListener('seeked', ready);
     video.addEventListener('loadeddata', loaded);
-    video.addEventListener('ended', clock);
+    video.addEventListener('ended', ended);
     return {
       destroy() {
         video.removeEventListener('waiting', stalled);
         video.removeEventListener('canplay', ready);
         video.removeEventListener('seeked', ready);
         video.removeEventListener('loadeddata', loaded);
-        video.removeEventListener('ended', clock);
-        if (players.get(key) === video) {
-          players.delete(key);
-          if (!destroyed && sources[key]?.loaded)
-            sources = { ...sources, [key]: { ...sources[key], loaded: false } };
-        }
+        video.removeEventListener('ended', ended);
         release(video);
-        rebuild();
       },
     };
   }
-  async function prepareSlot(
-    item: CompareItem,
-    index: number,
-    revision: number,
-    force = fallback.has(item.key),
-  ): Promise<void> {
+  function audioPlayer(audio: HTMLAudioElement) {
+    const ready = () => {
+      if (!videoState.loaded) return;
+      applyAudioSelection();
+    };
+    audio.addEventListener('loadeddata', ready);
+    audio.addEventListener('canplay', ready);
+    return {
+      destroy() {
+        audio.removeEventListener('loadeddata', ready);
+        audio.removeEventListener('canplay', ready);
+        release(audio);
+      },
+    };
+  }
+  async function prepareCompare(revision: number, force = fallbackUsed): Promise<void> {
     if (destroyed || revision !== preparationRevision) return;
     const id = crypto.randomUUID();
     requestId = id;
     try {
-      const descriptor: VideoComparisonSources = await prepareVideo(
-        generation,
-        index,
-        id,
-        force,
-        engineBusy,
-      );
+      const descriptor = await prepareVideo(generation, id, force, engineBusy);
       if (destroyed || revision !== preparationRevision) return;
-      sources = {
-        ...sources,
-        [item.key]: {
-          url: descriptor.original_url,
-          status: 'ready',
-          error: '',
-          note: descriptor.playback_note || '',
-          loaded: false,
-        },
+      videoState = {
+        status: 'ready',
+        error: '',
+        note: descriptor.playback_note || '',
+        url: descriptor.video_url,
+        width: descriptor.width,
+        height: descriptor.height,
+        duration: descriptor.duration,
+        slots: descriptor.slots,
+        loaded: false,
       };
     } catch (error) {
       if (destroyed || revision !== preparationRevision) return;
-      sources = {
-        ...sources,
-        [item.key]: { url: '', status: 'error', error: String(error), note: '', loaded: false },
+      videoState = {
+        ...emptyVideoState(),
+        status: 'error',
+        error: String(error),
       };
     } finally {
       if (requestId === id) requestId = '';
@@ -320,72 +413,65 @@
     stopClock();
     desiredTime = 0;
     wantedPlayback = false;
-    for (const player of players.values()) release(player);
-    sources = Object.fromEntries(
-      entries.map((item) => [
-        item.key,
-        {
-          url: '',
-          status: item.status === 'ready' ? 'loading' : item.status,
-          error: item.error,
-          note: '',
-          loaded: false,
-        },
-      ]),
-    );
+    fallbackUsed = false;
+    if (combinedVideo) release(combinedVideo);
+    if (audioElement) release(audioElement);
     sync = undefined;
+    const readyCount = entries.filter((item) => item.status === 'ready').length;
+    videoState =
+      entries.length >= 2 && readyCount > 0
+        ? { ...emptyVideoState(), status: 'loading' }
+        : emptyVideoState();
     updateTransport();
-    // Single-preview conversion has one cancellation gate. Prepare slots serially
-    // through that same gate, allowing each ready side to appear independently.
-    preparationQueue = preparationQueue
-      .catch(() => {})
-      .then(async () => {
-        for (const [index, item] of entries.entries()) {
-          if (item.status === 'ready') await prepareSlot(item, index, revision);
-        }
-      });
+    if (entries.length < 2 || readyCount === 0) return;
+    preparationQueue = preparationQueue.catch(() => {}).then(() => prepareCompare(revision));
   }
-  const fallback = new Set<string>();
-  function videoError(item: CompareItem, index: number): void {
-    if (destroyed || !sources[item.key]?.url) return;
-    const player = players.get(item.key);
-    const code = player?.error?.code;
-    if (player) release(player);
-    const compatible = !fallback.has(item.key) && (code === 3 || code === 4);
-    sources = {
-      ...sources,
-      [item.key]: {
-        url: '',
-        status: compatible ? 'loading' : 'error',
-        error: 'Preview unavailable',
-        note: '',
-        loaded: false,
-      },
+  function videoError(): void {
+    if (destroyed || !videoState.url) return;
+    const code = combinedVideo?.error?.code;
+    if (combinedVideo) release(combinedVideo);
+    if (audioElement) release(audioElement);
+    const compatible = !fallbackUsed && (code === 3 || code === 4);
+    videoState = {
+      ...emptyVideoState(),
+      status: compatible ? 'loading' : 'error',
+      error: 'Preview unavailable',
     };
     rebuild();
     if (compatible) {
-      fallback.add(item.key);
+      fallbackUsed = true;
       const revision = preparationRevision;
       preparationQueue = preparationQueue
         .catch(() => {})
-        .then(() => prepareSlot(item, index, revision, true));
+        .then(() => prepareCompare(revision, true));
     }
   }
-  function state(item: CompareItem, available: Record<string, Source>): Source {
-    return (
-      available[item.key] || {
-        url: '',
-        status: item.status,
-        error: item.error,
-        note: '',
-        loaded: false,
-      }
-    );
+  function slotOverlayMessage(
+    item: CompareItem,
+    index: number,
+    current: VideoState,
+  ): string | null {
+    if (item.status === 'loading') return 'Loading…';
+    if (item.status === 'missing') return 'File missing';
+    if (item.status !== 'ready') return item.error || 'Preview unavailable';
+    if (current.status === 'error') return current.error || 'Preview unavailable';
+    if (current.status !== 'ready' || !current.loaded) return 'Loading…';
+    const slot = current.slots[index];
+    if (!slot || slot.width <= 0 || slot.height <= 0) return 'Preview unavailable';
+    return null;
   }
   $: videos = items[0]?.media_kind === 'video';
   $: if (audioChoice !== 'off' && !items.some((item) => item.key === audioChoice))
     audioChoice = items[0]?.key ?? '';
   $: audioKey = audioChoice === 'off' ? '' : audioChoice;
+  $: audioSlotIndex = audioKey ? items.findIndex((item) => item.key === audioKey) : -1;
+  $: activeAudioUrl =
+    audioSlotIndex >= 0 ? (videoState.slots[audioSlotIndex]?.audio_url ?? '') : '';
+  $: if (sync) {
+    void audioSlotIndex;
+    void activeAudioUrl;
+    void tick().then(() => applyAudioSelection());
+  }
   $: prepareVideos(
     JSON.stringify([
       videos,
@@ -467,7 +553,8 @@
     stopClock();
     desiredTime = 0;
     wantedPlayback = false;
-    for (const player of players.values()) release(player);
+    if (combinedVideo) release(combinedVideo);
+    if (audioElement) release(audioElement);
     clearTimeout(regionTimer);
     void regionQueue
       .catch(() => {})
@@ -492,19 +579,24 @@
           height: (canvasHeight - 2 * (rows - 1)) / rows - BAR,
         }
       : { width: canvasWidth, height: canvasHeight };
+  function slotSize(
+    item: CompareItem | undefined,
+    index: number,
+    videoSlots: CompareVideoSlot[],
+    isVideo: boolean,
+  ) {
+    const fallback = { width: item?.width || 1, height: item?.height || 1 };
+    return isVideo ? slotFrameSize(videoSlots[index], fallback) : fallback;
+  }
   $: main = items[0];
-  $: mainSize = { width: main?.width || 1, height: main?.height || 1 };
+  $: mainSize = slotSize(main, 0, videoState.slots, videos);
   $: fitted = fitSize(cell, mainSize, shownLayout === 'boxes' ? 12 : 56);
-  // Pan uses the first image's fitted coordinate system; each box clamps its own view.
+  // Pan uses the first item's fitted coordinate system; each box clamps its own view.
   $: bounds =
     shownLayout === 'boxes'
       ? boxes.reduce(
-          (acc, item) => {
-            const fit = fitSize(
-              cell,
-              videos ? mainSize : { width: item.width || 1, height: item.height || 1 },
-              12,
-            );
+          (acc, item, index) => {
+            const fit = fitSize(cell, slotSize(item, index, videoState.slots, videos), 12);
             const b = panBounds(cell, fit, zoom);
             return {
               x: Math.max(acc.x, (b.x * fitted.width) / fit.width),
@@ -552,21 +644,19 @@
   }
 
   /** A box's own fitted size and its share of the common pan. */
-  function boxView(item: CompareItem, ...deps: unknown[]) {
+  function boxView(item: CompareItem, index: number, ...deps: unknown[]) {
     void deps;
-    const fit = fitSize(
+    return croppedBoxView(
       cell,
-      videos ? mainSize : { width: item.width || 1, height: item.height || 1 },
+      slotSize(item, index, videoState.slots, videos),
+      fitted,
+      zoom,
+      { x: panX, y: panY },
       12,
     );
-    const pan = clampPan(
-      { x: (panX * fit.width) / fitted.width, y: (panY * fit.height) / fitted.height },
-      panBounds(cell, fit, zoom),
-    );
-    return { fit, pan };
   }
-  function boxStyle(item: CompareItem, ...deps: unknown[]): string {
-    const { fit, pan } = boxView(item, ...deps);
+  function boxStyle(item: CompareItem, index: number, ...deps: unknown[]): string {
+    const { fit, pan } = boxView(item, index, ...deps);
     return `width:${fit.width}px;height:${fit.height}px;left:50%;top:50%;transform:translate(calc(-50% + ${pan.x}px), calc(-50% + ${pan.y}px)) scale(${zoom})`;
   }
 
@@ -624,9 +714,7 @@
     if (!rect) return;
     const index = box ? Array.from(well!.querySelectorAll('.box-well')).indexOf(box) : -1;
     const item = boxes[index];
-    const fit = item
-      ? fitSize(cell, videos ? mainSize : { width: item.width || 1, height: item.height || 1 }, 12)
-      : fitted;
+    const fit = item ? fitSize(cell, slotSize(item, index, videoState.slots, videos), 12) : fitted;
     const kx = fit.width / fitted.width,
       ky = fit.height / fitted.height;
     const pointer = {
@@ -636,12 +724,8 @@
     const nextBounds =
       shownLayout === 'boxes'
         ? boxes.reduce(
-            (acc, entry) => {
-              const f = fitSize(
-                cell,
-                videos ? mainSize : { width: entry.width || 1, height: entry.height || 1 },
-                12,
-              );
+            (acc, entry, entryIndex) => {
+              const f = fitSize(cell, slotSize(entry, entryIndex, videoState.slots, videos), 12);
               const b = panBounds(cell, f, bounded);
               return {
                 x: Math.max(acc.x, (b.x * fitted.width) / f.width),
@@ -837,7 +921,7 @@
               : item.status === 'missing'
                 ? 'File missing'
                 : videos
-                  ? state(item, sources).error || 'Loading…'
+                  ? videoState.error || 'Loading…'
                   : item.error || 'Preview unavailable'}</span
           >{/if}
         {#if shownLayout !== 'boxes'}<span class="slot-meta"
@@ -894,6 +978,29 @@
       on:pointerup={pointerUp}
       on:pointercancel={pointerUp}
     >
+      {#if videos && items.length >= 2}
+        <!-- svelte-ignore a11y_media_has_caption -->
+        <video
+          class="compare-video-source"
+          bind:this={combinedVideo}
+          use:combinedPlayer
+          src={videoState.url || undefined}
+          muted
+          playsinline
+          preload="auto"
+          aria-hidden="true"
+          on:error={videoError}
+        ></video>
+        <audio
+          class="compare-audio-source"
+          bind:this={audioElement}
+          use:audioPlayer
+          src={activeAudioUrl || undefined}
+          muted={!activeAudioUrl}
+          preload="auto"
+          aria-hidden="true"
+        ></audio>
+      {/if}
       {#if items.length < 2}
         <div class="canvas-empty">
           <h2>Pick two outputs</h2>
@@ -907,17 +1014,11 @@
         >
           {#if videos}
             {#each items.slice(0, 2) as item, index (item.key)}
-              <!-- svelte-ignore a11y_media_has_caption -->
-              <video
-                use:videoPlayer={item.key}
-                src={state(item, sources).url || undefined}
+              <canvas
+                use:videoCanvas={index}
                 aria-label={`${index + 1}: ${item.label}`}
-                muted={item.key !== audioKey}
-                playsinline
-                preload="auto"
                 style={index ? `clip-path: inset(0 0 0 ${geometry.imagePercent}%)` : ''}
-                on:error={() => videoError(item, index)}
-              ></video>
+              ></canvas>
             {/each}
           {:else}
             <img
@@ -976,18 +1077,17 @@
           {/each}
         {/if}
         {#each items.slice(0, 2) as item, index (item.key)}
-          {#if videos ? state(item, sources).status !== 'ready' || !state(item, sources).loaded : item.status !== 'ready'}<div
-              class="slot-state"
-              class:right-state={index === 1}
-              role="status"
-            >
-              {item.label}: {(videos ? state(item, sources).status : item.status) === 'loading'
+          {@const overlay = videos
+            ? slotOverlayMessage(item, index, videoState)
+            : item.status !== 'ready'
+              ? item.status === 'loading'
                 ? 'Loading…'
                 : item.status === 'missing'
                   ? 'File missing'
-                  : videos
-                    ? state(item, sources).error || 'Loading…'
-                    : item.error || 'Preview unavailable'}
+                  : item.error || 'Preview unavailable'
+              : null}
+          {#if overlay}<div class="slot-state" class:right-state={index === 1} role="status">
+              {item.label}: {overlay}
             </div>{/if}
         {/each}
         <div
@@ -1024,34 +1124,26 @@
                 <span>{item.meta}{inputs.length > 1 ? ` · ${item.media_name}` : ''}</span>
               </div>
               <div class="box-well">
-                {#if videos ? state(item, sources).status !== 'ready' || !state(item, sources).loaded : item.status !== 'ready'}<div
-                    class="slot-state"
-                    role="status"
-                  >
-                    {(videos ? state(item, sources).status : item.status) === 'loading'
+                {#if videos}
+                  {@const overlay = slotOverlayMessage(item, index, videoState)}
+                  {#if overlay}<div class="slot-state" role="status">{overlay}</div>{/if}
+                {:else if item.status !== 'ready'}
+                  <div class="slot-state" role="status">
+                    {item.status === 'loading'
                       ? 'Loading…'
                       : item.status === 'missing'
                         ? 'File missing'
-                        : videos
-                          ? state(item, sources).error || 'Loading…'
-                          : item.error || 'Preview unavailable'}
-                  </div>{/if}
+                        : item.error || 'Preview unavailable'}
+                  </div>
+                {/if}
                 <div
                   class="image-stage"
                   class:video-stage={videos}
-                  style={boxStyle(item, fitted, panX, panY, zoom, cell)}
+                  style={boxStyle(item, index, fitted, panX, panY, zoom, cell, videoState.slots)}
                 >
                   {#if videos}
-                    <!-- svelte-ignore a11y_media_has_caption -->
-                    <video
-                      use:videoPlayer={item.key}
-                      src={state(item, sources).url || undefined}
-                      aria-label={`${index + 1}: ${item.label}`}
-                      muted={item.key !== audioKey}
-                      playsinline
-                      preload="auto"
-                      on:error={() => videoError(item, index)}
-                    ></video>
+                    <canvas use:videoCanvas={index} aria-label={`${index + 1}: ${item.label}`}
+                    ></canvas>
                   {:else}
                     <img
                       src={item.preview_data_url}
@@ -1073,7 +1165,7 @@
                 </div>
                 {#if !videos && item.unfinished?.tiles && item.status === 'ready'}<UnfinishedTiles
                     {...item.unfinished.tiles}
-                    {...boxView(item, fitted, panX, panY, zoom, cell)}
+                    {...boxView(item, index, fitted, panX, panY, zoom, cell, videoState.slots)}
                     {zoom}
                     lit={tilesLit(item.key)}
                   />{/if}
@@ -1167,9 +1259,7 @@
             ? `${frames} ${frames === 1 ? 'frame' : 'frames'}`
             : formatMediaTime(duration)}.</span
         >{/if}
-      {#each items.filter((item) => state(item, sources).note) as item (item.key)}<span
-          class="compare-slots-note">{state(item, sources).note}</span
-        >{/each}
+      {#if videoState.note}<span class="compare-slots-note">{videoState.note}</span>{/if}
     {/if}
   </div>
   {#if items.length >= 2}

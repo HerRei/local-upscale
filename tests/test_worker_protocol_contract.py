@@ -454,6 +454,8 @@ def _ts_interface_fields(source: str) -> dict[str, set[str]]:
 RUST_TS_DIFFERENCES = {
     "MediaItem": (set(), {"probe_stage", "probe_started_at"}),
     "VideoComparisonSources": ({"original_path", "enhanced_path"}, set()),
+    "CompareVideoSlot": ({"audio_path"}, set()),
+    "CompareVideoSources": ({"video_path"}, set()),
 }
 
 

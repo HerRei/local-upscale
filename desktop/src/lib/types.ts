@@ -566,6 +566,26 @@ export interface VideoComparisonSources {
   enhanced_url: string;
 }
 
+export interface CompareVideoSlot {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fps: number;
+  duration: number;
+  frames: number;
+  audio_url: string;
+}
+
+export interface CompareVideoSources {
+  playback_note?: string;
+  video_url: string;
+  width: number;
+  height: number;
+  duration: number;
+  slots: CompareVideoSlot[];
+}
+
 export interface InstalledEngine {
   id: string;
   backend: string;

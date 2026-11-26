@@ -17,14 +17,66 @@ use crate::{
     process_tree::{lead_own_group, ProcessTree},
     state::lock,
 };
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 const COPY_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
 const CACHE_LIMIT: u64 = 6 * 1024 * 1024 * 1024;
+const COMPARE_CACHE_DIR: &str = "compare-playback";
 /// The converter prints one small JSON progress object per line; a line this long is a
 /// fault, not progress.
 const MAX_CONVERTER_LINE_BYTES: usize = 1024 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComparePlaybackInput {
+    pub path: PathBuf,
+    pub kept_frames: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+struct CompareManifestSlot {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    fps: f64,
+    duration: f64,
+    frames: u64,
+    #[serde(default)]
+    has_audio: bool,
+    #[serde(default)]
+    audio_file: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+struct ComparePlaybackManifest {
+    width: u32,
+    height: u32,
+    duration: f64,
+    slots: Vec<CompareManifestSlot>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreparedCompareSlot {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub fps: f64,
+    pub duration: f64,
+    pub frames: u64,
+    pub audio_path: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreparedComparePlayback {
+    pub video_path: PathBuf,
+    pub width: u32,
+    pub height: u32,
+    pub duration: f64,
+    pub slots: Vec<PreparedCompareSlot>,
+}
 
 #[derive(Default)]
 pub struct VideoPreviewControl {
@@ -144,6 +196,272 @@ impl VideoPreviewControl {
         fs::rename(output, &destination)?;
         Ok(destination)
     }
+
+    pub fn is_compare_cached(
+        &self,
+        inputs: &[ComparePlaybackInput],
+        root: &Path,
+    ) -> AppResult<bool> {
+        let (key, _, _) = canonicalize_compare_inputs(inputs)?;
+        let entry_dir = root.join(COMPARE_CACHE_DIR).join(key);
+        Ok(entry_dir.join("combined.webm").is_file() && entry_dir.join("manifest.json").is_file())
+    }
+
+    pub fn convert_compare(
+        &self,
+        inputs: &[ComparePlaybackInput],
+        root: &Path,
+        mut command: Command,
+        cancel: Arc<AtomicBool>,
+        report: impl Fn(serde_json::Value) + Send + 'static,
+    ) -> AppResult<PreparedComparePlayback> {
+        let _guard = lock(&self.gate)?;
+        check_cancelled(&cancel)?;
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(AppError::Validation(
+                "Playback conversion cancelled.".into(),
+            ));
+        }
+        let (key, slot_to_unique, canonical) = canonicalize_compare_inputs(inputs)?;
+        let compare_root = root.join(COMPARE_CACHE_DIR);
+        fs::create_dir_all(&compare_root)?;
+        sweep_stale_converting_dirs(&compare_root);
+        let entry_dir = compare_root.join(&key);
+        if let Some(prepared) = try_load_compare_entry(&entry_dir, &slot_to_unique)? {
+            return Ok(prepared);
+        }
+        evict_compare_cache_if_needed(&compare_root)?;
+
+        let work = tempfile::Builder::new()
+            .prefix("converting-")
+            .tempdir_in(&compare_root)?;
+        let video_out = work.path().join("combined.webm");
+        let manifest_out = work.path().join("manifest.json");
+        let request_path = work.path().join("request.json");
+        let sources_json: Vec<serde_json::Value> = canonical
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                serde_json::json!({
+                    "path": entry.input.path,
+                    "kept_frames": entry.input.kept_frames,
+                    "audio_path": work.path().join(format!("audio-{index}.webm")),
+                })
+            })
+            .collect();
+        let request_body = serde_json::json!({
+            "sources": sources_json,
+            "output_video": video_out,
+            "output_manifest": manifest_out,
+        });
+        fs::write(&request_path, serde_json::to_vec(&request_body)?)?;
+
+        command.arg("--video-compare-preview").arg(&request_path);
+        run_conversion_with_pid(
+            command,
+            work.path(),
+            cancel,
+            report,
+            Duration::from_secs(1800),
+            COPY_LIMIT,
+            Some(&self.active_pid),
+        )?;
+
+        if !video_out.is_file() || video_out.metadata()?.len() == 0 || !manifest_out.is_file() {
+            return Err(AppError::Worker(
+                "Playback converter produced no video.".into(),
+            ));
+        }
+        let _ = fs::remove_file(&request_path);
+        let work_path = work.keep();
+        if let Err(rename_err) = fs::rename(&work_path, &entry_dir) {
+            let _ = fs::remove_dir_all(&work_path);
+            if let Some(prepared) = try_load_compare_entry(&entry_dir, &slot_to_unique)? {
+                return Ok(prepared);
+            }
+            return Err(rename_err.into());
+        }
+        try_load_compare_entry(&entry_dir, &slot_to_unique)?.ok_or_else(|| {
+            AppError::Worker("Compare playback manifest is missing or invalid.".into())
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+struct CanonicalCompareEntry {
+    input: ComparePlaybackInput,
+    len: u64,
+    modified_nanos: u128,
+}
+
+fn canonicalize_compare_inputs(
+    inputs: &[ComparePlaybackInput],
+) -> AppResult<(String, Vec<usize>, Vec<CanonicalCompareEntry>)> {
+    if inputs.is_empty() || inputs.len() > 4 {
+        return Err(AppError::Validation(
+            "Compare playback requires 1 to 4 videos.".into(),
+        ));
+    }
+    let mut entries = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        let metadata = input.path.metadata()?;
+        let modified_nanos = metadata
+            .modified()?
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        entries.push(CanonicalCompareEntry {
+            input: input.clone(),
+            len: metadata.len(),
+            modified_nanos,
+        });
+    }
+    let mut order: Vec<usize> = (0..entries.len()).collect();
+    order.sort_by(|&a, &b| {
+        let ea = &entries[a];
+        let eb = &entries[b];
+        (
+            ea.input.path.as_os_str(),
+            ea.input.kept_frames,
+            ea.len,
+            ea.modified_nanos,
+        )
+            .cmp(&(
+                eb.input.path.as_os_str(),
+                eb.input.kept_frames,
+                eb.len,
+                eb.modified_nanos,
+            ))
+    });
+    let mut canonical: Vec<CanonicalCompareEntry> = Vec::with_capacity(entries.len());
+    let mut slot_to_unique = vec![0_usize; entries.len()];
+    for idx in order {
+        let entry = &entries[idx];
+        let matches_last = canonical.last().is_some_and(|prev| {
+            prev.input.path == entry.input.path
+                && prev.input.kept_frames == entry.input.kept_frames
+                && prev.len == entry.len
+                && prev.modified_nanos == entry.modified_nanos
+        });
+        if matches_last {
+            slot_to_unique[idx] = canonical.len() - 1;
+        } else {
+            slot_to_unique[idx] = canonical.len();
+            canonical.push(entry.clone());
+        }
+    }
+    let mut hash = Sha256::new();
+    hash.update(b"compare-playback-v1:");
+    for entry in &canonical {
+        hash.update(
+            format!(
+                "{}:{}:{}:{};",
+                entry.input.path.display(),
+                entry.len,
+                entry.modified_nanos,
+                entry.input.kept_frames.unwrap_or(0)
+            )
+            .as_bytes(),
+        );
+    }
+    let hex: String = hash
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    Ok((hex, slot_to_unique, canonical))
+}
+
+fn try_load_compare_entry(
+    entry_dir: &Path,
+    slot_to_unique: &[usize],
+) -> AppResult<Option<PreparedComparePlayback>> {
+    let video_path = entry_dir.join("combined.webm");
+    let manifest_path = entry_dir.join("manifest.json");
+    if !video_path.is_file() || !manifest_path.is_file() {
+        return Ok(None);
+    }
+    let raw = fs::read(&manifest_path)?;
+    let manifest: ComparePlaybackManifest = serde_json::from_slice(&raw)
+        .map_err(|error| AppError::Worker(format!("Invalid Compare manifest: {error}")))?;
+    let mut slots = Vec::with_capacity(slot_to_unique.len());
+    for &unique_idx in slot_to_unique {
+        let slot = manifest.slots.get(unique_idx).ok_or_else(|| {
+            AppError::Worker("Compare playback manifest is missing a slot.".into())
+        })?;
+        let audio_path = slot
+            .audio_file
+            .as_deref()
+            .filter(|name| !name.is_empty() && !name.contains('/') && !name.contains('\\'))
+            .map(|name| entry_dir.join(name))
+            .filter(|path| path.is_file());
+        slots.push(PreparedCompareSlot {
+            x: slot.x,
+            y: slot.y,
+            width: slot.width,
+            height: slot.height,
+            fps: slot.fps,
+            duration: slot.duration,
+            frames: slot.frames,
+            audio_path,
+        });
+    }
+    Ok(Some(PreparedComparePlayback {
+        video_path,
+        width: manifest.width,
+        height: manifest.height,
+        duration: manifest.duration,
+        slots,
+    }))
+}
+
+fn sweep_stale_converting_dirs(compare_root: &Path) {
+    let Ok(entries) = fs::read_dir(compare_root) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with("converting-")
+            && entry.file_type().is_ok_and(|kind| kind.is_dir())
+        {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+fn evict_compare_cache_if_needed(compare_root: &Path) -> AppResult<()> {
+    let mut entries = Vec::new();
+    let mut used = 0_u64;
+    for entry in fs::read_dir(compare_root)?.filter_map(Result::ok) {
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let bytes = tree_bytes(&entry.path());
+        used = used.saturating_add(bytes);
+        let modified = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(UNIX_EPOCH);
+        entries.push((modified, bytes, entry.path()));
+    }
+    if used + COPY_LIMIT <= CACHE_LIMIT {
+        return Ok(());
+    }
+    entries.sort_by_key(|(modified, _, _)| *modified);
+    for (_, bytes, path) in entries {
+        if used + COPY_LIMIT <= CACHE_LIMIT {
+            break;
+        }
+        if fs::remove_dir_all(&path).is_ok() {
+            used = used.saturating_sub(bytes);
+        }
+    }
+    if used + COPY_LIMIT > CACHE_LIMIT {
+        return Err(AppError::Validation(
+            "Playback cache is full. Saved exports remain available.".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Shared descriptor for single preview and each authorised Compare slot.
@@ -621,5 +939,125 @@ mod tests {
         assert_eq!(fs::read_to_string(&source).unwrap(), "source unchanged");
         control.shutdown();
         assert!(!cache.exists());
+    }
+
+    #[test]
+    fn compare_cache_key_is_stable_across_swaps_and_sensitive_to_kept_frames_and_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.mp4");
+        let b = dir.path().join("b.mp4");
+        fs::write(&a, b"alpha").unwrap();
+        fs::write(&b, b"bravo").unwrap();
+        let in_a = ComparePlaybackInput {
+            path: a.clone(),
+            kept_frames: None,
+        };
+        let in_b = ComparePlaybackInput {
+            path: b.clone(),
+            kept_frames: Some(30),
+        };
+        let (key_ab, map_ab, uniq_ab) =
+            canonicalize_compare_inputs(&[in_a.clone(), in_b.clone()]).unwrap();
+        let (key_ba, map_ba, uniq_ba) =
+            canonicalize_compare_inputs(&[in_b.clone(), in_a.clone()]).unwrap();
+        assert_eq!(key_ab, key_ba);
+        assert_eq!(uniq_ab.len(), 2);
+        assert_eq!(uniq_ba.len(), 2);
+        assert_eq!(map_ab, vec![0, 1]);
+        assert_eq!(map_ba, vec![1, 0]);
+
+        let in_b_more = ComparePlaybackInput {
+            path: b.clone(),
+            kept_frames: Some(45),
+        };
+        let (key_diff_kept, _, _) =
+            canonicalize_compare_inputs(&[in_a.clone(), in_b_more]).unwrap();
+        assert_ne!(key_ab, key_diff_kept);
+
+        fs::write(&b, b"bravo-changed").unwrap();
+        let (key_diff_bytes, _, _) = canonicalize_compare_inputs(&[in_a, in_b]).unwrap();
+        assert_ne!(key_ab, key_diff_bytes);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn compare_playback_cache_persists_across_sessions_and_cleans_failed_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.mp4");
+        let b = dir.path().join("b.mp4");
+        fs::write(&a, b"one").unwrap();
+        fs::write(&b, b"two").unwrap();
+        let work = dir.path().join("work");
+        let inputs = vec![
+            ComparePlaybackInput {
+                path: a.clone(),
+                kept_frames: None,
+            },
+            ComparePlaybackInput {
+                path: b.clone(),
+                kept_frames: Some(24),
+            },
+        ];
+
+        let mut fail_cmd = Command::new("/bin/sh");
+        fail_cmd.args(["-c", "echo boom >&2; exit 1"]);
+        let control = VideoPreviewControl::default();
+        let err = control
+            .convert_compare(
+                &inputs,
+                &work,
+                fail_cmd,
+                control.begin("fail").unwrap(),
+                |_| {},
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("boom"));
+        assert!(!control.is_compare_cached(&inputs, &work).unwrap());
+
+        let mut ok_cmd = Command::new("/bin/sh");
+        ok_cmd.args([
+            "-c",
+            r#"
+            req="$1"
+            dir=$(dirname "$req")
+            printf 'webm-bytes' > "$dir/combined.webm"
+            printf 'audio-bytes' > "$dir/audio-0.webm"
+            cat > "$dir/manifest.json" <<'EOF'
+{"width":128,"height":148,"duration":1.0,"slots":[{"x":0,"y":0,"width":128,"height":72,"fps":30.0,"duration":3.0,"frames":90,"has_audio":true,"audio_file":"audio-0.webm"},{"x":0,"y":76,"width":128,"height":72,"fps":24.0,"duration":1.0,"frames":24,"has_audio":false,"audio_file":null}]}
+EOF
+            "#,
+        ]);
+        let prepared = control
+            .convert_compare(&inputs, &work, ok_cmd, control.begin("ok").unwrap(), |_| {})
+            .unwrap();
+        assert_eq!(prepared.width, 128);
+        assert_eq!(prepared.slots.len(), 2);
+        assert!(prepared.video_path.is_file());
+        assert!(prepared.slots[0].audio_path.as_ref().unwrap().is_file());
+        assert!(prepared.slots[1].audio_path.is_none());
+
+        // Shutdown must keep the content-stable compare cache intact for the next session.
+        control.shutdown();
+        assert!(prepared.video_path.is_file());
+
+        let next_session = VideoPreviewControl::default();
+        assert!(next_session.is_compare_cached(&inputs, &work).unwrap());
+        // Swapped order hits the same cached combined video and remaps slot rects.
+        let swapped = vec![inputs[1].clone(), inputs[0].clone()];
+        let never_runs = Command::new("/bin/false");
+        let cached = next_session
+            .convert_compare(
+                &swapped,
+                &work,
+                never_runs,
+                next_session.begin("hit").unwrap(),
+                |_| {},
+            )
+            .unwrap();
+        assert_eq!(cached.video_path, prepared.video_path);
+        assert_eq!(cached.slots[0].y, 76);
+        assert_eq!(cached.slots[1].y, 0);
+        assert!(cached.slots[0].audio_path.is_none());
+        assert!(cached.slots[1].audio_path.is_some());
     }
 }

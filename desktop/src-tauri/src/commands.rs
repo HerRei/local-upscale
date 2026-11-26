@@ -22,8 +22,9 @@ use crate::{
     results::{MediaResults, ResultUi},
     state::{emit_state_changed, lock, AppState},
     types::{
-        AppSnapshot, CatalogModel, ComparisonPair, ComparisonSlot, Recipe, StartBatchInput,
-        StartBenchmarkInput, UiSettings, VideoComparisonSources,
+        AppSnapshot, CatalogModel, CompareVideoSlot, CompareVideoSources, ComparisonPair,
+        ComparisonSlot, Recipe, StartBatchInput, StartBenchmarkInput, UiSettings,
+        VideoComparisonSources,
     },
     worker,
 };
@@ -2262,7 +2263,6 @@ fn request_latest_comparison(state: &AppState, media_id: String) -> AppResult<()
 }
 
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
 pub async fn prepare_video_comparison(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
@@ -2271,23 +2271,7 @@ pub async fn prepare_video_comparison(
     force_compatible: bool,
     result_id: Option<String>,
     defer_conversion: Option<bool>,
-    compare_generation: Option<u64>,
-    compare_slot: Option<usize>,
 ) -> AppResult<VideoComparisonSources> {
-    let compare_path = match (compare_generation, compare_slot) {
-        (Some(generation), Some(index)) => {
-            let database = lock(&state.database)?;
-            let mut runtime = lock(&state.runtime)?;
-            Some(crate::compare::video_path(
-                &database,
-                &mut runtime.compare,
-                generation,
-                index,
-            )?)
-        }
-        (None, None) => None,
-        _ => return Err(AppError::Validation("Invalid Compare slot".into())),
-    };
     let cancel = state.video_preview.begin(&request_id)?;
     let state = Arc::clone(state.inner());
     tauri::async_runtime::spawn_blocking(move || {
@@ -2300,7 +2284,36 @@ pub async fn prepare_video_comparison(
             result_id.as_deref(),
             defer_conversion.unwrap_or(false),
             cancel,
-            compare_path,
+        )
+    })
+    .await
+    .map_err(|error| AppError::Worker(format!("Playback preparation failed: {error}")))?
+}
+
+#[tauri::command]
+pub async fn prepare_compare_video(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    generation: u64,
+    request_id: String,
+    _force_compatible: bool,
+    defer_conversion: Option<bool>,
+) -> AppResult<CompareVideoSources> {
+    let slot_inputs = {
+        let database = lock(&state.database)?;
+        let mut runtime = lock(&state.runtime)?;
+        crate::compare::video_inputs(&database, &mut runtime.compare, generation)?
+    };
+    let cancel = state.video_preview.begin(&request_id)?;
+    let state = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        compare_video_sources(
+            &state,
+            &app,
+            &request_id,
+            &slot_inputs,
+            defer_conversion.unwrap_or(false),
+            cancel,
         )
     })
     .await
@@ -2329,40 +2342,28 @@ pub(crate) fn resolve_video_comparison_inputs(
     state: &AppState,
     media_id: &str,
     result_id: Option<&str>,
-    compare_path: Option<(String, bool)>,
 ) -> AppResult<(PathBuf, Option<PathBuf>)> {
-    let (original, enhanced) = if let Some((path, is_result)) = compare_path {
-        let path = PathBuf::from(path);
-        (
-            if is_result {
-                canonical_result_video(path)?
-            } else {
-                state.grants.check_media_input(&path)?;
-                canonical_video(path)?
-            },
-            None,
-        )
-    } else {
-        let database = lock(&state.database)?;
-        let media = database
-            .get_media(media_id)?
-            .ok_or_else(|| AppError::Validation("the selected video is no longer queued".into()))?;
-        if media.kind != "video" {
-            return Err(AppError::Validation(
-                "video playback is available only for videos".into(),
-            ));
-        }
-        state.grants.check_media_input(Path::new(&media.path))?;
-        // Before a job finishes there is no output: play the source alone.
-        let output = match result_id {
-            Some("") => None,
-            Some(id) => Some(database.media_result_output(media_id, id)?),
-            None => database.latest_completed_output_for_media(media_id)?,
-        };
-        (PathBuf::from(media.path), output.map(PathBuf::from))
+    let database = lock(&state.database)?;
+    let media = database
+        .get_media(media_id)?
+        .ok_or_else(|| AppError::Validation("the selected video is no longer queued".into()))?;
+    if media.kind != "video" {
+        return Err(AppError::Validation(
+            "video playback is available only for videos".into(),
+        ));
+    }
+    state.grants.check_media_input(Path::new(&media.path))?;
+    // Before a job finishes there is no output: play the source alone.
+    let output = match result_id {
+        Some("") => None,
+        Some(id) => Some(database.media_result_output(media_id, id)?),
+        None => database.latest_completed_output_for_media(media_id)?,
     };
-    let original = canonical_video(original)?;
-    let enhanced = enhanced.map(canonical_result_video).transpose()?;
+    let original = canonical_video(PathBuf::from(media.path))?;
+    let enhanced = output
+        .map(PathBuf::from)
+        .map(canonical_result_video)
+        .transpose()?;
     Ok((original, enhanced))
 }
 
@@ -2376,10 +2377,8 @@ fn video_comparison_sources(
     result_id: Option<&str>,
     defer_conversion: bool,
     cancel: Arc<std::sync::atomic::AtomicBool>,
-    compare_path: Option<(String, bool)>,
 ) -> AppResult<VideoComparisonSources> {
-    let (original, enhanced) =
-        resolve_video_comparison_inputs(state, media_id, result_id, compare_path)?;
+    let (original, enhanced) = resolve_video_comparison_inputs(state, media_id, result_id)?;
     let mut converted = false;
     let mut playback = |path: PathBuf| -> AppResult<PathBuf> {
         if force_compatible || crate::video_preview::needs_conversion(&path) {
@@ -2441,6 +2440,149 @@ fn video_comparison_sources(
         enhanced_url,
         converted,
     ))
+}
+
+fn compare_video_sources(
+    state: &AppState,
+    app: &AppHandle,
+    request_id: &str,
+    slot_inputs: &[Option<crate::compare::CompareVideoInput>],
+    defer_conversion: bool,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+) -> AppResult<CompareVideoSources> {
+    let mut ready_positions = Vec::new();
+    let mut compare_inputs = Vec::new();
+    for (index, maybe) in slot_inputs.iter().enumerate() {
+        let Some(input) = maybe else {
+            continue;
+        };
+        let path = PathBuf::from(&input.path);
+        let canonical = if input.is_result {
+            canonical_result_video(path)?
+        } else {
+            state.grants.check_media_input(&path)?;
+            canonical_video(path)?
+        };
+        ready_positions.push(index);
+        compare_inputs.push(crate::video_preview::ComparePlaybackInput {
+            path: canonical,
+            kept_frames: input.kept_frames,
+        });
+    }
+    if compare_inputs.is_empty() {
+        return Err(AppError::Validation(
+            "Choose an available video in Compare".into(),
+        ));
+    }
+    if defer_conversion
+        && !state
+            .video_preview
+            .is_compare_cached(&compare_inputs, &state.paths.work_root)?
+    {
+        return Err(AppError::Validation(
+            "This video needs a playback conversion. It will load when the current video is done."
+                .into(),
+        ));
+    }
+    let reporter = app.clone();
+    let request = request_id.to_owned();
+    let prepared = state.video_preview.convert_compare(
+        &compare_inputs,
+        &state.paths.work_root,
+        worker::codec_helper_command(state, app)?,
+        Arc::clone(&cancel),
+        move |mut data| {
+            data["request_id"] = json!(request);
+            data["media_id"] = json!("");
+            let _ = reporter.emit("video-comparison-progress", data);
+        },
+    )?;
+    if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(AppError::Validation(
+            "Playback conversion cancelled.".into(),
+        ));
+    }
+    let scope = app.asset_protocol_scope();
+    scope.allow_file(&prepared.video_path).map_err(|error| {
+        AppError::Config(format!(
+            "could not authorize the combined video preview: {error}"
+        ))
+    })?;
+    for slot in &prepared.slots {
+        if let Some(audio) = &slot.audio_path {
+            scope.allow_file(audio).map_err(|error| {
+                AppError::Config(format!(
+                    "could not authorize the Compare audio preview: {error}"
+                ))
+            })?;
+        }
+    }
+    #[cfg(target_os = "linux")]
+    let media_server_urls = {
+        let mut server = lock(&state.media_server)?;
+        if server.is_none() {
+            *server = Some(crate::media_server::MediaServer::start()?);
+        }
+        let server = server.as_ref().expect("media server was initialized");
+        let video_url = Some(server.url_for(&prepared.video_path)?);
+        let audio_urls = prepared
+            .slots
+            .iter()
+            .map(|slot| {
+                slot.audio_path
+                    .as_deref()
+                    .map(|path| server.url_for(path))
+                    .transpose()
+            })
+            .collect::<AppResult<Vec<_>>>()?;
+        (video_url, audio_urls)
+    };
+    #[cfg(not(target_os = "linux"))]
+    let media_server_urls: (Option<String>, Vec<Option<String>>) =
+        (None, vec![None; prepared.slots.len()]);
+
+    let mut slots: Vec<CompareVideoSlot> = (0..slot_inputs.len())
+        .map(|_| CompareVideoSlot {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+            fps: 0.0,
+            duration: 0.0,
+            frames: 0,
+            audio_path: String::new(),
+            audio_url: None,
+        })
+        .collect();
+    for (ready_idx, &slot_idx) in ready_positions.iter().enumerate() {
+        let p = &prepared.slots[ready_idx];
+        slots[slot_idx] = CompareVideoSlot {
+            x: p.x,
+            y: p.y,
+            width: p.width,
+            height: p.height,
+            fps: p.fps,
+            duration: p.duration,
+            frames: p.frames,
+            audio_path: p
+                .audio_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            audio_url: media_server_urls.1[ready_idx].clone(),
+        };
+    }
+    Ok(CompareVideoSources {
+        playback_note:
+            "Compatible SDR playback copy · up to 1280 px per side. Source and saved exports are unchanged."
+                .into(),
+        video_path: prepared.video_path.to_string_lossy().into_owned(),
+        video_url: media_server_urls.0,
+        width: prepared.width,
+        height: prepared.height,
+        duration: prepared.duration,
+        slots,
+    })
 }
 
 #[tauri::command]

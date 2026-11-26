@@ -141,24 +141,52 @@ it('asks the host to pick and grant media, output folders, checkpoints, and expo
 });
 
 import { prepareCompareVideo } from './api';
-it('resolves a Compare slot through the single-video descriptor route using only its generation and index', async () => {
+it('resolves a combined Compare video descriptor by generation', async () => {
   invoke.mockResolvedValueOnce({
-    original_path: '/host/only.webm',
-    original_url: 'http://127.0.0.1/authorised',
+    video_path: '/host/combined.webm',
+    video_url: 'http://127.0.0.1/combined',
     playback_note: 'Compatible SDR playback copy',
+    width: 1280,
+    height: 1444,
+    duration: 3,
+    slots: [
+      {
+        x: 0,
+        y: 0,
+        width: 1280,
+        height: 720,
+        fps: 30,
+        duration: 3,
+        frames: 90,
+        audio_path: '/host/audio-0.webm',
+        audio_url: 'http://127.0.0.1/audio-0',
+      },
+    ],
   });
-  expect(await prepareCompareVideo(7, 2, 'request', true, true)).toEqual({
-    original_url: 'http://127.0.0.1/authorised',
-    enhanced_url: '',
+  expect(await prepareCompareVideo(7, 'request', true, true)).toEqual({
+    video_url: 'http://127.0.0.1/combined',
     playback_note: 'Compatible SDR playback copy',
+    width: 1280,
+    height: 1444,
+    duration: 3,
+    slots: [
+      {
+        x: 0,
+        y: 0,
+        width: 1280,
+        height: 720,
+        fps: 30,
+        duration: 3,
+        frames: 90,
+        audio_url: 'http://127.0.0.1/audio-0',
+      },
+    ],
   });
-  expect(invoke).toHaveBeenCalledWith('prepare_video_comparison', {
-    mediaId: '',
+  expect(invoke).toHaveBeenCalledWith('prepare_compare_video', {
+    generation: 7,
     requestId: 'request',
     forceCompatible: true,
     deferConversion: true,
-    compareGeneration: 7,
-    compareSlot: 2,
   });
 });
 

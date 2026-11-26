@@ -230,27 +230,47 @@ pub fn plan(
     Ok(requests)
 }
 
-/// Only a current, unchanged, host-resolved slot can enter the existing playback route.
-pub fn video_path(
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompareVideoInput {
+    pub path: String,
+    pub is_result: bool,
+    pub kept_frames: Option<u64>,
+}
+
+/// Host-resolved video inputs for the current Compare generation, aligned 1:1 with `compare.slots`.
+pub fn video_inputs(
     db: &Database,
     compare: &mut CompareState,
     generation: u64,
-    index: usize,
-) -> AppResult<(String, bool)> {
+) -> AppResult<Vec<Option<CompareVideoInput>>> {
     refresh(db, compare)?;
-    let slot = compare
-        .slots
-        .get(index)
-        .filter(|slot| {
-            compare.generation == generation
-                && slot.media_kind == "video"
-                && slot.status == CompareStatus::Ready
-        })
-        .ok_or_else(|| AppError::Validation("Choose an available video in Compare".into()))?;
-    Ok((
-        slot.path.clone(),
-        matches!(&slot.pick, ComparePick::Output { .. }),
-    ))
+    if compare.generation != generation
+        || compare.slots.is_empty()
+        || compare.slots.iter().any(|slot| slot.media_kind != "video")
+    {
+        return Err(AppError::Validation(
+            "Choose an available video in Compare".into(),
+        ));
+    }
+    let mut inputs = Vec::with_capacity(compare.slots.len());
+    for slot in &compare.slots {
+        if slot.status != CompareStatus::Ready {
+            inputs.push(None);
+            continue;
+        }
+        let (is_result, kept_frames) = match &slot.pick {
+            ComparePick::Original { .. } => (false, None),
+            ComparePick::Output { media_id, job_id } => {
+                (true, db.media_result_kept_frames(media_id, job_id)?)
+            }
+        };
+        inputs.push(Some(CompareVideoInput {
+            path: slot.path.clone(),
+            is_result,
+            kept_frames,
+        }));
+    }
+    Ok(inputs)
 }
 
 pub fn refresh(db: &Database, compare: &mut CompareState) -> AppResult<()> {
@@ -470,12 +490,11 @@ mod tests {
             assert_eq!(compare.slots[index].media_kind, "video");
             assert_eq!(compare.slots[index].status, CompareStatus::Ready);
             let generation = compare.generation;
-            let (path, is_result) = video_path(&db, &mut compare, generation, index).unwrap();
-            assert_eq!(is_result, index % 2 == 1);
-            let descriptor = crate::video_preview::sources(path.into(), None, None, None, false);
-            assert_eq!(descriptor.original_path, expected.to_string_lossy());
-            assert!(descriptor.enhanced_path.is_empty());
-            assert!(descriptor.playback_note.is_empty());
+            let resolved = video_inputs(&db, &mut compare, generation).unwrap();
+            let input = resolved[index].as_ref().unwrap();
+            assert_eq!(input.is_result, index % 2 == 1);
+            assert_eq!(input.path, expected.to_string_lossy());
+            assert_eq!(input.kept_frames, None);
         }
         assert!(plan(&db, &mut compare, &vec![source.clone(); 5]).is_err());
         assert!(plan(
@@ -508,10 +527,12 @@ mod tests {
         )
         .is_err());
         let generation = compare.generation;
-        assert!(video_path(&db, &mut compare, generation + 1, 0).is_err());
+        assert!(video_inputs(&db, &mut compare, generation + 1).is_err());
         std::fs::remove_file(output).unwrap();
         assert!(plan(&db, &mut CompareState::default(), &[result]).is_err());
-        assert!(video_path(&db, &mut compare, generation, 1).is_err());
+        let after = video_inputs(&db, &mut compare, generation).unwrap();
+        assert!(after[0].is_some());
+        assert!(after[1].is_none());
     }
 
     #[test]

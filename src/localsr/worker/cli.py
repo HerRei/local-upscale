@@ -42,6 +42,13 @@ def main():
         stop_children_on_termination()
 
         raise SystemExit(playback_main(sys.argv[2:]))
+    if sys.argv[1:2] == ["--video-compare-preview"]:
+        from localsr.core.child_processes import stop_children_on_termination
+        from localsr.core.video_playback import compare_main
+
+        stop_children_on_termination()
+
+        raise SystemExit(compare_main(sys.argv[2:]))
     # Before the server's imports, which may fail: the crashed engine's notes are then
     # already settled.
     from localsr.core import gpu_guard
