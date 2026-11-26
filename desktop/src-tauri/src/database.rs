@@ -338,6 +338,31 @@ impl Database {
         )? != 0)
     }
 
+    pub fn get_media_preview_by_path(&self, path: &str) -> AppResult<Option<String>> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT preview_data_url FROM media WHERE path=?1",
+                [path],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn list_media_previews(&self) -> AppResult<Vec<(String, String)>> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT id, preview_data_url FROM media WHERE preview_data_url != ''")?;
+        let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn clear_media_preview(&self, id: &str) -> AppResult<()> {
+        self.connection
+            .execute("UPDATE media SET preview_data_url='' WHERE id=?1", [id])?;
+        Ok(())
+    }
+
     pub fn clear_media(&self) -> AppResult<()> {
         self.connection.execute("DELETE FROM media", [])?;
         Ok(())

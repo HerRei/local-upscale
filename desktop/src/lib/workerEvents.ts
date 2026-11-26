@@ -104,6 +104,13 @@ function keptPart(snapshot: AppSnapshot, envelope: WorkerEnvelope): string {
   return keptTilesText(finished, Number(data.total_tiles ?? 0));
 }
 
+function previewUrlFromData(data: Record<string, unknown>): string {
+  if (typeof data.preview_url === 'string' && data.preview_url) return data.preview_url;
+  return typeof data.jpeg_base64 === 'string' && data.jpeg_base64
+    ? `data:image/jpeg;base64,${data.jpeg_base64}`
+    : '';
+}
+
 function updateMediaByPath(
   snapshot: AppSnapshot,
   mediaPath: unknown,
@@ -140,7 +147,7 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
         duration_seconds: Number(data.duration_seconds ?? 0),
         hdr_format: data.hdr_format === 'HLG' || data.hdr_format === 'PQ' ? data.hdr_format : '',
         audio_warning: String(data.audio_warning ?? ''),
-        preview_data_url: data.jpeg_base64 ? `data:image/jpeg;base64,${data.jpeg_base64}` : '',
+        preview_data_url: previewUrlFromData(data),
         probe_status: 'ready',
         probe_stage: undefined,
         probe_started_at: undefined,
@@ -370,19 +377,23 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
         next.runtime.throughput = done / elapsed;
         next.runtime.throughput_unit = 'frames/s';
       }
-      if (typeof data.jpeg_base64 === 'string' && data.jpeg_base64) {
-        next.runtime.result_preview_data_url = `data:image/jpeg;base64,${data.jpeg_base64}`;
+      {
+        const preview = previewUrlFromData(data);
+        if (preview) {
+          next.runtime.result_preview_data_url = preview;
+        }
       }
       break;
     }
     case 'live_preview_frame':
       if (
         String(data.job_id ?? '') === next.runtime.active_job_id &&
-        String(data.preview_kind ?? '') === 'video' &&
-        typeof data.jpeg_base64 === 'string' &&
-        data.jpeg_base64
+        String(data.preview_kind ?? '') === 'video'
       ) {
-        next.runtime.result_preview_data_url = `data:image/jpeg;base64,${data.jpeg_base64}`;
+        const preview = previewUrlFromData(data);
+        if (preview) {
+          next.runtime.result_preview_data_url = preview;
+        }
       }
       break;
     case 'benchmark_started':

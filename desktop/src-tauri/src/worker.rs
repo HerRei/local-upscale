@@ -960,7 +960,9 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
         runtime.status_title = "Queued".into();
         runtime.status_detail = "Sending the next item to the inference engine.".into();
         runtime.progress = 0.0;
-        runtime.result_preview_data_url.clear();
+        let stale = std::mem::take(&mut runtime.result_preview_data_url);
+        drop(runtime);
+        cleanup_stale_previews(state, vec![stale])?;
     }
     // A job being sent ends any earlier stop for a full disk.
     state.worker.disk_stop.store(false, Ordering::SeqCst);
@@ -1371,6 +1373,7 @@ fn handle_worker_envelope(
             data.insert("can_keep_partial".into(), Value::Bool(keep));
         }
     }
+    attach_preview_url_to_envelope(state, &mut envelope);
     // Apply native state first so a frontend callback can immediately issue a
     // command against the state represented by this envelope.
     let _ = app.emit("worker-message", envelope.clone());
@@ -1738,7 +1741,11 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
         "job_completed" | "job_failed" | "job_cancelled"
     ) {
         let failed = envelope.message_type == "job_failed";
-        leave_batch(&mut *lock(&state.runtime)?, &id, failed);
+        let stale = {
+            let mut runtime = lock(&state.runtime)?;
+            leave_batch(&mut runtime, &id, failed)
+        };
+        cleanup_stale_previews(state, stale)?;
     }
     Ok(())
 }
@@ -1771,10 +1778,13 @@ fn apply_background_photo(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> A
                 database.record_partial(&id, &partial_record(data))?;
             }
             drop(database);
-            let mut runtime = lock(&state.runtime)?;
-            // The result shown after the batch belongs to last_output_path.
-            runtime.last_output_path = output;
-            runtime.result_preview_data_url.clear();
+            let stale = {
+                let mut runtime = lock(&state.runtime)?;
+                // The result shown after the batch belongs to last_output_path.
+                runtime.last_output_path = output;
+                std::mem::take(&mut runtime.result_preview_data_url)
+            };
+            cleanup_stale_previews(state, vec![stale])?;
         }
         "job_failed" => {
             lock(&state.database)?.finish_job(&id, "failed", "", &string(data, "error_message"))?;
@@ -1790,25 +1800,26 @@ fn apply_background_photo(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> A
 
 /// A batch photo has ended. While others remain, the batch stays active: when the
 /// shown photo ended before the next one started, the window shows the batch.
-fn leave_batch(runtime: &mut RuntimeStatus, id: &str, failed: bool) {
+fn leave_batch(runtime: &mut RuntimeStatus, id: &str, failed: bool) -> Vec<String> {
     runtime.active_batch_job_ids.retain(|member| member != id);
     let Some(next) = runtime.active_batch_job_ids.first().cloned() else {
-        return;
+        return Vec::new();
     };
     if !runtime.active_job_id.is_empty() && runtime.active_job_id != id {
-        return;
+        return Vec::new();
     }
     runtime.active_job_id = next;
     runtime.progress = 0.0;
     runtime.elapsed_seconds = 0.0;
     runtime.estimated_remaining_seconds = 0.0;
     runtime.throughput = 0.0;
-    runtime.result_preview_data_url.clear();
+    let stale = std::mem::take(&mut runtime.result_preview_data_url);
     // A failure stays on the status line until the next photo starts.
     if runtime.worker != "restarting" && !failed {
         runtime.status_title = "Processing".into();
         runtime.status_detail = "Finishing the other photos of this batch.".into();
     }
+    vec![stale]
 }
 
 fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppResult<()> {
@@ -1900,8 +1911,16 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             let preview = if encoded.is_empty() {
                 String::new()
             } else {
-                format!("data:image/jpeg;base64,{encoded}")
+                crate::preview_cache::save_jpeg_base64(&state.paths.preview_root, &encoded)
+                    .unwrap_or_default()
             };
+            let mut stale = Vec::new();
+            let old_media_preview = lock(&state.database)?.get_media_preview_by_path(&path)?;
+            if let Some(old) = old_media_preview {
+                if old != preview {
+                    stale.push(old);
+                }
+            }
             lock(&state.database)?.update_media_probe(
                 &path,
                 &string(data, "media_kind"),
@@ -1920,9 +1939,11 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             if lock(&state.database)?.get_media_by_path(&path)?.is_none() && !preview.is_empty() {
                 let mut runtime = lock(&state.runtime)?;
                 if runtime.active_job_id.is_empty() && runtime.last_output_path == path {
-                    runtime.result_preview_data_url = preview;
+                    let old = std::mem::replace(&mut runtime.result_preview_data_url, preview);
+                    stale.push(old);
                 }
             }
+            cleanup_stale_previews(state, stale)?;
         }
         "media_probe_failed" => {
             lock(&state.database)?
@@ -1939,57 +1960,92 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             )?;
         }
         "preview_ready" => {
+            let path = string(data, "image_path");
+            let encoded = string(data, "jpeg_base64");
+            let preview_url = if encoded.is_empty() {
+                None
+            } else {
+                crate::preview_cache::save_jpeg_base64(&state.paths.preview_root, &encoded).ok()
+            };
+            let mut stale = Vec::new();
             {
                 let database = lock(&state.database)?;
                 let mut runtime = lock(&state.runtime)?;
-                crate::compare::apply(&database, &mut runtime.compare, data, false)?;
+                crate::compare::apply(
+                    &database,
+                    &mut runtime.compare,
+                    &state.paths.preview_root,
+                    data,
+                    false,
+                )?;
             }
-            apply_pair_preview(&mut *lock(&state.runtime)?, data, false);
-            let path = string(data, "image_path");
-            let encoded = string(data, "jpeg_base64");
-            if !encoded.is_empty() {
+            {
                 let mut runtime = lock(&state.runtime)?;
-                // A selection without pair slots (the fallback when the
-                // result history is unavailable) is matched by its path.
-                if string(data, "slot").is_empty() && runtime.comparison_output_path == path {
-                    runtime.comparison_preview_data_url =
-                        format!("data:image/jpeg;base64,{encoded}");
-                    runtime.comparison_error.clear();
-                }
-                if runtime.active_job_id.is_empty() && runtime.last_output_path == path {
-                    runtime.result_preview_data_url = format!("data:image/jpeg;base64,{encoded}");
+                stale.extend(apply_pair_preview(
+                    &mut runtime,
+                    data,
+                    false,
+                    preview_url.as_deref(),
+                ));
+                if let Some(url) = preview_url {
+                    // A selection without pair slots (the fallback when the
+                    // result history is unavailable) is matched by its path.
+                    if string(data, "slot").is_empty() && runtime.comparison_output_path == path {
+                        stale.push(std::mem::replace(
+                            &mut runtime.comparison_preview_data_url,
+                            url.clone(),
+                        ));
+                        runtime.comparison_error.clear();
+                    }
+                    if runtime.active_job_id.is_empty() && runtime.last_output_path == path {
+                        stale.push(std::mem::replace(&mut runtime.result_preview_data_url, url));
+                    }
                 }
             }
+            cleanup_stale_previews(state, stale)?;
         }
         "preview_failed" => {
             {
                 let database = lock(&state.database)?;
                 let mut runtime = lock(&state.runtime)?;
-                crate::compare::apply(&database, &mut runtime.compare, data, true)?;
+                crate::compare::apply(
+                    &database,
+                    &mut runtime.compare,
+                    &state.paths.preview_root,
+                    data,
+                    true,
+                )?;
             }
-            let mut runtime = lock(&state.runtime)?;
-            apply_pair_preview(&mut runtime, data, true);
-            if string(data, "slot").is_empty()
-                && runtime.comparison_output_path == string(data, "image_path")
-            {
-                runtime.comparison_preview_data_url.clear();
-                runtime.comparison_error = string(data, "error_message");
-            }
+            let stale = {
+                let mut runtime = lock(&state.runtime)?;
+                let mut stale = apply_pair_preview(&mut runtime, data, true, None);
+                if string(data, "slot").is_empty()
+                    && runtime.comparison_output_path == string(data, "image_path")
+                {
+                    stale.push(std::mem::take(&mut runtime.comparison_preview_data_url));
+                    runtime.comparison_error = string(data, "error_message");
+                }
+                stale
+            };
+            cleanup_stale_previews(state, stale)?;
         }
         "job_started" => {
             let id = string(data, "job_id");
             lock(&state.database)?.set_job_status(&id, "running")?;
-            let mut runtime = lock(&state.runtime)?;
-            runtime.begin_active_job(id);
-            runtime.video_memory = None;
-            runtime.status_title = "Processing".into();
-            runtime.status_detail = "Preparing the selected model.".into();
-            runtime.elapsed_seconds = 0.0;
-            runtime.estimated_remaining_seconds = 0.0;
-            runtime.throughput = 0.0;
-            runtime.throughput_unit = "tiles/s".into();
-            runtime.active_tile_size = 0;
-            runtime.result_preview_data_url.clear();
+            let stale = {
+                let mut runtime = lock(&state.runtime)?;
+                runtime.begin_active_job(id);
+                runtime.video_memory = None;
+                runtime.status_title = "Processing".into();
+                runtime.status_detail = "Preparing the selected model.".into();
+                runtime.elapsed_seconds = 0.0;
+                runtime.estimated_remaining_seconds = 0.0;
+                runtime.throughput = 0.0;
+                runtime.throughput_unit = "tiles/s".into();
+                runtime.active_tile_size = 0;
+                std::mem::take(&mut runtime.result_preview_data_url)
+            };
+            cleanup_stale_previews(state, vec![stale])?;
         }
         "engine_status" => {
             // The engine's word on the hardware route. The next progress tick replaces the
@@ -2231,6 +2287,12 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 0.0
             };
             lock(&state.database)?.update_job_progress(&id, progress)?;
+            let encoded = string(data, "jpeg_base64");
+            let preview_url = if encoded.is_empty() {
+                None
+            } else {
+                crate::preview_cache::save_jpeg_base64(&state.paths.preview_root, &encoded).ok()
+            };
             let mut runtime = lock(&state.runtime)?;
             runtime.frames_processed = integer(data, "frames_processed");
             runtime.total_frames = integer(data, "total_frames");
@@ -2250,20 +2312,34 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 runtime.throughput = completed / elapsed;
                 runtime.throughput_unit = "frames/s".into();
             }
-            let encoded = string(data, "jpeg_base64");
-            if !encoded.is_empty() {
-                runtime.result_preview_data_url = format!("data:image/jpeg;base64,{encoded}");
-            }
+            let stale = preview_url
+                .map(|url| std::mem::replace(&mut runtime.result_preview_data_url, url))
+                .unwrap_or_default();
+            drop(runtime);
+            cleanup_stale_previews(state, vec![stale])?;
         }
         "live_preview_frame" => {
             let id = string(data, "job_id");
             let encoded = string(data, "jpeg_base64");
-            let mut runtime = lock(&state.runtime)?;
-            if id == runtime.active_job_id
-                && string(data, "preview_kind") == "video"
-                && !encoded.is_empty()
-            {
-                runtime.result_preview_data_url = format!("data:image/jpeg;base64,{encoded}");
+            let preview_kind = string(data, "preview_kind");
+            let active_matches = {
+                let runtime = lock(&state.runtime)?;
+                id == runtime.active_job_id && preview_kind == "video" && !encoded.is_empty()
+            };
+            if active_matches {
+                if let Ok(url) =
+                    crate::preview_cache::save_jpeg_base64(&state.paths.preview_root, &encoded)
+                {
+                    let stale = {
+                        let mut runtime = lock(&state.runtime)?;
+                        if id == runtime.active_job_id {
+                            std::mem::replace(&mut runtime.result_preview_data_url, url)
+                        } else {
+                            String::new()
+                        }
+                    };
+                    cleanup_stale_previews(state, vec![stale])?;
+                }
             }
         }
         "benchmark_started" => {
@@ -2449,23 +2525,27 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             if partial {
                 lock(&state.database)?.record_partial(&id, &partial_record(data))?;
             }
-            let mut runtime = lock(&state.runtime)?;
-            runtime.take_active_job();
-            // A video frame thumbnail is a live preview, not a completed
-            // before/after result. The full-output request issued by the host
-            // will populate this again only after it has decoded successfully.
-            runtime.result_preview_data_url.clear();
-            runtime.progress = 100.0;
-            runtime.last_output_path = output;
-            runtime.status_title = if partial { stopped } else { "Complete".into() };
-            runtime.status_detail = if notes.is_empty() {
-                "The output was written successfully.".into()
-            } else {
-                notes
+            let stale = {
+                let mut runtime = lock(&state.runtime)?;
+                runtime.take_active_job();
+                // A video frame thumbnail is a live preview, not a completed
+                // before/after result. The full-output request issued by the host
+                // will populate this again only after it has decoded successfully.
+                let stale = std::mem::take(&mut runtime.result_preview_data_url);
+                runtime.progress = 100.0;
+                runtime.last_output_path = output;
+                runtime.status_title = if partial { stopped } else { "Complete".into() };
+                runtime.status_detail = if notes.is_empty() {
+                    "The output was written successfully.".into()
+                } else {
+                    notes
+                };
+                runtime.elapsed_seconds =
+                    seconds(data, "inference_seconds").max(seconds(data, "elapsed_seconds"));
+                runtime.estimated_remaining_seconds = 0.0;
+                stale
             };
-            runtime.elapsed_seconds =
-                seconds(data, "inference_seconds").max(seconds(data, "elapsed_seconds"));
-            runtime.estimated_remaining_seconds = 0.0;
+            cleanup_stale_previews(state, vec![stale])?;
         }
         "job_cancelled" => {
             let id = string(data, "job_id");
@@ -2504,40 +2584,113 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
 /// A side of the selected pair takes an answer only when the slot, the request
 /// generation, the target and the decoded file all match. Late answers for an
 /// earlier pair, another media or another side are dropped, cache hits too.
-fn apply_pair_preview(runtime: &mut RuntimeStatus, data: &Value, failed: bool) {
+fn apply_pair_preview(
+    runtime: &mut RuntimeStatus,
+    data: &Value,
+    failed: bool,
+    preview_url: Option<&str>,
+) -> Vec<String> {
     let pair = &mut runtime.comparison_pair;
     if data["generation"].as_u64() != Some(pair.generation) || pair.generation == 0 {
-        return;
+        return Vec::new();
     }
     let slot = match data["slot"].as_str() {
         Some("showing") => &mut pair.showing,
         Some("against") => &mut pair.against,
-        _ => return,
+        _ => return Vec::new(),
     };
     if slot.target_id == "original"
         || slot.target_id != string(data, "target_id")
         || slot.output_path != string(data, "image_path")
     {
-        return;
+        return Vec::new();
     }
     if failed {
-        slot.preview_data_url.clear();
+        let stale = std::mem::take(&mut slot.preview_data_url);
         slot.error = string(data, "error_message");
         if slot.error.is_empty() {
             slot.error = "The preview could not be decoded. The saved file is unchanged.".into();
         }
-        return;
+        return vec![stale];
     }
-    let encoded = string(data, "jpeg_base64");
-    if encoded.is_empty() {
-        return;
-    }
-    slot.preview_data_url = format!("data:image/jpeg;base64,{encoded}");
+    let Some(url) = preview_url else {
+        return Vec::new();
+    };
+    let stale = std::mem::replace(&mut slot.preview_data_url, url.to_owned());
     slot.error.clear();
     slot.width = u32::try_from(integer(data, "width")).unwrap_or_default();
     slot.height = u32::try_from(integer(data, "height")).unwrap_or_default();
     slot.preview_width = u32::try_from(integer(data, "preview_width")).unwrap_or_default();
     slot.preview_height = u32::try_from(integer(data, "preview_height")).unwrap_or_default();
+    vec![stale]
+}
+
+fn cleanup_stale_previews(state: &AppState, stale: Vec<String>) -> AppResult<()> {
+    if stale.iter().all(String::is_empty) {
+        return Ok(());
+    }
+    let database = lock(&state.database)?;
+    let runtime = lock(&state.runtime)?;
+    let refs: Vec<&str> = stale.iter().map(String::as_str).collect();
+    crate::preview_cache::remove_if_unreferenced(
+        &state.paths.preview_root,
+        &database,
+        Some(&runtime),
+        &refs,
+    )
+}
+
+fn attach_preview_url_to_envelope(state: &AppState, envelope: &mut WorkerEnvelope) {
+    match envelope.message_type.as_str() {
+        "media_info" => {
+            let path = string(&envelope.data, "media_path");
+            let url = state
+                .database
+                .lock()
+                .ok()
+                .and_then(|db| db.get_media_preview_by_path(&path).ok().flatten())
+                .filter(|url| !url.is_empty())
+                .or_else(|| {
+                    state.runtime.lock().ok().and_then(|runtime| {
+                        (runtime.last_output_path == path
+                            && !runtime.result_preview_data_url.is_empty())
+                        .then(|| runtime.result_preview_data_url.clone())
+                    })
+                });
+            if let Some(data) = envelope.data.as_object_mut() {
+                data.remove("jpeg_base64");
+                if let Some(url) = url {
+                    data.insert("preview_url".into(), Value::String(url));
+                }
+            }
+        }
+        "video_frame_completed" => {
+            let url = state
+                .runtime
+                .lock()
+                .ok()
+                .map(|runtime| runtime.result_preview_data_url.clone())
+                .filter(|url| !url.is_empty());
+            if let Some(data) = envelope.data.as_object_mut() {
+                data.remove("jpeg_base64");
+                if let Some(url) = url {
+                    data.insert("preview_url".into(), Value::String(url));
+                }
+            }
+        }
+        "live_preview_frame" if string(&envelope.data, "preview_kind") == "video" => {
+            let url = state
+                .runtime
+                .lock()
+                .ok()
+                .map(|runtime| runtime.result_preview_data_url.clone())
+                .filter(|url| !url.is_empty());
+            if let (Some(url), Some(data)) = (url, envelope.data.as_object_mut()) {
+                data.insert("preview_url".into(), Value::String(url));
+            }
+        }
+        _ => {}
+    }
 }
 
 /// A media probe carries the user's optional FFmpeg for formats LocalSR omits.

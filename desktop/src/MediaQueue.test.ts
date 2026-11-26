@@ -246,4 +246,12 @@ describe('row styles', () => {
     expect(img?.getAttribute('width')).toBe('44');
     expect(img?.getAttribute('height')).toBe('44');
   });
+
+  it('renders thumbnails from file-backed asset URLs as well as legacy data URLs', () => {
+    const url = 'asset://localhost/%2Fcache%2Fpreviews%2Fabc123.jpg';
+    const item = { ...media(1), preview_data_url: url };
+    const { container } = render(MediaQueue, { ...props([], 1), items: [item] });
+    const img = container.querySelector('.thumb img');
+    expect(img?.getAttribute('src')).toBe(url);
+  });
 });

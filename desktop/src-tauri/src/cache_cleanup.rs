@@ -104,6 +104,10 @@ fn entries(base: &Path) -> AppResult<Vec<Entry>> {
                 paths.extend(children(&npu)?);
             }
         }
+        let previews = localsr.join("previews");
+        if local_children.contains(&previews) {
+            paths.extend(children(&previews)?);
+        }
     }
     #[cfg(target_os = "macos")]
     {
@@ -173,6 +177,7 @@ fn guarded_cleanup(state: &AppState, bases: &[PathBuf], clear: bool) -> AppResul
         if clear { Duration::ZERO } else { MAX_AGE },
         if clear { 0 } else { MAX_SIZE },
     )?;
+    crate::preview_cache::prune_missing_references(state)?;
     let mut remaining = 0u64;
     for base in bases {
         remaining = remaining.saturating_add(entries(base)?.iter().map(|entry| entry.size).sum());
@@ -352,5 +357,64 @@ mod tests {
             .auto_cache_cleanup = true;
         cleanup_at_start_in(&state, &[dir.path().to_path_buf()]).unwrap();
         assert!(!program.exists());
+    }
+
+    #[test]
+    fn manual_clear_removes_preview_files_and_clears_stale_file_urls() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::paths::AppPaths::under(dir.path());
+        let state = crate::state::AppState::from_paths(paths.clone()).unwrap();
+        let preview_url =
+            crate::preview_cache::save_jpeg_bytes(&paths.preview_root, b"thumb-bytes").unwrap();
+        let preview_file =
+            crate::preview_cache::confined_preview_path(&paths.preview_root, &preview_url).unwrap();
+        {
+            let db = crate::state::lock(&state.database).unwrap();
+            db.insert_media("m1", "/a.png", "a.png", "image").unwrap();
+            db.update_media_probe(
+                "/a.png",
+                "image",
+                100,
+                100,
+                1,
+                0.0,
+                0.0,
+                &preview_url,
+                "",
+                "",
+                true,
+            )
+            .unwrap();
+            db.insert_media("m2", "/b.png", "b.png", "image").unwrap();
+            db.update_media_probe(
+                "/b.png",
+                "image",
+                100,
+                100,
+                1,
+                0.0,
+                0.0,
+                "data:image/jpeg;base64,bGVnYWN5",
+                "",
+                "",
+                true,
+            )
+            .unwrap();
+        }
+        assert!(!entries(dir.path()).unwrap().is_empty());
+        let remaining = guarded_cleanup(&state, &[dir.path().to_path_buf()], true).unwrap();
+        assert_eq!(remaining, 0);
+        assert!(!preview_file.exists());
+        let db = crate::state::lock(&state.database).unwrap();
+        assert!(db
+            .get_media("m1")
+            .unwrap()
+            .unwrap()
+            .preview_data_url
+            .is_empty());
+        assert_eq!(
+            db.get_media("m2").unwrap().unwrap().preview_data_url,
+            "data:image/jpeg;base64,bGVnYWN5"
+        );
     }
 }

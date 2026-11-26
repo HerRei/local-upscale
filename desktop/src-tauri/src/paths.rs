@@ -12,6 +12,7 @@ pub struct AppPaths {
     pub settings: PathBuf,
     pub benchmark: PathBuf,
     pub work_root: PathBuf,
+    pub preview_root: PathBuf,
     pub legacy_settings: PathBuf,
     pub default_output: PathBuf,
     #[cfg(debug_assertions)]
@@ -29,6 +30,8 @@ impl AppPaths {
         std::fs::create_dir_all(&model_root)?;
         let work_root = next_root.join("work");
         std::fs::create_dir_all(&work_root)?;
+        let preview_root = base.cache_dir().join("LocalSR").join("previews");
+        std::fs::create_dir_all(&preview_root)?;
 
         let default_output = UserDirs::new()
             .and_then(|dirs| dirs.desktop_dir().map(Path::to_path_buf))
@@ -45,6 +48,7 @@ impl AppPaths {
             settings: next_root.join("settings.json"),
             benchmark: next_root.join("benchmark-latest.json"),
             work_root,
+            preview_root,
             legacy_settings: shared_root.join("settings.json"),
             next_root,
             model_root,
@@ -65,6 +69,7 @@ impl AppPaths {
             settings: next_root.join("settings.json"),
             benchmark: next_root.join("benchmark-latest.json"),
             work_root: next_root.join("work"),
+            preview_root: shared_root.join("previews"),
             legacy_settings: shared_root.join("settings.json"),
             model_root: shared_root.join("models"),
             default_output: root.join("output"),

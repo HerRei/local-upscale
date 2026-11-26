@@ -1,5 +1,5 @@
 //! Host-owned selections and bounded preview requests for the Compare tab.
-use std::{fs, time::SystemTime};
+use std::{fs, path::Path, time::SystemTime};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -318,6 +318,7 @@ fn parse_slot_index(data: &Value) -> Option<usize> {
 pub fn apply(
     db: &Database,
     compare: &mut CompareState,
+    preview_root: &Path,
     data: &Value,
     failed: bool,
 ) -> AppResult<()> {
@@ -345,18 +346,26 @@ pub fn apply(
             .unwrap_or("The preview could not be decoded.")
             .into();
     } else if let Some(encoded) = data["jpeg_base64"].as_str().filter(|s| !s.is_empty()) {
-        slot.status = CompareStatus::Ready;
-        slot.preview_data_url = format!("data:image/jpeg;base64,{encoded}");
-        let dimension = |name: &str| {
-            data[name]
-                .as_u64()
-                .and_then(|n| u32::try_from(n).ok())
-                .unwrap_or_default()
-        };
-        slot.width = dimension("width");
-        slot.height = dimension("height");
-        slot.preview_width = dimension("preview_width");
-        slot.preview_height = dimension("preview_height");
+        match crate::preview_cache::save_jpeg_base64(preview_root, encoded) {
+            Ok(url) => {
+                slot.status = CompareStatus::Ready;
+                slot.preview_data_url = url;
+                let dimension = |name: &str| {
+                    data[name]
+                        .as_u64()
+                        .and_then(|n| u32::try_from(n).ok())
+                        .unwrap_or_default()
+                };
+                slot.width = dimension("width");
+                slot.height = dimension("height");
+                slot.preview_width = dimension("preview_width");
+                slot.preview_height = dimension("preview_height");
+            }
+            Err(_) => {
+                slot.status = CompareStatus::Error;
+                slot.error = "The preview could not be decoded.".into();
+            }
+        }
     } else {
         // An answer without a picture is no answer: the slot must not wait for another.
         slot.status = CompareStatus::Error;
@@ -656,7 +665,9 @@ mod tests {
 
     #[test]
     fn matches_all_identity_fields_and_invalidates_removed_files_and_jobs() {
+        use base64::Engine;
         let dir = tempfile::tempdir().unwrap();
+        let preview_root = dir.path().join("previews");
         let dir_root = std::fs::canonicalize(dir.path()).unwrap();
         let db = Database::open(&dir_root.as_path().join("queue.db")).unwrap();
         let original = dir_root.as_path().join("original.png");
@@ -680,7 +691,7 @@ mod tests {
         ];
         let requests = plan(&db, &mut compare, &picks).unwrap();
         let mut answer = requests[1]["data"].clone();
-        answer["jpeg_base64"] = json!("pixels");
+        answer["jpeg_base64"] = json!(base64::engine::general_purpose::STANDARD.encode(b"pixels"));
         answer["width"] = json!(1200);
         answer["height"] = json!(800);
         answer["preview_width"] = json!(600);
@@ -693,15 +704,17 @@ mod tests {
         ] {
             let mut stale = answer.clone();
             stale[key] = value;
-            apply(&db, &mut compare, &stale, false).unwrap();
+            apply(&db, &mut compare, &preview_root, &stale, false).unwrap();
             assert_eq!(compare.slots[1].status, CompareStatus::Loading);
         }
-        apply(&db, &mut compare, &answer, false).unwrap();
+        apply(&db, &mut compare, &preview_root, &answer, false).unwrap();
         assert_eq!(compare.slots[1].status, CompareStatus::Ready);
-        assert_eq!(
-            compare.slots[1].preview_data_url,
-            "data:image/jpeg;base64,pixels"
-        );
+        let saved_path = crate::preview_cache::confined_preview_path(
+            &preview_root,
+            &compare.slots[1].preview_data_url,
+        )
+        .expect("slot preview must be a confined preview file URL");
+        assert_eq!(std::fs::read(saved_path).unwrap(), b"pixels");
         assert_eq!(
             (compare.slots[1].width, compare.slots[1].preview_width),
             (1200, 600)
@@ -710,7 +723,7 @@ mod tests {
         refresh(&db, &mut compare).unwrap();
         assert_eq!(compare.slots[1].status, CompareStatus::Missing);
         assert!(compare.slots[1].preview_data_url.is_empty());
-        apply(&db, &mut compare, &answer, false).unwrap();
+        apply(&db, &mut compare, &preview_root, &answer, false).unwrap();
         assert_eq!(compare.slots[1].status, CompareStatus::Missing);
         db.remove_media_guarded("a", &[]).unwrap();
         refresh(&db, &mut compare).unwrap();
@@ -720,6 +733,7 @@ mod tests {
     #[test]
     fn failed_preview_exposes_reason_and_a_new_generation_rejects_old_answers() {
         let dir = tempfile::tempdir().unwrap();
+        let preview_root = dir.path().join("previews");
         let db = Database::open(&dir.path().join("queue.db")).unwrap();
         let path = dir.path().join("image.png");
         std::fs::write(&path, "image").unwrap();
@@ -732,17 +746,19 @@ mod tests {
         let first = plan(&db, &mut compare, &picks).unwrap();
         let mut failure = first[0]["data"].clone();
         failure["error_message"] = json!("bad image");
-        apply(&db, &mut compare, &failure, true).unwrap();
+        apply(&db, &mut compare, &preview_root, &failure, true).unwrap();
         assert_eq!(compare.slots[0].status, CompareStatus::Error);
         assert_eq!(compare.slots[0].error, "bad image");
         plan(&db, &mut compare, &picks).unwrap();
-        apply(&db, &mut compare, &failure, true).unwrap();
+        apply(&db, &mut compare, &preview_root, &failure, true).unwrap();
         assert_eq!(compare.slots[0].status, CompareStatus::Loading);
     }
 
     #[test]
     fn a_replaced_file_at_the_same_path_cannot_accept_an_old_answer() {
+        use base64::Engine;
         let dir = tempfile::tempdir().unwrap();
+        let preview_root = dir.path().join("previews");
         let db = Database::open(&dir.path().join("queue.db")).unwrap();
         let path = dir.path().join("image.png");
         std::fs::write(&path, "first").unwrap();
@@ -760,8 +776,9 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         std::fs::write(&path, "a different file").unwrap();
         let mut answer = requests[0]["data"].clone();
-        answer["jpeg_base64"] = json!("old pixels");
-        apply(&db, &mut compare, &answer, false).unwrap();
+        answer["jpeg_base64"] =
+            json!(base64::engine::general_purpose::STANDARD.encode(b"old pixels"));
+        apply(&db, &mut compare, &preview_root, &answer, false).unwrap();
         assert_eq!(compare.slots[0].status, CompareStatus::Missing);
         assert!(compare.slots[0].preview_data_url.is_empty());
         assert!(plan(
@@ -777,7 +794,9 @@ mod tests {
     }
     #[test]
     fn regions_reject_stale_identity_and_fall_back_on_failure() {
+        use base64::Engine;
         let dir = tempfile::tempdir().unwrap();
+        let preview_root = dir.path().join("previews");
         let db = Database::open(&dir.path().join("queue.db")).unwrap();
         let path = dir.path().join("image.png");
         std::fs::write(&path, "image").unwrap();
@@ -793,10 +812,10 @@ mod tests {
         )
         .unwrap();
         let mut answer = preview[0]["data"].clone();
-        answer["jpeg_base64"] = json!("preview");
+        answer["jpeg_base64"] = json!(base64::engine::general_purpose::STANDARD.encode(b"preview"));
         answer["width"] = json!(100);
         answer["height"] = json!(100);
-        apply(&db, &mut compare, &answer, false).unwrap();
+        apply(&db, &mut compare, &preview_root, &answer, false).unwrap();
         let region = Region {
             x: 1,
             y: 2,
@@ -822,10 +841,12 @@ mod tests {
         assert!(compare.slots[0].region.is_none());
         apply_region(&db, &mut compare, &newer[0]["data"], true).unwrap();
         assert!(compare.slots[0].region.is_none());
-        assert_eq!(
-            compare.slots[0].preview_data_url,
-            "data:image/jpeg;base64,preview"
-        );
+        let saved_path = crate::preview_cache::confined_preview_path(
+            &preview_root,
+            &compare.slots[0].preview_data_url,
+        )
+        .expect("slot preview must be a confined preview file URL");
+        assert_eq!(std::fs::read(saved_path).unwrap(), b"preview");
     }
 
     fn one_image_db(dir: &std::path::Path, names: &[&str]) -> (Database, Vec<std::path::PathBuf>) {
@@ -847,14 +868,15 @@ mod tests {
         }
     }
 
-    fn decode(db: &Database, compare: &mut CompareState, request: &Value) {
+    fn decode(db: &Database, compare: &mut CompareState, preview_root: &Path, request: &Value) {
+        use base64::Engine;
         let mut answer = request["data"].clone();
-        answer["jpeg_base64"] = json!("pixels");
+        answer["jpeg_base64"] = json!(base64::engine::general_purpose::STANDARD.encode(b"pixels"));
         answer["width"] = json!(100);
         answer["height"] = json!(100);
         answer["preview_width"] = json!(50);
         answer["preview_height"] = json!(50);
-        apply(db, compare, &answer, false).unwrap();
+        apply(db, compare, preview_root, &answer, false).unwrap();
     }
 
     #[test]
@@ -870,32 +892,36 @@ mod tests {
     #[test]
     fn an_answer_without_a_picture_ends_the_wait_with_an_error() {
         let dir = tempfile::tempdir().unwrap();
+        let preview_root = dir.path().join("previews");
         let (db, _) = one_image_db(dir.path(), &["a.png"]);
         let mut compare = CompareState::default();
         let requests = plan(&db, &mut compare, &[original("m0")]).unwrap();
         let mut answer = requests[0]["data"].clone();
         answer["jpeg_base64"] = json!("");
-        apply(&db, &mut compare, &answer, false).unwrap();
+        apply(&db, &mut compare, &preview_root, &answer, false).unwrap();
         assert_eq!(compare.slots[0].status, CompareStatus::Error);
         assert!(!compare.slots[0].error.is_empty());
     }
 
     #[test]
     fn swapping_decoded_picks_keeps_their_previews_and_asks_for_nothing() {
+        use base64::Engine;
         let dir = tempfile::tempdir().unwrap();
+        let preview_root = dir.path().join("previews");
         let (db, _) = one_image_db(dir.path(), &["a.png", "b.png"]);
         let mut compare = CompareState::default();
         let picks = [original("m0"), original("m1")];
         let requests = plan(&db, &mut compare, &picks).unwrap();
         for request in &requests {
-            decode(&db, &mut compare, request);
+            decode(&db, &mut compare, &preview_root, request);
         }
+        let expected_url = compare.slots[0].preview_data_url.clone();
         let swapped = [original("m1"), original("m0")];
         assert!(plan(&db, &mut compare, &swapped).unwrap().is_empty());
         assert_eq!(compare.slots[0].pick, swapped[0]);
         for slot in &compare.slots {
             assert_eq!(slot.status, CompareStatus::Ready);
-            assert_eq!(slot.preview_data_url, "data:image/jpeg;base64,pixels");
+            assert_eq!(slot.preview_data_url, expected_url);
             assert_eq!(
                 (slot.width, slot.preview_width, slot.region.is_none()),
                 (100, 50, true)
@@ -903,21 +929,19 @@ mod tests {
         }
         // An answer of the earlier generation cannot reach the reordered slots.
         let mut late = requests[0]["data"].clone();
-        late["jpeg_base64"] = json!("late");
-        apply(&db, &mut compare, &late, false).unwrap();
-        assert_eq!(
-            compare.slots[0].preview_data_url,
-            "data:image/jpeg;base64,pixels"
-        );
+        late["jpeg_base64"] = json!(base64::engine::general_purpose::STANDARD.encode(b"late"));
+        apply(&db, &mut compare, &preview_root, &late, false).unwrap();
+        assert_eq!(compare.slots[0].preview_data_url, expected_url);
     }
 
     #[test]
     fn a_pick_that_was_still_loading_is_requested_again_after_a_swap() {
         let dir = tempfile::tempdir().unwrap();
+        let preview_root = dir.path().join("previews");
         let (db, _) = one_image_db(dir.path(), &["a.png", "b.png"]);
         let mut compare = CompareState::default();
         let requests = plan(&db, &mut compare, &[original("m0"), original("m1")]).unwrap();
-        decode(&db, &mut compare, &requests[0]);
+        decode(&db, &mut compare, &preview_root, &requests[0]);
         let again = plan(&db, &mut compare, &[original("m1"), original("m0")]).unwrap();
         assert_eq!(again.len(), 1);
         assert_eq!(again[0]["data"]["slot"], "slot1");
@@ -945,10 +969,11 @@ mod tests {
     #[test]
     fn regions_for_slots_that_are_not_ready_are_null_and_do_not_reject_the_batch() {
         let dir = tempfile::tempdir().unwrap();
+        let preview_root = dir.path().join("previews");
         let (db, _) = one_image_db(dir.path(), &["a.png", "b.png"]);
         let mut compare = CompareState::default();
         let requests = plan(&db, &mut compare, &[original("m0"), original("m1")]).unwrap();
-        decode(&db, &mut compare, &requests[0]);
+        decode(&db, &mut compare, &preview_root, &requests[0]);
         let region = Region {
             x: 0,
             y: 0,

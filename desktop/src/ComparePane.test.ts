@@ -861,3 +861,17 @@ it('preserves playback position and audio choice when switching between slider a
     load.mockRestore();
   }
 });
+
+it('renders comparison images from file-backed asset URLs', () => {
+  const urlA = 'asset://localhost/%2Fcache%2Fpreviews%2Fa.jpg';
+  const urlB = 'asset://localhost/%2Fcache%2Fpreviews%2Fb.jpg';
+  const { container } = render(ComparePane, {
+    ...props,
+    items: [
+      { ...item('one', 'a'), preview_data_url: urlA },
+      { ...item('two', 'a'), preview_data_url: urlB },
+    ],
+  });
+  expect(container.querySelector('.source-image')?.getAttribute('src')).toBe(urlA);
+  expect(container.querySelector('.result-image')?.getAttribute('src')).toBe(urlB);
+});

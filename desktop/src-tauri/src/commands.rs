@@ -334,8 +334,7 @@ pub(crate) fn add_media_checked(
     }
     let normalized = normalize_media_paths_checked(paths, &state.grants)?;
     if replace {
-        lock(&state.database)?.clear_media()?;
-        clear_completed_result(state)?;
+        clear_all_media_and_previews(state)?;
     }
 
     let mut granted = Vec::with_capacity(normalized.len());
@@ -436,12 +435,40 @@ pub(crate) fn remove_media_checked(state: &AppState, id: &str) -> AppResult<()> 
     // The scheduler lock keeps the dispatcher from sending this picture's job meanwhile. The
     // batch the engine already holds is not removed from under it.
     let engine_jobs = lock(&state.runtime)?.active_batch_job_ids.clone();
-    let existing = {
+    let (existing, stale) = {
         let database = lock(&state.database)?;
         let existing = database.get_media(id)?;
         database.remove_media_guarded(id, &engine_jobs)?;
-        existing
+        let mut runtime = lock(&state.runtime)?;
+        let mut stale = Vec::new();
+        if let Some(media) = &existing {
+            stale.push(media.preview_data_url.clone());
+        }
+        if runtime.comparison_media_id == id {
+            runtime.comparison_media_id.clear();
+            runtime.comparison_output_path.clear();
+            runtime.comparison_error.clear();
+            stale.push(std::mem::take(&mut runtime.comparison_preview_data_url));
+        }
+        if runtime.comparison_pair.media_id == id {
+            let pair = std::mem::take(&mut runtime.comparison_pair);
+            stale.push(pair.showing.preview_data_url);
+            stale.push(pair.against.preview_data_url);
+        }
+        for slot in &runtime.compare.slots {
+            stale.push(slot.preview_data_url.clone());
+        }
+        crate::compare::refresh(&database, &mut runtime.compare)?;
+        let refs: Vec<&str> = stale.iter().map(String::as_str).collect();
+        crate::preview_cache::remove_if_unreferenced(
+            &state.paths.preview_root,
+            &database,
+            Some(&runtime),
+            &refs,
+        )?;
+        (existing, stale)
     };
+    let _ = stale;
     if let Some(media) = existing {
         state.grants.revoke_media_file(Path::new(&media.path));
     }
@@ -452,9 +479,27 @@ pub(crate) fn remove_media_checked(state: &AppState, id: &str) -> AppResult<()> 
 #[tauri::command]
 pub fn clear_results(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
     let _scheduler = lock(&state.scheduler)?;
-    let engine_jobs = lock(&state.runtime)?.active_batch_job_ids.clone();
-    lock(&state.database)?.hide_all_results(&engine_jobs)?;
+    clear_results_checked(&state)?;
     emit_state_changed(&app);
+    Ok(())
+}
+
+pub(crate) fn clear_results_checked(state: &AppState) -> AppResult<()> {
+    let engine_jobs = lock(&state.runtime)?.active_batch_job_ids.clone();
+    let database = lock(&state.database)?;
+    database.hide_all_results(&engine_jobs)?;
+    let mut runtime = lock(&state.runtime)?;
+    crate::compare::refresh(&database, &mut runtime.compare)?;
+    runtime.comparison_media_id.clear();
+    runtime.comparison_output_path.clear();
+    runtime.comparison_preview_data_url.clear();
+    runtime.comparison_error.clear();
+    runtime.comparison_pair = Default::default();
+    if runtime.active_job_id.is_empty() {
+        runtime.last_output_path.clear();
+        runtime.result_preview_data_url.clear();
+    }
+    crate::preview_cache::sweep_unreferenced(&state.paths.preview_root, &database, Some(&runtime))?;
     Ok(())
 }
 
@@ -470,9 +515,23 @@ pub fn clear_media(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult
 pub(crate) fn clear_media_checked(state: &AppState) -> AppResult<()> {
     crate::updates::ensure_not_installing(state)?;
     ensure_queue_idle(state)?;
-    lock(&state.database)?.clear_media()?;
+    clear_all_media_and_previews(state)?;
     state.grants.clear_media();
-    clear_completed_result(state)?;
+    Ok(())
+}
+
+fn clear_all_media_and_previews(state: &AppState) -> AppResult<()> {
+    let database = lock(&state.database)?;
+    database.clear_media()?;
+    let mut runtime = lock(&state.runtime)?;
+    runtime.comparison_media_id.clear();
+    runtime.comparison_output_path.clear();
+    runtime.comparison_preview_data_url.clear();
+    runtime.comparison_error.clear();
+    runtime.comparison_pair = Default::default();
+    runtime.compare.slots.clear();
+    clear_completed_result_locked(&mut runtime);
+    crate::preview_cache::sweep_unreferenced(&state.paths.preview_root, &database, Some(&runtime))?;
     Ok(())
 }
 
@@ -2012,11 +2071,29 @@ pub(crate) fn request_compare_checked(
 ) -> AppResult<()> {
     let _scheduler = lock(&state.scheduler)?;
     authorize_compare_originals(state, picks)?;
-    let requests = {
+    let (requests, stale) = {
         let database = lock(&state.database)?;
         let mut runtime = lock(&state.runtime)?;
-        crate::compare::plan(&database, &mut runtime.compare, picks)?
+        let stale: Vec<String> = runtime
+            .compare
+            .slots
+            .iter()
+            .map(|slot| slot.preview_data_url.clone())
+            .collect();
+        let requests = crate::compare::plan(&database, &mut runtime.compare, picks)?;
+        (requests, stale)
     };
+    if !stale.is_empty() {
+        let database = lock(&state.database)?;
+        let runtime = lock(&state.runtime)?;
+        let refs: Vec<&str> = stale.iter().map(String::as_str).collect();
+        crate::preview_cache::remove_if_unreferenced(
+            &state.paths.preview_root,
+            &database,
+            Some(&runtime),
+            &refs,
+        )?;
+    }
     let shortfall = lock(&state.engine)?
         .as_ref()
         .and_then(|engine| crate::compare::engine_shortfall(&engine.features));
@@ -2030,7 +2107,13 @@ pub(crate) fn request_compare_checked(
             failure["error_message"] = json!(error.to_string());
             let database = lock(&state.database)?;
             let mut runtime = lock(&state.runtime)?;
-            crate::compare::apply(&database, &mut runtime.compare, &failure, true)?;
+            crate::compare::apply(
+                &database,
+                &mut runtime.compare,
+                &state.paths.preview_root,
+                &failure,
+                true,
+            )?;
         }
     }
     Ok(())
@@ -2362,12 +2445,30 @@ pub fn request_image_comparison(
         (media, showing_path, against_path)
     };
     native_menu::set_comparison_labels(&app, against != "original");
-    let requests = plan_pair_requests(
-        &mut *lock(&state.runtime)?,
-        &media,
-        (&showing, &showing_path),
-        (&against, &against_path),
-    );
+    let requests = {
+        let mut runtime = lock(&state.runtime)?;
+        let stale = [
+            runtime.comparison_pair.showing.preview_data_url.clone(),
+            runtime.comparison_pair.against.preview_data_url.clone(),
+        ];
+        let requests = plan_pair_requests(
+            &mut runtime,
+            &media,
+            (&showing, &showing_path),
+            (&against, &against_path),
+        );
+        drop(runtime);
+        let database = lock(&state.database)?;
+        let runtime = lock(&state.runtime)?;
+        let refs: Vec<&str> = stale.iter().map(String::as_str).collect();
+        crate::preview_cache::remove_if_unreferenced(
+            &state.paths.preview_root,
+            &database,
+            Some(&runtime),
+            &refs,
+        )?;
+        requests
+    };
     for request in requests {
         worker::send(&state, &request)?;
     }
@@ -2467,7 +2568,7 @@ fn request_latest_comparison(state: &AppState, media_id: String) -> AppResult<()
             "the completed image is no longer available".into(),
         ));
     }
-    {
+    let stale = {
         let mut runtime = lock(&state.runtime)?;
         if runtime.comparison_media_id == media_id
             && runtime.comparison_output_path == output
@@ -2477,8 +2578,18 @@ fn request_latest_comparison(state: &AppState, media_id: String) -> AppResult<()
         }
         runtime.comparison_media_id = media_id;
         runtime.comparison_output_path = output.clone();
-        runtime.comparison_preview_data_url.clear();
         runtime.comparison_error.clear();
+        std::mem::take(&mut runtime.comparison_preview_data_url)
+    };
+    if !stale.is_empty() {
+        let database = lock(&state.database)?;
+        let runtime = lock(&state.runtime)?;
+        crate::preview_cache::remove_if_unreferenced(
+            &state.paths.preview_root,
+            &database,
+            Some(&runtime),
+            &[stale.as_str()],
+        )?;
     }
     // A single bounded comparison is retained independently of the active
     // job. The worker response carries its path, so a late response from a
@@ -3846,8 +3957,7 @@ fn ensure_queue_idle(state: &AppState) -> AppResult<()> {
     }
 }
 
-fn clear_completed_result(state: &AppState) -> AppResult<()> {
-    let mut runtime = lock(&state.runtime)?;
+fn clear_completed_result_locked(runtime: &mut crate::types::RuntimeStatus) {
     runtime.progress = 0.0;
     runtime.last_output_path.clear();
     runtime.result_preview_data_url.clear();
@@ -3860,7 +3970,6 @@ fn clear_completed_result(state: &AppState) -> AppResult<()> {
         runtime.status_title = "Ready".into();
         runtime.status_detail = "The isolated inference engine is ready.".into();
     }
-    Ok(())
 }
 
 /// HEIC, MOV and ProRes are written by macOS's own encoders, so only macOS accepts them.

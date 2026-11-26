@@ -365,3 +365,23 @@ it('counts a short kept video in frames and marks an unfinished photo with its t
   expect(rows[1]).not.toContain('0:00');
   expect(rows[3]).toContain('Unfinished · 3 of 35 tiles · Quick · 4×');
 });
+
+it('renders output group thumbnails from file-backed asset URLs', () => {
+  const url = 'asset://localhost/%2Fcache%2Fpreviews%2Fthumb.jpg';
+  const withUrl = { ...media, preview_data_url: url };
+  const histories = [{ media_id: 'a', results: [result('span')] }] as MediaResults[];
+  const { container } = render(OutputsList, {
+    groups: outputGroups([withUrl], histories),
+    picks: [],
+    togglePick: vi.fn(),
+    clearPicks: vi.fn(),
+    clearOutputs: vi.fn(),
+    openCompare: vi.fn(),
+    compareActive: false,
+    shown: null,
+    showResult: vi.fn(),
+  });
+  const imgs = container.querySelectorAll('.thumb img');
+  expect(imgs.length).toBeGreaterThan(0);
+  expect(imgs[0]?.getAttribute('src')).toBe(url);
+});

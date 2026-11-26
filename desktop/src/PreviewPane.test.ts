@@ -1258,3 +1258,29 @@ it('uses async decoding on preview images and pauses edit-sweep animation when o
   expect(source).toMatch(/\.edit-sweep::before\s*\{[^}]*animation-play-state:\s*paused/);
   expect(source).toMatch(/\.edit-sweep\.on::before\s*\{[^}]*animation-play-state:\s*running/);
 });
+
+it('renders source and result previews from file-backed asset URLs', () => {
+  const sourceUrl = 'asset://localhost/%2Fcache%2Fpreviews%2Fsource.jpg';
+  const resultUrl = 'http://asset.localhost/C%3A%5Ccache%5Cpreviews%5Cresult.jpg';
+  const { container } = render(PreviewPane, {
+    selectedMedia: {
+      id: 'photo',
+      path: '/photo.png',
+      name: 'photo.png',
+      kind: 'image',
+      width: 1000,
+      height: 800,
+      frame_count: 1,
+      fps: 0,
+      duration_seconds: 0,
+      preview_data_url: sourceUrl,
+      probe_status: 'ready',
+      error: '',
+      selected: true,
+    },
+    resultPreview: resultUrl,
+    completedVideoOutput: '',
+  });
+  expect(container.querySelector('.source-image')?.getAttribute('src')).toBe(sourceUrl);
+  expect(container.querySelector('.result-image')?.getAttribute('src')).toBe(resultUrl);
+});
