@@ -165,3 +165,12 @@ padded_height
 tile_width
 tile_height
 max_tile_area
+
+# localsr-benchmark-v3 result fields (serialized with asdict())
+status_note
+recommended_device
+recommended_device_name
+recommended_device_seconds_per_input_mp
+recommended_cpu_threads
+cpu_threads
+cpu_avx2

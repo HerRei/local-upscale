@@ -108,18 +108,6 @@ def cpu_thread_counts() -> tuple[int, int]:
     return physical, logical
 
 
-def run_model_on_cpu_for_test(model: torch.nn.Module, tensor: torch.Tensor) -> np.ndarray:
-    """Run a raw model on CPU using the safe memory format (NCHW on pre-AVX2)."""
-    fmt = cpu_memory_format()
-    model = model.to(device=torch.device("cpu"), dtype=torch.float32)
-    model.eval()
-    inp = tensor.unsqueeze(0).to(device=torch.device("cpu"), dtype=torch.float32)
-    inp = inp.contiguous(memory_format=fmt)
-    with torch.no_grad():
-        out = model(inp)
-    return (out.squeeze(0).clamp(0, 1) * 255.0).round().byte().numpy()
-
-
 def resolve_benchmark_preset_models(
     catalog=MODEL_CATALOG,
     store: ModelStore | None = None,

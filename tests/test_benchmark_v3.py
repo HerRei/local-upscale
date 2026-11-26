@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 import torch
 
+from localsr.core import hardware
 from localsr.image_models.pulse import PULSE
 
 
@@ -37,9 +38,21 @@ def test_cpu_supports_avx2_detection_and_pre_avx2_fallback(monkeypatch):
     assert hardware.cpu_memory_format() == torch.contiguous_format
 
 
+def run_model_on_cpu_for_test(model: torch.nn.Module, tensor: torch.Tensor) -> np.ndarray:
+    """Run a raw model on CPU using the safe memory format (NCHW on pre-AVX2)."""
+    fmt = hardware.cpu_memory_format()
+    model = model.to(device=torch.device("cpu"), dtype=torch.float32)
+    model.eval()
+    inp = tensor.unsqueeze(0).to(device=torch.device("cpu"), dtype=torch.float32)
+    inp = inp.contiguous(memory_format=fmt)
+    with torch.no_grad():
+        out = model(inp)
+    return (out.squeeze(0).clamp(0, 1) * 255.0).round().byte().numpy()
+
+
 def test_pre_avx2_pulse_runs_in_nchw_without_channels_last(monkeypatch):
     from localsr.core import hardware
-    from localsr.core.benchmark_v3 import V3_SCENES, _scene_tensor, run_model_on_cpu_for_test
+    from localsr.core.benchmark_v3 import V3_SCENES, _scene_tensor
 
     monkeypatch.setattr(hardware.platform, "machine", lambda: "x86_64")
     monkeypatch.setattr(torch.backends.cpu, "get_cpu_capability", lambda: "DEFAULT")
