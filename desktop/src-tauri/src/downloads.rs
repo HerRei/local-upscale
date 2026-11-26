@@ -1073,7 +1073,6 @@ fn publish_progress<R: tauri::Runtime>(
             "progress": progress
         }),
     );
-    emit_state_changed(app);
 }
 
 fn emit_download_event<R: tauri::Runtime>(
@@ -1436,6 +1435,37 @@ mod tests {
         assert!(validate_artifact_metadata("https://example.com/model", 0, &digest).is_err());
         assert!(validate_artifact_metadata("https://example.com/model", 1, "placeholder").is_err());
         assert!(validate_artifact_metadata("https://example.com/model", 1, &digest).is_ok());
+    }
+
+    #[test]
+    fn progress_chunks_emit_download_progress_but_no_state_changed() {
+        use tauri::Listener;
+
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap();
+        let app = tauri::test::mock_app();
+        let handle = app.handle().clone();
+        let state_changes = Arc::new(AtomicUsize::new(0));
+        let progress_events = Arc::new(AtomicUsize::new(0));
+        {
+            let state_changes = state_changes.clone();
+            handle.listen("state-changed", move |_| {
+                state_changes.fetch_add(1, Ordering::SeqCst);
+            });
+            let progress_events = progress_events.clone();
+            handle.listen("worker-message", move |event| {
+                if event.payload().contains("download-progress") {
+                    progress_events.fetch_add(1, Ordering::SeqCst);
+                }
+            });
+        }
+
+        for step in 1..=5 {
+            publish_progress(&state, &handle, "model", step * 4 * 1024 * 1024, 100 << 20);
+        }
+
+        assert_eq!(progress_events.load(Ordering::SeqCst), 5);
+        assert_eq!(state_changes.load(Ordering::SeqCst), 0);
     }
 
     #[test]
