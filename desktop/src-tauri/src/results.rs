@@ -196,8 +196,11 @@ pub fn request_kind(request: &Value) -> &'static str {
                     stage["kind"] == "restore" && stage["model_id"] == primary.as_str()
                 }) || (request["data"]["output_scale"].as_u64() == Some(1)
                     && stages.is_some_and(|list| {
+                        let steps = crate::steps::registry();
                         list.iter().all(|stage| {
-                            matches!(stage["kind"].as_str(), Some("restore" | "deblock"))
+                            stage["kind"]
+                                .as_str()
+                                .is_some_and(|kind| steps.is_fix_stage_kind(kind))
                         })
                     }));
             if restores {

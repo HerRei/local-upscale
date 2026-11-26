@@ -2925,14 +2925,7 @@ fn video_stage_title(stage: &str) -> &'static str {
 }
 
 fn stage_label(kind: &str) -> &'static str {
-    match kind {
-        "deblock" => "Removing JPEG artifacts",
-        "restore" => "Restoring",
-        "upscale" => "Upscaling",
-        "face_restore" => "Restoring faces",
-        "edit" => "Preparing edit",
-        _ => "Processing",
-    }
+    crate::steps::registry().stage_label(kind)
 }
 
 /// High-frequency inference messages are already delivered through the typed

@@ -5,6 +5,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from .steps import (
+    DEFAULT_FIX_ORDER,
+    FACE_STAGE_KIND,
+    FIX_KINDS,
+    FIX_STAGE_KINDS,
+    IMAGE_PIPELINE_ROLES,
+    IMAGE_PIPELINE_STAGE_KINDS,
+    IMAGE_PRIMARY_STAGE_KINDS,
+    LIMITS,
+    parameter_for,
+)
+
 
 @dataclass(frozen=True)
 class PipelineStage:
@@ -17,9 +29,16 @@ class PipelineStage:
     fix: str | None = None
 
 
-FIX_KINDS = frozenset({"blur", "jpeg", "noise", "colour"})
 # Up to one fix per kind runs before the main model.
-MAX_FIX_STAGES = len(FIX_KINDS)
+MAX_FIX_STAGES = LIMITS.max_fix_stages
+_FACE_FIDELITY = parameter_for("face_restore", "fidelity")
+_FACE_FIDELITY_MIN = 0.0 if _FACE_FIDELITY.minimum is None else float(_FACE_FIDELITY.minimum)
+_FACE_FIDELITY_MAX = 1.0 if _FACE_FIDELITY.maximum is None else float(_FACE_FIDELITY.maximum)
+_FIX_LIST_TEXT = (
+    ", ".join(DEFAULT_FIX_ORDER[:-1]) + f" or {DEFAULT_FIX_ORDER[-1]}"
+    if len(DEFAULT_FIX_ORDER) > 1
+    else "".join(DEFAULT_FIX_ORDER)
+)
 
 
 class PipelineStageError(RuntimeError):
@@ -47,7 +66,7 @@ class ImagePipeline:
     def face(self) -> PipelineStage | None:
         if self.primary_index is None or not self.stages:
             return None
-        return self.stages[-1] if self.stages[-1].kind == "face_restore" else None
+        return self.stages[-1] if self.stages[-1].kind == FACE_STAGE_KIND else None
 
 
 def resolve_image_pipeline(
@@ -100,9 +119,7 @@ def _is_fix_only_stages(raw: object) -> bool:
     if not isinstance(raw, list):
         return False
     return all(
-        isinstance(item, dict)
-        and item.get("kind") in {"deblock", "restore"}
-        and item.get("role") == "fix"
+        isinstance(item, dict) and item.get("kind") in FIX_STAGE_KINDS and item.get("role") == "fix"
         for item in raw
     )
 
@@ -123,7 +140,7 @@ def _parse_stage_item(item: object) -> PipelineStage:
     if not isinstance(item, dict):
         raise ValueError("Every pipeline stage must be an object.")
     kind = str(item.get("kind") or "")
-    if kind not in {"deblock", "restore", "upscale", "face_restore"}:
+    if kind not in IMAGE_PIPELINE_STAGE_KINDS:
         raise ValueError(f"Unsupported image pipeline stage: {kind or '<empty>'}")
     model_id = str(item.get("model_id") or "")
     model_path = str(item.get("model_path") or "")
@@ -131,13 +148,16 @@ def _parse_stage_item(item: object) -> PipelineStage:
         raise ValueError(f"The {kind} stage requires a model ID and model path.")
     fidelity = item.get("fidelity")
     parsed_fidelity = None if fidelity is None else float(fidelity)
-    if parsed_fidelity is not None and not 0.0 <= parsed_fidelity <= 1.0:
+    if (
+        parsed_fidelity is not None
+        and not _FACE_FIDELITY_MIN <= parsed_fidelity <= _FACE_FIDELITY_MAX
+    ):
         raise ValueError("Face restoration fidelity must be between 0 and 1.")
     fix = item.get("fix")
     if fix is not None and (
-        not isinstance(fix, str) or fix not in FIX_KINDS or kind not in {"deblock", "restore"}
+        not isinstance(fix, str) or fix not in FIX_KINDS or kind not in FIX_STAGE_KINDS
     ):
-        raise ValueError("Only a restoration stage may name a fix: blur, jpeg, noise or colour.")
+        raise ValueError(f"Only a restoration stage may name a fix: {_FIX_LIST_TEXT}.")
     return PipelineStage(
         kind=kind,
         model_id=model_id,
@@ -152,19 +172,21 @@ def _parse_stage_item(item: object) -> PipelineStage:
 def parse_pipeline_stages(raw: object) -> tuple[PipelineStage, ...]:
     if not isinstance(raw, list) or not raw:
         return ()
-    if len(raw) > MAX_FIX_STAGES + 2:
-        raise ValueError(f"Image recipes support at most {MAX_FIX_STAGES + 2} bounded stages.")
+    if len(raw) > LIMITS.max_image_pipeline_stages:
+        raise ValueError(
+            f"Image recipes support at most {LIMITS.max_image_pipeline_stages} bounded stages."
+        )
     stages: list[PipelineStage] = [_parse_stage_item(item) for item in raw]
 
     kinds = [stage.kind for stage in stages]
-    if any(stage.role not in {"", "fix", "primary", "face"} for stage in stages):
+    if any(stage.role not in IMAGE_PIPELINE_ROLES for stage in stages):
         raise ValueError("Unknown pipeline stage role.")
     primary_index = _primary_index(stages)
     if primary_index > MAX_FIX_STAGES:
         raise ValueError(
             f"Only {MAX_FIX_STAGES} restoration/deblock stages may precede the primary stage."
         )
-    if any(kind not in {"deblock", "restore"} for kind in kinds[:primary_index]):
+    if any(kind not in FIX_STAGE_KINDS for kind in kinds[:primary_index]):
         raise ValueError("Only restoration or deblock may precede the primary stage.")
     fixes = [stage.fix for stage in stages if stage.fix is not None]
     if len(set(fixes)) != len(fixes):
@@ -174,7 +196,7 @@ def parse_pipeline_stages(raw: object) -> tuple[PipelineStage, ...]:
     if stages[primary_index].role not in {"", "primary"}:
         raise ValueError("The primary stage must have the primary role.")
     trailing = kinds[primary_index + 1 :]
-    if trailing not in ([], ["face_restore"]):
+    if trailing not in ([], [FACE_STAGE_KIND]):
         raise ValueError("Face restoration is the only optional stage after the primary stage.")
     if trailing and (
         kinds[primary_index] != "upscale" or stages[-1].execution != "fused-with-upscale"
@@ -199,7 +221,7 @@ def _primary_index(stages: list[PipelineStage] | tuple[PipelineStage, ...]) -> i
         if len(explicit) != 1 or (upscales and explicit != upscales):
             raise ValueError("An image recipe must contain exactly one primary stage.")
         index = explicit[0]
-        if stages[index].kind not in {"restore", "deblock", "upscale"}:
+        if stages[index].kind not in IMAGE_PRIMARY_STAGE_KINDS:
             raise ValueError("The primary stage must restore or upscale.")
         return index
     if upscales:

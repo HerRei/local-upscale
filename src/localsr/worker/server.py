@@ -147,9 +147,11 @@ BUNDLE_LOAD_SECONDS = 900.0
 
 
 def _engine_features() -> list[str]:
+    from localsr.core.steps import LIMITS, REQUIRED_STEP_FEATURES
+
     features = [
         "image",
-        "image_multi_fix",
+        LIMITS.multi_fix_feature,
         "checkpoint_sha256_consent",
         "image_batch_v1",
         "video_frame",
@@ -157,11 +159,11 @@ def _engine_features() -> list[str]:
         "cancellation",
         "progressive_preview",
         "benchmark_v1",
-        "image_edit",
-        "video_interpolation",
-        "video_audio_denoise",
-        "compare_regions",
     ]
+    for feature in REQUIRED_STEP_FEATURES:
+        if feature not in features:
+            features.append(feature)
+    features.append("compare_regions")
     if "seedvr2" in _video_engines():
         features.append("video_seedvr2")
     if "flashvsr" in _video_engines():

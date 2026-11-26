@@ -500,15 +500,15 @@ fn default_true() -> bool {
 }
 
 fn default_edit_dimension() -> u32 {
-    512
+    crate::steps::registry().param_default_u32("edit", "max_dimension")
 }
 
 fn default_edit_steps() -> u32 {
-    40
+    crate::steps::registry().param_default_u32("edit", "steps")
 }
 
 fn default_edit_seed() -> u32 {
-    42
+    crate::steps::registry().param_default_u32("edit", "seed")
 }
 
 fn default_hdr_mode() -> String {
@@ -516,11 +516,11 @@ fn default_hdr_mode() -> String {
 }
 
 pub(crate) fn default_interpolation() -> String {
-    "off".into()
+    crate::steps::registry().param_default_str("interpolate", "interpolation")
 }
 
 pub(crate) fn default_interpolation_order() -> String {
-    "after_upscale".into()
+    crate::steps::registry().param_default_str("interpolate", "interpolation_order")
 }
 
 pub(crate) fn default_video_task() -> String {
@@ -598,6 +598,7 @@ fn deserialize_viewer_background<'de, D: serde::Deserializer<'de>>(
 
 impl Default for UiSettings {
     fn default() -> Self {
+        let steps = crate::steps::registry();
         Self {
             appearance: default_appearance(),
             colour_blind_palette: false,
@@ -613,7 +614,7 @@ impl Default for UiSettings {
             custom_model_path: String::new(),
             custom_models: Vec::new(),
             trusted_checkpoint_sha256: Vec::new(),
-            output_scale: 4,
+            output_scale: steps.param_default_u32("upscale", "output_scale"),
             output_directory: String::new(),
             output_format: "png".into(),
             preserve_metadata: true,
@@ -623,15 +624,15 @@ impl Default for UiSettings {
             halo: 32,
             precision: "fp32".into(),
             safe_memory: false,
-            deflicker: false,
-            deflicker_window: 3,
+            deflicker: steps.param_default_bool("deflicker", "deflicker"),
+            deflicker_window: steps.param_default_u32("deflicker", "deflicker_window"),
             video_container: "mp4".into(),
             video_codec: default_video_codec(),
             automatic_video_format: true,
             external_ffmpeg_path: String::new(),
             video_hdr_mode: default_hdr_mode(),
-            video_target_resolution: 0,
-            video_low_memory: true,
+            video_target_resolution: steps.param_default_u32("video", "target_resolution"),
+            video_low_memory: steps.param_default_bool("video", "video_low_memory"),
             video_crf: 18,
             video_interpolation: default_interpolation(),
             video_interpolation_order: default_interpolation_order(),
@@ -645,7 +646,7 @@ impl Default for UiSettings {
             crash_reports: true,
             skipped_update_version: String::new(),
             enable_face_model: false,
-            face_fidelity: 70,
+            face_fidelity: steps.param_default_u32("face_restore", "face_fidelity"),
             enable_live_preview: true,
             low_priority: false,
             allow_unsafe_pickle_model: false,

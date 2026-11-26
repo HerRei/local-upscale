@@ -100,6 +100,7 @@
     moveFixStage,
     toggleFixStage,
   } from './lib/fixStages';
+  import { FIX_CHIPS, FIX_NAMES, MULTI_FIX_FEATURE, stepFeature } from './lib/steps';
   import { applyWorkerEnvelope, resultPreviewForSelectedMedia } from './lib/workerEvents';
   import { formatBytes, formatDuration, formatVideoClock } from './lib/format';
   import { plainEngineError, recommendedEngineOffer } from './lib/engines';
@@ -312,13 +313,6 @@
   let recipeName = '';
   // Model terms are accepted per model: several fixes can each need their own.
   let termsAccepted: Record<string, boolean> = {};
-  // How a fix is named in its row's buttons.
-  const FIX_NAMES: Record<Exclude<FixKind, 'faces'>, string> = {
-    blur: 'blur',
-    jpeg: 'JPEG',
-    noise: 'noise',
-    colour: 'colour',
-  };
   let previewPane: PreviewPane | undefined;
   let inspectorScroll: HTMLDivElement | undefined;
   let lastLivePreviewSequence = 0;
@@ -718,7 +712,7 @@
   $: editFit = editModel ? editFitFor(editModel, snapshot.capabilities, editingDevice) : 'unknown';
   $: editSizeAllowed = editSizeLimit(snapshot.capabilities, editingDevice);
   $: editRuntime = editRuntimeOverride || snapshot.edit.runtime_path;
-  $: editSupported = snapshot.engine?.features.includes('image_edit') === true;
+  $: editSupported = snapshot.engine?.features.includes(stepFeature('edit')) === true;
   $: editBlockReason =
     settings.task !== 'edit'
       ? ''
@@ -759,7 +753,7 @@
       : [];
   // Engines without image_multi_fix run one fix at a time.
   $: fixPlanSupported =
-    imageFixes.length <= 1 || snapshot.engine?.features.includes('image_multi_fix') === true;
+    imageFixes.length <= 1 || snapshot.engine?.features.includes(MULTI_FIX_FEATURE) === true;
   $: usingTemporalVideo =
     settings.task === 'video' &&
     !restoring &&
@@ -874,7 +868,8 @@
   $: audioDisabled = settings.task === 'video' && !audioHasSource;
   $: audioModels = snapshot.catalog.audio_models ?? [];
   $: selectedAudioModel = resolveAudioModel(audioModels, settings.video_audio_model);
-  $: interpolationSupported = snapshot.engine?.features.includes('video_interpolation') === true;
+  $: interpolationSupported =
+    snapshot.engine?.features.includes(stepFeature('interpolate')) === true;
   $: hasVideoOnlyWork =
     settings.task === 'video' &&
     ((Boolean(settings.deflicker) && !preservingHdr) ||
@@ -1331,7 +1326,7 @@
   $: downloads = pendingDownloads(plan);
   $: planNeedsFile = plan.some((stage) => stage.needsFile);
   $: planMissing = plan.some((stage) => stage.missing);
-  $: fixChips = ['noise', 'blur', 'jpeg', 'colour'] as FixKind[];
+  $: fixChips = FIX_CHIPS as FixKind[];
   $: prepareReady =
     !snapshot.runtime.active_job_id &&
     !activeDownload &&
@@ -2045,9 +2040,7 @@
       current.selected_model_id
     ) {
       const picked = byId(current.selected_model_id);
-      const fit = picked
-        ? (['noise', 'blur', 'jpeg', 'colour'] as const).find((fix) => fitsFix(picked, fix))
-        : undefined;
+      const fit = picked ? FIX_CHIPS.find((fix) => fitsFix(picked, fix)) : undefined;
       if (fit && picked) {
         patch.fix_stages = [{ fix: fit, model_id: picked.model_id }];
         patch.fixes = [fit];
@@ -2068,9 +2061,7 @@
         (current.selected_model_id || !hasVideoOption)
       ) {
         const picked = byId(current.selected_model_id);
-        const fit = picked
-          ? (['noise', 'blur', 'jpeg', 'colour'] as const).find((fix) => fitsFix(picked, fix))
-          : undefined;
+        const fit = picked ? FIX_CHIPS.find((fix) => fitsFix(picked, fix)) : undefined;
         if (fit && picked) {
           patch.fix_stages = [{ fix: fit, model_id: picked.model_id }];
           patch.fixes = [fit];

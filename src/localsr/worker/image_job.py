@@ -30,6 +30,7 @@ from localsr.core.pipeline import (
     PipelineStageError,
     resolve_image_pipeline,
 )
+from localsr.core.steps import FIX_SHORT_NAMES
 from localsr.protocol.messages import (
     EngineStatus,
     JobCancelled,
@@ -40,9 +41,6 @@ from localsr.protocol.messages import (
     WorkerMessage,
 )
 from localsr.worker.job_progress import ImageJobProgress
-
-# How a skip note names the problem a fix was chosen for.
-_FIX_NAMES = {"blur": "blur", "jpeg": "JPEG", "noise": "noise"}
 
 
 def save_output(
@@ -273,7 +271,7 @@ class ImageJobRunner:
             # says so, and nothing damaged is kept.
             model = CATALOG_BY_ID.get(stage.model_id)
             reason = str(error).split(". ")[0].rstrip(".")
-            problem = _FIX_NAMES.get(stage.fix or "", "")
+            problem = FIX_SHORT_NAMES.get(stage.fix or "", "")
             note = (
                 f"The {problem + ' ' if problem else ''}fix "
                 f"({model.display_name if model else stage.model_id}) was skipped for this "

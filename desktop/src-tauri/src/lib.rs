@@ -33,6 +33,7 @@ mod queue_timing;
 mod results;
 mod settings;
 mod state;
+mod steps;
 mod tray;
 mod types;
 mod update_storage;

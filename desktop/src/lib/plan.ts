@@ -7,6 +7,7 @@ import {
   fitsFix,
   rememberedFixModel,
 } from './fixStages';
+import { FIX_LABELS } from './steps';
 import type {
   AppSnapshot,
   CatalogModel,
@@ -20,13 +21,7 @@ import type {
   TaskKind,
   UiSettings,
 } from './types';
-export const FIX_LABELS: Record<FixKind, string> = {
-  noise: 'Noise',
-  jpeg: 'JPEG artifacts',
-  blur: 'Blur',
-  colour: 'Colour',
-  faces: 'Faces',
-};
+export { FIX_LABELS };
 
 /** Catalog name without its role suffix, with `4x` written `×4`. */
 export function displayName(model: { name: string; display_name?: string }): string {
