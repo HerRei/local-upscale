@@ -61,7 +61,7 @@ impl<B: Backend> AwakeGuard<B> {
         self.inner.lock().map(|inner| inner.held).unwrap_or(false)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub(crate) fn with_backend<R>(&self, f: impl FnOnce(&mut B) -> R) -> R {
         let mut inner = self.inner.lock().expect("stay_awake lock poisoned");
         f(&mut inner.backend)
