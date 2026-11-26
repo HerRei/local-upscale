@@ -50,6 +50,12 @@ class EditPlan:
     gpu_budget: int
     max_dimension: int
     process_limit: int
+    text_encoder: str = "cpu"
+    vae: str = "cpu"
+    offload: bool = True
+
+
+PLACEMENT_CHOICES = ("auto", "gpu", "cpu")
 
 
 def reserve_for(total_ram: int, unified: bool = False) -> int:
@@ -70,19 +76,30 @@ def mapped_size(model: dict) -> int:
     return sum(f["size_bytes"] for f in model["files"])
 
 
-def estimate_edit_memory(model: dict, unified: bool, limit: int) -> int:
-    """Resident memory at the bundle's heaviest phase, in bytes.
+def estimate_edit_memory(
+    model: dict,
+    unified: bool,
+    limit: int,
+    *,
+    text_encoder: str = "cpu",
+    vae: str = "cpu",
+) -> int:
+    """Resident host memory at the bundle's heaviest phase, in bytes.
 
     Weights are memory-mapped and touched lazily: the encoders are resident while
     the prompt and reference are encoded, the transformer while the image is
     sampled, and the phase that is over can be evicted. On unified memory the
-    transformer lives in the same pool; beside a dedicated GPU the card holds it
-    and the host holds the encoders.
+    transformer lives in the same pool; beside a dedicated GPU the card holds
+    the transformer and any component placed on the GPU, while the host holds
+    components placed on the CPU.
     """
     sizes = {f["role"]: f["size_bytes"] for f in model["files"]}
     activations = activation_memory(unified, limit)
-    conditioning = sizes.get("text_encoder", 0) + sizes.get("vision", 0)
-    sampling = sizes.get("vae", 0) + activations + (sizes["diffusion"] if unified else 0)
+    conditioning = (
+        0 if text_encoder == "gpu" else sizes.get("text_encoder", 0) + sizes.get("vision", 0)
+    )
+    vae_host = 0 if vae == "gpu" else sizes.get("vae", 0)
+    sampling = vae_host + activations + (sizes["diffusion"] if unified else 0)
     return int(max(conditioning, sampling) * 1.1)
 
 
@@ -178,7 +195,116 @@ def read_edit_memory(device: str) -> EditMemory:
     raise ValueError("Editing requires Apple Silicon Metal or a CUDA/ROCm GPU.")
 
 
-def plan_edit(model: dict, memory: EditMemory, max_dimension: int = 512) -> EditPlan:
+def _validate_placement(name: str, value: str) -> str:
+    if value not in PLACEMENT_CHOICES:
+        raise ValueError(f"{name} must be auto, gpu or cpu.")
+    return value
+
+
+def _choose_unified_placement(
+    model: dict,
+    memory: EditMemory,
+    reserve: int,
+    limit: int,
+    diffusion_bytes: int,
+    vae_bytes: int,
+    encoder_bytes: int,
+    activations: int,
+    total_bytes: int,
+    text_encoder: str,
+    vae: str,
+) -> tuple[str, str, bool, int]:
+    if text_encoder != "gpu" and vae != "gpu":
+        required = estimate_edit_memory(model, True, limit)
+        return "cpu", "cpu", True, required
+    if model.get("family") == "mage-flow-edit-turbo":
+        raise MemoryError(
+            "Mage-Flow runs on the CPU on Apple Silicon because Metal produces blank output."
+        )
+    unified_cap = min(int(memory.total_ram * 0.60), memory.free_ram - reserve)
+    vae_need = diffusion_bytes + vae_bytes + activations
+    if vae == "gpu" and vae_need > unified_cap:
+        raise MemoryError(
+            f"Keeping the VAE on the GPU needs about {vae_need / GIB:.1f} GiB of unified memory, "
+            f"but only {max(0, unified_cap) / GIB:.1f} GiB is available."
+        )
+    vae_place = "gpu" if vae == "gpu" else "cpu"
+    te_need = (
+        diffusion_bytes + (vae_bytes if vae_place == "gpu" else 0) + encoder_bytes + activations
+    )
+    if text_encoder == "gpu" and te_need > unified_cap:
+        raise MemoryError(
+            f"Keeping the text encoder on the GPU needs about {te_need / GIB:.1f} GiB of unified "
+            f"memory, but only {max(0, unified_cap) / GIB:.1f} GiB is available."
+        )
+    te_place = "gpu" if text_encoder == "gpu" else "cpu"
+    offload = not (
+        te_place == "gpu" and vae_place == "gpu" and total_bytes + activations <= unified_cap
+    )
+    resident_gpu = (
+        diffusion_bytes
+        + (vae_bytes if vae_place == "gpu" else 0)
+        + (encoder_bytes if te_place == "gpu" else 0)
+        + activations
+    )
+    required = max(estimate_edit_memory(model, True, limit), int(resident_gpu * 1.1))
+    return te_place, vae_place, offload, required
+
+
+def _choose_discrete_placement(
+    budget: int,
+    diffusion_bytes: int,
+    vae_bytes: int,
+    encoder_bytes: int,
+    activations: int,
+    total_bytes: int,
+    text_encoder: str,
+    vae: str,
+) -> tuple[str, str, bool]:
+    vae_need = diffusion_bytes + vae_bytes + activations
+    vae_fits = vae_need <= budget
+    if vae == "cpu":
+        vae_place = "cpu"
+    elif vae == "gpu":
+        if not vae_fits:
+            raise MemoryError(
+                f"Keeping the VAE on the GPU needs about {vae_need / GIB:.1f} GiB of VRAM, "
+                f"but only {budget / GIB:.1f} GiB is budgeted."
+            )
+        vae_place = "gpu"
+    else:
+        vae_place = "gpu" if vae_fits else "cpu"
+
+    te_need = (
+        diffusion_bytes + (vae_bytes if vae_place == "gpu" else 0) + encoder_bytes + activations
+    )
+    te_fits = te_need <= budget
+    if text_encoder == "cpu":
+        te_place = "cpu"
+    elif text_encoder == "gpu":
+        if not te_fits:
+            raise MemoryError(
+                f"Keeping the text encoder on the GPU needs about {te_need / GIB:.1f} GiB of VRAM, "
+                f"but only {budget / GIB:.1f} GiB is budgeted."
+            )
+        te_place = "gpu"
+    else:
+        te_place = "gpu" if (vae == "cpu" or vae_place == "gpu") and te_fits else "cpu"
+
+    offload = not (te_place == "gpu" and vae_place == "gpu" and total_bytes + activations <= budget)
+    return te_place, vae_place, offload
+
+
+def plan_edit(
+    model: dict,
+    memory: EditMemory,
+    max_dimension: int = 512,
+    *,
+    text_encoder: str = "auto",
+    vae: str = "auto",
+) -> EditPlan:
+    text_encoder = _validate_placement("edit_text_encoder", text_encoder)
+    vae = _validate_placement("edit_vae", vae)
     if memory.pressure in {"critical", "high"} or (
         not memory.unified and memory.pressure == "warning"
     ):
@@ -207,19 +333,29 @@ def plan_edit(model: dict, memory: EditMemory, max_dimension: int = 512) -> Edit
             limit = min(limit, 512)
         elif capacity < 16 * GIB:
             limit = min(limit, 768)
-    # A starting estimate of the heaviest phase; the supervisor watches the real
-    # numbers while the model runs. Its process limit allows every mapped file
-    # to stay resident, which is normal when memory is plentiful.
-    required = estimate_edit_memory(model, memory.unified, limit)
-    process_limit = int(mapped_size(model) * 1.1 + activation_memory(memory.unified, limit))
-    if memory.free_ram - reserve < required:
-        raise MemoryError(
-            f"Editing needs about {required / GIB:.1f} GiB available plus "
-            f"a {reserve / GIB:.1f} GiB reserve for other apps; "
-            f"only {memory.free_ram / GIB:.1f} GiB is currently available. "
-            "Close apps or choose a smaller model or edit size, and retry."
-        )
+    sizes = {f["role"]: f["size_bytes"] for f in model["files"]}
+    diffusion_bytes = sizes.get("diffusion", 0)
+    vae_bytes = sizes.get("vae", 0)
+    encoder_bytes = sizes.get("text_encoder", 0) + sizes.get("vision", 0)
+    activations = activation_memory(memory.unified, limit)
+    total_bytes = mapped_size(model)
+    # The supervisor watches the real numbers while the model runs. Its process limit
+    # allows every mapped file to stay resident, which is normal when memory is plentiful.
+    process_limit = int(total_bytes * 1.1 + activations)
     if memory.unified:
+        te_place, vae_place, offload, required = _choose_unified_placement(
+            model,
+            memory,
+            reserve,
+            limit,
+            diffusion_bytes,
+            vae_bytes,
+            encoder_bytes,
+            activations,
+            total_bytes,
+            text_encoder,
+            vae,
+        )
         # Metal may wire well over half of unified memory; stay under Apple's
         # recommended working set with room for the encoders and the OS.
         budget = min(required, int(memory.total_ram * 0.60), memory.free_ram - reserve)
@@ -228,7 +364,25 @@ def plan_edit(model: dict, memory: EditMemory, max_dimension: int = 512) -> Edit
         budget = min(int(memory.gpu_total * 0.80), memory.gpu_free - gpu_reserve)
         if budget < 4 * GIB:
             raise MemoryError("Too little VRAM is free. Close GPU apps before editing.")
-    return EditPlan(required, reserve, budget, limit, process_limit)
+        te_place, vae_place, offload = _choose_discrete_placement(
+            budget,
+            diffusion_bytes,
+            vae_bytes,
+            encoder_bytes,
+            activations,
+            total_bytes,
+            text_encoder,
+            vae,
+        )
+        required = estimate_edit_memory(model, False, limit, text_encoder=te_place, vae=vae_place)
+    if memory.free_ram - reserve < required:
+        raise MemoryError(
+            f"Editing needs about {required / GIB:.1f} GiB available plus "
+            f"a {reserve / GIB:.1f} GiB reserve for other apps; "
+            f"only {memory.free_ram / GIB:.1f} GiB is currently available. "
+            "Close apps or choose a smaller model or edit size, and retry."
+        )
+    return EditPlan(required, reserve, budget, limit, process_limit, te_place, vae_place, offload)
 
 
 # On unified memory macOS compresses and swaps to make room, and on a busy 16 GB

@@ -135,6 +135,14 @@ pub struct StartEditInput {
     pub seed: u32,
     pub accepted_terms: bool,
     pub output_directory: String,
+    #[serde(default = "default_edit_placement")]
+    pub edit_text_encoder: String,
+    #[serde(default = "default_edit_placement")]
+    pub edit_vae: String,
+}
+
+fn default_edit_placement() -> String {
+    "auto".into()
 }
 
 #[cfg(test)]
@@ -783,6 +791,17 @@ pub fn validate(input: &StartEditInput, model: &EditModel) -> Result<(), String>
     if !model.installed {
         return Err("Download all components of the editing model first.".into());
     }
+    if input
+        .edit_text_encoder
+        .parse::<crate::protocol::EditPlacement>()
+        .is_err()
+        || input
+            .edit_vae
+            .parse::<crate::protocol::EditPlacement>()
+            .is_err()
+    {
+        return Err("Invalid text encoder or VAE placement.".into());
+    }
     Ok(())
 }
 
@@ -916,12 +935,17 @@ mod tests {
             seed: 42,
             accepted_terms: false,
             output_directory: String::new(),
+            edit_text_encoder: "auto".into(),
+            edit_vae: "auto".into(),
         };
         assert!(validate(&input, model).unwrap_err().contains("license"));
         input.accepted_terms = true;
         assert!(validate(&input, model).unwrap_err().contains("Download"));
         model.installed = true;
         assert!(validate(&input, model).is_ok());
+        input.edit_vae = "tpu".into();
+        assert!(validate(&input, model).is_err());
+        input.edit_vae = "auto".into();
         input.prompt = " ".into();
         assert!(validate(&input, model).is_err());
         input.prompt = "Edit".into();

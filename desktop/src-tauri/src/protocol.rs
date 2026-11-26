@@ -380,6 +380,36 @@ pub struct VideoJobRequest {
     pub temporary_directory: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EditPlacement {
+    #[default]
+    Auto,
+    Gpu,
+    Cpu,
+}
+
+impl EditPlacement {
+    pub fn is_auto(&self) -> bool {
+        *self == Self::Auto
+    }
+}
+
+impl FromStr for EditPlacement {
+    type Err = AppError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "auto" => Ok(Self::Auto),
+            "gpu" => Ok(Self::Gpu),
+            "cpu" => Ok(Self::Cpu),
+            _ => Err(AppError::Validation(format!(
+                "unsupported edit placement: {value}"
+            ))),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct EditJobRequest {
     pub job_id: String,
@@ -406,6 +436,10 @@ pub struct EditJobRequest {
     pub family: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_files: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "EditPlacement::is_auto")]
+    pub edit_text_encoder: EditPlacement,
+    #[serde(default, skip_serializing_if = "EditPlacement::is_auto")]
+    pub edit_vae: EditPlacement,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -666,5 +700,34 @@ mod tests {
             let reserialized = serde_json::to_value(&typed).unwrap();
             assert!(validator.is_valid(&reserialized), "invalid: {reserialized}");
         }
+    }
+
+    #[test]
+    fn edit_placement_fields_omit_auto_and_validate_overrides() {
+        let validator = schema_validator();
+        let mut edit: EditJobRequest = serde_json::from_value(json!({
+            "job_id": "edit-place",
+            "image_path": "/in/photo.png",
+            "output_path": "/out/edit.png",
+            "model_id": "qwen_edit_2511_q2_k",
+            "bundle_dir": "/models/qwen",
+            "runtime_path": "/bin/sd-cli",
+            "prompt": "Brighten",
+            "device": "cuda:0"
+        }))
+        .unwrap();
+        assert_eq!(edit.edit_text_encoder, EditPlacement::Auto);
+        assert_eq!(edit.edit_vae, EditPlacement::Auto);
+        let default_wire = serde_json::to_value(WorkerJobRequest::Edit(edit.clone())).unwrap();
+        assert!(default_wire["data"].get("edit_text_encoder").is_none());
+        assert!(default_wire["data"].get("edit_vae").is_none());
+        assert!(validator.is_valid(&default_wire));
+
+        edit.edit_text_encoder = EditPlacement::Cpu;
+        edit.edit_vae = EditPlacement::Gpu;
+        let override_wire = serde_json::to_value(WorkerJobRequest::Edit(edit)).unwrap();
+        assert_eq!(override_wire["data"]["edit_text_encoder"], "cpu");
+        assert_eq!(override_wire["data"]["edit_vae"], "gpu");
+        assert!(validator.is_valid(&override_wire));
     }
 }

@@ -1073,3 +1073,382 @@ def test_runtime_probe_runs_once_per_runtime_and_timeouts_are_explained(tmp_path
     runtime.write_bytes(b"runtime, newer build")
     image_edit.check_runtime(str(runtime))
     assert calls == ["--help", "--help"]
+
+
+@pytest.mark.parametrize(
+    "model_id,gpu_gb,max_dim,expected",
+    [
+        ("flux2_klein_4b_q4_0", 8, 512, ("gpu", "gpu", False)),
+        ("flux2_klein_4b_q4_0", 12, 768, ("gpu", "gpu", False)),
+        ("flux2_klein_4b_q4_0", 24, 1024, ("gpu", "gpu", False)),
+        ("flux2_klein_4b_q8_0", 8, 512, ("cpu", "gpu", True)),
+        ("flux2_klein_4b_q8_0", 12, 512, ("gpu", "gpu", False)),
+        ("flux2_klein_4b_q8_0", 12, 768, ("cpu", "gpu", True)),
+        ("flux2_klein_4b_q8_0", 24, 1024, ("gpu", "gpu", False)),
+        ("mage_flow_edit_turbo_q6_k", 8, 512, ("cpu", "gpu", True)),
+        ("mage_flow_edit_turbo_q6_k", 12, 768, ("gpu", "gpu", False)),
+        ("mage_flow_edit_turbo_q6_k", 24, 1024, ("gpu", "gpu", False)),
+        ("qwen_edit_2511_q2_k", 8, 512, ("cpu", "cpu", True)),
+        ("qwen_edit_2511_q2_k", 12, 768, ("cpu", "gpu", True)),
+        ("qwen_edit_2511_q2_k", 24, 1024, ("gpu", "gpu", False)),
+        ("qwen_edit_2511_q3_k_s", 12, 768, ("cpu", "cpu", True)),
+        ("qwen_edit_2511_q3_k_s", 24, 1024, ("gpu", "gpu", False)),
+        ("qwen_edit_2511_q4_k_m", 24, 512, ("gpu", "gpu", False)),
+        ("qwen_edit_2511_q4_k_m", 24, 1024, ("cpu", "gpu", True)),
+        ("qwen_edit_2511_q5_k_m", 24, 512, ("cpu", "gpu", True)),
+        ("qwen_edit_2511_q8_0", 24, 512, ("cpu", "cpu", True)),
+    ],
+)
+def test_plan_edit_places_parts_by_discrete_gpu_memory(model_id, gpu_gb, max_dim, expected):
+    selected = next(m for m in image_edit.edit_catalog() if m["model_id"] == model_id)
+    memory = EditMemory(64 * GIB, 60 * GIB, gpu_total=gpu_gb * GIB, gpu_free=gpu_gb * GIB)
+    plan = plan_edit(selected, memory, max_dim)
+    assert (plan.text_encoder, plan.vae, plan.offload) == expected
+
+
+@pytest.mark.parametrize(
+    "model_id,ram_gb",
+    [
+        ("flux2_klein_4b_q4_0", 16),
+        ("flux2_klein_4b_q8_0", 16),
+        ("mage_flow_edit_turbo_q6_k", 16),
+        ("qwen_edit_2511_q2_k", 24),
+        ("qwen_edit_2511_q4_k_m", 32),
+        ("qwen_edit_2511_q8_0", 48),
+    ],
+)
+def test_plan_edit_keeps_unified_memory_on_cpu_for_every_family(model_id, ram_gb):
+    selected = next(m for m in image_edit.edit_catalog() if m["model_id"] == model_id)
+    memory = EditMemory(ram_gb * GIB, int(ram_gb * 0.85 * GIB), unified=True)
+    plan = plan_edit(selected, memory, 1024)
+    assert (plan.text_encoder, plan.vae, plan.offload) == ("cpu", "cpu", True)
+
+
+def test_build_edit_command_exact_arguments_for_unified_and_discrete_placements():
+    def run_cmd(selected, plan, device, backend="", rocm=False, gpu_override=None):
+        files = {entry["role"]: Path("/models") / entry["filename"] for entry in selected["files"]}
+        return image_edit.build_edit_command(
+            "/runtime/sd-cli",
+            selected,
+            files,
+            "ref.png",
+            "out.png",
+            "Add snow",
+            plan,
+            device,
+            selected["default_steps"],
+            42,
+            (512, 384),
+            rocm=rocm,
+            backend=backend,
+            gpu_override=gpu_override,
+        )
+
+    # Unified memory commands remain byte-identical to today across all families.
+    qwen = model("Q2_K", "qwen-image-edit-2511")
+    qwen_mac = plan_edit(qwen, EditMemory(24 * GIB, 20 * GIB, unified=True))
+    assert run_cmd(qwen, qwen_mac, "mps") == [
+        "/runtime/sd-cli",
+        "--diffusion-model",
+        "/models/qwen-image-edit-2511-Q2_K.gguf",
+        "--llm",
+        "/models/Qwen2.5-VL-7B-Instruct.Q2_K.gguf",
+        "--llm_vision",
+        "/models/Qwen2.5-VL-7B-Instruct.mmproj-Q8_0.gguf",
+        "--vae",
+        "/models/qwen_image_vae.safetensors",
+        "-r",
+        "ref.png",
+        "-o",
+        "out.png",
+        "-p",
+        "Add snow",
+        "--steps",
+        "40",
+        "--seed",
+        "42",
+        "-W",
+        "512",
+        "-H",
+        "384",
+        "--sampling-method",
+        "euler",
+        "--offload-to-cpu",
+        "--mmap",
+        "--disable-prefetch",
+        "--fa",
+        "--vae-tiling",
+        "--vae-tile-size",
+        "256",
+        "--conditioning-cache-size",
+        "0",
+        "--backend",
+        "diffusion=MTL0,te=cpu,vae=cpu",
+        "--max-vram",
+        f"{qwen_mac.gpu_budget / GIB:.2f}",
+        "--cfg-scale",
+        "2.5",
+        "--flow-shift",
+        "3",
+        "--model-args",
+        "qwen_image_zero_cond_t=true",
+    ]
+
+    mage = model("Q6_K", "mage-flow-edit-turbo")
+    mage_mac = plan_edit(mage, EditMemory(16 * GIB, 14 * GIB, unified=True))
+    assert run_cmd(mage, mage_mac, "mps") == [
+        "/runtime/sd-cli",
+        "--diffusion-model",
+        "/models/mage-flow-edit-turbo-Q6_K.gguf",
+        "--llm",
+        "/models/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+        "--llm_vision",
+        "/models/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf",
+        "--vae",
+        "/models/mage_flow_vae_bf16.safetensors",
+        "-r",
+        "ref.png",
+        "-o",
+        "out.png",
+        "-p",
+        "Add snow",
+        "--steps",
+        "4",
+        "--seed",
+        "42",
+        "-W",
+        "512",
+        "-H",
+        "384",
+        "--sampling-method",
+        "euler",
+        "--offload-to-cpu",
+        "--mmap",
+        "--disable-prefetch",
+        "--fa",
+        "--vae-tiling",
+        "--vae-tile-size",
+        "256",
+        "--conditioning-cache-size",
+        "0",
+        "--backend",
+        "cpu",
+        "--max-vram",
+        f"{mage_mac.gpu_budget / GIB:.2f}",
+        "--cfg-scale",
+        "1",
+    ]
+
+    # Discrete GPU: all fit -> no --offload-to-cpu, te=CUDA0, vae=CUDA0.
+    flux_q4 = model("Q4_0", "flux2-klein-4b")
+    flux_24 = plan_edit(
+        flux_q4, EditMemory(64 * GIB, 60 * GIB, gpu_total=24 * GIB, gpu_free=24 * GIB)
+    )
+    assert run_cmd(flux_q4, flux_24, "cuda:0", backend="CUDA") == [
+        "/runtime/sd-cli",
+        "--diffusion-model",
+        "/models/flux-2-klein-4b-Q4_0.gguf",
+        "--llm",
+        "/models/Qwen3-4B-Q4_K_M.gguf",
+        "--vae",
+        "/models/flux2-vae.safetensors",
+        "-r",
+        "ref.png",
+        "-o",
+        "out.png",
+        "-p",
+        "Add snow",
+        "--steps",
+        "4",
+        "--seed",
+        "42",
+        "-W",
+        "512",
+        "-H",
+        "384",
+        "--sampling-method",
+        "euler",
+        "--mmap",
+        "--disable-prefetch",
+        "--fa",
+        "--vae-tiling",
+        "--vae-tile-size",
+        "256",
+        "--conditioning-cache-size",
+        "0",
+        "--backend",
+        "diffusion=CUDA0,te=CUDA0,vae=CUDA0",
+        "--max-vram",
+        f"{flux_24.gpu_budget / GIB:.2f}",
+        "--cfg-scale",
+        "1",
+    ]
+
+    # Discrete GPU: VAE fits, TE does not -> keep --offload-to-cpu, te=cpu, vae=CUDA0.
+    qwen_12 = plan_edit(qwen, EditMemory(64 * GIB, 60 * GIB, gpu_total=12 * GIB, gpu_free=12 * GIB))
+    cmd_12 = run_cmd(qwen, qwen_12, "cuda:0", backend="CUDA")
+    assert "--offload-to-cpu" in cmd_12
+    assert cmd_12[cmd_12.index("--backend") + 1] == "diffusion=CUDA0,te=cpu,vae=CUDA0"
+
+    # Discrete GPU: neither fits -> keep --offload-to-cpu, te=cpu, vae=cpu.
+    qwen_8 = plan_edit(qwen, EditMemory(64 * GIB, 60 * GIB, gpu_total=8 * GIB, gpu_free=8 * GIB))
+    cmd_8 = run_cmd(qwen, qwen_8, "cuda:0", backend="CUDA")
+    assert "--offload-to-cpu" in cmd_8
+    assert cmd_8[cmd_8.index("--backend") + 1] == "diffusion=CUDA0,te=cpu,vae=cpu"
+
+    # Vulkan & ROCm follow the selected GPU identifier for placed components.
+    cmd_vk = run_cmd(flux_q4, flux_24, "cuda:1", backend="VULKAN")
+    assert cmd_vk[cmd_vk.index("--backend") + 1] == "diffusion=Vulkan1,te=Vulkan1,vae=Vulkan1"
+    cmd_rocm = run_cmd(flux_q4, flux_24, "cuda:0", rocm=True)
+    assert cmd_rocm[cmd_rocm.index("--backend") + 1] == "diffusion=ROCm0,te=ROCm0,vae=ROCm0"
+
+
+def test_plan_edit_placement_overrides_and_refusals():
+    flux_q4 = model("Q4_0", "flux2-klein-4b")
+    gpu_24 = EditMemory(64 * GIB, 60 * GIB, gpu_total=24 * GIB, gpu_free=24 * GIB)
+
+    p_te_cpu = plan_edit(flux_q4, gpu_24, text_encoder="cpu")
+    assert (p_te_cpu.text_encoder, p_te_cpu.vae, p_te_cpu.offload) == ("cpu", "gpu", True)
+
+    p_vae_cpu = plan_edit(flux_q4, gpu_24, vae="cpu")
+    assert (p_vae_cpu.text_encoder, p_vae_cpu.vae, p_vae_cpu.offload) == ("gpu", "cpu", True)
+
+    p_both_cpu = plan_edit(flux_q4, gpu_24, text_encoder="cpu", vae="cpu")
+    assert (p_both_cpu.text_encoder, p_both_cpu.vae, p_both_cpu.offload) == ("cpu", "cpu", True)
+
+    # Forced GPU that does not fit refuses clearly.
+    qwen_q2 = model("Q2_K", "qwen-image-edit-2511")
+    gpu_8 = EditMemory(64 * GIB, 60 * GIB, gpu_total=8 * GIB, gpu_free=8 * GIB)
+    with pytest.raises(MemoryError, match="VAE"):
+        plan_edit(qwen_q2, gpu_8, vae="gpu")
+    gpu_12 = EditMemory(64 * GIB, 60 * GIB, gpu_total=12 * GIB, gpu_free=12 * GIB)
+    with pytest.raises(MemoryError, match="text encoder"):
+        plan_edit(qwen_q2, gpu_12, text_encoder="gpu")
+
+    # Forced GPU on Mage-Flow + unified memory refuses (Metal output is blank).
+    mage = model("Q6_K", "mage-flow-edit-turbo")
+    mac_16 = EditMemory(16 * GIB, 14 * GIB, unified=True)
+    with pytest.raises(MemoryError, match="Mage-Flow"):
+        plan_edit(mage, mac_16, vae="gpu")
+
+    # Forced GPU on unified memory that exceeds working set refuses.
+    flux_q8 = model("Q8_0", "flux2-klein-4b")
+    with pytest.raises(MemoryError, match="text encoder"):
+        plan_edit(flux_q8, mac_16, text_encoder="gpu", vae="gpu")
+
+    # Invalid override values fail validation.
+    with pytest.raises(ValueError, match="edit_text_encoder"):
+        image_edit.validate_request(
+            {"model_id": flux_q4["model_id"], "prompt": "Edit.", "edit_text_encoder": "tpu"}
+        )
+    with pytest.raises(ValueError, match="edit_vae"):
+        image_edit.validate_request(
+            {"model_id": flux_q4["model_id"], "prompt": "Edit.", "edit_vae": "tpu"}
+        )
+
+
+def test_discrete_gpu_host_admission_accounts_for_gpu_placement():
+    # A machine with 8 GiB system RAM (6 GiB free, 4 GiB reserve = 2 GiB headroom)
+    # and a 24 GiB GPU can run Qwen Q4_K_M when TE and VAE run on the GPU.
+    qwen_q4 = model("Q4_K_M", "qwen-image-edit-2511")
+    tight_host_24g_gpu = EditMemory(8 * GIB, 6 * GIB, gpu_total=24 * GIB, gpu_free=24 * GIB)
+    plan = plan_edit(qwen_q4, tight_host_24g_gpu, 512)
+    assert (plan.text_encoder, plan.vae, plan.offload) == ("gpu", "gpu", False)
+    assert plan.required_ram <= 2 * GIB
+    # If forced to CPU, the 5.15 GiB text encoder exceeds the 2 GiB host headroom.
+    with pytest.raises(MemoryError, match="currently available"):
+        plan_edit(qwen_q4, tight_host_24g_gpu, 512, text_encoder="cpu")
+
+
+def test_run_edit_job_refuses_forced_gpu_before_run_and_emits_placement_notes(
+    monkeypatch, tmp_path
+):
+    from PIL import Image
+
+    image_path = tmp_path / "source.png"
+    Image.new("RGB", (128, 96)).save(image_path)
+    monkeypatch.setattr(image_edit, "check_runtime", lambda _: tmp_path / "sd-cli")
+    monkeypatch.setattr(
+        image_edit,
+        "verify_bundle",
+        lambda *_: {entry["role"]: Path(entry["filename"]) for entry in model()["files"]},
+    )
+    monkeypatch.setattr(image_edit, "resolve_edit_gpu", lambda _r, _d, _b: "CUDA0")
+
+    # Refusal happens before starting the runtime or writing output.
+    monkeypatch.setattr(
+        image_edit.subprocess,
+        "Popen",
+        lambda *a, **k: pytest.fail("the editor must not start on refused placement"),
+    )
+    bad_req = {
+        "job_id": "refuse-forced-gpu",
+        "model_id": "qwen_edit_2511_q2_k",
+        "prompt": "Brighten",
+        "device": "cuda:0",
+        "runtime_path": str(tmp_path / "sd-cli"),
+        "bundle_dir": str(tmp_path),
+        "image_path": str(image_path),
+        "output_path": str(tmp_path / "refused.png"),
+        "edit_vae": "gpu",
+    }
+    mem_8g = EditMemory(64 * GIB, 60 * GIB, gpu_total=8 * GIB, gpu_free=8 * GIB)
+    with pytest.raises(MemoryError, match="VAE"):
+        image_edit.run_edit_job(
+            bad_req, threading.Event(), lambda _: None, sampler=lambda _: mem_8g
+        )
+
+    class FixtureProcess:
+        def __init__(self, command, **_kwargs):
+            native = json.loads(Path(command[-1]).read_text())["command"]
+            Image.new("RGB", (128, 96), "green").save(native[native.index("-o") + 1])
+            self.stdin = io.BytesIO()
+            self.stdout = io.BytesIO(b"")
+            self.returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(image_edit.subprocess, "Popen", FixtureProcess)
+    (tmp_path / "scratch").mkdir()
+
+    for idx, (mem, expected_note) in enumerate(
+        [
+            (
+                EditMemory(64 * GIB, 60 * GIB, gpu_total=24 * GIB, gpu_free=24 * GIB),
+                "Text encoder and VAE ran on the GPU.",
+            ),
+            (
+                EditMemory(64 * GIB, 60 * GIB, gpu_total=12 * GIB, gpu_free=12 * GIB),
+                "VAE ran on the GPU; text encoder ran on the CPU.",
+            ),
+            (
+                EditMemory(64 * GIB, 60 * GIB, gpu_total=8 * GIB, gpu_free=8 * GIB),
+                "Text encoder and VAE ran on the CPU.",
+            ),
+        ]
+    ):
+        messages = []
+        req = {
+            "job_id": f"ok-{idx}",
+            "model_id": "qwen_edit_2511_q2_k",
+            "prompt": "Brighten",
+            "device": "cuda:0",
+            "runtime_path": str(tmp_path / "sd-cli"),
+            "bundle_dir": str(tmp_path),
+            "image_path": str(image_path),
+            "output_path": str(tmp_path / f"out-{idx}.png"),
+            "scratch_directory": str(tmp_path / "scratch"),
+        }
+        image_edit.run_edit_job(
+            req, threading.Event(), messages.append, sampler=lambda _d, m=mem: m
+        )
+        completed = json.loads(messages[-1].to_json())
+        assert completed["type"] == "job_completed"
+        assert completed["data"]["notes"] == expected_note
+
+
+def test_engine_features_advertise_edit_placement():
+    from localsr.worker.server import _engine_features
+
+    assert "edit_placement" in _engine_features()
