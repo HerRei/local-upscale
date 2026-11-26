@@ -40,13 +40,25 @@ export async function refreshUpdateStatus(): Promise<api.UpdateStatus> {
  * launch. A launch check is silent: being offline or unconfigured must never interrupt
  * the user.
  */
-export async function startUpdateWatcher(checkAtLaunch = true): Promise<() => void> {
+export async function startUpdateWatcher(
+  checkAtLaunch = true,
+  onLaunchCheck?: () => void,
+): Promise<() => void> {
   if (!api.isTauri()) return () => {};
   const stop = await api.listenForUpdates((status) => updateState.set(status));
   try {
     const status = await refreshUpdateStatus();
     if (checkAtLaunch && status.configured && !status.managed_by_store && status.stage === 'idle') {
-      updateState.set(await api.checkUpdateAtLaunch(status.channel));
+      // Fire without awaiting so offline or slow update feeds never stall startup.
+      void api
+        .checkUpdateAtLaunch(status.channel)
+        .then((next) => {
+          updateState.set(next);
+          onLaunchCheck?.();
+        })
+        .catch(() => {
+          // Offline or feed unavailable; "Check for Updates…" reports errors explicitly.
+        });
     }
   } catch {
     // Offline or feed unavailable; "Check for Updates…" reports errors explicitly.

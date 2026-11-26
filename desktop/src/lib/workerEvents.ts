@@ -1,6 +1,12 @@
 import { formatDuration } from './format';
 import { keptTilesText, keptVideoText } from './unfinished';
-import type { AppSnapshot, ModelDownloadStatus, RuntimeStatus, WorkerEnvelope } from './types';
+import type {
+  AppSnapshot,
+  MediaItem,
+  ModelDownloadStatus,
+  RuntimeStatus,
+  WorkerEnvelope,
+} from './types';
 export function resultPreviewForSelectedMedia(snapshot: AppSnapshot): string {
   const selected = snapshot.media.find((media) => media.selected) ?? snapshot.media[0];
   if (!selected) return '';
@@ -97,26 +103,69 @@ function keptPart(snapshot: AppSnapshot, envelope: WorkerEnvelope): string {
   return keptTilesText(finished, Number(data.total_tiles ?? 0));
 }
 
+function updateMediaByPath(
+  snapshot: AppSnapshot,
+  mediaPath: unknown,
+  update: (item: MediaItem) => MediaItem,
+): AppSnapshot {
+  const index = snapshot.media.findIndex((item) => item.path === mediaPath);
+  if (index < 0) return snapshot;
+  return {
+    ...snapshot,
+    media: snapshot.media.map((item, i) => (i === index ? update(item) : item)),
+  };
+}
+
 function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppSnapshot {
   // Tiles carry display-only pixels and coordinates. Returning the existing
   // snapshot avoids cloning media thumbnails, model metadata and job history
   // twice per tile; App.svelte composites the pixels on its bounded canvas.
   if (envelope.type === 'tile_update') return snapshot;
 
-  // Progress events can be frequent as well, but only mutate runtime fields.
-  // A shallow immutable update keeps Svelte reactive without copying the full
-  // application state on every inference step.
-  const next = [
-    'progress',
-    'video_tile_progress',
-    'video_stage_progress',
-    'video_memory',
-    'video_frame_started',
-    'video_frame_completed',
-  ].includes(envelope.type)
-    ? { ...snapshot, runtime: { ...snapshot.runtime } }
-    : structuredClone(snapshot);
   const data = envelope.data;
+  switch (envelope.type) {
+    case 'capabilities_info':
+      return {
+        ...snapshot,
+        capabilities: data as unknown as AppSnapshot['capabilities'],
+      };
+    case 'media_info':
+      return updateMediaByPath(snapshot, data.media_path, (item) => ({
+        ...item,
+        width: Number(data.width ?? 0),
+        height: Number(data.height ?? 0),
+        frame_count: Number(data.frame_count ?? 0),
+        fps: Number(data.fps ?? 0),
+        duration_seconds: Number(data.duration_seconds ?? 0),
+        hdr_format: data.hdr_format === 'HLG' || data.hdr_format === 'PQ' ? data.hdr_format : '',
+        audio_warning: String(data.audio_warning ?? ''),
+        preview_data_url: data.jpeg_base64 ? `data:image/jpeg;base64,${data.jpeg_base64}` : '',
+        probe_status: 'ready',
+        probe_stage: undefined,
+        probe_started_at: undefined,
+        error: '',
+      }));
+    case 'media_probe_progress':
+      return updateMediaByPath(snapshot, data.media_path, (item) => ({
+        ...item,
+        probe_started_at: item.probe_started_at ?? Date.now(),
+        probe_stage: String(data.stage ?? 'opening'),
+        probe_status: 'pending',
+        error: '',
+      }));
+    case 'media_probe_failed':
+      return updateMediaByPath(snapshot, data.media_path, (item) => ({
+        ...item,
+        probe_status: 'failed',
+        probe_stage: undefined,
+        probe_started_at: undefined,
+        error: String(data.error_message ?? 'The media could not be opened.'),
+      }));
+  }
+
+  // Structural sharing: copy only snapshot and runtime for runtime-mutating events so
+  // large media arrays and base64 previews keep their object identities.
+  const next: AppSnapshot = { ...snapshot, runtime: { ...snapshot.runtime } };
   if (
     [
       'progress',
@@ -138,50 +187,6 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       next.engine = data as unknown as AppSnapshot['engine'];
       next.runtime.worker = 'ready';
       break;
-    case 'capabilities_info':
-      next.capabilities = data as unknown as AppSnapshot['capabilities'];
-      break;
-    case 'media_info': {
-      const media = next.media.find((item) => item.path === data.media_path);
-      if (media) {
-        media.width = Number(data.width ?? 0);
-        media.height = Number(data.height ?? 0);
-        media.frame_count = Number(data.frame_count ?? 0);
-        media.fps = Number(data.fps ?? 0);
-        media.duration_seconds = Number(data.duration_seconds ?? 0);
-        media.hdr_format =
-          data.hdr_format === 'HLG' || data.hdr_format === 'PQ' ? data.hdr_format : '';
-        media.audio_warning = String(data.audio_warning ?? '');
-        media.preview_data_url = data.jpeg_base64
-          ? `data:image/jpeg;base64,${data.jpeg_base64}`
-          : '';
-        media.probe_status = 'ready';
-        media.probe_stage = undefined;
-        media.probe_started_at = undefined;
-        media.error = '';
-      }
-      break;
-    }
-    case 'media_probe_progress': {
-      const media = next.media.find((item) => item.path === data.media_path);
-      if (media) {
-        media.probe_started_at ??= Date.now();
-        media.probe_stage = String(data.stage ?? 'opening');
-        media.probe_status = 'pending';
-        media.error = '';
-      }
-      break;
-    }
-    case 'media_probe_failed': {
-      const media = next.media.find((item) => item.path === data.media_path);
-      if (media) {
-        media.probe_status = 'failed';
-        media.probe_stage = undefined;
-        media.probe_started_at = undefined;
-        media.error = String(data.error_message ?? 'The media could not be opened.');
-      }
-      break;
-    }
     case 'job_started':
       if (next.runtime.active_job_id !== String(data.job_id ?? '')) {
         next.runtime.frames_processed = 0;
@@ -426,8 +431,10 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       next.runtime.progress = 100;
       next.runtime.status_title = 'Benchmark complete';
       if (typeof data.result === 'object' && data.result) {
-        next.latest_benchmark = data.result as unknown as AppSnapshot['latest_benchmark'];
-        const result = next.latest_benchmark;
+        const result = {
+          ...(data.result as unknown as NonNullable<AppSnapshot['latest_benchmark']>),
+        };
+        next.latest_benchmark = result;
         if (result?.workload_version.startsWith('localsr-benchmark-v2')) {
           const old = snapshot.latest_benchmark;
           const history =
@@ -604,6 +611,8 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       syncPrimaryDownload(next.runtime, remaining);
       break;
     }
+    default:
+      return snapshot;
   }
   // A bar is drawn from these as a percentage of its track.
   next.runtime.progress = clampPercent(next.runtime.progress);

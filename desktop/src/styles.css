@@ -1187,7 +1187,6 @@ input:focus-visible {
   height: 100%;
   overflow: hidden;
   background: var(--accent-hi);
-  transition: width 0.5s ease;
 }
 .media-select {
   min-width: 0;
@@ -2331,7 +2330,6 @@ input[type='number'],
   height: 100%;
   overflow: hidden;
   background: var(--accent-hi);
-  transition: width 0.5s ease;
 }
 /* A moving shine shows that work continues between progress updates. It is a layer as wide as
    the whole line, moved by transform on the compositor and clipped by the filled part, so a

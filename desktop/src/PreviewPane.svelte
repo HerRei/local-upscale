@@ -1087,6 +1087,7 @@
             alt={processing && videoSourcePreview
               ? `Source frame ${videoSourceFrame + 1} of ${selectedMedia.name}`
               : `Preview of ${selectedMedia.name}`}
+            decoding="async"
             draggable="false"
             on:load={onPreviewLoad}
             on:error={onSourcePreviewError}
@@ -1409,6 +1410,10 @@
       transparent 60%
     );
     animation: sweep 3.2s linear infinite;
+    animation-play-state: paused;
+  }
+  .edit-sweep.on::before {
+    animation-play-state: running;
   }
   .active-tile {
     animation: tile-pulse 1.2s ease-in-out infinite;

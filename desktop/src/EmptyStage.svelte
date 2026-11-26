@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte';
+  import { onMount } from 'svelte';
 
   export let addFiles: () => void;
   export let dropping = false;
@@ -77,12 +77,26 @@
       context.drawImage(sharp, 0, 0);
       context.restore();
       dividerLeft = phase * 100;
-      if (!reduceMotion) frame = requestAnimationFrame(draw);
+      if (!reduceMotion && !document.hidden) frame = requestAnimationFrame(draw);
+      else frame = 0;
     };
     draw(0);
+    if (reduceMotion) return;
+    const onVisibility = () => {
+      if (document.hidden) {
+        cancelAnimationFrame(frame);
+        frame = 0;
+      } else if (!frame) {
+        frame = requestAnimationFrame(draw);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      cancelAnimationFrame(frame);
+      frame = 0;
+    };
   });
-
-  onDestroy(() => cancelAnimationFrame(frame));
 </script>
 
 <div class="empty-stage" class:dropping>

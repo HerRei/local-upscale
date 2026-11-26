@@ -212,9 +212,14 @@
             on:click={() => selectQueueMedia(media.id)}
           >
             <div class="thumb">
-              {#if media.preview_data_url}<img src={media.preview_data_url} alt="" />{:else}<span
-                  >{media.kind === 'video' ? 'VID' : 'IMG'}</span
-                >{/if}
+              {#if media.preview_data_url}<img
+                  src={media.preview_data_url}
+                  alt=""
+                  decoding="async"
+                  loading="lazy"
+                  width="44"
+                  height="44"
+                />{:else}<span>{media.kind === 'video' ? 'VID' : 'IMG'}</span>{/if}
               {#if media.kind === 'video'}<b>▶</b>{/if}
             </div>
             <div class="media-copy">
