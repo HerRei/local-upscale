@@ -6761,6 +6761,12 @@ it('saves Run at low priority, Show in menu bar and Notify via setPreference eve
   expect(api.setPreference).toHaveBeenCalledWith('notify_on_finish', false);
 
   await user.click(within(settingsDialog).getByRole('tab', { name: 'Performance' }));
+  // The host stores the preference before it answers, so a refresh that lands after the
+  // click (a slow CI runner) must see it; a stale mock here made the test flaky.
+  api.refreshSnapshot.mockResolvedValue({
+    ...running,
+    settings: { ...running.settings, low_priority: true },
+  });
   await user.click(within(settingsDialog).getByRole('switch', { name: 'Run at low priority' }));
   expect(api.setPreference).toHaveBeenCalledWith('low_priority', true);
   expect(api.saveSettings).not.toHaveBeenCalledWith(
