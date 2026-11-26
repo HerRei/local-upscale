@@ -1958,25 +1958,31 @@ class WorkerServer:
             face_model_path=data.get("face_model_path"),
             face_fidelity=float(data.get("face_fidelity", 0.7)),
         )
+        for stage in pipeline.stages:
+            if stage.mask_path:
+                raise ValueError(f"Video stage {stage.step_id!r} does not support masks.")
         face_model_path = None if pipeline.primary is None else data.get("face_model_path")
         release_except = getattr(self.engine, "release_models_except", None)
         if callable(release_except):
             release_except(
-                {stage.model_path for stage in pipeline.stages}
+                {stage.model_path for stage in pipeline.stages if stage.model_path}
                 | ({face_model_path} if face_model_path else set())
             )
         preprocess_stages: list[VideoFixStage] = []
         for stage in pipeline.preprocess_stages:
-            stage_info = self.model_adapter.inspect(stage.model_path)
-            if int(getattr(stage_info, "scale", 0)) != 1:
-                raise ValueError(
-                    "A preprocessing restoration checkpoint must have native scale 1×."
-                )
-            if (
-                int(getattr(stage_info, "in_channels", 3)) != 3
-                or int(getattr(stage_info, "out_channels", 3)) != 3
-            ):
-                raise ValueError("A fix must preserve the working frame channels.")
+            if stage.model_path:
+                stage_info = self.model_adapter.inspect(stage.model_path)
+                if int(getattr(stage_info, "scale", 0)) != 1:
+                    raise ValueError(
+                        "A preprocessing restoration checkpoint must have native scale 1×."
+                    )
+                if (
+                    int(getattr(stage_info, "in_channels", 3)) != 3
+                    or int(getattr(stage_info, "out_channels", 3)) != 3
+                ):
+                    raise ValueError("A fix must preserve the working frame channels.")
+            else:
+                stage_info = None
             catalog_model = CATALOG_BY_ID.get(stage.model_id)
             preprocess_stages.append(
                 VideoFixStage(
@@ -1986,6 +1992,8 @@ class WorkerServer:
                     halo=catalog_model.recommended_halo if catalog_model else 0,
                     fix=stage.fix,
                     time_factor=catalog_model.time_factor if catalog_model else 1.0,
+                    step_id=stage.step_id,
+                    params=dict(stage.params),
                 )
             )
         if pipeline.primary is None:

@@ -12,25 +12,25 @@ from __future__ import annotations
 import queue
 import threading
 import time
-from collections import deque
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from typing import Any
 
 import numpy as np
 import torch
-from PIL import Image
 
 from .audio_denoise import cleaned_audio_source
-from .deflicker import AnalysisFrame, deflicker_stream, prepare_analysis_frame
+from .deflicker import AnalysisFrame, deflicker_stream
 from .disk_space import require_video_room
 from .eta import RemainingTime
 from .face_compositing import blend_tile_outputs, classify_tile
 from .face_detection import FaceMask, detect_faces, face_mask_for_tile_core
-from .frame_interpolation import ORDERS, InterpolationTarget, interpolate_frames
-from .hdr import anchor_hdr_detail, tone_map_to_sdr
-from .inference import InferenceEngine, UnstableRestorationError
+from .frame_interpolation import ORDERS, InterpolationTarget
+from .inference import InferenceEngine
 from .media_codecs import EXTERNAL_OUTPUT_CODECS, validate_output
 from .tiling import generate_tiles
+from .video_chain import VideoChainContext, build_video_stages, run_video_chain
+from .video_chain import rgb_to_tensor as rgb_to_tensor
 from .video_io import (
     TimedVideoFrame,
     _should_keep_partial,
@@ -39,15 +39,8 @@ from .video_io import (
     encode_video,
     probe_video,
     selected_frame_count,
-    uint8_chw_to_rgb_hwc,
     validate_hdr_encoder,
 )
-
-
-def rgb_to_tensor(rgb: np.ndarray) -> torch.Tensor:
-    """Convert an HxWx3 uint8 RGB array to a (3, H, W) float32 tensor in [0, 1]."""
-    arr = rgb.astype(np.float32) / 255.0
-    return torch.from_numpy(arr).permute(2, 0, 1)
 
 
 def _prefetch(items, depth: int):
@@ -144,6 +137,18 @@ class VideoFixStage:
     halo: int = 0
     fix: str | None = None
     time_factor: float = 1.0
+    step_id: str = ""
+    params: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.step_id:
+            if self.fix:
+                resolved = self.fix
+            elif getattr(self.model_info, "architecture", "") == "DDColor":
+                resolved = "colour"
+            else:
+                resolved = "restore"
+            object.__setattr__(self, "step_id", resolved)
 
 
 # Keyframe spacing of the temporal video colour (see video_colour.colour_frames).
@@ -328,9 +333,13 @@ def _run_video_job(
         validate_hdr_encoder(config.video_codec, config.external_ffmpeg, config.container)
         if config.deflicker:
             raise ValueError("De-flicker is not yet supported with HDR preservation.")
-        if any(stage.fix == "colour" for stage in config.preprocess_stages):
+        if any(
+            stage.step_id == "colour" or stage.fix == "colour" for stage in config.preprocess_stages
+        ):
             raise ValueError("Colour is not yet supported with HDR preservation.")
     for stage in config.preprocess_stages:
+        if stage.model_info is None:
+            continue
         if int(getattr(stage.model_info, "scale", 0)) != 1:
             raise ValueError("A preprocessing restoration checkpoint must have native scale 1×.")
         if (
@@ -537,7 +546,9 @@ def _run_video_frames(
     colour_indices = [
         i
         for i, stage in enumerate(config.preprocess_stages)
-        if stage.fix == "colour" or getattr(stage.model_info, "architecture", "") == "DDColor"
+        if stage.step_id == "colour"
+        or stage.fix == "colour"
+        or getattr(stage.model_info, "architecture", "") == "DDColor"
     ]
     if len(colour_indices) > 1:
         raise ValueError("Only one video colour stage is supported.")
@@ -559,34 +570,6 @@ def _run_video_frames(
         if callable(add_note):
             add_note(note)
 
-    # Load the fix models once and reuse them for every frame.
-    for stage in config.preprocess_stages:
-        engine.load_model(
-            stage.model_path,
-            config.device_str,
-            precision_str,
-            _SafeModelInfo(stage.model_info, config.safe_memory),
-        )
-    use_face_aware = False
-    if not skip_primary_sr:
-        # Load the model once and reuse it for every frame.
-        engine.load_model(
-            config.model_path,
-            config.device_str,
-            precision_str,
-            # safe_memory is enforced at the engine level via model_info.
-            _SafeModelInfo(model_info, config.safe_memory),
-        )
-        # If face-aware mode is enabled, also pre-load the face model.
-        use_face_aware = config.face_model_path is not None and config.face_model_info is not None
-        if use_face_aware:
-            engine.load_model(
-                config.face_model_path,
-                config.device_str,
-                precision_str,
-                _SafeModelInfo(config.face_model_info, config.safe_memory),
-            )
-
     stage_weights = [max(0.05, float(stage.time_factor)) for stage in config.preprocess_stages]
     if not skip_primary_sr:
         stage_weights.append(max(0.05, float(config.primary_time_factor)))
@@ -598,464 +581,98 @@ def _run_video_frames(
         running_weight += weight
     stage_spans = [weight / total_stage_weight for weight in stage_weights]
     primary_stage_index = len(config.preprocess_stages)
+    use_face_aware = (
+        not skip_primary_sr
+        and config.face_model_path is not None
+        and config.face_model_info is not None
+    )
 
-    frames_processed = 0
-    cached_face_mask: FaceMask | None = None
-    frames_since_detection = 0
-    warned_unstable: set[int] = set()
+    ctx = VideoChainContext(
+        config=config,
+        engine=engine,
+        cancel_event=cancel_event,
+        preserve_hdr=preserve_hdr,
+        transfer=transfer,
+        precision_str=precision_str,
+        fps=fps,
+        interpolation=interpolation,
+        before_upscale=before_upscale,
+        total_frames=total_frames,
+        remaining_time=remaining_time,
+        model_info=model_info,
+        native_scale=native_scale,
+        output_scale=output_scale,
+        skip_primary_sr=skip_primary_sr,
+        use_face_aware=use_face_aware,
+        output_width=output_width,
+        output_height=output_height,
+        job_started_at=job_started_at,
+        colour_index=colour_index,
+        has_preprocess_stages=bool(config.preprocess_stages),
+        stage_offsets=stage_offsets,
+        stage_spans=stage_spans,
+        primary_stage_index=primary_stage_index,
+        frame_started_cb=frame_started_cb,
+        frame_completed_cb=frame_completed_cb,
+        enhanced_frame_cb=enhanced_frame_cb,
+        progress_cb=progress_cb,
+        tile_callback=tile_callback,
+        tile_progress_cb=tile_progress_cb,
+        warning_callback=warning_callback,
+        source_frame_cb=source_frame_cb,
+        stage_cb=stage_cb,
+        synthesizer=synthesizer,
+        keep_partial=keep_partial,
+        now_fn=lambda: time.perf_counter(),
+        detect_faces_fn=lambda rgb, cancel_event=None: detect_faces(rgb, cancel_event=cancel_event),
+        process_face_aware_fn=process_frame_face_aware,
+        deflicker_fn=_deflicker_frames,
+        prefetch_fn=_prefetch,
+        release_after_last_fn=_release_after_last_frame,
+        should_keep_partial_fn=_should_keep_partial,
+        colour_keyframe_interval=COLOUR_KEYFRAME_INTERVAL,
+        inference_started_at=inference_started_at,
+    )
+    # Build and validate the stage chain before loading any models.
+    stages = build_video_stages(ctx)
 
-    def frame_generator() -> Iterator[TimedVideoFrame | tuple[TimedVideoFrame, AnalysisFrame]]:
-        nonlocal inference_started_at
-        nonlocal frames_processed
-        nonlocal cached_face_mask
-        nonlocal frames_since_detection
-
-        decoded = decode_timed_frames(
-            config.video_path,
-            start_frame=config.start_frame,
-            end_frame=config.end_frame,
-            cancel_event=cancel_event,
-            hdr_mode=config.hdr_mode,
+    # Load the fix models once and reuse them for every frame.
+    for stage in config.preprocess_stages:
+        if stage.model_path and stage.model_info is not None:
+            engine.load_model(
+                stage.model_path,
+                config.device_str,
+                precision_str,
+                _SafeModelInfo(stage.model_info, config.safe_memory),
+            )
+    if not skip_primary_sr:
+        # Load the model once and reuse it for every frame.
+        engine.load_model(
+            config.model_path,
+            config.device_str,
+            precision_str,
+            # safe_memory is enforced at the engine level via model_info.
+            _SafeModelInfo(model_info, config.safe_memory),
         )
-        if colour_index is None:
-            decoded = _prefetch(decoded, 4)
-        if before_upscale and interpolation is not None:
-            # On this thread, not the decoder's: one thread drives the GPU.
-            decoded = interpolate_frames(decoded, interpolation, synthesizer, cancel_event)
-        source_analyses: deque[AnalysisFrame] = deque()
-        if colour_index is not None:
-            from .video_colour import colour_frames
-
-            metadata = deque()
-            source_previews = deque()
-            colour_input = decoded
-            stage = config.preprocess_stages[colour_index]
-
-            prepared = [0]
-            first_output = [False]
-            first_batch = min(
-                COLOUR_KEYFRAME_INTERVAL + 1, total_frames or COLOUR_KEYFRAME_INTERVAL + 1
+        # If face-aware mode is enabled, also pre-load the face model.
+        if use_face_aware:
+            engine.load_model(
+                config.face_model_path,
+                config.device_str,
+                precision_str,
+                _SafeModelInfo(config.face_model_info, config.safe_memory),
             )
 
-            def input_pixels():
-                nonlocal inference_started_at
-                for item in colour_input:
-                    if cancel_event.is_set():
-                        raise InterruptedError("video job cancelled")
-                    if inference_started_at is None:
-                        inference_started_at = time.perf_counter()
-                    # The UI uses a 640 px preview. Keep that small proxy with the
-                    # timing metadata until the corresponding output is ready.
-                    preview = None
-                    if source_frame_cb is not None:
-                        stride = max(1, int(np.ceil(max(item.rgb.shape[:2]) / 640)))
-                        preview = item.rgb[::stride, ::stride].copy()
-                    analysis = prepare_analysis_frame(item.rgb) if config.deflicker else None
-                    metadata.append(
-                        (
-                            item.index,
-                            item.timestamp,
-                            item.duration,
-                            item.time_base,
-                            preview,
-                            analysis,
-                        )
-                    )
-                    pixels = item.rgb
-                    for preceding_index, preceding in enumerate(
-                        config.preprocess_stages[:colour_index]
-                    ):
-                        engine.switch_model(preceding.model_path)
-                        try:
-                            output = engine.process_frame(
-                                img_tensor=rgb_to_tensor(pixels),
-                                model_info=preceding.model_info,
-                                tile_size=config.tile_size,
-                                halo=max(config.halo, preceding.halo),
-                                cancel_event=cancel_event,
-                                progress_callback=lambda *_: None,
-                                safe_memory=config.safe_memory,
-                                whole_frame=True,
-                            )
-                        except UnstableRestorationError as error:
-                            if preceding_index not in warned_unstable:
-                                warned_unstable.add(preceding_index)
-                                note = (
-                                    f"The {preceding.fix or 'restoration'} fix "
-                                    f"({preceding.model_id or preceding.model_path}) was "
-                                    f"skipped for one or more frames because the model became "
-                                    f"unstable: {error}"
-                                )
-                                if warning_callback is not None:
-                                    warning_callback(note)
-                                add_note = getattr(engine, "add_note", None)
-                                if callable(add_note):
-                                    add_note(note)
-                        else:
-                            pixels = uint8_chw_to_rgb_hwc(output)
-                    # Colour needs a batch of frames before the first one can be finished;
-                    # until then the frame progress cannot move, so the batch is counted.
-                    prepared[0] += 1
-                    if not first_output[0] and stage_cb is not None:
-                        stage_cb("colour_preparing", prepared[0], first_batch)
-                    yield pixels
-
-            def colourise(pixels):
-                engine.switch_model(stage.model_path)
-                result = engine.process_frame(
-                    img_tensor=rgb_to_tensor(pixels),
-                    model_info=stage.model_info,
-                    tile_size=config.tile_size,
-                    halo=max(config.halo, stage.halo),
-                    cancel_event=cancel_event,
-                    progress_callback=lambda *_: None,
-                    safe_memory=config.safe_memory,
-                    whole_frame=True,
-                )
-                return uint8_chw_to_rgb_hwc(result)
-
-            def colour_stream():
-                for pixels in colour_frames(
-                    input_pixels(), colourise, interval=COLOUR_KEYFRAME_INTERVAL
-                ):
-                    first_output[0] = True
-                    index, timestamp, duration, time_base, preview, analysis = metadata.popleft()
-                    if preview is not None:
-                        source_previews.append(preview)
-                    if analysis is not None:
-                        source_analyses.append(analysis)
-                    yield TimedVideoFrame(index, pixels, timestamp, duration, time_base)
-
-            decoded = colour_stream()
-        for output_frame_index, source_frame in enumerate(decoded):
-            rgb = source_frame.rgb
-            if cancel_event.is_set():
-                raise InterruptedError("video job cancelled")
-            if inference_started_at is None:
-                inference_started_at = time.perf_counter()
-            if frame_started_cb is not None:
-                frame_started_cb(output_frame_index, total_frames)
-            if source_frame_cb is not None:
-                source = source_previews.popleft() if colour_index is not None else rgb
-                source_frame_cb(output_frame_index, total_frames, source)
-            source_analysis: AnalysisFrame | None = None
-            if config.deflicker:
-                source_analysis = (
-                    source_analyses.popleft()
-                    if colour_index is not None
-                    else prepare_analysis_frame(rgb)
-                )
-
-            tensor = torch.from_numpy(rgb).permute(2, 0, 1) if preserve_hdr else rgb_to_tensor(rgb)
-            float_options = {"float_output": True} if preserve_hdr else {}
-
-            def record_tile_eta(frame_index: int, stage_index: int, done: int, count: int) -> None:
-                if remaining_time is None or not count:
-                    return
-                progress_value = (
-                    frame_index
-                    + stage_offsets[stage_index]
-                    + stage_spans[stage_index] * (done / count)
-                )
-                if config.preprocess_stages and frame_index == 0 and done == 1 and stage_index > 0:
-                    remaining_time.skip_warmup(time.perf_counter(), progress_value)
-                else:
-                    remaining_time.update(time.perf_counter(), progress_value)
-
-            def observed_tile(
-                phase,
-                tile,
-                pixels,
-                done,
-                count,
-                image_w,
-                image_h,
-                size,
-                *,
-                frame_index=output_frame_index,
-                source_rgb=rgb,
-            ):
-                if phase == "completed":
-                    record_tile_eta(frame_index, primary_stage_index, done, count)
-                if tile_progress_cb is not None:
-                    elapsed = time.perf_counter() - job_started_at
-                    remaining = remaining_time.remaining() if remaining_time else None
-                    tile_progress_cb(
-                        frame_index, total_frames, done, count, elapsed, remaining, size
-                    )
-                if tile_callback is not None:
-                    if pixels is not None and preserve_hdr:
-                        core = source_rgb[
-                            tile.core_y : tile.core_y + tile.core_h,
-                            tile.core_x : tile.core_x + tile.core_w,
-                        ]
-                        pixels = anchor_hdr_detail(
-                            core, pixels.transpose(1, 2, 0).copy(), transfer
-                        ).transpose(2, 0, 1)
-                    tile_callback(phase, tile, pixels, done, count, image_w, image_h, size)
-
-            def tile_progress(_completed: int, _total: int, _active_tile: int) -> None:
-                """Tile timing is reported by ``tile_callback``; the engine requires a callback."""
-
-            try:
-                last_fix_chw: np.ndarray | None = (
-                    rgb.transpose(2, 0, 1) if colour_index is not None else None
-                )
-                for stage_index, stage in enumerate(config.preprocess_stages):
-                    if colour_index is not None and stage_index <= colour_index:
-                        continue
-                    if cancel_event.is_set():
-                        raise InterruptedError("video job cancelled")
-                    engine.switch_model(stage.model_path)
-                    is_final_stage = (
-                        skip_primary_sr and stage_index == len(config.preprocess_stages) - 1
-                    )
-
-                    def fix_tile_callback(
-                        phase,
-                        tile,
-                        pixels,
-                        done,
-                        count,
-                        image_w,
-                        image_h,
-                        size,
-                        *,
-                        frame_index=output_frame_index,
-                        idx=stage_index,
-                        final_stage=is_final_stage,
-                        source_rgb=rgb,
-                    ):
-                        if phase == "completed":
-                            record_tile_eta(frame_index, idx, done, count)
-                        if final_stage and tile_progress_cb is not None:
-                            elapsed = time.perf_counter() - job_started_at
-                            remaining = remaining_time.remaining() if remaining_time else None
-                            tile_progress_cb(
-                                frame_index, total_frames, done, count, elapsed, remaining, size
-                            )
-                        if final_stage and tile_callback is not None:
-                            if pixels is not None and preserve_hdr:
-                                core = source_rgb[
-                                    tile.core_y : tile.core_y + tile.core_h,
-                                    tile.core_x : tile.core_x + tile.core_w,
-                                ]
-                                pixels = anchor_hdr_detail(
-                                    core, pixels.transpose(1, 2, 0).copy(), transfer
-                                ).transpose(2, 0, 1)
-                            tile_callback(phase, tile, pixels, done, count, image_w, image_h, size)
-
-                    try:
-                        fix_chw = engine.process_frame(
-                            img_tensor=tensor,
-                            model_info=stage.model_info,
-                            tile_size=config.tile_size,
-                            halo=max(config.halo, stage.halo),
-                            cancel_event=cancel_event,
-                            progress_callback=tile_progress,
-                            safe_memory=config.safe_memory,
-                            tile_callback=fix_tile_callback,
-                            whole_frame=True,
-                            **float_options,
-                        )
-                    except UnstableRestorationError as error:
-                        if stage_index not in warned_unstable:
-                            warned_unstable.add(stage_index)
-                            label = stage.fix or "restoration"
-                            note = (
-                                f"The {label} fix ({stage.model_id or stage.model_path}) was "
-                                f"skipped for one or more frames because the model became "
-                                f"unstable: {error}"
-                            )
-                            if warning_callback is not None:
-                                warning_callback(note)
-                            add_note = getattr(engine, "add_note", None)
-                            if callable(add_note):
-                                add_note(note)
-                    else:
-                        last_fix_chw = fix_chw
-                        tensor = (
-                            torch.from_numpy(np.array(fix_chw, copy=True)).float()
-                            if preserve_hdr
-                            else torch.from_numpy(np.array(fix_chw, copy=True)).float().div_(255.0)
-                        )
-
-                if skip_primary_sr:
-                    out_chw = last_fix_chw
-                elif use_face_aware:
-                    # Run face detection every N frames and cache the mask.
-                    if (
-                        cached_face_mask is None
-                        or frames_since_detection >= config.face_detection_interval
-                    ):
-                        cached_face_mask = detect_faces(
-                            tone_map_to_sdr(rgb, transfer, 9) if preserve_hdr else rgb,
-                            cancel_event=cancel_event,
-                        )
-                        frames_since_detection = 0
-                    else:
-                        frames_since_detection += 1
-
-                    if cached_face_mask.has_faces:
-                        out_chw = process_frame_face_aware(
-                            engine=engine,
-                            img_tensor=tensor,
-                            face_mask=cached_face_mask,
-                            general_model_path=config.model_path,
-                            face_model_path=config.face_model_path,
-                            general_model_info=model_info,
-                            face_model_info=config.face_model_info,
-                            device_str=config.device_str,
-                            precision_str=precision_str,
-                            tile_size=config.tile_size,
-                            halo=config.halo,
-                            cancel_event=cancel_event,
-                            safe_memory=config.safe_memory,
-                            face_fidelity=config.face_fidelity,
-                            tile_callback=observed_tile,
-                            **float_options,
-                        )
-                    else:
-                        # No faces detected — use the general model. The face model was
-                        # loaded last, and a frame with faces leaves either one active.
-                        engine.switch_model(config.model_path)
-                        out_chw = engine.process_frame(
-                            img_tensor=tensor,
-                            model_info=model_info,
-                            tile_size=config.tile_size,
-                            halo=config.halo,
-                            cancel_event=cancel_event,
-                            progress_callback=tile_progress,
-                            safe_memory=config.safe_memory,
-                            tile_callback=observed_tile,
-                            whole_frame=True,
-                            **float_options,
-                        )
-                else:
-                    if config.preprocess_stages:
-                        engine.switch_model(config.model_path)
-                    out_chw = engine.process_frame(
-                        img_tensor=tensor,
-                        model_info=model_info,
-                        tile_size=config.tile_size,
-                        halo=config.halo,
-                        cancel_event=cancel_event,
-                        progress_callback=tile_progress,
-                        safe_memory=config.safe_memory,
-                        tile_callback=observed_tile,
-                        whole_frame=True,
-                        **float_options,
-                    )
-            except InterruptedError:
-                raise
-
-            if skip_primary_sr:
-                if preserve_hdr:
-                    out_rgb = (
-                        tensor.permute(1, 2, 0).clamp(0, 1).numpy().copy()
-                        if out_chw is not None
-                        else rgb
-                    )
-                    if out_chw is not None:
-                        out_rgb = anchor_hdr_detail(rgb, out_rgb, transfer)
-                else:
-                    out_rgb = uint8_chw_to_rgb_hwc(out_chw) if out_chw is not None else rgb
-            elif preserve_hdr:
-                out_rgb = out_chw.transpose(1, 2, 0)
-                if output_scale != native_scale:
-                    out_rgb = (
-                        torch.nn.functional.interpolate(
-                            torch.from_numpy(out_chw).unsqueeze(0),
-                            size=(output_height, output_width),
-                            mode="bicubic",
-                            align_corners=False,
-                            antialias=True,
-                        )[0]
-                        .permute(1, 2, 0)
-                        .clamp(0, 1)
-                        .numpy()
-                        .copy()
-                    )
-                out_rgb = anchor_hdr_detail(rgb, out_rgb, transfer)
-            else:
-                out_rgb = uint8_chw_to_rgb_hwc(out_chw)
-                if output_scale != native_scale:
-                    out_rgb = np.array(
-                        Image.fromarray(out_rgb).resize(
-                            (output_width, output_height), Image.Resampling.LANCZOS
-                        ),
-                        dtype=np.uint8,
-                    )
-            frames_processed += 1
-
-            if enhanced_frame_cb is not None:
-                enhanced_frame_cb(output_frame_index, total_frames, out_rgb)
-            if frame_completed_cb is not None:
-                frame_completed_cb(output_frame_index, total_frames, "")
-
-            if progress_cb is not None:
-                now = time.perf_counter()
-                if remaining_time is not None:
-                    remaining_time.update(now, frames_processed)
-                progress_cb(
-                    min(frames_processed, max(0, total_frames - 1))
-                    if interpolation is not None and not before_upscale and total_frames > 0
-                    else frames_processed,
-                    total_frames,
-                    now - job_started_at,
-                    remaining_time.remaining() if remaining_time else None,
-                )
-
-            restored_frame = source_frame.with_pixels(out_rgb)
-            if config.deflicker:
-                assert source_analysis is not None
-                yield (restored_frame, source_analysis)
-            else:
-                yield restored_frame
-
-    # Apply temporal de-flicker if enabled. The source-driven filter wraps the
-    # restored-frame generator so the encoder receives stabilised frames.
-    restored_frames = _release_after_last_frame(frame_generator(), engine, config.device_str)
-    if config.deflicker:
-        # Smoothing a large frame takes a moment of its own; the status names it.
-        # config.deflicker_window is accepted for request compatibility and unused.
-        def report_deflicker(index: int) -> None:
-            if stage_cb is not None:
-                stage_cb("deflickering", index + 1, total_frames)
-
-        output_frames = _deflicker_frames(
-            restored_frames,
-            config.deflicker_window,
-            cancel_event,
-            report_deflicker,
-            keep=lambda: _should_keep_partial(
-                config.keep_partial if keep_partial is None else keep_partial
-            ),
-            device_str=config.device_str,
-        )
-    else:
-        output_frames = restored_frames
+    decoded = decode_timed_frames(
+        config.video_path,
+        start_frame=config.start_frame,
+        end_frame=config.end_frame,
+        cancel_event=cancel_event,
+        hdr_mode=config.hdr_mode,
+    )
+    output_frames = run_video_chain(decoded, ctx, stages=stages)
     if interpolation is not None:
-        if not before_upscale:
-            output_frames = interpolate_frames(
-                output_frames, interpolation, synthesizer, cancel_event
-            )
-            if progress_cb is not None:
-
-                def report_interpolation_done(frames):
-                    yield from frames
-                    progress_cb(
-                        frames_processed,
-                        total_frames,
-                        time.perf_counter() - job_started_at,
-                        remaining_time.remaining() if remaining_time else None,
-                    )
-
-                output_frames = report_interpolation_done(output_frames)
         fps = interpolation.output_fps(fps)
-    # Restore the next frames while the encoder writes the previous ones.
-    if colour_index is None:
-        output_frames = _prefetch(output_frames, 2)
 
     # The encoder consumes the generator directly so frames never accumulate
     # in memory beyond what PyAV's internal buffers hold. Compatible audio and
@@ -1097,7 +714,7 @@ def _run_video_frames(
     completed_at = time.perf_counter()
     return VideoJobResult(
         output_path=output_path,
-        frames_processed=frames_processed,
+        frames_processed=ctx.frames_processed,
         partial=output_path != config.output_video_path,
         kept_seconds=probe_video(output_path).duration_seconds
         if output_path != config.output_video_path
@@ -1106,7 +723,7 @@ def _run_video_frames(
         if output_path != config.output_video_path
         else 0,
         elapsed_seconds=completed_at - job_started_at,
-        inference_seconds=(completed_at - (inference_started_at or completed_at)),
+        inference_seconds=(completed_at - (ctx.inference_started_at or completed_at)),
     )
 
 
