@@ -267,6 +267,8 @@ pub struct Recipe {
     #[serde(default)]
     pub output_format: String,
     #[serde(default)]
+    pub output_bit_depth: Option<u8>,
+    #[serde(default)]
     pub preserve_metadata: Option<bool>,
     #[serde(default)]
     pub jpeg_quality: Option<u32>,
@@ -404,6 +406,8 @@ pub struct UiSettings {
     pub output_scale: u32,
     pub output_directory: String,
     pub output_format: String,
+    #[serde(default = "default_output_bit_depth")]
+    pub output_bit_depth: u8,
     pub preserve_metadata: bool,
     pub jpeg_quality: u32,
     pub device_id: String,
@@ -558,6 +562,10 @@ fn default_stopped_job_result() -> String {
     "ask".into()
 }
 
+fn default_output_bit_depth() -> u8 {
+    8
+}
+
 fn deserialize_stopped_job_result<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<String, D::Error> {
@@ -627,6 +635,7 @@ impl Default for UiSettings {
             output_scale: steps.param_default_u32("upscale", "output_scale"),
             output_directory: String::new(),
             output_format: "png".into(),
+            output_bit_depth: default_output_bit_depth(),
             preserve_metadata: true,
             jpeg_quality: 98,
             device_id: "cpu".into(),
@@ -1205,6 +1214,8 @@ pub struct StartBatchInput {
     pub custom_model_path: String,
     pub output_directory: String,
     pub output_format: String,
+    #[serde(default = "default_output_bit_depth")]
+    pub output_bit_depth: u8,
     pub output_scale: u32,
     pub preserve_metadata: bool,
     pub jpeg_quality: u32,

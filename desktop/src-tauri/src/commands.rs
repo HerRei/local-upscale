@@ -850,6 +850,9 @@ pub(crate) fn save_recipe_checked(state: &AppState, mut recipe: Recipe) -> AppRe
     }
     let steps = crate::steps::registry();
     if (!recipe.output_format.is_empty() && !output_format_is_valid(&recipe.output_format))
+        || recipe
+            .output_bit_depth
+            .is_some_and(|depth| !matches!(depth, 8 | 16))
         || (!recipe.video_container.is_empty()
             && !video_container_is_valid(&recipe.video_container))
         || (!recipe.video_codec.is_empty() && !video_codec_is_valid(&recipe.video_codec))
@@ -872,6 +875,15 @@ pub(crate) fn save_recipe_checked(state: &AppState, mut recipe: Recipe) -> AppRe
     {
         return Err(AppError::Validation(
             "recipe contains unsupported output settings".into(),
+        ));
+    }
+    if recipe.task != "video"
+        && recipe.output_bit_depth == Some(16)
+        && !recipe.output_format.is_empty()
+        && !matches!(recipe.output_format.as_str(), "png" | "tif")
+    {
+        return Err(AppError::Validation(
+            "16-bit output is only supported for PNG and TIFF images.".into(),
         ));
     }
     validate_recipe_stages(&recipe)?;
@@ -1077,6 +1089,7 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
     }
     input.device = resolve_device(state, &input.device)?;
     validate_start(&input, state)?;
+    validate_bit_depth_engine(&input, lock(&state.engine)?.as_ref())?;
     validate_fix_engine(&input, lock(&state.engine)?.as_ref())?;
     validate_stage_params_engine(&input.fix_stages, lock(&state.engine)?.as_ref())?;
     let steps = crate::steps::registry();
@@ -1477,8 +1490,16 @@ fn refuse_when_disk_is_short(
             false,
         )
     } else {
-        crate::disk_room::image_need(width, height, native, saved, &input.output_format, false)
-            .total()
+        crate::disk_room::image_need(
+            width,
+            height,
+            native,
+            saved,
+            &input.output_format,
+            false,
+            input.output_bit_depth,
+        )
+        .total()
     };
     match crate::disk_room::check(output_directory, need) {
         Some(reason) => Err(AppError::Validation(reason)),
@@ -3882,6 +3903,7 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
         ));
     }
     if !output_format_is_valid(&settings.output_format)
+        || !matches!(settings.output_bit_depth, 8 | 16)
         || !video_container_is_valid(&settings.video_container)
         || !video_codec_is_valid(&settings.video_codec)
         || !matches!(settings.video_hdr_mode.as_str(), "tone_map" | "preserve")
@@ -3893,6 +3915,14 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
     {
         return Err(AppError::Validation(
             "unsupported output or precision setting".into(),
+        ));
+    }
+    if settings.task != "video"
+        && settings.output_bit_depth == 16
+        && !matches!(settings.output_format.as_str(), "png" | "tif")
+    {
+        return Err(AppError::Validation(
+            "16-bit output is only supported for PNG and TIFF images.".into(),
         ));
     }
     if settings.video_codec == "ffv1" && settings.video_container != "mkv" {
@@ -3931,6 +3961,22 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
     {
         return Err(AppError::Validation(
             "one or more numeric settings are out of range".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_bit_depth_engine(
+    input: &StartBatchInput,
+    engine: Option<&crate::types::EngineInfo>,
+) -> AppResult<()> {
+    if input.task != "video"
+        && input.output_bit_depth == 16
+        && !engine.is_some_and(|engine| engine.features.iter().any(|f| f == "image_16bit"))
+    {
+        return Err(AppError::Validation(
+            "This engine does not support 16-bit output. Update LocalSR or choose 8-bit output."
+                .into(),
         ));
     }
     Ok(())
@@ -4036,6 +4082,7 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
         output_scale: input.output_scale,
         output_directory: input.output_directory.clone(),
         output_format: input.output_format.clone(),
+        output_bit_depth: input.output_bit_depth,
         preserve_metadata: input.preserve_metadata,
         jpeg_quality: input.jpeg_quality,
         device_id: input.device.clone(),
@@ -4531,6 +4578,7 @@ fn build_job_request(
             scratch_directory: Some(scratch_directory.to_string_lossy().into_owned()),
             output_temporary_directory: None,
             output_format: input.output_format.parse::<OutputFormat>()?,
+            output_bit_depth: input.output_bit_depth,
             device: input.device.clone(),
             tile_size: input.tile_size,
             halo: input.halo,

@@ -60,7 +60,9 @@ def encode_preview_jpeg(pixels: np.ndarray, max_dimension: int, quality: int) ->
         array = array[:, :, :3]
     else:
         raise ValueError("preview pixels must contain one, three, or four channels")
-    if array.dtype != np.uint8:
+    if array.dtype == np.uint16:
+        array = (array >> 8).astype(np.uint8)
+    elif array.dtype != np.uint8:
         array = np.clip(array, 0, 255).astype(np.uint8)
     image = Image.fromarray(np.ascontiguousarray(array), mode="RGB")
     maximum = max(64, min(640, int(max_dimension)))

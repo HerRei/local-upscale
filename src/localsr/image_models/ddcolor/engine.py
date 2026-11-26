@@ -347,12 +347,16 @@ def colorize_tensor(
     *,
     device: torch.device | None = None,
     cancel_event: threading.Event | None = None,
+    bit_depth: int = 8,
 ) -> ColorizeResult:
-    """Colorize a (3, H, W) float32 [0, 1] RGB tensor and return uint8 (3, H, W) in result.rgb."""
+    """Colorize a (3, H, W) float32 [0, 1] RGB tensor and return uint8 or uint16 (3, H, W)."""
     rgb_hwc = img_tensor.detach().cpu().clamp(0.0, 1.0).permute(1, 2, 0).numpy().astype(np.float32)
     result = colorize_rgb_array(model, rgb_hwc, device=device, cancel_event=cancel_event)
-    rgb_u8 = np.rint(result.rgb * 255.0).clip(0, 255).astype(np.uint8)
-    chw = np.ascontiguousarray(rgb_u8.transpose(2, 0, 1))
+    if bit_depth == 16:
+        quantized = np.rint(result.rgb * 65535.0).clip(0, 65535).astype(np.uint16)
+    else:
+        quantized = np.rint(result.rgb * 255.0).clip(0, 255).astype(np.uint8)
+    chw = np.ascontiguousarray(quantized.transpose(2, 0, 1))
     return ColorizeResult(
         rgb=chw,
         input_mean_chroma=result.input_mean_chroma,

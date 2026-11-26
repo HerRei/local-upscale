@@ -20,6 +20,13 @@ from localsr.core.image_formats import (
     is_system_decoded,
     require_ordinary_source,
 )
+from localsr.core.image_io_16bit import (
+    apply_exif_orientation,
+    read_png_16,
+    read_tiff_16,
+    write_png_16,
+    write_tiff_16,
+)
 from localsr.core.output_publish import owned_temporary, publish_output
 from localsr.core.pixel_budget import MAX_INPUT_PIXELS as MAX_INPUT_PIXELS
 from localsr.core.pixel_budget import TOO_LARGE_MESSAGE, require_pixel_budget
@@ -210,13 +217,13 @@ def _to_srgb(
     return converted
 
 
-def _decode_with_macos(path: str) -> Image.Image:
+def _decode_with_macos(path: str, *, bit_depth: int = 8) -> Image.Image:
     """Decode HEIC/HEIF or JPEG XL with macOS (ImageIO, through /usr/bin/sips).
 
     LocalSR ships no HEVC decoder: Apple licenses its own for apps that use the
     system API. sips applies the orientation to the pixels and keeps the colour
     profile and the descriptive EXIF tags; a 10-bit photo arrives as a 16-bit
-    TIFF that Pillow reads as 8-bit RGBA.
+    TIFF that Pillow reads as 8-bit RGBA unless bit_depth=16 reads it via tifffile.
     """
     with tempfile.TemporaryDirectory(prefix="localsr-decode-") as work:
         target = Path(work) / "decoded.tiff"
@@ -254,6 +261,14 @@ def _decode_with_macos(path: str) -> Image.Image:
         try:
             image = Image.open(io.BytesIO(target.read_bytes()), formats=("TIFF",))
             image.load()
+            if bit_depth == 16:
+                bits = getattr(image, "tag_v2", {}).get(258)
+                if (
+                    isinstance(bits, int)
+                    and bits > 8
+                    or (isinstance(bits, tuple) and any(b > 8 for b in bits))
+                ):
+                    image.info["_decoded_tiff16"] = read_tiff_16(target)
         except (OSError, SyntaxError, EOFError, ValueError) as error:
             # sips reports success for some truncated files and writes a broken TIFF.
             raise UnreadableImageError(
@@ -262,15 +277,22 @@ def _decode_with_macos(path: str) -> Image.Image:
     if image.mode == "RGBA" and image.getchannel("A").getextrema() == (255, 255):
         # sips always writes an alpha channel; an opaque one is not transparency.
         icc, exif = image.info.get("icc_profile"), image.getexif()
+        raw16 = image.info.pop("_decoded_tiff16", None)
         image = image.convert("RGB")
         if icc:
             image.info["icc_profile"] = icc
+        if raw16 is not None and raw16.ndim == 3 and raw16.shape[2] == 4:
+            image.info["_decoded_tiff16"] = np.ascontiguousarray(raw16[:, :, :3])
         image.getexif().update(exif)
     return image
 
 
-def require_output_format(format: str) -> None:
+def require_output_format(format: str, output_bit_depth: int = 8) -> None:
     """Fail before any inference when this computer cannot write ``format``."""
+    if output_bit_depth not in (8, 16):
+        raise ValueError("Output bit depth must be 8 or 16.")
+    if output_bit_depth == 16 and format.lower() not in ("png", "tif", "tiff"):
+        raise ValueError("16-bit output is only supported for PNG and TIFF images.")
     if format.lower() == "heic" and sys.platform != "darwin":
         raise ValueError("HEIC output needs macOS, which provides the HEIC encoder.")
 
@@ -314,10 +336,10 @@ def _encode_with_macos(image: Image.Image, destination: Path, quality: int, **kw
         )
 
 
-def open_image(path: str | Path) -> Image.Image:
+def open_image(path: str | Path, *, bit_depth: int = 8) -> Image.Image:
     """Open a still image: through macOS for HEIC/HEIF and JPEG XL, else Pillow."""
     if is_system_decoded(path):
-        return _decode_with_macos(str(path))
+        return _decode_with_macos(str(path), **({"bit_depth": 16} if bit_depth == 16 else {}))
     return Image.open(path, formats=PILLOW_INPUT_FORMATS)
 
 
@@ -328,7 +350,7 @@ def open_photo(path: str | Path) -> Image.Image:
     return open_image(path)
 
 
-def _develop_raw(path: str) -> np.ndarray:
+def _develop_raw(path: str, output_bps: int = 8) -> np.ndarray:
     # Keep LibRaw out of the GUI process. ImageManager is instantiated by the
     # isolated worker for real jobs, and the import occurs only for RAW input.
     import rawpy
@@ -341,7 +363,7 @@ def _develop_raw(path: str) -> np.ndarray:
                 use_camera_wb=True,
                 use_auto_wb=False,
                 output_color=rawpy.ColorSpace.sRGB,
-                output_bps=8,
+                output_bps=output_bps,
             )
     except Exception as error:
         # LibRaw's own errors are bytes such as b'Input/output error'.
@@ -364,6 +386,14 @@ def _picture_of_planes(planes: np.ndarray) -> Image.Image:
     return picture
 
 
+def _resize_uint16_plane(plane: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+    """Resize a uint16 plane via float32 Pillow 'F' mode LANCZOS and round/clip back."""
+    resized = Image.fromarray(plane.astype(np.float32), mode="F").resize(
+        size, Image.Resampling.LANCZOS
+    )
+    return np.clip(np.rint(np.asarray(resized, dtype=np.float32)), 0, 65535).astype(np.uint16)
+
+
 class ImageManager:
     def __init__(self):
         self.original_mode = "RGB"
@@ -373,7 +403,7 @@ class ImageManager:
         # A grey source has no colour, so save() keeps only the luma a model returns.
         self.grayscale = False
 
-    def load(self, path: str) -> dict:
+    def load(self, path: str, *, bit_depth: int = 8) -> dict:
         """
         Loads an image safely.
         - Applies EXIF orientation.
@@ -384,13 +414,13 @@ class ImageManager:
         from; the library's own message stays as the chained cause.
         """
         try:
-            return self._load(path)
+            return self._load(path, bit_depth=bit_depth)
         except Exception as error:
             if _is_decode_failure(error):
                 raise _unreadable(path) from error
             raise
 
-    def _load(self, path: str) -> dict:
+    def _load(self, path: str, *, bit_depth: int = 8) -> dict:
         require_ordinary_source(path)
         self.notes = []
         self.alpha_channel = None
@@ -404,7 +434,11 @@ class ImageManager:
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", Image.DecompressionBombWarning)
-                metadata_img = open_image(path)
+                metadata_img = (
+                    open_image(path, bit_depth=16)
+                    if bit_depth == 16 and is_system_decoded(path)
+                    else open_image(path)
+                )
             # The size comes from the header; nothing has been decoded yet.
             if not is_raw:
                 require_pixel_budget(metadata_img.width, metadata_img.height)
@@ -441,9 +475,11 @@ class ImageManager:
         # camera serial/device identity, embedded thumbnails, software, and host
         # names never cross into an output file.
         safe_exif = {}
+        orientation = 1
         try:
             exif_data = metadata_img.getexif() if metadata_img is not None else None
             if exif_data is not None:
+                orientation = int(exif_data.get(274, 1) or 1)
                 # 274 is Orientation.
                 # Descriptive authorship/time tags only. Dimension and
                 # orientation tags are regenerated from the actual output.
@@ -458,12 +494,26 @@ class ImageManager:
             )
 
         sample_bits = 16
-        if metadata_img is not None:
-            bits = getattr(metadata_img, "tag_v2", {}).get(258)
-            if isinstance(bits, tuple) and len(bits) == 1:
-                bits = bits[0]
+        raw_bits = (
+            getattr(metadata_img, "tag_v2", {}).get(258) if metadata_img is not None else None
+        )
+        if raw_bits is not None:
+            bits = raw_bits[0] if isinstance(raw_bits, tuple) and len(raw_bits) >= 1 else raw_bits
             if isinstance(bits, int) and 8 < bits <= 16:
                 sample_bits = bits
+
+        if bit_depth == 16:
+            loaded_16 = self._try_load_16bit(
+                path=path,
+                is_raw=is_raw,
+                metadata_img=metadata_img,
+                orientation=orientation,
+                raw_bits=raw_bits,
+                sample_bits=sample_bits,
+                safe_exif=safe_exif,
+            )
+            if loaded_16 is not None:
+                return loaded_16
 
         if is_raw:
             try:
@@ -543,6 +593,131 @@ class ImageManager:
             "grayscale": self.grayscale,
         }
 
+    def _try_load_16bit(
+        self,
+        *,
+        path: str,
+        is_raw: bool,
+        metadata_img: Image.Image | None,
+        orientation: int,
+        raw_bits: Any,
+        sample_bits: int,
+        safe_exif: dict,
+    ) -> dict | None:
+        """Load 16-bit RAW, PNG, TIFF, or float/wide grey without 8-bit truncation."""
+        if is_raw:
+            try:
+                rgb = _develop_raw(path, output_bps=16)
+                converted_icc = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+            finally:
+                if metadata_img is not None:
+                    metadata_img.close()
+            self.original_mode = "RGB"
+            self.grayscale = False
+            divisor = 65535.0 if rgb.dtype == np.uint16 else 255.0
+            arr = np.ascontiguousarray(rgb, dtype=np.float32) / divisor
+            return {
+                "tensor": torch.from_numpy(arr).permute(2, 0, 1),
+                "icc_profile": converted_icc,
+                "safe_exif": safe_exif,
+                "has_invalid_icc": False,
+                "original_mode": self.original_mode,
+                "alpha_image": None,
+                "grayscale": False,
+            }
+
+        assert metadata_img is not None
+        icc_profile_bytes = metadata_img.info.get("icc_profile")
+        arr_float: np.ndarray | None = None
+        grey_source = False
+
+        if "_decoded_tiff16" in metadata_img.info:
+            pixels16 = metadata_img.info.pop("_decoded_tiff16")
+            self.original_mode = metadata_img.mode
+            arr_float = pixels16.astype(np.float32) / 65535.0
+        elif metadata_img.format == "PNG":
+            png16 = read_png_16(path)
+            if png16 is not None:
+                pixels16, colour = png16
+                pixels16 = apply_exif_orientation(pixels16, orientation)
+                self.original_mode = {0: "I;16", 2: "RGB", 4: "LA", 6: "RGBA"}[colour]
+                grey_source = colour in (0, 4)
+                if colour in (4, 6):
+                    self.alpha_channel = Image.fromarray(np.ascontiguousarray(pixels16[..., -1]))
+                    pixels16 = np.ascontiguousarray(
+                        pixels16[..., 0] if colour == 4 else pixels16[..., :3]
+                    )
+                arr_float = pixels16.astype(np.float32) / 65535.0
+        elif metadata_img.format == "TIFF" and metadata_img.mode != "F":
+            has_wide_samples = (isinstance(raw_bits, int) and raw_bits > 8) or (
+                isinstance(raw_bits, tuple) and any(b > 8 for b in raw_bits)
+            )
+            if has_wide_samples:
+                pixels16 = apply_exif_orientation(
+                    read_tiff_16(path, sample_bits=sample_bits), orientation
+                )
+                channels = 1 if pixels16.ndim == 2 else pixels16.shape[2]
+                self.original_mode = {1: "I;16", 2: "LA", 3: "RGB", 4: "RGBA"}[channels]
+                grey_source = channels in (1, 2)
+                if channels in (2, 4):
+                    self.alpha_channel = Image.fromarray(np.ascontiguousarray(pixels16[..., -1]))
+                    pixels16 = np.ascontiguousarray(
+                        pixels16[..., 0] if channels == 2 else pixels16[..., :3]
+                    )
+                arr_float = pixels16.astype(np.float32) / 65535.0
+        elif metadata_img.mode == "F" or metadata_img.mode in WIDE_GREY_MODES:
+            transposed = ImageOps.exif_transpose(metadata_img)
+            self.original_mode = transposed.mode
+            grey_source = True
+            if transposed.mode == "F":
+                wide, float_range = _float_grey_to_16_bit(transposed)
+                if float_range is not None:
+                    self.notes.append(
+                        f"{Path(path).name} holds floating-point values up to "
+                        f"{float_range}; they were read as a range from 0 to {float_range}."
+                    )
+                arr_float = np.asarray(wide, dtype=np.float32) / 65535.0
+            else:
+                values = np.asarray(transposed).astype(np.float64)
+                maximum = (1 << sample_bits) - 1
+                if transposed.mode == "I" and values.max() <= 255:
+                    maximum = 255
+                arr_float = np.clip(values / maximum, 0.0, 1.0).astype(np.float32)
+
+        if arr_float is None:
+            return None
+
+        kept_icc: bytes | None = None
+        has_invalid_icc = False
+        if icc_profile_bytes:
+            try:
+                src_profile = ImageCms.ImageCmsProfile(io.BytesIO(icc_profile_bytes))
+                srgb_profile = ImageCms.createProfile("sRGB")
+                ImageCms.buildTransform(
+                    src_profile, srgb_profile, "L" if grey_source else "RGB", "RGB"
+                )
+                kept_icc = icc_profile_bytes
+            except (ImageCms.PyCMSError, OSError, ValueError) as e:
+                has_invalid_icc = True
+                warnings.warn(f"Invalid ICC profile: {e}", RuntimeWarning, stacklevel=2)
+
+        if arr_float.ndim == 2:
+            arr_float = np.repeat(arr_float[..., None], 3, axis=-1)
+        arr_float = np.ascontiguousarray(arr_float, dtype=np.float32)
+        self.grayscale = grey_source or bool(
+            (arr_float[..., 0] == arr_float[..., 1]).all()
+            and (arr_float[..., 1] == arr_float[..., 2]).all()
+        )
+        return {
+            "tensor": torch.from_numpy(arr_float).permute(2, 0, 1),
+            "icc_profile": kept_icc,
+            "safe_exif": safe_exif,
+            "has_invalid_icc": has_invalid_icc,
+            "original_mode": self.original_mode,
+            "alpha_image": self.alpha_channel,
+            "grayscale": self.grayscale,
+        }
+
     def save(
         self,
         output_writer: Any,
@@ -556,6 +731,7 @@ class ImageManager:
         output_scale: int | None = None,
         temporary_directory: str | os.PathLike | None = None,
         cancel_event: threading.Event | None = None,
+        output_bit_depth: int = 8,
     ):
         """
         Saves the memory-mapped numpy array to the final destination.
@@ -579,6 +755,7 @@ class ImageManager:
             output_scale=output_scale,
             temporary_directory=temporary_directory,
             cancel_event=cancel_event,
+            **({"output_bit_depth": output_bit_depth} if output_bit_depth != 8 else {}),
         )
 
     def _fit_jpeg_exif(self, exif: Image.Exif, copied: dict) -> None:
@@ -612,15 +789,31 @@ class ImageManager:
         output_scale: int | None = None,
         temporary_directory: str | os.PathLike | None = None,
         cancel_event: threading.Event | None = None,
+        output_bit_depth: int = 8,
     ):
-
-        out_img = _picture_of_planes(writer_mmap)
-
+        require_output_format(format, output_bit_depth)
         final_scale = scale if output_scale is None else int(output_scale)
         if final_scale < 1 or final_scale > scale:
             raise ValueError(
                 f"Output scale must be between 1 and the model's native {scale}× scale."
             )
+        if output_bit_depth == 16:
+            self._save_16bit_from_writer(
+                writer_mmap=writer_mmap,
+                destination_path=destination_path,
+                format=format,
+                preserve_metadata=preserve_metadata,
+                icc_profile=icc_profile,
+                safe_exif=safe_exif,
+                scale=scale,
+                final_scale=final_scale,
+                temporary_directory=temporary_directory,
+                cancel_event=cancel_event,
+            )
+            return
+
+        out_img = _picture_of_planes(writer_mmap)
+
         if final_scale != scale:
             target_size = (
                 round(out_img.width * final_scale / scale),
@@ -686,6 +879,95 @@ class ImageManager:
                 _encode_with_macos(out_img, tmp_path, quality, **kwargs)
             else:
                 out_img.save(tmp_path, format=fmt, **kwargs)
+
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("Cancelled during image export.")
+            publish_output(tmp_path, destination)
+        except Exception:
+            try:
+                tmp_path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
+            raise
+
+    def _save_16bit_from_writer(
+        self,
+        *,
+        writer_mmap: np.ndarray,
+        destination_path: str,
+        format: str,
+        preserve_metadata: bool,
+        icc_profile: bytes | None,
+        safe_exif: dict,
+        scale: int,
+        final_scale: int,
+        temporary_directory: str | os.PathLike | None,
+        cancel_event: threading.Event | None,
+    ) -> None:
+        _, height, width = writer_mmap.shape
+        target_w, target_h = (
+            (round(width * final_scale / scale), round(height * final_scale / scale))
+            if final_scale != scale
+            else (width, height)
+        )
+        rgb16 = np.empty((target_h, target_w, 3), dtype=np.uint16)
+        for ch in range(3):
+            plane = np.asarray(writer_mmap[ch])
+            if plane.dtype != np.uint16:
+                plane = plane.astype(np.uint16) * 257
+            if (target_w, target_h) != (width, height):
+                plane = _resize_uint16_plane(plane, (target_w, target_h))
+            rgb16[:, :, ch] = plane
+
+        if self.grayscale:
+            luma = (
+                np.rint(
+                    0.299 * rgb16[:, :, 0].astype(np.float64)
+                    + 0.587 * rgb16[:, :, 1].astype(np.float64)
+                    + 0.114 * rgb16[:, :, 2].astype(np.float64)
+                )
+                .clip(0, 65535)
+                .astype(np.uint16)
+            )
+            rgb16[:, :, 0] = luma
+            rgb16[:, :, 1] = luma
+            rgb16[:, :, 2] = luma
+
+        out_pixels: np.ndarray = rgb16
+        if self.alpha_channel is not None:
+            new_size = (
+                self.alpha_channel.width * final_scale,
+                self.alpha_channel.height * final_scale,
+            )
+            alpha_arr = np.asarray(self.alpha_channel)
+            if alpha_arr.dtype != np.uint16:
+                alpha_arr = alpha_arr.astype(np.uint16) * 257
+            if new_size != self.alpha_channel.size:
+                alpha_arr = _resize_uint16_plane(alpha_arr, new_size)
+            out_pixels = np.dstack((rgb16, alpha_arr))
+
+        exif_dict: dict[int, Any] | None = None
+        exif_bytes: bytes | None = None
+        icc = icc_profile if preserve_metadata else None
+        if preserve_metadata:
+            exif_dict = {**safe_exif, 274: 1, 40962: target_w, 40963: target_h}
+            exif = Image.Exif()
+            for k, v in exif_dict.items():
+                exif[k] = v
+            exif_bytes = exif.tobytes()
+
+        fmt = format.lower()
+        destination = Path(destination_path)
+        if cancel_event is not None and cancel_event.is_set():
+            raise InterruptedError("Cancelled before image export.")
+        tmp_path = owned_temporary(temporary_directory or destination.parent, "image")
+        try:
+            if fmt == "png":
+                write_png_16(tmp_path, out_pixels, icc_profile=icc, exif_bytes=exif_bytes)
+            else:
+                write_tiff_16(tmp_path, out_pixels, icc_profile=icc, exif_dict=exif_dict)
 
             if cancel_event is not None and cancel_event.is_set():
                 raise InterruptedError("Cancelled during image export.")

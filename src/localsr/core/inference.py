@@ -591,6 +591,7 @@ class InferenceEngine:
         model,
         *,
         float_output: bool = False,
+        bit_depth: int = 8,
         cancel_event: threading.Event | None = None,
     ) -> np.ndarray:
         """Render a tile, recovering unstable regions with more real context.
@@ -619,6 +620,7 @@ class InferenceEngine:
                 halo,
                 model,
                 float_output=float_output,
+                bit_depth=bit_depth,
             )
 
         try:
@@ -695,8 +697,9 @@ class InferenceEngine:
         model,
         *,
         float_output: bool = False,
+        bit_depth: int = 8,
     ) -> np.ndarray:
-        """Run inference on a single tile and return the core output as uint8 (C, H, W).
+        """Run inference on a single tile and return the core output as uint8 or uint16 (C, H, W).
 
         This is the shared per-tile logic used by process_frame, process_image,
         and the face-aware pipeline. It handles halo extraction, padding,
@@ -717,6 +720,7 @@ class InferenceEngine:
                     core_top,
                     core_left,
                     float_output=float_output,
+                    bit_depth=bit_depth,
                 )
 
         tile_input = img_tensor[
@@ -752,6 +756,7 @@ class InferenceEngine:
             halo,
             halo,
             float_output=float_output,
+            bit_depth=bit_depth,
         )
 
     def _infer_tile(
@@ -766,6 +771,7 @@ class InferenceEngine:
         core_left: int,
         *,
         float_output: bool = False,
+        bit_depth: int = 8,
     ) -> np.ndarray:
         """Run one prepared tile input and return its core output.
 
@@ -867,6 +873,15 @@ class InferenceEngine:
 
         if float_output:
             return out_core.clamp(0, 1).numpy()
+        if bit_depth == 16:
+            return (
+                out_core.clamp(0, 1)
+                .mul_(65535.0)
+                .round_()
+                .to(torch.int32)
+                .numpy()
+                .astype(np.uint16, copy=False)
+            )
         out_core = torch.clamp(out_core, 0, 1) * 255.0
         return out_core.round().byte().numpy()
 
@@ -1037,6 +1052,7 @@ class InferenceEngine:
         safe_memory: bool = True,
         tile_callback: Callable[..., None] | None = None,
         temporary_directory: str | None = None,
+        bit_depth: int = 8,
     ) -> OutputWriter:
         from localsr.image_models.ddcolor import colorize_tensor
 
@@ -1045,13 +1061,19 @@ class InferenceEngine:
         active_size = max(w, h)
         writer = OutputWriter(
             (model_info.out_channels, h, w),
-            dtype=np.uint8,
+            dtype=np.uint16 if bit_depth == 16 else np.uint8,
             temporary_directory=temporary_directory,
         )
         try:
             if tile_callback is not None:
                 tile_callback("started", full_tile, None, 0, 1, w, h, active_size)
-            result = colorize_tensor(model, img_tensor, device=device, cancel_event=cancel_event)
+            result = colorize_tensor(
+                model,
+                img_tensor,
+                device=device,
+                cancel_event=cancel_event,
+                **({"bit_depth": 16} if bit_depth == 16 else {}),
+            )
             if result.already_colorful and result.note:
                 self.add_note(result.note)
                 if self.status_callback is not None:
@@ -1084,6 +1106,7 @@ class InferenceEngine:
         tile_callback: Callable[..., None] | None = None,
         temporary_directory: str | None = None,
         keep_partial: Callable[[], bool] | None = None,
+        output_bit_depth: int = 8,
     ) -> OutputWriter:
         """Run the model over the image in tiles.
 
@@ -1110,15 +1133,17 @@ class InferenceEngine:
                 safe_memory=safe_memory,
                 tile_callback=tile_callback,
                 temporary_directory=temporary_directory,
+                bit_depth=output_bit_depth,
             )
         scale = model_info.scale
+        out_dtype = np.uint16 if output_bit_depth == 16 else np.uint8
 
         current_tile_size = tile_size
         min_tile_size = min(tile_size, 64) if safe_memory else 4
 
         writer = OutputWriter(
             (model_info.out_channels, h * scale, w * scale),
-            dtype=np.uint8,
+            dtype=out_dtype,
             temporary_directory=temporary_directory,
         )
         try:
@@ -1155,6 +1180,7 @@ class InferenceEngine:
                                 halo,
                                 model,
                                 cancel_event=cancel_event,
+                                **({"bit_depth": 16} if output_bit_depth == 16 else {}),
                             )
                         except InterruptedError:
                             raise _stop(writer, finished, total_tiles, keep_partial) from None
@@ -1215,7 +1241,7 @@ class InferenceEngine:
                         writer.cleanup()
                         writer = OutputWriter(
                             (model_info.out_channels, h * scale, w * scale),
-                            dtype=np.uint8,
+                            dtype=out_dtype,
                             temporary_directory=temporary_directory,
                         )
                         continue

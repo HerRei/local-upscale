@@ -79,6 +79,17 @@
       "alpha": false,
       "scratch": 3686400,
       "encoded": 1662976
+    },
+    {
+      "width": 1600,
+      "height": 1067,
+      "scale": 4,
+      "output_scale": 4,
+      "format": "tiff",
+      "alpha": false,
+      "bit_depth": 16,
+      "scratch": 163891200,
+      "encoded": 165584244
     }
   ],
   "reserves": [

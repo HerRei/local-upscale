@@ -790,6 +790,7 @@ def process_frame_face_aware(
     progress_callback: Callable[[int, int, int], None] | None = None,
     tile_callback: Callable[..., None] | None = None,
     float_output: bool = False,
+    bit_depth: int = 8,
 ) -> np.ndarray:
     """Process a single frame with per-tile model selection.
 
@@ -819,8 +820,11 @@ def process_frame_face_aware(
     scale = general_model_info.scale
     out_channels = general_model_info.out_channels
     out_shape = (out_channels, h * scale, w * scale)
-    out_array = np.zeros(out_shape, dtype=np.float32 if float_output else np.uint8)
-    float_options = {"float_output": True} if float_output else {}
+    out_dtype = np.float32 if float_output else (np.uint16 if bit_depth == 16 else np.uint8)
+    out_array = np.zeros(out_shape, dtype=out_dtype)
+    float_options = (
+        {"float_output": True} if float_output else ({"bit_depth": 16} if bit_depth == 16 else {})
+    )
 
     # Load both models once. Subsequent switching via switch_model is
     # instant — no torch reload, no VRAM spike.
@@ -855,6 +859,17 @@ def process_frame_face_aware(
         )
         if float_output:
             return resized.squeeze(0).clamp(0, 1).cpu().numpy()
+        if bit_depth == 16:
+            return (
+                resized.squeeze(0)
+                .clamp(0, 1)
+                .mul(65535.0)
+                .round()
+                .to(torch.int32)
+                .cpu()
+                .numpy()
+                .astype(np.uint16, copy=False)
+            )
         return resized.squeeze(0).clamp(0, 1).mul(255).round().byte().cpu().numpy()
 
     for i, tile in enumerate(tiles):

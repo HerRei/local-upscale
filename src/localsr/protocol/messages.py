@@ -77,6 +77,7 @@ class JobRequest:
     stages: list[dict[str, object]] | None = None
     # Apple silicon: run supported models through Core ML on the Neural Engine.
     neural_engine: bool = True
+    output_bit_depth: int = 8
 
     def to_json(self) -> str:
         return json.dumps({"type": "job_request", "data": asdict(self)})

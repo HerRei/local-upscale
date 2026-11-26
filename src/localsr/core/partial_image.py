@@ -64,7 +64,19 @@ def fill_unfinished(
             recompute_scale_factor=False,
         )[0]
         piece = resized[:, (first - lo) * scale : (first - lo) * scale + (bottom - top)]
-        pixels = piece.clamp(0, 1).mul(255).round().byte().numpy()
+        if output.dtype == np.uint16:
+            import torch as _torch
+
+            pixels = (
+                piece.clamp(0, 1)
+                .mul(65535.0)
+                .round()
+                .to(_torch.int32)
+                .numpy()
+                .astype(np.uint16, copy=False)
+            )
+        else:
+            pixels = piece.clamp(0, 1).mul(255).round().byte().numpy()
         for channel in range(channels):
             np.copyto(output[channel, top:bottom], pixels[channel], where=~keep)
 

@@ -269,6 +269,7 @@ export interface Recipe {
   video_model_id?: string;
   custom_model_path?: string;
   output_format?: 'png' | 'jpg' | 'tif' | 'webp' | 'heic';
+  output_bit_depth?: 8 | 16;
   preserve_metadata?: boolean;
   jpeg_quality?: number;
   deflicker?: boolean;
@@ -335,6 +336,7 @@ export interface UiSettings {
   output_scale: number;
   output_directory: string;
   output_format: 'png' | 'jpg' | 'tif' | 'webp' | 'heic';
+  output_bit_depth?: 8 | 16;
   preserve_metadata: boolean;
   jpeg_quality: number;
   device_id: string;
@@ -726,6 +728,7 @@ export interface StartBatchInput {
   custom_model_path: string;
   output_directory: string;
   output_format: string;
+  output_bit_depth?: 8 | 16;
   output_scale: number;
   preserve_metadata: boolean;
   jpeg_quality: number;

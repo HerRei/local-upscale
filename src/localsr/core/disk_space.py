@@ -29,7 +29,7 @@ SYSTEM_RESERVE = 8_000_000_000
 OTHER_RESERVE = 1_000_000_000
 # Headers, an ICC profile and EXIF around the pixels.
 _SLACK = 1 << 20
-# The output memmap holds uint8 samples.
+# The output memmap holds uint8 or uint16 samples.
 _MEMMAP_CHANNELS = 3
 
 disk_usage = shutil.disk_usage
@@ -135,7 +135,9 @@ def require_room(
             raise _refusal(folder, need, volume)
 
 
-def encoded_bound(fmt: str, width: int, height: int, alpha: bool = False) -> int:
+def encoded_bound(
+    fmt: str, width: int, height: int, alpha: bool = False, bit_depth: int = 8
+) -> int:
     """At most this many bytes for a ``width`` x ``height`` picture in ``fmt``.
 
     PNG and TIFF (deflate) never exceed the raw samples by more than their framing;
@@ -143,6 +145,7 @@ def encoded_bound(fmt: str, width: int, height: int, alpha: bool = False) -> int
     not predictions.
     """
     pixels = width * height
+    bytes_per_sample = 2 if bit_depth == 16 else 1
     name = fmt.lower()
     if name in ("jpg", "jpeg"):
         return 2 * pixels + _SLACK
@@ -150,7 +153,7 @@ def encoded_bound(fmt: str, width: int, height: int, alpha: bool = False) -> int
         return pixels + _SLACK
     if name == "webp":
         return (3 if alpha else 2) * pixels + _SLACK
-    raw = (4 if alpha else 3) * pixels
+    raw = (4 if alpha else 3) * bytes_per_sample * pixels
     return raw + raw // 256 + height + _SLACK
 
 
@@ -174,12 +177,14 @@ def image_need(
     output_scale: int | None,
     fmt: str,
     alpha: bool = False,
+    bit_depth: int = 8,
 ) -> ImageNeed:
     """Peak bytes one photo of ``width`` x ``height`` needs: its memmap and its encoded file."""
     final = int(output_scale or scale)
+    bytes_per_sample = 2 if bit_depth == 16 else 1
     return ImageNeed(
-        scratch=_MEMMAP_CHANNELS * width * scale * height * scale,
-        encoded=encoded_bound(fmt, round(width * final), round(height * final), alpha),
+        scratch=_MEMMAP_CHANNELS * bytes_per_sample * width * scale * height * scale,
+        encoded=encoded_bound(fmt, round(width * final), round(height * final), alpha, bit_depth),
     )
 
 
@@ -207,7 +212,13 @@ def require_image_room(
     data: Mapping[str, Any], width: int, height: int, scale: int, alpha: bool = False
 ) -> None:
     need = image_need(
-        width, height, scale, data.get("output_scale"), str(data["output_format"]), alpha
+        width,
+        height,
+        scale,
+        data.get("output_scale"),
+        str(data["output_format"]),
+        alpha,
+        bit_depth=int(data.get("output_bit_depth") or 8),
     )
     require_room(image_claims(data, need))
 
