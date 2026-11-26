@@ -480,6 +480,7 @@ export interface RuntimeStatus {
 export interface BenchmarkRender {
   device: string;
   scene_id: string;
+  model_name?: string;
   input_width: number;
   input_height: number;
   output_width: number;
@@ -501,6 +502,7 @@ export interface BenchmarkSceneResult {
   p95_ms: number;
   cv_percent: number | null;
   megapixels_per_second: number;
+  seconds_per_input_mp?: number | null;
   encode_ms?: number | null;
   preview?: BenchmarkRender | null;
 }
@@ -510,6 +512,9 @@ export interface BenchmarkDeviceResult {
   device: string;
   device_type: string;
   device_name: string;
+  preset?: string;
+  model_id?: string;
+  model_name?: string;
   thermal_state: string;
   warmup_iterations: number;
   peak_memory_bytes?: number | null;
@@ -517,7 +522,42 @@ export interface BenchmarkDeviceResult {
   stable: boolean;
   cv_percent: number | null;
   score: number;
+  seconds_per_input_mp?: number | null;
+  matched_cpu?: boolean | null;
+  psnr_db?: number | null;
+  status?: string;
+  status_note?: string | null;
+  recommended?: boolean;
   scenes: BenchmarkSceneResult[];
+}
+
+export interface CpuThreadBenchmark {
+  physical_cores: number;
+  logical_cores: number;
+  recommended_threads: number;
+  tested?: boolean;
+  physical_seconds_per_input_mp?: number | null;
+  logical_seconds_per_input_mp?: number | null;
+  model_id?: string | null;
+  model_name?: string | null;
+}
+
+export interface MissingPresetModel {
+  preset: string;
+  preset_label: string;
+  model_id: string;
+  model_name: string;
+}
+
+export interface BenchmarkedModelSummary {
+  preset: string;
+  preset_label: string;
+  model_id: string;
+  model_name: string;
+  scale: number;
+  recommended_device?: string | null;
+  recommended_device_name?: string | null;
+  recommended_seconds_per_input_mp?: number | null;
 }
 
 export interface BenchmarkResult {
@@ -548,6 +588,15 @@ export interface BenchmarkResult {
   thermal_state?: string;
   reference_label?: string | null;
   reference_ratio?: number | null;
+  recommended_device?: string | null;
+  recommended_device_name?: string | null;
+  recommended_device_seconds_per_input_mp?: number | null;
+  recommended_cpu_threads?: number | null;
+  cpu_threads?: CpuThreadBenchmark | null;
+  cpu_avx2?: boolean | null;
+  cpu_memory_format?: string | null;
+  missing_presets?: MissingPresetModel[];
+  benchmarked_models?: BenchmarkedModelSummary[];
 }
 
 export interface VideoComparisonProgress {

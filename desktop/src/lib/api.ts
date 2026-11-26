@@ -217,8 +217,8 @@ export const setRunLowPriority = (enabled: boolean): Promise<void> =>
 
 export const cancelJobs = (keepPartial = false): Promise<void> =>
   invoke('cancel_jobs', { keepPartial });
-export const startBenchmark = (device: string): Promise<void> =>
-  invoke('start_benchmark', { input: { device } });
+export const startBenchmark = (device?: string): Promise<void> =>
+  invoke('start_benchmark', { input: device ? { device } : {} });
 export const exportBenchmark = async (): Promise<boolean> => {
   if (!isTauri()) return false;
   const destination = await invoke<string | null>('choose_benchmark_export');

@@ -85,6 +85,7 @@ struct WorkerEventGate {
     job_id: String,
     last_progress: Option<Instant>,
     last_tile_completed: Option<Instant>,
+    last_benchmark_tile_completed: Option<Instant>,
     last_video_started: Option<Instant>,
     last_video_progress: Option<Instant>,
     last_video_preview: Option<Instant>,
@@ -144,6 +145,18 @@ impl WorkerEventGate {
                 Duration::from_millis(100),
             ),
             "live_preview_frame" => true,
+            "benchmark_tile" => match string(data, "phase").as_str() {
+                "reset" => true,
+                "started" => true,
+                "completed" if string(data, "jpeg_base64").is_empty() => true,
+                "completed" => sampled(
+                    &mut self.last_benchmark_tile_completed,
+                    now,
+                    is_last_item(data, "completed_tiles", "total_tiles"),
+                    Duration::from_millis(75),
+                ),
+                _ => false,
+            },
             "benchmark_progress" => sampled(
                 &mut self.last_benchmark_progress,
                 now,
@@ -168,6 +181,7 @@ impl WorkerEventGate {
         self.job_id = job_id;
         self.last_progress = None;
         self.last_tile_completed = None;
+        self.last_benchmark_tile_completed = None;
         self.last_video_started = None;
         self.last_video_progress = None;
         self.last_video_preview = None;
@@ -2227,9 +2241,11 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
         "benchmark_started" => {
             let mut runtime = lock(&state.runtime)?;
             runtime.begin_active_job(string(data, "job_id"));
-            let is_v2 = string(data, "workload_version").starts_with("localsr-benchmark-v2");
+            let version = string(data, "workload_version");
+            let is_multi_stage = version.starts_with("localsr-benchmark-v2")
+                || version.starts_with("localsr-benchmark-v3");
             runtime.status_title = "Benchmark running".into();
-            runtime.status_detail = if is_v2 {
+            runtime.status_detail = if is_multi_stage {
                 format!(
                     "Benchmark · {} stages · warming up.",
                     integer(data, "measured_frame_count")
@@ -2308,7 +2324,16 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             runtime.take_active_job();
             runtime.progress = 100.0;
             runtime.status_title = "Benchmark complete".into();
-            runtime.status_detail = if result.is_v2() {
+            runtime.status_detail = if result.is_v3() {
+                if let (Some(name), Some(sec)) = (
+                    result.recommended_device_name.as_deref(),
+                    result.recommended_device_seconds_per_input_mp,
+                ) {
+                    format!("Recommended: {name} ({sec:.1} s / input MP).")
+                } else {
+                    "Benchmark complete · no device passed verification.".into()
+                }
+            } else if result.is_v2() {
                 if result.cv_percent.is_none() {
                     "Measurements saved. Too few repetitions to assess consistency on this device."
                         .into()
@@ -2339,7 +2364,13 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 )
             };
             runtime.elapsed_seconds = result.total_elapsed_seconds;
-            if result.is_v2() {
+            if result.is_v3() {
+                runtime.throughput = result
+                    .recommended_device_seconds_per_input_mp
+                    .unwrap_or_default();
+                runtime.throughput_unit = "s / input MP".into();
+                runtime.thermal_status = result.thermal_state.clone();
+            } else if result.is_v2() {
                 runtime.throughput = result.system_score.or(result.cpu_score).unwrap_or_default();
                 runtime.throughput_unit = "output MP/s".into();
                 runtime.thermal_status = result.thermal_state.clone();

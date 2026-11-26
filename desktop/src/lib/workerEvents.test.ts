@@ -528,6 +528,42 @@ describe('desktop state', () => {
     expect(after.runtime.status_detail).toContain('Too few repetitions');
     expect(after.runtime.status_detail).not.toContain('0.0%');
   });
+
+  it('tracks benchmark v3 recommendations in seconds per input megapixel', () => {
+    let snapshot = demoSnapshot();
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'benchmark_started',
+      data: {
+        job_id: 'benchmark-v3',
+        workload_version: 'localsr-benchmark-v3',
+        measured_frame_count: 16,
+      },
+    });
+    expect(snapshot.runtime.status_detail).toContain('16 phases');
+
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'benchmark_completed',
+      data: {
+        job_id: 'benchmark-v3',
+        result: {
+          workload_version: 'localsr-benchmark-v3',
+          recommended_device: 'cpu',
+          recommended_device_name: 'CPU',
+          recommended_device_seconds_per_input_mp: 9.1,
+          recommended_cpu_threads: 4,
+          stable: true,
+          cv_percent: 1.5,
+          total_elapsed_seconds: 42.0,
+          thermal_state: 'nominal',
+          device_results: [],
+          score: 0.5,
+        },
+      },
+    });
+    expect(snapshot.runtime.status_detail).toBe('Recommended: CPU (9.1 s / input MP)');
+    expect(snapshot.runtime.throughput).toBe(9.1);
+    expect(snapshot.runtime.throughput_unit).toBe('s / input MP');
+  });
 });
 
 it('waits for the first tile measurement before showing a long-duration frame ETA', () => {

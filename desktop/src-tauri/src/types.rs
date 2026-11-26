@@ -763,6 +763,8 @@ pub struct BenchmarkSceneResult {
     pub cv_percent: Option<f64>,
     pub megapixels_per_second: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seconds_per_input_mp: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encode_ms: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<serde_json::Value>,
@@ -775,6 +777,12 @@ pub struct BenchmarkDeviceResult {
     pub device: String,
     pub device_type: String,
     pub device_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_name: Option<String>,
     pub thermal_state: String,
     pub warmup_iterations: u32,
     #[serde(default)]
@@ -785,7 +793,59 @@ pub struct BenchmarkDeviceResult {
     pub cv_percent: Option<f64>,
     #[serde(default)]
     pub score: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seconds_per_input_mp: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_cpu: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub psnr_db: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_note: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended: Option<bool>,
     pub scenes: Vec<BenchmarkSceneResult>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CpuThreadBenchmark {
+    pub physical_cores: u32,
+    pub logical_cores: u32,
+    pub recommended_threads: u32,
+    #[serde(default)]
+    pub tested: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub physical_seconds_per_input_mp: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logical_seconds_per_input_mp: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_name: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MissingPresetModel {
+    pub preset: String,
+    pub preset_label: String,
+    pub model_id: String,
+    pub model_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct BenchmarkedModelSummary {
+    pub preset: String,
+    pub preset_label: String,
+    pub model_id: String,
+    pub model_name: String,
+    pub scale: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended_device: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended_device_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended_seconds_per_input_mp: Option<f64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -832,6 +892,25 @@ pub struct BenchmarkResult {
     pub reference_label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_ratio: Option<f64>,
+    // ---- LocalSR Benchmark v3 (localsr-benchmark-v3) ----
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended_device: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended_device_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended_device_seconds_per_input_mp: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended_cpu_threads: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_threads: Option<CpuThreadBenchmark>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_avx2: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_memory_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing_presets: Vec<MissingPresetModel>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub benchmarked_models: Vec<BenchmarkedModelSummary>,
 }
 
 impl BenchmarkResult {
@@ -839,7 +918,18 @@ impl BenchmarkResult {
         self.workload_version.starts_with("localsr-benchmark-v2")
     }
 
+    pub fn is_v3(&self) -> bool {
+        self.workload_version.starts_with("localsr-benchmark-v3")
+    }
+
     pub fn retain_device_scores(&mut self, previous: Option<&Self>, completed_at: u64) {
+        if self.is_v3() {
+            for device in &mut self.device_results {
+                device.completed_at_unix = completed_at;
+            }
+            self.device_history = self.device_results.clone();
+            return;
+        }
         let mut history = previous
             .filter(|old| old.workload_version == self.workload_version)
             .map(|old| {
@@ -1045,9 +1135,10 @@ pub struct AppSnapshot {
     pub engines: EngineManagerSnapshot,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub struct StartBenchmarkInput {
-    pub device: String,
+    #[serde(default)]
+    pub device: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1320,5 +1411,79 @@ mod tests {
         gpu.workload_version = "future-incompatible-workload".into();
         gpu.retain_device_scores(Some(&saved), 3456);
         assert_eq!(gpu.device_history.len(), 1);
+    }
+
+    #[test]
+    fn v3_benchmark_results_keep_all_devices_and_models_in_history() {
+        let devices = serde_json::json!([
+            {
+                "device": "cpu",
+                "device_type": "cpu",
+                "device_name": "CPU",
+                "preset": "quick",
+                "model_id": "localsr_quick_x4_v1",
+                "model_name": "LocalSR Photo S",
+                "thermal_state": "nominal",
+                "warmup_iterations": 2,
+                "stable": true,
+                "cv_percent": 1.2,
+                "score": 0.3,
+                "seconds_per_input_mp": 9.1,
+                "matched_cpu": true,
+                "recommended": true,
+                "scenes": []
+            },
+            {
+                "device": "cpu",
+                "device_type": "cpu",
+                "device_name": "CPU",
+                "preset": "best",
+                "model_id": "realplksr_nomoswebphoto_x4",
+                "model_name": "RealPLKSR 4x NomosWebPhoto — Best",
+                "thermal_state": "nominal",
+                "warmup_iterations": 2,
+                "stable": true,
+                "cv_percent": 1.5,
+                "score": 0.05,
+                "seconds_per_input_mp": 200.8,
+                "matched_cpu": true,
+                "recommended": true,
+                "scenes": []
+            }
+        ]);
+        let mut v3 = serde_json::json!({
+            "workload_version": "localsr-benchmark-v3",
+            "backend": "cpu",
+            "device": "cpu",
+            "model_id": "localsr_quick_x4_v1",
+            "model_name": "LocalSR Photo S",
+            "scale": 4,
+            "input_width": 256,
+            "input_height": 256,
+            "warmup_count": 3,
+            "measured_frame_count": 10,
+            "median_inference_ms": 200.0,
+            "p95_inference_ms": 220.0,
+            "end_to_end_fps": 5.0,
+            "processed_megapixels_per_second": 0.3,
+            "total_elapsed_seconds": 30.0,
+            "peak_memory_bytes": 1024,
+            "score": 0.3,
+            "recommended_device": "cpu",
+            "recommended_device_name": "CPU",
+            "recommended_device_seconds_per_input_mp": 9.1,
+            "recommended_cpu_threads": 4,
+            "cpu_avx2": false,
+            "cpu_memory_format": "nchw"
+        });
+        v3["device_results"] = devices;
+        let mut result: BenchmarkResult = serde_json::from_value(v3).unwrap();
+        assert!(result.is_v3());
+        assert!(!result.is_v2());
+        assert_eq!(result.recommended_cpu_threads, Some(4));
+        assert_eq!(result.cpu_memory_format.as_deref(), Some("nchw"));
+        result.retain_device_scores(None, 5555);
+        assert_eq!(result.device_history.len(), 2);
+        assert_eq!(result.device_history[0].completed_at_unix, 5555);
     }
 }

@@ -1932,11 +1932,59 @@ pub fn clear_compare_regions(state: State<'_, Arc<AppState>>, app: AppHandle) ->
     Ok(())
 }
 
+fn benchmark_preset_candidates(models: &[CatalogModel]) -> Vec<(&'static str, &CatalogModel)> {
+    let eligible: Vec<&CatalogModel> = models
+        .iter()
+        .filter(|model| {
+            model.native_scale >= 4
+                && model.preset_eligible
+                && model.commercial_use_allowed == Some(true)
+                && (model.purposes.iter().any(|p| p == "photo")
+                    || model.purposes.iter().any(|p| p == "general"))
+        })
+        .collect();
+    let purpose_rank = |model: &CatalogModel| -> u8 {
+        if model.purposes.iter().any(|p| p == "photo") {
+            2
+        } else {
+            1
+        }
+    };
+    let quick = eligible.iter().copied().min_by(|a, b| {
+        purpose_rank(b)
+            .cmp(&purpose_rank(a))
+            .then_with(|| b.speed_tier.cmp(&a.speed_tier))
+            .then_with(|| b.speed_factor.total_cmp(&a.speed_factor))
+            .then_with(|| a.memory_factor.total_cmp(&b.memory_factor))
+            .then_with(|| a.size_bytes.cmp(&b.size_bytes))
+            .then_with(|| b.quality_tier.cmp(&a.quality_tier))
+            .then_with(|| a.model_id.cmp(&b.model_id))
+    });
+    let best = eligible.iter().copied().min_by(|a, b| {
+        purpose_rank(b)
+            .cmp(&purpose_rank(a))
+            .then_with(|| b.quality_tier.cmp(&a.quality_tier))
+            .then_with(|| b.size_bytes.cmp(&a.size_bytes))
+            .then_with(|| b.speed_tier.cmp(&a.speed_tier))
+            .then_with(|| a.model_id.cmp(&b.model_id))
+    });
+    let mut picks = Vec::new();
+    if let Some(model) = quick {
+        picks.push(("quick", model));
+    }
+    if let Some(model) = best {
+        if quick.is_none_or(|q| q.model_id != model.model_id) {
+            picks.push(("best", model));
+        }
+    }
+    picks
+}
+
 #[tauri::command]
 pub fn start_benchmark(
     state: State<'_, Arc<AppState>>,
     app: AppHandle,
-    input: StartBenchmarkInput,
+    input: Option<StartBenchmarkInput>,
 ) -> AppResult<()> {
     let _scheduler = lock(&state.scheduler)?;
     if state
@@ -1953,38 +2001,44 @@ pub fn start_benchmark(
             "wait for the inference worker to become ready".into(),
         ));
     }
-    let (model_path, model_name) = {
+    let _requested_device = input.and_then(|value| value.device);
+    let installed_models = {
         let catalog = lock(&state.catalog)?;
-        let model = catalog
-            .models
-            .iter()
-            .find(|model| model.model_id == "span_photo_x4")
-            .ok_or_else(|| {
-                AppError::Config("benchmark model is missing from the catalog".into())
-            })?;
-        if !model.installed {
-            return Err(AppError::Validation(
-                "download and verify the Quick model before running the benchmark".into(),
+        let candidates = benchmark_preset_candidates(&catalog.models);
+        if candidates.is_empty() {
+            return Err(AppError::Config(
+                "benchmark preset models are missing from the catalog".into(),
             ));
         }
-        (
-            model.installed_path.clone().unwrap_or_default(),
-            model.name.clone(),
-        )
+        let installed: Vec<serde_json::Value> = candidates
+            .into_iter()
+            .filter(|(_, model)| model.installed)
+            .map(|(preset, model)| {
+                json!({
+                    "preset": preset,
+                    "model_id": model.model_id,
+                    "model_name": model.name,
+                    "model_path": model.installed_path.clone().unwrap_or_default(),
+                })
+            })
+            .collect();
+        if installed.is_empty() {
+            return Err(AppError::Validation(
+                "download at least one preset model (Quick or Best Quality) before running the benchmark".into(),
+            ));
+        }
+        installed
     };
-    let device_exists = lock(&state.capabilities)?
-        .devices
-        .iter()
-        .any(|device| device.id == input.device);
-    if !device_exists {
-        return Err(AppError::Validation(
-            "the selected benchmark device is unavailable".into(),
-        ));
-    }
+    let primary = &installed_models[0];
     let job_id = format!("benchmark-{}", Uuid::new_v4());
     let mut message = json!({"type":"benchmark_request", "data": {
-        "job_id": job_id, "model_path": model_path, "model_id":"span_photo_x4",
-        "model_name": model_name, "workload":"v2", "device": input.device
+        "job_id": job_id,
+        "model_path": primary["model_path"],
+        "model_id": primary["model_id"],
+        "model_name": primary["model_name"],
+        "workload": "v3",
+        "device": "all",
+        "models": installed_models,
     }});
     lock(&state.worker.cancellation)?.prepare(&job_id, &mut message)?;
     {
@@ -1996,7 +2050,7 @@ pub fn start_benchmark(
         }
         runtime.begin_active_job(job_id.clone());
         runtime.status_title = "Benchmark preparing".into();
-        runtime.status_detail = "Loading the fixed LocalSR benchmark workload.".into();
+        runtime.status_detail = "Loading the LocalSR v3 benchmark workload.".into();
         runtime.progress = 0.0;
     }
     if let Err(error) = worker::send(&state, &message) {
@@ -3091,7 +3145,7 @@ pub async fn choose_benchmark_export(
         .dialog()
         .file()
         .set_title("Export benchmark")
-        .set_file_name("localsr-benchmark-v1.json")
+        .set_file_name("localsr-benchmark-v3.json")
         .add_filter("JSON", &["json"]);
     let picked = tauri::async_runtime::spawn_blocking(move || dialog.blocking_save_file())
         .await

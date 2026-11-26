@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { benchmarkDeviceBarWidth, benchmarkSceneLabel } from './benchmark';
+import {
+  benchmarkDeviceBarWidth,
+  benchmarkOneMpExample,
+  benchmarkSceneLabel,
+  benchmarkSpeedBarWidth,
+} from './benchmark';
 import { mediaNamesFor, without } from './collections';
 import { demoSnapshot } from './demo';
 import { presetDownload, supportsHdrPreservation } from './plan';
@@ -34,6 +39,24 @@ describe('extracted helpers', () => {
     expect(benchmarkDeviceBarWidth(2, [])).toBe(100);
     expect(benchmarkSceneLabel('s2-gallery')).toBe('Gallery · tiled');
     expect(benchmarkSceneLabel('other')).toBe('other');
+    expect(benchmarkOneMpExample(25.1, 4)).toBe('a 1 MP photo to 16 MP takes about 25 s');
+    expect(benchmarkOneMpExample(0.4, 4)).toBe('a 1 MP photo to 16 MP takes about 0.4 s');
+    expect(
+      benchmarkSpeedBarWidth(10, [
+        {
+          device: 'cpu',
+          device_type: 'cpu',
+          device_name: 'CPU',
+          thermal_state: 'nominal',
+          warmup_iterations: 1,
+          stable: true,
+          cv_percent: 1,
+          score: 1,
+          seconds_per_input_mp: 5,
+          scenes: [],
+        },
+      ]),
+    ).toBe(50);
   });
 
   it('removes a key without changing its source and resolves media names', () => {

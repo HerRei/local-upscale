@@ -360,10 +360,24 @@
               "properties": {
                 "job_id": { "type": "string", "minLength": 1 },
                 "model_path": { "type": "string", "minLength": 1 },
-                "model_id": { "const": "span_photo_x4" },
+                "model_id": { "type": "string", "minLength": 1 },
                 "model_name": { "type": "string", "minLength": 1 },
                 "device": { "type": "string", "minLength": 1 },
-                "workload": { "enum": ["v1", "v2"] }
+                "workload": { "enum": ["v1", "v2", "v3"] },
+                "models": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["preset", "model_id", "model_name", "model_path"],
+                    "properties": {
+                      "preset": { "type": "string", "minLength": 1 },
+                      "model_id": { "type": "string", "minLength": 1 },
+                      "model_name": { "type": "string", "minLength": 1 },
+                      "model_path": { "type": "string", "minLength": 1 }
+                    },
+                    "additionalProperties": false
+                  }
+                }
               },
               "additionalProperties": false
             }

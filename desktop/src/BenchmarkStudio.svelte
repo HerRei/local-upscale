@@ -23,6 +23,10 @@
   let total = 0;
   let sceneName = '';
   let device = '';
+  let modelName = '';
+  let modelScale = 4;
+  let lastTilePaintAt = 0;
+  let pendingTileCount = 0;
   let active: ReturnType<typeof tilePercentages> = null;
   const names: Record<string, string> = {
     's1-classroom': 'Compute',
@@ -45,11 +49,16 @@
       visible = false;
       active = null;
       completed = 0;
+      lastTilePaintAt = 0;
+      pendingTileCount = 0;
     }
     const tile = tileFromData(data);
     if (tile.image_width <= 0 || tile.image_height <= 0 || data.phase === 'reset') return;
     sceneName = names[String(data.scene_id)] ?? String(data.scene_id);
     device = String(data.device).toUpperCase();
+    if (typeof data.model_name === 'string' && data.model_name) modelName = data.model_name;
+    const tileScale = Number(data.scale ?? 0);
+    if (Number.isFinite(tileScale) && tileScale > 0) modelScale = tileScale;
     total = Number(data.total_tiles ?? 0);
     completed = Math.max(completed, Number(data.completed_tiles ?? 0));
     const position = tilePercentages(
@@ -69,11 +78,31 @@
       position.height === active.height
     )
       active = null;
+    const now = typeof performance === 'undefined' ? Date.now() : performance.now();
+    if (data.phase === 'completed') {
+      if (!data.jpeg_base64) return;
+      const isLast = total > 0 && completed >= total;
+      if (
+        !isLast &&
+        ((lastTilePaintAt > 0 && now - lastTilePaintAt < 75) || pendingTileCount >= 3)
+      ) {
+        return;
+      }
+      lastTilePaintAt = now;
+    } else if (pendingTileCount >= 3) {
+      return;
+    }
     const ticket = generation;
+    pendingTileCount += 1;
     work = work
       .then(() => paint(data, ticket))
       .catch((error) => {
         console.error('Could not decode benchmark tile preview', error);
+      })
+      .finally(() => {
+        if (ticket === generation) {
+          pendingTileCount = Math.max(0, pendingTileCount - 1);
+        }
       });
   }
 
@@ -83,9 +112,10 @@
         (key) => [key, Number(data[key] ?? 0)],
       ),
     ) as unknown as OutputTile;
-    // The benchmark's fixed model is SPAN 4×. An edge patch can be narrower
-    // than the actual tile size, especially when reopening this panel mid-run.
-    const size = Number(data.active_tile_size ?? 0) * 4;
+    // An edge patch can be narrower than the actual tile size, especially
+    // when reopening this panel mid-run.
+    const scale = Number(data.scale ?? 0) || modelScale || 4;
+    const size = Number(data.active_tile_size ?? 0) * scale;
     if (Number.isFinite(size) && size > 0) tile.grid_width = tile.grid_height = size;
     return tile;
   }
@@ -132,7 +162,10 @@
 
 <section class="render-studio" aria-label="Benchmark render tiles">
   <header>
-    <strong>Live render tiles</strong><span>SPAN · 4×{device && running ? ` · ${device}` : ''}</span
+    <strong>Live render tiles</strong><span
+      >{modelName || current?.model_name || 'Preset model'} · {modelScale}×{device && running
+        ? ` · ${device}`
+        : ''}</span
     >
   </header>
   <div
@@ -153,12 +186,14 @@
     {/if}
     {#if !running && current}<img
         src={current.output_data_url}
-        alt="Completed SPAN benchmark render"
+        alt={current.model_name
+          ? `Completed ${current.model_name} benchmark render`
+          : 'Completed benchmark render'}
       />
     {:else if !running || !visible}<div class="waiting">
         <span class:working={running}></span>{running
           ? 'Preparing model tiles…'
-          : 'Run CPU or GPU to see the model render.'}
+          : 'Run the benchmark to see the model render.'}
       </div>{/if}
   </div>
   <footer>
@@ -167,7 +202,7 @@
         ? `${sceneName} · ${completed} / ${total} tiles`
         : current
           ? `${names[current.scene_id] ?? current.scene_id} · ${current.device.toUpperCase()}`
-          : 'Three fixed scenes'}</span
+          : 'Fixed benchmark scenes'}</span
     >
     <span>{running && visible && completed < total ? 'Rendering warm-up' : 'Warm-up preview'}</span>
   </footer>
