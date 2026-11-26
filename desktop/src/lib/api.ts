@@ -161,6 +161,7 @@ export type PreferenceName =
   | 'contrast'
   | 'viewer_background'
   | 'auto_cache_cleanup'
+  | 'keep_awake'
   | 'stopped_job_result'
   | 'appearance'
   | 'interface_scale';

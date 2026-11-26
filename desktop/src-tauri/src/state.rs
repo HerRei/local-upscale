@@ -123,6 +123,7 @@ pub struct AppState {
     /// Low priority chosen in Advanced for the work of this session; the saved setting
     /// is only the default. None follows the default.
     pub run_low_priority: Mutex<Option<bool>>,
+    pub stay_awake: crate::stay_awake::StayAwake,
 }
 
 impl AppState {
@@ -206,6 +207,7 @@ impl AppState {
             engine_recommendation_cache: Mutex::new(None),
             tray_state: Mutex::new(None),
             run_low_priority: Mutex::new(None),
+            stay_awake: crate::stay_awake::StayAwake::default(),
         })
     }
 

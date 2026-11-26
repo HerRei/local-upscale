@@ -35,6 +35,7 @@ mod queue_timing;
 mod results;
 mod settings;
 mod state;
+mod stay_awake;
 mod steps;
 mod tray;
 mod types;

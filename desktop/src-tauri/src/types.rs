@@ -501,6 +501,9 @@ pub struct UiSettings {
     // Remove unused compiled model caches (older than 30 days or over 5 GB) on startup.
     #[serde(default = "default_true")]
     pub auto_cache_cleanup: bool,
+    // Keep the computer from going to idle sleep while jobs are queued or running.
+    #[serde(default = "default_true")]
+    pub keep_awake: bool,
     // What happens when stopping a running video job: ask, keep, or discard.
     #[serde(
         default = "default_stopped_job_result",
@@ -685,6 +688,7 @@ impl Default for UiSettings {
             notify_on_finish: true,
             menu_bar_icon_monochrome: true,
             auto_cache_cleanup: true,
+            keep_awake: true,
             stopped_job_result: default_stopped_job_result(),
         }
     }

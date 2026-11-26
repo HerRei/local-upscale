@@ -6889,6 +6889,10 @@ it('saves Run at low priority, Show in menu bar and Notify via setPreference eve
   expect(api.saveSettings).not.toHaveBeenCalledWith(
     expect.objectContaining({ low_priority: true }),
   );
+  await user.click(
+    within(settingsDialog).getByRole('switch', { name: 'Keep the computer awake while working' }),
+  );
+  expect(api.setPreference).toHaveBeenCalledWith('keep_awake', false);
   await waitFor(() =>
     expect(document.querySelector('.status-bar .status-note')?.textContent).toBe('Low priority'),
   );

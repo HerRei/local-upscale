@@ -883,6 +883,15 @@ impl Database {
         Ok(usize::try_from(count.max(0)).unwrap_or(0))
     }
 
+    pub fn has_unfinished_jobs(&self) -> AppResult<bool> {
+        let active: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM jobs WHERE status IN ('queued','starting','running','cancelling'))",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(active)
+    }
+
     pub fn job_media_name(&self, id: &str) -> AppResult<Option<String>> {
         Ok(self
             .connection

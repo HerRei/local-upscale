@@ -173,6 +173,7 @@ pub(crate) fn start_edit_checked(
         custom_files,
     );
     lock(&state.database)?.insert_job(&id, &media.id, &serde_json::to_string(&request)?)?;
+    crate::stay_awake::sync(state);
     Ok(())
 }
 
@@ -556,6 +557,7 @@ fn keep_update_switches(current: &UiSettings, incoming: &mut UiSettings) {
     incoming.completion_sound = current.completion_sound;
     incoming.menu_bar_icon_monochrome = current.menu_bar_icon_monochrome;
     incoming.auto_cache_cleanup = current.auto_cache_cleanup;
+    incoming.keep_awake = current.keep_awake;
     incoming.stopped_job_result = current.stopped_job_result.clone();
     incoming.skipped_update_version = current.skipped_update_version.clone();
     incoming.model_directory = current.model_directory.clone();
@@ -734,6 +736,7 @@ fn apply_preference(state: &AppState, name: &str, value: &Value) -> AppResult<()
             "menu_bar_icon_monochrome" => settings.menu_bar_icon_monochrome = bool_value()?,
             "colour_blind_palette" => settings.colour_blind_palette = bool_value()?,
             "auto_cache_cleanup" => settings.auto_cache_cleanup = bool_value()?,
+            "keep_awake" => settings.keep_awake = bool_value()?,
             "stopped_job_result" => {
                 let choice = value
                     .as_str()
@@ -795,6 +798,8 @@ fn apply_preference(state: &AppState, name: &str, value: &Value) -> AppResult<()
         *lock(&state.run_low_priority)? = None;
         let enabled = lock(&state.settings)?.low_priority;
         crate::worker::apply_low_priority(state, enabled);
+    } else if name == "keep_awake" {
+        crate::stay_awake::sync(state);
     }
     Ok(())
 }
@@ -1317,6 +1322,7 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
             })
             .collect()
     })?;
+    crate::stay_awake::sync(state);
     Ok(())
 }
 
@@ -1463,6 +1469,8 @@ pub(crate) fn retry_job_on_cpu_checked(state: &AppState, job_id: &str) -> AppRes
             ui_json: ui_json.clone(),
         }])
     })?;
+    drop(database);
+    crate::stay_awake::sync(state);
     Ok(())
 }
 
@@ -1542,6 +1550,8 @@ pub(crate) fn cancel_jobs_checked(state: &AppState, keep_partial: bool) -> AppRe
             &json!({"type": "cancel_request", "data": {"job_id": active, "keep_partial": keep_partial}}),
         )?;
     }
+    drop(cancellation);
+    crate::stay_awake::sync(state);
     Ok(())
 }
 
@@ -1630,6 +1640,8 @@ pub(crate) fn cancel_jobs_for_media_checked(
             )?;
         }
     }
+    drop(cancellation);
+    crate::stay_awake::sync(state);
     Ok(())
 }
 
@@ -1646,6 +1658,7 @@ pub fn start_model_trials(
     let _scheduler = lock(&state.scheduler)?;
     crate::updates::ensure_not_installing(&state)?;
     let ids = admit_model_trials(&state, &media_id, &model_ids, &base_settings)?;
+    crate::stay_awake::sync(&state);
     worker::dispatch_next_locked(&state, &app)?;
     emit_state_changed(&app);
     Ok(ids)
@@ -2201,6 +2214,7 @@ pub fn start_benchmark(
         lock(&state.runtime)?.take_active_job();
         return Err(error);
     }
+    crate::stay_awake::sync(&state);
     emit_state_changed(&app);
     Ok(())
 }

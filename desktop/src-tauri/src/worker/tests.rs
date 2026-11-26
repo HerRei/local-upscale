@@ -2704,3 +2704,81 @@ fn a_kept_part_is_named_in_frames_below_a_second_and_in_tiles_for_a_photo() {
         json!({"kept_seconds": 0.074, "kept_frames": 2})
     );
 }
+
+#[test]
+fn stay_awake_tracks_job_and_benchmark_envelopes() {
+    let directory = tempfile::tempdir().unwrap();
+    let state =
+        Arc::new(AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap());
+    assert!(!state.stay_awake.is_held());
+
+    {
+        let database = lock(&state.database).unwrap();
+        database
+            .insert_media("m1", "/in/a.png", "a.png", "image")
+            .unwrap();
+        database
+            .insert_media("m2", "/in/b.png", "b.png", "image")
+            .unwrap();
+        database
+            .insert_job(
+                "j1",
+                "m1",
+                r#"{"type":"job_request","data":{"output_path":"/out/a.png"}}"#,
+            )
+            .unwrap();
+        database
+            .insert_job(
+                "j2",
+                "m2",
+                r#"{"type":"job_request","data":{"output_path":"/out/b.png"}}"#,
+            )
+            .unwrap();
+    }
+    lock(&state.runtime).unwrap().begin_active_job("j1".into());
+    assert!(accept_envelope(&state, &envelope("job_started", json!({"job_id": "j1"})),).unwrap());
+    assert!(state.stay_awake.is_held());
+
+    assert!(accept_envelope(
+        &state,
+        &envelope(
+            "job_completed",
+            json!({"job_id": "j1", "output_path": "/out/a.png"}),
+        ),
+    )
+    .unwrap());
+    // j2 is still queued, so stay_awake remains held.
+    assert!(state.stay_awake.is_held());
+
+    lock(&state.runtime).unwrap().begin_active_job("j2".into());
+    assert!(accept_envelope(
+        &state,
+        &envelope(
+            "job_completed",
+            json!({"job_id": "j2", "output_path": "/out/b.png"}),
+        ),
+    )
+    .unwrap());
+    assert!(!state.stay_awake.is_held());
+
+    // Benchmarks have no database job row; runtime.active_job_id drives stay_awake.
+    lock(&state.runtime)
+        .unwrap()
+        .begin_active_job("bench-1".into());
+    assert!(accept_envelope(
+        &state,
+        &envelope(
+            "benchmark_started",
+            json!({"job_id": "bench-1", "measured_frame_count": 4, "warmup_count": 1}),
+        ),
+    )
+    .unwrap());
+    assert!(state.stay_awake.is_held());
+
+    assert!(accept_envelope(
+        &state,
+        &envelope("benchmark_cancelled", json!({"job_id": "bench-1"})),
+    )
+    .unwrap());
+    assert!(!state.stay_awake.is_held());
+}
