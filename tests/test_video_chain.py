@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import platform
+import sys
 import threading
 from fractions import Fraction
 from pathlib import Path
@@ -559,6 +561,13 @@ def _case_config(case_name: str, tmp: Path):
     return builders[case_name]()
 
 
+# The baseline was recorded on macOS arm64 from the code before the refactor; decoding
+# and colour conversion differ slightly between CPUs and library builds, so the hashes
+# are only comparable there (the macOS CI job runs it).
+@pytest.mark.skipif(
+    sys.platform != "darwin" or platform.machine() != "arm64",
+    reason="baseline hashes were recorded on macOS arm64",
+)
 @pytest.mark.parametrize(
     "case_name",
     [

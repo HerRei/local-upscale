@@ -1128,7 +1128,7 @@ def test_build_edit_command_exact_arguments_for_unified_and_discrete_placements(
     def run_cmd(selected, plan, device, backend="", rocm=False, gpu_override=None):
         files = {entry["role"]: Path("/models") / entry["filename"] for entry in selected["files"]}
         return image_edit.build_edit_command(
-            "/runtime/sd-cli",
+            str(Path("/runtime/sd-cli")),
             selected,
             files,
             "ref.png",
@@ -1148,15 +1148,15 @@ def test_build_edit_command_exact_arguments_for_unified_and_discrete_placements(
     qwen = model("Q2_K", "qwen-image-edit-2511")
     qwen_mac = plan_edit(qwen, EditMemory(24 * GIB, 20 * GIB, unified=True))
     assert run_cmd(qwen, qwen_mac, "mps") == [
-        "/runtime/sd-cli",
+        str(Path("/runtime/sd-cli")),
         "--diffusion-model",
-        "/models/qwen-image-edit-2511-Q2_K.gguf",
+        str(Path("/models/qwen-image-edit-2511-Q2_K.gguf")),
         "--llm",
-        "/models/Qwen2.5-VL-7B-Instruct.Q2_K.gguf",
+        str(Path("/models/Qwen2.5-VL-7B-Instruct.Q2_K.gguf")),
         "--llm_vision",
-        "/models/Qwen2.5-VL-7B-Instruct.mmproj-Q8_0.gguf",
+        str(Path("/models/Qwen2.5-VL-7B-Instruct.mmproj-Q8_0.gguf")),
         "--vae",
-        "/models/qwen_image_vae.safetensors",
+        str(Path("/models/qwen_image_vae.safetensors")),
         "-r",
         "ref.png",
         "-o",
@@ -1197,15 +1197,15 @@ def test_build_edit_command_exact_arguments_for_unified_and_discrete_placements(
     mage = model("Q6_K", "mage-flow-edit-turbo")
     mage_mac = plan_edit(mage, EditMemory(16 * GIB, 14 * GIB, unified=True))
     assert run_cmd(mage, mage_mac, "mps") == [
-        "/runtime/sd-cli",
+        str(Path("/runtime/sd-cli")),
         "--diffusion-model",
-        "/models/mage-flow-edit-turbo-Q6_K.gguf",
+        str(Path("/models/mage-flow-edit-turbo-Q6_K.gguf")),
         "--llm",
-        "/models/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+        str(Path("/models/Qwen3VL-4B-Instruct-Q4_K_M.gguf")),
         "--llm_vision",
-        "/models/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf",
+        str(Path("/models/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf")),
         "--vae",
-        "/models/mage_flow_vae_bf16.safetensors",
+        str(Path("/models/mage_flow_vae_bf16.safetensors")),
         "-r",
         "ref.png",
         "-o",
@@ -1245,13 +1245,13 @@ def test_build_edit_command_exact_arguments_for_unified_and_discrete_placements(
         flux_q4, EditMemory(64 * GIB, 60 * GIB, gpu_total=24 * GIB, gpu_free=24 * GIB)
     )
     assert run_cmd(flux_q4, flux_24, "cuda:0", backend="CUDA") == [
-        "/runtime/sd-cli",
+        str(Path("/runtime/sd-cli")),
         "--diffusion-model",
-        "/models/flux-2-klein-4b-Q4_0.gguf",
+        str(Path("/models/flux-2-klein-4b-Q4_0.gguf")),
         "--llm",
-        "/models/Qwen3-4B-Q4_K_M.gguf",
+        str(Path("/models/Qwen3-4B-Q4_K_M.gguf")),
         "--vae",
-        "/models/flux2-vae.safetensors",
+        str(Path("/models/flux2-vae.safetensors")),
         "-r",
         "ref.png",
         "-o",
