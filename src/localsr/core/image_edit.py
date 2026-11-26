@@ -62,6 +62,9 @@ CUSTOM_EDIT_FAMILIES: dict[str, dict] = {
 PROBE_TIMEOUTS = {"--help": 90, "--list-devices": 120}
 # Runtimes whose --help already passed, keyed by path, size and modification time.
 _CHECKED_RUNTIMES: set[tuple[str, int, int]] = set()
+# Bundle files whose checksum passed, keyed by resolved path. The worker is long-lived, so a
+# 8-21 GB bundle is hashed once instead of on every edit.
+_VERIFIED_BUNDLE_FILES: dict[str, tuple[tuple[int, int, int, int, int], str]] = {}
 
 
 def probe_runtime(runtime: Path, option: str):
@@ -336,10 +339,24 @@ def verify_bundle(
     hashed = 0
     for entry in model["files"]:
         path = directory / entry["filename"]
-        if not path.is_file() or path.stat().st_size != entry["size_bytes"]:
+        if not path.is_file() or (stat := path.stat()).st_size != entry["size_bytes"]:
             raise FileNotFoundError(
                 "The editing model is incomplete. Download all components again."
             )
+        key = os.fspath(path.resolve())
+        signature = (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino, stat.st_dev)
+        # A rewrite inside the timestamp granularity can keep the same signature, so a
+        # verdict only counts once the file has been untouched for a while.
+        settled = time.time_ns() - max(stat.st_mtime_ns, stat.st_ctime_ns) > 2_000_000_000
+        if settled and _VERIFIED_BUNDLE_FILES.get(key) == (signature, entry["sha256"]):
+            if cancel.is_set():
+                raise InterruptedError("Editing cancelled.")
+            hashed += stat.st_size
+            if progress is not None:
+                progress(hashed / total)
+            paths[entry["role"]] = path
+            continue
+        _VERIFIED_BUNDLE_FILES.pop(key, None)
         digest = hashlib.sha256()
         with path.open("rb") as stream:
             while block := stream.read(1024**2):
@@ -351,6 +368,8 @@ def verify_bundle(
                     progress(hashed / total)
         if digest.hexdigest() != entry["sha256"]:
             raise ValueError(f"Editing model checksum failed: {path.name}. Download it again.")
+        if settled:
+            _VERIFIED_BUNDLE_FILES[key] = (signature, entry["sha256"])
         paths[entry["role"]] = path
     return paths
 
@@ -443,7 +462,6 @@ def build_edit_command(
         "--vae-tiling",
         "--vae-tile-size",
         "256",
-        *([] if use_cpu else ["--threads", "2"]),
         "--conditioning-cache-size",
         "0",
         "--backend",
