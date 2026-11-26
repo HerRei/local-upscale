@@ -1,0 +1,283 @@
+{
+  "image_upscale_fixes_and_face": {
+    "type": "job_request",
+    "data": {
+      "job_id": "sample-image-upscale",
+      "image_path": "/in/photo.png",
+      "model_path": "/models/span.safetensors",
+      "output_path": "/out/photo_upscaled_4x.png",
+      "scratch_directory": "/work/scratch",
+      "output_format": "png",
+      "device": "cpu",
+      "tile_size": 256,
+      "halo": 32,
+      "precision": "fp32",
+      "jpeg_quality": 98,
+      "preserve_metadata": true,
+      "safe_memory": false,
+      "neural_engine": true,
+      "preview_enabled": true,
+      "preview_max_fps": 2.0,
+      "preview_max_dimension": 320,
+      "output_scale": 4,
+      "face_model_path": "/models/face.pth",
+      "face_fidelity": 0.65,
+      "stages": [
+        {
+          "kind": "restore",
+          "role": "fix",
+          "fix": "blur",
+          "model_id": "nafnet_gopro_deblur",
+          "model_path": "/models/nafnet.pth"
+        },
+        {
+          "kind": "deblock",
+          "role": "fix",
+          "fix": "jpeg",
+          "model_id": "fbcnn_color",
+          "model_path": "/models/fbcnn.pth"
+        },
+        {
+          "kind": "upscale",
+          "role": "primary",
+          "model_id": "span_photo_x4",
+          "model_path": "/models/span.safetensors"
+        },
+        {
+          "kind": "face_restore",
+          "model_id": "hat_l_x4_face",
+          "model_path": "/models/face.pth",
+          "fidelity": 0.65,
+          "execution": "fused-with-upscale"
+        }
+      ],
+      "allow_unverified_checkpoint": false,
+      "approved_checkpoint_sha256": null
+    }
+  },
+  "image_same_size_restore": {
+    "type": "job_request",
+    "data": {
+      "job_id": "sample-image-restore",
+      "image_path": "/in/noisy.png",
+      "model_path": "/models/scunet.pth",
+      "output_path": "/out/noisy_denoised.png",
+      "scratch_directory": "/work/scratch",
+      "output_format": "png",
+      "device": "cpu",
+      "tile_size": 256,
+      "halo": 32,
+      "precision": "fp32",
+      "jpeg_quality": 98,
+      "preserve_metadata": true,
+      "safe_memory": false,
+      "neural_engine": true,
+      "preview_enabled": true,
+      "preview_max_fps": 2.0,
+      "preview_max_dimension": 320,
+      "output_scale": 1,
+      "face_model_path": null,
+      "face_fidelity": 0.7,
+      "stages": [
+        {
+          "kind": "deblock",
+          "role": "fix",
+          "fix": "jpeg",
+          "model_id": "fbcnn_color",
+          "model_path": "/models/fbcnn.pth"
+        },
+        {
+          "kind": "restore",
+          "role": "primary",
+          "fix": "noise",
+          "model_id": "scunet_color_real_psnr",
+          "model_path": "/models/scunet.pth"
+        }
+      ],
+      "allow_unverified_checkpoint": false,
+      "approved_checkpoint_sha256": null
+    }
+  },
+  "image_stage_params_and_mask": {
+    "type": "job_request",
+    "data": {
+      "job_id": "sample-image-stage-params",
+      "image_path": "/in/masked.png",
+      "model_path": "/models/span.safetensors",
+      "output_path": "/out/masked_upscaled_2x.png",
+      "scratch_directory": "/work/scratch",
+      "output_format": "png",
+      "device": "cpu",
+      "tile_size": 256,
+      "halo": 32,
+      "precision": "fp32",
+      "jpeg_quality": 98,
+      "preserve_metadata": true,
+      "safe_memory": false,
+      "neural_engine": true,
+      "preview_enabled": true,
+      "preview_max_fps": 2.0,
+      "preview_max_dimension": 320,
+      "output_scale": 2,
+      "face_model_path": null,
+      "face_fidelity": 0.7,
+      "stages": [
+        {
+          "kind": "restore",
+          "role": "fix",
+          "fix": "noise",
+          "model_id": "scunet_color_real_psnr",
+          "model_path": "/models/scunet.pth",
+          "params": {
+            "strength": 0.5
+          },
+          "mask_path": "/in/mask.png"
+        },
+        {
+          "kind": "upscale",
+          "role": "primary",
+          "model_id": "span_photo_x4",
+          "model_path": "/models/span.safetensors"
+        }
+      ],
+      "allow_unverified_checkpoint": false,
+      "approved_checkpoint_sha256": null
+    }
+  },
+  "video_interpolation_deflicker_audio": {
+    "type": "video_job_request",
+    "data": {
+      "job_id": "sample-video-fbf",
+      "video_path": "/input/clip.mp4",
+      "hdr_mode": "tone_map",
+      "model_path": "/models/span.safetensors",
+      "output_video_path": "/out/clip_video_4x.mp4",
+      "container": "mp4",
+      "video_codec": "av1",
+      "external_ffmpeg": "",
+      "crf": 18,
+      "fps": null,
+      "device": "cpu",
+      "tile_size": 256,
+      "halo": 32,
+      "precision": "fp32",
+      "safe_memory": false,
+      "neural_engine": true,
+      "keyframe_interval": null,
+      "start_frame": null,
+      "end_frame": null,
+      "face_model_path": null,
+      "face_fidelity": 0.7,
+      "deflicker": true,
+      "deflicker_window": 5,
+      "model_kind": "spandrel_image",
+      "bundle_dir": null,
+      "temporal_window": 0,
+      "temporal_overlap": 0,
+      "target_resolution": 0,
+      "output_scale": 4,
+      "stages": [
+        {
+          "kind": "upscale",
+          "role": "primary",
+          "model_id": "span_photo_x4",
+          "model_path": "/models/span.safetensors"
+        }
+      ],
+      "allow_unverified_checkpoint": false,
+      "preview_enabled": true,
+      "preview_max_fps": 2.0,
+      "preview_max_dimension": 320,
+      "interpolation": "x2",
+      "interpolation_order": "before_upscale",
+      "interpolation_model_id": "rife_4_26",
+      "interpolation_bundle_dir": "/models/rife_4_26",
+      "audio_denoise": true,
+      "audio_denoise_model_id": "deepfilternet3",
+      "audio_denoise_bundle_dir": "/models/deepfilternet3"
+    }
+  },
+  "video_temporal_model": {
+    "type": "video_job_request",
+    "data": {
+      "job_id": "sample-video-temporal",
+      "video_path": "/input/clip.mp4",
+      "hdr_mode": "tone_map",
+      "model_path": "",
+      "output_video_path": "/out/clip_video_1080px.mp4",
+      "container": "mp4",
+      "video_codec": "av1",
+      "external_ffmpeg": "",
+      "crf": 18,
+      "fps": null,
+      "device": "cpu",
+      "tile_size": 256,
+      "halo": 32,
+      "precision": "fp32",
+      "safe_memory": false,
+      "neural_engine": true,
+      "keyframe_interval": null,
+      "start_frame": null,
+      "end_frame": null,
+      "face_model_path": null,
+      "deflicker": false,
+      "deflicker_window": 3,
+      "model_kind": "seedvr2",
+      "video_model_id": "seedvr2_3b",
+      "bundle_dir": "/models/seedvr2",
+      "temporal_window": 9,
+      "temporal_overlap": 2,
+      "target_resolution": 1080,
+      "video_low_memory": true,
+      "output_scale": 4,
+      "allow_unverified_checkpoint": false,
+      "preview_enabled": true,
+      "preview_max_fps": 2.0,
+      "preview_max_dimension": 320,
+      "interpolation": "off",
+      "audio_denoise": false,
+      "audio_denoise_model_id": null,
+      "audio_denoise_bundle_dir": null
+    }
+  },
+  "edit_catalog_model": {
+    "type": "edit_job_request",
+    "data": {
+      "job_id": "sample-edit-catalog",
+      "image_path": "/in/photo.png",
+      "output_path": "/out/photo_localsr_edit_sample.png",
+      "model_id": "qwen_edit_2511_q2_k",
+      "bundle_dir": "/models/qwen-image-edit-2511",
+      "runtime_path": "/bin/sd-cli",
+      "prompt": "Replace the sky with sunset clouds.",
+      "device": "mps",
+      "max_dimension": 512,
+      "steps": 40,
+      "seed": 42,
+      "accepted_terms": false
+    }
+  },
+  "edit_custom_model": {
+    "type": "edit_job_request",
+    "data": {
+      "job_id": "sample-edit-custom",
+      "image_path": "/in/photo.png",
+      "output_path": "/out/photo_localsr_edit_custom.png",
+      "model_id": "__custom__",
+      "bundle_dir": "",
+      "runtime_path": "/bin/sd-cli",
+      "prompt": "Make it warmer.",
+      "device": "mps",
+      "max_dimension": 768,
+      "steps": 4,
+      "seed": 7,
+      "accepted_terms": false,
+      "family": "flux2-klein",
+      "custom_files": {
+        "diffusion": "/custom/flux.gguf",
+        "text_encoder": "/custom/te.gguf",
+        "vae": "/custom/vae.safetensors"
+      }
+    }
+  }
+}

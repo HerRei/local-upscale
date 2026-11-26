@@ -79,6 +79,10 @@ HandshakeRequest
 BenchmarkRequest
 MediaProbeRequest
 RegionRequest
+IMAGE_JOB_FIELDS
+VIDEO_JOB_FIELDS
+EDIT_JOB_FIELDS
+validate_edit_job
 request_id
 target_width
 target_height

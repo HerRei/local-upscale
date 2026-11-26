@@ -29,6 +29,7 @@ mod pipe_lines;
 mod process_priority;
 mod process_tree;
 mod programs;
+mod protocol;
 mod queue_timing;
 mod results;
 mod settings;

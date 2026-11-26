@@ -1,0 +1,490 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:localsr:worker-protocol:1",
+  "title": "LocalSR inference worker protocol",
+  "description": "Version 1 JSON Lines messages exchanged by a trusted desktop host and an isolated LocalSR inference worker.",
+  "x-protocol-version": 1,
+  "oneOf": [
+    { "$ref": "#/$defs/handshakeRequest" },
+    { "$ref": "#/$defs/emptyRequest" },
+    { "$ref": "#/$defs/pathRequest" },
+    { "$ref": "#/$defs/regionRequest" },
+    { "$ref": "#/$defs/jobRequest" },
+    { "$ref": "#/$defs/imageBatchRequest" },
+    { "$ref": "#/$defs/editJobRequest" },
+    { "$ref": "#/$defs/videoJobRequest" },
+    { "$ref": "#/$defs/benchmarkRequest" },
+    { "$ref": "#/$defs/cancelRequest" },
+    { "$ref": "#/$defs/setLowPriorityRequest" },
+    { "$ref": "#/$defs/workerReady" },
+    { "$ref": "#/$defs/engineInfo" },
+    { "$ref": "#/$defs/workerResponse" }
+  ],
+  "$defs": {
+    "imageBatchRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        { "properties": {
+          "type": { "const": "image_batch_request" },
+          "data": {
+            "type": "object", "required": ["jobs"],
+            "properties": { "jobs": {
+              "type": "array", "minItems": 2, "maxItems": 64,
+              "description": "Queued photos sharing one model and every setting; each keeps its own job_id, paths and terminal message. Sent only to engines that list the image_batch_v1 feature.",
+              "items": { "$ref": "#/$defs/jobRequest/allOf/1/properties/data" }
+            }},
+            "additionalProperties": false
+          }
+        }}
+      ]
+    },
+    "editJobRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        { "properties": {
+          "type": { "const": "edit_job_request" },
+          "data": {
+            "type": "object",
+            "required": ["job_id", "image_path", "output_path", "model_id", "bundle_dir", "runtime_path", "prompt", "device"],
+            "properties": {
+              "job_id": { "type": "string", "minLength": 1 },
+              "image_path": { "type": "string", "minLength": 1 },
+              "output_path": { "type": "string", "minLength": 1 },
+              "model_id": { "type": "string", "minLength": 1 },
+              "bundle_dir": { "type": "string" },
+              "runtime_path": { "type": "string", "minLength": 1 },
+              "prompt": { "type": "string", "minLength": 1, "maxLength": 4000 },
+              "device": { "type": "string", "minLength": 1 },
+              "max_dimension": { "enum": [512, 768, 1024] },
+              "steps": { "type": "integer", "minimum": 1, "maximum": 60 },
+              "seed": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+              "accepted_terms": { "type": "boolean" },
+              "scratch_directory": { "type": ["string", "null"] },
+              "output_temporary_directory": { "type": ["string", "null"] },
+              "family": { "type": "string" },
+              "custom_files": {
+                "type": ["object", "null"],
+                "additionalProperties": { "type": "string", "minLength": 1 }
+              }
+            },
+            "additionalProperties": false
+          }
+        }}
+      ]
+    },
+    "envelope": {
+      "type": "object",
+      "required": ["type", "data"],
+      "properties": {
+        "type": { "type": "string", "minLength": 1 },
+        "data": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "handshakeRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        {
+          "properties": {
+            "type": { "const": "handshake_request" },
+            "data": {
+              "type": "object",
+              "required": ["client_name", "client_version", "protocol_version"],
+              "properties": {
+                "client_name": { "type": "string", "minLength": 1 },
+                "client_version": { "type": "string", "minLength": 1 },
+                "protocol_version": { "const": 1 }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "emptyRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        {
+          "properties": {
+            "type": { "enum": ["capabilities_request", "shutdown_request", "region_clear"] },
+            "data": { "type": "object", "maxProperties": 0 }
+          }
+        }
+      ]
+    },
+    "setLowPriorityRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        {
+          "properties": {
+            "type": { "const": "set_low_priority" },
+            "data": {
+              "type": "object",
+              "required": ["low_priority"],
+              "properties": {
+                "low_priority": { "type": "boolean" }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "regionRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        { "properties": {
+          "type": { "const": "region_request" },
+          "data": {
+            "type": "object",
+            "required": ["image_path", "slot", "generation", "target_id", "request_id", "x", "y", "width", "height", "target_width", "target_height"],
+            "properties": {
+              "image_path": { "type": "string", "minLength": 1 },
+              "slot": { "enum": ["slot1", "slot2", "slot3", "slot4"] },
+              "generation": { "type": "integer", "minimum": 1 },
+              "target_id": { "type": "string", "minLength": 1 },
+              "request_id": { "type": "integer", "minimum": 1 },
+              "x": { "type": "integer", "minimum": 0 },
+              "y": { "type": "integer", "minimum": 0 },
+              "width": { "type": "integer", "minimum": 1 },
+              "height": { "type": "integer", "minimum": 1 },
+              "target_width": { "type": "integer", "minimum": 1, "maximum": 2048 },
+              "target_height": { "type": "integer", "minimum": 1, "maximum": 2048 }
+            },
+            "additionalProperties": false
+          }
+        } }
+      ]
+    },
+    "pathRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "preview_request",
+                "media_probe_request"
+              ]
+            },
+            "data": {
+              "type": "object",
+              "properties": {
+                "image_path": { "type": "string" },
+                "media_path": { "type": "string" },
+                "comparison": { "type": "boolean" },
+                "slot": { "enum": ["showing", "against", "slot1", "slot2", "slot3", "slot4"] },
+                "generation": { "type": "integer", "minimum": 0 },
+                "target_id": { "type": "string" },
+                "max_dimension": { "type": "integer", "minimum": 64, "maximum": 2048 },
+                "external_ffmpeg": { "type": "string" }
+              },
+              "minProperties": 1,
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "cancelRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        {
+          "properties": {
+            "type": { "const": "cancel_request" },
+            "data": {
+              "type": "object",
+              "required": ["job_id"],
+              "properties": { "job_id": { "type": "string", "minLength": 1 } },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "baseJobData": {
+      "type": "object",
+      "required": [
+        "job_id",
+        "model_path",
+        "device",
+        "tile_size",
+        "halo",
+        "precision",
+        "safe_memory"
+      ],
+      "properties": {
+        "job_id": { "type": "string", "minLength": 1 },
+        "model_path": { "type": "string" },
+        "device": { "type": "string", "minLength": 1 },
+        "tile_size": { "type": "integer", "minimum": 32, "maximum": 2048 },
+        "halo": { "type": "integer", "minimum": 0, "maximum": 256 },
+        "precision": { "enum": ["fp32", "fp16", "bf16"] },
+        "safe_memory": { "type": "boolean" },
+        "scratch_directory": { "type": ["string", "null"], "minLength": 1 },
+        "output_temporary_directory": { "type": ["string", "null"], "minLength": 1 },
+        "face_model_path": { "type": ["string", "null"] },
+        "face_fidelity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "allow_unverified_checkpoint": { "type": ["boolean", "null"] },
+        "approved_checkpoint_sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+        "preview_enabled": { "type": "boolean" },
+        "preview_max_fps": { "type": "number", "exclusiveMinimum": 0, "maximum": 5 },
+        "preview_max_dimension": { "type": "integer", "minimum": 64, "maximum": 640 },
+        "neural_engine": { "type": "boolean" }
+      }
+    },
+    "pipelineStage": {
+      "type": "object",
+      "anyOf": [
+        { "required": ["kind"] },
+        { "required": ["step"] }
+      ],
+      "properties": {
+        "kind": { "type": "string", "minLength": 1 },
+        "step": { "type": "string", "minLength": 1 },
+        "role": { "type": "string", "minLength": 1 },
+        "fix": { "type": ["string", "null"] },
+        "model_id": { "type": ["string", "null"] },
+        "model_path": { "type": ["string", "null"] },
+        "fidelity": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "execution": { "enum": ["sequential", "fused-with-upscale"] },
+        "params": { "type": ["object", "null"] },
+        "mask_path": { "type": ["string", "null"], "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "jobRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        {
+          "properties": {
+            "type": { "const": "job_request" },
+            "data": {
+              "allOf": [
+                { "$ref": "#/$defs/baseJobData" },
+                {
+                  "type": "object",
+                  "required": [
+                    "image_path",
+                    "output_path",
+                    "output_format",
+                    "jpeg_quality",
+                    "preserve_metadata"
+                  ],
+                  "properties": {
+                    "image_path": { "type": "string", "minLength": 1 },
+                    "output_path": { "type": "string", "minLength": 1 },
+                    "output_format": { "enum": ["png", "jpg", "tif", "webp", "heic"] },
+                    "jpeg_quality": { "type": "integer", "minimum": 1, "maximum": 100 },
+                    "preserve_metadata": { "type": "boolean" },
+                    "output_scale": { "type": ["integer", "null"], "minimum": 1, "maximum": 8 },
+                    "stages": {
+                      "type": ["array", "null"],
+                      "maxItems": 16,
+                      "items": { "$ref": "#/$defs/pipelineStage" }
+                    }
+                  }
+                }
+              ],
+              "unevaluatedProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "videoJobRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        {
+          "properties": {
+            "type": { "const": "video_job_request" },
+            "data": {
+              "allOf": [
+                { "$ref": "#/$defs/baseJobData" },
+                {
+                  "type": "object",
+                  "required": [
+                    "video_path",
+                    "output_video_path",
+                    "container",
+                    "crf",
+                    "model_kind"
+                  ],
+                  "properties": {
+                    "video_path": { "type": "string", "minLength": 1 },
+                    "hdr_mode": { "enum": ["reject", "tone_map", "preserve"], "default": "reject" },
+                    "output_video_path": { "type": "string", "minLength": 1 },
+                    "container": { "enum": ["mp4", "mkv", "mov"] },
+                    "video_codec": { "enum": ["auto", "av1", "vp9", "ffv1", "h264", "hevc", "prores"], "default": "av1" },
+                    "external_ffmpeg": { "type": ["string", "null"] },
+                    "video_low_memory": { "type": "boolean", "default": true },
+                    "crf": { "type": "integer", "minimum": 0, "maximum": 51 },
+                    "fps": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+                    "keyframe_interval": { "type": ["integer", "null"], "minimum": 1 },
+                    "start_frame": { "type": ["integer", "null"], "minimum": 0 },
+                    "end_frame": { "type": ["integer", "null"], "minimum": 0 },
+                    "deflicker": { "type": "boolean" },
+                    "deflicker_window": { "type": "integer", "minimum": 1, "maximum": 9 },
+                    "model_kind": { "enum": ["spandrel_image", "seedvr2", "flashvsr"] },
+                    "bundle_dir": { "type": ["string", "null"] },
+                    "temporal_window": { "type": "integer", "minimum": 0 },
+                    "temporal_overlap": { "type": "integer", "minimum": 0 },
+                    "target_resolution": { "type": "integer", "minimum": 0 },
+                    "output_scale": { "type": ["integer", "null"], "minimum": 1, "maximum": 8 },
+                    "interpolation": { "enum": ["off", "x2", "x4", "fps60", "fps120"], "default": "off" },
+                    "interpolation_order": { "enum": ["after_upscale", "before_upscale"], "default": "after_upscale" },
+                    "interpolation_model_id": { "type": ["string", "null"] },
+                    "interpolation_bundle_dir": { "type": ["string", "null"] },
+                    "audio_denoise": { "type": "boolean", "default": false },
+                    "audio_denoise_model_id": { "type": ["string", "null"] },
+                    "audio_denoise_bundle_dir": { "type": ["string", "null"] },
+                    "video_model_id": { "type": ["string", "null"] },
+                    "temporary_directory": { "type": ["string", "null"] },
+                    "stages": {
+                      "type": ["array", "null"],
+                      "maxItems": 16,
+                      "items": { "$ref": "#/$defs/pipelineStage" }
+                    }
+                  }
+                }
+              ],
+              "unevaluatedProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "benchmarkRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        {
+          "properties": {
+            "type": { "const": "benchmark_request" },
+            "data": {
+              "type": "object",
+              "required": ["job_id", "model_path", "model_id", "model_name", "device"],
+              "properties": {
+                "job_id": { "type": "string", "minLength": 1 },
+                "model_path": { "type": "string", "minLength": 1 },
+                "model_id": { "type": "string", "minLength": 1 },
+                "model_name": { "type": "string", "minLength": 1 },
+                "device": { "type": "string", "minLength": 1 },
+                "workload": { "enum": ["v1", "v2", "v3"] },
+                "models": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["preset", "model_id", "model_name", "model_path"],
+                    "properties": {
+                      "preset": { "type": "string", "minLength": 1 },
+                      "model_id": { "type": "string", "minLength": 1 },
+                      "model_name": { "type": "string", "minLength": 1 },
+                      "model_path": { "type": "string", "minLength": 1 }
+                    },
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "workerReady": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        {
+          "properties": {
+            "type": { "const": "worker_ready" },
+            "data": { "type": "object", "maxProperties": 0 }
+          }
+        }
+      ]
+    },
+    "engineInfo": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        {
+          "properties": {
+            "type": { "const": "engine_info" },
+            "data": {
+              "type": "object",
+              "required": [
+                "protocol_version",
+                "minimum_protocol_version",
+                "engine_id",
+                "engine_version",
+                "features",
+                "model_formats",
+                "video_engines"
+              ],
+              "properties": {
+                "protocol_version": { "const": 1 },
+                "minimum_protocol_version": { "type": "integer", "minimum": 1 },
+                "engine_id": { "type": "string", "minLength": 1 },
+                "engine_version": { "type": "string", "minLength": 1 },
+                "features": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+                "model_formats": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+                "video_engines": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "workerResponse": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "protocol_error",
+                "capabilities_info",
+                "preview_ready",
+                "preview_failed",
+                "region_ready",
+                "region_failed",
+                "media_info",
+                "media_probe_failed",
+                "media_probe_progress",
+                "job_started",
+                "stage_started",
+                "stage_progress",
+                "stage_completed",
+                "progress",
+                "tile_update",
+                "live_preview_frame",
+                "live_preview_warning",
+                "log",
+                "warning",
+                "engine_status",
+                "job_completed",
+                "job_cancelled",
+                "job_failed",
+                "video_frame_started",
+                "video_stage_progress",
+                "video_memory",
+                "video_tile_progress",
+                "video_frame_completed",
+                "video_job_completed",
+                "benchmark_started",
+                "benchmark_progress",
+                "benchmark_stage_started",
+                "benchmark_stage_progress",
+                "benchmark_stage_completed",
+                "benchmark_preview",
+                "benchmark_tile",
+                "benchmark_completed",
+                "benchmark_cancelled",
+                "benchmark_failed"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

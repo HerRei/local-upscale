@@ -31,6 +31,7 @@ spandrel_datas, spandrel_binaries, spandrel_hidden = collect_all("spandrel")
 datas = spandrel_datas + [
     (str(ROOT / "LICENSE"), "."),
     (str(ROOT / "THIRD_PARTY_NOTICES.md"), "."),
+    (str(ROOT / "protocol" / "worker-protocol.schema.json"), "protocol"),
     (
         str(SOURCE / "localsr" / "core" / "benchmark_references.json"),
         "localsr/core",

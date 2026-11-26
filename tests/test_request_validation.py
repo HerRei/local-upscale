@@ -9,19 +9,21 @@ from pathlib import Path
 import pytest
 
 from localsr.worker.request_validation import (
+    EDIT_JOB_FIELDS,
     IMAGE_JOB_FIELDS,
     VIDEO_JOB_FIELDS,
     InvalidRequest,
     usable_job_id,
+    validate_edit_job,
     validate_image_job,
     validate_probe,
     validate_video_job,
 )
 
-SCHEMA = json.loads(
-    (Path(__file__).resolve().parents[1] / "protocol" / "worker-protocol.schema.json").read_text(
-        encoding="utf-8"
-    )
+ROOT = Path(__file__).resolve().parents[1]
+SCHEMA = json.loads((ROOT / "protocol" / "worker-protocol.schema.json").read_text(encoding="utf-8"))
+SAMPLES = json.loads(
+    (ROOT / "tests" / "fixtures" / "job_request_samples.json").read_text(encoding="utf-8")
 )
 
 
@@ -82,7 +84,13 @@ def video_request(**overrides):
 
 def test_the_requests_the_host_sends_are_accepted():
     validate_image_job(image_request())
-    validate_image_job(image_request(output_format="heic", output_scale=None, stages=[{}]))
+    validate_image_job(
+        image_request(
+            output_format="heic",
+            output_scale=None,
+            stages=[{"kind": "upscale", "model_id": "m", "model_path": "/models/m.safetensors"}],
+        )
+    )
     validate_video_job(video_request())
     validate_video_job(video_request(fps=29.97, start_frame=0, end_frame=9, container="mov"))
 
@@ -238,3 +246,180 @@ def test_checkpoint_digest_must_be_sha256(make_request, validate):
     validate(make_request(approved_checkpoint_sha256="a" * 64))
     with pytest.raises(InvalidRequest, match="approved_checkpoint_sha256"):
         validate(make_request(approved_checkpoint_sha256="not-a-sha256"))
+
+
+def _schema_props(definition: str) -> tuple[dict, set[str]]:
+    def _collect(node: dict, props: dict, required: set[str]) -> None:
+        if "$ref" in node:
+            target: object = SCHEMA
+            for part in node["$ref"].removeprefix("#/").split("/"):
+                target = target[int(part)] if isinstance(target, list) else target[part]
+            assert isinstance(target, dict)
+            _collect(target, props, required)
+        for part in node.get("allOf", []):
+            _collect(part, props, required)
+        required.update(node.get("required", ()))
+        props.update(node.get("properties", {}))
+
+    envelope_props: dict = {}
+    _collect(SCHEMA["$defs"][definition], envelope_props, set())
+    props: dict = {}
+    required: set[str] = set()
+    _collect(envelope_props["data"], props, required)
+    return props, required
+
+
+@pytest.mark.parametrize(
+    ("definition", "fields"),
+    [
+        ("jobRequest", IMAGE_JOB_FIELDS),
+        ("videoJobRequest", VIDEO_JOB_FIELDS),
+        ("editJobRequest", EDIT_JOB_FIELDS),
+    ],
+)
+def test_derived_fields_match_schema_properties_and_required(definition, fields):
+    props, required = _schema_props(definition)
+    assert {field.name for field in fields} == set(props)
+    assert {field.name for field in fields if field.required} == required
+
+
+def test_rust_job_request_samples_are_accepted_and_bad_types_rejected(monkeypatch):
+    from localsr.worker import server as worker_server
+
+    validators = {
+        "job_request": validate_image_job,
+        "video_job_request": validate_video_job,
+        "edit_job_request": validate_edit_job,
+    }
+    accepted: list[str] = []
+    monkeypatch.setattr(worker_server, "send_message", lambda msg: accepted.append(msg.to_json()))
+
+    for name, sample in SAMPLES.items():
+        req_type = sample["type"]
+        data = sample["data"]
+        validators[req_type](data)
+        if req_type in ("job_request", "video_job_request"):
+            assert worker_server._accepts(data, validators[req_type]), name
+
+    # Reject a field with the wrong/unknown type and an unknown field name.
+    bad_image = {**SAMPLES["image_upscale_fixes_and_face"]["data"], "tile_size": "256"}
+    assert not worker_server._accepts(bad_image, validate_image_job)
+    assert "tile_size" in accepted[-1]
+
+    bad_video = {**SAMPLES["video_temporal_model"]["data"], "crf": "18"}
+    assert not worker_server._accepts(bad_video, validate_video_job)
+    assert "crf" in accepted[-1]
+
+    with pytest.raises(InvalidRequest, match="steps"):
+        validate_edit_job({**SAMPLES["edit_catalog_model"]["data"], "steps": "40"})
+
+    with pytest.raises(InvalidRequest, match="unknown_field"):
+        validate_image_job({**SAMPLES["image_upscale_fixes_and_face"]["data"], "unknown_field": 1})
+
+    assert not worker_server._accepts(
+        {**SAMPLES["video_interpolation_deflicker_audio"]["data"], "unknown_field": 1},
+        validate_video_job,
+    )
+
+
+def test_old_0_6_1_requests_are_accepted():
+    from localsr.core.pipeline import resolve_image_pipeline
+
+    old_image = {
+        "job_id": "061-img",
+        "image_path": "/in/photo.png",
+        "model_path": "/models/span.pth",
+        "output_path": "/out/photo_upscaled_4x.png",
+        "scratch_directory": "/work/061",
+        "output_format": "png",
+        "device": "mps",
+        "tile_size": 256,
+        "halo": 32,
+        "precision": "fp32",
+        "jpeg_quality": 98,
+        "preserve_metadata": True,
+        "safe_memory": False,
+        "neural_engine": True,
+        "preview_enabled": True,
+        "preview_max_fps": 2.0,
+        "preview_max_dimension": 320,
+        "output_scale": 4,
+        "face_model_path": None,
+        "face_fidelity": 0.7,
+        "stages": [
+            {
+                "kind": "upscale",
+                "role": "primary",
+                "fix": None,
+                "model_id": "span_photo_x4",
+                "model_path": "/models/span.pth",
+            }
+        ],
+        "allow_unverified_checkpoint": False,
+        "approved_checkpoint_sha256": None,
+    }
+    validate_image_job(old_image)
+    pipeline = resolve_image_pipeline(
+        raw_stages=old_image["stages"],
+        model_path=old_image["model_path"],
+        output_scale=old_image["output_scale"],
+    )
+    assert pipeline.primary is not None and pipeline.primary.kind == "upscale"
+
+    old_video = {
+        "job_id": "061-vid",
+        "video_path": "/in/clip.mp4",
+        "hdr_mode": "tone_map",
+        "model_path": "/models/span.pth",
+        "output_video_path": "/out/clip_video_4x.mp4",
+        "container": "mp4",
+        "video_codec": "av1",
+        "external_ffmpeg": "",
+        "crf": 18,
+        "fps": None,
+        "device": "cpu",
+        "tile_size": 256,
+        "halo": 32,
+        "precision": "fp32",
+        "safe_memory": False,
+        "neural_engine": True,
+        "keyframe_interval": None,
+        "start_frame": None,
+        "end_frame": None,
+        "face_model_path": None,
+        "face_fidelity": 0.7,
+        "deflicker": False,
+        "deflicker_window": 3,
+        "model_kind": "spandrel_image",
+        "bundle_dir": None,
+        "temporal_window": 0,
+        "temporal_overlap": 0,
+        "target_resolution": 0,
+        "output_scale": 4,
+        "stages": old_image["stages"],
+        "allow_unverified_checkpoint": False,
+        "approved_checkpoint_sha256": None,
+        "preview_enabled": True,
+        "preview_max_fps": 2.0,
+        "preview_max_dimension": 320,
+        "interpolation": "off",
+        "interpolation_order": "after_upscale",
+        "interpolation_model_id": None,
+        "interpolation_bundle_dir": None,
+        "audio_denoise": False,
+        "audio_denoise_model_id": None,
+        "audio_denoise_bundle_dir": None,
+    }
+    validate_video_job(old_video)
+    validate_edit_job(SAMPLES["edit_catalog_model"]["data"])
+
+
+def test_the_packaged_schema_copy_matches_the_protocol_schema():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    packaged = root / "src" / "localsr" / "protocol" / "worker-protocol.schema.json"
+    source = root / "protocol" / "worker-protocol.schema.json"
+    assert packaged.read_bytes() == source.read_bytes(), (
+        "Copy protocol/worker-protocol.schema.json to src/localsr/protocol/ after editing it."
+    )
