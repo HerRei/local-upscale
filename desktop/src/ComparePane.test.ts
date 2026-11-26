@@ -148,6 +148,16 @@ it('names the compared pictures by their ends, with the full names on hover', ()
   }
 });
 
+it('sets async decoding on comparison images', () => {
+  const { container } = render(ComparePane, {
+    ...props,
+    items: [item('one', 'a'), item('two', 'a')],
+  });
+  const imgs = [...container.querySelectorAll('img')];
+  expect(imgs.length).toBeGreaterThanOrEqual(2);
+  expect(imgs.every((img) => img.getAttribute('decoding') === 'async')).toBe(true);
+});
+
 it('opens two videos in the image slider with one shared transport, then boxes for three, and releases sources', async () => {
   const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
   const load = vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});

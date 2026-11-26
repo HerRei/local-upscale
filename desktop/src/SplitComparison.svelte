@@ -49,6 +49,7 @@
         class="reference-image"
         src={reference.src}
         alt={`Reference: ${reference.label}`}
+        decoding="async"
         draggable="false"
       />
     {:else}
@@ -63,6 +64,7 @@
       style={`clip-path: inset(0 0 0 ${resultClip}%)`}
       src={showing.src}
       alt={showingAlt}
+      decoding="async"
       draggable="false"
     />
   {:else if showing.state !== 'ready' && !peeking}
