@@ -950,9 +950,19 @@ impl Database {
     }
 
     /// A job that started is now stopping; one that never started stays as it is.
+    #[cfg(test)]
     pub fn mark_cancelling(&self, id: &str) -> AppResult<()> {
         self.connection.execute(
             "UPDATE jobs SET status='cancelling', updated_at=?2 WHERE id=?1 AND status IN ('starting','running')",
+            params![id, now_millis()],
+        )?;
+        Ok(())
+    }
+
+    /// A job already dispatched to the engine (including a batch member) is now stopping.
+    pub fn mark_batch_cancelling(&self, id: &str) -> AppResult<()> {
+        self.connection.execute(
+            "UPDATE jobs SET status='cancelling', updated_at=?2 WHERE id=?1 AND status IN ('queued','starting','running')",
             params![id, now_millis()],
         )?;
         Ok(())
@@ -1038,8 +1048,13 @@ impl Database {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn cancel_queued_jobs(&self) -> AppResult<()> {
         self.stop_queued_jobs("Cancelled before starting.")
+    }
+
+    pub fn cancel_queued_jobs_except(&self, exclude: &[String]) -> AppResult<()> {
+        self.stop_queued_jobs_except("Cancelled before starting.", exclude)
     }
 
     /// End every queued job as cancelled with `reason`; finished ones are not touched.
@@ -1048,6 +1063,31 @@ impl Database {
             "UPDATE jobs SET status='cancelled', error=?2, updated_at=?1 WHERE status='queued'",
             params![now_millis(), reason],
         )?;
+        Ok(())
+    }
+
+    /// End every queued job as cancelled with `reason`, leaving jobs in `exclude` open
+    /// so the engine's terminal replies settle them cleanly.
+    pub fn stop_queued_jobs_except(&self, reason: &str, exclude: &[String]) -> AppResult<()> {
+        if exclude.is_empty() {
+            return self.stop_queued_jobs(reason);
+        }
+        let now = now_millis();
+        let transaction = self.connection.unchecked_transaction()?;
+        let mut statement = transaction.prepare("SELECT id FROM jobs WHERE status='queued'")?;
+        let queued: Vec<String> = statement
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        for id in queued {
+            if !exclude.iter().any(|member| member == &id) {
+                transaction.execute(
+                    "UPDATE jobs SET status='cancelled', error=?2, updated_at=?1 WHERE id=?3 AND status='queued'",
+                    params![now, reason, id],
+                )?;
+            }
+        }
+        transaction.commit()?;
         Ok(())
     }
 

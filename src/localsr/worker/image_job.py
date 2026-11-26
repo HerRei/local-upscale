@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
+import traceback
 from collections.abc import Callable, Mapping
 from contextlib import ExitStack
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+import psutil
 
-from localsr.core.disk_space import require_image_room
+from localsr.core.disk_space import failure_fields, require_image_room
 from localsr.core.face_compositing import blend_with_alpha, load_mask
 from localsr.core.image_io import ImageManager, require_output_format
 from localsr.core.inference import InferenceEngine, UnstableRestorationError
@@ -36,12 +40,156 @@ from localsr.protocol.messages import (
     EngineStatus,
     JobCancelled,
     JobCompleted,
+    JobFailed,
     LivePreviewWarning,
     LogMessage,
     WarningMessage,
     WorkerMessage,
 )
 from localsr.worker.job_progress import ImageJobProgress
+
+# 8-bit ImageManager.save allocates ~8 B/px (Pillow image + strips) plus encoder
+# buffers; 16 B/px (32 B/px for 16-bit) keeps an overlapped save within a
+# quarter of available RAM so concurrent inference on the next photo stays out of swap.
+_OVERLAP_BYTES_PER_PIXEL = 16
+_FALLBACK_AVAILABLE_MEMORY = 1 * 2**30
+
+
+def overlap_pixel_threshold(bit_depth: int = 8) -> int:
+    """Maximum output pixel count for overlapping a save with the next photo."""
+    try:
+        available = int(psutil.virtual_memory().available)
+    except (OSError, RuntimeError, AttributeError):
+        available = 0
+    if available <= 0:
+        available = _FALLBACK_AVAILABLE_MEMORY
+    bytes_per_pixel = _OVERLAP_BYTES_PER_PIXEL * (2 if bit_depth == 16 else 1)
+    return max(1, (available // 4) // bytes_per_pixel)
+
+
+@dataclass(slots=True)
+class _SaveTask:
+    job_id: str
+    manager: ImageManager
+    writer: Any
+    image: dict[str, Any]
+    info: NormalizedModelInfo
+    data: Mapping[str, Any]
+    notes: list[str]
+    started_at: float
+    inference_started_at: float
+    discard_signal: DiscardOnStop
+    emit: Callable[[WorkerMessage], None]
+    log: Callable[[str], None]
+
+
+class SavePipeline:
+    """One background save thread behind a depth-1 slot so at most two results exist."""
+
+    def __init__(self, *, pixel_threshold: int | None = None) -> None:
+        self._pixel_threshold = pixel_threshold
+        self._cond = threading.Condition()
+        self._pending: _SaveTask | None = None
+        self._active = False
+        self._closed = False
+        self._thread: threading.Thread | None = None
+
+    def exceeds_threshold(self, output_pixels: int, bit_depth: int = 8) -> bool:
+        limit = (
+            self._pixel_threshold
+            if self._pixel_threshold is not None
+            else overlap_pixel_threshold(bit_depth)
+        )
+        return output_pixels > limit
+
+    def wait_if_large(self, output_pixels: int, bit_depth: int = 8) -> None:
+        if self.exceeds_threshold(output_pixels, bit_depth):
+            self.drain()
+
+    def submit(self, task: _SaveTask) -> None:
+        with self._cond:
+            while self._active:
+                self._cond.wait(timeout=0.5)
+            if self._closed:
+                raise RuntimeError("SavePipeline is closed.")
+            if self._thread is None:
+                self._thread = threading.Thread(
+                    target=self._run, name="localsr-save-pipeline", daemon=True
+                )
+                self._thread.start()
+            self._pending = task
+            self._active = True
+            self._cond.notify_all()
+
+    def drain(self) -> None:
+        with self._cond:
+            while self._active:
+                self._cond.wait(timeout=0.5)
+
+    def close(self) -> None:
+        with self._cond:
+            while self._active:
+                self._cond.wait(timeout=0.5)
+            self._closed = True
+            self._cond.notify_all()
+            thread = self._thread
+        if thread is not None:
+            thread.join()
+
+    def _run(self) -> None:
+        while True:
+            with self._cond:
+                while self._pending is None and not self._closed:
+                    self._cond.wait(timeout=0.5)
+                if self._pending is None and self._closed:
+                    return
+                task = self._pending
+                self._pending = None
+            assert task is not None
+            try:
+                self._execute(task)
+            finally:
+                with self._cond:
+                    self._active = False
+                    self._cond.notify_all()
+
+    def _execute(self, task: _SaveTask) -> None:
+        try:
+            try:
+                task.log("Writing final output...")
+                save_notes = save_output(
+                    task.manager,
+                    task.writer,
+                    task.image,
+                    task.info,
+                    task.data,
+                    task.discard_signal,
+                )
+            except InterruptedError:
+                task.emit(JobCancelled(job_id=task.job_id))
+                return
+            except Exception as error:  # noqa: BLE001 - a save failure stops only this photo
+                traceback.print_exc(file=sys.stderr)
+                task.emit(
+                    JobFailed(
+                        job_id=task.job_id,
+                        **failure_fields(error, task.data.get("output_path")),
+                    )
+                )
+                return
+            completed_at = time.monotonic()
+            notes = [*task.notes, *save_notes]
+            task.emit(
+                JobCompleted(
+                    job_id=task.job_id,
+                    elapsed_seconds=completed_at - task.started_at,
+                    inference_seconds=completed_at - task.inference_started_at,
+                    output_path=task.data["output_path"],
+                    notes=" ".join(notes),
+                )
+            )
+        finally:
+            task.writer.cleanup()
 
 
 def save_output(
@@ -228,6 +376,8 @@ class ImageJobRunner:
         emit_preview: Callable[[PreviewPacket], None],
         preview_factory: Callable[..., LatestPreviewEncoder] = LatestPreviewEncoder,
         keep_partial: Callable[[], bool] | None = None,
+        save_pipeline: SavePipeline | None = None,
+        overlap_save: bool = False,
     ) -> None:
         # Whether a stop keeps the finished tiles of the upscaling step (the host asks).
         self.keep_partial = keep_partial
@@ -237,6 +387,8 @@ class ImageJobRunner:
         self.emit = emit
         self.emit_preview = emit_preview
         self.preview_factory = preview_factory
+        self.save_pipeline = save_pipeline
+        self.overlap_save = overlap_save
 
     def run(self, job_id: str, data: Mapping[str, Any]) -> None:
         bit_depth = int(data.get("output_bit_depth") or 8)
@@ -279,6 +431,7 @@ class ImageJobRunner:
         try:
             # Ownership begins before image decoding: corrupt media must also
             # release an encoder, and failed writes must release every memmap.
+            kept_writer: list[OutputWriter | None] = [None]
             with ExitStack() as resources:
                 preview = self.preview_factory(
                     self.emit_preview,
@@ -300,6 +453,8 @@ class ImageJobRunner:
                 processing_started_at = time.monotonic()
                 working_image = image
                 notes: list[str] = []
+                if pipeline.preprocess_stages and self.save_pipeline is not None:
+                    self.save_pipeline.drain()
                 for index, stage in enumerate(pipeline.preprocess_stages):
                     working_image = self._run_stage(
                         working_image, stage, index, data, progress, notes
@@ -312,12 +467,21 @@ class ImageJobRunner:
                     and pipeline.primary.step_id in _PRIMARY_GRAYSCALE_CLEARING_STEPS
                 )
                 try:
-                    writer, info = self._primary(working_image, pipeline, data, progress, resources)
+                    writer, info = self._primary(
+                        working_image,
+                        pipeline,
+                        data,
+                        progress,
+                        resources,
+                        kept_writer=kept_writer,
+                    )
                 except TilesStopped as stopped:
                     resources.callback(stopped.writer.cleanup)
                     colour = stopped.info is not None and stopped.info.architecture == "DDColor"
                     if colour or primary_clears_grayscale:
                         manager.grayscale = False
+                    if self.save_pipeline is not None:
+                        self.save_pipeline.drain()
                     self._save_finished_part(
                         job_id, data, manager, image, working_image, stopped, started_at
                     )
@@ -334,10 +498,53 @@ class ImageJobRunner:
                         notes,
                         resources,
                         manager,
+                        kept_writer=kept_writer,
                     )
                 # Every tile is done: a stop that keeps the finished part saves it whole.
                 if self._discard_signal().is_set():
                     raise InterruptedError("Cancelled before the output was saved.")
+                shape = getattr(writer, "shape", None)
+                output_pixels = int(shape[1]) * int(shape[2]) if shape is not None else 0
+                if (
+                    self.save_pipeline is not None
+                    and self.overlap_save
+                    and not self.save_pipeline.exceeds_threshold(output_pixels, bit_depth)
+                ):
+                    notes.extend(self._take_engine_notes())
+                    save_image = {
+                        "icc_profile": image.get("icc_profile"),
+                        "safe_exif": image.get("safe_exif", {}),
+                    }
+                    inf_start = (
+                        progress.inference_started_at
+                        if progress.inference_started_at is not None
+                        else processing_started_at
+                    )
+                    kept_writer[0] = writer
+                    del image, working_image
+                    try:
+                        self.save_pipeline.submit(
+                            _SaveTask(
+                                job_id=job_id,
+                                manager=manager,
+                                writer=writer,
+                                image=save_image,
+                                info=info,
+                                data=dict(data),
+                                notes=notes,
+                                started_at=started_at,
+                                inference_started_at=inf_start,
+                                discard_signal=self._discard_signal(),
+                                emit=self.emit,
+                                log=self._log,
+                            )
+                        )
+                    except BaseException:
+                        kept_writer[0] = None
+                        raise
+                    return
+                if self.save_pipeline is not None:
+                    self.save_pipeline.drain()
                 self._log("Writing final output...")
                 notes.extend(self._save(manager, writer, image, info, data))
                 notes.extend(self._take_engine_notes())
@@ -439,6 +646,8 @@ class ImageJobRunner:
         notes: list[str],
         resources: ExitStack,
         manager: ImageManager,
+        *,
+        kept_writer: list[OutputWriter | None] | None = None,
     ) -> OutputWriter:
         import torch
 
@@ -478,10 +687,23 @@ class ImageJobRunner:
         out_writer = OutputWriter(
             final_pixels.shape, dtype=out_dtype, temporary_directory=data.get("scratch_directory")
         )
-        resources.callback(out_writer.cleanup)
+        self._register_writer(resources, out_writer, kept_writer)
         out_writer.mmap[:] = final_pixels
         out_writer.mmap.flush()
         return out_writer
+
+    @staticmethod
+    def _register_writer(
+        resources: ExitStack,
+        writer: OutputWriter,
+        kept_writer: list[OutputWriter | None] | None,
+    ) -> None:
+        if kept_writer is None:
+            resources.callback(writer.cleanup)
+        else:
+            resources.callback(
+                lambda w=writer, kept=kept_writer: w.cleanup() if w is not kept[0] else None
+            )
 
     def _primary(
         self,
@@ -490,11 +712,17 @@ class ImageJobRunner:
         data: Mapping[str, Any],
         progress: ImageJobProgress,
         resources: ExitStack,
+        *,
+        kept_writer: list[OutputWriter | None] | None = None,
     ) -> tuple[OutputWriter, NormalizedModelInfo]:
         primary, face = pipeline.primary, pipeline.face
         height, width = image["tensor"].shape[-2:]
         if primary is None:
-            return self._passthrough_1x(image, data, resources, width, height)
+            if self.save_pipeline is not None:
+                self.save_pipeline.wait_if_large(
+                    width * height, int(data.get("output_bit_depth") or 8)
+                )
+            return self._passthrough_1x(image, data, resources, width, height, kept_writer)
         assert pipeline.primary_index is not None
         progress.start(pipeline.primary_index, primary, span=1 + int(face is not None))
         if face is not None:
@@ -507,8 +735,17 @@ class ImageJobRunner:
                 f"Output scale must be between 1 and the model's native {info.scale}× scale.",
             )
         if data.get("output_scale") == 1 and info.scale > 1:
+            if self.save_pipeline is not None:
+                self.save_pipeline.wait_if_large(
+                    width * height, int(data.get("output_bit_depth") or 8)
+                )
             progress.complete(pipeline.primary_index, primary)
-            return self._passthrough_1x(image, data, resources, width, height)
+            return self._passthrough_1x(image, data, resources, width, height, kept_writer)
+        if self.save_pipeline is not None:
+            self.save_pipeline.wait_if_large(
+                width * info.scale * height * info.scale,
+                int(data.get("output_bit_depth") or 8),
+            )
         # Before any memmap exists: a photo that cannot be written must not start.
         require_image_room(data, width, height, info.scale, image.get("alpha_image") is not None)
         face_path = data.get("face_model_path")
@@ -527,13 +764,21 @@ class ImageJobRunner:
             writer = None
             if face_path and face_info is not None:
                 writer = self._process_faces(
-                    image, primary, info, face_path, face_info, data, progress, resources
+                    image,
+                    primary,
+                    info,
+                    face_path,
+                    face_info,
+                    data,
+                    progress,
+                    resources,
+                    kept_writer,
                 )
             if writer is None:
                 writer = self._process_image(
                     image, primary, info, data, progress, keep_partial=self.keep_partial
                 )
-                resources.callback(writer.cleanup)
+                self._register_writer(resources, writer, kept_writer)
             if primary.mask_path:
                 blended = _apply_stage_mask(primary, image["tensor"], writer.get_array())
                 target = getattr(writer, "mmap", None)
@@ -630,6 +875,7 @@ class ImageJobRunner:
         data: Mapping[str, Any],
         progress: ImageJobProgress,
         resources: ExitStack,
+        kept_writer: list[OutputWriter | None] | None = None,
     ) -> OutputWriter | None:
         from localsr.core.face_detection import detect_faces
         from localsr.core.video_pipeline import process_frame_face_aware
@@ -668,7 +914,7 @@ class ImageJobRunner:
             dtype=result.dtype,
             temporary_directory=data.get("scratch_directory"),
         )
-        resources.callback(writer.cleanup)
+        self._register_writer(resources, writer, kept_writer)
         writer.mmap[:] = result
         writer.mmap.flush()
         return writer
@@ -680,6 +926,7 @@ class ImageJobRunner:
         resources: ExitStack,
         width: int,
         height: int,
+        kept_writer: list[OutputWriter | None] | None = None,
     ) -> tuple[OutputWriter, NormalizedModelInfo]:
         """Package 1× working pixels for atomic save without running an upscaler."""
         require_image_room(data, width, height, 1, image.get("alpha_image") is not None)
@@ -703,7 +950,7 @@ class ImageJobRunner:
         writer = OutputWriter(
             pixels.shape, dtype=out_dtype, temporary_directory=data.get("scratch_directory")
         )
-        resources.callback(writer.cleanup)
+        self._register_writer(resources, writer, kept_writer)
         writer.mmap[:] = pixels
         writer.mmap.flush()
         channels = int(pixels.shape[0])

@@ -113,6 +113,10 @@ ALLOWED_WAITS = {
     ("core/video_pipeline.py", "worker.join()"): "the frame producer stops with its consumer",
     ("desktop_launcher.py", "return subprocess.run("): "the app's launcher, not the engine",
     ("worker/edit_guard.py", "return process.wait()"): "the guarded process ends with the job",
+    (
+        "worker/image_job.py",
+        "thread.join()",
+    ): "the save thread exits after the active save finishes and _closed is set",
 }
 BOUNDED_CALLS = {"join", "wait", "communicate"}
 SUBPROCESS_CALLS = {"run", "check_output", "check_call", "call"}

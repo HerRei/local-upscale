@@ -742,18 +742,30 @@ const MAX_BATCH_PHOTOS: usize = 64;
 /// checks again and runs any photo it cannot batch as an ordinary job.
 const BATCH_ARCHITECTURES: [&str; 3] = ["SPAN", "RealESRGAN", "FBCNN"];
 
+#[derive(Clone, Copy)]
+enum BatchPolicy {
+    CoreMlOnly,
+    Pipelined,
+}
+
+enum BatchSupport {
+    None,
+    CoreMlOnly(Vec<String>),
+    Pipelined,
+}
+
 /// The recipe the photos of one batch share: the whole request apart from each
-/// photo's identity and paths. None for anything but an image on Apple's GPU with
-/// the Neural Engine on, without a fix before the upscaler and without Faces.
-fn image_batch_key(message: &Value) -> Option<Value> {
+/// photo's identity and paths. Under `CoreMlOnly`, restricted to Apple's GPU with
+/// the Neural Engine on; under `Pipelined`, allowed on every device.
+fn image_batch_key(message: &Value, policy: BatchPolicy) -> Option<Value> {
     let data = &message["data"];
     let face = data["face_model_path"]
         .as_str()
         .is_some_and(|path| !path.is_empty());
     let stages = data["stages"].as_array();
+    let coreml_only = matches!(policy, BatchPolicy::CoreMlOnly);
     if message["type"] != "job_request"
-        || data["device"] != "mps"
-        || data["neural_engine"] == false
+        || (coreml_only && (data["device"] != "mps" || data["neural_engine"] == false))
         || data["run_alone"] == true
         || face
         || stages.is_some_and(|stages| {
@@ -779,10 +791,19 @@ fn image_batch_key(message: &Value) -> Option<Value> {
     Some(Value::Object(key))
 }
 
-/// What to send next: the first queued job, alone or with the queued photos right
-/// behind it that share its recipe; a batch never reaches past a different job.
+#[cfg(test)]
 fn next_dispatch(
     window: &[crate::database::PendingJob],
+    batch_model: impl Fn(&str) -> bool,
+) -> AppResult<Option<(Vec<String>, Value)>> {
+    next_dispatch_for(window, BatchPolicy::CoreMlOnly, batch_model)
+}
+
+/// What to send next: the first queued job, alone or with the queued photos right
+/// behind it that share its recipe; a batch never reaches past a different job.
+fn next_dispatch_for(
+    window: &[crate::database::PendingJob],
+    policy: BatchPolicy,
     batch_model: impl Fn(&str) -> bool,
 ) -> AppResult<Option<(Vec<String>, Value)>> {
     let Some(first) = window.first() else {
@@ -791,14 +812,14 @@ fn next_dispatch(
     let message: Value = serde_json::from_str(&first.request_json)?;
     let mut ids = vec![first.id.clone()];
     let mut jobs = vec![message["data"].clone()];
-    if let Some(key) = image_batch_key(&message)
+    if let Some(key) = image_batch_key(&message, policy)
         .filter(|_| batch_model(message["data"]["model_path"].as_str().unwrap_or_default()))
     {
         for job in window.iter().skip(1).take(MAX_BATCH_PHOTOS - 1) {
             let Ok(next) = serde_json::from_str::<Value>(&job.request_json) else {
                 break;
             };
-            if image_batch_key(&next).as_ref() != Some(&key) {
+            if image_batch_key(&next, policy).as_ref() != Some(&key) {
                 break;
             }
             ids.push(job.id.clone());
@@ -816,24 +837,29 @@ fn next_dispatch(
     Ok(Some((ids, batch)))
 }
 
-/// Installed model paths that may run as a photo batch with this engine.
-fn batch_model_paths(state: &AppState, platform: bool) -> AppResult<Vec<String>> {
-    let batches = platform
-        && lock(&state.engine)?.as_ref().is_some_and(|engine| {
-            engine
-                .features
-                .iter()
-                .any(|feature| feature == "image_batch_v1")
+/// How this engine supports photo batches on this platform.
+fn batch_support(state: &AppState, platform: bool) -> AppResult<BatchSupport> {
+    let (pipelined, v1) = lock(&state.engine)?
+        .as_ref()
+        .map_or((false, false), |engine| {
+            (
+                engine.features.iter().any(|f| f == "image_batch_pipelined"),
+                engine.features.iter().any(|f| f == "image_batch_v1"),
+            )
         });
-    if !batches {
-        return Ok(Vec::new());
+    if pipelined {
+        return Ok(BatchSupport::Pipelined);
     }
-    Ok(lock(&state.catalog)?
+    if !(platform && v1) {
+        return Ok(BatchSupport::None);
+    }
+    let paths = lock(&state.catalog)?
         .models
         .iter()
         .filter(|model| BATCH_ARCHITECTURES.contains(&model.architecture.as_str()))
         .filter_map(|model| model.installed_path.clone())
-        .collect())
+        .collect();
+    Ok(BatchSupport::CoreMlOnly(paths))
 }
 
 pub fn dispatch_next(state: &Arc<AppState>, app: &AppHandle) -> AppResult<()> {
@@ -912,16 +938,26 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
         stop_queue_locked(state, &reason)?;
         return Ok(Dispatch::Failed);
     }
-    let paths = batch_model_paths(state, batches)?;
+    let support = batch_support(state, batches)?;
     let mut window = Vec::new();
-    if !paths.is_empty() {
+    if !matches!(support, BatchSupport::None) {
         window = lock(&state.database)?.queued_job_window(MAX_BATCH_PHOTOS)?;
     }
     if window.first().map(|job| &job.id) != Some(&pending.id) {
         window = vec![pending];
     }
-    let Some((ids, mut message)) = next_dispatch(&window, |path| paths.iter().any(|p| p == path))?
-    else {
+    let dispatch = match &support {
+        BatchSupport::None => next_dispatch_for(&window, BatchPolicy::CoreMlOnly, |_| false)?,
+        BatchSupport::CoreMlOnly(paths) => {
+            next_dispatch_for(&window, BatchPolicy::CoreMlOnly, |path| {
+                paths.iter().any(|p| p == path)
+            })?
+        }
+        BatchSupport::Pipelined => {
+            next_dispatch_for(&window, BatchPolicy::Pipelined, |path| !path.is_empty())?
+        }
+    };
+    let Some((ids, mut message)) = dispatch else {
         return Ok(Dispatch::Idle);
     };
     let first = ids[0].clone();
@@ -1127,13 +1163,24 @@ pub(crate) fn stop_queue_for_full_disk(state: &Arc<AppState>, reason: &str) -> A
 fn stop_queue_locked(state: &Arc<AppState>, reason: &str) -> AppResult<()> {
     if !state.worker.disk_stop.swap(true, Ordering::SeqCst) {
         let mut cancellation = lock(&state.worker.cancellation)?;
-        lock(&state.database)?.stop_queued_jobs(crate::disk_room::NOT_STARTED)?;
+        let batch_ids = cancellation.job_ids.clone();
+        lock(&state.database)?
+            .stop_queued_jobs_except(crate::disk_room::NOT_STARTED, &batch_ids)?;
         let active = lock(&state.runtime)?.active_job_id.clone();
         if !active.is_empty() {
-            cancellation.request(&active, Instant::now());
-            for id in &cancellation.job_ids {
-                lock(&state.database)?.mark_cancelling(id)?;
+            let now = Instant::now();
+            if batch_ids.is_empty() {
+                cancellation.request(&active, now);
+            } else {
+                for id in &batch_ids {
+                    cancellation.request(id, now);
+                }
             }
+            let db = lock(&state.database)?;
+            for id in &cancellation.job_ids {
+                db.mark_batch_cancelling(id)?;
+            }
+            drop(db);
             let _ = send(
                 state,
                 &json!({"type": "cancel_request", "data": {"job_id": active, "keep_partial": false}}),
