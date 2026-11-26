@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.6.2-beta] - Unreleased
+## [0.6.2-beta] - 2026-11-26
 
 A small speed and responsiveness update. Nothing changes in the results.
 
