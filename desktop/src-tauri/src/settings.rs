@@ -105,7 +105,7 @@ fn migrate_v1(value: &mut Value) -> Option<()> {
                 fixes
                     .iter()
                     .filter_map(Value::as_str)
-                    .filter(|fix| matches!(*fix, "noise" | "jpeg" | "blur" | "colour"))
+                    .filter(|fix| crate::steps::registry().is_valid_fix_stage(fix))
                     .map(str::to_owned)
                     .collect()
             })

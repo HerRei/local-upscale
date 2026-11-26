@@ -1029,6 +1029,7 @@ def main() -> int:
         parser.error("--private-preview-media can never be combined with a signed release build")
 
     run([sys.executable, str(ROOT / "scripts" / "export_desktop_catalog.py")])
+    run([sys.executable, str(ROOT / "scripts" / "export_desktop_steps.py")])
     if not args.skip_worker:
         build_worker(args.target, args.private_preview_media)
     payload = None

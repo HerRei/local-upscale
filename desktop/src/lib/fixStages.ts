@@ -1,16 +1,12 @@
 import { fixesOf, presetMayPick, rankForQuality, rightsAllowPreset } from './plan';
+import { DEFAULT_FIX_ORDER, FIX_ROW_LABELS, fixDefaultStageKind } from './steps';
 import type { AppSnapshot, CatalogModel, FixKind, FixStageSelection, Quality } from './types';
 /**
  * Fix models that can produce unstable results. The engine skips these before an upscale.
  */
 export const UNSTABLE_FIX_MODELS = new Set(['nafnet_gopro_deblur']);
 
-export const FIX_ROW_LABELS: Record<Exclude<FixKind, 'faces'>, string> = {
-  noise: 'Fix noise',
-  jpeg: 'Fix JPEG',
-  blur: 'Fix blur',
-  colour: 'Colour',
-};
+export { DEFAULT_FIX_ORDER, FIX_ROW_LABELS };
 
 /**
  * Where the user's own fix model is remembered. One choice per problem and quality,
@@ -32,9 +28,6 @@ export function fitsFix(model: CatalogModel, fix: Exclude<FixKind, 'faces'>): bo
     model.native_scale === 1 && !model.purposes.includes('face') && fixesOf(model).includes(fix)
   );
 }
-
-/** The order a fix takes when it is turned on: deblur first, colour last. */
-export const DEFAULT_FIX_ORDER: Exclude<FixKind, 'faces'>[] = ['blur', 'jpeg', 'noise', 'colour'];
 
 /**
  * Turn a fix off, or on at its place in the default order: before the first fix that
@@ -72,7 +65,7 @@ export function fixStageKind(
   model: CatalogModel | undefined,
   fix: Exclude<FixKind, 'faces'>,
 ): 'deblock' | 'restore' {
-  return model?.stage === 'deblock' || fix === 'jpeg' ? 'deblock' : 'restore';
+  return model?.stage === 'deblock' ? 'deblock' : fixDefaultStageKind(fix);
 }
 
 /**

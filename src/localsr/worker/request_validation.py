@@ -15,6 +15,7 @@ from typing import Any
 
 from localsr.core.image_formats import require_ordinary_source
 from localsr.core.output_publish import require_output_name
+from localsr.core.steps import parameter_for
 
 
 class InvalidRequest(ValueError):
@@ -34,6 +35,23 @@ class Field:
     non_empty: bool = False
 
 
+def _field_from_step(
+    step_id: str,
+    param_name: str,
+    *,
+    field_name: str | None = None,
+) -> Field:
+    param = parameter_for(step_id, param_name)
+    return Field(
+        field_name or param.name,
+        param.kind,
+        nullable=param.nullable,
+        minimum=param.minimum,
+        maximum=param.maximum,
+        choices=param.choices,
+    )
+
+
 _PRECISIONS = ("fp32", "fp16", "bf16")
 
 # Fields every image and video job carries.
@@ -48,7 +66,7 @@ _JOB_FIELDS = (
     Field("scratch_directory", "str", nullable=True, non_empty=True),
     Field("output_temporary_directory", "str", nullable=True, non_empty=True),
     Field("face_model_path", "str", nullable=True),
-    Field("face_fidelity", "number", minimum=0, maximum=1),
+    _field_from_step("face_restore", "fidelity", field_name="face_fidelity"),
     Field("allow_unverified_checkpoint", "bool", nullable=True),
     Field("approved_checkpoint_sha256", "str", nullable=True, non_empty=True),
     Field("preview_enabled", "bool"),
@@ -66,7 +84,7 @@ IMAGE_JOB_FIELDS = _JOB_FIELDS + (
     Field("output_format", "choice", required=True, choices=_IMAGE_FORMATS),
     Field("jpeg_quality", "int", required=True, minimum=1, maximum=100),
     Field("preserve_metadata", "bool", required=True),
-    Field("output_scale", "int", nullable=True, minimum=1, maximum=8),
+    _field_from_step("upscale", "output_scale"),
 )
 
 VIDEO_JOB_FIELDS = _JOB_FIELDS + (
@@ -80,29 +98,25 @@ VIDEO_JOB_FIELDS = _JOB_FIELDS + (
         choices=("auto", "av1", "vp9", "ffv1", "h264", "hevc", "prores"),
     ),
     Field("external_ffmpeg", "str", nullable=True),
-    Field("video_low_memory", "bool"),
+    _field_from_step("video", "video_low_memory"),
     Field("crf", "int", minimum=0, maximum=51),
     Field("fps", "number", nullable=True, above=0),
     Field("keyframe_interval", "int", nullable=True, minimum=1),
     Field("start_frame", "int", nullable=True, minimum=0),
     Field("end_frame", "int", nullable=True, minimum=0),
-    Field("deflicker", "bool"),
-    Field("deflicker_window", "int", minimum=1, maximum=9),
+    _field_from_step("deflicker", "deflicker"),
+    _field_from_step("deflicker", "deflicker_window"),
     Field("model_kind", "choice", choices=("spandrel_image", "seedvr2", "flashvsr")),
     Field("bundle_dir", "str", nullable=True),
-    Field("temporal_window", "int", minimum=0),
-    Field("temporal_overlap", "int", minimum=0),
-    Field("target_resolution", "int", minimum=0),
-    Field("output_scale", "int", nullable=True, minimum=1, maximum=8),
-    Field(
-        "interpolation",
-        "choice",
-        choices=("off", "x2", "x4", "fps60", "fps120"),
-    ),
-    Field("interpolation_order", "choice", choices=("after_upscale", "before_upscale")),
+    _field_from_step("video", "temporal_window"),
+    _field_from_step("video", "temporal_overlap"),
+    _field_from_step("video", "target_resolution"),
+    _field_from_step("upscale", "output_scale"),
+    _field_from_step("interpolate", "interpolation"),
+    _field_from_step("interpolate", "interpolation_order"),
     Field("interpolation_model_id", "str", nullable=True),
     Field("interpolation_bundle_dir", "str", nullable=True),
-    Field("audio_denoise", "bool"),
+    _field_from_step("audio_denoise", "audio_denoise"),
     Field("audio_denoise_model_id", "str", nullable=True),
     Field("audio_denoise_bundle_dir", "str", nullable=True),
     Field("video_model_id", "str", nullable=True),

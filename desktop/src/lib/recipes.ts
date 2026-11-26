@@ -1,4 +1,5 @@
 import { fixesOf } from './plan';
+import { isFixStageKind, isVideoOrUpscalePrimaryKind } from './steps';
 import type { AppSnapshot, Recipe, FixKind, FixStageSelection, UiSettings } from './types';
 
 /** True when a recipe runs Restore (including old non-Restore recipes saved at 1×). */
@@ -23,10 +24,10 @@ export function recipeFixStages(
   const restoring = isRestoreRecipe(recipe);
   const primary = restoring
     ? stages.length - 1
-    : stages.findIndex((stage) => stage.kind === 'upscale' || stage.kind === 'video');
+    : stages.findIndex((stage) => isVideoOrUpscalePrimaryKind(stage.kind));
   const result: FixStageSelection[] = [];
   stages.forEach((stage, index) => {
-    if (stage.kind !== 'restore' && stage.kind !== 'deblock') return;
+    if (!isFixStageKind(stage.kind)) return;
     if (index > primary) return;
     const model = catalog.models.find((entry) => entry.model_id === stage.model_id);
     const fixes = model

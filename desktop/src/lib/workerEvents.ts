@@ -1,4 +1,5 @@
 import { formatDuration } from './format';
+import { STAGE_LABELS } from './steps';
 import { keptTilesText, keptVideoText } from './unfinished';
 import type {
   AppSnapshot,
@@ -212,18 +213,11 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       next.runtime.hardware_note = '';
       break;
     case 'stage_started': {
-      const labels: Record<string, string> = {
-        deblock: 'Removing JPEG artifacts',
-        restore: 'Restoring',
-        upscale: 'Upscaling',
-        face_restore: 'Restoring faces',
-        edit: 'Preparing edit',
-      };
       const kind = String(data.stage_kind ?? '');
       // A new stage starts its tiles again: none of them is finished yet.
       next.runtime.tiles_completed = 0;
       next.runtime.tiles_total = 0;
-      next.runtime.status_title = `${labels[kind] ?? 'Processing'} · stage ${Number(data.stage_index ?? 0) + 1}/${Number(data.stage_count ?? 1)}`;
+      next.runtime.status_title = `${STAGE_LABELS[kind] ?? 'Processing'} · stage ${Number(data.stage_index ?? 0) + 1}/${Number(data.stage_count ?? 1)}`;
       next.runtime.status_detail = `Preparing ${String(data.model_id ?? 'model')}.`;
       break;
     }

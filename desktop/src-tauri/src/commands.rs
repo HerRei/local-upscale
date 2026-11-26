@@ -90,9 +90,12 @@ pub(crate) fn start_edit_checked(
             "Wait for the editing worker to become ready.".into(),
         ));
     }
+    let edit_feature = crate::steps::registry()
+        .required_feature("edit")
+        .unwrap_or("image_edit");
     if !lock(&state.engine)?
         .as_ref()
-        .is_some_and(|engine| engine.features.iter().any(|f| f == "image_edit"))
+        .is_some_and(|engine| engine.features.iter().any(|f| f == edit_feature))
     {
         return Err(AppError::Validation(
             "This worker does not support editing. Update LocalSR.".into(),
@@ -816,6 +819,7 @@ pub(crate) fn save_recipe_checked(state: &AppState, mut recipe: Recipe) -> AppRe
             "recipe name or task is invalid".into(),
         ));
     }
+    let steps = crate::steps::registry();
     if (!recipe.output_format.is_empty() && !output_format_is_valid(&recipe.output_format))
         || (!recipe.video_container.is_empty()
             && !video_container_is_valid(&recipe.video_container))
@@ -826,7 +830,7 @@ pub(crate) fn save_recipe_checked(state: &AppState, mut recipe: Recipe) -> AppRe
         || recipe.video_crf.is_some_and(|value| value > 51)
         || recipe
             .deflicker_window
-            .is_some_and(|value| !(1..=9).contains(&value))
+            .is_some_and(|value| !steps.param_int_in_range("deflicker", "deflicker_window", value))
         || (!recipe.video_interpolation.is_empty()
             && !interpolation_choice_is_valid(
                 &recipe.video_interpolation,
@@ -886,20 +890,19 @@ fn remove_recipe(state: &AppState, id: &str) -> AppResult<()> {
 }
 
 fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
+    let steps = crate::steps::registry();
+    let limits = steps.limits();
     if recipe.stages.is_empty() {
         // The frontend reconstructs recipes without stages from their top-level fields.
         return Ok(());
     }
-    if recipe.stages.len() > 6
+    if recipe.stages.len() > limits.max_recipe_stages
         || recipe.stages.iter().any(|stage| {
             stage.model_id.trim().is_empty()
-                || !matches!(
-                    stage.kind.as_str(),
-                    "deblock" | "restore" | "upscale" | "face_restore" | "video"
-                )
-                || stage
-                    .fidelity
-                    .is_some_and(|value| !(0.0..=1.0).contains(&value))
+                || !steps.is_recipe_stage_kind(&stage.kind)
+                || stage.fidelity.is_some_and(|value| {
+                    !steps.param_float_in_range("face_restore", "fidelity", value)
+                })
         })
     {
         return Err(AppError::Validation(
@@ -911,8 +914,8 @@ fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
     let mut fixes = HashSet::new();
     if recipe.stages.iter().any(|stage| {
         stage.fix.as_deref().is_some_and(|fix| {
-            !matches!(fix, "blur" | "jpeg" | "noise" | "colour")
-                || !matches!(stage.kind.as_str(), "deblock" | "restore")
+            !steps.is_valid_fix_stage(fix)
+                || !steps.is_fix_stage_kind(&stage.kind)
                 || !fixes.insert(fix)
         })
     }) {
@@ -925,56 +928,49 @@ fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
         .iter()
         .map(|stage| stage.kind.as_str())
         .collect();
+    let face_kind = steps.face_stage_kind();
     let valid = match recipe.task.as_str() {
         "upscale" => {
             let upscale = kinds.iter().position(|kind| *kind == "upscale");
             upscale.is_some_and(|index| {
                 kinds.iter().filter(|kind| **kind == "upscale").count() == 1
-                    && index <= 4
+                    && index <= limits.max_upscale_prefix_stages
                     && kinds[..index]
                         .iter()
-                        .all(|kind| matches!(*kind, "deblock" | "restore"))
-                    && kinds[index + 1..]
-                        .iter()
-                        .all(|kind| *kind == "face_restore")
-                    && kinds[index + 1..].len() <= 1
+                        .all(|kind| steps.is_fix_stage_kind(kind))
+                    && kinds[index + 1..].iter().all(|kind| *kind == face_kind)
+                    && kinds[index + 1..].len() <= limits.max_face_stages
             })
         }
         // Up to three fixes, then the Restore model itself, which is always a restore stage.
         "denoise" => kinds.split_last().is_some_and(|(last, before)| {
             *last == "restore"
-                && before.len() <= 3
-                && before
-                    .iter()
-                    .all(|kind| matches!(*kind, "restore" | "deblock"))
+                && before.len() <= limits.max_denoise_prefix_stages
+                && before.iter().all(|kind| steps.is_fix_stage_kind(kind))
         }),
         "video" => {
             if recipe.video_task == "denoise" {
                 kinds.split_last().is_some_and(|(last, before)| {
                     *last == "restore"
-                        && before.len() <= 3
-                        && before
-                            .iter()
-                            .all(|kind| matches!(*kind, "restore" | "deblock"))
+                        && before.len() <= limits.max_denoise_prefix_stages
+                        && before.iter().all(|kind| steps.is_fix_stage_kind(kind))
                 })
             } else {
                 let primary = kinds
                     .iter()
-                    .position(|kind| matches!(*kind, "upscale" | "video"));
+                    .position(|kind| steps.is_video_primary_stage_kind(kind));
                 primary.is_some_and(|index| {
                     kinds
                         .iter()
-                        .filter(|kind| matches!(**kind, "upscale" | "video"))
+                        .filter(|kind| steps.is_video_primary_stage_kind(kind))
                         .count()
                         == 1
-                        && index <= 3
+                        && index <= limits.max_video_upscale_prefix_stages
                         && kinds[..index]
                             .iter()
-                            .all(|kind| matches!(*kind, "deblock" | "restore"))
-                        && kinds[index + 1..]
-                            .iter()
-                            .all(|kind| *kind == "face_restore")
-                        && kinds[index + 1..].len() <= 1
+                            .all(|kind| steps.is_fix_stage_kind(kind))
+                        && kinds[index + 1..].iter().all(|kind| *kind == face_kind)
+                        && kinds[index + 1..].len() <= limits.max_face_stages
                 })
             }
         }
@@ -1043,11 +1039,14 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
     input.device = resolve_device(state, &input.device)?;
     validate_start(&input, state)?;
     validate_fix_engine(&input, lock(&state.engine)?.as_ref())?;
+    let steps = crate::steps::registry();
     if input.task == "video"
         && input.video_interpolation != "off"
-        && !lock(&state.engine)?
-            .as_ref()
-            .is_some_and(|engine| engine.features.iter().any(|f| f == "video_interpolation"))
+        && !lock(&state.engine)?.as_ref().is_some_and(|engine| {
+            steps
+                .required_feature("interpolate")
+                .is_some_and(|required| engine.features.iter().any(|f| f == required))
+        })
     {
         return Err(AppError::Validation(
             "This worker does not support frame interpolation. Update LocalSR or turn interpolation off.".into(),
@@ -1055,9 +1054,11 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
     }
     if input.task == "video"
         && input.video_clean_audio
-        && !lock(&state.engine)?
-            .as_ref()
-            .is_some_and(|engine| engine.features.iter().any(|f| f == "video_audio_denoise"))
+        && !lock(&state.engine)?.as_ref().is_some_and(|engine| {
+            steps
+                .required_feature("audio_denoise")
+                .is_some_and(|required| engine.features.iter().any(|f| f == required))
+        })
     {
         return Err(AppError::Validation(
             "This worker does not support audio cleanup. Update LocalSR or turn Clean up audio off.".into(),
@@ -3598,6 +3599,8 @@ fn validate_custom_edit_model(custom: &crate::types::CustomEditModel) -> AppResu
 }
 
 fn validate_settings(settings: &UiSettings) -> AppResult<()> {
+    let steps = crate::steps::registry();
+    let limits = steps.limits();
     validate_fix_selections(&settings.fix_stages)?;
     if !matches!(settings.interface_scale, 100 | 110 | 125) {
         return Err(AppError::Validation(
@@ -3616,9 +3619,9 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
         return Err(AppError::Validation("unknown video task".into()));
     }
     // Zero steps means the chosen model's own default.
-    if !matches!(settings.edit_max_dimension, 512 | 768 | 1024)
-        || settings.edit_steps > 60
-        || settings.edit_seed > i32::MAX as u32
+    if !steps.param_has_int_choice("edit", "max_dimension", settings.edit_max_dimension)
+        || !steps.param_ui_int_in_range("edit", "steps", settings.edit_steps)
+        || !steps.param_int_in_range("edit", "seed", settings.edit_seed)
         || settings.edit_model_id.len() > 64
     {
         return Err(AppError::Validation(
@@ -3628,11 +3631,11 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
     validate_custom_edit_model(&settings.custom_edit_model)?;
     if !matches!(settings.quality.as_str(), "" | "quick" | "best" | "custom")
         || !matches!(settings.content.as_str(), "" | "photo" | "illustration")
-        || settings.fixes.len() > 5
+        || settings.fixes.len() > limits.max_fix_chips
         || !settings
             .fixes
             .iter()
-            .all(|fix| matches!(fix.as_str(), "noise" | "jpeg" | "blur" | "colour" | "faces"))
+            .all(|fix| steps.is_valid_fix_chip(fix))
         || settings.preset_pins.len() > 64
         || !settings
             .preset_pins
@@ -3679,13 +3682,13 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
             "the external FFmpeg path is invalid".into(),
         ));
     }
-    if !(1..=8).contains(&settings.output_scale)
+    if !steps.param_int_in_range("upscale", "output_scale", settings.output_scale)
         || !(32..=2048).contains(&settings.tile_size)
         || settings.halo > 256
-        || !(1..=9).contains(&settings.deflicker_window)
+        || !steps.param_int_in_range("deflicker", "deflicker_window", settings.deflicker_window)
         || !(0..=51).contains(&settings.video_crf)
         || !(1..=100).contains(&settings.jpeg_quality)
-        || settings.face_fidelity > 100
+        || !steps.param_int_in_range("face_restore", "face_fidelity", settings.face_fidelity)
         || !matches!(
             settings.video_target_resolution,
             0 | 256 | 512 | 720 | 1080 | 1440 | 2160
@@ -3704,12 +3707,13 @@ fn validate_fix_engine(
     input: &StartBatchInput,
     engine: Option<&crate::types::EngineInfo>,
 ) -> AppResult<()> {
+    let multi_fix_feature = crate::steps::registry().limits().multi_fix_feature.as_str();
     if input.fix_stages.len() > 1
         && !engine.is_some_and(|engine| {
             engine
                 .features
                 .iter()
-                .any(|feature| feature == "image_multi_fix")
+                .any(|feature| feature == multi_fix_feature)
         })
     {
         return Err(AppError::Validation(
@@ -3720,10 +3724,11 @@ fn validate_fix_engine(
 }
 
 fn validate_fix_selections(stages: &[crate::types::FixStageSelection]) -> AppResult<()> {
+    let steps = crate::steps::registry();
     let mut fixes = HashSet::new();
-    if stages.len() > 4
+    if stages.len() > steps.limits().max_fix_stages
         || stages.iter().any(|stage| {
-            !matches!(stage.fix.as_str(), "blur" | "jpeg" | "noise" | "colour")
+            !steps.is_valid_fix_stage(&stage.fix)
                 || !fixes.insert(&stage.fix)
                 || stage.model_id.len() > 64
         })
@@ -3737,8 +3742,9 @@ fn validate_fix_selections(stages: &[crate::types::FixStageSelection]) -> AppRes
 
 /// Frame interpolation targets and orders the worker accepts.
 fn interpolation_choice_is_valid(target: &str, order: &str) -> bool {
-    matches!(target, "off" | "x2" | "x4" | "fps60" | "fps120")
-        && matches!(order, "after_upscale" | "before_upscale")
+    let steps = crate::steps::registry();
+    steps.param_has_choice("interpolate", "interpolation", target)
+        && steps.param_has_choice("interpolate", "interpolation_order", order)
 }
 
 fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppResult<()> {
@@ -4083,11 +4089,7 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
         }
         preprocess.push(ResolvedImageStage {
             // As the plan card names it (plan.ts resolvePlan).
-            kind: if model.stage == "deblock" || selection.fix == "jpeg" {
-                "deblock"
-            } else {
-                "restore"
-            },
+            kind: crate::steps::registry().fix_stage_kind(&model.stage, &selection.fix),
             fix: selection.fix.clone(),
             model_id: model.model_id.clone(),
             path: model.installed_path.clone().unwrap_or_default(),
@@ -4434,7 +4436,7 @@ fn image_pipeline_stages(
     skip_upscale: bool,
     input: &StartBatchInput,
 ) -> Vec<Value> {
-    let mut stages = Vec::with_capacity(5);
+    let mut stages = Vec::with_capacity(crate::steps::registry().limits().max_recipe_stages);
     for stage in preprocess {
         stages.push(json!({
             "kind": stage.kind,

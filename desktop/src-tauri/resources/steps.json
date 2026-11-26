@@ -1,0 +1,513 @@
+{
+  "limits": {
+    "max_denoise_prefix_stages": 3,
+    "max_face_stages": 1,
+    "max_fix_chips": 5,
+    "max_fix_stages": 4,
+    "max_image_pipeline_stages": 6,
+    "max_recipe_stages": 6,
+    "max_upscale_prefix_stages": 4,
+    "max_video_upscale_prefix_stages": 3,
+    "multi_fix_feature": "image_multi_fix"
+  },
+  "phases": [
+    "audio",
+    "geometry",
+    "cleanup",
+    "restore",
+    "primary",
+    "face",
+    "temporal",
+    "grade",
+    "encode"
+  ],
+  "schema_version": 1,
+  "steps": [
+    {
+      "fix_chip_order": null,
+      "fix_kind": null,
+      "id": "audio_denoise",
+      "in_image_pipeline": false,
+      "in_recipe_stages": false,
+      "is_fix_stage": false,
+      "label": "Clean up audio",
+      "media": [
+        "video"
+      ],
+      "needs_model": true,
+      "order": 10,
+      "parameters": [
+        {
+          "choices": [],
+          "default": false,
+          "int_choices": [],
+          "kind": "bool",
+          "maximum": null,
+          "minimum": null,
+          "name": "audio_denoise",
+          "nullable": false,
+          "ui_default": null,
+          "ui_maximum": null,
+          "ui_minimum": null
+        }
+      ],
+      "phase": "audio",
+      "required_feature": "video_audio_denoise",
+      "role": "audio_denoise",
+      "row_label": "",
+      "short_name": "",
+      "stage_kind": "audio_denoise",
+      "stage_label": ""
+    },
+    {
+      "fix_chip_order": 2,
+      "fix_kind": "blur",
+      "id": "blur",
+      "in_image_pipeline": true,
+      "in_recipe_stages": true,
+      "is_fix_stage": true,
+      "label": "Blur",
+      "media": [
+        "image",
+        "video"
+      ],
+      "needs_model": true,
+      "order": 10,
+      "parameters": [],
+      "phase": "restore",
+      "required_feature": null,
+      "role": "fix",
+      "row_label": "Fix blur",
+      "short_name": "blur",
+      "stage_kind": "restore",
+      "stage_label": ""
+    },
+    {
+      "fix_chip_order": 3,
+      "fix_kind": "jpeg",
+      "id": "jpeg",
+      "in_image_pipeline": true,
+      "in_recipe_stages": true,
+      "is_fix_stage": true,
+      "label": "JPEG artifacts",
+      "media": [
+        "image",
+        "video"
+      ],
+      "needs_model": true,
+      "order": 20,
+      "parameters": [],
+      "phase": "restore",
+      "required_feature": null,
+      "role": "fix",
+      "row_label": "Fix JPEG",
+      "short_name": "JPEG",
+      "stage_kind": "deblock",
+      "stage_label": "Removing JPEG artifacts"
+    },
+    {
+      "fix_chip_order": 1,
+      "fix_kind": "noise",
+      "id": "noise",
+      "in_image_pipeline": true,
+      "in_recipe_stages": true,
+      "is_fix_stage": true,
+      "label": "Noise",
+      "media": [
+        "image",
+        "video"
+      ],
+      "needs_model": true,
+      "order": 30,
+      "parameters": [],
+      "phase": "restore",
+      "required_feature": null,
+      "role": "fix",
+      "row_label": "Fix noise",
+      "short_name": "noise",
+      "stage_kind": "restore",
+      "stage_label": ""
+    },
+    {
+      "fix_chip_order": 4,
+      "fix_kind": "colour",
+      "id": "colour",
+      "in_image_pipeline": true,
+      "in_recipe_stages": true,
+      "is_fix_stage": true,
+      "label": "Colour",
+      "media": [
+        "image",
+        "video"
+      ],
+      "needs_model": true,
+      "order": 40,
+      "parameters": [],
+      "phase": "restore",
+      "required_feature": null,
+      "role": "fix",
+      "row_label": "Colour",
+      "short_name": "colour",
+      "stage_kind": "restore",
+      "stage_label": ""
+    },
+    {
+      "fix_chip_order": null,
+      "fix_kind": null,
+      "id": "restore",
+      "in_image_pipeline": true,
+      "in_recipe_stages": true,
+      "is_fix_stage": false,
+      "label": "Restore",
+      "media": [
+        "image",
+        "video"
+      ],
+      "needs_model": true,
+      "order": 10,
+      "parameters": [],
+      "phase": "primary",
+      "required_feature": null,
+      "role": "primary",
+      "row_label": "",
+      "short_name": "",
+      "stage_kind": "restore",
+      "stage_label": "Restoring"
+    },
+    {
+      "fix_chip_order": null,
+      "fix_kind": null,
+      "id": "upscale",
+      "in_image_pipeline": true,
+      "in_recipe_stages": true,
+      "is_fix_stage": false,
+      "label": "Upscale",
+      "media": [
+        "image",
+        "video"
+      ],
+      "needs_model": true,
+      "order": 20,
+      "parameters": [
+        {
+          "choices": [],
+          "default": 4,
+          "int_choices": [],
+          "kind": "int",
+          "maximum": 8,
+          "minimum": 1,
+          "name": "output_scale",
+          "nullable": true,
+          "ui_default": null,
+          "ui_maximum": null,
+          "ui_minimum": null
+        }
+      ],
+      "phase": "primary",
+      "required_feature": null,
+      "role": "primary",
+      "row_label": "",
+      "short_name": "",
+      "stage_kind": "upscale",
+      "stage_label": "Upscaling"
+    },
+    {
+      "fix_chip_order": null,
+      "fix_kind": null,
+      "id": "video",
+      "in_image_pipeline": false,
+      "in_recipe_stages": true,
+      "is_fix_stage": false,
+      "label": "Video",
+      "media": [
+        "video"
+      ],
+      "needs_model": true,
+      "order": 30,
+      "parameters": [
+        {
+          "choices": [],
+          "default": null,
+          "int_choices": [],
+          "kind": "int",
+          "maximum": null,
+          "minimum": 0,
+          "name": "temporal_window",
+          "nullable": false,
+          "ui_default": null,
+          "ui_maximum": null,
+          "ui_minimum": null
+        },
+        {
+          "choices": [],
+          "default": null,
+          "int_choices": [],
+          "kind": "int",
+          "maximum": null,
+          "minimum": 0,
+          "name": "temporal_overlap",
+          "nullable": false,
+          "ui_default": null,
+          "ui_maximum": null,
+          "ui_minimum": null
+        },
+        {
+          "choices": [],
+          "default": 0,
+          "int_choices": [],
+          "kind": "int",
+          "maximum": null,
+          "minimum": 0,
+          "name": "target_resolution",
+          "nullable": false,
+          "ui_default": null,
+          "ui_maximum": null,
+          "ui_minimum": null
+        },
+        {
+          "choices": [],
+          "default": true,
+          "int_choices": [],
+          "kind": "bool",
+          "maximum": null,
+          "minimum": null,
+          "name": "video_low_memory",
+          "nullable": false,
+          "ui_default": null,
+          "ui_maximum": null,
+          "ui_minimum": null
+        }
+      ],
+      "phase": "primary",
+      "required_feature": null,
+      "role": "primary",
+      "row_label": "",
+      "short_name": "",
+      "stage_kind": "video",
+      "stage_label": ""
+    },
+    {
+      "fix_chip_order": null,
+      "fix_kind": null,
+      "id": "edit",
+      "in_image_pipeline": false,
+      "in_recipe_stages": false,
+      "is_fix_stage": false,
+      "label": "Edit",
+      "media": [
+        "image"
+      ],
+      "needs_model": true,
+      "order": 40,
+      "parameters": [
+        {
+          "choices": [],
+          "default": 512,
+          "int_choices": [
+            512,
+            768,
+            1024
+          ],
+          "kind": "int_choice",
+          "maximum": null,
+          "minimum": null,
+          "name": "max_dimension",
+          "nullable": false,
+          "ui_default": null,
+          "ui_maximum": null,
+          "ui_minimum": null
+        },
+        {
+          "choices": [],
+          "default": 40,
+          "int_choices": [],
+          "kind": "int",
+          "maximum": 60,
+          "minimum": 1,
+          "name": "steps",
+          "nullable": false,
+          "ui_default": 40,
+          "ui_maximum": 60,
+          "ui_minimum": 0
+        },
+        {
+          "choices": [],
+          "default": 42,
+          "int_choices": [],
+          "kind": "int",
+          "maximum": 2147483647,
+          "minimum": 0,
+          "name": "seed",
+          "nullable": false,
+          "ui_default": null,
+          "ui_maximum": null,
+          "ui_minimum": null
+        }
+      ],
+      "phase": "primary",
+      "required_feature": "image_edit",
+      "role": "primary",
+      "row_label": "",
+      "short_name": "",
+      "stage_kind": "edit",
+      "stage_label": "Preparing edit"
+    },
+    {
+      "fix_chip_order": 5,
+      "fix_kind": "faces",
+      "id": "face_restore",
+      "in_image_pipeline": true,
+      "in_recipe_stages": true,
+      "is_fix_stage": false,
+      "label": "Faces",
+      "media": [
+        "image",
+        "video"
+      ],
+      "needs_model": true,
+      "order": 10,
+      "parameters": [
+        {
+          "choices": [],
+          "default": 0.7,
+          "int_choices": [],
+          "kind": "number",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "name": "fidelity",
+          "nullable": false,
+          "ui_default": null,
+          "ui_maximum": null,
+          "ui_minimum": null
+        },
+        {
+          "choices": [],
+          "default": 70,
+          "int_choices": [],
+          "kind": "int",
+          "maximum": 100,
+          "minimum": 0,
+          "name": "face_fidelity",
+          "nullable": false,
+          "ui_default": null,
+          "ui_maximum": null,
+          "ui_minimum": null
+        }
+      ],
+      "phase": "face",
+      "required_feature": null,
+      "role": "face",
+      "row_label": "",
+      "short_name": "",
+      "stage_kind": "face_restore",
+      "stage_label": "Restoring faces"
+    },
+    {
+      "fix_chip_order": null,
+      "fix_kind": null,
+      "id": "deflicker",
+      "in_image_pipeline": false,
+      "in_recipe_stages": false,
+      "is_fix_stage": false,
+      "label": "De-flicker",
+      "media": [
+        "video"
+      ],
+      "needs_model": false,
+      "order": 10,
+      "parameters": [
+        {
+          "choices": [],
+          "default": false,
+          "int_choices": [],
+          "kind": "bool",
+          "maximum": null,
+          "minimum": null,
+          "name": "deflicker",
+          "nullable": false,
+          "ui_default": null,
+          "ui_maximum": null,
+          "ui_minimum": null
+        },
+        {
+          "choices": [],
+          "default": 3,
+          "int_choices": [],
+          "kind": "int",
+          "maximum": 9,
+          "minimum": 1,
+          "name": "deflicker_window",
+          "nullable": false,
+          "ui_default": null,
+          "ui_maximum": null,
+          "ui_minimum": null
+        }
+      ],
+      "phase": "temporal",
+      "required_feature": null,
+      "role": null,
+      "row_label": "",
+      "short_name": "",
+      "stage_kind": null,
+      "stage_label": "De-flickering"
+    },
+    {
+      "fix_chip_order": null,
+      "fix_kind": null,
+      "id": "interpolate",
+      "in_image_pipeline": false,
+      "in_recipe_stages": false,
+      "is_fix_stage": false,
+      "label": "Frame interpolation",
+      "media": [
+        "video"
+      ],
+      "needs_model": true,
+      "order": 20,
+      "parameters": [
+        {
+          "choices": [
+            "off",
+            "x2",
+            "x4",
+            "fps60",
+            "fps120"
+          ],
+          "default": "off",
+          "int_choices": [],
+          "kind": "choice",
+          "maximum": null,
+          "minimum": null,
+          "name": "interpolation",
+          "nullable": false,
+          "ui_default": null,
+          "ui_maximum": null,
+          "ui_minimum": null
+        },
+        {
+          "choices": [
+            "after_upscale",
+            "before_upscale"
+          ],
+          "default": "after_upscale",
+          "int_choices": [],
+          "kind": "choice",
+          "maximum": null,
+          "minimum": null,
+          "name": "interpolation_order",
+          "nullable": false,
+          "ui_default": null,
+          "ui_maximum": null,
+          "ui_minimum": null
+        }
+      ],
+      "phase": "temporal",
+      "required_feature": "video_interpolation",
+      "role": "interpolate",
+      "row_label": "",
+      "short_name": "",
+      "stage_kind": "interpolate",
+      "stage_label": ""
+    }
+  ]
+}

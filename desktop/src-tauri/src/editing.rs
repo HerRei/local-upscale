@@ -767,9 +767,10 @@ pub fn validate(input: &StartEditInput, model: &EditModel) -> Result<(), String>
     {
         return Err("Describe the edit in 1–4000 characters.".into());
     }
-    if !matches!(input.max_dimension, 512 | 768 | 1024)
-        || !(1..=60).contains(&input.steps)
-        || input.seed > i32::MAX as u32
+    let steps = crate::steps::registry();
+    if !steps.param_has_int_choice("edit", "max_dimension", input.max_dimension)
+        || !steps.param_int_in_range("edit", "steps", input.steps)
+        || !steps.param_int_in_range("edit", "seed", input.seed)
     {
         return Err("Invalid edit size, step count, or seed.".into());
     }
