@@ -145,6 +145,52 @@ fn multi_fix_requires_a_capable_engine_before_queueing() {
 }
 
 #[test]
+fn output_bit_depth_16_requires_image_16bit_feature_and_png_or_tiff() {
+    let mut options = input("upscale");
+    options.output_bit_depth = 16;
+    options.output_format = "png".into();
+
+    let mut engine: crate::types::EngineInfo = serde_json::from_value(json!({
+        "protocol_version": 1,
+        "minimum_protocol_version": 1,
+        "engine_id": "test",
+        "engine_version": "test",
+        "features": ["image"],
+        "model_formats": [],
+        "video_engines": []
+    }))
+    .unwrap();
+    assert!(validate_bit_depth_engine(&options, Some(&engine)).is_err());
+    assert!(validate_bit_depth_engine(&options, None).is_err());
+    // Default 8-bit never requires the feature so old engines stay supported.
+    assert!(validate_bit_depth_engine(&input("upscale"), Some(&engine)).is_ok());
+
+    engine.features.push("image_16bit".into());
+    assert!(validate_bit_depth_engine(&options, Some(&engine)).is_ok());
+
+    for bad_fmt in ["jpg", "webp", "heic"] {
+        options.output_format = bad_fmt.into();
+        assert!(validate_start_input(&options, false).is_err(), "{bad_fmt}");
+    }
+    for good_fmt in ["png", "tif"] {
+        options.output_format = good_fmt.into();
+        assert!(validate_start_input(&options, false).is_ok(), "{good_fmt}");
+    }
+    // Missing output_bit_depth in saved v2 settings defaults to 8 without a schema bump.
+    let v2_without_depth = json!({
+        "schema_version": 2,
+        "ui": {"output_format": "png"},
+        "recipes": []
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(dir.path());
+    fs::create_dir_all(&paths.next_root).unwrap();
+    fs::write(&paths.settings, v2_without_depth.to_string()).unwrap();
+    let (loaded_settings, _) = crate::settings::load(&paths);
+    assert_eq!(loaded_settings.output_bit_depth, 8);
+}
+
+#[test]
 fn multi_fix_serialization_preserves_five_stages_and_restore_primary_role() {
     let prefix: Vec<_> = [
         ("blur", "restore"),
@@ -735,6 +781,7 @@ fn input(task: &str) -> StartBatchInput {
         custom_model_path: String::new(),
         output_directory: String::new(),
         output_format: "png".into(),
+        output_bit_depth: 8,
         output_scale: 4,
         preserve_metadata: true,
         jpeg_quality: 98,
@@ -1916,6 +1963,7 @@ fn recipe_stage_validation_accepts_legacy_and_rejects_ambiguous_order() {
         video_model_id: String::new(),
         custom_model_path: String::new(),
         output_format: "png".into(),
+        output_bit_depth: None,
         preserve_metadata: Some(true),
         jpeg_quality: Some(98),
         deflicker: None,

@@ -17,7 +17,7 @@ const SYSTEM_RESERVE: u64 = 8_000_000_000;
 const OTHER_RESERVE: u64 = 1_000_000_000;
 /// Headers, an ICC profile and EXIF around the pixels.
 const SLACK: u64 = 1 << 20;
-/// The output memmap holds three uint8 samples per pixel.
+/// The output memmap holds three uint8 or uint16 samples per pixel.
 const MEMMAP_CHANNELS: u64 = 3;
 const VIDEO_BYTES_PER_PIXEL_FRAME: u64 = 20;
 
@@ -82,9 +82,10 @@ pub fn format_size(bytes: u64) -> String {
     }
 }
 
-pub fn encoded_bound(format: &str, width: u64, height: u64, alpha: bool) -> u64 {
+pub fn encoded_bound(format: &str, width: u64, height: u64, alpha: bool, bit_depth: u8) -> u64 {
     let calculate = || -> Option<u64> {
         let pixels = width.checked_mul(height)?;
+        let bytes_per_sample = if bit_depth == 16 { 2_u64 } else { 1_u64 };
         match format.to_ascii_lowercase().as_str() {
             "jpg" | "jpeg" => 2_u64.checked_mul(pixels)?.checked_add(SLACK),
             "heic" => pixels.checked_add(SLACK),
@@ -92,7 +93,9 @@ pub fn encoded_bound(format: &str, width: u64, height: u64, alpha: bool) -> u64 
                 .checked_mul(pixels)?
                 .checked_add(SLACK),
             _ => {
-                let raw = (if alpha { 4_u64 } else { 3 }).checked_mul(pixels)?;
+                let raw = (if alpha { 4_u64 } else { 3 })
+                    .checked_mul(bytes_per_sample)?
+                    .checked_mul(pixels)?;
                 raw.checked_add(raw / 256)?
                     .checked_add(height)?
                     .checked_add(SLACK)
@@ -123,15 +126,18 @@ pub fn image_need(
     output_scale: u64,
     format: &str,
     alpha: bool,
+    bit_depth: u8,
 ) -> ImageNeed {
     let saved = if output_scale == 0 {
         scale
     } else {
         output_scale
     };
+    let bytes_per_sample = if bit_depth == 16 { 2_u64 } else { 1_u64 };
     ImageNeed {
         scratch: MEMMAP_CHANNELS
-            .checked_mul(width)
+            .checked_mul(bytes_per_sample)
+            .and_then(|n| n.checked_mul(width))
             .and_then(|n| n.checked_mul(scale))
             .and_then(|n| n.checked_mul(height))
             .and_then(|n| n.checked_mul(scale))
@@ -141,6 +147,7 @@ pub fn image_need(
             width.saturating_mul(saved),
             height.saturating_mul(saved),
             alpha,
+            bit_depth,
         ),
     }
 }
@@ -274,6 +281,10 @@ pub fn request_need(
     match request["type"].as_str()? {
         "job_request" => {
             let folder = Path::new(data["output_path"].as_str()?).parent()?;
+            let bit_depth = match data["output_bit_depth"].as_u64() {
+                Some(16) => 16,
+                _ => 8,
+            };
             let need = image_need(
                 width,
                 height,
@@ -281,6 +292,7 @@ pub fn request_need(
                 output_scale,
                 data["output_format"].as_str().unwrap_or("png"),
                 false,
+                bit_depth,
             );
             Some((folder.to_path_buf(), need.total()))
         }
@@ -345,6 +357,7 @@ mod tests {
                 number(&case["output_scale"]),
                 case["format"].as_str().unwrap(),
                 case["alpha"].as_bool().unwrap(),
+                case.get("bit_depth").and_then(Value::as_u64).unwrap_or(8) as u8,
             );
             assert_eq!(
                 (need.scratch, need.encoded),

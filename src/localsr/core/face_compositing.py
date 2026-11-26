@@ -65,6 +65,8 @@ def blend_with_alpha(
     )
     if foreground.dtype == np.float32 and background.dtype == np.float32:
         return blended.clip(0.0, 1.0).astype(np.float32)
+    if np.uint16 in (foreground.dtype, background.dtype):
+        return np.rint(blended).clip(0, 65535).astype(np.uint16)
     return blended.clip(0, 255).astype(np.uint8)
 
 

@@ -22,6 +22,7 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
+import numpy as np
 import psutil
 import torch
 from PIL import Image
@@ -96,13 +97,15 @@ def batch_settings(data: Mapping[str, Any]) -> dict[str, Any] | None:
     return {key: value for key, value in data.items() if key not in _PHOTO_FIELDS}
 
 
-def save_bytes(width: int, height: int, scale: int, output_scale: int, alpha: bool) -> int:
+def save_bytes(
+    width: int, height: int, scale: int, output_scale: int, alpha: bool, bit_depth: int = 8
+) -> int:
     """Peak bytes one save holds for a ``width`` x ``height`` native-scale output.
 
     Pillow copies the transposed output (3 B/px) into an RGB image (4 B/px), and
     the save reads the output's pages; the estimate uses 8 B/px. A smaller
     output scale adds the resized RGB copy; alpha adds the RGBA image (4 B/px) and
-    its scaled alpha plane (1 B/px).
+    its scaled alpha plane (1 B/px). At 16 bits, sample buffers double.
     """
     native = width * height
     final = round(width * output_scale / scale) * round(height * output_scale / scale)
@@ -111,7 +114,7 @@ def save_bytes(width: int, height: int, scale: int, output_scale: int, alpha: bo
         total += 4 * final
     if alpha:
         total += 5 * final
-    return total
+    return total * (2 if bit_depth == 16 else 1)
 
 
 def default_memory_budget() -> int:
@@ -202,6 +205,15 @@ class _Lane:
             if self.info.architecture == "SPAN" and _span_output_is_unstable(core):
                 raise PhotoFallback("SPAN produced extreme pixel values.")
             self.tiles += 1
+            if photo.bit_depth == 16:
+                return (
+                    core.clamp(0, 1)
+                    .mul_(65535.0)
+                    .round_()
+                    .to(torch.int32)
+                    .numpy()
+                    .astype(np.uint16, copy=False)
+                )
             return core.clamp(0, 1).mul_(255).round_().byte().numpy()
 
 
@@ -210,6 +222,7 @@ class _Photo:
 
     def __init__(self, batch: ImageBatchRunner, data, manager, image, info, shape, preview):
         self.batch, self.data, self.manager, self.info = batch, data, manager, info
+        self.bit_depth = int(data.get("output_bit_depth") or 8)
         self.tensor = image["tensor"]
         # The save needs the metadata and alpha, not the decoded input.
         self.image = {key: value for key, value in image.items() if key != "tensor"}
@@ -240,9 +253,11 @@ class _Photo:
             info.scale,
             int(data.get("output_scale") or info.scale),
             getattr(manager, "alpha_channel", None) is not None,
+            bit_depth=self.bit_depth,
         )
         self.writer = OutputWriter(
             (info.out_channels, self.height, self.width),
+            dtype=np.uint16 if self.bit_depth == 16 else np.uint8,
             temporary_directory=data.get("scratch_directory"),
         )
 
@@ -465,7 +480,13 @@ class ImageBatchRunner:
         (width, height), alpha = largest
         data = jobs[0]
         need = image_need(
-            width, height, info.scale, data.get("output_scale"), str(data["output_format"]), alpha
+            width,
+            height,
+            info.scale,
+            data.get("output_scale"),
+            str(data["output_format"]),
+            alpha,
+            bit_depth=int(data.get("output_bit_depth") or 8),
         )
         for encoders in range(usual, 0, -1):
             try:
@@ -489,8 +510,17 @@ class ImageBatchRunner:
             self._check_cancelled()
             data = remaining[0]
             manager = ImageManager()
+            bit_depth = int(data.get("output_bit_depth") or 8)
             try:
-                return {"first": (data, manager.load(data["image_path"]), manager)}
+                return {
+                    "first": (
+                        data,
+                        manager.load(
+                            data["image_path"], **({"bit_depth": 16} if bit_depth == 16 else {})
+                        ),
+                        manager,
+                    )
+                }
             except Exception as error:  # noqa: BLE001 - this photo only, as in the normal runner
                 remaining.pop(0)
                 self.announce(data)
@@ -533,7 +563,10 @@ class ImageBatchRunner:
                 _, image, manager = decoded
             else:
                 manager = ImageManager()
-                image = manager.load(item["image_path"])
+                bit_depth = int(item.get("output_bit_depth") or 8)
+                image = manager.load(
+                    item["image_path"], **({"bit_depth": 16} if bit_depth == 16 else {})
+                )
             return _Photo(self, item, manager, image, info, shape, preview)
 
         last = [self.clock()]

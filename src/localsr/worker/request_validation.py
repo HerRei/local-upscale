@@ -380,10 +380,20 @@ def _check_stage_masks(data: dict[str, Any]) -> None:
             raise InvalidRequest(str(error)) from None
 
 
+def _check_output_bit_depth(data: dict[str, Any]) -> None:
+    if data.get("output_bit_depth", 8) == 16 and str(data.get("output_format", "")).lower() not in (
+        "png",
+        "tif",
+        "tiff",
+    ):
+        raise InvalidRequest("16-bit output is only supported for PNG and TIFF images.")
+
+
 def validate_image_job(data: Any) -> None:
     _validate_object(data, _IMAGE_JOB_SPEC, "image job request")
     _check_paths(data["image_path"], data["output_path"])
     _check_stage_masks(data)
+    _check_output_bit_depth(data)
 
 
 def validate_video_job(data: Any) -> None:

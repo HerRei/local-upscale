@@ -247,6 +247,11 @@ pub struct ImageJobRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_temporary_directory: Option<String>,
     pub output_format: OutputFormat,
+    #[serde(
+        default = "default_output_bit_depth",
+        skip_serializing_if = "is_default_output_bit_depth"
+    )]
+    pub output_bit_depth: u8,
     pub device: String,
     #[serde(default = "default_tile_size")]
     pub tile_size: u32,
@@ -432,6 +437,14 @@ fn default_precision() -> Precision {
 
 fn default_jpeg_quality() -> u32 {
     98
+}
+
+fn default_output_bit_depth() -> u8 {
+    8
+}
+
+fn is_default_output_bit_depth(depth: &u8) -> bool {
+    *depth == 8
 }
 
 fn default_preview_max_fps() -> f64 {

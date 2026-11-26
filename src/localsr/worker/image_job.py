@@ -56,6 +56,7 @@ def save_output(
 
     Returns what the save left out or changed, as sentences for the job's notes.
     """
+    bit_depth = int(data.get("output_bit_depth") or 8)
     manager.save(
         writer,
         data["output_path"],
@@ -68,6 +69,7 @@ def save_output(
         output_scale=int(data.get("output_scale") or info.scale),
         temporary_directory=data.get("output_temporary_directory"),
         cancel_event=cancel_event,
+        **({"output_bit_depth": 16} if bit_depth == 16 else {}),
     )
     return list(manager.notes)
 
@@ -88,7 +90,18 @@ def _apply_stage_mask(stage: PipelineStage, stage_input: Any, stage_output: Any)
             in_tensor[None], size=(height, width), mode="bilinear", align_corners=False
         )[0]
     mask = load_mask(stage.mask_path, width, height)
-    if out_arr.dtype == np.uint8:
+    if out_arr.dtype == np.uint16:
+        import torch
+
+        in_arr = (
+            in_tensor.clamp(0, 1)
+            .mul(65535.0)
+            .round()
+            .to(torch.int32)
+            .numpy()
+            .astype(np.uint16, copy=False)
+        )
+    elif out_arr.dtype == np.uint8:
         in_arr = in_tensor.clamp(0, 1).mul(255).round().byte().numpy()
     else:
         in_arr = in_tensor.numpy().astype(np.float32, copy=False)
@@ -132,12 +145,13 @@ def _run_fix_model_stage(
             restored = np.asarray(writer.get_array())
             if restored.shape != tuple(image["tensor"].shape):
                 raise ValueError("A fix must preserve the working image dimensions and channels.")
+            divisor = 65535.0 if restored.dtype == np.uint16 else 255.0
             return {
                 **image,
                 "grayscale": False
                 if clear_grayscale or info.architecture == "DDColor"
                 else image.get("grayscale", False),
-                "tensor": torch.from_numpy(np.array(restored, copy=True)).float().div_(255.0),
+                "tensor": torch.from_numpy(np.array(restored, copy=True)).float().div_(divisor),
                 "_skip_preview": info.architecture == "DDColor",
             }
     except UnstableRestorationError as error:
@@ -225,7 +239,11 @@ class ImageJobRunner:
         self.preview_factory = preview_factory
 
     def run(self, job_id: str, data: Mapping[str, Any]) -> None:
-        require_output_format(str(data["output_format"]))
+        bit_depth = int(data.get("output_bit_depth") or 8)
+        require_output_format(
+            str(data["output_format"]),
+            **({"output_bit_depth": bit_depth} if bit_depth != 8 else {}),
+        )
         started_at = time.monotonic()
         self.engine.neural_engine_enabled = bool(data.get("neural_engine", True))
         self.engine.status_callback = lambda message: self.emit(
@@ -274,7 +292,10 @@ class ImageJobRunner:
                 self._check_cancelled()
                 self._log("Loading image...")
                 manager = ImageManager()
-                image = manager.load(data["image_path"])
+                image = manager.load(
+                    data["image_path"],
+                    **({"bit_depth": 16} if bit_depth == 16 else {}),
+                )
                 self._log("Starting inference pipeline...")
                 processing_started_at = time.monotonic()
                 working_image = image
@@ -424,9 +445,10 @@ class ImageJobRunner:
         assert pipeline.primary_index is not None
         start_index = pipeline.primary_index + 1 + (1 if pipeline.face is not None else 0)
         pixels = np.asarray(writer.get_array())
+        divisor = 65535.0 if pixels.dtype == np.uint16 else 255.0
         post_image = {
             **working_image,
-            "tensor": torch.from_numpy(np.array(pixels, copy=True)).float().div_(255.0),
+            "tensor": torch.from_numpy(np.array(pixels, copy=True)).float().div_(divisor),
         }
         for offset, stage in enumerate(pipeline.postprocess_stages):
             post_image = self._run_stage(
@@ -434,11 +456,27 @@ class ImageJobRunner:
             )
             if not post_image.get("grayscale", True):
                 manager.grayscale = False
-        final_pixels = (
-            post_image["tensor"].detach().cpu().clamp(0, 1).mul(255).round().byte().numpy()
-        )
+        bit_depth = int(data.get("output_bit_depth") or 8)
+        if bit_depth == 16:
+            final_pixels = (
+                post_image["tensor"]
+                .detach()
+                .cpu()
+                .clamp(0, 1)
+                .mul(65535.0)
+                .round()
+                .to(torch.int32)
+                .numpy()
+                .astype(np.uint16, copy=False)
+            )
+            out_dtype = np.uint16
+        else:
+            final_pixels = (
+                post_image["tensor"].detach().cpu().clamp(0, 1).mul(255).round().byte().numpy()
+            )
+            out_dtype = np.uint8
         out_writer = OutputWriter(
-            final_pixels.shape, dtype=np.uint8, temporary_directory=data.get("scratch_directory")
+            final_pixels.shape, dtype=out_dtype, temporary_directory=data.get("scratch_directory")
         )
         resources.callback(out_writer.cleanup)
         out_writer.mmap[:] = final_pixels
@@ -532,6 +570,7 @@ class ImageJobRunner:
         halo: int | None = None,
         keep_partial: Callable[[], bool] | None = None,
     ) -> OutputWriter:
+        bit_depth = int(data.get("output_bit_depth") or 8)
         return self.engine.process_image(
             img_data=image,
             model_info=info,
@@ -546,6 +585,7 @@ class ImageJobRunner:
             tile_callback=progress.tile,
             temporary_directory=data.get("scratch_directory"),
             **({"keep_partial": keep_partial} if keep_partial is not None else {}),
+            **({"output_bit_depth": 16} if bit_depth == 16 else {}),
         )
 
     def _save_finished_part(
@@ -603,6 +643,7 @@ class ImageJobRunner:
         self._log(
             f"Detected {len(mask.boxes)} face(s); applying fidelity-controlled face restoration."
         )
+        bit_depth = int(data.get("output_bit_depth") or 8)
         result = process_frame_face_aware(
             engine=self.engine,
             img_tensor=tensor,
@@ -620,9 +661,12 @@ class ImageJobRunner:
             face_fidelity=float(data.get("face_fidelity", 0.7)),
             progress_callback=progress.update,
             tile_callback=progress.tile,
+            **({"bit_depth": 16} if bit_depth == 16 else {}),
         )
         writer = OutputWriter(
-            result.shape, dtype=np.uint8, temporary_directory=data.get("scratch_directory")
+            result.shape,
+            dtype=result.dtype,
+            temporary_directory=data.get("scratch_directory"),
         )
         resources.callback(writer.cleanup)
         writer.mmap[:] = result
@@ -639,9 +683,25 @@ class ImageJobRunner:
     ) -> tuple[OutputWriter, NormalizedModelInfo]:
         """Package 1× working pixels for atomic save without running an upscaler."""
         require_image_room(data, width, height, 1, image.get("alpha_image") is not None)
-        pixels = image["tensor"].clamp(0, 1).mul(255).round().byte().numpy()
+        bit_depth = int(data.get("output_bit_depth") or 8)
+        if bit_depth == 16:
+            import torch
+
+            pixels = (
+                image["tensor"]
+                .clamp(0, 1)
+                .mul(65535.0)
+                .round()
+                .to(torch.int32)
+                .numpy()
+                .astype(np.uint16, copy=False)
+            )
+            out_dtype = np.uint16
+        else:
+            pixels = image["tensor"].clamp(0, 1).mul(255).round().byte().numpy()
+            out_dtype = np.uint8
         writer = OutputWriter(
-            pixels.shape, dtype=np.uint8, temporary_directory=data.get("scratch_directory")
+            pixels.shape, dtype=out_dtype, temporary_directory=data.get("scratch_directory")
         )
         resources.callback(writer.cleanup)
         writer.mmap[:] = pixels

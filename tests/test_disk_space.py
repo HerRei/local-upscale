@@ -397,6 +397,7 @@ def test_the_desktop_host_mirror_agrees_with_the_shared_cases():
             case["output_scale"],
             case["format"],
             case["alpha"],
+            case.get("bit_depth", 8),
         )
         assert (need.scratch, need.encoded) == (case["scratch"], case["encoded"])
     for case in cases["reserves"]:
