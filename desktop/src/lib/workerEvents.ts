@@ -397,11 +397,11 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       next.runtime.hardware_note = '';
       next.runtime.video_memory = undefined;
       next.runtime.status_title = 'Benchmark running';
-      next.runtime.status_detail = String(data.workload_version ?? '').startsWith(
-        'localsr-benchmark-v2',
-      )
-        ? `Multi-device benchmark · ${Number(data.measured_frame_count ?? 0)} phases · warming up each device`
-        : `Warming up ${Number(data.warmup_count ?? 0)} iteration${Number(data.warmup_count ?? 0) === 1 ? '' : 's'} · then measuring ${Number(data.measured_frame_count ?? 0)} frames`;
+      next.runtime.status_detail =
+        String(data.workload_version ?? '').startsWith('localsr-benchmark-v2') ||
+        String(data.workload_version ?? '').startsWith('localsr-benchmark-v3')
+          ? `Multi-device benchmark · ${Number(data.measured_frame_count ?? 0)} phases · warming up each device`
+          : `Warming up ${Number(data.warmup_count ?? 0)} iteration${Number(data.warmup_count ?? 0) === 1 ? '' : 's'} · then measuring ${Number(data.measured_frame_count ?? 0)} frames`;
       next.runtime.progress = 0;
       break;
     case 'benchmark_progress':
@@ -435,7 +435,18 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
           ...(data.result as unknown as NonNullable<AppSnapshot['latest_benchmark']>),
         };
         next.latest_benchmark = result;
-        if (result?.workload_version.startsWith('localsr-benchmark-v2')) {
+        if (result?.workload_version.startsWith('localsr-benchmark-v3')) {
+          result.device_history = result.device_results ?? [];
+          next.runtime.status_detail =
+            result.recommended_device_name && result.recommended_device_seconds_per_input_mp != null
+              ? `Recommended: ${result.recommended_device_name} (${result.recommended_device_seconds_per_input_mp.toFixed(1)} s / input MP)`
+              : 'Benchmark complete · no device passed verification';
+          next.runtime.elapsed_seconds =
+            result.result_elapsed_seconds ?? result.total_elapsed_seconds;
+          next.runtime.throughput = result.recommended_device_seconds_per_input_mp ?? 0;
+          next.runtime.throughput_unit = 's / input MP';
+          next.runtime.thermal_status = result.thermal_state ?? next.runtime.thermal_status;
+        } else if (result?.workload_version.startsWith('localsr-benchmark-v2')) {
           const old = snapshot.latest_benchmark;
           const history =
             old?.workload_version === result.workload_version

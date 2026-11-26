@@ -766,7 +766,10 @@ class WorkerServer:
         self.engine.status_callback = None
         workload = str(data.get("workload") or "v1")
         if workload == "v2":
-            self._run_benchmark_v2(job_id, data)
+            WorkerServer._run_benchmark_v2(self, job_id, data)
+            return
+        if workload == "v3":
+            WorkerServer._run_benchmark_v3(self, job_id, data)
             return
 
         requested_model_id = str(data.get("model_id") or "")
@@ -935,6 +938,131 @@ class WorkerServer:
             device_results.append(phase.to_dict())
 
         result = aggregate_v2(device_results, time.monotonic() - started_at)
+        send_message(BenchmarkCompleted(job_id=job_id, result=result.to_dict()))
+
+    def _run_benchmark_v3(self, job_id: str, data: dict) -> None:
+        """Run localsr-benchmark-v3 across all devices on downloaded preset models."""
+        from localsr.core.benchmark_v3 import (
+            V3_SCENES,
+            enumerate_benchmark_devices,
+            resolve_benchmark_preset_models,
+            run_benchmark_v3,
+        )
+        from localsr.core.benchmark_v3 import (
+            WORKLOAD_VERSION as V3_WORKLOAD_VERSION,
+        )
+        from localsr.core.hardware import get_capability_report
+
+        available, missing = resolve_benchmark_preset_models(store=self.model_store)
+        if not available:
+            names = ", ".join(item["model_name"] for item in missing)
+            raise FileNotFoundError(
+                f"Download at least one preset model before benchmarking ({names})."
+            )
+        # Verify any host-supplied paths match the trusted ModelStore locations.
+        supplied_by_id = {
+            str(entry.get("model_id") or ""): str(entry.get("model_path") or "")
+            for entry in (data.get("models") or [])
+            if isinstance(entry, dict)
+        }
+        for entry in available:
+            model = entry["model"]
+            supplied = supplied_by_id.get(model.model_id)
+            if supplied:
+                WorkerServer._verify_benchmark_model(self, model.model_id, {"model_path": supplied})
+
+        capabilities = get_capability_report()
+        devices = enumerate_benchmark_devices(capabilities)
+        total_phases = len(available) * len(devices) * (len(V3_SCENES) + 2)
+        send_message(
+            BenchmarkStarted(
+                job_id=job_id,
+                workload_version=V3_WORKLOAD_VERSION,
+                warmup_count=0,
+                measured_frame_count=total_phases,
+            )
+        )
+
+        def stage_progress(update) -> None:
+            percentage = (update.stage_index + update.fraction) / max(1, update.stage_count) * 100.0
+            send_message(
+                BenchmarkProgress(
+                    job_id=job_id,
+                    completed_frames=update.stage_index,
+                    total_frames=update.stage_count,
+                    percentage=percentage,
+                    stage=update.stage,
+                )
+            )
+            device_part = update.stage.split(":", 2)[1] if ":" in update.stage else "all"
+            common = {
+                "job_id": job_id,
+                "device": device_part,
+                "stage": update.stage,
+                "stage_index": update.stage_index + 1,
+                "stage_count": update.stage_count,
+                "percentage": percentage,
+            }
+            if update.event == "started":
+                send_message(BenchmarkStageStarted(**common))
+            elif update.event == "progress":
+                send_message(
+                    BenchmarkStageProgress(
+                        **common,
+                        completed_units=update.completed_units,
+                        total_units=update.total_units,
+                    )
+                )
+            else:
+                send_message(BenchmarkStageCompleted(**common))
+
+        def render_tile(
+            model_entry,
+            device_entry,
+            scene,
+            scale,
+            phase,
+            tile,
+            pixels,
+            done,
+            count,
+            width,
+            height,
+            size,
+        ):
+            send_message(
+                BenchmarkTile(
+                    job_id=job_id,
+                    device=device_entry["id"],
+                    scene_id=scene.scene_id,
+                    phase=phase,
+                    completed_tiles=done,
+                    total_tiles=count,
+                    output_x=tile.out_x if tile else 0,
+                    output_y=tile.out_y if tile else 0,
+                    output_width=tile.out_w if tile else 0,
+                    output_height=tile.out_h if tile else 0,
+                    image_width=width,
+                    image_height=height,
+                    active_tile_size=size,
+                    jpeg_base64=_encode_chw_jpeg(pixels, 192) if pixels is not None else "",
+                    model_name=model_entry["model"].name,
+                    scale=scale,
+                )
+            )
+
+        result = run_benchmark_v3(
+            engine=self.engine,
+            model_adapter=self.model_adapter,
+            cancel_event=self.cancel_event,
+            store=self.model_store,
+            capabilities=capabilities,
+            progress_callback=stage_progress,
+            preview_callback=lambda render: send_message(
+                BenchmarkPreview(job_id=job_id, render=render)
+            ),
+            tile_callback=render_tile,
+        )
         send_message(BenchmarkCompleted(job_id=job_id, result=result.to_dict()))
 
     def _run_image_job(self, data, announced: bool = False) -> None:

@@ -24,7 +24,7 @@ it('waits for real pixels and presents the completed render without a comparison
   expect(screen.getByText('Preparing model tiles…')).toBeTruthy();
   expect(screen.queryByRole('img')).toBeNull();
   await view.rerender({ running: false, renders: [capture] });
-  expect(screen.getByAltText('Completed SPAN benchmark render').getAttribute('src')).toBe(
+  expect(screen.getByAltText('Completed benchmark render').getAttribute('src')).toBe(
     capture.output_data_url,
   );
   expect(screen.queryByRole('slider')).toBeNull();
@@ -185,6 +185,79 @@ describe('BenchmarkStudio after a run without output', () => {
     const view = render(BenchmarkStudio, { running: true, tileMessage });
     await screen.findByLabelText('Tile currently being rendered');
     await view.rerender({ running: false, renders: [], tileMessage });
-    expect(screen.queryByText('Run CPU or GPU to see the model render.')).not.toBeNull();
+    expect(screen.queryByText('Run the benchmark to see the model render.')).not.toBeNull();
+  });
+
+  it('throttles intermediate completed tile JPEGs within 75 ms while keeping started outlines responsive', async () => {
+    const drawImage = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+      fillRect: vi.fn(),
+      drawImage,
+      strokeRect: vi.fn(),
+    } as unknown as CanvasRenderingContext2D);
+    vi.stubGlobal(
+      'Image',
+      class {
+        onload?: () => void;
+        set src(_value: string) {
+          this.onload?.();
+        }
+      },
+    );
+    let now = 1000;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const base = {
+      job_id: 'benchmark-throttle',
+      device: 'mps',
+      scene_id: 's2-gallery',
+      output_x: 0,
+      output_y: 0,
+      output_width: 1024,
+      output_height: 1024,
+      image_width: 2048,
+      image_height: 2048,
+      completed_tiles: 0,
+      total_tiles: 4,
+    };
+    const msg = (extra: Record<string, unknown>): WorkerEnvelope => ({
+      type: 'benchmark_tile',
+      data: { ...base, ...extra },
+    });
+    const view = render(BenchmarkStudio, {
+      running: true,
+      tileMessage: msg({ phase: 'started' }),
+    });
+    await view.rerender({
+      tileMessage: msg({ phase: 'completed', completed_tiles: 1, jpeg_base64: 'tile1' }),
+    });
+    await waitFor(() => expect(drawImage).toHaveBeenCalledTimes(1));
+
+    // Second completed tile arrives 20 ms later -> throttled.
+    now = 1020;
+    await view.rerender({
+      tileMessage: msg({
+        phase: 'completed',
+        output_x: 1024,
+        completed_tiles: 2,
+        jpeg_base64: 'tile2',
+      }),
+    });
+    await view.rerender({
+      tileMessage: msg({ phase: 'started', output_y: 1024, completed_tiles: 2 }),
+    });
+    expect(screen.getByLabelText('Tile currently being rendered').style.top).toBe('50%');
+    expect(drawImage).toHaveBeenCalledTimes(1);
+
+    // Third completed tile arrives after 75 ms -> decoded.
+    now = 1080;
+    await view.rerender({
+      tileMessage: msg({
+        phase: 'completed',
+        output_y: 1024,
+        completed_tiles: 3,
+        jpeg_base64: 'tile3',
+      }),
+    });
+    await waitFor(() => expect(drawImage).toHaveBeenCalledTimes(2));
   });
 });

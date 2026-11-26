@@ -4432,3 +4432,15 @@ fn low_priority_from_advanced_lasts_for_the_session_and_a_new_default_ends_it() 
     assert!(lock(&state.run_low_priority).unwrap().is_none());
     assert!(!crate::worker::effective_low_priority(&state));
 }
+
+#[test]
+fn benchmark_preset_candidates_pick_quick_and_best_from_catalog() {
+    let manifest: crate::types::CatalogManifest =
+        serde_json::from_str(include_str!("../../resources/model-catalog.json")).unwrap();
+    let picks = benchmark_preset_candidates(&manifest.models);
+    assert_eq!(picks.len(), 2);
+    assert_eq!(picks[0].0, "quick");
+    assert_eq!(picks[0].1.model_id, "localsr_quick_x4_v1");
+    assert_eq!(picks[1].0, "best");
+    assert_eq!(picks[1].1.model_id, "realplksr_nomoswebphoto_x4");
+}

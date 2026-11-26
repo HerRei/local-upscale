@@ -265,6 +265,15 @@ fn high_frequency_worker_events_are_sampled_but_final_progress_is_forwarded() {
             assert!(gate.should_forward(&position, started + Duration::from_millis(index)));
         }
     }
+
+    let bench_tile = |completed: u64| WorkerEnvelope {
+        message_type: "benchmark_tile".into(),
+        data: json!({"job_id": "bench-1", "phase": "completed", "completed_tiles": completed, "total_tiles": 4, "jpeg_base64": "abc"}),
+    };
+    assert!(gate.should_forward(&bench_tile(1), started));
+    assert!(!gate.should_forward(&bench_tile(2), started + Duration::from_millis(10)));
+    assert!(gate.should_forward(&bench_tile(3), started + Duration::from_millis(75)));
+    assert!(gate.should_forward(&bench_tile(4), started + Duration::from_millis(76)));
 }
 
 #[test]

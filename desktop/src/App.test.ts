@@ -1207,7 +1207,7 @@ describe('LocalSR desktop interface', () => {
     expect(pages.queryByRole('button', { name: 'Preview' })).toBeNull();
   });
 
-  it('makes the real benchmark discoverable and starts it from the View menu', async () => {
+  it('makes the real benchmark discoverable and starts it across all devices from the View menu', async () => {
     const user = await mountWith(readySnapshot());
 
     await chooseMenuItem('view.performance');
@@ -1217,59 +1217,44 @@ describe('LocalSR desktop interface', () => {
     await user.click(
       within(screen.getByRole('dialog')).getByRole('button', { name: 'Run Benchmark' }),
     );
-    await waitFor(() => expect(api.startBenchmark).toHaveBeenCalledWith('mps'));
+    await waitFor(() => expect(api.startBenchmark).toHaveBeenCalledTimes(1));
+    expect(api.downloadModel).not.toHaveBeenCalled();
   });
 
-  it('runs the selected CPU independently of the enhancement GPU', async () => {
-    const user = await mountWith(readySnapshot());
-    await chooseMenuItem('view.performance');
-    const dialog = await screen.findByRole('dialog');
-    await user.selectOptions(
-      within(dialog).getByRole('combobox', { name: 'Benchmark device' }),
-      'cpu',
-    );
-    await user.click(within(dialog).getByRole('button', { name: 'Run Benchmark' }));
-    await waitFor(() => expect(api.startBenchmark).toHaveBeenCalledWith('cpu'));
-  });
-
-  it('downloads the missing benchmark model once before starting the selected device', async () => {
+  it('notes missing preset models and never triggers a download from the benchmark panel', async () => {
     const snapshot = readySnapshot();
-    snapshot.catalog.models.find((model) => model.model_id === 'span_photo_x4')!.installed = false;
-    let finishDownload!: () => void;
-    api.downloadModel.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          finishDownload = () => resolve(undefined);
-        }),
-    );
+    snapshot.catalog.models.find(
+      (model) => model.model_id === 'realplksr_nomoswebphoto_x4',
+    )!.installed = false;
     const user = await mountWith(snapshot);
     await chooseMenuItem('view.performance');
     const dialog = within(screen.getByRole('dialog'));
-    const device = dialog.getByRole('combobox', { name: 'Benchmark device' });
-    await user.selectOptions(device, 'cpu');
-    await user.click(dialog.getByRole('button', { name: 'Download & run benchmark' }));
-    expect(api.downloadModel).toHaveBeenCalledWith('span_photo_x4', false);
-    expect(api.startBenchmark).not.toHaveBeenCalled();
-    expect((device as HTMLSelectElement).disabled).toBe(true);
-    await user.click(dialog.getByRole('button', { name: /Downloading SPAN/ }));
-    expect(api.downloadModel).toHaveBeenCalledOnce();
-    finishDownload();
-    await waitFor(() => expect(api.startBenchmark).toHaveBeenCalledWith('cpu'));
+    expect(
+      dialog.getByText(/Missing preset model:.*Only downloaded models take part/i),
+    ).toBeTruthy();
+    expect(dialog.queryByRole('button', { name: /Download/i })).toBeNull();
+    await user.click(dialog.getByRole('button', { name: 'Run Benchmark' }));
+    await waitFor(() => expect(api.startBenchmark).toHaveBeenCalledTimes(1));
+    expect(api.downloadModel).not.toHaveBeenCalled();
   });
 
-  it('shows a failed or cancelled model download beside the benchmark button and allows retry', async () => {
+  it('blocks benchmark start when neither preset model is downloaded without offering downloads', async () => {
     const snapshot = readySnapshot();
-    snapshot.catalog.models.find((model) => model.model_id === 'span_photo_x4')!.installed = false;
-    api.downloadModel.mockRejectedValueOnce(new Error('download cancelled'));
-    const user = await mountWith(snapshot);
+    snapshot.catalog.models.find((model) => model.model_id === 'localsr_quick_x4_v1')!.installed =
+      false;
+    snapshot.catalog.models.find(
+      (model) => model.model_id === 'realplksr_nomoswebphoto_x4',
+    )!.installed = false;
+    await mountWith(snapshot);
     await chooseMenuItem('view.performance');
     const dialog = within(screen.getByRole('dialog'));
-    await user.click(dialog.getByRole('button', { name: 'Download & run benchmark' }));
-    expect((await dialog.findByRole('alert')).textContent).toContain('download cancelled');
-    expect(api.startBenchmark).not.toHaveBeenCalled();
-    await user.click(dialog.getByRole('button', { name: 'Download & run benchmark' }));
-    await waitFor(() => expect(api.startBenchmark).toHaveBeenCalledWith('mps'));
-    expect(dialog.queryByRole('alert')).toBeNull();
+    const runBtn = dialog.getByRole('button', { name: 'Run Benchmark' }) as HTMLButtonElement;
+    expect(runBtn.disabled).toBe(true);
+    expect(
+      dialog.getByText(/Missing preset models:.*Download at least one preset model/i),
+    ).toBeTruthy();
+    expect(dialog.queryByRole('button', { name: /Download/i })).toBeNull();
+    expect(api.downloadModel).not.toHaveBeenCalled();
   });
 
   it('shows one title and one progress bar for all model downloads', async () => {
@@ -1480,6 +1465,130 @@ describe('LocalSR desktop interface', () => {
       dialog.querySelector('.benchmark-device .file-name[title="Apple GPU (Metal)"]'),
     ).toBeTruthy();
     expect(within(dialog).getByText('Hardware results')).toBeTruthy();
+    expect(within(dialog).getAllByText(/Older v2 benchmark/).length).toBeGreaterThan(0);
+  });
+
+  it('renders v3 multi-device benchmark results, 1 MP example, CPU threads, and failed correctness check', async () => {
+    const snapshot = readySnapshot();
+    snapshot.latest_benchmark = {
+      workload_version: 'localsr-benchmark-v3',
+      backend: 'cpu',
+      device: 'cpu',
+      model_id: 'localsr_quick_x4_v1',
+      model_name: 'LocalSR Photo S',
+      scale: 4,
+      input_width: 256,
+      input_height: 256,
+      warmup_count: 3,
+      measured_frame_count: 10,
+      median_inference_ms: 200,
+      p95_inference_ms: 210,
+      end_to_end_fps: 5,
+      processed_megapixels_per_second: 0.3,
+      total_elapsed_seconds: 32.0,
+      peak_memory_bytes: 256 * 1024 ** 2,
+      score: 1.76,
+      recommended_device: 'cpu',
+      recommended_device_name: 'CPU',
+      recommended_device_seconds_per_input_mp: 9.1,
+      recommended_cpu_threads: 4,
+      cpu_threads: {
+        physical_cores: 4,
+        logical_cores: 8,
+        recommended_threads: 4,
+        tested: true,
+        physical_seconds_per_input_mp: 9.1,
+        logical_seconds_per_input_mp: 11.4,
+      },
+      cpu_avx2: false,
+      cpu_memory_format: 'nchw',
+      stable: true,
+      cv_percent: 2.0,
+      result_elapsed_seconds: 32.0,
+      thermal_state: 'nominal',
+      benchmarked_models: [
+        {
+          preset: 'quick',
+          preset_label: 'Quick',
+          model_id: 'localsr_quick_x4_v1',
+          model_name: 'LocalSR Photo S',
+          scale: 4,
+          recommended_device: 'cpu',
+          recommended_device_name: 'CPU',
+          recommended_seconds_per_input_mp: 9.1,
+        },
+      ],
+      device_results: [
+        {
+          device: 'cpu',
+          device_type: 'cpu',
+          device_name: 'CPU',
+          preset: 'quick',
+          model_id: 'localsr_quick_x4_v1',
+          model_name: 'LocalSR Photo S',
+          thermal_state: 'nominal',
+          warmup_iterations: 2,
+          stable: true,
+          cv_percent: 1.8,
+          score: 1.76,
+          seconds_per_input_mp: 9.1,
+          matched_cpu: true,
+          status: 'ok',
+          recommended: true,
+          scenes: [],
+        },
+        {
+          device: 'directml:0',
+          device_type: 'directml',
+          device_name: 'Intel UHD 620 (DirectML)',
+          preset: 'quick',
+          model_id: 'localsr_quick_x4_v1',
+          model_name: 'LocalSR Photo S',
+          thermal_state: 'nominal',
+          warmup_iterations: 2,
+          stable: true,
+          cv_percent: 2.0,
+          score: 1.07,
+          seconds_per_input_mp: 15.0,
+          matched_cpu: true,
+          psnr_db: 95.2,
+          status: 'ok',
+          recommended: false,
+          scenes: [],
+        },
+        {
+          device: 'cuda:0',
+          device_type: 'cuda',
+          device_name: 'Broken GPU (CUDA)',
+          preset: 'quick',
+          model_id: 'localsr_quick_x4_v1',
+          model_name: 'LocalSR Photo S',
+          thermal_state: 'nominal',
+          warmup_iterations: 0,
+          stable: false,
+          cv_percent: null,
+          score: 0,
+          seconds_per_input_mp: null,
+          matched_cpu: false,
+          psnr_db: 28.4,
+          status: 'mismatch',
+          status_note: 'did not match the CPU',
+          recommended: false,
+          scenes: [],
+        },
+      ],
+    };
+    await mountWith(snapshot);
+    await chooseMenuItem('view.performance');
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getAllByText('9.1').length).toBeGreaterThan(0);
+    expect(
+      within(dialog).getAllByText(/a 1 MP photo to 16 MP takes about 9 s/i).length,
+    ).toBeGreaterThan(0);
+    expect(within(dialog).getByText('NCHW (pre-AVX2)')).toBeTruthy();
+    expect(within(dialog).getByText('Recommended CPU threads')).toBeTruthy();
+    expect(within(dialog).getByText('4')).toBeTruthy();
+    expect(within(dialog).getAllByText('did not match the CPU').length).toBeGreaterThan(0);
   });
 
   it('keeps advanced controls in a dedicated scroll region', async () => {

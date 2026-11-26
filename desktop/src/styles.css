@@ -2750,6 +2750,14 @@ input[type='number'],
 .benchmark-device.cpu {
   border-color: var(--cpu-card-border);
 }
+.benchmark-device.recommended {
+  border-color: var(--accent-hi);
+}
+.benchmark-device-example {
+  margin-bottom: 6px;
+  color: var(--secondary);
+  font-size: calc(10px * var(--ui-scale));
+}
 .benchmark-device-heading {
   display: flex;
   align-items: flex-start;

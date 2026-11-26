@@ -1,6 +1,7 @@
 import ctypes
 import logging
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -11,6 +12,55 @@ import torch
 from .coreml_runtime import coreml_available
 
 logger = logging.getLogger(__name__)
+
+
+def cpu_supports_avx2() -> bool:
+    """Whether the CPU supports AVX2 (required by PyTorch FBGEMM channels_last on x86)."""
+    if platform.machine().lower() not in {"x86_64", "amd64", "i386", "i686"}:
+        return False
+    get_cap = getattr(getattr(torch.backends, "cpu", None), "get_cpu_capability", None)
+    if callable(get_cap):
+        try:
+            cap = str(get_cap()).upper()
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+            cap = ""
+        if "AVX2" in cap or "AVX512" in cap:
+            return True
+        if cap in {"DEFAULT", "AVX", "SSE4_2", "NONE"}:
+            return False
+    if sys.platform.startswith("linux"):
+        try:
+            cpuinfo = Path("/proc/cpuinfo").read_text(encoding="utf-8", errors="ignore").lower()
+            for line in cpuinfo.splitlines():
+                if line.startswith("flags"):
+                    return "avx2" in line.split()
+        except OSError:
+            return False
+    if sys.platform == "darwin":
+        for sysctl_key in ("machdep.cpu.leaf7_features", "machdep.cpu.features"):
+            try:
+                out = subprocess.check_output(
+                    ["/usr/sbin/sysctl", "-n", sysctl_key],
+                    stdin=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    timeout=2,
+                )
+                if "AVX2" in out.upper().split():
+                    return True
+            except (OSError, subprocess.SubprocessError):
+                continue
+    return False
+
+
+def cpu_memory_format() -> torch.memory_format:
+    """Use NCHW on pre-AVX2 CPUs so PULSE does not hit FBGEMM crashes."""
+    # Pre-AVX2 x86 CPUs lack FBGEMM support and crash in channels_last; NCHW is
+    # always safe and matches InferenceEngine's production tensor layout.
+    if not cpu_supports_avx2():
+        return torch.contiguous_format
+    return torch.contiguous_format
+
 
 # OpenVINO's name for a GPU ends in "(iGPU)" or "(dGPU)"; the DirectML adapter name of the
 # same GPU does not.

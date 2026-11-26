@@ -197,9 +197,13 @@ class BenchmarkRequest:
     model_name: str
     device: str
     workload: str = "v1"
+    models: list[dict[str, str]] | None = None
 
     def to_json(self) -> str:
-        return json.dumps({"type": "benchmark_request", "data": asdict(self)})
+        data = asdict(self)
+        if data["models"] is None:
+            del data["models"]
+        return json.dumps({"type": "benchmark_request", "data": data})
 
 
 @dataclass
@@ -405,6 +409,8 @@ class TileUpdate:
 class BenchmarkTile(TileUpdate):
     device: str = ""
     scene_id: str = ""
+    model_name: str = ""
+    scale: int = 4
 
     def to_json(self) -> str:
         return json.dumps({"type": "benchmark_tile", "data": asdict(self)})

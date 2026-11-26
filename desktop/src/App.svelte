@@ -5,7 +5,12 @@
 
   import { tabFromKey } from './lib/keyboard';
   import { isRestoreRecipe, recipeFixStages, recipeMatches } from './lib/recipes';
-  import { benchmarkDeviceBarWidth, benchmarkSceneLabel } from './lib/benchmark';
+  import {
+    benchmarkDeviceBarWidth,
+    benchmarkOneMpExample,
+    benchmarkSceneLabel,
+    benchmarkSpeedBarWidth,
+  } from './lib/benchmark';
   import { without, mediaNamesFor as mediaNamesForPaths } from './lib/collections';
   import {
     presetDownload,
@@ -155,8 +160,7 @@
   let editRuntimeOverride = '';
   let customEditOpen = false;
   let benchmarkRenders: BenchmarkRender[] = [];
-  let benchmarkDevice = '';
-  let benchmarkSetup: 'idle' | 'downloading' | 'starting' = 'idle';
+  let benchmarkSetup: 'idle' | 'starting' = 'idle';
   let benchmarkError = '';
   let benchmarkTile: WorkerEnvelope | undefined;
   let downloadErrors: Record<string, string> = {};
@@ -846,7 +850,24 @@
         return other ? { name: other.name, size: other.total_size_bytes } : undefined;
       });
   $: benchmarkRunning = snapshot.runtime.active_job_id.startsWith('benchmark-');
-  $: benchmarkModel = snapshot.catalog.models.find((model) => model.model_id === 'span_photo_x4');
+  $: benchmarkQuickModel = choosePresetModel(snapshot, 'upscale', 'quick', 'photo', {});
+  $: benchmarkBestModel = choosePresetModel(snapshot, 'upscale', 'best', 'photo', {});
+  $: benchmarkPresetModels = [
+    benchmarkQuickModel ? { preset: 'quick', label: 'Quick', model: benchmarkQuickModel } : null,
+    benchmarkBestModel && benchmarkBestModel.model_id !== benchmarkQuickModel?.model_id
+      ? { preset: 'best', label: 'Best Quality', model: benchmarkBestModel }
+      : null,
+  ].filter(
+    (
+      entry,
+    ): entry is {
+      preset: string;
+      label: string;
+      model: NonNullable<typeof benchmarkQuickModel>;
+    } => entry !== null,
+  );
+  $: benchmarkInstalledPresets = benchmarkPresetModels.filter((entry) => entry.model.installed);
+  $: benchmarkMissingPresets = benchmarkPresetModels.filter((entry) => !entry.model.installed);
   $: benchmarkStartBlockReason =
     snapshot.runtime.worker !== 'ready'
       ? 'Waiting for the inference engine to become ready.'
@@ -854,12 +875,12 @@
         ? 'Finish or cancel the current work before benchmarking.'
         : activeDownload
           ? 'Wait for the current model download to finish before benchmarking.'
-          : !benchmarkModel
-            ? 'The benchmark model is unavailable in this catalog.'
-            : !benchmarkModel.installed &&
-                (!benchmarkModel.automated_download_allowed ||
-                  benchmarkModel.terms_acceptance_required)
-              ? 'Import the SPAN Quick model before benchmarking.'
+          : !benchmarkPresetModels.length
+            ? 'The benchmark preset models are unavailable in this catalog.'
+            : !benchmarkInstalledPresets.length
+              ? `Missing preset models: ${benchmarkMissingPresets
+                  .map((entry) => `${entry.model.name} (${entry.label})`)
+                  .join(' and ')}. Download at least one preset model before benchmarking.`
               : '';
   $: customModelNeedsOptIn =
     settings.selected_model_id === '__custom__' &&
@@ -1455,9 +1476,6 @@
       : selectedMedia?.kind === 'video' || settings.task === 'video'
         ? 'Enlarges videos, fixes them, or both. Edit is for photos.'
         : 'Enlarges photos and artwork, fixes them, or both.';
-  $: benchmarkHardware = snapshot.capabilities.devices.find(
-    (device) => device.id === benchmarkDevice,
-  );
   $: unreadyMedia = queueSelection.find((media) => media.probe_status !== 'ready');
   const preparingNote = (media: MediaItem): string =>
     media.probe_status === 'failed'
@@ -4097,9 +4115,6 @@
 
   function showPerformance(): void {
     void refreshCrashReports();
-    if (!benchmarkDevice)
-      benchmarkDevice =
-        snapshot.capabilities.devices.find((device) => device.id !== 'cpu')?.id ?? 'cpu';
     showModal(
       'Performance & Diagnostics',
       'Live values come from the isolated inference worker. Temperature is shown only when a supported backend reports it.',
@@ -4140,15 +4155,10 @@
 
   async function runBenchmark(): Promise<void> {
     if (benchmarkSetup !== 'idle' || benchmarkRunning || benchmarkStartBlockReason) return;
-    const device = benchmarkDevice || 'cpu';
     benchmarkError = '';
     try {
-      if (!benchmarkModel?.installed) {
-        benchmarkSetup = 'downloading';
-        await api.downloadModel('span_photo_x4', false);
-      }
       benchmarkSetup = 'starting';
-      await api.startBenchmark(device);
+      await api.startBenchmark();
       await refresh();
     } catch (error) {
       benchmarkError = `Benchmark could not start: ${String(error)}`;
@@ -5978,36 +5988,22 @@
         <section class="benchmark-panel" aria-labelledby="benchmark-title">
           <div class="benchmark-heading">
             <div>
-              <span class="eyebrow">Benchmark v2.1</span>
+              <span class="eyebrow">Benchmark v3</span>
               <h3 id="benchmark-title">CPU & GPU Benchmarks</h3>
             </div>
             <span class="benchmark-private">100% local</span>
           </div>
           <p class="benchmark-intro">
-            Choose one device for each run. CPU and GPU scores are saved separately, using the same
-            fixed SPAN workload.
-          </p>
-          <p class="benchmark-intro">
-            Compare scores from the same workload revision. Earlier results remain in your history.
+            Measures every available processor side by side on your downloaded Quick and Best
+            Quality preset models. Each device’s output is checked against the CPU before its speed
+            counts.
           </p>
 
-          <label class="field-label" for="benchmark-device">Benchmark device</label>
-          <select
-            id="benchmark-device"
-            bind:value={benchmarkDevice}
-            disabled={benchmarkRunning || benchmarkSetup !== 'idle'}
-          >
-            {#each snapshot.capabilities.devices as device}
-              <option value={device.id}
-                >{device.id === 'cpu' ? 'CPU' : 'GPU'} · {device.name} ({device.id.toUpperCase()})</option
-              >
-            {/each}
-          </select>
-          {#if !benchmarkModel?.installed && benchmarkSetup === 'idle'}
+          {#if benchmarkMissingPresets.length && benchmarkInstalledPresets.length}
             <p class="benchmark-intro">
-              The first run downloads and verifies SPAN Quick{benchmarkModel
-                ? ` (${formatBytes(benchmarkModel.size_bytes)})`
-                : ''}. It is reused for CPU and GPU benchmarks.
+              Missing preset model{benchmarkMissingPresets.length > 1 ? 's' : ''}: {benchmarkMissingPresets
+                .map((entry) => `${entry.model.name} (${entry.label})`)
+                .join(', ')}. Only downloaded models take part.
             </p>
           {/if}
           <div class="benchmark-actions">
@@ -6021,21 +6017,10 @@
                 ? 'Cancelling…'
                 : benchmarkRunning
                   ? 'Cancel Benchmark'
-                  : benchmarkSetup === 'downloading'
-                    ? `Downloading SPAN · ${Math.round(downloadMap.get('span_photo_x4')?.progress ?? snapshot.runtime.download_progress)}%`
-                    : benchmarkSetup === 'starting'
-                      ? 'Starting benchmark…'
-                      : !benchmarkModel?.installed
-                        ? 'Download & run benchmark'
-                        : 'Run Benchmark'}</button
+                  : benchmarkSetup === 'starting'
+                    ? 'Starting benchmark…'
+                    : 'Run Benchmark'}</button
             >
-            {#if benchmarkSetup === 'downloading' && downloadMap.has('span_photo_x4')}<button
-                class="button"
-                on:click={() =>
-                  api
-                    .cancelDownload('span_photo_x4')
-                    .catch((error) => (benchmarkError = String(error)))}>Cancel download</button
-              >{/if}
             {#if snapshot.latest_benchmark}<button
                 class="button"
                 disabled={benchmarkRunning}
@@ -6046,11 +6031,7 @@
           </div>
           {#if benchmarkError}<p class="error-message" role="alert">{benchmarkError}</p>{/if}
           {#if benchmarkSetup !== 'idle'}
-            <p role="status">
-              {benchmarkSetup === 'downloading'
-                ? 'Downloading and verifying the benchmark model. The selected device will start automatically when it is ready.'
-                : 'Starting the benchmark on the selected device…'}
-            </p>
+            <p role="status">Starting the benchmark across all available devices…</p>
           {:else if !benchmarkRunning && benchmarkStartBlockReason}
             <p role="status">{benchmarkStartBlockReason}</p>
           {/if}
@@ -6085,14 +6066,237 @@
           />
 
           {#if snapshot.latest_benchmark && !benchmarkRunning}
-            {#if snapshot.latest_benchmark.workload_version.startsWith('localsr-benchmark-v2')}
+            {#if snapshot.latest_benchmark.workload_version.startsWith('localsr-benchmark-v3')}
+              <div class:unstable={!snapshot.latest_benchmark.stable} class="benchmark-hero">
+                <div class="benchmark-score-block">
+                  <div class="benchmark-score-label">
+                    <span>Recommended device</span>
+                    <span
+                      class:unstable={!snapshot.latest_benchmark.stable}
+                      class="benchmark-status-pill"
+                    >
+                      {snapshot.latest_benchmark.stable
+                        ? '● Stable result'
+                        : snapshot.latest_benchmark.cv_percent == null
+                          ? '● Consistency unmeasured'
+                          : '● Unstable result'}
+                    </span>
+                  </div>
+                  {#if snapshot.latest_benchmark.recommended_device_name && snapshot.latest_benchmark.recommended_device_seconds_per_input_mp != null}
+                    <div class="benchmark-score-value">
+                      <strong
+                        >{snapshot.latest_benchmark.recommended_device_seconds_per_input_mp.toFixed(
+                          1,
+                        )}</strong
+                      >
+                      <span>s / input MP</span>
+                    </div>
+                    <p>
+                      {snapshot.latest_benchmark.recommended_device_name} · {benchmarkOneMpExample(
+                        snapshot.latest_benchmark.recommended_device_seconds_per_input_mp,
+                        snapshot.latest_benchmark.scale || 4,
+                      )}
+                    </p>
+                  {:else}
+                    <div class="benchmark-score-value text-score">
+                      <strong>No verified device</strong>
+                    </div>
+                    <p>No device matched the CPU output within the accuracy threshold.</p>
+                  {/if}
+                </div>
+
+                <div class="benchmark-comparison">
+                  <span>Recommended CPU threads</span>
+                  <strong>{snapshot.latest_benchmark.recommended_cpu_threads ?? '—'}</strong>
+                  {#if snapshot.latest_benchmark.cpu_threads?.tested}
+                    <b>
+                      {snapshot.latest_benchmark.cpu_threads.physical_cores} physical ({snapshot.latest_benchmark.cpu_threads.physical_seconds_per_input_mp?.toFixed(
+                        1,
+                      )} s/MP) vs {snapshot.latest_benchmark.cpu_threads.logical_cores} logical ({snapshot.latest_benchmark.cpu_threads.logical_seconds_per_input_mp?.toFixed(
+                        1,
+                      )} s/MP)
+                    </b>
+                  {:else if snapshot.latest_benchmark.cpu_threads}
+                    <b>
+                      {snapshot.latest_benchmark.cpu_threads.physical_cores} physical / {snapshot
+                        .latest_benchmark.cpu_threads.logical_cores} logical cores
+                    </b>
+                  {:else}
+                    <b>Lower s / input MP is faster</b>
+                  {/if}
+                </div>
+              </div>
+
+              <dl class="benchmark-facts">
+                <div>
+                  <dt>Consistency</dt>
+                  <dd class:warning-value={!snapshot.latest_benchmark.stable}>
+                    {snapshot.latest_benchmark.cv_percent == null
+                      ? 'Too few repetitions'
+                      : `${snapshot.latest_benchmark.cv_percent.toFixed(1)}% spread`}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Total time</dt>
+                  <dd>
+                    {formatDuration(
+                      snapshot.latest_benchmark.result_elapsed_seconds ??
+                        snapshot.latest_benchmark.total_elapsed_seconds,
+                    )}
+                  </dd>
+                </div>
+                <div>
+                  <dt>CPU tensor layout</dt>
+                  <dd>
+                    {snapshot.latest_benchmark.cpu_avx2 === false
+                      ? 'NCHW (pre-AVX2)'
+                      : (snapshot.latest_benchmark.cpu_memory_format ?? 'nchw').toUpperCase()}
+                  </dd>
+                </div>
+              </dl>
+
+              {#if snapshot.latest_benchmark.missing_presets?.length}
+                <p class="benchmark-note">
+                  Skipped (not downloaded): {snapshot.latest_benchmark.missing_presets
+                    .map((entry) => `${entry.model_name} (${entry.preset_label})`)
+                    .join(', ')}.
+                </p>
+              {/if}
+
+              {#each snapshot.latest_benchmark.benchmarked_models?.length ? snapshot.latest_benchmark.benchmarked_models : [{ preset: 'quick', preset_label: 'Preset', model_id: snapshot.latest_benchmark.model_id, model_name: snapshot.latest_benchmark.model_name, scale: snapshot.latest_benchmark.scale || 4 }] as modelSummary (modelSummary.model_id)}
+                {@const modelDevices = benchmarkScores.filter(
+                  (entry) => !entry.model_id || entry.model_id === modelSummary.model_id,
+                )}
+                {#if modelDevices.length}
+                  <div class="benchmark-section-title">
+                    <strong>{modelSummary.preset_label} · {modelSummary.model_name}</strong>
+                    <span
+                      >{modelSummary.recommended_device_name &&
+                      modelSummary.recommended_seconds_per_input_mp != null
+                        ? `Fastest: ${modelSummary.recommended_device_name} · ${benchmarkOneMpExample(modelSummary.recommended_seconds_per_input_mp, modelSummary.scale)}`
+                        : 'Seconds per input megapixel (lower is faster)'}</span
+                    >
+                  </div>
+                  <div
+                    class="benchmark-devices"
+                    aria-label={`${modelSummary.model_name} per-device benchmark results`}
+                  >
+                    {#each modelDevices as device (`${modelSummary.model_id}:${device.device}`)}
+                      {@const mismatch =
+                        device.matched_cpu === false || device.status === 'mismatch'}
+                      {@const validSpeed = !mismatch && device.seconds_per_input_mp != null}
+                      <article
+                        class="benchmark-device"
+                        class:cpu={device.device_type === 'cpu'}
+                        class:recommended={Boolean(device.recommended)}
+                        aria-label={`${device.device_name} benchmark result`}
+                      >
+                        <div class="benchmark-device-heading">
+                          <div>
+                            <span
+                              >{device.recommended
+                                ? 'Recommended'
+                                : device.device_type === 'cpu'
+                                  ? 'CPU'
+                                  : device.device_type === 'coreml'
+                                    ? 'Neural Engine'
+                                    : device.device_type === 'npu'
+                                      ? 'NPU'
+                                      : 'GPU'}</span
+                            ><strong><FileName name={device.device_name} /></strong>
+                          </div>
+                          <div class="benchmark-device-score">
+                            {#if mismatch}
+                              <strong class="warning-value">No score</strong>
+                              <span>did not match the CPU</span>
+                            {:else if validSpeed && device.seconds_per_input_mp != null}
+                              <strong>{device.seconds_per_input_mp.toFixed(1)}</strong>
+                              <span>s / input MP</span>
+                            {:else}
+                              <strong>—</strong>
+                              <span>{device.status_note ?? 'Unavailable'}</span>
+                            {/if}
+                          </div>
+                        </div>
+                        <div class="benchmark-device-track" aria-hidden="true">
+                          <i
+                            style={`width:${validSpeed ? benchmarkSpeedBarWidth(device.seconds_per_input_mp, modelDevices) : 0}%`}
+                          ></i>
+                        </div>
+                        {#if validSpeed && device.seconds_per_input_mp != null}
+                          <div class="benchmark-device-example">
+                            {benchmarkOneMpExample(
+                              device.seconds_per_input_mp,
+                              modelSummary.scale || 4,
+                            )}
+                          </div>
+                        {/if}
+                        <div class="benchmark-device-meta">
+                          {#if mismatch}
+                            <span class="warning-value">did not match the CPU</span>
+                            {#if device.psnr_db != null}
+                              <span>{device.psnr_db.toFixed(1)} dB</span>
+                            {/if}
+                          {:else if validSpeed}
+                            <span class:warning-value={!device.stable}
+                              >{device.stable
+                                ? '● Stable'
+                                : device.cv_percent == null
+                                  ? '● Unmeasured consistency'
+                                  : '● Unstable'}</span
+                            >
+                            <span
+                              >{device.cv_percent == null
+                                ? 'Too few repetitions'
+                                : `${device.cv_percent.toFixed(1)}% spread`}</span
+                            >
+                            {#if device.psnr_db != null}
+                              <span>{device.psnr_db.toFixed(1)} dB vs CPU</span>
+                            {:else if device.device_type !== 'cpu' && device.matched_cpu}
+                              <span>Exact CPU match</span>
+                            {/if}
+                            <span>{device.thermal_state}</span>
+                          {:else}
+                            <span class="warning-value"
+                              >{device.status_note ?? device.status ?? 'Skipped'}</span
+                            >
+                          {/if}
+                        </div>
+                        {#if device.scenes.length}
+                          <details class="benchmark-scenes">
+                            <summary>Scene breakdown</summary>
+                            {#each device.scenes as scene (scene.scene_id)}
+                              <div class="benchmark-scene">
+                                <span class="scene-name">{benchmarkSceneLabel(scene.scene_id)}</span
+                                >
+                                <strong
+                                  >{scene.seconds_per_input_mp != null
+                                    ? `${scene.seconds_per_input_mp.toFixed(1)} s/MP`
+                                    : `${scene.megapixels_per_second.toFixed(2)} MP/s`}</strong
+                                >
+                                <span class="scene-metric">{scene.median_ms.toFixed(0)} ms</span>
+                                <span class="scene-metric subtle">{scene.iterations} runs</span>
+                              </div>
+                            {/each}
+                          </details>
+                        {/if}
+                      </article>
+                    {/each}
+                  </div>
+                {/if}
+              {/each}
+              <p class="benchmark-note">
+                Lower seconds per input megapixel is faster. Devices that fail the CPU output check
+                receive no score and are not recommended.
+              </p>
+            {:else if snapshot.latest_benchmark.workload_version.startsWith('localsr-benchmark-v2')}
               <div class:unstable={!snapshot.latest_benchmark.stable} class="benchmark-hero">
                 <div class="benchmark-score-block">
                   <div class="benchmark-score-label">
                     <span
                       >Latest {snapshot.latest_benchmark.device_results?.[0]?.device_type === 'cpu'
                         ? 'CPU'
-                        : 'GPU'} score</span
+                        : 'GPU'} score · Older v2 benchmark</span
                     >
                     <span
                       class:unstable={!snapshot.latest_benchmark.stable}
@@ -6195,7 +6399,7 @@
                 </div>
                 <div>
                   <dt>Workload</dt>
-                  <dd>v2 · 3 fixed scenes</dd>
+                  <dd>Older v2 benchmark · SPAN</dd>
                 </div>
               </dl>
 
@@ -6265,15 +6469,16 @@
                 </div>
               {/if}
               <p class="benchmark-note">
-                Each score is the geometric mean of that device’s output throughput across three
-                scenes. Running CPU preserves the last GPU result, and vice versa. Results over 5%
-                timing spread are marked unstable.
+                This is an older v2 benchmark (SPAN only). Run the benchmark again to compare every
+                device on your current Quick and Best preset models.
               </p>
             {:else}
               <div class="benchmark-hero legacy-score">
                 <div class="benchmark-score-block">
                   <div class="benchmark-score-label">
-                    <span>Legacy score</span><span class="benchmark-status-pill">V1 workload</span>
+                    <span>Legacy score</span><span class="benchmark-status-pill"
+                      >Older v1 benchmark</span
+                    >
                   </div>
                   <div class="benchmark-score-value">
                     <strong>{snapshot.latest_benchmark.score.toFixed(2)}</strong><span>points</span>
@@ -6314,8 +6519,8 @@
                 </div>
               </dl>
               <p class="benchmark-note">
-                This is an older v1 result. Run the benchmark again to get the separate CPU or GPU
-                v2 score.
+                This is an older v1 result. Run the benchmark again to compare every device on your
+                current Quick and Best preset models.
               </p>
             {/if}
           {:else if !benchmarkRunning}
@@ -6323,7 +6528,7 @@
               <div class="benchmark-empty-gauge" aria-hidden="true"><i></i></div>
               <div>
                 <strong>No benchmark result yet</strong><span
-                  >Run the fixed workload to measure this system and create a local score.</span
+                  >Run the v3 benchmark to measure every processor and recommend the fastest one.</span
                 >
               </div>
             </div>
@@ -6332,34 +6537,20 @@
 
         {#if benchmarkRunning}
           <div class="performance-section-heading">
-            <strong>Benchmark hardware</strong><span>Selected for this run</span>
+            <strong>Benchmark scope</strong><span>All available devices</span>
           </div>
           <dl class="performance-grid">
             <div>
-              <dt>Backend</dt>
-              <dd>{benchmarkHardware?.type?.toUpperCase() ?? 'Detecting'}</dd>
+              <dt>Devices</dt>
+              <dd>{snapshot.capabilities.devices.map((device) => device.name).join(', ')}</dd>
             </div>
             <div>
-              <dt>Device</dt>
-              <dd>{benchmarkHardware?.name ?? 'Detecting'}</dd>
-            </div>
-            <div>
-              <dt>Device capacity</dt>
-              <dd>
-                {benchmarkHardware?.id === 'cpu'
-                  ? 'Uses system RAM'
-                  : benchmarkHardware?.total_memory
-                    ? formatBytes(benchmarkHardware.total_memory)
-                    : 'Not reported'}
-              </dd>
-            </div>
-            <div>
-              <dt>Model</dt>
-              <dd>SPAN · fixed benchmark workload</dd>
+              <dt>Preset models</dt>
+              <dd>{benchmarkInstalledPresets.map((entry) => entry.model.name).join(', ')}</dd>
             </div>
             <div>
               <dt>Timing and memory</dt>
-              <dd>Measurements appear in the completed scene results.</dd>
+              <dd>Measurements appear in the completed results.</dd>
             </div>
           </dl>
         {:else}
