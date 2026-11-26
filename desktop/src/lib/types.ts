@@ -117,6 +117,8 @@ export interface StartEditInput {
   seed: number;
   accepted_terms: boolean;
   output_directory: string;
+  edit_text_encoder?: 'auto' | 'gpu' | 'cpu';
+  edit_vae?: 'auto' | 'gpu' | 'cpu';
 }
 
 export interface CatalogVideoModel {

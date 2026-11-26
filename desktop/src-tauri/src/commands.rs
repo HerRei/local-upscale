@@ -136,6 +136,7 @@ pub(crate) fn start_edit_checked(
             (model, bundle_dir, None)
         };
     crate::editing::validate(&input, &model).map_err(AppError::Validation)?;
+    validate_edit_placement_engine(&input, lock(&state.engine)?.as_ref())?;
     if !lock(&state.capabilities)?
         .devices
         .iter()
@@ -204,7 +205,25 @@ fn build_edit_request(
         output_temporary_directory: None,
         family: custom_files.as_ref().map(|_| model.family.clone()),
         custom_files,
+        edit_text_encoder: input.edit_text_encoder.parse().unwrap_or_default(),
+        edit_vae: input.edit_vae.parse().unwrap_or_default(),
     })
+}
+
+fn validate_edit_placement_engine(
+    input: &crate::editing::StartEditInput,
+    engine: Option<&crate::types::EngineInfo>,
+) -> AppResult<()> {
+    let uses_override = input.edit_text_encoder != "auto" || input.edit_vae != "auto";
+    if uses_override
+        && !engine.is_some_and(|engine| engine.features.iter().any(|f| f == "edit_placement"))
+    {
+        return Err(AppError::Validation(
+            "This engine does not support choosing where the text encoder or VAE run. Update LocalSR or leave them on Auto."
+                .into(),
+        ));
+    }
+    Ok(())
 }
 
 /// The editing program to run: the one the host found at start-up or one the user

@@ -22,6 +22,8 @@ from localsr.core.child_processes import native_environment, stop_process, track
 from localsr.core.disk_space import edit_bytes, require_room
 from localsr.core.edit_memory import (
     GIB,
+    PLACEMENT_CHOICES,
+    EditPlan,
     minimum_unified_memory_gb,
     minimum_vram_gb,
     plan_edit,
@@ -233,6 +235,9 @@ def validate_request(data: dict) -> dict:
         raise ValueError("Seed must be between 0 and 2147483647.")
     if model["terms_acceptance_required"] and data.get("accepted_terms") is not True:
         raise ValueError("Review and accept this model's license before editing.")
+    for key in ("edit_text_encoder", "edit_vae"):
+        if data.get(key, "auto") not in PLACEMENT_CHOICES:
+            raise ValueError(f"{key} must be auto, gpu or cpu.")
     return model
 
 
@@ -405,6 +410,18 @@ def edit_dimensions(width: int, height: int, limit: int) -> tuple[int, int]:
     )
 
 
+def placement_note(model: dict, plan: EditPlan, device: str) -> str:
+    if model["family"] == "mage-flow-edit-turbo" and device == "mps":
+        return "Diffusion model, text encoder, and VAE ran on the CPU."
+    if plan.text_encoder == "gpu" and plan.vae == "gpu":
+        return "Text encoder and VAE ran on the GPU."
+    if plan.text_encoder == "gpu":
+        return "Text encoder ran on the GPU; VAE ran on the CPU."
+    if plan.vae == "gpu":
+        return "VAE ran on the GPU; text encoder ran on the CPU."
+    return "Text encoder and VAE ran on the CPU."
+
+
 def build_edit_command(
     runtime,
     model,
@@ -429,6 +446,8 @@ def build_edit_command(
     # diffusion transformer on Apple Silicon, whereas full CPU with default
     # physical-core threading finishes a 512 px edit in ~96 s.
     use_cpu = model["family"] == "mage-flow-edit-turbo" and device == "mps"
+    te_backend = gpu if plan.text_encoder == "gpu" else "cpu"
+    vae_backend = gpu if plan.vae == "gpu" else "cpu"
     width, height = dimensions
     args = [
         str(runtime),
@@ -455,7 +474,7 @@ def build_edit_command(
         str(height),
         "--sampling-method",
         "euler",
-        "--offload-to-cpu",
+        *(["--offload-to-cpu"] if plan.offload else []),
         "--mmap",
         "--disable-prefetch",
         "--fa",
@@ -465,7 +484,7 @@ def build_edit_command(
         "--conditioning-cache-size",
         "0",
         "--backend",
-        "cpu" if use_cpu else f"diffusion={gpu},te=cpu,vae=cpu",
+        "cpu" if use_cpu else f"diffusion={gpu},te={te_backend},vae={vae_backend}",
         "--max-vram",
         f"{plan.gpu_budget / GIB:.2f}",
         "--cfg-scale",
@@ -484,8 +503,16 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
     model = validate_request(data)
     steps = int(data.get("steps") or model.get("default_steps", 40))
     device = str(data.get("device", "mps"))
+    edit_text_encoder = str(data.get("edit_text_encoder", "auto"))
+    edit_vae = str(data.get("edit_vae", "auto"))
     initial = sampler(device)
-    plan = plan_edit(model, initial, data.get("max_dimension", 512))
+    plan = plan_edit(
+        model,
+        initial,
+        data.get("max_dimension", 512),
+        text_encoder=edit_text_encoder,
+        vae=edit_vae,
+    )
     if cancel.is_set():
         raise InterruptedError("Editing cancelled.")
     require_output_name(data["output_path"])
@@ -530,7 +557,13 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
     tracker.enter(1)
     # Re-admit after the potentially long checksum pass, without trusting stale free RAM.
     initial = sampler(device)
-    plan = plan_edit(model, initial, data.get("max_dimension", 512))
+    plan = plan_edit(
+        model,
+        initial,
+        data.get("max_dimension", 512),
+        text_encoder=edit_text_encoder,
+        vae=edit_vae,
+    )
     output = Path(data["output_path"])
     if output.exists():
         raise FileExistsError("The edit result already exists; choose a new output filename.")
@@ -649,6 +682,9 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
             process.stdout.close()
         emit(
             JobCompleted(
-                job_id, elapsed_seconds=time.monotonic() - started, output_path=str(output)
+                job_id,
+                elapsed_seconds=time.monotonic() - started,
+                output_path=str(output),
+                notes=placement_note(model, plan, device),
             )
         )

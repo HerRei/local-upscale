@@ -111,6 +111,8 @@ class EditJobRequest:
     output_temporary_directory: str | None = None
     family: str = ""
     custom_files: dict[str, str] | None = None
+    edit_text_encoder: str = "auto"
+    edit_vae: str = "auto"
 
     def to_json(self) -> str:
         return json.dumps({"type": "edit_job_request", "data": asdict(self)})

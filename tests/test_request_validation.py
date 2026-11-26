@@ -423,3 +423,14 @@ def test_the_packaged_schema_copy_matches_the_protocol_schema():
     assert packaged.read_bytes() == source.read_bytes(), (
         "Copy protocol/worker-protocol.schema.json to src/localsr/protocol/ after editing it."
     )
+
+
+def test_edit_placement_fields_validated_against_schema():
+    base = SAMPLES["edit_catalog_model"]["data"]
+    for choice in ("auto", "gpu", "cpu"):
+        validate_edit_job({**base, "edit_text_encoder": choice, "edit_vae": choice})
+    for bad in ("tpu", 123, None):
+        with pytest.raises(InvalidRequest, match="edit_text_encoder"):
+            validate_edit_job({**base, "edit_text_encoder": bad})
+        with pytest.raises(InvalidRequest, match="edit_vae"):
+            validate_edit_job({**base, "edit_vae": bad})

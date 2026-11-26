@@ -65,7 +65,9 @@
               "custom_files": {
                 "type": ["object", "null"],
                 "additionalProperties": { "type": "string", "minLength": 1 }
-              }
+              },
+              "edit_text_encoder": { "enum": ["auto", "gpu", "cpu"], "default": "auto" },
+              "edit_vae": { "enum": ["auto", "gpu", "cpu"], "default": "auto" }
             },
             "additionalProperties": false
           }

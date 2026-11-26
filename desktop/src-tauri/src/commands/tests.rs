@@ -3327,6 +3327,8 @@ fn ungranted_paths_are_refused_for_every_path_taking_command() {
                     seed: 1,
                     accepted_terms: true,
                     output_directory: ungranted_dir.to_string_lossy().into_owned(),
+                    edit_text_encoder: "auto".into(),
+                    edit_vae: "auto".into(),
                 },
             ),
         ),
@@ -3345,6 +3347,8 @@ fn ungranted_paths_are_refused_for_every_path_taking_command() {
                     seed: 1,
                     accepted_terms: true,
                     output_directory: String::new(),
+                    edit_text_encoder: "auto".into(),
+                    edit_vae: "auto".into(),
                 },
             ),
         ),
@@ -4020,9 +4024,126 @@ fn custom_edit_model_requires_grants_checks_sd_cli_and_persists_paths_in_place()
             seed: 42,
             accepted_terms: false,
             output_directory: String::new(),
+            edit_text_encoder: "auto".into(),
+            edit_vae: "auto".into(),
         },
     )
     .unwrap();
+}
+
+#[test]
+fn edit_placement_overrides_are_gated_by_engine_feature() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(&dir.path().join("app"));
+    let state = AppState::from_paths(paths).unwrap();
+    let edit_model = crate::editing::catalog_in(&state.model_root())
+        .unwrap()
+        .into_iter()
+        .find(|m| m.model_id == "flux2_klein_4b_q4_0")
+        .unwrap();
+    let bundle_dir = state.paths.model_root.join(&edit_model.family);
+    fs::create_dir_all(&bundle_dir).unwrap();
+    for file in &edit_model.files {
+        fs::File::create(bundle_dir.join(&file.filename))
+            .unwrap()
+            .set_len(file.size_bytes)
+            .unwrap();
+    }
+    let sd_cli = dir.path().join("sd-cli");
+    fs::write(&sd_cli, b"rt").unwrap();
+    *lock(&state.edit_runtime).unwrap() = sd_cli.to_string_lossy().into_owned();
+    lock(&state.runtime).unwrap().worker = "ready".into();
+    *lock(&state.engine).unwrap() = Some(crate::types::EngineInfo {
+        protocol_version: 1,
+        minimum_protocol_version: 1,
+        engine_id: "old".into(),
+        engine_version: "0.6.2".into(),
+        features: vec!["image_edit".into()],
+        model_formats: vec![],
+        video_engines: vec![],
+    });
+    lock(&state.capabilities)
+        .unwrap()
+        .devices
+        .push(crate::types::DeviceInfo {
+            id: "cuda:0".into(),
+            device_type: "cuda".into(),
+            name: "RTX".into(),
+            ..Default::default()
+        });
+    let photo = dir.path().join("photo.png");
+    fs::write(&photo, b"png").unwrap();
+    state.grants.grant_media_file(&photo);
+    {
+        let db = lock(&state.database).unwrap();
+        db.insert_media("m1", photo.to_str().unwrap(), "photo.png", "image")
+            .unwrap();
+        db.update_media_probe(
+            photo.to_str().unwrap(),
+            "image",
+            512,
+            512,
+            1,
+            0.0,
+            0.0,
+            "",
+            "",
+            "",
+            false,
+        )
+        .unwrap();
+    }
+
+    let make_input = |te: &str, vae: &str| crate::editing::StartEditInput {
+        media_id: "m1".into(),
+        model_id: edit_model.model_id.clone(),
+        prompt: "Add snow".into(),
+        runtime_path: String::new(),
+        device: "cuda:0".into(),
+        max_dimension: 512,
+        steps: 4,
+        seed: 42,
+        accepted_terms: false,
+        output_directory: String::new(),
+        edit_text_encoder: te.into(),
+        edit_vae: vae.into(),
+    };
+
+    // Old engine without edit_placement: auto succeeds and omits placement fields from the wire.
+    start_edit_checked(&state, make_input("auto", "auto")).unwrap();
+    let queued = lock(&state.database)
+        .unwrap()
+        .next_queued_job()
+        .unwrap()
+        .unwrap();
+    let wire: Value = serde_json::from_str(&queued.request_json).unwrap();
+    assert!(wire["data"].get("edit_text_encoder").is_none());
+    assert!(wire["data"].get("edit_vae").is_none());
+    lock(&state.database)
+        .unwrap()
+        .finish_job(&queued.id, "completed", "", "")
+        .unwrap();
+
+    // Old engine refuses explicit overrides.
+    assert!(start_edit_checked(&state, make_input("cpu", "auto")).is_err());
+    assert!(start_edit_checked(&state, make_input("auto", "gpu")).is_err());
+
+    // Engine with edit_placement accepts overrides and serializes them.
+    lock(&state.engine)
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .features
+        .push("edit_placement".into());
+    start_edit_checked(&state, make_input("cpu", "gpu")).unwrap();
+    let next = lock(&state.database)
+        .unwrap()
+        .next_queued_job()
+        .unwrap()
+        .unwrap();
+    let latest: Value = serde_json::from_str(&next.request_json).unwrap();
+    assert_eq!(latest["data"]["edit_text_encoder"], "cpu");
+    assert_eq!(latest["data"]["edit_vae"], "gpu");
 }
 
 #[test]
@@ -4790,6 +4911,8 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
         seed: 42,
         accepted_terms: false,
         output_directory: "/out".into(),
+        edit_text_encoder: "auto".into(),
+        edit_vae: "auto".into(),
     };
     let custom_edit_model = crate::editing::EditModel {
         model_id: "__custom__".into(),
@@ -4807,6 +4930,8 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
         seed: 7,
         accepted_terms: false,
         output_directory: "/out".into(),
+        edit_text_encoder: "auto".into(),
+        edit_vae: "auto".into(),
     };
     let custom_files = std::collections::BTreeMap::from([
         ("diffusion".into(), "/custom/flux.gguf".into()),

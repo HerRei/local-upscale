@@ -161,6 +161,7 @@ def _engine_features() -> list[str]:
         "progressive_preview",
         "benchmark_v1",
         "image_16bit",
+        "edit_placement",
     ]
     for feature in REQUIRED_STEP_FEATURES:
         if feature not in features:
