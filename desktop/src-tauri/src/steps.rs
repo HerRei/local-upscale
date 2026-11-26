@@ -78,6 +78,8 @@ pub struct StepDefinition {
     pub is_fix_stage: bool,
     pub in_recipe_stages: bool,
     #[serde(default)]
+    pub row_label: String,
+    #[serde(default)]
     pub stage_label: String,
     pub required_feature: Option<String>,
     #[serde(default)]
@@ -161,6 +163,15 @@ impl StepRegistry {
         self.step(fix)
             .and_then(|step| step.stage_kind.as_deref())
             .unwrap_or("restore")
+    }
+
+    pub fn fix_row_label(&self, fix: &str) -> &str {
+        self.steps
+            .iter()
+            .find(|step| step.is_fix_stage && step.fix_kind.as_deref() == Some(fix))
+            .map(|step| step.row_label.as_str())
+            .filter(|label| !label.is_empty())
+            .unwrap_or("Fix")
     }
 
     pub fn stage_label(&self, kind: &str) -> &str {

@@ -18,6 +18,7 @@ mod gpu_notice;
 mod grants;
 mod headless_smoke;
 mod integrations;
+mod job_plan;
 mod launch;
 #[cfg(any(target_os = "linux", test))]
 mod media_server;
@@ -253,6 +254,7 @@ pub fn run() {
             commands::set_privacy_choice,
             commands::save_recipe,
             commands::delete_recipe,
+            commands::plan_job,
             commands::start_jobs,
             commands::open_edit_link,
             commands::start_edit,

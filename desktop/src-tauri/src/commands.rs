@@ -1042,6 +1042,88 @@ pub(crate) fn delete_recipe_checked(state: &AppState, id: &str) -> AppResult<()>
     remove_recipe(state, id)
 }
 
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[serde(default)]
+pub struct PlanJobOptions {
+    pub face_model_id: Option<String>,
+    pub face_enabled: bool,
+    pub using_temporal_video: Option<bool>,
+    pub selected_video_model_id: Option<String>,
+    pub edit_model_id: Option<String>,
+    pub has_audio: Option<bool>,
+}
+
+#[tauri::command]
+pub fn plan_job(
+    state: State<'_, Arc<AppState>>,
+    settings: UiSettings,
+    options: Option<PlanJobOptions>,
+) -> AppResult<Vec<crate::job_plan::PlanStage>> {
+    plan_job_checked(&state, settings, options.unwrap_or_default())
+}
+
+pub(crate) fn plan_job_checked(
+    state: &AppState,
+    settings: UiSettings,
+    options: PlanJobOptions,
+) -> AppResult<Vec<crate::job_plan::PlanStage>> {
+    let catalog = lock(&state.catalog)?.clone();
+    let capabilities = lock(&state.capabilities)?.clone();
+    let effective = crate::job_plan::with_listed_device(&settings, &capabilities);
+    let steps = crate::steps::registry();
+    let model_root = crate::state::effective_model_root(&state.paths, &effective);
+    let edit_models = if effective.task == "edit" {
+        crate::editing::catalog_in(&model_root)?
+    } else {
+        Vec::new()
+    };
+    let custom_edit = if effective.task == "edit" {
+        crate::editing::custom_edit_model(&effective.custom_edit_model)
+    } else {
+        None
+    };
+
+    let face_model = options
+        .face_model_id
+        .as_deref()
+        .and_then(|id| catalog.models.iter().find(|model| model.model_id == id));
+    let video_id = options
+        .selected_video_model_id
+        .as_deref()
+        .unwrap_or(&effective.selected_video_model_id);
+    let selected_video_model = catalog
+        .video_models
+        .iter()
+        .find(|model| model.model_id == video_id);
+    let edit_id = options
+        .edit_model_id
+        .as_deref()
+        .unwrap_or(&effective.edit_model_id);
+    let edit_model = if edit_id == crate::editing::CUSTOM_EDIT_MODEL_ID {
+        custom_edit.as_ref()
+    } else {
+        edit_models.iter().find(|model| model.model_id == edit_id)
+    };
+    let using_temporal_video = options
+        .using_temporal_video
+        .unwrap_or_else(|| crate::job_plan::default_using_temporal_video(&effective));
+
+    let plan_options = crate::job_plan::PlanOptions {
+        face_model,
+        face_enabled: options.face_enabled,
+        using_temporal_video,
+        selected_video_model,
+        edit_model,
+        has_audio: options.has_audio,
+    };
+    Ok(crate::job_plan::resolve_plan(
+        &catalog,
+        steps,
+        &effective,
+        &plan_options,
+    ))
+}
+
 #[tauri::command]
 pub async fn start_jobs(
     state: State<'_, Arc<AppState>>,

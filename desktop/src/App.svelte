@@ -117,6 +117,7 @@
     videoModelShortName,
     videoModelsForJob,
   } from './lib/videoEngines';
+  import { buildStartInput } from './lib/startInput';
   import { demoSnapshot } from './lib/demo';
   import { modal } from './lib/modal';
   import {
@@ -3396,56 +3397,13 @@
   }
 
   function makeStartInput(ids: string[], task: TaskKind, batchMode: boolean): StartBatchInput {
-    return {
-      media_ids: ids,
-      // What the plan card showed, kept with the job for the result history.
-      ui: {
-        quality: settings.quality,
-        content: settings.content,
-        recipe_name: snapshot.recipes.find((recipe) => activeRecipeIds.has(recipe.id))?.name ?? '',
-        fixes: [...settings.fixes],
-      },
-      batch_mode: batchMode,
+    return buildStartInput(settings, {
+      mediaIds: ids,
       task,
-      video_task: videoTask,
-      model_id: noRestoreModel ? '' : settings.selected_model_id,
-      video_model_id: settings.selected_video_model_id,
-      fix_stages: usingTemporalVideo ? [] : imageFixes,
-      custom_model_path: settings.custom_model_path,
-      output_directory: settings.output_directory,
-      output_format: settings.output_format,
-      output_scale: settings.output_scale,
-      preserve_metadata: settings.preserve_metadata,
-      jpeg_quality: settings.jpeg_quality,
-      device: settings.device_id,
-      tile_size: settings.tile_size,
-      halo: settings.halo,
-      precision: settings.precision,
-      safe_memory: settings.safe_memory,
-      neural_engine: settings.neural_engine ?? true,
-      deflicker: usingTemporalVideo ? false : settings.deflicker,
-      deflicker_window: settings.deflicker_window,
-      video_container: settings.video_container,
-      video_codec: settings.video_codec ?? 'auto',
-      external_ffmpeg_path: settings.external_ffmpeg_path ?? '',
-      video_hdr_mode: usingTemporalVideo ? 'tone_map' : (settings.video_hdr_mode ?? 'tone_map'),
-      video_target_resolution: settings.video_target_resolution ?? 0,
-      video_low_memory: settings.video_low_memory ?? true,
-      video_crf: settings.video_crf,
-      enable_face_model: false,
-      face_fidelity: settings.face_fidelity,
-      enable_live_preview: settings.enable_live_preview,
-      allow_unsafe_pickle_model: settings.allow_unsafe_pickle_model,
-      // Frame interpolation is a frame-by-frame video stage.
-      video_interpolation:
-        settings.task === 'video' && !usingTemporalVideo
-          ? (settings.video_interpolation ?? 'off')
-          : 'off',
-      video_interpolation_order: settings.video_interpolation_order ?? 'after_upscale',
-      video_clean_audio:
-        settings.task === 'video' && !audioDisabled && Boolean(settings.video_clean_audio),
-      video_audio_model: settings.video_audio_model ?? '',
-    };
+      batchMode,
+      hasAudio: audioHasSource,
+      recipeName: snapshot.recipes.find((recipe) => activeRecipeIds.has(recipe.id))?.name ?? '',
+    });
   }
 
   async function start(mediaIds?: string[]): Promise<void> {

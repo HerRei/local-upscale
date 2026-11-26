@@ -30,6 +30,7 @@ import {
   listenForEngineStatus,
   listenForModelMove,
   listenForWorker,
+  planJob,
   refreshEngineCatalog,
   removeEngine,
   saveCustomEditModel,
@@ -38,6 +39,7 @@ import {
   uninstallLinuxMenu,
   useEngine,
 } from './api';
+import { demoSnapshot } from './demo';
 
 afterEach(() => {
   delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
@@ -288,4 +290,29 @@ it('forwards engine manager commands and status events', async () => {
     },
   });
   expect(statuses).toHaveLength(1);
+});
+
+it('forwards plan_job with settings and options', async () => {
+  const settings = {
+    ...demoSnapshot().settings,
+    task: 'upscale' as const,
+    selected_model_id: 'span_photo_x4',
+  };
+  const expected = [
+    {
+      kind: 'upscale' as const,
+      role: 'primary' as const,
+      remembered: false,
+      label: 'Upscale ×4',
+      model_id: 'span_photo_x4',
+      installed: false,
+      can_download: true,
+      needs_file: false,
+      size_bytes: 1234,
+    },
+  ];
+  invoke.mockResolvedValueOnce(expected);
+  const options = { face_enabled: false, has_audio: true };
+  expect(await planJob(settings, options)).toEqual(expected);
+  expect(invoke).toHaveBeenCalledWith('plan_job', { settings, options });
 });

@@ -1,0 +1,676 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { demoSnapshot } from './demo';
+import { withListedDevice } from './neuralEngine';
+import { resolvePlan, type PlanStage } from './plan';
+import { buildStartInput } from './startInput';
+import type {
+  CapabilityInfo,
+  FixKind,
+  FixStageSelection,
+  InterpolationOrder,
+  InterpolationTarget,
+  StartBatchInput,
+  TaskKind,
+  UiSettings,
+} from './types';
+
+type FixKindNoFace = Exclude<FixKind, 'faces'>;
+
+interface SerializedPlanStage {
+  kind: PlanStage['kind'];
+  role: PlanStage['role'];
+  fix?: FixKindNoFace;
+  remembered?: boolean;
+  missing?: boolean;
+  label: string;
+  model_id?: string;
+  video_model_id?: string;
+  interpolation_model_id?: string;
+  audio_model_id?: string;
+  edit_model_id?: string;
+  custom?: string;
+  installed: boolean;
+  can_download: boolean;
+  needs_file: boolean;
+  size_bytes: number;
+}
+
+interface ParityCase {
+  id: string;
+  installed_ids: string[];
+  capabilities: CapabilityInfo;
+  settings: UiSettings;
+  options: {
+    face_model_id: string | null;
+    face_enabled: boolean;
+    using_temporal_video: boolean;
+    selected_video_model_id: string | null;
+    edit_model_id: string | null;
+    has_audio: boolean | null;
+  };
+  start_request: {
+    media_ids: string[];
+    task: TaskKind | '';
+    batch_mode: boolean;
+    recipe_name: string;
+  };
+  expected_plan: SerializedPlanStage[];
+  expected_start_input: StartBatchInput;
+}
+
+const FIXTURE_PATH = path.resolve(__dirname, '../../src-tauri/tests/fixtures/job_plan_cases.json');
+
+const ALL_FIXES: FixKindNoFace[] = ['noise', 'jpeg', 'blur', 'colour'];
+
+const DEFAULT_FIX_MODELS: Record<FixKindNoFace, string> = {
+  noise: 'denoise_realplksr_1x',
+  jpeg: 'fbcnn_color',
+  blur: 'nafnet_gopro_deblur',
+  colour: 'ddcolor_modelscope',
+};
+
+const ALT_FIX_MODELS: Record<FixKindNoFace, string> = {
+  noise: 'scunet_color_real_psnr',
+  jpeg: 'fbcnn_color',
+  blur: 'nafnet_gopro_deblur',
+  colour: 'ddcolor_modelscope',
+};
+
+function serializePlanStage(stage: PlanStage): SerializedPlanStage {
+  return {
+    kind: stage.kind,
+    role: stage.role,
+    ...(stage.fix !== undefined ? { fix: stage.fix } : {}),
+    ...(stage.remembered !== undefined ? { remembered: stage.remembered } : {}),
+    ...(stage.missing !== undefined ? { missing: stage.missing } : {}),
+    label: stage.label,
+    ...(stage.model ? { model_id: stage.model.model_id } : {}),
+    ...(stage.videoModel ? { video_model_id: stage.videoModel.model_id } : {}),
+    ...(stage.interpolationModel
+      ? { interpolation_model_id: stage.interpolationModel.model_id }
+      : {}),
+    ...(stage.audioModel ? { audio_model_id: stage.audioModel.model_id } : {}),
+    ...(stage.editModel ? { edit_model_id: stage.editModel.model_id } : {}),
+    ...(stage.custom !== undefined ? { custom: stage.custom } : {}),
+    installed: stage.installed,
+    can_download: stage.canDownload,
+    needs_file: stage.needsFile,
+    size_bytes: stage.sizeBytes,
+  };
+}
+
+function makeCapabilities(deviceIds: string[]): CapabilityInfo {
+  const base = demoSnapshot().capabilities;
+  return {
+    ...base,
+    devices: deviceIds.map((id) => ({
+      id,
+      type: id === 'cpu' ? 'cpu' : id.startsWith('cuda') ? 'cuda' : 'mps',
+      name: id.toUpperCase(),
+      total_memory: 16 * 1024 ** 3,
+      free_memory: 12 * 1024 ** 3,
+      supports_fp16: id !== 'cpu',
+      is_integrated: id === 'mps',
+      recommended_tile_sizes: [64, 128, 256],
+      neural_engine: id === 'mps',
+    })),
+  };
+}
+
+function makeCase(
+  id: string,
+  spec: {
+    settingsPatch: Partial<UiSettings>;
+    installedIds?: string[];
+    deviceIds?: string[];
+    faceModelId?: string | null;
+    faceEnabled?: boolean;
+    usingTemporalVideo?: boolean;
+    selectedVideoModelId?: string | null;
+    editModelId?: string | null;
+    hasAudio?: boolean | null;
+    mediaIds?: string[];
+    batchMode?: boolean;
+    recipeName?: string;
+  },
+): ParityCase {
+  const snapshot = demoSnapshot();
+  const installedIds = [...new Set(spec.installedIds ?? [])].sort();
+  const installedSet = new Set(installedIds);
+
+  for (const model of snapshot.catalog.models) {
+    model.installed = installedSet.has(model.model_id);
+  }
+  for (const model of [
+    ...snapshot.catalog.video_models,
+    ...snapshot.catalog.interpolation_models,
+    ...(snapshot.catalog.audio_models ?? []),
+  ]) {
+    model.installed = installedSet.has(model.model_id);
+  }
+  for (const model of snapshot.edit.models) {
+    model.installed = installedSet.has(model.model_id);
+  }
+
+  const capabilities = makeCapabilities(spec.deviceIds ?? ['cpu', 'mps']);
+  const settings: UiSettings = {
+    ...snapshot.settings,
+    ...spec.settingsPatch,
+  };
+  const effectiveSettings = withListedDevice(settings, capabilities);
+
+  const faceModelId = spec.faceModelId ?? null;
+  const faceEnabled = spec.faceEnabled ?? false;
+  const usingTemporalVideo = spec.usingTemporalVideo ?? false;
+  const selectedVideoModelId = spec.selectedVideoModelId ?? null;
+  const editModelId = spec.editModelId ?? null;
+  const hasAudio = spec.hasAudio === undefined ? null : spec.hasAudio;
+
+  const faceModel = faceModelId
+    ? snapshot.catalog.models.find((m) => m.model_id === faceModelId)
+    : undefined;
+  const selectedVideoModel = selectedVideoModelId
+    ? snapshot.catalog.video_models.find((m) => m.model_id === selectedVideoModelId)
+    : undefined;
+  const editModel = editModelId
+    ? snapshot.edit.models.find((m) => m.model_id === editModelId)
+    : undefined;
+
+  const plan = resolvePlan(snapshot, effectiveSettings, {
+    faceModel,
+    faceEnabled,
+    usingTemporalVideo,
+    selectedVideoModel,
+    editModel,
+    hasAudio: hasAudio === null ? undefined : hasAudio,
+  });
+
+  const mediaIds = spec.mediaIds ?? ['media-1'];
+  const batchMode = spec.batchMode ?? false;
+  const recipeName = spec.recipeName ?? '';
+  const startInput = buildStartInput(settings, {
+    mediaIds,
+    task: effectiveSettings.task,
+    batchMode,
+    hasAudio: hasAudio === null ? true : hasAudio,
+    recipeName,
+    capabilities,
+  });
+
+  return {
+    id,
+    installed_ids: installedIds,
+    capabilities,
+    settings,
+    options: {
+      face_model_id: faceModelId,
+      face_enabled: faceEnabled,
+      using_temporal_video: usingTemporalVideo,
+      selected_video_model_id: selectedVideoModelId,
+      edit_model_id: editModelId,
+      has_audio: hasAudio,
+    },
+    start_request: {
+      media_ids: mediaIds,
+      task: settings.task,
+      batch_mode: batchMode,
+      recipe_name: recipeName,
+    },
+    expected_plan: plan.map(serializePlanStage),
+    expected_start_input: startInput,
+  };
+}
+
+function buildCorpus(): ParityCase[] {
+  const cases: ParityCase[] = [];
+  let index = 0;
+  const push = (tag: string, spec: Parameters<typeof makeCase>[1]) => {
+    index += 1;
+    cases.push(makeCase(`case-${String(index).padStart(3, '0')}-${tag}`, spec));
+  };
+
+  // 1. Image upscale: qualities x contents x single fixes x face x installed (64 cases)
+  for (const quality of ['quick', 'best'] as const) {
+    for (const content of ['photo', 'illustration'] as const) {
+      const selectedModelId =
+        content === 'photo'
+          ? quality === 'quick'
+            ? 'span_photo_x4'
+            : 'realplksr_nomoswebphoto_x4'
+          : quality === 'quick'
+            ? 'realesrgan_x4plus_anime_6b'
+            : 'esrgan_hfa2k_x4';
+      for (const fix of ALL_FIXES) {
+        for (const faceEnabled of [false, true]) {
+          const fixModelId = DEFAULT_FIX_MODELS[fix];
+          const installedIds = faceEnabled ? [selectedModelId, 'hat_l_x4_face'] : [fixModelId];
+          push(`upscale-${quality}-${content}-${fix}-face_${faceEnabled}`, {
+            settingsPatch: {
+              task: 'upscale',
+              quality,
+              content,
+              output_scale: quality === 'quick' ? 2 : 4,
+              selected_model_id: selectedModelId,
+              fixes: faceEnabled ? [fix, 'faces'] : [fix],
+              fix_stages: [{ fix, model_id: fixModelId }],
+              enable_face_model: faceEnabled,
+            },
+            installedIds,
+            faceEnabled,
+            faceModelId: faceEnabled ? 'hat_l_x4_face' : 'hat_s_x4_face',
+          });
+        }
+      }
+    }
+  }
+
+  // 2. All ordered pairs of fix kinds across upscale & denoise, with pins & missing models (72 cases)
+  const fixPairs: [FixKindNoFace, FixKindNoFace][] = [];
+  for (const first of ALL_FIXES) {
+    for (const second of ALL_FIXES) {
+      if (first !== second) fixPairs.push([first, second]);
+    }
+  }
+  for (const [first, second] of fixPairs) {
+    for (const task of ['upscale', 'denoise'] as const) {
+      for (const pinFirst of [false, true]) {
+        const firstModel = ALT_FIX_MODELS[first];
+        const secondModel = DEFAULT_FIX_MODELS[second];
+        const primaryId = task === 'denoise' ? secondModel : 'span_photo_x4';
+        const presetPins: Record<string, string> = pinFirst
+          ? { [`fix/${first}/best`]: firstModel }
+          : {};
+        push(`pair-${task}-${first}-${second}-pin_${pinFirst}`, {
+          settingsPatch: {
+            task,
+            quality: 'best',
+            selected_model_id: primaryId,
+            output_scale: task === 'denoise' ? 1 : 4,
+            fixes: [first, second],
+            fix_stages: [
+              { fix: first, model_id: firstModel },
+              { fix: second, model_id: secondModel },
+            ],
+            preset_pins: presetPins,
+          },
+          installedIds: pinFirst ? [primaryId, firstModel] : [secondModel],
+          faceEnabled: true,
+          faceModelId: 'hat_l_x4_face',
+        });
+      }
+    }
+  }
+  // Additional 12 cases for all pairs with quick quality + one missing model on second fix
+  for (const [first, second] of fixPairs) {
+    push(`pair-missing-${first}-${second}`, {
+      settingsPatch: {
+        task: 'upscale',
+        quality: 'quick',
+        selected_model_id: 'localsr_quick_x4_v1',
+        fixes: [first, second],
+        fix_stages: [
+          { fix: first, model_id: DEFAULT_FIX_MODELS[first] },
+          { fix: second, model_id: 'missing_model_id' },
+        ],
+      },
+      installedIds: [DEFAULT_FIX_MODELS[first]],
+    });
+  }
+
+  // 3. Restore task ('denoise') variations: single fixes, 3 fixes, 4 fixes, custom, missing, no-fix (32 cases)
+  for (const quality of ['quick', 'best', 'custom', ''] as const) {
+    for (const fix of ALL_FIXES) {
+      const modelId = ALT_FIX_MODELS[fix];
+      push(`restore-${quality || 'empty'}-${fix}`, {
+        settingsPatch: {
+          task: 'denoise',
+          quality,
+          output_scale: 1,
+          selected_model_id: modelId,
+          fixes: [fix],
+          fix_stages: [{ fix, model_id: modelId }],
+          preset_pins: { [`fix/${fix}/best`]: modelId },
+        },
+        installedIds: quality === 'quick' ? [modelId] : [],
+      });
+    }
+  }
+  for (const customPath of ['', '/models/custom_restore.safetensors']) {
+    for (const installed of [false, true]) {
+      push(`restore-custom-${customPath ? 'set' : 'empty'}-${installed}`, {
+        settingsPatch: {
+          task: 'denoise',
+          quality: 'custom',
+          output_scale: 1,
+          selected_model_id: '__custom__',
+          custom_model_path: customPath,
+          fix_stages: [],
+          fixes: [],
+        },
+        installedIds: installed ? ['span_photo_x4'] : [],
+      });
+    }
+  }
+  for (const fixStages of [
+    [] as FixStageSelection[],
+    [{ fix: 'blur' as const, model_id: 'fbcnn_color' }], // misfit
+    [{ fix: 'jpeg' as const, model_id: 'missing' }], // missing
+    [
+      { fix: 'blur' as const, model_id: 'nafnet_gopro_deblur' },
+      { fix: 'jpeg' as const, model_id: 'fbcnn_color' },
+      { fix: 'noise' as const, model_id: 'scunet_color_real_psnr' },
+    ],
+    [
+      { fix: 'blur' as const, model_id: 'nafnet_gopro_deblur' },
+      { fix: 'jpeg' as const, model_id: 'fbcnn_color' },
+      { fix: 'noise' as const, model_id: 'scunet_color_real_psnr' },
+      { fix: 'colour' as const, model_id: 'ddcolor_modelscope' },
+    ],
+  ]) {
+    for (const selectedId of ['denoise_realplksr_1x', 'missing_primary']) {
+      push(`restore-multi-${fixStages.length}-${selectedId}`, {
+        settingsPatch: {
+          task: 'denoise',
+          output_scale: 1,
+          selected_model_id: selectedId,
+          fix_stages: fixStages,
+          fixes: fixStages.map((s) => s.fix),
+        },
+        installedIds: ['nafnet_gopro_deblur', 'fbcnn_color'],
+      });
+    }
+  }
+
+  // 4. Upscale custom model, preset pins, face installed/uninstalled, batch/device fallback (36 cases)
+  for (const customPath of ['', '/models/my_upscaler.pth']) {
+    for (const faceEnabled of [false, true]) {
+      for (const faceInstalled of [false, true]) {
+        push(
+          `upscale-custom-${customPath ? 'set' : 'empty'}-face_${faceEnabled}_${faceInstalled}`,
+          {
+            settingsPatch: {
+              task: 'upscale',
+              quality: 'custom',
+              selected_model_id: '__custom__',
+              custom_model_path: customPath,
+              output_scale: 4,
+              device_id: 'cuda:0', // unlisted in ['cpu', 'mps'] -> falls back to cpu
+            },
+            deviceIds: ['cpu', 'mps'],
+            installedIds: faceInstalled ? ['hat_l_x4_face'] : [],
+            faceEnabled,
+            faceModelId: 'hat_l_x4_face',
+            batchMode: true,
+            mediaIds: ['m1', 'm2'],
+            recipeName: 'Custom upscale',
+          },
+        );
+      }
+    }
+  }
+  const pinConfigs: Record<string, string>[] = [
+    {},
+    { 'upscale/photo/best': 'hat_l_x4_imagenet' },
+    { 'fix/noise/best': 'scunet_color_real_psnr' },
+    { 'fix/noise/quick': 'scunet_color_real_psnr' },
+    { 'fix/noise/best': 'fbcnn_color' }, // invalid pin for noise
+    { 'fix/jpeg/best': 'fbcnn_color', 'fix/blur/quick': 'nafnet_gopro_deblur' },
+  ];
+  for (const pins of pinConfigs) {
+    for (const quality of ['quick', 'best'] as const) {
+      for (const installed of [false, true]) {
+        push(`pins-${quality}-${Object.keys(pins).length}-${installed}`, {
+          settingsPatch: {
+            task: 'upscale',
+            quality,
+            selected_model_id: 'realplksr_nomoswebphoto_x4',
+            fix_stages: [
+              { fix: 'noise', model_id: 'scunet_color_real_psnr' },
+              { fix: 'jpeg', model_id: 'fbcnn_color' },
+            ],
+            fixes: ['noise', 'jpeg'],
+            preset_pins: pins,
+            device_id: 'mps',
+          },
+          deviceIds: ['mps'], // no cpu, mps listed
+          installedIds: installed ? ['realplksr_nomoswebphoto_x4', 'scunet_color_real_psnr'] : [],
+        });
+      }
+    }
+  }
+
+  // 5. Video frame-by-frame upscale: interpolation x order x clean audio x hasAudio x fixes (96 cases)
+  const interpTargets: InterpolationTarget[] = ['off', 'x2', 'fps60'];
+  const interpOrders: InterpolationOrder[] = ['after_upscale', 'before_upscale'];
+  for (const target of interpTargets) {
+    for (const order of interpOrders) {
+      for (const cleanAudio of [false, true]) {
+        for (const hasAudio of [true, false, null] as const) {
+          for (const audioModel of ['', 'dpdfnet8_48khz_hr']) {
+            for (const withFix of [false, true]) {
+              if (cases.length >= 340 && target === 'off' && order === 'before_upscale') continue;
+              const installedIds = withFix
+                ? ['span_photo_x4', 'rife_4_26', 'deepfilternet3']
+                : ['dpdfnet8_48khz_hr'];
+              push(
+                `video-fbf-${target}-${order}-aud_${cleanAudio}_${hasAudio}-${audioModel || 'def'}-fix_${withFix}`,
+                {
+                  settingsPatch: {
+                    task: 'video',
+                    video_task: 'upscale',
+                    selected_video_model_id: 'frame_by_frame',
+                    selected_model_id: 'span_photo_x4',
+                    output_scale: 4,
+                    deflicker: withFix,
+                    video_hdr_mode: withFix ? 'tone_map' : 'preserve',
+                    video_interpolation: target,
+                    video_interpolation_order: order,
+                    video_clean_audio: cleanAudio,
+                    video_audio_model: audioModel,
+                    fix_stages: withFix ? [{ fix: 'blur', model_id: 'nafnet_gopro_deblur' }] : [],
+                    fixes: withFix ? ['blur'] : [],
+                  },
+                  installedIds,
+                  hasAudio,
+                  batchMode: withFix,
+                  mediaIds: withFix ? ['v1', 'v2'] : ['v1'],
+                },
+              );
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Additional interpolation targets x4 and fps120 + unknown audio model
+  for (const target of ['x4', 'fps120'] as const) {
+    for (const order of interpOrders) {
+      push(`video-interp-${target}-${order}`, {
+        settingsPatch: {
+          task: 'video',
+          video_task: 'upscale',
+          selected_video_model_id: 'frame_by_frame',
+          selected_model_id: 'span_photo_x4',
+          video_interpolation: target,
+          video_interpolation_order: order,
+          video_clean_audio: true,
+          video_audio_model: 'unknown_id',
+        },
+        installedIds: ['span_photo_x4'],
+        hasAudio: true,
+      });
+    }
+  }
+
+  // 6. Video temporal (SeedVR2 / FlashVSR): target_resolution, fixes ignored, interp ignored, audio kept (24 cases)
+  for (const videoModelId of ['flashvsr_v11', 'seedvr2_3b']) {
+    for (const targetRes of [0, 720]) {
+      for (const cleanAudio of [false, true]) {
+        for (const hasAudio of [true, false]) {
+          for (const installed of [false, true]) {
+            if (videoModelId === 'seedvr2_3b' && targetRes === 720 && cleanAudio && !installed) {
+              continue;
+            }
+            push(
+              `video-temporal-${videoModelId}-res_${targetRes}-aud_${cleanAudio}_${hasAudio}-${installed}`,
+              {
+                settingsPatch: {
+                  task: 'video',
+                  video_task: 'upscale',
+                  selected_video_model_id: videoModelId,
+                  selected_model_id: 'span_photo_x4',
+                  output_scale: 4,
+                  video_target_resolution: targetRes,
+                  deflicker: true,
+                  video_hdr_mode: 'preserve',
+                  video_interpolation: 'fps60',
+                  video_interpolation_order: 'before_upscale',
+                  video_clean_audio: cleanAudio,
+                  fix_stages: [{ fix: 'jpeg', model_id: 'fbcnn_color' }],
+                  fixes: ['jpeg'],
+                },
+                installedIds: installed ? [videoModelId, 'deepfilternet3'] : [],
+                usingTemporalVideo: true,
+                selectedVideoModelId: videoModelId,
+                hasAudio,
+                faceEnabled: true,
+                faceModelId: 'hat_l_x4_face',
+              },
+            );
+          }
+        }
+      }
+    }
+  }
+
+  // 7. Video restore ('video' + video_task: 'denoise'): with fixes, without fixes, custom, interp, audio (24 cases)
+  for (const fixMode of ['none', 'single', 'pair', 'custom', 'missing'] as const) {
+    for (const cleanAudio of [false, true]) {
+      for (const target of ['off', 'x2'] as const) {
+        const fixStages: FixStageSelection[] =
+          fixMode === 'none' || fixMode === 'custom'
+            ? []
+            : fixMode === 'single'
+              ? [{ fix: 'colour', model_id: 'ddcolor_modelscope' }]
+              : fixMode === 'missing'
+                ? [{ fix: 'noise', model_id: 'missing' }]
+                : [
+                    { fix: 'jpeg', model_id: 'fbcnn_color' },
+                    { fix: 'noise', model_id: 'scunet_color_real_psnr' },
+                  ];
+        push(`video-restore-${fixMode}-aud_${cleanAudio}-${target}`, {
+          settingsPatch: {
+            task: 'video',
+            video_task: 'denoise',
+            selected_video_model_id: 'flashvsr_v11', // restoring overrides temporal to false
+            selected_model_id:
+              fixMode === 'custom'
+                ? '__custom__'
+                : fixMode === 'single'
+                  ? 'ddcolor_modelscope'
+                  : 'scunet_color_real_psnr',
+            custom_model_path: fixMode === 'custom' ? '/models/vid_fix.safetensors' : '',
+            output_scale: 1,
+            deflicker: true,
+            video_interpolation: target,
+            video_clean_audio: cleanAudio,
+            fix_stages: fixStages,
+            fixes: fixStages.map((s) => s.fix),
+          },
+          installedIds: ['ddcolor_modelscope', 'fbcnn_color'],
+          usingTemporalVideo: false,
+          hasAudio: true,
+        });
+      }
+    }
+  }
+
+  // 8. Edit task & empty task (16 cases)
+  for (const editModelId of ['qwen_edit_2511_q4_k_m', 'flux2_klein_4b_q4_0', null]) {
+    for (const installed of [false, true]) {
+      if (editModelId === null && installed) continue;
+      push(`edit-${editModelId ?? 'none'}-inst_${installed}`, {
+        settingsPatch: {
+          task: 'edit',
+          edit_model_id: editModelId ?? '',
+          fix_stages: [{ fix: 'noise', model_id: 'scunet_color_real_psnr' }],
+          fixes: ['noise'],
+          video_clean_audio: true,
+          video_interpolation: 'x2',
+        },
+        installedIds: installed && editModelId ? [editModelId] : [],
+        editModelId,
+        faceEnabled: true,
+        faceModelId: 'hat_l_x4_face',
+      });
+    }
+  }
+  push('empty-task', {
+    settingsPatch: {
+      task: '',
+      selected_model_id: '',
+      fix_stages: [{ fix: 'noise', model_id: 'scunet_color_real_psnr' }],
+    },
+    installedIds: [],
+  });
+
+  // 9. Extra colour/purpose fallback and video-only edge cases
+  push('upscale-colorize-restore-fallback', {
+    settingsPatch: {
+      task: 'denoise',
+      selected_model_id: 'ddcolor_modelscope',
+      fix_stages: [],
+      fixes: [],
+    },
+    installedIds: ['ddcolor_modelscope'],
+  });
+
+  return cases;
+}
+
+describe('job_plan parity corpus', () => {
+  it('covers all required plan and start-input combinations with at least 300 cases', () => {
+    const cases = buildCorpus();
+    expect(cases.length).toBeGreaterThanOrEqual(300);
+
+    const tasks = new Set(cases.map((c) => c.settings.task));
+    expect(tasks).toEqual(new Set(['upscale', 'denoise', 'video', 'edit', '']));
+
+    const kinds = new Set(cases.flatMap((c) => c.expected_plan.map((s) => s.kind)));
+    expect(kinds).toEqual(
+      new Set([
+        'deblock',
+        'restore',
+        'upscale',
+        'face_restore',
+        'video',
+        'edit',
+        'interpolate',
+        'audio_denoise',
+      ]),
+    );
+
+    expect(cases.some((c) => c.expected_plan.some((s) => s.missing === true))).toBe(true);
+    expect(cases.some((c) => c.expected_plan.some((s) => s.remembered === true))).toBe(true);
+    expect(cases.some((c) => c.expected_plan.some((s) => s.custom !== undefined))).toBe(true);
+    expect(cases.some((c) => c.expected_plan.some((s) => s.needs_file))).toBe(true);
+    expect(
+      cases.some(
+        (c) => c.expected_start_input.device === 'cpu' && c.settings.device_id === 'cuda:0',
+      ),
+    ).toBe(true);
+
+    const serialized = `{\n  "schema_version": 1,\n  "cases": [\n${cases.map((c) => `    ${JSON.stringify(c)}`).join(',\n')}\n  ]\n}\n`;
+    if (process.env.UPDATE_JOB_PLAN_FIXTURE === '1') {
+      fs.mkdirSync(path.dirname(FIXTURE_PATH), { recursive: true });
+      fs.writeFileSync(FIXTURE_PATH, serialized, 'utf8');
+    }
+
+    expect(fs.existsSync(FIXTURE_PATH)).toBe(true);
+    const committed = fs.readFileSync(FIXTURE_PATH, 'utf8');
+    expect(serialized).toBe(committed);
+  });
+});

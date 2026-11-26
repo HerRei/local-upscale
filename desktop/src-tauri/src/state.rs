@@ -367,7 +367,7 @@ impl AppState {
     }
 }
 
-fn effective_model_root(paths: &AppPaths, settings: &UiSettings) -> PathBuf {
+pub(crate) fn effective_model_root(paths: &AppPaths, settings: &UiSettings) -> PathBuf {
     let custom = settings.model_directory.trim();
     if custom.is_empty() {
         paths.model_root.clone()
