@@ -216,7 +216,6 @@
                   src={media.preview_data_url}
                   alt=""
                   decoding="async"
-                  loading="lazy"
                   width="44"
                   height="44"
                 />{:else}<span>{media.kind === 'video' ? 'VID' : 'IMG'}</span>{/if}
