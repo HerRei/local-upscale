@@ -45,7 +45,14 @@ from release_targets import (
 ROOT = Path(__file__).resolve().parents[1]
 PROBE = Path(__file__).resolve().parent / "upgrade_check" / "old_release_probe.rs"
 # Releases whose updaters are in use and share the probe's API. Add each new release.
-OLDER_RELEASES = ("v0.4.0-beta", "v0.5.0-beta", "v0.5.2-beta", "v0.6.0-beta", "v0.6.1-beta", "v0.6.2-beta")
+OLDER_RELEASES = (
+    "v0.4.0-beta",
+    "v0.5.0-beta",
+    "v0.5.2-beta",
+    "v0.6.0-beta",
+    "v0.6.1-beta",
+    "v0.6.2-beta",
+)
 NEW_HOST_TEST = (
     "updates::tests::"
     "upgrade_check_the_new_host_records_and_starts_the_engine_an_older_updater_installed"
