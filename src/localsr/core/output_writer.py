@@ -98,8 +98,9 @@ class OutputWriter:
         data should be (C, H, W).
         """
         _, h, w = data.shape
+        # No flush here: tiles are read back through get_array() in this process,
+        # and close() flushes once. A flush per tile was an msync of the whole file.
         self.mmap[:, y : y + h, x : x + w] = data
-        self.mmap.flush()
 
     def get_array(self) -> np.ndarray:
         return self.mmap
