@@ -408,4 +408,21 @@ describe('SingleVideoCompareSync', () => {
     expect(audio.paused).toBe(true);
     expect(video.currentTime).toBeCloseTo(23.5 / 24);
   });
+
+  it('stops on the last kept frame before the combined video reaches its end', async () => {
+    const video = player(1);
+    const sync = new SingleVideoCompareSync(video, [
+      { fps: 30, duration: 3 },
+      { fps: 30, duration: 3, kept: { seconds: 1, frames: 30 } },
+    ]);
+    expect(sync.limited).toBe(true);
+    await sync.play();
+    // Inside frame 29 (0.967-1.0 s), short of the end of the stream.
+    video.currentTime = 0.97;
+    sync.tick();
+    expect(sync.playing).toBe(false);
+    expect(video.paused).toBe(true);
+    expect(sync.frame).toBe(29);
+    expect(video.currentTime).toBeCloseTo(29.5 / 30);
+  });
 });

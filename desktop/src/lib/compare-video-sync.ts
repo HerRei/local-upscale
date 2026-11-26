@@ -600,7 +600,11 @@ export class SingleVideoCompareSync {
       }
       this.time = Math.min(this.duration, this.video.currentTime);
       this.syncAudio();
-      if (this.time >= this.duration) this.pause();
+      if (this.limited && this.frame >= this.frames - 1) {
+        // Stop on the last kept frame before the element reaches its end: Linux
+        // WebKit (GStreamer) paints the first frame after a seek out of end-of-stream.
+        this.finish();
+      } else if (this.time >= this.duration) this.pause();
     } else if (!this.wanted && !this.video.seeking && this.time < length(this.video)) {
       this.time = Math.min(this.duration, this.video.currentTime);
     }

@@ -325,6 +325,9 @@
     const ready = () => {
       if (!videoState.loaded) return;
       paintAll();
+      // Some engines expose a seeked frame to drawImage only once it is on screen.
+      if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => paintAll());
+      else requestAnimationFrame(() => requestAnimationFrame(() => paintAll()));
       void sync
         ?.ready(video)
         .then(() => {
