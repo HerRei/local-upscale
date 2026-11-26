@@ -7,6 +7,7 @@ import type {
   CustomEditModel,
   EngineCatalogEntry,
   EngineDownloadStatus,
+  FixKind,
   IntegrationStatus,
   LaunchIntent,
   ModelMoveProgress,
@@ -22,6 +23,7 @@ import type {
   TrialEstimate,
   ComparePick,
 } from './types';
+import type { PlanStage } from './plan';
 
 export const isTauri = (): boolean => '__TAURI_INTERNALS__' in window;
 
@@ -187,6 +189,39 @@ export interface SetupChoices {
 
 export const setPrivacyChoice = (choices: SetupChoices): Promise<void> =>
   invoke('set_privacy_choice', { choices });
+export interface PlanJobOptions {
+  face_model_id?: string | null;
+  face_enabled?: boolean;
+  using_temporal_video?: boolean | null;
+  selected_video_model_id?: string | null;
+  edit_model_id?: string | null;
+  has_audio?: boolean | null;
+}
+
+export interface HostPlanStage {
+  kind: PlanStage['kind'];
+  role: PlanStage['role'];
+  fix?: Exclude<FixKind, 'faces'>;
+  remembered?: boolean;
+  missing?: boolean;
+  label: string;
+  model_id?: string;
+  video_model_id?: string;
+  interpolation_model_id?: string;
+  audio_model_id?: string;
+  edit_model_id?: string;
+  custom?: string;
+  installed: boolean;
+  can_download: boolean;
+  needs_file: boolean;
+  size_bytes: number;
+}
+
+export const planJob = (
+  settings: UiSettings,
+  options: PlanJobOptions = {},
+): Promise<HostPlanStage[]> => invoke('plan_job', { settings, options });
+
 export const startJobs = (input: StartBatchInput): Promise<void> => invoke('start_jobs', { input });
 export const startEdit = (input: StartEditInput): Promise<void> => invoke('start_edit', { input });
 export const openEditLink = (modelId: string, link: 'license' | 'source'): Promise<void> =>

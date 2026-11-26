@@ -328,7 +328,7 @@ pub struct RecipeStage {
     pub mask_path: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct FixStageSelection {
     pub fix: String,
     #[serde(default)]
@@ -1193,7 +1193,7 @@ pub struct CompareVideoSources {
     pub slots: Vec<CompareVideoSlot>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct StartBatchInput {
     /// Host-only: "Try others…" names each output after its model. The UI
     /// cannot set it, so Start, Finder and the CLI keep their names.

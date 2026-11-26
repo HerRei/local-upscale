@@ -4923,3 +4923,60 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
         assert_eq!(serde_json::to_value(round_trip).unwrap(), sample, "{name}");
     }
 }
+
+#[test]
+fn plan_job_checked_resolves_stages_from_app_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(directory.path());
+    let state = AppState::from_paths(paths).unwrap();
+
+    let upscale_settings = UiSettings {
+        task: "upscale".into(),
+        selected_model_id: "span_photo_x4".into(),
+        output_scale: 4,
+        fix_stages: vec![crate::types::FixStageSelection {
+            fix: "jpeg".into(),
+            model_id: "fbcnn_color".into(),
+            ..Default::default()
+        }],
+        ..UiSettings::default()
+    };
+    let upscale_plan =
+        plan_job_checked(&state, upscale_settings, PlanJobOptions::default()).unwrap();
+    assert_eq!(upscale_plan.len(), 2);
+    assert_eq!(upscale_plan[0].kind, "deblock");
+    assert_eq!(upscale_plan[0].model_id.as_deref(), Some("fbcnn_color"));
+    assert_eq!(upscale_plan[1].kind, "upscale");
+    assert_eq!(upscale_plan[1].model_id.as_deref(), Some("span_photo_x4"));
+
+    let temporal_settings = UiSettings {
+        task: "video".into(),
+        video_task: "upscale".into(),
+        selected_video_model_id: "flashvsr_v11".into(),
+        video_clean_audio: true,
+        output_scale: 4,
+        ..UiSettings::default()
+    };
+    let temporal_plan =
+        plan_job_checked(&state, temporal_settings, PlanJobOptions::default()).unwrap();
+    assert_eq!(
+        temporal_plan
+            .iter()
+            .map(|stage| stage.kind.as_str())
+            .collect::<Vec<_>>(),
+        vec!["audio_denoise", "video"]
+    );
+
+    let edit_settings = UiSettings {
+        task: "edit".into(),
+        edit_model_id: "qwen_edit_2511_q4_k_m".into(),
+        ..UiSettings::default()
+    };
+    let edit_plan = plan_job_checked(&state, edit_settings, PlanJobOptions::default()).unwrap();
+    assert_eq!(edit_plan.len(), 1);
+    assert_eq!(edit_plan[0].kind, "edit");
+    assert_eq!(
+        edit_plan[0].edit_model_id.as_deref(),
+        Some("qwen_edit_2511_q4_k_m")
+    );
+}
