@@ -118,3 +118,67 @@ def test_exported_desktop_steps_json_is_in_sync() -> None:
     assert shipped_path.is_file(), "missing desktop/src-tauri/resources/steps.json"
     assert shipped_path.read_text(encoding="utf-8") == exporter.encoded_manifest()
     assert json.loads(shipped_path.read_text(encoding="utf-8")) == manifest
+
+
+def test_generic_step_params_validator_with_test_only_modelless_step() -> None:
+    from localsr.core.steps import StepDefinition, StepParameter, validate_step_params
+
+    test_step = StepDefinition(
+        id="test_tint",
+        media=("image",),
+        phase="grade",
+        order=10,
+        needs_model=False,
+        supports_mask=True,
+        in_image_pipeline=True,
+        stage_kind="test_tint",
+        parameters=(
+            StepParameter(name="amount", kind="number", minimum=0.0, maximum=1.0, required=True),
+            StepParameter(name="passes", kind="int", minimum=1, maximum=4, default=1),
+            StepParameter(name="mode", kind="choice", choices=("add", "multiply"), default="add"),
+            StepParameter(name="bucket", kind="int_choice", int_choices=(8, 16, 32), default=16),
+            StepParameter(name="clamp", kind="bool", default=True),
+            StepParameter(name="label", kind="str", nullable=True, default=None),
+        ),
+    )
+
+    validated = validate_step_params(
+        test_step,
+        {
+            "amount": 0.5,
+            "passes": 2,
+            "mode": "multiply",
+            "bucket": 32,
+            "clamp": False,
+            "label": None,
+        },
+    )
+    assert validated["amount"] == 0.5
+
+    # Missing required parameter or None when not nullable must fail.
+    for bad in (
+        None,
+        {},
+        {"amount": None},
+        {"amount": -0.1},
+        {"amount": 1.1},
+        {"amount": float("nan")},
+        {"amount": True},
+        {"amount": "0.5"},
+        {"amount": 0.5, "passes": 0},
+        {"amount": 0.5, "passes": 5},
+        {"amount": 0.5, "passes": 1.5},
+        {"amount": 0.5, "passes": True},
+        {"amount": 0.5, "mode": "screen"},
+        {"amount": 0.5, "bucket": 12},
+        {"amount": 0.5, "bucket": True},
+        {"amount": 0.5, "clamp": "yes"},
+        {"amount": 0.5, "label": 42},
+        {"amount": 0.5, "unknown": 1},
+    ):
+        try:
+            validate_step_params(test_step, bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {bad!r}")

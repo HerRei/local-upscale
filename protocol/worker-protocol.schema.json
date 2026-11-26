@@ -235,15 +235,21 @@
     },
     "pipelineStage": {
       "type": "object",
-      "required": ["kind", "model_id", "model_path"],
+      "anyOf": [
+        { "required": ["kind"] },
+        { "required": ["step"] }
+      ],
       "properties": {
-        "kind": { "enum": ["deblock", "restore", "upscale", "face_restore"] },
-        "role": { "enum": ["fix", "primary", "face"] },
-        "fix": { "enum": ["blur", "jpeg", "noise", "colour"] },
-        "model_id": { "type": "string", "minLength": 1 },
-        "model_path": { "type": "string", "minLength": 1 },
-        "fidelity": { "type": "number", "minimum": 0, "maximum": 1 },
-        "execution": { "enum": ["sequential", "fused-with-upscale"] }
+        "kind": { "type": "string", "minLength": 1 },
+        "step": { "type": "string", "minLength": 1 },
+        "role": { "type": "string", "minLength": 1 },
+        "fix": { "type": ["string", "null"] },
+        "model_id": { "type": ["string", "null"] },
+        "model_path": { "type": ["string", "null"] },
+        "fidelity": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "execution": { "enum": ["sequential", "fused-with-upscale"] },
+        "params": { "type": ["object", "null"] },
+        "mask_path": { "type": ["string", "null"], "minLength": 1 }
       },
       "additionalProperties": false
     },
@@ -275,7 +281,7 @@
                     "stages": {
                       "type": ["array", "null"],
                       "minItems": 1,
-                      "maxItems": 5,
+                      "maxItems": 16,
                       "items": { "$ref": "#/$defs/pipelineStage" }
                     }
                   }
@@ -337,7 +343,7 @@
                     "stages": {
                       "type": ["array", "null"],
                       "minItems": 1,
-                      "maxItems": 5,
+                      "maxItems": 16,
                       "items": { "$ref": "#/$defs/pipelineStage" }
                     }
                   }

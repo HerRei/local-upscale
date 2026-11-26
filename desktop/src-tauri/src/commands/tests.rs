@@ -157,6 +157,8 @@ fn multi_fix_serialization_preserves_five_stages_and_restore_primary_role() {
         fix: (*fix).into(),
         model_id: (*fix).into(),
         path: format!("/models/{fix}"),
+        params: None,
+        mask_path: None,
     })
     .collect();
     let mut options = input("upscale");
@@ -221,6 +223,7 @@ fn multi_fix_host_resolves_every_catalog_stage_and_rejects_invalid_choices() {
     .map(|(fix, id)| FixStageSelection {
         fix: (*fix).into(),
         model_id: (*id).into(),
+        ..Default::default()
     })
     .collect();
     match resolve_model_selection(&state, &options).unwrap() {
@@ -853,6 +856,7 @@ fn model_trials_validate_every_candidate_before_admitting_any() {
     fix.fix_stages = vec![crate::types::FixStageSelection {
         fix: "blur".into(),
         model_id: "missing-fix".into(),
+        ..Default::default()
     }];
     let mut scale = base.clone();
     scale.output_scale = 8;
@@ -968,6 +972,7 @@ fn restore_trials_need_models_that_fix_the_selected_problem() {
     base.fix_stages = vec![crate::types::FixStageSelection {
         fix: missing.into(),
         model_id: ids[1].clone(),
+        ..Default::default()
     }];
     assert!(admit_model_trials(&state, "media", &ids, &base).is_err());
     assert!(no_jobs(&state));
@@ -1007,6 +1012,7 @@ fn restore_trials_replace_the_last_fix_model_with_each_candidate() {
     base.fix_stages = vec![crate::types::FixStageSelection {
         fix: common.into(),
         model_id: ids[0].clone(),
+        ..Default::default()
     }];
     admit_model_trials(&state, "media", &ids, &base).unwrap();
     let requests = lock(&state.database)
@@ -1082,6 +1088,7 @@ fn try_others_needs_two_to_four_models_and_an_engine_that_runs_the_fixes() {
         .map(|fix| crate::types::FixStageSelection {
             fix: (*fix).into(),
             model_id: ids[0].clone(),
+            ..Default::default()
         })
         .collect();
     let error = trial_candidates(&state, "media", &ids, &several)
@@ -1722,6 +1729,8 @@ fn image_recipe_serializes_restore_upscale_and_fused_face_in_order() {
             fix: "jpeg".into(),
             model_id: "fbcnn_color".into(),
             path: "/models/fbcnn.pth".into(),
+            params: None,
+            mask_path: None,
         }],
         face_path: Some("/models/face.pth".into()),
         face_model_id: "hat_l_x4_face".into(),
@@ -1933,12 +1942,14 @@ fn recipe_stage_validation_accepts_legacy_and_rejects_ambiguous_order() {
             model_id: "first".into(),
             fidelity: None,
             fix: None,
+            ..Default::default()
         },
         RecipeStage {
             kind: "upscale".into(),
             model_id: "second".into(),
             fidelity: None,
             fix: None,
+            ..Default::default()
         },
     ];
     assert!(validate_recipe_stages(&invalid).is_err());
@@ -2885,10 +2896,12 @@ fn video_restore_and_fix_first_build_stages_names_and_reject_temporal() {
         crate::types::FixStageSelection {
             fix: "jpeg".into(),
             model_id: "fbcnn_color".into(),
+            ..Default::default()
         },
         crate::types::FixStageSelection {
             fix: "noise".into(),
             model_id: "scunet_color_real_psnr".into(),
+            ..Default::default()
         },
     ];
     let selection = resolve_model_selection(&state, &restore_input).unwrap();
@@ -2918,6 +2931,7 @@ fn video_restore_and_fix_first_build_stages_names_and_reject_temporal() {
     upscale_1x.fix_stages = vec![crate::types::FixStageSelection {
         fix: "jpeg".into(),
         model_id: "fbcnn_color".into(),
+        ..Default::default()
     }];
     let selection_1x = resolve_model_selection(&state, &upscale_1x).unwrap();
     let msg_1x = build_job_message(
@@ -3981,6 +3995,7 @@ fn colour_fix_is_resolved_for_photos_and_video() {
     photo_upscale.fix_stages = vec![FixStageSelection {
         fix: "colour".into(),
         model_id: "ddcolor_modelscope".into(),
+        ..Default::default()
     }];
     match resolve_model_selection(&state, &photo_upscale).unwrap() {
         ModelSelection::Image { preprocess, .. } => {
@@ -3997,6 +4012,7 @@ fn colour_fix_is_resolved_for_photos_and_video() {
     photo_restore.fix_stages = vec![FixStageSelection {
         fix: "colour".into(),
         model_id: "ddcolor_modelscope".into(),
+        ..Default::default()
     }];
     match resolve_model_selection(&state, &photo_restore).unwrap() {
         ModelSelection::Image {
@@ -4016,6 +4032,7 @@ fn colour_fix_is_resolved_for_photos_and_video() {
     video_job.fix_stages = vec![FixStageSelection {
         fix: "colour".into(),
         model_id: "ddcolor_modelscope".into(),
+        ..Default::default()
     }];
     match resolve_model_selection(&state, &video_job).unwrap() {
         ModelSelection::Image { preprocess, .. } => {
@@ -4443,4 +4460,79 @@ fn benchmark_preset_candidates_pick_quick_and_best_from_catalog() {
     assert_eq!(picks[0].1.model_id, "localsr_quick_x4_v1");
     assert_eq!(picks[1].0, "best");
     assert_eq!(picks[1].1.model_id, "realplksr_nomoswebphoto_x4");
+}
+
+#[test]
+fn stage_params_and_masks_are_forwarded_and_gated_by_engine_feature() {
+    use crate::types::FixStageSelection;
+
+    let stage_with_params = FixStageSelection {
+        fix: "noise".into(),
+        model_id: "scunet_color_real_psnr".into(),
+        params: Some(serde_json::Map::from_iter([(
+            "strength".into(),
+            json!(0.5),
+        )])),
+        mask_path: Some("/tmp/mask.png".into()),
+    };
+    let old_engine = crate::types::EngineInfo {
+        protocol_version: 1,
+        minimum_protocol_version: 1,
+        engine_id: "test".into(),
+        engine_version: "0.6.0".into(),
+        features: vec!["image".into(), "image_multi_fix".into()],
+        model_formats: vec![],
+        video_engines: vec![],
+    };
+    assert!(validate_stage_params_engine(
+        std::slice::from_ref(&stage_with_params),
+        Some(&old_engine)
+    )
+    .is_err());
+    assert!(validate_stage_params_engine(std::slice::from_ref(&stage_with_params), None).is_err());
+
+    // Without params or masks, an older engine is still accepted.
+    let plain_stage = FixStageSelection {
+        fix: "noise".into(),
+        model_id: "scunet_color_real_psnr".into(),
+        params: None,
+        mask_path: None,
+    };
+    assert!(validate_stage_params_engine(&[plain_stage], Some(&old_engine)).is_ok());
+
+    let mut new_engine = old_engine;
+    new_engine.features.push(
+        crate::steps::registry()
+            .limits()
+            .stage_params_feature
+            .clone(),
+    );
+    assert!(validate_stage_params_engine(
+        std::slice::from_ref(&stage_with_params),
+        Some(&new_engine)
+    )
+    .is_ok());
+
+    let resolved = vec![ResolvedImageStage {
+        kind: "restore",
+        fix: "noise".into(),
+        model_id: "scunet_color_real_psnr".into(),
+        path: "/models/scunet.pth".into(),
+        params: stage_with_params.params,
+        mask_path: stage_with_params.mask_path,
+    }];
+    let serialized = image_pipeline_stages(
+        &resolved,
+        "main",
+        "/models/main.pth",
+        None,
+        "",
+        false,
+        &input("upscale"),
+    );
+    assert_eq!(serialized[0]["params"], json!({"strength": 0.5}));
+    assert_eq!(serialized[0]["mask_path"], "/tmp/mask.png");
+    // Primary stage without params/mask_path omits those keys cleanly.
+    assert!(serialized[1].get("params").is_none());
+    assert!(serialized[1].get("mask_path").is_none());
 }

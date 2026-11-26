@@ -7,9 +7,65 @@ tiles are run through both models and alpha-blended.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
+from PIL import Image, ImageOps
 
 from .face_detection import smooth_alpha
+from .image_formats import PILLOW_INPUT_FORMATS, require_ordinary_source
+
+MASK_RESAMPLING = Image.Resampling.BILINEAR
+
+
+def load_mask(mask_path: str | Path, width: int, height: int) -> np.ndarray:
+    """Load an 8- or 16-bit single-channel mask and resize it to ``(height, width)``."""
+    if width <= 0 or height <= 0:
+        raise ValueError("Mask target dimensions must be positive.")
+    path_str = str(mask_path)
+    if not path_str or "\0" in path_str:
+        raise ValueError("Mask path is invalid.")
+    require_ordinary_source(path_str)
+    with Image.open(path_str, formats=PILLOW_INPUT_FORMATS) as opened:
+        exif = opened.getexif() if hasattr(opened, "getexif") else None
+        img = ImageOps.exif_transpose(opened) if exif and exif.get(274, 1) != 1 else opened
+        if img.mode in ("I;16", "I;16L", "I;16B", "I;16N"):
+            arr = np.asarray(img, dtype=np.float32) / 65535.0
+        elif img.mode == "I":
+            raw = np.asarray(img, dtype=np.float32)
+            scale = 255.0 if float(raw.max(initial=0.0)) <= 255.0 else 65535.0
+            arr = raw / scale
+        elif img.mode == "F":
+            arr = np.asarray(img, dtype=np.float32)
+        else:
+            arr = np.asarray(img.convert("L"), dtype=np.float32) / 255.0
+    arr = np.clip(arr, 0.0, 1.0).astype(np.float32, copy=False)
+    if arr.shape != (height, width):
+        arr = np.asarray(
+            Image.fromarray(arr, mode="F").resize((width, height), MASK_RESAMPLING),
+            dtype=np.float32,
+        )
+        arr = np.clip(arr, 0.0, 1.0)
+    return arr
+
+
+def blend_with_alpha(
+    foreground: np.ndarray,
+    background: np.ndarray,
+    alpha: np.ndarray,
+) -> np.ndarray:
+    """Composite ``alpha * foreground + (1 - alpha) * background`` for ``(C, H, W)`` arrays."""
+    if foreground.shape != background.shape:
+        raise ValueError(
+            f"Shape mismatch: foreground {foreground.shape} vs background {background.shape}"
+        )
+    alpha_3d = alpha[None, :, :] if alpha.ndim == 2 else alpha
+    blended = foreground.astype(np.float32) * alpha_3d + background.astype(np.float32) * (
+        1.0 - alpha_3d
+    )
+    if foreground.dtype == np.float32 and background.dtype == np.float32:
+        return blended.clip(0.0, 1.0).astype(np.float32)
+    return blended.clip(0, 255).astype(np.uint8)
 
 
 def classify_tile(
@@ -75,12 +131,8 @@ def blend_tile_outputs(
         if alpha.shape[1] < out_w:
             alpha = np.pad(alpha, ((0, 0), (0, out_w - alpha.shape[1])), mode="edge")
     # Broadcast alpha to (1, H, W) for channel-wise blending.
-    alpha_3d = alpha[None, :, :]
     face_mix = (
         identity_output.astype(np.float32) * (1.0 - fidelity)
         + face_output.astype(np.float32) * fidelity
     )
-    blended = face_mix * alpha_3d + general_output.astype(np.float32) * (1.0 - alpha_3d)
-    if face_output.dtype == np.float32 and general_output.dtype == np.float32:
-        return blended.clip(0, 1).astype(np.float32)
-    return blended.clip(0, 255).astype(np.uint8)
+    return blend_with_alpha(face_mix, general_output, alpha)

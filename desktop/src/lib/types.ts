@@ -299,6 +299,8 @@ export interface FixStageSelection {
   fix: Exclude<FixKind, 'faces'>;
   /** Empty while no catalog model fixes this problem; Start then waits. */
   model_id: string;
+  params?: Record<string, unknown>;
+  mask_path?: string;
 }
 
 /** Frame interpolation: a frame-rate multiplier or a fixed output rate. */
@@ -311,6 +313,8 @@ export interface RecipeStage {
   kind: 'deblock' | 'restore' | 'upscale' | 'face_restore' | 'video';
   model_id: string;
   fidelity?: number;
+  params?: Record<string, unknown>;
+  mask_path?: string;
 }
 
 export interface UiSettings {

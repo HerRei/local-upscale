@@ -8,12 +8,16 @@ import {
   MULTI_FIX_FEATURE,
   PHASES,
   STAGE_LABELS,
+  STAGE_PARAMS_FEATURE,
   STEP_LIMITS,
   STEPS,
   fixDefaultStageKind,
   isFixStageKind,
   isVideoOrUpscalePrimaryKind,
   stepFeature,
+  validateStageParams,
+  validateStepParams,
+  type StepDefinition,
 } from './steps';
 import type { PlanStage } from './plan';
 import type { FixKind, RecipeStage, StageKind } from './types';
@@ -101,5 +105,151 @@ describe('step registry', () => {
         'audio_denoise',
       ]),
     );
+  });
+
+  it('validates stage params generically from a step definition', () => {
+    expect(STAGE_PARAMS_FEATURE).toBe('stage_params_and_masks');
+    const fixtureStep: StepDefinition = {
+      id: 'test_tint',
+      media: ['image'],
+      phase: 'grade',
+      order: 10,
+      needs_model: false,
+      supports_mask: true,
+      stage_kind: 'test_tint',
+      role: null,
+      fix_kind: null,
+      is_fix_stage: false,
+      fix_chip_order: null,
+      in_image_pipeline: true,
+      in_recipe_stages: false,
+      label: 'Test tint',
+      row_label: '',
+      short_name: '',
+      stage_label: '',
+      required_feature: null,
+      parameters: [
+        {
+          name: 'amount',
+          kind: 'number',
+          default: null,
+          minimum: 0,
+          maximum: 1,
+          choices: [],
+          int_choices: [],
+          ui_minimum: null,
+          ui_maximum: null,
+          ui_default: null,
+          nullable: false,
+          required: true,
+        },
+        {
+          name: 'passes',
+          kind: 'int',
+          default: 1,
+          minimum: 1,
+          maximum: 4,
+          choices: [],
+          int_choices: [],
+          ui_minimum: null,
+          ui_maximum: null,
+          ui_default: null,
+          nullable: false,
+          required: false,
+        },
+        {
+          name: 'mode',
+          kind: 'choice',
+          default: 'add',
+          minimum: null,
+          maximum: null,
+          choices: ['add', 'multiply'],
+          int_choices: [],
+          ui_minimum: null,
+          ui_maximum: null,
+          ui_default: null,
+          nullable: false,
+          required: false,
+        },
+        {
+          name: 'bucket',
+          kind: 'int_choice',
+          default: 16,
+          minimum: null,
+          maximum: null,
+          choices: [],
+          int_choices: [8, 16, 32],
+          ui_minimum: null,
+          ui_maximum: null,
+          ui_default: null,
+          nullable: false,
+          required: false,
+        },
+        {
+          name: 'clamp',
+          kind: 'bool',
+          default: true,
+          minimum: null,
+          maximum: null,
+          choices: [],
+          int_choices: [],
+          ui_minimum: null,
+          ui_maximum: null,
+          ui_default: null,
+          nullable: false,
+          required: false,
+        },
+        {
+          name: 'label',
+          kind: 'str',
+          default: null,
+          minimum: null,
+          maximum: null,
+          choices: [],
+          int_choices: [],
+          ui_minimum: null,
+          ui_maximum: null,
+          ui_default: null,
+          nullable: true,
+          required: false,
+        },
+      ],
+    };
+
+    expect(
+      validateStepParams(fixtureStep, {
+        amount: 0.5,
+        passes: 2,
+        mode: 'multiply',
+        bucket: 32,
+        clamp: false,
+        label: null,
+      }),
+    ).toBeNull();
+
+    expect(validateStageParams('test_tint', { amount: 0.5 }, [fixtureStep])).toBeNull();
+    expect(validateStageParams('missing_step', {}, [fixtureStep])).not.toBeNull();
+
+    for (const bad of [
+      undefined,
+      null,
+      {},
+      { amount: null },
+      { amount: -0.1 },
+      { amount: 1.1 },
+      { amount: Number.NaN },
+      { amount: true },
+      { amount: '0.5' },
+      { amount: 0.5, passes: 0 },
+      { amount: 0.5, passes: 5 },
+      { amount: 0.5, passes: 1.5 },
+      { amount: 0.5, mode: 'screen' },
+      { amount: 0.5, bucket: 12 },
+      { amount: 0.5, clamp: 'yes' },
+      { amount: 0.5, label: 42 },
+      { amount: 0.5, unknown: 1 },
+    ]) {
+      expect(validateStepParams(fixtureStep, bad as Record<string, unknown>)).not.toBeNull();
+    }
   });
 });

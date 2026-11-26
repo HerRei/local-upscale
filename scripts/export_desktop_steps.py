@@ -32,6 +32,7 @@ def _encode_parameter(param: StepParameter) -> dict[str, Any]:
         "ui_maximum": param.ui_maximum,
         "ui_default": param.ui_default,
         "nullable": param.nullable,
+        "required": param.required,
     }
 
 
@@ -45,6 +46,7 @@ def build_manifest() -> dict[str, Any]:
                 "phase": step.phase,
                 "order": step.order,
                 "needs_model": step.needs_model,
+                "supports_mask": step.supports_mask,
                 "stage_kind": step.stage_kind,
                 "role": step.role,
                 "fix_kind": step.fix_kind,
@@ -73,6 +75,7 @@ def build_manifest() -> dict[str, Any]:
             "max_denoise_prefix_stages": LIMITS.max_denoise_prefix_stages,
             "max_video_upscale_prefix_stages": LIMITS.max_video_upscale_prefix_stages,
             "multi_fix_feature": LIMITS.multi_fix_feature,
+            "stage_params_feature": LIMITS.stage_params_feature,
         },
         "steps": steps,
     }

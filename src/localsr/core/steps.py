@@ -7,7 +7,9 @@ Non-Python targets (the Rust desktop host and Svelte webview) consume
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
+from typing import Any
 
 # Canonical execution phases from earliest to latest in a job.
 PHASES: tuple[str, ...] = (
@@ -38,6 +40,7 @@ class StepParameter:
     ui_maximum: int | float | None = None
     ui_default: int | float | None = None
     nullable: bool = False
+    required: bool = False
 
 
 @dataclass(frozen=True)
@@ -56,6 +59,7 @@ class StepDefinition:
     fix_chip_order: int | None = None
     in_image_pipeline: bool = False
     in_recipe_stages: bool = False
+    supports_mask: bool = False
     label: str = ""
     row_label: str = ""
     short_name: str = ""
@@ -77,6 +81,7 @@ class StepLimits:
     max_denoise_prefix_stages: int
     max_video_upscale_prefix_stages: int
     multi_fix_feature: str = "image_multi_fix"
+    stage_params_feature: str = "stage_params_and_masks"
 
 
 STEPS: tuple[StepDefinition, ...] = (
@@ -399,3 +404,102 @@ def parameter_for(step_id: str, param_name: str) -> StepParameter:
         if param.name == param_name:
             return param
     raise KeyError(f"{step_id}.{param_name}")
+
+
+def resolve_step(
+    kind: str,
+    fix: str | None = None,
+    step_id: str | None = None,
+    *,
+    steps: tuple[StepDefinition, ...] | None = None,
+) -> StepDefinition:
+    """Resolve a pipeline stage's ``StepDefinition`` from ``step_id``, ``fix``, or ``kind``."""
+    pool = STEPS if steps is None else steps
+    by_id = {entry.id: entry for entry in pool}
+    if step_id is not None:
+        if not isinstance(step_id, str) or step_id not in by_id:
+            raise ValueError(f"Unsupported pipeline step: {step_id or '<empty>'}")
+        return by_id[step_id]
+    if fix is not None:
+        if not isinstance(fix, str) or fix not in by_id or not by_id[fix].is_fix_stage:
+            raise ValueError(f"Unsupported fix kind: {fix!r}")
+        if kind not in FIX_STAGE_KINDS:
+            raise ValueError(f"Only a restoration stage may name a fix: {fix}.")
+        return by_id[fix]
+    if kind in by_id and by_id[kind].in_image_pipeline:
+        return by_id[kind]
+    for entry in pool:
+        if entry.in_image_pipeline and entry.stage_kind == kind:
+            return entry
+    raise ValueError(f"Unsupported image pipeline stage: {kind or '<empty>'}")
+
+
+def _validate_param_value(step_id: str, param: StepParameter, value: Any) -> None:
+    if value is None:
+        if param.nullable:
+            return
+        raise ValueError(f"Parameter {param.name!r} for {step_id} stage cannot be null.")
+    kind = param.kind
+    if kind == "bool":
+        if not isinstance(value, bool):
+            raise ValueError(f"Parameter {param.name!r} for {step_id} stage must be a boolean.")
+        return
+    if kind == "str":
+        if not isinstance(value, str):
+            raise ValueError(f"Parameter {param.name!r} for {step_id} stage must be a string.")
+        return
+    if kind == "choice":
+        if not isinstance(value, str) or value not in param.choices:
+            raise ValueError(
+                f"Parameter {param.name!r} for {step_id} stage must be one of {param.choices!r}."
+            )
+        return
+    if kind == "int_choice":
+        if isinstance(value, bool) or not isinstance(value, int) or value not in param.int_choices:
+            raise ValueError(
+                f"Parameter {param.name!r} for {step_id} stage must be one of {param.int_choices!r}."
+            )
+        return
+    if kind == "int":
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"Parameter {param.name!r} for {step_id} stage must be an integer.")
+    elif kind == "number":
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+        ):
+            raise ValueError(
+                f"Parameter {param.name!r} for {step_id} stage must be a finite number."
+            )
+    else:
+        raise ValueError(f"Unsupported parameter kind {kind!r} for {step_id}.{param.name}.")
+    if param.minimum is not None and value < param.minimum:
+        raise ValueError(
+            f"Parameter {param.name!r} for {step_id} stage must be >= {param.minimum}."
+        )
+    if param.maximum is not None and value > param.maximum:
+        raise ValueError(
+            f"Parameter {param.name!r} for {step_id} stage must be <= {param.maximum}."
+        )
+
+
+def validate_step_params(step: StepDefinition, raw_params: object) -> dict[str, Any]:
+    """Validate a stage's ``params`` dict against ``step.parameters``."""
+    if raw_params is None:
+        params: dict[str, Any] = {}
+    elif isinstance(raw_params, dict):
+        params = dict(raw_params)
+    else:
+        raise ValueError(f"Parameters for {step.id} stage must be an object.")
+
+    by_name = {param.name: param for param in step.parameters}
+    for key in params:
+        if not isinstance(key, str) or key not in by_name:
+            raise ValueError(f"Unknown parameter {key!r} for {step.id} stage.")
+    for param in step.parameters:
+        if param.required and param.name not in params:
+            raise ValueError(f"Missing required parameter {param.name!r} for {step.id} stage.")
+    for key, value in params.items():
+        _validate_param_value(step.id, by_name[key], value)
+    return params

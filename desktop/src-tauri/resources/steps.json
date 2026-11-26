@@ -8,7 +8,8 @@
     "max_recipe_stages": 6,
     "max_upscale_prefix_stages": 4,
     "max_video_upscale_prefix_stages": 3,
-    "multi_fix_feature": "image_multi_fix"
+    "multi_fix_feature": "image_multi_fix",
+    "stage_params_feature": "stage_params_and_masks"
   },
   "phases": [
     "audio",
@@ -46,6 +47,7 @@
           "minimum": null,
           "name": "audio_denoise",
           "nullable": false,
+          "required": false,
           "ui_default": null,
           "ui_maximum": null,
           "ui_minimum": null
@@ -57,7 +59,8 @@
       "row_label": "",
       "short_name": "",
       "stage_kind": "audio_denoise",
-      "stage_label": ""
+      "stage_label": "",
+      "supports_mask": false
     },
     {
       "fix_chip_order": 2,
@@ -80,7 +83,8 @@
       "row_label": "Fix blur",
       "short_name": "blur",
       "stage_kind": "restore",
-      "stage_label": ""
+      "stage_label": "",
+      "supports_mask": false
     },
     {
       "fix_chip_order": 3,
@@ -103,7 +107,8 @@
       "row_label": "Fix JPEG",
       "short_name": "JPEG",
       "stage_kind": "deblock",
-      "stage_label": "Removing JPEG artifacts"
+      "stage_label": "Removing JPEG artifacts",
+      "supports_mask": false
     },
     {
       "fix_chip_order": 1,
@@ -126,7 +131,8 @@
       "row_label": "Fix noise",
       "short_name": "noise",
       "stage_kind": "restore",
-      "stage_label": ""
+      "stage_label": "",
+      "supports_mask": false
     },
     {
       "fix_chip_order": 4,
@@ -149,7 +155,8 @@
       "row_label": "Colour",
       "short_name": "colour",
       "stage_kind": "restore",
-      "stage_label": ""
+      "stage_label": "",
+      "supports_mask": false
     },
     {
       "fix_chip_order": null,
@@ -172,7 +179,8 @@
       "row_label": "",
       "short_name": "",
       "stage_kind": "restore",
-      "stage_label": "Restoring"
+      "stage_label": "Restoring",
+      "supports_mask": false
     },
     {
       "fix_chip_order": null,
@@ -198,6 +206,7 @@
           "minimum": 1,
           "name": "output_scale",
           "nullable": true,
+          "required": false,
           "ui_default": null,
           "ui_maximum": null,
           "ui_minimum": null
@@ -209,7 +218,8 @@
       "row_label": "",
       "short_name": "",
       "stage_kind": "upscale",
-      "stage_label": "Upscaling"
+      "stage_label": "Upscaling",
+      "supports_mask": false
     },
     {
       "fix_chip_order": null,
@@ -234,6 +244,7 @@
           "minimum": 0,
           "name": "temporal_window",
           "nullable": false,
+          "required": false,
           "ui_default": null,
           "ui_maximum": null,
           "ui_minimum": null
@@ -247,6 +258,7 @@
           "minimum": 0,
           "name": "temporal_overlap",
           "nullable": false,
+          "required": false,
           "ui_default": null,
           "ui_maximum": null,
           "ui_minimum": null
@@ -260,6 +272,7 @@
           "minimum": 0,
           "name": "target_resolution",
           "nullable": false,
+          "required": false,
           "ui_default": null,
           "ui_maximum": null,
           "ui_minimum": null
@@ -273,6 +286,7 @@
           "minimum": null,
           "name": "video_low_memory",
           "nullable": false,
+          "required": false,
           "ui_default": null,
           "ui_maximum": null,
           "ui_minimum": null
@@ -284,7 +298,8 @@
       "row_label": "",
       "short_name": "",
       "stage_kind": "video",
-      "stage_label": ""
+      "stage_label": "",
+      "supports_mask": false
     },
     {
       "fix_chip_order": null,
@@ -313,6 +328,7 @@
           "minimum": null,
           "name": "max_dimension",
           "nullable": false,
+          "required": false,
           "ui_default": null,
           "ui_maximum": null,
           "ui_minimum": null
@@ -326,6 +342,7 @@
           "minimum": 1,
           "name": "steps",
           "nullable": false,
+          "required": false,
           "ui_default": 40,
           "ui_maximum": 60,
           "ui_minimum": 0
@@ -339,6 +356,7 @@
           "minimum": 0,
           "name": "seed",
           "nullable": false,
+          "required": false,
           "ui_default": null,
           "ui_maximum": null,
           "ui_minimum": null
@@ -350,7 +368,8 @@
       "row_label": "",
       "short_name": "",
       "stage_kind": "edit",
-      "stage_label": "Preparing edit"
+      "stage_label": "Preparing edit",
+      "supports_mask": false
     },
     {
       "fix_chip_order": 5,
@@ -376,6 +395,7 @@
           "minimum": 0.0,
           "name": "fidelity",
           "nullable": false,
+          "required": false,
           "ui_default": null,
           "ui_maximum": null,
           "ui_minimum": null
@@ -389,6 +409,7 @@
           "minimum": 0,
           "name": "face_fidelity",
           "nullable": false,
+          "required": false,
           "ui_default": null,
           "ui_maximum": null,
           "ui_minimum": null
@@ -400,7 +421,8 @@
       "row_label": "",
       "short_name": "",
       "stage_kind": "face_restore",
-      "stage_label": "Restoring faces"
+      "stage_label": "Restoring faces",
+      "supports_mask": false
     },
     {
       "fix_chip_order": null,
@@ -425,6 +447,7 @@
           "minimum": null,
           "name": "deflicker",
           "nullable": false,
+          "required": false,
           "ui_default": null,
           "ui_maximum": null,
           "ui_minimum": null
@@ -438,6 +461,7 @@
           "minimum": 1,
           "name": "deflicker_window",
           "nullable": false,
+          "required": false,
           "ui_default": null,
           "ui_maximum": null,
           "ui_minimum": null
@@ -449,7 +473,8 @@
       "row_label": "",
       "short_name": "",
       "stage_kind": null,
-      "stage_label": "De-flickering"
+      "stage_label": "De-flickering",
+      "supports_mask": false
     },
     {
       "fix_chip_order": null,
@@ -480,6 +505,7 @@
           "minimum": null,
           "name": "interpolation",
           "nullable": false,
+          "required": false,
           "ui_default": null,
           "ui_maximum": null,
           "ui_minimum": null
@@ -496,6 +522,7 @@
           "minimum": null,
           "name": "interpolation_order",
           "nullable": false,
+          "required": false,
           "ui_default": null,
           "ui_maximum": null,
           "ui_minimum": null
@@ -507,7 +534,8 @@
       "row_label": "",
       "short_name": "",
       "stage_kind": "interpolate",
-      "stage_label": ""
+      "stage_label": "",
+      "supports_mask": false
     }
   ]
 }

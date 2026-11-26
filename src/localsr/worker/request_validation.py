@@ -207,16 +207,36 @@ def _check_checkpoint_digest(data: dict[str, Any]) -> None:
         raise InvalidRequest('The request has an invalid "approved_checkpoint_sha256".')
 
 
+def _check_stage_masks(data: dict[str, Any]) -> None:
+    stages = data.get("stages")
+    if not isinstance(stages, list):
+        return
+    for item in stages:
+        if not isinstance(item, dict):
+            continue
+        mask_path = item.get("mask_path")
+        if mask_path is None:
+            continue
+        if not isinstance(mask_path, str) or not mask_path.strip() or "\0" in mask_path:
+            raise InvalidRequest('The request has an invalid stage "mask_path".')
+        try:
+            require_ordinary_source(mask_path)
+        except ValueError as error:
+            raise InvalidRequest(str(error)) from None
+
+
 def validate_image_job(data: Any) -> None:
     validate_fields(data, IMAGE_JOB_FIELDS, "image job request")
     _check_checkpoint_digest(data)
     _check_paths(data["image_path"], data["output_path"])
+    _check_stage_masks(data)
 
 
 def validate_video_job(data: Any) -> None:
     validate_fields(data, VIDEO_JOB_FIELDS, "video job request")
     _check_checkpoint_digest(data)
     _check_paths(data["video_path"], data["output_video_path"])
+    _check_stage_masks(data)
 
 
 def validate_probe(data: Any) -> None:

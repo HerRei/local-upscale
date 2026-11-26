@@ -755,7 +755,13 @@ fn image_batch_key(message: &Value) -> Option<Value> {
         || data["neural_engine"] == false
         || data["run_alone"] == true
         || face
-        || stages.is_some_and(|stages| stages.len() != 1 || stages[0]["kind"] == "face_restore")
+        || stages.is_some_and(|stages| {
+            stages.len() != 1
+                || stages[0]["kind"] == "face_restore"
+                || stages[0].get("params").is_some_and(|v| !v.is_null())
+                || stages[0].get("mask_path").is_some_and(|v| !v.is_null())
+                || stages[0]["model_path"].as_str().is_none_or(str::is_empty)
+        })
     {
         return None;
     }
