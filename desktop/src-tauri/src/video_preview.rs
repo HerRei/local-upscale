@@ -478,7 +478,14 @@ mod tests {
             .trim()
             .parse()
             .unwrap();
-        assert!(wait_until_stopped(helper), "the helper still runs");
+        // Failed once on a Linux runner (2026-11-25) and never locally: say what the helper
+        // was doing, so the next failure tells a missed kill from a slow one.
+        assert!(
+            wait_until_stopped(helper),
+            "the helper still runs: {}",
+            fs::read_to_string(format!("/proc/{helper}/stat"))
+                .unwrap_or_else(|_| "no /proc".into())
+        );
     }
 
     #[cfg(unix)]
