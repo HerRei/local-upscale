@@ -155,6 +155,7 @@ def _engine_features() -> list[str]:
         LIMITS.stage_params_feature,
         "checkpoint_sha256_consent",
         "image_batch_v1",
+        "image_batch_pipelined",
         "video_frame",
         "camera_raw",
         "cancellation",
@@ -273,6 +274,8 @@ class WorkerServer:
         self.restart_after_job = False
         # The last device report, so a refresh during a job needs no new look at the drivers.
         self.last_capabilities: dict | None = None
+        self._batch_save_pipeline = None
+        self._batch_has_more = False
 
     def _check_approved_checkpoint(self, data: dict) -> None:
         digest = data.get("approved_checkpoint_sha256")
@@ -314,6 +317,8 @@ class WorkerServer:
                 # The desktop cancels a whole queue: every photo of the batch,
                 # also those that later run on their own, is cancelled.
                 self.pending_cancel_job_ids |= self.active_batch_job_ids
+                for member_id in self.active_batch_job_ids:
+                    self.pending_cancel_keep_partial[member_id] = keep_partial
                 self.active_cancel_keep_partial = keep_partial
                 self.cancel_event.set()
             elif requested_job_id == self.active_job_id:
@@ -324,7 +329,7 @@ class WorkerServer:
         with self.state_lock:
             if self.shutdown_event.is_set():
                 return False
-            if job_id == self.active_job_id:
+            if job_id in self.active_batch_job_ids or job_id == self.active_job_id:
                 return self.active_cancel_keep_partial
             return self.pending_cancel_keep_partial.get(job_id, False)
 
@@ -360,6 +365,16 @@ class WorkerServer:
             self.pending_cancel_keep_partial.pop(job_id, None)
             self.active_cancel_keep_partial = False
             self._clear_cancel_unless_shutting_down()
+
+    def _activate_batch_member(self, job_id: str) -> None:
+        """Focus a batch photo without resetting batch cancellation or pending saves."""
+        with self.state_lock:
+            self.active_job_id = job_id
+            if self.shutdown_event.is_set():
+                self.active_cancel_keep_partial = False
+                self.cancel_event.set()
+            elif job_id in self.pending_cancel_job_ids:
+                self.cancel_event.set()
 
     def _activate_batch(self, job_ids: list[str]) -> None:
         with self.state_lock:
@@ -1070,7 +1085,7 @@ class WorkerServer:
         )
         send_message(BenchmarkCompleted(job_id=job_id, result=result.to_dict()))
 
-    def _run_image_job(self, data, announced: bool = False) -> None:
+    def _run_image_job(self, data, announced: bool = False, *, in_batch: bool = False) -> None:
         """One image job: its own activation, checkpoint policy and failure boundary.
 
         ``announced`` is set for a photo whose job_started a batch already sent."""
@@ -1089,10 +1104,14 @@ class WorkerServer:
         )
 
         try:
-            self._activate_job(job_id)
-            if not announced:
+            if in_batch:
+                self._activate_batch_member(job_id)
+            else:
+                self._activate_job(job_id)
+            if not announced and not (in_batch and self.cancel_event.is_set()):
                 send_message(JobStarted(job_id=job_id))
-            self._check_approved_checkpoint(data)
+            if not self.cancel_event.is_set():
+                self._check_approved_checkpoint(data)
             self._run_job(job_id, data)
         # The process boundary must turn any inference/I/O failure
         # into a job_failed message instead of killing the worker.
@@ -1106,9 +1125,11 @@ class WorkerServer:
                     **failure_fields(e, data.get("output_path")),
                 )
             )
-            self._restart_if_required()
+            if not in_batch:
+                self._restart_if_required()
         finally:
-            self._deactivate_job(job_id)
+            if not in_batch:
+                self._deactivate_job(job_id)
             self.model_adapter.release()
             self.model_adapter.allow_unverified_checkpoints = previous_checkpoint_policy
             self.model_adapter.approved_checkpoint = previous_approved_checkpoint
@@ -1201,8 +1222,25 @@ class WorkerServer:
             self.model_adapter.approved_checkpoint = previous_approved_checkpoint
         try:
             self._restart_if_required()
-            for data in returned:
-                self._run_image_job(data, announced=str(data["job_id"]) in started)
+            from localsr.worker.image_job import SavePipeline
+
+            pipeline = SavePipeline()
+            self._batch_save_pipeline = pipeline
+            try:
+                for index, data in enumerate(returned):
+                    if self.restart_after_job:
+                        break
+                    self._batch_has_more = index + 1 < len(returned)
+                    self._run_image_job(
+                        data,
+                        announced=str(data["job_id"]) in started,
+                        in_batch=True,
+                    )
+            finally:
+                self._batch_has_more = False
+                pipeline.close()
+                self._batch_save_pipeline = None
+            self._restart_if_required()
         finally:
             self._deactivate_batch(ids)
 
@@ -1217,6 +1255,8 @@ class WorkerServer:
             emit_preview=self._emit_live_preview,
             preview_factory=LatestPreviewEncoder,
             keep_partial=lambda: self._keep_partial_for_job(job_id),
+            save_pipeline=self._batch_save_pipeline,
+            overlap_save=self._batch_has_more,
         ).run(job_id, data)
 
     @staticmethod

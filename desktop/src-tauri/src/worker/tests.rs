@@ -3081,3 +3081,308 @@ fn preview_files_are_cleaned_on_remove_clear_results_clear_media_and_startup_swe
     crate::commands::clear_media_checked(&restarted).unwrap();
     assert!(!shared_file.exists());
 }
+
+fn ready_for_pipelined_batches(state: &AppState) {
+    *lock(&state.engine).unwrap() = Some(
+        serde_json::from_value(json!({
+            "protocol_version": 1,
+            "minimum_protocol_version": 1,
+            "engine_id": "e",
+            "engine_version": "1",
+            "features": ["image", "image_batch_v1", "image_batch_pipelined"],
+            "model_formats": [],
+            "video_engines": []
+        }))
+        .unwrap(),
+    );
+    lock(&state.runtime).unwrap().worker = "ready".into();
+}
+
+#[test]
+fn pipelined_engine_batches_every_architecture_and_device_even_off_macos() {
+    let cases: [(&str, bool, &str, bool); 4] = [
+        ("cpu", false, "/models/hat.pth", false),
+        ("cuda:0", false, "/models/realplksr.pth", true),
+        ("mps", false, "/models/hat.pth", false),
+        ("mps", true, "/models/custom_checkpoint.safetensors", false),
+    ];
+    for (device, neural_engine, model_path, platform) in cases {
+        let directory = tempfile::tempdir().unwrap();
+        let state = batch_state(directory.path());
+        {
+            let db = lock(&state.database).unwrap();
+            db.cancel_queued_jobs().unwrap();
+            for id in ["p1", "p2"] {
+                let mut job = photo_job(id);
+                job["data"]["device"] = json!(device);
+                job["data"]["neural_engine"] = json!(neural_engine);
+                job["data"]["model_path"] = json!(model_path);
+                job["data"]["stages"] = json!([{
+                    "kind": "upscale",
+                    "model_id": "custom",
+                    "model_path": model_path
+                }]);
+                job["data"]["output_path"] =
+                    json!(directory.path().join("out").join(format!("{id}.png")));
+                db.insert_media(id, &format!("/in/{id}.png"), id, "image")
+                    .unwrap();
+                db.insert_job(id, id, &job.to_string()).unwrap();
+            }
+        }
+        ready_for_pipelined_batches(&state);
+        let (sender, receiver) = mpsc::channel();
+        *lock(&state.worker.sender).unwrap() = Some(sender);
+
+        assert!(begin_dispatch(&state, platform).unwrap());
+        let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+        assert_eq!(sent["type"], "image_batch_request", "{device}/{model_path}");
+        assert_eq!(
+            lock(&state.runtime).unwrap().active_batch_job_ids,
+            ["p1", "p2"]
+        );
+        lock(&state.worker.cancellation).unwrap().finish().unwrap();
+    }
+}
+
+#[test]
+fn without_pipelined_feature_non_coreml_jobs_still_dispatch_one_by_one() {
+    for (device, neural_engine, model_path, platform) in [
+        ("cpu", false, "/models/span.pth", true),
+        ("mps", false, "/models/span.pth", true),
+        ("mps", true, "/models/hat.pth", true),
+        ("mps", true, "/models/span.pth", false),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let state = batch_state(directory.path());
+        {
+            let db = lock(&state.database).unwrap();
+            db.cancel_queued_jobs().unwrap();
+            for id in ["s1", "s2"] {
+                let mut job = photo_job(id);
+                job["data"]["device"] = json!(device);
+                job["data"]["neural_engine"] = json!(neural_engine);
+                job["data"]["model_path"] = json!(model_path);
+                job["data"]["stages"] = json!([{
+                    "kind": "upscale",
+                    "model_id": "m",
+                    "model_path": model_path
+                }]);
+                job["data"]["output_path"] =
+                    json!(directory.path().join("out").join(format!("{id}.png")));
+                db.insert_media(id, &format!("/in/{id}.png"), id, "image")
+                    .unwrap();
+                db.insert_job(id, id, &job.to_string()).unwrap();
+            }
+        }
+        ready_for_batches(&state);
+        let (sender, receiver) = mpsc::channel();
+        *lock(&state.worker.sender).unwrap() = Some(sender);
+
+        assert!(begin_dispatch(&state, platform).unwrap());
+        let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+        assert_eq!(sent["type"], "job_request", "{device}/{model_path}");
+        assert!(lock(&state.runtime)
+            .unwrap()
+            .active_batch_job_ids
+            .is_empty());
+        lock(&state.worker.cancellation).unwrap().finish().unwrap();
+    }
+}
+
+#[test]
+fn pipelined_batch_respects_recipe_boundaries_and_max_batch_photos() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    {
+        let db = lock(&state.database).unwrap();
+        db.cancel_queued_jobs().unwrap();
+        let mut diff_halo = photo_job("diff");
+        diff_halo["data"]["device"] = json!("cpu");
+        diff_halo["data"]["model_path"] = json!("/models/hat.pth");
+        diff_halo["data"]["stages"] =
+            json!([{"kind": "upscale", "model_id": "hat", "model_path": "/models/hat.pth"}]);
+        diff_halo["data"]["halo"] = json!(32);
+        diff_halo["data"]["output_path"] = json!(directory.path().join("out").join("diff.png"));
+
+        for index in 0..MAX_BATCH_PHOTOS + 5 {
+            let id = format!("q{index}");
+            let mut job = photo_job(&id);
+            job["data"]["device"] = json!("cpu");
+            job["data"]["model_path"] = json!("/models/hat.pth");
+            job["data"]["stages"] =
+                json!([{"kind": "upscale", "model_id": "hat", "model_path": "/models/hat.pth"}]);
+            job["data"]["output_path"] =
+                json!(directory.path().join("out").join(format!("{id}.png")));
+            db.insert_media(&id, &format!("/in/{id}.png"), &id, "image")
+                .unwrap();
+            if index == 2 {
+                db.insert_media("diff", "/in/diff.png", "diff", "image")
+                    .unwrap();
+                db.insert_job("diff", "diff", &diff_halo.to_string())
+                    .unwrap();
+            }
+            db.insert_job(&id, &id, &job.to_string()).unwrap();
+        }
+    }
+    ready_for_pipelined_batches(&state);
+    let (sender, receiver) = mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+    assert!(begin_dispatch(&state, false).unwrap());
+    let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+    assert_eq!(sent["type"], "image_batch_request");
+    // Stops before "diff", never reaching past it.
+    let ids: Vec<String> = sent["data"]["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|job| string(job, "job_id"))
+        .collect();
+    assert_eq!(ids, ["q0", "q1"]);
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+
+    // Face restoration and multi-stage recipes still dispatch one by one.
+    for (field, value) in [
+        ("face_model_path", json!("/models/face.pth")),
+        (
+            "stages",
+            json!([{"kind": "restore", "model_path": "/r.pth"}, {"kind": "upscale", "model_path": "/models/hat.pth"}]),
+        ),
+    ] {
+        let mut first = photo_job("f1");
+        first["data"]["device"] = json!("cpu");
+        first["data"][field] = value.clone();
+        let mut second = photo_job("f2");
+        second["data"]["device"] = json!("cpu");
+        second["data"][field] = value;
+        let (ids, message) = next_dispatch_for(
+            &pending(&[first.clone(), second]),
+            BatchPolicy::Pipelined,
+            |p| !p.is_empty(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(ids, ["f1"]);
+        assert_eq!(message, first);
+    }
+}
+
+#[test]
+fn cancelling_a_pipelined_batch_while_an_earlier_photo_saves_settles_every_member() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    {
+        let db = lock(&state.database).unwrap();
+        db.cancel_queued_jobs().unwrap();
+        for id in ["ca", "cb", "cc"] {
+            let mut job = photo_job(id);
+            job["data"]["device"] = json!("cpu");
+            job["data"]["model_path"] = json!("/models/hat.pth");
+            job["data"]["stages"] =
+                json!([{"kind": "upscale", "model_id": "hat", "model_path": "/models/hat.pth"}]);
+            job["data"]["output_path"] =
+                json!(directory.path().join("out").join(format!("{id}.png")));
+            db.insert_media(id, &format!("/in/{id}.png"), id, "image")
+                .unwrap();
+            db.insert_job(id, id, &job.to_string()).unwrap();
+        }
+    }
+    ready_for_pipelined_batches(&state);
+    let (sender, receiver) = mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+
+    assert!(begin_dispatch(&state, false).unwrap());
+    let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+    let scratch_dirs: Vec<PathBuf> = sent["data"]["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|job| PathBuf::from(job["scratch_directory"].as_str().unwrap()))
+        .collect();
+    assert!(scratch_dirs.iter().all(|p| p.is_dir()));
+
+    // Photo ca starts, hands off to saver, and photo cb starts while ca is saving.
+    apply_worker_envelope(&state, &envelope("job_started", json!({"job_id": "ca"}))).unwrap();
+    apply_worker_envelope(&state, &envelope("job_started", json!({"job_id": "cb"}))).unwrap();
+    assert_eq!(lock(&state.runtime).unwrap().active_job_id, "cb");
+
+    // User cancels with keep_partial=true while ca is saving, cb is running, and cc has not started.
+    crate::commands::cancel_jobs_checked(&state, true).unwrap();
+    let cancel_msg: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+    assert_eq!(cancel_msg["type"], "cancel_request");
+    assert_eq!(cancel_msg["data"]["job_id"], "cb");
+    assert_eq!(cancel_msg["data"]["keep_partial"], true);
+
+    let out_ca = directory
+        .path()
+        .join("out")
+        .join("ca.png")
+        .to_string_lossy()
+        .into_owned();
+    assert!(accept_envelope(
+        &state,
+        &envelope(
+            "job_completed",
+            json!({"job_id": "ca", "output_path": out_ca})
+        )
+    )
+    .unwrap());
+    lock(&state.worker.cancellation)
+        .unwrap()
+        .finish_member("ca")
+        .unwrap();
+    assert!(!scratch_dirs[0].exists());
+
+    assert!(accept_envelope(&state, &envelope("job_cancelled", json!({"job_id": "cb"}))).unwrap());
+    lock(&state.worker.cancellation)
+        .unwrap()
+        .finish_member("cb")
+        .unwrap();
+    assert!(!scratch_dirs[1].exists());
+
+    // cc must also be accepted (not dropped as stale) so active_batch_job_ids and scratch clear.
+    assert!(accept_envelope(&state, &envelope("job_cancelled", json!({"job_id": "cc"}))).unwrap());
+    lock(&state.worker.cancellation)
+        .unwrap()
+        .finish_member("cc")
+        .unwrap();
+    assert!(!scratch_dirs[2].exists());
+
+    let runtime = lock(&state.runtime).unwrap();
+    assert!(runtime.active_job_id.is_empty());
+    assert!(runtime.active_batch_job_ids.is_empty());
+    assert_eq!(status(&state, "ca"), "completed");
+    assert_eq!(status(&state, "cb"), "cancelled");
+    assert_eq!(status(&state, "cc"), "cancelled");
+}
+
+#[test]
+fn crash_recovery_requeues_saving_and_inferring_pipelined_batch_photos_alone() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    let ids: Vec<String> = ["a", "b", "c"].map(String::from).to_vec();
+    {
+        let db = lock(&state.database).unwrap();
+        db.set_job_status("a", "running").unwrap();
+        db.set_job_status("b", "running").unwrap();
+        settle_stopped_jobs(&db, &ids, &[], "The engine stopped.");
+    }
+    for id in ["a", "b", "c"] {
+        assert_eq!(status(&state, id), "queued");
+    }
+    let window = lock(&state.database)
+        .unwrap()
+        .queued_job_window(MAX_BATCH_PHOTOS)
+        .unwrap();
+    // Both a (was saving) and b (was inferring) were marked run_alone; c remains batchable.
+    let (sent_a, msg_a) = next_dispatch_for(&window, BatchPolicy::Pipelined, |p| !p.is_empty())
+        .unwrap()
+        .unwrap();
+    assert_eq!(sent_a, ["a"]);
+    assert_eq!(msg_a["type"], "job_request");
+    let (sent_b, msg_b) =
+        next_dispatch_for(&window[1..], BatchPolicy::Pipelined, |p| !p.is_empty())
+            .unwrap()
+            .unwrap();
+    assert_eq!(sent_b, ["b"]);
+    assert_eq!(msg_b["type"], "job_request");
+}
