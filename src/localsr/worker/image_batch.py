@@ -85,7 +85,9 @@ def batch_settings(data: Mapping[str, Any]) -> dict[str, Any] | None:
         )
     except (KeyError, ValueError):
         return None  # The normal runner reports an invalid recipe for each photo.
-    if pipeline.preprocess_stages or pipeline.face is not None:
+    if pipeline.preprocess_stages or pipeline.face is not None or pipeline.postprocess_stages:
+        return None
+    if any(stage.params or stage.mask_path or not stage.model_path for stage in pipeline.stages):
         return None
     if pipeline.primary is None or (
         data.get("output_scale") == 1 and pipeline.primary.kind == "upscale"

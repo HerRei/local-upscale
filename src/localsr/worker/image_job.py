@@ -11,6 +11,7 @@ from typing import Any
 import numpy as np
 
 from localsr.core.disk_space import require_image_room
+from localsr.core.face_compositing import blend_with_alpha, load_mask
 from localsr.core.image_io import ImageManager, require_output_format
 from localsr.core.inference import InferenceEngine, UnstableRestorationError
 from localsr.core.live_preview import LatestPreviewEncoder, PreviewPacket
@@ -71,6 +72,137 @@ def save_output(
     return list(manager.notes)
 
 
+def _apply_stage_mask(stage: PipelineStage, stage_input: Any, stage_output: Any) -> np.ndarray:
+    """Composite ``mask * stage_output + (1 - mask) * stage_input`` once in one place."""
+    assert stage.mask_path is not None
+    if hasattr(stage_output, "detach"):
+        out_arr = stage_output.detach().cpu().numpy()
+    else:
+        out_arr = np.asarray(stage_output)
+    in_tensor = stage_input.detach().cpu()
+    height, width = int(out_arr.shape[1]), int(out_arr.shape[2])
+    if tuple(in_tensor.shape[1:]) != (height, width):
+        import torch.nn.functional as F
+
+        in_tensor = F.interpolate(
+            in_tensor[None], size=(height, width), mode="bilinear", align_corners=False
+        )[0]
+    mask = load_mask(stage.mask_path, width, height)
+    if out_arr.dtype == np.uint8:
+        in_arr = in_tensor.clamp(0, 1).mul(255).round().byte().numpy()
+    else:
+        in_arr = in_tensor.numpy().astype(np.float32, copy=False)
+        out_arr = out_arr.astype(np.float32, copy=False)
+    return blend_with_alpha(out_arr, in_arr, mask)
+
+
+def _run_fix_model_stage(
+    runner: ImageJobRunner,
+    image: dict[str, Any],
+    stage: PipelineStage,
+    _index: int,
+    data: Mapping[str, Any],
+    progress: ImageJobProgress,
+    notes: list[str],
+    *,
+    clear_grayscale: bool = False,
+) -> dict[str, Any]:
+    runner._log(f"Running {stage.kind} stage with {stage.model_id}...")
+    try:
+        with ExitStack() as resources:
+            info = runner.model_adapter.inspect(stage.model_path)
+            if info.scale != 1:
+                raise ValueError(
+                    "A preprocessing restoration checkpoint must have native scale 1×."
+                )
+            channels = image["tensor"].shape[0]
+            if info.in_channels != channels or info.out_channels != channels:
+                raise ValueError("A fix must preserve the working image channels.")
+            # A fix keeps at least the overlap its own model needs, whatever the
+            # upscaler after it uses.
+            model = CATALOG_BY_ID.get(stage.model_id)
+            halo = max(int(data["halo"]), model.recommended_halo if model else 0)
+            writer = runner._process_image(image, stage, info, data, progress, halo=halo)
+            resources.callback(writer.cleanup)
+            runner._check_cancelled()
+            import torch
+
+            # Copy before releasing the memmap; metadata and alpha remain
+            # attached to the original image until the final atomic save.
+            restored = np.asarray(writer.get_array())
+            if restored.shape != tuple(image["tensor"].shape):
+                raise ValueError("A fix must preserve the working image dimensions and channels.")
+            return {
+                **image,
+                "grayscale": False
+                if clear_grayscale or info.architecture == "DDColor"
+                else image.get("grayscale", False),
+                "tensor": torch.from_numpy(np.array(restored, copy=True)).float().div_(255.0),
+                "_skip_preview": info.architecture == "DDColor",
+            }
+    except UnstableRestorationError as error:
+        # The fix before the main model is optional. A model that cannot handle this
+        # image (NAFNet's deblur runs away on line art, screentone and already sharp
+        # pictures) must not stop the job: the image goes on without this fix, the job
+        # says so, and nothing damaged is kept.
+        model = CATALOG_BY_ID.get(stage.model_id)
+        reason = str(error).split(". ")[0].rstrip(".")
+        problem = FIX_SHORT_NAMES.get(stage.fix or "", "")
+        note = (
+            f"The {problem + ' ' if problem else ''}fix "
+            f"({model.display_name if model else stage.model_id}) was skipped for this "
+            f"image; the next step used the picture without it. Reason: {reason}."
+        )
+        runner._log(f"{note} ({error})")
+        runner.emit(WarningMessage(message=note))
+        notes.append(note)
+        return {**image, "_skip_preview": True}
+    finally:
+        if stage.model_path:
+            runner.engine.release_model(stage.model_path)
+        runner.model_adapter.release()
+
+
+def _run_colour_fix_stage(
+    runner: ImageJobRunner,
+    image: dict[str, Any],
+    stage: PipelineStage,
+    index: int,
+    data: Mapping[str, Any],
+    progress: ImageJobProgress,
+    notes: list[str],
+) -> dict[str, Any]:
+    return _run_fix_model_stage(
+        runner, image, stage, index, data, progress, notes, clear_grayscale=True
+    )
+
+
+StageImpl = Callable[
+    [
+        "ImageJobRunner",
+        dict[str, Any],
+        PipelineStage,
+        int,
+        Mapping[str, Any],
+        ImageJobProgress,
+        list[str],
+    ],
+    dict[str, Any],
+]
+
+# Dispatch non-primary stages by registry step id; new steps add one entry here.
+IMAGE_STEP_HANDLERS: dict[str, StageImpl] = {
+    "blur": _run_fix_model_stage,
+    "jpeg": _run_fix_model_stage,
+    "noise": _run_fix_model_stage,
+    "colour": _run_colour_fix_stage,
+    "restore": _run_fix_model_stage,
+}
+
+# Primary steps that produce colour output from monochrome sources.
+_PRIMARY_GRAYSCALE_CLEARING_STEPS: frozenset[str] = frozenset({"colour"})
+
+
 class ImageJobRunner:
     def __init__(
         self,
@@ -112,10 +244,14 @@ class ImageJobRunner:
         # The engine cache otherwise keeps every upscaler used since the engine started. A
         # fix runs alone: the upscaler is loaded after it, not kept beside it.
         face_path = None if pipeline.primary is None else data.get("face_model_path")
+        first_preprocess_model = next(
+            (stage.model_path for stage in pipeline.preprocess_stages if stage.model_path),
+            None,
+        )
         self.engine.release_models_except(
-            {pipeline.preprocess_stages[0].model_path}
-            if pipeline.preprocess_stages
-            else {stage.model_path for stage in pipeline.stages}
+            {first_preprocess_model}
+            if first_preprocess_model is not None
+            else {stage.model_path for stage in pipeline.stages if stage.model_path}
             | ({face_path} if face_path else set())
         )
         scratch = data.get("scratch_directory")
@@ -144,29 +280,40 @@ class ImageJobRunner:
                 working_image = image
                 notes: list[str] = []
                 for index, stage in enumerate(pipeline.preprocess_stages):
-                    working_image = self._preprocess(
+                    working_image = self._run_stage(
                         working_image, stage, index, data, progress, notes
                     )
-                    if stage.fix == "colour":
+                    if not working_image.get("grayscale", True):
                         manager.grayscale = False
                 self._check_cancelled()
+                primary_clears_grayscale = (
+                    pipeline.primary is not None
+                    and pipeline.primary.step_id in _PRIMARY_GRAYSCALE_CLEARING_STEPS
+                )
                 try:
                     writer, info = self._primary(working_image, pipeline, data, progress, resources)
                 except TilesStopped as stopped:
                     resources.callback(stopped.writer.cleanup)
                     colour = stopped.info is not None and stopped.info.architecture == "DDColor"
-                    if colour or (
-                        pipeline.primary is not None and pipeline.primary.fix == "colour"
-                    ):
+                    if colour or primary_clears_grayscale:
                         manager.grayscale = False
                     self._save_finished_part(
                         job_id, data, manager, image, working_image, stopped, started_at
                     )
                     return
-                if info.architecture == "DDColor" or (
-                    pipeline.primary is not None and pipeline.primary.fix == "colour"
-                ):
+                if info.architecture == "DDColor" or primary_clears_grayscale:
                     manager.grayscale = False
+                if pipeline.postprocess_stages:
+                    writer = self._run_postprocess(
+                        writer,
+                        working_image,
+                        pipeline,
+                        data,
+                        progress,
+                        notes,
+                        resources,
+                        manager,
+                    )
                 # Every tile is done: a stop that keeps the finished part saves it whole.
                 if self._discard_signal().is_set():
                     raise InterruptedError("Cancelled before the output was saved.")
@@ -196,7 +343,7 @@ class ImageJobRunner:
         take: Callable[[], list[str]] | None = getattr(self.engine, "take_notes", None)
         return take() if callable(take) else []
 
-    def _preprocess(
+    def _run_stage(
         self,
         image: dict[str, Any],
         stage: PipelineStage,
@@ -207,86 +354,96 @@ class ImageJobRunner:
     ) -> dict[str, Any]:
         self._check_cancelled()
         progress.start(index, stage)
-        self._log(f"Running {stage.kind} stage with {stage.model_id}...")
+        handler = IMAGE_STEP_HANDLERS.get(stage.step_id)
+        if handler is None:
+            raise PipelineStageError(
+                stage, f"No implementation registered for step {stage.step_id!r}."
+            )
         try:
-            with ExitStack() as resources:
-                info = self.model_adapter.inspect(stage.model_path)
-                if info.scale != 1:
-                    raise ValueError(
-                        "A preprocessing restoration checkpoint must have native scale 1×."
-                    )
-                channels = image["tensor"].shape[0]
-                if info.in_channels != channels or info.out_channels != channels:
-                    raise ValueError("A fix must preserve the working image channels.")
-                # A fix keeps at least the overlap its own model needs, whatever the
-                # upscaler after it uses.
-                model = CATALOG_BY_ID.get(stage.model_id)
-                halo = max(int(data["halo"]), model.recommended_halo if model else 0)
-                writer = self._process_image(image, stage, info, data, progress, halo=halo)
-                resources.callback(writer.cleanup)
-                self._check_cancelled()
-                import torch
+            import torch
 
-                # Copy before releasing the memmap; metadata and alpha remain
-                # attached to the original image until the final atomic save.
-                restored = np.asarray(writer.get_array())
-                if restored.shape != tuple(image["tensor"].shape):
-                    raise ValueError(
-                        "A fix must preserve the working image dimensions and channels."
-                    )
-                working_image = {
-                    **image,
-                    "grayscale": False
-                    if stage.fix == "colour" or info.architecture == "DDColor"
-                    else image.get("grayscale", False),
-                    "tensor": torch.from_numpy(np.array(restored, copy=True)).float().div_(255.0),
+            output_image = handler(self, image, stage, index, data, progress, notes)
+            skip_preview = bool(output_image.pop("_skip_preview", False))
+            if stage.mask_path:
+                blended = _apply_stage_mask(stage, image["tensor"], output_image["tensor"])
+                output_image = {
+                    **output_image,
+                    "tensor": torch.from_numpy(np.array(blended, copy=True)),
                 }
-                if info.architecture != "DDColor":
-                    _, height, width = restored.shape
-                    progress.preview.submit(
-                        job_id=progress.job_id,
-                        preview_kind="tile",
-                        pixels=restored,
-                        force=True,
-                        output_x=0,
-                        output_y=0,
-                        output_width=int(width),
-                        output_height=int(height),
-                        image_width=int(width),
-                        image_height=int(height),
-                        active_tile_size=max(int(width), int(height)),
-                        stage_index=index,
-                    )
-                flush_preview = getattr(progress.preview, "flush", None)
-                if callable(flush_preview):
-                    flush_preview()
-                progress.complete(index, stage)
-                return working_image
+            if not skip_preview:
+                pixels = (
+                    output_image["tensor"]
+                    .detach()
+                    .cpu()
+                    .clamp(0, 1)
+                    .mul(255)
+                    .round()
+                    .byte()
+                    .numpy()
+                )
+                _, height, width = pixels.shape
+                progress.preview.submit(
+                    job_id=progress.job_id,
+                    preview_kind="tile",
+                    pixels=pixels,
+                    force=True,
+                    output_x=0,
+                    output_y=0,
+                    output_width=int(width),
+                    output_height=int(height),
+                    image_width=int(width),
+                    image_height=int(height),
+                    active_tile_size=max(int(width), int(height)),
+                    stage_index=index,
+                )
+            flush_preview = getattr(progress.preview, "flush", None)
+            if callable(flush_preview):
+                flush_preview()
+            progress.complete(index, stage)
+            return output_image
         except InterruptedError:
             raise
-        except UnstableRestorationError as error:
-            # The fix before the main model is optional. A model that cannot handle this
-            # image (NAFNet's deblur runs away on line art, screentone and already sharp
-            # pictures) must not stop the job: the image goes on without this fix, the job
-            # says so, and nothing damaged is kept.
-            model = CATALOG_BY_ID.get(stage.model_id)
-            reason = str(error).split(". ")[0].rstrip(".")
-            problem = FIX_SHORT_NAMES.get(stage.fix or "", "")
-            note = (
-                f"The {problem + ' ' if problem else ''}fix "
-                f"({model.display_name if model else stage.model_id}) was skipped for this "
-                f"image; the next step used the picture without it. Reason: {reason}."
-            )
-            self._log(f"{note} ({error})")
-            self.emit(WarningMessage(message=note))
-            notes.append(note)
-            progress.complete(index, stage)
-            return image
+        except PipelineStageError:
+            raise
         except Exception as error:  # noqa: BLE001
             raise PipelineStageError(stage, str(error)) from error
-        finally:
-            self.engine.release_model(stage.model_path)
-            self.model_adapter.release()
+
+    def _run_postprocess(
+        self,
+        writer: OutputWriter,
+        working_image: dict[str, Any],
+        pipeline: ImagePipeline,
+        data: Mapping[str, Any],
+        progress: ImageJobProgress,
+        notes: list[str],
+        resources: ExitStack,
+        manager: ImageManager,
+    ) -> OutputWriter:
+        import torch
+
+        assert pipeline.primary_index is not None
+        start_index = pipeline.primary_index + 1 + (1 if pipeline.face is not None else 0)
+        pixels = np.asarray(writer.get_array())
+        post_image = {
+            **working_image,
+            "tensor": torch.from_numpy(np.array(pixels, copy=True)).float().div_(255.0),
+        }
+        for offset, stage in enumerate(pipeline.postprocess_stages):
+            post_image = self._run_stage(
+                post_image, stage, start_index + offset, data, progress, notes
+            )
+            if not post_image.get("grayscale", True):
+                manager.grayscale = False
+        final_pixels = (
+            post_image["tensor"].detach().cpu().clamp(0, 1).mul(255).round().byte().numpy()
+        )
+        out_writer = OutputWriter(
+            final_pixels.shape, dtype=np.uint8, temporary_directory=data.get("scratch_directory")
+        )
+        resources.callback(out_writer.cleanup)
+        out_writer.mmap[:] = final_pixels
+        out_writer.mmap.flush()
+        return out_writer
 
     def _primary(
         self,
@@ -339,6 +496,14 @@ class ImageJobRunner:
                     image, primary, info, data, progress, keep_partial=self.keep_partial
                 )
                 resources.callback(writer.cleanup)
+            if primary.mask_path:
+                blended = _apply_stage_mask(primary, image["tensor"], writer.get_array())
+                target = getattr(writer, "mmap", None)
+                if target is not None:
+                    target[:] = blended
+                    target.flush()
+                else:
+                    writer.get_array()[:] = blended
         except TilesStopped as stopped:
             stopped.info = info
             raise

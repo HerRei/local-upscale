@@ -11,10 +11,48 @@ const fixChipOrderSteps = [...fixStageSteps].sort(
   (left, right) => (left.fix_chip_order ?? left.order) - (right.fix_chip_order ?? right.order),
 );
 
-export const STEPS = rawSteps.steps;
+export interface StepParameter {
+  name: string;
+  kind: string;
+  default: boolean | number | string | null;
+  minimum: number | null;
+  maximum: number | null;
+  choices: readonly string[];
+  int_choices: readonly number[];
+  ui_minimum: number | null;
+  ui_maximum: number | null;
+  ui_default: number | null;
+  nullable: boolean;
+  required: boolean;
+}
+
+export interface StepDefinition {
+  id: string;
+  media: readonly string[];
+  phase: string;
+  order: number;
+  needs_model: boolean;
+  supports_mask: boolean;
+  stage_kind: string | null;
+  role: string | null;
+  fix_kind: string | null;
+  is_fix_stage: boolean;
+  fix_chip_order: number | null;
+  in_image_pipeline: boolean;
+  in_recipe_stages: boolean;
+  label: string;
+  row_label: string;
+  short_name: string;
+  stage_label: string;
+  required_feature: string | null;
+  parameters: readonly StepParameter[];
+}
+
+export const STEPS: readonly StepDefinition[] = rawSteps.steps;
 export const PHASES = rawSteps.phases;
 export const STEP_LIMITS = rawSteps.limits;
 export const MULTI_FIX_FEATURE = rawSteps.limits.multi_fix_feature;
+export const STAGE_PARAMS_FEATURE = rawSteps.limits.stage_params_feature;
 
 /** The order a fix takes when it is turned on: deblur first, colour last. */
 export const DEFAULT_FIX_ORDER: FixStageKind[] = fixStageSteps.map(
@@ -69,4 +107,89 @@ export function isVideoOrUpscalePrimaryKind(kind: string): boolean {
       step.id !== 'restore' &&
       step.stage_kind === kind,
   );
+}
+
+function validateParamValue(stepId: string, param: StepParameter, value: unknown): string | null {
+  if (value === null) {
+    return param.nullable ? null : `Parameter "${param.name}" for step "${stepId}" cannot be null.`;
+  }
+  switch (param.kind) {
+    case 'bool':
+      return typeof value === 'boolean'
+        ? null
+        : `Parameter "${param.name}" for step "${stepId}" must be a boolean.`;
+    case 'str':
+      return typeof value === 'string'
+        ? null
+        : `Parameter "${param.name}" for step "${stepId}" must be a string.`;
+    case 'choice':
+      return typeof value === 'string' && param.choices.includes(value)
+        ? null
+        : `Parameter "${param.name}" for step "${stepId}" must be one of ${param.choices.join(', ')}.`;
+    case 'int_choice':
+      return typeof value === 'number' &&
+        Number.isInteger(value) &&
+        param.int_choices.includes(value)
+        ? null
+        : `Parameter "${param.name}" for step "${stepId}" must be one of ${param.int_choices.join(', ')}.`;
+    case 'int':
+      if (typeof value !== 'number' || !Number.isInteger(value)) {
+        return `Parameter "${param.name}" for step "${stepId}" must be an integer.`;
+      }
+      break;
+    case 'number':
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        return `Parameter "${param.name}" for step "${stepId}" must be a finite number.`;
+      }
+      break;
+    default:
+      return `Unsupported parameter kind "${param.kind}" for "${stepId}.${param.name}".`;
+  }
+  if (param.minimum !== null && value < param.minimum) {
+    return `Parameter "${param.name}" for step "${stepId}" must be >= ${param.minimum}.`;
+  }
+  if (param.maximum !== null && value > param.maximum) {
+    return `Parameter "${param.name}" for step "${stepId}" must be <= ${param.maximum}.`;
+  }
+  return null;
+}
+
+export function validateStepParams(step: StepDefinition, rawParams: unknown): string | null {
+  let params: Record<string, unknown>;
+  if (rawParams === undefined || rawParams === null) {
+    params = {};
+  } else if (typeof rawParams === 'object' && !Array.isArray(rawParams)) {
+    params = rawParams as Record<string, unknown>;
+  } else {
+    return `Parameters for step "${step.id}" must be an object.`;
+  }
+
+  const byName = new Map(step.parameters.map((param) => [param.name, param]));
+  for (const key of Object.keys(params)) {
+    if (!byName.has(key)) {
+      return `Unknown parameter "${key}" for step "${step.id}".`;
+    }
+  }
+  for (const param of step.parameters) {
+    if (param.required && !Object.hasOwn(params, param.name)) {
+      return `Missing required parameter "${param.name}" for step "${step.id}".`;
+    }
+  }
+  for (const [key, value] of Object.entries(params)) {
+    const param = byName.get(key);
+    if (!param) continue;
+    const error = validateParamValue(step.id, param, value);
+    if (error !== null) return error;
+  }
+  return null;
+}
+
+export function validateStageParams(
+  stepId: string,
+  rawParams: unknown,
+  steps: readonly StepDefinition[] = STEPS,
+): string | null {
+  const step = steps.find((candidate) => candidate.id === stepId);
+  if (!step) return `Unknown step "${stepId}".`;
+  return validateStepParams(step, rawParams);
 }

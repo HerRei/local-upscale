@@ -114,6 +114,7 @@ collect_runtime  # packaging/tauri_worker.spec
 filter_binaries  # packaging/tauri_worker.spec
 
 # Public helpers kept by decision and exercised by tests.
+IMAGE_PIPELINE_STAGE_KINDS  # core/steps.py: tested in test_steps_registry.py
 _.size_megabytes
 _.file_size_bytes
 _.total_size_bytes

@@ -899,10 +899,20 @@ fn validate_recipe_stages(recipe: &Recipe) -> AppResult<()> {
     }
     if recipe.stages.len() > limits.max_recipe_stages
         || recipe.stages.iter().any(|stage| {
-            stage.model_id.trim().is_empty()
+            let step = steps.step_for_stage(&stage.kind, stage.fix.as_deref());
+            let needs_model = step.is_none_or(|s| s.needs_model);
+            (needs_model && stage.model_id.trim().is_empty())
                 || !steps.is_recipe_stage_kind(&stage.kind)
                 || stage.fidelity.is_some_and(|value| {
                     !steps.param_float_in_range("face_restore", "fidelity", value)
+                })
+                || step.is_some_and(|s| {
+                    steps
+                        .validate_step_params(s, stage.params.as_ref())
+                        .is_err()
+                        || stage.mask_path.as_deref().is_some_and(|mask| {
+                            !s.supports_mask || mask.trim().is_empty() || mask.contains('\0')
+                        })
                 })
         })
     {
@@ -1040,6 +1050,7 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
     input.device = resolve_device(state, &input.device)?;
     validate_start(&input, state)?;
     validate_fix_engine(&input, lock(&state.engine)?.as_ref())?;
+    validate_stage_params_engine(&input.fix_stages, lock(&state.engine)?.as_ref())?;
     let steps = crate::steps::registry();
     if input.task == "video"
         && input.video_interpolation != "off"
@@ -3919,6 +3930,28 @@ fn validate_fix_engine(
     Ok(())
 }
 
+fn validate_stage_params_engine(
+    stages: &[crate::types::FixStageSelection],
+    engine: Option<&crate::types::EngineInfo>,
+) -> AppResult<()> {
+    let uses_params_or_masks = stages
+        .iter()
+        .any(|stage| stage.params.is_some() || stage.mask_path.is_some());
+    if !uses_params_or_masks {
+        return Ok(());
+    }
+    let feature = crate::steps::registry()
+        .limits()
+        .stage_params_feature
+        .as_str();
+    if !engine.is_some_and(|engine| engine.features.iter().any(|f| f == feature)) {
+        return Err(AppError::Validation(
+            "This engine does not support stage parameters or masks. Update LocalSR.".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_fix_selections(stages: &[crate::types::FixStageSelection]) -> AppResult<()> {
     let steps = crate::steps::registry();
     let mut fixes = HashSet::new();
@@ -3932,6 +3965,25 @@ fn validate_fix_selections(stages: &[crate::types::FixStageSelection]) -> AppRes
         return Err(AppError::Validation(
             "choose up to four different fixes: blur, JPEG, noise or colour".into(),
         ));
+    }
+    for stage in stages {
+        steps
+            .validate_stage_params(&stage.fix, stage.params.as_ref())
+            .map_err(AppError::Validation)?;
+        if let Some(mask) = stage.mask_path.as_deref() {
+            if mask.trim().is_empty() || mask.contains('\0') {
+                return Err(AppError::Validation("stage mask path is invalid".into()));
+            }
+            if !steps
+                .step(&stage.fix)
+                .is_some_and(|step| step.supports_mask)
+            {
+                return Err(AppError::Validation(format!(
+                    "the {} stage does not support a mask",
+                    stage.fix
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -4129,6 +4181,8 @@ struct ResolvedImageStage {
     fix: String,
     model_id: String,
     path: String,
+    params: Option<serde_json::Map<String, serde_json::Value>>,
+    mask_path: Option<String>,
 }
 
 fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResult<ModelSelection> {
@@ -4289,6 +4343,8 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
             fix: selection.fix.clone(),
             model_id: model.model_id.clone(),
             path: model.installed_path.clone().unwrap_or_default(),
+            params: selection.params.clone(),
+            mask_path: selection.mask_path.clone(),
         });
     }
     if restoring && !preprocess.is_empty() {
@@ -4634,26 +4690,51 @@ fn image_pipeline_stages(
 ) -> Vec<Value> {
     let mut stages = Vec::with_capacity(crate::steps::registry().limits().max_recipe_stages);
     for stage in preprocess {
-        stages.push(json!({
-            "kind": stage.kind,
-            "role": "fix",
-            "fix": stage.fix,
-            "model_id": stage.model_id,
-            "model_path": stage.path,
-        }));
+        let mut entry = serde_json::Map::from_iter([
+            ("kind".into(), json!(stage.kind)),
+            ("role".into(), json!("fix")),
+            ("fix".into(), json!(stage.fix)),
+            ("model_id".into(), json!(stage.model_id)),
+            ("model_path".into(), json!(stage.path)),
+        ]);
+        if let Some(params) = &stage.params {
+            entry.insert("params".into(), Value::Object(params.clone()));
+        }
+        if let Some(mask_path) = &stage.mask_path {
+            entry.insert("mask_path".into(), json!(mask_path));
+        }
+        stages.push(Value::Object(entry));
     }
     if skip_upscale {
         return stages;
     }
     let restoring =
         input.task == "denoise" || (input.task == "video" && input.video_task == "denoise");
-    stages.push(json!({
-        "kind": if restoring { "restore" } else { "upscale" },
-        "role": "primary",
-        "fix": if restoring { input.fix_stages.last().map(|stage| stage.fix.as_str()) } else { None },
-        "model_id": model_id,
-        "model_path": model_path,
-    }));
+    let primary_selection = if restoring {
+        input.fix_stages.last()
+    } else {
+        None
+    };
+    let mut primary = serde_json::Map::from_iter([
+        (
+            "kind".into(),
+            json!(if restoring { "restore" } else { "upscale" }),
+        ),
+        ("role".into(), json!("primary")),
+        (
+            "fix".into(),
+            json!(primary_selection.map(|stage| stage.fix.as_str())),
+        ),
+        ("model_id".into(), json!(model_id)),
+        ("model_path".into(), json!(model_path)),
+    ]);
+    if let Some(params) = primary_selection.and_then(|stage| stage.params.as_ref()) {
+        primary.insert("params".into(), Value::Object(params.clone()));
+    }
+    if let Some(mask_path) = primary_selection.and_then(|stage| stage.mask_path.as_ref()) {
+        primary.insert("mask_path".into(), json!(mask_path));
+    }
+    stages.push(Value::Object(primary));
     if let Some(path) = face_path {
         stages.push(json!({
             "kind": "face_restore",

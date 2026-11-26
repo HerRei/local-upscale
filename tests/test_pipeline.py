@@ -1001,3 +1001,167 @@ def test_multi_fix_final_write_preserves_alpha_and_cleans_real_scratch(
         )
     assert all(writer.mmap is None for writer in writers)
     assert not list((tmp_path / "scratch").glob("localsr-output-*.dat"))
+
+
+def _register_test_modelless_step(monkeypatch, *, supports_mask: bool = True):
+    import localsr.core.pipeline as pipeline_mod
+    import localsr.core.steps as steps_mod
+    from localsr.core.steps import StepDefinition, StepParameter
+    from localsr.worker import image_job
+
+    step = StepDefinition(
+        id="test_fill",
+        media=("image",),
+        phase="cleanup",
+        order=10,
+        needs_model=False,
+        supports_mask=supports_mask,
+        stage_kind="test_fill",
+        role="fix",
+        in_image_pipeline=True,
+        label="Test fill",
+        parameters=(
+            StepParameter(
+                name="value",
+                kind="number",
+                minimum=0.0,
+                maximum=1.0,
+                required=True,
+            ),
+        ),
+    )
+    new_steps = (*steps_mod.STEPS, step)
+    new_by_id = {**steps_mod.STEPS_BY_ID, step.id: step}
+    monkeypatch.setattr(steps_mod, "STEPS", new_steps)
+    monkeypatch.setattr(steps_mod, "STEPS_BY_ID", new_by_id)
+    monkeypatch.setattr(pipeline_mod, "STEPS", new_steps)
+
+    def run_test_fill(_runner, image, stage, _index, _data, _progress, _notes):
+        fill_value = float(stage.params["value"])
+        return {
+            **image,
+            "tensor": torch.full_like(image["tensor"], fill_value),
+        }
+
+    monkeypatch.setitem(image_job.IMAGE_STEP_HANDLERS, step.id, run_test_fill)
+    return step
+
+
+def test_modelless_step_with_params_and_mask_composites_only_inside_mask(tmp_path, monkeypatch):
+    from PIL import Image
+
+    from localsr.core.image_io import ImageManager
+
+    _register_test_modelless_step(monkeypatch, supports_mask=True)
+
+    # Create a 6x8 source image filled with 0.25 (64/255).
+    source_arr = np.full((6, 8, 3), 64, dtype=np.uint8)
+    in_path = tmp_path / "input.png"
+    out_path = tmp_path / "output.png"
+    Image.fromarray(source_arr).save(in_path)
+
+    # Create a 16-bit single-channel mask at a DIFFERENT size (3x4) whose left half is 0
+    # and right half is 65535 (1.0), verifying 16-bit load + resizing to stage resolution.
+    mask_u16 = np.zeros((3, 4), dtype=np.uint16)
+    mask_u16[:, 2:] = 65535
+    mask_path = tmp_path / "mask16.png"
+    Image.fromarray(mask_u16).save(mask_path)
+
+    data = {
+        "job_id": "modelless-mask-job",
+        "image_path": str(in_path),
+        "model_path": "",
+        "output_path": str(out_path),
+        "scratch_directory": str(tmp_path / "scratch"),
+        "output_format": "png",
+        "device": "cpu",
+        "precision": "fp32",
+        "tile_size": 64,
+        "halo": 8,
+        "jpeg_quality": 98,
+        "preserve_metadata": True,
+        "safe_memory": True,
+        "output_scale": 1,
+        "preview_enabled": False,
+        "stages": [
+            {
+                "kind": "test_fill",
+                "params": {"value": 1.0},
+                "mask_path": str(mask_path),
+            }
+        ],
+    }
+
+    server = WorkerServer()
+    server.model_adapter = _Adapter()
+    engine = _PipelineEngine()
+    server.engine = engine
+
+    loaded = ImageManager().load(str(in_path))
+    expected_input = loaded["tensor"].clone()
+
+    server._run_job("modelless-mask-job", data)
+    assert engine.calls == []  # No model checkpoint loaded or run.
+
+    with Image.open(out_path) as out_img:
+        out_arr = np.asarray(out_img)
+    assert out_arr.shape == (6, 8, 3)
+    # Far-left columns (mask == 0) stay unchanged at input pixel value (64);
+    # far-right columns (mask == 1) become filled output (255).
+    np.testing.assert_array_equal(out_arr[:, :2, :], np.full((6, 2, 3), 64, dtype=np.uint8))
+    np.testing.assert_array_equal(out_arr[:, 6:, :], np.full((6, 2, 3), 255, dtype=np.uint8))
+    assert float(expected_input.mean()) == pytest.approx(64.0 / 255.0, abs=1e-4)
+
+
+def test_modelless_step_rejects_mask_when_step_forbids_masks(monkeypatch):
+    from localsr.core.pipeline import resolve_image_pipeline
+
+    _register_test_modelless_step(monkeypatch, supports_mask=False)
+    with pytest.raises(ValueError, match="mask"):
+        resolve_image_pipeline(
+            raw_stages=[
+                {
+                    "kind": "test_fill",
+                    "params": {"value": 0.5},
+                    "mask_path": "/tmp/mask.png",
+                }
+            ],
+            model_path="",
+            output_scale=1,
+        )
+
+
+def test_engine_advertises_stage_params_and_masks_feature():
+    from localsr.core.steps import LIMITS
+    from localsr.worker.server import _engine_features
+
+    assert LIMITS.stage_params_feature in _engine_features()
+
+
+def test_old_format_request_without_params_or_mask_path_validates_and_runs_unchanged(
+    tmp_path, monkeypatch
+):
+    from localsr.core.image_io import ImageManager
+    from localsr.worker.request_validation import validate_image_job
+
+    data = _job_data(tmp_path)
+    data["stages"] = [
+        {"kind": "restore", "model_id": "restore", "model_path": str(tmp_path / "restore.pth")},
+        {"kind": "upscale", "model_id": "upscale", "model_path": str(tmp_path / "upscale.pth")},
+    ]
+    validate_image_job(data)
+
+    server = WorkerServer()
+    server.model_adapter = _Adapter()
+    engine = _PipelineEngine()
+    server.engine = engine
+    monkeypatch.setattr(ImageManager, "load", lambda *_: {"tensor": torch.zeros((3, 4, 4))})
+    saved = {}
+    monkeypatch.setattr(
+        ImageManager,
+        "save",
+        lambda _self, writer, _path, **_kw: saved.update(shape=writer.get_array().shape),
+    )
+    server._run_job("legacy-job", data)
+    assert engine.calls == [str(tmp_path / "restore.pth"), str(tmp_path / "upscale.pth")]
+    assert saved["shape"] == (3, 8, 8)

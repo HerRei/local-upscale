@@ -311,20 +311,30 @@ pub struct Recipe {
     pub video_audio_model: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct RecipeStage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fix: Option<String>,
     pub kind: String,
+    #[serde(default)]
     pub model_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fidelity: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask_path: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct FixStageSelection {
     pub fix: String,
+    #[serde(default)]
     pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask_path: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

@@ -152,6 +152,7 @@ def _engine_features() -> list[str]:
     features = [
         "image",
         LIMITS.multi_fix_feature,
+        LIMITS.stage_params_feature,
         "checkpoint_sha256_consent",
         "image_batch_v1",
         "video_frame",

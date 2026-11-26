@@ -4,8 +4,9 @@ use serde::Deserialize;
 
 const STEPS_JSON: &str = include_str!("../resources/steps.json");
 
-static REGISTRY: LazyLock<StepRegistry> =
-    LazyLock::new(|| serde_json::from_str(STEPS_JSON).expect("bundled steps.json must be valid"));
+static REGISTRY: LazyLock<StepRegistry> = LazyLock::new(|| {
+    StepRegistry::from_json(STEPS_JSON).expect("bundled steps.json must be valid")
+});
 
 pub fn registry() -> &'static StepRegistry {
     &REGISTRY
@@ -27,26 +28,50 @@ pub struct StepLimits {
     pub max_denoise_prefix_stages: usize,
     pub max_video_upscale_prefix_stages: usize,
     pub multi_fix_feature: String,
+    #[serde(default = "default_stage_params_feature")]
+    pub stage_params_feature: String,
+}
+
+fn default_stage_params_feature() -> String {
+    "stage_params_and_masks".into()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_param_kind() -> String {
+    "str".into()
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct StepParameter {
     pub name: String,
+    #[serde(default = "default_param_kind")]
+    pub kind: String,
     pub default: Option<serde_json::Value>,
     pub minimum: Option<f64>,
     pub maximum: Option<f64>,
     #[serde(default)]
     pub choices: Vec<String>,
     #[serde(default)]
-    pub int_choices: Vec<u32>,
+    pub int_choices: Vec<i64>,
     pub ui_minimum: Option<f64>,
     pub ui_maximum: Option<f64>,
+    #[serde(default)]
+    pub nullable: bool,
+    #[serde(default)]
+    pub required: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct StepDefinition {
     pub id: String,
     pub phase: String,
+    #[serde(default = "default_true")]
+    pub needs_model: bool,
+    #[serde(default)]
+    pub supports_mask: bool,
     pub stage_kind: Option<String>,
     pub role: Option<String>,
     pub fix_kind: Option<String>,
@@ -60,12 +85,28 @@ pub struct StepDefinition {
 }
 
 impl StepRegistry {
+    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(json)
+    }
+
     pub fn limits(&self) -> &StepLimits {
         &self.limits
     }
 
     pub fn step(&self, id: &str) -> Option<&StepDefinition> {
         self.steps.iter().find(|step| step.id == id)
+    }
+
+    pub fn step_for_stage(&self, kind: &str, fix: Option<&str>) -> Option<&StepDefinition> {
+        if let Some(fix_id) = fix {
+            return self.step(fix_id).filter(|step| step.is_fix_stage);
+        }
+        if let Some(step) = self.step(kind) {
+            return Some(step);
+        }
+        self.steps
+            .iter()
+            .find(|step| step.stage_kind.as_deref() == Some(kind))
     }
 
     pub fn required_feature(&self, step_id: &str) -> Option<&str> {
@@ -171,7 +212,49 @@ impl StepRegistry {
 
     pub fn param_has_int_choice(&self, step_id: &str, param_name: &str, value: u32) -> bool {
         self.parameter(step_id, param_name)
-            .is_some_and(|param| param.int_choices.contains(&value))
+            .is_some_and(|param| param.int_choices.contains(&i64::from(value)))
+    }
+
+    pub fn validate_stage_params(
+        &self,
+        step_id: &str,
+        params: Option<&serde_json::Map<String, serde_json::Value>>,
+    ) -> Result<(), String> {
+        let step = self
+            .step(step_id)
+            .ok_or_else(|| format!("unknown step '{step_id}'"))?;
+        self.validate_step_params(step, params)
+    }
+
+    pub fn validate_step_params(
+        &self,
+        step: &StepDefinition,
+        params: Option<&serde_json::Map<String, serde_json::Value>>,
+    ) -> Result<(), String> {
+        let empty = serde_json::Map::new();
+        let map = params.unwrap_or(&empty);
+        for key in map.keys() {
+            if !step.parameters.iter().any(|param| param.name == *key) {
+                return Err(format!("unknown parameter '{key}' for step '{}'", step.id));
+            }
+        }
+        for param in &step.parameters {
+            if param.required && !map.contains_key(&param.name) {
+                return Err(format!(
+                    "missing required parameter '{}' for step '{}'",
+                    param.name, step.id
+                ));
+            }
+        }
+        for (key, value) in map {
+            let param = step
+                .parameters
+                .iter()
+                .find(|candidate| candidate.name == *key)
+                .expect("checked above");
+            validate_param_value(&step.id, param, value)?;
+        }
+        Ok(())
     }
 
     pub fn param_default_u32(&self, step_id: &str, param_name: &str) -> u32 {
@@ -196,6 +279,115 @@ impl StepRegistry {
             .map(str::to_owned)
             .expect("step parameter must have a string default")
     }
+}
+
+fn validate_param_value(
+    step_id: &str,
+    param: &StepParameter,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    if value.is_null() {
+        return if param.nullable {
+            Ok(())
+        } else {
+            Err(format!(
+                "parameter '{}' for step '{}' cannot be null",
+                param.name, step_id
+            ))
+        };
+    }
+    match param.kind.as_str() {
+        "bool" => {
+            if !value.is_boolean() {
+                return Err(format!(
+                    "parameter '{}' for step '{}' must be a boolean",
+                    param.name, step_id
+                ));
+            }
+            Ok(())
+        }
+        "str" => {
+            if !value.is_string() {
+                return Err(format!(
+                    "parameter '{}' for step '{}' must be a string",
+                    param.name, step_id
+                ));
+            }
+            Ok(())
+        }
+        "choice" => {
+            let Some(chosen) = value.as_str() else {
+                return Err(format!(
+                    "parameter '{}' for step '{}' must be a string choice",
+                    param.name, step_id
+                ));
+            };
+            if !param.choices.iter().any(|choice| choice == chosen) {
+                return Err(format!(
+                    "parameter '{}' for step '{}' must be one of {:?}",
+                    param.name, step_id, param.choices
+                ));
+            }
+            Ok(())
+        }
+        "int_choice" => {
+            let Some(chosen) = value.as_i64() else {
+                return Err(format!(
+                    "parameter '{}' for step '{}' must be an integer choice",
+                    param.name, step_id
+                ));
+            };
+            if !param.int_choices.contains(&chosen) {
+                return Err(format!(
+                    "parameter '{}' for step '{}' must be one of {:?}",
+                    param.name, step_id, param.int_choices
+                ));
+            }
+            Ok(())
+        }
+        "int" => {
+            let Some(number) = value.as_i64().map(|v| v as f64) else {
+                return Err(format!(
+                    "parameter '{}' for step '{}' must be an integer",
+                    param.name, step_id
+                ));
+            };
+            check_numeric_bounds(step_id, param, number)
+        }
+        "number" => {
+            let Some(number) = value.as_f64().filter(|v| v.is_finite()) else {
+                return Err(format!(
+                    "parameter '{}' for step '{}' must be a finite number",
+                    param.name, step_id
+                ));
+            };
+            check_numeric_bounds(step_id, param, number)
+        }
+        other => Err(format!(
+            "unsupported parameter kind '{other}' for '{step_id}.{}'",
+            param.name
+        )),
+    }
+}
+
+fn check_numeric_bounds(step_id: &str, param: &StepParameter, value: f64) -> Result<(), String> {
+    if let Some(min) = param.minimum {
+        if value < min {
+            return Err(format!(
+                "parameter '{}' for step '{}' must be >= {min}",
+                param.name, step_id
+            ));
+        }
+    }
+    if let Some(max) = param.maximum {
+        if value > max {
+            return Err(format!(
+                "parameter '{}' for step '{}' must be <= {max}",
+                param.name, step_id
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -236,5 +428,94 @@ mod tests {
         assert_eq!(reg.fix_stage_kind("", "blur"), "restore");
         assert_eq!(reg.stage_label("deblock"), "Removing JPEG artifacts");
         assert_eq!(reg.stage_label("edit"), "Preparing edit");
+    }
+
+    #[test]
+    fn generic_registry_validator_checks_fixture_modelless_step_params() {
+        let fixture_json = r#"{
+            "schema_version": 1,
+            "phases": ["grade"],
+            "limits": {
+                "max_fix_stages": 4,
+                "max_fix_chips": 5,
+                "max_face_stages": 1,
+                "max_recipe_stages": 6,
+                "max_upscale_prefix_stages": 4,
+                "max_denoise_prefix_stages": 3,
+                "max_video_upscale_prefix_stages": 3,
+                "multi_fix_feature": "image_multi_fix",
+                "stage_params_feature": "stage_params_and_masks"
+            },
+            "steps": [
+                {
+                    "id": "test_tint",
+                    "media": ["image"],
+                    "phase": "grade",
+                    "order": 10,
+                    "needs_model": false,
+                    "supports_mask": true,
+                    "stage_kind": "test_tint",
+                    "role": null,
+                    "fix_kind": null,
+                    "is_fix_stage": false,
+                    "fix_chip_order": null,
+                    "in_image_pipeline": true,
+                    "in_recipe_stages": false,
+                    "label": "Test tint",
+                    "row_label": "",
+                    "short_name": "",
+                    "stage_label": "",
+                    "required_feature": null,
+                    "parameters": [
+                        {"name": "amount", "kind": "number", "default": null, "minimum": 0.0, "maximum": 1.0, "choices": [], "int_choices": [], "ui_minimum": null, "ui_maximum": null, "ui_default": null, "nullable": false, "required": true},
+                        {"name": "passes", "kind": "int", "default": 1, "minimum": 1, "maximum": 4, "choices": [], "int_choices": [], "ui_minimum": null, "ui_maximum": null, "ui_default": null, "nullable": false, "required": false},
+                        {"name": "mode", "kind": "choice", "default": "add", "minimum": null, "maximum": null, "choices": ["add", "multiply"], "int_choices": [], "ui_minimum": null, "ui_maximum": null, "ui_default": null, "nullable": false, "required": false},
+                        {"name": "bucket", "kind": "int_choice", "default": 16, "minimum": null, "maximum": null, "choices": [], "int_choices": [8, 16, 32], "ui_minimum": null, "ui_maximum": null, "ui_default": null, "nullable": false, "required": false},
+                        {"name": "clamp", "kind": "bool", "default": true, "minimum": null, "maximum": null, "choices": [], "int_choices": [], "ui_minimum": null, "ui_maximum": null, "ui_default": null, "nullable": false, "required": false},
+                        {"name": "label", "kind": "str", "default": null, "minimum": null, "maximum": null, "choices": [], "int_choices": [], "ui_minimum": null, "ui_maximum": null, "ui_default": null, "nullable": true, "required": false}
+                    ]
+                }
+            ]
+        }"#;
+        let reg = StepRegistry::from_json(fixture_json).unwrap();
+        let step = reg.step("test_tint").unwrap();
+        assert!(!step.needs_model);
+        assert!(step.supports_mask);
+
+        let valid = serde_json::json!({
+            "amount": 0.5,
+            "passes": 2,
+            "mode": "multiply",
+            "bucket": 32,
+            "clamp": false,
+            "label": null
+        });
+        assert!(reg
+            .validate_stage_params("test_tint", valid.as_object())
+            .is_ok());
+
+        for bad in [
+            serde_json::json!({}),
+            serde_json::json!({"amount": null}),
+            serde_json::json!({"amount": -0.1}),
+            serde_json::json!({"amount": 1.1}),
+            serde_json::json!({"amount": true}),
+            serde_json::json!({"amount": "0.5"}),
+            serde_json::json!({"amount": 0.5, "passes": 0}),
+            serde_json::json!({"amount": 0.5, "passes": 5}),
+            serde_json::json!({"amount": 0.5, "passes": 1.5}),
+            serde_json::json!({"amount": 0.5, "mode": "screen"}),
+            serde_json::json!({"amount": 0.5, "bucket": 12}),
+            serde_json::json!({"amount": 0.5, "clamp": "yes"}),
+            serde_json::json!({"amount": 0.5, "label": 42}),
+            serde_json::json!({"amount": 0.5, "unknown": 1}),
+        ] {
+            assert!(
+                reg.validate_stage_params("test_tint", bad.as_object())
+                    .is_err(),
+                "expected error for {bad}"
+            );
+        }
+        assert!(reg.validate_stage_params("test_tint", None).is_err());
     }
 }
