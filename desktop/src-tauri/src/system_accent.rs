@@ -8,6 +8,7 @@ pub struct SystemAccent {
 
 /// Maps `AppleAccentColor` numbers (measured from `NSColor.controlAccentColor` on macOS 27.2)
 /// to their light and dark sRGB hex strings.
+#[cfg(any(target_os = "macos", test))]
 pub fn accent_pair(value: Option<i64>) -> Option<(&'static str, &'static str)> {
     match value {
         None => None,
