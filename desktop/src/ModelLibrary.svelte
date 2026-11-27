@@ -79,6 +79,8 @@
   export let retryDownload: (modelId: string) => Promise<void> = async () => {};
   export let dismissDownloadError: (modelId: string) => void = () => {};
   export let busy = false;
+  // While Start waits for downloads, models can still be chosen; the folder cannot move.
+  export let folderBusy = busy;
   export let close: () => void;
   export let useForJob: (model: CatalogModel) => void;
   export let useVideoForJob: (model: CatalogVideoModel) => void = () => {};
@@ -613,11 +615,14 @@
             <button
               class="button compact"
               type="button"
-              disabled={busy}
+              disabled={folderBusy}
               on:click={chooseModelFolder}>Choose folder…</button
             >
-            <button class="button compact" type="button" disabled={busy} on:click={resetModelFolder}
-              >Reset to default</button
+            <button
+              class="button compact"
+              type="button"
+              disabled={folderBusy}
+              on:click={resetModelFolder}>Reset to default</button
             >
           </div>
         </div>

@@ -145,6 +145,37 @@ test.describe('downloads', () => {
     await expect(page.locator('.foot-cost')).toContainText('4.0 GB to download');
   });
 
+  test('the upscaler can be changed while Start waits for a download, and the job uses it', async ({
+    page,
+  }) => {
+    await openApp(page, {
+      ...ready,
+      installed: ['span_photo_x4', 'realplksr_nomoswebphoto_x4'],
+      settings: { selected_model_id: 'span_photo_x4' },
+      concurrentDownloads: true,
+    });
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await fix(page, 'Colour').check();
+    await page.getByRole('button', { name: /^Download .*, then upscale$/ }).click();
+    await progressDownload(page, 'ddcolor_modelscope', 40);
+
+    await page.getByRole('button', { name: 'Change the upscaler' }).click();
+    const library = page.getByRole('dialog', { name: 'Model library' });
+    await library.getByRole('button', { name: /^RealPLKSR ×4 NomosWebPhoto/ }).click();
+    const use = library.getByRole('button', { name: 'Use for this job' });
+    await expect(use).toBeEnabled();
+    await use.click();
+    await expect(library).toHaveCount(0);
+
+    await finishDownload(page, 'ddcolor_modelscope');
+    await expect.poll(async () => (await hostCalls(page, 'start_jobs')).length).toBeGreaterThan(0);
+    const start = (await hostCalls(page, 'start_jobs')).at(-1);
+    expect((start?.args as { input: { model_id: string } }).input.model_id).toBe(
+      'realplksr_nomoswebphoto_x4',
+    );
+  });
+
   test('a cancelled download leaves Start and the cost line at what is left', async ({ page }) => {
     await openApp(page, EDIT_SCENARIO);
     await prepareEditDownload(page);

@@ -5230,7 +5230,8 @@
     cancelDownload={cancelDownloadById}
     {retryDownload}
     {dismissDownloadError}
-    busy={settingsLocked || preparing}
+    busy={settingsLocked}
+    folderBusy={settingsLocked || preparing}
     modelDirectoryMissing={Boolean(snapshot.model_directory_missing)}
     {chooseModelFolder}
     {resetModelFolder}
