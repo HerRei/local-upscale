@@ -2262,7 +2262,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.video_interpolation = 'x2';
     snapshot.catalog.interpolation_models.forEach((model) => (model.installed = false));
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: 'Download 23 MB, then start video' }));
+    await user.click(screen.getByRole('button', { name: 'Download 25 MB, then start video' }));
     await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith('rife_4_26', false));
   });
 
@@ -8332,7 +8332,7 @@ describe('Engine manager UI and recommendation card', () => {
     );
 
     const cardText =
-      'Your NVIDIA GeForce RTX 4070 can run LocalSR much faster with the NVIDIA engine (4.3 GB).';
+      'Your NVIDIA GeForce RTX 4070 can run LocalSR much faster with the NVIDIA engine (4.6 GB).';
     const card = (await screen.findByText(cardText)).closest(
       '.engine-recommendation-card',
     ) as HTMLElement;
@@ -8357,7 +8357,7 @@ describe('Engine manager UI and recommendation card', () => {
     const snapshot = windowsCpuSnapshot();
     const user = await mountWith(snapshot);
     const cardText =
-      'Your NVIDIA GeForce RTX 4070 can run LocalSR much faster with the NVIDIA engine (4.3 GB).';
+      'Your NVIDIA GeForce RTX 4070 can run LocalSR much faster with the NVIDIA engine (4.6 GB).';
     expect(screen.getByText(cardText)).toBeTruthy();
 
     updateState.set({
@@ -8413,7 +8413,7 @@ describe('Engine manager UI and recommendation card', () => {
     const user = await mountWith(snapshot);
     const card = screen
       .getByText(
-        'Your NVIDIA GeForce RTX 4070 can run LocalSR much faster with the NVIDIA engine (4.3 GB).',
+        'Your NVIDIA GeForce RTX 4070 can run LocalSR much faster with the NVIDIA engine (4.6 GB).',
       )
       .closest('.engine-recommendation-card') as HTMLElement;
     await user.click(within(card).getByRole('button', { name: 'Download' }));
@@ -8500,11 +8500,11 @@ describe('Engine manager UI and recommendation card', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Engine' });
     const list = within(dialog).getByRole('list', { name: 'Available engines' });
     expect(within(list).getByText('NVIDIA CUDA')).toBeTruthy();
-    expect(within(list).getByText('4.3 GB · Not installed')).toBeTruthy();
+    expect(within(list).getByText('4.6 GB · Not installed')).toBeTruthy();
     expect(within(list).getByText('DirectML')).toBeTruthy();
-    expect(within(list).getByText('430 MB · Installed')).toBeTruthy();
+    expect(within(list).getByText('451 MB · Installed')).toBeTruthy();
     expect(within(list).getByText('CPU')).toBeTruthy();
-    expect(within(list).getByText('317 MB · Built in')).toBeTruthy();
+    expect(within(list).getByText('332 MB · Built in')).toBeTruthy();
 
     // Only Recommended and Active stay as badges.
     const badges = [...list.querySelectorAll('.engine-badge')].map((el) => el.textContent);
@@ -8620,8 +8620,8 @@ describe('Engine manager UI and recommendation card', () => {
       error: null,
     });
     expect(await within(cudaRow).findByText(/Downloading…/)).toBeTruthy();
-    expect(within(cudaRow).queryByText('4.3 GB · Not installed')).toBeNull();
-    expect(within(cudaRow).queryByText('4.3 GB')).toBeNull();
+    expect(within(cudaRow).queryByText('4.6 GB · Not installed')).toBeNull();
+    expect(within(cudaRow).queryByText('4.6 GB')).toBeNull();
     expect(cudaRow.querySelector('progress')).toBeTruthy();
     await user.click(within(cudaRow).getByRole('button', { name: 'Cancel' }));
     expect(api.cancelEngineInstall).toHaveBeenCalledTimes(1);
@@ -8892,7 +8892,7 @@ describe('Clearing the model cache', () => {
     await user.click(within(settings).getByRole('tab', { name: 'Storage' }));
     await user.click(await within(settings).findByRole('button', { name: 'Clear cache' }));
     const question = await screen.findByRole('dialog', { name: 'Clear the model cache?' });
-    expect(question.textContent).toContain('3.0 GB');
+    expect(question.textContent).toContain('3.2 GB');
     await user.click(within(question).getByRole('button', { name: 'Cancel' }));
     expect(api.clearCache).not.toHaveBeenCalled();
 
@@ -9480,13 +9480,13 @@ describe('Size decides', () => {
       screen
         .getByRole('button', { name: /^Quick/ })
         .getAttribute('title')
-        ?.includes('28 MB download'),
+        ?.includes('30 MB download'),
     ).toBeTruthy();
     expect(
       screen
         .getByRole('button', { name: /^Best/ })
         .getAttribute('title')
-        ?.includes('443 MB download'),
+        ?.includes('464 MB download'),
     ).toBeTruthy();
 
     await user.click(screen.getByRole('button', { name: /^Best/ }));
@@ -10245,7 +10245,7 @@ describe('Fix list', () => {
     const group = screen.getByRole('group', { name: 'Fix' });
     await user.click(within(group).getByRole('checkbox', { name: 'Noise' }));
     expect(
-      await within(group).findByRole('button', { name: 'RealPLKSR Denoise · 28 MB' }),
+      await within(group).findByRole('button', { name: 'RealPLKSR Denoise · 29 MB' }),
     ).toBeTruthy();
   });
 
