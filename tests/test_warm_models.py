@@ -122,6 +122,10 @@ def test_catalog_hash_cache_hits_and_misses_on_tamper(tmp_path, monkeypatch, set
     payload = b"catalog-model-bytes"
     checkpoint = tmp_path / "catalog-cached.pth"
     checkpoint.write_bytes(payload)
+    # A cached file is older than the settle window; the tamper below writes a later
+    # timestamp, also on Windows, where writes within one tick keep the same time.
+    aged = checkpoint.stat().st_mtime - 60
+    os.utime(checkpoint, (aged, aged))
     entry = SimpleNamespace(
         name="Catalog Cached",
         size_bytes=len(payload),
