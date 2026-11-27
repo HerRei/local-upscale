@@ -1981,6 +1981,41 @@ input:focus-visible {
 .fix-row.disabled .fix-tag {
   opacity: 0.38;
 }
+.fix-row > .pop-anchor {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 62%;
+}
+.fix-row > .pop-anchor .fix-value {
+  max-width: 100%;
+}
+.fix-pop-head {
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.fix-pop-model {
+  display: flex;
+  gap: 8px;
+  font-size: calc(12px * var(--ui-scale));
+}
+.fix-pop-model > span {
+  color: var(--secondary);
+}
+.fix-pop-model strong {
+  font-weight: 500;
+}
+.fix-pop-note {
+  margin: 6px 0 0;
+  color: var(--secondary);
+  font-size: calc(12px * var(--ui-scale));
+  line-height: 1.4;
+}
+.fix-pop-change {
+  text-align: right;
+}
+.fix-pop-more {
+  margin-top: 4px;
+}
 .fix-value {
   flex: 0 1 auto;
   min-width: 0;

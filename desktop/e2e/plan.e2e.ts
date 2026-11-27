@@ -104,18 +104,11 @@ test.describe('plan card', () => {
     // The blur fix's warning stays within two lines under its name.
     const notes = (await rows(page).first().locator('.plan-note').boundingBox())!;
     expect(notes.height).toBeLessThanOrEqual(2 * 18);
-    // Change… is one column on every row, the arrows sit directly left of it, and no name is cut.
-    const changes = page.locator('.plan-row').getByRole('button', { name: /^Change/ });
-    expect(await changes.count()).toBe(4);
-    const rights = await changes.evaluateAll((els) =>
-      els.map((el) => Math.round(el.getBoundingClientRect().right)),
-    );
-    expect(new Set(rights).size).toBe(1);
-    const later = (await page
-      .getByRole('button', { name: 'Move the JPEG fix later' })
-      .boundingBox())!;
-    const change = (await changes.nth(1).boundingBox())!;
-    expect(change.x - (later.x + later.width)).toBeLessThanOrEqual(8);
+    await expect(
+      rows(page)
+        .first()
+        .getByRole('button', { name: /^Change/ }),
+    ).toHaveCount(0);
     const cut = await rows(page)
       .locator('.name')
       .evaluateAll((els) => els.filter((el) => el.scrollWidth > el.clientWidth).length);
@@ -143,9 +136,36 @@ test.describe('plan card', () => {
 
   test('a fix has its own Change… for its model', async ({ page }) => {
     await fix(page, 'JPEG artifacts').click();
-    await openPlanSheet(page);
-    await page.getByRole('button', { name: 'Change the jpeg fix model' }).click();
+    await fix(page, 'JPEG artifacts').locator('..').locator('..').getByRole('button').click();
+    await page.getByRole('button', { name: 'Change the JPEG fix model' }).click();
     await expect(page.getByRole('dialog', { name: 'Model library' })).toBeVisible();
+  });
+
+  test('Fix popover supports keyboard dismissal and one open surface', async ({ page }) => {
+    await fix(page, 'Noise').check();
+    await fix(page, 'Blur').check();
+    const noise = fix(page, 'Noise').locator('..').locator('..').getByRole('button');
+    const blur = fix(page, 'Blur').locator('..').locator('..').getByRole('button');
+    await noise.focus();
+    await page.keyboard.press('Enter');
+    const options = page.getByRole('group', { name: 'Noise options' });
+    await expect(options).toBeVisible();
+    await expect(options.getByRole('button', { name: 'Change the noise fix model' })).toBeFocused();
+    await expect(options).toContainText('Model');
+    await expect(
+      options.getByRole('button', { name: /more models? in the library/ }),
+    ).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(noise).toBeFocused();
+    await noise.click();
+    await blur.click();
+    await expect(options).toHaveCount(0);
+    await expect(page.getByRole('group', { name: 'Blur options' })).toBeVisible();
+    await fix(page, 'Colour').check();
+    await fix(page, 'Colour').locator('..').locator('..').getByRole('button').click();
+    await expect(
+      page.getByRole('group', { name: 'Colour options' }).getByRole('button', { name: /Change/ }),
+    ).toHaveCount(0);
   });
 
   test('Try others… opens the library for trial runs', async ({ page }) => {

@@ -84,14 +84,13 @@
       stage.editModel ??
       stage.interpolationModel ??
       stage.audioModel}
-    {@const changeSlot =
-      stage.role === 'fix'
-        ? stage.fix !== 'colour' && stage.fix && 'fix'
-        : stage.role === 'primary'
-          ? stage.editModel
-            ? 'edit'
-            : 'primary'
-          : undefined}
+    {@const changeSlot = stage.fix
+      ? undefined
+      : stage.role === 'primary'
+        ? stage.editModel
+          ? 'edit'
+          : 'primary'
+        : undefined}
     {@const moreVideoCount =
       changeSlot === 'primary'
         ? videoModelsForJob(snapshot.catalog, settings.task, videoTask).filter(
@@ -253,13 +252,11 @@
             class="link-button"
             type="button"
             disabled={settingsLocked}
-            aria-label={changeSlot === 'fix' && stage.fix
-              ? `Change the ${FIX_NAMES[stage.fix]} fix model`
-              : changeSlot === 'edit'
-                ? 'Change the edit model'
-                : restoring
-                  ? 'Change the restore model'
-                  : 'Change the upscaler'}
+            aria-label={changeSlot === 'edit'
+              ? 'Change the edit model'
+              : restoring
+                ? 'Change the restore model'
+                : 'Change the upscaler'}
             on:click={() => openFromSheet(changeSlot, stage.fix)}>Change…</button
           >
         {/if}

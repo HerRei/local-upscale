@@ -459,6 +459,34 @@ async function openPlanSheet(user: ReturnType<typeof userEvent.setup>): Promise<
   return screen.getByRole('group', { name: 'Plan' });
 }
 
+async function openFixPopover(
+  user: ReturnType<typeof userEvent.setup>,
+  name: string,
+): Promise<HTMLElement> {
+  const checkbox = screen.getByRole('checkbox', { name });
+  const row = checkbox.closest('.fix-row')!;
+  const trigger = within(row as HTMLElement).getByRole('button');
+  if (trigger.getAttribute('aria-expanded') !== 'true') await user.click(trigger);
+  return screen.getByRole('group', { name: `${name} options` });
+}
+
+async function openRestoreModel(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  const restore = screen.queryByRole('button', { name: 'Change the restore model' });
+  if (restore) {
+    await user.click(restore);
+    return;
+  }
+  const selections = [
+    ...screen
+      .getByRole('group', { name: 'Fix' })
+      .querySelectorAll<HTMLInputElement>('input:checked'),
+  ];
+  const name = selections.at(-1)?.closest('label')?.textContent?.trim();
+  if (!name) throw new Error('No selected fix for the restore model');
+  const popover = await openFixPopover(user, name);
+  await user.click(within(popover).getByRole('button', { name: /Change the .* fix model/ }));
+}
+
 async function openOutputSheet(user: ReturnType<typeof userEvent.setup>): Promise<HTMLElement> {
   const trigger = document.querySelector('.foot-output') as HTMLButtonElement;
   if (trigger.getAttribute('aria-expanded') !== 'true') {
@@ -2456,7 +2484,7 @@ describe('LocalSR desktop interface', () => {
     await user.click(screen.getByRole('radio', { name: 'Same size' }));
     await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
     await openPlanSheet(user);
-    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    await openRestoreModel(user);
     const restoreLib = screen.getByRole('dialog', { name: 'Model library' });
     expect(within(restoreLib).queryByText('Several frames at once · Labs')).toBeNull();
     await user.click(within(restoreLib).getByRole('button', { name: /Video \(Labs\)/ }));
@@ -4539,6 +4567,7 @@ describe('LocalSR desktop interface', () => {
     const stages = screen.getByRole('list', { name: 'Stages' });
     expect(within(stages).getByText('Fix noise')).toBeTruthy();
     await openPlanSheet(user);
+    await openFixPopover(user, 'Noise');
     await user.click(screen.getByRole('button', { name: 'Change the noise fix model' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
     expect(within(library).getByText('Choosing for Upscale · Noise')).toBeTruthy();
@@ -4548,6 +4577,9 @@ describe('LocalSR desktop interface', () => {
     expect(within(library).queryByRole('button', { name: 'Use for this job' })).toBeNull();
     await user.click(within(library).getByRole('button', { name: 'Use for Noise · Best' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: 'Change the noise fix model' }),
+    );
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
         expect.objectContaining({
@@ -4596,6 +4628,7 @@ describe('LocalSR desktop interface', () => {
     );
 
     await openPlanSheet(user);
+    await openFixPopover(user, 'Noise');
     await user.click(screen.getByRole('button', { name: 'Change the noise fix model' }));
     const again = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(again).getByRole('button', { name: 'Back to the default' }));
@@ -4620,6 +4653,7 @@ describe('LocalSR desktop interface', () => {
     await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
     await openPlanSheet(user);
     await openPlanSheet(user);
+    await openFixPopover(user, 'Noise');
     await user.click(screen.getByRole('button', { name: 'Change the noise fix model' }));
     library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
@@ -4644,7 +4678,7 @@ describe('LocalSR desktop interface', () => {
     await user.click(screen.getByRole('button', { name: /^Best/ }));
     await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
     await openPlanSheet(user);
-    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    await openRestoreModel(user);
     const library = screen.getByRole('dialog', { name: 'Model library' });
     expect(within(library).getByText('Choosing for Same size · Noise')).toBeTruthy();
     expect(within(library).queryByRole('button', { name: /FBCNN/ })).toBeNull();
@@ -4694,7 +4728,7 @@ describe('LocalSR desktop interface', () => {
     });
     const user = await mountWith(snapshot);
     await openPlanSheet(user);
-    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    await openRestoreModel(user);
     let library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
     await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
@@ -4709,11 +4743,11 @@ describe('LocalSR desktop interface', () => {
       ),
     );
     await openPlanSheet(user);
-    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    await openRestoreModel(user);
     library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: 'Use for Noise' }));
     await openPlanSheet(user);
-    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    await openRestoreModel(user);
     library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: 'Back to the default' }));
     await waitFor(() =>
@@ -5131,18 +5165,16 @@ describe('Several fixes in one pass', () => {
     expect(screen.queryByRole('button', { name: 'Move the noise fix later' })).toBeNull();
     expect(move('Move the JPEG fix earlier')).toBeTruthy();
     expect(move('Move the JPEG fix later')).toBeTruthy();
-    // One line per model: role, name, Change… and the arrows; notes and links below it.
     const jpegRow = rows()[1];
     const end = jpegRow.querySelector('.plan-end')!;
     expect([...end.querySelectorAll('button')].map((button) => button.textContent)).toEqual([
       '↑',
       '↓',
-      'Change…',
     ]);
     // A fix that can move one way shows one arrow, with no empty slot beside it.
     expect(
       [...rows()[2].querySelectorAll('.plan-end button')].map((button) => button.textContent),
-    ).toEqual(['↑', 'Change…']);
+    ).toEqual(['↑']);
     expect(document.querySelector('.move-gap')).toBeNull();
     expect(move('Move the JPEG fix earlier').getAttribute('title')).toBe('Move earlier');
     expect(move('Move the JPEG fix later').getAttribute('title')).toBe('Move later');
@@ -5163,6 +5195,7 @@ describe('Several fixes in one pass', () => {
     );
 
     await openPlanSheet(user);
+    await openFixPopover(user, 'Noise');
     await user.click(screen.getByRole('button', { name: 'Change the noise fix model' }));
     let library = screen.getByRole('dialog', { name: 'Model library' });
     expect(within(library).getByText('Choosing for Upscale · Noise')).toBeTruthy();
@@ -5180,6 +5213,7 @@ describe('Several fixes in one pass', () => {
     await openPlanSheet(user);
     expect(within(rows()[1]).getByText(/Your pick/)).toBeTruthy();
     expect(within(rows()[2]).queryByText(/Your pick/)).toBeNull();
+    await openFixPopover(user, 'JPEG artifacts');
     await user.click(screen.getByRole('button', { name: 'Change the JPEG fix model' }));
     library = screen.getByRole('dialog', { name: 'Model library' });
     expect(within(library).getByText('Choosing for Upscale · JPEG artifacts')).toBeTruthy();
@@ -5288,6 +5322,7 @@ describe('Several fixes in one pass', () => {
     await openPlanSheet(user);
     expect(labels()).toEqual(['Fix JPEG', 'Fix noise']);
     // A fix before the model is chosen like one before an upscale; the model stays.
+    await openFixPopover(user, 'JPEG artifacts');
     await user.click(screen.getByRole('button', { name: 'Change the JPEG fix model' }));
     const fixLibrary = screen.getByRole('dialog', { name: 'Model library' });
     expect(within(fixLibrary).getByText('Choosing for Same size · JPEG artifacts')).toBeTruthy();
@@ -5302,7 +5337,7 @@ describe('Several fixes in one pass', () => {
       }),
     );
     await openPlanSheet(user);
-    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    await openRestoreModel(user);
     expect(
       within(screen.getByRole('dialog', { name: 'Model library' })).getByText(
         'Choosing for Same size · Noise',
@@ -5359,7 +5394,7 @@ describe('Several fixes in one pass', () => {
     });
     const user = await mountWith(snapshot);
     await openPlanSheet(user);
-    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    await openRestoreModel(user);
     const library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
     await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
@@ -5390,7 +5425,7 @@ describe('Several fixes in one pass', () => {
     await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
     api.chooseCustomModel.mockResolvedValueOnce('/models/mine.safetensors' as never);
     await openPlanSheet(user);
-    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    await openRestoreModel(user);
     await user.click(screen.getByRole('button', { name: /Your own file/ }));
     await user.click(screen.getByRole('button', { name: 'Choose checkpoint…' }));
     await waitFor(() =>
@@ -5592,6 +5627,7 @@ describe('Several fixes in one pass', () => {
     expect(
       (screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement).disabled,
     ).toBe(true);
+    await openFixPopover(user, 'Blur');
     await user.click(screen.getByRole('button', { name: 'Change the blur fix model' }));
     expect(
       within(screen.getByRole('dialog', { name: 'Model library' })).getByText(
@@ -5671,6 +5707,7 @@ describe('Several fixes in one pass', () => {
     );
 
     await openPlanSheet(user);
+    await openFixPopover(user, 'JPEG artifacts');
     await user.click(screen.getByRole('button', { name: 'Change the JPEG fix model' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('checkbox', { name: /reviewed.*license/i }));
@@ -5694,6 +5731,7 @@ describe('Several fixes in one pass', () => {
     const user = await mountWith(snapshot);
     await openPlanSheet(user);
     await openPlanSheet(user);
+    await openFixPopover(user, 'Noise');
     await user.click(screen.getByRole('button', { name: 'Change the noise fix model' }));
     await user.click(screen.getByRole('button', { name: 'Back to the default' }));
     await waitFor(() =>
@@ -7096,7 +7134,7 @@ it('does not ask for a catalog model under Your own file', async () => {
   await user.click(screen.getByRole('radio', { name: 'Same size' }));
   await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
   await openPlanSheet(user);
-  await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+  await openRestoreModel(user);
   await user.click(screen.getByRole('button', { name: /Your own file/ }));
   expect(
     screen.queryByText('Select a model to see what it is for and where it comes from.'),
@@ -9480,7 +9518,7 @@ describe('Size decides', () => {
     ).toBeTruthy();
 
     // Pin SCUNet Color for Noise · Quick, switch Best -> Quick, then Back to the default.
-    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    await openRestoreModel(user);
     let library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /SCUNet Color/ }));
     await user.click(within(library).getByRole('button', { name: 'Use for Noise · Quick' }));
@@ -9506,7 +9544,7 @@ describe('Size decides', () => {
       within(screen.getByRole('list', { name: 'Stages' })).getByText('SCUNet Color'),
     ).toBeTruthy();
 
-    await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
+    await openRestoreModel(user);
     library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: 'Back to the default' }));
     await openPlanSheet(user);

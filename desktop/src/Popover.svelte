@@ -106,13 +106,14 @@
     await positionSurface();
     if (!open) return;
     if (byKeyboard) {
-      surfaceEl?.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+      (surfaceEl?.querySelector<HTMLElement>(FOCUSABLE) ?? surfaceEl)?.focus();
     }
   }
 
   function onWindowClick(event: MouseEvent): void {
     if (!open) return;
     const path = event.composedPath();
+    if (event.target instanceof Node && inModal(event.target)) return;
     if ((surfaceEl && path.includes(surfaceEl)) || (triggerEl && path.includes(triggerEl))) return;
     close(false);
   }
@@ -196,6 +197,7 @@
         class="pop"
         class:above
         role="group"
+        tabindex="-1"
         aria-label={label}
         style:width={`${width}px`}
         style:max-height={maxHeight ? `${maxHeight}px` : undefined}

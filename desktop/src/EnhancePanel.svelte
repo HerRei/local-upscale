@@ -456,6 +456,8 @@
               models={snapshot.catalog.models}
               {downloadMap}
               {settingsLocked}
+              {activeDevice}
+              {openLibrary}
               {toggleFix}
               {updateSettings}
               bind:moreOpen={moreFixesOpen}

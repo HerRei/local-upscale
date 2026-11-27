@@ -1,9 +1,25 @@
 <script lang="ts">
   import HelpTip from './HelpTip.svelte';
+  import Popover from './Popover.svelte';
+  import { UNSTABLE_FIX_MODELS } from './lib/fixStages';
+  import {
+    displayName,
+    fitFor,
+    FIT_LABELS,
+    libraryModelsForTask,
+    modelsAvailableBeyondSelection,
+  } from './lib/plan';
+  import { FIX_NAMES, type FixStageKind } from './lib/steps';
   import type { EnhancePanelActions } from './lib/enhancePanel';
   import { fixRows, fixRowValue, SETTING_ROWS, splitFixRows, type FixRow } from './lib/fixRows';
   import type { PlanStage } from './lib/plan';
-  import type { CatalogModel, FixKind, ModelDownloadStatus, UiSettings } from './lib/types';
+  import type {
+    CatalogModel,
+    DeviceInfo,
+    FixKind,
+    ModelDownloadStatus,
+    UiSettings,
+  } from './lib/types';
 
   export let settings: UiSettings;
   export let mediaKind: 'image' | 'video';
@@ -12,6 +28,8 @@
   export let models: readonly CatalogModel[];
   export let downloadMap: Map<string, ModelDownloadStatus>;
   export let settingsLocked: boolean;
+  export let activeDevice: DeviceInfo | undefined;
+  export let openLibrary: EnhancePanelActions['openLibrary'];
   export let toggleFix: EnhancePanelActions['toggleFix'];
   export let updateSettings: EnhancePanelActions['updateSettings'];
   export let moreOpen = false;
@@ -72,6 +90,39 @@
       ticked && row.source === 'fix_stage'
         ? fixRowValue(row.id, plan, settings, models, downloadMap)
         : ''}
+    {@const stage = plan.find((entry) => entry.fix === row.id)}
+    {@const model =
+      stage?.model ??
+      models.find(
+        (entry) =>
+          entry.model_id ===
+          settings.fix_stages.find((selection) => selection.fix === row.id)?.model_id,
+      )}
+    {@const meta = model
+      ? [
+          stage?.remembered ? 'Your pick' : '',
+          model.support_tier === 'labs' ? 'Labs' : '',
+          model.commercial_use_allowed === false ? 'Non-commercial' : '',
+          ['heavy', 'too_heavy'].includes(fitFor(model, activeDevice))
+            ? FIT_LABELS[fitFor(model, activeDevice)]
+            : '',
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      : ''}
+    {@const moreCount =
+      row.id !== 'colour'
+        ? modelsAvailableBeyondSelection(
+            libraryModelsForTask(
+              [...models],
+              settings.task,
+              settings.content,
+              row.id as FixStageKind,
+              'upscale',
+            ),
+            model?.model_id ?? '',
+          )
+        : 0}
     <div class="fix-row" class:disabled={rowDisabled && !settingsLocked} title={title || undefined}>
       <label class="fix-check" class:disabled={rowDisabled && !settingsLocked}>
         <input
@@ -86,27 +137,65 @@
         <span class="fix-tag">{row.tag}</span>
       {/if}
       {#if ticked && row.source === 'fix_stage' && value}
-        <button
-          type="button"
-          class="fix-value"
-          class:warn={value === 'Needs your file' || value === 'No model for this fix'}
+        <Popover
+          label={`${row.label} options`}
+          triggerClass={`fix-value${value === 'Needs your file' || value === 'No model for this fix' ? ' warn' : ''}`}
+          triggerTitle={value}
           disabled={settingsLocked}
-          title={value}
         >
-          <span class="fix-value-text">{value}</span><svg
-            class="pop-chevron"
-            aria-hidden="true"
-            xmlns="http://www.w3.org/2000/svg"
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2.25"
-            stroke-linecap="round"
-            stroke-linejoin="round"><path d="m6 9 6 6 6-6" /></svg
-          >
-        </button>
+          <svelte:fragment slot="trigger">
+            <span class="fix-value-text">{value}</span><svg
+              class="pop-chevron"
+              aria-hidden="true"
+              xmlns="http://www.w3.org/2000/svg"
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.25"
+              stroke-linecap="round"
+              stroke-linejoin="round"><path d="m6 9 6 6 6-6" /></svg
+            >
+          </svelte:fragment>
+          <div class="fix-pop-head">{row.label}</div>
+          <div class="fix-pop-model">
+            <span>Model</span><strong>{model ? displayName(model) : value}</strong>
+          </div>
+          {#if meta}<p class="fix-pop-note">{meta}</p>{/if}
+          {#if model && UNSTABLE_FIX_MODELS.has(model.model_id)}<p class="fix-pop-note">
+              Can add artifacts to sharp pictures and line art. Skipped if the result is unstable.
+            </p>{/if}
+          {#if row.id === 'colour'}<p class="fix-pop-note">
+              {mediaKind === 'video'
+                ? "Adds colour to black-and-white videos. Colours are the model's guess and are carried between frames so they stay steady."
+                : "Adds colour to black-and-white photos. The colours are the model's guess. A photo that already has colour is recoloured too."}
+            </p>{/if}
+          {#if row.id !== 'colour'}
+            <div class="fix-pop-change">
+              <button
+                class="link-button"
+                type="button"
+                aria-label={`Change the ${FIX_NAMES[row.id as FixStageKind] ?? row.id} fix model`}
+                on:click={() =>
+                  openLibrary(
+                    stage?.role === 'primary' ? 'primary' : 'fix',
+                    row.id as FixStageKind,
+                  )}>Change…</button
+              >
+            </div>
+            {#if moreCount}<button
+                class="link-button fix-pop-more"
+                type="button"
+                aria-label={`${moreCount} more ${moreCount === 1 ? 'model' : 'models'} in the library`}
+                on:click={() =>
+                  openLibrary(
+                    stage?.role === 'primary' ? 'primary' : 'fix',
+                    row.id as FixStageKind,
+                  )}>{moreCount} more {moreCount === 1 ? 'model' : 'models'}</button
+              >{/if}
+          {/if}
+        </Popover>
       {/if}
     </div>
   {/each}
