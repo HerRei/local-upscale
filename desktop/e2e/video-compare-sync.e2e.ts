@@ -391,26 +391,3 @@ test.describe('video Compare sync (real PyAV clips)', () => {
     await expect.poll(() => sampleFrames(canvases)).toEqual([29, 23]);
   });
 });
-
-test('DIAG which frame pair each seek shows on this engine', async ({ page }) => {
-  const { video, canvases } = await openCompare(page, ['Original', 'Stopped 24 fps result']);
-  const out: unknown[] = [];
-  for (const target of [0.034, 0.038, 0.041, 0.043, 0.05, 0.0625, 0.066, 0.07, 0.09, 0.104]) {
-    await video.evaluate(
-      (node, t) =>
-        new Promise<void>((resolve) => {
-          const v = node as HTMLVideoElement;
-          v.addEventListener('seeked', () => resolve(), { once: true });
-          v.currentTime = t;
-        }),
-      target,
-    );
-    await page.waitForTimeout(400);
-    out.push({
-      target,
-      t: await video.evaluate((n) => (n as HTMLVideoElement).currentTime),
-      frames: await sampleFrames(canvases),
-    });
-  }
-  console.log('DIAGSEEK', JSON.stringify(out));
-});

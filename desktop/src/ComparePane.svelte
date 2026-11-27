@@ -315,6 +315,15 @@
       },
     };
   }
+  let seekRepaints: ReturnType<typeof setTimeout>[] = [];
+  function repaintAfterSeek(): void {
+    for (const id of seekRepaints) clearTimeout(id);
+    seekRepaints = [0, 100, 300].map((delay) =>
+      setTimeout(() => {
+        if (!destroyed && !sync?.playing) paintAll();
+      }, delay),
+    );
+  }
   function combinedPlayer(video: HTMLVideoElement) {
     const stalled = () => {
       if (!videoState.loaded) return;
@@ -325,9 +334,9 @@
     const ready = () => {
       if (!videoState.loaded) return;
       paintAll();
-      // Some engines expose a seeked frame to drawImage only once it is on screen.
-      if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => paintAll());
-      else requestAnimationFrame(() => requestAnimationFrame(() => paintAll()));
+      // Linux WebKit (GStreamer) hands drawImage the previous frame for a moment after
+      // a seek completes; paint again once the new frame has had time to arrive.
+      repaintAfterSeek();
       void sync
         ?.ready(video)
         .then(() => {
@@ -550,6 +559,7 @@
   onDestroy(() => {
     destroyed = true;
     clearTimeout(detailsTimer);
+    for (const id of seekRepaints) clearTimeout(id);
     preparationRevision++;
     if (requestId) void cancelVideo(requestId).catch(() => {});
     sync?.pause();
