@@ -311,7 +311,9 @@ def _encode_with_macos(image: Image.Image, destination: Path, quality: int, **kw
     require_output_format("heic")
     with tempfile.TemporaryDirectory(prefix="localsr-encode-", dir=destination.parent) as work:
         source = Path(work) / "source.tiff"
-        image.save(source, format="TIFF", compression="tiff_deflate", **kwargs)
+        # Uncompressed: the file lives only until sips has read it, and deflate took
+        # about 1.1 of 1.6 s for a 24 MP photo (sips also reads it twice as fast).
+        image.save(source, format="TIFF", compression="raw", **kwargs)
         try:
             result = subprocess.run(
                 [
