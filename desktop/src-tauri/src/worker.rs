@@ -1109,14 +1109,14 @@ fn stop_queue_locked(state: &Arc<AppState>, reason: &str) -> AppResult<()> {
         let active = lock(&state.runtime)?.active_job_id.clone();
         if !active.is_empty() {
             let now = Instant::now();
-            if batch_ids.is_empty() {
-                cancellation.request(&active, now);
-            } else {
-                for id in &batch_ids {
+            cancellation.request(&active, now);
+            let db = lock(&state.database)?;
+            // A photo saving its result is left to finish; see cancel_jobs_checked.
+            for id in &batch_ids {
+                if db.job_is_queued(id)? {
                     cancellation.request(id, now);
                 }
             }
-            let db = lock(&state.database)?;
             for id in &cancellation.job_ids {
                 db.mark_batch_cancelling(id)?;
             }

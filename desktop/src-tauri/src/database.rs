@@ -941,6 +941,18 @@ impl Database {
         Ok(())
     }
 
+    /// Whether the engine has not started the job yet. A batch photo that started before
+    /// the one on screen is saving its result, which a stop lets finish.
+    pub fn job_is_queued(&self, id: &str) -> AppResult<bool> {
+        let status: Option<String> = self
+            .connection
+            .query_row("SELECT status FROM jobs WHERE id=?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        Ok(status.as_deref() == Some("queued"))
+    }
+
     /// Whether the job has reached a final state, after which nothing may change it.
     pub fn job_has_ended(&self, id: &str) -> AppResult<bool> {
         let status: Option<String> = self
