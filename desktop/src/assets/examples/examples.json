@@ -1,0 +1,150 @@
+[
+  {
+    "id": "noise",
+    "kind": "fix",
+    "fix": "noise",
+    "model_id": "denoise_realplksr_1x",
+    "before": "noise-before.webp",
+    "after": "noise-after.webp",
+    "alt": "Example: a noisy photo before and after the Noise fix",
+    "source": {
+      "title": "Placeholder until the real example is made",
+      "author": "LocalSR",
+      "url": "https://localsr.com",
+      "licence": "CC0-1.0"
+    },
+    "made": {
+      "app": "0.7.0",
+      "settings": "Placeholder"
+    }
+  },
+  {
+    "id": "jpeg",
+    "kind": "fix",
+    "fix": "jpeg",
+    "model_id": "fbcnn_color",
+    "before": "jpeg-before.webp",
+    "after": "jpeg-after.webp",
+    "alt": "Example: a heavily compressed JPEG before and after the JPEG fix",
+    "source": {
+      "title": "Placeholder until the real example is made",
+      "author": "LocalSR",
+      "url": "https://localsr.com",
+      "licence": "CC0-1.0"
+    },
+    "made": {
+      "app": "0.7.0",
+      "settings": "Placeholder"
+    }
+  },
+  {
+    "id": "blur",
+    "kind": "fix",
+    "fix": "blur",
+    "model_id": "nafnet_gopro_deblur",
+    "before": "blur-before.webp",
+    "after": "blur-after.webp",
+    "alt": "Example: a photo with camera shake before and after the Blur fix",
+    "source": {
+      "title": "Placeholder until the real example is made",
+      "author": "LocalSR",
+      "url": "https://localsr.com",
+      "licence": "CC0-1.0"
+    },
+    "made": {
+      "app": "0.7.0",
+      "settings": "Placeholder"
+    }
+  },
+  {
+    "id": "colour",
+    "kind": "fix",
+    "fix": "colour",
+    "model_id": "ddcolor_modelscope",
+    "before": "colour-before.webp",
+    "after": "colour-after.webp",
+    "alt": "Example: a black-and-white photo before and after the Colour fix",
+    "source": {
+      "title": "Placeholder until the real example is made",
+      "author": "LocalSR",
+      "url": "https://localsr.com",
+      "licence": "CC0-1.0"
+    },
+    "made": {
+      "app": "0.7.0",
+      "settings": "Placeholder"
+    }
+  },
+  {
+    "id": "photo-quick",
+    "kind": "upscale",
+    "model_id": "localsr_quick_x4_v1",
+    "before": "photo-before.webp",
+    "after": "photo-quick-after.webp",
+    "alt": "Example: a photo enlarged 4 times, before and after",
+    "source": {
+      "title": "Placeholder until the real example is made",
+      "author": "LocalSR",
+      "url": "https://localsr.com",
+      "licence": "CC0-1.0"
+    },
+    "made": {
+      "app": "0.7.0",
+      "settings": "Placeholder"
+    }
+  },
+  {
+    "id": "photo-best",
+    "kind": "upscale",
+    "model_id": "realplksr_nomoswebphoto_x4",
+    "before": "photo-before.webp",
+    "after": "photo-best-after.webp",
+    "alt": "Example: a photo enlarged 4 times, before and after",
+    "source": {
+      "title": "Placeholder until the real example is made",
+      "author": "LocalSR",
+      "url": "https://localsr.com",
+      "licence": "CC0-1.0"
+    },
+    "made": {
+      "app": "0.7.0",
+      "settings": "Placeholder"
+    }
+  },
+  {
+    "id": "art-quick",
+    "kind": "upscale",
+    "model_id": "realesrgan_x4plus_anime_6b",
+    "before": "art-before.webp",
+    "after": "art-quick-after.webp",
+    "alt": "Example: line art enlarged 4 times, before and after",
+    "source": {
+      "title": "Placeholder until the real example is made",
+      "author": "LocalSR",
+      "url": "https://localsr.com",
+      "licence": "CC0-1.0"
+    },
+    "made": {
+      "app": "0.7.0",
+      "settings": "Placeholder"
+    }
+  },
+  {
+    "id": "art-best",
+    "kind": "upscale",
+    "model_id": "esrgan_hfa2k_x4",
+    "before": "art-before.webp",
+    "after": "art-best-after.webp",
+    "alt": "Example: line art enlarged 4 times, before and after",
+    "source": {
+      "title": "Placeholder until the real example is made",
+      "author": "LocalSR",
+      "url": "https://localsr.com",
+      "licence": "CC0-1.0"
+    },
+    "made": {
+      "app": "0.7.0",
+      "settings": "Placeholder"
+    }
+  }
+]

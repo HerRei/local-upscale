@@ -3624,6 +3624,55 @@ input[type='number'],
   }
 }
 
+/* Model library example picture: one file pixel per device pixel, never scaled */
+.example {
+  flex-shrink: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+.example-frame {
+  width: 312px;
+  max-width: 100%;
+  height: 195px;
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: var(--recess);
+  touch-action: none;
+  user-select: none;
+}
+.example-frame img {
+  display: block;
+  width: 312px;
+  height: 195px;
+  object-fit: fill;
+}
+@media (max-resolution: 1.5dppx) {
+  .example-frame img {
+    object-fit: none;
+  }
+}
+.example-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.example-switch {
+  flex-shrink: 0;
+  grid-template-columns: auto auto;
+}
+.example-switch button {
+  min-height: 26px;
+  padding: 0 10px;
+}
+.example-caption {
+  min-width: 0;
+  color: var(--secondary);
+  font-size: calc(11px * var(--ui-scale));
+  text-align: right;
+}
+
 /* Model library: quality state, content, fix chips, plan card */
 .seg-inline {
   display: grid;
@@ -4262,6 +4311,9 @@ input[type='number'],
   min-width: 0;
   padding: 8px 10px;
   background: var(--fact-card-bg);
+}
+.facts > div:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
 }
 .facts dt {
   color: var(--secondary);
