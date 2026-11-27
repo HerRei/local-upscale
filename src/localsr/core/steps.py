@@ -336,6 +336,24 @@ STEPS: tuple[StepDefinition, ...] = (
         ),
     ),
     StepDefinition(
+        id="deinterlace",
+        media=("video",),
+        phase="geometry",
+        order=10,
+        needs_model=False,
+        in_image_pipeline=True,
+        label="Deinterlace",
+        stage_label="Deinterlacing",
+        required_feature="video_deinterlace",
+        dev_only=True,
+        parameters=(
+            StepParameter(name="mode", kind="choice", default="frame", choices=("frame", "field")),
+            StepParameter(
+                name="parity", kind="choice", default="auto", choices=("auto", "tff", "bff")
+            ),
+        ),
+    ),
+    StepDefinition(
         id="grain",
         media=("image",),
         phase="grade",

@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Protocol
 
+import av
 import numpy as np
 import torch
 from PIL import Image
@@ -109,6 +110,7 @@ class VideoChainContext:
     warned_unstable: set[int] = field(default_factory=set)
     cached_face_mask: FaceMask | None = None
     frames_since_detection: int = 0
+    field_order: str = "unknown"
 
     def check_cancelled(self) -> None:
         if self.cancel_event.is_set():
@@ -304,8 +306,93 @@ def _build_colour_stage(stage: VideoFixStage, step_ctx: VideoStepContext) -> Vid
     return _stage
 
 
+def _build_deinterlace_stage(stage: VideoFixStage, step_ctx: VideoStepContext) -> VideoStreamStage:
+    ctx = step_ctx.shared
+    mode = stage.params.get("mode", "frame")
+    parity = stage.params.get("parity", "auto")
+    field_order = getattr(ctx, "field_order", "unknown")
+    if parity == "auto" and field_order == "progressive":
+
+        def passthrough(frames: Iterator[StreamFrame]) -> Iterator[StreamFrame]:
+            for item in frames:
+                ctx.check_cancelled()
+                yield item
+
+        return passthrough
+    if parity == "auto":
+        parity = field_order if field_order in {"tff", "bff"} else "auto"
+
+    def _stage(frames: Iterator[StreamFrame]) -> Iterator[StreamFrame]:
+        graph = None
+        pending: deque[StreamFrame] = deque()
+        emitted = 0
+
+        def drain():
+            nonlocal emitted
+            while True:
+                try:
+                    filtered = graph.pull()
+                except (av.error.BlockingIOError, av.error.EOFError):
+                    break
+                ctx.check_cancelled()
+                origin = pending[0]
+                rgb = filtered.to_ndarray(format=pixel_format)
+                if is_float:
+                    rgb = rgb.astype(np.float32) / 65535.0
+                half = origin.frame.duration / 2
+                timing = replace(
+                    origin.frame,
+                    rgb=rgb,
+                    timestamp=origin.frame.timestamp
+                    + (half if mode == "field" and emitted % 2 else 0),
+                    duration=half if mode == "field" else origin.frame.duration,
+                    time_base=origin.frame.time_base / 2
+                    if mode == "field"
+                    else origin.frame.time_base,
+                )
+                yield replace(origin, frame=timing, tensor=None, out_chw=None)
+                emitted += 1
+                if mode == "frame" or emitted % 2 == 0:
+                    pending.popleft()
+
+        for item in frames:
+            ctx.check_cancelled()
+            rgb = item.frame.rgb
+            is_float = rgb.dtype == np.float32
+            high_depth = rgb.dtype == np.uint16 or is_float
+            pixel_format = "rgb48le" if high_depth else "rgb24"
+            planar = "gbrp16le" if high_depth else "gbrp"
+            if is_float:
+                rgb = np.rint(np.clip(rgb, 0, 1) * 65535).astype(np.uint16)
+            frame = av.VideoFrame.from_ndarray(rgb, format=pixel_format)
+            frame.pts = item.frame.index
+            frame.time_base = item.frame.duration
+            if graph is None:
+                graph = av.filter.Graph()
+                source = graph.add_buffer(template=frame)
+                convert = graph.add("format", f"pix_fmts={planar}")
+                deinterlace = graph.add(
+                    "bwdif",
+                    f"mode=send_{'field' if mode == 'field' else 'frame'}:parity={parity}:deint=all",
+                )
+                sink = graph.add("buffersink")
+                source.link_to(convert)
+                convert.link_to(deinterlace)
+                deinterlace.link_to(sink)
+                graph.configure()
+            pending.append(item)
+            graph.push(frame)
+            yield from drain()
+        if graph is not None:
+            graph.push(None)
+            yield from drain()
+
+    return _stage
+
+
 # Dispatch video preprocessing/fix/grade steps by registry step id.
 VIDEO_STEP_HANDLERS: dict[str, VideoStepHandler] = {
+    "deinterlace": _build_deinterlace_stage,
     "blur": _build_fix_model_stage,
     "jpeg": _build_fix_model_stage,
     "noise": _build_fix_model_stage,
@@ -621,6 +708,13 @@ def build_video_stages(ctx: VideoChainContext) -> list[VideoStreamStage]:
     stages: list[VideoStreamStage] = []
     if ctx.colour_index is None:
         stages.append(lambda s: ctx.prefetch_fn(s, 4))
+    for idx, stage in enumerate(ctx.config.preprocess_stages):
+        if stage.step_id == "deinterlace":
+            stages.append(
+                _dispatch_preprocess_stage(
+                    stage, ctx, idx, report_tiles=False, is_final_stage=False
+                )
+            )
     if ctx.before_upscale and ctx.interpolation is not None:
         stages.append(_interpolate_before_stage(ctx))
 
@@ -628,6 +722,8 @@ def build_video_stages(ctx: VideoChainContext) -> list[VideoStreamStage]:
     if ctx.colour_index is not None:
         stages.append(_capture_source_side_data_stage(ctx))
         for idx, stage in enumerate(preprocess[: ctx.colour_index]):
+            if stage.step_id == "deinterlace":
+                continue
             stages.append(
                 _dispatch_preprocess_stage(
                     stage, ctx, idx, report_tiles=False, is_final_stage=False
@@ -647,6 +743,8 @@ def build_video_stages(ctx: VideoChainContext) -> list[VideoStreamStage]:
 
     for idx in range(after_colour_start, len(preprocess)):
         stage = preprocess[idx]
+        if stage.step_id == "deinterlace":
+            continue
         is_final = ctx.skip_primary_sr and idx == len(preprocess) - 1
         stages.append(
             _dispatch_preprocess_stage(stage, ctx, idx, report_tiles=True, is_final_stage=is_final)
