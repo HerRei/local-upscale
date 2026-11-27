@@ -1103,13 +1103,24 @@ pub(crate) fn stop_queue_for_full_disk(state: &Arc<AppState>, reason: &str) -> A
 fn stop_queue_locked(state: &Arc<AppState>, reason: &str) -> AppResult<()> {
     if !state.worker.disk_stop.swap(true, Ordering::SeqCst) {
         let mut cancellation = lock(&state.worker.cancellation)?;
-        lock(&state.database)?.stop_queued_jobs(crate::disk_room::NOT_STARTED)?;
+        let batch_ids = cancellation.job_ids.clone();
+        lock(&state.database)?
+            .stop_queued_jobs_except(crate::disk_room::NOT_STARTED, &batch_ids)?;
         let active = lock(&state.runtime)?.active_job_id.clone();
         if !active.is_empty() {
-            cancellation.request(&active, Instant::now());
-            for id in &cancellation.job_ids {
-                lock(&state.database)?.mark_cancelling(id)?;
+            let now = Instant::now();
+            cancellation.request(&active, now);
+            let db = lock(&state.database)?;
+            // A photo saving its result is left to finish; see cancel_jobs_checked.
+            for id in &batch_ids {
+                if db.job_is_queued(id)? {
+                    cancellation.request(id, now);
+                }
             }
+            for id in &cancellation.job_ids {
+                db.mark_batch_cancelling(id)?;
+            }
+            drop(db);
             let _ = send(
                 state,
                 &json!({"type": "cancel_request", "data": {"job_id": active, "keep_partial": false}}),

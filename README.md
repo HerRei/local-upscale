@@ -65,6 +65,11 @@ and DDColor, and each model shows its size, licence and source before you downlo
 The [model guide](docs/models/README.md) describes them, and
 [model licences](docs/model-licenses.md) lists each licence.
 
+<!-- release-candidate -->
+v0.6.3-beta is in preparation; the downloads below are still v0.6.2-beta.
+[Draft release notes](docs/releases/v0.6.3-beta.md).
+<!-- /release-candidate -->
+
 ## Download
 
 ### Which file do I need?
