@@ -204,9 +204,8 @@ of the settings file (a `mask_path` must be a photo added to LocalSR).
 
 ### Steps with a model, alpha output and jobs of steps alone
 
-The plumbing background removal needs, behind the same dev gate. No shipped step uses it
-yet: the tests register steps (and a catalog model) of their own, as `test_pipeline.py`
-does for model-less steps.
+The plumbing background removal uses, behind the same dev gate. The tests also register
+steps (and a catalog model) of their own, as `test_pipeline.py` does for model-less steps.
 
 - Registry: `model_task` (the catalog `purposes` entry a step's models carry) and
   `output_alpha` (`src/localsr/core/steps.py:74`, `:76`), exported by
@@ -268,13 +267,10 @@ does for model-less steps.
 
 ## What each tool still needs
 
-- **Background removal** (model step, alpha out): the plumbing is in (see "Steps with a
-  model, alpha output and jobs of steps alone"). Still needed: the step itself
-  (`model_task`, `output_alpha`, a `required_feature`), its catalog model with a
-  `purposes` entry for that task and a loader the model adapter knows, its handler in
-  `IMAGE_MODEL_STEP_HANDLERS`, and a UI row with the model choice. A 1x catalog model of
-  that task would also show among the Restore models (`modelsForTask` takes every 1x model
-  that is not a face model), so those lists must leave step models out.
+- **Background removal** (model step, alpha out): the developer-only `remove_background`
+  step loads the MIT BiRefNet general checkpoint and sets a matte. It runs in `cleanup`,
+  before fixes and the primary, so the matte is computed at source size and scales with
+  the image. The step still needs a UI row with its model choice.
 - **Deinterlacing**: the dev-only video geometry step supports frame and field modes, field
   order selection, and progressive-source passthrough. It still needs a UI row.
 - **Video stabilisation**: needs a video geometry handler and crop output dimensions passed

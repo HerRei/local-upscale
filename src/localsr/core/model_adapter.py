@@ -138,6 +138,13 @@ class ModelAdapter:
 
                     if is_ddcolor_state_dict(state_dict):
                         return resolved_trust, load_ddcolor_descriptor(state_dict)
+                    from localsr.image_models.birefnet import (
+                        is_birefnet_state_dict,
+                        load_birefnet_descriptor,
+                    )
+
+                    if is_birefnet_state_dict(state_dict):
+                        return resolved_trust, load_birefnet_descriptor(state_dict)
                     message = _unsupported_model_message(state_dict)
                 else:
                     message = "This checkpoint's architecture could not be recognized and is not supported."
@@ -230,7 +237,7 @@ class ModelAdapter:
         # Spandrel 0.4 does not expose a tiling capability flag. LocalSR tiles
         # ImageModelDescriptor inputs itself and applies the descriptor's size
         # requirements to every tile; DDColor runs whole-image at its input size.
-        tiling_supported = arch != "DDColor"
+        tiling_supported = arch not in {"DDColor", "BiRefNet"}
 
         half_supported = getattr(self.parsed, "supports_half", False)
 

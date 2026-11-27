@@ -162,7 +162,10 @@ pub fn fix_quality(quality: &str) -> &'static str {
 
 pub fn fits_fix(model: &CatalogModel, fix: &str) -> bool {
     model.native_scale == 1
-        && !model.purposes.iter().any(|purpose| purpose == "face")
+        && !model
+            .purposes
+            .iter()
+            .any(|purpose| purpose == "face" || purpose == "background")
         && fixes_of(model).iter().any(|entry| entry == fix)
 }
 

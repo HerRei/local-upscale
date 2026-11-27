@@ -118,9 +118,10 @@ describe('step registry', () => {
     expect(grain.required_feature).toBe('image_grain');
     expect(STEPS.filter((step) => step.dev_only).map((step) => step.id)).toEqual([
       'deinterlace',
+      'remove_background',
       'grain',
     ]);
-    expect(STEP_LIMITS.max_step_stages).toBe(2);
+    expect(STEP_LIMITS.max_step_stages).toBe(3);
     for (const id of ['upscale', 'noise', 'face_restore', 'deflicker', 'edit', 'missing']) {
       expect(stepStage(id)).toBeUndefined();
     }
@@ -157,8 +158,10 @@ describe('step registry', () => {
     expect(stepStage('with_task', steps)).toEqual({ step: withTask, placement: 'before_fixes' });
     expect(stepStage('without_task', steps)).toBeUndefined();
     expect(stepStage('fix_with_task', steps)).toBeUndefined();
-    // No shipped step brings a model or sets the alpha yet.
-    expect(STEPS.every((step) => step.model_task === null && !step.output_alpha)).toBe(true);
+    const background = stepStage('remove_background');
+    expect(background?.placement).toBe('before_fixes');
+    expect(background?.step.model_task).toBe('background');
+    expect(background?.step.output_alpha).toBe(true);
   });
 
   it('validates stage params generically from a step definition', () => {

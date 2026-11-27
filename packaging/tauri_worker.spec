@@ -47,6 +47,10 @@ datas = spandrel_datas + [
         "localsr/video_models/flashvsr",
     ),
     (
+        str(SOURCE / "localsr" / "image_models" / "birefnet" / "NOTICE.md"),
+        "localsr/image_models/birefnet",
+    ),
+    (
         str(SOURCE / "localsr" / "image_models" / "ddcolor" / "NOTICE.md"),
         "localsr/image_models/ddcolor",
     ),

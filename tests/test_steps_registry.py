@@ -73,7 +73,10 @@ def test_step_registry_matches_current_pipeline_and_catalog() -> None:
         assert STEPS_BY_ID[fix].stage_kind == "restore"
 
     for model in MODEL_CATALOG:
-        assert model.stage_kind in IMAGE_PIPELINE_STAGE_KINDS, model.model_id
+        if model.stage_kind == "background":
+            assert any(step.model_task in model.purposes for step in STEPS if step.model_task)
+        else:
+            assert model.stage_kind in IMAGE_PIPELINE_STAGE_KINDS, model.model_id
         assert set(model.fixes) <= FIX_KINDS, model.model_id
 
     features = set(_engine_features())

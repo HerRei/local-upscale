@@ -165,7 +165,7 @@
   let estimateError = '';
   let runningTrials = false;
 
-  $: models = snapshot.catalog.models;
+  $: models = snapshot.catalog.models.filter((model) => !model.purposes.includes('background'));
   $: videoModels = snapshot.catalog.video_models;
   $: videoUnavailable = videoAvailability(
     videoModels,

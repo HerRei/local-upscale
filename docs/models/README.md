@@ -25,6 +25,7 @@ loading. Restoration weights are not included in installers.
 | SCUNet Color (PSNR) | 1× | Blind real-photo denoising | 72.0 MB | Apache-2.0 |
 | DAT2 BHI Real | 4× | Lettering, buildings and clean photos · very slow | 140.2 MB | CC BY 4.0 |
 | DAT2 RealWebPhoto v4 | 4× | Noisy, compressed web and phone photos · very slow | 140.3 MB | CC BY 4.0 |
+| BiRefNet | 1× | Developer-only background removal | 444.5 MB | MIT |
 | DDColor (DDColor-L) | 1× | Photo colorization | 911.9 MB | Apache-2.0 |
 | HAT-S Face | 4× | Face companion · verified import | 40.5 MB | Rights unresolved |
 | HAT-L Face | 4× | Large face companion · verified import | 165.7 MB | Rights unresolved |

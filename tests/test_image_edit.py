@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import subprocess
 import sys
 import threading
@@ -147,7 +148,15 @@ def test_sysctl_reads_the_real_free_level():
 def test_supervisor_measures_the_macos_footprint():
     import psutil
 
-    assert 0 < edit_guard.process_memory(psutil.Process()) <= psutil.Process().memory_info().rss * 2
+    process = psutil.Process()
+    actual = edit_guard.process_memory(process)
+    report = subprocess.check_output(
+        ["/usr/bin/footprint", "--noCategories", "-f", "bytes", str(process.pid)], text=True
+    )
+    match = re.search(r"^\s*phys_footprint:\s*(\d+) B", report, re.MULTILINE)
+    assert match is not None
+    reference = int(match.group(1))
+    assert actual > 0 and abs(actual - reference) <= max(16 * 1024**2, reference // 10)
 
 
 @pytest.mark.parametrize(

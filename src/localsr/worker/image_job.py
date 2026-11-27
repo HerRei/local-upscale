@@ -439,6 +439,29 @@ ModelStageImpl = Callable[
     Any,
 ]
 
+
+BIREFNET_INPUT_SIZE = 1024
+
+
+def _run_background_stage(runner, image, _stage, _index, _data, _progress, _notes, model):
+    import torch
+    import torch.nn.functional as F
+
+    runner._check_cancelled()
+    rgb = image["tensor"][:3].unsqueeze(0).to(dtype=torch.float32)
+    size = rgb.shape[-2:]
+    rgb = F.interpolate(
+        rgb, size=(BIREFNET_INPUT_SIZE, BIREFNET_INPUT_SIZE), mode="bilinear", align_corners=False
+    ).to(device=model.device)
+    mean = rgb.new_tensor((0.485, 0.456, 0.406)).view(1, 3, 1, 1)
+    std = rgb.new_tensor((0.229, 0.224, 0.225)).view(1, 3, 1, 1)
+    with torch.inference_mode():
+        logits = model.module((rgb - mean) / std)
+        matte = logits.sigmoid().float().cpu()
+    runner._check_cancelled()
+    return F.interpolate(matte, size=size, mode="bilinear", align_corners=False)[0, 0]
+
+
 # Dispatch non-primary stages by registry step id; new steps add one entry here.
 IMAGE_STEP_HANDLERS: dict[str, StageImpl] = {
     "blur": _run_fix_model_stage,
@@ -450,7 +473,7 @@ IMAGE_STEP_HANDLERS: dict[str, StageImpl] = {
 }
 
 # Step stages that bring a catalog model (`model_task`); each handler gets it loaded.
-IMAGE_MODEL_STEP_HANDLERS: dict[str, ModelStageImpl] = {}
+IMAGE_MODEL_STEP_HANDLERS: dict[str, ModelStageImpl] = {"remove_background": _run_background_stage}
 
 # Primary steps that produce colour output from monochrome sources.
 _PRIMARY_GRAYSCALE_CLEARING_STEPS: frozenset[str] = frozenset({"colour"})

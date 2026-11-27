@@ -25,7 +25,10 @@ export function fixQuality(quality: Quality | ''): 'quick' | 'best' {
 /** A 1× model that fixes this problem; the host accepts nothing else as a fix. */
 export function fitsFix(model: CatalogModel, fix: Exclude<FixKind, 'faces'>): boolean {
   return (
-    model.native_scale === 1 && !model.purposes.includes('face') && fixesOf(model).includes(fix)
+    model.native_scale === 1 &&
+    !model.purposes.includes('face') &&
+    !model.purposes.includes('background') &&
+    fixesOf(model).includes(fix)
   );
 }
 
