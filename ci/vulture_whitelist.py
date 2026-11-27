@@ -179,3 +179,4 @@ recommended_device_seconds_per_input_mp
 recommended_cpu_threads
 cpu_threads
 cpu_avx2
+framerate  # PyAV codec_context.framerate: set to 0/1 so Matroska writes no DefaultDuration

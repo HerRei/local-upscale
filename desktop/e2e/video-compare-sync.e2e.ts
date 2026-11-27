@@ -78,44 +78,46 @@ test.describe('video Compare sync (real PyAV clips)', () => {
         await transport.getByRole('button', { name: 'Play comparison' }).click();
         // Sample both side canvases synchronously in rAF while actively playing past targetSeconds.
         const samples = await video.evaluate((node, stopAt) => {
-          return new Promise<{ t: number; f0: number; f1: number; seeking: boolean }[]>((resolve) => {
-            const v = node as HTMLVideoElement;
-            const pane = v.closest('.compare-pane')!;
-            const sideCanvases = [
-              ...pane.querySelectorAll('.image-stage canvas'),
-            ] as HTMLCanvasElement[];
-            const scratch = document.createElement('canvas');
-            scratch.width = 128;
-            scratch.height = 72;
-            const ctx = scratch.getContext('2d')!;
-            const read = (c: HTMLCanvasElement) => {
-              if (c.width < 2 || c.height < 2) return -1;
-              ctx.drawImage(c, 0, 0, 128, 72);
-              const data = ctx.getImageData(0, 55, 128, 1).data;
-              let f = 0;
-              for (let b = 0; b < 8; b++) {
-                const px = (b * 16 + 8) * 4;
-                const luma = 0.299 * data[px] + 0.587 * data[px + 1] + 0.114 * data[px + 2];
-                f = (f << 1) | (luma > 128 ? 1 : 0);
-              }
-              return f;
-            };
-            const out: { t: number; f0: number; f1: number; seeking: boolean }[] = [];
-            const step = () => {
-              out.push({
-                t: Number(v.currentTime.toFixed(3)),
-                f0: read(sideCanvases[0]),
-                f1: read(sideCanvases[1]),
-                seeking: v.seeking,
-              });
-              if (v.currentTime > stopAt || out.length > 220) {
-                resolve(out);
-              } else {
-                requestAnimationFrame(step);
-              }
-            };
-            requestAnimationFrame(step);
-          });
+          return new Promise<{ t: number; f0: number; f1: number; seeking: boolean }[]>(
+            (resolve) => {
+              const v = node as HTMLVideoElement;
+              const pane = v.closest('.compare-pane')!;
+              const sideCanvases = [
+                ...pane.querySelectorAll('.image-stage canvas'),
+              ] as HTMLCanvasElement[];
+              const scratch = document.createElement('canvas');
+              scratch.width = 128;
+              scratch.height = 72;
+              const ctx = scratch.getContext('2d')!;
+              const read = (c: HTMLCanvasElement) => {
+                if (c.width < 2 || c.height < 2) return -1;
+                ctx.drawImage(c, 0, 0, 128, 72);
+                const data = ctx.getImageData(0, 55, 128, 1).data;
+                let f = 0;
+                for (let b = 0; b < 8; b++) {
+                  const px = (b * 16 + 8) * 4;
+                  const luma = 0.299 * data[px] + 0.587 * data[px + 1] + 0.114 * data[px + 2];
+                  f = (f << 1) | (luma > 128 ? 1 : 0);
+                }
+                return f;
+              };
+              const out: { t: number; f0: number; f1: number; seeking: boolean }[] = [];
+              const step = () => {
+                out.push({
+                  t: Number(v.currentTime.toFixed(3)),
+                  f0: read(sideCanvases[0]),
+                  f1: read(sideCanvases[1]),
+                  seeking: v.seeking,
+                });
+                if (v.currentTime > stopAt || out.length > 220) {
+                  resolve(out);
+                } else {
+                  requestAnimationFrame(step);
+                }
+              };
+              requestAnimationFrame(step);
+            },
+          );
         }, targetSeconds);
         const settled = samples.filter((s) => !s.seeking && s.f0 >= 0 && s.f1 >= 0);
         expect(settled.length).toBeGreaterThan(0);
@@ -196,7 +198,10 @@ test.describe('video Compare sync (real PyAV clips)', () => {
   test('step forward and back moves exactly one frame on both sides and stops at ends', async ({
     page,
   }) => {
-    const { canvases, transport } = await openCompare(page, ['Original', 'Stopped overhang result']);
+    const { canvases, transport } = await openCompare(page, [
+      'Original',
+      'Stopped overhang result',
+    ]);
     const prev = transport.getByRole('button', { name: 'Previous frame' });
     const next = transport.getByRole('button', { name: 'Next frame' });
 
@@ -385,4 +390,27 @@ test.describe('video Compare sync (real PyAV clips)', () => {
       .toBe(true);
     await expect.poll(() => sampleFrames(canvases)).toEqual([29, 23]);
   });
+});
+
+test('DIAG which frame pair each seek shows on this engine', async ({ page }) => {
+  const { video, canvases } = await openCompare(page, ['Original', 'Stopped 24 fps result']);
+  const out: unknown[] = [];
+  for (const target of [0.034, 0.038, 0.041, 0.043, 0.05, 0.0625, 0.066, 0.07, 0.09, 0.104]) {
+    await video.evaluate(
+      (node, t) =>
+        new Promise<void>((resolve) => {
+          const v = node as HTMLVideoElement;
+          v.addEventListener('seeked', () => resolve(), { once: true });
+          v.currentTime = t;
+        }),
+      target,
+    );
+    await page.waitForTimeout(400);
+    out.push({
+      target,
+      t: await video.evaluate((n) => (n as HTMLVideoElement).currentTime),
+      frames: await sampleFrames(canvases),
+    });
+  }
+  console.log('DIAGSEEK', JSON.stringify(out));
 });
