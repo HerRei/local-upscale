@@ -60,7 +60,36 @@ def main() -> int:
             "The packaged worker cannot load Core ML (coremltools native module).", file=sys.stderr
         )
         return 1
-    print("Packaged worker startup, capability IPC, and shutdown succeeded.")
+    # The worker imports most of itself on first use; a module the freeze left out
+    # would otherwise only show at the first job.
+    imports = subprocess.run(
+        [str(worker), "--import-check"],
+        stdin=subprocess.DEVNULL,
+        text=True,
+        capture_output=True,
+        timeout=300,
+        check=False,
+    )
+    # A worker without the check would start serving and exit 0 on the closed input,
+    # so success needs the report itself.
+    report = {}
+    for line in imports.stdout.splitlines():
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(message, dict) and "checked" in message:
+            report = message
+    if imports.returncode != 0 or not report.get("checked") or report.get("failed") != {}:
+        print(imports.stdout, file=sys.stderr)
+        print(imports.stderr, file=sys.stderr)
+        print(
+            "The packaged worker failed its import check "
+            f"(exit {imports.returncode}, report {report or 'missing'}).",
+            file=sys.stderr,
+        )
+        return 1
+    print("Packaged worker startup, capability IPC, deferred imports and shutdown succeeded.")
     return 0
 
 

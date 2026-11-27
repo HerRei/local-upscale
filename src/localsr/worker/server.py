@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import gc
+import importlib
 import importlib.util
 import io
 import json
@@ -2475,7 +2476,55 @@ class WorkerServer:
         )
 
 
+# Every module the server imports inside a function, so the worker starts without them
+# (tests/test_worker_startup.py keeps this list complete). A packaged worker that lacks one
+# would only fail at the first job that needs it; `--import-check` imports them all now.
+DEFERRED_IMPORTS = (
+    "PIL",
+    "localsr.core.audio_denoise",
+    "localsr.core.backend_validation",
+    "localsr.core.benchmark",
+    "localsr.core.benchmark_v2",
+    "localsr.core.benchmark_v3",
+    "localsr.core.child_processes",
+    "localsr.core.hardware",
+    "localsr.core.hdr",
+    "localsr.core.image_edit",
+    "localsr.core.image_io",
+    "localsr.core.inference",
+    "localsr.core.live_preview",
+    "localsr.core.media_bridge",
+    "localsr.core.media_codecs",
+    "localsr.core.model_adapter",
+    "localsr.core.onnx_runtime",
+    "localsr.core.steps",
+    "localsr.core.video_engines",
+    "localsr.core.video_io",
+    "localsr.core.video_memory",
+    "localsr.core.video_pipeline",
+    "localsr.video_models.rife.engine",
+    "localsr.worker.compare_regions",
+    "localsr.worker.image_batch",
+    "localsr.worker.image_job",
+    "torch",
+)
+
+
+def import_check(modules: tuple[str, ...] = DEFERRED_IMPORTS) -> int:
+    """Import every deferred module; print what failed as JSON and return 1 if any did."""
+    failed: dict[str, str] = {}
+    for name in modules:
+        try:
+            importlib.import_module(name)
+        except Exception as error:  # noqa: BLE001 - every missing module is reported, not the first
+            failed[name] = f"{type(error).__name__}: {error}"
+    print(json.dumps({"checked": len(modules), "failed": failed}, sort_keys=True))
+    return 1 if failed else 0
+
+
 def main():
+    if sys.argv[1:2] == ["--import-check"]:
+        raise SystemExit(import_check())
     if len(sys.argv) > 1 and sys.argv[1] == "--backend-probe":
         import argparse
 

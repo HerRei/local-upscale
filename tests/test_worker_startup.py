@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import subprocess
@@ -126,3 +127,50 @@ def test_worker_server_lazy_model_adapter_and_engine_allow_override():
     server.engine = sentinel_engine
     assert server.model_adapter is sentinel_adapter
     assert server.engine is sentinel_engine
+
+
+def _function_level_imports(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    found: set[str] = set()
+    for function in ast.walk(tree):
+        if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for node in ast.walk(function):
+            if isinstance(node, ast.Import):
+                found.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                found.add(node.module)
+    return {name for name in found if name.split(".")[0] not in sys.stdlib_module_names}
+
+
+def test_the_import_check_covers_every_module_the_server_defers():
+    from localsr.worker.server import DEFERRED_IMPORTS
+
+    server = ROOT / "src" / "localsr" / "worker" / "server.py"
+    assert set(DEFERRED_IMPORTS) == _function_level_imports(server)
+
+
+def test_the_import_check_imports_them_all_through_the_worker_entry_point():
+    completed = subprocess.run(
+        [sys.executable, "-m", "localsr.worker", "--import-check"],
+        env=_worker_env(),
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    from localsr.worker.server import DEFERRED_IMPORTS
+
+    report = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert report == {"checked": len(DEFERRED_IMPORTS), "failed": {}}
+
+
+def test_the_import_check_names_every_module_that_is_missing(capsys):
+    from localsr.worker.server import import_check
+
+    assert import_check(("json", "localsr.no_such_module", "no_such_package")) == 1
+    report = json.loads(capsys.readouterr().out)
+    assert report["checked"] == 3
+    assert sorted(report["failed"]) == ["localsr.no_such_module", "no_such_package"]
+    assert report["failed"]["no_such_package"].startswith("ModuleNotFoundError")
