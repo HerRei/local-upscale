@@ -3959,6 +3959,7 @@
           ? settings.custom_model_path
           : '',
       output_format: settings.output_format,
+      output_bit_depth: settings.output_bit_depth ?? 8,
       preserve_metadata: settings.preserve_metadata,
       jpeg_quality: settings.jpeg_quality,
       deflicker: settings.deflicker,
@@ -4079,6 +4080,7 @@
         ? 1
         : Math.min(recipeModel?.native_scale ?? recipe.output_scale, recipe.output_scale),
       output_format: recipe.output_format ?? settings.output_format,
+      output_bit_depth: recipe.output_bit_depth ?? settings.output_bit_depth,
       preserve_metadata: recipe.preserve_metadata ?? settings.preserve_metadata,
       jpeg_quality: recipe.jpeg_quality ?? settings.jpeg_quality,
       tile_size: recipe.tile_size,

@@ -39,6 +39,16 @@ describe('recipeFixStages and recipeMatches', () => {
       fix_stages: [{ fix: 'noise', model_id: 'denoise_realplksr_1x' }],
     };
     expect(recipeMatches(recipe, current, snapshot.catalog)).toBe(true);
+
+    // A recipe that recorded its output matches only that output; an older one any output.
+    const withOutput: Recipe = { ...recipe, output_format: 'tif', output_bit_depth: 16 };
+    expect(recipeMatches(withOutput, current, snapshot.catalog)).toBe(false);
+    const tiff16: UiSettings = { ...current, output_format: 'tif', output_bit_depth: 16 };
+    expect(recipeMatches(withOutput, tiff16, snapshot.catalog)).toBe(true);
+    expect(recipeMatches(withOutput, { ...tiff16, output_bit_depth: 8 }, snapshot.catalog)).toBe(
+      false,
+    );
+    expect(recipeMatches(recipe, tiff16, snapshot.catalog)).toBe(true);
   });
 
   it('keeps upscale recipes with fixes unchanged', () => {

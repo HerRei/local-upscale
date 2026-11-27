@@ -346,7 +346,7 @@
           recipes={snapshot.recipes}
           {activeRecipeIds}
           selectedMediaKind={selectedMedia?.kind}
-          canSave={Boolean(settings.task)}
+          canSave={Boolean(settings.task) && settings.task !== 'edit'}
           bind:recipeName
           bind:recipeEditorOpen
           bind:deletingRecipeId

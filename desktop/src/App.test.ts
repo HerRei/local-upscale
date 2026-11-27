@@ -2015,8 +2015,36 @@ describe('LocalSR desktop interface', () => {
 
     await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledTimes(1));
     expect(api.saveRecipe).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'Portrait cleanup', task: 'upscale' }),
+      expect.objectContaining({ name: 'Portrait cleanup', task: 'upscale', output_bit_depth: 8 }),
     );
+  }, 20_000);
+
+  it('keeps a 16-bit output in a saved recipe', async () => {
+    const snapshot = readySnapshot([image('first', true)]);
+    snapshot.settings = { ...snapshot.settings, output_format: 'png', output_bit_depth: 16 };
+    const user = await mountWith(snapshot);
+
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    await user.click(screen.getByRole('button', { name: 'Save current as recipe…' }));
+    await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Archive');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledTimes(1));
+    expect(api.saveRecipe).toHaveBeenCalledWith(
+      expect.objectContaining({ output_format: 'png', output_bit_depth: 16 }),
+    );
+  }, 20_000);
+
+  it('offers no recipe saving for Edit, which recipes cannot hold', async () => {
+    const snapshot = readySnapshot([image('first', true)]);
+    snapshot.settings = { ...snapshot.settings, task: 'edit' };
+    const user = await mountWith(snapshot);
+
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    expect(
+      (screen.getByRole('button', { name: 'Save current as recipe…' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
   }, 20_000);
 
   it('lights up a saved recipe while its settings are applied', async () => {

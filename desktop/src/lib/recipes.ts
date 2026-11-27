@@ -92,6 +92,10 @@ export function recipeMatches(
     current.tile_size === recipe.tile_size &&
     current.halo === recipe.halo &&
     current.safe_memory === recipe.safe_memory &&
+    // Older recipes did not record the output; they match whatever it is.
+    (!recipe.output_format || current.output_format === recipe.output_format) &&
+    (recipe.output_bit_depth === undefined ||
+      (current.output_bit_depth ?? 8) === recipe.output_bit_depth) &&
     sameFixStages(current.fix_stages, fixes) &&
     !current.enable_face_model &&
     (current.quality || 'custom') === (recipe.quality || 'custom') &&
