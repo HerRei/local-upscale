@@ -3,18 +3,23 @@
   import AdvancedSettings from './AdvancedSettings.svelte';
   import HelpTip from './HelpTip.svelte';
   import ModelCredit from './ModelCredit.svelte';
+  import OutputSheet from './OutputSheet.svelte';
   import PlanSheet from './PlanSheet.svelte';
   import Popover from './Popover.svelte';
   import RecipesMenu from './RecipesMenu.svelte';
   import VideoMemory from './VideoMemory.svelte';
   import { customModels } from './lib/customModels';
   import { EDIT_FIT_LABELS, editFamilyLabel, editVariantName } from './lib/editing';
-  import type { EnhancePanelActions, EnhancePanelView } from './lib/enhancePanel';
+  import {
+    outputSummary,
+    type EnhancePanelActions,
+    type EnhancePanelView,
+  } from './lib/enhancePanel';
   import { formatBytes } from './lib/format';
   import { FIX_LABELS, displayName, type PlanStage } from './lib/plan';
   import { planLine } from './lib/planLine';
   import { FIX_CHIPS } from './lib/steps';
-  import type { FixKind, TaskKind } from './lib/types';
+  import type { FixKind, InterpolationOrder, InterpolationTarget, TaskKind } from './lib/types';
   import { videoModelShortName } from './lib/videoEngines';
 
   export let view: EnhancePanelView;
@@ -31,6 +36,7 @@
   const fixChips = FIX_CHIPS as FixKind[];
   let recipesOpen = false;
   let planOpen = false;
+  let outputOpen = false;
 
   const {
     setTask,
@@ -130,6 +136,10 @@
   $: if (!settings.task || settings.task === 'edit' || planState.status === 'error') {
     planOpen = false;
   }
+  $: if (!settings.task || settings.task === 'edit') {
+    outputOpen = false;
+  }
+  $: outputLineText = outputSummary(settings, { preservingHdr, audioDisabled });
 
   $: taskTip =
     selectedMedia?.kind === 'video' || settings.task === 'video'
@@ -335,101 +345,6 @@
           </div>
         </div>
       </section>
-
-      {#if settings.task === 'video' && selectedMedia?.hdr_format}
-        <section class="control-section" aria-label="HDR conversion">
-          <span class="eyebrow"
-            >{preservingHdr ? 'HDR input · HDR output · Labs' : 'HDR input · SDR output'}</span
-          >
-          <label class="field-label" for="hdr-output">Colour output</label>
-          <select
-            id="hdr-output"
-            value={usingTemporalVideo ? 'tone_map' : (settings.video_hdr_mode ?? 'tone_map')}
-            on:change={(event) =>
-              updateSettings({
-                video_hdr_mode: event.currentTarget.value as 'tone_map' | 'preserve',
-                ...(event.currentTarget.value === 'preserve'
-                  ? { precision: 'fp32', deflicker: false }
-                  : {}),
-              })}
-          >
-            <option value="preserve" disabled={!hdrPreservationAvailable}
-              >Preserve {selectedMedia.hdr_format} · 10-bit HEVC · Labs{!hdrPreservationAvailable
-                ? ' · unavailable for this model'
-                : ''}</option
-            >
-            <option value="tone_map">Convert to SDR · 8-bit H.264</option>
-          </select>
-          {#if preservingHdr}
-            <p class="model-description">
-              Keeps {selectedMedia.hdr_format} in float precision through HAT and exports 10-bit BT.2020
-              HEVC. Source light and colour constrain the model’s added detail. HAT models were trained
-              on SDR; HDR detail quality is experimental.
-            </p>
-            <p class="model-description">
-              Thumbnails and live tiles use SDR tone mapping. Final playback depends on system HDR
-              support. Dolby Vision dynamic metadata is not retained; compatible HLG/PQ base video
-              is preserved.
-            </p>
-          {:else}
-            <p class="model-description">
-              This {selectedMedia.hdr_format} video is tone-mapped to SDR before enhancement and exported
-              as 8-bit SDR. The preview uses the same conversion.
-            </p>
-          {/if}
-          {#if settings.selected_model_id === '__custom__' && !usingTemporalVideo}<p
-              class="model-description"
-            >
-              HDR preservation remains available for custom checkpoints. The current adapter
-              requires HAT; compatibility is checked when the model loads.
-            </p>{/if}
-        </section>
-      {/if}
-
-      {#if settings.task === 'video'}
-        <section class="control-section" aria-label="Audio">
-          <div class="eyebrow eyebrow-row">
-            <span class="label-with-tip"
-              >Audio{#if selectedMedia?.audio_warning}<HelpTip
-                  label="this video's audio"
-                  text={selectedMedia.audio_warning}
-                />{/if}</span
-            >
-          </div>
-          <div class="check-line">
-            <label class="check-row"
-              ><input
-                type="checkbox"
-                disabled={audioDisabled}
-                checked={!audioDisabled && Boolean(settings.video_clean_audio)}
-                on:change={(event) =>
-                  updateSettings({ video_clean_audio: event.currentTarget.checked })}
-              /> Clean up audio</label
-            ><HelpTip
-              label="Clean up audio"
-              text="Removes background noise such as hum, wind and hiss from speech. Music may sound worse."
-            />
-          </div>
-          {#if audioDisabled}
-            <p class="model-description">This video has no audio track.</p>
-          {:else if settings.video_clean_audio && audioModels.length > 0}
-            <label class="field-label" for="audio-model">Audio model</label>
-            <select
-              id="audio-model"
-              value={selectedAudioModel?.model_id ?? ''}
-              on:change={(event) =>
-                updateSettings({ video_audio_model: event.currentTarget.value })}
-            >
-              {#each audioModels as model (model.model_id)}
-                <option value={model.model_id}>{model.name}</option>
-              {/each}
-            </select>
-            {#if selectedAudioModel?.summary}
-              <p class="model-description">{selectedAudioModel.summary}</p>
-            {/if}
-          {/if}
-        </section>
-      {/if}
 
       {#if settings.task}
         {#if settings.task === 'edit'}
@@ -714,6 +629,75 @@
           </section>
         {/if}
 
+        {#if settings.task === 'video' && !usingTemporalVideo}
+          <section class="control-section">
+            <div class="advanced-controls">
+              <div class="check-line">
+                <label class="check-row"
+                  ><input
+                    type="checkbox"
+                    disabled={settings.video_hdr_mode === 'preserve'}
+                    checked={settings.deflicker}
+                    on:change={(event) =>
+                      updateSettings({ deflicker: event.currentTarget.checked })}
+                  /> De-flicker · Labs</label
+                ><HelpTip
+                  label="De-flicker"
+                  text="Evens out brightness flicker in the original video and the shimmer that frame-by-frame upscaling adds in still areas. It decides from the original, so motion, cuts and real light changes pass through. Adds about 40 ms per frame. Off by default."
+                />
+              </div>
+              <p class="model-description">
+                Steadies flicker and still-area shimmer. Motion and scene cuts pass through.
+              </p>
+              <div class="field-row">
+                <span class="label-with-tip"
+                  ><label for="frame-rate">Frame rate</label><HelpTip
+                    label="Frame rate"
+                    text="Adds in-between frames for smoother motion. 2× and 4× multiply the clip's own rate; 60 and 120 fps set a fixed rate and are skipped when the clip is already about that fast. The first use downloads a model of about 25 MB."
+                  /></span
+                ><select
+                  id="frame-rate"
+                  disabled={preservingHdr || !interpolationSupported}
+                  value={settings.video_interpolation ?? 'off'}
+                  on:change={(event) =>
+                    updateSettings({
+                      video_interpolation: event.currentTarget.value as InterpolationTarget,
+                    })}
+                  ><option value="off">Original</option><option value="x2">2× · interpolated</option
+                  ><option value="x4">4× · interpolated</option><option value="fps60"
+                    >60 fps · interpolated</option
+                  ><option value="fps120">120 fps · interpolated</option></select
+                >
+              </div>
+              {#if (settings.video_interpolation ?? 'off') !== 'off'}
+                <div class="field-row">
+                  <span class="label-with-tip"
+                    ><label for="interpolation-order">Interpolate</label><HelpTip
+                      label="Interpolate"
+                      text="When the extra frames are made. After upscaling is faster; before upscaling can look smoother but upscales more frames."
+                    /></span
+                  ><select
+                    id="interpolation-order"
+                    value={settings.video_interpolation_order ?? 'after_upscale'}
+                    on:change={(event) =>
+                      updateSettings({
+                        video_interpolation_order: event.currentTarget.value as InterpolationOrder,
+                      })}
+                    ><option value="after_upscale">After upscaling · faster</option><option
+                      value="before_upscale">Before upscaling</option
+                    ></select
+                  >
+                </div>
+                <p class="model-description">
+                  RIFE · Labs adds the in-between frames. Scene cuts stay cuts; very fast motion can
+                  smear. Before upscaling, the added frames are upscaled too: at 2× that takes about
+                  twice as long.
+                </p>
+              {/if}
+            </div>
+          </section>
+        {/if}
+
         {#if lastFailure}
           <section
             class="control-section failure-note"
@@ -750,22 +734,18 @@
             </div>
           </section>
         {/if}
-        <AdvancedSettings
-          {settings}
-          {selectedModel}
-          {editModel}
-          capabilities={snapshot.capabilities}
-          {usingTemporalVideo}
-          videoModel={usingTemporalVideo ? selectedVideoModel : undefined}
-          {preservingHdr}
-          {interpolationSupported}
-          updateSettings={chooseInAdvanced}
-          defaults={defaultSettings}
-          onUseDefaults={useDefaultsForSession}
-          {chooseOutput}
-          onOpenFfmpegSettings={() => openSettings('storage', 'ffmpeg')}
-          {refreshCapabilities}
-        />
+        {#if settings.task === 'edit'}
+          <AdvancedSettings
+            {settings}
+            {editModel}
+            capabilities={snapshot.capabilities}
+            updateSettings={chooseInAdvanced}
+            defaults={defaultSettings}
+            onUseDefaults={useDefaultsForSession}
+            {chooseOutput}
+            {refreshCapabilities}
+          />
+        {/if}
       {/if}
     </fieldset>
   </div>
@@ -945,6 +925,49 @@
             {openLibrary}
             {moveFix}
             {refreshCapabilities}
+          />
+        </Popover>
+      {/if}
+      {#if settings.task !== 'edit'}
+        <Popover
+          bind:open={outputOpen}
+          placement="sheet"
+          label="Output"
+          triggerClass="foot-line foot-output foot-trigger"
+          triggerTitle={outputLineText}
+          let:close
+        >
+          <svelte:fragment slot="trigger">
+            <span class="foot-output-key">Output</span>
+            <span class="foot-output-value">{outputLineText}</span>
+            <svg
+              class="pop-chevron"
+              aria-hidden="true"
+              xmlns="http://www.w3.org/2000/svg"
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.25"
+              stroke-linecap="round"
+              stroke-linejoin="round"><path d={outputOpen ? 'm6 9 6 6 6-6' : 'm9 6 6 6-6 6'} /></svg
+            >
+          </svelte:fragment>
+          <OutputSheet
+            {settings}
+            {selectedMedia}
+            capabilities={snapshot.capabilities}
+            {usingTemporalVideo}
+            {preservingHdr}
+            {hdrPreservationAvailable}
+            {audioDisabled}
+            {audioModels}
+            {selectedAudioModel}
+            disabled={settingsLocked}
+            {updateSettings}
+            {chooseOutput}
+            onOpenFfmpegSettings={() => openSettings('storage', 'ffmpeg')}
           />
         </Popover>
       {/if}

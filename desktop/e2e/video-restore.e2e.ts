@@ -60,8 +60,8 @@ test('video Same size, Fix chips and video recipes', async ({ page }) => {
   await expect(stages).toContainText('FBCNN');
   await page.keyboard.press('Escape');
 
-  // Output scale is gone from Advanced.
-  await page.getByRole('button', { name: /Advanced/ }).click();
+  // Advanced is gone for video, and Output scale is not offered.
+  await expect(page.getByRole('button', { name: /^Advanced/ })).toHaveCount(0);
   await expect(page.getByLabel('Output scale', { exact: true })).toHaveCount(0);
 
   // Save a video Same size recipe and check what is sent to the host.

@@ -3,11 +3,6 @@ import { openApp, showPane } from './app';
 import { answer, emit, hostCalls } from './fake-host';
 import { upscale, video, windows } from './fixtures';
 
-async function openAdvanced(page: Page): Promise<void> {
-  await showPane(page, 'enhance');
-  await page.getByRole('button', { name: /^Advanced/ }).click();
-}
-
 async function openPlanSheet(page: Page): Promise<void> {
   await showPane(page, 'enhance');
   const trigger = page.locator('.foot-plan');
@@ -17,10 +12,19 @@ async function openPlanSheet(page: Page): Promise<void> {
   await expect(page.locator('#device')).toBeVisible();
 }
 
+async function openOutputSheet(page: Page): Promise<void> {
+  await showPane(page, 'enhance');
+  const trigger = page.locator('.foot-output');
+  if ((await trigger.getAttribute('aria-expanded')) !== 'true') {
+    await trigger.click();
+  }
+  await expect(page.getByRole('group', { name: 'Output' })).toBeVisible();
+}
+
 // Settings holds the default hardware; the Plan sheet chooses it for this session.
-// External FFmpeg is app-wide too: its Advanced row opens Settings at Storage.
+// External FFmpeg is app-wide too: its Output sheet row opens Settings at Storage.
 async function openFfmpegSettings(page: Page): Promise<void> {
-  await openAdvanced(page);
+  await openOutputSheet(page);
   await page
     .locator('.field-row', { hasText: 'External FFmpeg' })
     .getByRole('button', { name: 'Change…' })
@@ -152,7 +156,7 @@ test.describe('Settings: hardware', () => {
 test.describe('Advanced settings: frame interpolation', () => {
   test('lists the frame rates and shows the order only when interpolating', async ({ page }) => {
     await openApp(page, video);
-    await openAdvanced(page);
+    await showPane(page, 'enhance');
     expect(await optionTexts(page, '#frame-rate')).toEqual([
       'Original',
       '2× · interpolated',
@@ -181,7 +185,7 @@ test.describe('Advanced settings: frame interpolation', () => {
 
   test('an engine without interpolation leaves the frame rate disabled', async ({ page }) => {
     await openApp(page, { ...video, features: [] });
-    await openAdvanced(page);
+    await showPane(page, 'enhance');
     await expect(page.locator('#frame-rate')).toBeDisabled();
   });
 });
@@ -263,13 +267,13 @@ test.describe('Video audio cleanup', () => {
       installed: [...(video.installed ?? []), 'deepfilternet3', 'dpdfnet8_48khz_hr'],
       settings: { ...video.settings, video_interpolation: 'off' },
     });
-    await showPane(page, 'enhance');
-    const audio = page.getByRole('region', { name: 'Audio' });
-    const checkbox = audio.getByRole('checkbox', { name: 'Clean up audio' });
+    await openOutputSheet(page);
+    const output = page.getByRole('group', { name: 'Output' });
+    const checkbox = output.getByRole('checkbox', { name: 'Clean up audio' });
     await expect(checkbox).not.toBeChecked();
     await expect(checkbox).toBeEnabled();
 
-    await audio.getByRole('button', { name: 'About Clean up audio' }).click();
+    await output.getByRole('button', { name: 'About Clean up audio' }).click();
     await expect(
       page.getByText(/Removes background noise such as hum, wind and hiss from speech/i),
     ).toBeVisible();
@@ -280,15 +284,16 @@ test.describe('Video audio cleanup', () => {
     await expect(page.getByRole('list', { name: 'Stages' })).toContainText('DeepFilterNet3');
     await page.keyboard.press('Escape');
 
-    const picker = audio.getByLabel('Audio model');
+    await openOutputSheet(page);
+    const picker = output.getByLabel('Audio model');
     await expect(picker).toHaveValue('deepfilternet3');
-    await expect(audio).toContainText('Speech noise removal');
+    await expect(output).toContainText('Speech noise removal');
 
     await picker.selectOption('dpdfnet8_48khz_hr');
     await expect
       .poll(async () => (await lastSaved(page)).video_audio_model)
       .toBe('dpdfnet8_48khz_hr');
-    await expect(audio).toContainText('Stronger speech noise removal');
+    await expect(output).toContainText('Stronger speech noise removal');
     await openPlanSheet(page);
     await expect(page.getByRole('list', { name: 'Stages' })).toContainText('DPDFNet');
     await page.keyboard.press('Escape');
@@ -313,10 +318,10 @@ test.describe('Video audio cleanup', () => {
       installed: [...(video.installed ?? []), 'deepfilternet3'],
       settings: { ...video.settings, video_interpolation: 'off' },
     });
-    await showPane(page, 'enhance');
-    const audio = page.getByRole('region', { name: 'Audio' });
-    await audio.getByRole('checkbox', { name: 'Clean up audio' }).check();
-    await audio.getByLabel('Audio model').selectOption('dpdfnet8_48khz_hr');
+    await openOutputSheet(page);
+    const output = page.getByRole('group', { name: 'Output' });
+    await output.getByRole('checkbox', { name: 'Clean up audio' }).check();
+    await output.getByLabel('Audio model').selectOption('dpdfnet8_48khz_hr');
 
     await page.getByRole('button', { name: /Download .* start video/i }).click();
     await expect
@@ -333,10 +338,10 @@ test.describe('Video audio cleanup', () => {
 
   test('disables Clean up audio with a note when a video has no audio track', async ({ page }) => {
     await openApp(page, { ...video, videoHasAudio: false });
-    await showPane(page, 'enhance');
-    const audio = page.getByRole('region', { name: 'Audio' });
-    const checkbox = audio.getByRole('checkbox', { name: 'Clean up audio' });
+    await openOutputSheet(page);
+    const output = page.getByRole('group', { name: 'Output' });
+    const checkbox = output.getByRole('checkbox', { name: 'Clean up audio' });
     await expect(checkbox).toBeDisabled();
-    await expect(audio).toContainText('This video has no audio track.');
+    await expect(output).toContainText('This video has no audio track.');
   });
 });

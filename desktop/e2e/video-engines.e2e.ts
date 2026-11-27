@@ -106,8 +106,8 @@ test('FlashVSR is chosen from the library on a Mac that can run it, with its own
   ]);
   await res.selectOption('x3');
   await expect(res).toHaveValue('x3');
-  await page.getByRole('button', { name: /^Advanced/ }).click();
-  await expect(page.getByText(/^FlashVSR · Labs\./)).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Advanced/ })).toHaveCount(0);
+  await expect(page.getByText('FlashVSR works best up to 4×')).toBeVisible();
 
   await page.getByRole('button', { name: 'Start selected video' }).click();
   await expect.poll(async () => (await hostCalls(page, 'start_jobs')).length).toBe(1);

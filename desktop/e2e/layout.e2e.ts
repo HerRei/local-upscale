@@ -336,13 +336,22 @@ test.describe('overflow and alignment', () => {
   };
 
   for (const [name, scenario] of Object.entries(advancedScenarios)) {
-    test(`Advanced, ${name}: every tip wraps inside its box and the window`, async ({ page }) => {
+    test(`Output or Advanced, ${name}: every tip wraps inside its box and the window`, async ({
+      page,
+    }) => {
       await page.setViewportSize({ width: 880, height: 640 });
       await openApp(page, scenario);
       await showPane(page, 'enhance');
-      await page.getByRole('button', { name: /^Advanced/ }).click();
+      const isEdit = name === 'Edit';
+      if (isEdit) {
+        await page.getByRole('button', { name: /^Advanced/ }).click();
+      } else {
+        await page.locator('.foot-output').click();
+      }
       const column = await box(page.locator('.inspector-scroll'));
-      const tips = page.locator('.advanced-controls .help-tip');
+      const tips = page.locator(
+        isEdit ? '.advanced-controls .help-tip' : '.enhance-pane .sheet .help-tip',
+      );
       const count = await tips.count();
       expect(count).toBeGreaterThan(2);
       for (let index = 0; index < count; index++) {
@@ -397,7 +406,7 @@ test.describe('overflow and alignment', () => {
       await page.evaluate(() => {
         const fieldset = document.querySelector('fieldset.processing-settings');
         (fieldset as HTMLFieldSetElement).disabled = false;
-        (document.querySelector('.disclosure') as HTMLButtonElement).click();
+        (document.querySelector('.disclosure') as HTMLButtonElement | null)?.click();
       });
       if (openSheet) {
         await page.locator('.foot-plan').click();
@@ -507,12 +516,12 @@ test.describe('overflow and alignment', () => {
     }
   });
 
-  test('Advanced and Plan sheet: three selects share the select column; the FFmpeg actions are one line', async ({
+  test('Output and Plan sheets: three selects share the select column; the FFmpeg actions are one line', async ({
     page,
   }) => {
     await openApp(page, ready);
     await showPane(page, 'enhance');
-    await page.getByRole('button', { name: /^Advanced/ }).click();
+    await page.locator('.foot-output').click();
     const column = page.locator('#format');
     await column.scrollIntoViewIfNeeded();
     const formatLeft = await left(column);
@@ -521,16 +530,13 @@ test.describe('overflow and alignment', () => {
     expect(Math.abs((await left(page.locator('#halo-size'))) - formatLeft)).toBeLessThan(0.5);
     expect(Math.abs((await right(page.locator('#precision'))) - formatRight)).toBeLessThan(0.5);
 
-    await openApp(page, video);
-    await showPane(page, 'enhance');
-    await page.getByRole('button', { name: /^Advanced/ }).click();
     await openApp(page, {
       ...video,
       settings: { ...video.settings, external_ffmpeg_path: '/opt/homebrew/bin/ffmpeg' },
     });
     await showPane(page, 'enhance');
-    await page.getByRole('button', { name: /^Advanced/ }).click();
-    // The FFmpeg actions live in Settings > Storage; Advanced links there.
+    await page.locator('.foot-output').click();
+    // The FFmpeg actions live in Settings > Storage; the Output sheet links there.
     await page
       .locator('.field-row', { hasText: 'External FFmpeg' })
       .getByRole('button', { name: 'Change…' })

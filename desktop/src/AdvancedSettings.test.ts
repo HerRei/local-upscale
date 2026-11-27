@@ -5,155 +5,68 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import AdvancedSettings from './AdvancedSettings.svelte';
 import { demoSnapshot } from './lib/demo';
-import type { CapabilityInfo, UiSettings } from './lib/types';
+import type { CapabilityInfo, EditModel, UiSettings } from './lib/types';
 
-const api = vi.hoisted(() => ({}));
-vi.mock('./lib/api', () => api);
+vi.mock('./lib/api', () => ({}));
 
 afterEach(cleanup);
 
 const base = demoSnapshot().capabilities;
-const mac: CapabilityInfo = {
-  ...base,
-  media: {
-    system_codecs: {
-      label: 'macOS',
-      decode: ['h264', 'hevc', 'aac'],
-      encode: ['h264', 'hevc', 'prores', 'aac'],
-      containers: ['mp4', 'mov'],
-    },
-    image_output: ['heic'],
-    external_ffmpeg: { detected: [], candidates: [] },
-  },
-};
+const editModel: EditModel = demoSnapshot().edit.models[0];
 
 async function open(
-  settings: Partial<UiSettings>,
-  capabilities: CapabilityInfo,
+  settings: Partial<UiSettings> = {},
+  capabilities: CapabilityInfo = base,
   updateSettings = vi.fn(),
+  chooseOutput = vi.fn(async () => undefined),
 ) {
   render(AdvancedSettings, {
-    settings: { ...demoSnapshot().settings, ...settings },
-    selectedModel: undefined,
+    settings: { ...demoSnapshot().settings, task: 'edit', ...settings },
+    editModel,
     capabilities,
-    usingTemporalVideo: false,
     updateSettings,
-    chooseOutput: async () => undefined,
+    chooseOutput,
     refreshCapabilities: async () => true,
   });
   await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
-  return updateSettings;
+  return { updateSettings, chooseOutput };
 }
 
-function options(label: string): string[] {
-  return Array.from(screen.getByLabelText(label).querySelectorAll('option')).map(
-    (option) => option.value,
-  );
-}
-
-describe('HEIC image output', () => {
-  it('is offered with a quality slider where the engine announces it', async () => {
-    const update = await open({ task: 'upscale', output_format: 'heic' }, mac);
-    expect(options('Format')).toEqual(['png', 'jpg', 'tif', 'webp', 'heic']);
-    const slider = screen.getByLabelText(/^HEIC quality/);
-    await fireEvent.change(slider, { target: { value: '85' } });
-    expect(update).toHaveBeenCalledWith({ jpeg_quality: 85 });
+describe('AdvancedSettings for Edit', () => {
+  it('shows the Size, steps, seed summary and omits photo/video output controls', async () => {
+    await open();
+    expect(screen.getByText('Size, steps, seed')).toBeTruthy();
+    expect(screen.queryByText('Format, tiles')).toBeNull();
+    expect(screen.queryByLabelText('Format')).toBeNull();
+    expect(screen.queryByLabelText('Container')).toBeNull();
+    expect(screen.queryByLabelText('Frame rate')).toBeNull();
+    expect(screen.queryByLabelText('Tile')).toBeNull();
   });
 
-  it('is hidden everywhere else, and PNG shows no quality slider', async () => {
-    await open({ task: 'upscale', output_format: 'png' }, base);
-    expect(options('Format')).toEqual(['png', 'jpg', 'tif', 'webp']);
-    expect(screen.queryByLabelText(/quality/)).toBeNull();
-  });
-});
-
-describe('MOV video output', () => {
-  it('lists only HEVC and ProRes for MOV and switches the pair together', async () => {
-    const update = await open({ task: 'video', video_container: 'mov', video_codec: 'hevc' }, mac);
-    expect(options('Container')).toEqual(['mp4', 'mkv', 'mov']);
-    expect(options('Video format')).toEqual(['hevc', 'prores']);
-    await fireEvent.change(screen.getByLabelText('Video format'), { target: { value: 'prores' } });
-    expect(update).toHaveBeenLastCalledWith({ video_codec: 'prores', video_container: 'mov' });
-    await fireEvent.change(screen.getByLabelText('Container'), { target: { value: 'mp4' } });
-    expect(update).toHaveBeenLastCalledWith({ video_container: 'mp4' });
+  it('clamps Edit size to the device memory limit and updates edit_max_dimension', async () => {
+    const { updateSettings } = await open({ edit_max_dimension: 1024 });
+    const size = screen.getByLabelText('Edit size') as HTMLSelectElement;
+    expect(size.value).toBe('512');
+    expect(size.querySelector<HTMLOptionElement>('option[value="1024"]')?.disabled).toBe(true);
+    await fireEvent.change(size, { target: { value: '512' } });
+    expect(updateSettings).toHaveBeenCalledWith({ edit_max_dimension: 512 });
   });
 
-  it('keeps the existing codecs for MP4 and moves to a MOV codec on choosing MOV', async () => {
-    const update = await open({ task: 'video', video_container: 'mp4', video_codec: 'av1' }, mac);
-    expect(options('Video format')).toEqual(['auto', 'av1', 'vp9', 'ffv1', 'h264', 'hevc']);
-    await fireEvent.change(screen.getByLabelText('Container'), { target: { value: 'mov' } });
-    expect(update).toHaveBeenLastCalledWith({ video_container: 'mov', video_codec: 'hevc' });
+  it('clamps Steps and Seed inputs and saves updates', async () => {
+    const { updateSettings } = await open({ edit_steps: 40, edit_seed: 42 });
+    const steps = screen.getByLabelText('Steps') as HTMLInputElement;
+    const seed = screen.getByLabelText('Seed') as HTMLInputElement;
+    await fireEvent.change(steps, { target: { value: '80' } });
+    expect(updateSettings).toHaveBeenLastCalledWith({ edit_steps: 60 });
+    await fireEvent.change(seed, { target: { value: '-5' } });
+    expect(updateSettings).toHaveBeenLastCalledWith({ edit_seed: 0 });
   });
 
-  it('is hidden where the system codecs are missing', async () => {
-    await open({ task: 'video', video_container: 'mp4', video_codec: 'av1' }, base);
-    expect(options('Container')).toEqual(['mp4', 'mkv']);
-    expect(options('Video format')).not.toContain('prores');
+  it('renders Save to and RunSettings inside Advanced', async () => {
+    const { chooseOutput } = await open({ output_directory: '/Users/demo/Desktop' });
+    await fireEvent.click(screen.getByRole('button', { name: 'Save to /Users/demo/Desktop' }));
+    expect(chooseOutput).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText('Hardware')).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: 'Run at low priority' })).toBeTruthy();
   });
-});
-
-describe('External FFmpeg shortcut', () => {
-  it('shows detected or chosen FFmpeg status and opens Storage settings on Change…', async () => {
-    const onOpenFfmpegSettings = vi.fn();
-    render(AdvancedSettings, {
-      settings: {
-        ...demoSnapshot().settings,
-        task: 'video',
-        external_ffmpeg_path: '/usr/bin/ffmpeg',
-      },
-      selectedModel: undefined,
-      capabilities: mac,
-      usingTemporalVideo: false,
-      updateSettings: vi.fn(),
-      chooseOutput: async () => undefined,
-      onOpenFfmpegSettings,
-      refreshCapabilities: async () => true,
-    });
-    await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
-    expect(screen.getByText('/usr/bin/ffmpeg')).toBeTruthy();
-    const row = screen.getByText('External FFmpeg').closest('.field-row') as HTMLElement;
-    const change = row.querySelector('button.link-button') as HTMLButtonElement;
-    expect(change.textContent).toBe('Change…');
-    await fireEvent.click(change);
-    expect(onOpenFfmpegSettings).toHaveBeenCalledTimes(1);
-
-    cleanup();
-    render(AdvancedSettings, {
-      settings: { ...demoSnapshot().settings, task: 'video', external_ffmpeg_path: '' },
-      selectedModel: undefined,
-      capabilities: mac,
-      usingTemporalVideo: false,
-      updateSettings: vi.fn(),
-      chooseOutput: async () => undefined,
-      refreshCapabilities: async () => true,
-    });
-    await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
-    expect(screen.getByText('None')).toBeTruthy();
-  });
-});
-
-it('explains when interpolation happens', async () => {
-  await open({ task: 'video', video_interpolation: 'x2' }, mac);
-  expect(screen.getByRole('button', { name: 'About Interpolate' })).toBeTruthy();
-});
-
-it('omits Output scale from Advanced and shows Format, tiles summary for photo and video', async () => {
-  await open({ task: 'video', video_task: 'upscale', output_scale: 2 }, mac);
-  expect(screen.queryByLabelText('Output scale')).toBeNull();
-  expect(screen.getByText('Format, tiles')).toBeTruthy();
-
-  cleanup();
-  await open({ task: 'video', video_task: 'denoise', output_scale: 4 }, mac);
-  expect(screen.queryByLabelText('Output scale')).toBeNull();
-  expect(screen.getByText('Format, tiles')).toBeTruthy();
-
-  cleanup();
-  await open({ task: 'denoise', output_scale: 1 }, mac);
-  expect(screen.queryByLabelText('Output scale')).toBeNull();
-  expect(screen.getByText('Format, tiles')).toBeTruthy();
-
-  cleanup();
-  await open({ task: 'upscale', output_scale: 2 }, mac);
-  expect(screen.queryByLabelText('Output scale')).toBeNull();
-  expect(screen.getByText('Format, tiles')).toBeTruthy();
 });

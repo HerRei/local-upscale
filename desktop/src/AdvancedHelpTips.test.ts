@@ -7,7 +7,7 @@ import AdvancedSettings from './AdvancedSettings.svelte';
 import { demoSnapshot } from './lib/demo';
 import type { CapabilityInfo, UiSettings } from './lib/types';
 
-vi.mock('./lib/api', () => ({ chooseExternalFFmpeg: vi.fn(), detectExternalFFmpeg: vi.fn() }));
+vi.mock('./lib/api', () => ({}));
 
 afterEach(cleanup);
 
@@ -27,86 +27,28 @@ const mac: CapabilityInfo = {
   system_memory_pressure_level: 'low',
   system_memory_pressure_percent: 40,
   devices: [macGpu, base.devices[0]],
-  media: {
-    system_codecs: {
-      label: 'macOS',
-      decode: ['h264', 'hevc', 'aac'],
-      encode: ['h264', 'hevc', 'prores', 'aac'],
-      containers: ['mp4', 'mov'],
-    },
-    image_output: ['heic'],
-    external_ffmpeg: { detected: [], candidates: [] },
-  },
 };
-// Windows and Linux: no system codecs, no HEIC.
 const other: CapabilityInfo = { ...base, system_memory_pressure_level: 'moderate' };
 
 interface Variant {
   name: string;
   settings: Partial<UiSettings>;
   capabilities: CapabilityInfo;
-  temporal?: boolean;
-  interpolation?: boolean;
-  /** Labels that must be found, so an enumeration that finds nothing cannot pass. */
   expected: string[];
 }
 
-const IMAGE = ['Format', 'Preserve safe metadata and color profile'];
-const TAIL = ['Save to'];
-const VIDEO = ['Container', 'Video format', 'Video quality · CRF'];
-
 const variants: Variant[] = [
-  {
-    name: 'upscale on a Mac with HEIC',
-    settings: { task: 'upscale', output_format: 'heic' },
-    capabilities: mac,
-    expected: [...IMAGE, 'HEIC quality', ...TAIL],
-  },
-  {
-    name: 'upscale elsewhere with JPEG',
-    settings: { task: 'upscale', output_format: 'jpg' },
-    capabilities: other,
-    expected: [...IMAGE, 'JPEG quality', ...TAIL],
-  },
-  {
-    name: 'restore with PNG',
-    settings: { task: 'denoise', output_format: 'png' },
-    capabilities: other,
-    expected: ['Format', ...TAIL],
-  },
-  {
-    name: 'video frame by frame on a Mac',
-    settings: { task: 'video', video_interpolation: 'x2' },
-    capabilities: mac,
-    interpolation: true,
-    expected: [...VIDEO, 'De-flicker · Labs', 'Frame rate', 'Interpolate', ...TAIL],
-  },
-  {
-    name: 'video frame by frame elsewhere',
-    settings: { task: 'video', video_interpolation: 'off' },
-    capabilities: other,
-    interpolation: true,
-    expected: [...VIDEO, 'De-flicker · Labs', 'Frame rate', ...TAIL],
-  },
-  {
-    name: 'video restore frame by frame elsewhere',
-    settings: { task: 'video', video_task: 'denoise', video_interpolation: 'off' },
-    capabilities: other,
-    interpolation: true,
-    expected: [...VIDEO, 'De-flicker · Labs', 'Frame rate', ...TAIL],
-  },
-  {
-    name: 'video with a temporal model',
-    settings: { task: 'video', video_target_resolution: 1080 },
-    capabilities: mac,
-    temporal: true,
-    expected: [...VIDEO, ...TAIL],
-  },
   {
     name: 'edit on a Mac',
     settings: { task: 'edit' },
     capabilities: mac,
-    expected: ['Edit size', 'Steps', 'Seed', ...TAIL, 'Memory pressure'],
+    expected: ['Edit size', 'Steps', 'Seed', 'Save to', 'Memory pressure'],
+  },
+  {
+    name: 'edit elsewhere',
+    settings: { task: 'edit' },
+    capabilities: other,
+    expected: ['Edit size', 'Steps', 'Seed', 'Save to', 'Memory pressure'],
   },
 ];
 
@@ -116,10 +58,7 @@ const withoutTip: Record<string, string> = {};
 async function open(variant: Variant): Promise<HTMLElement> {
   render(AdvancedSettings, {
     settings: { ...demoSnapshot().settings, ...variant.settings },
-    selectedModel: undefined,
     capabilities: variant.capabilities,
-    usingTemporalVideo: variant.temporal ?? false,
-    interpolationSupported: variant.interpolation ?? false,
     updateSettings: () => undefined,
     chooseOutput: async () => undefined,
     refreshCapabilities: async () => true,
@@ -128,7 +67,7 @@ async function open(variant: Variant): Promise<HTMLElement> {
   return document.querySelector('.advanced-controls') as HTMLElement;
 }
 
-/** Every labelled control: fields, checkboxes, sliders, the folder button and the memory line. */
+/** Every labelled control: fields, checkboxes, the folder button and the memory line. */
 function controls(root: HTMLElement): { label: string; row: Element }[] {
   const found: { label: string; row: Element }[] = [];
   for (const field of root.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
@@ -180,25 +119,6 @@ describe('every labelled control in Advanced has a help tip or a reason not to',
     }
     for (const label of Object.keys(withoutTip)) expect(seen.has(label)).toBe(true);
   });
-
-  it('omits the app-wide settings moved to the Settings sheet', async () => {
-    const root = await open(variants[0]);
-    const fieldLabels = [...root.querySelectorAll('.field-label')].map((el) =>
-      el.textContent?.trim(),
-    );
-    expect(fieldLabels).not.toContain('Engine');
-    for (const moved of [
-      'Model folder',
-      'Model cache',
-      'Interface text',
-      'Show sampled enhanced previews (max 2 fps)',
-      'Show in menu bar',
-      'Monochrome menu bar icon',
-      'Notify when a file finishes',
-    ]) {
-      expect(root.textContent).not.toContain(moved);
-    }
-  });
 });
 
 describe('the wording of the help tips', () => {
@@ -212,7 +132,7 @@ describe('the wording of the help tips', () => {
       }
       cleanup();
     }
-    expect(texts.size).toBeGreaterThanOrEqual(14);
+    expect(texts.size).toBeGreaterThanOrEqual(6);
     for (const text of texts) {
       const words = text.trim().split(/\s+/).length;
       expect(words, text).toBeLessThanOrEqual(46);
@@ -223,8 +143,6 @@ describe('the wording of the help tips', () => {
 });
 
 describe('while a job runs, the whole Advanced section is locked', () => {
-  // Help tips, Refresh and Run at low priority stay usable; every other interactive thing must
-  // be disabled, so a control added later that sits outside the locked fieldset fails here.
   const usable = (element: Element) =>
     element.classList.contains('help-tip') ||
     element.classList.contains('memory-refresh') ||
@@ -237,10 +155,7 @@ describe('while a job runs, the whole Advanced section is locked', () => {
         target: fieldset,
         props: {
           settings: { ...demoSnapshot().settings, ...variant.settings },
-          selectedModel: undefined,
           capabilities: variant.capabilities,
-          usingTemporalVideo: variant.temporal ?? false,
-          interpolationSupported: variant.interpolation ?? false,
           updateSettings: () => undefined,
           chooseOutput: async () => undefined,
           refreshCapabilities: async () => true,
@@ -254,8 +169,10 @@ describe('while a job runs, the whole Advanced section is locked', () => {
         ),
       ];
       expect(interactive.length).toBeGreaterThanOrEqual(3);
-      const open = interactive.filter((item) => !usable(item) && !item.matches(':disabled'));
-      expect(open.map((item) => item.outerHTML.slice(0, 80))).toEqual([]);
+      const openControls = interactive.filter(
+        (item) => !usable(item) && !item.matches(':disabled'),
+      );
+      expect(openControls.map((item) => item.outerHTML.slice(0, 80))).toEqual([]);
       expect(interactive.filter(usable).length).toBeGreaterThanOrEqual(2);
       fieldset.remove();
     });

@@ -1139,6 +1139,24 @@ input:focus-visible {
   overflow: hidden;
   line-height: 1.35;
 }
+.foot-output {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr) auto;
+  gap: 0;
+}
+.foot-output-key {
+  padding-right: 6px;
+  color: var(--secondary);
+}
+.foot-output-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.foot-output .pop-chevron {
+  margin-left: 8px;
+}
 .foot-cost {
   position: relative;
   color: var(--secondary);
@@ -2282,14 +2300,26 @@ input[type='number'],
   border: 0;
   border-top: 1px solid var(--divider);
 }
-.run-settings {
+.run-settings,
+.output-settings {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
-.enhance-pane .sheet :is(select, button):disabled,
+.enhance-pane .sheet :is(select, button, input):disabled,
 .enhance-pane .sheet label:has(> input:disabled),
-.run-settings.locked :is(.field-label, .field-grid label) {
+.run-settings.locked :is(.field-label, .field-grid label),
+.output-settings.locked
+  :is(
+    .field-row label,
+    .range-row label,
+    .range-head > b,
+    .field-label,
+    .directory-path,
+    .directory-field small,
+    .directory-field > b,
+    .engine-active-label
+  ) {
   opacity: 0.38;
   cursor: not-allowed;
 }

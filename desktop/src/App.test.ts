@@ -459,6 +459,14 @@ async function openPlanSheet(user: ReturnType<typeof userEvent.setup>): Promise<
   return screen.getByRole('group', { name: 'Plan' });
 }
 
+async function openOutputSheet(user: ReturnType<typeof userEvent.setup>): Promise<HTMLElement> {
+  const trigger = document.querySelector('.foot-output') as HTMLButtonElement;
+  if (trigger.getAttribute('aria-expanded') !== 'true') {
+    await user.click(trigger);
+  }
+  return screen.getByRole('group', { name: 'Output' });
+}
+
 /** A Mac with an editing engine, the native runtime and every Qwen bundle installed. */
 function editSnapshot(unifiedGb: number): AppSnapshot {
   const snapshot = readySnapshot([image('photo', true)]);
@@ -1712,10 +1720,10 @@ describe('LocalSR desktop interface', () => {
 
   it('keeps advanced controls in a dedicated scroll region', async () => {
     const user = await mountWith(readySnapshot([image('first', true)]));
-    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
 
     const inspector = screen.getByRole('region', { name: 'Enhancement settings' });
     expect(inspector.classList.contains('inspector-scroll')).toBe(true);
+    await openOutputSheet(user);
     expect(screen.getByLabelText('Format')).toBeTruthy();
     expect(
       screen.getByRole('checkbox', { name: /Preserve safe metadata and color profile/i }),
@@ -1779,7 +1787,7 @@ describe('LocalSR desktop interface', () => {
     const snapshot = readySnapshot([media]);
     snapshot.settings.task = 'video';
     snapshot.settings.batch_mode = true;
-    await mountWith(snapshot);
+    const user = await mountWith(snapshot);
     const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
     callback({
       type: 'media_probe_progress',
@@ -1818,20 +1826,26 @@ describe('LocalSR desktop interface', () => {
         jpeg_base64: 'test',
       },
     });
-    expect(await screen.findByRole('region', { name: 'HDR conversion' })).toBeTruthy();
-    expect(screen.getByText(/exported as 8-bit SDR/)).toBeTruthy();
-    // The note about this video's audio is a tip on the Audio heading, not a section of its own.
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Start selected video' }).hasAttribute('disabled'),
+      ).toBe(false),
+    );
+    expect(screen.queryByText('Converting HDR to an SDR preview')).toBeNull();
+    const output = await openOutputSheet(user);
+    expect(within(output).getByLabelText('Colour output')).toBeTruthy();
+    const hdrTip = within(output).getByRole('button', { name: 'About Colour output' });
+    expect(
+      document.getElementById(hdrTip.getAttribute('aria-describedby') ?? '')?.textContent,
+    ).toMatch(/exported as 8-bit SDR/);
+    // The note about this video's audio is a tip on Clean up audio in the Output sheet.
     expect(screen.queryByRole('region', { name: 'Audio compatibility' })).toBeNull();
-    const audioTip = within(screen.getByRole('region', { name: 'Audio' })).getByRole('button', {
+    const audioTip = within(output).getByRole('button', {
       name: "About this video's audio",
     });
     expect(
       document.getElementById(audioTip.getAttribute('aria-describedby') ?? '')?.textContent,
     ).toBe('Standard audio will be kept. The extra track will be omitted.');
-    expect(screen.queryByText('Converting HDR to an SDR preview')).toBeNull();
-    expect(
-      screen.getByRole('button', { name: 'Start selected video' }).hasAttribute('disabled'),
-    ).toBe(false);
   });
 
   async function pickUpscalerInLibrary(
@@ -1863,11 +1877,17 @@ describe('LocalSR desktop interface', () => {
       name: 'AMD GPU',
     };
     const user = await mountWith(snapshot);
-    const hdr = screen.getByLabelText('Colour output') as HTMLSelectElement;
-    expect(hdr.value).toBe('preserve');
+    let output = await openOutputSheet(user);
+    expect((within(output).getByLabelText('Colour output') as HTMLSelectElement).value).toBe(
+      'preserve',
+    );
     await pickUpscalerInLibrary(user, /^SeedVR2-3B — Labs/);
-    expect(hdr.value).toBe('tone_map');
-    expect(hdr.querySelector<HTMLOptionElement>('option[value="preserve"]')!.disabled).toBe(true);
+    output = await openOutputSheet(user);
+    const hdrAfterSeed = within(output).getByLabelText('Colour output') as HTMLSelectElement;
+    expect(hdrAfterSeed.value).toBe('tone_map');
+    expect(
+      hdrAfterSeed.querySelector<HTMLOptionElement>('option[value="preserve"]')!.disabled,
+    ).toBe(true);
     expect(screen.getByText('SDR output selected. This model cannot preserve HDR.')).toBeTruthy();
     expect((screen.getByLabelText('Output resolution') as HTMLSelectElement).value).toBe('x4');
     await user.selectOptions(screen.getByLabelText('Output resolution'), '512');
@@ -1885,16 +1905,23 @@ describe('LocalSR desktop interface', () => {
       }),
     );
     await pickUpscalerInLibrary(user, /^HAT-S ×4/);
-    expect(hdr.value).toBe('preserve');
+    output = await openOutputSheet(user);
+    expect((within(output).getByLabelText('Colour output') as HTMLSelectElement).value).toBe(
+      'preserve',
+    );
     api.chooseCustomModel.mockResolvedValueOnce('/models/mine.safetensors' as never);
     await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     await user.click(screen.getByRole('button', { name: /Your own file/ }));
     await user.click(screen.getByRole('button', { name: 'Choose checkpoint…' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
-    expect(hdr.querySelector<HTMLOptionElement>('option[value="preserve"]')!.disabled).toBe(false);
-    await user.selectOptions(hdr, 'preserve');
-    expect(hdr.value).toBe('preserve');
+    output = await openOutputSheet(user);
+    const hdrCustom = within(output).getByLabelText('Colour output') as HTMLSelectElement;
+    expect(hdrCustom.querySelector<HTMLOptionElement>('option[value="preserve"]')!.disabled).toBe(
+      false,
+    );
+    await user.selectOptions(hdrCustom, 'preserve');
+    expect(hdrCustom.value).toBe('preserve');
     expect(screen.getByText(/The current adapter requires HAT/)).toBeTruthy();
   });
 
@@ -1905,8 +1932,11 @@ describe('LocalSR desktop interface', () => {
       selected_video_model_id: 'seedvr2_3b',
       video_hdr_mode: 'preserve',
     });
-    await mountWith(snapshot);
-    expect((screen.getByLabelText('Colour output') as HTMLSelectElement).value).toBe('tone_map');
+    const user = await mountWith(snapshot);
+    const output = await openOutputSheet(user);
+    expect((within(output).getByLabelText('Colour output') as HTMLSelectElement).value).toBe(
+      'tone_map',
+    );
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenCalledWith(
         expect.objectContaining({ video_hdr_mode: 'preserve' }),
@@ -2014,10 +2044,10 @@ describe('LocalSR desktop interface', () => {
     expect(document.querySelectorAll('.model-output-note')).toHaveLength(0);
     const oldModelId = (api.saveSettings.mock.calls.at(-1)?.[0] as UiSettings).selected_model_id;
 
-    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
+    expect(screen.getByRole('checkbox', { name: /De-flicker · Labs/i })).toBeTruthy();
+    await openOutputSheet(user);
     expect(screen.getByLabelText('Container')).toBeTruthy();
     expect(screen.getByLabelText(/Video quality · CRF/i)).toBeTruthy();
-    expect(screen.getByRole('checkbox', { name: /De-flicker · Labs/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Start selected video' })).toBeTruthy();
 
     await pickUpscalerInLibrary(user, /^SeedVR2-3B — Labs/);
@@ -2052,7 +2082,6 @@ describe('LocalSR desktop interface', () => {
         enable_face_model: false,
       });
       const user = await mountWith(snapshot);
-      await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
       await pickUpscalerInLibrary(user, /^SeedVR2-3B — Labs/);
       await pickUpscalerInLibrary(user, /^HAT-L ×4 ImageNet/);
       expect(
@@ -2081,8 +2110,7 @@ describe('LocalSR desktop interface', () => {
     const snapshot = readySnapshot([video('clip', true)]);
     snapshot.settings.task = 'video';
     snapshot.engine!.features = ['video_frame'];
-    const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
+    await mountWith(snapshot);
     expect((screen.getByLabelText('Frame rate') as HTMLSelectElement).disabled).toBe(true);
   });
 
@@ -2092,7 +2120,6 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.video_hdr_mode = 'preserve';
     snapshot.settings.selected_model_id = 'hat_s_x4';
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     const rate = screen.getByLabelText('Frame rate') as HTMLSelectElement;
     expect(rate.disabled).toBe(false);
     await user.selectOptions(rate, 'x2');
@@ -2148,7 +2175,6 @@ describe('LocalSR desktop interface', () => {
     const snapshot = readySnapshot([video('clip', true)]);
     snapshot.catalog.interpolation_models.forEach((model) => (model.installed = true));
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     const rate = screen.getByLabelText('Frame rate') as HTMLSelectElement;
     expect(rate.value).toBe('off');
     expect(screen.queryByLabelText('Interpolate')).toBeNull();
@@ -2220,7 +2246,6 @@ describe('LocalSR desktop interface', () => {
     snapshot.catalog.interpolation_models.forEach((model) => (model.installed = true));
     const user = await mountWith(snapshot);
     await pickUpscalerInLibrary(user, /^SeedVR2-3B — Labs/);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     expect(screen.queryByLabelText('Frame rate')).toBeNull();
     expect(screen.queryByText('Interpolate 2×')).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Start selected video' }));
@@ -2294,17 +2319,15 @@ describe('LocalSR desktop interface', () => {
     expect(screen.queryByRole('checkbox', { name: 'Reduce GPU memory' })).toBeNull();
     expect(screen.getByLabelText('Output resolution')).toBeTruthy();
     expect(screen.getByText(/above that, it runs at 4× and resizes the rest/)).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
-    expect(screen.getByText(/^FlashVSR · Labs\. One-step diffusion upscaling/)).toBeTruthy();
-    expect(screen.queryByText(/^SeedVR2 · Labs/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Advanced/ })).toBeNull();
     expect(screen.queryByRole('checkbox', { name: /De-flicker · Labs/i })).toBeNull();
 
-    // SeedVR2 keeps its own panel and note.
+    // SeedVR2 keeps its own panel and description.
     await pickUpscalerInLibrary(user, /^SeedVR2-3B — Labs/);
     expect(screen.getByLabelText('SeedVR2 memory').textContent).toMatch(
       /Up to 5 frames per clip · 128 px VAE tiles\./,
     );
-    expect(screen.getByText(/^SeedVR2 · Labs\. Uses its own temporal processing/)).toBeTruthy();
+    expect(screen.getByText(/Smaller output uses less memory/)).toBeTruthy();
 
     await pickUpscalerInLibrary(user, /^FlashVSR v1\.1 — Labs/);
     await user.click(screen.getByRole('button', { name: 'Start selected video' }));
@@ -2644,9 +2667,9 @@ describe('LocalSR desktop interface', () => {
         await user.click(link);
         expect(api.openDownloadPage).toHaveBeenCalledTimes(1);
       }
-      // The hint moved: Advanced does not repeat it.
+      // The hint moved: the Plan sheet does not repeat it.
       await chooseTask(user, /^Upscale & restore$/);
-      await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
+      await openPlanSheet(user);
       expect(screen.getAllByText(text)).toHaveLength(1);
     },
   );
@@ -2731,7 +2754,6 @@ describe('LocalSR desktop interface', () => {
     ];
     const user = await mountWith(snapshot);
     await chooseTask(user, /^Upscale & restore$/);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     await chooseMenuItem('app.settings');
     const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
     await user.click(within(settingsDialog).getByRole('tab', { name: 'Appearance' }));
@@ -4863,8 +4885,8 @@ describe('LocalSR desktop interface', () => {
       ),
     ).toBeTruthy();
     expect(within(status).queryByRole('button', { name: 'Download page' })).toBeNull();
-    await user2.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
-    expect(document.querySelector('.advanced-controls')?.textContent).not.toMatch(
+    const sheet = await openPlanSheet(user2);
+    expect(sheet.textContent).not.toMatch(
       /NPU compiler|intel-driver-compiler-npu|current Intel NPU driver/,
     );
   });
@@ -7471,15 +7493,15 @@ describe('crash reports', () => {
     if (upscaler) upscaler.installed = true;
 
     const user = await mountWith(snap);
-    const audioRegion = screen.getByRole('region', { name: 'Audio' });
-    const toggle = within(audioRegion).getByRole('checkbox', {
+    let output = await openOutputSheet(user);
+    const toggle = within(output).getByRole('checkbox', {
       name: 'Clean up audio',
     }) as HTMLInputElement;
     expect(toggle.checked).toBe(false);
     expect(toggle.disabled).toBe(false);
-    expect(within(audioRegion).queryByLabelText('Audio model')).toBeNull();
+    expect(within(output).queryByLabelText('Audio model')).toBeNull();
 
-    await user.click(within(audioRegion).getByRole('button', { name: 'About Clean up audio' }));
+    await user.click(within(output).getByRole('button', { name: 'About Clean up audio' }));
     expect(
       await screen.findByText(/Removes background noise such as hum, wind and hiss from speech/i),
     ).toBeTruthy();
@@ -7490,22 +7512,23 @@ describe('crash reports', () => {
         expect.objectContaining({ video_clean_audio: true }),
       ),
     );
-    const picker = within(audioRegion).getByLabelText('Audio model') as HTMLSelectElement;
+    const picker = within(output).getByLabelText('Audio model') as HTMLSelectElement;
     expect(picker.value).toBe('deepfilternet3');
-    expect(within(audioRegion).getByText('Speech noise removal')).toBeTruthy();
+    expect(within(output).getByText('Speech noise removal')).toBeTruthy();
     await openPlanSheet(user);
     const stages = screen.getByRole('list', { name: 'Stages' });
     expect(within(stages).getByText('DeepFilterNet3')).toBeTruthy();
     await user.keyboard('{Escape}');
 
     // Switching the picker to DPDFNet saves video_audio_model, updates summary & stages.
-    await user.selectOptions(picker, 'dpdfnet8_48khz_hr');
+    output = await openOutputSheet(user);
+    await user.selectOptions(within(output).getByLabelText('Audio model'), 'dpdfnet8_48khz_hr');
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
         expect.objectContaining({ video_audio_model: 'dpdfnet8_48khz_hr' }),
       ),
     );
-    expect(within(audioRegion).getByText('Stronger speech noise removal')).toBeTruthy();
+    expect(within(output).getByText('Stronger speech noise removal')).toBeTruthy();
     await openPlanSheet(user);
     expect(within(screen.getByRole('list', { name: 'Stages' })).getByText('DPDFNet')).toBeTruthy();
 
@@ -7566,14 +7589,14 @@ describe('crash reports', () => {
     silentSnap.settings.task = 'video';
     silentSnap.settings.video_clean_audio = true;
     cleanup();
-    await mountWith(silentSnap);
-    const silentRegion = screen.getByRole('region', { name: 'Audio' });
-    const silentToggle = within(silentRegion).getByRole('checkbox', {
+    const silentUser = await mountWith(silentSnap);
+    const silentOutput = await openOutputSheet(silentUser);
+    const silentToggle = within(silentOutput).getByRole('checkbox', {
       name: 'Clean up audio',
     }) as HTMLInputElement;
     expect(silentToggle.disabled).toBe(true);
     expect(silentToggle.checked).toBe(false);
-    expect(within(silentRegion).getByText('This video has no audio track.')).toBeTruthy();
+    expect(within(silentOutput).getByText('This video has no audio track.')).toBeTruthy();
   });
 });
 
@@ -7786,10 +7809,9 @@ describe('video Same size, Fix, and Output resolution', () => {
     });
     const user = await mountWith(snapshot);
 
-    // Output scale is gone from Advanced; summary reads Format, tiles.
-    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    // Advanced is gone for video, and Output scale is not offered.
+    expect(screen.queryByRole('button', { name: /^Advanced/ })).toBeNull();
     expect(screen.queryByLabelText('Output scale')).toBeNull();
-    expect(screen.getByText('Format, tiles')).toBeTruthy();
 
     // Switch to Same size with nothing ticked: Noise stays off, Start disabled with video note.
     await user.click(screen.getByRole('radio', { name: 'Same size' }));
@@ -8059,8 +8081,8 @@ describe('Model folder and Windows CPU GPU download notice', () => {
 
     const user = await mountWith(snapshot);
 
-    // Shown once above Advanced, even after opening Advanced.
-    await user.click(screen.getByRole('button', { name: /Advanced/ }));
+    // Shown once in the panel body, even after opening the Output sheet.
+    await openOutputSheet(user);
     const alerts = screen.getAllByRole('alert', { name: 'Model folder unavailable' });
     expect(alerts).toHaveLength(1);
     expect(alerts[0].textContent?.replace(/\s+/g, ' ')).toContain(
@@ -8775,9 +8797,11 @@ describe('Settings sheet', () => {
     snap.settings.task = 'video';
     const user = await mountWith(snap);
 
-    // Clicking External FFmpeg Change… in Advanced opens Settings > Storage with #settings-ffmpeg focused.
-    await user.click(screen.getByRole('button', { name: /Advanced/ }));
-    const ffmpegRow = screen.getByText('External FFmpeg').closest('.field-row') as HTMLElement;
+    // Clicking External FFmpeg Change… in Output sheet opens Settings > Storage with #settings-ffmpeg focused.
+    const output = await openOutputSheet(user);
+    const ffmpegRow = within(output)
+      .getByText('External FFmpeg')
+      .closest('.field-row') as HTMLElement;
     await user.click(within(ffmpegRow).getByRole('button', { name: 'Change…' }));
     const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
     expect(document.activeElement?.id).toBe('settings-ffmpeg');
@@ -9494,7 +9518,6 @@ describe('Size decides', () => {
       ),
     ).toBeTruthy();
 
-    await user.click(screen.getByRole('button', { name: /Advanced/ }));
     await user.selectOptions(screen.getByLabelText('Frame rate'), 'x2');
     await waitFor(() => expect(startBtn.disabled).toBe(false));
     await user.click(startBtn);
@@ -9984,5 +10007,99 @@ describe('Plan sheet', () => {
     expect(lowPriority.matches(':disabled')).toBe(false);
     await user.click(lowPriority);
     expect(api.setRunLowPriority).toHaveBeenCalledWith(true);
+  });
+});
+
+describe('Output sheet and line', () => {
+  it('shows PNG · Desktop for photo, opens Format/metadata/Save to, and updates to JPEG 98 · Desktop', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.output_format = 'png';
+    snapshot.settings.jpeg_quality = 98;
+    snapshot.settings.output_directory = '/Users/demo/Desktop';
+    const user = await mountWith(snapshot);
+
+    const trigger = document.querySelector('.foot-output') as HTMLButtonElement;
+    expect(trigger.textContent).toContain('Output');
+    expect(trigger.textContent).toContain('PNG · Desktop');
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+
+    const sheet = await openOutputSheet(user);
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(trigger.getAttribute('aria-controls')).toBe(sheet.id);
+    expect(within(sheet).getByLabelText('Format')).toBeTruthy();
+    expect(
+      within(sheet).getByRole('checkbox', { name: 'Preserve safe metadata and color profile' }),
+    ).toBeTruthy();
+    expect(within(sheet).getByRole('button', { name: 'Save to /Users/demo/Desktop' })).toBeTruthy();
+    expect(within(sheet).queryByLabelText(/quality/)).toBeNull();
+
+    await user.selectOptions(within(sheet).getByLabelText('Format'), 'jpg');
+    expect(within(sheet).getByLabelText(/^JPEG quality/)).toBeTruthy();
+    expect(trigger.textContent).toContain('JPEG 98 · Desktop');
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('group', { name: 'Output' })).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('shows MP4 · AV1 · CRF 18 · Desktop for video and adds sound cleaned when Clean up audio is ticked', async () => {
+    const snapshot = readySnapshot([{ ...video('clip', true), has_audio: true }]);
+    snapshot.settings.task = 'video';
+    snapshot.settings.video_container = 'mp4';
+    snapshot.settings.video_codec = 'av1';
+    snapshot.settings.video_crf = 18;
+    snapshot.settings.output_directory = '/Users/demo/Desktop';
+    const user = await mountWith(snapshot);
+
+    const trigger = document.querySelector('.foot-output') as HTMLButtonElement;
+    expect(trigger.textContent).toContain('MP4 · AV1 · CRF 18 · Desktop');
+
+    const sheet = await openOutputSheet(user);
+    expect(within(sheet).getByLabelText('Container')).toBeTruthy();
+    expect(within(sheet).getByLabelText('Video format')).toBeTruthy();
+    expect(within(sheet).getByText('External FFmpeg')).toBeTruthy();
+    expect(within(sheet).getByLabelText(/Video quality · CRF/)).toBeTruthy();
+    const cleanAudio = within(sheet).getByRole('checkbox', { name: 'Clean up audio' });
+    await user.click(cleanAudio);
+    expect(within(sheet).getByLabelText('Audio model')).toBeTruthy();
+    expect(trigger.textContent).toContain('MP4 · AV1 · CRF 18 · sound cleaned · Desktop');
+  });
+
+  it('offers Colour output in the Output sheet for HDR video and saves Preserve with FP32 and deflicker off', async () => {
+    const media = { ...video('hdr', true), hdr_format: 'HLG' as const };
+    const snapshot = readySnapshot([media]);
+    snapshot.settings.task = 'video';
+    snapshot.settings.selected_model_id = 'hat_s_x4';
+    snapshot.settings.video_hdr_mode = 'tone_map';
+    snapshot.settings.deflicker = true;
+    const user = await mountWith(snapshot);
+
+    const sheet = await openOutputSheet(user);
+    const colour = within(sheet).getByLabelText('Colour output') as HTMLSelectElement;
+    await user.selectOptions(colour, 'preserve');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          video_hdr_mode: 'preserve',
+          precision: 'fp32',
+          deflicker: false,
+        }),
+      ),
+    );
+  });
+});
+
+describe('Edit panel layout', () => {
+  it('shows prompt, model line, and Advanced Size, steps, seed with no plan or Output line', async () => {
+    const snapshot = editSnapshot(36);
+    const user = await mountWith(snapshot);
+    await chooseTask(user, /^Edit$/);
+
+    expect(screen.getByLabelText('What to change')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Change the edit model' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Advanced.*Size, steps, seed/ })).toBeTruthy();
+    expect(document.querySelector('.foot-plan')).toBeNull();
+    expect(document.querySelector('.foot-output')).toBeNull();
   });
 });
