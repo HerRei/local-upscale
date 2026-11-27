@@ -206,18 +206,16 @@
 
   function stageNeedsUser(stage: PlanStage): boolean {
     if (stage.custom !== undefined) return true;
+    const target = stageTarget(stage);
+    if (target && downloadMap.has(target.model_id)) return false;
     if (stage.model && licenseReviewModel?.model_id === stage.model.model_id && !stage.installed) {
       return true;
     }
     if (stage.editModel?.model_id === '__custom__' && !stage.installed) return true;
-    const target = stageTarget(stage);
-    const stageDownload = target ? downloadMap.get(target.model_id) : undefined;
     if (
       target &&
       !stage.installed &&
-      (Boolean((stage.model ?? stage.editModel)?.terms_acceptance_required) ||
-        !stage.canDownload ||
-        Boolean(stageDownload))
+      (Boolean((stage.model ?? stage.editModel)?.terms_acceptance_required) || !stage.canDownload)
     ) {
       return true;
     }
@@ -228,6 +226,18 @@
       editModel?.terms_acceptance_required,
     );
   }
+
+  $: needsYouStages =
+    (void downloadMap,
+    void licenseReviewModel,
+    void editModel,
+    void settings,
+    plan.filter((stage) => stageNeedsUser(stage)));
+  $: costBytes = downloads.stages.reduce((total, stage) => {
+    const target = stageTarget(stage);
+    if (target && downloadMap.has(target.model_id)) return total;
+    return total + stage.sizeBytes;
+  }, 0);
 
   $: planSteps = planLine(plan, settings, selectedMedia);
   $: planLineText =
@@ -763,108 +773,86 @@
   </div>
   {#if settings.task}
     <div class="panel-foot">
-      {#each plan as stage (`${stage.role}:${stage.fix ?? stage.kind}`)}
-        {#if stageNeedsUser(stage)}
-          {@const target = stageTarget(stage)}
-          {@const name = stageName(stage)}
-          {@const head = name ? `${needsYouStep(stage)} · ${name}` : needsYouStep(stage)}
-          {@const stageDownload = target ? downloadMap.get(target.model_id) : undefined}
-          <div class="needs-you">
-            <p class="needs-you-head">{head}</p>
-            {#if stage.custom !== undefined}
-              <button class="button full" disabled={settingsLocked} on:click={chooseCustomModel}
-                >{settings.custom_model_path
-                  ? 'Choose another checkpoint…'
-                  : 'Choose checkpoint…'}</button
-              >
-              {#if customModelNeedsOptIn}
-                <label class="terms"
-                  ><input
-                    type="checkbox"
-                    disabled={settingsLocked}
-                    checked={settings.allow_unsafe_pickle_model}
-                    on:change={(event) => void changeCheckpointConsent(event.currentTarget.checked)}
-                  /> Allow this pickle-based checkpoint. It may execute code inside the inference worker.</label
-                >
-              {/if}
-            {:else if stage.model && licenseReviewModel?.model_id === stage.model.model_id && !stage.installed}
-              <ModelCredit
-                model={stage.model}
-                openLicense={() => openAnyLicense(stage.model!.model_id)}
-                openSource={() => openAnySource(stage.model!.model_id)}
-              />
-            {:else if stage.editModel?.model_id === '__custom__' && !stage.installed}
-              <button
-                class="button full"
-                type="button"
-                disabled={settingsLocked}
-                on:click={openCustomEdit}>Choose edit model files…</button
-              >
-            {:else if target && !stage.installed}
-              {#if (stage.model ?? stage.editModel)?.terms_acceptance_required}
-                <label class="terms"
-                  ><input
-                    type="checkbox"
-                    disabled={settingsLocked}
-                    bind:checked={termsAccepted[target.model_id]}
-                  /> I reviewed the model license and restrictions.</label
-                >
-              {/if}
-              {#if !stage.canDownload || target.terms_acceptance_required || Boolean(stageDownload)}
-                <button
-                  class="button full"
-                  disabled={settingsLocked ||
-                    (stage.videoModel && Boolean(temporalUnavailableReason)) ||
-                    preparing}
-                  on:click={() => runDownload(target)}
-                >
-                  {stageDownload
-                    ? stageDownload.status === 'queued'
-                      ? 'Waiting in queue · Cancel'
-                      : `Downloading ${Math.round(stageDownload.progress)}% · Cancel`
-                    : stage.canDownload
-                      ? `Download model · ${formatBytes(stage.sizeBytes)}`
-                      : 'Choose externally downloaded checkpoint…'}
-                </button>
-              {/if}
-              {#if stageDownload?.status === 'downloading'}<progress
-                  class="download-progress"
-                  value={stageDownload.progress}
-                  max="100"
-                  aria-label={`${name} download progress`}
-                ></progress>{/if}
-            {:else if settings.task === 'edit' && stage.kind === 'edit' && stage.installed && editModel?.terms_acceptance_required}
+      {#each needsYouStages as stage (`${stage.role}:${stage.fix ?? stage.kind}`)}
+        {@const target = stageTarget(stage)}
+        {@const name = stageName(stage)}
+        {@const head = name ? `${needsYouStep(stage)} · ${name}` : needsYouStep(stage)}
+        <div class="needs-you">
+          <p class="needs-you-head">{head}</p>
+          {#if stage.custom !== undefined}
+            <button class="button full" disabled={settingsLocked} on:click={chooseCustomModel}
+              >{settings.custom_model_path
+                ? 'Choose another checkpoint…'
+                : 'Choose checkpoint…'}</button
+            >
+            {#if customModelNeedsOptIn}
               <label class="terms"
                 ><input
                   type="checkbox"
                   disabled={settingsLocked}
-                  bind:checked={termsAccepted[editModel.model_id]}
-                /> I reviewed the Qwen Research License and accept it for this edit.</label
+                  checked={settings.allow_unsafe_pickle_model}
+                  on:change={(event) => void changeCheckpointConsent(event.currentTarget.checked)}
+                /> Allow this pickle-based checkpoint. It may execute code inside the inference worker.</label
               >
             {/if}
-          </div>
-        {/if}
-      {/each}
-      {#if hasNothingToRun}
+          {:else if stage.model && licenseReviewModel?.model_id === stage.model.model_id && !stage.installed}
+            <ModelCredit
+              model={stage.model}
+              openLicense={() => openAnyLicense(stage.model!.model_id)}
+              openSource={() => openAnySource(stage.model!.model_id)}
+            />
+          {:else if stage.editModel?.model_id === '__custom__' && !stage.installed}
+            <button
+              class="button full"
+              type="button"
+              disabled={settingsLocked}
+              on:click={openCustomEdit}>Choose edit model files…</button
+            >
+          {:else if target && !stage.installed}
+            {#if (stage.model ?? stage.editModel)?.terms_acceptance_required}
+              <label class="terms"
+                ><input
+                  type="checkbox"
+                  disabled={settingsLocked}
+                  bind:checked={termsAccepted[target.model_id]}
+                /> I reviewed the model license and restrictions.</label
+              >
+            {/if}
+            {#if !stage.canDownload}
+              <button
+                class="button full"
+                disabled={settingsLocked ||
+                  (stage.videoModel && Boolean(temporalUnavailableReason)) ||
+                  preparing}
+                on:click={() => runDownload(target)}
+                >Choose externally downloaded checkpoint…</button
+              >
+            {/if}
+          {:else if settings.task === 'edit' && stage.kind === 'edit' && stage.installed && editModel?.terms_acceptance_required}
+            <label class="terms"
+              ><input
+                type="checkbox"
+                disabled={settingsLocked}
+                bind:checked={termsAccepted[editModel.model_id]}
+              /> I reviewed the Qwen Research License and accept it for this edit.</label
+            >
+          {/if}
+        </div>
+      {/each}{#if hasNothingToRun}
         <p class="inline-warning" role="status">{nothingToRunReason}</p>
-      {/if}
-      {#if usingTemporalVideo && temporalUnavailableReason}
+      {/if}{#if usingTemporalVideo && temporalUnavailableReason}
         <p class="inline-warning" role="status">{temporalUnavailableReason}</p>
-      {/if}
-      {#if settings.task === 'video' && !restoring && selectedMedia?.hdr_format && !hdrPreservationAvailable}
+      {/if}{#if settings.task === 'video' && !restoring && selectedMedia?.hdr_format && !hdrPreservationAvailable}
         <p class="inline-warning" role="status">
           SDR output selected. This model cannot preserve HDR.
         </p>
-      {/if}
-      {#if settings.task === 'video' && selectedMedia?.hdr_format && preservingHdr && !hdrModelCompatible}
+      {/if}{#if settings.task === 'video' && selectedMedia?.hdr_format && preservingHdr && !hdrModelCompatible}
         <p class="inline-warning" role="status">Choose a HAT model for HDR preservation.</p>
-      {/if}
-      {#if !fixPlanSupported && snapshot.engine}
+      {/if}{#if !fixPlanSupported && snapshot.engine}
         <p class="inline-warning" role="status">
           This engine runs one fix at a time. Update LocalSR to run several.
         </p>
-      {/if}
-      {#if settings.task === 'edit' && editBlockReason}
+      {/if}{#if settings.task === 'edit' && editBlockReason}
         <p class="inline-warning" role="status">
           {editBlockReason}
           {#if !editRuntime && editingDevice && editSupported}<button
@@ -874,14 +862,12 @@
               on:click={chooseEditRuntime}>Choose runtime…</button
             >{/if}
         </p>
-      {/if}
-      {#if planState.status === 'error'}
+      {/if}{#if planState.status === 'error'}
         <p class="inline-warning" role="status" title={planState.message}>
           Could not work out the plan.
           <button class="link-button" type="button" on:click={retryPlan}>Try again</button>
         </p>
-      {/if}
-      {#if settings.task !== 'edit' && planState.status !== 'error'}
+      {/if}{#if settings.task !== 'edit' && planState.status !== 'error'}
         <Popover
           bind:open={planOpen}
           placement="sheet"
@@ -937,8 +923,7 @@
             {refreshCapabilities}
           />
         </Popover>
-      {/if}
-      {#if settings.task !== 'edit'}
+      {/if}{#if settings.task !== 'edit'}
         <Popover
           bind:open={outputOpen}
           placement="sheet"
@@ -980,13 +965,12 @@
             onOpenFfmpegSettings={() => openSettings('storage', 'ffmpeg')}
           />
         </Popover>
-      {/if}
-      {#if downloads.stages.length}
+      {/if}{#if costBytes > 0}
         <div class="foot-line foot-cost">
           <span class="foot-cost-download"
-            >{formatBytes(downloads.bytes)} to download<HelpTip
+            >{formatBytes(costBytes)} to download<HelpTip
               label="Downloads"
-              text={`Models download once when you start and stay on this computer. Your ${
+              text={`Models download once when you start and stay on this computer. Each file is checked before it is used. Your ${
                 settings.task === 'video' ? 'videos' : 'photos'
               } never leave it.`}
             /></span

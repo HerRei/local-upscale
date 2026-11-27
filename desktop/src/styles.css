@@ -3897,6 +3897,7 @@ input[type='number'],
   color: var(--secondary);
   font-size: calc(11px * var(--ui-scale));
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .library-download-error,
 .download-error {

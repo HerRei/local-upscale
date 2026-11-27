@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import App from './App.svelte';
 import { demoSnapshot } from './lib/demo';
 import { progressBytes } from './lib/downloadProgress';
+import { formatBytes } from './lib/format';
 import { modelDisplayName } from './lib/modelNames';
 import { applyWorkerEnvelope } from './lib/workerEvents';
 import type {
@@ -5680,11 +5681,8 @@ describe('Several fixes in one pass', () => {
     await user.click(blurTerms);
     expect(blurTerms.checked).toBe(true);
     expect(jpegTerms.checked).toBe(false);
+    expect(within(blurNeeds).queryByRole('button', { name: /^Download model/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /then upscale$/ })).toBeNull();
-    await user.click(within(blurNeeds).getByRole('button', { name: /^Download model/ }));
-    await waitFor(() =>
-      expect(api.downloadModel).toHaveBeenCalledWith('nafnet_gopro_deblur', true),
-    );
 
     await openPlanSheet(user);
     await openFixPopover(user, 'JPEG artifacts');
@@ -7707,10 +7705,30 @@ describe('Concurrent model downloads in the Model Library', () => {
     await waitFor(() =>
       expect(downloadsPanel().textContent).toContain('Downloads · 3 active · 1 waiting'),
     );
-    expect(within(downloadsPanel()).getByText('40%')).toBeTruthy();
-    expect(within(downloadsPanel()).getByText('75%')).toBeTruthy();
+    expect(within(downloadsPanel()).getByText('40 of 100 B')).toBeTruthy();
+    expect(within(downloadsPanel()).getByText('75 of 100 B')).toBeTruthy();
+    expect(within(downloadsPanel()).queryByText('40%')).toBeNull();
     expect(within(downloadsPanel()).getByText(/Waiting/)).toBeTruthy();
-    expect(within(dialog).getByRole('button', { name: 'Waiting in queue · Cancel' })).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: 'Waiting in queue · Cancel' })).toBeNull();
+    expect(within(dialog).getAllByRole('button', { name: /Cancel/ })).toHaveLength(4);
+    const detail = within(dialog).getByLabelText('Model details');
+    const waitingDetailBtn = within(detail).getByRole('button', {
+      name: 'Waiting…',
+    }) as HTMLButtonElement;
+    expect(waitingDetailBtn.disabled).toBe(true);
+    const listRegion = within(dialog).getByRole('region', { name: 'Models' });
+    expect(within(listRegion).getByRole('button', { name: /SPAN ×4/ }).textContent).toContain(
+      'Downloading',
+    );
+    expect(within(listRegion).getByRole('button', { name: /SPAN ×4/ }).textContent).not.toContain(
+      '40%',
+    );
+
+    await user.click(within(listRegion).getByRole('button', { name: /SPAN ×4/ }));
+    const downloadingDetailBtn = within(detail).getByRole('button', {
+      name: 'Downloading…',
+    }) as HTMLButtonElement;
+    expect(downloadingDetailBtn.disabled).toBe(true);
 
     // Cancel one active download while others keep running.
     await user.click(within(downloadsPanel()).getByRole('button', { name: /Cancel .*SwinIR/ }));
@@ -7718,17 +7736,28 @@ describe('Concurrent model downloads in the Model Library', () => {
     await waitFor(() => expect(within(downloadsPanel()).queryByText(/SwinIR/)).toBeNull());
     // No failure modal or error banner when cancelled intentionally.
     expect(within(dialog).queryByRole('alert')).toBeNull();
-    expect(within(downloadsPanel()).getByText('40%')).toBeTruthy();
-    expect(within(downloadsPanel()).getByText('75%')).toBeTruthy();
+    expect(within(downloadsPanel()).getByText('40 of 100 B')).toBeTruthy();
+    expect(within(downloadsPanel()).getByText('75 of 100 B')).toBeTruthy();
 
     // Fail one download: shows its own inline error without blocking others with a modal.
     sendWorker({
       type: 'download-failed',
-      data: { model_id: 'realplksr_nomoswebphoto_x4', error_message: 'download checksum mismatch' },
+      data: {
+        model_id: 'realplksr_nomoswebphoto_x4',
+        error_message: 'download checksum mismatch',
+        reason: 'damaged',
+        downloaded_bytes: 0,
+        total_bytes: 100,
+      },
     });
     pending.get('realplksr_nomoswebphoto_x4')?.reject(new Error('download checksum mismatch'));
     const alert = await within(downloadsPanel()).findByRole('alert');
-    expect(alert.textContent).toContain('download checksum mismatch');
+    expect(alert.textContent).toContain(
+      'Arrived damaged and was removed. Start again to download it once more.',
+    );
+    expect(
+      within(alert).getByRole('button', { name: 'Try RealPLKSR ×4 NomosWebPhoto again' }),
+    ).toBeTruthy();
     expect(screen.queryByRole('dialog', { name: 'Download failed' })).toBeNull();
     // Dismiss error cleanly.
     await user.click(within(alert).getByRole('button', { name: /Dismiss/ }));
@@ -7739,6 +7768,57 @@ describe('Concurrent model downloads in the Model Library', () => {
     pending.get('span_photo_x4')?.resolve();
     sendWorker({ type: 'download-completed', data: { model_id: 'hat_s_x4' } });
     pending.get('hat_s_x4')?.resolve();
+  });
+
+  it('shows the plain failure sentence in the library tray and retries with the first licence answer', async () => {
+    const snapshot = readySnapshot();
+    snapshot.catalog = structuredClone(snapshot.catalog);
+    const hat = snapshot.catalog.models.find((model) => model.model_id === 'hat_s_x4')!;
+    hat.installed = false;
+    hat.terms_acceptance_required = true;
+    let rejectFirst!: (error: Error) => void;
+    api.downloadModel
+      .mockImplementationOnce(
+        () =>
+          new Promise<undefined>((_resolve, reject) => {
+            rejectFirst = reject;
+          }),
+      )
+      .mockImplementationOnce(async () => undefined);
+
+    const user = await mountWith(snapshot);
+    const emitWorker = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+    await chooseMenuItem('view.models');
+    const dialog = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(dialog).getByRole('button', { name: /^Upscale photos/ }));
+    await user.click(within(dialog).getByRole('button', { name: /HAT-S ×4/ }));
+    await user.click(within(dialog).getByRole('checkbox', { name: /reviewed.*license/i }));
+    await user.click(within(dialog).getByRole('button', { name: /^Download / }));
+    await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith('hat_s_x4', true));
+
+    emitWorker({
+      type: 'download-failed',
+      data: {
+        model_id: 'hat_s_x4',
+        error_message: 'timeout',
+        reason: 'offline',
+        downloaded_bytes: 20_000_000,
+        total_bytes: 64_000_000,
+      },
+    });
+    rejectFirst(new Error('timeout'));
+
+    const panel = await within(dialog).findByRole('region', { name: 'Model downloads' });
+    const alert = await within(panel).findByRole('alert');
+    expect(alert.querySelector('.library-download-error')?.textContent?.trim()).toBe(
+      'No connection to the model server. Kept at 20 of 64 MB.',
+    );
+
+    // Selecting another row clears local termsAccepted; Try again still sends true from the first call.
+    await user.click(within(dialog).getByRole('button', { name: /SPAN ×4/ }));
+    await user.click(within(alert).getByRole('button', { name: 'Try HAT-S ×4 again' }));
+    await waitFor(() => expect(api.downloadModel).toHaveBeenCalledTimes(2));
+    expect(api.downloadModel).toHaveBeenLastCalledWith('hat_s_x4', true);
   });
 });
 
@@ -9895,7 +9975,7 @@ describe('Enhance panel foot', () => {
     ).toBe(true);
   });
 
-  it('shows terms and download controls in the foot under Upscale · <name> and gates Start', async () => {
+  it('shows terms in the foot without Download model, gates Start, and hides the block while downloading', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.catalog = structuredClone(snapshot.catalog);
     snapshot.settings.task = 'upscale';
@@ -9904,13 +9984,14 @@ describe('Enhance panel foot', () => {
     model.installed = false;
     model.terms_acceptance_required = true;
     const user = await mountWith(snapshot);
+    const emitWorker = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
     const foot = document.querySelector('.panel-foot') as HTMLElement;
     expect(within(foot).getByText('Upscale · HAT-S ×4')).toBeTruthy();
     const terms = within(foot).getByRole('checkbox', {
       name: 'I reviewed the model license and restrictions.',
     }) as HTMLInputElement;
     expect(terms.checked).toBe(false);
-    expect(within(foot).getByRole('button', { name: /^Download model/ })).toBeTruthy();
+    expect(within(foot).queryByRole('button', { name: /^Download model/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /then upscale$/ })).toBeNull();
     expect(
       (screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement).disabled,
@@ -9922,21 +10003,122 @@ describe('Enhance panel foot', () => {
       name: /then upscale$/,
     })) as HTMLButtonElement;
     expect(downloadAndStart.disabled).toBe(false);
-    await user.click(within(foot).getByRole('button', { name: /^Download model/ }));
-    await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith('hat_s_x4', true));
+
+    emitWorker({
+      type: 'download-started',
+      data: { model_id: 'hat_s_x4', total_bytes: model.size_bytes },
+    });
+    emitWorker({
+      type: 'download-progress',
+      data: {
+        model_id: 'hat_s_x4',
+        downloaded_bytes: Math.round(model.size_bytes * 0.09),
+        total_bytes: model.size_bytes,
+        progress: 9,
+      },
+    });
+    await waitFor(() => expect(within(foot).queryByText('Upscale · HAT-S ×4')).toBeNull());
+    expect(foot.querySelector('progress, [role="progressbar"]')).toBeNull();
   });
 
-  it('shows pending download cost and the download privacy tip in the foot', async () => {
+  it('shows pending download cost for non-downloading models, hides at zero, and shows the 3-sentence tip', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.catalog = structuredClone(snapshot.catalog);
-    snapshot.settings.task = 'upscale';
-    snapshot.catalog.models.forEach((model) => (model.installed = false));
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      quality: 'quick',
+      selected_model_id: 'localsr_quick_x4_v1',
+      fixes: ['noise'],
+      fix_stages: [{ fix: 'noise', model_id: 'denoise_realplksr_1x' }],
+    });
+    const upscaler = snapshot.catalog.models.find(
+      (model) => model.model_id === 'localsr_quick_x4_v1',
+    )!;
+    const denoiser = snapshot.catalog.models.find(
+      (model) => model.model_id === 'denoise_realplksr_1x',
+    )!;
+    upscaler.installed = false;
+    denoiser.installed = false;
+
     const user = await mountWith(snapshot);
+    const emitWorker = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
     const foot = document.querySelector('.panel-foot') as HTMLElement;
-    expect(within(foot).getByText(/\d+(\.\d+)? MB to download/)).toBeTruthy();
+    expect(
+      within(foot).getByText(
+        `${formatBytes(upscaler.size_bytes + denoiser.size_bytes)} to download`,
+      ),
+    ).toBeTruthy();
+
     await user.click(within(foot).getByRole('button', { name: 'About Downloads' }));
     expect(within(foot).getByRole('tooltip').textContent).toBe(
-      'Models download once when you start and stay on this computer. Your photos never leave it.',
+      'Models download once when you start and stay on this computer. Each file is checked before it is used. Your photos never leave it.',
+    );
+
+    emitWorker({
+      type: 'download-started',
+      data: { model_id: 'denoise_realplksr_1x', total_bytes: denoiser.size_bytes },
+    });
+    await waitFor(() =>
+      expect(
+        within(foot).getByText(`${formatBytes(upscaler.size_bytes)} to download`),
+      ).toBeTruthy(),
+    );
+
+    emitWorker({
+      type: 'download-started',
+      data: { model_id: 'localsr_quick_x4_v1', total_bytes: upscaler.size_bytes },
+    });
+    await waitFor(() => expect(foot.querySelector('.foot-cost')).toBeNull());
+  });
+
+  it('shows no percentage or Waiting in Plan sheet Stages while models download', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.catalog = structuredClone(snapshot.catalog);
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      quality: 'quick',
+      selected_model_id: 'localsr_quick_x4_v1',
+      fixes: ['noise'],
+      fix_stages: [{ fix: 'noise', model_id: 'denoise_realplksr_1x' }],
+    });
+    for (const id of ['localsr_quick_x4_v1', 'denoise_realplksr_1x']) {
+      snapshot.catalog.models.find((model) => model.model_id === id)!.installed = false;
+    }
+    snapshot.runtime.downloads = [
+      {
+        model_id: 'localsr_quick_x4_v1',
+        status: 'downloading',
+        progress: 42,
+        downloaded_bytes: 10_000_000,
+        total_bytes: 25_000_000,
+      },
+      {
+        model_id: 'denoise_realplksr_1x',
+        status: 'queued',
+        progress: 0,
+        downloaded_bytes: 0,
+        total_bytes: 28_000_000,
+      },
+    ];
+    const user = await mountWith(snapshot);
+    await openPlanSheet(user);
+    const stages = screen.getByRole('list', { name: 'Stages' });
+    expect(within(stages).getByText('LocalSR Photo S')).toBeTruthy();
+    expect(within(stages).getByText('RealPLKSR Denoise')).toBeTruthy();
+    expect(stages.textContent).not.toMatch(/\d+%|Waiting/);
+  });
+
+  it('leaves no whitespace inside .panel-foot when Edit has nothing to show in the foot', async () => {
+    const snapshot = editSnapshot(16);
+    snapshot.settings.task = 'edit';
+    snapshot.settings.edit_model_id = 'flux2_klein_4b_q4_0';
+    snapshot.edit.models.find((model) => model.model_id === 'flux2_klein_4b_q4_0')!.installed =
+      true;
+    await mountWith(snapshot);
+    const foot = document.querySelector('.panel-foot') as HTMLElement;
+    expect(foot.children.length).toBe(0);
+    expect(Array.from(foot.childNodes).some((node) => node.nodeType === Node.TEXT_NODE)).toBe(
+      false,
     );
   });
 

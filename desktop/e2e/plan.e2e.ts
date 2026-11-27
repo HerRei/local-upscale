@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { openApp, showPane } from './app';
-import { hostCalls } from './fake-host';
+import { hostCalls, progressDownload } from './fake-host';
 import { ready, upscale } from './fixtures';
 
 const fix = (page: Page, name: string) =>
@@ -183,4 +183,19 @@ test('Try others… waits for a ready worker', async ({ page }) => {
   await expect(
     page.getByRole('button', { name: 'Try other upscalers on this image' }),
   ).toBeDisabled();
+});
+
+test('Plan sheet Stages show no percentage or Waiting while a model downloads', async ({
+  page,
+}) => {
+  await openApp(page, { ...ready, installed: [] });
+  await showPane(page, 'enhance');
+  await fix(page, 'Noise').check();
+  await page.getByRole('button', { name: /^Download .*, then upscale$/ }).click();
+  await progressDownload(page, 'localsr_quick_x4_v1', 42);
+  await openPlanSheet(page);
+  const stages = page.getByRole('list', { name: 'Stages' });
+  await expect(stages).toContainText('LocalSR Photo S');
+  await expect(stages).toContainText('RealPLKSR Denoise');
+  await expect(stages).not.toContainText(/%|Waiting/);
 });

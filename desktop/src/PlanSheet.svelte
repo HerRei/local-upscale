@@ -145,13 +145,7 @@
       <div class="name" title={name || undefined}>{name}</div>
       <div class="plan-end">
         <span class="state" class:warn={stage.needsFile}
-          >{stageDownload
-            ? stageDownload.status === 'queued'
-              ? 'Waiting'
-              : `${Math.round(stageDownload.progress)}%`
-            : stage.needsFile && !stage.installed
-              ? 'Needs your file'
-              : ''}</span
+          >{!stageDownload && stage.needsFile && !stage.installed ? 'Needs your file' : ''}</span
         >
         {#if movable}
           <!-- Only the moves this fix can make, directly left of Change…. -->

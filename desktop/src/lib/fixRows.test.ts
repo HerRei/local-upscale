@@ -151,7 +151,7 @@ describe('fixRows', () => {
       ],
     ]);
     expect(fixRowValue('noise', [missingStage], settings, [model], downloading)).toBe(
-      'RealPLKSR Denoise · 42%',
+      'RealPLKSR Denoise',
     );
 
     const queued = new Map<string, ModelDownloadStatus>([
@@ -167,7 +167,7 @@ describe('fixRows', () => {
       ],
     ]);
     expect(fixRowValue('noise', [missingStage], settings, [model], queued)).toBe(
-      'RealPLKSR Denoise · Waiting',
+      'RealPLKSR Denoise',
     );
 
     expect(

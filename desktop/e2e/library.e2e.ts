@@ -407,8 +407,10 @@ test.describe('Concurrent model downloads', () => {
 
     await progressDownload(page, 'hat_l_x4_imagenet', 35);
     await progressDownload(page, 'swinir_m_real_x4_gan', 80);
-    await expect(panel).toContainText('35%');
-    await expect(panel).toContainText('80%');
+    await expect(panel).toContainText('58 of 166 MB');
+    await expect(panel).toContainText('54 of 67 MB');
+    await expect(panel).not.toContainText('35%');
+    await expect(panel).not.toContainText('80%');
 
     // Cancelling one active download promotes the 4th waiting download without blocking others.
     await panel.getByRole('button', { name: /Cancel .*SwinIR/ }).click();
@@ -419,7 +421,8 @@ test.describe('Concurrent model downloads', () => {
     // Failing one download shows its own error without affecting the other two.
     await failDownload(page, 'hat_s_x4', 'checksum mismatch');
     const alert = panel.getByRole('alert');
-    await expect(alert).toContainText('checksum mismatch');
+    await expect(alert).toContainText('Checksum mismatch.');
+    await expect(alert.getByRole('button', { name: 'Try HAT-S ×4 again' })).toBeVisible();
     await expect(panel).toContainText('Downloads · 2 active');
     await alert.getByRole('button', { name: /Dismiss/ }).click();
     await expect(panel.getByRole('alert')).toHaveCount(0);

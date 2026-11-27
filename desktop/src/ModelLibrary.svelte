@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { customModels } from './lib/customModels';
+  import { downloadFailureText, progressBytes, type DownloadFailure } from './lib/downloadProgress';
   import { keptTrialSettings, trialIncompatibility, trialTime } from './lib/modelTrials';
+  import { modelDisplayName } from './lib/modelNames';
   import {
     FIX_LABELS,
     choosePresetModel,
@@ -70,7 +72,10 @@
   export let device: DeviceInfo | undefined;
   export let downloads: ModelDownloadStatus[] = [];
   export let downloadErrors: Record<string, string> = {};
+  export let downloadFailures: Record<string, DownloadFailure> = {};
+  export let downloadDetails: Record<string, string> = {};
   export let cancelDownload: (modelId: string) => Promise<void> = async () => {};
+  export let retryDownload: (modelId: string) => Promise<void> = async () => {};
   export let dismissDownloadError: (modelId: string) => void = () => {};
   export let busy = false;
   export let close: () => void;
@@ -441,15 +446,8 @@
   }
 
   function modelLabel(modelId: string): string {
-    const image = models.find((item) => item.model_id === modelId);
-    if (image) return displayName(image);
-    return (
-      videoModels.find((item) => item.model_id === modelId)?.name ??
-      (modelId === '__custom__' ? customEdit?.name : undefined) ??
-      editModels.find((item) => item.model_id === modelId)?.name ??
-      interpolationModels.find((item) => item.model_id === modelId)?.name ??
-      modelId
-    );
+    if (modelId === '__custom__' && customEdit) return customEdit.name;
+    return modelDisplayName(snapshot, modelId, true);
   }
 
   function selectByModelId(modelId: string): void {
@@ -496,8 +494,7 @@
 
   function downloadButtonLabel(entry: ModelDownloadStatus | undefined, sizeBytes: number): string {
     if (!entry) return `Download ${formatBytes(sizeBytes)}`;
-    if (entry.status === 'queued') return 'Waiting in queue · Cancel';
-    return `Downloading ${Math.round(entry.progress)}% · Cancel`;
+    return entry.status === 'queued' ? 'Waiting…' : 'Downloading…';
   }
 
   function rightsLabel(model: CatalogModel): string {
@@ -647,7 +644,8 @@
                   {#if item.status === 'queued'}
                     {item.total_bytes ? `Waiting · ${formatBytes(item.total_bytes)}` : 'Waiting'}
                   {:else}
-                    {Math.round(item.progress)}%
+                    {downloadDetails[item.model_id] ||
+                      progressBytes(item.downloaded_bytes ?? 0, item.total_bytes ?? 0)}
                   {/if}
                 </span>
                 <button
@@ -669,6 +667,14 @@
           {/each}
           {#each failedEntries as [modelId, message] (modelId)}
             {@const name = modelLabel(modelId)}
+            {@const failure = downloadFailures[modelId] ?? {
+              modelId,
+              name,
+              reason: 'other',
+              done: 0,
+              total: 0,
+              message,
+            }}
             <div class="library-download-item is-error" role="alert">
               <div class="library-download-top">
                 <button
@@ -676,14 +682,25 @@
                   type="button"
                   on:click={() => selectByModelId(modelId)}>{name}</button
                 >
-                <button
-                  class="button compact ghost"
-                  type="button"
-                  aria-label={`Dismiss ${name} error`}
-                  on:click={() => dismissDownloadError(modelId)}>Dismiss</button
-                >
+                <div class="eyebrow-actions">
+                  <button
+                    class="button compact ghost"
+                    type="button"
+                    disabled={busy}
+                    aria-label={`Try ${name} again`}
+                    on:click={() => void retryDownload(modelId)}>Try again</button
+                  >
+                  <button
+                    class="button compact ghost"
+                    type="button"
+                    aria-label={`Dismiss ${name} error`}
+                    on:click={() => dismissDownloadError(modelId)}>Dismiss</button
+                  >
+                </div>
               </div>
-              <p class="library-download-error">{message}</p>
+              <p class="library-download-error" title={failure.message || undefined}>
+                {downloadFailureText(failure, false).detail}
+              </p>
             </div>
           {/each}
         </div>
@@ -762,7 +779,7 @@
             <div class="right">
               <b>{formatBytes(model.total_size_bytes)}</b>{#if dl}<span
                   class:downloading={dl.status === 'downloading'}
-                  >{dl.status === 'queued' ? 'Waiting' : `${Math.round(dl.progress)}%`}</span
+                  >{dl.status === 'queued' ? 'Waiting' : 'Downloading'}</span
                 >{:else if dlError}<span class="error">Failed</span>{:else if model.installed}<span
                   class="ok">Installed</span
                 >{:else}<span>Not downloaded</span>{/if}
@@ -790,7 +807,7 @@
             <div class="right">
               <b>{formatBytes(model.total_size_bytes)}</b>{#if dl}<span
                   class:downloading={dl.status === 'downloading'}
-                  >{dl.status === 'queued' ? 'Waiting' : `${Math.round(dl.progress)}%`}</span
+                  >{dl.status === 'queued' ? 'Waiting' : 'Downloading'}</span
                 >{:else if dlError}<span class="error">Failed</span>{:else if model.installed}<span
                   class="ok">Installed</span
                 >{:else}<span>Not downloaded</span>{/if}
@@ -867,6 +884,8 @@
             >
           </div>
           {#each audioModels as model (model.model_id)}
+            {@const dl = downloadMap.get(model.model_id)}
+            {@const dlError = downloadErrors[model.model_id]}
             <button
               class="row"
               type="button"
@@ -882,9 +901,13 @@
                 </div>
               </div>
               <div class="right">
-                <b>{formatBytes(model.total_size_bytes)}</b>{#if model.installed}<span class="ok"
-                    >Installed</span
-                  >{:else}<span>Not downloaded</span>{/if}
+                <b>{formatBytes(model.total_size_bytes)}</b>{#if dl}<span
+                    class:downloading={dl.status === 'downloading'}
+                    >{dl.status === 'queued' ? 'Waiting' : 'Downloading'}</span
+                  >{:else if dlError}<span class="error">Failed</span
+                  >{:else if model.installed}<span class="ok">Installed</span>{:else}<span
+                    >Not downloaded</span
+                  >{/if}
               </div>
             </button>
           {/each}
@@ -931,7 +954,7 @@
                 <div class="right">
                   <b>{formatBytes(model.total_size_bytes)}</b>{#if dl}<span
                       class:downloading={dl.status === 'downloading'}
-                      >{dl.status === 'queued' ? 'Waiting' : `${Math.round(dl.progress)}%`}</span
+                      >{dl.status === 'queued' ? 'Waiting' : 'Downloading'}</span
                     >{:else if dlError}<span class="error">Failed</span
                     >{:else if model.installed}<span class="ok">Installed</span>{/if}
                 </div>
@@ -1118,9 +1141,7 @@
                   <b>{formatBytes(model.size_bytes)}</b>{#if downloadMap.get(model.model_id)}
                     {@const dl = downloadMap.get(model.model_id)}<span
                       class:downloading={dl?.status === 'downloading'}
-                      >{dl?.status === 'queued'
-                        ? 'Waiting'
-                        : `${Math.round(dl?.progress ?? 0)}%`}</span
+                      >{dl?.status === 'queued' ? 'Waiting' : 'Downloading'}</span
                     >{:else if downloadErrors[model.model_id]}<span class="error">Failed</span
                     >{:else if model.installed}<span class="ok">Installed</span
                     >{:else if !model.automated_download_allowed}<span>Your file</span>{/if}
@@ -1376,18 +1397,10 @@
               <button
                 class="button primary"
                 type="button"
-                disabled={busy}
+                disabled={busy || Boolean(dl)}
                 on:click={() => void download(selectedVideo)}
                 >{downloadButtonLabel(dl, selectedVideo.total_size_bytes)}</button
               >
-              {#if dl?.status === 'downloading'}
-                <progress
-                  class="download-progress"
-                  value={dl.progress}
-                  max="100"
-                  aria-label={`${selectedVideo.name} download progress`}
-                ></progress>
-              {/if}
             {:else}
               <div class="installed-badge">✓ Installed · integrity checked before use</div>
             {/if}
@@ -1450,18 +1463,10 @@
               <button
                 class="button primary"
                 type="button"
-                disabled={busy}
+                disabled={busy || Boolean(dl)}
                 on:click={() => void download(selectedInterpolation)}
                 >{downloadButtonLabel(dl, selectedInterpolation.total_size_bytes)}</button
               >
-              {#if dl?.status === 'downloading'}
-                <progress
-                  class="download-progress"
-                  value={dl.progress}
-                  max="100"
-                  aria-label={`${selectedInterpolation.name} download progress`}
-                ></progress>
-              {/if}
             {:else}
               <div class="installed-badge">✓ Installed · integrity checked before use</div>
               <button
@@ -1523,18 +1528,10 @@
               <button
                 class="button primary"
                 type="button"
-                disabled={busy}
+                disabled={busy || Boolean(dl)}
                 on:click={() => void download(selectedAudio)}
                 >{downloadButtonLabel(dl, selectedAudio.total_size_bytes)}</button
               >
-              {#if dl?.status === 'downloading'}
-                <progress
-                  class="download-progress"
-                  value={dl.progress}
-                  max="100"
-                  aria-label={`${selectedAudio.name} download progress`}
-                ></progress>
-              {/if}
             {:else}
               <div class="installed-badge">✓ Installed · integrity checked before use</div>
               <button
@@ -1672,18 +1669,11 @@
                   class="button primary"
                   type="button"
                   disabled={busy ||
-                    (selectedEdit.terms_acceptance_required && !termsAccepted && !dl)}
+                    Boolean(dl) ||
+                    (selectedEdit.terms_acceptance_required && !termsAccepted)}
                   on:click={() => void download(selectedEdit, termsAccepted)}
                   >{downloadButtonLabel(dl, selectedEdit.total_size_bytes)}</button
                 >
-                {#if dl?.status === 'downloading'}
-                  <progress
-                    class="download-progress"
-                    value={dl.progress}
-                    max="100"
-                    aria-label={`${selectedEdit.name} download progress`}
-                  ></progress>
-                {/if}
               {:else}
                 <div class="installed-badge">✓ Installed · integrity checked before use</div>
               {/if}
@@ -1775,18 +1765,12 @@
               <button
                 class="button primary"
                 type="button"
-                disabled={busy || (selected.terms_acceptance_required && !termsAccepted && !dl)}
+                disabled={busy ||
+                  Boolean(dl) ||
+                  (selected.terms_acceptance_required && !termsAccepted)}
                 on:click={() => void download(selected, termsAccepted)}
                 >{downloadButtonLabel(dl, selected.size_bytes)}</button
               >
-              {#if dl?.status === 'downloading'}
-                <progress
-                  class="download-progress"
-                  value={dl.progress}
-                  max="100"
-                  aria-label={`${displayName(selected)} download progress`}
-                ></progress>
-              {/if}
             {:else if !selected.installed}
               <label class="terms"
                 ><input type="checkbox" bind:checked={termsAccepted} /> I understand that the checkpoint

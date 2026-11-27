@@ -156,11 +156,7 @@ export function fixRowValue(
             ?.name ?? 'Checkpoint')
         : '';
     const stageDownload = stage.model ? downloadMap.get(stage.model.model_id) : undefined;
-    if (stageDownload) {
-      return stageDownload.status === 'queued'
-        ? `${name} · Waiting`
-        : `${name} · ${Math.round(stageDownload.progress)}%`;
-    }
+    if (stageDownload) return name;
     if (stage.needsFile && !stage.installed) return 'Needs your file';
     if (!stage.installed && stage.canDownload && stage.sizeBytes > 0) {
       return `${name} · ${formatBytes(stage.sizeBytes)}`;

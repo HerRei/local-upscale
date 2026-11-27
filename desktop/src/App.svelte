@@ -150,6 +150,7 @@
   let benchmarkTile: WorkerEnvelope | undefined;
   let downloadErrors: Record<string, string> = {};
   let downloadFailures: Record<string, DownloadFailure> = {};
+  let downloadAcceptedTerms: Record<string, boolean> = {};
   let rememberedFailureIds: string[] = [];
   const cancelledDownloads = new Set<string>();
   let cancellingDownloads = false;
@@ -845,6 +846,15 @@
           .filter(Boolean)
           .join(' · ')
       : '';
+  $: downloadDetails =
+    downloadStatus || activeDownloads.length
+      ? Object.fromEntries(
+          activeDownloads.map((item) => [
+            item.model_id,
+            downloadRun.detail(item.model_id, downloadNow),
+          ]),
+        )
+      : ({} as Record<string, string>);
   $: benchmarkRunning = snapshot.runtime.active_job_id.startsWith('benchmark-');
   $: benchmarkQuickModel = choosePresetModel(snapshot, 'upscale', 'quick', 'photo', {});
   $: benchmarkBestModel = choosePresetModel(snapshot, 'upscale', 'best', 'photo', {});
@@ -2571,7 +2581,9 @@
           dismissDownloadError(model.model_id);
           cancelledDownloads.delete(model.model_id);
           try {
-            await api.downloadModel(model.model_id, Boolean(termsAccepted[model.model_id]));
+            const accepted = Boolean(termsAccepted[model.model_id]);
+            downloadAcceptedTerms[model.model_id] = accepted;
+            await api.downloadModel(model.model_id, accepted);
           } catch (error) {
             const message = errorMessageText(error);
             const wasCancelled =
@@ -3587,6 +3599,9 @@
       showModal('Review the model terms', 'Confirm the model-specific license before downloading.');
       return;
     }
+    if (target.automated_download_allowed) {
+      downloadAcceptedTerms[target.model_id] = accepted;
+    }
     dismissDownloadError(target.model_id);
     rememberedFailureIds = [];
     cancelledDownloads.delete(target.model_id);
@@ -3614,6 +3629,24 @@
       }
       recordDownloadFailure(target.model_id, error);
     }
+  }
+
+  function findDownloadModel(
+    modelId: string,
+  ): CatalogModel | CatalogVideoModel | EditModel | undefined {
+    return (
+      snapshot.catalog.models.find((item) => item.model_id === modelId) ??
+      snapshot.catalog.video_models.find((item) => item.model_id === modelId) ??
+      snapshot.catalog.interpolation_models?.find((item) => item.model_id === modelId) ??
+      snapshot.catalog.audio_models?.find((item) => item.model_id === modelId) ??
+      snapshot.edit.models.find((item) => item.model_id === modelId)
+    );
+  }
+
+  async function retryDownload(modelId: string): Promise<void> {
+    const target = findDownloadModel(modelId);
+    if (!target || !target.automated_download_allowed) return;
+    await runDownload(target, downloadAcceptedTerms[modelId] ?? Boolean(termsAccepted[modelId]));
   }
 
   function makeStartInput(ids: string[], task: TaskKind, batchMode: boolean): StartBatchInput {
@@ -5157,7 +5190,10 @@
     device={activeDevice}
     downloads={activeDownloads}
     {downloadErrors}
+    {downloadFailures}
+    {downloadDetails}
     cancelDownload={cancelDownloadById}
+    {retryDownload}
     {dismissDownloadError}
     busy={settingsLocked || preparing}
     modelDirectoryMissing={Boolean(snapshot.model_directory_missing)}
