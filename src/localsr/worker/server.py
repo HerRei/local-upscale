@@ -96,6 +96,29 @@ run_video_job: Any = None
 with_current_memory: Any = None
 
 
+def detach_request_stream():
+    """Return a private stream for host requests and leave NUL as the process's stdin.
+
+    On Windows a synchronous read pending on the stdin pipe blocks every other use of the
+    same pipe until a request arrives: a child that inherits it, and GetFileType or isatty
+    on it from any thread (CPython #78961). Libraries imported on first use do both, so
+    nothing but the reader may hold the pipe.
+    """
+    if sys.platform != "win32" or sys.stdin is None:
+        return sys.stdin
+    import ctypes
+    import msvcrt
+
+    private = os.dup(sys.stdin.fileno())
+    null = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(null, 0)
+    os.close(null)
+    std_input_handle = -10
+    if not ctypes.windll.kernel32.SetStdHandle(std_input_handle, msvcrt.get_osfhandle(0)):
+        raise ctypes.WinError()
+    return open(private, encoding="utf-8", errors="replace")
+
+
 def _latest_preview_encoder():
     global LatestPreviewEncoder
     if LatestPreviewEncoder is None:
@@ -288,6 +311,7 @@ class WorkerServer:
         self.state_lock = threading.Lock()
         self._lazy_lock = threading.Lock()
         self._warmup_started = False
+        self._requests: Any = None
         self.running = True
         self.active_job_id = None
         self.active_batch_job_ids: set[str] = set()
@@ -486,13 +510,14 @@ class WorkerServer:
             self._clear_cancel_unless_shutting_down()
 
     def reader_thread_func(self):
+        requests = self._requests if self._requests is not None else sys.stdin
         try:
             # Requests are UTF-8 whatever the console's code page, and a byte that is not
             # UTF-8 must not end the reader.
-            reconfigure = getattr(sys.stdin, "reconfigure", None)
+            reconfigure = getattr(requests, "reconfigure", None)
             if reconfigure is not None:
                 reconfigure(encoding="utf-8", errors="replace")
-            for line in sys.stdin:
+            for line in requests:
                 try:
                     self._read_line(line)
                 # One bad line, whatever it raises (RecursionError and a
@@ -573,6 +598,7 @@ class WorkerServer:
         os._exit(DEVICE_LOST_EXIT_CODE)
 
     def run(self):
+        self._requests = detach_request_stream()
         reader_thread = threading.Thread(target=self.reader_thread_func, daemon=True)
         reader_thread.start()
 
