@@ -221,3 +221,41 @@ def test_regions_cut_from_a_heic_export(tmp_path):
     )
     with Image.open(io.BytesIO(base64.b64decode(result.png_base64))) as crop:
         assert crop.getpixel((8, 8))[0] > 200
+
+
+def test_region_service_accepts_preview_slots_and_preserves_identity(tmp_path):
+    import queue
+
+    path = tmp_path / "source.png"
+    Image.new("RGB", (8, 8), "green").save(path)
+    emitted = queue.Queue()
+    service = RegionService(emitted.put)
+    try:
+        for index, slot in enumerate(("original", "showing", "against"), start=1):
+            service.submit(
+                {
+                    "image_path": str(path),
+                    "slot": slot,
+                    "generation": 4,
+                    "target_id": f"target-{slot}",
+                    "request_id": index,
+                    "x": 0,
+                    "y": 0,
+                    "width": 4,
+                    "height": 4,
+                    "target_width": 4,
+                    "target_height": 4,
+                }
+            )
+        replies = [emitted.get(timeout=5) for _ in range(3)]
+        assert [(r.slot, r.generation, r.target_id, r.request_id) for r in replies] == [
+            ("original", 4, "target-original", 1),
+            ("showing", 4, "target-showing", 2),
+            ("against", 4, "target-against", 3),
+        ]
+        assert all(r.png_base64 for r in replies)
+        service.submit(_region(path, "unknown"))
+        with pytest.raises(queue.Empty):
+            emitted.get(timeout=0.1)
+    finally:
+        service.close()

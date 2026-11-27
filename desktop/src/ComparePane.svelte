@@ -4,7 +4,12 @@
    * as boxes (up to four), with one zoom and pan for every box. Escape or Done leaves.
    */
   import { onDestroy, onMount, tick } from 'svelte';
-  import { visibleRegion, type Region } from './lib/compareRegions';
+  import {
+    cropStyle as formatCropStyle,
+    sameRegion,
+    visibleRegion,
+    type Region,
+  } from './lib/compareRegions';
   import * as api from './lib/api';
   import type { CompareVideoSlot } from './lib/types';
   import { SingleVideoCompareSync } from './lib/compare-video-sync';
@@ -548,12 +553,11 @@
   }
 
   function cropStyle(item: CompareItem): string {
-    const r = item.region!.bounds;
-    return `left:${(100 * r.x) / item.width}%;top:${(100 * r.y) / item.height}%;width:${(100 * r.width) / item.width}%;height:${(100 * r.height) / item.height}%`;
+    return formatCropStyle(item.region!.bounds, { width: item.width, height: item.height });
   }
 
   function currentCrop(item: CompareItem, index: number, desired: (Region | null)[]): boolean {
-    return !!item.region && JSON.stringify(item.region.bounds) === JSON.stringify(desired[index]);
+    return !!item.region && sameRegion(item.region.bounds, desired[index]);
   }
 
   onDestroy(() => {
@@ -1656,16 +1660,6 @@
   .box-well {
     position: relative;
     overflow: hidden;
-  }
-  .region-overlay {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-  }
-  .region-image {
-    position: absolute;
-    max-width: none;
-    pointer-events: none;
   }
   .box-well .image-stage {
     box-shadow: none;

@@ -712,6 +712,8 @@ pub struct RuntimeStatus {
     #[serde(default)]
     pub comparison_pair: ComparisonPair,
     #[serde(default)]
+    pub preview_original: PreviewOriginalRegion,
+    #[serde(default)]
     pub video_memory: Option<serde_json::Value>,
     pub worker: String,
     pub active_job_id: String,
@@ -1005,6 +1007,7 @@ impl Default for RuntimeStatus {
         Self {
             compare: crate::compare::CompareState::default(),
             comparison_pair: ComparisonPair::default(),
+            preview_original: PreviewOriginalRegion::default(),
             worker: "starting".into(),
             active_job_id: String::new(),
             active_batch_job_ids: Vec::new(),
@@ -1053,6 +1056,26 @@ pub struct ComparisonPair {
     pub generation: u64,
     pub showing: ComparisonSlot,
     pub against: ComparisonSlot,
+    #[serde(skip)]
+    pub region_request_id: u64,
+}
+
+/// Full-resolution crop state for the Original layer in the main preview.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PreviewOriginalRegion {
+    pub media_id: String,
+    #[serde(skip)]
+    pub generation: u64,
+    #[serde(default)]
+    pub region: Option<crate::compare::RegionResult>,
+    #[serde(skip)]
+    pub requested_region: Option<crate::compare::Region>,
+    #[serde(skip)]
+    pub path: String,
+    #[serde(skip)]
+    pub file: Option<crate::compare::FileIdentity>,
+    #[serde(skip)]
+    pub request_id: u64,
 }
 
 /// One side of the pair. The Original is drawn from the probe thumbnail the
@@ -1070,6 +1093,12 @@ pub struct ComparisonSlot {
     pub height: u32,
     pub preview_width: u32,
     pub preview_height: u32,
+    #[serde(default)]
+    pub region: Option<crate::compare::RegionResult>,
+    #[serde(skip)]
+    pub requested_region: Option<crate::compare::Region>,
+    #[serde(skip)]
+    pub file: Option<crate::compare::FileIdentity>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

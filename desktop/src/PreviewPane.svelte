@@ -12,6 +12,13 @@
   import type { ViewerBackground } from './lib/viewerBackground';
   import type { PaneUnfinished } from './lib/unfinished';
   import type { ComparisonSide } from './lib/results';
+  import {
+    cropStyle,
+    previewRegionsFor,
+    sameRegion,
+    type PreviewRegions,
+    type RegionResult,
+  } from './lib/compareRegions';
   import * as api from './lib/api';
   import { comparisonFromKey, comparisonFromPointer } from './lib/comparison';
   import {
@@ -51,6 +58,24 @@
   export let referenceState: ComparisonSide['state'] = 'ready';
   export let showingError = '';
   export let referenceError = '';
+  export let pairGeneration = 0;
+  export let showingWidth = 0;
+  export let showingHeight = 0;
+  export let showingPreviewWidth = 0;
+  export let showingPreviewHeight = 0;
+  export let showingRegion: RegionResult | null = null;
+  export let referenceWidth = 0;
+  export let referenceHeight = 0;
+  export let referencePreviewWidth = 0;
+  export let referencePreviewHeight = 0;
+  export let referenceRegion: RegionResult | null = null;
+  export let originalRegion: RegionResult | null = null;
+  export let requestRegions: (
+    mediaId: string,
+    generation: number,
+    regions: PreviewRegions,
+  ) => Promise<void> = async () => {};
+  export let clearRegions: () => Promise<void> = async () => {};
   /** Showing alone in its own framing (an Edit result that does not match the source). */
   /** The result a pair is still waiting for: the picture stays as it was, no divider or view options. */
   export let loadingLabel = '';
@@ -101,12 +126,20 @@
   let panStartY = 0;
   let canvasWell: HTMLDivElement | undefined;
   let progressiveCanvas: HTMLCanvasElement | undefined;
+  let sourceImg: HTMLImageElement | undefined;
   let canvasWidth = 1;
   let canvasHeight = 1;
   let previewNaturalWidth = 1;
   let previewNaturalHeight = 1;
+  let sourcePreviewWidth = 0;
+  let sourcePreviewHeight = 0;
+  let lastSourceUrl = '';
   let stageWidth = 1;
   let stageHeight = 1;
+  let regionTimer: ReturnType<typeof setTimeout> | undefined;
+  let regionKey = '';
+  let regionQueue = Promise.resolve();
+  let hadRegionRequest = false;
   // The divider keeps its place on screen and its size at every zoom; both
   // images move under it, so a deep zoom still shows before and after.
   $: comparison = comparisonGeometry(
@@ -164,16 +197,105 @@
           ? 0
           : comparison.imagePercent;
   $: splitActive = canCompare && !videoComparison;
+  $: canRequestRegions = Boolean(
+    selectedMedia?.kind === 'image' &&
+    selectedMedia.probe_status === 'ready' &&
+    selectedMedia.width > 0 &&
+    selectedMedia.height > 0 &&
+    sourcePreview &&
+    !videoComparison &&
+    !loading &&
+    !liveTilesShown,
+  );
+  $: showingPreviewSize =
+    showingPreviewWidth > 0 && showingPreviewHeight > 0
+      ? { width: showingPreviewWidth, height: showingPreviewHeight }
+      : resultPreview === sourcePreview && sourcePreviewWidth > 0 && sourcePreviewHeight > 0
+        ? { width: sourcePreviewWidth, height: sourcePreviewHeight }
+        : null;
+  $: desiredRegions = canRequestRegions
+    ? previewRegionsFor({
+        cell: { width: canvasWidth, height: canvasHeight },
+        fit: { width: stageWidth, height: stageHeight },
+        zoom,
+        pan: { x: panX, y: panY },
+        pixelRatio: typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1,
+        comparisonView,
+        peeking: holdingOriginal,
+        singleFrame: Boolean(singleFrame),
+        referenceIsResult: pairShown,
+        original:
+          sourcePreviewWidth > 0 && sourcePreviewHeight > 0 && selectedMedia
+            ? {
+                image: { width: selectedMedia.width, height: selectedMedia.height },
+                preview: { width: sourcePreviewWidth, height: sourcePreviewHeight },
+              }
+            : null,
+        showing:
+          resultPreview &&
+          showingState === 'ready' &&
+          showingWidth > 0 &&
+          showingHeight > 0 &&
+          showingPreviewSize
+            ? {
+                image: { width: showingWidth, height: showingHeight },
+                preview: showingPreviewSize,
+              }
+            : null,
+        against:
+          pairShown &&
+          referencePreview &&
+          referenceState === 'ready' &&
+          referenceWidth > 0 &&
+          referenceHeight > 0 &&
+          referencePreviewWidth > 0 &&
+          referencePreviewHeight > 0
+            ? {
+                image: { width: referenceWidth, height: referenceHeight },
+                preview: { width: referencePreviewWidth, height: referencePreviewHeight },
+              }
+            : null,
+      })
+    : { original: null, showing: null, against: null };
+  $: currentOriginalRegion =
+    originalRegion && sameRegion(originalRegion.bounds, desiredRegions.original)
+      ? originalRegion
+      : null;
+  $: currentShowingRegion =
+    showingRegion && sameRegion(showingRegion.bounds, desiredRegions.showing)
+      ? showingRegion
+      : null;
+  $: currentReferenceRegion =
+    referenceRegion && sameRegion(referenceRegion.bounds, desiredRegions.against)
+      ? referenceRegion
+      : null;
+  $: desiredRegionKey = canRequestRegions
+    ? JSON.stringify([selectedMedia?.id ?? '', pairGeneration, desiredRegions])
+    : '';
+  $: if (canRequestRegions && selectedMedia) {
+    scheduleRegions(desiredRegionKey, selectedMedia.id, pairGeneration, desiredRegions);
+  }
   let showingSide: ComparisonSide;
   $: showingSide = {
     src: resultPreview,
     label: showingLabel,
     state: pairShown ? showingState : 'ready',
     error: showingError,
+    width: showingWidth,
+    height: showingHeight,
+    region: currentShowingRegion,
   };
   let referenceSide: ComparisonSide | undefined;
   $: referenceSide = pairShown
-    ? { src: referencePreview, label: referenceLabel, state: referenceState, error: referenceError }
+    ? {
+        src: referencePreview,
+        label: referenceLabel,
+        state: referenceState,
+        error: referenceError,
+        width: referenceWidth,
+        height: referenceHeight,
+        region: currentReferenceRegion,
+      }
     : undefined;
   $: dividerPercent = Math.round(100 - comparison.enhancedPercent);
   // A mark shows while its side does. Hovering it, or focusing it with the keyboard, shows
@@ -235,6 +357,11 @@
   let disposed = false;
 
   $: sourcePreview = selectedMedia?.preview_data_url ?? '';
+  $: if (sourcePreview !== lastSourceUrl) {
+    lastSourceUrl = sourcePreview;
+    sourcePreviewWidth = 0;
+    sourcePreviewHeight = 0;
+  }
   $: activeStagePreview = stageBasePreview || stagePreview;
   $: displayedSourcePreview =
     (processing &&
@@ -282,8 +409,11 @@
     viewedMediaId = selectedMedia?.id ?? '';
     previewNaturalWidth = Math.max(1, selectedMedia?.width ?? 1);
     previewNaturalHeight = Math.max(1, selectedMedia?.height ?? 1);
+    sourcePreviewWidth = 0;
+    sourcePreviewHeight = 0;
     laidOutSourcePreview = '';
     previewRetryMediaId = '';
+    clearScheduledRegions(true);
     resetProgressivePreview();
     resetView();
     scheduleViewportReset();
@@ -321,8 +451,50 @@
       void playbackListener?.then((unlisten) => unlisten()).catch(() => {});
       observer?.disconnect();
       progressiveGeneration += 1;
+      clearTimeout(regionTimer);
+      regionKey = '';
+      hadRegionRequest = false;
+      regionQueue = regionQueue
+        .catch(() => {})
+        .then(() => clearRegions())
+        .catch(() => {});
     };
   });
+
+  function clearScheduledRegions(notifyHost: boolean): void {
+    clearTimeout(regionTimer);
+    regionKey = '';
+    if (notifyHost && hadRegionRequest) {
+      hadRegionRequest = false;
+      regionQueue = regionQueue
+        .catch(() => {})
+        .then(() => clearRegions())
+        .catch(() => {});
+    }
+  }
+
+  function scheduleRegions(
+    key: string,
+    mediaId: string,
+    generation: number,
+    regions: PreviewRegions,
+  ): void {
+    if (!mediaId || key === regionKey) return;
+    const anyRequested = Boolean(regions.original || regions.showing || regions.against);
+    if (!anyRequested && !hadRegionRequest) {
+      regionKey = key;
+      return;
+    }
+    regionKey = key;
+    clearTimeout(regionTimer);
+    regionTimer = setTimeout(() => {
+      hadRegionRequest = anyRequested;
+      regionQueue = regionQueue
+        .catch(() => {})
+        .then(() => (disposed ? undefined : requestRegions(mediaId, generation, regions)))
+        .catch(() => {});
+    }, 160);
+  }
 
   export function actualSize(): void {
     if (videoPlayer) videoPlayer.actualSize();
@@ -910,6 +1082,14 @@
     if (videoSourcePreview && selectedMedia?.kind === 'video') return;
     const image = event.currentTarget as HTMLImageElement;
     previewRetryMediaId = '';
+    if (
+      displayedSourcePreview === sourcePreview &&
+      image.naturalWidth > 0 &&
+      image.naturalHeight > 0
+    ) {
+      sourcePreviewWidth = image.naturalWidth;
+      sourcePreviewHeight = image.naturalHeight;
+    }
     previewNaturalWidth = Math.max(1, image.naturalWidth);
     previewNaturalHeight = Math.max(1, image.naturalHeight);
     updateViewport(true);
@@ -918,6 +1098,16 @@
 
   function updateViewport(reset = false): void {
     if (!canvasWell) return;
+    if (
+      displayedSourcePreview === sourcePreview &&
+      sourcePreviewWidth === 0 &&
+      sourceImg?.complete &&
+      sourceImg.naturalWidth > 0 &&
+      sourceImg.naturalHeight > 0
+    ) {
+      sourcePreviewWidth = sourceImg.naturalWidth;
+      sourcePreviewHeight = sourceImg.naturalHeight;
+    }
     const rectangle = canvasWell.getBoundingClientRect();
     canvasWidth = Math.max(1, rectangle.width);
     canvasHeight = Math.max(1, rectangle.height);
@@ -1079,6 +1269,7 @@
           dividerKey={compareKeyDown}
         >
           <img
+            bind:this={sourceImg}
             class="source-image"
             class:waiting-frame={waitingForVideoFrame}
             class:contained={Boolean(singleFrame)}
@@ -1092,6 +1283,19 @@
             on:load={onPreviewLoad}
             on:error={onSourcePreviewError}
           />
+          {#if currentOriginalRegion && !liveTilesShown && (!singleFrame || holdingOriginal)}
+            <img
+              class="region-image"
+              style={cropStyle(currentOriginalRegion.bounds, {
+                width: selectedMedia.width,
+                height: selectedMedia.height,
+              })}
+              src={currentOriginalRegion.data_url}
+              alt=""
+              decoding="async"
+              draggable="false"
+            />
+          {/if}
           <canvas
             bind:this={progressiveCanvas}
             class="progressive-image"

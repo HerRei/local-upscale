@@ -161,6 +161,8 @@ const api = vi.hoisted(() => ({
     ],
   })),
   requestCompare: vi.fn(async (_picks: ComparePick[]): Promise<void> => undefined),
+  requestPreviewRegions: vi.fn(async () => undefined),
+  clearPreviewRegions: vi.fn(async () => undefined),
   startModelTrials: vi.fn(
     async (_mediaId: string, _modelIds: string[], _base: StartBatchInput): Promise<string[]> => [],
   ),

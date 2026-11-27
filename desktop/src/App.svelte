@@ -1184,6 +1184,16 @@
     referencePreview: referenceIsResult && againstSide?.state === 'ready' ? againstSide.src : '',
     referenceLabel: referenceIsResult ? (againstSide?.label ?? 'Original') : 'Original',
     showingLabel: showingSide?.label ?? '',
+    showingWidth: showingSide?.width ?? 0,
+    showingHeight: showingSide?.height ?? 0,
+    showingPreviewWidth: showingSide?.previewWidth ?? 0,
+    showingPreviewHeight: showingSide?.previewHeight ?? 0,
+    showingRegion: showingSide?.region ?? null,
+    referenceWidth: referenceIsResult ? (againstSide?.width ?? 0) : 0,
+    referenceHeight: referenceIsResult ? (againstSide?.height ?? 0) : 0,
+    referencePreviewWidth: referenceIsResult ? (againstSide?.previewWidth ?? 0) : 0,
+    referencePreviewHeight: referenceIsResult ? (againstSide?.previewHeight ?? 0) : 0,
+    referenceRegion: referenceIsResult ? (againstSide?.region ?? null) : null,
     singleFrame,
     showingUnfinished:
       videoMark ??
@@ -1204,6 +1214,16 @@
           referencePreview: '',
           referenceLabel: 'Original',
           showingLabel: '',
+          showingWidth: 0,
+          showingHeight: 0,
+          showingPreviewWidth: 0,
+          showingPreviewHeight: 0,
+          showingRegion: null,
+          referenceWidth: 0,
+          referenceHeight: 0,
+          referencePreviewWidth: 0,
+          referencePreviewHeight: 0,
+          referenceRegion: null,
           singleFrame: null,
           showingUnfinished: null,
           referenceUnfinished: null,
@@ -1211,6 +1231,14 @@
       : loadingTarget
         ? heldView
         : paneView;
+  $: pairGeneration =
+    selectedImage && snapshot.runtime.comparison_pair?.media_id === selectedImage.id
+      ? snapshot.runtime.comparison_pair.generation
+      : 0;
+  $: originalRegion =
+    selectedImage && snapshot.runtime.preview_original?.media_id === selectedImage.id
+      ? (snapshot.runtime.preview_original.region ?? null)
+      : null;
   $: desiredPairKey =
     pairShown &&
     selectedImage &&
@@ -4532,6 +4560,23 @@
           showingLabel={shownView.showingLabel}
           showingState={showingSide?.state ?? 'ready'}
           showingError={showingSide?.error ?? ''}
+          {pairGeneration}
+          showingWidth={shownView.showingWidth}
+          showingHeight={shownView.showingHeight}
+          showingPreviewWidth={shownView.showingPreviewWidth}
+          showingPreviewHeight={shownView.showingPreviewHeight}
+          showingRegion={shownView.showingRegion}
+          referenceWidth={shownView.referenceWidth}
+          referenceHeight={shownView.referenceHeight}
+          referencePreviewWidth={shownView.referencePreviewWidth}
+          referencePreviewHeight={shownView.referencePreviewHeight}
+          referenceRegion={shownView.referenceRegion}
+          {originalRegion}
+          requestRegions={(mediaId, generation, regions) =>
+            api.isTauri()
+              ? api.requestPreviewRegions(mediaId, generation, regions)
+              : Promise.resolve()}
+          clearRegions={() => (api.isTauri() ? api.clearPreviewRegions() : Promise.resolve())}
           singleFrame={shownView.singleFrame}
           showingUnfinished={shownView.showingUnfinished}
           referenceUnfinished={shownView.referenceUnfinished}
