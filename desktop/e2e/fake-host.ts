@@ -25,6 +25,30 @@ export interface Scenario {
   videoSyncCompare?: boolean;
   /** With `running`: the host can keep the finished part of the photo that runs. */
   keepPartial?: boolean;
+  /** With `running`: multi-step job entries for `runtime.job_steps`. */
+  jobSteps?: {
+    kind: string;
+    fix?: string;
+    model_id?: string;
+    state?: 'waiting' | 'running' | 'done' | 'skipped';
+    note?: string;
+    preview_url?: string;
+    kept?: boolean;
+  }[];
+  /** Multi-step results of the last lone photo job for `runtime.last_steps`. */
+  lastSteps?: {
+    job_id: string;
+    media_id?: string;
+    steps: {
+      kind: string;
+      fix?: string;
+      model_id?: string;
+      state?: 'waiting' | 'running' | 'done' | 'skipped';
+      note?: string;
+      preview_url?: string;
+      kept?: boolean;
+    }[];
+  };
   /** Populated by installFakeHost only for video Compare. */
   playbackFixtures?: string[];
   /** Populated by installFakeHost for `videoSyncCompare`. */
@@ -174,8 +198,136 @@ function hostScript(scenario: Scenario): void {
   const answers: Record<string, unknown> = {};
   const listeners: Record<string, number[]> = {};
   const emit = (event: string, payload: unknown) => {
+    let delivered = payload;
+    if (event === 'worker-message' && snapshot && payload && typeof payload === 'object') {
+      const envelope = payload as { type?: string; data?: Json };
+      const data = envelope.data ?? {};
+      const jobId = String(data.job_id ?? '');
+      const sameJob =
+        !snapshot.runtime.active_job_id || !jobId || jobId === snapshot.runtime.active_job_id;
+      if (envelope.type === 'job_started') {
+        if (Array.isArray(data.job_steps)) {
+          snapshot.runtime.job_steps = structuredClone(data.job_steps);
+        }
+        snapshot.runtime.last_steps = null;
+      } else if (sameJob && envelope.type === 'stage_started') {
+        const index = Number(data.stage_index ?? 0);
+        if (
+          Array.isArray(snapshot.runtime.job_steps) &&
+          index >= 0 &&
+          index < snapshot.runtime.job_steps.length
+        ) {
+          snapshot.runtime.job_steps = snapshot.runtime.job_steps.map((step: Json, i: number) =>
+            i < index && (step.state === 'waiting' || step.state === 'running')
+              ? { ...step, state: 'done' }
+              : i === index
+                ? { ...step, state: 'running' }
+                : step,
+          );
+        }
+      } else if (sameJob && envelope.type === 'stage_completed') {
+        const index = Number(data.stage_index ?? 0);
+        if (
+          Array.isArray(snapshot.runtime.job_steps) &&
+          index >= 0 &&
+          index < snapshot.runtime.job_steps.length
+        ) {
+          snapshot.runtime.job_steps = snapshot.runtime.job_steps.map((step: Json, i: number) =>
+            i === index && (step.state === 'waiting' || step.state === 'running')
+              ? { ...step, state: 'done' }
+              : step,
+          );
+        }
+      } else if (sameJob && envelope.type === 'stage_result') {
+        const index = Number(data.stage_index ?? -1);
+        const skipped = Boolean(data.skipped);
+        const previewUrl = skipped
+          ? ''
+          : typeof data.preview_url === 'string' && data.preview_url
+            ? data.preview_url
+            : typeof data.jpeg_base64 === 'string' && data.jpeg_base64
+              ? `data:image/jpeg;base64,${data.jpeg_base64}`
+              : '';
+        if (
+          Array.isArray(snapshot.runtime.job_steps) &&
+          index >= 0 &&
+          index < snapshot.runtime.job_steps.length
+        ) {
+          const step = snapshot.runtime.job_steps[index];
+          snapshot.runtime.job_steps[index] = {
+            ...step,
+            state: skipped ? 'skipped' : 'done',
+            note: typeof data.note === 'string' && data.note ? data.note : step.note,
+            preview_url: previewUrl || step.preview_url,
+            kept:
+              typeof data.kept === 'boolean' ? data.kept : Boolean(data.image_path) || step.kept,
+          };
+        }
+        if ('jpeg_base64' in data) {
+          const rest = { ...data };
+          delete rest.jpeg_base64;
+          if (previewUrl && !rest.preview_url) rest.preview_url = previewUrl;
+          delivered = { ...envelope, data: rest };
+        }
+      } else if (
+        sameJob &&
+        ['job_completed', 'video_job_completed', 'job_cancelled', 'job_failed'].includes(
+          envelope.type ?? '',
+        )
+      ) {
+        const terminalJobId = jobId || snapshot.runtime.active_job_id;
+        const job = snapshot.jobs.find((entry: Json) => entry.id === terminalJobId);
+        if (envelope.type === 'job_completed') {
+          const completedPath = String(
+            data.output_path || `/fixture/results/${terminalJobId || 'result'}.png`,
+          );
+          if (job) {
+            job.status = 'completed';
+            job.progress = 100;
+            job.output_path = completedPath;
+          }
+          snapshot.runtime.active_job_id = '';
+          snapshot.runtime.last_output_path = completedPath;
+          const otherInflight = snapshot.jobs.some(
+            (entry: Json) =>
+              entry.id !== terminalJobId &&
+              ['queued', 'starting', 'running', 'cancelling'].includes(entry.status),
+          );
+          const batchCount = snapshot.runtime.active_batch_job_ids?.length ?? 0;
+          const isPhoto = (job?.media_kind ?? 'image') === 'image';
+          if (
+            isPhoto &&
+            !data.partial &&
+            !otherInflight &&
+            batchCount <= 1 &&
+            Array.isArray(snapshot.runtime.job_steps) &&
+            snapshot.runtime.job_steps.length >= 2
+          ) {
+            const mediaId =
+              job?.media_id ??
+              snapshot.media.find((m: Json) => m.selected)?.id ??
+              snapshot.media[0]?.id ??
+              '';
+            snapshot.runtime.last_steps = {
+              job_id: terminalJobId,
+              media_id: mediaId,
+              steps: structuredClone(snapshot.runtime.job_steps),
+            };
+          } else {
+            snapshot.runtime.last_steps = null;
+          }
+        } else {
+          if (job) {
+            job.status = envelope.type === 'job_cancelled' ? 'cancelled' : 'failed';
+          }
+          snapshot.runtime.active_job_id = '';
+          snapshot.runtime.last_steps = null;
+        }
+        snapshot.runtime.job_steps = [];
+      }
+    }
     for (const id of listeners[event] ?? []) {
-      (callbacks.get(id) as (message: unknown) => void)({ event, id: 0, payload });
+      (callbacks.get(id) as (message: unknown) => void)({ event, id: 0, payload: delivered });
     }
   };
   type DownloadEntry = {
@@ -414,6 +566,17 @@ function hostScript(scenario: Scenario): void {
       s.runtime.status_title = 'Processing';
       s.runtime.progress = running ? (rows[Number(running[0])].progress ?? 40) : 40;
       if (scenario.keepPartial) s.runtime.can_keep_partial = true;
+      s.runtime.job_steps = scenario.jobSteps?.length
+        ? scenario.jobSteps.map((step) => ({
+            kind: step.kind,
+            fix: step.fix ?? '',
+            model_id: step.model_id ?? '',
+            state: step.state ?? 'waiting',
+            note: step.note ?? '',
+            preview_url: step.preview_url ?? '',
+            kept: step.kept ?? false,
+          }))
+        : [];
       s.jobs = Array.from({ length: scenario.jobPhotos ?? scenario.photos ?? 1 }, (_, index) => ({
         id: `job-photo-${index + 1}`,
         media_id: `photo-${index + 1}`,
@@ -441,6 +604,21 @@ function hostScript(scenario: Scenario): void {
           created_at: 1794160000 + index,
         })),
       );
+    }
+    if (scenario.lastSteps) {
+      s.runtime.last_steps = {
+        job_id: scenario.lastSteps.job_id,
+        media_id: scenario.lastSteps.media_id ?? 'photo-1',
+        steps: scenario.lastSteps.steps.map((step) => ({
+          kind: step.kind,
+          fix: step.fix ?? '',
+          model_id: step.model_id ?? '',
+          state: step.state ?? 'done',
+          note: step.note ?? '',
+          preview_url: step.preview_url ?? '',
+          kept: step.kept ?? false,
+        })),
+      };
     }
     if (scenario.runningVideo) {
       for (const media of s.media) media.selected = media.id === 'video-1';
@@ -488,196 +666,233 @@ function hostScript(scenario: Scenario): void {
     return s;
   }
 
-  const histories = (): Json[] => [
-    ...Object.entries(scenario.outputs ?? {}).map(([n, list]) => ({
-      media_id: `photo-${n}`,
-      results: list.map((entry, index) => ({
-        job_id: entry.id,
-        completed_at: 1794160000 + index,
-        status: 'completed',
-        kind: entry.edit ? 'edit' : 'upscale',
-        output_path: `/fixture/results/alpine-lake-${n}-${entry.id}.png`,
-        output_name: `alpine-lake-${n}-${entry.id}${entry.partial ? '_partial' : ''}.png`,
-        available: true,
-        model_id: entry.id,
-        model_label: entry.label,
-        scale: entry.edit ? 0 : 4,
-        prompt: entry.edit ? 'Make it dusk' : '',
-        max_dimension: entry.edit ? Math.max(entry.edit.width, entry.edit.height) : 0,
-        stages: (entry.stages ?? []).map((label) => ({
-          kind: 'upscale',
-          model_id: label,
-          model_label: label,
-        })),
-        notes: '',
-        elapsed_seconds: entry.seconds ?? 12,
-        ...(entry.stages ? { device: 'mps', neural_engine: true } : {}),
-        ...(entry.partial
-          ? { partial: true, finished_tiles: entry.partial.tiles, total_tiles: entry.partial.total }
-          : {}),
-        ui: entry.edit
-          ? null
-          : {
-              quality: entry.quality ?? 'Quick',
-              content: 'photo',
-              recipe_name: '',
-              ...(entry.fixes ? { fixes: entry.fixes } : {}),
-            },
-      })),
-      total_count: list.length,
-      completed_count: list.length,
-      available_count: list.length,
-      default_result_id: list[0]?.id ?? null,
-      next_before: null,
-    })),
-    ...(scenario.videoCompare
-      ? [
-          {
-            media_id: 'video-1',
-            results: [
-              ...[15, 60].map((fps) => ({
-                job_id: `video-${fps}`,
-                completed_at: 1,
-                status: 'completed',
-                kind: 'video',
-                output_path: `/fixture/result-${fps}.mp4`,
-                output_name: `result-${fps}.mp4`,
-                available: true,
-                model_id: `video-${fps}`,
-                model_label: `${fps} fps result`,
-                scale: 1,
-                prompt: '',
-                max_dimension: 0,
-                stages: [],
-                notes: '',
-                elapsed_seconds: 1,
-                output_fps: fps,
-                output_duration_seconds: 4,
-                ui: null,
-              })),
-              ...(scenario.videoPartial
-                ? [
-                    {
-                      job_id: 'video-part',
-                      completed_at: 2,
-                      status: 'completed',
-                      kind: 'video',
-                      output_path: '/fixture/result_partial.mp4',
-                      output_name: 'result_partial.mp4',
-                      available: true,
-                      model_id: 'video-part',
-                      model_label: 'Stopped result',
-                      scale: 2,
-                      prompt: '',
-                      max_dimension: 0,
-                      stages: [],
-                      notes: '',
-                      elapsed_seconds: 100,
-                      output_fps: 15,
-                      output_duration_seconds: 2 / 15,
-                      partial: true,
-                      kept_seconds: 2 / 15,
-                      kept_frames: 2,
-                      ui: null,
-                    },
-                  ]
-                : []),
-            ],
-            total_count: scenario.videoPartial ? 3 : 2,
-            completed_count: scenario.videoPartial ? 3 : 2,
-            available_count: scenario.videoPartial ? 3 : 2,
-            default_result_id: scenario.videoPartial ? 'video-part' : 'video-60',
-            next_before: null,
-          },
-        ]
-      : []),
-    ...(scenario.videoSyncCompare
-      ? [
-          {
-            media_id: 'video-1',
-            results: [
-              ...[
-                { id: 'video-30', label: '30 fps result', fps: 30, dur: 3 },
-                { id: 'video-24', label: '24 fps result', fps: 24, dur: 3 },
-                { id: 'video-60', label: '60 fps result', fps: 60, dur: 3 },
-              ].map((entry, idx) => ({
-                job_id: entry.id,
-                completed_at: 10 + idx,
-                status: 'completed',
-                kind: 'video',
-                output_path: `/fixture/${entry.id}.mp4`,
-                output_name: `${entry.id}.mp4`,
-                available: true,
-                model_id: entry.id,
-                model_label: entry.label,
-                scale: 1,
-                prompt: '',
-                max_dimension: 0,
-                stages: [],
-                notes: '',
-                elapsed_seconds: 1,
-                output_fps: entry.fps,
-                output_duration_seconds: entry.dur,
-                ui: null,
-              })),
-              ...[
-                {
-                  id: 'video-part-1s',
-                  label: 'Stopped 1s result',
-                  fps: 30,
-                  dur: 1,
-                  keptSeconds: 1,
-                  keptFrames: 30,
-                },
-                {
-                  id: 'video-part-overhang',
-                  label: 'Stopped overhang result',
-                  fps: 30,
-                  dur: 1.5,
-                  keptSeconds: 1.5,
-                  keptFrames: 30,
-                },
-                {
-                  id: 'video-part-24',
-                  label: 'Stopped 24 fps result',
-                  fps: 24,
-                  dur: 1,
-                  keptSeconds: 1,
-                  keptFrames: 24,
-                },
-              ].map((entry, idx) => ({
-                job_id: entry.id,
-                completed_at: 20 + idx,
-                status: 'completed',
-                kind: 'video',
-                output_path: `/fixture/${entry.id}.mp4`,
-                output_name: `${entry.id}.mp4`,
-                available: true,
-                model_id: entry.id,
-                model_label: entry.label,
-                scale: 2,
-                prompt: '',
-                max_dimension: 0,
-                stages: [],
-                notes: '',
-                elapsed_seconds: 10,
-                output_fps: entry.fps,
-                output_duration_seconds: entry.dur,
+  const histories = (): Json[] => {
+    const byMedia = new Map<string, Json[]>();
+    for (const [n, list] of Object.entries(scenario.outputs ?? {})) {
+      byMedia.set(
+        `photo-${n}`,
+        list.map((entry, index) => ({
+          job_id: entry.id,
+          completed_at: 1794160000 + index,
+          status: 'completed',
+          kind: entry.edit ? 'edit' : 'upscale',
+          output_path: `/fixture/results/alpine-lake-${n}-${entry.id}.png`,
+          output_name: `alpine-lake-${n}-${entry.id}${entry.partial ? '_partial' : ''}.png`,
+          available: true,
+          model_id: entry.id,
+          model_label: entry.label,
+          scale: entry.edit ? 0 : 4,
+          prompt: entry.edit ? 'Make it dusk' : '',
+          max_dimension: entry.edit ? Math.max(entry.edit.width, entry.edit.height) : 0,
+          stages: (entry.stages ?? []).map((label) => ({
+            kind: 'upscale',
+            model_id: label,
+            model_label: label,
+          })),
+          notes: '',
+          elapsed_seconds: entry.seconds ?? 12,
+          ...(entry.stages ? { device: 'mps', neural_engine: true } : {}),
+          ...(entry.partial
+            ? {
                 partial: true,
-                kept_seconds: entry.keptSeconds,
-                kept_frames: entry.keptFrames,
-                ui: null,
-              })),
-            ],
-            total_count: 6,
-            completed_count: 6,
-            available_count: 6,
-            default_result_id: 'video-part-1s',
-            next_before: null,
-          },
-        ]
-      : []),
-  ];
+                finished_tiles: entry.partial.tiles,
+                total_tiles: entry.partial.total,
+              }
+            : {}),
+          ui: entry.edit
+            ? null
+            : {
+                quality: entry.quality ?? 'Quick',
+                content: 'photo',
+                recipe_name: '',
+                ...(entry.fixes ? { fixes: entry.fixes } : {}),
+              },
+        })),
+      );
+    }
+    for (const job of snapshot?.jobs ?? []) {
+      if (job.media_kind !== 'image' || job.status !== 'completed' || !job.output_path) continue;
+      const list = byMedia.get(job.media_id) ?? [];
+      if (list.some((item) => item.job_id === job.id)) continue;
+      list.unshift({
+        job_id: job.id,
+        completed_at: job.created_at ?? 1794160000,
+        status: 'completed',
+        kind: 'upscale',
+        output_path: job.output_path,
+        output_name: job.output_path.split('/').pop() ?? `${job.id}.png`,
+        available: true,
+        model_id: job.model_id ?? 'span_photo_x4',
+        model_label: job.model_label ?? 'SPAN ×4',
+        scale: 4,
+        prompt: '',
+        max_dimension: 0,
+        stages: [],
+        notes: '',
+        elapsed_seconds: job.elapsed_seconds ?? 1,
+        ui: { quality: 'Quick', content: 'photo', recipe_name: '' },
+      });
+      byMedia.set(job.media_id, list);
+    }
+    return [
+      ...[...byMedia.entries()].map(([mediaId, results]) => ({
+        media_id: mediaId,
+        results,
+        total_count: results.length,
+        completed_count: results.length,
+        available_count: results.length,
+        default_result_id: results[0]?.job_id ?? null,
+        next_before: null,
+      })),
+      ...(scenario.videoCompare
+        ? [
+            {
+              media_id: 'video-1',
+              results: [
+                ...[15, 60].map((fps) => ({
+                  job_id: `video-${fps}`,
+                  completed_at: 1,
+                  status: 'completed',
+                  kind: 'video',
+                  output_path: `/fixture/result-${fps}.mp4`,
+                  output_name: `result-${fps}.mp4`,
+                  available: true,
+                  model_id: `video-${fps}`,
+                  model_label: `${fps} fps result`,
+                  scale: 1,
+                  prompt: '',
+                  max_dimension: 0,
+                  stages: [],
+                  notes: '',
+                  elapsed_seconds: 1,
+                  output_fps: fps,
+                  output_duration_seconds: 4,
+                  ui: null,
+                })),
+                ...(scenario.videoPartial
+                  ? [
+                      {
+                        job_id: 'video-part',
+                        completed_at: 2,
+                        status: 'completed',
+                        kind: 'video',
+                        output_path: '/fixture/result_partial.mp4',
+                        output_name: 'result_partial.mp4',
+                        available: true,
+                        model_id: 'video-part',
+                        model_label: 'Stopped result',
+                        scale: 2,
+                        prompt: '',
+                        max_dimension: 0,
+                        stages: [],
+                        notes: '',
+                        elapsed_seconds: 100,
+                        output_fps: 15,
+                        output_duration_seconds: 2 / 15,
+                        partial: true,
+                        kept_seconds: 2 / 15,
+                        kept_frames: 2,
+                        ui: null,
+                      },
+                    ]
+                  : []),
+              ],
+              total_count: scenario.videoPartial ? 3 : 2,
+              completed_count: scenario.videoPartial ? 3 : 2,
+              available_count: scenario.videoPartial ? 3 : 2,
+              default_result_id: scenario.videoPartial ? 'video-part' : 'video-60',
+              next_before: null,
+            },
+          ]
+        : []),
+      ...(scenario.videoSyncCompare
+        ? [
+            {
+              media_id: 'video-1',
+              results: [
+                ...[
+                  { id: 'video-30', label: '30 fps result', fps: 30, dur: 3 },
+                  { id: 'video-24', label: '24 fps result', fps: 24, dur: 3 },
+                  { id: 'video-60', label: '60 fps result', fps: 60, dur: 3 },
+                ].map((entry, idx) => ({
+                  job_id: entry.id,
+                  completed_at: 10 + idx,
+                  status: 'completed',
+                  kind: 'video',
+                  output_path: `/fixture/${entry.id}.mp4`,
+                  output_name: `${entry.id}.mp4`,
+                  available: true,
+                  model_id: entry.id,
+                  model_label: entry.label,
+                  scale: 1,
+                  prompt: '',
+                  max_dimension: 0,
+                  stages: [],
+                  notes: '',
+                  elapsed_seconds: 1,
+                  output_fps: entry.fps,
+                  output_duration_seconds: entry.dur,
+                  ui: null,
+                })),
+                ...[
+                  {
+                    id: 'video-part-1s',
+                    label: 'Stopped 1s result',
+                    fps: 30,
+                    dur: 1,
+                    keptSeconds: 1,
+                    keptFrames: 30,
+                  },
+                  {
+                    id: 'video-part-overhang',
+                    label: 'Stopped overhang result',
+                    fps: 30,
+                    dur: 1.5,
+                    keptSeconds: 1.5,
+                    keptFrames: 30,
+                  },
+                  {
+                    id: 'video-part-24',
+                    label: 'Stopped 24 fps result',
+                    fps: 24,
+                    dur: 1,
+                    keptSeconds: 1,
+                    keptFrames: 24,
+                  },
+                ].map((entry, idx) => ({
+                  job_id: entry.id,
+                  completed_at: 20 + idx,
+                  status: 'completed',
+                  kind: 'video',
+                  output_path: `/fixture/${entry.id}.mp4`,
+                  output_name: `${entry.id}.mp4`,
+                  available: true,
+                  model_id: entry.id,
+                  model_label: entry.label,
+                  scale: 2,
+                  prompt: '',
+                  max_dimension: 0,
+                  stages: [],
+                  notes: '',
+                  elapsed_seconds: 10,
+                  output_fps: entry.fps,
+                  output_duration_seconds: entry.dur,
+                  partial: true,
+                  kept_seconds: entry.keptSeconds,
+                  kept_frames: entry.keptFrames,
+                  ui: null,
+                })),
+              ],
+              total_count: 6,
+              completed_count: 6,
+              available_count: 6,
+              default_result_id: 'video-part-1s',
+              next_before: null,
+            },
+          ]
+        : []),
+    ];
+  };
 
   function compareSlots(picks: Json[]): Json[] {
     // An unfinished result reports the size of its saved file, which its tiles are measured in.
@@ -703,12 +918,50 @@ function hostScript(scenario: Scenario): void {
     if (target === 'original') {
       return { target_id: target, preview_data_url: '', width: 1600, height: 1067 };
     }
+    const hash = target.indexOf('#');
+    if (hash > 0) {
+      const jobId = target.slice(0, hash);
+      const rawIndex = target.slice(hash + 1);
+      const index = /^\d+$/.test(rawIndex) ? Number(rawIndex) : -1;
+      const lastSteps = snapshot?.runtime?.last_steps;
+      const step =
+        lastSteps?.job_id === jobId && lastSteps?.media_id === mediaId
+          ? lastSteps.steps?.[index]
+          : undefined;
+      if (
+        !step ||
+        step.state === 'skipped' ||
+        (!step.kept && index !== lastSteps.steps.length - 1)
+      ) {
+        return { target_id: target, preview_data_url: '', error: 'Step result is unavailable.' };
+      }
+      const media = snapshot?.media?.find((m: Json) => m.id === mediaId);
+      const baseW = media?.width || 1600;
+      const baseH = media?.height || 1067;
+      const isLast = index === lastSteps.steps.length - 1;
+      const scale = isLast ? 4 : 1;
+      return {
+        target_id: target,
+        preview_data_url: step.preview_url || picture(isLast ? 30 : 75 + index * 35),
+        error: '',
+        width: baseW * scale,
+        height: baseH * scale,
+        preview_width: Math.min(baseW * scale, 1600),
+        preview_height: Math.min(baseH * scale, 1067),
+      };
+    }
     const n = Number(mediaId.replace('photo-', ''));
     const entry = scenario.outputs?.[n]?.find((candidate) => candidate.id === target);
+    const liveJob = snapshot?.jobs?.find(
+      (candidate: Json) =>
+        candidate.id === target &&
+        candidate.media_id === mediaId &&
+        candidate.status === 'completed',
+    );
     const size = entry?.edit ?? { width: 1600 * 4, height: 1067 * 4 };
     return {
       target_id: target,
-      output_path: `/fixture/results/alpine-lake-${n}-${target}.png`,
+      output_path: liveJob?.output_path ?? `/fixture/results/alpine-lake-${n}-${target}.png`,
       preview_data_url: entry?.edit ? picture(190 + n * 25, size.width, size.height) : picture(30),
       error: '',
       ...size,
@@ -943,6 +1196,7 @@ function hostScript(scenario: Scenario): void {
       }
       case 'remove_media':
         snapshot.media = snapshot.media.filter((media: Json) => media.id !== args.id);
+        if (snapshot.runtime.last_steps?.media_id === args.id) snapshot.runtime.last_steps = null;
         return null;
       case 'use_result_as_input': {
         const path = String(args.path);
@@ -959,9 +1213,11 @@ function hostScript(scenario: Scenario): void {
         for (const media of snapshot.media) media.selected = media.id === args.id;
         return null;
       case 'clear_results':
+        snapshot.runtime.last_steps = null;
         return null;
       case 'clear_media':
         snapshot.media = [];
+        snapshot.runtime.last_steps = null;
         return null;
       case 'choose_media_files':
         return [];

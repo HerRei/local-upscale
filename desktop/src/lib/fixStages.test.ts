@@ -140,7 +140,7 @@ describe('several fixes in one pass', () => {
       });
       return snapshot.runtime.status_title;
     };
-    expect(title(2, 5)).toBe('Restoring · stage 3/5');
+    expect(title(2, 5)).toBe('Step 3 of 5 · Fix');
     // A one-stage job reads as before.
     expect(title(0, 1)).toBe('Enhancing');
   });

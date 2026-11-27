@@ -4413,6 +4413,26 @@ describe('LocalSR desktop interface', () => {
       },
     ];
     snapshot.runtime.active_job_id = 'job-colour-upscale';
+    snapshot.runtime.job_steps = [
+      {
+        kind: 'restore',
+        fix: 'colour',
+        model_id: 'ddcolor_modelscope',
+        state: 'running',
+        note: '',
+        preview_url: '',
+        kept: false,
+      },
+      {
+        kind: 'upscale',
+        fix: '',
+        model_id: 'span_photo_x4',
+        state: 'waiting',
+        note: '',
+        preview_url: '',
+        kept: false,
+      },
+    ];
     api.selectMedia.mockImplementation(async (id: string) => {
       snapshot.media.forEach((item) => (item.selected = item.id === id));
       api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
@@ -4422,25 +4442,28 @@ describe('LocalSR desktop interface', () => {
     const listener = api.listenForWorker.mock.calls[0]?.[0] as
       ((message: WorkerEnvelope) => void) | undefined;
     expect(listener).toBeTypeOf('function');
-    listener?.({ type: 'job_started', data: { job_id: 'job-colour-upscale' } });
+    listener?.({
+      type: 'job_started',
+      data: { job_id: 'job-colour-upscale', job_steps: snapshot.runtime.job_steps },
+    });
 
     // User clicks another photo while stage 0 (colour) completes.
     await user.click(screen.getByRole('button', { name: /^other\.png/ }));
     await waitFor(() => expect(document.title).toContain('other.png'));
+    snapshot.runtime.job_steps[0].state = 'done';
+    snapshot.runtime.job_steps[0].preview_url = 'data:image/jpeg;base64,colourised-stage0';
     listener?.({
-      type: 'live_preview_frame',
+      type: 'stage_result',
       data: {
         job_id: 'job-colour-upscale',
-        sequence: 1,
         stage_index: 0,
-        preview_kind: 'tile',
-        output_x: 0,
-        output_y: 0,
-        output_width: 1982,
-        output_height: 1361,
-        image_width: 1982,
-        image_height: 1361,
-        jpeg_base64: 'colourised-stage0',
+        stage_count: 2,
+        step: 'restore',
+        fix: 'colour',
+        skipped: false,
+        note: '',
+        preview_url: 'data:image/jpeg;base64,colourised-stage0',
+        image_path: '',
       },
     });
 
@@ -10962,5 +10985,620 @@ describe('Download status bar, Start, and failures', () => {
     const openLink = await screen.findByRole('button', { name: 'Open library' });
     await user.click(openLink);
     expect(await screen.findByRole('dialog', { name: 'Model library' })).toBeTruthy();
+  });
+});
+
+describe('Step names', () => {
+  it('shows the viewer label, status bar title and plan line marks for a four-step job running step 2, and hides label and marks when another file is selected', async () => {
+    const first = image('photo', true);
+    const second = image('other', false);
+    const snapshot = readySnapshot([first, second]);
+    snapshot.settings = {
+      ...snapshot.settings,
+      task: 'upscale',
+      output_scale: 4,
+      fixes: ['jpeg', 'colour', 'noise'],
+      fix_stages: [
+        { fix: 'jpeg', model_id: 'fbcnn_color' },
+        { fix: 'colour', model_id: 'ddcolor_modelscope' },
+        { fix: 'noise', model_id: 'denoise_realplksr_1x' },
+      ],
+      selected_model_id: 'span_photo_x4',
+    };
+    for (const model of snapshot.catalog.models) model.installed = true;
+    snapshot.jobs = [
+      {
+        id: 'job-steps',
+        media_id: 'photo',
+        media_name: 'photo.png',
+        media_kind: 'image',
+        status: 'running',
+        output_path: '',
+        progress: 0,
+        error: '',
+        created_at: 1,
+        model_id: 'span_photo_x4',
+      },
+    ];
+    api.selectMedia.mockImplementation(async (id: string) => {
+      snapshot.media.forEach((item) => (item.selected = item.id === id));
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    });
+
+    const user = await mountWith(snapshot);
+    const foot = document.querySelector('.panel-foot') as HTMLElement;
+    await within(foot).findByText('JPEG → Colour → Noise → Upscale 4×');
+
+    const emitWorker = api.listenForWorker.mock.calls[0]?.[0] as (message: WorkerEnvelope) => void;
+    const emit = (message: WorkerEnvelope) => {
+      snapshot.runtime = applyWorkerEnvelope(snapshot, message).runtime;
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+      emitWorker(message);
+    };
+    const jobSteps = [
+      {
+        kind: 'deblock',
+        fix: 'jpeg',
+        model_id: 'fbcnn_color',
+        state: 'waiting',
+        note: '',
+        preview_url: '',
+        kept: false,
+      },
+      {
+        kind: 'restore',
+        fix: 'colour',
+        model_id: 'ddcolor_modelscope',
+        state: 'waiting',
+        note: '',
+        preview_url: '',
+        kept: false,
+      },
+      {
+        kind: 'restore',
+        fix: 'noise',
+        model_id: 'denoise_realplksr_1x',
+        state: 'waiting',
+        note: '',
+        preview_url: '',
+        kept: false,
+      },
+      {
+        kind: 'upscale',
+        fix: '',
+        model_id: 'span_photo_x4',
+        state: 'waiting',
+        note: '',
+        preview_url: '',
+        kept: false,
+      },
+    ];
+    emit({ type: 'job_started', data: { job_id: 'job-steps', job_steps: jobSteps } });
+    emit({
+      type: 'stage_started',
+      data: {
+        job_id: 'job-steps',
+        stage_index: 0,
+        stage_count: 4,
+        step: 'deblock',
+        fix: 'jpeg',
+        model_id: 'fbcnn_color',
+      },
+    });
+    emit({
+      type: 'stage_result',
+      data: {
+        job_id: 'job-steps',
+        stage_index: 0,
+        stage_count: 4,
+        step: 'deblock',
+        fix: 'jpeg',
+        skipped: false,
+        note: '',
+        preview_url: 'data:image/jpeg;base64,jpeg-done',
+      },
+    });
+    emit({
+      type: 'stage_started',
+      data: {
+        job_id: 'job-steps',
+        stage_index: 1,
+        stage_count: 4,
+        step: 'restore',
+        fix: 'colour',
+        model_id: 'ddcolor_modelscope',
+      },
+    });
+    emit({
+      type: 'progress',
+      data: { job_id: 'job-steps', percentage: 31, completed_tiles: 0, total_tiles: 1 },
+    });
+
+    await waitFor(() =>
+      expect(document.querySelector('.status-copy strong')?.textContent).toBe(
+        'Step 2 of 4 · Colour · 31%',
+      ),
+    );
+    const stepLabelEl = document.querySelector('.step-label') as HTMLElement;
+    expect(stepLabelEl).toBeTruthy();
+    expect(stepLabelEl.getAttribute('aria-hidden')).toBe('true');
+    expect(stepLabelEl.querySelector('.activity-dot')).toBeTruthy();
+    expect(stepLabelEl.textContent).toBe('Step 2 of 4 · Colour');
+
+    const planTrigger = foot.querySelector('.foot-plan') as HTMLElement;
+    expect(planTrigger.getAttribute('aria-label')).toBe(
+      'Plan: JPEG done, Colour running, Noise, Upscale 4×',
+    );
+    expect(planTrigger.querySelector('.foot-plan-text.marked')?.textContent).toBe(
+      '✓ JPEG → Colour → Noise → Upscale 4×',
+    );
+    expect(planTrigger.querySelector('.foot-plan-step.done')?.textContent).toBe('✓ JPEG');
+    expect(planTrigger.querySelector('.foot-plan-step.running')?.textContent).toBe('Colour');
+    expect(
+      Array.from(planTrigger.querySelectorAll('.foot-plan-step.waiting')).map(
+        (el) => el.textContent,
+      ),
+    ).toEqual(['Noise', 'Upscale 4×']);
+
+    // Selecting another file hides the viewer label and plan-line marks while keeping the global bar title.
+    await user.click(screen.getByRole('button', { name: /^other\.png/ }));
+    await waitFor(() => expect(document.title).toContain('other.png'));
+    expect(document.querySelector('.step-label')).toBeNull();
+    expect(foot.querySelectorAll('.foot-plan-step')).toHaveLength(0);
+    expect(foot.querySelector('.foot-plan')?.getAttribute('aria-label')).toBe(
+      'Plan: JPEG, Colour, Noise, Upscale 4×',
+    );
+    expect(document.querySelector('.status-copy strong')?.textContent).toBe(
+      'Step 2 of 4 · Colour · 31%',
+    );
+  });
+
+  it('holds a skipped step label in the viewer for 4 s and hides label and marks for a one-step job', async () => {
+    const photo = image('photo', true);
+    const snapshot = readySnapshot([photo]);
+    snapshot.settings = {
+      ...snapshot.settings,
+      task: 'upscale',
+      output_scale: 4,
+      fixes: ['blur', 'jpeg', 'noise'],
+      fix_stages: [
+        { fix: 'blur', model_id: 'nafnet_gopro_deblur' },
+        { fix: 'jpeg', model_id: 'fbcnn_color' },
+        { fix: 'noise', model_id: 'denoise_realplksr_1x' },
+      ],
+      selected_model_id: 'span_photo_x4',
+    };
+    for (const model of snapshot.catalog.models) model.installed = true;
+    snapshot.jobs = [
+      {
+        id: 'job-skip',
+        media_id: 'photo',
+        media_name: 'photo.png',
+        media_kind: 'image',
+        status: 'running',
+        output_path: '',
+        progress: 0,
+        error: '',
+        created_at: 1,
+        model_id: 'span_photo_x4',
+      },
+    ];
+
+    await mountWith(snapshot);
+    const foot = document.querySelector('.panel-foot') as HTMLElement;
+    await within(foot).findByText('Blur → JPEG → Noise → Upscale 4×');
+    const emitWorker = api.listenForWorker.mock.calls[0]?.[0] as (message: WorkerEnvelope) => void;
+
+    vi.useFakeTimers();
+    try {
+      emitWorker({
+        type: 'job_started',
+        data: {
+          job_id: 'job-skip',
+          job_steps: [
+            {
+              kind: 'restore',
+              fix: 'blur',
+              model_id: 'nafnet_gopro_deblur',
+              state: 'waiting',
+              note: '',
+              preview_url: '',
+              kept: false,
+            },
+            {
+              kind: 'deblock',
+              fix: 'jpeg',
+              model_id: 'fbcnn_color',
+              state: 'waiting',
+              note: '',
+              preview_url: '',
+              kept: false,
+            },
+            {
+              kind: 'restore',
+              fix: 'noise',
+              model_id: 'denoise_realplksr_1x',
+              state: 'waiting',
+              note: '',
+              preview_url: '',
+              kept: false,
+            },
+            {
+              kind: 'upscale',
+              fix: '',
+              model_id: 'span_photo_x4',
+              state: 'waiting',
+              note: '',
+              preview_url: '',
+              kept: false,
+            },
+          ],
+        },
+      });
+      emitWorker({
+        type: 'stage_started',
+        data: {
+          job_id: 'job-skip',
+          stage_index: 0,
+          stage_count: 4,
+          step: 'restore',
+          fix: 'blur',
+          model_id: 'nafnet_gopro_deblur',
+        },
+      });
+      await tick();
+      expect(document.querySelector('.step-label')?.textContent).toBe('Step 1 of 4 · Blur');
+
+      emitWorker({
+        type: 'stage_result',
+        data: {
+          job_id: 'job-skip',
+          stage_index: 0,
+          stage_count: 4,
+          step: 'restore',
+          fix: 'blur',
+          skipped: true,
+          note: 'Blur model did not improve this image.',
+        },
+      });
+      await tick();
+      emitWorker({
+        type: 'stage_started',
+        data: {
+          job_id: 'job-skip',
+          stage_index: 1,
+          stage_count: 4,
+          step: 'deblock',
+          fix: 'jpeg',
+          model_id: 'fbcnn_color',
+        },
+      });
+      await tick();
+
+      // Status bar and plan line advance at once while the skipped label stays for 4 s.
+      expect(document.querySelector('.status-copy strong')?.textContent).toBe('Step 2 of 4 · JPEG');
+      expect(foot.querySelector('.foot-plan')?.getAttribute('aria-label')).toBe(
+        'Plan: Blur skipped, JPEG running, Noise, Upscale 4×',
+      );
+      expect(document.querySelector('.step-label')?.textContent).toBe('Step 1 of 4 · Blur skipped');
+
+      await vi.advanceTimersByTimeAsync(3999);
+      await tick();
+      expect(document.querySelector('.step-label')?.textContent).toBe('Step 1 of 4 · Blur skipped');
+
+      await vi.advanceTimersByTimeAsync(1);
+      await tick();
+      expect(document.querySelector('.step-label')?.textContent).toBe('Step 2 of 4 · JPEG');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows no viewer label or plan marks for a one-step job', async () => {
+    const photo = image('photo', true);
+    const snapshot = readySnapshot([photo]);
+    snapshot.settings = {
+      ...snapshot.settings,
+      task: 'upscale',
+      output_scale: 4,
+      fixes: [],
+      fix_stages: [],
+      selected_model_id: 'span_photo_x4',
+    };
+    for (const model of snapshot.catalog.models) model.installed = true;
+    snapshot.jobs = [
+      {
+        id: 'job-one',
+        media_id: 'photo',
+        media_name: 'photo.png',
+        media_kind: 'image',
+        status: 'running',
+        output_path: '',
+        progress: 0,
+        error: '',
+        created_at: 1,
+        model_id: 'span_photo_x4',
+      },
+    ];
+
+    await mountWith(snapshot);
+    const foot = document.querySelector('.panel-foot') as HTMLElement;
+    await within(foot).findByText('Upscale 4×');
+    const emitWorker = api.listenForWorker.mock.calls[0]?.[0] as (message: WorkerEnvelope) => void;
+    emitWorker({
+      type: 'job_started',
+      data: {
+        job_id: 'job-one',
+        job_steps: [
+          {
+            kind: 'upscale',
+            fix: '',
+            model_id: 'span_photo_x4',
+            state: 'waiting',
+            note: '',
+            preview_url: '',
+            kept: false,
+          },
+        ],
+      },
+    });
+    emitWorker({
+      type: 'stage_started',
+      data: {
+        job_id: 'job-one',
+        stage_index: 0,
+        stage_count: 1,
+        step: 'upscale',
+        fix: '',
+        model_id: 'span_photo_x4',
+      },
+    });
+
+    await waitFor(() =>
+      expect(document.querySelector('.status-copy strong')?.textContent).toBe('Enhancing'),
+    );
+    expect(document.querySelector('.step-label')).toBeNull();
+    expect(foot.querySelectorAll('.foot-plan-step')).toHaveLength(0);
+    expect(foot.querySelector('.foot-plan')?.getAttribute('aria-label')).toBe('Plan: Upscale 4×');
+  });
+});
+
+describe('Step chips', () => {
+  function setupLastSteps(
+    steps: NonNullable<AppSnapshot['runtime']['last_steps']>['steps'],
+    options: { jobId?: string; media?: MediaItem; jobs?: JobRecord[]; batchIds?: string[] } = {},
+  ) {
+    const media = options.media ?? image('photo', true);
+    const jobId = options.jobId ?? 'job-steps';
+    const snapshot = readySnapshot([media]);
+    snapshot.jobs = options.jobs ?? [
+      {
+        id: jobId,
+        media_id: media.id,
+        media_name: media.name,
+        media_kind: media.kind,
+        status: 'completed',
+        progress: 100,
+        output_path: `/out/${jobId}.png`,
+        error: '',
+        created_at: 1,
+        model_id: 'span_photo_x4',
+      },
+    ];
+    snapshot.runtime.last_output_path = `/out/${jobId}.png`;
+    snapshot.runtime.active_batch_job_ids = options.batchIds ?? [];
+    snapshot.runtime.last_steps =
+      media.kind === 'image'
+        ? {
+            job_id: jobId,
+            media_id: media.id,
+            steps,
+          }
+        : null;
+    let generation = 0;
+    snapshot.runtime.comparison_pair = {
+      media_id: '',
+      generation: 0,
+      showing: { target_id: '', preview_data_url: '' },
+      against: { target_id: '', preview_data_url: '' },
+    };
+    api.requestImageComparison.mockImplementation(async (mediaId, pair) => {
+      if (!pair) return;
+      generation += 1;
+      snapshot.runtime.comparison_pair = {
+        media_id: mediaId,
+        generation,
+        showing:
+          pair.showing === 'original'
+            ? { target_id: 'original', preview_data_url: '', width: 640, height: 480 }
+            : {
+                target_id: pair.showing,
+                preview_data_url: `data:image/jpeg;base64,${encodeURIComponent(pair.showing)}`,
+                width: pair.showing.includes('#') ? 640 : 2560,
+                height: pair.showing.includes('#') ? 480 : 1920,
+                preview_width: pair.showing.includes('#') ? 640 : 2048,
+                preview_height: pair.showing.includes('#') ? 480 : 1536,
+              },
+        against: { target_id: pair.against, preview_data_url: '', width: 640, height: 480 },
+      };
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    });
+    return { snapshot, media, jobId };
+  }
+
+  const fourSteps = (): NonNullable<AppSnapshot['runtime']['last_steps']>['steps'] => [
+    {
+      kind: 'deblock',
+      fix: 'jpeg',
+      model_id: 'fbcnn_color',
+      state: 'done',
+      note: '',
+      preview_url: '',
+      kept: true,
+    },
+    {
+      kind: 'restore',
+      fix: 'colour',
+      model_id: 'ddcolor_modelscope',
+      state: 'done',
+      note: '',
+      preview_url: '',
+      kept: true,
+    },
+    {
+      kind: 'restore',
+      fix: 'noise',
+      model_id: 'denoise_realplksr_1x',
+      state: 'done',
+      note: '',
+      preview_url: '',
+      kept: true,
+    },
+    {
+      kind: 'upscale',
+      fix: '',
+      model_id: 'span_photo_x4',
+      state: 'done',
+      note: '',
+      preview_url: '',
+      kept: false,
+    },
+  ];
+
+  it('shows Result after each step with JPEG, Colour, Noise, 4× and 4× pressed by default', async () => {
+    const { snapshot, jobId } = setupLastSteps(fourSteps());
+    api.listMediaResults.mockResolvedValue(
+      historyOf('photo', [row(jobId, { model_label: 'SPAN ×4', scale: 4 })]),
+    );
+
+    await mountWith(snapshot);
+
+    const group = await screen.findByRole('group', { name: 'Result after each step' });
+    const buttons = within(group).getAllByRole('button');
+    expect(buttons.map((button) => button.textContent?.trim())).toEqual([
+      'JPEG',
+      'Colour',
+      'Noise',
+      '4×',
+    ]);
+    expect(within(group).getByRole('button', { name: '4×', pressed: true })).toBeTruthy();
+    expect(within(group).getByRole('button', { name: 'Noise' }).getAttribute('title')).toBe(
+      'The picture after the Noise fix',
+    );
+    expect(within(group).getByRole('button', { name: '4×' }).getAttribute('title')).toBe(
+      'The finished result',
+    );
+  });
+
+  it('switches the result side when Noise is clicked, shows Loading After Noise… and side label After Noise', async () => {
+    const { snapshot, jobId } = setupLastSteps(fourSteps());
+    api.listMediaResults.mockResolvedValue(
+      historyOf('photo', [row(jobId, { model_label: 'SPAN ×4', scale: 4 })]),
+    );
+
+    const user = await mountWith(snapshot);
+    await waitFor(() =>
+      expect(document.querySelector('.result-image')?.getAttribute('src')).toContain(jobId),
+    );
+    expect(screen.getByRole('button', { name: 'Reveal' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Open' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Use as input' })).toBeTruthy();
+
+    let releaseStep!: () => void;
+    const gate = new Promise<void>((resolve) => (releaseStep = resolve));
+    const immediate = api.requestImageComparison.getMockImplementation()!;
+    api.requestImageComparison.mockImplementation(async (mediaId, pair) => {
+      if (pair?.showing === `${jobId}#2`) await gate;
+      await immediate(mediaId, pair);
+    });
+
+    const group = screen.getByRole('group', { name: 'Result after each step' });
+    await user.click(within(group).getByRole('button', { name: 'Noise' }));
+
+    expect(api.requestImageComparison).toHaveBeenCalledWith('photo', {
+      showing: `${jobId}#2`,
+      against: 'original',
+    });
+    expect(await screen.findByText('Loading After Noise…')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Reveal' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Use as input' })).toBeNull();
+
+    releaseStep();
+    await waitFor(() => expect(screen.queryByText('Loading After Noise…')).toBeNull());
+
+    expect(document.querySelector('.divider-labels')?.textContent).toContain('After Noise');
+    expect(document.querySelector('.result-image')?.getAttribute('src')).toContain(
+      encodeURIComponent(`${jobId}#2`),
+    );
+    expect(within(group).getByRole('button', { name: 'Noise', pressed: true })).toBeTruthy();
+    expect(within(group).getByRole('button', { name: '4×', pressed: false })).toBeTruthy();
+
+    await user.click(within(group).getByRole('button', { name: '4×' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Reveal' })).toBeTruthy());
+  });
+
+  it('disables a skipped step with its note as title, and an unkept step with its error title', async () => {
+    const steps = fourSteps();
+    steps[0] = {
+      kind: 'restore',
+      fix: 'blur',
+      model_id: 'nafnet_gopro_deblur',
+      state: 'skipped',
+      note: 'Blur model did not improve this image.',
+      preview_url: '',
+      kept: false,
+    };
+    steps[1].kept = false;
+    const { snapshot, jobId } = setupLastSteps(steps);
+    api.listMediaResults.mockResolvedValue(
+      historyOf('photo', [row(jobId, { model_label: 'SPAN ×4', scale: 4 })]),
+    );
+
+    await mountWith(snapshot);
+    const group = await screen.findByRole('group', { name: 'Result after each step' });
+    const blur = within(group).getByRole('button', { name: 'Blur' }) as HTMLButtonElement;
+    expect(blur.disabled).toBe(true);
+    expect(blur.getAttribute('title')).toBe('Blur model did not improve this image.');
+
+    const colour = within(group).getByRole('button', { name: 'Colour' }) as HTMLButtonElement;
+    expect(colour.disabled).toBe(true);
+    expect(colour.getAttribute('title')).toBe("This step's picture could not be kept.");
+  });
+
+  it('does not show step chips for a video result or a batch', async () => {
+    const videoMedia: MediaItem = {
+      id: 'video-1',
+      path: '/clip.mp4',
+      name: 'clip.mp4',
+      kind: 'video',
+      width: 1920,
+      height: 1080,
+      frame_count: 100,
+      fps: 24,
+      duration_seconds: 4,
+      preview_data_url: 'data:image/jpeg;base64,v',
+      probe_status: 'ready',
+      error: '',
+      selected: true,
+    };
+    const videoSetup = setupLastSteps(fourSteps(), { media: videoMedia, jobId: 'job-v' });
+    api.listAllMediaResults.mockResolvedValue([
+      historyOf('video-1', [row('job-v', { kind: 'video', output_path: '/out/job-v.mp4' })]),
+    ]);
+    await mountWith(videoSetup.snapshot);
+    await tick();
+    expect(screen.queryByRole('group', { name: 'Result after each step' })).toBeNull();
+
+    cleanup();
+    const batchSetup = setupLastSteps(fourSteps(), {
+      jobId: 'job-b1',
+      batchIds: ['job-b1', 'job-b2'],
+    });
+    batchSetup.snapshot.runtime.last_steps = null;
+    api.listMediaResults.mockResolvedValue(historyOf('photo', [row('job-b1')]));
+    await mountWith(batchSetup.snapshot);
+    await tick();
+    expect(screen.queryByRole('group', { name: 'Result after each step' })).toBeNull();
   });
 });

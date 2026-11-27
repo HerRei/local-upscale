@@ -1,14 +1,14 @@
 import type { PlanStage } from './plan';
 import type { FixKind, InterpolationTarget, MediaItem, UiSettings } from './types';
 
-const PLAN_FIX_NAMES: Record<Exclude<FixKind, 'faces'>, string> = {
+export const PLAN_FIX_NAMES: Record<Exclude<FixKind, 'faces'>, string> = {
   blur: 'Blur',
   jpeg: 'JPEG',
   noise: 'Noise',
   colour: 'Colour',
 };
 
-const INTERPOLATION_BY_TARGET: Record<Exclude<InterpolationTarget, 'off'>, string> = {
+export const INTERPOLATION_BY_TARGET: Record<Exclude<InterpolationTarget, 'off'>, string> = {
   x2: '2× frames',
   x4: '4× frames',
   fps60: '60 fps',

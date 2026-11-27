@@ -25,6 +25,7 @@
   } from './lib/enhancePanel';
   import { formatBytes } from './lib/format';
   import { displayName, fitFor, FIT_LABELS, resultFps, type PlanStage } from './lib/plan';
+  import { planMarks } from './lib/jobSteps';
   import { planLine } from './lib/planLine';
   import type { InterpolationOrder, InterpolationTarget, TaskKind } from './lib/types';
   import { videoModelShortName } from './lib/videoEngines';
@@ -251,18 +252,48 @@
   }, 0);
 
   $: planSteps = planLine(plan, settings, selectedMedia);
+  $: activeJobMediaId = snapshot.runtime.active_job_id
+    ? (snapshot.jobs.find((job) => job.id === snapshot.runtime.active_job_id)?.media_id ?? '')
+    : '';
+  $: jobForSelected =
+    Boolean(snapshot.runtime.active_job_id) &&
+    (!activeJobMediaId || selectedMedia?.id === activeJobMediaId);
+  $: activePlanMarks =
+    settingsLocked && jobForSelected && !(planState.status === 'loading' && planState.first)
+      ? planMarks(snapshot.runtime.job_steps ?? [], planSteps)
+      : [];
   $: planLineText =
     planState.status === 'loading' && planState.first
       ? 'Working out the plan…'
       : planSteps.length > 0
         ? planSteps.join(' → ')
         : 'Nothing to run';
+  $: planLineTitle =
+    planState.status === 'loading' && planState.first
+      ? undefined
+      : activePlanMarks.length > 0
+        ? activePlanMarks
+            .map((mark) => (mark.state === 'done' ? `✓ ${mark.name}` : mark.name))
+            .join(' → ')
+        : planLineText;
   $: planLineLabel =
     planState.status === 'loading' && planState.first
       ? 'Working out the plan…'
-      : planSteps.length > 0
-        ? `Plan: ${planSteps.join(', ')}`
-        : 'Plan: Nothing to run';
+      : activePlanMarks.length > 0
+        ? `Plan: ${activePlanMarks
+            .map((mark) =>
+              mark.state === 'done'
+                ? `${mark.name} done`
+                : mark.state === 'running'
+                  ? `${mark.name} running`
+                  : mark.state === 'skipped'
+                    ? `${mark.name} skipped`
+                    : mark.name,
+            )
+            .join(', ')}`
+        : planSteps.length > 0
+          ? `Plan: ${planSteps.join(', ')}`
+          : 'Plan: Nothing to run';
 
   $: primaryStage = plan.find((stage) => stage.role === 'primary');
   $: primaryName = primaryStage
@@ -893,14 +924,17 @@
             planState.status === 'loading' && planState.first ? ' muted' : ''
           }${planDimmed ? ' dimmed' : ''}`}
           triggerLabel={planLineLabel}
-          triggerTitle={planState.status === 'loading' && planState.first
-            ? undefined
-            : planLineText}
+          triggerTitle={planLineTitle}
           triggerBusy={planState.status === 'loading' && !planState.first}
           let:close
         >
           <svelte:fragment slot="trigger">
-            <span class="foot-plan-text">{planLineText}</span>
+            <span class="foot-plan-text" class:marked={activePlanMarks.length > 0}
+              >{#if activePlanMarks.length > 0}{#each activePlanMarks as mark, index (index)}{#if index > 0}{' → '}{/if}<span
+                    class={`foot-plan-step ${mark.state}`}
+                    >{mark.state === 'done' ? `✓ ${mark.name}` : mark.name}</span
+                  >{/each}{:else}{planLineText}{/if}</span
+            >
             <svg
               class="pop-chevron"
               aria-hidden="true"

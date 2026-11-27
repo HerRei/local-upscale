@@ -36,6 +36,7 @@
     ORIGINAL,
     alignedFraming,
     chooseTarget,
+    defaultChoice,
     describeSide,
     effectiveChoice,
     framingRounding,
@@ -102,6 +103,14 @@
   } from './lib/fixStages';
   import { DEFAULT_FIX_ORDER, FIX_NAMES, MULTI_FIX_FEATURE, stepFeature } from './lib/steps';
   import { applyWorkerEnvelope, resultPreviewForSelectedMedia } from './lib/workerEvents';
+  import {
+    parseStepTarget,
+    resultStepChips,
+    stepLabel,
+    stepName,
+    stepShowingLabel,
+    validStepTarget,
+  } from './lib/jobSteps';
   import { formatBytes, formatDuration, formatVideoClock } from './lib/format';
   import { plainEngineError, recommendedEngineOffer } from './lib/engines';
   import { videoAvailability } from './lib/videoEngines';
@@ -128,6 +137,7 @@
     FixKind,
     FixStageSelection,
     IntegrationStatus,
+    JobStep,
     LaunchIntent,
     MediaItem,
     MediaResults,
@@ -316,13 +326,51 @@
   let previewPane: PreviewPane | undefined;
   let inspectorScroll: HTMLDivElement | undefined;
   let lastLivePreviewSequence = 0;
-  let stageBasePreview = '';
-  let stageBaseJobId = '';
-  let stageBaseSequence = 0;
-  $: if (snapshot.runtime.active_job_id !== stageBaseJobId) {
-    stageBasePreview = '';
-    stageBaseSequence = 0;
-    stageBaseJobId = snapshot.runtime.active_job_id;
+  $: activeStepPreview =
+    snapshot.runtime.job_steps?.reduceRight((found, step) => found || step.preview_url, '') ?? '';
+  let skippedStepLabel = '';
+  let skippedStepTimer: ReturnType<typeof setTimeout> | undefined;
+  let trackedStepJobId = '';
+  let trackedStepStates: JobStep['state'][] = [];
+
+  function clearSkippedStepLabel(): void {
+    if (skippedStepTimer) clearTimeout(skippedStepTimer);
+    skippedStepTimer = undefined;
+    skippedStepLabel = '';
+  }
+
+  function observeJobSteps(
+    jobId: string,
+    steps: readonly JobStep[],
+    currentSettings: UiSettings,
+    isVideo: boolean,
+  ): void {
+    if (!jobId || steps.length < 2) {
+      trackedStepJobId = '';
+      trackedStepStates = [];
+      clearSkippedStepLabel();
+      return;
+    }
+    const nextStates = steps.map((step) => step.state);
+    if (trackedStepJobId !== jobId || trackedStepStates.length !== steps.length) {
+      trackedStepJobId = jobId;
+      trackedStepStates = nextStates;
+      clearSkippedStepLabel();
+      return;
+    }
+    // Keep a newly skipped step in the viewer corner for 4 s before the next step's label.
+    for (let index = 0; index < steps.length; index += 1) {
+      if (steps[index].state === 'skipped' && trackedStepStates[index] !== 'skipped') {
+        const name = stepName(steps[index], currentSettings, isVideo);
+        skippedStepLabel = `Step ${index + 1} of ${steps.length} · ${name} skipped`;
+        if (skippedStepTimer) clearTimeout(skippedStepTimer);
+        skippedStepTimer = setTimeout(() => {
+          skippedStepTimer = undefined;
+          skippedStepLabel = '';
+        }, 4000);
+      }
+    }
+    trackedStepStates = nextStates;
   }
   let diagnostics = '';
   let reportOpen = false;
@@ -966,11 +1014,23 @@
       .filter((job) => ['queued', 'starting', 'running', 'cancelling'].includes(job.status))
       .map((job) => job.media_id),
   );
-  $: activeJobMediaId =
-    snapshot.jobs.find((job) => job.id === snapshot.runtime.active_job_id)?.media_id ?? '';
-  $: videoEngineBusy = Boolean(
-    snapshot.jobs.find((job) => job.id === snapshot.runtime.active_job_id)?.media_kind === 'video',
-  );
+  $: activeJob = snapshot.jobs.find((job) => job.id === snapshot.runtime.active_job_id);
+  $: activeJobMediaId = activeJob?.media_id ?? '';
+  $: videoEngineBusy = activeJob?.media_kind === 'video';
+  $: activeJobIsVideo = activeJob ? activeJob.media_kind === 'video' : settings.task === 'video';
+  $: activeJobSteps = snapshot.runtime.job_steps ?? [];
+  $: observeJobSteps(snapshot.runtime.active_job_id, activeJobSteps, settings, activeJobIsVideo);
+  $: viewerStepLabel =
+    activeJobMediaId && selectedMedia?.id === activeJobMediaId && activeJobSteps.length >= 2
+      ? skippedStepLabel || stepLabel(activeJobSteps, settings, activeJobIsVideo)
+      : '';
+  $: activeStepTitle =
+    snapshot.runtime.active_job_id &&
+    activeJobSteps.length >= 2 &&
+    !snapshot.runtime.status_title.startsWith('Step ') &&
+    ['Processing', 'Enhancing', ''].includes(snapshot.runtime.status_title)
+      ? stepLabel(activeJobSteps, settings, activeJobIsVideo)
+      : '';
   $: runnableMedia = settings.task
     ? snapshot.media.filter((media) => (settings.task === 'video') === (media.kind === 'video'))
     : [];
@@ -1105,7 +1165,17 @@
     selectedImage && snapshot.runtime.comparison_pair && !historyFailures[selectedImage.id],
   );
   $: history = selectedImage ? histories[selectedImage.id] : undefined;
-  $: choice = effectiveChoice(history, selectedImage ? pairChoices[selectedImage.id] : undefined);
+  $: activeLastSteps = snapshot.runtime.last_steps ?? null;
+  $: rawChoice = effectiveChoice(
+    history,
+    selectedImage ? pairChoices[selectedImage.id] : undefined,
+  );
+  $: choice =
+    selectedImage &&
+    rawChoice.showing.includes('#') &&
+    !validStepTarget(rawChoice.showing, activeLastSteps, selectedImage.id)
+      ? defaultChoice(history)
+      : rawChoice;
   // While this image runs and nothing was chosen, its live tiles stay in view.
   $: liveRun = Boolean(selectedImage && activeJobMediaId === selectedImage.id && !choice.pinned);
   $: pairShown = Boolean(pairMode && history && !liveRun);
@@ -1118,7 +1188,10 @@
           .filter((row): row is ResultSummary => Boolean(row)),
       ]
     : [];
-  $: showingSide = selectedImage
+  $: showingStepLabel = selectedImage
+    ? stepShowingLabel(choice.showing, activeLastSteps, settings)
+    : '';
+  $: showingSideRaw = selectedImage
     ? describeSide(
         choice.showing,
         resultRows.find((row) => row.job_id === choice.showing),
@@ -1133,6 +1206,10 @@
           : '',
       )
     : undefined;
+  $: showingSide =
+    showingSideRaw && showingStepLabel
+      ? { ...showingSideRaw, label: showingStepLabel }
+      : showingSideRaw;
   $: againstSide =
     selectedImage && choice.against !== ORIGINAL
       ? describeSide(
@@ -1194,8 +1271,33 @@
           : ''
       : '';
   $: pairLoadingLabel = loadingTarget
-    ? (resultRows.find((row) => row.job_id === loadingTarget)?.model_label ?? 'result')
+    ? stepShowingLabel(loadingTarget, activeLastSteps, settings) ||
+      (resultRows.find((row) => row.job_id === loadingTarget)?.model_label ?? 'result')
     : '';
+  $: shownLastSteps =
+    pairShown &&
+    selectedImage &&
+    activeLastSteps &&
+    activeLastSteps.media_id === selectedImage.id &&
+    activeLastSteps.steps.length >= 2 &&
+    !(snapshot.runtime.active_batch_job_ids && snapshot.runtime.active_batch_job_ids.length > 1) &&
+    !activeLastSteps.steps.some((step) => step.kind === 'edit' || step.kind === 'video') &&
+    resultRows.find((row) => row.job_id === activeLastSteps.job_id)?.kind !== 'edit' &&
+    (choice.showing === activeLastSteps.job_id ||
+      (parseStepTarget(choice.showing)?.jobId === activeLastSteps.job_id &&
+        validStepTarget(choice.showing, activeLastSteps, selectedImage.id)))
+      ? activeLastSteps
+      : null;
+  $: lastStepsScale = shownLastSteps
+    ? resultRows.find((row) => row.job_id === shownLastSteps.job_id)?.scale ||
+      snapshot.catalog.models.find(
+        (model) => model.model_id === shownLastSteps.steps.at(-1)?.model_id,
+      )?.native_scale ||
+      settings.output_scale
+    : 0;
+  $: viewerStepChips = shownLastSteps
+    ? resultStepChips(shownLastSteps, choice.showing, settings, lastStepsScale)
+    : [];
   // A stopped job's kept result is marked Unfinished wherever it shows. A photo's finished
   // tiles are measured in pixels of its saved file, which the decoded side reports.
   $: showingRow = pairShown
@@ -1779,6 +1881,7 @@
       accent.dispose();
       if (stateRefresh) clearTimeout(stateRefresh);
       if (runtimePulseTimer) clearTimeout(runtimePulseTimer);
+      if (skippedStepTimer) clearTimeout(skippedStepTimer);
       if (autoStartTimer) clearTimeout(autoStartTimer);
       if (etaTimer) clearInterval(etaTimer);
       for (const unlisten of unlisteners) unlisten();
@@ -1835,6 +1938,7 @@
       ) {
         latest.runtime.tiles_completed ??= snapshot.runtime.tiles_completed;
         latest.runtime.tiles_total ??= snapshot.runtime.tiles_total;
+        latest.runtime.job_steps ??= snapshot.runtime.job_steps;
       }
       snapshot = latest;
       if (!latest.settings.crash_reports) {
@@ -1923,18 +2027,6 @@
         return;
       }
       const sequence = Number(message.data.sequence ?? 0);
-      const encoded = typeof message.data.jpeg_base64 === 'string' ? message.data.jpeg_base64 : '';
-      if (
-        jobId === snapshot.runtime.active_job_id &&
-        String(message.data.preview_kind ?? '') === 'tile' &&
-        encoded &&
-        isFullImageFrame(message.data) &&
-        sequence > stageBaseSequence
-      ) {
-        stageBasePreview = `data:image/jpeg;base64,${encoded}`;
-        stageBaseJobId = jobId;
-        stageBaseSequence = sequence;
-      }
       if (
         jobId !== snapshot.runtime.active_job_id ||
         (activeJobMediaId && selectedMedia?.id !== activeJobMediaId) ||
@@ -4599,24 +4691,8 @@
     previewPane?.resetView();
   }
 
-  function isFullImageFrame(data: Record<string, unknown>): boolean {
-    const imageWidth = Number(data.image_width ?? 0);
-    const imageHeight = Number(data.image_height ?? 0);
-    return (
-      imageWidth > 0 &&
-      imageHeight > 0 &&
-      Number(data.output_x ?? 0) === 0 &&
-      Number(data.output_y ?? 0) === 0 &&
-      Number(data.output_width ?? 0) === imageWidth &&
-      Number(data.output_height ?? 0) === imageHeight
-    );
-  }
-
   function resetProgressivePreview(jobId = ''): void {
     lastLivePreviewSequence = 0;
-    stageBasePreview = '';
-    stageBaseJobId = jobId;
-    stageBaseSequence = 0;
     previewPane?.resetProgressivePreview(jobId);
   }
 
@@ -4925,8 +5001,13 @@
           {videoEngineBusy}
           activeTileSize={snapshot.runtime.active_tile_size}
           stagePreview={!activeJobMediaId || selectedMedia?.id === activeJobMediaId
-            ? stageBasePreview
+            ? activeStepPreview
             : ''}
+          stepLabel={viewerStepLabel}
+          stepChips={viewerStepChips}
+          selectStepChip={(target) => {
+            if (target !== choice.showing) choosePair('showing', target);
+          }}
           {selectedMedia}
           resultPreview={shownView.resultPreview}
           referenceIsResult={shownView.referenceIsResult}
@@ -4996,7 +5077,7 @@
               : saving
                 ? 'Saving the result'
                 : snapshot.runtime.active_job_id
-                  ? snapshot.runtime.status_title
+                  ? activeStepTitle || snapshot.runtime.status_title
                   : downloadStatus
                     ? `${downloadStatus.title} · ${Math.round(downloadStatus.percent)}%`
                     : !preparing && downloadFailureLine

@@ -788,6 +788,14 @@ pub struct JobStep {
     pub kept: bool,
 }
 
+/// The steps of the last finished lone photo job, for the step chips after it.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct LastSteps {
+    pub job_id: String,
+    pub media_id: String,
+    pub steps: Vec<JobStep>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RuntimeStatus {
     #[serde(default)]
@@ -857,6 +865,9 @@ pub struct RuntimeStatus {
     /// The running photo job's steps; empty outside a job of two or more steps.
     #[serde(default)]
     pub job_steps: Vec<JobStep>,
+    /// Set when a lone photo job with step results ends (S6 keeps its full-size files).
+    #[serde(default)]
+    pub last_steps: Option<LastSteps>,
     /// The plan line's name of each of `job_steps`, for the status title.
     #[serde(skip)]
     pub job_step_names: Vec<String>,
@@ -1147,6 +1158,7 @@ impl Default for RuntimeStatus {
             tiles_completed: 0,
             tiles_total: 0,
             job_steps: Vec::new(),
+            last_steps: None,
             job_step_names: Vec::new(),
         }
     }

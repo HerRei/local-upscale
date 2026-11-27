@@ -167,6 +167,10 @@ test('colour plus upscale live preview keeps an opaque colourised base without a
     ...withOutputs,
     photos: 1,
     running: true,
+    jobSteps: [
+      { kind: 'restore', fix: 'colour', model_id: 'ddcolor_modelscope', state: 'running' },
+      { kind: 'upscale', model_id: 'span_photo_x4', state: 'waiting' },
+    ],
     settings: { ...withOutputs.settings, appearance: 'light', viewer_background: 'checker' },
   });
   await showPane(page, 'preview');
@@ -185,19 +189,17 @@ test('colour plus upscale live preview keeps an opaque colourised base without a
   });
 
   await emit(page, 'worker-message', {
-    type: 'live_preview_frame',
+    type: 'stage_result',
     data: {
       job_id: 'job-photo-1',
-      sequence: 1,
       stage_index: 0,
-      preview_kind: 'tile',
-      output_x: 0,
-      output_y: 0,
-      output_width: 1600,
-      output_height: 1067,
-      image_width: 1600,
-      image_height: 1067,
-      jpeg_base64: blueBase,
+      stage_count: 2,
+      step: 'restore',
+      fix: 'colour',
+      skipped: false,
+      note: '',
+      preview_url: `data:image/jpeg;base64,${blueBase}`,
+      image_path: '',
     },
   });
   await emit(page, 'worker-message', {

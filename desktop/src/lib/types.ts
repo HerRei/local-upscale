@@ -478,6 +478,12 @@ export interface JobStep {
   kept: boolean;
 }
 
+export interface LastSteps {
+  job_id: string;
+  media_id: string;
+  steps: JobStep[];
+}
+
 export interface RuntimeStatus {
   comparison_pair?: ComparisonPair;
   preview_original?: PreviewOriginalRegion;
@@ -524,6 +530,7 @@ export interface RuntimeStatus {
   can_keep_partial?: boolean;
   /** The running photo job's steps; empty outside a job of two or more steps. */
   job_steps?: JobStep[];
+  last_steps?: LastSteps | null;
 }
 
 export interface BenchmarkRender {

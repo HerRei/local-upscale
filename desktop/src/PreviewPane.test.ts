@@ -1034,52 +1034,21 @@ it('uses the colourised stage preview as the opaque base for the upscaling stage
     error: '',
     selected: true,
   };
-  const { component, container } = render(PreviewPane, {
+  const { component, container, rerender } = render(PreviewPane, {
     selectedMedia,
     resultPreview: '',
     completedVideoOutput: '',
     processing: true,
+    stagePreview: '',
   });
 
-  // Stage 0 (colour) finishes with a full-image colourised frame.
-  component.queueProgressiveTile(
-    {
-      type: 'tile_update',
-      data: {
-        job_id: 'colour-upscale',
-        stage_index: 0,
-        phase: 'started',
-        active_tile_size: 1982,
-        output_x: 0,
-        output_y: 0,
-        output_width: 1982,
-        output_height: 1361,
-        image_width: 1982,
-        image_height: 1361,
-      },
-    },
-    'colour-upscale',
+  // Stage 0 (colour) finishes and provides its step picture via stagePreview.
+  await rerender({ stagePreview: 'data:image/jpeg;base64,colourised-stage0' });
+  await waitFor(() =>
+    expect(container.querySelector('.source-image')?.getAttribute('src')).toBe(
+      'data:image/jpeg;base64,colourised-stage0',
+    ),
   );
-  component.queueProgressiveTile(
-    {
-      type: 'tile_update',
-      data: {
-        job_id: 'colour-upscale',
-        stage_index: 0,
-        phase: 'completed',
-        active_tile_size: 1982,
-        output_x: 0,
-        output_y: 0,
-        output_width: 1982,
-        output_height: 1361,
-        image_width: 1982,
-        image_height: 1361,
-        jpeg_base64: 'colourised-stage0',
-      },
-    },
-    'colour-upscale',
-  );
-  await waitFor(() => expect(drawImage).toHaveBeenCalledTimes(2));
 
   fillRect.mockClear();
   drawImage.mockClear();
@@ -1136,7 +1105,7 @@ it('uses the colourised stage preview as the opaque base for the upscaling stage
   );
 });
 
-it('updates the stage 1 base if the colourised stage 0 frame arrives after stage 1 started', async () => {
+it('updates the stage 1 base if the colourised stage 0 picture arrives after stage 1 started', async () => {
   const fillRect = vi.fn();
   const drawImage = vi.fn();
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
@@ -1176,11 +1145,12 @@ it('updates the stage 1 base if the colourised stage 0 frame arrives after stage
     error: '',
     selected: true,
   };
-  const { component } = render(PreviewPane, {
+  const { component, container, rerender } = render(PreviewPane, {
     selectedMedia,
     resultPreview: '',
     completedVideoOutput: '',
     processing: true,
+    stagePreview: '',
   });
 
   component.queueProgressiveTile(
@@ -1207,28 +1177,13 @@ it('updates the stage 1 base if the colourised stage 0 frame arrives after stage
   drawImage.mockClear();
   drawnSources.length = 0;
 
-  component.queueProgressiveTile(
-    {
-      type: 'tile_update',
-      data: {
-        job_id: 'late-stage0',
-        stage_index: 0,
-        phase: 'completed',
-        active_tile_size: 1982,
-        output_x: 0,
-        output_y: 0,
-        output_width: 1982,
-        output_height: 1361,
-        image_width: 1982,
-        image_height: 1361,
-        jpeg_base64: 'colourised-stage0',
-      },
-    },
-    'late-stage0',
+  await rerender({ stagePreview: 'data:image/jpeg;base64,colourised-stage0' });
+  await waitFor(() =>
+    expect(container.querySelector('.source-image')?.getAttribute('src')).toBe(
+      'data:image/jpeg;base64,colourised-stage0',
+    ),
   );
-  await waitFor(() => expect(drawImage).toHaveBeenCalledTimes(1));
   expect(drawnSources).toEqual(['data:image/jpeg;base64,colourised-stage0']);
-  expect(fillRect).toHaveBeenCalledTimes(1);
 });
 
 it('uses async decoding on preview images and pauses edit-sweep animation when off', () => {
@@ -1387,4 +1342,481 @@ it('debounces region requests on zoom for both sides, aligns crops, and clears o
     rect.mockRestore();
     vi.useRealTimers();
   }
+});
+
+describe('Viewer between steps', () => {
+  const photo: MediaItem = {
+    id: 'step-photo',
+    path: '/step-photo.jpg',
+    name: 'step-photo.jpg',
+    kind: 'image',
+    width: 1600,
+    height: 1067,
+    frame_count: 1,
+    fps: 0,
+    duration_seconds: 0,
+    preview_data_url: 'data:image/jpeg;base64,source-orig',
+    probe_status: 'ready',
+    error: '',
+    selected: true,
+  };
+
+  function setupCanvasAndImages() {
+    const fillRect = vi.fn();
+    const clearRect = vi.fn();
+    const drawImage = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+      fillStyle: '',
+      fillRect,
+      clearRect,
+      drawImage,
+    } as unknown as CanvasRenderingContext2D);
+    const pendingDecodes = new Map<
+      string,
+      { resolve: () => void; reject: (err: unknown) => void }
+    >();
+    vi.stubGlobal(
+      'Image',
+      class {
+        onload?: () => void;
+        onerror?: () => void;
+        private currentSrc = '';
+        get src() {
+          return this.currentSrc;
+        }
+        set src(value: string) {
+          this.currentSrc = value;
+          this.onload?.();
+        }
+        decode() {
+          const src = this.currentSrc;
+          return new Promise<void>((resolve, reject) => {
+            pendingDecodes.set(src, { resolve, reject });
+          });
+        }
+      },
+    );
+    return { fillRect, clearRect, drawImage, pendingDecodes };
+  }
+
+  it('ignores a full-image tile of a finished step without painting or changing the source base', async () => {
+    const { fillRect, drawImage } = setupCanvasAndImages();
+    const { component, container } = render(PreviewPane, {
+      selectedMedia: photo,
+      resultPreview: '',
+      completedVideoOutput: '',
+      processing: true,
+      stagePreview: '',
+    });
+
+    component.queueProgressiveTile(
+      {
+        type: 'tile_update',
+        data: {
+          job_id: 'job-1',
+          stage_index: 0,
+          phase: 'completed',
+          output_x: 0,
+          output_y: 0,
+          output_width: 1600,
+          output_height: 1067,
+          image_width: 1600,
+          image_height: 1067,
+          jpeg_base64: 'tiny-320px-base',
+        },
+      },
+      'job-1',
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(container.querySelector('.source-image')?.getAttribute('src')).toBe(
+      'data:image/jpeg;base64,source-orig',
+    );
+    expect(fillRect).not.toHaveBeenCalled();
+    expect(drawImage).not.toHaveBeenCalled();
+    expect(container.querySelector('.progressive-image.visible')).toBeNull();
+  });
+
+  it('keeps step 1 tiles on canvas while step 2 tiles arrive without a step picture, then swaps and clears in one update when it decodes', async () => {
+    const { clearRect, drawImage, pendingDecodes } = setupCanvasAndImages();
+    const { component, container, rerender } = render(PreviewPane, {
+      selectedMedia: photo,
+      resultPreview: '',
+      completedVideoOutput: '',
+      processing: true,
+      stagePreview: '',
+    });
+
+    // Step 1 (index 0) paints a tile.
+    component.queueProgressiveTile(
+      {
+        type: 'tile_update',
+        data: {
+          job_id: 'job-2',
+          stage_index: 0,
+          phase: 'completed',
+          active_tile_size: 256,
+          output_x: 0,
+          output_y: 0,
+          output_width: 256,
+          output_height: 256,
+          image_width: 1600,
+          image_height: 1067,
+          jpeg_base64: 'step1-tile0',
+        },
+      },
+      'job-2',
+    );
+    await waitFor(() => expect(drawImage).toHaveBeenCalledTimes(2));
+    expect(container.querySelector('.progressive-image.visible')).toBeTruthy();
+
+    clearRect.mockClear();
+    drawImage.mockClear();
+
+    // Step 2 (index 1) tiles arrive before step 1's picture has arrived.
+    component.queueProgressiveTile(
+      {
+        type: 'tile_update',
+        data: {
+          job_id: 'job-2',
+          stage_index: 1,
+          phase: 'started',
+          active_tile_size: 256,
+          output_x: 0,
+          output_y: 0,
+          output_width: 1024,
+          output_height: 1024,
+          image_width: 6400,
+          image_height: 4268,
+        },
+      },
+      'job-2',
+    );
+    component.queueProgressiveTile(
+      {
+        type: 'tile_update',
+        data: {
+          job_id: 'job-2',
+          stage_index: 1,
+          phase: 'completed',
+          active_tile_size: 256,
+          output_x: 0,
+          output_y: 0,
+          output_width: 1024,
+          output_height: 1024,
+          image_width: 6400,
+          image_height: 4268,
+          jpeg_base64: 'step2-tile0',
+        },
+      },
+      'job-2',
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Canvas still shows step 1's tiles without clearing or painting step 2 yet.
+    expect(clearRect).not.toHaveBeenCalled();
+    expect(drawImage).not.toHaveBeenCalled();
+    expect(container.querySelector('.progressive-image.visible')).toBeTruthy();
+
+    // Step 1's picture arrives and starts decoding.
+    const step1Url = 'asset://localhost/%2Fcache%2Fpreviews%2Fstep1.jpg';
+    await rerender({ stagePreview: step1Url });
+    expect(pendingDecodes.has(step1Url)).toBe(true);
+    // Before decode resolves: old source stays and canvas is not cleared yet.
+    expect(container.querySelector('.source-image')?.getAttribute('src')).toBe(
+      'data:image/jpeg;base64,source-orig',
+    );
+    expect(clearRect).not.toHaveBeenCalled();
+
+    // Decode finishes: base updates and canvas clears in one update.
+    pendingDecodes.get(step1Url)!.resolve();
+    await waitFor(() =>
+      expect(container.querySelector('.source-image')?.getAttribute('src')).toBe(step1Url),
+    );
+    expect(clearRect).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears at the next tile and keeps the source base when no step picture arrives for 2 s', async () => {
+    vi.useFakeTimers();
+    try {
+      const { clearRect, drawImage } = setupCanvasAndImages();
+      const { component, container } = render(PreviewPane, {
+        selectedMedia: photo,
+        resultPreview: '',
+        completedVideoOutput: '',
+        processing: true,
+        stagePreview: '',
+      });
+
+      component.queueProgressiveTile(
+        {
+          type: 'tile_update',
+          data: {
+            job_id: 'job-timeout',
+            stage_index: 0,
+            phase: 'completed',
+            active_tile_size: 256,
+            output_x: 0,
+            output_y: 0,
+            output_width: 256,
+            output_height: 256,
+            image_width: 1600,
+            image_height: 1067,
+            jpeg_base64: 'step1-tile0',
+          },
+        },
+        'job-timeout',
+      );
+      await vi.waitFor(() => expect(drawImage).toHaveBeenCalledTimes(2));
+
+      clearRect.mockClear();
+      drawImage.mockClear();
+
+      // Step 2 starts without a step picture.
+      component.queueProgressiveTile(
+        {
+          type: 'tile_update',
+          data: {
+            job_id: 'job-timeout',
+            stage_index: 1,
+            phase: 'started',
+            active_tile_size: 256,
+            output_x: 0,
+            output_y: 0,
+            output_width: 1024,
+            output_height: 1024,
+            image_width: 6400,
+            image_height: 4268,
+          },
+        },
+        'job-timeout',
+      );
+      expect(clearRect).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(2000);
+      // Not cleared until the next tile is painted.
+      expect(clearRect).not.toHaveBeenCalled();
+
+      component.queueProgressiveTile(
+        {
+          type: 'tile_update',
+          data: {
+            job_id: 'job-timeout',
+            stage_index: 1,
+            phase: 'completed',
+            active_tile_size: 256,
+            output_x: 0,
+            output_y: 0,
+            output_width: 1024,
+            output_height: 1024,
+            image_width: 6400,
+            image_height: 4268,
+            jpeg_base64: 'step2-tile1',
+          },
+        },
+        'job-timeout',
+      );
+      await vi.waitFor(() => expect(drawImage).toHaveBeenCalledTimes(2));
+      expect(clearRect).toHaveBeenCalledTimes(1);
+      expect(container.querySelector('.source-image')?.getAttribute('src')).toBe(
+        'data:image/jpeg;base64,source-orig',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps zoom and pan unchanged across a step change', async () => {
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      width: 800,
+      height: 600,
+      top: 0,
+      left: 0,
+      right: 800,
+      bottom: 600,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    try {
+      const { pendingDecodes } = setupCanvasAndImages();
+      const { container, rerender } = render(PreviewPane, {
+        selectedMedia: photo,
+        resultPreview: '',
+        completedVideoOutput: '',
+        processing: true,
+        stagePreview: '',
+      });
+      await waitFor(() =>
+        expect(container.querySelector<HTMLElement>('.image-stage')?.style.width).not.toBe('1px'),
+      );
+
+      const canvas = container.querySelector('.canvas-well') as HTMLElement;
+      for (let step = 0; step < 8; step += 1) {
+        await fireEvent.wheel(canvas, { deltaY: -100, clientX: 200, clientY: 180 });
+      }
+      const zoomBefore = screen.getByRole('group', { name: 'Preview zoom' }).textContent;
+      const stageBefore = container.querySelector<HTMLElement>('.image-stage')?.style.transform;
+      expect(zoomBefore).not.toContain('100%');
+
+      const stepUrl = 'asset://localhost/%2Fcache%2Fpreviews%2Fstep-zoom.jpg';
+      await rerender({ stagePreview: stepUrl });
+      pendingDecodes.get(stepUrl)!.resolve();
+      await waitFor(() =>
+        expect(container.querySelector('.source-image')?.getAttribute('src')).toBe(stepUrl),
+      );
+      await fireEvent.load(container.querySelector('.source-image') as HTMLImageElement);
+
+      expect(screen.getByRole('group', { name: 'Preview zoom' }).textContent).toBe(zoomBefore);
+      expect(container.querySelector<HTMLElement>('.image-stage')?.style.transform).toBe(
+        stageBefore,
+      );
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it('shows the original when M is held during a job, hides the step label, and restores both on release', async () => {
+    const { drawImage, pendingDecodes } = setupCanvasAndImages();
+    const { component, container, rerender } = render(PreviewPane, {
+      selectedMedia: photo,
+      resultPreview: '',
+      completedVideoOutput: '',
+      processing: true,
+      stagePreview: '',
+      stepLabel: 'Step 2 of 4 · Upscale 4×',
+    });
+
+    expect(container.querySelector('.step-label')?.getAttribute('aria-hidden')).toBe('true');
+    expect(container.querySelector('.step-label .activity-dot')).toBeTruthy();
+    expect(container.querySelector('.step-label')?.textContent).toBe('Step 2 of 4 · Upscale 4×');
+
+    const stepUrl = 'asset://localhost/%2Fcache%2Fpreviews%2Fstep-m.jpg';
+    await rerender({ stagePreview: stepUrl });
+    pendingDecodes.get(stepUrl)!.resolve();
+    await waitFor(() =>
+      expect(container.querySelector('.source-image')?.getAttribute('src')).toBe(stepUrl),
+    );
+
+    component.queueProgressiveTile(
+      {
+        type: 'tile_update',
+        data: {
+          job_id: 'job-peek',
+          stage_index: 1,
+          phase: 'completed',
+          active_tile_size: 256,
+          output_x: 0,
+          output_y: 0,
+          output_width: 1024,
+          output_height: 1024,
+          image_width: 6400,
+          image_height: 4268,
+          jpeg_base64: 'upscale-tile',
+        },
+      },
+      'job-peek',
+    );
+    await waitFor(() => expect(drawImage).toHaveBeenCalledTimes(2));
+    expect(container.querySelector('.progressive-image.visible')).toBeTruthy();
+
+    await fireEvent.keyDown(window, { key: 'm' });
+    expect(container.querySelector('.source-image')?.getAttribute('src')).toBe(
+      'data:image/jpeg;base64,source-orig',
+    );
+    expect(container.querySelector('.progressive-image.visible')).toBeNull();
+    expect(container.querySelector('.step-label')).toBeNull();
+    expect(container.querySelector('.original-chip')?.textContent).toBe('Original');
+
+    await fireEvent.keyUp(window, { key: 'm' });
+    expect(container.querySelector('.source-image')?.getAttribute('src')).toBe(stepUrl);
+    expect(container.querySelector('.progressive-image.visible')).toBeTruthy();
+    expect(container.querySelector('.original-chip')).toBeNull();
+    expect(container.querySelector('.step-label')?.textContent).toBe('Step 2 of 4 · Upscale 4×');
+  });
+
+  it('does not render the step label when stepLabel is empty or processing is false', async () => {
+    setupCanvasAndImages();
+    const { container, rerender } = render(PreviewPane, {
+      selectedMedia: photo,
+      resultPreview: '',
+      completedVideoOutput: '',
+      processing: true,
+      stagePreview: '',
+      stepLabel: '',
+    });
+    expect(container.querySelector('.step-label')).toBeNull();
+
+    await rerender({ processing: false, stepLabel: 'Step 2 of 4 · Colour' });
+    expect(container.querySelector('.step-label')).toBeNull();
+  });
+
+  it('renders step chips left of the comparison view switch in the header', async () => {
+    const selectStepChip = vi.fn();
+    const photo: MediaItem = {
+      id: 'step-chips-photo',
+      path: '/step-chips-photo.jpg',
+      name: 'step-chips-photo.jpg',
+      kind: 'image',
+      width: 1600,
+      height: 1067,
+      frame_count: 1,
+      fps: 0,
+      duration_seconds: 0,
+      preview_data_url: 'data:image/jpeg;base64,source',
+      probe_status: 'ready',
+      error: '',
+      selected: true,
+    };
+    const { container } = render(PreviewPane, {
+      selectedMedia: photo,
+      resultPreview: 'data:image/jpeg;base64,result',
+      completedVideoOutput: '',
+      stepChips: [
+        {
+          id: 'job-1#0',
+          label: 'Blur',
+          pressed: false,
+          disabled: true,
+          skipped: true,
+          title: 'Blur model did not improve this image.',
+        },
+        {
+          id: 'job-1#1',
+          label: 'Noise',
+          pressed: false,
+          disabled: false,
+          title: 'The picture after the Noise fix',
+        },
+        {
+          id: 'job-1',
+          label: '4×',
+          pressed: true,
+          disabled: false,
+          title: 'The finished result',
+        },
+      ],
+      selectStepChip,
+    });
+
+    const header = container.querySelector('.preview-header')!;
+    const group = screen.getByRole('group', { name: 'Result after each step' });
+    const viewSwitch = screen.getByRole('radiogroup', { name: 'Comparison view' });
+    expect(header.contains(group)).toBe(true);
+    expect(
+      Boolean(group.compareDocumentPosition(viewSwitch) & Node.DOCUMENT_POSITION_FOLLOWING),
+    ).toBe(true);
+
+    const blurChip = screen.getByRole('button', { name: 'Blur' }) as HTMLButtonElement;
+    expect(blurChip.disabled).toBe(true);
+    expect(blurChip.getAttribute('title')).toBe('Blur model did not improve this image.');
+
+    const finalChip = screen.getByRole('button', { name: '4×' });
+    expect(finalChip.getAttribute('aria-pressed')).toBe('true');
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Noise' }));
+    expect(selectStepChip).toHaveBeenCalledWith('job-1#1');
+  });
 });

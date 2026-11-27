@@ -9,6 +9,8 @@
   import SplitComparison from './SplitComparison.svelte';
   import UnfinishedTiles from './UnfinishedTiles.svelte';
   import BackgroundSwitch from './BackgroundSwitch.svelte';
+  import StepChips from './StepChips.svelte';
+  import type { StepChip } from './lib/jobSteps';
   import type { ViewerBackground } from './lib/viewerBackground';
   import type { PaneUnfinished } from './lib/unfinished';
   import type { ComparisonSide } from './lib/results';
@@ -89,6 +91,11 @@
   export let showLiveTiles = true;
   /** Full-image result from an earlier stage (for example colour before upscaling). */
   export let stagePreview = '';
+  /** Current step label shown in the corner for multi-step jobs. */
+  export let stepLabel = '';
+  /** Result chips shown in the header after a multi-step photo job. */
+  export let stepChips: StepChip[] = [];
+  export let selectStepChip: (id: string) => void = () => {};
   /** Why a pair is shown as a single result, for example a different framing. */
   export let comparisonNote = '';
   export let completedVideoOutput: string;
@@ -179,10 +186,14 @@
   // Two saved sides compare even while one of them is still decoding.
   $: loading = loadingLabel !== '';
   $: pairShown = referenceIsResult && !singleFrame && selectedMedia?.kind === 'image' && !loading;
+  $: hasLiveTiles = progressiveVisible && !resultPreview && showLiveTiles && !pairShown;
   $: canCompare =
     !loading &&
     Boolean((resultPreview && !singleFrame) || pairShown || videoComparison?.enhanced_url);
-  $: canPeek = canCompare || Boolean(singleFrame && resultPreview);
+  $: canPeek =
+    canCompare ||
+    Boolean(singleFrame && resultPreview) ||
+    Boolean(processing && (committedStagePreview || hasLiveTiles || videoSourcePreview));
   $: if (!canPeek) holdingOriginal = false;
   $: shownView = holdingOriginal ? 'original' : comparisonView;
   $: resultClip = loading
@@ -316,7 +327,7 @@
     tilesPinned[side] === mark.id || tilesHovered === side || tilesFocused === side;
   $: if (tilesHovered && !marks.some((entry) => entry.side === tilesHovered)) tilesHovered = '';
   $: if (tilesFocused && !marks.some((entry) => entry.side === tilesFocused)) tilesFocused = '';
-  $: liveTilesShown = progressiveVisible && !resultPreview && showLiveTiles && !pairShown;
+  $: liveTilesShown = hasLiveTiles && !holdingOriginal;
   $: frameKey = singleFrame ? `${singleFrame.width}x${singleFrame.height}` : '';
   let laidOutFrame = '';
   $: if (frameKey !== laidOutFrame) {
@@ -333,10 +344,15 @@
   let progressiveJobId = '';
   let progressiveFrame = -1;
   let progressiveStage = 0;
-  let stageBasePreview = '';
-  let stageBaseStage = -1;
+  let committedStagePreview = '';
+  let decodingStagePreview = '';
+  let stagePreviewGeneration = 0;
+  let stageDecodeWork: Promise<void> = Promise.resolve();
+  let awaitingStagePreview = false;
+  let stagePreviewTimer: ReturnType<typeof setTimeout> | undefined;
+  let pendingStepClear = false;
+  let pendingStepTiles: { data: WorkerEnvelope['data']; jobId: string }[] = [];
   let stageTilesDrawn = 0;
-  let progressiveGridTile: OutputTile | null = null;
   let videoSourceFrame = -1;
   let videoSourcePreview = '';
   let progressiveOutputWidth = 0;
@@ -362,11 +378,12 @@
     sourcePreviewWidth = 0;
     sourcePreviewHeight = 0;
   }
-  $: activeStagePreview = stageBasePreview || stagePreview;
+  $: handleStagePreviewChange(stagePreview);
   $: displayedSourcePreview =
     (processing &&
+      !holdingOriginal &&
       (videoSourcePreview ||
-        (showLiveTiles && !resultPreview && !pairShown ? activeStagePreview : ''))) ||
+        (showLiveTiles && !resultPreview && !pairShown ? committedStagePreview : ''))) ||
     sourcePreview;
   $: deferredPreview = Boolean(
     videoEngineBusy &&
@@ -451,6 +468,8 @@
       void playbackListener?.then((unlisten) => unlisten()).catch(() => {});
       observer?.disconnect();
       progressiveGeneration += 1;
+      clearTimeout(stagePreviewTimer);
+      stagePreviewTimer = undefined;
       clearTimeout(regionTimer);
       regionKey = '';
       hadRegionRequest = false;
@@ -534,32 +553,104 @@
     if (!videoEngineBusy) void repairSelectedPreview();
   }
 
-  export function resetProgressivePreview(jobId = '', frame = -1, preserveStageBase = false): void {
-    if (jobId !== progressiveJobId || frame !== videoSourceFrame) {
-      videoSourceFrame = -1;
-      videoSourcePreview = '';
-    }
-    if (!preserveStageBase) {
-      stageBasePreview = '';
-      stageBaseStage = -1;
-    }
+  function clearProgressiveCanvas(): void {
     stageTilesDrawn = 0;
-    progressiveGridTile = null;
-    progressiveFrame = frame;
-    progressiveStage = 0;
-    progressiveGeneration += 1;
-    progressiveJobId = jobId;
     progressiveOutputWidth = 0;
     progressiveOutputHeight = 0;
     progressiveVisible = false;
     progressivePendingCount = 0;
     lastProgressivePaintAt = 0;
     activeTileVisible = false;
+    progressiveGeneration += 1;
     progressiveWork = Promise.resolve();
     const context = progressiveCanvas?.getContext('2d');
     if (progressiveCanvas && context) {
       context.clearRect(0, 0, progressiveCanvas.width, progressiveCanvas.height);
     }
+  }
+
+  function handleStagePreviewChange(url: string): void {
+    if (!url) {
+      clearTimeout(stagePreviewTimer);
+      stagePreviewTimer = undefined;
+      committedStagePreview = '';
+      decodingStagePreview = '';
+      stagePreviewGeneration += 1;
+      stageDecodeWork = Promise.resolve();
+      awaitingStagePreview = false;
+      pendingStepClear = false;
+      pendingStepTiles = [];
+      return;
+    }
+    if (url === committedStagePreview || url === decodingStagePreview) return;
+    const generation = ++stagePreviewGeneration;
+    decodingStagePreview = url;
+    const work = decodeStageImage(url)
+      .then(() => {
+        if (disposed || generation !== stagePreviewGeneration || stagePreview !== url) return;
+        decodingStagePreview = '';
+        committedStagePreview = url;
+        const shouldClear = progressiveVisible || awaitingStagePreview;
+        awaitingStagePreview = false;
+        pendingStepClear = false;
+        clearTimeout(stagePreviewTimer);
+        stagePreviewTimer = undefined;
+        const toFlush = pendingStepTiles;
+        pendingStepTiles = [];
+        if (shouldClear) {
+          clearProgressiveCanvas();
+        }
+        if (toFlush.length > 0) {
+          const tileGeneration = progressiveGeneration;
+          for (const entry of toFlush) {
+            enqueueProgressiveTile(entry.data, entry.jobId, tileGeneration);
+          }
+        }
+      })
+      .catch(() => {
+        if (generation === stagePreviewGeneration && decodingStagePreview === url) {
+          decodingStagePreview = '';
+        }
+      });
+    stageDecodeWork = work;
+  }
+
+  async function decodeStageImage(source: string): Promise<HTMLImageElement> {
+    if (!source) throw new Error('preview source is empty');
+    const image = new Image();
+    if (typeof image.decode === 'function') {
+      image.src = source;
+      await image.decode();
+      return image;
+    }
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error('preview image could not be decoded'));
+      image.src = source;
+    });
+    return image;
+  }
+
+  export function resetProgressivePreview(jobId = '', frame = -1): void {
+    if (jobId !== progressiveJobId || frame !== videoSourceFrame) {
+      videoSourceFrame = -1;
+      videoSourcePreview = '';
+    }
+    if (!jobId || jobId !== progressiveJobId) {
+      committedStagePreview = '';
+      decodingStagePreview = '';
+      stagePreviewGeneration += 1;
+      stageDecodeWork = Promise.resolve();
+    }
+    clearTimeout(stagePreviewTimer);
+    stagePreviewTimer = undefined;
+    awaitingStagePreview = false;
+    pendingStepClear = false;
+    pendingStepTiles = [];
+    progressiveFrame = frame;
+    progressiveStage = 0;
+    progressiveJobId = jobId;
+    clearProgressiveCanvas();
   }
 
   function isFullImageTile(tile: OutputTile): boolean {
@@ -592,6 +683,22 @@
     videoSourcePreview = `data:image/jpeg;base64,${data.jpeg_base64}`;
   }
 
+  function enqueueProgressiveTile(
+    data: WorkerEnvelope['data'],
+    jobId: string,
+    generation: number,
+  ): void {
+    progressivePendingCount += 1;
+    progressiveWork = progressiveWork
+      .then(() => paintProgressiveTile(data, jobId, generation))
+      .catch((error) => console.error('Could not draw progressive tile', error))
+      .finally(() => {
+        if (generation === progressiveGeneration) {
+          progressivePendingCount = Math.max(0, progressivePendingCount - 1);
+        }
+      });
+  }
+
   export function queueProgressiveTile(message: WorkerEnvelope, activeJobId: string): void {
     const data = message.data;
     const jobId = String(data.job_id ?? '');
@@ -602,42 +709,8 @@
     const tile = tileFromData(data);
     const encoded = typeof data.jpeg_base64 === 'string' ? data.jpeg_base64 : '';
     const fullImage = phase === 'completed' && Boolean(encoded) && isFullImageTile(tile);
-    if (jobId === progressiveJobId && stage < progressiveStage) {
-      if (fullImage && stage > stageBaseStage && frame <= progressiveFrame) {
-        stageBasePreview = `data:image/jpeg;base64,${encoded}`;
-        stageBaseStage = stage;
-        if (stageTilesDrawn === 0 && progressiveOutputWidth > 0) {
-          progressiveOutputWidth = 0;
-          progressiveOutputHeight = 0;
-          const generation = progressiveGeneration;
-          progressivePendingCount += 1;
-          progressiveWork = progressiveWork
-            .then(async () => {
-              await ensureProgressiveCanvas(
-                progressiveGridTile ?? tile,
-                jobId,
-                generation,
-                Boolean(data.processing_stage),
-              );
-            })
-            .catch((error) => console.error('Could not update stage preview', error))
-            .finally(() => {
-              if (generation === progressiveGeneration) {
-                progressivePendingCount = Math.max(0, progressivePendingCount - 1);
-              }
-            });
-        }
-      }
-      return;
-    }
-    if (stage > progressiveStage) {
-      resetProgressivePreview(
-        jobId,
-        frame,
-        jobId === progressiveJobId && frame === progressiveFrame,
-      );
-      progressiveStage = stage;
-    }
+    if (fullImage && selectedMedia?.kind !== 'video') return;
+    if (jobId === progressiveJobId && stage < progressiveStage) return;
     if (frame >= 0 && frame < progressiveFrame) return;
     if (frame > progressiveFrame || phase === 'reset') {
       resetProgressivePreview(jobId, frame);
@@ -645,10 +718,33 @@
     }
     if (!progressiveJobId) progressiveJobId = jobId;
     if (jobId !== progressiveJobId) return;
-
-    if (fullImage && stage >= stageBaseStage) {
-      stageBasePreview = `data:image/jpeg;base64,${encoded}`;
-      stageBaseStage = stage;
+    if (stage > progressiveStage) {
+      const hadTiles = progressiveVisible && stageTilesDrawn > 0 && selectedMedia?.kind !== 'video';
+      progressiveStage = stage;
+      if (hadTiles) {
+        if (!awaitingStagePreview) {
+          awaitingStagePreview = true;
+          pendingStepClear = false;
+          pendingStepTiles = [];
+          clearTimeout(stagePreviewTimer);
+          const generation = progressiveGeneration;
+          stagePreviewTimer = setTimeout(() => {
+            stagePreviewTimer = undefined;
+            if (disposed || generation !== progressiveGeneration || !awaitingStagePreview) return;
+            awaitingStagePreview = false;
+            pendingStepClear = true;
+            pendingStepTiles = [];
+          }, 2000);
+        }
+      } else {
+        awaitingStagePreview = false;
+        pendingStepClear = false;
+        pendingStepTiles = [];
+        clearTimeout(stagePreviewTimer);
+        stagePreviewTimer = undefined;
+        progressiveOutputWidth = 0;
+        progressiveOutputHeight = 0;
+      }
     }
 
     const now = typeof performance === 'undefined' ? Date.now() : performance.now();
@@ -667,7 +763,7 @@
         activeTileHeight = percentage.height;
         activeTileVisible = true;
       }
-      if (progressiveVisible) return;
+      if (awaitingStagePreview || pendingStepClear || progressiveVisible) return;
     }
     if (phase === 'completed') {
       // Completion metadata has no pixels. It must not consume the display
@@ -685,14 +781,23 @@
         }
         return;
       }
+      if (awaitingStagePreview) {
+        if (pendingStepTiles.length < 64) {
+          pendingStepTiles.push({ data, jobId });
+        }
+        return;
+      }
+      if (pendingStepClear) {
+        pendingStepClear = false;
+        clearProgressiveCanvas();
+      }
       // Decoding every JPEG can monopolize WKWebView when a lightweight model
       // finishes many tiny tiles per second. A sampled live mosaic stays useful
       // while preserving input responsiveness; completion always loads the
       // authoritative full output image.
       if (
-        !fullImage &&
-        ((lastProgressivePaintAt > 0 && now - lastProgressivePaintAt < 75) ||
-          progressivePendingCount >= 3)
+        (lastProgressivePaintAt > 0 && now - lastProgressivePaintAt < 75) ||
+        progressivePendingCount >= 3
       ) {
         return;
       }
@@ -701,16 +806,7 @@
       return;
     }
 
-    const generation = progressiveGeneration;
-    progressivePendingCount += 1;
-    progressiveWork = progressiveWork
-      .then(() => paintProgressiveTile(data, jobId, generation))
-      .catch((error) => console.error('Could not draw progressive tile', error))
-      .finally(() => {
-        if (generation === progressiveGeneration) {
-          progressivePendingCount = Math.max(0, progressivePendingCount - 1);
-        }
-      });
+    enqueueProgressiveTile(data, jobId, progressiveGeneration);
   }
 
   function tileFromData(data: WorkerEnvelope['data']): OutputTile {
@@ -792,6 +888,10 @@
     generation: number,
     overlappingRegions = false,
   ): Promise<boolean> {
+    if (decodingStagePreview) {
+      await stageDecodeWork;
+      if (generation !== progressiveGeneration || jobId !== progressiveJobId) return false;
+    }
     const canvas = progressiveCanvas;
     if (!canvas) return false;
     if (
@@ -819,8 +919,7 @@
       progressiveVisible = true;
       return true;
     }
-    progressiveGridTile = tile;
-    const stageBase = stageBasePreview || stagePreview;
+    const stageBase = committedStagePreview;
     context.fillStyle = themeColor('--preview-canvas-background');
     context.fillRect(0, 0, size.width, size.height);
     try {
@@ -1082,16 +1181,17 @@
     if (videoSourcePreview && selectedMedia?.kind === 'video') return;
     const image = event.currentTarget as HTMLImageElement;
     previewRetryMediaId = '';
-    if (
-      displayedSourcePreview === sourcePreview &&
-      image.naturalWidth > 0 &&
-      image.naturalHeight > 0
-    ) {
+    if (displayedSourcePreview !== sourcePreview) return;
+    if (image.naturalWidth > 0 && image.naturalHeight > 0) {
       sourcePreviewWidth = image.naturalWidth;
       sourcePreviewHeight = image.naturalHeight;
     }
     previewNaturalWidth = Math.max(1, image.naturalWidth);
     previewNaturalHeight = Math.max(1, image.naturalHeight);
+    if (processing) {
+      updateViewport(false);
+      return;
+    }
     updateViewport(true);
     scheduleViewportReset();
   }
@@ -1184,15 +1284,7 @@
 />
 
 <section class="preview-pane" class:compact-hidden={compactHidden}>
-  <div class="preview-header" data-tauri-drag-region>
-    <div class="header-file" data-tauri-drag-region>
-      {#if selectedMedia}<span class="header-name"><FileName name={selectedMedia.name} /></span
-        >{/if}<span class="header-size" data-tauri-drag-region
-        >{selectedMedia
-          ? `${selectedMedia.width || '—'} × ${selectedMedia.height || '—'}${selectedMedia.kind === 'video' ? ' · Video' : ''}`
-          : 'No media selected'}</span
-      >
-    </div>
+  {#snippet viewSwitch()}
     {#if canCompare}
       <div class="view-switch" role="radiogroup" aria-label="Comparison view">
         {#each comparisonViews as option (option.id)}
@@ -1205,6 +1297,30 @@
           >
         {/each}
       </div>
+    {/if}
+  {/snippet}
+
+  <div class="preview-header" class:has-steps={stepChips.length > 0} data-tauri-drag-region>
+    <div class="header-file" data-tauri-drag-region>
+      {#if selectedMedia}<span class="header-name"><FileName name={selectedMedia.name} /></span
+        >{/if}<span class="header-size" data-tauri-drag-region
+        >{selectedMedia
+          ? `${selectedMedia.width || '—'} × ${selectedMedia.height || '—'}${selectedMedia.kind === 'video' ? ' · Video' : ''}`
+          : 'No media selected'}</span
+      >
+    </div>
+    {#if stepChips.length > 0}
+      <div class="header-steps" data-tauri-drag-region>
+        <StepChips
+          chips={stepChips}
+          label="Steps"
+          ariaLabel="Result after each step"
+          onSelect={selectStepChip}
+        />
+        {@render viewSwitch()}
+      </div>
+    {:else}
+      {@render viewSwitch()}
     {/if}
   </div>
 
@@ -1436,6 +1552,11 @@
           >
         {/if}
       {/each}
+      {#if processing && stepLabel && !holdingOriginal && !resultPreview && !pairShown}
+        <div class="step-label" aria-hidden="true">
+          <span class="activity-dot"></span><span>{stepLabel}</span>
+        </div>
+      {/if}
       {#if videoPreparation}
         <div class="playback-preparation" role="status" on:pointerdown|stopPropagation>
           <span class="playback-spinner" aria-hidden="true"></span>
