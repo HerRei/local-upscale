@@ -6,7 +6,7 @@
     "max_fix_stages": 4,
     "max_image_pipeline_stages": 6,
     "max_recipe_stages": 6,
-    "max_step_stages": 1,
+    "max_step_stages": 2,
     "max_upscale_prefix_stages": 4,
     "max_video_upscale_prefix_stages": 3,
     "multi_fix_feature": "image_multi_fix",
@@ -548,6 +548,66 @@
       "short_name": "",
       "stage_kind": "interpolate",
       "stage_label": "",
+      "supports_mask": false
+    },
+    {
+      "dev_only": true,
+      "fix_chip_order": null,
+      "fix_kind": null,
+      "id": "deinterlace",
+      "in_image_pipeline": true,
+      "in_recipe_stages": false,
+      "is_fix_stage": false,
+      "label": "Deinterlace",
+      "media": [
+        "video"
+      ],
+      "needs_model": false,
+      "order": 10,
+      "parameters": [
+        {
+          "choices": [
+            "frame",
+            "field"
+          ],
+          "default": "frame",
+          "int_choices": [],
+          "kind": "choice",
+          "maximum": null,
+          "minimum": null,
+          "name": "mode",
+          "nullable": false,
+          "required": false,
+          "ui_default": null,
+          "ui_maximum": null,
+          "ui_minimum": null
+        },
+        {
+          "choices": [
+            "auto",
+            "tff",
+            "bff"
+          ],
+          "default": "auto",
+          "int_choices": [],
+          "kind": "choice",
+          "maximum": null,
+          "minimum": null,
+          "name": "parity",
+          "nullable": false,
+          "required": false,
+          "ui_default": null,
+          "ui_maximum": null,
+          "ui_minimum": null
+        }
+      ],
+      "phase": "geometry",
+      "required_feature": "video_deinterlace",
+      "role": null,
+      "row_label": "",
+      "short_name": "",
+      "stage_kind": null,
+      "stage_label": "Deinterlacing",
       "supports_mask": false
     },
     {

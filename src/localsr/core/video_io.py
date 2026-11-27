@@ -58,6 +58,7 @@ class VideoProbe:
     hdr_format: str = ""
     audio_warning: str = ""
     has_audio: bool = True
+    field_order: str = "unknown"
 
 
 @dataclass(frozen=True)
@@ -191,6 +192,9 @@ def _video_probe(container, stream, first: av.VideoFrame | None, converter: str 
         {16: "PQ", 18: "HLG"}.get(transfer, ""),
         _audio_compatibility_warning(container, converter=converter),
         any(item.type == "audio" for item in container.streams),
+        {1: "progressive", 2: "tff", 3: "bff", 4: "bff", 5: "tff"}.get(
+            int(getattr(stream.codec_context, "field_order", 0)), "unknown"
+        ),
     )
 
 

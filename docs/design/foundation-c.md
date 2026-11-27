@@ -208,10 +208,10 @@ of the settings file (a `mask_path` must be a photo added to LocalSR).
   (`StepStageSelection.model_id`, resolved through the catalog like a fix), a handler that
   sets the image's alpha instead of its colour, and a host rule that forces an output format
   with alpha (PNG, TIFF, WebP).
-- **Video stabilisation and deinterlacing** (model-less, parameters): a video handler in
-  `VIDEO_STEP_HANDLERS` (both are phase `geometry`, so they arrive before the primary through
-  `step_stages` already); the output size after a crop and the frame rate after field
-  doubling must reach `VideoChainContext` (`output_width`, `fps`).
+- **Deinterlacing**: the dev-only video geometry step supports frame and field modes, field
+  order selection, and progressive-source passthrough. It still needs a UI row.
+- **Video stabilisation**: needs a video geometry handler and crop output dimensions passed
+  to `VideoChainContext`.
 - **Grain/film look for real**: the look (midtone weighting, grain size, colour grain), a UI
   row, and running after the primary in video (today refused).
 - **Denoise/deblur strength**: declare `strength` on the fix step, and blend the fix output
