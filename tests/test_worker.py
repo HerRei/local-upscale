@@ -1,5 +1,6 @@
 import json
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -920,7 +921,7 @@ def _pipelined_batch_setup(tmp_path, monkeypatch, count, *, size=(8, 8), scale=2
             self._job_id = ""
 
         def load(self, path, **_kwargs):
-            job_id = path.rsplit("/", 1)[-1].removesuffix(".png")
+            job_id = Path(path).stem
             return {
                 "job_id": job_id,
                 "tensor": torch.full((3, size[1], size[0]), 0.5, dtype=torch.float32),

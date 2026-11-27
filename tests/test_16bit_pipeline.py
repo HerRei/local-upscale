@@ -35,6 +35,11 @@ def _srgb_bytes() -> bytes:
     return ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
 
 
+def _without_icc_date(profile: bytes | None) -> bytes | None:
+    """An ICC profile minus its creation time (header bytes 24-35), which LittleCMS stamps."""
+    return None if profile is None else profile[:24] + profile[36:]
+
+
 def _encode_png(
     arr: np.ndarray,
     color_type: int,
@@ -219,7 +224,9 @@ def test_16bit_rgb_png_round_trip_preserves_values_within_one_16bit_step(tmp_pat
     # Metadata allow-list + ICC survived and Pillow reads both back from the written PNG.
     assert b"iCCP" in extra and b"eXIf" in extra
     with Image.open(out_path) as pil_out:
-        assert pil_out.info.get("icc_profile") == _srgb_bytes()
+        assert _without_icc_date(pil_out.info.get("icc_profile")) == _without_icc_date(
+            _srgb_bytes()
+        )
         out_exif = pil_out.getexif()
         assert out_exif[274] == 1
         assert out_exif[315] == "Hermes"
@@ -366,7 +373,7 @@ def test_16bit_wide_gamut_icc_stays_unconverted_and_invalid_icc_warns(tmp_path):
     # 8-bit still converts to sRGB.
     data8 = ImageManager().load(str(src_png), bit_depth=8)
     assert data8["has_invalid_icc"] is False
-    assert data8["icc_profile"] == _srgb_bytes()
+    assert _without_icc_date(data8["icc_profile"]) == _without_icc_date(_srgb_bytes())
     assert int(round(float(data8["tensor"][0, 1, 0]) * 255)) > 120
 
     # Round-trip embeds the original wide-gamut ICC unchanged in both PNG and TIFF.
