@@ -1183,7 +1183,9 @@
     referenceIsResult,
     referencePreview: referenceIsResult && againstSide?.state === 'ready' ? againstSide.src : '',
     referenceLabel: referenceIsResult ? (againstSide?.label ?? 'Original') : 'Original',
-    showingLabel: showingSide?.label ?? '',
+    // Without a result list the newest result is shown on its own terms, not as the
+    // chosen side, which then still reads Original.
+    showingLabel: pairMode && history ? (showingSide?.label ?? '') : '',
     showingWidth: showingSide?.width ?? 0,
     showingHeight: showingSide?.height ?? 0,
     showingPreviewWidth: showingSide?.previewWidth ?? 0,
