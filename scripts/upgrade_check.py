@@ -52,6 +52,7 @@ OLDER_RELEASES = (
     "v0.6.0-beta",
     "v0.6.1-beta",
     "v0.6.2-beta",
+    "v0.6.3-beta",
 )
 NEW_HOST_TEST = (
     "updates::tests::"
