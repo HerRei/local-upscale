@@ -1174,6 +1174,7 @@ pub(crate) fn plan_job_checked(
     settings: UiSettings,
     options: PlanJobOptions,
 ) -> AppResult<Vec<crate::job_plan::PlanStage>> {
+    validate_step_stages(&settings.step_stages, None)?;
     let catalog = lock(&state.catalog)?.clone();
     let capabilities = lock(&state.capabilities)?.clone();
     let effective = crate::job_plan::with_listed_device(&settings, &capabilities);
@@ -1269,6 +1270,7 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
     validate_bit_depth_engine(&input, lock(&state.engine)?.as_ref())?;
     validate_fix_engine(&input, lock(&state.engine)?.as_ref())?;
     validate_stage_params_engine(&input.fix_stages, lock(&state.engine)?.as_ref())?;
+    validate_step_stages_engine(&input.step_stages, lock(&state.engine)?.as_ref())?;
     let steps = crate::steps::registry();
     if input.task == "video"
         && input.video_interpolation != "off"
@@ -4204,6 +4206,7 @@ fn validate_start(input: &StartBatchInput, state: &AppState) -> AppResult<()> {
             .grants
             .check_model_file(Path::new(&input.custom_model_path))?;
     }
+    check_stage_masks_granted(input, state)?;
     let media = state
         .capabilities
         .lock()
@@ -4237,6 +4240,7 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
     let steps = crate::steps::registry();
     let limits = steps.limits();
     validate_fix_selections(&settings.fix_stages)?;
+    validate_step_stages(&settings.step_stages, None)?;
     if !matches!(settings.interface_scale, 100 | 110 | 125) {
         return Err(AppError::Validation(
             "interface scale must be 100, 110, or 125 percent".into(),
@@ -4390,9 +4394,18 @@ fn validate_stage_params_engine(
     stages: &[crate::types::FixStageSelection],
     engine: Option<&crate::types::EngineInfo>,
 ) -> AppResult<()> {
-    let uses_params_or_masks = stages
-        .iter()
-        .any(|stage| stage.params.is_some() || stage.mask_path.is_some());
+    validate_stage_params_engine_for(
+        stages
+            .iter()
+            .any(|stage| stage.params.is_some() || stage.mask_path.is_some()),
+        engine,
+    )
+}
+
+fn validate_stage_params_engine_for(
+    uses_params_or_masks: bool,
+    engine: Option<&crate::types::EngineInfo>,
+) -> AppResult<()> {
     if !uses_params_or_masks {
         return Ok(());
     }
@@ -4404,6 +4417,99 @@ fn validate_stage_params_engine(
         return Err(AppError::Validation(
             "This engine does not support stage parameters or masks. Update LocalSR.".into(),
         ));
+    }
+    Ok(())
+}
+
+/// Each step stage is a known step, at most once, with registry-valid parameters and
+/// mask, and (when `media` is given) one that runs on that media.
+fn validate_step_stages(
+    stages: &[crate::types::StepStageSelection],
+    media: Option<&str>,
+) -> AppResult<()> {
+    let steps = crate::steps::registry();
+    if stages.len() > steps.limits().max_step_stages {
+        return Err(AppError::Validation("too many added steps".into()));
+    }
+    let mut seen = HashSet::new();
+    for stage in stages {
+        let step = steps
+            .validate_step_stage(
+                &stage.step,
+                stage.params.as_ref(),
+                stage.mask_path.as_deref(),
+            )
+            .map_err(AppError::Validation)?;
+        if !seen.insert(stage.step.as_str()) {
+            return Err(AppError::Validation(format!(
+                "{} can run only once",
+                step.label
+            )));
+        }
+        if let Some(media) = media {
+            if !step.media.iter().any(|candidate| candidate == media) {
+                return Err(AppError::Validation(format!(
+                    "{} does not run on {}",
+                    step.label,
+                    if media == "video" { "videos" } else { "photos" }
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_step_stages_engine(
+    stages: &[crate::types::StepStageSelection],
+    engine: Option<&crate::types::EngineInfo>,
+) -> AppResult<()> {
+    let steps = crate::steps::registry();
+    let has =
+        |feature: &str| engine.is_some_and(|engine| engine.features.iter().any(|f| f == feature));
+    for stage in stages {
+        let Some((step, _)) = steps.step_stage(&stage.step) else {
+            return Err(AppError::Validation(format!(
+                "unknown step '{}'",
+                stage.step
+            )));
+        };
+        if step
+            .required_feature
+            .as_deref()
+            .is_some_and(|feature| !has(feature))
+        {
+            return Err(AppError::Validation(if step.dev_only {
+                format!(
+                    "{} is a development step. Start LocalSR with LOCALSR_DEV_STEPS=1 to run it.",
+                    step.label
+                )
+            } else {
+                format!("This engine cannot run {}. Update LocalSR.", step.label)
+            }));
+        }
+    }
+    validate_stage_params_engine_for(
+        stages
+            .iter()
+            .any(|stage| stage.params.is_some() || stage.mask_path.is_some()),
+        engine,
+    )
+}
+
+/// The worker opens a stage mask itself, so it must be a media file the user chose.
+fn check_stage_masks_granted(input: &StartBatchInput, state: &AppState) -> AppResult<()> {
+    let masks = input
+        .fix_stages
+        .iter()
+        .filter_map(|stage| stage.mask_path.as_deref())
+        .chain(
+            input
+                .step_stages
+                .iter()
+                .filter_map(|stage| stage.mask_path.as_deref()),
+        );
+    for mask in masks {
+        state.grants.check_media_input(Path::new(mask))?;
     }
     Ok(())
 }
@@ -4460,6 +4566,7 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
         selected_model_id: input.model_id.clone(),
         selected_video_model_id: input.video_model_id.clone(),
         fix_stages: input.fix_stages.clone(),
+        step_stages: input.step_stages.clone(),
         custom_model_path: input.custom_model_path.clone(),
         output_scale: input.output_scale,
         output_directory: input.output_directory.clone(),
@@ -4493,6 +4600,15 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
         ..UiSettings::default()
     };
     validate_settings(&settings)?;
+    if !input.step_stages.is_empty() {
+        let temporal = input.task == "video" && input.video_model_id != "frame_by_frame";
+        let Some(media) = crate::job_plan::step_stage_media(&input.task, temporal) else {
+            return Err(AppError::Validation(
+                "Added steps run on photos and with the Frame-by-frame video engine.".into(),
+            ));
+        };
+        validate_step_stages(&input.step_stages, Some(media))?;
+    }
     if input.task == "video"
         && input.video_task == "denoise"
         && input.video_model_id != "frame_by_frame"
@@ -4564,7 +4680,7 @@ fn upscale_skips_sr(input: &StartBatchInput) -> bool {
 
 fn has_work_at_1x(input: &StartBatchInput) -> bool {
     let temporal = input.task == "video" && input.video_model_id != "frame_by_frame";
-    if !temporal && !input.fix_stages.is_empty() {
+    if !temporal && (!input.fix_stages.is_empty() || !input.step_stages.is_empty()) {
         return true;
     }
     if input.task == "video" {
@@ -5215,8 +5331,24 @@ fn image_pipeline_stages(
     input: &StartBatchInput,
 ) -> Vec<crate::protocol::PipelineStageRequest> {
     use crate::protocol::{PipelineStageRequest, StageExecution};
+    use crate::steps::StepPlacement;
 
-    let mut stages = Vec::with_capacity(crate::steps::registry().limits().max_recipe_stages);
+    let steps = crate::steps::registry();
+    let step_stages = |placement: StepPlacement| {
+        input.step_stages.iter().filter_map(move |selection| {
+            let (step, at) = steps.step_stage(&selection.step)?;
+            (at == placement).then(|| PipelineStageRequest {
+                kind: Some(step.stage_kind.clone().unwrap_or_else(|| step.id.clone())),
+                step: Some(step.id.clone()),
+                params: selection.params.clone(),
+                mask_path: selection.mask_path.clone(),
+                ..Default::default()
+            })
+        })
+    };
+    let mut stages =
+        Vec::with_capacity(steps.limits().max_recipe_stages + steps.limits().max_step_stages);
+    stages.extend(step_stages(StepPlacement::BeforeFixes));
     for stage in preprocess {
         stages.push(PipelineStageRequest {
             kind: Some(stage.kind.to_owned()),
@@ -5230,6 +5362,7 @@ fn image_pipeline_stages(
         });
     }
     if skip_upscale {
+        stages.extend(step_stages(StepPlacement::AfterPrimary));
         return stages;
     }
     let restoring =
@@ -5259,6 +5392,7 @@ fn image_pipeline_stages(
             ..Default::default()
         });
     }
+    stages.extend(step_stages(StepPlacement::AfterPrimary));
     stages
 }
 

@@ -588,6 +588,59 @@ function buildCorpus(): ParityCase[] {
     installedIds: ['ddcolor_modelscope'],
   });
 
+  // 10. Step stages added by id: photos run them, video, temporal models and Edit leave them out
+  const grain = { step: 'grain', params: { strength: 40, seed: 7 } };
+  const maskedGrain = { ...grain, mask_path: '/in/mask.png' };
+  const stepCases: [
+    string,
+    Partial<UiSettings>,
+    Omit<Parameters<typeof makeCase>[1], 'settingsPatch'>?,
+  ][] = [
+    ['upscale', { task: 'upscale', step_stages: [grain] }],
+    [
+      'upscale-fix-face-mask',
+      {
+        task: 'upscale',
+        fix_stages: [{ fix: 'noise', model_id: 'denoise_realplksr_1x' }],
+        fixes: ['noise', 'faces'],
+        step_stages: [maskedGrain],
+      },
+      { faceEnabled: true, faceModelId: 'hat_l_x4_face' },
+    ],
+    [
+      'upscale-unknown-step',
+      { task: 'upscale', step_stages: [{ step: 'tool_from_a_newer_version' }, grain] },
+    ],
+    [
+      'restore',
+      {
+        task: 'denoise',
+        selected_model_id: 'denoise_realplksr_1x',
+        output_scale: 1,
+        fix_stages: [{ fix: 'noise', model_id: 'denoise_realplksr_1x' }],
+        fixes: ['noise'],
+        step_stages: [grain],
+      },
+    ],
+    [
+      'video-frame-by-frame',
+      { task: 'video', selected_video_model_id: 'frame_by_frame', step_stages: [grain] },
+    ],
+    [
+      'video-temporal',
+      { task: 'video', selected_video_model_id: 'seedvr2_3b', step_stages: [grain] },
+      { usingTemporalVideo: true, selectedVideoModelId: 'seedvr2_3b' },
+    ],
+    ['edit', { task: 'edit', step_stages: [grain] }, { editModelId: null }],
+  ];
+  for (const [tag, patch, spec] of stepCases) {
+    push(`step-stages-${tag}`, {
+      ...spec,
+      settingsPatch: { selected_model_id: 'span_photo_x4', output_scale: 4, ...patch },
+      installedIds: ['span_photo_x4', 'denoise_realplksr_1x'],
+    });
+  }
+
   return cases;
 }
 
@@ -611,8 +664,10 @@ describe('job_plan parity corpus', () => {
         'deflicker',
         'interpolate',
         'audio_denoise',
+        'grain',
       ]),
     );
+    expect(cases.some((c) => (c.expected_start_input.step_stages ?? []).length > 0)).toBe(true);
 
     expect(cases.some((c) => c.expected_plan.some((s) => s.missing === true))).toBe(true);
     expect(cases.some((c) => c.expected_plan.some((s) => s.remembered === true))).toBe(true);

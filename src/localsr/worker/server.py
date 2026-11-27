@@ -197,7 +197,12 @@ BUNDLE_LOAD_SECONDS = 900.0
 
 
 def _engine_features(video_engines: list[str] | None = None) -> list[str]:
-    from localsr.core.steps import LIMITS, REQUIRED_STEP_FEATURES
+    from localsr.core.steps import (
+        DEV_STEP_FEATURES,
+        LIMITS,
+        REQUIRED_STEP_FEATURES,
+        dev_steps_enabled,
+    )
 
     features = [
         "image",
@@ -215,7 +220,7 @@ def _engine_features(video_engines: list[str] | None = None) -> list[str]:
         "edit_placement",
         "precision_auto",
     ]
-    for feature in REQUIRED_STEP_FEATURES:
+    for feature in REQUIRED_STEP_FEATURES + (DEV_STEP_FEATURES if dev_steps_enabled() else ()):
         if feature not in features:
             features.append(feature)
     features.append("compare_regions")
@@ -2185,10 +2190,16 @@ class WorkerServer:
             output_scale=data.get("output_scale"),
             face_model_path=data.get("face_model_path"),
             face_fidelity=float(data.get("face_fidelity", 0.7)),
+            media="video",
         )
         for stage in pipeline.stages:
             if stage.mask_path:
                 raise ValueError(f"Video stage {stage.step_id!r} does not support masks.")
+        if pipeline.postprocess_stages:
+            raise ValueError(
+                f"Video stage {pipeline.postprocess_stages[0].step_id!r} cannot run after the "
+                "main model in this version."
+            )
         face_model_path = None if pipeline.primary is None else data.get("face_model_path")
         release_except = getattr(self.engine, "release_models_except", None)
         if callable(release_except):

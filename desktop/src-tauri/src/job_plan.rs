@@ -7,10 +7,10 @@ use serde::{Deserialize, Serialize};
 use crate::{
     editing::EditModel,
     results::ResultUi,
-    steps::StepRegistry,
+    steps::{StepDefinition, StepPlacement, StepRegistry},
     types::{
         CapabilityInfo, CatalogManifest, CatalogModel, CatalogVideoModel, DeviceInfo,
-        FixStageSelection, StartBatchInput, UiSettings,
+        FixStageSelection, StartBatchInput, StepStageSelection, UiSettings,
     },
 };
 
@@ -223,6 +223,59 @@ pub fn with_listed_device(settings: &UiSettings, capabilities: &CapabilityInfo) 
     next
 }
 
+/// The media a task's step stages run on: photos, or frame-by-frame video frames.
+pub fn step_stage_media(task: &str, using_temporal_video: bool) -> Option<&'static str> {
+    match task {
+        "upscale" | "denoise" => Some("image"),
+        "video" if !using_temporal_video => Some("video"),
+        _ => None,
+    }
+}
+
+/// The step stages that run for these settings, in their order, with where each runs.
+/// Steps this version does not know and steps for another media are left out.
+pub fn active_step_stages<'a>(
+    steps: &'a StepRegistry,
+    settings: &'a UiSettings,
+    using_temporal_video: bool,
+) -> Vec<(&'a StepStageSelection, &'a StepDefinition, StepPlacement)> {
+    let Some(media) = step_stage_media(&settings.task, using_temporal_video) else {
+        return Vec::new();
+    };
+    settings
+        .step_stages
+        .iter()
+        .filter_map(|selection| {
+            let (step, placement) = steps.step_stage(&selection.step)?;
+            step.media
+                .iter()
+                .any(|candidate| candidate == media)
+                .then_some((selection, step, placement))
+        })
+        .collect()
+}
+
+fn step_stage_row(step: &StepDefinition) -> PlanStage {
+    PlanStage {
+        kind: step.id.clone(),
+        role: "step".into(),
+        fix: None,
+        remembered: None,
+        missing: None,
+        label: step.label.clone(),
+        model_id: None,
+        video_model_id: None,
+        interpolation_model_id: None,
+        audio_model_id: None,
+        edit_model_id: None,
+        custom: None,
+        installed: true,
+        can_download: false,
+        needs_file: false,
+        size_bytes: 0,
+    }
+}
+
 fn missing_stage(kind: &str, role: &str, label: &str, fix: &str) -> PlanStage {
     PlanStage {
         kind: kind.to_owned(),
@@ -321,6 +374,12 @@ pub fn resolve_plan(
 
     let by_id =
         |id: &str| -> Option<&CatalogModel> { catalog.models.iter().find(|m| m.model_id == id) };
+    let step_stages = active_step_stages(steps, settings, options.using_temporal_video);
+    for (_, step, placement) in &step_stages {
+        if *placement == StepPlacement::BeforeFixes {
+            stages.push(step_stage_row(step));
+        }
+    }
     let restoring = is_restore_task(settings);
     let fix_stages: &[FixStageSelection] = if !options.using_temporal_video
         && (settings.task == "upscale" || settings.task == "video" || restoring)
@@ -532,6 +591,12 @@ pub fn resolve_plan(
         }
     }
 
+    for (_, step, placement) in &step_stages {
+        if *placement == StepPlacement::AfterPrimary {
+            stages.push(step_stage_row(step));
+        }
+    }
+
     let audio_model = resolve_audio_model(&catalog.audio_models, &settings.video_audio_model);
     if settings.task == "video" && settings.video_clean_audio && options.has_audio != Some(false) {
         if let Some(audio) = audio_model {
@@ -569,6 +634,7 @@ pub fn resolve_plan(
 /// Pure `StartBatchInput` builder matching `startInput.ts::buildStartInput`.
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn build_start_input(
+    steps: &StepRegistry,
     capabilities: &CapabilityInfo,
     raw_settings: &UiSettings,
     has_audio: Option<bool>,
@@ -611,6 +677,10 @@ pub fn build_start_input(
         } else {
             image_fixes
         },
+        step_stages: active_step_stages(steps, &settings, using_temporal_video)
+            .into_iter()
+            .map(|(selection, _, _)| selection.clone())
+            .collect(),
         custom_model_path: settings.custom_model_path.clone(),
         output_directory: settings.output_directory.clone(),
         output_format: settings.output_format.clone(),
@@ -683,7 +753,7 @@ pub fn plan_job(
     let effective = with_listed_device(settings, capabilities);
     JobPlan {
         stages: resolve_plan(catalog, steps, &effective, options),
-        start_input: build_start_input(capabilities, &effective, options.has_audio, request),
+        start_input: build_start_input(steps, capabilities, &effective, options.has_audio, request),
     }
 }
 
@@ -937,5 +1007,160 @@ mod tests {
             &PlanOptions::default(),
         );
         assert!(photo_plan.iter().all(|stage| stage.kind != "deflicker"));
+    }
+
+    #[test]
+    fn step_stages_join_the_plan_and_start_input_where_their_media_runs() {
+        use crate::types::StepStageSelection;
+
+        let catalog = crate::catalog::bundled_catalog().unwrap();
+        let steps = crate::steps::registry();
+        let capabilities = CapabilityInfo::default();
+        let grain = StepStageSelection {
+            step: "grain".into(),
+            params: serde_json::json!({"strength": 40, "seed": 7})
+                .as_object()
+                .cloned(),
+            mask_path: Some("/in/mask.png".into()),
+        };
+        let unknown = StepStageSelection {
+            step: "tool_from_a_newer_version".into(),
+            ..StepStageSelection::default()
+        };
+        let face = catalog
+            .models
+            .iter()
+            .find(|model| model.model_id == "hat_l_x4_face")
+            .unwrap();
+        let photo = UiSettings {
+            task: "upscale".into(),
+            selected_model_id: "span_photo_x4".into(),
+            output_scale: 4,
+            fix_stages: vec![FixStageSelection {
+                fix: "noise".into(),
+                model_id: "denoise_realplksr_1x".into(),
+                ..FixStageSelection::default()
+            }],
+            step_stages: vec![unknown.clone(), grain.clone()],
+            ..UiSettings::default()
+        };
+        let request = |task: &'static str| StartRequest {
+            media_ids: vec!["m".into()],
+            task,
+            batch_mode: false,
+            recipe_name: "",
+        };
+        let with_face = PlanOptions {
+            face_model: Some(face),
+            face_enabled: true,
+            ..PlanOptions::default()
+        };
+
+        let plan = plan_job(
+            &catalog,
+            steps,
+            &capabilities,
+            &photo,
+            &with_face,
+            &request("upscale"),
+        );
+        assert_eq!(
+            plan.stages
+                .iter()
+                .map(|stage| stage.kind.as_str())
+                .collect::<Vec<_>>(),
+            vec!["restore", "upscale", "face_restore", "grain"]
+        );
+        assert_eq!(
+            plan.stages[3],
+            PlanStage {
+                kind: "grain".into(),
+                role: "step".into(),
+                fix: None,
+                remembered: None,
+                missing: None,
+                label: "Film grain".into(),
+                model_id: None,
+                video_model_id: None,
+                interpolation_model_id: None,
+                audio_model_id: None,
+                edit_model_id: None,
+                custom: None,
+                installed: true,
+                can_download: false,
+                needs_file: false,
+                size_bytes: 0,
+            }
+        );
+        assert_eq!(plan.start_input.step_stages, vec![grain.clone()]);
+
+        let restore = UiSettings {
+            task: "denoise".into(),
+            selected_model_id: "denoise_realplksr_1x".into(),
+            output_scale: 1,
+            ..photo.clone()
+        };
+        let restore_plan = plan_job(
+            &catalog,
+            steps,
+            &capabilities,
+            &restore,
+            &PlanOptions::default(),
+            &request("denoise"),
+        );
+        assert_eq!(
+            restore_plan
+                .stages
+                .iter()
+                .map(|stage| stage.kind.as_str())
+                .collect::<Vec<_>>(),
+            vec!["restore", "grain"]
+        );
+        assert_eq!(restore_plan.start_input.step_stages, vec![grain.clone()]);
+
+        // Grain is for photos: a frame-by-frame video, a temporal model and Edit run none.
+        for (settings, options, task) in [
+            (
+                UiSettings {
+                    task: "video".into(),
+                    selected_video_model_id: "frame_by_frame".into(),
+                    ..photo.clone()
+                },
+                PlanOptions::default(),
+                "video",
+            ),
+            (
+                UiSettings {
+                    task: "edit".into(),
+                    ..photo.clone()
+                },
+                PlanOptions::default(),
+                "edit",
+            ),
+        ] {
+            let other = plan_job(
+                &catalog,
+                steps,
+                &capabilities,
+                &settings,
+                &options,
+                &request(task),
+            );
+            assert!(
+                other.stages.iter().all(|stage| stage.kind != "grain"),
+                "{task}"
+            );
+            assert!(other.start_input.step_stages.is_empty(), "{task}");
+        }
+        let temporal = UiSettings {
+            task: "video".into(),
+            selected_video_model_id: "seedvr2_3b".into(),
+            ..photo
+        };
+        assert!(
+            build_start_input(steps, &capabilities, &temporal, None, &request("video"))
+                .step_stages
+                .is_empty()
+        );
     }
 }

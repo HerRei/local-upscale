@@ -8,6 +8,7 @@ Non-Python targets (the Rust desktop host and Svelte webview) consume
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -66,6 +67,8 @@ class StepDefinition:
     stage_label: str = ""
     required_feature: str | None = None
     parameters: tuple[StepParameter, ...] = ()
+    # Runs only when the engine was started with LOCALSR_DEV_STEPS=1.
+    dev_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -80,6 +83,7 @@ class StepLimits:
     max_upscale_prefix_stages: int
     max_denoise_prefix_stages: int
     max_video_upscale_prefix_stages: int
+    max_step_stages: int = 0
     multi_fix_feature: str = "image_multi_fix"
     stage_params_feature: str = "stage_params_and_masks"
 
@@ -331,6 +335,23 @@ STEPS: tuple[StepDefinition, ...] = (
             ),
         ),
     ),
+    StepDefinition(
+        id="grain",
+        media=("image",),
+        phase="grade",
+        order=10,
+        needs_model=False,
+        supports_mask=True,
+        in_image_pipeline=True,
+        label="Film grain",
+        stage_label="Adding grain",
+        required_feature="image_grain",
+        dev_only=True,
+        parameters=(
+            StepParameter(name="strength", kind="int", default=25, minimum=0, maximum=100),
+            StepParameter(name="seed", kind="int", default=0, minimum=0, maximum=2_147_483_647),
+        ),
+    ),
 )
 
 STEPS_BY_ID: dict[str, StepDefinition] = {step.id: step for step in STEPS}
@@ -380,7 +401,26 @@ FACE_STAGE_KIND: str = next(
 )
 
 REQUIRED_STEP_FEATURES: tuple[str, ...] = tuple(
-    dict.fromkeys(step.required_feature for step in STEPS if step.required_feature is not None)
+    dict.fromkeys(
+        step.required_feature
+        for step in STEPS
+        if step.required_feature is not None and not step.dev_only
+    )
+)
+
+DEV_STEP_FEATURES: tuple[str, ...] = tuple(
+    dict.fromkeys(
+        step.required_feature
+        for step in STEPS
+        if step.required_feature is not None and step.dev_only
+    )
+)
+
+DEV_STEPS_ENV = "LOCALSR_DEV_STEPS"
+
+# Steps a job adds by id beside its fixes: model-less entries of the stage list.
+STEP_STAGE_IDS: tuple[str, ...] = tuple(
+    step.id for step in STEPS if step.in_image_pipeline and not step.needs_model
 )
 
 LIMITS = StepLimits(
@@ -394,7 +434,13 @@ LIMITS = StepLimits(
     # Restore runs its own final fix as the primary stage, leaving N-1 prefix slots.
     max_denoise_prefix_stages=len(_FIX_STAGE_STEPS) - 1,
     max_video_upscale_prefix_stages=len(_FIX_STAGE_STEPS) - 1,
+    max_step_stages=len(STEP_STAGE_IDS),
 )
+
+
+def dev_steps_enabled() -> bool:
+    """Whether this engine runs ``dev_only`` steps and lists their features."""
+    return os.environ.get(DEV_STEPS_ENV) == "1"
 
 
 def parameter_for(step_id: str, param_name: str) -> StepParameter:
@@ -404,6 +450,14 @@ def parameter_for(step_id: str, param_name: str) -> StepParameter:
         if param.name == param_name:
             return param
     raise KeyError(f"{step_id}.{param_name}")
+
+
+def resolved_step_params(step_id: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Validated ``params`` with each declared parameter that was left out at its default."""
+    return {
+        param.name: params.get(param.name, param.default)
+        for param in STEPS_BY_ID[step_id].parameters
+    }
 
 
 def resolve_step(

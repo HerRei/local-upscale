@@ -1,5 +1,5 @@
 import { withListedDevice } from './neuralEngine';
-import { effectiveVideoTask, isRestoreTask } from './plan';
+import { activeStepStages, effectiveVideoTask, isRestoreTask } from './plan';
 import { recipeMatches } from './recipes';
 import type {
   CapabilityInfo,
@@ -66,6 +66,9 @@ export function buildStartInput(
     : rawSettings;
   const { videoTask, usingTemporalVideo, imageFixes, noRestoreModel, audioDisabled } =
     deriveStartFlags(settings, options.hasAudio !== false);
+  const stepStages = activeStepStages(settings, usingTemporalVideo).map(
+    ({ selection }) => selection,
+  );
   const recipeName =
     options.recipeName ??
     (options.recipes && options.catalog
@@ -87,6 +90,8 @@ export function buildStartInput(
     model_id: noRestoreModel ? '' : settings.selected_model_id,
     video_model_id: settings.selected_video_model_id,
     fix_stages: usingTemporalVideo ? [] : imageFixes,
+    // Omitted when empty, as the host writes it, so older start inputs stay the same.
+    ...(stepStages.length > 0 ? { step_stages: stepStages } : {}),
     custom_model_path: settings.custom_model_path,
     output_directory: settings.output_directory,
     output_format: settings.output_format,

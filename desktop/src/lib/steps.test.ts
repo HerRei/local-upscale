@@ -14,6 +14,7 @@ import {
   isFixStageKind,
   isVideoOrUpscalePrimaryKind,
   stepFeature,
+  stepStage,
   validateStageParams,
   validateStepParams,
   type StepDefinition,
@@ -105,6 +106,38 @@ describe('step registry', () => {
     );
   });
 
+  it('names grain the one step a job adds by id, after the main model, for developers only', () => {
+    expect(stepStage('grain')).toEqual({
+      step: STEPS.find((step) => step.id === 'grain'),
+      placement: 'after_primary',
+    });
+    const grain = stepStage('grain')!.step;
+    expect(grain.dev_only).toBe(true);
+    expect(grain.media).toEqual(['image']);
+    expect(grain.supports_mask).toBe(true);
+    expect(grain.required_feature).toBe('image_grain');
+    expect(STEPS.filter((step) => step.dev_only).map((step) => step.id)).toEqual(['grain']);
+    expect(STEP_LIMITS.max_step_stages).toBe(1);
+    for (const id of ['upscale', 'noise', 'face_restore', 'deflicker', 'edit', 'missing']) {
+      expect(stepStage(id)).toBeUndefined();
+    }
+    expect(validateStageParams('grain', { strength: 100, seed: 2147483647 })).toBeNull();
+    for (const bad of [{ strength: 101 }, { strength: -1 }, { strength: 2.5 }, { seed: -1 }]) {
+      expect(validateStageParams('grain', bad)).not.toBeNull();
+    }
+  });
+
+  it('places a step by its phase and ignores steps outside the stage list', () => {
+    const base = STEPS.find((step) => step.id === 'grain')!;
+    const level: StepDefinition = { ...base, id: 'level', phase: 'geometry' };
+    const besideFace: StepDefinition = { ...base, id: 'beside_face', phase: 'face' };
+    const notListed: StepDefinition = { ...base, id: 'not_listed', in_image_pipeline: false };
+    const steps = [level, besideFace, notListed];
+    expect(stepStage('level', steps)?.placement).toBe('before_fixes');
+    expect(stepStage('beside_face', steps)).toBeUndefined();
+    expect(stepStage('not_listed', steps)).toBeUndefined();
+  });
+
   it('validates stage params generically from a step definition', () => {
     expect(STAGE_PARAMS_FEATURE).toBe('stage_params_and_masks');
     const fixtureStep: StepDefinition = {
@@ -126,6 +159,7 @@ describe('step registry', () => {
       short_name: '',
       stage_label: '',
       required_feature: null,
+      dev_only: false,
       parameters: [
         {
           name: 'amount',

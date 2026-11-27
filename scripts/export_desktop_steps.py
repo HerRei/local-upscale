@@ -59,6 +59,7 @@ def build_manifest() -> dict[str, Any]:
                 "short_name": step.short_name,
                 "stage_label": step.stage_label,
                 "required_feature": step.required_feature,
+                "dev_only": step.dev_only,
                 "parameters": [_encode_parameter(param) for param in step.parameters],
             }
         )
@@ -74,6 +75,7 @@ def build_manifest() -> dict[str, Any]:
             "max_upscale_prefix_stages": LIMITS.max_upscale_prefix_stages,
             "max_denoise_prefix_stages": LIMITS.max_denoise_prefix_stages,
             "max_video_upscale_prefix_stages": LIMITS.max_video_upscale_prefix_stages,
+            "max_step_stages": LIMITS.max_step_stages,
             "multi_fix_feature": LIMITS.multi_fix_feature,
             "stage_params_feature": LIMITS.stage_params_feature,
         },

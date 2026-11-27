@@ -14,6 +14,8 @@ pub fn registry() -> &'static StepRegistry {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct StepRegistry {
+    #[serde(default)]
+    phases: Vec<String>,
     limits: StepLimits,
     steps: Vec<StepDefinition>,
 }
@@ -27,6 +29,8 @@ pub struct StepLimits {
     pub max_upscale_prefix_stages: usize,
     pub max_denoise_prefix_stages: usize,
     pub max_video_upscale_prefix_stages: usize,
+    #[serde(default)]
+    pub max_step_stages: usize,
     pub multi_fix_feature: String,
     #[serde(default = "default_stage_params_feature")]
     pub stage_params_feature: String,
@@ -67,6 +71,8 @@ pub struct StepParameter {
 #[derive(Clone, Debug, Deserialize)]
 pub struct StepDefinition {
     pub id: String,
+    #[serde(default)]
+    pub media: Vec<String>,
     pub phase: String,
     #[serde(default = "default_true")]
     pub needs_model: bool,
@@ -76,14 +82,28 @@ pub struct StepDefinition {
     pub role: Option<String>,
     pub fix_kind: Option<String>,
     pub is_fix_stage: bool,
+    #[serde(default)]
+    pub in_image_pipeline: bool,
     pub in_recipe_stages: bool,
+    #[serde(default)]
+    pub label: String,
     #[serde(default)]
     pub row_label: String,
     #[serde(default)]
     pub stage_label: String,
     pub required_feature: Option<String>,
+    /// The engine lists this step's feature only when started with `LOCALSR_DEV_STEPS=1`.
+    #[serde(default)]
+    pub dev_only: bool,
     #[serde(default)]
     pub parameters: Vec<StepParameter>,
+}
+
+/// Where a step a job adds by id runs: before the fixes, or after the main model and Faces.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StepPlacement {
+    BeforeFixes,
+    AfterPrimary,
 }
 
 impl StepRegistry {
@@ -97,6 +117,47 @@ impl StepRegistry {
 
     pub fn step(&self, id: &str) -> Option<&StepDefinition> {
         self.steps.iter().find(|step| step.id == id)
+    }
+
+    fn phase_index(&self, phase: &str) -> Option<usize> {
+        self.phases.iter().position(|candidate| candidate == phase)
+    }
+
+    /// A model-less step of the stage list that a job adds by id beside its fixes.
+    pub fn step_stage(&self, id: &str) -> Option<(&StepDefinition, StepPlacement)> {
+        let step = self
+            .step(id)
+            .filter(|step| step.in_image_pipeline && !step.needs_model && !step.is_fix_stage)?;
+        let phase = self.phase_index(&step.phase)?;
+        if phase < self.phase_index("primary")? {
+            Some((step, StepPlacement::BeforeFixes))
+        } else if phase > self.phase_index("face")? {
+            Some((step, StepPlacement::AfterPrimary))
+        } else {
+            None
+        }
+    }
+
+    /// Checks one step stage's id, parameters and mask path against the registry.
+    pub fn validate_step_stage(
+        &self,
+        step_id: &str,
+        params: Option<&serde_json::Map<String, serde_json::Value>>,
+        mask_path: Option<&str>,
+    ) -> Result<&StepDefinition, String> {
+        let (step, _) = self
+            .step_stage(step_id)
+            .ok_or_else(|| format!("'{step_id}' is not a step a job can add"))?;
+        self.validate_step_params(step, params)?;
+        if let Some(mask) = mask_path {
+            if mask.trim().is_empty() || mask.contains('\0') {
+                return Err("stage mask path is invalid".into());
+            }
+            if !step.supports_mask {
+                return Err(format!("the {} step does not support a mask", step.id));
+            }
+        }
+        Ok(step)
     }
 
     pub fn step_for_stage(&self, kind: &str, fix: Option<&str>) -> Option<&StepDefinition> {
@@ -528,5 +589,106 @@ mod tests {
             );
         }
         assert!(reg.validate_stage_params("test_tint", None).is_err());
+    }
+
+    #[test]
+    fn grain_is_a_dev_only_step_stage_that_runs_after_the_main_model() {
+        let reg = registry();
+        let grain = reg.step("grain").unwrap();
+        assert!(grain.dev_only && grain.supports_mask && !grain.needs_model);
+        assert_eq!(grain.media, vec!["image".to_owned()]);
+        assert_eq!(grain.label, "Film grain");
+        assert_eq!(grain.required_feature.as_deref(), Some("image_grain"));
+        assert_eq!(
+            reg.step_stage("grain").map(|(_, placement)| placement),
+            Some(StepPlacement::AfterPrimary)
+        );
+        for id in [
+            "upscale",
+            "noise",
+            "face_restore",
+            "deflicker",
+            "edit",
+            "missing",
+        ] {
+            assert!(reg.step_stage(id).is_none(), "{id} is not a step stage");
+        }
+        assert_eq!(reg.limits().max_step_stages, 1);
+        assert!(reg
+            .steps
+            .iter()
+            .all(|step| step.dev_only == (step.id == "grain")));
+
+        let check = |params: serde_json::Value, mask: Option<&str>| {
+            reg.validate_step_stage("grain", params.as_object(), mask)
+                .map(|step| step.id.clone())
+        };
+        assert_eq!(check(serde_json::json!({}), None).unwrap(), "grain");
+        for valid in [
+            serde_json::json!({"strength": 0}),
+            serde_json::json!({"strength": 100, "seed": 2_147_483_647}),
+        ] {
+            assert!(
+                check(valid.clone(), Some("/in/mask.png")).is_ok(),
+                "{valid}"
+            );
+        }
+        for invalid in [
+            serde_json::json!({"strength": 101}),
+            serde_json::json!({"strength": -1}),
+            serde_json::json!({"strength": 12.5}),
+            serde_json::json!({"strength": "50"}),
+            serde_json::json!({"strength": true}),
+            serde_json::json!({"strength": null}),
+            serde_json::json!({"seed": -1}),
+            serde_json::json!({"seed": 2_147_483_648_u64}),
+            serde_json::json!({"grain_size": 2}),
+        ] {
+            assert!(check(invalid.clone(), None).is_err(), "{invalid}");
+        }
+        for mask in ["", "  ", "/in/a\0b.png"] {
+            assert!(
+                check(serde_json::json!({}), Some(mask)).is_err(),
+                "{mask:?}"
+            );
+        }
+        assert!(reg
+            .validate_step_stage("upscale", None, None)
+            .unwrap_err()
+            .contains("upscale"));
+    }
+
+    #[test]
+    fn step_stage_placement_follows_the_registry_phase() {
+        let fixture_json = r#"{
+            "schema_version": 1,
+            "phases": ["audio", "geometry", "cleanup", "restore", "primary", "face", "temporal", "grade", "encode"],
+            "limits": {
+                "max_fix_stages": 4, "max_fix_chips": 5, "max_face_stages": 1,
+                "max_recipe_stages": 6, "max_upscale_prefix_stages": 4,
+                "max_denoise_prefix_stages": 3, "max_video_upscale_prefix_stages": 3,
+                "max_step_stages": 3, "multi_fix_feature": "image_multi_fix"
+            },
+            "steps": [
+                {"id": "level", "media": ["image", "video"], "phase": "geometry", "needs_model": false,
+                 "in_image_pipeline": true, "is_fix_stage": false, "in_recipe_stages": false,
+                 "stage_kind": null, "role": null, "fix_kind": null, "required_feature": null},
+                {"id": "beside_face", "media": ["image"], "phase": "face", "needs_model": false,
+                 "in_image_pipeline": true, "is_fix_stage": false, "in_recipe_stages": false,
+                 "stage_kind": null, "role": null, "fix_kind": null, "required_feature": null},
+                {"id": "not_listed", "media": ["image"], "phase": "grade", "needs_model": false,
+                 "in_image_pipeline": false, "is_fix_stage": false, "in_recipe_stages": false,
+                 "stage_kind": null, "role": null, "fix_kind": null, "required_feature": null}
+            ]
+        }"#;
+        let reg = StepRegistry::from_json(fixture_json).unwrap();
+        assert_eq!(
+            reg.step_stage("level").map(|(_, placement)| placement),
+            Some(StepPlacement::BeforeFixes)
+        );
+        assert!(reg.step_stage("beside_face").is_none());
+        assert!(reg.step_stage("not_listed").is_none());
+        assert!(!reg.step("level").unwrap().dev_only);
+        assert_eq!(reg.limits().max_step_stages, 3);
     }
 }

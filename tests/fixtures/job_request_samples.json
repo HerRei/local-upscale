@@ -144,6 +144,57 @@
       "approved_checkpoint_sha256": null
     }
   },
+  "image_modelless_grain_step": {
+    "type": "job_request",
+    "data": {
+      "job_id": "sample-image-grain",
+      "image_path": "/in/grain.png",
+      "model_path": "/models/span.safetensors",
+      "output_path": "/out/grain_upscaled_2x.png",
+      "scratch_directory": "/work/scratch",
+      "output_format": "png",
+      "device": "cpu",
+      "tile_size": 256,
+      "halo": 32,
+      "precision": "fp32",
+      "jpeg_quality": 98,
+      "preserve_metadata": true,
+      "safe_memory": false,
+      "neural_engine": true,
+      "preview_enabled": true,
+      "preview_max_fps": 2.0,
+      "preview_max_dimension": 320,
+      "output_scale": 2,
+      "face_model_path": null,
+      "face_fidelity": 0.7,
+      "stages": [
+        {
+          "kind": "restore",
+          "role": "fix",
+          "fix": "noise",
+          "model_id": "scunet_color_real_psnr",
+          "model_path": "/models/scunet.pth"
+        },
+        {
+          "kind": "upscale",
+          "role": "primary",
+          "model_id": "span_photo_x4",
+          "model_path": "/models/span.safetensors"
+        },
+        {
+          "kind": "grain",
+          "step": "grain",
+          "params": {
+            "strength": 40,
+            "seed": 7
+          },
+          "mask_path": "/in/mask.png"
+        }
+      ],
+      "allow_unverified_checkpoint": false,
+      "approved_checkpoint_sha256": null
+    }
+  },
   "video_interpolation_deflicker_audio": {
     "type": "video_job_request",
     "data": {

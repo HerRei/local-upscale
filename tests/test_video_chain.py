@@ -821,3 +821,56 @@ def replace_step_mask_support(step):
     from dataclasses import replace
 
     return replace(step, supports_mask=True)
+
+
+def test_video_job_refuses_a_step_after_the_main_model_instead_of_dropping_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from localsr.core import steps as steps_mod
+    from localsr.core.steps import StepDefinition
+    from localsr.worker.server import WorkerServer
+
+    source = _make_clip(tmp_path / "in.mp4", frames=2)
+    model_file = tmp_path / "up.pth"
+    model_file.write_bytes(b"model")
+    late_step = StepDefinition(
+        id="test_video_grade",
+        media=("video",),
+        phase="grade",
+        order=10,
+        needs_model=False,
+        in_image_pipeline=True,
+    )
+    new_steps = (*steps_mod.STEPS, late_step)
+    monkeypatch.setattr(steps_mod, "STEPS", new_steps)
+    monkeypatch.setattr(
+        steps_mod, "STEPS_BY_ID", {**steps_mod.STEPS_BY_ID, late_step.id: late_step}
+    )
+    monkeypatch.setattr("localsr.core.pipeline.STEPS", new_steps)
+
+    server = WorkerServer()
+    server.engine = InferenceEngine(SimpleNamespace(load=lambda *a: None, release=lambda: None))
+    with pytest.raises(ValueError, match="after the main model"):
+        server._run_video_job(
+            "late-step-video",
+            {
+                "video_path": str(source),
+                "model_path": str(model_file),
+                "output_video_path": str(tmp_path / "out.mkv"),
+                "device": "cpu",
+                "precision": "fp32",
+                "tile_size": 64,
+                "halo": 4,
+                "safe_memory": False,
+                "output_scale": 2,
+                "stages": [
+                    {
+                        "kind": "upscale",
+                        "role": "primary",
+                        "model_id": "up",
+                        "model_path": str(model_file),
+                    },
+                    {"step": "test_video_grade"},
+                ],
+            },
+        )

@@ -29,6 +29,7 @@ function extraStep(
     short_name: id,
     stage_label: '',
     required_feature: null,
+    dev_only: false,
     parameters: [],
     ...overrides,
   };

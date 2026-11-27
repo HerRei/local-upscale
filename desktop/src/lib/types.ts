@@ -306,6 +306,13 @@ export interface FixStageSelection {
   mask_path?: string;
 }
 
+/** A registry step the job adds by id beside its fixes (`steps.ts` `stepStage`). */
+export interface StepStageSelection {
+  step: string;
+  params?: Record<string, unknown>;
+  mask_path?: string;
+}
+
 /** Frame interpolation: a frame-rate multiplier or a fixed output rate. */
 export type InterpolationTarget = 'off' | 'x2' | 'x4' | 'fps60' | 'fps120';
 export type InterpolationOrder = 'after_upscale' | 'before_upscale';
@@ -333,6 +340,7 @@ export interface UiSettings {
   selected_model_id: string;
   selected_video_model_id: string;
   fix_stages: FixStageSelection[];
+  step_stages?: StepStageSelection[];
   custom_model_path: string;
   custom_models?: { path: string; name: string }[];
   trusted_checkpoint_sha256?: string[];
@@ -730,6 +738,7 @@ export interface StartBatchInput {
   model_id: string;
   video_model_id: string;
   fix_stages: FixStageSelection[];
+  step_stages?: StepStageSelection[];
   custom_model_path: string;
   output_directory: string;
   output_format: string;

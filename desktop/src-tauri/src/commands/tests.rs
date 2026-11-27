@@ -1,6 +1,6 @@
 use super::*;
 use crate::paths::AppPaths;
-use crate::types::RecipeStage;
+use crate::types::{RecipeStage, StepStageSelection};
 
 #[test]
 fn the_download_page_is_the_one_the_release_publishes() {
@@ -822,6 +822,7 @@ fn input(task: &str) -> StartBatchInput {
         video_interpolation_order: "after_upscale".into(),
         video_clean_audio: false,
         video_audio_model: String::new(),
+        step_stages: Vec::new(),
     }
 }
 
@@ -4726,6 +4727,174 @@ fn stage_params_and_masks_are_forwarded_and_gated_by_engine_feature() {
     assert!(serialized[1].get("mask_path").is_none());
 }
 
+fn grain_stage(params: serde_json::Value, mask_path: Option<&str>) -> StepStageSelection {
+    StepStageSelection {
+        step: "grain".into(),
+        params: params.as_object().cloned(),
+        mask_path: mask_path.map(str::to_owned),
+    }
+}
+
+#[test]
+fn step_stages_are_checked_against_the_registry_and_their_media() {
+    let valid = grain_stage(json!({"strength": 100, "seed": 7}), Some("/in/mask.png"));
+    assert!(validate_step_stages(std::slice::from_ref(&valid), Some("image")).is_ok());
+    assert!(validate_step_stages(std::slice::from_ref(&valid), None).is_ok());
+    for params in [
+        json!({"strength": 101}),
+        json!({"strength": -1}),
+        json!({"strength": 2.5}),
+        json!({"seed": 2_147_483_648_u64}),
+        json!({"grain_size": 1}),
+    ] {
+        assert!(
+            validate_step_stages(&[grain_stage(params.clone(), None)], Some("image")).is_err(),
+            "{params}"
+        );
+    }
+    let unknown = StepStageSelection {
+        step: "noise".into(),
+        ..StepStageSelection::default()
+    };
+    for stages in [
+        vec![valid.clone(), grain_stage(json!({}), None)],
+        vec![unknown],
+        vec![grain_stage(json!({}), Some(""))],
+    ] {
+        assert!(validate_step_stages(&stages, Some("image")).is_err());
+    }
+    let video = validate_step_stages(std::slice::from_ref(&valid), Some("video"))
+        .unwrap_err()
+        .to_string();
+    assert!(video.contains("Film grain"), "{video}");
+
+    let mut settings = UiSettings {
+        step_stages: vec![grain_stage(json!({"strength": 300}), None)],
+        ..UiSettings::default()
+    };
+    assert!(validate_settings(&settings).is_err());
+    settings.step_stages = vec![valid];
+    assert!(validate_settings(&settings).is_ok());
+}
+
+#[test]
+fn step_stages_need_their_engine_feature_and_a_start_that_can_run_them() {
+    let engine = |features: &[&str]| crate::types::EngineInfo {
+        protocol_version: 1,
+        minimum_protocol_version: 1,
+        engine_id: "test".into(),
+        engine_version: "0.7.0".into(),
+        features: features
+            .iter()
+            .map(|feature| (*feature).to_owned())
+            .collect(),
+        model_formats: vec![],
+        video_engines: vec![],
+    };
+    let plain = grain_stage(json!(null), None);
+    let tuned = grain_stage(json!({"strength": 40}), None);
+    let without_grain = engine(&["image", "stage_params_and_masks"]);
+    let refusal = validate_step_stages_engine(std::slice::from_ref(&plain), Some(&without_grain))
+        .unwrap_err()
+        .to_string();
+    assert!(refusal.contains("LOCALSR_DEV_STEPS=1"), "{refusal}");
+    assert!(validate_step_stages_engine(std::slice::from_ref(&plain), None).is_err());
+    let grain_only = engine(&["image", "image_grain"]);
+    assert!(validate_step_stages_engine(std::slice::from_ref(&plain), Some(&grain_only)).is_ok());
+    assert!(validate_step_stages_engine(std::slice::from_ref(&tuned), Some(&grain_only)).is_err());
+    let full = engine(&["image", "image_grain", "stage_params_and_masks"]);
+    assert!(validate_step_stages_engine(&[tuned], Some(&full)).is_ok());
+    assert!(validate_step_stages_engine(&[], Some(&without_grain)).is_ok());
+
+    // Upscale at 1× with only a step is work; a temporal video model runs no steps.
+    let mut one_times = input("upscale");
+    one_times.output_scale = 1;
+    assert!(validate_start_input(&one_times, true).is_err());
+    one_times.step_stages = vec![plain.clone()];
+    assert!(validate_start_input(&one_times, true).is_ok());
+    let mut temporal = input("video");
+    temporal.video_model_id = "seedvr2_3b".into();
+    temporal.video_target_resolution = 1080;
+    temporal.step_stages = vec![plain];
+    assert!(validate_start_input(&temporal, true).is_err());
+}
+
+#[test]
+fn a_stage_mask_must_be_a_file_the_user_granted() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
+    let mask = std::fs::canonicalize(directory.path())
+        .unwrap()
+        .join("mask.png");
+    fs::write(&mask, b"png").unwrap();
+    let mask_text = mask.to_string_lossy().into_owned();
+
+    let mut stepped = input("upscale");
+    stepped.step_stages = vec![grain_stage(json!({}), Some(&mask_text))];
+    let mut fixed = input("upscale");
+    fixed.fix_stages = vec![crate::types::FixStageSelection {
+        fix: "noise".into(),
+        model_id: "scunet_color_real_psnr".into(),
+        mask_path: Some(mask_text.clone()),
+        ..Default::default()
+    }];
+    assert!(validate_start(&stepped, &state).is_err());
+    assert!(check_stage_masks_granted(&fixed, &state).is_err());
+    state.grants.grant_media_file(&mask);
+    assert!(validate_start(&stepped, &state).is_ok());
+    assert!(check_stage_masks_granted(&fixed, &state).is_ok());
+    state.grants.revoke_media_file(&mask);
+    assert!(validate_start(&stepped, &state).is_err());
+}
+
+#[test]
+fn image_pipeline_stages_place_step_stages_by_their_phase() {
+    let mut photo = input("upscale");
+    photo.step_stages = vec![grain_stage(
+        json!({"strength": 40, "seed": 7}),
+        Some("/in/mask.png"),
+    )];
+    let fix = vec![ResolvedImageStage {
+        kind: "restore",
+        fix: "noise".into(),
+        model_id: "scunet_color_real_psnr".into(),
+        path: "/models/scunet.pth".into(),
+        params: None,
+        mask_path: None,
+    }];
+    let kinds = |stages: &[crate::protocol::PipelineStageRequest]| {
+        stages
+            .iter()
+            .map(|stage| stage.kind.clone().unwrap_or_default())
+            .collect::<Vec<_>>()
+    };
+    let stages = image_pipeline_stages(
+        &fix,
+        "span_photo_x4",
+        "/models/span.pth",
+        Some("/models/face.pth"),
+        "hat_l_x4_face",
+        false,
+        &photo,
+    );
+    assert_eq!(
+        kinds(&stages),
+        vec!["restore", "upscale", "face_restore", "grain"]
+    );
+    let grain = serde_json::to_value(&stages[3]).unwrap();
+    assert_eq!(
+        grain,
+        json!({
+            "kind": "grain",
+            "step": "grain",
+            "params": {"strength": 40, "seed": 7},
+            "mask_path": "/in/mask.png"
+        })
+    );
+    let one_times = image_pipeline_stages(&fix, "", "", None, "", true, &photo);
+    assert_eq!(kinds(&one_times), vec!["restore", "grain"]);
+}
+
 #[test]
 fn typed_job_requests_match_fixtures_and_validate_against_schema() {
     let schema: serde_json::Value = serde_json::from_str(include_str!(
@@ -4843,6 +5012,33 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
                 json!(0.5),
             )])),
             mask_path: Some("/in/mask.png".into()),
+        }],
+        face_path: None,
+        face_model_id: String::new(),
+        native_scale: 4,
+        skip_upscale: false,
+        interpolation: None,
+        audio_denoise: None,
+    };
+
+    let mut grain_input = input("upscale");
+    grain_input.model_id = "span_photo_x4".into();
+    grain_input.output_scale = 2;
+    grain_input.step_stages = vec![grain_stage(
+        json!({"strength": 40, "seed": 7}),
+        Some("/in/mask.png"),
+    )];
+    let grain_selection = ModelSelection::Image {
+        model_id: "span_photo_x4".into(),
+        path: "/models/span.safetensors".into(),
+        approved_checkpoint_sha256: None,
+        preprocess: vec![ResolvedImageStage {
+            kind: "restore",
+            fix: "noise".into(),
+            model_id: "scunet_color_real_psnr".into(),
+            path: "/models/scunet.pth".into(),
+            params: None,
+            mask_path: None,
         }],
         face_path: None,
         face_model_id: String::new(),
@@ -4988,6 +5184,18 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
                 work,
                 &params_input,
                 &params_selection,
+            )
+            .unwrap(),
+        ),
+        (
+            "image_modelless_grain_step",
+            build_job_message(
+                "sample-image-grain",
+                &image_media("/in/grain.png", "grain.png"),
+                Path::new("/out/grain_upscaled_2x.png"),
+                work,
+                &grain_input,
+                &grain_selection,
             )
             .unwrap(),
         ),

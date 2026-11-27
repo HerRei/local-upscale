@@ -16,6 +16,7 @@ import psutil
 
 from localsr.core.disk_space import failure_fields, require_image_room
 from localsr.core.face_compositing import blend_with_alpha, load_mask
+from localsr.core.grain import add_grain
 from localsr.core.image_io import ImageManager, require_output_format
 from localsr.core.inference import InferenceEngine, UnstableRestorationError
 from localsr.core.live_preview import LatestPreviewEncoder, PreviewPacket
@@ -35,7 +36,7 @@ from localsr.core.pipeline import (
     PipelineStageError,
     resolve_image_pipeline,
 )
-from localsr.core.steps import FIX_SHORT_NAMES
+from localsr.core.steps import FIX_SHORT_NAMES, resolved_step_params
 from localsr.protocol.messages import (
     EngineStatus,
     JobCancelled,
@@ -339,6 +340,24 @@ def _run_colour_fix_stage(
     )
 
 
+def _run_grain_stage(
+    _runner: ImageJobRunner,
+    image: dict[str, Any],
+    stage: PipelineStage,
+    _index: int,
+    _data: Mapping[str, Any],
+    _progress: ImageJobProgress,
+    _notes: list[str],
+) -> dict[str, Any]:
+    params = resolved_step_params(stage.step_id, stage.params)
+    return {
+        **image,
+        "tensor": add_grain(
+            image["tensor"], strength=int(params["strength"]), seed=int(params["seed"])
+        ),
+    }
+
+
 StageImpl = Callable[
     [
         "ImageJobRunner",
@@ -359,6 +378,7 @@ IMAGE_STEP_HANDLERS: dict[str, StageImpl] = {
     "noise": _run_fix_model_stage,
     "colour": _run_colour_fix_stage,
     "restore": _run_fix_model_stage,
+    "grain": _run_grain_stage,
 }
 
 # Primary steps that produce colour output from monochrome sources.

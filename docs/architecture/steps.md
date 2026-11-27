@@ -25,6 +25,7 @@ Each `StepDefinition` in `STEPS` declares:
 - `in_image_pipeline` / `in_recipe_stages`: whether the step appears in bounded image `stages[]` requests and saved `Recipe.stages`.
 - `label` / `row_label` / `short_name` / `stage_label`: UI and worker status strings.
 - `required_feature`: worker `engine_info.features` entry gating the step (`image_edit`, `video_interpolation`, `video_audio_denoise`, etc.).
+- `dev_only`: the worker lists the step's `required_feature` and runs the step only when it was started with `LOCALSR_DEV_STEPS=1` (the desktop host passes its environment on). `grain` is the only such step.
 - `parameters`: `StepParameter` entries naming each parameter's type, default, choices, numeric bounds, `nullable`, and `required`.
 
 ## Adding a New Step
@@ -41,9 +42,10 @@ Each `StepDefinition` in `STEPS` declares:
 3. Register one implementation function in `IMAGE_STEP_HANDLERS` (`src/localsr/worker/image_job.py`) keyed by `step.id`. It receives `(runner, image, stage, index, data, progress, notes)` and returns an updated image dict (`stage.params` holds validated parameters).
 4. Do not implement masking inside the step itself: `ImageJobRunner` reads any `stage.mask_path` as a single-channel 8- or 16-bit image, resizes it with bilinear resampling to the stage's output resolution, and composites `mask * stage_output + (1 - mask) * stage_input` once in `_apply_stage_mask`. Callers that want feathered edges supply an already-feathered mask.
 5. In the Rust host, any stage carrying `params` or `mask_path` is gated behind `limits().stage_params_feature` (`stage_params_and_masks`) so older engines never receive them.
+6. A job adds such a step by id through `step_stages` (`StepStageSelection {step, params?, mask_path?}` in `UiSettings` and `StartBatchInput`, omitted when empty). The host plans it (`job_plan.rs` `active_step_stages`, `plan.ts` `activeStepStages`, same rules in the parity fixture), validates it on save and start (`commands.rs` `validate_step_stages`, `validate_step_stages_engine`, and every mask path must be a granted media file), and sends it as an ordinary `stages[]` entry: before the fixes when its phase comes before `primary`, after the primary and Faces when it comes after `face` (`image_pipeline_stages`). Each step runs at most once; `limits.max_step_stages` bounds the list. Settings load drops entries this version cannot run. Give a step that should stay hidden `dev_only=True` and a `required_feature`. Design: `docs/design/foundation-c.md`.
 
 ## Adding a Video Step
 
 1. Add or update the `StepDefinition` in `src/localsr/core/steps.py` with `"video"` in `media` (and `phase`, `order`, `needs_model`, `required_feature`, and any `StepParameter` entries), then run `.venv/bin/python scripts/export_desktop_steps.py` to keep `desktop/src-tauri/resources/steps.json` in sync.
 2. Write a `VideoStreamStage` (`Iterator[StreamFrame] -> Iterator[StreamFrame]`) in `src/localsr/core/video_chain.py` plus a handler `(stage: VideoFixStage, step_ctx: VideoStepContext) -> VideoStreamStage` that reads `stage.params` and preserves per-frame side data on `StreamFrame`.
-3. Register the handler in `VIDEO_STEP_HANDLERS` (`src/localsr/core/video_chain.py`) keyed by `step.id`. `WorkerServer._run_video_job` (`src/localsr/worker/server.py`) forwards `step_id` and `params` onto `VideoFixStage` and rejects any video stage carrying `mask_path`.
+3. Register the handler in `VIDEO_STEP_HANDLERS` (`src/localsr/core/video_chain.py`) keyed by `step.id`. `WorkerServer._run_video_job` (`src/localsr/worker/server.py`) forwards `step_id` and `params` onto `VideoFixStage` and rejects any video stage carrying `mask_path`, any step whose `media` lacks `"video"`, and any model-less stage after the main model (the frame chain runs them only before it).

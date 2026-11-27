@@ -40,6 +40,7 @@ pub fn load(paths: &AppPaths) -> (UiSettings, Vec<Recipe>) {
     let document = effective_document_path(paths).and_then(|path| read_document(&path));
     if let Some(mut document) = document {
         adopt_automatic_video_format(&mut document.ui);
+        keep_runnable_step_stages(&mut document.ui);
         return (document.ui, document.recipes);
     }
 
@@ -69,6 +70,23 @@ fn adopt_automatic_video_format(settings: &mut UiSettings) {
         }
         settings.automatic_video_format = true;
     }
+}
+
+/// A newer LocalSR may have saved steps or parameter values this version does not know;
+/// keeping them would make every later save of these settings fail its validation.
+fn keep_runnable_step_stages(settings: &mut UiSettings) {
+    let steps = crate::steps::registry();
+    let mut seen = std::collections::HashSet::new();
+    settings.step_stages.retain(|stage| {
+        steps
+            .validate_step_stage(
+                &stage.step,
+                stage.params.as_ref(),
+                stage.mask_path.as_deref(),
+            )
+            .is_ok()
+            && seen.insert(stage.step.clone())
+    });
 }
 
 fn read_document(path: &Path) -> Option<SettingsDocument> {
@@ -607,6 +625,45 @@ mod tests {
             serde_json::json!([{"fix":"jpeg","model_id":"fbcnn_color"}])
         );
         assert_eq!(value["fixes"], serde_json::json!(["jpeg"]));
+    }
+
+    #[test]
+    fn step_stages_this_version_cannot_run_are_dropped_on_load_and_empty_ones_are_not_written() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        fs::create_dir_all(&paths.next_root).unwrap();
+        fs::write(
+            &paths.settings,
+            r#"{"schema_version":2,"ui":{},"recipes":[]}"#,
+        )
+        .unwrap();
+        let (settings, recipes) = load(&paths);
+        assert!(settings.step_stages.is_empty());
+        save(&paths, &settings, &recipes).unwrap();
+        let written: Value =
+            serde_json::from_str(&fs::read_to_string(&paths.settings).unwrap()).unwrap();
+        assert!(written["ui"].get("step_stages").is_none());
+
+        fs::write(
+            &paths.settings,
+            r#"{"schema_version":2,"ui":{"step_stages":[
+                {"step":"tool_from_a_newer_version"},
+                {"step":"grain","params":{"strength":40,"seed":7},"mask_path":"/in/mask.png"},
+                {"step":"grain","params":{"strength":20}},
+                {"step":"grain","params":{"strength":250}},
+                {"step":"upscale"}
+            ]},"recipes":[]}"#,
+        )
+        .unwrap();
+        let (settings, recipes) = load(&paths);
+        assert_eq!(
+            serde_json::to_value(&settings.step_stages).unwrap(),
+            serde_json::json!([
+                {"step": "grain", "params": {"strength": 40, "seed": 7}, "mask_path": "/in/mask.png"}
+            ])
+        );
+        save(&paths, &settings, &recipes).unwrap();
+        assert_eq!(load(&paths).0.step_stages, settings.step_stages);
     }
 
     #[test]

@@ -339,6 +339,16 @@ pub struct FixStageSelection {
     pub mask_path: Option<String>,
 }
 
+/// A registry step the job adds by id beside its fixes (`steps.rs` `step_stage`).
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct StepStageSelection {
+    pub step: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask_path: Option<String>,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct CustomEditModel {
     #[serde(default)]
@@ -402,6 +412,8 @@ pub struct UiSettings {
     pub selected_model_id: String,
     pub selected_video_model_id: String,
     pub fix_stages: Vec<FixStageSelection>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub step_stages: Vec<StepStageSelection>,
     pub custom_model_path: String,
     pub custom_models: Vec<CustomModel>,
     pub trusted_checkpoint_sha256: Vec<String>,
@@ -650,6 +662,7 @@ impl Default for UiSettings {
             selected_model_id: String::new(),
             selected_video_model_id: "frame_by_frame".into(),
             fix_stages: Vec::new(),
+            step_stages: Vec::new(),
             custom_model_path: String::new(),
             custom_models: Vec::new(),
             trusted_checkpoint_sha256: Vec::new(),
@@ -1265,6 +1278,8 @@ pub struct StartBatchInput {
     pub model_id: String,
     pub video_model_id: String,
     pub fix_stages: Vec<FixStageSelection>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub step_stages: Vec<StepStageSelection>,
     pub custom_model_path: String,
     pub output_directory: String,
     pub output_format: String,

@@ -7,7 +7,7 @@ import {
   fitsFix,
   rememberedFixModel,
 } from './fixStages';
-import { FIX_LABELS } from './steps';
+import { FIX_LABELS, stepStage, type StepDefinition, type StepPlacement } from './steps';
 import type {
   AppSnapshot,
   CatalogModel,
@@ -18,6 +18,7 @@ import type {
   FixKind,
   InterpolationTarget,
   Quality,
+  StepStageSelection,
   TaskKind,
   UiSettings,
 } from './types';
@@ -146,7 +147,8 @@ export interface PlanStage {
     | 'edit'
     | 'deflicker'
     | 'interpolate'
-    | 'audio_denoise';
+    | 'audio_denoise'
+    | 'grain';
   /**
    * What the row's Change opens: the fix before the upscaler, the main model, or Faces.
    * Frame interpolation and audio cleanup are set directly and have no Change.
@@ -171,6 +173,41 @@ export interface PlanStage {
   /** Missing, and only a user-supplied copy is accepted. */
   needsFile: boolean;
   sizeBytes: number;
+}
+
+/** The media a task's step stages run on: photos, or frame-by-frame video frames. */
+function stepStageMedia(task: UiSettings['task'], usingTemporalVideo: boolean): string | null {
+  if (task === 'upscale' || task === 'denoise') return 'image';
+  if (task === 'video' && !usingTemporalVideo) return 'video';
+  return null;
+}
+
+/**
+ * The step stages that run for these settings, in their order, with where each runs.
+ * Steps this version does not know and steps for another media are left out.
+ */
+export function activeStepStages(
+  settings: Pick<UiSettings, 'task' | 'step_stages'>,
+  usingTemporalVideo: boolean,
+): { selection: StepStageSelection; step: StepDefinition; placement: StepPlacement }[] {
+  const media = stepStageMedia(settings.task, usingTemporalVideo);
+  if (!media) return [];
+  return (settings.step_stages ?? []).flatMap((selection) => {
+    const found = stepStage(selection.step);
+    return found && found.step.media.includes(media) ? [{ selection, ...found }] : [];
+  });
+}
+
+function stepStageRow(step: StepDefinition): PlanStage {
+  return {
+    kind: step.id as PlanStage['kind'],
+    role: 'step',
+    label: step.label,
+    installed: true,
+    canDownload: false,
+    needsFile: false,
+    sizeBytes: 0,
+  };
 }
 
 /**
@@ -234,6 +271,10 @@ export function resolvePlan(
       sizeBytes: model.installed ? 0 : model.size_bytes,
     };
 
+  const stepStages = activeStepStages(settings, options.usingTemporalVideo);
+  for (const { step, placement } of stepStages) {
+    if (placement === 'before_fixes') stages.push(stepStageRow(step));
+  }
   const restoring = isRestoreTask(settings);
   const fixStages =
     !options.usingTemporalVideo &&
@@ -351,6 +392,10 @@ export function resolvePlan(
     };
     if (settings.video_interpolation_order === 'before_upscale') stages.unshift(stage);
     else stages.push(stage);
+  }
+
+  for (const { step, placement } of stepStages) {
+    if (placement === 'after_primary') stages.push(stepStageRow(step));
   }
 
   // Audio cleanup runs before video processing when the source has an audio track.

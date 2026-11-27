@@ -41,8 +41,13 @@ export interface StepDefinition {
   short_name: string;
   stage_label: string;
   required_feature: string | null;
+  /** The engine lists this step's feature only when started with `LOCALSR_DEV_STEPS=1`. */
+  dev_only: boolean;
   parameters: readonly StepParameter[];
 }
+
+/** Where a step a job adds by id runs: before the fixes, or after the main model and Faces. */
+export type StepPlacement = 'before_fixes' | 'after_primary';
 
 export const STEPS: readonly StepDefinition[] = rawSteps.steps;
 export const PHASES = rawSteps.phases;
@@ -98,6 +103,26 @@ export function isVideoOrUpscalePrimaryKind(kind: string): boolean {
       step.id !== 'restore' &&
       step.stage_kind === kind,
   );
+}
+
+/** A model-less step of the stage list that a job adds by id beside its fixes. */
+export function stepStage(
+  id: string,
+  steps: readonly StepDefinition[] = STEPS,
+): { step: StepDefinition; placement: StepPlacement } | undefined {
+  const step = steps.find(
+    (candidate) =>
+      candidate.id === id &&
+      candidate.in_image_pipeline &&
+      !candidate.needs_model &&
+      !candidate.is_fix_stage,
+  );
+  if (!step) return undefined;
+  const phase = PHASES.indexOf(step.phase);
+  if (phase === -1) return undefined;
+  if (phase < PHASES.indexOf('primary')) return { step, placement: 'before_fixes' };
+  if (phase > PHASES.indexOf('face')) return { step, placement: 'after_primary' };
+  return undefined;
 }
 
 function validateParamValue(stepId: string, param: StepParameter, value: unknown): string | null {

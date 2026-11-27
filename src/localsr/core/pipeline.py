@@ -9,6 +9,7 @@ from typing import Any
 from .image_formats import require_ordinary_source
 from .steps import (
     DEFAULT_FIX_ORDER,
+    DEV_STEPS_ENV,
     FACE_STAGE_KIND,
     FIX_KINDS,
     FIX_STAGE_KINDS,
@@ -18,6 +19,7 @@ from .steps import (
     PHASES,
     STEPS,
     StepDefinition,
+    dev_steps_enabled,
     parameter_for,
     resolve_step,
     validate_step_params,
@@ -106,13 +108,14 @@ def resolve_image_pipeline(
     output_scale: int | None = None,
     face_model_path: str | None = None,
     face_fidelity: float = 0.7,
+    media: str = "image",
 ) -> ImagePipeline:
     """Resolve old requests and check stage paths before loading any model."""
     if output_scale == 1 and not model_path and _is_fix_only_stages(raw_stages):
-        stages = _parse_fix_only_stages(raw_stages)
+        stages = _parse_fix_only_stages(raw_stages, media)
         return ImagePipeline(stages, primary_index=None)
 
-    stages = parse_pipeline_stages(raw_stages)
+    stages = parse_pipeline_stages(raw_stages, media=media)
     if not stages:
         stages = (
             PipelineStage(
@@ -137,7 +140,9 @@ def resolve_image_pipeline(
     if output_scale == 1 and pipeline.primary.kind == "upscale":
         # At 1× in Upscale, drop the upscaling stage (and any fused face pass)
         # so the engine never loads or runs an SR model only to resize back.
-        return ImagePipeline(pipeline.preprocess_stages, primary_index=None)
+        return ImagePipeline(
+            pipeline.preprocess_stages + pipeline.postprocess_stages, primary_index=None
+        )
     if Path(pipeline.primary.model_path) != Path(model_path):
         raise ValueError("The primary pipeline stage does not match the authenticated job model.")
     if pipeline.face is not None and (face_model_path or "") != pipeline.face.model_path:
@@ -167,21 +172,39 @@ def _is_fix_only_stages(raw: object) -> bool:
     return True
 
 
-def _parse_fix_only_stages(raw: object) -> tuple[PipelineStage, ...]:
+def _parse_fix_only_stages(raw: object, media: str) -> tuple[PipelineStage, ...]:
     if not isinstance(raw, list) or not raw:
         return ()
-    parsed = [_parse_stage_item(item) for item in raw]
+    _check_stage_count(raw)
+    parsed = [_parse_stage_item(item, media) for item in raw]
     fix_count = sum(1 for _, step in parsed if step.is_fix_stage)
     if fix_count > MAX_FIX_STAGES:
         raise ValueError(f"Only {MAX_FIX_STAGES} restoration/deblock stages may run.")
     stages = [stage for stage, _ in parsed]
-    fixes = [stage.fix for stage in stages if stage.fix is not None]
-    if len(set(fixes)) != len(fixes):
-        raise ValueError("Each fix kind may run only once.")
+    _check_each_runs_once(stages, [step for _, step in parsed])
     return tuple(stages)
 
 
-def _parse_stage_item(item: object) -> tuple[PipelineStage, StepDefinition]:
+def _check_stage_count(raw: list[object]) -> None:
+    # Model stages and the model-less steps a job adds by id have separate bounds.
+    if len(raw) > LIMITS.max_image_pipeline_stages + LIMITS.max_step_stages:
+        raise ValueError(
+            f"Image recipes support at most {LIMITS.max_image_pipeline_stages} bounded stages."
+        )
+
+
+def _check_each_runs_once(
+    stages: list[PipelineStage] | tuple[PipelineStage, ...], steps: list[StepDefinition]
+) -> None:
+    fixes = [stage.fix for stage in stages if stage.fix is not None]
+    if len(set(fixes)) != len(fixes):
+        raise ValueError("Each fix kind may run only once.")
+    modelless = [step.id for step in steps if not step.needs_model]
+    if len(set(modelless)) != len(modelless):
+        raise ValueError("Each model-less step may run only once.")
+
+
+def _parse_stage_item(item: object, media: str) -> tuple[PipelineStage, StepDefinition]:
     if not isinstance(item, dict):
         raise ValueError("Every pipeline stage must be an object.")
     raw_step = item.get("step")
@@ -192,6 +215,13 @@ def _parse_stage_item(item: object) -> tuple[PipelineStage, StepDefinition]:
     step = resolve_step(kind, fix=fix, step_id=raw_step, steps=STEPS)
     if not step.in_image_pipeline:
         raise ValueError(f"Unsupported image pipeline stage: {kind or step.id}")
+    if media not in step.media:
+        raise ValueError(f"The {step.id} step does not run on {media} jobs.")
+    if step.dev_only and not dev_steps_enabled():
+        raise ValueError(
+            f"The {step.id} step is a development step; this engine runs it only with "
+            f"{DEV_STEPS_ENV}=1."
+        )
     if not kind:
         kind = step.stage_kind or step.id
     model_id = str(item.get("model_id") or "")
@@ -234,16 +264,17 @@ def _parse_stage_item(item: object) -> tuple[PipelineStage, StepDefinition]:
     return stage, step
 
 
-def parse_pipeline_stages(raw: object) -> tuple[PipelineStage, ...]:
+def parse_pipeline_stages(raw: object, *, media: str = "image") -> tuple[PipelineStage, ...]:
     if not isinstance(raw, list) or not raw:
         return ()
-    if len(raw) > LIMITS.max_image_pipeline_stages:
+    _check_stage_count(raw)
+    parsed = [_parse_stage_item(item, media) for item in raw]
+    stages: list[PipelineStage] = [stage for stage, _ in parsed]
+    steps_list: list[StepDefinition] = [step for _, step in parsed]
+    if sum(1 for step in steps_list if step.needs_model) > LIMITS.max_image_pipeline_stages:
         raise ValueError(
             f"Image recipes support at most {LIMITS.max_image_pipeline_stages} bounded stages."
         )
-    parsed = [_parse_stage_item(item) for item in raw]
-    stages: list[PipelineStage] = [stage for stage, _ in parsed]
-    steps_list: list[StepDefinition] = [step for _, step in parsed]
 
     kinds = [stage.kind for stage in stages]
     primary_index = _primary_index(stages)
@@ -263,9 +294,7 @@ def parse_pipeline_stages(raw: object) -> tuple[PipelineStage, ...]:
                 raise ValueError("Only restoration or deblock may precede the primary stage.")
             if stage.role == "primary":
                 raise ValueError("Only fix roles may precede the primary stage.")
-    fixes = [stage.fix for stage in stages if stage.fix is not None]
-    if len(set(fixes)) != len(fixes):
-        raise ValueError("Each fix kind may run only once.")
+    _check_each_runs_once(stages, steps_list)
     if stages[primary_index].role not in {"", "primary"}:
         raise ValueError("The primary stage must have the primary role.")
     trailing_start = primary_index + 1
