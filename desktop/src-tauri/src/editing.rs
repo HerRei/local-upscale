@@ -139,6 +139,10 @@ pub struct StartEditInput {
     pub edit_text_encoder: String,
     #[serde(default = "default_edit_placement")]
     pub edit_vae: String,
+    #[serde(default)]
+    pub edit_vram_limit_mb: Option<u64>,
+    #[serde(default)]
+    pub edit_allow_any_size: Option<bool>,
 }
 
 fn default_edit_placement() -> String {
@@ -802,6 +806,11 @@ pub fn validate(input: &StartEditInput, model: &EditModel) -> Result<(), String>
     {
         return Err("Invalid text encoder or VAE placement.".into());
     }
+    if let Some(limit_mb) = input.edit_vram_limit_mb {
+        if limit_mb != 0 && limit_mb < 1024 {
+            return Err("Edit VRAM limit must be 0 (automatic) or at least 1024 MiB.".into());
+        }
+    }
     Ok(())
 }
 
@@ -937,6 +946,8 @@ mod tests {
             output_directory: String::new(),
             edit_text_encoder: "auto".into(),
             edit_vae: "auto".into(),
+            edit_vram_limit_mb: None,
+            edit_allow_any_size: None,
         };
         assert!(validate(&input, model).unwrap_err().contains("license"));
         input.accepted_terms = true;

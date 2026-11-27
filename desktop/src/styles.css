@@ -2234,11 +2234,15 @@ input[type='number'],
   color: var(--secondary);
   font-weight: 400;
 }
-.advanced-controls {
+.advanced-controls,
+.expert-controls {
   padding-top: 8px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+.expert-controls .link-button {
+  align-self: flex-start;
 }
 .field-row {
   display: grid;
@@ -3662,10 +3666,14 @@ input[type='number'],
   font-weight: 400;
   letter-spacing: 0;
 }
-.link-button:hover {
+.link-button:where(:not(:disabled)):hover {
   color: var(--text);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+.link-button:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
 }
 .enhance-pane .link-button,
 .pop .link-button {

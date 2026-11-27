@@ -440,3 +440,16 @@ def test_auto_precision_is_accepted_by_schema_and_validators():
     assert "auto" in SCHEMA["$defs"]["baseJobData"]["properties"]["precision"]["enum"]
     validate_image_job(image_request(precision="auto"))
     validate_video_job(video_request(precision="auto"))
+
+
+def test_edit_expert_fields_validated_against_schema():
+    base = SAMPLES["edit_catalog_model"]["data"]
+    validate_edit_job({**base, "edit_vram_limit_mb": 0, "edit_allow_any_size": False})
+    validate_edit_job({**base, "edit_vram_limit_mb": 1024, "edit_allow_any_size": True})
+    validate_edit_job({**base, "edit_vram_limit_mb": 12288})
+    for bad_limit in (-1, 512, 1023, "4096", True, None):
+        with pytest.raises(InvalidRequest, match="edit_vram_limit_mb"):
+            validate_edit_job({**base, "edit_vram_limit_mb": bad_limit})
+    for bad_flag in ("yes", 1, None):
+        with pytest.raises(InvalidRequest, match="edit_allow_any_size"):
+            validate_edit_job({**base, "edit_allow_any_size": bad_flag})

@@ -3344,6 +3344,8 @@ fn ungranted_paths_are_refused_for_every_path_taking_command() {
                     output_directory: ungranted_dir.to_string_lossy().into_owned(),
                     edit_text_encoder: "auto".into(),
                     edit_vae: "auto".into(),
+                    edit_vram_limit_mb: None,
+                    edit_allow_any_size: None,
                 },
             ),
         ),
@@ -3364,6 +3366,8 @@ fn ungranted_paths_are_refused_for_every_path_taking_command() {
                     output_directory: String::new(),
                     edit_text_encoder: "auto".into(),
                     edit_vae: "auto".into(),
+                    edit_vram_limit_mb: None,
+                    edit_allow_any_size: None,
                 },
             ),
         ),
@@ -4041,6 +4045,8 @@ fn custom_edit_model_requires_grants_checks_sd_cli_and_persists_paths_in_place()
             output_directory: String::new(),
             edit_text_encoder: "auto".into(),
             edit_vae: "auto".into(),
+            edit_vram_limit_mb: None,
+            edit_allow_any_size: None,
         },
     )
     .unwrap();
@@ -4122,6 +4128,8 @@ fn edit_placement_overrides_are_gated_by_engine_feature() {
         output_directory: String::new(),
         edit_text_encoder: te.into(),
         edit_vae: vae.into(),
+        edit_vram_limit_mb: None,
+        edit_allow_any_size: None,
     };
 
     // Old engine without edit_placement: auto succeeds and omits placement fields from the wire.
@@ -4159,6 +4167,170 @@ fn edit_placement_overrides_are_gated_by_engine_feature() {
     let latest: Value = serde_json::from_str(&next.request_json).unwrap();
     assert_eq!(latest["data"]["edit_text_encoder"], "cpu");
     assert_eq!(latest["data"]["edit_vae"], "gpu");
+}
+
+#[test]
+fn edit_expert_settings_validate_and_flow_from_settings_to_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(&dir.path().join("app"));
+    let state = AppState::from_paths(paths).unwrap();
+    let edit_model = crate::editing::catalog_in(&state.model_root())
+        .unwrap()
+        .into_iter()
+        .find(|m| m.model_id == "flux2_klein_4b_q4_0")
+        .unwrap();
+    let bundle_dir = state.paths.model_root.join(&edit_model.family);
+    fs::create_dir_all(&bundle_dir).unwrap();
+    for file in &edit_model.files {
+        fs::File::create(bundle_dir.join(&file.filename))
+            .unwrap()
+            .set_len(file.size_bytes)
+            .unwrap();
+    }
+    let sd_cli = dir.path().join("sd-cli");
+    fs::write(&sd_cli, b"rt").unwrap();
+    *lock(&state.edit_runtime).unwrap() = sd_cli.to_string_lossy().into_owned();
+    lock(&state.runtime).unwrap().worker = "ready".into();
+    *lock(&state.engine).unwrap() = Some(crate::types::EngineInfo {
+        protocol_version: 1,
+        minimum_protocol_version: 1,
+        engine_id: "old".into(),
+        engine_version: "0.6.2".into(),
+        features: vec!["image_edit".into(), "edit_placement".into()],
+        model_formats: vec![],
+        video_engines: vec![],
+    });
+    lock(&state.capabilities)
+        .unwrap()
+        .devices
+        .push(crate::types::DeviceInfo {
+            id: "cuda:0".into(),
+            device_type: "cuda".into(),
+            name: "RTX 3060".into(),
+            total_memory: 12 * 1024 * 1024 * 1024,
+            free_memory: 11 * 1024 * 1024 * 1024,
+            ..Default::default()
+        });
+    let photo = dir.path().join("photo.png");
+    fs::write(&photo, b"png").unwrap();
+    state.grants.grant_media_file(&photo);
+    {
+        let db = lock(&state.database).unwrap();
+        db.insert_media("m1", photo.to_str().unwrap(), "photo.png", "image")
+            .unwrap();
+        db.update_media_probe(
+            photo.to_str().unwrap(),
+            "image",
+            512,
+            512,
+            1,
+            0.0,
+            0.0,
+            "",
+            "",
+            "",
+            false,
+        )
+        .unwrap();
+    }
+
+    // Settings validation rejects non-zero VRAM limits under 1024 MiB and invalid placements.
+    let bad_settings = UiSettings {
+        edit_vram_limit_mb: 512,
+        ..UiSettings::default()
+    };
+    assert!(validate_settings(&bad_settings).is_err());
+    assert!(validate_settings(&UiSettings {
+        edit_text_encoder: "tpu".into(),
+        ..UiSettings::default()
+    })
+    .is_err());
+    assert!(validate_settings(&UiSettings {
+        edit_vae: "tpu".into(),
+        ..UiSettings::default()
+    })
+    .is_err());
+    let ok_settings = UiSettings {
+        edit_text_encoder: "cpu".into(),
+        edit_vae: "gpu".into(),
+        edit_vram_limit_mb: 9830,
+        edit_allow_any_size: true,
+        ..UiSettings::default()
+    };
+    save_settings_checked(&state, ok_settings).unwrap();
+
+    let base_input = || crate::editing::StartEditInput {
+        media_id: "m1".into(),
+        model_id: edit_model.model_id.clone(),
+        prompt: "Add snow".into(),
+        runtime_path: String::new(),
+        device: "cuda:0".into(),
+        max_dimension: 1024,
+        steps: 4,
+        seed: 42,
+        accepted_terms: false,
+        output_directory: String::new(),
+        edit_text_encoder: "auto".into(),
+        edit_vae: "auto".into(),
+        edit_vram_limit_mb: None,
+        edit_allow_any_size: None,
+    };
+
+    // Old engine without edit_expert refuses non-default settings overrides.
+    assert!(start_edit_checked(&state, base_input()).is_err());
+
+    // Old engine succeeds when defaults are active and omits expert fields from the wire.
+    save_settings_checked(&state, UiSettings::default()).unwrap();
+    start_edit_checked(&state, base_input()).unwrap();
+    let queued = lock(&state.database)
+        .unwrap()
+        .next_queued_job()
+        .unwrap()
+        .unwrap();
+    let default_wire: Value = serde_json::from_str(&queued.request_json).unwrap();
+    assert!(default_wire["data"].get("edit_vram_limit_mb").is_none());
+    assert!(default_wire["data"].get("edit_allow_any_size").is_none());
+    lock(&state.database)
+        .unwrap()
+        .finish_job(&queued.id, "completed", "", "")
+        .unwrap();
+
+    // Engine with edit_expert enforces 1024..total_vram_mb and forwards settings into the request.
+    lock(&state.engine)
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .features
+        .push("edit_expert".into());
+    save_settings_checked(
+        &state,
+        UiSettings {
+            edit_vram_limit_mb: 12 * 1024 + 1,
+            edit_allow_any_size: true,
+            ..UiSettings::default()
+        },
+    )
+    .unwrap();
+    assert!(start_edit_checked(&state, base_input()).is_err());
+
+    save_settings_checked(
+        &state,
+        UiSettings {
+            edit_vram_limit_mb: 9830,
+            edit_allow_any_size: true,
+            ..UiSettings::default()
+        },
+    )
+    .unwrap();
+    start_edit_checked(&state, base_input()).unwrap();
+    let next = lock(&state.database)
+        .unwrap()
+        .next_queued_job()
+        .unwrap()
+        .unwrap();
+    let wire: Value = serde_json::from_str(&next.request_json).unwrap();
+    assert_eq!(wire["data"]["edit_vram_limit_mb"], 9830);
+    assert_eq!(wire["data"]["edit_allow_any_size"], true);
 }
 
 #[test]
@@ -5123,6 +5295,8 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
         output_directory: "/out".into(),
         edit_text_encoder: "auto".into(),
         edit_vae: "auto".into(),
+        edit_vram_limit_mb: None,
+        edit_allow_any_size: None,
     };
     let custom_edit_model = crate::editing::EditModel {
         model_id: "__custom__".into(),
@@ -5142,6 +5316,8 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
         output_directory: "/out".into(),
         edit_text_encoder: "auto".into(),
         edit_vae: "auto".into(),
+        edit_vram_limit_mb: None,
+        edit_allow_any_size: None,
     };
     let custom_files = std::collections::BTreeMap::from([
         ("diffusion".into(), "/custom/flux.gguf".into()),
@@ -5234,6 +5410,8 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
                 Path::new("/bin/sd-cli"),
                 &catalog_edit_input,
                 None,
+                0,
+                false,
             ))
             .unwrap(),
         ),
@@ -5248,6 +5426,8 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
                 Path::new("/bin/sd-cli"),
                 &custom_edit_input,
                 Some(custom_files),
+                0,
+                false,
             ))
             .unwrap(),
         ),

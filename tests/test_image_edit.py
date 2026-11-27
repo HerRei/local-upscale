@@ -64,8 +64,9 @@ def test_gpu_profiles_allow_driver_overhead_and_keep_vram_reserve(selected):
         64 * GIB, 60 * GIB, gpu_total=capacity * GIB - 32 * 1024**2, gpu_free=(capacity - 1) * GIB
     )
     plan = plan_edit(selected, memory, 1024)
-    assert 4 * GIB <= plan.gpu_budget <= memory.gpu_free - 2 * GIB
-    assert plan.max_dimension == (512 if capacity < 12 else 768 if capacity < 16 else 1024)
+    gpu_reserve = max(1 * GIB, int(memory.gpu_total * 0.08))
+    assert 4 * GIB <= plan.gpu_budget <= memory.gpu_free - gpu_reserve
+    assert plan.max_dimension in (512, 768, 1024)
     smaller = [tier for tier in GPU_TIERS if tier < capacity]
     if smaller:
         with pytest.raises(MemoryError, match="smaller"):
@@ -1083,7 +1084,7 @@ def test_runtime_probe_runs_once_per_runtime_and_timeouts_are_explained(tmp_path
         ("flux2_klein_4b_q4_0", 24, 1024, ("gpu", "gpu", False)),
         ("flux2_klein_4b_q8_0", 8, 512, ("cpu", "gpu", True)),
         ("flux2_klein_4b_q8_0", 12, 512, ("gpu", "gpu", False)),
-        ("flux2_klein_4b_q8_0", 12, 768, ("cpu", "gpu", True)),
+        ("flux2_klein_4b_q8_0", 12, 768, ("gpu", "gpu", False)),
         ("flux2_klein_4b_q8_0", 24, 1024, ("gpu", "gpu", False)),
         ("mage_flow_edit_turbo_q6_k", 8, 512, ("cpu", "gpu", True)),
         ("mage_flow_edit_turbo_q6_k", 12, 768, ("gpu", "gpu", False)),
@@ -1091,12 +1092,12 @@ def test_runtime_probe_runs_once_per_runtime_and_timeouts_are_explained(tmp_path
         ("qwen_edit_2511_q2_k", 8, 512, ("cpu", "cpu", True)),
         ("qwen_edit_2511_q2_k", 12, 768, ("cpu", "gpu", True)),
         ("qwen_edit_2511_q2_k", 24, 1024, ("gpu", "gpu", False)),
-        ("qwen_edit_2511_q3_k_s", 12, 768, ("cpu", "cpu", True)),
+        ("qwen_edit_2511_q3_k_s", 12, 768, ("cpu", "gpu", True)),
         ("qwen_edit_2511_q3_k_s", 24, 1024, ("gpu", "gpu", False)),
         ("qwen_edit_2511_q4_k_m", 24, 512, ("gpu", "gpu", False)),
         ("qwen_edit_2511_q4_k_m", 24, 1024, ("cpu", "gpu", True)),
-        ("qwen_edit_2511_q5_k_m", 24, 512, ("cpu", "gpu", True)),
-        ("qwen_edit_2511_q8_0", 24, 512, ("cpu", "cpu", True)),
+        ("qwen_edit_2511_q5_k_m", 24, 512, ("gpu", "gpu", False)),
+        ("qwen_edit_2511_q8_0", 24, 512, ("cpu", "gpu", True)),
     ],
 )
 def test_plan_edit_places_parts_by_discrete_gpu_memory(model_id, gpu_gb, max_dim, expected):
@@ -1451,4 +1452,241 @@ def test_run_edit_job_refuses_forced_gpu_before_run_and_emits_placement_notes(
 def test_engine_features_advertise_edit_placement():
     from localsr.worker.server import _engine_features
 
-    assert "edit_placement" in _engine_features()
+    features = _engine_features()
+    assert "edit_placement" in features
+    assert "edit_expert" in features
+
+
+def test_12gb_card_runs_flux_klein_q4_at_1024_all_on_gpu():
+    flux_q4 = model("Q4_0", "flux2-klein-4b")
+    memory = EditMemory(64 * GIB, 60 * GIB, gpu_total=12 * GIB, gpu_free=int(10.66 * GIB))
+    plan = plan_edit(flux_q4, memory, 1024)
+    assert plan.gpu_budget == int(10.66 * GIB) - 1 * GIB
+    assert plan.max_dimension == 1024
+    assert (plan.text_encoder, plan.vae, plan.offload) == ("gpu", "gpu", False)
+
+
+@pytest.mark.parametrize(
+    "model_id,gpu_free_gib,requested,expected_dim,expected_place",
+    [
+        ("flux2_klein_4b_q4_0", 8.0, 1024, 1024, ("cpu", "gpu", True)),
+        ("flux2_klein_4b_q4_0", 7.0, 1024, 768, ("cpu", "gpu", True)),
+        ("flux2_klein_4b_q4_0", 5.5, 1024, 512, ("cpu", "gpu", True)),
+        ("flux2_klein_4b_q4_0", 8.0, 768, 768, ("cpu", "gpu", True)),
+        ("flux2_klein_4b_q8_0", 8.0, 1024, 768, ("cpu", "gpu", True)),
+        ("flux2_klein_4b_q8_0", 7.0, 1024, 512, ("cpu", "gpu", True)),
+        ("mage_flow_edit_turbo_q6_k", 8.0, 1024, 768, ("cpu", "gpu", True)),
+        ("qwen_edit_2511_q2_k", 8.0, 1024, 512, ("cpu", "cpu", True)),
+    ],
+)
+def test_8gb_card_picks_largest_size_that_fits(
+    model_id, gpu_free_gib, requested, expected_dim, expected_place
+):
+    selected = next(m for m in image_edit.edit_catalog() if m["model_id"] == model_id)
+    memory = EditMemory(64 * GIB, 60 * GIB, gpu_total=8 * GIB, gpu_free=int(gpu_free_gib * GIB))
+    plan = plan_edit(selected, memory, requested)
+    assert plan.max_dimension == expected_dim
+    assert (plan.text_encoder, plan.vae, plan.offload) == expected_place
+
+
+def test_discrete_gpu_size_fit_also_respects_host_ram():
+    flux_q4 = model("Q4_0", "flux2-klein-4b")
+    # 8 GiB system RAM (6 GiB free, 4 GiB reserve = 2 GiB headroom) cannot hold 1024 px
+    # activations (4.0 GiB * 1.1 = 4.4 GiB) or 768 px (2.25 * 1.1 = 2.475 GiB), so it fits 512 px.
+    tight_host = EditMemory(8 * GIB, 6 * GIB, gpu_total=24 * GIB, gpu_free=24 * GIB)
+    plan = plan_edit(flux_q4, tight_host, 1024)
+    assert plan.max_dimension == 512
+    assert (plan.text_encoder, plan.vae, plan.offload) == ("gpu", "gpu", False)
+
+
+def test_vram_limit_override_used_bounds_checked_and_ignored_on_unified(caplog):
+    flux_q4 = model("Q4_0", "flux2-klein-4b")
+    gpu_12 = EditMemory(64 * GIB, 60 * GIB, gpu_total=12 * GIB, gpu_free=int(10.66 * GIB))
+
+    # Override replaces rule 1 budget: 6144 MiB (6 GiB) fits 768 px, not 1024 px.
+    plan = plan_edit(flux_q4, gpu_12, 1024, vram_limit_mb=6144)
+    assert plan.gpu_budget == 6144 * 1024**2
+    assert plan.max_dimension == 768
+    assert (plan.text_encoder, plan.vae, plan.offload) == ("cpu", "gpu", True)
+
+    # 7680 MiB (7.5 GiB) allows 1024 px with offload; requesting 768 px fits completely on GPU.
+    plan_75 = plan_edit(flux_q4, gpu_12, 1024, vram_limit_mb=7680)
+    assert plan_75.gpu_budget == 7680 * 1024**2
+    assert plan_75.max_dimension == 1024
+    assert (plan_75.text_encoder, plan_75.vae, plan_75.offload) == ("cpu", "gpu", True)
+    plan_75_768 = plan_edit(flux_q4, gpu_12, 768, vram_limit_mb=7680)
+    assert plan_75_768.max_dimension == 768
+    assert (plan_75_768.text_encoder, plan_75_768.vae, plan_75_768.offload) == ("gpu", "gpu", False)
+
+    # Forced GPU placement that cannot fit at 1024/768 drops to 512 when 512 fits.
+    flux_q8 = model("Q8_0", "flux2-klein-4b")
+    assert plan_edit(flux_q8, gpu_12, 1024).max_dimension == 1024
+    te_gpu_flux_q8 = plan_edit(flux_q8, gpu_12, 1024, text_encoder="gpu")
+    assert te_gpu_flux_q8.max_dimension == 512
+    assert (te_gpu_flux_q8.text_encoder, te_gpu_flux_q8.vae) == ("gpu", "gpu")
+
+    # 0 keeps automatic rule 1.
+    auto_plan = plan_edit(flux_q4, gpu_12, 1024, vram_limit_mb=0)
+    assert auto_plan.max_dimension == 1024
+
+    # Out-of-bounds values fail validation.
+    for bad in (-1, 512, 1023, 12 * 1024 + 1, True):
+        with pytest.raises(ValueError, match="edit_vram_limit_mb"):
+            plan_edit(flux_q4, gpu_12, 1024, vram_limit_mb=bad)
+
+    # Unified memory ignores vram_limit_mb with a log note and keeps the exact Mac plan.
+    mac_24 = EditMemory(24 * GIB, 20 * GIB, unified=True)
+    expected = plan_edit(flux_q4, mac_24, 1024)
+    with caplog.at_level("INFO"):
+        overridden = plan_edit(flux_q4, mac_24, 1024, vram_limit_mb=4096)
+    assert overridden == expected
+    assert "edit_vram_limit_mb" in caplog.text
+
+
+def test_allow_any_size_keeps_requested_size_and_unified_plans_stay_identical():
+    flux_q8 = model("Q8_0", "flux2-klein-4b")
+    gpu_8 = EditMemory(64 * GIB, 60 * GIB, gpu_total=8 * GIB, gpu_free=8 * GIB)
+    assert plan_edit(flux_q8, gpu_8, 1024).max_dimension == 768
+    forced = plan_edit(flux_q8, gpu_8, 1024, allow_any_size=True)
+    assert forced.max_dimension == 1024
+    assert (forced.text_encoder, forced.vae, forced.offload) == ("cpu", "cpu", True)
+
+    # Unified memory plans remain byte-identical across Mac tiers.
+    qwen_q2 = model("Q2_K", "qwen-image-edit-2511")
+    mac_24 = EditMemory(24 * GIB, 20 * GIB, unified=True)
+    mac_plan = plan_edit(qwen_q2, mac_24, 1024)
+    assert mac_plan == EditPlan(
+        required_ram=int((7_468_022_368 + 253_806_246 + int(1.5 * GIB)) * 1.1),
+        reserve_ram=int(24 * GIB * 0.10),
+        gpu_budget=min(
+            int((7_468_022_368 + 253_806_246 + int(1.5 * GIB)) * 1.1),
+            int(24 * GIB * 0.60),
+            20 * GIB - int(24 * GIB * 0.10),
+        ),
+        max_dimension=512,
+        process_limit=int(
+            (7_468_022_368 + 3_015_939_072 + 853_119_712 + 253_806_246) * 1.1 + int(1.5 * GIB)
+        ),
+        text_encoder="cpu",
+        vae="cpu",
+        offload=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "returncode,output",
+    [
+        (1, b"ggml_vulkan: Error OutOfDeviceMemory\n"),
+        (1, b"CUDA error: out of memory\n"),
+        (75, b"Editing stopped to protect system memory: only 1.0 GiB of memory was left.\n"),
+    ],
+)
+def test_run_edit_job_surfaces_oom_from_sd_cli_and_supervisor(
+    monkeypatch, tmp_path, returncode, output
+):
+    from PIL import Image
+
+    from localsr.core.disk_space import failure_fields
+    from localsr.core.memory_errors import DeviceOutOfMemoryError
+
+    image_path = tmp_path / "source.png"
+    Image.new("RGB", (128, 96)).save(image_path)
+    monkeypatch.setattr(image_edit, "check_runtime", lambda _: tmp_path / "sd-cli")
+    monkeypatch.setattr(
+        image_edit,
+        "verify_bundle",
+        lambda *_: {entry["role"]: Path(entry["filename"]) for entry in model()["files"]},
+    )
+    monkeypatch.setattr(image_edit, "resolve_edit_gpu", lambda _r, _d, _b: "CUDA0")
+    (tmp_path / "scratch").mkdir()
+
+    class OomProcess:
+        def __init__(self, command, **_kwargs):
+            self.stdin = io.BytesIO()
+            self.stdout = io.BytesIO(output)
+            self.returncode = returncode
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(image_edit.subprocess, "Popen", OomProcess)
+    req = {
+        "job_id": "oom-edit",
+        "model_id": "flux2_klein_4b_q4_0",
+        "prompt": "Brighten",
+        "device": "cuda:0",
+        "max_dimension": 1024,
+        "edit_allow_any_size": True,
+        "runtime_path": str(tmp_path / "sd-cli"),
+        "bundle_dir": str(tmp_path),
+        "image_path": str(image_path),
+        "output_path": str(tmp_path / "out.png"),
+        "scratch_directory": str(tmp_path / "scratch"),
+    }
+    mem_8g = EditMemory(64 * GIB, 60 * GIB, gpu_total=8 * GIB, gpu_free=8 * GIB)
+    with pytest.raises(DeviceOutOfMemoryError) as caught:
+        image_edit.run_edit_job(req, threading.Event(), lambda _: None, sampler=lambda _: mem_8g)
+    expected = (
+        "Not enough memory for this size. Choose a smaller size or let LocalSR "
+        "place the models automatically."
+    )
+    assert str(caught.value) == expected
+    assert failure_fields(caught.value, req["output_path"], edit_request=req) == {
+        "error_message": expected
+    }
+
+
+def test_run_edit_job_emits_log_note_when_vram_limit_ignored_on_unified(monkeypatch, tmp_path):
+    from PIL import Image
+
+    image_path = tmp_path / "source.png"
+    Image.new("RGB", (128, 96)).save(image_path)
+    monkeypatch.setattr(image_edit, "check_runtime", lambda _: tmp_path / "sd-cli")
+    monkeypatch.setattr(
+        image_edit,
+        "verify_bundle",
+        lambda *_: {entry["role"]: Path(entry["filename"]) for entry in model()["files"]},
+    )
+    (tmp_path / "scratch").mkdir()
+
+    class OkProcess:
+        def __init__(self, command, **_kwargs):
+            native = json.loads(Path(command[-1]).read_text())["command"]
+            Image.new("RGB", (128, 96), "green").save(native[native.index("-o") + 1])
+            self.stdin = io.BytesIO()
+            self.stdout = io.BytesIO(b"")
+            self.returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(image_edit.subprocess, "Popen", OkProcess)
+    messages = []
+    req = {
+        "job_id": "mac-ignore-vram",
+        "model_id": "flux2_klein_4b_q4_0",
+        "prompt": "Brighten",
+        "device": "mps",
+        "edit_vram_limit_mb": 4096,
+        "runtime_path": str(tmp_path / "sd-cli"),
+        "bundle_dir": str(tmp_path),
+        "image_path": str(image_path),
+        "output_path": str(tmp_path / "out.png"),
+        "scratch_directory": str(tmp_path / "scratch"),
+    }
+    mac_16 = EditMemory(16 * GIB, 14 * GIB, unified=True)
+    image_edit.run_edit_job(req, threading.Event(), messages.append, sampler=lambda _: mac_16)
+    logs = [
+        json.loads(m.to_json())["data"]["message"]
+        for m in messages
+        if json.loads(m.to_json())["type"] == "log"
+    ]
+    assert any("edit_vram_limit_mb" in line for line in logs)
+
+
+def test_allow_any_size_does_not_lift_the_mac_limits():
+    # An oversized edit in unified memory would swap the whole Mac, so the limits hold.
+    qwen_q2 = model("Q2_K", "qwen-image-edit-2511")
+    mac_24 = EditMemory(24 * GIB, 20 * GIB, unified=True)
+    assert plan_edit(qwen_q2, mac_24, 1024, allow_any_size=True) == plan_edit(qwen_q2, mac_24, 1024)
+    assert plan_edit(qwen_q2, mac_24, 1024, allow_any_size=True).max_dimension == 512

@@ -33,12 +33,13 @@
     EDIT_FAMILIES,
     EDIT_FIT_LABELS,
     editDevice,
+    editExpert,
     editFamilyLabel,
     editFamilySummary,
     editFitFor,
     editHardwareLabel,
+    editRecommendedSize,
     editRuntimeLabel,
-    editSizeLimit,
     editVariantName,
   } from './lib/editing';
   import type {
@@ -187,7 +188,12 @@
   $: runningDownloadCount = downloads.filter((item) => item.status === 'downloading').length;
   $: queuedDownloadCount = downloads.filter((item) => item.status === 'queued').length;
   $: editGpu = editDevice(snapshot.capabilities, settings);
-  $: editLimit = editSizeLimit(snapshot.capabilities, editGpu);
+  $: editLimit = editRecommendedSize(
+    selectedEdit,
+    snapshot.capabilities,
+    editGpu,
+    editExpert(settings, selectedEdit, editGpu, snapshot.engine?.features ?? []),
+  );
   $: editFit = (model: EditModel) => editFitFor(model, snapshot.capabilities, editGpu);
   $: installedVideoModels = videoModels.filter((model) => model.installed);
   $: installedInterpolationModels = interpolationModels.filter((model) => model.installed);

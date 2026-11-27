@@ -10,7 +10,13 @@
   import RecipesMenu from './RecipesMenu.svelte';
   import VideoMemory from './VideoMemory.svelte';
   import { customModels } from './lib/customModels';
-  import { EDIT_FIT_LABELS, editFamilyLabel, editVariantName } from './lib/editing';
+  import {
+    EDIT_FIT_LABELS,
+    editExpert,
+    editExpertChanges,
+    editFamilyLabel,
+    editVariantName,
+  } from './lib/editing';
   import {
     mediaFacts,
     outputSummary,
@@ -138,6 +144,9 @@
     outputOpen = false;
   }
   $: outputLineText = outputSummary(settings, { preservingHdr, audioDisabled });
+  $: expertChanges = editExpertChanges(
+    editExpert(settings, editModel, editingDevice, snapshot.engine?.features ?? []),
+  );
   $: facts = mediaFacts(selectedMedia);
 
   $: taskTip =
@@ -683,13 +692,17 @@
                         (model) => model.path === settings.custom_model_path,
                       )?.name ?? 'Checkpoint')
                     : ''}
-                {@const meta = stage.editModel
+                {@const baseMeta = stage.editModel
                   ? `${editVariantName(stage.editModel)}${
                       editFit !== 'unknown' && editFit !== 'runs'
                         ? ` · ${EDIT_FIT_LABELS[editFit]}`
                         : ''
                     }`
                   : ''}
+                {@const meta = baseMeta
+                  ? `${baseMeta}${expertChanges.length ? ' · Expert settings' : ''}`
+                  : ''}
+                {@const metaTitle = baseMeta ? [baseMeta, ...expertChanges].join(' · ') : ''}
                 <div class="plan-row" role="listitem">
                   <span class="stage">{stage.label}</span>
                   <div class="name" title={name || undefined}>{name}</div>
@@ -706,8 +719,9 @@
                   </div>
                   {#if meta || stage.custom !== undefined}<p
                       class="plan-note"
-                      title={(stage.custom !== undefined ? settings.custom_model_path : meta) ||
-                        undefined}
+                      title={(stage.custom !== undefined
+                        ? settings.custom_model_path
+                        : metaTitle) || undefined}
                     >
                       {#if stage.custom !== undefined}<span class="path-text"
                           >{settings.custom_model_path ||
@@ -761,6 +775,7 @@
             {settings}
             {editModel}
             capabilities={snapshot.capabilities}
+            features={snapshot.engine?.features ?? []}
             updateSettings={chooseInAdvanced}
             defaults={defaultSettings}
             onUseDefaults={useDefaultsForSession}

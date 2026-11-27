@@ -405,6 +405,12 @@ def validate_video_job(data: Any) -> None:
 def validate_edit_job(data: Any) -> None:
     _validate_object(data, _EDIT_JOB_SPEC, "edit job request")
     _check_paths(data["image_path"], data["output_path"])
+    vram_limit = data.get("edit_vram_limit_mb", 0)
+    if vram_limit != 0 and vram_limit < 1024:
+        raise InvalidRequest(
+            'The edit job request has an invalid "edit_vram_limit_mb": '
+            f"it must be 0 or at least 1024, not {vram_limit}."
+        )
 
 
 def validate_probe(data: Any) -> None:

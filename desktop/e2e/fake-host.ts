@@ -8,8 +8,9 @@ import type { Page } from '@playwright/test';
  * keeps the value of the app's own demo snapshot (src/lib/demo.ts, real model catalog).
  */
 export interface Scenario {
-  devices?: 'mac' | 'windows' | 'cpu';
+  devices?: 'mac' | 'windows' | 'cuda' | 'cpu';
   platform?: string;
+  editRuntime?: string;
   task?: string;
   /** Number of photos in the queue; the first one is selected. */
   photos?: number;
@@ -343,7 +344,18 @@ function hostScript(scenario: Scenario): void {
         }),
       ];
       s.settings.device_id = 'directml:0';
+    } else if (kind === 'cuda') {
+      s.capabilities.devices = [
+        { ...cpu, name: 'Intel Core i7-12700' },
+        gpu('cuda:0', 'cuda', 'NVIDIA GeForce RTX 3060 (CUDA)', {
+          is_integrated: false,
+          total_memory: 12 * GIB,
+          free_memory: Math.round(10.66 * GIB),
+        }),
+      ];
+      s.settings.device_id = 'cuda:0';
     }
+    if (scenario.editRuntime) s.edit.runtime_path = scenario.editRuntime;
     s.capabilities.system_ram_total = 16 * GIB;
     for (const id of scenario.installed ?? []) {
       const model = [

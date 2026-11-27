@@ -497,6 +497,14 @@ pub struct UiSettings {
     pub edit_steps: u32,
     #[serde(default = "default_edit_seed")]
     pub edit_seed: u32,
+    #[serde(default = "default_edit_placement")]
+    pub edit_text_encoder: String,
+    #[serde(default = "default_edit_placement")]
+    pub edit_vae: String,
+    #[serde(default)]
+    pub edit_vram_limit_mb: u64,
+    #[serde(default)]
+    pub edit_allow_any_size: bool,
     #[serde(default)]
     pub custom_edit_model: CustomEditModel,
     pub model_directory: String,
@@ -540,6 +548,10 @@ fn default_edit_steps() -> u32 {
 
 fn default_edit_seed() -> u32 {
     crate::steps::registry().param_default_u32("edit", "seed")
+}
+
+fn default_edit_placement() -> String {
+    "auto".into()
 }
 
 fn default_hdr_mode() -> String {
@@ -711,6 +723,10 @@ impl Default for UiSettings {
             edit_max_dimension: default_edit_dimension(),
             edit_steps: default_edit_steps(),
             edit_seed: default_edit_seed(),
+            edit_text_encoder: default_edit_placement(),
+            edit_vae: default_edit_placement(),
+            edit_vram_limit_mb: 0,
+            edit_allow_any_size: false,
             custom_edit_model: CustomEditModel::default(),
             model_directory: String::new(),
             gpu_download_notice_dismissed: false,

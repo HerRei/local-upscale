@@ -15,6 +15,16 @@ _DEVICE_OUT_OF_MEMORY = re.compile(
     r"|PYTORCH_CUDA_ALLOC_CONF",
     re.IGNORECASE,
 )
+_EDIT_OUT_OF_MEMORY = re.compile(
+    r"out of memory|OutOfDeviceMemory|VK_ERROR_OUT_OF_DEVICE_MEMORY|OutOfHostMemory"
+    r"|VK_ERROR_OUT_OF_HOST_MEMORY|failed to allocate|cudaErrorMemoryAllocation"
+    r"|not enough memory|cannot allocate memory|bad_alloc",
+    re.IGNORECASE,
+)
+EDIT_OUT_OF_MEMORY_MESSAGE = (
+    "Not enough memory for this size. Choose a smaller size or let LocalSR "
+    "place the models automatically."
+)
 
 
 class DeviceOutOfMemoryError(RuntimeError):
@@ -45,8 +55,17 @@ def is_device_out_of_memory(error: BaseException) -> bool:
     )
 
 
+def is_edit_out_of_memory(text: str) -> bool:
+    """Whether ``text`` from sd-cli/ggml indicates a GPU or host out-of-memory failure."""
+    return bool(_EDIT_OUT_OF_MEMORY.search(text))
+
+
 def memory_failure_message(
-    error: BaseException, *, video: bool = False, interpolating_after_upscale: bool = False
+    error: BaseException,
+    *,
+    video: bool = False,
+    interpolating_after_upscale: bool = False,
+    edit: bool = False,
 ) -> str | None:
     """The status-line sentence for a job that ran out of graphics memory, or None.
 
@@ -57,6 +76,10 @@ def memory_failure_message(
     gave_up = next(
         (link for link in _chain(error) if isinstance(link, DeviceOutOfMemoryError)), None
     )
+    if edit:
+        if raw or gave_up is not None or _EDIT_OUT_OF_MEMORY.search(str(error)):
+            return EDIT_OUT_OF_MEMORY_MESSAGE
+        return None
     if not raw and gave_up is None:
         return None
     if gave_up is not None and gave_up.device_type == "cpu":
@@ -78,6 +101,8 @@ def memory_failure_message(
 
 __all__ = [
     "DeviceOutOfMemoryError",
+    "EDIT_OUT_OF_MEMORY_MESSAGE",
     "is_device_out_of_memory",
+    "is_edit_out_of_memory",
     "memory_failure_message",
 ]

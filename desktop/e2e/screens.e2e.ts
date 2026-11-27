@@ -198,5 +198,28 @@ test.describe('screens @visual', () => {
       'Downloads · 3 active · 1 waiting',
     );
     await shoot(page, 'library-downloads');
+  test('Edit Expert settings on Windows CUDA', async ({ page }) => {
+    await openApp(page, {
+      devices: 'cuda',
+      platform: 'Win32',
+      photos: 1,
+      task: 'edit',
+      worker: 'ready',
+      editRuntime: '/fixture/sd-cli',
+      features: ['image_edit', 'edit_placement', 'edit_expert'],
+      installed: ['flux2_klein_4b_q4_0'],
+      settings: {
+        edit_model_id: 'flux2_klein_4b_q4_0',
+        edit_max_dimension: 1024,
+        edit_vram_limit_mb: 11264,
+        edit_allow_any_size: true,
+      },
+    });
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await page.getByRole('button', { name: /^Advanced/ }).click();
+    await page.locator('#edit-expert').click();
+    await page.locator('#edit-expert-reset').scrollIntoViewIfNeeded();
+    await shoot(page, 'edit-expert-windows');
   });
 });

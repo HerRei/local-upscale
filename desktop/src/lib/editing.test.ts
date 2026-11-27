@@ -8,11 +8,15 @@ import {
   customEditFamilySpec,
   editDevice,
   editDimensions,
+  editExpert,
+  editExpertChanges,
   editFamilyLabel,
   editFitFor,
   editHardwareLabel,
   editPeakEstimate,
-  editSizeLimit,
+  editRecommendedSize,
+  editSizeFor,
+  editVramOptions,
   recommendAnyEditModel,
 } from './editing';
 import type { DeviceInfo, EditModel } from './types';
@@ -29,13 +33,170 @@ const gpu = (id: string, capacity: number): DeviceInfo => ({
   recommended_tile_sizes: [256],
 });
 
+const autoExpert = {
+  textEncoder: 'auto' as const,
+  vae: 'auto' as const,
+  vramLimitMb: 0,
+  allowAnySize: false,
+};
+
 describe('Qwen memory recommendations', () => {
-  it('caps the edit resolution on smaller devices', () => {
+  it('recommends 1024 px for FLUX.2 klein Q4_0 on a 12 GiB card', () => {
     const capabilities = demoSnapshot().capabilities;
-    capabilities.system_ram_total = 24 * EDIT_GIB;
-    expect(editSizeLimit(capabilities, gpu('mps', 24))).toBe(512);
-    expect(editSizeLimit(capabilities, gpu('cuda:0', 12))).toBe(768);
-    expect(editSizeLimit(capabilities, gpu('cuda:0', 16))).toBe(1024);
+    const fluxQ4 = models.find((model) => model.model_id === 'flux2_klein_4b_q4_0')!;
+    const card12 = { ...gpu('cuda:0', 12), free_memory: Math.floor(10.66 * EDIT_GIB) };
+    expect(editRecommendedSize(fluxQ4, capabilities, card12, autoExpert)).toBe(1024);
+  });
+
+  it.each([
+    ['flux2_klein_4b_q4_0', 8.0, 1024],
+    ['flux2_klein_4b_q4_0', 7.0, 768],
+    ['flux2_klein_4b_q4_0', 5.5, 512],
+    ['flux2_klein_4b_q8_0', 8.0, 768],
+    ['flux2_klein_4b_q8_0', 7.0, 512],
+    ['mage_flow_edit_turbo_q6_k', 8.0, 768],
+    ['qwen_edit_2511_q2_k', 8.0, 512],
+  ] as const)(
+    'matches the 8 GB worker size fit for %s with %s GiB free',
+    (modelId, freeGib, expected) => {
+      const capabilities = demoSnapshot().capabilities;
+      const selected = models.find((model) => model.model_id === modelId)!;
+      const card8 = {
+        ...gpu('cuda:0', 8),
+        total_memory: 8 * EDIT_GIB,
+        free_memory: Math.floor(freeGib * EDIT_GIB),
+      };
+      expect(editRecommendedSize(selected, capabilities, card8, autoExpert)).toBe(expected);
+    },
+  );
+
+  it('responds to GPU memory limits and forced GPU placement', () => {
+    const capabilities = demoSnapshot().capabilities;
+    const card12 = { ...gpu('cuda:0', 12), free_memory: Math.floor(10.66 * EDIT_GIB) };
+    const fluxQ4 = models.find((model) => model.model_id === 'flux2_klein_4b_q4_0')!;
+    const fluxQ8 = models.find((model) => model.model_id === 'flux2_klein_4b_q8_0')!;
+    const qwenQ3 = models.find((model) => model.model_id === 'qwen_edit_2511_q3_k_s')!;
+
+    expect(
+      editRecommendedSize(fluxQ4, capabilities, card12, { ...autoExpert, vramLimitMb: 6144 }),
+    ).toBe(768);
+    expect(editRecommendedSize(qwenQ3, capabilities, card12, autoExpert)).toBe(512);
+    expect(
+      editRecommendedSize(qwenQ3, capabilities, card12, { ...autoExpert, vramLimitMb: 11264 }),
+    ).toBe(768);
+    expect(editRecommendedSize(fluxQ8, capabilities, card12, autoExpert)).toBe(1024);
+    expect(
+      editRecommendedSize(fluxQ8, capabilities, card12, { ...autoExpert, textEncoder: 'gpu' }),
+    ).toBe(512);
+  });
+
+  it('keeps the Mac tier recommendations and defaults to 512 with no device', () => {
+    const capabilities = demoSnapshot().capabilities;
+    for (const [gb, expected] of [
+      [24, 512],
+      [36, 768],
+      [48, 1024],
+    ] as const) {
+      capabilities.system_ram_total = gb * EDIT_GIB;
+      expect(editRecommendedSize(undefined, capabilities, gpu('mps', gb), autoExpert)).toBe(
+        expected,
+      );
+    }
+    expect(editRecommendedSize(undefined, capabilities, undefined, autoExpert)).toBe(512);
+  });
+
+  it('builds whole-GB GPU memory options and clamps saved expert overrides', () => {
+    const card12 = gpu('cuda:0', 12);
+    const options = editVramOptions(card12);
+    expect(options[0]).toEqual({ value: 0, label: 'Automatic' });
+    expect(options.slice(1).map((opt) => opt.label)).toEqual([
+      'Up to 4 GB',
+      'Up to 5 GB',
+      'Up to 6 GB',
+      'Up to 7 GB',
+      'Up to 8 GB',
+      'Up to 9 GB',
+      'Up to 10 GB',
+      'Up to 11 GB',
+      'Up to 12 GB',
+    ]);
+    expect(options.at(-1)?.value).toBe(12256);
+    expect(editVramOptions(gpu('cuda:0', 3))).toEqual([{ value: 0, label: 'Automatic' }]);
+
+    const fluxQ4 = models.find((model) => model.model_id === 'flux2_klein_4b_q4_0')!;
+    const mage = models.find((model) => model.model_id === 'mage_flow_edit_turbo_q6_k')!;
+    const full = ['image_edit', 'edit_placement', 'edit_expert'];
+
+    expect(editExpert({ edit_vram_limit_mb: 16384 }, fluxQ4, card12, full).vramLimitMb).toBe(12256);
+    expect(
+      editExpert(
+        {
+          edit_text_encoder: 'cpu',
+          edit_vae: 'gpu',
+          edit_vram_limit_mb: 8192,
+          edit_allow_any_size: true,
+        },
+        fluxQ4,
+        card12,
+        ['image_edit'],
+      ),
+    ).toEqual(autoExpert);
+    expect(
+      editExpert(
+        {
+          edit_text_encoder: 'cpu',
+          edit_vae: 'gpu',
+          edit_vram_limit_mb: 8192,
+          edit_allow_any_size: true,
+        },
+        fluxQ4,
+        card12,
+        ['image_edit', 'edit_placement'],
+      ),
+    ).toEqual({
+      textEncoder: 'cpu',
+      vae: 'gpu',
+      vramLimitMb: 0,
+      allowAnySize: false,
+    });
+    expect(
+      editExpert(
+        {
+          edit_text_encoder: 'gpu',
+          edit_vae: 'gpu',
+          edit_vram_limit_mb: 8192,
+          edit_allow_any_size: true,
+        },
+        fluxQ4,
+        gpu('mps', 24),
+        full,
+      ),
+    ).toEqual({
+      textEncoder: 'gpu',
+      vae: 'gpu',
+      vramLimitMb: 0,
+      allowAnySize: false,
+    });
+    expect(
+      editExpert({ edit_text_encoder: 'gpu', edit_vae: 'gpu' }, mage, gpu('mps', 24), full),
+    ).toEqual(autoExpert);
+
+    expect(editExpertChanges(autoExpert)).toEqual([]);
+    expect(
+      editExpertChanges({
+        textEncoder: 'cpu',
+        vae: 'gpu',
+        vramLimitMb: 11264,
+        allowAnySize: true,
+      }),
+    ).toEqual([
+      'Text encoder on the CPU',
+      'VAE on the GPU',
+      'GPU memory up to 11 GB',
+      'Any edit size',
+    ]);
+    expect(editSizeFor(1024, 512, { allowAnySize: false })).toBe(512);
+    expect(editSizeFor(1024, 512, { allowAnySize: true })).toBe(1024);
   });
 });
 

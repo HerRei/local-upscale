@@ -31,8 +31,13 @@ from localsr.core.edit_memory import (
 )
 from localsr.core.image_formats import PILLOW_INPUT_FORMATS
 from localsr.core.image_io import open_photo
+from localsr.core.memory_errors import (
+    EDIT_OUT_OF_MEMORY_MESSAGE,
+    DeviceOutOfMemoryError,
+    is_edit_out_of_memory,
+)
 from localsr.core.output_publish import publish_output, require_output_name
-from localsr.protocol.messages import JobCompleted, ProgressUpdate, StageStarted
+from localsr.protocol.messages import JobCompleted, LogMessage, ProgressUpdate, StageStarted
 
 CATALOG_PATH = Path(__file__).with_name("edit_catalog.json")
 REQUIRED_FLAGS = ("--max-vram", "--mmap", "--model-args", "--backend", "--vae-tiling")
@@ -238,6 +243,16 @@ def validate_request(data: dict) -> dict:
     for key in ("edit_text_encoder", "edit_vae"):
         if data.get(key, "auto") not in PLACEMENT_CHOICES:
             raise ValueError(f"{key} must be auto, gpu or cpu.")
+    vram_limit = data.get("edit_vram_limit_mb", 0)
+    if (
+        isinstance(vram_limit, bool)
+        or not isinstance(vram_limit, int)
+        or vram_limit < 0
+        or 0 < vram_limit < 1024
+    ):
+        raise ValueError("edit_vram_limit_mb must be 0 or at least 1024 MiB.")
+    if not isinstance(data.get("edit_allow_any_size", False), bool):
+        raise ValueError("edit_allow_any_size must be true or false.")
     return model
 
 
@@ -505,13 +520,24 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
     device = str(data.get("device", "mps"))
     edit_text_encoder = str(data.get("edit_text_encoder", "auto"))
     edit_vae = str(data.get("edit_vae", "auto"))
+    edit_vram_limit_mb = int(data.get("edit_vram_limit_mb", 0))
+    edit_allow_any_size = bool(data.get("edit_allow_any_size", False))
     initial = sampler(device)
+    if initial.unified and edit_vram_limit_mb:
+        emit(
+            LogMessage(
+                level="info",
+                message=f"Ignoring edit_vram_limit_mb={edit_vram_limit_mb} MiB on unified memory.",
+            )
+        )
     plan = plan_edit(
         model,
         initial,
         data.get("max_dimension", 512),
         text_encoder=edit_text_encoder,
         vae=edit_vae,
+        vram_limit_mb=edit_vram_limit_mb,
+        allow_any_size=edit_allow_any_size,
     )
     if cancel.is_set():
         raise InterruptedError("Editing cancelled.")
@@ -563,6 +589,8 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
         data.get("max_dimension", 512),
         text_encoder=edit_text_encoder,
         vae=edit_vae,
+        vram_limit_mb=edit_vram_limit_mb,
+        allow_any_size=edit_allow_any_size,
     )
     output = Path(data["output_path"])
     if output.exists():
@@ -658,12 +686,23 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
             if process.returncode == 130 or cancel.is_set():
                 raise InterruptedError("Editing cancelled.")
             if process.returncode != 0:
-                # The guard explains a memory stop in its last line; show that, not
-                # the runtime's log, which only says where the model had got to.
-                guard = [line for line in logs if line.startswith("Editing stopped")]
-                if process.returncode == 75 and guard:
-                    raise MemoryError(guard[-1])
                 detail = "\n".join(logs)
+                # The guard uses exit 75 when memory runs short; rewrite both guard and
+                # sd-cli out-of-memory failures into the user-facing edit size/placement advice.
+                guard = [line for line in logs if line.startswith("Editing stopped")]
+                if process.returncode == 75:
+                    cause = MemoryError(guard[-1] if guard else detail)
+                    raise DeviceOutOfMemoryError(
+                        EDIT_OUT_OF_MEMORY_MESSAGE,
+                        device_type="cpu" if initial.unified else "cuda",
+                        step="edit",
+                    ) from cause
+                if is_edit_out_of_memory(detail):
+                    raise DeviceOutOfMemoryError(
+                        EDIT_OUT_OF_MEMORY_MESSAGE,
+                        device_type="cpu" if initial.unified else "cuda",
+                        step="edit",
+                    ) from RuntimeError(f"Editing stopped (exit {process.returncode}). {detail}")
                 raise RuntimeError(f"Editing stopped (exit {process.returncode}). {detail}")
             if not result.is_file():
                 raise RuntimeError("The editing runtime returned no image.")
