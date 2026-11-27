@@ -1375,6 +1375,7 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
         ));
     }
     refuse_when_disk_is_short(&input, &selection, &media[0], &output_directory)?;
+    let engine = lock(&state.engine)?.clone();
     let ui_json = ui_json(input.ui.as_ref())?;
     let media_ids: Vec<&str> = media.iter().map(|item| item.id.as_str()).collect();
     lock(&state.database)?.admit_jobs(&media_ids, |reserved| {
@@ -1383,13 +1384,14 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
             .map(|item| -> AppResult<NewJob> {
                 let job_id = Uuid::new_v4().to_string();
                 let output = unique_output_path(&output_directory, &item.path, &input, reserved);
-                let message = build_job_message(
+                let message = build_job_message_for_engine(
                     &job_id,
                     item,
                     &output,
                     &state.paths.work_root,
                     &input,
                     &selection,
+                    engine.as_ref(),
                 )?;
                 Ok(NewJob {
                     id: job_id,
@@ -1914,6 +1916,7 @@ fn admit_model_trials(
         &media,
         &directory,
     )?;
+    let engine = lock(&state.engine)?.clone();
     let mut ids = Vec::with_capacity(candidates.len());
     database.admit_jobs(&[media_id], |reserved| {
         candidates
@@ -1922,13 +1925,14 @@ fn admit_model_trials(
                 let id = Uuid::new_v4().to_string();
                 let output =
                     unique_output_path(&directory, &media.path, &candidate.input, reserved);
-                let message = build_job_message(
+                let message = build_job_message_for_engine(
                     &id,
                     &media,
                     &output,
                     &state.paths.work_root,
                     &candidate.input,
                     &candidate.selection,
+                    engine.as_ref(),
                 )?;
                 ids.push(id.clone());
                 Ok(NewJob {
@@ -1978,6 +1982,7 @@ pub fn estimate_model_trials(
             })
             .collect()
     };
+    let engine = lock(&state.engine)?.clone();
     let database = lock(&state.database)?;
     let media = database
         .get_media(&media_id)?
@@ -1987,13 +1992,14 @@ pub fn estimate_model_trials(
         .zip(labels)
         .map(|(candidate, model_label)| -> AppResult<TrialEstimate> {
             // The work profile ignores paths and ids; these placeholders never run.
-            let message = build_job_message(
+            let message = build_job_message_for_engine(
                 "estimate",
                 &media,
                 Path::new(""),
                 &state.paths.work_root,
                 &candidate.input,
                 &candidate.selection,
+                engine.as_ref(),
             )?;
             Ok(TrialEstimate {
                 model_label,
@@ -4140,7 +4146,10 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
         || !video_container_is_valid(&settings.video_container)
         || !video_codec_is_valid(&settings.video_codec)
         || !matches!(settings.video_hdr_mode.as_str(), "tone_map" | "preserve")
-        || !matches!(settings.precision.as_str(), "fp32" | "fp16" | "bf16")
+        || !matches!(
+            settings.precision.as_str(),
+            "auto" | "fp32" | "fp16" | "bf16"
+        )
         || !interpolation_choice_is_valid(
             &settings.video_interpolation,
             &settings.video_interpolation_order,
@@ -4765,6 +4774,7 @@ fn validate_model_for_task(model: &CatalogModel, task: &str) -> AppResult<()> {
     }
 }
 
+#[cfg(test)]
 fn build_job_message(
     job_id: &str,
     media: &crate::types::MediaItem,
@@ -4773,7 +4783,35 @@ fn build_job_message(
     input: &StartBatchInput,
     selection: &ModelSelection,
 ) -> AppResult<Value> {
-    let request = build_job_request(job_id, media, output, scratch_directory, input, selection)?;
+    build_job_message_for_engine(
+        job_id,
+        media,
+        output,
+        scratch_directory,
+        input,
+        selection,
+        None,
+    )
+}
+
+fn build_job_message_for_engine(
+    job_id: &str,
+    media: &crate::types::MediaItem,
+    output: &Path,
+    scratch_directory: &Path,
+    input: &StartBatchInput,
+    selection: &ModelSelection,
+    engine: Option<&crate::types::EngineInfo>,
+) -> AppResult<Value> {
+    let request = build_job_request(
+        job_id,
+        media,
+        output,
+        scratch_directory,
+        input,
+        selection,
+        engine,
+    )?;
     Ok(serde_json::to_value(request)?)
 }
 
@@ -4784,6 +4822,7 @@ fn build_job_request(
     scratch_directory: &Path,
     input: &StartBatchInput,
     selection: &ModelSelection,
+    engine: Option<&crate::types::EngineInfo>,
 ) -> AppResult<crate::protocol::WorkerJobRequest> {
     use crate::protocol::{
         HdrMode, ImageJobRequest, InterpolationMode, InterpolationOrder, OutputFormat, Precision,
@@ -4791,7 +4830,13 @@ fn build_job_request(
     };
 
     let output = output.to_string_lossy().into_owned();
-    let precision: Precision = input.precision.parse()?;
+    let precision: Precision = if input.precision == "auto"
+        && !engine.is_some_and(|info| info.features.iter().any(|f| f == "precision_auto"))
+    {
+        Precision::Fp32
+    } else {
+        input.precision.parse()?
+    };
     match selection {
         ModelSelection::Image {
             model_id,

@@ -191,6 +191,7 @@ def _engine_features(video_engines: list[str] | None = None) -> list[str]:
         "benchmark_v1",
         "image_16bit",
         "edit_placement",
+        "precision_auto",
     ]
     for feature in REQUIRED_STEP_FEATURES:
         if feature not in features:

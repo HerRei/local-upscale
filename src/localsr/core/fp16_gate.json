@@ -1,0 +1,47 @@
+{
+  "ESRGAN": {
+    "passed": true,
+    "min_psnr": 57.92,
+    "max_abs_error": 6,
+    "nan_inf": false,
+    "speedup": 1.257,
+    "measured_on": "Apple M1 Pro",
+    "date": "2026-11-27"
+  },
+  "HAT": {
+    "passed": false,
+    "min_psnr": null,
+    "max_abs_error": 38,
+    "nan_inf": true,
+    "speedup": 0.0,
+    "measured_on": "Apple M1 Pro",
+    "date": "2026-11-27"
+  },
+  "PLKSR": {
+    "passed": false,
+    "min_psnr": 48.88,
+    "max_abs_error": 152,
+    "nan_inf": false,
+    "speedup": 1.319,
+    "measured_on": "Apple M1 Pro",
+    "date": "2026-11-27"
+  },
+  "PULSE": {
+    "passed": true,
+    "min_psnr": 59.89,
+    "max_abs_error": 1,
+    "nan_inf": false,
+    "speedup": 1.195,
+    "measured_on": "Apple M1 Pro",
+    "date": "2026-11-27"
+  },
+  "SPAN": {
+    "passed": true,
+    "min_psnr": 58.87,
+    "max_abs_error": 8,
+    "nan_inf": false,
+    "speedup": 1.181,
+    "measured_on": "Apple M1 Pro",
+    "date": "2026-11-27"
+  }
+}
