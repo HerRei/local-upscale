@@ -207,6 +207,7 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
         next.runtime.can_keep_partial = undefined;
         next.runtime.job_steps = [];
       }
+      next.runtime.last_steps = null;
       if (Array.isArray(data.job_steps)) {
         next.runtime.job_steps = (data.job_steps as JobStep[]).map((step) => ({ ...step }));
       }
@@ -608,6 +609,7 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       next.runtime.can_keep_partial = undefined;
       next.runtime.hardware_note = '';
       next.runtime.job_steps = [];
+      next.runtime.last_steps = null;
       next.runtime.status_title = 'Cancelled';
       next.runtime.status_detail = 'Temporary output was cleaned up.';
       break;
@@ -620,6 +622,7 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       next.runtime.can_keep_partial = undefined;
       next.runtime.hardware_note = '';
       next.runtime.job_steps = [];
+      next.runtime.last_steps = null;
       next.runtime.status_title = 'Could not finish';
       next.runtime.status_detail = String(data.error_message ?? 'Unknown worker error.');
       break;

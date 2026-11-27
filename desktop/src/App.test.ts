@@ -11362,3 +11362,243 @@ describe('Step names', () => {
     expect(foot.querySelector('.foot-plan')?.getAttribute('aria-label')).toBe('Plan: Upscale 4×');
   });
 });
+
+describe('Step chips', () => {
+  function setupLastSteps(
+    steps: NonNullable<AppSnapshot['runtime']['last_steps']>['steps'],
+    options: { jobId?: string; media?: MediaItem; jobs?: JobRecord[]; batchIds?: string[] } = {},
+  ) {
+    const media = options.media ?? image('photo', true);
+    const jobId = options.jobId ?? 'job-steps';
+    const snapshot = readySnapshot([media]);
+    snapshot.jobs = options.jobs ?? [
+      {
+        id: jobId,
+        media_id: media.id,
+        media_name: media.name,
+        media_kind: media.kind,
+        status: 'completed',
+        progress: 100,
+        output_path: `/out/${jobId}.png`,
+        error: '',
+        created_at: 1,
+        model_id: 'span_photo_x4',
+      },
+    ];
+    snapshot.runtime.last_output_path = `/out/${jobId}.png`;
+    snapshot.runtime.active_batch_job_ids = options.batchIds ?? [];
+    snapshot.runtime.last_steps =
+      media.kind === 'image'
+        ? {
+            job_id: jobId,
+            media_id: media.id,
+            steps,
+          }
+        : null;
+    let generation = 0;
+    snapshot.runtime.comparison_pair = {
+      media_id: '',
+      generation: 0,
+      showing: { target_id: '', preview_data_url: '' },
+      against: { target_id: '', preview_data_url: '' },
+    };
+    api.requestImageComparison.mockImplementation(async (mediaId, pair) => {
+      if (!pair) return;
+      generation += 1;
+      snapshot.runtime.comparison_pair = {
+        media_id: mediaId,
+        generation,
+        showing:
+          pair.showing === 'original'
+            ? { target_id: 'original', preview_data_url: '', width: 640, height: 480 }
+            : {
+                target_id: pair.showing,
+                preview_data_url: `data:image/jpeg;base64,${encodeURIComponent(pair.showing)}`,
+                width: pair.showing.includes('#') ? 640 : 2560,
+                height: pair.showing.includes('#') ? 480 : 1920,
+                preview_width: pair.showing.includes('#') ? 640 : 2048,
+                preview_height: pair.showing.includes('#') ? 480 : 1536,
+              },
+        against: { target_id: pair.against, preview_data_url: '', width: 640, height: 480 },
+      };
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    });
+    return { snapshot, media, jobId };
+  }
+
+  const fourSteps = (): NonNullable<AppSnapshot['runtime']['last_steps']>['steps'] => [
+    {
+      kind: 'deblock',
+      fix: 'jpeg',
+      model_id: 'fbcnn_color',
+      state: 'done',
+      note: '',
+      preview_url: '',
+      kept: true,
+    },
+    {
+      kind: 'restore',
+      fix: 'colour',
+      model_id: 'ddcolor_modelscope',
+      state: 'done',
+      note: '',
+      preview_url: '',
+      kept: true,
+    },
+    {
+      kind: 'restore',
+      fix: 'noise',
+      model_id: 'denoise_realplksr_1x',
+      state: 'done',
+      note: '',
+      preview_url: '',
+      kept: true,
+    },
+    {
+      kind: 'upscale',
+      fix: '',
+      model_id: 'span_photo_x4',
+      state: 'done',
+      note: '',
+      preview_url: '',
+      kept: false,
+    },
+  ];
+
+  it('shows Result after each step with JPEG, Colour, Noise, 4× and 4× pressed by default', async () => {
+    const { snapshot, jobId } = setupLastSteps(fourSteps());
+    api.listMediaResults.mockResolvedValue(
+      historyOf('photo', [row(jobId, { model_label: 'SPAN ×4', scale: 4 })]),
+    );
+
+    await mountWith(snapshot);
+
+    const group = await screen.findByRole('group', { name: 'Result after each step' });
+    const buttons = within(group).getAllByRole('button');
+    expect(buttons.map((button) => button.textContent?.trim())).toEqual([
+      'JPEG',
+      'Colour',
+      'Noise',
+      '4×',
+    ]);
+    expect(within(group).getByRole('button', { name: '4×', pressed: true })).toBeTruthy();
+    expect(within(group).getByRole('button', { name: 'Noise' }).getAttribute('title')).toBe(
+      'The picture after the Noise fix',
+    );
+    expect(within(group).getByRole('button', { name: '4×' }).getAttribute('title')).toBe(
+      'The finished result',
+    );
+  });
+
+  it('switches the result side when Noise is clicked, shows Loading After Noise… and side label After Noise', async () => {
+    const { snapshot, jobId } = setupLastSteps(fourSteps());
+    api.listMediaResults.mockResolvedValue(
+      historyOf('photo', [row(jobId, { model_label: 'SPAN ×4', scale: 4 })]),
+    );
+
+    const user = await mountWith(snapshot);
+    await waitFor(() =>
+      expect(document.querySelector('.result-image')?.getAttribute('src')).toContain(jobId),
+    );
+    expect(screen.getByRole('button', { name: 'Reveal' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Open' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Use as input' })).toBeTruthy();
+
+    let releaseStep!: () => void;
+    const gate = new Promise<void>((resolve) => (releaseStep = resolve));
+    const immediate = api.requestImageComparison.getMockImplementation()!;
+    api.requestImageComparison.mockImplementation(async (mediaId, pair) => {
+      if (pair?.showing === `${jobId}#2`) await gate;
+      await immediate(mediaId, pair);
+    });
+
+    const group = screen.getByRole('group', { name: 'Result after each step' });
+    await user.click(within(group).getByRole('button', { name: 'Noise' }));
+
+    expect(api.requestImageComparison).toHaveBeenCalledWith('photo', {
+      showing: `${jobId}#2`,
+      against: 'original',
+    });
+    expect(await screen.findByText('Loading After Noise…')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Reveal' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Use as input' })).toBeNull();
+
+    releaseStep();
+    await waitFor(() => expect(screen.queryByText('Loading After Noise…')).toBeNull());
+
+    expect(document.querySelector('.divider-labels')?.textContent).toContain('After Noise');
+    expect(document.querySelector('.result-image')?.getAttribute('src')).toContain(
+      encodeURIComponent(`${jobId}#2`),
+    );
+    expect(within(group).getByRole('button', { name: 'Noise', pressed: true })).toBeTruthy();
+    expect(within(group).getByRole('button', { name: '4×', pressed: false })).toBeTruthy();
+
+    await user.click(within(group).getByRole('button', { name: '4×' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Reveal' })).toBeTruthy());
+  });
+
+  it('disables a skipped step with its note as title, and an unkept step with its error title', async () => {
+    const steps = fourSteps();
+    steps[0] = {
+      kind: 'restore',
+      fix: 'blur',
+      model_id: 'nafnet_gopro_deblur',
+      state: 'skipped',
+      note: 'Blur model did not improve this image.',
+      preview_url: '',
+      kept: false,
+    };
+    steps[1].kept = false;
+    const { snapshot, jobId } = setupLastSteps(steps);
+    api.listMediaResults.mockResolvedValue(
+      historyOf('photo', [row(jobId, { model_label: 'SPAN ×4', scale: 4 })]),
+    );
+
+    await mountWith(snapshot);
+    const group = await screen.findByRole('group', { name: 'Result after each step' });
+    const blur = within(group).getByRole('button', { name: 'Blur' }) as HTMLButtonElement;
+    expect(blur.disabled).toBe(true);
+    expect(blur.getAttribute('title')).toBe('Blur model did not improve this image.');
+
+    const colour = within(group).getByRole('button', { name: 'Colour' }) as HTMLButtonElement;
+    expect(colour.disabled).toBe(true);
+    expect(colour.getAttribute('title')).toBe("This step's picture could not be kept.");
+  });
+
+  it('does not show step chips for a video result or a batch', async () => {
+    const videoMedia: MediaItem = {
+      id: 'video-1',
+      path: '/clip.mp4',
+      name: 'clip.mp4',
+      kind: 'video',
+      width: 1920,
+      height: 1080,
+      frame_count: 100,
+      fps: 24,
+      duration_seconds: 4,
+      preview_data_url: 'data:image/jpeg;base64,v',
+      probe_status: 'ready',
+      error: '',
+      selected: true,
+    };
+    const videoSetup = setupLastSteps(fourSteps(), { media: videoMedia, jobId: 'job-v' });
+    api.listAllMediaResults.mockResolvedValue([
+      historyOf('video-1', [row('job-v', { kind: 'video', output_path: '/out/job-v.mp4' })]),
+    ]);
+    await mountWith(videoSetup.snapshot);
+    await tick();
+    expect(screen.queryByRole('group', { name: 'Result after each step' })).toBeNull();
+
+    cleanup();
+    const batchSetup = setupLastSteps(fourSteps(), {
+      jobId: 'job-b1',
+      batchIds: ['job-b1', 'job-b2'],
+    });
+    batchSetup.snapshot.runtime.last_steps = null;
+    api.listMediaResults.mockResolvedValue(historyOf('photo', [row('job-b1')]));
+    await mountWith(batchSetup.snapshot);
+    await tick();
+    expect(screen.queryByRole('group', { name: 'Result after each step' })).toBeNull();
+  });
+});

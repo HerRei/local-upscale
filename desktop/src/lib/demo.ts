@@ -150,6 +150,7 @@ export function demoSnapshot(): AppSnapshot {
       frames_processed: 0,
       total_frames: 0,
       job_steps: [],
+      last_steps: null,
     },
     latest_benchmark: null,
     edit: { models: structuredClone(editModels), runtime_path: '', custom_model: null },

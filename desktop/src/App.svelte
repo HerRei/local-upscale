@@ -36,6 +36,7 @@
     ORIGINAL,
     alignedFraming,
     chooseTarget,
+    defaultChoice,
     describeSide,
     effectiveChoice,
     framingRounding,
@@ -102,7 +103,14 @@
   } from './lib/fixStages';
   import { DEFAULT_FIX_ORDER, FIX_NAMES, MULTI_FIX_FEATURE, stepFeature } from './lib/steps';
   import { applyWorkerEnvelope, resultPreviewForSelectedMedia } from './lib/workerEvents';
-  import { stepLabel, stepName } from './lib/jobSteps';
+  import {
+    parseStepTarget,
+    resultStepChips,
+    stepLabel,
+    stepName,
+    stepShowingLabel,
+    validStepTarget,
+  } from './lib/jobSteps';
   import { formatBytes, formatDuration, formatVideoClock } from './lib/format';
   import { plainEngineError, recommendedEngineOffer } from './lib/engines';
   import { videoAvailability } from './lib/videoEngines';
@@ -1157,7 +1165,17 @@
     selectedImage && snapshot.runtime.comparison_pair && !historyFailures[selectedImage.id],
   );
   $: history = selectedImage ? histories[selectedImage.id] : undefined;
-  $: choice = effectiveChoice(history, selectedImage ? pairChoices[selectedImage.id] : undefined);
+  $: activeLastSteps = snapshot.runtime.last_steps ?? null;
+  $: rawChoice = effectiveChoice(
+    history,
+    selectedImage ? pairChoices[selectedImage.id] : undefined,
+  );
+  $: choice =
+    selectedImage &&
+    rawChoice.showing.includes('#') &&
+    !validStepTarget(rawChoice.showing, activeLastSteps, selectedImage.id)
+      ? defaultChoice(history)
+      : rawChoice;
   // While this image runs and nothing was chosen, its live tiles stay in view.
   $: liveRun = Boolean(selectedImage && activeJobMediaId === selectedImage.id && !choice.pinned);
   $: pairShown = Boolean(pairMode && history && !liveRun);
@@ -1170,7 +1188,10 @@
           .filter((row): row is ResultSummary => Boolean(row)),
       ]
     : [];
-  $: showingSide = selectedImage
+  $: showingStepLabel = selectedImage
+    ? stepShowingLabel(choice.showing, activeLastSteps, settings)
+    : '';
+  $: showingSideRaw = selectedImage
     ? describeSide(
         choice.showing,
         resultRows.find((row) => row.job_id === choice.showing),
@@ -1185,6 +1206,10 @@
           : '',
       )
     : undefined;
+  $: showingSide =
+    showingSideRaw && showingStepLabel
+      ? { ...showingSideRaw, label: showingStepLabel }
+      : showingSideRaw;
   $: againstSide =
     selectedImage && choice.against !== ORIGINAL
       ? describeSide(
@@ -1246,8 +1271,33 @@
           : ''
       : '';
   $: pairLoadingLabel = loadingTarget
-    ? (resultRows.find((row) => row.job_id === loadingTarget)?.model_label ?? 'result')
+    ? stepShowingLabel(loadingTarget, activeLastSteps, settings) ||
+      (resultRows.find((row) => row.job_id === loadingTarget)?.model_label ?? 'result')
     : '';
+  $: shownLastSteps =
+    pairShown &&
+    selectedImage &&
+    activeLastSteps &&
+    activeLastSteps.media_id === selectedImage.id &&
+    activeLastSteps.steps.length >= 2 &&
+    !(snapshot.runtime.active_batch_job_ids && snapshot.runtime.active_batch_job_ids.length > 1) &&
+    !activeLastSteps.steps.some((step) => step.kind === 'edit' || step.kind === 'video') &&
+    resultRows.find((row) => row.job_id === activeLastSteps.job_id)?.kind !== 'edit' &&
+    (choice.showing === activeLastSteps.job_id ||
+      (parseStepTarget(choice.showing)?.jobId === activeLastSteps.job_id &&
+        validStepTarget(choice.showing, activeLastSteps, selectedImage.id)))
+      ? activeLastSteps
+      : null;
+  $: lastStepsScale = shownLastSteps
+    ? resultRows.find((row) => row.job_id === shownLastSteps.job_id)?.scale ||
+      snapshot.catalog.models.find(
+        (model) => model.model_id === shownLastSteps.steps.at(-1)?.model_id,
+      )?.native_scale ||
+      settings.output_scale
+    : 0;
+  $: viewerStepChips = shownLastSteps
+    ? resultStepChips(shownLastSteps, choice.showing, settings, lastStepsScale)
+    : [];
   // A stopped job's kept result is marked Unfinished wherever it shows. A photo's finished
   // tiles are measured in pixels of its saved file, which the decoded side reports.
   $: showingRow = pairShown
@@ -4954,6 +5004,10 @@
             ? activeStepPreview
             : ''}
           stepLabel={viewerStepLabel}
+          stepChips={viewerStepChips}
+          selectStepChip={(target) => {
+            if (target !== choice.showing) choosePair('showing', target);
+          }}
           {selectedMedia}
           resultPreview={shownView.resultPreview}
           referenceIsResult={shownView.referenceIsResult}

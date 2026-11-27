@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { demoSnapshot } from './demo';
-import { planMarks, stepLabel, stepName } from './jobSteps';
+import {
+  parseStepTarget,
+  planMarks,
+  resultStepChips,
+  stepLabel,
+  stepName,
+  stepShowingLabel,
+  validStepTarget,
+} from './jobSteps';
 import { resolvePlan } from './plan';
 import { planLine } from './planLine';
-import type { JobStep, UiSettings } from './types';
+import type { JobStep, LastSteps, UiSettings } from './types';
 
 function step(overrides: Partial<JobStep> = {}): JobStep {
   return {
@@ -132,5 +140,81 @@ describe('jobSteps', () => {
         true,
       ),
     ).toBe('Upscale to 1080 px');
+  });
+
+  it('builds step chips, labels, and target validation for last_steps', () => {
+    const lastSteps: LastSteps = {
+      job_id: 'job-42',
+      media_id: 'photo-1',
+      steps: [
+        step({ kind: 'deblock', fix: 'jpeg', model_id: 'fbcnn_color', state: 'done', kept: true }),
+        step({
+          kind: 'restore',
+          fix: 'blur',
+          model_id: 'nafnet_gopro_deblur',
+          state: 'skipped',
+          note: 'Blur model did not improve this image.',
+          kept: false,
+        }),
+        step({
+          kind: 'restore',
+          fix: 'noise',
+          model_id: 'denoise_realplksr_1x',
+          state: 'done',
+          kept: true,
+        }),
+        step({
+          kind: 'restore',
+          fix: 'colour',
+          model_id: 'ddcolor_modelscope',
+          state: 'done',
+          kept: false,
+        }),
+        step({ kind: 'upscale', fix: '', model_id: 'span_photo_x4', state: 'done', kept: false }),
+      ],
+    };
+
+    const chips = resultStepChips(lastSteps, 'job-42', settings, 4);
+    expect(chips.map((c) => c.label)).toEqual(['JPEG', 'Blur', 'Noise', 'Colour', '4×']);
+    expect(chips.map((c) => c.id)).toEqual([
+      'job-42#0',
+      'job-42#1',
+      'job-42#2',
+      'job-42#3',
+      'job-42',
+    ]);
+    expect(chips.map((c) => c.pressed)).toEqual([false, false, false, false, true]);
+    expect(chips.map((c) => c.disabled)).toEqual([false, true, false, true, false]);
+    expect(chips.map((c) => c.title)).toEqual([
+      'The picture after the JPEG fix',
+      'Blur model did not improve this image.',
+      'The picture after the Noise fix',
+      "This step's picture could not be kept.",
+      'The finished result',
+    ]);
+
+    expect(stepShowingLabel('job-42#2', lastSteps, settings)).toBe('After Noise');
+    expect(stepShowingLabel('job-42', lastSteps, settings)).toBe('');
+    expect(parseStepTarget('job-42#2')).toEqual({ jobId: 'job-42', index: 2 });
+    expect(parseStepTarget('job-42')).toBeNull();
+    expect(validStepTarget('job-42#2', lastSteps, 'photo-1')).toBe(true);
+    expect(validStepTarget('job-42#1', lastSteps, 'photo-1')).toBe(false);
+    expect(validStepTarget('job-42#3', lastSteps, 'photo-1')).toBe(false);
+    expect(validStepTarget('job-42#2', lastSteps, 'photo-2')).toBe(false);
+    expect(validStepTarget('job-42#2', null, 'photo-1')).toBe(false);
+
+    const restoreOnly: LastSteps = {
+      job_id: 'job-99',
+      media_id: 'photo-1',
+      steps: [
+        step({ kind: 'deblock', fix: 'jpeg', state: 'done', kept: true }),
+        step({ kind: 'restore', fix: 'noise', state: 'done', kept: false }),
+      ],
+    };
+    const restoreChips = resultStepChips(restoreOnly, 'job-99', settings);
+    expect(restoreChips.map((c) => c.label)).toEqual(['JPEG', 'Noise']);
+    expect(restoreChips[1].title).toBe('The finished result');
+    expect(restoreChips[1].disabled).toBe(false);
+    expect(restoreChips[1].pressed).toBe(true);
   });
 });

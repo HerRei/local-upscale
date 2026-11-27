@@ -1752,4 +1752,71 @@ describe('Viewer between steps', () => {
     await rerender({ processing: false, stepLabel: 'Step 2 of 4 · Colour' });
     expect(container.querySelector('.step-label')).toBeNull();
   });
+
+  it('renders step chips left of the comparison view switch in the header', async () => {
+    const selectStepChip = vi.fn();
+    const photo: MediaItem = {
+      id: 'step-chips-photo',
+      path: '/step-chips-photo.jpg',
+      name: 'step-chips-photo.jpg',
+      kind: 'image',
+      width: 1600,
+      height: 1067,
+      frame_count: 1,
+      fps: 0,
+      duration_seconds: 0,
+      preview_data_url: 'data:image/jpeg;base64,source',
+      probe_status: 'ready',
+      error: '',
+      selected: true,
+    };
+    const { container } = render(PreviewPane, {
+      selectedMedia: photo,
+      resultPreview: 'data:image/jpeg;base64,result',
+      completedVideoOutput: '',
+      stepChips: [
+        {
+          id: 'job-1#0',
+          label: 'Blur',
+          pressed: false,
+          disabled: true,
+          skipped: true,
+          title: 'Blur model did not improve this image.',
+        },
+        {
+          id: 'job-1#1',
+          label: 'Noise',
+          pressed: false,
+          disabled: false,
+          title: 'The picture after the Noise fix',
+        },
+        {
+          id: 'job-1',
+          label: '4×',
+          pressed: true,
+          disabled: false,
+          title: 'The finished result',
+        },
+      ],
+      selectStepChip,
+    });
+
+    const header = container.querySelector('.preview-header')!;
+    const group = screen.getByRole('group', { name: 'Result after each step' });
+    const viewSwitch = screen.getByRole('radiogroup', { name: 'Comparison view' });
+    expect(header.contains(group)).toBe(true);
+    expect(
+      Boolean(group.compareDocumentPosition(viewSwitch) & Node.DOCUMENT_POSITION_FOLLOWING),
+    ).toBe(true);
+
+    const blurChip = screen.getByRole('button', { name: 'Blur' }) as HTMLButtonElement;
+    expect(blurChip.disabled).toBe(true);
+    expect(blurChip.getAttribute('title')).toBe('Blur model did not improve this image.');
+
+    const finalChip = screen.getByRole('button', { name: '4×' });
+    expect(finalChip.getAttribute('aria-pressed')).toBe('true');
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Noise' }));
+    expect(selectStepChip).toHaveBeenCalledWith('job-1#1');
+  });
 });

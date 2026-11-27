@@ -474,6 +474,12 @@ export interface JobStep {
   kept: boolean;
 }
 
+export interface LastSteps {
+  job_id: string;
+  media_id: string;
+  steps: JobStep[];
+}
+
 export interface RuntimeStatus {
   comparison_pair?: ComparisonPair;
   preview_original?: PreviewOriginalRegion;
@@ -519,6 +525,7 @@ export interface RuntimeStatus {
   tiles_total?: number;
   can_keep_partial?: boolean;
   job_steps?: JobStep[];
+  last_steps?: LastSteps | null;
 }
 
 export interface BenchmarkRender {

@@ -1459,9 +1459,85 @@ input:focus-visible {
   background: var(--header-bg);
   white-space: nowrap;
 }
-.preview-header > .view-switch {
+.preview-header.has-steps {
+  flex-wrap: wrap;
+  padding-block: 6px;
+  row-gap: 6px;
+}
+.preview-header.has-steps > .header-file {
+  flex: 0 1 auto;
+}
+.header-steps {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.preview-header .view-switch {
   flex: none;
   margin-left: auto;
+}
+.step-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+.step-chips-label {
+  color: var(--secondary);
+  font-size: calc(11px * var(--ui-scale));
+  white-space: nowrap;
+}
+.step-chips-row {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--recess);
+}
+.step-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--secondary);
+  font-size: calc(11.5px * var(--ui-scale));
+  line-height: 1.3;
+  white-space: nowrap;
+}
+.step-chip:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+.step-chip[aria-pressed='true'] {
+  background: var(--raised);
+  color: var(--text);
+  font-weight: 500;
+  box-shadow: inset 0 1px var(--hairline);
+}
+.step-chip.skipped {
+  text-decoration: line-through;
+}
+.step-chip:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+.step-chip .activity-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: var(--activity-dot);
 }
 /* The name shrinks first and keeps its end. When even a short name would not fit beside
    the size, the size wraps onto a second line that the fixed height hides. */
@@ -5149,7 +5225,8 @@ label.setting-label {
 [data-contrast='high'] .settings-rail .rail-item.active {
   box-shadow: none; /* has its own bar, styles.css:4224 */
 }
-[data-contrast='high'] .seg-inline button.active {
+[data-contrast='high'] .seg-inline button.active,
+[data-contrast='high'] .step-chip[aria-pressed='true'] {
   box-shadow: inset 0 0 0 1px var(--text);
 }
 [data-contrast='high'] .zoom-hud button.active,
@@ -5217,6 +5294,7 @@ label.setting-label {
   .setup-theme-tile.active,
   .saved-recipe button.active,
   .seg-inline button.active,
+  .step-chip[aria-pressed='true'],
   .zoom-hud button.active {
     outline: 2px solid Highlight;
     outline-offset: -2px;

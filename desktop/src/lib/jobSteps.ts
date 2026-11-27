@@ -1,6 +1,6 @@
 import { INTERPOLATION_BY_TARGET, PLAN_FIX_NAMES } from './planLine';
 import { STEPS } from './steps';
-import type { JobStep, UiSettings } from './types';
+import type { JobStep, LastSteps, UiSettings } from './types';
 
 export type StepNameSettings = Pick<UiSettings, 'output_scale'> &
   Partial<Pick<UiSettings, 'task' | 'video_target_resolution' | 'video_interpolation'>>;
@@ -8,6 +8,17 @@ export type StepNameSettings = Pick<UiSettings, 'output_scale'> &
 export interface PlanMark {
   name: string;
   state: JobStep['state'];
+}
+
+export interface StepChip {
+  id: string;
+  label: string;
+  pressed?: boolean;
+  disabled?: boolean;
+  title?: string;
+  skipped?: boolean;
+  running?: boolean;
+  missing?: boolean;
 }
 
 /** Plan-line name for a running or queued job step. */
@@ -80,4 +91,79 @@ export function planMarks(steps: readonly JobStep[], names: readonly string[]): 
     name,
     state: steps[index].state,
   }));
+}
+
+/** Split `<job_id>#<index>` into its job id and step index, or null for other targets. */
+export function parseStepTarget(target: string): { jobId: string; index: number } | null {
+  const hash = target.indexOf('#');
+  if (hash <= 0) return null;
+  const raw = target.slice(hash + 1);
+  if (!/^\d+$/.test(raw)) return null;
+  return { jobId: target.slice(0, hash), index: Number(raw) };
+}
+
+/** False only when a `<job>#<index>` target no longer points to a kept step of `lastSteps`. */
+export function validStepTarget(
+  target: string,
+  lastSteps: LastSteps | null | undefined,
+  mediaId: string,
+): boolean {
+  if (!target.includes('#')) return true;
+  if (!lastSteps || lastSteps.media_id !== mediaId || lastSteps.steps.length < 2) return false;
+  const parsed = parseStepTarget(target);
+  if (!parsed || parsed.jobId !== lastSteps.job_id) return false;
+  if (parsed.index < 0 || parsed.index >= lastSteps.steps.length - 1) return false;
+  const step = lastSteps.steps[parsed.index];
+  return Boolean(step && step.state !== 'skipped' && step.kept);
+}
+
+/** Comparison side label (`After Noise`) for a step target of `lastSteps`. */
+export function stepShowingLabel(
+  target: string,
+  lastSteps: LastSteps | null | undefined,
+  settings: StepNameSettings,
+): string {
+  const parsed = parseStepTarget(target);
+  if (!parsed || !lastSteps || parsed.jobId !== lastSteps.job_id) return '';
+  if (parsed.index < 0 || parsed.index >= lastSteps.steps.length - 1) return '';
+  const step = lastSteps.steps[parsed.index];
+  if (!step) return '';
+  return `After ${stepName(step, settings, false)}`;
+}
+
+/** Step result chips for the viewer head when the last photo job had two or more steps. */
+export function resultStepChips(
+  lastSteps: LastSteps,
+  showingTarget: string,
+  settings: StepNameSettings,
+  jobScale?: number,
+): StepChip[] {
+  const { steps, job_id: jobId } = lastSteps;
+  if (steps.length < 2) return [];
+  if (steps.some((step) => step.kind === 'edit' || step.kind === 'video')) return [];
+  const lastIndex = steps.length - 1;
+  return steps.map((step, index) => {
+    const isLast = index === lastIndex;
+    const id = isLast ? jobId : `${jobId}#${index}`;
+    const name = stepName(step, settings, false);
+    const scale = jobScale && jobScale > 0 ? jobScale : settings.output_scale;
+    const label = isLast && step.kind === 'upscale' ? (scale > 0 ? `${scale}×` : 'Upscale') : name;
+    const skipped = step.state === 'skipped';
+    const disabled = skipped || (!isLast && !step.kept);
+    const title = skipped
+      ? step.note
+      : isLast
+        ? 'The finished result'
+        : !step.kept
+          ? "This step's picture could not be kept."
+          : `The picture after the ${name} fix`;
+    return {
+      id,
+      label,
+      pressed: !disabled && showingTarget === id,
+      disabled,
+      skipped,
+      title,
+    };
+  });
 }

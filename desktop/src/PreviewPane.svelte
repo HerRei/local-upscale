@@ -9,6 +9,8 @@
   import SplitComparison from './SplitComparison.svelte';
   import UnfinishedTiles from './UnfinishedTiles.svelte';
   import BackgroundSwitch from './BackgroundSwitch.svelte';
+  import StepChips from './StepChips.svelte';
+  import type { StepChip } from './lib/jobSteps';
   import type { ViewerBackground } from './lib/viewerBackground';
   import type { PaneUnfinished } from './lib/unfinished';
   import type { ComparisonSide } from './lib/results';
@@ -91,6 +93,9 @@
   export let stagePreview = '';
   /** Current step label shown in the corner for multi-step jobs. */
   export let stepLabel = '';
+  /** Result chips shown in the header after a multi-step photo job. */
+  export let stepChips: StepChip[] = [];
+  export let selectStepChip: (id: string) => void = () => {};
   /** Why a pair is shown as a single result, for example a different framing. */
   export let comparisonNote = '';
   export let completedVideoOutput: string;
@@ -1279,15 +1284,7 @@
 />
 
 <section class="preview-pane" class:compact-hidden={compactHidden}>
-  <div class="preview-header" data-tauri-drag-region>
-    <div class="header-file" data-tauri-drag-region>
-      {#if selectedMedia}<span class="header-name"><FileName name={selectedMedia.name} /></span
-        >{/if}<span class="header-size" data-tauri-drag-region
-        >{selectedMedia
-          ? `${selectedMedia.width || '—'} × ${selectedMedia.height || '—'}${selectedMedia.kind === 'video' ? ' · Video' : ''}`
-          : 'No media selected'}</span
-      >
-    </div>
+  {#snippet viewSwitch()}
     {#if canCompare}
       <div class="view-switch" role="radiogroup" aria-label="Comparison view">
         {#each comparisonViews as option (option.id)}
@@ -1300,6 +1297,30 @@
           >
         {/each}
       </div>
+    {/if}
+  {/snippet}
+
+  <div class="preview-header" class:has-steps={stepChips.length > 0} data-tauri-drag-region>
+    <div class="header-file" data-tauri-drag-region>
+      {#if selectedMedia}<span class="header-name"><FileName name={selectedMedia.name} /></span
+        >{/if}<span class="header-size" data-tauri-drag-region
+        >{selectedMedia
+          ? `${selectedMedia.width || '—'} × ${selectedMedia.height || '—'}${selectedMedia.kind === 'video' ? ' · Video' : ''}`
+          : 'No media selected'}</span
+      >
+    </div>
+    {#if stepChips.length > 0}
+      <div class="header-steps" data-tauri-drag-region>
+        <StepChips
+          chips={stepChips}
+          label="Steps"
+          ariaLabel="Result after each step"
+          onSelect={selectStepChip}
+        />
+        {@render viewSwitch()}
+      </div>
+    {:else}
+      {@render viewSwitch()}
     {/if}
   </div>
 
