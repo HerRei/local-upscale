@@ -3386,3 +3386,56 @@ fn crash_recovery_requeues_saving_and_inferring_pipelined_batch_photos_alone() {
     assert_eq!(sent_b, ["b"]);
     assert_eq!(msg_b["type"], "job_request");
 }
+
+#[test]
+fn a_stop_lets_the_batch_photo_that_is_saving_finish_past_the_deadline() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    ready_for_batches(&state);
+    let (sender, receiver) = mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+    assert!(begin_dispatch(&state, true).unwrap());
+    let _ = receiver.try_recv().unwrap();
+    // "a" is inferred and saving while "b" runs on screen; "c" has not started.
+    accept_envelope(&state, &envelope("job_started", json!({"job_id": "a"}))).unwrap();
+    accept_envelope(&state, &envelope("job_started", json!({"job_id": "b"}))).unwrap();
+    crate::commands::cancel_jobs_checked(&state, false).unwrap();
+    {
+        let cancellation = lock(&state.worker.cancellation).unwrap();
+        assert!(cancellation.is_cancelling("b"));
+        assert!(cancellation.is_cancelling("c"));
+        assert!(!cancellation.is_cancelling("a"));
+    }
+    for id in ["c", "b"] {
+        accept_envelope(&state, &envelope("job_cancelled", json!({"job_id": id}))).unwrap();
+        lock(&state.worker.cancellation)
+            .unwrap()
+            .finish_member(id)
+            .unwrap();
+    }
+    // Saving a large photo can take longer than the stop's grace; the engine is not
+    // restarted for it.
+    let later = std::time::Instant::now() + crate::cancellation::CANCEL_GRACE * 2;
+    assert!(!lock(&state.worker.cancellation).unwrap().expired(later));
+    let output = directory.path().join("out").join("a.png");
+    std::fs::write(&output, b"png").unwrap();
+    assert!(accept_envelope(
+        &state,
+        &envelope(
+            "job_completed",
+            json!({"job_id": "a", "output_path": output})
+        )
+    )
+    .unwrap());
+    lock(&state.worker.cancellation)
+        .unwrap()
+        .finish_member("a")
+        .unwrap();
+    assert_eq!(status(&state, "a"), "completed");
+    assert_eq!(status(&state, "b"), "cancelled");
+    assert_eq!(status(&state, "c"), "cancelled");
+    let runtime = lock(&state.runtime).unwrap().clone();
+    assert!(runtime.active_job_id.is_empty());
+    assert!(runtime.active_batch_job_ids.is_empty());
+    assert_eq!(runtime.last_output_path, output.to_string_lossy());
+}

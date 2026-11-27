@@ -1607,11 +1607,15 @@ pub(crate) fn cancel_jobs_checked(state: &AppState, keep_partial: bool) -> AppRe
     // A second request while the first is still being carried out changes nothing.
     if !active.is_empty() && !cancellation.is_cancelling(&active) {
         let now = std::time::Instant::now();
-        if batch_ids.is_empty() {
-            cancellation.request(&active, now);
-        } else {
+        cancellation.request(&active, now);
+        {
+            // A photo saving its result is left to finish, as it would be without a batch;
+            // only those not started yet are held to the stop's deadline with the shown one.
+            let db = lock(&state.database)?;
             for id in &batch_ids {
-                cancellation.request(id, now);
+                if db.job_is_queued(id)? {
+                    cancellation.request(id, now);
+                }
             }
         }
         // Keeping the finished part means saving it, which for a large photo (filling in
