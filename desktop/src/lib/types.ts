@@ -440,6 +440,10 @@ export interface ModelDownloadStatus {
   progress: number;
   downloaded_bytes?: number;
   total_bytes?: number;
+  /** Sent by 0.7.0 hosts; older hosts leave it out. */
+  phase?: 'downloading' | 'verifying';
+  /** Bytes that arrived over the network in this run, without a resumed part. */
+  received_bytes?: number;
 }
 
 export interface RuntimeStatus {
