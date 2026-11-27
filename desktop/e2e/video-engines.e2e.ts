@@ -28,7 +28,8 @@ async function openPlanSheet(page: Page): Promise<void> {
 }
 
 async function openUpscalerLibrary(page: Page): Promise<Locator> {
-  await openPlanSheet(page);
+  if ((await page.locator('.foot-plan').getAttribute('aria-expanded')) === 'true')
+    await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Change the upscaler' }).click();
   const library = page.getByRole('dialog', { name: 'Model library' });
   await expect(library).toBeVisible();
@@ -43,16 +44,7 @@ test('FlashVSR is chosen from the library on a Mac that can run it, with its own
   await expect(page.locator('#video-engine')).toHaveCount(0);
   await expect(page.locator('.model-output-note')).toHaveCount(0);
 
-  await openPlanSheet(page);
-  const videoLink = page.getByRole('button', { name: 'SeedVR2, FlashVSR in the model library' });
-  await expect(videoLink).toBeVisible();
-  await expect(videoLink).toHaveText('SeedVR2, FlashVSR…');
-  await page.getByRole('button', { name: 'About Video models' }).click();
-  const mainTip = page.getByRole('tooltip').filter({ visible: true });
-  await expect(mainTip).toContainText('Several frames at once:');
-  await expect(mainTip).toContainText('Frame by frame:');
-
-  await videoLink.click();
+  await page.getByRole('button', { name: 'Change the upscaler' }).click();
   const library = page.getByRole('dialog', { name: 'Model library' });
   await expect(library).toBeVisible();
   await expect(library.locator('.list-head').nth(0)).toContainText('Frame by frame');
@@ -63,6 +55,7 @@ test('FlashVSR is chosen from the library on a Mac that can run it, with its own
   );
 
   const flashRow = library.getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ });
+  await flashRow.click();
   await expect(flashRow).toHaveAttribute('aria-pressed', 'true');
   await expect(flashRow).toBeInViewport();
   await expect(flashRow).toContainText('Quality: 3 out of 4');
@@ -107,7 +100,10 @@ test('FlashVSR is chosen from the library on a Mac that can run it, with its own
   await res.selectOption('x3');
   await expect(res).toHaveValue('x3');
   await expect(page.getByRole('button', { name: /^Advanced/ })).toHaveCount(0);
-  await expect(page.getByText('FlashVSR works best up to 4×')).toBeVisible();
+  await page.getByRole('button', { name: 'About Size' }).click();
+  await expect(page.getByRole('tooltip').filter({ visible: true })).toContainText(
+    'FlashVSR works best up to 4×',
+  );
 
   await page.getByRole('button', { name: 'Start selected video' }).click();
   await expect.poll(async () => (await hostCalls(page, 'start_jobs')).length).toBe(1);
@@ -125,7 +121,7 @@ test('on the CPU of the same Mac the library says what FlashVSR needs, and SeedV
   await openApp(page, { ...mac, settings: { ...mac.settings, device_id: 'cpu' } });
   await showPane(page, 'enhance');
   await openPlanSheet(page);
-  await expect(page.locator('.video-models-link')).toHaveText(/SeedVR2…/);
+  await expect(page.locator('.video-models-link')).toHaveCount(0);
   const library = await openUpscalerLibrary(page);
   const flashRow = library.getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ });
   await expect(flashRow.locator('.pill.bad')).toHaveText('Unavailable');

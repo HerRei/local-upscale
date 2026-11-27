@@ -394,6 +394,12 @@ const INTERPOLATION_RATES: Record<Exclude<InterpolationTarget, 'off'>, [number, 
   fps120: [0, 120],
 };
 
+export function resultFps(target: Exclude<InterpolationTarget, 'off'>, fps: number): number | null {
+  if (!(fps > 0)) return null;
+  const [multiplier, rate] = INTERPOLATION_RATES[target];
+  return multiplier ? fps * multiplier : fps >= rate * 0.99 ? fps : rate;
+}
+
 /** The plan row's name for an interpolation target. */
 export function interpolationLabel(target: Exclude<InterpolationTarget, 'off'>): string {
   const [multiplier, rate] = INTERPOLATION_RATES[target];

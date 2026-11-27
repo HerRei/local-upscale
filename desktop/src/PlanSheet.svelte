@@ -6,15 +6,7 @@
   import type { EnhancePanelActions } from './lib/enhancePanel';
   import { UNSTABLE_FIX_MODELS } from './lib/fixStages';
   import type { PlanState } from './lib/jobPlanClient';
-  import {
-    FIT_LABELS,
-    displayName,
-    fitFor,
-    frameRateChange,
-    libraryModelsForTask,
-    modelsAvailableBeyondSelection,
-    type PlanStage,
-  } from './lib/plan';
+  import { FIT_LABELS, displayName, fitFor, frameRateChange, type PlanStage } from './lib/plan';
   import { FIX_NAMES } from './lib/steps';
   import type {
     AppSnapshot,
@@ -25,14 +17,7 @@
     ModelDownloadStatus,
     UiSettings,
   } from './lib/types';
-  import {
-    FRAME_BY_FRAME_TIP,
-    SEVERAL_FRAMES_TIP,
-    videoEngineName,
-    videoModelShortName,
-    videoModelsForJob,
-    type VideoUnavailable,
-  } from './lib/videoEngines';
+  import { FRAME_BY_FRAME_TIP, SEVERAL_FRAMES_TIP, videoModelShortName } from './lib/videoEngines';
 
   export let snapshot: AppSnapshot;
   export let settings: UiSettings;
@@ -40,14 +25,12 @@
   export let settingsLocked: boolean;
   export let restoring: boolean;
   export let usingTemporalVideo: boolean;
-  export let videoTask: 'upscale' | 'denoise';
   export let selectedModel: CatalogModel | undefined;
   export let selectedMedia: MediaItem | undefined;
   export let editFit: keyof typeof EDIT_FIT_LABELS;
   export let imageFixes: FixStageSelection[];
   export let planState: PlanState;
   export let plan: PlanStage[];
-  export let videoAvailable: Record<string, VideoUnavailable | undefined>;
   export let activeDevice: DeviceInfo | undefined;
   export let downloadMap: Map<string, ModelDownloadStatus>;
   export let canOpenTrials: boolean;
@@ -84,42 +67,6 @@
       stage.editModel ??
       stage.interpolationModel ??
       stage.audioModel}
-    {@const changeSlot = stage.fix
-      ? undefined
-      : stage.role === 'primary'
-        ? stage.editModel
-          ? 'edit'
-          : 'primary'
-        : undefined}
-    {@const moreVideoCount =
-      changeSlot === 'primary'
-        ? videoModelsForJob(snapshot.catalog, settings.task, videoTask).filter(
-            (model) =>
-              !videoAvailable[model.model_id] && model.model_id !== stage.videoModel?.model_id,
-          ).length
-        : 0}
-    {@const runnableVideoModels =
-      changeSlot === 'primary' && stage.model
-        ? videoModelsForJob(snapshot.catalog, settings.task, videoTask).filter(
-            (model) => !videoAvailable[model.model_id],
-          )
-        : []}
-    {@const videoNames = [
-      ...new Set(runnableVideoModels.map((model) => videoEngineName(model.engine_kind))),
-    ].join(', ')}
-    {@const moreModelCount =
-      changeSlot && settings.task !== 'edit'
-        ? modelsAvailableBeyondSelection(
-            libraryModelsForTask(
-              snapshot.catalog.models,
-              settings.task,
-              settings.content,
-              stage.fix,
-              videoTask,
-            ),
-            stage.model?.model_id ?? '',
-          ) + moreVideoCount
-        : 0}
     {@const tryOthers = stage.role === 'primary' && canTryOthers}
     {@const name = stage.model
       ? displayName(stage.model)
@@ -248,60 +195,22 @@
               >{/if}
           </span>
         {/if}
-        {#if changeSlot}<button
-            class="link-button"
-            type="button"
-            disabled={settingsLocked}
-            aria-label={changeSlot === 'edit'
-              ? 'Change the edit model'
-              : restoring
-                ? 'Change the restore model'
-                : 'Change the upscaler'}
-            on:click={() => openFromSheet(changeSlot, stage.fix)}>Change…</button
-          >
-        {/if}
       </div>
-      {#if moreModelCount || tryOthers || runnableVideoModels.length}<div class="plan-links">
-          {#if moreModelCount}<button
+      {#if tryOthers}<div class="plan-links">
+          <span class="try-others"
+            ><button
               class="link-button"
               type="button"
-              disabled={settingsLocked}
-              aria-label={`${moreModelCount} more ${moreModelCount === 1 ? 'model' : 'models'} in the library`}
-              on:click={() => changeSlot && openFromSheet(changeSlot, stage.fix)}
-              >{moreModelCount} more {moreModelCount === 1 ? 'model' : 'models'}</button
-            >{/if}
-          {#if tryOthers}<span class="try-others"
-              ><button
-                class="link-button"
-                type="button"
-                aria-label={restoring
-                  ? 'Try other restoration models on this image'
-                  : 'Try other upscalers on this image'}
-                disabled={settingsLocked || !canOpenTrials}
-                on:click={() => openFromSheet('try', stage.fix)}>Try others…</button
-              ><HelpTip
-                label="Try others"
-                text="Runs this image once per model you pick, with the same settings. Each result is kept as its own file, and Showing in the preview lets you flip between them."
-              /></span
-            >{/if}
-          {#if runnableVideoModels.length}<span class="video-models-link"
-              ><button
-                class="link-button"
-                type="button"
-                disabled={settingsLocked}
-                aria-label={`${videoNames} in the model library`}
-                on:click={() =>
-                  openFromSheet(
-                    'primary',
-                    stage.fix,
-                    (runnableVideoModels.find((model) => model.installed) ?? runnableVideoModels[0])
-                      .model_id,
-                  )}>{videoNames}…</button
-              ><HelpTip
-                label="Video models"
-                text={`${SEVERAL_FRAMES_TIP} ${FRAME_BY_FRAME_TIP}`}
-              /></span
-            >{/if}
+              aria-label={restoring
+                ? 'Try other restoration models on this image'
+                : 'Try other upscalers on this image'}
+              disabled={settingsLocked || !canOpenTrials}
+              on:click={() => openFromSheet('try', stage.fix)}>Try others…</button
+            ><HelpTip
+              label="Try others"
+              text="Runs this image once per model you pick, with the same settings. Each result is kept as its own file, and Showing in the preview lets you flip between them."
+            /></span
+          >
         </div>{/if}
       {#if meta || warning || stage.custom !== undefined}<p
           class="plan-note"

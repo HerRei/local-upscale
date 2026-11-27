@@ -93,8 +93,8 @@ test.describe('Size decides', () => {
     const quick = page.getByRole('button', { name: /^Quick/ });
     const best = page.getByRole('button', { name: /^Best/ });
     const stages = page.getByRole('list', { name: 'Stages' });
-    await expect(quick).toContainText('28 MB download');
-    await expect(best).toContainText('443 MB download');
+    await expect(quick).toHaveAttribute('title', /28 MB download/);
+    await expect(best).toHaveAttribute('title', /443 MB download/);
     await page.locator('.foot-plan').click();
     await expect(stages).toContainText('RealPLKSR Denoise');
     await page.keyboard.press('Escape');

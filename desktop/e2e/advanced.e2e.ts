@@ -159,22 +159,19 @@ test.describe('Advanced settings: frame interpolation', () => {
     await showPane(page, 'enhance');
     expect(await optionTexts(page, '#frame-rate')).toEqual([
       'Original',
-      '2× · interpolated',
-      '4× · interpolated',
-      '60 fps · interpolated',
-      '120 fps · interpolated',
+      '2× · 48 fps',
+      '4× · 96 fps',
+      '60 fps',
+      '120 fps',
+      '2× · 48 fps · before upscaling',
+      '4× · 96 fps · before upscaling',
+      '60 fps · before upscaling',
+      '120 fps · before upscaling',
     ]);
-    await expect(page.locator('#frame-rate')).toHaveValue('x2');
-    expect(await optionTexts(page, '#interpolation-order')).toEqual([
-      'After upscaling · faster',
-      'Before upscaling',
-    ]);
-
-    await page.locator('#frame-rate').selectOption('off');
+    await expect(page.locator('#frame-rate')).toHaveValue('x2:after_upscale');
     await expect(page.locator('#interpolation-order')).toHaveCount(0);
-    await page.locator('#frame-rate').selectOption('fps60');
-    await expect(page.locator('#interpolation-order')).toHaveValue('after_upscale');
-    await page.locator('#interpolation-order').selectOption('before_upscale');
+    await page.locator('#frame-rate').selectOption('off');
+    await page.locator('#frame-rate').selectOption('fps60:before_upscale');
     await expect
       .poll(async () => {
         const settings = await lastSaved(page);

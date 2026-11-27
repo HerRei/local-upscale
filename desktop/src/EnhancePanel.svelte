@@ -18,7 +18,7 @@
     type EnhancePanelView,
   } from './lib/enhancePanel';
   import { formatBytes } from './lib/format';
-  import { displayName, type PlanStage } from './lib/plan';
+  import { displayName, fitFor, FIT_LABELS, resultFps, type PlanStage } from './lib/plan';
   import { planLine } from './lib/planLine';
   import type { InterpolationOrder, InterpolationTarget, TaskKind } from './lib/types';
   import { videoModelShortName } from './lib/videoEngines';
@@ -83,7 +83,6 @@
     activeQuality,
     restoring,
     usingTemporalVideo,
-    videoTask,
     selectedModel,
     selectedVideoModel,
     editModel,
@@ -103,12 +102,10 @@
     activeRecipeIds,
     sizeResult,
     sizeMaxScale,
-    bestModel,
     imageFixes,
     noRestoreModel,
     planState,
     plan,
-    videoAvailable,
     activeDevice,
     downloadMap,
     canOpenTrials,
@@ -246,7 +243,42 @@
         ? `Plan: ${planSteps.join(', ')}`
         : 'Plan: Nothing to run';
 
-  // Quick and Best describe the result; the model behind them is named once, under Model.
+  $: primaryStage = plan.find((stage) => stage.role === 'primary');
+  $: primaryName = primaryStage
+    ? stageName(primaryStage)
+    : usingTemporalVideo && selectedVideoModel
+      ? videoModelShortName(selectedVideoModel)
+      : selectedModel
+        ? displayName(selectedModel)
+        : '';
+  $: primaryMeta = primaryStage?.model
+    ? [
+        primaryStage.remembered || activeQuality === 'custom' ? 'your pick' : '',
+        primaryStage.model.support_tier === 'labs' ? 'Labs' : '',
+        primaryStage.model.commercial_use_allowed === false ? 'Non-commercial' : '',
+        ['heavy', 'too_heavy'].includes(fitFor(primaryStage.model, activeDevice))
+          ? FIT_LABELS[fitFor(primaryStage.model, activeDevice)]
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : primaryStage?.videoModel
+      ? 'Labs'
+      : '';
+  $: fps = selectedMedia?.fps ?? 0;
+  $: outputFps =
+    settings.task === 'video' &&
+    !usingTemporalVideo &&
+    settings.video_interpolation &&
+    settings.video_interpolation !== 'off'
+      ? resultFps(settings.video_interpolation, fps)
+      : null;
+  function frameLabel(target: Exclude<InterpolationTarget, 'off'>): string {
+    if (target === 'fps60') return '60 fps';
+    if (target === 'fps120') return '120 fps';
+    const rate = resultFps(target, fps);
+    return `${target === 'x2' ? '2×' : '4×'}${rate === null ? '' : ` · ${Number(rate.toFixed(3))} fps`}`;
+  }
   function qualityBlurb(
     quality: 'quick' | 'best',
     isRestoring = restoring,
@@ -360,31 +392,9 @@
               placeholder="Replace the background with a sunset beach. Keep the person and their clothing unchanged."
               bind:value={editPrompt}></textarea>
           </section>
-        {:else}
-          <section class="control-section recipes">
-            <span class="eyebrow">Quality</span>
-            <div class="recipe-grid" role="group" aria-label="Quality">
-              <button
-                class="quick"
-                class:active={activeQuality === 'quick'}
-                aria-pressed={activeQuality === 'quick'}
-                on:click={() => applyPreset('quick')}
-                ><b>Quick</b><span>{qualityBlurb('quick', restoring, settings.task)}</span
-                >{#if quickDownload}<small>{quickDownload}</small>{/if}</button
-              >
-              <button
-                class="best"
-                class:active={activeQuality === 'best'}
-                aria-pressed={activeQuality === 'best'}
-                on:click={() => applyPreset('best')}
-                ><b>Best</b><span>{qualityBlurb('best', restoring, settings.task)}</span
-                >{#if bestDownload}<small>{bestDownload}</small>{/if}</button
-              >
-            </div>
-          </section>
         {/if}
 
-        {#if !usingTemporalVideo && settings.task !== 'edit'}
+        {#if settings.task !== 'edit'}
           <section
             class="control-section"
             aria-label={settings.task === 'video' ? 'Your video' : 'Your photo'}
@@ -395,100 +405,245 @@
               >
               {#if facts}<span class="panel-head-value">{facts}</span>{/if}
             </div>
-            <div
-              class="panel-row"
-              title={restoring
-                ? 'Content chooses the upscaler. Nothing is enlarged at Same size.'
-                : undefined}
-            >
-              <div class="panel-key">
-                <span class="panel-label" id="content-label">Content</span><HelpTip
-                  label="Content"
-                  text={settings.task === 'video'
-                    ? 'Video picks models trained on camera footage: skin, foliage, fabric, buildings. Animation picks models for drawings, anime and cartoons, which keep lines clean and colours flat. Choose what the video is, not the look you want.'
-                    : 'Photo picks models trained on camera pictures: skin, foliage, fabric, buildings. Illustration picks models for drawings, anime and comics, which keep lines clean and colours flat. Choose what the picture is, not the look you want.'}
-                />
-              </div>
-              <div
-                class="seg-inline"
-                role="radiogroup"
-                aria-labelledby="content-label"
+            {#if !usingTemporalVideo}<div
+                class="panel-row"
                 title={restoring
                   ? 'Content chooses the upscaler. Nothing is enlarged at Same size.'
                   : undefined}
               >
-                <button
-                  role="radio"
-                  aria-checked={settings.content !== 'illustration'}
-                  class:active={settings.content !== 'illustration'}
-                  disabled={restoring}
+                <div class="panel-key">
+                  <span class="panel-label" id="content-label">Content</span><HelpTip
+                    label="Content"
+                    text={settings.task === 'video'
+                      ? 'Video picks models trained on camera footage: skin, foliage, fabric, buildings. Animation picks models for drawings, anime and cartoons, which keep lines clean and colours flat. Choose what the video is, not the look you want.'
+                      : 'Photo picks models trained on camera pictures: skin, foliage, fabric, buildings. Illustration picks models for drawings, anime and comics, which keep lines clean and colours flat. Choose what the picture is, not the look you want.'}
+                  />
+                </div>
+                <div
+                  class="seg-inline"
+                  role="radiogroup"
+                  aria-labelledby="content-label"
                   title={restoring
                     ? 'Content chooses the upscaler. Nothing is enlarged at Same size.'
+                    : undefined}
+                >
+                  <button
+                    role="radio"
+                    aria-checked={settings.content !== 'illustration'}
+                    class:active={settings.content !== 'illustration'}
+                    disabled={restoring}
+                    title={restoring
+                      ? 'Content chooses the upscaler. Nothing is enlarged at Same size.'
+                      : settings.task === 'video'
+                        ? 'Uses a model made for camera footage'
+                        : 'Uses a model made for photographs'}
+                    on:keydown={radioGroupKeydown}
+                    on:click={() => setContent('photo')}
+                    >{settings.task === 'video' ? 'Video' : 'Photo'}</button
+                  >
+                  <button
+                    role="radio"
+                    aria-checked={settings.content === 'illustration'}
+                    class:active={settings.content === 'illustration'}
+                    disabled={restoring}
+                    title={restoring
+                      ? 'Content chooses the upscaler. Nothing is enlarged at Same size.'
+                      : 'Uses a model made for drawings and anime'}
+                    on:keydown={radioGroupKeydown}
+                    on:click={() => setContent('illustration')}
+                    >{settings.task === 'video' ? 'Animation' : 'Illustration'}</button
+                  >
+                </div>
+              </div>{/if}
+          </section>
+
+          {#if !usingTemporalVideo}<section class="control-section">
+              <FixList
+                {settings}
+                mediaKind={settings.task === 'video' ? 'video' : 'image'}
+                features={snapshot.engine?.features ?? []}
+                {plan}
+                models={snapshot.catalog.models}
+                {downloadMap}
+                {settingsLocked}
+                {activeDevice}
+                {openLibrary}
+                {toggleFix}
+                {updateSettings}
+                bind:moreOpen={moreFixesOpen}
+              />
+            </section>
+          {/if}
+          <section class="control-section" aria-label="Result">
+            <div class="panel-head">
+              <span class="panel-head-title">Result</span>{#if sizeResult}<span
+                  class="panel-head-value field-value"
+                  >{usingTemporalVideo
+                    ? outputDimensions.split(' · ')[0]
+                    : sizeResult}{outputFps !== null && outputFps !== fps
+                    ? ` · ${Number(outputFps.toFixed(3))} fps`
+                    : ''}</span
+                >{/if}
+            </div>
+            <div class="panel-row">
+              <div class="panel-key">
+                <span class="panel-label" id="size-label">Size</span><HelpTip
+                  label="Size"
+                  text={usingTemporalVideo
+                    ? `Smaller output takes less time and memory. For a first test, try 256 or 512 px.${flashVideo ? ' FlashVSR works best up to 4× the source: above that, it runs at 4× and resizes the rest.' : ''}`
                     : settings.task === 'video'
-                      ? 'Uses a model made for camera footage'
-                      : 'Uses a model made for photographs'}
-                  on:keydown={radioGroupKeydown}
-                  on:click={() => setContent('photo')}
-                  >{settings.task === 'video' ? 'Video' : 'Photo'}</button
+                      ? `Same size keeps the resolution and runs only the fixes you picked. With nothing picked, only De-flicker, Frame rate and Clean up audio run. 2× to 4× enlarges the result after the fixes. A 2× or 3× choice on a ${sizeMaxScale}× model resizes down afterwards.`
+                      : `Same size keeps the pixel size and runs only the fixes you picked. 2× to 4× enlarges the result after the fixes. The model always works at its own ${sizeMaxScale}× scale; a smaller choice resizes that result down afterwards, so it saves no time.`}
+                />
+              </div>
+              {#if usingTemporalVideo}
+                <select
+                  id="video-resolution"
+                  aria-label="Output resolution"
+                  value={settings.video_target_resolution
+                    ? String(settings.video_target_resolution)
+                    : `x${Math.min(4, Math.max(2, settings.output_scale))}`}
+                  on:change={(event) => {
+                    const chosen = event.currentTarget.value;
+                    if (chosen.startsWith('x'))
+                      updateSettings({
+                        output_scale: Number(chosen.slice(1)),
+                        video_target_resolution: 0,
+                      });
+                    else updateSettings({ video_target_resolution: Number(chosen) });
+                  }}
                 >
-                <button
-                  role="radio"
-                  aria-checked={settings.content === 'illustration'}
-                  class:active={settings.content === 'illustration'}
-                  disabled={restoring}
-                  title={restoring
-                    ? 'Content chooses the upscaler. Nothing is enlarged at Same size.'
-                    : 'Uses a model made for drawings and anime'}
-                  on:keydown={radioGroupKeydown}
-                  on:click={() => setContent('illustration')}
-                  >{settings.task === 'video' ? 'Animation' : 'Illustration'}</button
-                >
+                  {#each [2, 3, 4] as scale}<option value={`x${scale}`}
+                      >{selectedMedia && selectedMedia.width > 0 && selectedMedia.height > 0
+                        ? `${scale}× · ${selectedMedia.width * scale} × ${selectedMedia.height * scale}`
+                        : `${scale}×`}</option
+                    >{/each}
+                  {#each [256, 512, 720, 1080, 1440, 2160] as resolution}<option
+                      value={String(resolution)}>{resolution} px · shorter edge</option
+                    >{/each}
+                </select>
+              {:else}
+                <div class="seg-inline size-switch" role="radiogroup" aria-labelledby="size-label">
+                  {#each [1, 2, 3, 4] as const as scale (scale)}{@const active =
+                      (restoring ? 1 : settings.output_scale) === scale}<button
+                      role="radio"
+                      aria-label={scale === 1 ? 'Same size' : undefined}
+                      aria-checked={active}
+                      class:active
+                      disabled={scale > sizeMaxScale}
+                      title={scale === 1
+                        ? 'Same size'
+                        : scale > sizeMaxScale
+                          ? `This model enlarges up to ${sizeMaxScale}×.`
+                          : undefined}
+                      on:keydown={radioGroupKeydown}
+                      on:click={() => setSize(scale)}>{scale === 1 ? 'Same' : `${scale}×`}</button
+                    >{/each}
+                </div>
+              {/if}
+            </div>
+            <div class="panel-row">
+              <div class="panel-key">
+                <span class="panel-label">Quality</span><HelpTip
+                  label="Quality"
+                  text="Quick picks fast models that give a clean result. Best picks the most careful ones and takes longer. Both choose the upscaler and the model for each fix."
+                />
+              </div>
+              <div class="seg-inline" role="group" aria-label="Quality">
+                {#each ['quick', 'best'] as quality}<button
+                    class:active={activeQuality === quality}
+                    aria-pressed={activeQuality === quality}
+                    title={`${qualityBlurb(quality as 'quick' | 'best', restoring, settings.task)}${(quality === 'quick' ? quickDownload : bestDownload) ? ` · ${quality === 'quick' ? quickDownload : bestDownload}` : ''}`}
+                    on:click={() => applyPreset(quality as 'quick' | 'best')}
+                    >{quality === 'quick' ? 'Quick' : 'Best'}</button
+                  >{/each}
               </div>
             </div>
-          </section>
-
-          <section class="control-section">
-            <FixList
-              {settings}
-              mediaKind={settings.task === 'video' ? 'video' : 'image'}
-              features={snapshot.engine?.features ?? []}
-              {plan}
-              models={snapshot.catalog.models}
-              {downloadMap}
-              {settingsLocked}
-              {activeDevice}
-              {openLibrary}
-              {toggleFix}
-              {updateSettings}
-              bind:moreOpen={moreFixesOpen}
-            />
-          </section>
-
-          <section class="control-section">
-            <div class="field-heading">
-              <span class="field-label" id="size-label">Size</span><HelpTip
-                label="Size"
-                text={settings.task === 'video'
-                  ? `Same size keeps the resolution and runs only the fixes you picked. With nothing picked, only De-flicker, Frame rate and Clean up audio run. 2× to 4× enlarges the result after the fixes. A 2× or 3× choice on a ${sizeMaxScale}× model resizes down afterwards.`
-                  : `Same size keeps the pixel size and runs only the fixes you picked. 2× to 4× enlarges the result after the fixes. The model always works at its own ${sizeMaxScale}× scale; a smaller choice resizes that result down afterwards, so it saves no time.`}
-              />{#if sizeResult}<span class="field-value">{sizeResult}</span>{/if}
-            </div>
-            <div class="seg-inline size-switch" role="radiogroup" aria-labelledby="size-label">
-              {#each [1, 2, 3, 4] as const as scale (scale)}
-                {@const active = (restoring ? 1 : settings.output_scale) === scale}
-                <button
-                  role="radio"
-                  aria-checked={active}
-                  class:active
-                  disabled={scale > sizeMaxScale}
-                  title={scale > sizeMaxScale
-                    ? `This model enlarges up to ${sizeMaxScale}×.`
-                    : undefined}
-                  on:keydown={radioGroupKeydown}
-                  on:click={() => setSize(scale)}>{scale === 1 ? 'Same size' : `${scale}×`}</button
+            {#if (!restoring || primaryStage?.custom !== undefined) && primaryName}<div
+                class="panel-row"
+              >
+                <span></span>
+                <div class="result-model">
+                  <span
+                    class="result-model-name"
+                    title={activeQuality === 'custom'
+                      ? usingTemporalVideo
+                        ? 'Chosen by you. Fix, Same size, De-flicker and Frame rate need a frame-by-frame model: pick Quick or Best to go back.'
+                        : 'Chosen by you. Pick Quick or Best to go back.'
+                      : undefined}>{primaryName}{primaryMeta ? ` · ${primaryMeta}` : ''}</span
+                  ><button
+                    type="button"
+                    class="link-button"
+                    aria-label={restoring ? 'Change the restore model' : 'Change the upscaler'}
+                    on:click={() => openLibrary('primary')}>Models…</button
+                  >
+                </div>
+              </div>{/if}
+            {#if settings.task === 'video' && !usingTemporalVideo}<div class="panel-row">
+                <div class="panel-key">
+                  <label class="panel-label" for="frame-rate">Frames</label><HelpTip
+                    label="Frames"
+                    text="Adds in-between frames for smoother motion. 2× and 4× multiply the clip's own rate; 60 and 120 fps set a fixed rate and are skipped when the clip is already about that fast. Adding them after upscaling is faster; before upscaling can look smoother, but the added frames are upscaled too, which takes about twice as long at 2×. RIFE · Labs makes the frames: scene cuts stay cuts, very fast motion can smear. The first use downloads about 25 MB."
+                  />
+                </div>
+                <select
+                  id="frame-rate"
+                  disabled={preservingHdr || !interpolationSupported}
+                  title={preservingHdr
+                    ? 'Not available while HDR is preserved.'
+                    : !interpolationSupported
+                      ? 'This engine cannot add frames.'
+                      : undefined}
+                  value={(settings.video_interpolation ?? 'off') === 'off'
+                    ? 'off'
+                    : `${settings.video_interpolation}:${settings.video_interpolation_order ?? 'after_upscale'}`}
+                  on:change={(event) => {
+                    const [target, order] = event.currentTarget.value.split(':');
+                    updateSettings({
+                      video_interpolation: target as InterpolationTarget,
+                      video_interpolation_order: (order ||
+                        settings.video_interpolation_order ||
+                        'after_upscale') as InterpolationOrder,
+                    });
+                  }}
+                  ><option value="off">Original</option
+                  >{#each ['after_upscale', 'before_upscale'] as order}<optgroup
+                      label={order === 'after_upscale'
+                        ? 'Add frames after upscaling'
+                        : 'Add frames before upscaling (slower)'}
+                      >{#each ['x2', 'x4', 'fps60', 'fps120'] as target}<option
+                          value={`${target}:${order}`}
+                          >{frameLabel(target as Exclude<InterpolationTarget, 'off'>)}{order ===
+                          'before_upscale'
+                            ? ' · before upscaling'
+                            : ''}</option
+                        >{/each}</optgroup
+                    >{/each}</select
                 >
-              {/each}
-            </div>
+              </div>{/if}
+            {#if usingTemporalVideo}
+              {#if !(flashVideo && temporalUnavailableReason)}<VideoMemory
+                  model={selectedVideoModel}
+                  memoryEngine={videoMemoryEngine}
+                  lowMemory={settings.video_low_memory ?? true}
+                  device={snapshot.capabilities.devices.find(
+                    (device) => device.id === settings.device_id,
+                  )}
+                  memory={selectedMemory}
+                  running={Boolean(
+                    selectedMemory && snapshot.runtime.active_job_id === selectedMemory.job_id,
+                  )}
+                  {outputDimensions}
+                  disabled={Boolean(snapshot.runtime.active_job_id)}
+                  on:change={(event) => updateSettings({ video_low_memory: event.detail })}
+                />{/if}
+              {#if selectedMedia && settings.video_target_resolution && settings.video_target_resolution < Math.min(selectedMedia.width, selectedMedia.height)}<p
+                  class="notice"
+                >
+                  This setting reduces {selectedMedia.width} × {selectedMedia.height} to {outputDimensions}.
+                  Fine detail will be lost. Choose a larger output for a quality comparison.
+                </p>{/if}
+            {/if}
           </section>
         {/if}
 
@@ -551,147 +706,6 @@
                     </p>{/if}
                 </div>
               {/each}
-            </div>
-          </section>
-        {:else if activeQuality === 'custom' || usingTemporalVideo || (planState.status === 'ready' && !noRestoreModel && !plan.some((stage) => stage.role === 'primary'))}
-          <section class="control-section model-section" aria-label="Model plan">
-            <div class="eyebrow eyebrow-row">
-              <span>{activeQuality === 'custom' ? 'Model · chosen by you' : 'Model'}</span>
-              <span class="eyebrow-actions">
-                {#if activeQuality === 'custom' && (bestModel || (settings.task === 'video' && restoring && imageFixes.length > 0))}<button
-                    class="link-button"
-                    type="button"
-                    on:click={() => applyPreset('best')}>Back to Best</button
-                  >{/if}
-                {#if !noRestoreModel && !plan.some((stage) => stage.role === 'primary')}<button
-                    class="link-button"
-                    type="button"
-                    on:click={() => openLibrary('primary')}>Change…</button
-                  >{/if}
-              </span>
-            </div>
-            {#if activeQuality === 'custom'}
-              <p class="model-note">
-                {usingTemporalVideo
-                  ? 'Chosen by you. Fix, Same size, De-flicker and Frame rate need a frame-by-frame model: pick Quick or Best to go back.'
-                  : 'Chosen by you. Pick Quick or Best to go back.'}
-              </p>
-            {/if}
-            {#if usingTemporalVideo}
-              <!-- The FlashVSR panel describes this Mac; where FlashVSR cannot run, the line
-                 under the engine menu says why instead. -->
-              {#if !(flashVideo && temporalUnavailableReason)}
-                <VideoMemory
-                  model={selectedVideoModel}
-                  memoryEngine={videoMemoryEngine}
-                  lowMemory={settings.video_low_memory ?? true}
-                  device={snapshot.capabilities.devices.find(
-                    (device) => device.id === settings.device_id,
-                  )}
-                  memory={selectedMemory}
-                  running={Boolean(
-                    selectedMemory && snapshot.runtime.active_job_id === selectedMemory.job_id,
-                  )}
-                  {outputDimensions}
-                  disabled={Boolean(snapshot.runtime.active_job_id)}
-                  on:change={(event) => updateSettings({ video_low_memory: event.detail })}
-                />
-              {/if}
-              <div class="field-row">
-                <label for="video-resolution">Output resolution</label><select
-                  id="video-resolution"
-                  value={settings.video_target_resolution
-                    ? String(settings.video_target_resolution)
-                    : `x${Math.min(4, Math.max(2, settings.output_scale))}`}
-                  on:change={(event) => {
-                    const chosen = event.currentTarget.value;
-                    if (chosen.startsWith('x')) {
-                      updateSettings({
-                        output_scale: Number(chosen.slice(1)),
-                        video_target_resolution: 0,
-                      });
-                    } else {
-                      updateSettings({
-                        video_target_resolution: Number(chosen),
-                      });
-                    }
-                  }}
-                  >{#each [2, 3, 4] as scale}<option value={`x${scale}`}
-                      >{selectedMedia && selectedMedia.width > 0 && selectedMedia.height > 0
-                        ? `${scale}× · ${selectedMedia.width * scale} × ${selectedMedia.height * scale}`
-                        : `${scale}×`}</option
-                    >{/each}{#each [256, 512, 720, 1080, 1440, 2160] as resolution}<option
-                      value={String(resolution)}>{resolution} px · shorter edge</option
-                    >{/each}</select
-                >
-              </div>
-              <p class="model-description">
-                {#if flashVideo}
-                  Smaller output takes less time. For a first test, try 256 or 512 px. FlashVSR
-                  works best up to 4× the source: above that, it runs at 4× and resizes the rest.
-                {:else}
-                  Smaller output uses less memory. For a first test, try 256 or 512 px. This can
-                  reduce the size of a large source video.
-                {/if}
-              </p>
-              {#if selectedMedia && settings.video_target_resolution && settings.video_target_resolution < Math.min(selectedMedia.width, selectedMedia.height)}
-                <p class="notice">
-                  This setting reduces {selectedMedia.width} × {selectedMedia.height} to {outputDimensions}.
-                  Fine detail will be lost. Choose a larger output for a quality comparison.
-                </p>
-              {/if}
-            {/if}
-          </section>
-        {/if}
-
-        {#if settings.task === 'video' && !usingTemporalVideo}
-          <section class="control-section">
-            <div class="advanced-controls">
-              <div class="field-row">
-                <span class="label-with-tip"
-                  ><label for="frame-rate">Frame rate</label><HelpTip
-                    label="Frame rate"
-                    text="Adds in-between frames for smoother motion. 2× and 4× multiply the clip's own rate; 60 and 120 fps set a fixed rate and are skipped when the clip is already about that fast. The first use downloads a model of about 25 MB."
-                  /></span
-                ><select
-                  id="frame-rate"
-                  disabled={preservingHdr || !interpolationSupported}
-                  value={settings.video_interpolation ?? 'off'}
-                  on:change={(event) =>
-                    updateSettings({
-                      video_interpolation: event.currentTarget.value as InterpolationTarget,
-                    })}
-                  ><option value="off">Original</option><option value="x2">2× · interpolated</option
-                  ><option value="x4">4× · interpolated</option><option value="fps60"
-                    >60 fps · interpolated</option
-                  ><option value="fps120">120 fps · interpolated</option></select
-                >
-              </div>
-              {#if (settings.video_interpolation ?? 'off') !== 'off'}
-                <div class="field-row">
-                  <span class="label-with-tip"
-                    ><label for="interpolation-order">Interpolate</label><HelpTip
-                      label="Interpolate"
-                      text="When the extra frames are made. After upscaling is faster; before upscaling can look smoother but upscales more frames."
-                    /></span
-                  ><select
-                    id="interpolation-order"
-                    value={settings.video_interpolation_order ?? 'after_upscale'}
-                    on:change={(event) =>
-                      updateSettings({
-                        video_interpolation_order: event.currentTarget.value as InterpolationOrder,
-                      })}
-                    ><option value="after_upscale">After upscaling · faster</option><option
-                      value="before_upscale">Before upscaling</option
-                    ></select
-                  >
-                </div>
-                <p class="model-description">
-                  RIFE · Labs adds the in-between frames. Scene cuts stay cuts; very fast motion can
-                  smear. Before upscaling, the added frames are upscaled too: at 2× that takes about
-                  twice as long.
-                </p>
-              {/if}
             </div>
           </section>
         {/if}
@@ -905,14 +919,12 @@
             {settingsLocked}
             {restoring}
             {usingTemporalVideo}
-            {videoTask}
             {selectedModel}
             {selectedMedia}
             {editFit}
             {imageFixes}
             {planState}
             {plan}
-            {videoAvailable}
             {activeDevice}
             {downloadMap}
             {canOpenTrials}
@@ -984,3 +996,22 @@
     </div>
   {/if}
 </aside>
+
+<style>
+  .result-model {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    min-width: 0;
+  }
+  .result-model-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .result-model button {
+    flex: none;
+  }
+</style>

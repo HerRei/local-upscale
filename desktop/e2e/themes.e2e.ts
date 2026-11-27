@@ -136,6 +136,7 @@ for (const appearance of ['dark', 'light'] as const) {
     expect(await contrastOnPage(page.locator('.plan-row .stage').first())).toBeGreaterThanOrEqual(
       7,
     );
+    await page.keyboard.press('Escape');
     await page.getByRole('button', { name: 'Change the upscaler' }).click();
     const library = page.getByRole('dialog', { name: 'Model library' });
     await expect(library).toBeVisible();

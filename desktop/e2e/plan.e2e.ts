@@ -125,7 +125,6 @@ test.describe('plan card', () => {
   });
 
   test('Change… opens the model library on the upscaler and closes again', async ({ page }) => {
-    await openPlanSheet(page);
     await page.getByRole('button', { name: 'Change the upscaler' }).click();
     const library = page.getByRole('dialog', { name: 'Model library' });
     await expect(library).toBeVisible();
@@ -158,7 +157,9 @@ test.describe('plan card', () => {
     await page.keyboard.press('Escape');
     await expect(noise).toBeFocused();
     await noise.click();
-    await blur.click();
+    await blur.focus();
+    await expect(blur).toBeFocused();
+    await page.keyboard.press('Enter');
     await expect(options).toHaveCount(0);
     await expect(page.getByRole('group', { name: 'Blur options' })).toBeVisible();
     await fix(page, 'Colour').check();

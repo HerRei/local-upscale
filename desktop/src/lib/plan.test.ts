@@ -8,6 +8,7 @@ import {
   displayName,
   fitFor,
   frameRateChange,
+  resultFps,
   interpolationLabel,
   pendingDownloads,
   presetDownload,
@@ -389,6 +390,9 @@ describe('model library resolution', () => {
     expect(interpolationLabel('x2')).toBe('Interpolate 2×');
     expect(interpolationLabel('x4')).toBe('Interpolate 4×');
     expect(interpolationLabel('fps120')).toBe('Interpolate to 120 fps');
+    expect(resultFps('x2', 24)).toBe(48);
+    expect(resultFps('fps60', 59.94)).toBe(59.94);
+    expect(resultFps('fps60', 0)).toBeNull();
     expect(frameRateChange('x2', 29.97)).toBe('29.97 → 59.94 fps');
     expect(frameRateChange('fps60', 23.976)).toBe('23.976 → 60 fps');
     expect(frameRateChange('fps60', 59.94)).toBe('Already 59.94 fps · kept as it is');
