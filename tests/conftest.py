@@ -39,3 +39,9 @@ def roomy_disk(monkeypatch):
     """Jobs in the suite write tiny files, also in worker subprocesses; the free space of
     the machine that runs them must not decide them."""
     monkeypatch.setenv("LOCALSR_DISK_RESERVE_BYTES", "0")
+
+
+@pytest.fixture(autouse=True)
+def private_speed_table(monkeypatch, tmp_path):
+    """Jobs learn model speeds into a file; a test must never touch the real cache."""
+    monkeypatch.setenv("LOCALSR_SPEED_TABLE", str(tmp_path / "speeds.json"))

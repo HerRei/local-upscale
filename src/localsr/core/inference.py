@@ -610,6 +610,14 @@ class InferenceEngine:
         if callable(prepare):
             prepare(tile_size, halo, frame)
 
+    def backend_of(self, path: str) -> tuple[str, str] | None:
+        """The backend and precision a loaded model runs on, for the speed table."""
+        entry = self._loaded_models.get(path)
+        backend = self._loaded_backend_ids.get(path)
+        if entry is None or backend is None:
+            return None
+        return backend, str(entry[2]).removeprefix("torch.")
+
     @property
     def active_backend_id(self):
         return self._loaded_backend_ids.get(self._active_path)
