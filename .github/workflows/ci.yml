@@ -68,6 +68,9 @@ jobs:
         run: |
           npm ci
           npx playwright install --with-deps chromium webkit
+      - name: Check frontend formatting
+        working-directory: desktop
+        run: npm run format:check
       # The pixel baselines are committed for macOS only (fonts differ per platform), so
       # the screenshot tests run on a Mac with `npm run e2e`; the behaviour tests run here.
       - name: Run the UI tests against the Vite dev server
