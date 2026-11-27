@@ -56,7 +56,7 @@ from localsr.protocol.messages import (
     LogMessage,
     WorkerMessage,
 )
-from localsr.worker.image_job import save_output
+from localsr.worker.image_job import emit_save_status, save_output
 from localsr.worker.job_progress import ImageJobProgress
 
 # Fixed input side per architecture, including tile core and overlap.
@@ -298,6 +298,7 @@ class _Photo:
     def encode(self) -> float:
         """Save atomically; returns the seconds from the first tile to the saved file."""
         # Only a photo whose tiles are all done is encoded; a stop never discards it.
+        emit_save_status(self.batch.emit, self.data["job_id"], self.writer, self.info, self.data)
         notes = save_output(
             self.manager, self.writer, self.image, self.info, self.data, threading.Event()
         )
@@ -315,6 +316,7 @@ class _Photo:
         if not complete:
             fill_unfinished(self.writer.get_array(), self.finished, self.tensor)
             data = {**data, "output_path": partial_output_path(str(data["output_path"]))}
+        emit_save_status(self.batch.emit, self.data["job_id"], self.writer, self.info, self.data)
         notes = save_output(
             self.manager, self.writer, self.image, self.info, data, threading.Event()
         )

@@ -30,6 +30,7 @@ def no_dev_steps(monkeypatch):
 class _Writer:
     def __init__(self, array: np.ndarray) -> None:
         self.array = array
+        self.shape = array.shape
 
     def get_array(self) -> np.ndarray:
         return self.array

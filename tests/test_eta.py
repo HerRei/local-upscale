@@ -129,16 +129,16 @@ def test_one_slow_tile_among_steady_ones_does_not_swing_the_estimate(monkeypatch
     assert max(estimate for _t, estimate, _s in run.samples[10:49]) < 100
 
 
-def test_a_fix_stage_does_not_claim_to_be_the_whole_job(monkeypatch):
-    # Fix: 16 tiles at 0.1 s. Upscale: 16 tiles at 3 s. The old number during the fix
-    # stage was a second or two; the job needs another 48 s.
+def test_a_fix_stage_estimates_future_work_and_recalibrates(monkeypatch):
+    # The first estimate is provisional; the second stage supplies its own speed.
     run = Run(monkeypatch, stage_count=2, width=256, height=256)
     run.start_stage(0)
     _grid(run, 16, lambda n: 0.1)
-    assert all(estimate == 0 for _t, estimate, stage in run.samples if stage == 0)
+    assert any(estimate > 0 for _t, estimate, stage in run.samples if stage == 0)
     run.start_stage(1)
     _grid(run, 16, lambda n: 3.0)
-    run.check_against_truth(run.now)
+    run.samples = [sample for sample in run.samples if sample[2] == 1]
+    run.check_against_truth(run.now, after=0.3)
     assert any(estimate > 0 for _t, estimate, stage in run.samples if stage == 1)
 
 
