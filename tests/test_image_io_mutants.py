@@ -5,6 +5,7 @@ a patched ``open_image``; the macOS ``sips`` calls are replaced by fakes, so the
 everywhere.
 """
 
+import functools
 import io
 import subprocess
 import sys
@@ -20,6 +21,9 @@ from localsr.core import image_io
 from localsr.core.image_io import ImageManager, _narrow_wide_grey, require_output_format
 
 
+# LittleCMS stamps the creation time into each profile it builds, so one profile is built
+# once: two built a second apart would differ in their header.
+@functools.cache
 def _srgb_bytes() -> bytes:
     return ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
 
