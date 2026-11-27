@@ -17,6 +17,39 @@ function options(label: string): string[] {
   );
 }
 
+describe('memory meter', () => {
+  function meter(capabilities: CapabilityInfo) {
+    const { container } = render(RunSettings, {
+      settings: { ...demoSnapshot().settings, task: 'upscale' },
+      selectedModel: undefined,
+      capabilities,
+      usingTemporalVideo: false,
+      updateSettings: vi.fn(),
+      refreshCapabilities: vi.fn(async () => true),
+    });
+    return container.querySelector<HTMLElement>('.hardware-card .meter-clip > i');
+  }
+
+  it('shows the share of memory in use', () => {
+    const bar = meter({
+      ...base,
+      system_memory_pressure_level: 'moderate',
+      system_memory_pressure_percent: 80,
+    });
+    expect(bar?.style.width).toBe('80%');
+  });
+
+  it('is not drawn without a reading', () => {
+    expect(
+      meter({
+        ...base,
+        system_memory_pressure_level: 'unknown',
+        system_memory_pressure_percent: 0,
+      }),
+    ).toBeNull();
+  });
+});
+
 describe('Refresh in the memory line', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());

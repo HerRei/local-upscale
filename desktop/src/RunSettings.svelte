@@ -229,8 +229,11 @@
     ><span class="visually-hidden" role="status" aria-live="polite"
       >{refreshed ? 'Memory status refreshed' : ''}</span
     >
-    <div class="meter-clip">
-      <i style={`width:${Math.max(3, capabilities.system_memory_pressure_percent)}%`}></i>
-    </div>
+    <!-- Without a reading there is no share to show, and a minimum-width stub would read as one. -->
+    {#if capabilities.system_memory_pressure_level !== 'unknown'}
+      <div class="meter-clip">
+        <i style={`width:${Math.max(3, capabilities.system_memory_pressure_percent)}%`}></i>
+      </div>
+    {/if}
   </div>
 </div>
