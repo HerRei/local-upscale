@@ -3,7 +3,8 @@ import { formatBytes, formatDuration } from './format';
 
 describe('format', () => {
   it('formats bounded human-readable values', () => {
-    expect(formatBytes(1024 ** 3)).toBe('1.0 GB');
+    expect(formatBytes(1000 ** 3)).toBe('1.0 GB');
+    expect(formatBytes(1024 ** 3)).toBe('1.1 GB');
     expect(formatDuration(125)).toBe('2:05');
   });
   it('writes a size below one byte in bytes, never with a missing unit', () => {

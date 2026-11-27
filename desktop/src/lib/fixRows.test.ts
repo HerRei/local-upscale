@@ -135,7 +135,7 @@ describe('fixRows', () => {
       sizeBytes: 28 * 1024 * 1024,
     };
     expect(fixRowValue('noise', [missingStage], settings, [model], emptyDownloads)).toBe(
-      'RealPLKSR Denoise · 28 MB',
+      'RealPLKSR Denoise · 29 MB',
     );
 
     const downloading = new Map<string, ModelDownloadStatus>([

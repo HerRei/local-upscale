@@ -204,15 +204,15 @@ describe('model library resolution', () => {
       fixes: ['noise', 'blur'],
       preset_pins: {},
     };
-    expect(presetDownload('quick', snapshot, ui)).toBe('290 MB download');
+    expect(presetDownload('quick', snapshot, ui)).toBe('304 MB download');
 
     snapshot.catalog.models.find((m) => m.model_id === 'localsr_quick_x4_v1')!.installed = true;
-    expect(presetDownload('quick', snapshot, ui)).toBe('287 MB download');
-    expect(presetDownload('best', snapshot, ui)).toBe('730 MB download');
+    expect(presetDownload('quick', snapshot, ui)).toBe('301 MB download');
+    expect(presetDownload('best', snapshot, ui)).toBe('766 MB download');
 
     const sameSize = { ...ui, task: 'denoise' as const, output_scale: 1 };
-    expect(presetDownload('quick', snapshot, sameSize)).toBe('287 MB download');
-    expect(presetDownload('best', snapshot, sameSize)).toBe('702 MB download');
+    expect(presetDownload('quick', snapshot, sameSize)).toBe('301 MB download');
+    expect(presetDownload('best', snapshot, sameSize)).toBe('736 MB download');
 
     const noFixSameSize = { ...sameSize, fix_stages: [], fixes: [] };
     expect(presetDownload('quick', snapshot, noFixSameSize)).toBe('');
@@ -224,8 +224,8 @@ describe('model library resolution', () => {
       fixes: ['noise' as const],
       preset_pins: { 'fix/noise/quick': 'scunet_color_real_psnr' },
     };
-    expect(presetDownload('quick', snapshot, pinnedNoise)).toBe('69 MB download');
-    expect(presetDownload('best', snapshot, pinnedNoise)).toBe('443 MB download');
+    expect(presetDownload('quick', snapshot, pinnedNoise)).toBe('72 MB download');
+    expect(presetDownload('best', snapshot, pinnedNoise)).toBe('464 MB download');
   });
 
   it('labels Same size plan rows by fix, Fix for own file, Colour for colour, and omits a catalog primary without fixes', () => {
