@@ -105,6 +105,12 @@ export interface Scenario {
   concurrentDownloads?: boolean;
   /** Override plan_job behaviour for loading and error tests. */
   plan?: 'error' | { delayMs: number };
+  /**
+   * With the `patch_preview` feature: how the host answers `request_patch_preview`. Each step
+   * takes `delayMs` (default 0); `fail` ends the run in `failed` with that message; `missing`
+   * is the index of the step whose model is not downloaded.
+   */
+  patch?: { delayMs?: number; fail?: string; missing?: number };
   /** Override system_accent response on macOS. */
   systemAccent?: { light: string; dark: string };
   /** Pre-set edit.runtime_path so Edit plans can start without picking the runtime interactively. */
@@ -167,6 +173,45 @@ function hostScript(scenario: Scenario): void {
   });
   let snapshot: Json | null = null;
   let compareGeneration = 0;
+  const idlePatch = (): Json => ({
+    state: 'idle',
+    media_id: '',
+    region: null,
+    estimate_seconds: 0,
+    error: '',
+    steps: [],
+  });
+  // A newer request for a slot replaces the older run, as the host does.
+  const patchRuns: Record<string, number> = { a: 0, b: 0 };
+  const patchTimers: Record<string, ReturnType<typeof setTimeout>[]> = { a: [], b: [] };
+  const stopPatch = (slot: string) => {
+    patchRuns[slot]++;
+    for (const timer of patchTimers[slot]) clearTimeout(timer);
+    patchTimers[slot] = [];
+  };
+  const patchSteps = (input: Json, replace: Json | null, slot: string, limit: number | null) => {
+    const steps: Json[] = [];
+    for (const stage of input.fix_stages ?? []) {
+      const swapped = replace && slot === replace.slot && replace.fix === stage.fix;
+      steps.push({
+        kind: 'restore',
+        fix: stage.fix,
+        model_id: swapped ? replace.model_id : stage.model_id,
+      });
+    }
+    for (const stage of input.step_stages ?? []) {
+      steps.push({ kind: stage.step, fix: '', model_id: stage.model_id ?? '' });
+    }
+    if (input.output_scale > 1) {
+      const swapped = replace && slot === replace.slot && replace.fix === 'upscale';
+      steps.push({
+        kind: 'upscale',
+        fix: '',
+        model_id: swapped ? replace.model_id : input.model_id,
+      });
+    }
+    return limit === null || limit === undefined ? steps : steps.slice(0, limit);
+  };
   const calls: { command: string; args: unknown }[] = [];
   // Tests make the host refuse a command (failures), answer one with a fixed value
   // (answers), or deliver an event the way Tauri does (emit).
@@ -484,6 +529,9 @@ function hostScript(scenario: Scenario): void {
         model_formats: [],
         video_engines: scenario.videoEngines ?? [],
       };
+      if (scenario.features.includes('patch_preview')) {
+        s.runtime.patches = { a: idlePatch(), b: idlePatch() };
+      }
     }
     return s;
   }
@@ -927,6 +975,83 @@ function hostScript(scenario: Scenario): void {
           snapshot.runtime.comparison_pair.showing.region = null;
           snapshot.runtime.comparison_pair.against.region = null;
         }
+        emit('state-changed', null);
+        return null;
+      }
+      case 'request_patch_preview': {
+        if (!snapshot.runtime.patches) return null;
+        const slot = args.slot as string;
+        const patches = snapshot.runtime.patches;
+        stopPatch(slot);
+        const run = patchRuns[slot];
+        const setting = snapshot.settings.preview_patch ?? 'auto';
+        const scale = Math.max(1, args.input?.output_scale ?? 1);
+        const plan = patchSteps(args.input ?? {}, args.replace ?? null, slot, args.stageLimit);
+        const steps = plan.map((step, index) => ({
+          ...step,
+          state: scenario.patch?.missing === index ? 'missing' : 'waiting',
+          url: '',
+          width: 0,
+          height: 0,
+          seconds: 0,
+          note: '',
+        }));
+        const base = {
+          media_id: args.mediaId,
+          region: args.region,
+          estimate_seconds: 0,
+          error: '',
+          steps,
+        };
+        if (setting === 'off') return null;
+        if (setting === 'manual' && !args.force) {
+          patches[slot] = { ...base, state: 'stale', estimate_seconds: 12 };
+          emit('state-changed', null);
+          return null;
+        }
+        patches[slot] = { ...base, state: 'running' };
+        emit('state-changed', null);
+        const delay = scenario.patch?.delayMs ?? 0;
+        const later = (ms: number, work: () => void) => {
+          patchTimers[slot].push(
+            setTimeout(() => {
+              if (patchRuns[slot] === run) work();
+            }, ms),
+          );
+        };
+        let clock = 0;
+        for (const [index, step] of steps.entries()) {
+          // The host stops at the first step whose model is missing.
+          if (step.state === 'missing') break;
+          later(clock, () => {
+            step.state = 'running';
+            emit('state-changed', null);
+          });
+          clock += delay;
+          later(clock, () => {
+            const upscaled = step.kind === 'upscale' ? scale : 1;
+            step.state = 'done';
+            step.width = args.region.width * upscaled;
+            step.height = args.region.height * upscaled;
+            step.seconds = 1 + index;
+            step.url = picture(40 + 50 * index, step.width, step.height);
+            emit('state-changed', null);
+          });
+        }
+        later(clock, () => {
+          if (scenario.patch?.fail) {
+            patches[slot].state = 'failed';
+            patches[slot].error = scenario.patch.fail;
+          } else {
+            patches[slot].state = 'ready';
+          }
+          emit('state-changed', null);
+        });
+        return null;
+      }
+      case 'cancel_patch_preview': {
+        stopPatch(args.slot);
+        if (snapshot.runtime.patches) snapshot.runtime.patches[args.slot] = idlePatch();
         emit('state-changed', null);
         return null;
       }
