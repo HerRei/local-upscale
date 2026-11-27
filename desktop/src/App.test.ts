@@ -1903,7 +1903,8 @@ describe('LocalSR desktop interface', () => {
     const snapshot = readySnapshot([image('first', true)]);
     const user = await mountWith(snapshot);
 
-    await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    await user.click(screen.getByRole('button', { name: 'Save current as recipe…' }));
     const name = screen.getByRole('textbox', { name: 'Recipe name' });
     expect(document.activeElement).toBe(name);
     await user.type(name, 'Portrait cleanup');
@@ -1932,13 +1933,23 @@ describe('LocalSR desktop interface', () => {
       },
     ];
     const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
     const recipe = screen.getByRole('button', { name: /^Jens67/ });
     expect(recipe.getAttribute('aria-pressed')).toBe('false');
     await user.click(recipe);
-    await waitFor(() => expect(recipe.getAttribute('aria-pressed')).toBe('true'));
-    expect(recipe.classList.contains('active')).toBe(true);
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Recipes' })).toBeNull());
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    expect(screen.getByRole('button', { name: /^Jens67/ }).getAttribute('aria-pressed')).toBe(
+      'true',
+    );
+    expect(screen.getByRole('button', { name: /^Jens67/ }).classList.contains('active')).toBe(true);
     await user.click(screen.getByRole('button', { name: /^Quick/ }));
-    await waitFor(() => expect(recipe.getAttribute('aria-pressed')).toBe('false'));
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /^Jens67/ }).getAttribute('aria-pressed')).toBe(
+        'false',
+      ),
+    );
   });
 
   it('exposes image recipes, hardware controls, and installed face companions', async () => {
@@ -2105,11 +2116,16 @@ describe('LocalSR desktop interface', () => {
       },
     ];
     const user = await mountWith(snapshot);
-    const original = screen.getByRole('button', { name: /^Original recipe/ });
-    const motion = screen.getByRole('button', { name: /^Motion recipe/ });
-    await user.click(motion);
-    await waitFor(() => expect(motion.getAttribute('aria-pressed')).toBe('true'));
-    expect(original.getAttribute('aria-pressed')).toBe('false');
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    await user.click(screen.getByRole('button', { name: /^Motion recipe/ }));
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Recipes' })).toBeNull());
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    expect(
+      screen.getByRole('button', { name: /^Motion recipe/ }).getAttribute('aria-pressed'),
+    ).toBe('true');
+    expect(
+      screen.getByRole('button', { name: /^Original recipe/ }).getAttribute('aria-pressed'),
+    ).toBe('false');
   });
 
   it('offers frame interpolation for video, off by default, and sends it with Start', async () => {
@@ -2364,7 +2380,8 @@ describe('LocalSR desktop interface', () => {
     oldSettingsSnapshot.settings.quality = 'quick';
     oldSettingsSnapshot.settings.selected_video_model_id = 'seedvr2_3b';
     await mountWith(oldSettingsSnapshot);
-    expect(document.querySelector('.enhance-pane .pane-heading span')?.textContent).toBe('Custom');
+    expect(screen.getByRole('button', { name: 'Recipes' })).toBeTruthy();
+    expect(screen.getByText('Model · chosen by you')).toBeTruthy();
     expect(screen.getByRole('button', { name: /^Quick/ }).getAttribute('aria-pressed')).toBe(
       'false',
     );
@@ -2499,6 +2516,7 @@ describe('LocalSR desktop interface', () => {
     // The header says it once, with the explanation as its tooltip; no second line under it.
     const note = screen.getByText('Locked while running');
     expect(note.getAttribute('title')).toBe('Finish or cancel the run to change settings.');
+    expect(screen.queryByRole('button', { name: 'Recipes' })).toBeNull();
     expect(screen.queryByText(/Finish or cancel the queue/)).toBeNull();
     expect(document.querySelector('.settings-lock')).toBeNull();
     const region = screen.getByRole('region', { name: 'Enhancement settings' });
@@ -2530,8 +2548,12 @@ describe('LocalSR desktop interface', () => {
     const shown = (): unknown[] =>
       tasks().map((b) => [b.textContent, b.getAttribute('aria-pressed'), b.disabled]);
 
-    await mountWith(readySnapshot([image('photo', true)]));
-    expect(screen.getByText('Enlarges photos and artwork, fixes them, or both.')).toBeTruthy();
+    const user = await mountWith(readySnapshot([image('photo', true)]));
+    expect(document.querySelector('.task-caption')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'About Task' }));
+    expect(screen.getByRole('tooltip').textContent).toBe(
+      'Upscale & restore enlarges photos and artwork, fixes them, or both. Edit changes a photo from a description in words.',
+    );
     expect(shown()).toEqual([
       ['Upscale & restore', 'true', false],
       ['Edit', 'false', false],
@@ -2539,19 +2561,21 @@ describe('LocalSR desktop interface', () => {
     expect(screen.queryByRole('button', { name: /^Restore$/ })).toBeNull();
 
     cleanup();
-    const user = await mountWith(readySnapshot([video('clip', true)]));
+    const videoUser = await mountWith(readySnapshot([video('clip', true)]));
     expect(shown()).toEqual([
       ['Upscale & restore', 'true', false],
       ['Edit', 'false', true],
     ]);
-    expect(
-      screen.getByText('Enlarges videos, fixes them, or both. Edit is for photos.'),
-    ).toBeTruthy();
+    expect(document.querySelector('.task-caption')).toBeNull();
+    await videoUser.click(screen.getByRole('button', { name: 'About Task' }));
+    expect(screen.getByRole('tooltip').textContent).toBe(
+      'Upscale & restore enlarges videos, fixes them, or both. Edit is for photos.',
+    );
     expect(screen.getByRole('group', { name: 'Fix' })).toBeTruthy();
     expect(screen.getByRole('radiogroup', { name: 'Size' })).toBeTruthy();
     // Pressing the task a video already has changes nothing.
     api.saveSettings.mockClear();
-    await user.click(tasks()[0]);
+    await videoUser.click(tasks()[0]);
     expect(api.saveSettings).not.toHaveBeenCalled();
     expect(shown()[0]).toEqual(['Upscale & restore', 'true', false]);
 
@@ -4388,12 +4412,13 @@ describe('LocalSR desktop interface', () => {
         }),
       ),
     );
-    expect(screen.getByText('Quick · Illustration · 4×')).toBeTruthy();
+    expect(screen.queryByText('Quick · Illustration · 4×')).toBeNull();
     // An illustration model is picked outright, with no note about a stand-in.
     expect(screen.queryByText(/fully verified illustration/)).toBeNull();
     expect(screen.queryByRole('button', { name: /\(Labs\) for this job/ })).toBeNull();
     await user.click(screen.getByRole('button', { name: /^Best/ }));
-    await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    await user.click(screen.getByRole('button', { name: 'Save current as recipe…' }));
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
       expect(api.saveRecipe).toHaveBeenCalledWith(
@@ -4668,6 +4693,7 @@ describe('LocalSR desktop interface', () => {
       },
     ];
     const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
     await user.click(screen.getByRole('button', { name: /^Old scans/ }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
@@ -4933,7 +4959,6 @@ describe('LocalSR desktop interface', () => {
         }),
       ),
     );
-    expect(screen.getByText('Best · Illustration · 4×')).toBeTruthy();
   });
 });
 
@@ -5213,7 +5238,8 @@ describe('Several fixes in one pass', () => {
     // The host answers the save with the settings it holds.
     snapshot.settings = structuredClone(lastSaved());
     api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
-    await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    await user.click(screen.getByRole('button', { name: 'Save current as recipe…' }));
     await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Scan clean-up');
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledTimes(1));
@@ -5301,7 +5327,8 @@ describe('Several fixes in one pass', () => {
       snapshot.settings = structuredClone(lastSaved());
       api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
     });
-    await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    await user.click(screen.getByRole('button', { name: 'Save current as recipe…' }));
     await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Two fixes');
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledTimes(1));
@@ -5316,15 +5343,23 @@ describe('Several fixes in one pass', () => {
     expect(saved.getAttribute('aria-pressed')).toBe('true');
 
     await user.click(screen.getByRole('button', { name: 'Move the blur fix earlier' }));
-    await waitFor(() => expect(saved.getAttribute('aria-pressed')).toBe('false'));
-    await user.click(saved);
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /^Two fixes/ }).getAttribute('aria-pressed')).toBe(
+        'false',
+      ),
+    );
+    await user.click(screen.getByRole('button', { name: /^Two fixes/ }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
         fixes: ['noise', 'blur'],
         fix_stages: [{ fix: 'noise', model_id: 'nafnet_sidd_width64' }, blur],
       }),
     );
-    expect(saved.getAttribute('aria-pressed')).toBe('true');
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    expect(screen.getByRole('button', { name: /^Two fixes/ }).getAttribute('aria-pressed')).toBe(
+      'true',
+    );
   });
 
   it.each([
@@ -5381,6 +5416,7 @@ describe('Several fixes in one pass', () => {
       },
     ];
     const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
     await user.click(screen.getByRole('button', { name: /^Old recipe/ }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
@@ -5390,6 +5426,7 @@ describe('Several fixes in one pass', () => {
         fixes,
       }),
     );
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
     expect(screen.getByRole('button', { name: /^Old recipe/ }).getAttribute('aria-pressed')).toBe(
       'true',
     );
@@ -5409,7 +5446,8 @@ describe('Several fixes in one pass', () => {
     expect(screen.getByRole('button', { name: 'Noise' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Blur' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Faces' })).toBeNull();
-    await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    await user.click(screen.getByRole('button', { name: 'Save current as recipe…' }));
     await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Clip');
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledTimes(1));
@@ -6669,6 +6707,7 @@ describe('Dialogs and refused host calls', () => {
         },
       ];
       const user = await mountWith(snapshot);
+      await user.click(screen.getByRole('button', { name: 'Recipes' }));
       await user.click(screen.getByRole('button', { name: 'Delete Jens67' }));
       expect(api.deleteRecipe).not.toHaveBeenCalled();
       await user.click(screen.getByRole('button', { name: 'Confirm delete Jens67' }));
@@ -6693,6 +6732,7 @@ describe('Dialogs and refused host calls', () => {
       ];
       const user = await mountWith(snapshot);
       api.deleteRecipe.mockRejectedValueOnce(refusal);
+      await user.click(screen.getByRole('button', { name: 'Recipes' }));
       await user.click(screen.getByRole('button', { name: 'Delete Jens67' }));
       expect(api.deleteRecipe).not.toHaveBeenCalled();
       await user.click(screen.getByRole('button', { name: 'Cancel deleting Jens67' }));
@@ -7391,7 +7431,8 @@ describe('crash reports', () => {
     toggledSnap.settings.video_clean_audio = true;
     toggledSnap.settings.video_audio_model = 'dpdfnet8_48khz_hr';
     api.refreshSnapshot.mockResolvedValue(toggledSnap);
-    await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    await user.click(screen.getByRole('button', { name: 'Save current as recipe…' }));
     await user.type(screen.getByPlaceholderText('Name this setup'), 'Clean Speech');
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
@@ -7611,7 +7652,8 @@ describe('video Same size, Fix, and Output resolution', () => {
     );
 
     // Save recipe as a video same-size recipe.
-    await user.click(screen.getByRole('button', { name: 'Save as recipe…' }));
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    await user.click(screen.getByRole('button', { name: 'Save current as recipe…' }));
     await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Video Restore Fix');
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledTimes(1));
@@ -7804,6 +7846,7 @@ describe('video Same size, Fix, and Output resolution', () => {
         fixes: ['jpeg'],
       }),
     );
+    await user2.click(screen.getByRole('button', { name: 'Recipes' }));
     const oldPhotoBtn = screen.getByRole('button', { name: /^Old photo 1x/ });
     expect(oldPhotoBtn.textContent).toContain('same size · FP32');
     expect(oldPhotoBtn.textContent).not.toContain('1×');
@@ -7812,7 +7855,11 @@ describe('video Same size, Fix, and Output resolution', () => {
     expect(oldVidBtn.textContent).not.toContain('1×');
     expect(oldVidBtn.getAttribute('aria-pressed')).toBe('false');
     await user2.click(oldVidBtn);
-    await waitFor(() => expect(oldVidBtn.getAttribute('aria-pressed')).toBe('true'));
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Recipes' })).toBeNull());
+    await user2.click(screen.getByRole('button', { name: 'Recipes' }));
+    expect(screen.getByRole('button', { name: /^Old video 1x/ }).getAttribute('aria-pressed')).toBe(
+      'true',
+    );
     await user2.click(screen.getByRole('button', { name: 'About Size' }));
     expect(screen.getByRole('tooltip').textContent).toContain(
       'With nothing picked, only De-flicker, Frame rate and Clean up audio run.',
@@ -9109,8 +9156,6 @@ describe('Stopping a running photo', () => {
 
 describe('Size decides', () => {
   const lastSaved = (): UiSettings => api.saveSettings.mock.calls.at(-1)![0] as UiSettings;
-  const headerText = () =>
-    document.querySelector('.enhance-pane .pane-heading span')?.textContent?.trim() ?? '';
 
   it('switches photo between 4×, Same size (with and without fixes) and 2×', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
@@ -9130,7 +9175,6 @@ describe('Size decides', () => {
     const stages = screen.getByRole('list', { name: 'Stages' });
     expect(within(stages).queryByText(/Upscale/)).toBeNull();
     expect(within(stages).getByText('Fix noise')).toBeTruthy();
-    expect(headerText()).toBe('Quick · Same size');
     expect(screen.getByText('Fast clean-up')).toBeTruthy();
     expect(screen.getByText('Most careful, slower')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Restore selected' })).toBeTruthy();
@@ -9168,7 +9212,7 @@ describe('Size decides', () => {
     expect(startBtn.disabled).toBe(false);
     expect(within(stages).getByText('Fix blur')).toBeTruthy();
 
-    // Size -> 2×: Blur stays ticked, Content back, row Upscale ×2, header Quick · Photo · 2×.
+    // Size -> 2×: Blur stays ticked, Content back, row Upscale ×2.
     await user.click(screen.getByRole('radio', { name: '2×' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
@@ -9179,7 +9223,6 @@ describe('Size decides', () => {
     );
     expect(screen.getByRole('radiogroup', { name: 'Content' })).toBeTruthy();
     expect(within(stages).getByText('Upscale ×2')).toBeTruthy();
-    expect(headerText()).toBe('Quick · Photo · 2×');
 
     // Best then Illustration at 2× keep output_scale at 2.
     await user.click(screen.getByRole('button', { name: /^Best/ }));
@@ -9385,6 +9428,7 @@ describe('Size decides', () => {
       },
     ];
     const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
     const recipeBtn = screen.getByRole('button', { name: /^Clean photo/ });
     expect(recipeBtn.textContent).toContain('same size · FP16');
     await user.click(recipeBtn);
@@ -9514,5 +9558,111 @@ describe('host job plan client in App', () => {
 
     await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
     expect(api.startJobs.mock.calls[0][0]).toMatchObject({ output_scale: 2 });
+  });
+});
+
+describe('Enhance panel head, Recipes menu, and Task row', () => {
+  it('shows Recipes in the head instead of Quick · Photo · 4×, and Locked while running when busy', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    expect(screen.queryByText('Quick · Photo · 4×')).toBeNull();
+    const trigger = screen.getByRole('button', { name: 'Recipes' });
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(trigger.hasAttribute('aria-haspopup')).toBe(false);
+
+    await user.click(trigger);
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    const menu = screen.getByRole('group', { name: 'Recipes' });
+    expect(trigger.getAttribute('aria-controls')).toBe(menu.id);
+    expect(within(menu).getByText('No recipes yet.')).toBeTruthy();
+
+    cleanup();
+    const running = readySnapshot([image('photo', true)]);
+    running.runtime.active_job_id = 'job-1';
+    await mountWith(running);
+    expect(screen.getByText('Locked while running')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Recipes' })).toBeNull();
+  });
+
+  it('opens Recipes with a saved recipe, applies and closes, saves on Enter, cancels field on Escape, and confirms delete', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.recipes = [
+      {
+        id: 'phone',
+        name: 'Phone photos',
+        task: 'upscale',
+        model_id: 'span_photo_x4',
+        output_scale: 4,
+        tile_size: 256,
+        halo: 16,
+        precision: 'fp16',
+        safe_memory: true,
+      },
+    ];
+    const user = await mountWith(snapshot);
+    const trigger = screen.getByRole('button', { name: 'Recipes' });
+
+    // Keyboard open moves focus inside; Escape closes and returns focus to the trigger.
+    trigger.focus();
+    await user.keyboard('{Enter}');
+    const menu = screen.getByRole('group', { name: 'Recipes' });
+    const phoneBtn = within(menu).getByRole('button', { name: /^Phone photos/ });
+    expect(phoneBtn.textContent).toContain('upscale · 4× · FP16');
+    expect(document.activeElement).toBe(phoneBtn);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('group', { name: 'Recipes' })).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+
+    // Clicking the recipe applies it and closes the menu.
+    await user.click(trigger);
+    await user.click(screen.getByRole('button', { name: /^Phone photos/ }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          selected_model_id: 'span_photo_x4',
+          precision: 'fp16',
+        }),
+      ),
+    );
+    expect(screen.queryByRole('group', { name: 'Recipes' })).toBeNull();
+
+    // Save current as recipe… focuses the Recipe name field; Escape closes the field, Enter saves.
+    await user.click(trigger);
+    await user.click(screen.getByRole('button', { name: 'Save current as recipe…' }));
+    let nameField = screen.getByRole('textbox', { name: 'Recipe name' });
+    expect(document.activeElement).toBe(nameField);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('textbox', { name: 'Recipe name' })).toBeNull();
+    expect(screen.getByRole('group', { name: 'Recipes' })).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Save current as recipe…' }));
+    nameField = screen.getByRole('textbox', { name: 'Recipe name' });
+    await user.type(nameField, 'Crisp 4x{Enter}');
+    await waitFor(() =>
+      expect(api.saveRecipe).toHaveBeenCalledWith(expect.objectContaining({ name: 'Crisp 4x' })),
+    );
+
+    // Delete asks first and supports Cancel and Confirm delete.
+    await user.click(screen.getByRole('button', { name: 'Delete Phone photos' }));
+    expect(screen.getByText('Delete Phone photos?')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Cancel deleting Phone photos' }));
+    expect(screen.queryByText('Delete Phone photos?')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Delete Phone photos' }));
+    await user.click(screen.getByRole('button', { name: 'Confirm delete Phone photos' }));
+    expect(api.deleteRecipe).toHaveBeenCalledWith('phone');
+  });
+
+  it('shows the Task row with Edit disabled on video, no caption paragraph, and the video tip', async () => {
+    const snapshot = readySnapshot([video('clip', true)]);
+    const user = await mountWith(snapshot);
+    const group = screen.getByRole('group', { name: 'Task' });
+    expect(
+      (within(group).getByRole('button', { name: 'Edit' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(document.querySelector('.task-caption')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'About Task' }));
+    expect(screen.getByRole('tooltip').textContent).toBe(
+      'Upscale & restore enlarges videos, fixes them, or both. Edit is for photos.',
+    );
   });
 });

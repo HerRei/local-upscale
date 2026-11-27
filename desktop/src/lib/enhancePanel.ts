@@ -28,7 +28,6 @@ export interface EnhancePanelView {
   settingsLocked: boolean;
   movingModels: boolean;
   lockReason: string;
-  taskCaption: string;
   activeQuality: Quality;
   restoring: boolean;
   usingTemporalVideo: boolean;

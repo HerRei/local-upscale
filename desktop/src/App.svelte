@@ -1456,13 +1456,6 @@
     snapshot.runtime.status_title !== 'Warning'
       ? cpuHint(snapshot.capabilities, detectPlatform())
       : null;
-  $: taskCaption = !settings.task
-    ? ''
-    : settings.task === 'edit'
-      ? 'Describe a change in words.'
-      : selectedMedia?.kind === 'video' || settings.task === 'video'
-        ? 'Enlarges videos, fixes them, or both. Edit is for photos.'
-        : 'Enlarges photos and artwork, fixes them, or both.';
   $: unreadyMedia = queueSelection.find((media) => media.probe_status !== 'ready');
   const preparingNote = (media: MediaItem): string =>
     media.probe_status === 'failed'
@@ -3740,7 +3733,7 @@
   async function openRecipeEditor(): Promise<void> {
     recipeEditorOpen = true;
     await tick();
-    inspectorScroll?.querySelector<HTMLInputElement>('.recipe-input input')?.focus();
+    document.querySelector<HTMLInputElement>('.enhance-pane .recipe-input input')?.focus();
   }
 
   $: activeRecipeIds = new Set(
@@ -4401,7 +4394,6 @@
     settingsLocked,
     movingModels,
     lockReason,
-    taskCaption,
     activeQuality,
     restoring,
     usingTemporalVideo,

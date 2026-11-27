@@ -2,6 +2,8 @@
   import AdvancedSettings from './AdvancedSettings.svelte';
   import HelpTip from './HelpTip.svelte';
   import ModelCredit from './ModelCredit.svelte';
+  import Popover from './Popover.svelte';
+  import RecipesMenu from './RecipesMenu.svelte';
   import VideoMemory from './VideoMemory.svelte';
   import { customModels } from './lib/customModels';
   import { EDIT_FIT_LABELS, editFamilyLabel, editVariantName } from './lib/editing';
@@ -17,7 +19,6 @@
     libraryModelsForTask,
     modelsAvailableBeyondSelection,
   } from './lib/plan';
-  import { isRestoreRecipe } from './lib/recipes';
   import { FIX_CHIPS, FIX_NAMES } from './lib/steps';
   import type { FixKind, TaskKind } from './lib/types';
   import {
@@ -40,6 +41,7 @@
 
   const lockedTitle = 'Finish or cancel the run to change settings.';
   const fixChips = FIX_CHIPS as FixKind[];
+  let recipesOpen = false;
 
   const {
     setTask,
@@ -82,7 +84,6 @@
     settingsLocked,
     movingModels,
     lockReason,
-    taskCaption,
     activeQuality,
     restoring,
     usingTemporalVideo,
@@ -133,6 +134,16 @@
     interpolationSupported,
   } = view);
 
+  $: if (!recipesOpen) {
+    deletingRecipeId = null;
+    recipeEditorOpen = false;
+  }
+
+  $: taskTip =
+    selectedMedia?.kind === 'video' || settings.task === 'video'
+      ? 'Upscale & restore enlarges videos, fixes them, or both. Edit is for photos.'
+      : 'Upscale & restore enlarges photos and artwork, fixes them, or both. Edit changes a photo from a description in words.';
+
   // Quick and Best describe the result; the model behind them is named once, under Model.
   function qualityBlurb(
     quality: 'quick' | 'best',
@@ -149,25 +160,49 @@
 <aside class="enhance-pane pane" class:compact-hidden={page !== 'enhance'}>
   <div class="pane-heading" data-tauri-drag-region>
     <h1 data-tauri-drag-region>Enhance</h1>
-    <span data-tauri-drag-region title={settingsLocked ? lockedTitle : undefined}
-      >{movingModels
-        ? 'Moving models'
-        : settingsLocked
-          ? 'Locked while running'
-          : settings.task === 'edit'
-            ? editModel
-              ? editFamilyLabel(editModel.family)
-              : 'Choose a model'
-            : settings.task
-              ? `${activeQuality === 'custom' ? 'Custom' : activeQuality === 'best' ? 'Best' : 'Quick'}${
-                  usingTemporalVideo
-                    ? ''
-                    : restoring
-                      ? ' · Same size'
-                      : ` · ${settings.content === 'illustration' ? 'Illustration' : 'Photo'} · ${settings.output_scale}×`
-                }`
-              : 'Choose a task'}</span
-    >
+    {#if movingModels}
+      <span data-tauri-drag-region>Moving models</span>
+    {:else if settingsLocked}
+      <span data-tauri-drag-region title={lockedTitle}>Locked while running</span>
+    {:else}
+      <Popover
+        bind:open={recipesOpen}
+        label="Recipes"
+        width={260}
+        triggerClass="link-button recipes-trigger"
+        let:close
+      >
+        <svelte:fragment slot="trigger">
+          Recipes<svg
+            class="pop-chevron"
+            aria-hidden="true"
+            xmlns="http://www.w3.org/2000/svg"
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.25"
+            stroke-linecap="round"
+            stroke-linejoin="round"><path d="m6 9 6 6 6-6" /></svg
+          >
+        </svelte:fragment>
+        <RecipesMenu
+          recipes={snapshot.recipes}
+          {activeRecipeIds}
+          selectedMediaKind={selectedMedia?.kind}
+          canSave={Boolean(settings.task)}
+          bind:recipeName
+          bind:recipeEditorOpen
+          bind:deletingRecipeId
+          {openRecipeEditor}
+          {applyRecipe}
+          {deleteRecipe}
+          {addRecipe}
+          onClose={() => close(false)}
+        />
+      </Popover>
+    {/if}
   </div>
   <!-- Locked: the header says so once, and the dimmed controls show the rest. Screen readers
        hear the explanation when the lock starts, and it describes the settings region. -->
@@ -187,25 +222,28 @@
       aria-label="Processing settings"
     >
       <section class="control-section">
-        <span class="eyebrow">Task</span>
-        <div class="seg-inline" role="group" aria-label="Task">
-          <button
-            aria-pressed={Boolean(settings.task) && settings.task !== 'edit'}
-            class:active={Boolean(settings.task) && settings.task !== 'edit'}
-            on:click={() => {
-              // A video has this one task; pressing it again must not reset the setup.
-              if (settings.task !== 'video')
-                setTask(settings.output_scale === 1 ? 'denoise' : 'upscale');
-            }}>Upscale & restore</button
-          >
-          <button
-            aria-pressed={settings.task === 'edit'}
-            disabled={selectedMedia?.kind === 'video'}
-            class:active={settings.task === 'edit'}
-            on:click={() => setTask('edit')}>Edit</button
-          >
+        <div class="panel-row">
+          <div class="panel-key">
+            <span class="panel-label">Task</span><HelpTip label="Task" text={taskTip} />
+          </div>
+          <div class="seg-inline task-switch" role="group" aria-label="Task">
+            <button
+              aria-pressed={Boolean(settings.task) && settings.task !== 'edit'}
+              class:active={Boolean(settings.task) && settings.task !== 'edit'}
+              on:click={() => {
+                // A video has this one task; pressing it again must not reset the setup.
+                if (settings.task !== 'video')
+                  setTask(settings.output_scale === 1 ? 'denoise' : 'upscale');
+              }}>Upscale & restore</button
+            >
+            <button
+              aria-pressed={settings.task === 'edit'}
+              disabled={selectedMedia?.kind === 'video'}
+              class:active={settings.task === 'edit'}
+              on:click={() => setTask('edit')}>Edit</button
+            >
+          </div>
         </div>
-        {#if taskCaption}<p class="task-caption">{taskCaption}</p>{/if}
       </section>
 
       {#if settings.task === 'video' && selectedMedia?.hdr_format}
@@ -320,14 +358,7 @@
           </section>
         {:else}
           <section class="control-section recipes">
-            <div class="eyebrow eyebrow-row">
-              <span>Quality</span>
-              {#if !recipeEditorOpen}<span class="eyebrow-actions"
-                  ><button class="link-button" type="button" on:click={openRecipeEditor}
-                    >Save as recipe…</button
-                  ></span
-                >{/if}
-            </div>
+            <span class="eyebrow">Quality</span>
             <div class="recipe-grid" role="group" aria-label="Quality">
               <button
                 class="quick"
@@ -345,73 +376,6 @@
                 ><b>Best</b><span>{qualityBlurb('best', restoring, settings.task)}</span
                 >{#if bestDownload}<small>{bestDownload}</small>{/if}</button
               >
-            </div>
-            <div class="recipe-tools">
-              {#each snapshot.recipes as recipe (recipe.id)}
-                <div
-                  class="saved-recipe"
-                  data-recipe-id={recipe.id}
-                  class:confirming={deletingRecipeId === recipe.id}
-                >
-                  {#if deletingRecipeId === recipe.id}
-                    <p class="recipe-question">
-                      <b>Delete {recipe.name}?</b><span>This can’t be undone.</span>
-                    </p>
-                    <button
-                      class="danger"
-                      aria-label={`Confirm delete ${recipe.name}`}
-                      on:click={() => deleteRecipe(recipe.id)}>Delete</button
-                    >
-                    <button
-                      aria-label={`Cancel deleting ${recipe.name}`}
-                      on:click={() => (deletingRecipeId = null)}>Cancel</button
-                    >
-                  {:else}
-                    <button
-                      class:active={activeRecipeIds.has(recipe.id)}
-                      aria-pressed={activeRecipeIds.has(recipe.id)}
-                      disabled={Boolean(selectedMedia) &&
-                        (recipe.task === 'video') !== (selectedMedia?.kind === 'video')}
-                      on:click={() => applyRecipe(recipe)}
-                      ><b>{recipe.name}</b><span
-                        >{isRestoreRecipe(recipe)
-                          ? recipe.task === 'video'
-                            ? 'video · same size'
-                            : 'same size'
-                          : `${recipe.task} · ${recipe.output_scale}×`} · {recipe.precision.toUpperCase()}</span
-                      ></button
-                    ><button
-                      class:active={activeRecipeIds.has(recipe.id)}
-                      aria-label={`Delete ${recipe.name}`}
-                      on:click={() => (deletingRecipeId = recipe.id)}
-                      ><svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        width="16"
-                        height="16"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2.5"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg
-                      ></button
-                    >
-                  {/if}
-                </div>
-              {/each}
-              {#if recipeEditorOpen}
-                <div class="recipe-input">
-                  <input
-                    aria-label="Recipe name"
-                    placeholder="Name this setup"
-                    bind:value={recipeName}
-                    on:keydown={(event) => {
-                      if (event.key === 'Enter') void addRecipe();
-                      if (event.key === 'Escape') recipeEditorOpen = false;
-                    }}
-                  /><button on:click={addRecipe}>Save</button>
-                </div>
-              {/if}
             </div>
           </section>
         {/if}

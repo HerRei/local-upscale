@@ -63,7 +63,8 @@ test('video Same size, Fix chips and video recipes', async ({ page }) => {
   await expect(page.getByLabel('Output scale', { exact: true })).toHaveCount(0);
 
   // Save a video Same size recipe and check what is sent to the host.
-  await page.getByRole('button', { name: 'Save as recipe…' }).click();
+  await page.getByRole('button', { name: 'Recipes' }).click();
+  await page.getByRole('button', { name: 'Save current as recipe…' }).click();
   await page.getByRole('textbox', { name: 'Recipe name' }).fill('Video Clean');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect.poll(async () => (await hostCalls(page, 'save_recipe')).length).toBe(1);
@@ -118,6 +119,7 @@ test('video Same size, Fix chips and video recipes', async ({ page }) => {
   expect(upscaleCall.fix_stages.map((s) => s.fix)).toContain('blur');
 
   // Re-apply saved video Same size recipe and confirm it switches back to Same size.
+  await page.getByRole('button', { name: 'Recipes' }).click();
   await page.getByRole('button', { name: /^Saved Video Clean/ }).click();
   await expect(page.getByRole('radio', { name: 'Same size' })).toHaveAttribute(
     'aria-checked',

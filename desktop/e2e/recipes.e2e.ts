@@ -19,6 +19,7 @@ const recipe = {
 test('deleting a recipe asks first, and only Delete deletes', async ({ page }) => {
   await openApp(page, { devices: 'mac', photos: 1, recipes: [recipe] });
   await showPane(page, 'enhance');
+  await page.getByRole('button', { name: 'Recipes' }).click();
   await page.getByRole('button', { name: 'Delete Phone photos' }).click();
   await expect(page.getByText('Delete Phone photos?')).toBeVisible();
   await page.getByRole('button', { name: 'Cancel deleting Phone photos' }).click();
@@ -26,9 +27,10 @@ test('deleting a recipe asks first, and only Delete deletes', async ({ page }) =
   expect(await hostCalls(page, 'delete_recipe')).toHaveLength(0);
 
   await page.getByRole('button', { name: 'Delete Phone photos' }).click();
-  await page.locator('.control-section.recipes .eyebrow').first().click({ force: true });
+  await page.getByRole('heading', { name: 'Enhance' }).click();
   await expect(page.getByText('Delete Phone photos?')).toHaveCount(0);
 
+  await page.getByRole('button', { name: 'Recipes' }).click();
   await page.getByRole('button', { name: 'Delete Phone photos' }).click();
   await page.getByRole('button', { name: 'Confirm delete Phone photos' }).click();
   expect(await hostCalls(page, 'delete_recipe')).toHaveLength(1);

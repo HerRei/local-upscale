@@ -427,7 +427,7 @@ test.describe('overflow and alignment', () => {
             `${element.tagName}.${element.className} "${(element.textContent ?? '').trim().slice(0, 30)}"`;
           const dimmed = [
             ...document.querySelectorAll(
-              '.processing-settings :is(button, select, input, textarea, label, .field-label, .directory-path, .directory-field small, .directory-field > b, .range-head > b):not(.disclosure)',
+              '.processing-settings :is(button, select, input, textarea, label, .field-label, .panel-label, .directory-path, .directory-field small, .directory-field > b, .range-head > b):not(.disclosure)',
             ),
           ];
           const full = [
@@ -488,7 +488,8 @@ test.describe('overflow and alignment', () => {
         page,
       }) => {
         await page.setViewportSize(size);
-        const heading = () => page.locator('.processing-settings .eyebrow', { hasText: 'Task' });
+        const heading = () =>
+          page.locator('.processing-settings .panel-label', { hasText: 'Task' });
         await openApp(page, ready);
         await showPane(page, 'enhance');
         const idle = (await box(heading())).y;
@@ -558,7 +559,7 @@ test.describe('overflow and alignment', () => {
     await page.setViewportSize({ width: 880, height: 640 });
     await openApp(page, ready);
     await showPane(page, 'enhance');
-    const task = await box(page.getByRole('group', { name: 'Task' }));
+    const task = await box(page.locator('.panel-row').first());
     const contentCentre = await page.locator('.inspector-scroll').evaluate((el) => {
       const rect = el.getBoundingClientRect();
       return rect.left + el.clientLeft + el.clientWidth / 2;
