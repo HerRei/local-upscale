@@ -268,3 +268,38 @@ def test_compare_playback_helper_runs_without_torch_and_supports_cancellation(tm
         prepare_compare_playback(
             [CompareSource(s0), CompareSource(s1)], tmp_path / "c.webm", cancel_event=cancel
         )
+
+
+def test_combined_playback_declares_no_fixed_frame_duration(tmp_path):
+    # A mixed 30/24 fps comparison is variable-rate. A Matroska DefaultDuration makes
+    # GStreamer give every frame that fixed length, so seeks land on an earlier pair.
+    a = _make_solid_clip(
+        tmp_path / "a.webm",
+        width=32,
+        height=18,
+        fps=30,
+        frames=6,
+        colors=[(i * 40, 0, 0) for i in range(6)],
+        audio_seconds=0.0,
+    )
+    b = _make_solid_clip(
+        tmp_path / "b.webm",
+        width=32,
+        height=18,
+        fps=24,
+        frames=5,
+        colors=[(0, 0, i * 50) for i in range(5)],
+        audio_seconds=0.0,
+    )
+    dest = tmp_path / "combined.webm"
+    prepare_compare_playback([CompareSource(a), CompareSource(b)], dest)
+    default_duration_id = bytes([0x23, 0xE3, 0x83])
+    assert default_duration_id not in dest.read_bytes()[:8192]
+    with av.open(str(dest)) as container:
+        stream = container.streams.video[0]
+        pts = [
+            round(float(packet.pts * stream.time_base) * 1000)
+            for packet in container.demux(stream)
+            if packet.pts is not None
+        ]
+    assert pts[:4] == [0, 33, 42, 67]

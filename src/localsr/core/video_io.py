@@ -823,6 +823,7 @@ def _encode_video(
     stream_to_system: bool = False,
     replace_existing: bool = False,
     keep_partial: bool | Callable[[], bool] = False,
+    declare_frame_rate: bool = True,
 ) -> str:
     """Encode an iterable of (rgb_uint8_HxWx3) frames into a video file.
 
@@ -896,6 +897,11 @@ def _encode_video(
             str(encoded_temporary), mode="w", format=muxer_format(container_format)
         )
         stream = output_container.add_stream(spec.encoder, rate=fps_fraction)
+        if not declare_frame_rate:
+            # Without a nominal rate Matroska writes no DefaultDuration. GStreamer (Linux
+            # WebKit) uses that duration for every frame of a variable-rate file, so a
+            # seek lands on an earlier frame whose assumed duration overlaps the target.
+            stream.codec_context.framerate = Fraction(0, 1)
         stream.codec_context.thread_count = max(0, min(8, encoder_threads))
         stream.time_base = time_base
         stream.codec_context.time_base = time_base

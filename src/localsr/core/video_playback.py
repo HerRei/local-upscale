@@ -464,6 +464,7 @@ def prepare_compare_playback(
             sdr_bt709=any(bool(p.hdr_format) for p in probes),
             encoder_threads=2,
             replace_existing=True,
+            declare_frame_rate=False,
         )
 
         report(
