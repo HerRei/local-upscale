@@ -979,7 +979,10 @@ impl RuntimeStatus {
         if self.active_job_id != id {
             self.frames_processed = 0;
             self.total_frames = 0;
-            self.can_keep_partial = None;
+            // Handing over within the same batch keeps the batch's partial-save capability.
+            if !self.active_batch_job_ids.iter().any(|member| member == &id) {
+                self.can_keep_partial = None;
+            }
             self.tiles_completed = 0;
             self.tiles_total = 0;
         }

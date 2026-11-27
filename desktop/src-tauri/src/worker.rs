@@ -1767,11 +1767,12 @@ fn partial_output(requested: &Path, reported: &Path) -> bool {
 
 fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppResult<()> {
     let id = string(&envelope.data, "job_id");
-    let (member, background) = {
+    let (member, background, batch_keep) = {
         let runtime = lock(&state.runtime)?;
         (
             runtime.active_batch_job_ids.contains(&id),
             is_background_photo(&runtime, &id),
+            runtime.can_keep_partial,
         )
     };
     if !member {
@@ -1790,7 +1791,7 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
         let failed = envelope.message_type == "job_failed";
         let stale = {
             let mut runtime = lock(&state.runtime)?;
-            leave_batch(&mut runtime, &id, failed)
+            leave_batch(&mut runtime, &id, failed, batch_keep)
         };
         cleanup_stale_previews(state, stale)?;
     }
@@ -1847,7 +1848,12 @@ fn apply_background_photo(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> A
 
 /// A batch photo has ended. While others remain, the batch stays active: when the
 /// shown photo ended before the next one started, the window shows the batch.
-fn leave_batch(runtime: &mut RuntimeStatus, id: &str, failed: bool) -> Vec<String> {
+fn leave_batch(
+    runtime: &mut RuntimeStatus,
+    id: &str,
+    failed: bool,
+    can_keep_partial: Option<bool>,
+) -> Vec<String> {
     runtime.active_batch_job_ids.retain(|member| member != id);
     let Some(next) = runtime.active_batch_job_ids.first().cloned() else {
         return Vec::new();
@@ -1856,6 +1862,9 @@ fn leave_batch(runtime: &mut RuntimeStatus, id: &str, failed: bool) -> Vec<Strin
         return Vec::new();
     }
     runtime.active_job_id = next;
+    // take_active_job cleared can_keep_partial when the shown photo ended; restore it
+    // for the remaining batch members.
+    runtime.can_keep_partial = can_keep_partial;
     runtime.progress = 0.0;
     runtime.elapsed_seconds = 0.0;
     runtime.estimated_remaining_seconds = 0.0;

@@ -3481,3 +3481,143 @@ fn cancelling_a_running_batch_settles_its_unstarted_photos_and_frees_the_queue()
     assert!(begin_dispatch(&state, true).unwrap());
     lock(&state.worker.cancellation).unwrap().finish().unwrap();
 }
+
+#[test]
+fn batch_preserves_keep_partial_across_job_started_handover_and_grants_finalizing_grace() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    ready_for_batches(&state);
+    let (sender, receiver) = mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+    assert!(begin_dispatch(&state, true).unwrap());
+    let _ = receiver.try_recv().unwrap();
+
+    // First photo starts, then hands over to the second photo while still saving.
+    accept_envelope(&state, &envelope("job_started", json!({"job_id": "a"}))).unwrap();
+    accept_envelope(&state, &envelope("job_started", json!({"job_id": "b"}))).unwrap();
+    {
+        let runtime = lock(&state.runtime).unwrap();
+        assert_eq!(runtime.active_job_id, "b");
+        assert_eq!(runtime.can_keep_partial, Some(true));
+    }
+
+    crate::commands::cancel_jobs_checked(&state, true).unwrap();
+    let cancel: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+    assert_eq!(cancel["type"], "cancel_request");
+    assert_eq!(cancel["data"]["job_id"], "b");
+    assert_eq!(cancel["data"]["keep_partial"], true);
+
+    let later = std::time::Instant::now() + crate::cancellation::CANCEL_GRACE * 2;
+    assert!(
+        !lock(&state.worker.cancellation).unwrap().expired(later),
+        "keep on the 2nd batch member must grant partial finalizing grace"
+    );
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
+
+#[test]
+fn batch_preserves_keep_partial_across_leave_batch_handover() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    ready_for_batches(&state);
+    let (sender, receiver) = mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+    assert!(begin_dispatch(&state, true).unwrap());
+    let _ = receiver.try_recv().unwrap();
+
+    // First photo finishes before the second photo sends job_started (leave_batch handover).
+    accept_envelope(&state, &envelope("job_started", json!({"job_id": "a"}))).unwrap();
+    let out_a = directory.path().join("out").join("a.png");
+    accept_envelope(
+        &state,
+        &envelope(
+            "job_completed",
+            json!({"job_id": "a", "output_path": out_a}),
+        ),
+    )
+    .unwrap();
+    lock(&state.worker.cancellation)
+        .unwrap()
+        .finish_member("a")
+        .unwrap();
+    {
+        let runtime = lock(&state.runtime).unwrap();
+        assert_eq!(runtime.active_job_id, "b");
+        assert_eq!(runtime.can_keep_partial, Some(true));
+    }
+
+    accept_envelope(&state, &envelope("job_started", json!({"job_id": "b"}))).unwrap();
+    {
+        let runtime = lock(&state.runtime).unwrap();
+        assert_eq!(runtime.active_job_id, "b");
+        assert_eq!(runtime.can_keep_partial, Some(true));
+    }
+
+    crate::commands::cancel_jobs_checked(&state, true).unwrap();
+    let later = std::time::Instant::now() + crate::cancellation::CANCEL_GRACE * 2;
+    assert!(!lock(&state.worker.cancellation).unwrap().expired(later));
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
+
+#[test]
+fn single_job_after_a_batch_does_not_inherit_the_batchs_keep_partial_flag() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    ready_for_batches(&state);
+    let (sender, receiver) = mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+    assert!(begin_dispatch(&state, true).unwrap());
+    let _ = receiver.try_recv().unwrap();
+
+    for id in ["a", "b", "c"] {
+        let out = directory.path().join("out").join(format!("{id}.png"));
+        accept_envelope(&state, &envelope("job_started", json!({"job_id": id}))).unwrap();
+        accept_envelope(
+            &state,
+            &envelope("job_completed", json!({"job_id": id, "output_path": out})),
+        )
+        .unwrap();
+        lock(&state.worker.cancellation)
+            .unwrap()
+            .finish_member(id)
+            .unwrap();
+    }
+    {
+        let runtime = lock(&state.runtime).unwrap();
+        assert!(runtime.active_job_id.is_empty());
+        assert!(runtime.active_batch_job_ids.is_empty());
+        assert_eq!(runtime.can_keep_partial, None);
+    }
+
+    // A non-keepable single job (face restoration) dispatched after the batch keeps its own false flag.
+    {
+        let db = lock(&state.database).unwrap();
+        let mut faces = photo_job("d");
+        faces["data"]["face_model_path"] = json!("/models/face.pth");
+        faces["data"]["output_path"] = json!(directory.path().join("out").join("d.png"));
+        db.insert_media("d", "/in/d.png", "d", "image").unwrap();
+        db.insert_job("d", "d", &faces.to_string()).unwrap();
+    }
+    assert!(begin_dispatch(&state, true).unwrap());
+    let _ = receiver.try_recv().unwrap();
+    accept_envelope(&state, &envelope("job_started", json!({"job_id": "d"}))).unwrap();
+    assert_eq!(lock(&state.runtime).unwrap().can_keep_partial, Some(false));
+    crate::commands::cancel_jobs_checked(&state, true).unwrap();
+    let later = std::time::Instant::now() + crate::cancellation::CANCEL_GRACE * 2;
+    assert!(lock(&state.worker.cancellation).unwrap().expired(later));
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+
+    // Starting a new non-member job directly also clears any prior keep flag.
+    {
+        let mut runtime = lock(&state.runtime).unwrap();
+        runtime.active_job_id = "x".into();
+        runtime.active_batch_job_ids = vec!["x".into(), "y".into()];
+        runtime.can_keep_partial = Some(true);
+    }
+    apply_worker_envelope(
+        &state,
+        &envelope("job_started", json!({"job_id": "single"})),
+    )
+    .unwrap();
+    assert_eq!(lock(&state.runtime).unwrap().can_keep_partial, None);
+}
