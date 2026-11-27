@@ -3583,6 +3583,7 @@
       return;
     }
     upscalerBeforeSameSize = '';
+    lastAppliedRecipeId = '';
     // Keep the current size: Quick and Best choose the upscaler and every fix model.
     resolveRecipe({ quality: kind }, { keepScale: true });
   }
@@ -3936,15 +3937,14 @@
     }
   }
 
-  async function addRecipe(): Promise<void> {
-    const name = recipeName.trim() || `My Recipe ${snapshot.recipes.length + 1}`;
-    if (!settings.task) return;
+  function buildRecipe(id: string, name: string): Recipe | undefined {
+    if (!settings.task) return undefined;
     // The fixes that run before the model; a fix without a model has nothing to keep.
     const recipeFixPrefix = (
       usingTemporalVideo ? [] : restoring ? imageFixes.slice(0, -1) : imageFixes
     ).filter((selection) => selection.model_id);
-    const recipe: Recipe = {
-      id: crypto.randomUUID(),
+    return {
+      id,
       name,
       task: settings.task,
       ...(settings.task === 'video' ? { video_task: videoTask } : {}),
@@ -4009,6 +4009,12 @@
             },
           ],
     };
+  }
+
+  async function addRecipe(): Promise<void> {
+    const name = recipeName.trim() || `My Recipe ${snapshot.recipes.length + 1}`;
+    const recipe = buildRecipe(crypto.randomUUID(), name);
+    if (!recipe) return;
     try {
       await api.saveRecipe(recipe);
     } catch (error) {
@@ -4017,7 +4023,34 @@
     }
     recipeName = '';
     recipeEditorOpen = false;
+    lastAppliedRecipeId = recipe.id;
     await refresh();
+  }
+
+  // The recipe applied last in this session; Update offers to save the changes back to it.
+  let lastAppliedRecipeId = '';
+  $: updatableRecipe = snapshot.recipes.find(
+    (recipe) => recipe.id === lastAppliedRecipeId && !activeRecipeIds.has(recipe.id),
+  );
+
+  async function updateRecipe(): Promise<void> {
+    const target = updatableRecipe;
+    if (!target) return;
+    const recipe = buildRecipe(target.id, target.name);
+    if (!recipe) return;
+    try {
+      await api.saveRecipe(recipe);
+    } catch (error) {
+      showModal('Could not save the recipe', String(error));
+      return;
+    }
+    if (api.isTauri()) await refresh();
+    else {
+      snapshot = {
+        ...snapshot,
+        recipes: snapshot.recipes.map((entry) => (entry.id === recipe.id ? recipe : entry)),
+      };
+    }
   }
 
   async function openRecipeEditor(): Promise<void> {
@@ -4041,6 +4074,7 @@
       return;
     }
     upscalerBeforeSameSize = '';
+    lastAppliedRecipeId = recipe.id;
     const patch = recipeSettingsPatch(recipe, snapshot, settings);
     if (patch.task && patch.task !== 'video') lastImageTask = patch.task;
     updateSettings({
@@ -4220,7 +4254,9 @@
       if (action.startsWith('preset.recipe.')) {
         const id = action.slice('preset.recipe.'.length);
         const recipe = snapshot.recipes.find((candidate) => candidate.id === id);
+        // A pinned workflow carries its own id; it is not a stored recipe.
         if (recipe) applyRecipe(recipe);
+        else lastAppliedRecipeId = '';
         return;
       }
       switch (action) {
@@ -4645,6 +4681,7 @@
     applyPreset,
     applyRecipe,
     addRecipe,
+    updateRecipe,
     setContent,
     radioGroupKeydown,
     toggleFix,
@@ -4710,6 +4747,7 @@
     quickDownload,
     bestDownload,
     activeRecipeIds,
+    updatableRecipe,
     sizeResult,
     sizeMaxScale,
     bestModel,

@@ -150,6 +150,7 @@ export interface EnhancePanelView {
   quickDownload: string;
   bestDownload: string;
   activeRecipeIds: Set<string>;
+  updatableRecipe: Recipe | undefined;
   sizeResult: string;
   sizeMaxScale: number;
   bestModel: CatalogModel | undefined;
@@ -191,6 +192,7 @@ export interface EnhancePanelActions {
   applyPreset: (kind: 'quick' | 'best') => void;
   applyRecipe: (recipe: Recipe) => void;
   addRecipe: () => Promise<void>;
+  updateRecipe: () => Promise<void>;
   setContent: (content: UiSettings['content']) => void;
   radioGroupKeydown: (event: KeyboardEvent) => void;
   toggleFix: (fix: FixKind) => void;

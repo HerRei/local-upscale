@@ -52,6 +52,7 @@
     applyPreset,
     applyRecipe,
     addRecipe,
+    updateRecipe,
     setContent,
     radioGroupKeydown,
     toggleFix,
@@ -105,6 +106,7 @@
     quickDownload,
     bestDownload,
     activeRecipeIds,
+    updatableRecipe,
     sizeResult,
     sizeMaxScale,
     imageFixes,
@@ -354,6 +356,8 @@
           {openRecipesLibrary}
           {applyRecipe}
           {addRecipe}
+          {updatableRecipe}
+          {updateRecipe}
           onClose={() => close(false)}
         />
       </Popover>

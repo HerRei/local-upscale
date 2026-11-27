@@ -2093,6 +2093,38 @@ describe('LocalSR desktop interface', () => {
     );
   });
 
+  it('offers Update for the applied recipe once Size changes, saving under the same id and name', async () => {
+    const snapshot = readySnapshot([image('first', true)]);
+    const model = snapshot.catalog.models.find((entry) => entry.native_scale === 4)!;
+    snapshot.recipes = [
+      {
+        id: 'phone',
+        name: 'Phone photos',
+        task: 'upscale',
+        model_id: model.model_id,
+        output_scale: 4,
+        tile_size: 256,
+        halo: 32,
+        precision: 'fp32',
+        safe_memory: true,
+      },
+    ];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    expect(screen.queryByRole('button', { name: /^Update/ })).toBeNull();
+    await user.click(screen.getByRole('button', { name: /^Phone photos/ }));
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Recipes' })).toBeNull());
+    await user.click(
+      within(screen.getByRole('radiogroup', { name: 'Size' })).getByRole('radio', { name: '2×' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    await user.click(screen.getByRole('button', { name: 'Update “Phone photos”' }));
+    await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledTimes(1));
+    expect(api.saveRecipe).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'phone', name: 'Phone photos', output_scale: 2 }),
+    );
+  }, 20_000);
+
   it('exposes image recipes, hardware controls, and installed face companions', async () => {
     const user = await mountWith(readySnapshot());
     await chooseTask(user, /^Upscale & restore$/);

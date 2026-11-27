@@ -77,4 +77,38 @@ describe('Recipes menu', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(openRecipesLibrary).toHaveBeenCalledTimes(1);
   });
+
+  it('shows Update with the recipe name, and disables Save with the limit wording at 100', async () => {
+    const user = userEvent.setup();
+    const { catalog } = demoSnapshot();
+    const updateRecipe = vi.fn(async () => {});
+    const recipes = Array.from({ length: 100 }, (_, index) =>
+      makeRecipe(`r${index}`, `R ${index}`),
+    );
+    render(RecipesMenu, {
+      props: {
+        recipes,
+        catalog,
+        activeRecipeIds: new Set<string>(),
+        selectedMediaKind: 'image',
+        canSave: true,
+        recipeName: '',
+        recipeEditorOpen: false,
+        openRecipeEditor: vi.fn(async () => {}),
+        openRecipesLibrary: vi.fn(),
+        applyRecipe: vi.fn(),
+        addRecipe: vi.fn(async () => {}),
+        updatableRecipe: recipes[0],
+        updateRecipe,
+        onClose: vi.fn(),
+      },
+    });
+    const save = screen.getByRole('button', {
+      name: 'Save current as recipe…',
+    }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    expect(save.title).toBe('100 recipes is the limit. Delete one in Browse recipes… first.');
+    await user.click(screen.getByRole('button', { name: 'Update “R 0”' }));
+    expect(updateRecipe).toHaveBeenCalledTimes(1);
+  });
 });

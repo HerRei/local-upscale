@@ -16,11 +16,14 @@
   export let openRecipesLibrary: () => void;
   export let applyRecipe: (recipe: Recipe) => void;
   export let addRecipe: () => Promise<void>;
+  export let updatableRecipe: Recipe | undefined = undefined;
+  export let updateRecipe: () => Promise<void> = async () => {};
   export let onClose: () => void;
 
   let nameInput: HTMLInputElement | undefined;
   let saveButton: HTMLButtonElement | undefined;
 
+  $: atLimit = recipes.length >= 100;
   $: rows = menuRows(recipes, {
     pins,
     recent,
@@ -93,6 +96,17 @@
     }}>Browse recipes…</button
   >
   <hr class="pop-sep" />
+  {#if updatableRecipe && !recipeEditorOpen}
+    <button
+      class="link-button recipes-update"
+      type="button"
+      disabled={!canSave}
+      on:click={() => {
+        void updateRecipe();
+        onClose();
+      }}>Update “{updatableRecipe.name}”</button
+    >
+  {/if}
   {#if recipeEditorOpen}
     <div class="recipe-input">
       <input
@@ -119,7 +133,8 @@
       bind:this={saveButton}
       class="link-button recipes-save"
       type="button"
-      disabled={!canSave}
+      disabled={!canSave || atLimit}
+      title={atLimit ? '100 recipes is the limit. Delete one in Browse recipes… first.' : undefined}
       on:click={() => void startEditor()}>Save current as recipe…</button
     >
   {/if}
