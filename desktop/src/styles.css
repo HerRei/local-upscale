@@ -1073,6 +1073,70 @@ input:focus-visible {
   flex-direction: column;
   border-left: 1px solid var(--pane-seam);
 }
+.panel-foot {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 16px 12px;
+  border-top: 1px solid var(--divider);
+  background: var(--panel);
+}
+.panel-foot:empty {
+  display: none;
+}
+.needs-you {
+  display: flex;
+  flex-direction: column;
+}
+.needs-you-head {
+  margin: 0;
+  color: var(--text);
+  font-size: calc(12px * var(--ui-scale));
+  font-weight: 500;
+}
+.needs-you .terms {
+  margin: 6px 0 0;
+}
+.needs-you .button.full {
+  margin-top: 6px;
+}
+.panel-foot .inline-warning {
+  margin: 0;
+}
+.foot-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text);
+  font-size: calc(12px * var(--ui-scale));
+}
+.foot-plan.muted {
+  color: var(--secondary);
+}
+.foot-plan.dimmed {
+  opacity: 0.55;
+}
+.foot-plan-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  line-height: 1.35;
+}
+.foot-cost {
+  position: relative;
+  color: var(--secondary);
+  font-variant-numeric: tabular-nums;
+}
+.foot-cost-download {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+}
 .pane-heading {
   flex: 0 0 52px;
   display: flex;
@@ -3345,7 +3409,8 @@ input[type='number'],
     width: min(440px, calc(100% - 24px));
     margin-inline: auto;
   }
-  .enhance-pane .inspector-scroll {
+  .enhance-pane .inspector-scroll,
+  .enhance-pane .panel-foot {
     padding-inline: max(16px, calc(50% - 204px));
   }
   .media-pane .pane-heading,

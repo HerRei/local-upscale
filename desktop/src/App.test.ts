@@ -3,6 +3,7 @@
 import { emptyUpdateStatus, updateDialogOpen, updateState } from './lib/updates';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
+import { tick } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import App from './App.svelte';
@@ -5555,15 +5556,22 @@ describe('Several fixes in one pass', () => {
       model.terms_acceptance_required = true;
     }
     const user = await mountWith(snapshot);
-    const blurTerms = within(rows()[0]).getByRole('checkbox') as HTMLInputElement;
-    const jpegTerms = within(rows()[1]).getByRole('checkbox') as HTMLInputElement;
+    const foot = document.querySelector('.panel-foot') as HTMLElement;
+    const blurNeeds = within(foot)
+      .getByText('Blur · NAFNet GoPro Deblur')
+      .closest('.needs-you') as HTMLElement;
+    const jpegNeeds = within(foot)
+      .getByText('JPEG · FBCNN Color')
+      .closest('.needs-you') as HTMLElement;
+    const blurTerms = within(blurNeeds).getByRole('checkbox') as HTMLInputElement;
+    const jpegTerms = within(jpegNeeds).getByRole('checkbox') as HTMLInputElement;
     // Start cannot fetch a model whose terms nobody accepted.
     expect(screen.queryByRole('button', { name: /then upscale$/ })).toBeNull();
     await user.click(blurTerms);
     expect(blurTerms.checked).toBe(true);
     expect(jpegTerms.checked).toBe(false);
     expect(screen.queryByRole('button', { name: /then upscale$/ })).toBeNull();
-    await user.click(within(rows()[0]).getByRole('button', { name: /^Download model/ }));
+    await user.click(within(blurNeeds).getByRole('button', { name: /^Download model/ }));
     await waitFor(() =>
       expect(api.downloadModel).toHaveBeenCalledWith('nafnet_gopro_deblur', true),
     );
@@ -5574,8 +5582,8 @@ describe('Several fixes in one pass', () => {
     await user.click(within(library).getByRole('button', { name: /^Download/ }));
     await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith('fbcnn_color', true));
     await user.click(screen.getByRole('button', { name: 'Close model library' }));
-    expect((within(rows()[0]).getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
-    expect((within(rows()[1]).getByRole('checkbox') as HTMLInputElement).checked).toBe(false);
+    expect((within(blurNeeds).getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
+    expect((within(jpegNeeds).getByRole('checkbox') as HTMLInputElement).checked).toBe(false);
   });
 
   it('clears a remembered fix on a custom upscaler without keeping the old checkpoint', async () => {
@@ -9664,5 +9672,142 @@ describe('Enhance panel head, Recipes menu, and Task row', () => {
     expect(screen.getByRole('tooltip').textContent).toBe(
       'Upscale & restore enlarges videos, fixes them, or both. Edit is for photos.',
     );
+  });
+});
+
+describe('Enhance panel foot', () => {
+  it('shows the plan line in run order with its accessible name for Noise and Blur at 4×', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.output_scale = 4;
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    const foot = document.querySelector('.panel-foot') as HTMLElement;
+    const planEl = await within(foot).findByText('Blur → Noise → Upscale 4×');
+    expect(planEl.closest('.foot-plan')?.getAttribute('aria-label')).toBe(
+      'Plan: Blur, Noise, Upscale 4×',
+    );
+  });
+
+  it('shows Nothing to run and its note at Same size with no fixes, and disables Start', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
+    const foot = document.querySelector('.panel-foot') as HTMLElement;
+    expect(
+      await within(foot).findByText('Nothing to run. Pick what to fix, or choose a larger size.'),
+    ).toBeTruthy();
+    expect(within(foot).getByText('Nothing to run')).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Restore selected' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it('shows terms and download controls in the foot under Upscale · <name> and gates Start', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.catalog = structuredClone(snapshot.catalog);
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.selected_model_id = 'hat_s_x4';
+    const model = snapshot.catalog.models.find((entry) => entry.model_id === 'hat_s_x4')!;
+    model.installed = false;
+    model.terms_acceptance_required = true;
+    const user = await mountWith(snapshot);
+    const foot = document.querySelector('.panel-foot') as HTMLElement;
+    expect(within(foot).getByText('Upscale · HAT-S ×4')).toBeTruthy();
+    const terms = within(foot).getByRole('checkbox', {
+      name: 'I reviewed the model license and restrictions.',
+    }) as HTMLInputElement;
+    expect(terms.checked).toBe(false);
+    expect(within(foot).getByRole('button', { name: /^Download model/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /then upscale$/ })).toBeNull();
+    expect(
+      (screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    await user.click(terms);
+    expect(terms.checked).toBe(true);
+    const downloadAndStart = (await screen.findByRole('button', {
+      name: /then upscale$/,
+    })) as HTMLButtonElement;
+    expect(downloadAndStart.disabled).toBe(false);
+    await user.click(within(foot).getByRole('button', { name: /^Download model/ }));
+    await waitFor(() => expect(api.downloadModel).toHaveBeenCalledWith('hat_s_x4', true));
+  });
+
+  it('shows pending download cost and the download privacy tip in the foot', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.catalog = structuredClone(snapshot.catalog);
+    snapshot.settings.task = 'upscale';
+    snapshot.catalog.models.forEach((model) => (model.installed = false));
+    const user = await mountWith(snapshot);
+    const foot = document.querySelector('.panel-foot') as HTMLElement;
+    expect(within(foot).getByText(/\d+(\.\d+)? MB to download/)).toBeTruthy();
+    await user.click(within(foot).getByRole('button', { name: 'About Downloads' }));
+    expect(within(foot).getByRole('tooltip').textContent).toBe(
+      'Models download once when you start and stay on this computer. Your photos never leave it.',
+    );
+  });
+
+  it('shows Working out the plan… on first load and dims the plan line after 400 ms on reload', async () => {
+    let resolveFirst!: (stages: import('./lib/plan').PlanStage[]) => void;
+    const firstPromise = new Promise<import('./lib/plan').PlanStage[]>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const baseImpl = planFetch.defaultImpl!;
+    planFetch.mock.mockImplementationOnce(() => firstPromise);
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.selected_model_id = 'span_photo_x4';
+
+    await mountWith(snapshot);
+    const foot = document.querySelector('.panel-foot') as HTMLElement;
+    expect(within(foot).getByText('Working out the plan…')).toBeTruthy();
+
+    const firstStages = await baseImpl(snapshot, snapshot.settings, {
+      face_enabled: false,
+      has_audio: false,
+    });
+    resolveFirst(firstStages);
+    await waitFor(() => expect(within(foot).getByText('Upscale 4×')).toBeTruthy());
+
+    let resolveSecond!: (stages: import('./lib/plan').PlanStage[]) => void;
+    const secondPromise = new Promise<import('./lib/plan').PlanStage[]>((resolve) => {
+      resolveSecond = resolve;
+    });
+    planFetch.mock.mockImplementationOnce(() => secondPromise);
+    vi.useFakeTimers();
+    try {
+      await fireEvent.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+      await tick();
+      await Promise.resolve();
+      await tick();
+      const planEl = within(foot).getByText('Upscale 4×').closest('.foot-plan') as HTMLElement;
+      expect(planEl.getAttribute('aria-busy')).toBe('true');
+      expect(planEl.classList.contains('dimmed')).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(400);
+      await tick();
+      expect(planEl.classList.contains('dimmed')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const secondStages = await baseImpl(
+      snapshot,
+      {
+        ...snapshot.settings,
+        fixes: ['noise'],
+        fix_stages: [{ fix: 'noise', model_id: 'nafnet_sidd_width64' }],
+      },
+      { face_enabled: false, has_audio: false },
+    );
+    resolveSecond(secondStages);
+    await waitFor(() => expect(within(foot).getByText('Noise → Upscale 4×')).toBeTruthy());
+    const planEl = within(foot)
+      .getByText('Noise → Upscale 4×')
+      .closest('.foot-plan') as HTMLElement;
+    expect(planEl.hasAttribute('aria-busy')).toBe(false);
+    expect(planEl.classList.contains('dimmed')).toBe(false);
   });
 });
