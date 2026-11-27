@@ -7,10 +7,6 @@ const fixStageSteps = [...rawSteps.steps]
   .filter((step) => step.is_fix_stage && step.fix_kind !== null)
   .sort((left, right) => left.order - right.order);
 
-const fixChipOrderSteps = [...fixStageSteps].sort(
-  (left, right) => (left.fix_chip_order ?? left.order) - (right.fix_chip_order ?? right.order),
-);
-
 export interface StepParameter {
   name: string;
   kind: string;
@@ -56,11 +52,6 @@ export const STAGE_PARAMS_FEATURE = rawSteps.limits.stage_params_feature;
 
 /** The order a fix takes when it is turned on: deblur first, colour last. */
 export const DEFAULT_FIX_ORDER: FixStageKind[] = fixStageSteps.map(
-  (step) => step.fix_kind as FixStageKind,
-);
-
-/** The order Fix chips appear in the inspector. */
-export const FIX_CHIPS: FixStageKind[] = fixChipOrderSteps.map(
   (step) => step.fix_kind as FixStageKind,
 );
 

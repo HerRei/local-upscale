@@ -2012,8 +2012,8 @@ describe('LocalSR desktop interface', () => {
     expect(within(hardware).getByRole('option', { name: 'CPU' })).toBeTruthy();
 
     // Faces need a primary model with a companion; the default Best (RealPLKSR)
-    // has none, so the chip is not offered until such a model is chosen.
-    expect(screen.queryByRole('button', { name: 'Faces' })).toBeNull();
+    // has none, so the row is not offered until such a model is chosen.
+    expect(screen.queryByRole('checkbox', { name: 'Faces' })).toBeNull();
   });
 
   it.each([['hat_s_x4'], ['hat_l_x4_imagenet']])(
@@ -2025,7 +2025,7 @@ describe('LocalSR desktop interface', () => {
       snapshot.settings.selected_model_id = primaryId;
       snapshot.settings.quality = 'custom';
       await mountWith(snapshot);
-      expect(screen.queryByRole('button', { name: 'Faces' })).toBeNull();
+      expect(screen.queryByRole('checkbox', { name: 'Faces' })).toBeNull();
       expect(
         screen.queryByRole('button', { name: 'Choose externally downloaded face checkpoint…' }),
       ).toBeNull();
@@ -2044,7 +2044,7 @@ describe('LocalSR desktop interface', () => {
     expect(document.querySelectorAll('.model-output-note')).toHaveLength(0);
     const oldModelId = (api.saveSettings.mock.calls.at(-1)?.[0] as UiSettings).selected_model_id;
 
-    expect(screen.getByRole('checkbox', { name: /De-flicker · Labs/i })).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: 'De-flicker' })).toBeTruthy();
     await openOutputSheet(user);
     expect(screen.getByLabelText('Container')).toBeTruthy();
     expect(screen.getByLabelText(/Video quality · CRF/i)).toBeTruthy();
@@ -2063,7 +2063,7 @@ describe('LocalSR desktop interface', () => {
     expect(within(stages).getByText('SeedVR2-3B')).toBeTruthy();
     expect(within(stages).getByText('Labs · several frames at once')).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'Your video' })).toBeNull();
-    expect(screen.queryByRole('checkbox', { name: /De-flicker · Labs/i })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: 'De-flicker' })).toBeNull();
     expect(screen.queryByRole('checkbox', { name: /Safe memory mode/i })).toBeNull();
   });
 
@@ -2085,7 +2085,7 @@ describe('LocalSR desktop interface', () => {
       await pickUpscalerInLibrary(user, /^SeedVR2-3B — Labs/);
       await pickUpscalerInLibrary(user, /^HAT-L ×4 ImageNet/);
       expect(
-        (screen.getByRole('checkbox', { name: /De-flicker · Labs/i }) as HTMLInputElement).checked,
+        (screen.getByRole('checkbox', { name: 'De-flicker' }) as HTMLInputElement).checked,
       ).toBe(deflicker);
       expect((screen.getByLabelText('Frame rate') as HTMLSelectElement).value).toBe('x2');
       expect(api.saveSettings).toHaveBeenLastCalledWith(
@@ -2454,7 +2454,7 @@ describe('LocalSR desktop interface', () => {
     // Video Same size has no video rows in For this job and no Use for this job in Video (Labs).
     await user.click(screen.getByRole('button', { name: /^Quick/ }));
     await user.click(screen.getByRole('radio', { name: 'Same size' }));
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
     await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
     const restoreLib = screen.getByRole('dialog', { name: 'Model library' });
@@ -4485,7 +4485,7 @@ describe('LocalSR desktop interface', () => {
   it('maps the JPEG chip to a restoration stage and clears it again', async () => {
     const snapshot = readySnapshot([image('scan', true)]);
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: 'JPEG artifacts', pressed: false }));
+    await user.click(screen.getByRole('checkbox', { name: 'JPEG artifacts' }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
         expect.objectContaining({
@@ -4499,7 +4499,7 @@ describe('LocalSR desktop interface', () => {
       within(screen.getByRole('list', { name: 'Stages' })).getAllByRole('listitem'),
     ).toHaveLength(2);
     await user.keyboard('{Escape}');
-    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    await user.click(screen.getByRole('checkbox', { name: 'Blur' }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
         expect.objectContaining({
@@ -4511,7 +4511,7 @@ describe('LocalSR desktop interface', () => {
         }),
       ),
     );
-    await user.click(screen.getByRole('button', { name: 'Blur', pressed: true }));
+    await user.click(screen.getByRole('checkbox', { name: 'Blur' }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
         expect.objectContaining({
@@ -4526,7 +4526,7 @@ describe('LocalSR desktop interface', () => {
     const snapshot = readySnapshot([image('photo', true)]);
     const user = await mountWith(snapshot);
     await user.click(screen.getByRole('button', { name: /^Best/ }));
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
         expect.objectContaining({
@@ -4566,9 +4566,9 @@ describe('LocalSR desktop interface', () => {
     ).toBeTruthy();
     await user.keyboard('{Escape}');
 
-    // The choice survives the chip going off and on, Quick and back, and the content switch.
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: true }));
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    // The choice survives the fix going off and on, Quick and back, and the content switch.
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
         expect.objectContaining({
@@ -4617,15 +4617,15 @@ describe('LocalSR desktop interface', () => {
     let library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }));
     await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
     await openPlanSheet(user);
     await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the noise fix model' }));
     library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
     await user.click(within(library).getByRole('button', { name: 'Use for Noise' }));
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: true }));
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
         expect.objectContaining({
@@ -4642,7 +4642,7 @@ describe('LocalSR desktop interface', () => {
     const user = await mountWith(snapshot);
     await user.click(screen.getByRole('radio', { name: 'Same size' }));
     await user.click(screen.getByRole('button', { name: /^Best/ }));
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
     await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
@@ -4661,7 +4661,7 @@ describe('LocalSR desktop interface', () => {
       ),
     );
     // Blur enters before noise; the chosen denoiser remains primary.
-    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    await user.click(screen.getByRole('checkbox', { name: 'Blur' }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
         expect.objectContaining({
@@ -4729,7 +4729,7 @@ describe('LocalSR desktop interface', () => {
 
   it('warns before the blur fix that it can fail on sharp pictures', async () => {
     const user = await mountWith(readySnapshot([image('photo', true)]));
-    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    await user.click(screen.getByRole('checkbox', { name: 'Blur' }));
     expect(screen.getByRole('button', { name: 'About Fix' })).toBeTruthy();
     await openPlanSheet(user);
     expect(
@@ -4771,7 +4771,9 @@ describe('LocalSR desktop interface', () => {
         }),
       ),
     );
-    expect(screen.getByRole('button', { name: 'JPEG artifacts', pressed: true })).toBeTruthy();
+    expect(
+      (screen.getByRole('checkbox', { name: 'JPEG artifacts' }) as HTMLInputElement).checked,
+    ).toBe(true);
   });
 
   it('switches between HAT upscalers without offering Faces', async () => {
@@ -5113,12 +5115,14 @@ describe('Several fixes in one pass', () => {
   it('toggles each fix on its own, adds it at its place, moves it and changes its model', async () => {
     const user = await mountWith(readySnapshot([image('photo', true)]));
     await user.click(screen.getByRole('button', { name: /^Best/ }));
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
     // One fix has nowhere to move.
     expect(screen.queryByRole('button', { name: /^Move the/ })).toBeNull();
-    await user.click(screen.getByRole('button', { name: 'JPEG artifacts', pressed: false }));
-    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
-    expect(screen.getByRole('button', { name: 'Noise', pressed: true })).toBeTruthy();
+    await user.click(screen.getByRole('checkbox', { name: 'JPEG artifacts' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Blur' }));
+    expect((screen.getByRole('checkbox', { name: 'Noise' }) as HTMLInputElement).checked).toBe(
+      true,
+    );
     await openPlanSheet(user);
     expect(labels()).toEqual(['Fix blur', 'Fix JPEG', 'Fix noise', 'Upscale ×4']);
     const move = (name: string) => screen.getByRole('button', { name });
@@ -5184,7 +5188,7 @@ describe('Several fixes in one pass', () => {
     await user.click(screen.getByRole('button', { name: 'Close model library' }));
 
     // Turning one fix off keeps the others, their order and their models.
-    await user.click(screen.getByRole('button', { name: 'Blur', pressed: true }));
+    await user.click(screen.getByRole('checkbox', { name: 'Blur' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
         fixes: ['noise', 'jpeg'],
@@ -5269,8 +5273,8 @@ describe('Several fixes in one pass', () => {
     const user = await mountWith(snapshot);
     await user.click(screen.getByRole('radio', { name: 'Same size' }));
     await user.click(screen.getByRole('button', { name: /^Quick/ }));
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
-    await user.click(screen.getByRole('button', { name: 'JPEG artifacts', pressed: false }));
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
+    await user.click(screen.getByRole('checkbox', { name: 'JPEG artifacts' }));
     // JPEG goes before noise; the noise fix stays the model.
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
@@ -5369,8 +5373,8 @@ describe('Several fixes in one pass', () => {
       }),
     );
     // A problem it cannot fix brings a model that can.
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: true }));
-    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Blur' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
         selected_model_id: 'nafnet_gopro_deblur',
@@ -5382,8 +5386,8 @@ describe('Several fixes in one pass', () => {
   it('lets your own checkpoint be the Same size model without a fix in front of it', async () => {
     const user = await mountWith(readySnapshot([image('photo', true)]));
     await user.click(screen.getByRole('radio', { name: 'Same size' }));
-    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('checkbox', { name: 'Blur' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
     api.chooseCustomModel.mockResolvedValueOnce('/models/mine.safetensors' as never);
     await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
@@ -5398,15 +5402,17 @@ describe('Several fixes in one pass', () => {
     );
     await openPlanSheet(user);
     expect(labels()).toEqual(['Fix']);
-    expect(screen.getByRole('button', { name: 'Blur', pressed: false })).toBeTruthy();
+    expect((screen.getByRole('checkbox', { name: 'Blur' }) as HTMLInputElement).checked).toBe(
+      false,
+    );
   });
 
   it('saves the fixes in order in a recipe and applies them again', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     const user = await mountWith(snapshot);
     await user.click(screen.getByRole('button', { name: /^Best/ }));
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
-    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Blur' }));
     await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Move the noise fix earlier' }));
     api.saveRecipe.mockImplementationOnce(async (recipe: Recipe) => {
@@ -5531,9 +5537,9 @@ describe('Several fixes in one pass', () => {
     });
     const user = await mountWith(snapshot);
     // Frame-by-frame video offers fix stages; Faces only with a HAT model.
-    expect(screen.getByRole('button', { name: 'Noise' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Blur' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Faces' })).toBeNull();
+    expect(screen.getByRole('checkbox', { name: 'Noise' })).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: 'Blur' })).toBeTruthy();
+    expect(screen.queryByRole('checkbox', { name: 'Faces' })).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Recipes' }));
     await user.click(screen.getByRole('button', { name: 'Save current as recipe…' }));
     await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Clip');
@@ -5613,12 +5619,12 @@ describe('Several fixes in one pass', () => {
       (feature) => feature !== 'image_multi_fix',
     );
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
     expect(screen.queryByText(/runs one fix at a time/)).toBeNull();
     expect(
       (screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement).disabled,
     ).toBe(false);
-    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    await user.click(screen.getByRole('checkbox', { name: 'Blur' }));
     expect(
       screen.getByText('This engine runs one fix at a time. Update LocalSR to run several.'),
     ).toBeTruthy();
@@ -5713,9 +5719,9 @@ describe('Several fixes in one pass', () => {
     });
     const user = await mountWith(snapshot);
     await waitFor(() => expect(lastSaved()).toMatchObject({ enable_face_model: false, fixes: [] }));
-    expect(screen.queryByRole('button', { name: 'Faces' })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: 'Faces' })).toBeNull();
     await user.click(screen.getByRole('radio', { name: 'Same size' }));
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({ enable_face_model: false, fixes: ['noise'] }),
     );
@@ -7088,7 +7094,7 @@ it('asks for a task before applying a preset', async () => {
 it('does not ask for a catalog model under Your own file', async () => {
   const user = await mountWith(readySnapshot([image('photo', true)]));
   await user.click(screen.getByRole('radio', { name: 'Same size' }));
-  await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+  await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
   await openPlanSheet(user);
   await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
   await user.click(screen.getByRole('button', { name: /Your own file/ }));
@@ -7746,9 +7752,9 @@ describe('video Same size, Fix, and Output resolution', () => {
       }),
     );
 
-    // Tick Noise, then JPEG artifacts (prefix fix) before Noise (primary restore).
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
-    await user.click(screen.getByRole('button', { name: 'JPEG artifacts' }));
+    // Tick Noise, then Compression (prefix fix) before Noise (primary restore).
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Compression' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
         task: 'video',
@@ -7823,8 +7829,8 @@ describe('video Same size, Fix, and Output resolution', () => {
         selected_model_id: '',
       }),
     );
-    expect(screen.getByRole('button', { name: 'Noise' }).getAttribute('aria-pressed')).toBe(
-      'false',
+    expect((screen.getByRole('checkbox', { name: 'Noise' }) as HTMLInputElement).checked).toBe(
+      false,
     );
     expect(
       screen.getByText(
@@ -7840,7 +7846,7 @@ describe('video Same size, Fix, and Output resolution', () => {
     await user.keyboard('{Escape}');
 
     // Turning on De-flicker enables Start with no restore model.
-    await user.click(screen.getByRole('checkbox', { name: /De-flicker · Labs/i }));
+    await user.click(screen.getByRole('checkbox', { name: 'De-flicker' }));
     await waitFor(() => expect(startBtn.disabled).toBe(false));
     await user.click(startBtn);
     await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
@@ -7877,21 +7883,21 @@ describe('video Same size, Fix, and Output resolution', () => {
     expect(screen.getByRole('radio', { name: 'Same size' }).getAttribute('aria-checked')).toBe(
       'true',
     );
-    const sameSizeChips = Array.from(
-      screen.getByRole('group', { name: 'Fix' }).querySelectorAll('button'),
-    ).map((b) => b.textContent?.trim());
-    expect(sameSizeChips).toEqual(['Noise', 'Blur', 'JPEG artifacts', 'Colour']);
+    const sameSizeFixes = Array.from(
+      screen.getByRole('group', { name: 'Fix' }).querySelectorAll('.fix-name'),
+    ).map((el) => el.textContent?.trim());
+    expect(sameSizeFixes).toEqual(['Blur', 'JPEG artifacts', 'Noise', 'Colour']);
     await user1.click(screen.getByRole('button', { name: 'About Fix' }));
     expect(screen.getByRole('tooltip').textContent).toBe(
-      "Each problem you pick gets its own fix at the original size, in the order listed under Model. Quick picks a fast model for each problem, Best the most careful one. ↑ and ↓ change the order; a fix's Change… picks its model, which LocalSR remembers for that problem. Colour adds colour to black-and-white photos.",
+      'Tick what is wrong with the picture. Each problem gets its own fix at the original size, before the picture is enlarged. Quick picks a fast model for each problem, Best the most careful one. A ticked row names its model; click the name to change it, and LocalSR remembers your choice for that problem. The plan line at the bottom shows the order and lets you change it.',
     );
 
-    // Enlarging uses the same Fix chips.
+    // Enlarging uses the same Fix rows.
     await user1.click(screen.getByRole('radio', { name: '4×' }));
-    const upscaleChips = Array.from(
-      screen.getByRole('group', { name: 'Fix' }).querySelectorAll('button'),
-    ).map((b) => b.textContent?.trim());
-    expect(upscaleChips).toEqual(['Noise', 'Blur', 'JPEG artifacts', 'Colour']);
+    const upscaleFixes = Array.from(
+      screen.getByRole('group', { name: 'Fix' }).querySelectorAll('.fix-name'),
+    ).map((el) => el.textContent?.trim());
+    expect(upscaleFixes).toEqual(['Blur', 'JPEG artifacts', 'Noise', 'Colour']);
     await user1.click(screen.getByRole('button', { name: 'About Size' }));
     expect(screen.getByRole('tooltip').textContent).toBe(
       'Same size keeps the pixel size and runs only the fixes you picked. 2× to 4× enlarges the result after the fixes. The model always works at its own 4× scale; a smaller choice resizes that result down afterwards, so it saves no time.',
@@ -8215,10 +8221,13 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     });
     api.refreshSnapshot.mockImplementation(async () => structuredClone(snapshot));
 
-    // Upscale offers Colour chip with title, resolves DDColor for Quick and Best, and shows HelpTip.
-    const colourChip = screen.getByRole('button', { name: 'Colour', pressed: false });
-    expect(colourChip.getAttribute('title')).toBe('Adds colour to black-and-white photos');
-    await user.click(colourChip);
+    // Upscale offers Colour row with title, resolves DDColor for Quick and Best, and shows HelpTip.
+    const colourBox = screen.getByRole('checkbox', { name: 'Colour' }) as HTMLInputElement;
+    expect(colourBox.checked).toBe(false);
+    expect(colourBox.closest('.fix-row')?.getAttribute('title')).toBe(
+      'Adds colour to black-and-white photos',
+    );
+    await user.click(colourBox);
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
         expect.objectContaining({
@@ -8235,7 +8244,7 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     );
 
     expect(screen.queryByRole('button', { name: 'Change the colour fix model' })).toBeNull();
-    expect(screen.getByText('DDColor')).toBeTruthy();
+    expect(within(screen.getByRole('list', { name: 'Stages' })).getByText('DDColor')).toBeTruthy();
     await user.keyboard('{Escape}');
 
     // Best uses the same model, and Same size runs it as the primary row labelled "Colour".
@@ -8249,7 +8258,9 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     );
 
     await user.click(screen.getByRole('radio', { name: 'Same size' }));
-    expect(screen.getByRole('button', { name: 'Colour', pressed: true })).toBeTruthy();
+    expect((screen.getByRole('checkbox', { name: 'Colour' }) as HTMLInputElement).checked).toBe(
+      true,
+    );
     await openPlanSheet(user);
     const stages = screen.getByRole('list', { name: 'Stages' });
     expect(within(stages).getByText('Colour')).toBeTruthy();
@@ -8267,20 +8278,20 @@ describe('Model folder and Windows CPU GPU download notice', () => {
     // Switching to a video keeps Colour available under Fix, but the photo's
     // Colour choice is not carried over: a colour video would be recoloured.
     await user.click(screen.getByRole('button', { name: /▶\s*clip\.mp4/ }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Colour' })).toBeTruthy());
-    expect(screen.getByRole('button', { name: 'Colour' }).getAttribute('aria-pressed')).toBe(
-      'false',
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Colour' })).toBeTruthy());
+    expect((screen.getByRole('checkbox', { name: 'Colour' }) as HTMLInputElement).checked).toBe(
+      false,
     );
     expect(api.saveSettings).toHaveBeenLastCalledWith(
       expect.objectContaining({ task: 'video', fixes: [] }),
     );
     await user.click(screen.getByRole('radio', { name: '4×' }));
-    expect(screen.getByRole('button', { name: 'Colour' }).getAttribute('title')).toBe(
-      'Adds colour to black-and-white videos',
-    );
+    expect(
+      screen.getByRole('checkbox', { name: 'Colour' }).closest('.fix-row')?.getAttribute('title'),
+    ).toBe('Adds colour to black-and-white videos');
     await user.click(screen.getByRole('button', { name: 'About Fix' }));
     expect(screen.getByRole('tooltip').textContent).toContain(
-      'Colour adds colour to black-and-white videos and keeps it steady from frame to frame.',
+      'De-flicker runs after the frames are processed.',
     );
   });
 });
@@ -9278,8 +9289,8 @@ describe('Size decides', () => {
     const snapshot = readySnapshot([image('photo', true)]);
     const user = await mountWith(snapshot);
 
-    // Noise ticked, Size -> Same size: Content and Upscale row gone, last row Fix noise, Restore selected.
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    // Noise ticked, Size -> Same size: Content disabled, Upscale row gone, last row Fix noise, Restore selected.
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
     await user.click(screen.getByRole('radio', { name: 'Same size' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
@@ -9288,7 +9299,15 @@ describe('Size decides', () => {
         selected_model_id: 'denoise_realplksr_1x',
       }),
     );
-    expect(screen.queryByRole('radiogroup', { name: 'Content' })).toBeNull();
+    const contentSame = screen.getByRole('radiogroup', { name: 'Content' });
+    expect(contentSame.getAttribute('title')).toBe(
+      'Content chooses the upscaler. Nothing is enlarged at Same size.',
+    );
+    for (const label of ['Photo', 'Illustration']) {
+      expect(
+        (within(contentSame).getByRole('radio', { name: label }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+    }
     await openPlanSheet(user);
     expect(within(screen.getByRole('list', { name: 'Stages' })).queryByText(/Upscale/)).toBeNull();
     expect(
@@ -9300,15 +9319,15 @@ describe('Size decides', () => {
     expect(screen.getByRole('button', { name: 'Restore selected' })).toBeTruthy();
 
     // Untick Noise at Same size: nothing to run, Start disabled, no card download lines, no header Change….
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: true }));
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
         fix_stages: [],
         selected_model_id: '',
       }),
     );
-    expect(screen.getByRole('button', { name: 'Noise' }).getAttribute('aria-pressed')).toBe(
-      'false',
+    expect((screen.getByRole('checkbox', { name: 'Noise' }) as HTMLInputElement).checked).toBe(
+      false,
     );
     expect(
       screen.getByText('Nothing to run. Pick what to fix, or choose a larger size.'),
@@ -9319,7 +9338,7 @@ describe('Size decides', () => {
     expect(screen.queryByRole('button', { name: 'Change…' })).toBeNull();
 
     // Tick Blur: Start enabled, row Fix blur, selected_model_id nafnet_gopro_deblur.
-    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    await user.click(screen.getByRole('checkbox', { name: 'Blur' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
         selected_model_id: 'nafnet_gopro_deblur',
@@ -9330,7 +9349,7 @@ describe('Size decides', () => {
     expect(within(screen.getByRole('list', { name: 'Stages' })).getByText('Fix blur')).toBeTruthy();
     await user.keyboard('{Escape}');
 
-    // Size -> 2×: Blur stays ticked, Content back, row Upscale ×2.
+    // Size -> 2×: Blur stays ticked, Content enabled again, row Upscale ×2.
     await user.click(screen.getByRole('radio', { name: '2×' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
@@ -9339,7 +9358,12 @@ describe('Size decides', () => {
         fixes: ['blur'],
       }),
     );
-    expect(screen.getByRole('radiogroup', { name: 'Content' })).toBeTruthy();
+    const content2x = screen.getByRole('radiogroup', { name: 'Content' });
+    for (const label of ['Photo', 'Illustration']) {
+      expect(
+        (within(content2x).getByRole('radio', { name: label }) as HTMLButtonElement).disabled,
+      ).toBe(false);
+    }
     await openPlanSheet(user);
     expect(
       within(screen.getByRole('list', { name: 'Stages' })).getByText('Upscale ×2'),
@@ -9384,7 +9408,7 @@ describe('Size decides', () => {
     const library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }));
     await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
         selected_model_id: 'hat_l_x4_imagenet',
@@ -9433,7 +9457,7 @@ describe('Size decides', () => {
       snapshot.catalog.models.find((m) => m.model_id === id)!.installed = false;
     }
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
     await user.click(screen.getByRole('radio', { name: 'Same size' }));
     expect(
       within(screen.getByRole('button', { name: /^Quick/ })).getByText('28 MB download'),
@@ -9508,8 +9532,8 @@ describe('Size decides', () => {
     const startBtn = screen.getByRole('button', {
       name: 'Start selected video',
     }) as HTMLButtonElement;
-    expect(screen.getByRole('button', { name: 'Noise' }).getAttribute('aria-pressed')).toBe(
-      'false',
+    expect((screen.getByRole('checkbox', { name: 'Noise' }) as HTMLInputElement).checked).toBe(
+      false,
     );
     expect(startBtn.disabled).toBe(true);
     expect(
@@ -9594,7 +9618,9 @@ describe('Size decides', () => {
         fix_stages: [{ fix: 'noise', model_id: 'denoise_realplksr_1x' }],
       }),
     );
-    expect(screen.getByRole('button', { name: 'Noise' }).getAttribute('aria-pressed')).toBe('true');
+    expect((screen.getByRole('checkbox', { name: 'Noise' }) as HTMLInputElement).checked).toBe(
+      true,
+    );
     await openPlanSheet(loadedUser);
     expect(
       within(screen.getByRole('list', { name: 'Stages' })).getByText('Fix noise'),
@@ -9815,8 +9841,8 @@ describe('Enhance panel foot', () => {
     snapshot.settings.task = 'upscale';
     snapshot.settings.output_scale = 4;
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
-    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Blur' }));
     const foot = document.querySelector('.panel-foot') as HTMLElement;
     const planEl = await within(foot).findByText('Blur → Noise → Upscale 4×');
     expect(planEl.closest('.foot-plan')?.getAttribute('aria-label')).toBe(
@@ -9912,7 +9938,7 @@ describe('Enhance panel foot', () => {
     planFetch.mock.mockImplementationOnce(() => secondPromise);
     vi.useFakeTimers();
     try {
-      await fireEvent.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+      await fireEvent.click(screen.getByRole('checkbox', { name: 'Noise' }));
       await tick();
       await Promise.resolve();
       await tick();
@@ -9952,8 +9978,8 @@ describe('Plan sheet', () => {
     snapshot.settings.task = 'upscale';
     snapshot.settings.output_scale = 4;
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
-    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Blur' }));
 
     const trigger = document.querySelector('.foot-plan') as HTMLButtonElement;
     expect(trigger.getAttribute('aria-expanded')).toBe('false');
@@ -9974,9 +10000,9 @@ describe('Plan sheet', () => {
       ),
     );
     const fixLabels = Array.from(
-      screen.getByRole('group', { name: 'Fix' }).querySelectorAll('button'),
-    ).map((b) => b.textContent?.trim());
-    expect(fixLabels).toEqual(['Noise', 'Blur', 'JPEG artifacts', 'Colour']);
+      screen.getByRole('group', { name: 'Fix' }).querySelectorAll('.fix-name'),
+    ).map((el) => el.textContent?.trim());
+    expect(fixLabels).toEqual(['Blur', 'JPEG artifacts', 'Noise', 'Colour']);
 
     // This run controls live inside the sheet.
     for (const label of ['Hardware', 'Tile', 'Halo', 'Precision']) {
@@ -10101,5 +10127,129 @@ describe('Edit panel layout', () => {
     expect(screen.getByRole('button', { name: /Advanced.*Size, steps, seed/ })).toBeTruthy();
     expect(document.querySelector('.foot-plan')).toBeNull();
     expect(document.querySelector('.foot-output')).toBeNull();
+  });
+});
+
+describe('Fix list', () => {
+  it('lists photo checkboxes in engine order without Faces, and shows row value buttons when ticked', async () => {
+    const snapshot = readySnapshot([
+      { ...image('photo', true), name: 'lake.jpg', width: 1600, height: 1067 },
+    ]);
+    const user = await mountWith(snapshot);
+
+    const section = screen.getByRole('region', { name: 'Your photo' });
+    expect(within(section).getByText('Your photo')).toBeTruthy();
+    expect(within(section).getByText('1600 × 1067 · JPEG')).toBeTruthy();
+
+    const group = screen.getByRole('group', { name: 'Fix' });
+    const boxes = within(group).getAllByRole('checkbox') as HTMLInputElement[];
+    expect(
+      boxes.map((box) => box.closest('.fix-row')?.querySelector('.fix-name')?.textContent),
+    ).toEqual(['Blur', 'JPEG artifacts', 'Noise', 'Colour']);
+    expect(boxes.every((box) => !box.checked)).toBe(true);
+    expect(within(group).queryByRole('checkbox', { name: 'Faces' })).toBeNull();
+
+    await user.click(within(group).getByRole('checkbox', { name: 'Noise' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          fix_stages: [expect.objectContaining({ fix: 'noise' })],
+        }),
+      ),
+    );
+    const noiseBtn = await within(group).findByRole('button', { name: 'RealPLKSR Denoise' });
+    expect(noiseBtn.textContent?.trim()).toBe('RealPLKSR Denoise');
+
+    await user.click(within(group).getByRole('checkbox', { name: 'Blur' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          fix_stages: [
+            expect.objectContaining({ fix: 'blur' }),
+            expect.objectContaining({ fix: 'noise' }),
+          ],
+        }),
+      ),
+    );
+    expect(
+      Array.from(group.querySelectorAll('.fix-name')).map((el) => el.textContent?.trim()),
+    ).toEqual(['Blur', 'JPEG artifacts', 'Noise', 'Colour']);
+  });
+
+  it('shows download size on a ticked row whose model is missing', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.catalog = structuredClone(snapshot.catalog);
+    const denoise = snapshot.catalog.models.find((m) => m.model_id === 'denoise_realplksr_1x')!;
+    denoise.installed = false;
+    denoise.size_bytes = 28 * 1024 * 1024;
+    const user = await mountWith(snapshot);
+
+    const group = screen.getByRole('group', { name: 'Fix' });
+    await user.click(within(group).getByRole('checkbox', { name: 'Noise' }));
+    expect(
+      await within(group).findByRole('button', { name: 'RealPLKSR Denoise · 28 MB' }),
+    ).toBeTruthy();
+  });
+
+  it('shows Compression, De-flicker with Labs, Video/Animation Content, and disables De-flicker when HDR is preserved', async () => {
+    const media = {
+      ...video('clip', true),
+      width: 1920,
+      height: 1080,
+      fps: 24,
+      duration_seconds: 12,
+      hdr_format: 'HLG' as const,
+    };
+    const snapshot = readySnapshot([media]);
+    snapshot.settings.task = 'video';
+    snapshot.settings.selected_model_id = 'hat_s_x4';
+    const user = await mountWith(snapshot);
+
+    const section = screen.getByRole('region', { name: 'Your video' });
+    expect(within(section).getByText('Your video')).toBeTruthy();
+    expect(within(section).getByText('1920 × 1080 · 24 fps · 12s · HLG')).toBeTruthy();
+    const content = within(section).getByRole('radiogroup', { name: 'Content' });
+    expect(within(content).getByRole('radio', { name: 'Video' })).toBeTruthy();
+    expect(within(content).getByRole('radio', { name: 'Animation' })).toBeTruthy();
+
+    const group = screen.getByRole('group', { name: 'Fix' });
+    expect(within(group).getByRole('checkbox', { name: 'Compression' })).toBeTruthy();
+    const deflicker = within(group).getByRole('checkbox', {
+      name: 'De-flicker',
+    }) as HTMLInputElement;
+    expect(deflicker.closest('.fix-row')?.querySelector('.fix-tag')?.textContent).toBe('Labs');
+    expect(deflicker.disabled).toBe(false);
+
+    await user.click(deflicker);
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ deflicker: true }),
+      ),
+    );
+
+    const sheet = await openOutputSheet(user);
+    await user.selectOptions(within(sheet).getByLabelText('Colour output'), 'preserve');
+    await waitFor(() => expect(deflicker.disabled).toBe(true));
+    expect(deflicker.checked).toBe(false);
+    expect(deflicker.closest('.fix-row')?.getAttribute('title')).toBe(
+      'Not available while HDR is preserved.',
+    );
+  });
+
+  it('keeps all rows visible and shows the one-fix engine note in the foot', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.engine!.features = snapshot.engine!.features.filter(
+      (feature) => feature !== 'image_multi_fix',
+    );
+    const user = await mountWith(snapshot);
+
+    const group = screen.getByRole('group', { name: 'Fix' });
+    await user.click(within(group).getByRole('checkbox', { name: 'Noise' }));
+    await user.click(within(group).getByRole('checkbox', { name: 'Blur' }));
+
+    const foot = document.querySelector('.panel-foot') as HTMLElement;
+    expect(
+      within(foot).getByText('This engine runs one fix at a time. Update LocalSR to run several.'),
+    ).toBeTruthy();
   });
 });

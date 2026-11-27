@@ -1,8 +1,11 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { openApp, showPane } from './app';
 import { hostCalls } from './fake-host';
 
-test('video Same size, Fix chips and video recipes', async ({ page }) => {
+const fix = (page: Page, name: string) =>
+  page.getByRole('group', { name: 'Fix' }).getByRole('checkbox', { name, exact: true });
+
+test('video Same size, Fix rows and video recipes', async ({ page }) => {
   await openApp(page, {
     photos: 0,
     video: true,
@@ -46,14 +49,11 @@ test('video Same size, Fix chips and video recipes', async ({ page }) => {
   });
   await showPane(page, 'enhance');
 
-  // Switching a video to Same size leaves Fix chips off; tick Noise and JPEG artifacts.
+  // Switching a video to Same size leaves Fix rows unticked; tick Noise and Compression.
   await page.getByRole('radio', { name: 'Same size' }).click();
-  await expect(page.getByRole('button', { name: 'Noise', exact: true })).toHaveAttribute(
-    'aria-pressed',
-    'false',
-  );
-  await page.getByRole('button', { name: 'Noise', exact: true }).click();
-  await page.getByRole('button', { name: 'JPEG artifacts', exact: true }).click();
+  await expect(fix(page, 'Noise')).not.toBeChecked();
+  await fix(page, 'Noise').click();
+  await fix(page, 'Compression').click();
   await page.locator('.foot-plan').click();
   const stages = page.getByRole('list', { name: 'Stages' });
   await expect(stages.getByRole('listitem')).toHaveCount(2);
@@ -102,7 +102,7 @@ test('video Same size, Fix chips and video recipes', async ({ page }) => {
 
   // Switch back to 4× via Size; add Blur under Fix and start.
   await page.getByRole('radio', { name: '4×' }).click();
-  await page.getByRole('button', { name: 'Blur', exact: true }).click();
+  await fix(page, 'Blur').click();
   await page.locator('.foot-plan').click();
   await expect(stages).toContainText('LocalSR Photo S');
   await page.keyboard.press('Escape');
@@ -150,12 +150,12 @@ test('video Same size with nothing picked disables Start until a fix or video op
   });
   await showPane(page, 'enhance');
   await page.getByRole('radio', { name: 'Same size' }).click();
-  const noise = page.getByRole('button', { name: 'Noise', exact: true });
-  await expect(noise).toHaveAttribute('aria-pressed', 'false');
+  const noise = fix(page, 'Noise');
+  await expect(noise).not.toBeChecked();
   await expect(page.getByText(/Nothing to run\. Pick what to fix/).first()).toBeVisible();
   await expect(page.getByRole('button', { name: 'Start selected video' })).toBeDisabled();
 
-  await page.getByRole('button', { name: 'Blur', exact: true }).click();
+  await fix(page, 'Blur').click();
   await expect(page.getByText(/Nothing to run\. Pick what to fix/)).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Start selected video' })).toBeEnabled();
 });

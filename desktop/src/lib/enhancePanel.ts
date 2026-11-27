@@ -1,3 +1,4 @@
+import { formatDuration } from './format';
 import type { PlanState } from './jobPlanClient';
 import { imageQualityName } from './outputFormats';
 import type { Fit, PlanStage } from './plan';
@@ -44,6 +45,38 @@ function outputFolderName(directory: string): string {
   if (!trimmed) return directory.trim() ? '/' : 'choose a folder';
   const parts = trimmed.split(/[\\/]/);
   return parts[parts.length - 1] || trimmed;
+}
+
+const PHOTO_EXTENSION_NAMES: Record<string, string> = {
+  jpg: 'JPEG',
+  jpeg: 'JPEG',
+  png: 'PNG',
+  tif: 'TIFF',
+  tiff: 'TIFF',
+  webp: 'WebP',
+  heic: 'HEIC',
+};
+
+function photoTypeFromName(name: string): string {
+  const match = /\.([^.]+)$/.exec(name.trim());
+  if (!match) return '';
+  const ext = match[1].toLowerCase();
+  return PHOTO_EXTENSION_NAMES[ext] ?? ext.toUpperCase();
+}
+
+/** One-line facts for the Your photo / Your video section head. */
+export function mediaFacts(media: MediaItem | undefined): string {
+  if (!media || media.probe_status !== 'ready' || media.width <= 0 || media.height <= 0) {
+    return '';
+  }
+  const size = `${media.width} × ${media.height}`;
+  if (media.kind === 'video') {
+    const fps = media.fps > 0 ? `${Number(media.fps.toFixed(3))} fps` : '';
+    const duration = media.duration_seconds > 0 ? formatDuration(media.duration_seconds) : '';
+    const hdr = media.hdr_format || '';
+    return [size, fps, duration, hdr].filter(Boolean).join(' · ');
+  }
+  return [size, photoTypeFromName(media.name)].filter(Boolean).join(' · ');
 }
 
 /** One-line summary for the Output row in the Enhance panel foot. */

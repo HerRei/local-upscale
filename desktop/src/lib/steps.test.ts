@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_FIX_ORDER,
-  FIX_CHIPS,
   FIX_LABELS,
   FIX_NAMES,
   FIX_ROW_LABELS,
@@ -26,7 +25,6 @@ describe('step registry', () => {
   it('derives fix ordering, labels, stage kinds and feature gates from steps.json', () => {
     expect(PHASES.length).toBeGreaterThan(0);
     expect(DEFAULT_FIX_ORDER).toEqual(['blur', 'jpeg', 'noise', 'colour']);
-    expect(FIX_CHIPS).toEqual(['noise', 'blur', 'jpeg', 'colour']);
     expect(FIX_LABELS).toEqual({
       noise: 'Noise',
       jpeg: 'JPEG artifacts',

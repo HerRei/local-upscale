@@ -125,7 +125,9 @@ for (const appearance of ['dark', 'light'] as const) {
     ).toBeGreaterThanOrEqual(7);
 
     await showPane(page, 'enhance');
-    expect(await contrastOnPage(page.locator('.chips .chip').first())).toBeGreaterThanOrEqual(7);
+    expect(await contrastOnPage(page.locator('.fix-row .fix-name').first())).toBeGreaterThanOrEqual(
+      7,
+    );
     expect(
       await contrastOnPage(page.getByRole('button', { name: 'Upscale selected' })),
     ).toBeGreaterThanOrEqual(7);

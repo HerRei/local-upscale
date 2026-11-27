@@ -93,7 +93,7 @@
     moveFixStage,
     toggleFixStage,
   } from './lib/fixStages';
-  import { FIX_CHIPS, FIX_NAMES, MULTI_FIX_FEATURE, stepFeature } from './lib/steps';
+  import { DEFAULT_FIX_ORDER, FIX_NAMES, MULTI_FIX_FEATURE, stepFeature } from './lib/steps';
   import { applyWorkerEnvelope, resultPreviewForSelectedMedia } from './lib/workerEvents';
   import { formatBytes, formatDuration, formatVideoClock } from './lib/format';
   import { plainEngineError, recommendedEngineOffer } from './lib/engines';
@@ -2062,7 +2062,7 @@
       current.selected_model_id
     ) {
       const picked = byId(current.selected_model_id);
-      const fit = picked ? FIX_CHIPS.find((fix) => fitsFix(picked, fix)) : undefined;
+      const fit = picked ? DEFAULT_FIX_ORDER.find((fix) => fitsFix(picked, fix)) : undefined;
       if (fit && picked) {
         patch.fix_stages = [{ fix: fit, model_id: picked.model_id }];
         patch.fixes = [fit];
@@ -2083,7 +2083,7 @@
         (current.selected_model_id || !hasVideoOption)
       ) {
         const picked = byId(current.selected_model_id);
-        const fit = picked ? FIX_CHIPS.find((fix) => fitsFix(picked, fix)) : undefined;
+        const fit = picked ? DEFAULT_FIX_ORDER.find((fix) => fitsFix(picked, fix)) : undefined;
         if (fit && picked) {
           patch.fix_stages = [{ fix: fit, model_id: picked.model_id }];
           patch.fixes = [fit];

@@ -1904,6 +1904,118 @@ input:focus-visible {
   padding: 0 8px;
   white-space: nowrap;
 }
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.panel-head-title {
+  color: var(--secondary);
+  font-size: calc(11px * var(--ui-scale));
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.panel-head-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--secondary);
+  font-size: calc(11px * var(--ui-scale));
+  font-variant-numeric: tabular-nums;
+}
+.fix-head {
+  position: relative;
+  margin-bottom: 4px;
+}
+.fix-list {
+  display: flex;
+  flex-direction: column;
+}
+.fix-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+}
+.fix-check {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.fix-check.disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+.fix-check.disabled input[type='checkbox'] {
+  opacity: 1;
+}
+.fix-row input[type='checkbox'] {
+  margin: 0;
+}
+.fix-row input[type='checkbox']:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.fix-row input[type='checkbox']:checked::before {
+  background: var(--on-accent);
+}
+.fix-name {
+  color: var(--text);
+  font-size: calc(12px * var(--ui-scale));
+  white-space: nowrap;
+}
+.fix-tag {
+  flex: none;
+  color: var(--warning-text-muted);
+  font-size: calc(11px * var(--ui-scale));
+}
+.fix-row.disabled .fix-tag {
+  opacity: 0.38;
+}
+.fix-value {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 62%;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  padding: 2px 4px;
+  margin-right: -4px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--secondary);
+  font-size: calc(12px * var(--ui-scale));
+  font-variant-numeric: tabular-nums;
+}
+.fix-value:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+.fix-value.warn {
+  color: var(--warning-text-muted);
+}
+.fix-value-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fix-more {
+  align-self: flex-start;
+  min-height: 24px;
+  margin-top: 2px;
+}
 .field-label {
   display: block;
   margin: 12px 0 6px;
@@ -3521,35 +3633,6 @@ input[type='number'],
   color: var(--text);
   box-shadow: inset 0 1px var(--hairline);
 }
-.chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 28px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--text);
-  font-size: calc(12px * var(--ui-scale));
-}
-.chip:hover:not(:disabled) {
-  background: var(--hover);
-}
-.chip.on {
-  border-color: var(--accent-line);
-  background: var(--accent-fill);
-  color: var(--text);
-}
-.chip:disabled {
-  cursor: not-allowed;
-  opacity: 0.38;
-}
 .eyebrow-row {
   position: relative;
   display: flex;
@@ -5052,7 +5135,6 @@ label.setting-label {
   .media-row.selected,
   .row.selected,
   .rail-item.active,
-  .chip.on,
   .setup-theme-tile.active,
   .saved-recipe button.active,
   .recipe-grid button.active,

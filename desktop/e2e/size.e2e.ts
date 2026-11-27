@@ -1,7 +1,10 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { openApp, showPane } from './app';
 import { hostCalls, type Scenario } from './fake-host';
 import { ready } from './fixtures';
+
+const fix = (page: Page, name: string) =>
+  page.getByRole('group', { name: 'Fix' }).getByRole('checkbox', { name, exact: true });
 
 const scenario: Scenario = {
   ...ready,
@@ -15,11 +18,15 @@ test.describe('Size decides', () => {
     await openApp(page, scenario);
     await showPane(page, 'enhance');
 
-    await page.getByRole('button', { name: 'Noise', exact: true }).click();
-    await page.getByRole('button', { name: 'Blur', exact: true }).click();
+    await fix(page, 'Noise').click();
+    await fix(page, 'Blur').click();
     await page.getByRole('radio', { name: 'Same size' }).click();
 
-    await expect(page.getByRole('radiogroup', { name: 'Content' })).toHaveCount(0);
+    const content = page.getByRole('radiogroup', { name: 'Content' });
+    await expect(content).toBeVisible();
+    for (const label of ['Photo', 'Illustration']) {
+      await expect(content.getByRole('radio', { name: label })).toBeDisabled();
+    }
     await expect(page.locator('.field-value')).toHaveText('1600 × 1067');
     await page.locator('.foot-plan').click();
     const stages = page.getByRole('list', { name: 'Stages' });
@@ -41,8 +48,8 @@ test.describe('Size decides', () => {
       ],
     });
     await showPane(page, 'enhance');
-    await page.getByRole('button', { name: 'Noise', exact: true }).click();
-    await page.getByRole('button', { name: 'Blur', exact: true }).click();
+    await fix(page, 'Noise').click();
+    await fix(page, 'Blur').click();
     await page.getByRole('radio', { name: 'Same size' }).click();
     await expect(page.getByRole('button', { name: 'Restore selected' })).toBeVisible();
     await page.getByRole('button', { name: 'Restore selected' }).click();
@@ -54,26 +61,23 @@ test.describe('Size decides', () => {
     expect(input.output_scale).toBe(1);
     expect(input.fix_stages.map((s) => s.fix)).toEqual(['blur', 'noise']);
 
-    // Click 4×: Upscale row and Content come back, result is 6400 × 4268, both chips stay on.
+    // Click 4×: Upscale row and enabled Content come back, result is 6400 × 4268, both fixes stay on.
     await page.getByRole('radio', { name: '4×' }).click();
-    await expect(page.getByRole('radiogroup', { name: 'Content' })).toBeVisible();
+    await expect(content).toBeVisible();
+    for (const label of ['Photo', 'Illustration']) {
+      await expect(content.getByRole('radio', { name: label })).toBeEnabled();
+    }
     await expect(page.locator('.field-value')).toHaveText('6400 × 4268');
-    await expect(page.getByRole('button', { name: 'Noise', exact: true })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
-    await expect(page.getByRole('button', { name: 'Blur', exact: true })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
+    await expect(fix(page, 'Noise')).toBeChecked();
+    await expect(fix(page, 'Blur')).toBeChecked();
     await page.locator('.foot-plan').click();
     await expect(stages).toContainText('Upscale ×4');
     await page.keyboard.press('Escape');
 
     // Same size, untick both: photo line shows and Start is disabled.
     await page.getByRole('radio', { name: 'Same size' }).click();
-    await page.getByRole('button', { name: 'Noise', exact: true }).click();
-    await page.getByRole('button', { name: 'Blur', exact: true }).click();
+    await fix(page, 'Noise').click();
+    await fix(page, 'Blur').click();
     await expect(
       page.getByText('Nothing to run. Pick what to fix, or choose a larger size.'),
     ).toBeVisible();
@@ -83,7 +87,7 @@ test.describe('Size decides', () => {
   test('Best and Quick switch fix models and download sizes at Same size', async ({ page }) => {
     await openApp(page, scenario);
     await showPane(page, 'enhance');
-    await page.getByRole('button', { name: 'Noise', exact: true }).click();
+    await fix(page, 'Noise').click();
     await page.getByRole('radio', { name: 'Same size' }).click();
 
     const quick = page.getByRole('button', { name: /^Quick/ });

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import AdvancedSettings from './AdvancedSettings.svelte';
+  import FixList from './FixList.svelte';
   import HelpTip from './HelpTip.svelte';
   import ModelCredit from './ModelCredit.svelte';
   import OutputSheet from './OutputSheet.svelte';
@@ -11,15 +12,15 @@
   import { customModels } from './lib/customModels';
   import { EDIT_FIT_LABELS, editFamilyLabel, editVariantName } from './lib/editing';
   import {
+    mediaFacts,
     outputSummary,
     type EnhancePanelActions,
     type EnhancePanelView,
   } from './lib/enhancePanel';
   import { formatBytes } from './lib/format';
-  import { FIX_LABELS, displayName, type PlanStage } from './lib/plan';
+  import { displayName, type PlanStage } from './lib/plan';
   import { planLine } from './lib/planLine';
-  import { FIX_CHIPS } from './lib/steps';
-  import type { FixKind, InterpolationOrder, InterpolationTarget, TaskKind } from './lib/types';
+  import type { InterpolationOrder, InterpolationTarget, TaskKind } from './lib/types';
   import { videoModelShortName } from './lib/videoEngines';
 
   export let view: EnhancePanelView;
@@ -33,10 +34,10 @@
   export let failureNote: HTMLElement | undefined = undefined;
 
   const lockedTitle = 'Finish or cancel the run to change settings.';
-  const fixChips = FIX_CHIPS as FixKind[];
   let recipesOpen = false;
   let planOpen = false;
   let outputOpen = false;
+  let moreFixesOpen = false;
 
   const {
     setTask,
@@ -140,6 +141,7 @@
     outputOpen = false;
   }
   $: outputLineText = outputSummary(settings, { preservingHdr, audioDisabled });
+  $: facts = mediaFacts(selectedMedia);
 
   $: taskTip =
     selectedMedia?.kind === 'video' || settings.task === 'video'
@@ -385,71 +387,82 @@
         {#if !usingTemporalVideo && settings.task !== 'edit'}
           <section
             class="control-section"
-            aria-label={settings.task === 'video' ? 'Your video' : 'Your image'}
+            aria-label={settings.task === 'video' ? 'Your video' : 'Your photo'}
           >
-            <span class="eyebrow">{settings.task === 'video' ? 'Your video' : 'Your image'}</span>
-            {#if !restoring}
-              <div class="field-heading">
-                <span class="field-label" id="content-label">Content</span><HelpTip
+            <div class="panel-head">
+              <span class="panel-head-title"
+                >{settings.task === 'video' ? 'Your video' : 'Your photo'}</span
+              >
+              {#if facts}<span class="panel-head-value">{facts}</span>{/if}
+            </div>
+            <div
+              class="panel-row"
+              title={restoring
+                ? 'Content chooses the upscaler. Nothing is enlarged at Same size.'
+                : undefined}
+            >
+              <div class="panel-key">
+                <span class="panel-label" id="content-label">Content</span><HelpTip
                   label="Content"
-                  text="Photo picks models trained on camera pictures: skin, foliage, fabric, buildings. Illustration picks models for drawings, anime and comics, which keep lines clean and colours flat. Choose what the picture is, not the look you want."
+                  text={settings.task === 'video'
+                    ? 'Video picks models trained on camera footage: skin, foliage, fabric, buildings. Animation picks models for drawings, anime and cartoons, which keep lines clean and colours flat. Choose what the video is, not the look you want.'
+                    : 'Photo picks models trained on camera pictures: skin, foliage, fabric, buildings. Illustration picks models for drawings, anime and comics, which keep lines clean and colours flat. Choose what the picture is, not the look you want.'}
                 />
               </div>
-              <div class="seg-inline" role="radiogroup" aria-labelledby="content-label">
+              <div
+                class="seg-inline"
+                role="radiogroup"
+                aria-labelledby="content-label"
+                title={restoring
+                  ? 'Content chooses the upscaler. Nothing is enlarged at Same size.'
+                  : undefined}
+              >
                 <button
                   role="radio"
                   aria-checked={settings.content !== 'illustration'}
                   class:active={settings.content !== 'illustration'}
-                  title="Uses a model made for photographs"
+                  disabled={restoring}
+                  title={restoring
+                    ? 'Content chooses the upscaler. Nothing is enlarged at Same size.'
+                    : settings.task === 'video'
+                      ? 'Uses a model made for camera footage'
+                      : 'Uses a model made for photographs'}
                   on:keydown={radioGroupKeydown}
-                  on:click={() => setContent('photo')}>Photo</button
+                  on:click={() => setContent('photo')}
+                  >{settings.task === 'video' ? 'Video' : 'Photo'}</button
                 >
                 <button
                   role="radio"
                   aria-checked={settings.content === 'illustration'}
                   class:active={settings.content === 'illustration'}
-                  title="Uses a model made for drawings and anime"
+                  disabled={restoring}
+                  title={restoring
+                    ? 'Content chooses the upscaler. Nothing is enlarged at Same size.'
+                    : 'Uses a model made for drawings and anime'}
                   on:keydown={radioGroupKeydown}
-                  on:click={() => setContent('illustration')}>Illustration</button
+                  on:click={() => setContent('illustration')}
+                  >{settings.task === 'video' ? 'Animation' : 'Illustration'}</button
                 >
               </div>
-            {/if}
-            <div class="field-heading">
-              <span class="field-label" id="fix-label">Fix</span><HelpTip
-                label="Fix"
-                text={`Each problem you pick gets its own fix at the original size, in the order listed under Model. Quick picks a fast model for each problem, Best the most careful one. ↑ and ↓ change the order; a fix's Change… picks its model, which LocalSR remembers for that problem. ${
-                  settings.task === 'video'
-                    ? 'Colour adds colour to black-and-white videos and keeps it steady from frame to frame.'
-                    : 'Colour adds colour to black-and-white photos.'
-                }`}
-              />
             </div>
-            <div class="chips" role="group" aria-label="Fix">
-              {#each fixChips as fix (fix)}
-                <button
-                  class="chip"
-                  type="button"
-                  class:on={settings.fixes.includes(fix)}
-                  aria-pressed={settings.fixes.includes(fix)}
-                  title={fix === 'colour'
-                    ? `Adds colour to black-and-white ${settings.task === 'video' ? 'videos' : 'photos'}`
-                    : ''}
-                  on:click={() => toggleFix(fix)}
-                  >{#if settings.fixes.includes(fix)}<svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="12"
-                      height="12"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2.5"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      aria-hidden="true"><path d="m5 12 5 5L20 7" /></svg
-                    >{/if}{FIX_LABELS[fix]}</button
-                >
-              {/each}
-            </div>
+          </section>
+
+          <section class="control-section">
+            <FixList
+              {settings}
+              mediaKind={settings.task === 'video' ? 'video' : 'image'}
+              features={snapshot.engine?.features ?? []}
+              {plan}
+              models={snapshot.catalog.models}
+              {downloadMap}
+              {settingsLocked}
+              {toggleFix}
+              {updateSettings}
+              bind:moreOpen={moreFixesOpen}
+            />
+          </section>
+
+          <section class="control-section">
             <div class="field-heading">
               <span class="field-label" id="size-label">Size</span><HelpTip
                 label="Size"
@@ -632,23 +645,6 @@
         {#if settings.task === 'video' && !usingTemporalVideo}
           <section class="control-section">
             <div class="advanced-controls">
-              <div class="check-line">
-                <label class="check-row"
-                  ><input
-                    type="checkbox"
-                    disabled={settings.video_hdr_mode === 'preserve'}
-                    checked={settings.deflicker}
-                    on:change={(event) =>
-                      updateSettings({ deflicker: event.currentTarget.checked })}
-                  /> De-flicker · Labs</label
-                ><HelpTip
-                  label="De-flicker"
-                  text="Evens out brightness flicker in the original video and the shimmer that frame-by-frame upscaling adds in still areas. It decides from the original, so motion, cuts and real light changes pass through. Adds about 40 ms per frame. Off by default."
-                />
-              </div>
-              <p class="model-description">
-                Steadies flicker and still-area shimmer. Motion and scene cuts pass through.
-              </p>
               <div class="field-row">
                 <span class="label-with-tip"
                   ><label for="frame-rate">Frame rate</label><HelpTip
