@@ -257,6 +257,38 @@ def _accepts(data: object, validate) -> bool:
     return True
 
 
+def _release_engine_under_pressure(engine) -> None:
+    """Release loaded models and prepared backend caches when memory is needed elsewhere."""
+    if engine is None:
+        return
+    release_pressure = getattr(engine, "release_under_memory_pressure", None)
+    if callable(release_pressure):
+        release_pressure()
+        return
+    release = getattr(engine, "release_model", None)
+    if callable(release):
+        release()
+
+
+# Models stay loaded between jobs so the next one starts at once; after this long
+# without any request they go back to the system.
+IDLE_RELEASE_SECONDS = 600.0
+
+
+def _release_adapter(adapter, *, clear_metadata: bool = False) -> None:
+    if adapter is None:
+        return
+    release = getattr(adapter, "release", None)
+    if callable(release):
+        if clear_metadata:
+            try:
+                release(clear_metadata=True)
+                return
+            except TypeError:
+                pass
+        release()
+
+
 def _device_lost(error: BaseException) -> bool:
     """Whether a job failed because the graphics driver removed or reset the GPU."""
     from localsr.core.onnx_runtime import GpuDeviceLost, _is_device_lost
@@ -323,6 +355,8 @@ class WorkerServer:
         self._model_adapter: Any = None
         self.model_store = ModelStore()
         self._engine: Any = None
+        self._idle_since: float | None = None
+        self._idle_released = False
         self.approved_model_cache: dict[str, str] = {}
         self.result_previews = ResultPreviewService(send_message)
         from localsr.worker.compare_regions import RegionService
@@ -598,6 +632,27 @@ class WorkerServer:
         sys.stderr.flush()
         os._exit(DEVICE_LOST_EXIT_CODE)
 
+    def _note_activity(self) -> None:
+        self._idle_since = None
+        self._idle_released = False
+
+    def _release_when_idle(self, now: float) -> None:
+        if self._idle_since is None:
+            self._idle_since = now
+            return
+        if self._idle_released or now - self._idle_since < IDLE_RELEASE_SECONDS:
+            return
+        self._idle_released = True
+        _release_adapter(self._model_adapter)
+        _release_engine_under_pressure(self._engine)
+        gc.collect()
+        torch = sys.modules.get("torch")
+        if torch is not None:
+            if torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+            elif torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
     def run(self):
         reader_thread = threading.Thread(target=self.reader_thread_func, daemon=True)
         reader_thread.start()
@@ -608,6 +663,7 @@ class WorkerServer:
         while self.running:
             try:
                 msg = self.message_queue.get(timeout=1.0)
+                self._note_activity()
                 req_type = msg.get("type")
                 data = msg.get("data", {})
 
@@ -763,10 +819,8 @@ class WorkerServer:
                     self._activate_job(job_id)
                     try:
                         # Restoration caches and native Qwen weights must never coexist.
-                        if self._model_adapter is not None:
-                            self._model_adapter.release()
-                        if self._engine is not None:
-                            self._engine.release_model()
+                        _release_adapter(self._model_adapter, clear_metadata=True)
+                        _release_engine_under_pressure(self._engine)
                         gc.collect()
                         import torch
 
@@ -827,6 +881,8 @@ class WorkerServer:
                     except Exception as e:  # noqa: BLE001
                         traceback.print_exc(file=sys.stderr)
                         self.restart_after_job = _device_lost(e)
+                        if self._engine is not None:
+                            _release_engine_under_pressure(self._engine)
                         send_message(
                             JobFailed(
                                 job_id=job_id,
@@ -842,8 +898,7 @@ class WorkerServer:
                         self.model_adapter.release()
                         self.model_adapter.allow_unverified_checkpoints = previous_checkpoint_policy
                         self.model_adapter.approved_checkpoint = previous_approved_checkpoint
-                        self.engine.release_model()
-                        # Exception frames and model references have been released;
+                        # Exception frames and per-frame tensors have been released;
                         # return their cached allocations to other applications too.
                         try:
                             import torch
@@ -884,10 +939,11 @@ class WorkerServer:
                         self._restart_if_required()
                     finally:
                         self._deactivate_job(job_id)
-                        self.model_adapter.release()
-                        self.engine.release_model()
+                        _release_adapter(self.model_adapter)
+                        _release_engine_under_pressure(self.engine)
 
             except queue.Empty:
+                self._release_when_idle(time.monotonic())
                 continue
             except KeyboardInterrupt:
                 break
