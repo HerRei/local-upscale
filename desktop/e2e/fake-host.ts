@@ -102,6 +102,8 @@ export interface Scenario {
   unreadable?: { name: string; error: string };
   /** Simulate up to 3 concurrent model downloads with queue, progress, cancel, and errors. */
   concurrentDownloads?: boolean;
+  /** Override plan_job behaviour for loading and error tests. */
+  plan?: 'error' | { delayMs: number };
 }
 
 export interface HostCall {
@@ -716,6 +718,18 @@ function hostScript(scenario: Scenario): void {
       case 'save_settings':
         snapshot.settings = structuredClone(args.settings);
         return null;
+      case 'plan_job': {
+        if (scenario.plan === 'error') throw new Error('Plan failed in fixture');
+        if (typeof scenario.plan === 'object' && scenario.plan?.delayMs) {
+          await new Promise((resolve) => setTimeout(resolve, scenario.plan.delayMs));
+        }
+        const { planLocally } = (await import(
+          /* @vite-ignore */ new URL('/src/lib/jobPlanClient.ts', location.href).href
+        )) as {
+          planLocally: (s: Json, settings: Json, options: Json) => unknown[];
+        };
+        return planLocally(snapshot!, args.settings, args.options ?? {});
+      }
       case 'delete_recipe':
         snapshot.recipes = snapshot.recipes.filter((recipe: Json) => recipe.id !== args.id);
         return null;
@@ -1078,9 +1092,7 @@ export async function installFakeHost(page: Page, scenario: Scenario): Promise<v
     scenario.videoCompare || scenario.videoSyncCompare ? loadCompareFixtures() : undefined;
   if (compare) {
     await page.route('**/__e2e_fixture__/*', async (route) => {
-      const name = decodeURIComponent(
-        route.request().url().split('/__e2e_fixture__/').pop() ?? '',
-      );
+      const name = decodeURIComponent(route.request().url().split('/__e2e_fixture__/').pop() ?? '');
       const body = compare.bytes[name];
       if (!body) {
         await route.fulfill({ status: 404 });

@@ -93,8 +93,8 @@
     modelsForTask,
     pendingDownloads,
     presetSlot,
-    resolvePlan,
   } from './lib/plan';
+  import { createPlanClient, fetchPlan } from './lib/jobPlanClient';
   import {
     UNSTABLE_FIX_MODELS,
     chooseFixModel,
@@ -992,6 +992,8 @@
     !startingJob &&
     !movingModels &&
     !cancelling &&
+    $planState.status !== 'error' &&
+    !($planState.status === 'loading' && $planState.first) &&
     snapshot.runtime.worker === 'ready' &&
     Boolean(settings.task) &&
     modelReady &&
@@ -1338,13 +1340,20 @@
     if (quickModel && settings.selected_model_id === quickModel.model_id) return 'quick';
     return 'custom';
   })();
-  $: plan = resolvePlan(snapshot, settings, {
-    faceEnabled: false,
-    usingTemporalVideo,
-    selectedVideoModel,
-    editModel,
-    hasAudio: audioHasSource,
-  });
+  const planClient = createPlanClient(fetchPlan);
+  const planState = planClient.state;
+  let planErrorRecorded = false;
+  $: if (!booting) {
+    planClient.request(snapshot, settings, {
+      face_enabled: false,
+      has_audio: audioHasSource,
+    });
+  }
+  $: plan = $planState.stages;
+  $: if ($planState.status === 'error' && !planErrorRecorded) {
+    planErrorRecorded = true;
+    void api.recordFrontendError(`plan_job: ${$planState.message}`, '').catch(() => {});
+  }
   $: downloads = pendingDownloads(plan);
   $: planNeedsFile = plan.some((stage) => stage.needsFile);
   $: planMissing = plan.some((stage) => stage.missing);
@@ -1356,6 +1365,8 @@
     !startingJob &&
     !movingModels &&
     !cancelling &&
+    $planState.status !== 'error' &&
+    !($planState.status === 'loading' && $planState.first) &&
     !hasNothingToRun &&
     downloads.stages.length > 0 &&
     !planNeedsFile &&
@@ -1501,32 +1512,42 @@
       : '';
   // The lone start button of several inputs says what limits it; with a choice of two
   // buttons each carries its own note.
-  $: singleHint = hasNothingToRun
-    ? nothingToRunReason
-    : snapshot.media.length < 2
-      ? ''
-      : unreadyMedia
-        ? preparingNote(unreadyMedia)
-        : settings.task === 'edit'
-          ? selectedMedia
-            ? `Edit processes only “${selectedMedia.name}”; batches are not supported yet.`
-            : 'Edit processes only the selected image.'
-          : mismatchNote ||
-            (queueableMedia.length === 0 && runnableMedia.length > 0
-              ? `All ${runnableMedia.length} compatible item${runnableMedia.length === 1 ? ' is' : 's are'} already running or queued.`
-              : incompatibleNote);
+  $: singleHint =
+    $planState.status === 'error'
+      ? 'Could not work out the plan. Try again.'
+      : hasNothingToRun
+        ? nothingToRunReason
+        : snapshot.media.length < 2
+          ? ''
+          : unreadyMedia
+            ? preparingNote(unreadyMedia)
+            : settings.task === 'edit'
+              ? selectedMedia
+                ? `Edit processes only “${selectedMedia.name}”; batches are not supported yet.`
+                : 'Edit processes only the selected image.'
+              : mismatchNote ||
+                (queueableMedia.length === 0 && runnableMedia.length > 0
+                  ? `All ${runnableMedia.length} compatible item${runnableMedia.length === 1 ? ' is' : 's are'} already running or queued.`
+                  : incompatibleNote);
   $: oneUnready = selectedOnly.find((media) => media.probe_status !== 'ready');
   $: allUnready = queueableMedia.find((media) => media.probe_status !== 'ready');
-  $: oneTitle = oneUnready
-    ? preparingNote(oneUnready)
-    : hasNothingToRun
-      ? nothingToRunReason
-      : mismatchNote || (canPrepareOne ? `Downloads ${formatBytes(downloads.bytes)} first.` : '');
-  $: allTitle = allUnready
-    ? preparingNote(allUnready)
-    : hasNothingToRun
-      ? nothingToRunReason
-      : incompatibleNote;
+  $: oneTitle =
+    $planState.status === 'error'
+      ? 'Could not work out the plan. Try again.'
+      : oneUnready
+        ? preparingNote(oneUnready)
+        : hasNothingToRun
+          ? nothingToRunReason
+          : mismatchNote ||
+            (canPrepareOne ? `Downloads ${formatBytes(downloads.bytes)} first.` : '');
+  $: allTitle =
+    $planState.status === 'error'
+      ? 'Could not work out the plan. Try again.'
+      : allUnready
+        ? preparingNote(allUnready)
+        : hasNothingToRun
+          ? nothingToRunReason
+          : incompatibleNote;
   // What the primary button says it does to all: "Upscale all 52", "Start all 5 videos".
   $: allPhrase = `${
     startVerb === 'start video' ? 'start' : startVerb
@@ -1539,20 +1560,24 @@
     ? 'Wait for the current job to finish.'
     : movingModels
       ? 'Wait for models to finish moving.'
-      : snapshot.runtime.worker !== 'ready'
-        ? 'The processing engine is not ready yet.'
-        : !settings.task
-          ? 'Choose a task before starting.'
-          : !queueSelection.length
-            ? 'Select a compatible item before starting.'
-            : unreadyMedia
-              ? scopeHint
-              : hasNothingToRun
-                ? nothingToRunReason
-                : editBlockReason ||
-                  (!modelReady || !fixesReady || !interpolationReady
-                    ? 'Choose or download the required models before starting.'
-                    : 'The current settings are not ready to start.');
+      : $planState.status === 'error'
+        ? 'Could not work out the plan. Try again.'
+        : $planState.status === 'loading' && $planState.first
+          ? 'Working out the plan…'
+          : snapshot.runtime.worker !== 'ready'
+            ? 'The processing engine is not ready yet.'
+            : !settings.task
+              ? 'Choose a task before starting.'
+              : !queueSelection.length
+                ? 'Select a compatible item before starting.'
+                : unreadyMedia
+                  ? scopeHint
+                  : hasNothingToRun
+                    ? nothingToRunReason
+                    : editBlockReason ||
+                      (!modelReady || !fixesReady || !interpolationReady
+                        ? 'Choose or download the required models before starting.'
+                        : 'The current settings are not ready to start.');
 
   let themeForRefresh: (
     settings: Pick<
@@ -2442,6 +2467,9 @@
   }
 
   async function prepareAndStart(): Promise<void> {
+    const settled = await planClient.settled();
+    if (settled.status === 'error') return;
+    await tick();
     if (!canPrepare) return;
     const targets = downloads.stages.map(
       (stage) =>
@@ -2459,9 +2487,14 @@
   /** The status bar's two start buttons. The scope used is kept in the settings, so File > Start
    *  and automatic starts repeat it. */
   async function startScope(batch: boolean): Promise<void> {
+    const settled = await planClient.settled();
+    if (settled.status === 'error') return;
     if (settings.batch_mode !== batch) updateSettings({ batch_mode: batch });
     await tick();
     if (settings.batch_mode !== batch) return;
+    const settledAfter = await planClient.settled();
+    if (settledAfter.status === 'error') return;
+    await tick();
     if (canPrepare) await prepareAndStart();
     else await start();
   }
@@ -3407,6 +3440,9 @@
   }
 
   async function start(mediaIds?: string[]): Promise<void> {
+    const settled = await planClient.settled();
+    if (settled.status === 'error') return;
+    await tick();
     if (movingModels || (!mediaIds && !canQueue) || !selectedMedia || !settings.task) return;
     if (settings.task === 'edit') {
       await startEdit();
@@ -4950,6 +4986,9 @@
                 class:movable={imageFixes.length > 1}
                 role="list"
                 aria-label="Stages"
+                aria-busy={$planState.status === 'loading' && !$planState.first
+                  ? 'true'
+                  : undefined}
               >
                 {#each plan as stage (`${stage.role}:${stage.fix ?? stage.kind}`)}
                   {@const target =
@@ -5011,9 +5050,11 @@
                             ? editFamilyLabel(stage.editModel.family)
                             : stage.missing
                               ? 'No model for this fix'
-                              : (customModels(settings).find(
-                                  (model) => model.path === settings.custom_model_path,
-                                )?.name ?? 'Checkpoint')}
+                              : stage.custom !== undefined
+                                ? (customModels(settings).find(
+                                    (model) => model.path === settings.custom_model_path,
+                                  )?.name ?? 'Checkpoint')
+                                : ''}
                   <!-- Licenses live in the model library; only exceptions show here. -->
                   {@const meta = stage.editModel
                     ? `${editVariantName(stage.editModel)}${
@@ -5076,7 +5117,7 @@
                           /></span
                         >{:else}{stage.label}{/if}</span
                     >
-                    <div class="name" title={name}>{name}</div>
+                    <div class="name" title={name || undefined}>{name}</div>
                     <div class="plan-end">
                       <span class="state" class:warn={stage.needsFile}
                         >{stageDownload
@@ -5276,6 +5317,16 @@
                   </div>
                 {/each}
               </div>
+              {#if $planState.status === 'loading' && $planState.first}
+                <p class="model-note" role="status">Working out the plan…</p>
+              {:else if $planState.status === 'error'}
+                <p class="inline-warning" role="status" title={$planState.message}>
+                  Could not work out the plan.
+                  <button class="link-button" type="button" on:click={() => planClient.retry()}
+                    >Try again</button
+                  >
+                </p>
+              {/if}
               {#if hasNothingToRun}
                 <p class="inline-warning" role="status">{nothingToRunReason}</p>
               {/if}
