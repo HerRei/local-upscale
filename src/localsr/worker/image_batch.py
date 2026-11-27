@@ -42,7 +42,6 @@ from localsr.core.image_io import ImageManager
 from localsr.core.inference import InferenceEngine, _fixed_window, _span_output_is_unstable
 from localsr.core.live_preview import LatestPreviewEncoder, PreviewPacket
 from localsr.core.model_adapter import ModelAdapter, NormalizedModelInfo
-from localsr.core.output_publish import DiscardOnStop
 from localsr.core.output_writer import OutputWriter
 from localsr.core.partial_image import fill_unfinished, partial_output_path, saved_tiles
 from localsr.core.pipeline import PipelineStageError, resolve_image_pipeline
@@ -298,9 +297,10 @@ class _Photo:
 
     def encode(self) -> float:
         """Save atomically; returns the seconds from the first tile to the saved file."""
-        # A stop that keeps the finished part lets a photo whose tiles are all done be saved.
-        stop = DiscardOnStop(self.batch.cancel_event, self.batch.keep_partial or False)
-        notes = save_output(self.manager, self.writer, self.image, self.info, self.data, stop)
+        # Only a photo whose tiles are all done is encoded; a stop never discards it.
+        notes = save_output(
+            self.manager, self.writer, self.image, self.info, self.data, threading.Event()
+        )
         if notes:
             self.batch.save_notes[str(self.data["job_id"])] = notes
         started = self.progress.inference_started_at

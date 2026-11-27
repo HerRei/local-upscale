@@ -112,8 +112,9 @@ def run_photo_batch(
     on another; once no lane that may take tiles is left (all retired, or only
     idle ones such as a GPU lane on battery), every unfinished photo is returned.
     On cancellation, running native calls finish before their photos are
-    released, every photo outside an encoder is reported cancelled at once, and
-    each running save is reported as it ends: finished if it committed. When
+    released. A photo whose tiles are all done is finished work: its save runs or
+    is started, and it is reported as it ends. Every other photo is reported
+    cancelled at once. When
     ``keep(item)`` says a stop keeps the finished part, ``kept(item, photo)`` saves each
     open photo that has finished tiles first, and reports it.
 
@@ -361,6 +362,11 @@ def run_photo_batch(
             finish_encoded(report=False)
         else:
             take_opened()
+            if cancel.is_set():
+                # Fully tiled photos waiting for an encoder are saved, not dropped.
+                while waiting:
+                    entry = waiting.popleft()
+                    encoding[entry] = encoder.submit(entry.photo.encode)
             if cancel.is_set() and keep is not None and kept is not None:
                 # The lanes have stopped: what each open photo holds is final.
                 for entry in (*tiling, *ready):
@@ -385,17 +391,7 @@ def run_photo_batch(
                         resolve_cancelled(index)
                     else:
                         resolve(index, "failed", InterruptedError("The photo was interrupted."))
-            # A running save commits or raises InterruptedError; one that has not
-            # started is dropped, unless the stop keeps the finished part. Report each as
-            # it ends.
-            keeping_saves = (
-                cancel.is_set()
-                and keep is not None
-                and any(keep(items[entry.index]) for entry in encoding)
-            )
-            if not keeping_saves:
-                for future in encoding.values():
-                    future.cancel()
+            # Every save is of a finished photo: each runs to its end and is reported then.
             while encoding:
                 wait(list(encoding.values()), return_when=FIRST_COMPLETED)
                 finish_encoded()
