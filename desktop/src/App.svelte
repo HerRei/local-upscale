@@ -85,6 +85,7 @@
     isRestoreTask,
     modelsForTask,
     pendingDownloads,
+    withKeptBytes,
     presetSlot,
   } from './lib/plan';
   import { createPlanClient, fetchPlan } from './lib/jobPlanClient';
@@ -152,6 +153,8 @@
   let benchmarkTile: WorkerEnvelope | undefined;
   let downloadErrors: Record<string, string> = {};
   let downloadFailures: Record<string, DownloadFailure> = {};
+  /** What an interrupted or cancelled download kept per model id, until it completes. */
+  let keptDownloadBytes: Record<string, number> = {};
   let downloadAcceptedTerms: Record<string, boolean> = {};
   let rememberedFailureIds: string[] = [];
   const cancelledDownloads = new Set<string>();
@@ -1408,7 +1411,7 @@
     planErrorRecorded = true;
     void api.recordFrontendError(`plan_job: ${$planState.message}`, '').catch(() => {});
   }
-  $: downloads = pendingDownloads(plan);
+  $: downloads = pendingDownloads(plan, keptDownloadBytes);
   const stageModelId = (stage: (typeof plan)[number]): string =>
     (
       stage.model ??
@@ -2031,6 +2034,9 @@
       } else if (message.type === 'download-cancelled' && id) {
         downloadRun.dropped(id);
       }
+      if (id && (message.type === 'download-completed' || message.type === 'download-cancelled')) {
+        keptDownloadBytes = withKeptBytes(keptDownloadBytes, id, message.data.downloaded_bytes);
+      }
       if (id && id in downloadErrors) {
         const nextErrors = { ...downloadErrors };
         delete nextErrors[id];
@@ -2046,6 +2052,7 @@
       const id = String(message.data.model_id ?? '');
       if (id) {
         downloadRun.dropped(id);
+        keptDownloadBytes = withKeptBytes(keptDownloadBytes, id, message.data.downloaded_bytes);
         const errorMessage = String(message.data.error_message ?? 'Download failed.');
         downloadErrors = {
           ...downloadErrors,

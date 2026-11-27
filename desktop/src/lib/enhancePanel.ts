@@ -1,7 +1,7 @@
 import { formatDuration } from './format';
 import type { PlanState } from './jobPlanClient';
 import { imageQualityName } from './outputFormats';
-import type { Fit, PlanStage } from './plan';
+import type { Fit, PendingDownloads, PlanStage } from './plan';
 import type {
   AppSnapshot,
   CatalogModel,
@@ -150,7 +150,7 @@ export interface EnhancePanelView {
   nothingToRunReason: string;
   temporalUnavailableReason: string;
   fixPlanSupported: boolean;
-  downloads: { stages: PlanStage[]; bytes: number };
+  downloads: PendingDownloads;
   flashVideo: boolean;
   videoMemoryEngine: string;
   selectedMemory: VideoMemoryStatus | undefined;

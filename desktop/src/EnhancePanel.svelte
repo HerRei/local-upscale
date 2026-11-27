@@ -245,7 +245,9 @@
   $: costBytes = downloads.stages.reduce((total, stage) => {
     const target = stageTarget(stage);
     if (target && downloadMap.has(target.model_id)) return total;
-    return total + stage.sizeBytes;
+    return (
+      total + (target ? (downloads.left[target.model_id] ?? stage.sizeBytes) : stage.sizeBytes)
+    );
   }, 0);
 
   $: planSteps = planLine(plan, settings, selectedMedia);

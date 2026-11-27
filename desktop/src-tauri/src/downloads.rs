@@ -288,7 +288,12 @@ async fn download_model_with_env<R: tauri::Runtime>(
             return Err(error);
         }
     } else if is_cancelled_error(&result) {
-        emit_download_event(&app, "download-cancelled", json!({"model_id": model_id}));
+        // Cancel keeps the part, so the next start only fetches the rest.
+        emit_download_event(
+            &app,
+            "download-cancelled",
+            json!({"model_id": model_id, "downloaded_bytes": kept_bytes, "total_bytes": total_bytes}),
+        );
     } else if let Err(error) = &result {
         emit_download_event(
             &app,

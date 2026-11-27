@@ -463,9 +463,24 @@ export function frameRateChange(target: Exclude<InterpolationTarget, 'off'>, fps
   return `${format(fps)} → ${format(multiplier ? fps * multiplier : rate)} fps`;
 }
 
-/** Stages LocalSR can fetch itself before the job, and their total size. */
-export function pendingDownloads(stages: PlanStage[]): { stages: PlanStage[]; bytes: number } {
-  const seen = new Set<string>();
+export interface PendingDownloads {
+  stages: PlanStage[];
+  /** Bytes still to fetch for all of them. */
+  bytes: number;
+  /** Bytes still to fetch per model id: its size less a part kept from an earlier try. */
+  left: Record<string, number>;
+}
+
+/**
+ * Stages LocalSR can fetch itself before the job, and what is left to fetch for them.
+ * `kept` holds the bytes an interrupted or cancelled download left behind per model id;
+ * the next download continues from there.
+ */
+export function pendingDownloads(
+  stages: PlanStage[],
+  kept: Record<string, number> = {},
+): PendingDownloads {
+  const left: Record<string, number> = {};
   const pending = stages.filter((stage) => {
     const id = (
       stage.model ??
@@ -474,11 +489,28 @@ export function pendingDownloads(stages: PlanStage[]): { stages: PlanStage[]; by
       stage.audioModel ??
       stage.editModel
     )?.model_id;
-    if (!stage.canDownload || !id || seen.has(id)) return false;
-    seen.add(id);
+    if (!stage.canDownload || !id || id in left) return false;
+    left[id] = Math.max(0, stage.sizeBytes - Math.max(0, kept[id] ?? 0));
     return true;
   });
-  return { stages: pending, bytes: pending.reduce((total, stage) => total + stage.sizeBytes, 0) };
+  const bytes = Object.values(left).reduce((total, size) => total + size, 0);
+  return { stages: pending, bytes, left };
+}
+
+/**
+ * `kept` once a download of `id` has ended with `downloaded` bytes on disk. A completed
+ * download sends none and leaves nothing to subtract.
+ */
+export function withKeptBytes(
+  kept: Record<string, number>,
+  id: string,
+  downloaded: unknown,
+): Record<string, number> {
+  const bytes = Number(downloaded);
+  const next = { ...kept };
+  if (Number.isFinite(bytes) && bytes > 0) next[id] = bytes;
+  else delete next[id];
+  return next;
 }
 
 export function modelsForTask(

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { demoSnapshot } from './demo';
 import { applyWorkerEnvelope } from './workerEvents';
 import { moveFixStage, toggleFixStage } from './fixStages';
-import { pendingDownloads, resolvePlan } from './plan';
+import { pendingDownloads, resolvePlan, withKeptBytes } from './plan';
 
 describe('several fixes in one pass', () => {
   const blur = { fix: 'blur' as const, model_id: 'nafnet_gopro_deblur' };
@@ -71,6 +71,14 @@ describe('several fixes in one pass', () => {
     const downloads = pendingDownloads([...plan, plan[0]]);
     expect(downloads.stages.filter((stage) => stage.fix === 'blur')).toHaveLength(1);
     expect(downloads.bytes).toBe(plan[0].sizeBytes + plan[2].sizeBytes + plan[3].sizeBytes);
+    // A part kept from an earlier try is not fetched again; more than the size counts as all.
+    const blurId = plan[0].model!.model_id;
+    const lastId = plan[3].model!.model_id;
+    const resumed = pendingDownloads(plan, { [blurId]: 1000, [lastId]: plan[3].sizeBytes + 5 });
+    expect(resumed.left[blurId]).toBe(plan[0].sizeBytes - 1000);
+    expect(resumed.left[lastId]).toBe(0);
+    expect(resumed.bytes).toBe(plan[0].sizeBytes - 1000 + plan[2].sizeBytes);
+    expect(pendingDownloads(plan, { [blurId]: -50 }).bytes).toBe(downloads.bytes);
     const restore = resolvePlan(
       snapshot,
       { ...settings, task: 'denoise', selected_model_id: 'scunet_color_real_psnr' },
@@ -168,5 +176,18 @@ describe('several fixes in one pass', () => {
       { faceEnabled: false, usingTemporalVideo: false },
     );
     expect(videoPlan.map((stage) => stage.fix)).toEqual(['colour', undefined]);
+  });
+});
+
+describe('bytes kept by an interrupted download', () => {
+  it('are remembered per model and dropped when nothing is kept', () => {
+    const kept = withKeptBytes({}, 'a', 1200);
+    expect(kept).toEqual({ a: 1200 });
+    expect(withKeptBytes(kept, 'b', '300')).toEqual({ a: 1200, b: 300 });
+    // A completed download sends no bytes; a damaged part is deleted and reported as 0.
+    expect(withKeptBytes(kept, 'a', undefined)).toEqual({});
+    expect(withKeptBytes(kept, 'a', 0)).toEqual({});
+    expect(withKeptBytes(kept, 'a', 'not a number')).toEqual({});
+    expect(kept).toEqual({ a: 1200 });
   });
 });

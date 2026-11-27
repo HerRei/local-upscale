@@ -138,9 +138,35 @@ test.describe('downloads', () => {
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(page.locator('.status-copy strong')).toHaveText('Download interrupted');
     await expect(page.locator('.status-detail')).toContainText('kept at 1.3 of 5.3 GB');
-    const retry = page.getByRole('button', { name: 'Download 5.3 GB, then edit' });
+    // Start names what is left: the retry continues from the kept part.
+    const retry = page.getByRole('button', { name: 'Download 4.0 GB, then edit' });
     await expect(retry).toBeVisible();
     await expect(retry).toBeEnabled();
+    await expect(page.locator('.foot-cost')).toContainText('4.0 GB to download');
+  });
+
+  test('a cancelled download leaves Start and the cost line at what is left', async ({ page }) => {
+    await openApp(page, EDIT_SCENARIO);
+    await prepareEditDownload(page);
+
+    await progressDownload(page, 'flux2_klein_4b_q4_0', 40);
+    await page.getByRole('button', { name: 'Cancel download' }).click();
+    await expect(page.locator('.status-copy strong')).toHaveText('Download stopped');
+
+    await expect(page.getByRole('button', { name: 'Download 3.2 GB, then edit' })).toBeEnabled();
+    await expect(page.locator('.foot-cost')).toContainText('3.2 GB to download');
+  });
+
+  test('a finished download leaves nothing to fetch', async ({ page }) => {
+    await openApp(page, EDIT_SCENARIO);
+    await prepareEditDownload(page);
+    await progressDownload(page, 'flux2_klein_4b_q4_0', 50);
+    await failDownload(page, 'flux2_klein_4b_q4_0', 'network timeout', { reason: 'offline' });
+    await expect(page.getByRole('button', { name: 'Download 2.6 GB, then edit' })).toBeVisible();
+    await page.getByRole('button', { name: 'Download 2.6 GB, then edit' }).click();
+    await progressDownload(page, 'flux2_klein_4b_q4_0', 100);
+    await finishDownload(page, 'flux2_klein_4b_q4_0');
+    await expect(page.getByRole('button', { name: /^Download / })).toHaveCount(0);
   });
 
   test('library download shows in the status bar after closing library and cancels cleanly', async ({

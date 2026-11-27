@@ -1104,7 +1104,14 @@ function hostScript(scenario: Scenario): void {
           snapshot.runtime.status_detail =
             'What was downloaded is kept. The next download continues from there.';
         }
-        emit('worker-message', { type: 'download-cancelled', data: { model_id: modelId } });
+        emit('worker-message', {
+          type: 'download-cancelled',
+          data: {
+            model_id: modelId,
+            downloaded_bytes: Math.round((entry.progress / 100) * entry.totalBytes),
+            total_bytes: entry.totalBytes,
+          },
+        });
         emit('state-changed', null);
         entry.reject('download cancelled');
         return null;
