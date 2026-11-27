@@ -1,11 +1,15 @@
+from __future__ import annotations
+
 import os
 import sys
 import tempfile
 import time
 import warnings
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import numpy as np
+if TYPE_CHECKING:
+    import numpy as np
 
 
 def default_work_directory() -> Path:
@@ -49,15 +53,17 @@ class OutputWriter:
     def __init__(
         self,
         shape: tuple[int, int, int],
-        dtype=np.uint8,
+        dtype=None,
         temporary_directory: str | os.PathLike | None = None,
     ):
         """
         shape is (C, H, W).
         Creates a temporary memmap.
         """
+        import numpy as np
+
         self.shape = shape
-        self.dtype = dtype
+        self.dtype = np.uint8 if dtype is None else dtype
         self.mmap = None
 
         work_directory = (
