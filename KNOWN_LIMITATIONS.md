@@ -50,6 +50,8 @@ These apply to v0.6.1-beta. Please read them before starting a long job.
   macOS's encoders (MP4 only) or your FFmpeg, from a temporary lossless copy that
   needs extra disk space, except whole clips on macOS, which stream straight in.
 - The built-in video decoder opens local files only; it does not fetch network playlist segments.
+- On Linux, comparing videos with different frame rates can show one side a frame
+  early after a frame step or seek; playback and same-rate comparisons stay in step.
 - Interlacing is deinterlaced only when the file is tagged; untagged interlacing
   and inverse telecine are not detected. DVD menus, disc images and encrypted
   media are out of scope.
