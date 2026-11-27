@@ -207,7 +207,10 @@ def test_a_worker_that_ends_while_abandoned_work_still_runs_exits_without_finali
     with pytest.raises(PreparationTimeout):
         call(release.wait, limit=0.1)
     exits = []
-    monkeypatch.setattr(server_module, "WorkerServer", lambda: SimpleNamespace(run=lambda: None))
+    monkeypatch.setattr(server_module, "detach_request_stream", lambda: None)
+    monkeypatch.setattr(
+        server_module, "WorkerServer", lambda **_: SimpleNamespace(run=lambda: None)
+    )
     monkeypatch.setattr(server_module.os, "_exit", exits.append)
     monkeypatch.setattr(server_module.sys, "argv", ["worker"])
     server_module.main()

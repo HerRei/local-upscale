@@ -110,9 +110,8 @@ def detach_request_stream():
     import msvcrt
 
     private = os.dup(sys.stdin.fileno())
-    null = os.open(os.devnull, os.O_RDONLY)
-    os.dup2(null, 0)
-    os.close(null)
+    with open(os.devnull, "rb") as null:
+        os.dup2(null.fileno(), 0)
     std_input_handle = -10
     if not ctypes.windll.kernel32.SetStdHandle(std_input_handle, msvcrt.get_osfhandle(0)):
         raise ctypes.WinError()
@@ -302,7 +301,7 @@ class WorkerServer:
         )
         return preview_encoder, source_encoder
 
-    def __init__(self):
+    def __init__(self, requests=None):
         cleanup_stale_work_files()
         self.message_queue = queue.Queue()
         self.cancel_event = threading.Event()
@@ -311,7 +310,8 @@ class WorkerServer:
         self.state_lock = threading.Lock()
         self._lazy_lock = threading.Lock()
         self._warmup_started = False
-        self._requests: Any = None
+        # Where host requests arrive; None reads sys.stdin.
+        self._requests: Any = requests
         self.running = True
         self.active_job_id = None
         self.active_batch_job_ids: set[str] = set()
@@ -598,7 +598,6 @@ class WorkerServer:
         os._exit(DEVICE_LOST_EXIT_CODE)
 
     def run(self):
-        self._requests = detach_request_stream()
         reader_thread = threading.Thread(target=self.reader_thread_func, daemon=True)
         reader_thread.start()
 
@@ -2421,7 +2420,7 @@ def main():
             json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         return
-    server = WorkerServer()
+    server = WorkerServer(requests=detach_request_stream())
     server.run()
     if abandoned_work_running():
         # A thread stuck in native code (an ONNX export, a driver compile) cannot be stopped,
