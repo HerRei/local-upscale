@@ -866,6 +866,47 @@ it('tracks multiple active and queued model downloads independently', () => {
   expect(snapshot.runtime.download_progress).toBe(0);
 });
 
+it('keeps phase and received_bytes when sent on download-progress and zeroes received_bytes on start', () => {
+  let snapshot = demoSnapshot();
+  snapshot = applyWorkerEnvelope(snapshot, {
+    type: 'download-started',
+    data: { model_id: 'm1', total_bytes: 1000 },
+  });
+  expect(snapshot.runtime.downloads?.[0]).toMatchObject({
+    model_id: 'm1',
+    received_bytes: 0,
+  });
+
+  snapshot = applyWorkerEnvelope(snapshot, {
+    type: 'download-progress',
+    data: {
+      model_id: 'm1',
+      downloaded_bytes: 500,
+      total_bytes: 1000,
+      progress: 50,
+      phase: 'verifying',
+      received_bytes: 300,
+    },
+  });
+  expect(snapshot.runtime.downloads?.[0]).toMatchObject({
+    model_id: 'm1',
+    phase: 'verifying',
+    received_bytes: 300,
+  });
+
+  snapshot = applyWorkerEnvelope(snapshot, {
+    type: 'download-progress',
+    data: {
+      model_id: 'm1',
+      downloaded_bytes: 600,
+      total_bytes: 1000,
+      progress: 60,
+    },
+  });
+  expect(snapshot.runtime.downloads?.[0]).not.toHaveProperty('phase');
+  expect(snapshot.runtime.downloads?.[0]).not.toHaveProperty('received_bytes');
+});
+
 it('tracks the audio cleanup phase title, chunk progress and ETA', () => {
   let snapshot = demoSnapshot();
   snapshot.runtime.active_job_id = 'vid-audio';

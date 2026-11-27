@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 
 import App from './App.svelte';
 import { demoSnapshot } from './lib/demo';
+import { progressBytes } from './lib/downloadProgress';
+import { modelDisplayName } from './lib/modelNames';
 import { applyWorkerEnvelope } from './lib/workerEvents';
 import type {
   AppSnapshot,
@@ -1435,8 +1437,11 @@ describe('LocalSR desktop interface', () => {
       `Downloading 2 models · ${expected}%`,
     );
     expect(document.querySelector('.status-detail')?.textContent).toBe(
-      `${first.name}, ${second.name}`,
+      progressBytes(first.size_bytes / 2, first.size_bytes + second.size_bytes),
     );
+    const detailTitle = document.querySelector('.status-detail')?.getAttribute('title') ?? '';
+    expect(detailTitle).toContain(modelDisplayName(snapshot, first.model_id));
+    expect(detailTitle).toContain(modelDisplayName(snapshot, second.model_id));
     const bar = screen.getByRole('progressbar', { name: 'Download progress' });
     expect(bar.getAttribute('aria-valuenow')).toBe(String(expected));
   });
@@ -5762,27 +5767,31 @@ describe('Several fixes in one pass', () => {
       const ids = snapshot.settings.fix_stages.map((stage) => stage.model_id);
       for (const model of snapshot.catalog.models)
         if (ids.includes(model.model_id)) model.installed = false;
-      let rejectDownload!: (error: Error) => void;
+      const pending = new Map<string, (error: Error) => void>();
       api.downloadModel.mockImplementation(async (id: string) => {
         if (cancel)
           return new Promise((_, reject) => {
-            rejectDownload = reject;
+            pending.set(id, reject);
           });
         snapshot.catalog.models.find((model) => model.model_id === id)!.installed = true;
         api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
       });
-      api.cancelDownload.mockImplementationOnce(async () => {
-        rejectDownload(new Error('cancelled'));
+      api.cancelDownload.mockImplementation(async (id: string) => {
+        pending.get(id)?.(new Error('download cancelled'));
         return undefined;
       });
       const user = await mountWith(snapshot);
       await user.click(screen.getByRole('button', { name: /^Download .*then upscale$/ }));
       if (cancel) {
-        await user.click(await screen.findByRole('button', { name: 'Cancel download' }));
-        await waitFor(() => expect(api.cancelDownload).toHaveBeenCalledWith(ids[0]));
+        await user.click(await screen.findByRole('button', { name: 'Cancel downloads' }));
+        await waitFor(() =>
+          expect(api.cancelDownload.mock.calls.map((call) => call[0])).toEqual(
+            expect.arrayContaining(ids),
+          ),
+        );
         await screen.findByRole('button', { name: /^Download .*then upscale$/ });
         expect(api.startJobs).not.toHaveBeenCalled();
-        expect(api.downloadModel).toHaveBeenCalledTimes(1);
+        expect(api.downloadModel.mock.calls.map((call) => call[0])).toEqual(ids);
       } else {
         await waitFor(() => expect(api.startJobs).toHaveBeenCalled());
         expect(api.downloadModel.mock.calls.map((call) => call[0])).toEqual(ids);
@@ -10349,4 +10358,347 @@ it('does not call a result Original when its result list is unavailable', async 
   expect(document.querySelector('.result-image')?.getAttribute('alt')).not.toBe(
     'Showing: Original',
   );
+});
+
+describe('Download status bar, Start, and failures', () => {
+  it('shows the real model name, byte progress, and aria-valuetext for an edit model without checksum text', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.runtime.downloads = [
+      {
+        model_id: 'flux2_klein_4b_q4_0',
+        status: 'downloading',
+        progress: 9,
+        downloaded_bytes: 454_000_000,
+        total_bytes: 4_900_000_000,
+        phase: 'downloading',
+        received_bytes: 454_000_000,
+      },
+    ];
+    await mountWith(snapshot);
+
+    expect(document.querySelector('.status-copy strong')?.textContent).toBe(
+      'Downloading FLUX.2 klein 4B · 9%',
+    );
+    expect(document.body.textContent).not.toContain('flux2_klein_4b_q4_0');
+    expect(document.body.textContent).not.toContain('Checked against');
+    expect(document.querySelector('.status-detail')?.textContent).toBe('454 MB of 4.9 GB');
+    const bar = screen.getByRole('progressbar', { name: 'Download progress' });
+    expect(bar.getAttribute('aria-valuetext')?.startsWith('9%, 454 MB of 4.9 GB')).toBe(true);
+  });
+
+  it('shows time left over 5 s, Waiting for the connection after 9 s of silence, and Verifying after 2 s', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    await mountWith(snapshot);
+    const emitWorker = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    vi.useFakeTimers();
+
+    const total = 4_900_000_000;
+    emitWorker({
+      type: 'download-started',
+      data: { model_id: 'flux2_klein_4b_q4_0', total_bytes: total },
+    });
+    await tick();
+
+    for (let sec = 1; sec <= 5; sec += 1) {
+      await vi.advanceTimersByTimeAsync(1000);
+      emitWorker({
+        type: 'download-progress',
+        data: {
+          model_id: 'flux2_klein_4b_q4_0',
+          downloaded_bytes: sec * 12_000_000,
+          total_bytes: total,
+          progress: (sec * 12_000_000 * 100) / total,
+          phase: 'downloading',
+          received_bytes: sec * 12_000_000,
+        },
+      });
+      await tick();
+    }
+    expect(document.querySelector('.status-detail')?.textContent).toMatch(/about \d+ min left$/);
+
+    await vi.advanceTimersByTimeAsync(9000);
+    await tick();
+    expect(document.querySelector('.status-detail')?.textContent).toContain(
+      'Waiting for the connection…',
+    );
+
+    emitWorker({
+      type: 'download-progress',
+      data: {
+        model_id: 'flux2_klein_4b_q4_0',
+        downloaded_bytes: total,
+        total_bytes: total,
+        progress: 100,
+        phase: 'verifying',
+        received_bytes: 60_000_000,
+      },
+    });
+    await tick();
+    await vi.advanceTimersByTimeAsync(2000);
+    await tick();
+    expect(document.querySelector('.status-detail')?.textContent).toContain('Verifying…');
+  });
+
+  it('shows Cancel download beside a disabled Start when a plan model downloads externally, and ignores cancel errors', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.quality = 'quick';
+    snapshot.settings.selected_model_id = 'localsr_quick_x4_v1';
+    snapshot.catalog.models.find((m) => m.model_id === 'localsr_quick_x4_v1')!.installed = false;
+    snapshot.runtime.downloads = [
+      {
+        model_id: 'localsr_quick_x4_v1',
+        status: 'downloading',
+        progress: 20,
+        downloaded_bytes: 5_000_000,
+        total_bytes: 25_000_000,
+      },
+    ];
+    api.cancelDownload.mockRejectedValueOnce(new Error('that model is not being downloaded'));
+    const user = await mountWith(snapshot);
+
+    const cancelBtn = screen.getByRole('button', { name: 'Cancel download' });
+    const startBtn = screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement;
+    expect(startBtn.disabled).toBe(true);
+    expect(startBtn.getAttribute('title')).toBe('Wait for the download to finish.');
+
+    await user.click(cancelBtn);
+    await waitFor(() => expect(api.cancelDownload).toHaveBeenCalledWith('localsr_quick_x4_v1'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('keeps the job title and adds an extra line without Cancel download when a job runs during a download', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.jobs = [
+      {
+        id: 'job-1',
+        media_id: 'photo',
+        media_name: 'photo.png',
+        media_kind: 'image',
+        status: 'running',
+        output_path: '',
+        progress: 31,
+        error: '',
+        created_at: 1,
+      },
+    ];
+    snapshot.runtime.active_job_id = 'job-1';
+    snapshot.runtime.status_title = 'Processing';
+    snapshot.runtime.progress = 31;
+    snapshot.runtime.downloads = [
+      {
+        model_id: 'denoise_realplksr_1x',
+        status: 'downloading',
+        progress: 40,
+        downloaded_bytes: 12_000_000,
+        total_bytes: 29_559_554,
+      },
+    ];
+    api.bootstrap.mockResolvedValue(structuredClone(snapshot));
+    api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    render(App);
+
+    await waitFor(() =>
+      expect(document.querySelector('.status-copy strong')?.textContent).toBe('Processing · 31%'),
+    );
+    expect(screen.getByText('Also downloading RealPLKSR Denoise')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Cancel download/ })).toBeNull();
+  });
+
+  it('shows the idle summary when status_title is Download stopped with a selected photo', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.runtime.status_title = 'Download stopped';
+    api.bootstrap.mockResolvedValue(structuredClone(snapshot));
+    api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    render(App);
+
+    await waitFor(() =>
+      expect(document.querySelector('.status-copy strong')?.textContent).toBe('Download stopped'),
+    );
+    expect(document.querySelector('.status-detail')?.textContent).toMatch(/→.*Apple GPU/);
+  });
+
+  it('asks for all missing Start models at once, shows then-verb, cancels all, and starts once all resolve', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      quality: 'quick',
+      selected_model_id: 'localsr_quick_x4_v1',
+      fixes: ['noise'],
+      fix_stages: [{ fix: 'noise', model_id: 'denoise_realplksr_1x' }],
+    });
+    for (const model of snapshot.catalog.models) {
+      if (['localsr_quick_x4_v1', 'denoise_realplksr_1x'].includes(model.model_id)) {
+        model.installed = false;
+      }
+    }
+    const pending = new Map<string, { resolve: () => void; reject: (err: Error) => void }>();
+    api.downloadModel.mockImplementation(
+      (id: string) =>
+        new Promise<undefined>((resolve, reject) => {
+          pending.set(id, { resolve: () => resolve(undefined), reject });
+        }),
+    );
+    api.cancelDownload.mockImplementation(async (id: string) => {
+      pending.get(id)?.reject(new Error('download cancelled'));
+      return undefined;
+    });
+    const user = await mountWith(snapshot);
+
+    await user.click(screen.getByRole('button', { name: /^Download .*then upscale$/ }));
+    await waitFor(() => expect(api.downloadModel).toHaveBeenCalledTimes(2));
+    expect(api.downloadModel).toHaveBeenCalledWith('denoise_realplksr_1x', false);
+    expect(api.downloadModel).toHaveBeenCalledWith('localsr_quick_x4_v1', false);
+    expect(document.querySelector('.status-detail')?.textContent).toMatch(/then upscale$/);
+
+    await user.click(screen.getByRole('button', { name: 'Cancel downloads' }));
+    await waitFor(() => expect(api.cancelDownload).toHaveBeenCalledTimes(2));
+    expect(api.startJobs).not.toHaveBeenCalled();
+
+    pending.clear();
+    api.downloadModel.mockImplementation(async (id: string) => {
+      snapshot.catalog.models.find((m) => m.model_id === id)!.installed = true;
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+      return undefined;
+    });
+    await user.click(await screen.findByRole('button', { name: /^Download .*then upscale$/ }));
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+  });
+
+  it('shows · then upscale all 7 while downloading a batch of 7 photos', async () => {
+    const photos = Array.from({ length: 7 }, (_, i) => image(`p${i + 1}`, i === 0));
+    const snapshot = readySnapshot(photos);
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.quality = 'quick';
+    snapshot.settings.selected_model_id = 'localsr_quick_x4_v1';
+    snapshot.catalog.models.find((m) => m.model_id === 'localsr_quick_x4_v1')!.installed = false;
+    api.downloadModel.mockImplementation(() => new Promise<undefined>(() => {}));
+    const user = await mountWith(snapshot);
+
+    await user.click(screen.getByRole('button', { name: /^Download .*then upscale all 7$/ }));
+    await waitFor(() =>
+      expect(document.querySelector('.status-detail')?.textContent).toMatch(/then upscale all 7$/),
+    );
+  });
+
+  it('shows failure lines by cause without a dialog, clears on retry, and offers Open library for non-plan models', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      quality: 'quick',
+      selected_model_id: 'localsr_quick_x4_v1',
+      fixes: ['noise'],
+      fix_stages: [{ fix: 'noise', model_id: 'denoise_realplksr_1x' }],
+    });
+    for (const model of snapshot.catalog.models) {
+      if (['localsr_quick_x4_v1', 'denoise_realplksr_1x'].includes(model.model_id)) {
+        model.installed = false;
+      }
+    }
+    const pending = new Map<string, { resolve: () => void; reject: (err: Error) => void }>();
+    api.downloadModel.mockImplementation(
+      (id: string) =>
+        new Promise<undefined>((resolve, reject) => {
+          pending.set(id, { resolve: () => resolve(undefined), reject });
+        }),
+    );
+    const user = await mountWith(snapshot);
+    const emitWorker = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+
+    await user.click(screen.getByRole('button', { name: /^Download .*then upscale$/ }));
+    await waitFor(() => expect(pending.size).toBe(2));
+
+    emitWorker({
+      type: 'download-failed',
+      data: {
+        model_id: 'localsr_quick_x4_v1',
+        error_message: 'timeout',
+        reason: 'offline',
+        downloaded_bytes: 12_000_000,
+        total_bytes: 25_000_000,
+      },
+    });
+    pending.get('localsr_quick_x4_v1')?.reject(new Error('timeout'));
+    pending.get('denoise_realplksr_1x')?.resolve();
+
+    await waitFor(() =>
+      expect(document.querySelector('.status-copy strong')?.textContent).toBe(
+        'Download interrupted',
+      ),
+    );
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('LocalSR Photo S');
+    expect(alert.textContent).toContain('kept at');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(api.startJobs).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /^Download .*then upscale$/ })).toBeTruthy();
+
+    // Retry clears the failure line at download-queued.
+    pending.clear();
+    await user.click(screen.getByRole('button', { name: /^Download .*then upscale$/ }));
+    emitWorker({
+      type: 'download-queued',
+      data: { model_id: 'localsr_quick_x4_v1', total_bytes: 25_000_000 },
+    });
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+
+    // Damaged reason.
+    emitWorker({
+      type: 'download-failed',
+      data: {
+        model_id: 'localsr_quick_x4_v1',
+        error_message: 'checksum mismatch',
+        reason: 'damaged',
+        downloaded_bytes: 0,
+        total_bytes: 25_000_000,
+      },
+    });
+    pending.get('localsr_quick_x4_v1')?.reject(new Error('checksum mismatch'));
+    pending.get('denoise_realplksr_1x')?.resolve();
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain('arrived damaged and was removed'),
+    );
+
+    // Disk full reason.
+    pending.clear();
+    await user.click(screen.getByRole('button', { name: /^Download .*then upscale$/ }));
+    emitWorker({
+      type: 'download-failed',
+      data: {
+        model_id: 'localsr_quick_x4_v1',
+        error_message: 'not enough disk space: needs 50 MB',
+        reason: 'disk_full',
+        downloaded_bytes: 0,
+        total_bytes: 25_000_000,
+      },
+    });
+    pending.get('localsr_quick_x4_v1')?.reject(new Error('not enough disk space: needs 50 MB'));
+    pending.get('denoise_realplksr_1x')?.resolve();
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toBe('Not enough disk space: needs 50 MB.'),
+    );
+
+    // Failed model not in the plan offers Open library link.
+    emitWorker({
+      type: 'download-queued',
+      data: { model_id: 'hat_l_x4_imagenet', total_bytes: 100_000_000 },
+    });
+    emitWorker({
+      type: 'download-failed',
+      data: {
+        model_id: 'hat_l_x4_imagenet',
+        error_message: 'HTTP 503',
+        reason: 'server',
+        downloaded_bytes: 0,
+        total_bytes: 100_000_000,
+      },
+    });
+    const openLink = await screen.findByRole('button', { name: 'Open library' });
+    await user.click(openLink);
+    expect(await screen.findByRole('dialog', { name: 'Model library' })).toBeTruthy();
+  });
 });

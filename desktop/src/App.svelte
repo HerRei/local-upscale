@@ -1,6 +1,8 @@
 <script lang="ts">
   import { detectPlatform } from './lib/platform';
-  import { downloadSummary } from './lib/downloadSummary';
+  import { downloadFailureText, type DownloadFailure } from './lib/downloadProgress';
+  import { DownloadRun } from './lib/downloadSummary';
+  import { modelDisplayName, modelDownloadSize } from './lib/modelNames';
   import { createAccentController } from './lib/accent';
   import { createThemeController } from './lib/theme';
 
@@ -147,7 +149,11 @@
   let benchmarkError = '';
   let benchmarkTile: WorkerEnvelope | undefined;
   let downloadErrors: Record<string, string> = {};
+  let downloadFailures: Record<string, DownloadFailure> = {};
+  let rememberedFailureIds: string[] = [];
   const cancelledDownloads = new Set<string>();
+  let cancellingDownloads = false;
+  const downloadRun = new DownloadRun();
   $: benchmarkScores = snapshot.latest_benchmark?.device_history?.length
     ? snapshot.latest_benchmark.device_history
     : (snapshot.latest_benchmark?.device_results ?? []);
@@ -581,7 +587,10 @@
   let livePreviewWarning = '';
   let preparing = false;
   let preparingCancelled = false;
-  let preparingModelId = '';
+  let preparingThen = '';
+  let preparingTotalBytes = 0;
+  let preparingIds: string[] = [];
+  let preparingPendingIds: string[] = [];
   const isMac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
   let libraryOpen = false;
   let libraryContext: {
@@ -812,19 +821,30 @@
   $: downloadMap = new Map<string, ModelDownloadStatus>(
     activeDownloads.map((item) => [item.model_id, item]),
   );
+  const downloadClock = (_downloads: ModelDownloadStatus[], _second: number) =>
+    performance.now() / 1000;
   $: activeDownload = activeDownloads[0]?.model_id ?? '';
-  // Downloads own the status line while no job runs: one title, one bar for all of them.
-  $: downloadStatus = snapshot.runtime.active_job_id
-    ? null
-    : downloadSummary(activeDownloads, (id) => {
-        const model = snapshot.catalog.models.find((item) => item.model_id === id);
-        if (model) return { name: model.name, size: model.size_bytes };
-        const other = [
-          ...snapshot.catalog.video_models,
-          ...(snapshot.catalog.audio_models ?? []),
-        ].find((item) => item.model_id === id);
-        return other ? { name: other.name, size: other.total_size_bytes } : undefined;
-      });
+  $: if (activeDownloads.length === 0) cancellingDownloads = false;
+  $: downloadNow = downloadClock(activeDownloads, etaSecond);
+  $: downloadRun.observe(activeDownloads, downloadNow);
+  // Downloads own the status line while no job runs; when a job runs, an extra line names them.
+  $: downloadStatus = downloadRun.line(
+    downloadNow,
+    (id) => modelDisplayName(snapshot, id),
+    (id) => modelDownloadSize(snapshot, id),
+  );
+  $: downloadDetailText = downloadStatus
+    ? [downloadStatus.detail, preparing && preparingThen ? `then ${preparingThen}` : '']
+        .filter(Boolean)
+        .join(' · ')
+    : preparing
+      ? [
+          preparingTotalBytes > 0 ? formatBytes(preparingTotalBytes) : '',
+          preparingThen ? `then ${preparingThen}` : '',
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      : '';
   $: benchmarkRunning = snapshot.runtime.active_job_id.startsWith('benchmark-');
   $: benchmarkQuickModel = choosePresetModel(snapshot, 'upscale', 'quick', 'photo', {});
   $: benchmarkBestModel = choosePresetModel(snapshot, 'upscale', 'best', 'photo', {});
@@ -1017,9 +1037,9 @@
   // Past the last tile only the file is left to write: nothing remains to estimate.
   $: saving = Boolean(snapshot.runtime.active_job_id) && isSaving(snapshot.runtime.progress);
   $: runningStatusDetail = withEta(snapshot.runtime.status_detail, saving ? null : shownEta.job);
-  $: if (snapshot.runtime.active_job_id && !etaTimer) {
+  $: if ((snapshot.runtime.active_job_id || activeDownloads.length > 0) && !etaTimer) {
     etaTimer = setInterval(() => (etaSecond += 1), 1000);
-  } else if (!snapshot.runtime.active_job_id && etaTimer) {
+  } else if (!snapshot.runtime.active_job_id && activeDownloads.length === 0 && etaTimer) {
     clearInterval(etaTimer);
     etaTimer = undefined;
   }
@@ -1366,6 +1386,34 @@
     void api.recordFrontendError(`plan_job: ${$planState.message}`, '').catch(() => {});
   }
   $: downloads = pendingDownloads(plan);
+  const stageModelId = (stage: (typeof plan)[number]): string =>
+    (
+      stage.model ??
+      stage.videoModel ??
+      stage.interpolationModel ??
+      stage.audioModel ??
+      stage.editModel
+    )?.model_id ?? '';
+  $: anyDownloadBlockingStart = Boolean(activeDownload) && downloads.stages.length > 0;
+  $: downloadFailureLine = (() => {
+    const failures = rememberedFailureIds
+      .map((id) => downloadFailures[id])
+      .filter((entry): entry is DownloadFailure => Boolean(entry));
+    if (!failures.length) return null;
+    const first = failures[0];
+    const copy = downloadFailureText(first, true);
+    const moreCount = failures.length - 1;
+    return {
+      modelId: first.modelId,
+      title: copy.title,
+      detail: moreCount > 0 ? `${copy.detail} ${moreCount} more failed.` : copy.detail,
+      tooltip: failures
+        .map((entry) => entry.message)
+        .filter(Boolean)
+        .join('\n'),
+      inPlan: downloads.stages.some((stage) => stageModelId(stage) === first.modelId),
+    };
+  })();
   $: planNeedsFile = plan.some((stage) => stage.needsFile);
   $: planMissing = plan.some((stage) => stage.missing);
   $: prepareReady =
@@ -1407,7 +1455,7 @@
   // A finished job keeps its own message while its result is selected.
   $: idleSummary =
     selectedMedia &&
-    (['Ready', 'Model ready', 'Download paused', 'Cancelled'].includes(
+    (['Ready', 'Model ready', 'Download paused', 'Download stopped', 'Cancelled'].includes(
       snapshot.runtime.status_title,
     ) ||
       (snapshot.runtime.status_title === 'Complete' && !selectedOutputPath)) &&
@@ -1483,6 +1531,7 @@
     !preparing &&
     !booting &&
     !lastFailure &&
+    !downloadFailureLine &&
     snapshot.runtime.status_title !== 'Warning'
       ? cpuHint(snapshot.capabilities, detectPlatform())
       : null;
@@ -1520,37 +1569,43 @@
       ? 'Could not work out the plan. Try again.'
       : hasNothingToRun
         ? nothingToRunReason
-        : snapshot.media.length < 2
-          ? ''
-          : unreadyMedia
-            ? preparingNote(unreadyMedia)
-            : settings.task === 'edit'
-              ? selectedMedia
-                ? `Edit processes only “${selectedMedia.name}”; batches are not supported yet.`
-                : 'Edit processes only the selected image.'
-              : mismatchNote ||
-                (queueableMedia.length === 0 && runnableMedia.length > 0
-                  ? `All ${runnableMedia.length} compatible item${runnableMedia.length === 1 ? ' is' : 's are'} already running or queued.`
-                  : incompatibleNote);
+        : anyDownloadBlockingStart
+          ? 'Wait for the download to finish.'
+          : snapshot.media.length < 2
+            ? ''
+            : unreadyMedia
+              ? preparingNote(unreadyMedia)
+              : settings.task === 'edit'
+                ? selectedMedia
+                  ? `Edit processes only “${selectedMedia.name}”; batches are not supported yet.`
+                  : 'Edit processes only the selected image.'
+                : mismatchNote ||
+                  (queueableMedia.length === 0 && runnableMedia.length > 0
+                    ? `All ${runnableMedia.length} compatible item${runnableMedia.length === 1 ? ' is' : 's are'} already running or queued.`
+                    : incompatibleNote);
   $: oneUnready = selectedOnly.find((media) => media.probe_status !== 'ready');
   $: allUnready = queueableMedia.find((media) => media.probe_status !== 'ready');
   $: oneTitle =
     $planState.status === 'error'
       ? 'Could not work out the plan. Try again.'
-      : oneUnready
-        ? preparingNote(oneUnready)
-        : hasNothingToRun
-          ? nothingToRunReason
-          : mismatchNote ||
-            (canPrepareOne ? `Downloads ${formatBytes(downloads.bytes)} first.` : '');
+      : anyDownloadBlockingStart
+        ? 'Wait for the download to finish.'
+        : oneUnready
+          ? preparingNote(oneUnready)
+          : hasNothingToRun
+            ? nothingToRunReason
+            : mismatchNote ||
+              (canPrepareOne ? `Downloads ${formatBytes(downloads.bytes)} first.` : '');
   $: allTitle =
     $planState.status === 'error'
       ? 'Could not work out the plan. Try again.'
-      : allUnready
-        ? preparingNote(allUnready)
-        : hasNothingToRun
-          ? nothingToRunReason
-          : incompatibleNote;
+      : anyDownloadBlockingStart
+        ? 'Wait for the download to finish.'
+        : allUnready
+          ? preparingNote(allUnready)
+          : hasNothingToRun
+            ? nothingToRunReason
+            : incompatibleNote;
   // What the primary button says it does to all: "Upscale all 52", "Start all 5 videos".
   $: allPhrase = `${
     startVerb === 'start video' ? 'start' : startVerb
@@ -1562,24 +1617,26 @@
     ? 'Wait for the current job to finish.'
     : movingModels
       ? 'Wait for models to finish moving.'
-      : $planState.status === 'error'
-        ? 'Could not work out the plan. Try again.'
-        : $planState.status === 'loading' && $planState.first
-          ? 'Working out the plan…'
-          : snapshot.runtime.worker !== 'ready'
-            ? 'The processing engine is not ready yet.'
-            : !settings.task
-              ? 'Choose a task before starting.'
-              : !queueSelection.length
-                ? 'Select a compatible item before starting.'
-                : unreadyMedia
-                  ? scopeHint
-                  : hasNothingToRun
-                    ? nothingToRunReason
-                    : editBlockReason ||
-                      (!modelReady || !fixesReady || !interpolationReady
-                        ? 'Choose or download the required models before starting.'
-                        : 'The current settings are not ready to start.');
+      : anyDownloadBlockingStart
+        ? 'Wait for the download to finish.'
+        : $planState.status === 'error'
+          ? 'Could not work out the plan. Try again.'
+          : $planState.status === 'loading' && $planState.first
+            ? 'Working out the plan…'
+            : snapshot.runtime.worker !== 'ready'
+              ? 'The processing engine is not ready yet.'
+              : !settings.task
+                ? 'Choose a task before starting.'
+                : !queueSelection.length
+                  ? 'Select a compatible item before starting.'
+                  : unreadyMedia
+                    ? scopeHint
+                    : hasNothingToRun
+                      ? nothingToRunReason
+                      : editBlockReason ||
+                        (!modelReady || !fixesReady || !interpolationReady
+                          ? 'Choose or download the required models before starting.'
+                          : 'The current settings are not ready to start.');
 
   let themeForRefresh: (
     settings: Pick<
@@ -1906,6 +1963,7 @@
     // A pinned pair keeps its zoom, pan and divider while other runs start and finish.
     const pinned = Boolean(selectedMedia && pairChoices[selectedMedia.id]?.pinned);
     if (message.type === 'job_started') {
+      rememberedFailureIds = [];
       livePreviewWarning = '';
       if (!pinned) resetView();
       resetProgressivePreview(messageJob);
@@ -1943,19 +2001,47 @@
       message.type === 'download-cancelled'
     ) {
       const id = String(message.data.model_id ?? '');
+      if (message.type === 'download-queued' || message.type === 'download-started') {
+        rememberedFailureIds = [];
+      } else if (message.type === 'download-completed' && id) {
+        downloadRun.completed(id);
+      } else if (message.type === 'download-cancelled' && id) {
+        downloadRun.dropped(id);
+      }
       if (id && id in downloadErrors) {
         const nextErrors = { ...downloadErrors };
         delete nextErrors[id];
         downloadErrors = nextErrors;
       }
+      if (id && id in downloadFailures) {
+        const nextFailures = { ...downloadFailures };
+        delete nextFailures[id];
+        downloadFailures = nextFailures;
+      }
       if (message.type === 'download-completed') scheduleRefresh();
     } else if (message.type === 'download-failed') {
       const id = String(message.data.model_id ?? '');
       if (id) {
+        downloadRun.dropped(id);
+        const errorMessage = String(message.data.error_message ?? 'Download failed.');
         downloadErrors = {
           ...downloadErrors,
-          [id]: String(message.data.error_message ?? 'Download failed.'),
+          [id]: errorMessage,
         };
+        downloadFailures = {
+          ...downloadFailures,
+          [id]: {
+            modelId: id,
+            name: modelDisplayName(snapshot, id),
+            reason: parseFailureReason(message.data.reason),
+            done: Number(message.data.downloaded_bytes ?? 0) || 0,
+            total: Number(message.data.total_bytes ?? 0) || modelDownloadSize(snapshot, id),
+            message: errorMessage,
+          },
+        };
+        if (!rememberedFailureIds.includes(id)) {
+          rememberedFailureIds = [...rememberedFailureIds, id];
+        }
       }
     }
   }
@@ -2421,48 +2507,128 @@
     }
   }
 
+  const FAILURE_REASONS = new Set<DownloadFailure['reason']>([
+    'offline',
+    'server',
+    'damaged',
+    'disk_full',
+    'folder',
+    'other',
+  ]);
+
+  function parseFailureReason(raw: unknown): DownloadFailure['reason'] {
+    return typeof raw === 'string' && FAILURE_REASONS.has(raw as DownloadFailure['reason'])
+      ? (raw as DownloadFailure['reason'])
+      : 'other';
+  }
+
+  function errorMessageText(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  function recordDownloadFailure(modelId: string, error: unknown): void {
+    const message = errorMessageText(error);
+    if (!(modelId in downloadFailures)) {
+      downloadFailures = {
+        ...downloadFailures,
+        [modelId]: {
+          modelId,
+          name: modelDisplayName(snapshot, modelId),
+          reason: 'other',
+          done: 0,
+          total: modelDownloadSize(snapshot, modelId),
+          message,
+        },
+      };
+    }
+    if (!rememberedFailureIds.includes(modelId)) {
+      rememberedFailureIds = [...rememberedFailureIds, modelId];
+    }
+  }
+
   async function downloadModels(
     models: (CatalogModel | CatalogVideoModel | EditModel | undefined)[],
+    thenText = startVerb,
   ): Promise<boolean> {
+    const targets = models.filter((model): model is CatalogModel | CatalogVideoModel | EditModel =>
+      Boolean(model && !model.installed && model.automated_download_allowed),
+    );
+    if (!targets.length) return true;
     preparing = true;
     preparingCancelled = false;
+    preparingThen = thenText;
+    preparingTotalBytes = targets.reduce((sum, model) => {
+      const size = 'size_bytes' in model ? model.size_bytes : model.total_size_bytes;
+      return sum + (size || 0);
+    }, 0);
+    preparingIds = targets.map((model) => model.model_id);
+    preparingPendingIds = [...preparingIds];
+    rememberedFailureIds = [];
+    let results: PromiseSettledResult<void>[] = [];
     try {
-      for (const model of models) {
-        if (preparingCancelled) return false;
-        if (!model || model.installed || !model.automated_download_allowed) continue;
-        preparingModelId = model.model_id;
-        await api.downloadModel(model.model_id, Boolean(termsAccepted[model.model_id]));
-      }
-      await refresh();
-      return !preparingCancelled;
-    } catch (error) {
-      if (!preparingCancelled) showModal('Download failed', String(error));
-      return false;
+      results = await Promise.allSettled(
+        targets.map(async (model) => {
+          dismissDownloadError(model.model_id);
+          cancelledDownloads.delete(model.model_id);
+          try {
+            await api.downloadModel(model.model_id, Boolean(termsAccepted[model.model_id]));
+          } catch (error) {
+            const message = errorMessageText(error);
+            const wasCancelled =
+              preparingCancelled ||
+              cancelledDownloads.delete(model.model_id) ||
+              message.includes('download cancelled');
+            if (!wasCancelled) {
+              downloadErrors = { ...downloadErrors, [model.model_id]: message };
+              recordDownloadFailure(model.model_id, error);
+            }
+            throw error;
+          } finally {
+            preparingPendingIds = preparingPendingIds.filter((id) => id !== model.model_id);
+          }
+        }),
+      );
     } finally {
       preparing = false;
-      preparingModelId = '';
+      preparingThen = '';
+      preparingTotalBytes = 0;
+      preparingIds = [];
+      preparingPendingIds = [];
     }
+    const ok = !preparingCancelled && results.every((result) => result.status === 'fulfilled');
+    await refresh();
+    return ok;
   }
 
   /** Stop the downloads Start began; nothing starts afterwards. */
   async function cancelPreparation(): Promise<void> {
     preparingCancelled = true;
+    const remaining = new Set(
+      preparingIds.length ? preparingIds : activeDownloads.map((item) => item.model_id),
+    );
+    for (const id of remaining) cancelledDownloads.add(id);
     // The host registers a download a moment after Start asks for it.
-    for (let attempt = 0; attempt < 30 && preparing; attempt += 1) {
-      const modelId = preparingModelId || activeDownload;
-      if (modelId) {
-        try {
-          await api.cancelDownload(modelId);
-          return;
-        } catch {
-          // Not registered yet; try again shortly.
-        }
-      }
+    for (let attempt = 0; attempt < 30 && preparing && remaining.size > 0; attempt += 1) {
+      await Promise.all(
+        [...remaining].map(async (modelId) => {
+          if (!preparingPendingIds.includes(modelId) && !downloadMap.has(modelId)) {
+            remaining.delete(modelId);
+            return;
+          }
+          try {
+            await api.cancelDownload(modelId);
+            remaining.delete(modelId);
+          } catch {
+            // Not registered yet; try again shortly.
+          }
+        }),
+      );
+      if (remaining.size === 0 || !preparing) return;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
 
-  async function prepareAndStart(): Promise<void> {
+  async function prepareAndStart(thenText?: string): Promise<void> {
     const settled = await planClient.settled();
     if (settled.status === 'error') return;
     await tick();
@@ -2475,7 +2641,8 @@
         stage.interpolationModel ??
         stage.audioModel,
     );
-    if (!(await downloadModels(targets))) return;
+    const label = thenText ?? (scopeChoice && settings.batch_mode ? allPhrase : startVerb);
+    if (!(await downloadModels(targets, label))) return;
     await tick();
     if (canStart) await start();
   }
@@ -2491,7 +2658,7 @@
     const settledAfter = await planClient.settled();
     if (settledAfter.status === 'error') return;
     await tick();
-    if (canPrepare) await prepareAndStart();
+    if (canPrepare) await prepareAndStart(batch ? allPhrase : startVerb);
     else await start();
   }
 
@@ -3377,15 +3544,33 @@
   }
 
   function dismissDownloadError(modelId: string): void {
-    if (!(modelId in downloadErrors)) return;
-    const nextErrors = { ...downloadErrors };
-    delete nextErrors[modelId];
-    downloadErrors = nextErrors;
+    if (modelId in downloadErrors) {
+      const nextErrors = { ...downloadErrors };
+      delete nextErrors[modelId];
+      downloadErrors = nextErrors;
+    }
+    if (modelId in downloadFailures) {
+      const nextFailures = { ...downloadFailures };
+      delete nextFailures[modelId];
+      downloadFailures = nextFailures;
+    }
+    if (rememberedFailureIds.includes(modelId)) {
+      rememberedFailureIds = rememberedFailureIds.filter((id) => id !== modelId);
+    }
   }
 
   async function cancelDownloadById(modelId: string): Promise<void> {
     cancelledDownloads.add(modelId);
     await attempt('Could not cancel the download', () => api.cancelDownload(modelId));
+  }
+
+  async function cancelAllDownloads(): Promise<void> {
+    const ids = activeDownloads.map((item) => item.model_id);
+    if (!ids.length) return;
+    cancellingDownloads = true;
+    for (const id of ids) cancelledDownloads.add(id);
+    await Promise.allSettled(ids.map((id) => api.cancelDownload(id)));
+    cancellingDownloads = false;
   }
 
   async function runDownload(
@@ -3403,6 +3588,7 @@
       return;
     }
     dismissDownloadError(target.model_id);
+    rememberedFailureIds = [];
     cancelledDownloads.delete(target.model_id);
     try {
       if (!target.automated_download_allowed) {
@@ -3414,7 +3600,7 @@
       }
       await refresh();
     } catch (error) {
-      const message = String(error);
+      const message = errorMessageText(error);
       const wasCancelled =
         cancelledDownloads.delete(target.model_id) || message.includes('download cancelled');
       if (wasCancelled) {
@@ -3422,9 +3608,11 @@
         return;
       }
       downloadErrors = { ...downloadErrors, [target.model_id]: message };
-      if (!libraryOpen || !target.automated_download_allowed) {
-        showModal(target.automated_download_allowed ? 'Download failed' : 'Import failed', message);
+      if (!target.automated_download_allowed) {
+        showModal('Import failed', message);
+        return;
       }
+      recordDownloadFailure(target.model_id, error);
     }
   }
 
@@ -3458,6 +3646,7 @@
       settings.task,
       mediaIds ? ids.length > 1 : settings.batch_mode,
     );
+    rememberedFailureIds = [];
     startingJob = true;
     try {
       await api.startJobs(input);
@@ -3473,6 +3662,7 @@
   /** The worker rechecks memory before loading the editing bundle. */
   async function startEdit(): Promise<void> {
     if (!selectedMedia || !editModel || !editingDevice) return;
+    rememberedFailureIds = [];
     startingJob = true;
     try {
       await api.startEdit({
@@ -4735,9 +4925,13 @@
               ? 'Stopping…'
               : saving
                 ? 'Saving the result'
-                : downloadStatus
-                  ? `${downloadStatus.title} · ${Math.round(downloadStatus.percent)}%`
-                  : snapshot.runtime.status_title}{snapshot.runtime.active_job_id &&
+                : snapshot.runtime.active_job_id
+                  ? snapshot.runtime.status_title
+                  : downloadStatus
+                    ? `${downloadStatus.title} · ${Math.round(downloadStatus.percent)}%`
+                    : !preparing && downloadFailureLine
+                      ? downloadFailureLine.title
+                      : snapshot.runtime.status_title}{snapshot.runtime.active_job_id &&
           snapshot.runtime.progress > 0 &&
           !saving &&
           !cancelling
@@ -4745,19 +4939,40 @@
             : ''}{queuedCount ? ` · ${queuedCount} queued` : ''}</strong
         ><span
           class="status-detail"
-          role={activityDetail ? 'status' : undefined}
+          role={activityDetail
+            ? 'status'
+            : !snapshot.runtime.active_job_id &&
+                !downloadStatus &&
+                !preparing &&
+                downloadFailureLine
+              ? 'alert'
+              : undefined}
           title={booting
             ? undefined
-            : activityDetail || stoppedNote || idleSummary || runningStatusDetail}
-          >{booting
-            ? 'Opening the trusted desktop control plane.'
-            : activityDetail ||
-              (downloadStatus
-                ? activeDownloads.length > 1
-                  ? downloadStatus.names
-                  : 'Checked against its pinned checksum before use.'
-                : stoppedNote || idleSummary || runningStatusDetail)}</span
+            : snapshot.runtime.active_job_id
+              ? activityDetail || stoppedNote || idleSummary || runningStatusDetail || undefined
+              : downloadStatus || preparing
+                ? downloadStatus?.names || undefined
+                : downloadFailureLine
+                  ? downloadFailureLine.tooltip || undefined
+                  : stoppedNote || idleSummary || runningStatusDetail || undefined}
+          >{#if booting}Opening the trusted desktop control plane.{:else if snapshot.runtime.active_job_id}{activityDetail ||
+              stoppedNote ||
+              idleSummary ||
+              runningStatusDetail}{:else if downloadStatus || preparing}{downloadDetailText}{:else if downloadFailureLine}{downloadFailureLine.detail}{#if !downloadFailureLine.inPlan}{' '}<button
+                class="link-button"
+                type="button"
+                on:click={() => openLibrary('browse', undefined, downloadFailureLine.modelId)}
+                >Open library</button
+              >{/if}{:else}{stoppedNote || idleSummary || runningStatusDetail}{/if}</span
         >
+        {#if snapshot.runtime.active_job_id && downloadStatus}<span
+            class="status-note"
+            title={downloadStatus.detail || undefined}
+            >{downloadStatus.count === 1
+              ? `Also downloading ${downloadStatus.title.slice('Downloading '.length)}`
+              : `Also downloading ${downloadStatus.count} models`}</span
+          >{/if}
         {#if settings.low_priority}<span class="status-note">Low priority</span>{/if}
         {#if hardwareNote}<span class="status-note" title={hardwareNote}>{hardwareNote}</span>{/if}
         {#if hardwareHint}<span class="status-note" title={hardwareHint.text}
@@ -4804,6 +5019,12 @@
         aria-valuemin="0"
         aria-valuemax="100"
         aria-valuenow={Math.round(downloadStatus.percent)}
+        aria-valuetext={[
+          `${Math.round(downloadStatus.percent)}%`,
+          downloadStatus.detail.replace(/ · /g, ', '),
+        ]
+          .filter(Boolean)
+          .join(', ')}
       >
         <i style={`width:${downloadStatus.percent}%`}></i>
       </div>{/if}
@@ -4856,46 +5077,65 @@
           >{cancelling ? 'Stopping…' : inflightJobCount > 1 ? 'Cancel queue' : 'Cancel'}</button
         >
       {:else if preparing}
-        <button class="button danger start" on:click={() => void cancelPreparation()}
-          >{preparingCancelled ? 'Cancelling…' : 'Cancel download'}</button
-        >
-      {:else if scopeChoice}
         <button
-          class="button start scope-one"
-          disabled={!canStartOne && !canPrepareOne}
-          title={oneTitle || undefined}
-          on:click={() => void startScope(false)}>Only this one</button
+          class="button danger start"
+          title="Stops the download. What is already downloaded is kept, and the next download continues from there."
+          on:click={() => void cancelPreparation()}
+          >{preparingCancelled
+            ? 'Cancelling…'
+            : Math.max(activeDownloads.length, preparingPendingIds.length) > 1
+              ? 'Cancel downloads'
+              : 'Cancel download'}</button
         >
-        <button
-          class="button primary start"
-          disabled={!canStartAll && !canPrepareAll}
-          title={allTitle || undefined}
-          on:click={() => void startScope(true)}
-          >{canPrepareAll
-            ? `Download ${formatBytes(downloads.bytes)}, then ${allPhrase}`
-            : allPhrase.charAt(0).toUpperCase() + allPhrase.slice(1)}</button
-        >
-      {:else if canPrepare}
-        <button
-          class="button primary start"
-          title={singleHint || undefined}
-          on:click={() => void prepareAndStart()}
-          >{`Download ${formatBytes(downloads.bytes)}, then ${startVerb}`}</button
-        >
-      {:else if !batchLabel || queueSelection.length}
-        <button
-          class="button primary start"
-          disabled={!canStart}
-          title={singleHint || undefined}
-          on:click={() => start()}
-          >{settings.task === 'video'
-            ? 'Start selected video'
-            : settings.task === 'denoise'
-              ? 'Restore selected'
-              : settings.task === 'edit'
-                ? 'Edit selected'
-                : 'Upscale selected'}</button
-        >
+      {:else}
+        {#if downloadStatus}<button
+            class="button"
+            title="Stops the download. What is already downloaded is kept, and the next download continues from there."
+            on:click={() => void cancelAllDownloads()}
+            >{cancellingDownloads
+              ? 'Cancelling…'
+              : activeDownloads.length > 1
+                ? 'Cancel downloads'
+                : 'Cancel download'}</button
+          >{/if}
+        {#if scopeChoice}
+          <button
+            class="button start scope-one"
+            disabled={!canStartOne && !canPrepareOne}
+            title={oneTitle || undefined}
+            on:click={() => void startScope(false)}>Only this one</button
+          >
+          <button
+            class="button primary start"
+            disabled={!canStartAll && !canPrepareAll}
+            title={allTitle || undefined}
+            on:click={() => void startScope(true)}
+            >{canPrepareAll
+              ? `Download ${formatBytes(downloads.bytes)}, then ${allPhrase}`
+              : allPhrase.charAt(0).toUpperCase() + allPhrase.slice(1)}</button
+          >
+        {:else if canPrepare}
+          <button
+            class="button primary start"
+            title={singleHint || undefined}
+            on:click={() => void prepareAndStart()}
+            >{`Download ${formatBytes(downloads.bytes)}, then ${startVerb}`}</button
+          >
+        {:else if !batchLabel || queueSelection.length}
+          <button
+            class="button primary start"
+            disabled={!canStart}
+            title={singleHint || undefined}
+            on:click={() => start()}
+            >{settings.task === 'video'
+              ? 'Start selected video'
+              : settings.task === 'denoise'
+                ? 'Restore selected'
+                : settings.task === 'edit'
+                  ? 'Edit selected'
+                  : 'Upscale selected'}</button
+          >
+        {/if}
       {/if}
     </div>
   </footer>

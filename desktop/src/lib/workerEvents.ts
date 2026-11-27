@@ -588,6 +588,7 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
           Number.isFinite(totalBytes) && totalBytes > 0
             ? totalBytes
             : (existing[index]?.total_bytes ?? 0),
+        received_bytes: 0,
       };
       const updated =
         index >= 0 ? existing.map((item, i) => (i === index ? entry : item)) : [...existing, entry];
@@ -612,6 +613,13 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
             ? totalBytes
             : (existing[index]?.total_bytes ?? 0),
       };
+      if (data.phase === 'downloading' || data.phase === 'verifying') {
+        entry.phase = data.phase;
+      }
+      if (data.received_bytes !== undefined) {
+        const receivedBytes = Number(data.received_bytes);
+        if (Number.isFinite(receivedBytes)) entry.received_bytes = receivedBytes;
+      }
       const updated =
         index >= 0 ? existing.map((item, i) => (i === index ? entry : item)) : [...existing, entry];
       syncPrimaryDownload(next.runtime, updated);

@@ -180,6 +180,8 @@ function hostScript(scenario: Scenario): void {
     status: 'queued' | 'downloading';
     progress: number;
     totalBytes: number;
+    phase: 'downloading' | 'verifying';
+    receivedBytes: number;
     resolve: () => void;
     reject: (error: string) => void;
   };
@@ -192,6 +194,8 @@ function hostScript(scenario: Scenario): void {
       progress: item.progress,
       downloaded_bytes: Math.round((item.progress / 100) * item.totalBytes),
       total_bytes: item.totalBytes,
+      phase: item.phase,
+      received_bytes: item.receivedBytes,
     }));
     const primary =
       activeDownloads.find((item) => item.status === 'downloading') ?? activeDownloads[0];
@@ -220,6 +224,8 @@ function hostScript(scenario: Scenario): void {
       for (const m of [
         ...snapshot.catalog.models,
         ...snapshot.catalog.video_models,
+        ...(snapshot.catalog.interpolation_models ?? []),
+        ...(snapshot.catalog.audio_models ?? []),
         ...snapshot.edit.models,
       ]) {
         if (m.model_id === modelId) m.installed = true;
@@ -231,31 +237,52 @@ function hostScript(scenario: Scenario): void {
     emit('state-changed', null);
     entry.resolve();
   };
-  const failDownload = (modelId: string, errorMessage: string) => {
+  const failDownload = (
+    modelId: string,
+    errorMessage: string,
+    extra?: { reason?: 'offline' | 'server' | 'damaged' | 'disk_full' | 'folder' | 'other' },
+  ) => {
     const idx = activeDownloads.findIndex((item) => item.modelId === modelId);
     if (idx < 0) return;
     const [entry] = activeDownloads.splice(idx, 1);
+    const keptBytes =
+      extra?.reason === 'damaged' ? 0 : Math.round((entry.progress / 100) * entry.totalBytes);
     promoteDownloads();
     syncDownloads();
     emit('worker-message', {
       type: 'download-failed',
-      data: { model_id: modelId, error_message: errorMessage },
+      data: {
+        model_id: modelId,
+        error_message: errorMessage,
+        reason: extra?.reason ?? 'other',
+        downloaded_bytes: keptBytes,
+        total_bytes: entry.totalBytes,
+      },
     });
     emit('state-changed', null);
     entry.reject(errorMessage);
   };
-  const progressDownload = (modelId: string, progress: number) => {
+  const progressDownload = (
+    modelId: string,
+    progress: number,
+    extra?: { phase?: 'downloading' | 'verifying'; receivedBytes?: number },
+  ) => {
     const entry = activeDownloads.find((item) => item.modelId === modelId);
     if (!entry) return;
+    const downloadedBytes = Math.round((progress / 100) * entry.totalBytes);
     entry.progress = progress;
+    entry.phase = extra?.phase ?? 'downloading';
+    entry.receivedBytes = extra?.receivedBytes ?? downloadedBytes;
     syncDownloads();
     emit('worker-message', {
       type: 'download-progress',
       data: {
         model_id: modelId,
-        downloaded_bytes: Math.round((progress / 100) * entry.totalBytes),
+        downloaded_bytes: downloadedBytes,
         total_bytes: entry.totalBytes,
         progress,
+        phase: entry.phase,
+        received_bytes: entry.receivedBytes,
       },
     });
     emit('state-changed', null);
@@ -1016,6 +1043,8 @@ function hostScript(scenario: Scenario): void {
         const model = [
           ...snapshot.catalog.models,
           ...snapshot.catalog.video_models,
+          ...(snapshot.catalog.interpolation_models ?? []),
+          ...(snapshot.catalog.audio_models ?? []),
           ...snapshot.edit.models,
         ].find((m: Json) => m.model_id === modelId);
         const totalBytes = Number(model?.size_bytes ?? model?.total_size_bytes ?? 10_000_000);
@@ -1027,6 +1056,8 @@ function hostScript(scenario: Scenario): void {
             status,
             progress: 0,
             totalBytes,
+            phase: 'downloading',
+            receivedBytes: 0,
             resolve,
             reject,
           });
@@ -1193,22 +1224,32 @@ type FakeHostControls = {
   answers: Record<string, unknown>;
   emit: (event: string, payload: unknown) => void;
   finishDownload: (modelId: string) => void;
-  failDownload: (modelId: string, errorMessage: string) => void;
-  progressDownload: (modelId: string, progress: number) => void;
+  failDownload: (
+    modelId: string,
+    errorMessage: string,
+    extra?: { reason?: 'offline' | 'server' | 'damaged' | 'disk_full' | 'folder' | 'other' },
+  ) => void;
+  progressDownload: (
+    modelId: string,
+    progress: number,
+    extra?: { phase?: 'downloading' | 'verifying'; receivedBytes?: number },
+  ) => void;
 };
 
 export async function progressDownload(
   page: Page,
   modelId: string,
   progress: number,
+  extra?: { phase?: 'downloading' | 'verifying'; receivedBytes?: number },
 ): Promise<void> {
   await page.evaluate(
-    ([id, pct]) =>
+    ([id, pct, details]) =>
       (window as unknown as { __fakeHost: FakeHostControls }).__fakeHost.progressDownload(
         id as string,
         pct as number,
+        details as { phase?: 'downloading' | 'verifying'; receivedBytes?: number } | undefined,
       ),
-    [modelId, progress] as const,
+    [modelId, progress, extra] as const,
   );
 }
 
@@ -1219,14 +1260,22 @@ export async function finishDownload(page: Page, modelId: string): Promise<void>
   );
 }
 
-export async function failDownload(page: Page, modelId: string, message: string): Promise<void> {
+export async function failDownload(
+  page: Page,
+  modelId: string,
+  message: string,
+  extra?: { reason?: 'offline' | 'server' | 'damaged' | 'disk_full' | 'folder' | 'other' },
+): Promise<void> {
   await page.evaluate(
-    ([id, text]) =>
+    ([id, text, details]) =>
       (window as unknown as { __fakeHost: FakeHostControls }).__fakeHost.failDownload(
         id as string,
         text as string,
+        details as
+          | { reason?: 'offline' | 'server' | 'damaged' | 'disk_full' | 'folder' | 'other' }
+          | undefined,
       ),
-    [modelId, message] as const,
+    [modelId, message, extra] as const,
   );
 }
 /** From now on the host refuses `command` with this message. */
