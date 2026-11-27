@@ -1678,7 +1678,7 @@ describe('Viewer between steps', () => {
     }
   });
 
-  it('shows the original when M is held during a job and restores the step preview on release', async () => {
+  it('shows the original when M is held during a job, hides the step label, and restores both on release', async () => {
     const { drawImage, pendingDecodes } = setupCanvasAndImages();
     const { component, container, rerender } = render(PreviewPane, {
       selectedMedia: photo,
@@ -1686,7 +1686,12 @@ describe('Viewer between steps', () => {
       completedVideoOutput: '',
       processing: true,
       stagePreview: '',
+      stepLabel: 'Step 2 of 4 · Upscale 4×',
     });
+
+    expect(container.querySelector('.step-label')?.getAttribute('aria-hidden')).toBe('true');
+    expect(container.querySelector('.step-label .activity-dot')).toBeTruthy();
+    expect(container.querySelector('.step-label')?.textContent).toBe('Step 2 of 4 · Upscale 4×');
 
     const stepUrl = 'asset://localhost/%2Fcache%2Fpreviews%2Fstep-m.jpg';
     await rerender({ stagePreview: stepUrl });
@@ -1722,11 +1727,29 @@ describe('Viewer between steps', () => {
       'data:image/jpeg;base64,source-orig',
     );
     expect(container.querySelector('.progressive-image.visible')).toBeNull();
+    expect(container.querySelector('.step-label')).toBeNull();
     expect(container.querySelector('.original-chip')?.textContent).toBe('Original');
 
     await fireEvent.keyUp(window, { key: 'm' });
     expect(container.querySelector('.source-image')?.getAttribute('src')).toBe(stepUrl);
     expect(container.querySelector('.progressive-image.visible')).toBeTruthy();
     expect(container.querySelector('.original-chip')).toBeNull();
+    expect(container.querySelector('.step-label')?.textContent).toBe('Step 2 of 4 · Upscale 4×');
+  });
+
+  it('does not render the step label when stepLabel is empty or processing is false', async () => {
+    setupCanvasAndImages();
+    const { container, rerender } = render(PreviewPane, {
+      selectedMedia: photo,
+      resultPreview: '',
+      completedVideoOutput: '',
+      processing: true,
+      stagePreview: '',
+      stepLabel: '',
+    });
+    expect(container.querySelector('.step-label')).toBeNull();
+
+    await rerender({ processing: false, stepLabel: 'Step 2 of 4 · Colour' });
+    expect(container.querySelector('.step-label')).toBeNull();
   });
 });

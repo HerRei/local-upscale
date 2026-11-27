@@ -10987,3 +10987,378 @@ describe('Download status bar, Start, and failures', () => {
     expect(await screen.findByRole('dialog', { name: 'Model library' })).toBeTruthy();
   });
 });
+
+describe('Step names', () => {
+  it('shows the viewer label, status bar title and plan line marks for a four-step job running step 2, and hides label and marks when another file is selected', async () => {
+    const first = image('photo', true);
+    const second = image('other', false);
+    const snapshot = readySnapshot([first, second]);
+    snapshot.settings = {
+      ...snapshot.settings,
+      task: 'upscale',
+      output_scale: 4,
+      fixes: ['jpeg', 'colour', 'noise'],
+      fix_stages: [
+        { fix: 'jpeg', model_id: 'fbcnn_color' },
+        { fix: 'colour', model_id: 'ddcolor_modelscope' },
+        { fix: 'noise', model_id: 'denoise_realplksr_1x' },
+      ],
+      selected_model_id: 'span_photo_x4',
+    };
+    for (const model of snapshot.catalog.models) model.installed = true;
+    snapshot.jobs = [
+      {
+        id: 'job-steps',
+        media_id: 'photo',
+        media_name: 'photo.png',
+        media_kind: 'image',
+        status: 'running',
+        output_path: '',
+        progress: 0,
+        error: '',
+        created_at: 1,
+        model_id: 'span_photo_x4',
+      },
+    ];
+    api.selectMedia.mockImplementation(async (id: string) => {
+      snapshot.media.forEach((item) => (item.selected = item.id === id));
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    });
+
+    const user = await mountWith(snapshot);
+    const foot = document.querySelector('.panel-foot') as HTMLElement;
+    await within(foot).findByText('JPEG → Colour → Noise → Upscale 4×');
+
+    const emitWorker = api.listenForWorker.mock.calls[0]?.[0] as (message: WorkerEnvelope) => void;
+    const emit = (message: WorkerEnvelope) => {
+      snapshot.runtime = applyWorkerEnvelope(snapshot, message).runtime;
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+      emitWorker(message);
+    };
+    const jobSteps = [
+      {
+        kind: 'deblock',
+        fix: 'jpeg',
+        model_id: 'fbcnn_color',
+        state: 'waiting',
+        note: '',
+        preview_url: '',
+        kept: false,
+      },
+      {
+        kind: 'restore',
+        fix: 'colour',
+        model_id: 'ddcolor_modelscope',
+        state: 'waiting',
+        note: '',
+        preview_url: '',
+        kept: false,
+      },
+      {
+        kind: 'restore',
+        fix: 'noise',
+        model_id: 'denoise_realplksr_1x',
+        state: 'waiting',
+        note: '',
+        preview_url: '',
+        kept: false,
+      },
+      {
+        kind: 'upscale',
+        fix: '',
+        model_id: 'span_photo_x4',
+        state: 'waiting',
+        note: '',
+        preview_url: '',
+        kept: false,
+      },
+    ];
+    emit({ type: 'job_started', data: { job_id: 'job-steps', job_steps: jobSteps } });
+    emit({
+      type: 'stage_started',
+      data: {
+        job_id: 'job-steps',
+        stage_index: 0,
+        stage_count: 4,
+        step: 'deblock',
+        fix: 'jpeg',
+        model_id: 'fbcnn_color',
+      },
+    });
+    emit({
+      type: 'stage_result',
+      data: {
+        job_id: 'job-steps',
+        stage_index: 0,
+        stage_count: 4,
+        step: 'deblock',
+        fix: 'jpeg',
+        skipped: false,
+        note: '',
+        preview_url: 'data:image/jpeg;base64,jpeg-done',
+      },
+    });
+    emit({
+      type: 'stage_started',
+      data: {
+        job_id: 'job-steps',
+        stage_index: 1,
+        stage_count: 4,
+        step: 'restore',
+        fix: 'colour',
+        model_id: 'ddcolor_modelscope',
+      },
+    });
+    emit({
+      type: 'progress',
+      data: { job_id: 'job-steps', percentage: 31, completed_tiles: 0, total_tiles: 1 },
+    });
+
+    await waitFor(() =>
+      expect(document.querySelector('.status-copy strong')?.textContent).toBe(
+        'Step 2 of 4 · Colour · 31%',
+      ),
+    );
+    const stepLabelEl = document.querySelector('.step-label') as HTMLElement;
+    expect(stepLabelEl).toBeTruthy();
+    expect(stepLabelEl.getAttribute('aria-hidden')).toBe('true');
+    expect(stepLabelEl.querySelector('.activity-dot')).toBeTruthy();
+    expect(stepLabelEl.textContent).toBe('Step 2 of 4 · Colour');
+
+    const planTrigger = foot.querySelector('.foot-plan') as HTMLElement;
+    expect(planTrigger.getAttribute('aria-label')).toBe(
+      'Plan: JPEG done, Colour running, Noise, Upscale 4×',
+    );
+    expect(planTrigger.querySelector('.foot-plan-text.marked')?.textContent).toBe(
+      '✓ JPEG → Colour → Noise → Upscale 4×',
+    );
+    expect(planTrigger.querySelector('.foot-plan-step.done')?.textContent).toBe('✓ JPEG');
+    expect(planTrigger.querySelector('.foot-plan-step.running')?.textContent).toBe('Colour');
+    expect(
+      Array.from(planTrigger.querySelectorAll('.foot-plan-step.waiting')).map(
+        (el) => el.textContent,
+      ),
+    ).toEqual(['Noise', 'Upscale 4×']);
+
+    // Selecting another file hides the viewer label and plan-line marks while keeping the global bar title.
+    await user.click(screen.getByRole('button', { name: /^other\.png/ }));
+    await waitFor(() => expect(document.title).toContain('other.png'));
+    expect(document.querySelector('.step-label')).toBeNull();
+    expect(foot.querySelectorAll('.foot-plan-step')).toHaveLength(0);
+    expect(foot.querySelector('.foot-plan')?.getAttribute('aria-label')).toBe(
+      'Plan: JPEG, Colour, Noise, Upscale 4×',
+    );
+    expect(document.querySelector('.status-copy strong')?.textContent).toBe(
+      'Step 2 of 4 · Colour · 31%',
+    );
+  });
+
+  it('holds a skipped step label in the viewer for 4 s and hides label and marks for a one-step job', async () => {
+    const photo = image('photo', true);
+    const snapshot = readySnapshot([photo]);
+    snapshot.settings = {
+      ...snapshot.settings,
+      task: 'upscale',
+      output_scale: 4,
+      fixes: ['blur', 'jpeg', 'noise'],
+      fix_stages: [
+        { fix: 'blur', model_id: 'nafnet_gopro_deblur' },
+        { fix: 'jpeg', model_id: 'fbcnn_color' },
+        { fix: 'noise', model_id: 'denoise_realplksr_1x' },
+      ],
+      selected_model_id: 'span_photo_x4',
+    };
+    for (const model of snapshot.catalog.models) model.installed = true;
+    snapshot.jobs = [
+      {
+        id: 'job-skip',
+        media_id: 'photo',
+        media_name: 'photo.png',
+        media_kind: 'image',
+        status: 'running',
+        output_path: '',
+        progress: 0,
+        error: '',
+        created_at: 1,
+        model_id: 'span_photo_x4',
+      },
+    ];
+
+    await mountWith(snapshot);
+    const foot = document.querySelector('.panel-foot') as HTMLElement;
+    await within(foot).findByText('Blur → JPEG → Noise → Upscale 4×');
+    const emitWorker = api.listenForWorker.mock.calls[0]?.[0] as (message: WorkerEnvelope) => void;
+
+    vi.useFakeTimers();
+    try {
+      emitWorker({
+        type: 'job_started',
+        data: {
+          job_id: 'job-skip',
+          job_steps: [
+            {
+              kind: 'restore',
+              fix: 'blur',
+              model_id: 'nafnet_gopro_deblur',
+              state: 'waiting',
+              note: '',
+              preview_url: '',
+              kept: false,
+            },
+            {
+              kind: 'deblock',
+              fix: 'jpeg',
+              model_id: 'fbcnn_color',
+              state: 'waiting',
+              note: '',
+              preview_url: '',
+              kept: false,
+            },
+            {
+              kind: 'restore',
+              fix: 'noise',
+              model_id: 'denoise_realplksr_1x',
+              state: 'waiting',
+              note: '',
+              preview_url: '',
+              kept: false,
+            },
+            {
+              kind: 'upscale',
+              fix: '',
+              model_id: 'span_photo_x4',
+              state: 'waiting',
+              note: '',
+              preview_url: '',
+              kept: false,
+            },
+          ],
+        },
+      });
+      emitWorker({
+        type: 'stage_started',
+        data: {
+          job_id: 'job-skip',
+          stage_index: 0,
+          stage_count: 4,
+          step: 'restore',
+          fix: 'blur',
+          model_id: 'nafnet_gopro_deblur',
+        },
+      });
+      await tick();
+      expect(document.querySelector('.step-label')?.textContent).toBe('Step 1 of 4 · Blur');
+
+      emitWorker({
+        type: 'stage_result',
+        data: {
+          job_id: 'job-skip',
+          stage_index: 0,
+          stage_count: 4,
+          step: 'restore',
+          fix: 'blur',
+          skipped: true,
+          note: 'Blur model did not improve this image.',
+        },
+      });
+      await tick();
+      emitWorker({
+        type: 'stage_started',
+        data: {
+          job_id: 'job-skip',
+          stage_index: 1,
+          stage_count: 4,
+          step: 'deblock',
+          fix: 'jpeg',
+          model_id: 'fbcnn_color',
+        },
+      });
+      await tick();
+
+      // Status bar and plan line advance at once while the skipped label stays for 4 s.
+      expect(document.querySelector('.status-copy strong')?.textContent).toBe('Step 2 of 4 · JPEG');
+      expect(foot.querySelector('.foot-plan')?.getAttribute('aria-label')).toBe(
+        'Plan: Blur skipped, JPEG running, Noise, Upscale 4×',
+      );
+      expect(document.querySelector('.step-label')?.textContent).toBe('Step 1 of 4 · Blur skipped');
+
+      await vi.advanceTimersByTimeAsync(3999);
+      await tick();
+      expect(document.querySelector('.step-label')?.textContent).toBe('Step 1 of 4 · Blur skipped');
+
+      await vi.advanceTimersByTimeAsync(1);
+      await tick();
+      expect(document.querySelector('.step-label')?.textContent).toBe('Step 2 of 4 · JPEG');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows no viewer label or plan marks for a one-step job', async () => {
+    const photo = image('photo', true);
+    const snapshot = readySnapshot([photo]);
+    snapshot.settings = {
+      ...snapshot.settings,
+      task: 'upscale',
+      output_scale: 4,
+      fixes: [],
+      fix_stages: [],
+      selected_model_id: 'span_photo_x4',
+    };
+    for (const model of snapshot.catalog.models) model.installed = true;
+    snapshot.jobs = [
+      {
+        id: 'job-one',
+        media_id: 'photo',
+        media_name: 'photo.png',
+        media_kind: 'image',
+        status: 'running',
+        output_path: '',
+        progress: 0,
+        error: '',
+        created_at: 1,
+        model_id: 'span_photo_x4',
+      },
+    ];
+
+    await mountWith(snapshot);
+    const foot = document.querySelector('.panel-foot') as HTMLElement;
+    await within(foot).findByText('Upscale 4×');
+    const emitWorker = api.listenForWorker.mock.calls[0]?.[0] as (message: WorkerEnvelope) => void;
+    emitWorker({
+      type: 'job_started',
+      data: {
+        job_id: 'job-one',
+        job_steps: [
+          {
+            kind: 'upscale',
+            fix: '',
+            model_id: 'span_photo_x4',
+            state: 'waiting',
+            note: '',
+            preview_url: '',
+            kept: false,
+          },
+        ],
+      },
+    });
+    emitWorker({
+      type: 'stage_started',
+      data: {
+        job_id: 'job-one',
+        stage_index: 0,
+        stage_count: 1,
+        step: 'upscale',
+        fix: '',
+        model_id: 'span_photo_x4',
+      },
+    });
+
+    await waitFor(() =>
+      expect(document.querySelector('.status-copy strong')?.textContent).toBe('Enhancing'),
+    );
+    expect(document.querySelector('.step-label')).toBeNull();
+    expect(foot.querySelectorAll('.foot-plan-step')).toHaveLength(0);
+    expect(foot.querySelector('.foot-plan')?.getAttribute('aria-label')).toBe('Plan: Upscale 4×');
+  });
+});

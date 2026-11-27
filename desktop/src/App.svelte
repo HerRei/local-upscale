@@ -102,6 +102,7 @@
   } from './lib/fixStages';
   import { DEFAULT_FIX_ORDER, FIX_NAMES, MULTI_FIX_FEATURE, stepFeature } from './lib/steps';
   import { applyWorkerEnvelope, resultPreviewForSelectedMedia } from './lib/workerEvents';
+  import { stepLabel, stepName } from './lib/jobSteps';
   import { formatBytes, formatDuration, formatVideoClock } from './lib/format';
   import { plainEngineError, recommendedEngineOffer } from './lib/engines';
   import { videoAvailability } from './lib/videoEngines';
@@ -128,6 +129,7 @@
     FixKind,
     FixStageSelection,
     IntegrationStatus,
+    JobStep,
     LaunchIntent,
     MediaItem,
     MediaResults,
@@ -318,6 +320,50 @@
   let lastLivePreviewSequence = 0;
   $: activeStepPreview =
     snapshot.runtime.job_steps?.reduceRight((found, step) => found || step.preview_url, '') ?? '';
+  let skippedStepLabel = '';
+  let skippedStepTimer: ReturnType<typeof setTimeout> | undefined;
+  let trackedStepJobId = '';
+  let trackedStepStates: JobStep['state'][] = [];
+
+  function clearSkippedStepLabel(): void {
+    if (skippedStepTimer) clearTimeout(skippedStepTimer);
+    skippedStepTimer = undefined;
+    skippedStepLabel = '';
+  }
+
+  function observeJobSteps(
+    jobId: string,
+    steps: readonly JobStep[],
+    currentSettings: UiSettings,
+    isVideo: boolean,
+  ): void {
+    if (!jobId || steps.length < 2) {
+      trackedStepJobId = '';
+      trackedStepStates = [];
+      clearSkippedStepLabel();
+      return;
+    }
+    const nextStates = steps.map((step) => step.state);
+    if (trackedStepJobId !== jobId || trackedStepStates.length !== steps.length) {
+      trackedStepJobId = jobId;
+      trackedStepStates = nextStates;
+      clearSkippedStepLabel();
+      return;
+    }
+    // Keep a newly skipped step in the viewer corner for 4 s before the next step's label.
+    for (let index = 0; index < steps.length; index += 1) {
+      if (steps[index].state === 'skipped' && trackedStepStates[index] !== 'skipped') {
+        const name = stepName(steps[index], currentSettings, isVideo);
+        skippedStepLabel = `Step ${index + 1} of ${steps.length} · ${name} skipped`;
+        if (skippedStepTimer) clearTimeout(skippedStepTimer);
+        skippedStepTimer = setTimeout(() => {
+          skippedStepTimer = undefined;
+          skippedStepLabel = '';
+        }, 4000);
+      }
+    }
+    trackedStepStates = nextStates;
+  }
   let diagnostics = '';
   let reportOpen = false;
   let reportDiagnostics = '';
@@ -960,11 +1006,23 @@
       .filter((job) => ['queued', 'starting', 'running', 'cancelling'].includes(job.status))
       .map((job) => job.media_id),
   );
-  $: activeJobMediaId =
-    snapshot.jobs.find((job) => job.id === snapshot.runtime.active_job_id)?.media_id ?? '';
-  $: videoEngineBusy = Boolean(
-    snapshot.jobs.find((job) => job.id === snapshot.runtime.active_job_id)?.media_kind === 'video',
-  );
+  $: activeJob = snapshot.jobs.find((job) => job.id === snapshot.runtime.active_job_id);
+  $: activeJobMediaId = activeJob?.media_id ?? '';
+  $: videoEngineBusy = activeJob?.media_kind === 'video';
+  $: activeJobIsVideo = activeJob ? activeJob.media_kind === 'video' : settings.task === 'video';
+  $: activeJobSteps = snapshot.runtime.job_steps ?? [];
+  $: observeJobSteps(snapshot.runtime.active_job_id, activeJobSteps, settings, activeJobIsVideo);
+  $: viewerStepLabel =
+    activeJobMediaId && selectedMedia?.id === activeJobMediaId && activeJobSteps.length >= 2
+      ? skippedStepLabel || stepLabel(activeJobSteps, settings, activeJobIsVideo)
+      : '';
+  $: activeStepTitle =
+    snapshot.runtime.active_job_id &&
+    activeJobSteps.length >= 2 &&
+    !snapshot.runtime.status_title.startsWith('Step ') &&
+    ['Processing', 'Enhancing', ''].includes(snapshot.runtime.status_title)
+      ? stepLabel(activeJobSteps, settings, activeJobIsVideo)
+      : '';
   $: runnableMedia = settings.task
     ? snapshot.media.filter((media) => (settings.task === 'video') === (media.kind === 'video'))
     : [];
@@ -1773,6 +1831,7 @@
       accent.dispose();
       if (stateRefresh) clearTimeout(stateRefresh);
       if (runtimePulseTimer) clearTimeout(runtimePulseTimer);
+      if (skippedStepTimer) clearTimeout(skippedStepTimer);
       if (autoStartTimer) clearTimeout(autoStartTimer);
       if (etaTimer) clearInterval(etaTimer);
       for (const unlisten of unlisteners) unlisten();
@@ -4894,6 +4953,7 @@
           stagePreview={!activeJobMediaId || selectedMedia?.id === activeJobMediaId
             ? activeStepPreview
             : ''}
+          stepLabel={viewerStepLabel}
           {selectedMedia}
           resultPreview={shownView.resultPreview}
           referenceIsResult={shownView.referenceIsResult}
@@ -4963,7 +5023,7 @@
               : saving
                 ? 'Saving the result'
                 : snapshot.runtime.active_job_id
-                  ? snapshot.runtime.status_title
+                  ? activeStepTitle || snapshot.runtime.status_title
                   : downloadStatus
                     ? `${downloadStatus.title} · ${Math.round(downloadStatus.percent)}%`
                     : !preparing && downloadFailureLine

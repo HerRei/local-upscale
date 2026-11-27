@@ -89,6 +89,8 @@
   export let showLiveTiles = true;
   /** Full-image result from an earlier stage (for example colour before upscaling). */
   export let stagePreview = '';
+  /** Current step label shown in the corner for multi-step jobs. */
+  export let stepLabel = '';
   /** Why a pair is shown as a single result, for example a different framing. */
   export let comparisonNote = '';
   export let completedVideoOutput: string;
@@ -1529,6 +1531,11 @@
           >
         {/if}
       {/each}
+      {#if processing && stepLabel && !holdingOriginal && !resultPreview && !pairShown}
+        <div class="step-label" aria-hidden="true">
+          <span class="activity-dot"></span><span>{stepLabel}</span>
+        </div>
+      {/if}
       {#if videoPreparation}
         <div class="playback-preparation" role="status" on:pointerdown|stopPropagation>
           <span class="playback-spinner" aria-hidden="true"></span>
