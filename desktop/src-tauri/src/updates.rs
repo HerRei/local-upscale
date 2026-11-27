@@ -1627,6 +1627,161 @@ pub(crate) fn full_verify_engine_files(
     verify_engine_directory(&root.join("engine"), &meta.files, EngineCheck::Full)
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static ENGINE_FILE_HASH_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_engine_file_hash_count() {
+    ENGINE_FILE_HASH_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn engine_file_hash_count() -> usize {
+    ENGINE_FILE_HASH_COUNT.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn record_engine_file_hash() {
+    ENGINE_FILE_HASH_COUNT.with(|count| count.set(count.get() + 1));
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct EngineFileStamp {
+    len: u64,
+    modified: std::time::SystemTime,
+    #[cfg(unix)]
+    dev: u64,
+    #[cfg(unix)]
+    ino: u64,
+    #[cfg(unix)]
+    ctime: i64,
+    #[cfg(unix)]
+    ctime_nsec: i64,
+    #[cfg(windows)]
+    creation_time: u64,
+    #[cfg(windows)]
+    last_write_time: u64,
+}
+
+impl EngineFileStamp {
+    fn from_metadata(meta: &fs::Metadata) -> io::Result<Self> {
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+        #[cfg(windows)]
+        use std::os::windows::fs::MetadataExt;
+
+        Ok(Self {
+            len: meta.len(),
+            modified: meta.modified()?,
+            #[cfg(unix)]
+            dev: meta.dev(),
+            #[cfg(unix)]
+            ino: meta.ino(),
+            #[cfg(unix)]
+            ctime: meta.ctime(),
+            #[cfg(unix)]
+            ctime_nsec: meta.ctime_nsec(),
+            #[cfg(windows)]
+            creation_time: meta.creation_time(),
+            #[cfg(windows)]
+            last_write_time: meta.last_write_time(),
+        })
+    }
+}
+
+#[derive(Clone)]
+struct CachedCodeFile {
+    expected_sha256: String,
+    stamp: EngineFileStamp,
+}
+
+// Per-process cache of engine code files that passed their checksum. The engine restarts
+// after every Stop; a file is hashed again whenever its stamp or expected checksum changes.
+static ENGINE_CODE_HASH_CACHE: std::sync::LazyLock<
+    std::sync::Mutex<HashMap<PathBuf, CachedCodeFile>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+fn code_cache_key(path: &Path) -> Option<PathBuf> {
+    std::path::absolute(path).ok()
+}
+
+fn remove_cached_code_key(key: &Option<PathBuf>) {
+    let Some(key) = key else {
+        return;
+    };
+    if let Ok(mut cache) = ENGINE_CODE_HASH_CACHE.lock() {
+        cache.remove(key);
+    }
+}
+
+fn hash_opened_engine_file(file: &mut fs::File) -> io::Result<(u64, String)> {
+    #[cfg(test)]
+    record_engine_file_hash();
+    crate::engine_payload::sha256_reader(file)
+}
+
+fn hash_engine_file(path: &Path) -> io::Result<(u64, String)> {
+    let mut file = fs::File::open(path)?;
+    hash_opened_engine_file(&mut file)
+}
+
+fn verify_code_file_cached(path: &Path, expected_size: u64, expected_sha256: &str) -> bool {
+    let key = code_cache_key(path);
+    let Ok(mut file) = fs::File::open(path) else {
+        remove_cached_code_key(&key);
+        return false;
+    };
+    // Read the stamp from the opened handle so it always describes the same file
+    // whose bytes are hashed on a miss.
+    let Ok(meta) = file.metadata() else {
+        remove_cached_code_key(&key);
+        return false;
+    };
+    if !meta.is_file() {
+        remove_cached_code_key(&key);
+        return false;
+    }
+    let stamp = EngineFileStamp::from_metadata(&meta).ok();
+
+    if let (Some(key), Some(stamp)) = (&key, &stamp) {
+        if let Ok(cache) = ENGINE_CODE_HASH_CACHE.lock() {
+            if stamp.len == expected_size
+                && cache.get(key).is_some_and(|entry| {
+                    entry.expected_sha256 == expected_sha256 && &entry.stamp == stamp
+                })
+            {
+                return true;
+            }
+        }
+    }
+
+    let ok = hash_opened_engine_file(&mut file)
+        .is_ok_and(|(size, digest)| size == expected_size && digest == expected_sha256);
+
+    if let Some(key) = key {
+        if let Ok(mut cache) = ENGINE_CODE_HASH_CACHE.lock() {
+            if ok {
+                if let Some(stamp) = stamp {
+                    cache.insert(
+                        key,
+                        CachedCodeFile {
+                            expected_sha256: expected_sha256.to_owned(),
+                            stamp,
+                        },
+                    );
+                } else {
+                    cache.remove(&key);
+                }
+            } else {
+                cache.remove(&key);
+            }
+        }
+    }
+    ok
+}
+
 fn verify_engine_directory(
     engine_dir: &Path,
     files: &[crate::engine_payload::InstalledEngineFile],
@@ -1649,6 +1804,9 @@ fn verify_engine_directory(
         let code = || engine_code_file(&relative) || executable_content(path, stat);
         let Some(entry) = expected.remove(relative.as_str()) else {
             return if code() {
+                if matches!(check, EngineCheck::Code) {
+                    remove_cached_code_key(&code_cache_key(path));
+                }
                 Err(invalid(format!(
                     "Engine code file has no checksum: {relative}"
                 )))
@@ -1657,14 +1815,22 @@ fn verify_engine_directory(
             };
         };
         if stat.len() != entry.size {
+            if matches!(check, EngineCheck::Code) {
+                remove_cached_code_key(&code_cache_key(path));
+            }
             return Err(invalid(format!(
                 "Engine file has the wrong size: {relative}"
             )));
         }
-        if (matches!(check, EngineCheck::Full) || (matches!(check, EngineCheck::Code) && code()))
-            && !crate::engine_payload::sha256_file(path)
-                .is_ok_and(|(size, digest)| size == entry.size && digest == entry.sha256)
-        {
+        let hash_matches = match check {
+            EngineCheck::Sizes => true,
+            EngineCheck::Code => {
+                !code() || verify_code_file_cached(path, entry.size, &entry.sha256)
+            }
+            EngineCheck::Full => hash_engine_file(path)
+                .is_ok_and(|(size, digest)| size == entry.size && digest == entry.sha256),
+        };
+        if !hash_matches {
             return Err(invalid(format!(
                 "Engine file failed checksum verification: {relative}"
             )));
