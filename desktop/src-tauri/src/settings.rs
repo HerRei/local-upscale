@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::{
     error::{AppError, AppResult},
     paths::AppPaths,
-    types::{BenchmarkResult, Recipe, UiSettings},
+    types::{BenchmarkResult, CatalogManifest, Recipe, UiSettings},
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -40,7 +40,15 @@ pub fn load(paths: &AppPaths) -> (UiSettings, Vec<Recipe>) {
     let document = effective_document_path(paths).and_then(|path| read_document(&path));
     if let Some(mut document) = document {
         adopt_automatic_video_format(&mut document.ui);
-        keep_runnable_step_stages(&mut document.ui);
+        let catalog = crate::catalog::bundled_catalog().unwrap_or_else(|_| CatalogManifest {
+            schema_version: 0,
+            catalog_revision: String::new(),
+            models: Vec::new(),
+            video_models: Vec::new(),
+            interpolation_models: Vec::new(),
+            audio_models: Vec::new(),
+        });
+        keep_runnable_step_stages(&mut document.ui, &catalog);
         return (document.ui, document.recipes);
     }
 
@@ -72,20 +80,26 @@ fn adopt_automatic_video_format(settings: &mut UiSettings) {
     }
 }
 
-/// A newer LocalSR may have saved steps or parameter values this version does not know;
-/// keeping them would make every later save of these settings fail its validation.
-fn keep_runnable_step_stages(settings: &mut UiSettings) {
+/// A newer LocalSR may have saved steps, parameter values or step models this version does
+/// not know; keeping them would make every later save of these settings fail its validation,
+/// or leave a step waiting for a model this catalog cannot offer.
+fn keep_runnable_step_stages(settings: &mut UiSettings, catalog: &CatalogManifest) {
     let steps = crate::steps::registry();
     let mut seen = std::collections::HashSet::new();
     settings.step_stages.retain(|stage| {
-        steps
-            .validate_step_stage(
-                &stage.step,
-                stage.params.as_ref(),
-                stage.mask_path.as_deref(),
-            )
-            .is_ok()
-            && seen.insert(stage.step.clone())
+        let Ok(step) = steps.validate_step_stage(
+            &stage.step,
+            stage.params.as_ref(),
+            stage.mask_path.as_deref(),
+        ) else {
+            return false;
+        };
+        let model_known = match stage.chosen_model() {
+            None => true,
+            Some(_) if !step.needs_model => false,
+            Some(_) => crate::job_plan::step_stage_model(catalog, step, stage).is_some(),
+        };
+        model_known && seen.insert(stage.step.clone())
     });
 }
 
@@ -687,6 +701,58 @@ mod tests {
         );
         save(&paths, &settings, &recipes).unwrap();
         assert_eq!(load(&paths).0.step_stages, settings.step_stages);
+    }
+
+    #[test]
+    fn step_entries_keep_only_models_this_catalog_offers_for_the_step() {
+        use crate::types::StepStageSelection;
+
+        crate::steps::testing::with_steps(vec![crate::steps::testing::cutout()], || {
+            let stage = |step: &str, model_id: Option<&str>| StepStageSelection {
+                step: step.into(),
+                model_id: model_id.map(str::to_owned),
+                ..StepStageSelection::default()
+            };
+            let mut catalog = crate::catalog::bundled_catalog().unwrap();
+            let mut cutout_model = catalog.models[0].clone();
+            cutout_model.model_id = "cutout_model".into();
+            cutout_model.purposes = vec!["test_cutout".into()];
+            catalog.models.push(cutout_model);
+
+            for (entry, kept) in [
+                (stage("test_cutout", Some("cutout_model")), true),
+                // Waits for a choice, as a fix without a model does.
+                (stage("test_cutout", None), true),
+                (stage("test_cutout", Some("from_a_newer_catalog")), false),
+                (stage("test_cutout", Some("span_photo_x4")), false),
+                (stage("grain", Some("cutout_model")), false),
+                (stage("grain", None), true),
+            ] {
+                let mut settings = UiSettings {
+                    step_stages: vec![entry.clone()],
+                    ..UiSettings::default()
+                };
+                keep_runnable_step_stages(&mut settings, &catalog);
+                assert_eq!(settings.step_stages.len(), usize::from(kept), "{entry:?}");
+            }
+
+            // Loading uses this version's catalog, which has no cut-out model.
+            let directory = tempfile::tempdir().unwrap();
+            let paths = AppPaths::under(directory.path());
+            fs::create_dir_all(&paths.next_root).unwrap();
+            fs::write(
+                &paths.settings,
+                r#"{"schema_version":2,"ui":{"step_stages":[
+                    {"step":"test_cutout","model_id":"cutout_model"},
+                    {"step":"grain","params":{"strength":40}}
+                ]},"recipes":[]}"#,
+            )
+            .unwrap();
+            assert_eq!(
+                serde_json::to_value(load(&paths).0.step_stages).unwrap(),
+                serde_json::json!([{"step": "grain", "params": {"strength": 40}}])
+            );
+        });
     }
 
     #[test]

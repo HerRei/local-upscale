@@ -20,6 +20,7 @@ from .steps import (
     STEPS,
     StepDefinition,
     dev_steps_enabled,
+    is_step_stage,
     parameter_for,
     resolve_step,
     validate_step_params,
@@ -167,7 +168,7 @@ def _is_fix_only_stages(raw: object) -> bool:
             )
         except ValueError:
             return False
-        if not step.in_image_pipeline or step.needs_model or item.get("role") == "primary":
+        if not is_step_stage(step) or item.get("role") == "primary":
             return False
     return True
 
@@ -186,7 +187,7 @@ def _parse_fix_only_stages(raw: object, media: str) -> tuple[PipelineStage, ...]
 
 
 def _check_stage_count(raw: list[object]) -> None:
-    # Model stages and the model-less steps a job adds by id have separate bounds.
+    # Model stages and the steps a job adds by id have separate bounds.
     if len(raw) > LIMITS.max_image_pipeline_stages + LIMITS.max_step_stages:
         raise ValueError(
             f"Image recipes support at most {LIMITS.max_image_pipeline_stages} bounded stages."
@@ -199,9 +200,9 @@ def _check_each_runs_once(
     fixes = [stage.fix for stage in stages if stage.fix is not None]
     if len(set(fixes)) != len(fixes):
         raise ValueError("Each fix kind may run only once.")
-    modelless = [step.id for step in steps if not step.needs_model]
-    if len(set(modelless)) != len(modelless):
-        raise ValueError("Each model-less step may run only once.")
+    added = [step.id for step in steps if is_step_stage(step)]
+    if len(set(added)) != len(added):
+        raise ValueError("Each added step may run only once.")
 
 
 def _parse_stage_item(item: object, media: str) -> tuple[PipelineStage, StepDefinition]:
@@ -271,20 +272,27 @@ def parse_pipeline_stages(raw: object, *, media: str = "image") -> tuple[Pipelin
     parsed = [_parse_stage_item(item, media) for item in raw]
     stages: list[PipelineStage] = [stage for stage, _ in parsed]
     steps_list: list[StepDefinition] = [step for _, step in parsed]
-    if sum(1 for step in steps_list if step.needs_model) > LIMITS.max_image_pipeline_stages:
+    # Fixes, the primary and Faces; a step stage with a model counts with the added steps.
+    model_stages = [step.needs_model and not is_step_stage(step) for step in steps_list]
+    if sum(model_stages) > LIMITS.max_image_pipeline_stages:
         raise ValueError(
             f"Image recipes support at most {LIMITS.max_image_pipeline_stages} bounded stages."
         )
 
     kinds = [stage.kind for stage in stages]
     primary_index = _primary_index(stages)
-    fix_before = sum(1 for step in steps_list[:primary_index] if step.needs_model)
+    fix_before = sum(model_stages[:primary_index])
     if fix_before > MAX_FIX_STAGES:
         raise ValueError(
             f"Only {MAX_FIX_STAGES} restoration/deblock stages may precede the primary stage."
         )
-    for stage, step in zip(stages[:primary_index], steps_list[:primary_index], strict=True):
-        if step.needs_model:
+    for stage, step, model_stage in zip(
+        stages[:primary_index],
+        steps_list[:primary_index],
+        model_stages[:primary_index],
+        strict=True,
+    ):
+        if model_stage:
             if stage.kind not in FIX_STAGE_KINDS:
                 raise ValueError("Only restoration or deblock may precede the primary stage.")
             if stage.role not in {"", "fix"}:
@@ -308,7 +316,11 @@ def parse_pipeline_stages(raw: object, *, media: str = "image") -> tuple[Pipelin
             raise ValueError("The trailing stage must have the face role.")
         trailing_start += 1
     for stage, step in zip(stages[trailing_start:], steps_list[trailing_start:], strict=True):
-        if _PHASE_INDEX[step.phase] <= _FACE_PHASE or step.needs_model or stage.role == "primary":
+        if (
+            _PHASE_INDEX[step.phase] <= _FACE_PHASE
+            or not is_step_stage(step)
+            or stage.role == "primary"
+        ):
             raise ValueError("Face restoration is the only optional stage after the primary stage.")
     return tuple(stages)
 

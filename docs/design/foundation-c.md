@@ -202,12 +202,79 @@ To try it: start LocalSR with `LOCALSR_DEV_STEPS=1` and add
 `"step_stages": [{"step": "grain", "params": {"strength": 40, "seed": 7}}]` to the `ui` object
 of the settings file (a `mask_path` must be a photo added to LocalSR).
 
+### Steps with a model, alpha output and jobs of steps alone
+
+The plumbing background removal needs, behind the same dev gate. No shipped step uses it
+yet: the tests register steps (and a catalog model) of their own, as `test_pipeline.py`
+does for model-less steps.
+
+- Registry: `model_task` (the catalog `purposes` entry a step's models carry) and
+  `output_alpha` (`src/localsr/core/steps.py:74`, `:76`), exported by
+  `scripts/export_desktop_steps.py:63`; read in Rust (`desktop/src-tauri/src/steps.rs:149`,
+  `:152`) and TypeScript (`desktop/src/lib/steps.ts:47`, `:49`). A step stage is now a stage
+  list entry that is not a fix and is model-less or names a `model_task`
+  (`is_step_stage`, `is_model_step_stage`, `steps.py:427`, `:437`; `steps.rs:192`;
+  `steps.ts:125`).
+- Selection: `StepStageSelection.model_id`, omitted when absent
+  (`desktop/src-tauri/src/types.rs:352`, `desktop/src/lib/types.ts:319`).
+- Host checks: a model id only on a step that needs one, and at start one is required
+  (`desktop/src-tauri/src/commands.rs:4505`, messages at `:4536`, `:4551`); the model is
+  resolved with the fix's code, now `installed_stage_model` (`commands.rs:4873`): known,
+  of the step's task (`job_plan::serves_step`, `desktop/src-tauri/src/job_plan.rs:259`) and
+  installed (`commands.rs:5052`). Like a fix model it travels as `model_id` and
+  `model_path` on its stage (`commands.rs:5497`); the worker checks the file against the
+  catalog SHA-256 before it reads it (`ModelAdapter._checkpoint_trust`). Settings load
+  drops a step entry whose model this catalog does not offer for the step
+  (`desktop/src-tauri/src/settings.rs:86`).
+- Plan, both languages: a step with a model gets the fix's row, with the model, its download
+  size and `can_download`/`needs_file`, or a `missing` row while none resolves
+  (`job_plan.rs:297`, `desktop/src/lib/plan.ts:319`), so `pendingDownloads` fetches it and
+  Start waits (`stepStagesReady`, `plan.ts:218`; `desktop/src/App.svelte:951`).
+- Alpha output: a photo job with an `output_alpha` step keeps PNG, TIFF and WebP and saves
+  JPEG and HEIC as PNG (`output_format_keeping_alpha`, `job_plan.rs:280`, in the start input
+  at `:743`; `outputFormatKeepingAlpha`, `plan.ts:229`, `desktop/src/lib/startInput.ts:105`;
+  enforced again at start, `keep_alpha_output_format`, `commands.rs:4247`, `:1314`,
+  `:1878`). The output line then reads "PNG · folder · Saved as PNG to keep the transparent
+  background." (`desktop/src/lib/enhancePanel.ts:111`).
+- Jobs of steps alone: Restore with nothing picked and an added step plans the step alone
+  (no "Nothing to run", `App.svelte:930`), and the host runs it at 1x without a main model
+  (`no_restore_model`, `commands.rs:4755`, which now covers photos as well as videos).
+- Worker: `_is_fix_only_stages` and the stage parser take model-bearing step stages, before
+  the fixes or after Faces, counted with the added steps and once only
+  (`src/localsr/core/pipeline.py:171`, `:203`, `:276`, `:321`). Such a stage loads its model
+  as a fix does (inspect with the catalog check, `engine.load_model`, release afterwards)
+  and its handler in `IMAGE_MODEL_STEP_HANDLERS` gets it as a `StepModel`
+  (`src/localsr/worker/image_job.py:403`, `:453`, `:746`). A video job refuses such a stage
+  (`src/localsr/worker/server.py:2202`).
+- Alpha in the worker: an `output_alpha` handler returns a matte (height x width, 0..1);
+  `_with_matte` multiplies it into the image's alpha (resized to the image as the save does,
+  a mask keeping the alpha outside it) and leaves the colour as it was (`image_job.py:275`,
+  `:696`); the runner keeps the manager's alpha in step (`:556`, `:811`), and the save
+  scales any alpha to the saved picture, so a matte set before the upscaler grows with it and
+  one set after it is already at the output size (`src/localsr/core/image_io.py:844`,
+  `:947`).
+- Tests: `tests/test_model_steps.py` (a tiny one-channel ESRGAN in a temporary catalog,
+  loaded through the engine; a tampered copy refused; alpha before and after a 2x upscale, at
+  8 and 16 bits, with a mask; a step-only job at 1x; parser bounds; the registry rules),
+  `tests/test_video_chain.py`
+  (`test_video_job_refuses_a_step_that_brings_its_own_model`), Rust tests in `steps.rs`
+  (test steps via `steps::testing::with_steps`, `steps.rs:21`), `job_plan.rs`, `settings.rs`
+  and `commands/tests.rs`, `desktop/src/lib/stepStages.test.ts`, `steps.test.ts`,
+  `App.test.ts` ("runs an added step alone at Same size"), fourteen parity cases with
+  steps and catalog models of their own (`extra_steps`, `extra_models`;
+  `desktop/src/lib/jobPlanParity.test.ts:663`), and the host-built request sample
+  `image_step_with_model_alone` in `tests/fixtures/job_request_samples.json`, which the
+  worker resolves in `test_the_hosts_model_step_sample_resolves_in_the_worker`.
+
 ## What each tool still needs
 
-- **Background removal** (model step, alpha out): a model-bearing step stage
-  (`StepStageSelection.model_id`, resolved through the catalog like a fix), a handler that
-  sets the image's alpha instead of its colour, and a host rule that forces an output format
-  with alpha (PNG, TIFF, WebP).
+- **Background removal** (model step, alpha out): the plumbing is in (see "Steps with a
+  model, alpha output and jobs of steps alone"). Still needed: the step itself
+  (`model_task`, `output_alpha`, a `required_feature`), its catalog model with a
+  `purposes` entry for that task and a loader the model adapter knows, its handler in
+  `IMAGE_MODEL_STEP_HANDLERS`, and a UI row with the model choice. A 1x catalog model of
+  that task would also show among the Restore models (`modelsForTask` takes every 1x model
+  that is not a face model), so those lists must leave step models out.
 - **Video stabilisation and deinterlacing** (model-less, parameters): a video handler in
   `VIDEO_STEP_HANDLERS` (both are phase `geometry`, so they arrive before the primary through
   `step_stages` already); the output size after a crop and the frame rate after field
@@ -228,6 +295,6 @@ of the settings file (a `mask_path` must be a photo added to LocalSR).
   a large 4× output needs a banded or tiled path before such a step ships.
 - **Recipes**: `RecipeStage` already has `params` and `mask_path`, but recipes do not save
   step stages yet (`in_recipe_stages` is false for `grain`).
-- **Restore with only a step** (no fix chosen): the UI shows "Nothing to run" and the host
-  refuses the empty model id (`unknown image model`); a tool that is the whole job
-  (background removal alone) needs that path. 1× Upscale with only a step runs.
+- **Status line and name of a step-only job**: while it runs, the activity line names the
+  step's label, not its model (`activityModel` in `App.svelte`), and the result is named
+  like any Restore result (`_denoised`, `output_ending` in `commands.rs`).

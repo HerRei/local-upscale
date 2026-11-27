@@ -210,6 +210,7 @@ fn multi_fix_serialization_preserves_five_stages_and_restore_primary_role() {
     let mut options = input("upscale");
     let stages = serde_json::to_value(image_pipeline_stages(
         &prefix,
+        &[],
         "main",
         "/models/main",
         Some("/models/face"),
@@ -233,6 +234,7 @@ fn multi_fix_serialization_preserves_five_stages_and_restore_primary_role() {
         serde_json::from_value(json!([{"fix":"noise","model_id":"noise"}])).unwrap();
     let stages = serde_json::to_value(image_pipeline_stages(
         &prefix[..2],
+        &[],
         "noise",
         "/models/noise",
         None,
@@ -1630,6 +1632,7 @@ fn image_jobs_request_a_bounded_nonblocking_progressive_preview() {
         model_id: "model".into(),
         path: "/models/upscaler.safetensors".into(),
         preprocess: Vec::new(),
+        step_models: Vec::new(),
         face_path: None,
         face_model_id: String::new(),
         native_scale: 4,
@@ -1798,6 +1801,7 @@ fn image_recipe_serializes_restore_upscale_and_fused_face_in_order() {
             params: None,
             mask_path: None,
         }],
+        step_models: Vec::new(),
         face_path: Some("/models/face.pth".into()),
         face_model_id: "hat_l_x4_face".into(),
         native_scale: 4,
@@ -2349,6 +2353,7 @@ fn hdr_preservation_refuses_interpolation_only_for_hdr_sources() {
         model_id: "span_photo_x4".into(),
         path: "/models/span.pth".into(),
         preprocess: Vec::new(),
+        step_models: Vec::new(),
         face_path: None,
         face_model_id: String::new(),
         native_scale: 4,
@@ -2724,6 +2729,7 @@ fn a_start_that_cannot_be_written_is_refused_before_anything_is_queued() {
         model_id: "model".into(),
         path: "/models/m.pth".into(),
         preprocess: Vec::new(),
+        step_models: Vec::new(),
         face_path: None,
         face_model_id: String::new(),
         native_scale: 4,
@@ -4512,6 +4518,7 @@ fn remembered_pickle_consent_requires_an_engine_that_checks_the_digest() {
         path: "/models/checkpoint.pth".into(),
         approved_checkpoint_sha256: Some("a".repeat(64)),
         preprocess: vec![],
+        step_models: Vec::new(),
         face_path: None,
         face_model_id: String::new(),
         native_scale: 4,
@@ -4883,6 +4890,7 @@ fn stage_params_and_masks_are_forwarded_and_gated_by_engine_feature() {
     }];
     let serialized = serde_json::to_value(image_pipeline_stages(
         &resolved,
+        &[],
         "main",
         "/models/main.pth",
         None,
@@ -4904,6 +4912,7 @@ fn grain_stage(params: serde_json::Value, mask_path: Option<&str>) -> StepStageS
         step: "grain".into(),
         params: params.as_object().cloned(),
         mask_path: mask_path.map(str::to_owned),
+        model_id: None,
     }
 }
 
@@ -4991,6 +5000,271 @@ fn step_stages_need_their_engine_feature_and_a_start_that_can_run_them() {
     assert!(validate_start_input(&temporal, true).is_err());
 }
 
+fn photo_media() -> crate::types::MediaItem {
+    crate::types::MediaItem {
+        id: "media".into(),
+        path: "/in/photo.png".into(),
+        name: "photo.png".into(),
+        kind: "image".into(),
+        width: 64,
+        height: 48,
+        frame_count: 1,
+        fps: 0.0,
+        duration_seconds: 0.0,
+        preview_data_url: String::new(),
+        probe_status: "ready".into(),
+        hdr_format: String::new(),
+        audio_warning: String::new(),
+        has_audio: false,
+        error: String::new(),
+        selected: true,
+    }
+}
+
+/// The test cut-out step (`steps::testing::cutout`) with `model_id` chosen.
+fn cutout_stage(model_id: Option<&str>) -> StepStageSelection {
+    StepStageSelection {
+        step: "test_cutout".into(),
+        model_id: model_id.map(str::to_owned),
+        ..StepStageSelection::default()
+    }
+}
+
+/// A catalog model for task `task`, made from a shipped 1x model.
+fn task_model(id: &str, task: &str, installed: bool) -> CatalogModel {
+    let mut model = crate::catalog::bundled_catalog()
+        .unwrap()
+        .models
+        .into_iter()
+        .find(|model| model.model_id == "denoise_realplksr_1x")
+        .unwrap();
+    model.model_id = id.into();
+    model.filename = format!("{id}.safetensors");
+    model.purposes = vec![task.into()];
+    model.fixes = Vec::new();
+    model.installed = installed;
+    model.installed_path = installed.then(|| format!("/models/{id}.safetensors"));
+    model
+}
+
+/// An app state whose catalog also has cut-out models: one installed, one not, and an
+/// installed one of another task.
+fn cutout_state(directory: &Path) -> AppState {
+    let state = AppState::from_paths(AppPaths::under(directory)).unwrap();
+    {
+        let mut catalog = lock(&state.catalog).unwrap();
+        for model in &mut catalog.models {
+            model.installed = true;
+            model.installed_path = Some(format!("/models/{}", model.filename));
+        }
+        catalog.models.extend([
+            task_model("cutout_ready", "test_cutout", true),
+            task_model("cutout_missing", "test_cutout", false),
+            task_model("other_task", "test_other", true),
+        ]);
+    }
+    state
+}
+
+#[test]
+fn a_step_stage_names_a_model_exactly_when_its_step_needs_one() {
+    crate::steps::testing::with_steps(vec![crate::steps::testing::cutout()], || {
+        let ready = cutout_stage(Some("cutout_ready"));
+        assert!(validate_step_stages(std::slice::from_ref(&ready), Some("image")).is_ok());
+        // Saved settings may wait for a choice, as a fix's may; a start may not.
+        for waiting in [cutout_stage(None), cutout_stage(Some(""))] {
+            assert!(validate_step_stages(std::slice::from_ref(&waiting), None).is_ok());
+            let refusal = validate_step_stages(&[waiting], Some("image"))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                refusal.contains("Choose a model for Test cut-out"),
+                "{refusal}"
+            );
+        }
+        let too_long = cutout_stage(Some(&"m".repeat(65)));
+        assert!(validate_step_stages(&[too_long], None).is_err());
+        let mut grain = grain_stage(json!({}), None);
+        grain.model_id = Some("cutout_ready".into());
+        let refusal = validate_step_stages(std::slice::from_ref(&grain), None)
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains("without a model"), "{refusal}");
+        assert!(validate_settings(&UiSettings {
+            step_stages: vec![grain],
+            ..UiSettings::default()
+        })
+        .is_err());
+        assert!(validate_step_stages(&[ready], Some("video")).is_err());
+    });
+}
+
+#[test]
+fn a_step_model_is_resolved_like_a_fix_model_and_travels_with_its_stage() {
+    crate::steps::testing::with_steps(vec![crate::steps::testing::cutout()], || {
+        let directory = tempfile::tempdir().unwrap();
+        let state = cutout_state(directory.path());
+        let mut options = input("upscale");
+        options.model_id = "span_photo_x4".into();
+        options.fix_stages = vec![crate::types::FixStageSelection {
+            fix: "noise".into(),
+            model_id: "scunet_color_real_psnr".into(),
+            ..Default::default()
+        }];
+        options.step_stages = vec![cutout_stage(Some("cutout_ready"))];
+        let selection = resolve_model_selection(&state, &options).unwrap();
+        let ModelSelection::Image {
+            step_models,
+            preprocess,
+            ..
+        } = &selection
+        else {
+            panic!("expected an image plan");
+        };
+        assert_eq!(
+            step_models,
+            &vec![ResolvedStepModel {
+                step: "test_cutout".into(),
+                model_id: "cutout_ready".into(),
+                path: "/models/cutout_ready.safetensors".into(),
+            }]
+        );
+        assert_eq!(preprocess.len(), 1);
+
+        for (model_id, message) in [
+            (None, "choose a model for Test cut-out"),
+            (Some("unknown"), "choose a model for Test cut-out"),
+            (
+                Some("cutout_missing"),
+                "download and verify the model for Test cut-out",
+            ),
+            (
+                Some("other_task"),
+                "Test cut-out must use one of its own models",
+            ),
+            (
+                Some("scunet_color_real_psnr"),
+                "must use one of its own models",
+            ),
+        ] {
+            options.step_stages = vec![cutout_stage(model_id)];
+            let refusal = resolve_model_selection(&state, &options)
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(refusal.contains(message), "{model_id:?}: {refusal}");
+        }
+
+        // The stage carries the model as a fix stage carries its own: id and catalog path,
+        // which the worker checks against the catalog's SHA-256 before reading it.
+        options.step_stages = vec![cutout_stage(Some("cutout_ready"))];
+        let message = build_job_message(
+            "job",
+            &photo_media(),
+            Path::new("/out/photo.png"),
+            Path::new("/work"),
+            &options,
+            &resolve_model_selection(&state, &options).unwrap(),
+        )
+        .unwrap();
+        let stages = message["data"]["stages"].as_array().unwrap();
+        assert_eq!(
+            stages[0],
+            json!({
+                "kind": "test_cutout",
+                "step": "test_cutout",
+                "model_id": "cutout_ready",
+                "model_path": "/models/cutout_ready.safetensors"
+            })
+        );
+        let fix_file = lock(&state.catalog)
+            .unwrap()
+            .models
+            .iter()
+            .find(|model| model.model_id == "scunet_color_real_psnr")
+            .unwrap()
+            .filename
+            .clone();
+        assert_eq!(stages[1]["model_id"], "scunet_color_real_psnr");
+        assert_eq!(stages[1]["model_path"], format!("/models/{fix_file}"));
+        assert!(message["data"]["approved_checkpoint_sha256"].is_null());
+        assert_eq!(message["data"]["allow_unverified_checkpoint"], false);
+    });
+}
+
+#[test]
+fn a_photo_job_with_a_matte_step_saves_in_a_format_that_keeps_the_alpha() {
+    crate::steps::testing::with_steps(vec![crate::steps::testing::cutout()], || {
+        for (format, saved) in [
+            ("jpg", "png"),
+            ("heic", "png"),
+            ("png", "png"),
+            ("tif", "tif"),
+            ("webp", "webp"),
+        ] {
+            let mut photo = input("upscale");
+            photo.output_format = format.into();
+            photo.step_stages = vec![cutout_stage(Some("cutout_ready"))];
+            keep_alpha_output_format(&mut photo);
+            assert_eq!(photo.output_format, saved, "{format}");
+            assert_eq!(output_ending(&photo).1, saved);
+        }
+        let mut plain = input("upscale");
+        plain.output_format = "jpg".into();
+        plain.step_stages = vec![grain_stage(json!({}), None)];
+        keep_alpha_output_format(&mut plain);
+        assert_eq!(plain.output_format, "jpg");
+    });
+}
+
+#[test]
+fn restore_with_only_a_step_plans_a_one_times_job_without_a_main_model() {
+    crate::steps::testing::with_steps(vec![crate::steps::testing::cutout()], || {
+        let directory = tempfile::tempdir().unwrap();
+        let state = cutout_state(directory.path());
+        let mut alone = input("denoise");
+        alone.model_id = String::new();
+        alone.output_scale = 1;
+        let refusal = validate_start_input(&alone, true).unwrap_err().to_string();
+        assert!(refusal.contains("Nothing to run"), "{refusal}");
+
+        for stage in [
+            grain_stage(json!({}), None),
+            cutout_stage(Some("cutout_ready")),
+        ] {
+            alone.step_stages = vec![stage];
+            assert!(validate_start_input(&alone, true).is_ok());
+            let selection = resolve_model_selection(&state, &alone).unwrap();
+            let ModelSelection::Image {
+                model_id,
+                path,
+                skip_upscale,
+                native_scale,
+                ..
+            } = &selection
+            else {
+                panic!("expected an image plan");
+            };
+            assert!(*skip_upscale && model_id.is_empty() && path.is_empty());
+            assert_eq!(*native_scale, 1);
+            let message = build_job_message(
+                "job",
+                &photo_media(),
+                Path::new("/out/photo_denoised.png"),
+                Path::new("/work"),
+                &alone,
+                &selection,
+            )
+            .unwrap();
+            assert_eq!(message["data"]["model_path"], "");
+            assert_eq!(message["data"]["output_scale"], 1);
+            let stages = message["data"]["stages"].as_array().unwrap();
+            assert_eq!(stages.len(), 1);
+            assert_eq!(stages[0]["step"], alone.step_stages[0].step);
+        }
+    });
+}
+
 #[test]
 fn a_stage_mask_must_be_a_file_the_user_granted() {
     let directory = tempfile::tempdir().unwrap();
@@ -5042,6 +5316,7 @@ fn image_pipeline_stages_place_step_stages_by_their_phase() {
     };
     let stages = image_pipeline_stages(
         &fix,
+        &[],
         "span_photo_x4",
         "/models/span.pth",
         Some("/models/face.pth"),
@@ -5063,7 +5338,7 @@ fn image_pipeline_stages_place_step_stages_by_their_phase() {
             "mask_path": "/in/mask.png"
         })
     );
-    let one_times = image_pipeline_stages(&fix, "", "", None, "", true, &photo);
+    let one_times = image_pipeline_stages(&fix, &[], "", "", None, "", true, &photo);
     assert_eq!(kinds(&one_times), vec!["restore", "grain"]);
 }
 
@@ -5124,6 +5399,7 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
                 mask_path: None,
             },
         ],
+        step_models: Vec::new(),
         face_path: Some("/models/face.pth".into()),
         face_model_id: "hat_l_x4_face".into(),
         native_scale: 4,
@@ -5159,6 +5435,7 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
             params: None,
             mask_path: None,
         }],
+        step_models: Vec::new(),
         face_path: None,
         face_model_id: String::new(),
         native_scale: 1,
@@ -5185,6 +5462,7 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
             )])),
             mask_path: Some("/in/mask.png".into()),
         }],
+        step_models: Vec::new(),
         face_path: None,
         face_model_id: String::new(),
         native_scale: 4,
@@ -5212,6 +5490,7 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
             params: None,
             mask_path: None,
         }],
+        step_models: Vec::new(),
         face_path: None,
         face_model_id: String::new(),
         native_scale: 4,
@@ -5219,6 +5498,43 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
         interpolation: None,
         audio_denoise: None,
     };
+
+    let work = Path::new("/work/scratch");
+    // Restore with nothing but a step that brings its catalog model, as background removal
+    // alone will run; the step exists only in this test (`steps::testing::cutout`).
+    let mut step_alone_input = input("denoise");
+    step_alone_input.model_id = String::new();
+    step_alone_input.output_scale = 1;
+    step_alone_input.step_stages = vec![cutout_stage(Some("test_cutout_model"))];
+    let step_alone_selection = ModelSelection::Image {
+        model_id: String::new(),
+        path: String::new(),
+        approved_checkpoint_sha256: None,
+        preprocess: Vec::new(),
+        step_models: vec![ResolvedStepModel {
+            step: "test_cutout".into(),
+            model_id: "test_cutout_model".into(),
+            path: "/models/test-cutout.safetensors".into(),
+        }],
+        face_path: None,
+        face_model_id: String::new(),
+        native_scale: 1,
+        skip_upscale: true,
+        interpolation: None,
+        audio_denoise: None,
+    };
+    let step_alone_sample =
+        crate::steps::testing::with_steps(vec![crate::steps::testing::cutout()], || {
+            build_job_message(
+                "sample-image-step-alone",
+                &image_media("/in/portrait.png", "portrait.png"),
+                Path::new("/out/portrait_denoised.png"),
+                work,
+                &step_alone_input,
+                &step_alone_selection,
+            )
+            .unwrap()
+        });
 
     let mut fbf_video_input = input("video");
     fbf_video_input.model_id = "span_photo_x4".into();
@@ -5232,6 +5548,7 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
         path: "/models/span.safetensors".into(),
         approved_checkpoint_sha256: None,
         preprocess: Vec::new(),
+        step_models: Vec::new(),
         face_path: None,
         face_model_id: String::new(),
         native_scale: 4,
@@ -5325,7 +5642,6 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
         ("vae".into(), "/custom/vae.safetensors".into()),
     ]);
 
-    let work = Path::new("/work/scratch");
     let generated = [
         (
             "image_upscale_fixes_and_face",
@@ -5375,6 +5691,7 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
             )
             .unwrap(),
         ),
+        ("image_step_with_model_alone", step_alone_sample),
         (
             "video_interpolation_deflicker_audio",
             build_job_message(
@@ -5577,6 +5894,7 @@ fn precision_auto_validates_and_falls_back_to_fp32_without_engine_feature() {
         path: "/models/span.pth".into(),
         approved_checkpoint_sha256: None,
         preprocess: vec![],
+        step_models: Vec::new(),
         face_path: None,
         face_model_id: String::new(),
         native_scale: 4,

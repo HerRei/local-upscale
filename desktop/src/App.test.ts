@@ -10000,6 +10000,22 @@ describe('Enhance panel foot', () => {
     ).toBe(true);
   });
 
+  it('runs an added step alone at Same size with no fixes, and enables Start', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.step_stages = [{ step: 'grain', params: { strength: 40 } }];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
+    const foot = document.querySelector('.panel-foot') as HTMLElement;
+    expect(await within(foot).findByText('Film grain')).toBeTruthy();
+    expect(
+      within(foot).queryByText('Nothing to run. Pick what to fix, or choose a larger size.'),
+    ).toBeNull();
+    expect(within(foot).queryByText('Nothing to run')).toBeNull();
+    expect(
+      (screen.getByRole('button', { name: 'Restore selected' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
   it('shows terms in the foot without Download model, gates Start, and hides the block while downloading', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.catalog = structuredClone(snapshot.catalog);

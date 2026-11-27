@@ -7,7 +7,7 @@ import {
   fitsFix,
   rememberedFixModel,
 } from './fixStages';
-import { FIX_LABELS, stepStage, type StepDefinition, type StepPlacement } from './steps';
+import { FIX_LABELS, STEPS, stepStage, type StepDefinition, type StepPlacement } from './steps';
 import type {
   AppSnapshot,
   CatalogModel,
@@ -189,25 +189,52 @@ function stepStageMedia(task: UiSettings['task'], usingTemporalVideo: boolean): 
 export function activeStepStages(
   settings: Pick<UiSettings, 'task' | 'step_stages'>,
   usingTemporalVideo: boolean,
+  steps: readonly StepDefinition[] = STEPS,
 ): { selection: StepStageSelection; step: StepDefinition; placement: StepPlacement }[] {
   const media = stepStageMedia(settings.task, usingTemporalVideo);
   if (!media) return [];
   return (settings.step_stages ?? []).flatMap((selection) => {
-    const found = stepStage(selection.step);
+    const found = stepStage(selection.step, steps);
     return found && found.step.media.includes(media) ? [{ selection, ...found }] : [];
   });
 }
 
-function stepStageRow(step: StepDefinition): PlanStage {
-  return {
-    kind: step.id as PlanStage['kind'],
-    role: 'step',
-    label: step.label,
-    installed: true,
-    canDownload: false,
-    needsFile: false,
-    sizeBytes: 0,
-  };
+/** Whether a catalog model is one of the models a step stage takes (its `model_task`). */
+export function servesStep(model: CatalogModel, step: StepDefinition): boolean {
+  return step.model_task !== null && model.purposes.includes(step.model_task);
+}
+
+/** The catalog model a step stage runs: the chosen one, when it serves the step's task. */
+export function stepStageModel(
+  models: CatalogModel[],
+  step: StepDefinition,
+  selection: StepStageSelection,
+): CatalogModel | undefined {
+  if (!selection.model_id) return undefined;
+  return models.find((model) => model.model_id === selection.model_id && servesStep(model, step));
+}
+
+/** Whether every step row of a plan is ready: a step with a model waits for it as a fix does. */
+export function stepStagesReady(stages: readonly PlanStage[]): boolean {
+  return stages.every((stage) => stage.role !== 'step' || stage.installed);
+}
+
+/** What the output line adds when a step's transparent background forces PNG. */
+export const ALPHA_FORMAT_NOTE = 'Saved as PNG to keep the transparent background.';
+
+/**
+ * The format a job saves in: one that keeps the alpha a step sets (PNG, TIFF, WebP), or
+ * PNG in place of any other.
+ */
+export function outputFormatKeepingAlpha(
+  stepStages: readonly StepStageSelection[],
+  format: UiSettings['output_format'],
+  steps: readonly StepDefinition[] = STEPS,
+): UiSettings['output_format'] {
+  const setsAlpha = stepStages.some(
+    (selection) => stepStage(selection.step, steps)?.step.output_alpha === true,
+  );
+  return setsAlpha && !['png', 'tif', 'webp'].includes(format) ? 'png' : format;
 }
 
 /**
@@ -225,6 +252,8 @@ export function resolvePlan(
     selectedVideoModel?: CatalogVideoModel;
     editModel?: EditModel;
     hasAudio?: boolean;
+    /** The step registry; tests add steps that exist only in them. */
+    steps?: readonly StepDefinition[];
   },
 ): PlanStage[] {
   const stages: PlanStage[] = [];
@@ -271,24 +300,11 @@ export function resolvePlan(
       sizeBytes: model.installed ? 0 : model.size_bytes,
     };
 
-  const stepStages = activeStepStages(settings, options.usingTemporalVideo);
-  for (const { step, placement } of stepStages) {
-    if (placement === 'before_fixes') stages.push(stepStageRow(step));
-  }
-  const restoring = isRestoreTask(settings);
-  const fixStages =
-    !options.usingTemporalVideo &&
-    (settings.task === 'upscale' || settings.task === 'video' || restoring)
-      ? settings.fix_stages
-      : [];
-  // Same size's model is its last fix; the ones before it run first, as before an upscale.
-  const chip = restoring ? fixStages.at(-1)?.fix : undefined;
-  const noRestoreModel = restoring && !chip && settings.selected_model_id !== '__custom__';
   const missingStage = (
     kind: PlanStage['kind'],
     role: PlanStage['role'],
     label: string,
-    fix: Exclude<FixKind, 'faces'>,
+    fix?: Exclude<FixKind, 'faces'>,
   ): PlanStage => ({
     kind,
     role,
@@ -300,6 +316,37 @@ export function resolvePlan(
     needsFile: false,
     sizeBytes: 0,
   });
+  const stepStageRow = (step: StepDefinition, selection: StepStageSelection): PlanStage => {
+    const kind = step.id as PlanStage['kind'];
+    if (step.needs_model) {
+      // Like a fix: the chosen model's row, or a row that waits for one.
+      const model = stepStageModel(snapshot.catalog.models, step, selection);
+      return stageFor(kind, 'step', step.label, model) ?? missingStage(kind, 'step', step.label);
+    }
+    return {
+      kind,
+      role: 'step',
+      label: step.label,
+      installed: true,
+      canDownload: false,
+      needsFile: false,
+      sizeBytes: 0,
+    };
+  };
+
+  const stepStages = activeStepStages(settings, options.usingTemporalVideo, options.steps);
+  for (const { step, selection, placement } of stepStages) {
+    if (placement === 'before_fixes') stages.push(stepStageRow(step, selection));
+  }
+  const restoring = isRestoreTask(settings);
+  const fixStages =
+    !options.usingTemporalVideo &&
+    (settings.task === 'upscale' || settings.task === 'video' || restoring)
+      ? settings.fix_stages
+      : [];
+  // Same size's model is its last fix; the ones before it run first, as before an upscale.
+  const chip = restoring ? fixStages.at(-1)?.fix : undefined;
+  const noRestoreModel = restoring && !chip && settings.selected_model_id !== '__custom__';
   for (const selection of restoring ? fixStages.slice(0, -1) : fixStages) {
     const found = byId(selection.model_id);
     const model = found && fitsFix(found, selection.fix) ? found : undefined;
@@ -394,8 +441,8 @@ export function resolvePlan(
     else stages.push(stage);
   }
 
-  for (const { step, placement } of stepStages) {
-    if (placement === 'after_primary') stages.push(stepStageRow(step));
+  for (const { step, selection, placement } of stepStages) {
+    if (placement === 'after_primary') stages.push(stepStageRow(step, selection));
   }
 
   // Audio cleanup runs before video processing when the source has an audio track.

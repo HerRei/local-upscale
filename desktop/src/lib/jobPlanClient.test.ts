@@ -4,7 +4,7 @@ import { get } from 'svelte/store';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HostPlanStage } from './api';
 import { demoSnapshot } from './demo';
-import type { EditModel, UiSettings } from './types';
+import type { CatalogModel, EditModel, UiSettings } from './types';
 
 const api = vi.hoisted(() => ({
   isTauri: vi.fn(() => true),
@@ -231,13 +231,21 @@ describe('jobPlanClient', () => {
     const raw = JSON.parse(fs.readFileSync(FIXTURE_PATH, 'utf8')) as {
       cases: {
         installed_ids: string[];
+        extra_models?: CatalogModel[];
         expected_plan: HostPlanStage[];
       }[];
     };
     const base = demoSnapshot();
     for (const entry of raw.cases) {
+      // Models that exist only in a case are in its catalog, as the plan saw them.
+      const snapshot = entry.extra_models
+        ? {
+            ...base,
+            catalog: { ...base.catalog, models: [...base.catalog.models, ...entry.extra_models] },
+          }
+        : base;
       for (const stage of entry.expected_plan) {
-        expect(toHostStage(hydrateStage(stage, base))).toEqual(stage);
+        expect(toHostStage(hydrateStage(stage, snapshot))).toEqual(stage);
       }
     }
   });

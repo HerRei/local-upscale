@@ -347,6 +347,16 @@ pub struct StepStageSelection {
     pub params: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mask_path: Option<String>,
+    /// The catalog model of a step that needs one; absent while none is chosen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+}
+
+impl StepStageSelection {
+    /// The chosen model id; an empty one is no choice.
+    pub fn chosen_model(&self) -> Option<&str> {
+        self.model_id.as_deref().filter(|id| !id.is_empty())
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

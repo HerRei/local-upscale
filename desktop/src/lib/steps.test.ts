@@ -138,6 +138,26 @@ describe('step registry', () => {
     expect(stepStage('not_listed', steps)).toBeUndefined();
   });
 
+  it('takes a step with a model only when it names the catalog task of its models', () => {
+    const base = STEPS.find((step) => step.id === 'grain')!;
+    const withTask: StepDefinition = {
+      ...base,
+      id: 'with_task',
+      phase: 'cleanup',
+      needs_model: true,
+      model_task: 'matte',
+      output_alpha: true,
+    };
+    const withoutTask: StepDefinition = { ...withTask, id: 'without_task', model_task: null };
+    const fix: StepDefinition = { ...withTask, id: 'fix_with_task', is_fix_stage: true };
+    const steps = [withTask, withoutTask, fix];
+    expect(stepStage('with_task', steps)).toEqual({ step: withTask, placement: 'before_fixes' });
+    expect(stepStage('without_task', steps)).toBeUndefined();
+    expect(stepStage('fix_with_task', steps)).toBeUndefined();
+    // No shipped step brings a model or sets the alpha yet.
+    expect(STEPS.every((step) => step.model_task === null && !step.output_alpha)).toBe(true);
+  });
+
   it('validates stage params generically from a step definition', () => {
     expect(STAGE_PARAMS_FEATURE).toBe('stage_params_and_masks');
     const fixtureStep: StepDefinition = {
@@ -160,6 +180,8 @@ describe('step registry', () => {
       stage_label: '',
       required_feature: null,
       dev_only: false,
+      model_task: null,
+      output_alpha: false,
       parameters: [
         {
           name: 'amount',

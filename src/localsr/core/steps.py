@@ -69,6 +69,11 @@ class StepDefinition:
     parameters: tuple[StepParameter, ...] = ()
     # Runs only when the engine was started with LOCALSR_DEV_STEPS=1.
     dev_only: bool = False
+    # A model-bearing step stage takes its model from the catalog models whose
+    # `purposes` name this task.
+    model_task: str | None = None
+    # The handler returns a single-channel matte that becomes the image's alpha.
+    output_alpha: bool = False
 
 
 @dataclass(frozen=True)
@@ -418,10 +423,23 @@ DEV_STEP_FEATURES: tuple[str, ...] = tuple(
 
 DEV_STEPS_ENV = "LOCALSR_DEV_STEPS"
 
-# Steps a job adds by id beside its fixes: model-less entries of the stage list.
-STEP_STAGE_IDS: tuple[str, ...] = tuple(
-    step.id for step in STEPS if step.in_image_pipeline and not step.needs_model
-)
+
+def is_step_stage(step: StepDefinition) -> bool:
+    """A step a job adds by id beside its fixes: an entry of the stage list that is not a fix
+    and runs without a model or with one from its catalog task."""
+    return (
+        step.in_image_pipeline
+        and not step.is_fix_stage
+        and (not step.needs_model or step.model_task is not None)
+    )
+
+
+def is_model_step_stage(step: StepDefinition) -> bool:
+    """A step stage that brings a catalog model."""
+    return step.needs_model and is_step_stage(step)
+
+
+STEP_STAGE_IDS: tuple[str, ...] = tuple(step.id for step in STEPS if is_step_stage(step))
 
 LIMITS = StepLimits(
     max_fix_stages=len(_FIX_STAGE_STEPS),

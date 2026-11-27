@@ -9,7 +9,56 @@ static REGISTRY: LazyLock<StepRegistry> = LazyLock::new(|| {
 });
 
 pub fn registry() -> &'static StepRegistry {
+    #[cfg(test)]
+    if let Some(registry) = testing::current() {
+        return registry;
+    }
     &REGISTRY
+}
+
+/// Steps that exist only in a test, the way the worker's tests register theirs.
+#[cfg(test)]
+pub mod testing {
+    use std::cell::Cell;
+
+    use super::{StepDefinition, StepRegistry, REGISTRY};
+
+    thread_local! {
+        static CURRENT: Cell<Option<&'static StepRegistry>> = const { Cell::new(None) };
+    }
+
+    pub(super) fn current() -> Option<&'static StepRegistry> {
+        CURRENT.with(Cell::get)
+    }
+
+    /// Runs `body` on this thread with `extra` added to the bundled registry.
+    pub fn with_steps<T>(extra: Vec<StepDefinition>, body: impl FnOnce() -> T) -> T {
+        struct Restore(Option<&'static StepRegistry>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                CURRENT.with(|cell| cell.set(self.0));
+            }
+        }
+        let registry: &'static StepRegistry = Box::leak(Box::new(REGISTRY.with_steps(extra)));
+        let _restore = Restore(CURRENT.with(|cell| cell.replace(Some(registry))));
+        body()
+    }
+
+    /// A step definition from the same JSON shape `steps.json` uses.
+    pub fn step(json: serde_json::Value) -> StepDefinition {
+        serde_json::from_value(json).expect("test step must be a valid step definition")
+    }
+
+    /// A photo step stage with a model from catalog task `test_cutout` that sets the alpha,
+    /// as `tests/test_model_steps.py` (`CUTOUT`) and the plan parity cases define it.
+    pub fn cutout() -> StepDefinition {
+        step(serde_json::json!({
+            "id": "test_cutout", "media": ["image"], "phase": "cleanup", "order": 10,
+            "needs_model": true, "is_fix_stage": false, "in_image_pipeline": true,
+            "in_recipe_stages": false, "label": "Test cut-out",
+            "model_task": "test_cutout", "output_alpha": true
+        }))
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -95,6 +144,12 @@ pub struct StepDefinition {
     /// The engine lists this step's feature only when started with `LOCALSR_DEV_STEPS=1`.
     #[serde(default)]
     pub dev_only: bool,
+    /// A step stage with a model takes it from the catalog models whose `purposes` name this.
+    #[serde(default)]
+    pub model_task: Option<String>,
+    /// The step sets the image's alpha, so the job's output format must keep one.
+    #[serde(default)]
+    pub output_alpha: bool,
     #[serde(default)]
     pub parameters: Vec<StepParameter>,
 }
@@ -119,15 +174,27 @@ impl StepRegistry {
         self.steps.iter().find(|step| step.id == id)
     }
 
+    /// This registry with `extra` steps added, each also counted as a step a job may add.
+    #[cfg(test)]
+    pub fn with_steps(&self, extra: Vec<StepDefinition>) -> Self {
+        let mut registry = self.clone();
+        registry.limits.max_step_stages += extra.len();
+        registry.steps.extend(extra);
+        registry
+    }
+
     fn phase_index(&self, phase: &str) -> Option<usize> {
         self.phases.iter().position(|candidate| candidate == phase)
     }
 
-    /// A model-less step of the stage list that a job adds by id beside its fixes.
+    /// A step of the stage list that a job adds by id beside its fixes: model-less, or
+    /// one whose model comes from the catalog task it names.
     pub fn step_stage(&self, id: &str) -> Option<(&StepDefinition, StepPlacement)> {
-        let step = self
-            .step(id)
-            .filter(|step| step.in_image_pipeline && !step.needs_model && !step.is_fix_stage)?;
+        let step = self.step(id).filter(|step| {
+            step.in_image_pipeline
+                && !step.is_fix_stage
+                && (!step.needs_model || step.model_task.is_some())
+        })?;
         let phase = self.phase_index(&step.phase)?;
         if phase < self.phase_index("primary")? {
             Some((step, StepPlacement::BeforeFixes))
@@ -656,6 +723,60 @@ mod tests {
             .validate_step_stage("upscale", None, None)
             .unwrap_err()
             .contains("upscale"));
+    }
+
+    #[test]
+    fn a_step_with_a_model_is_a_step_stage_only_when_it_names_its_catalog_task() {
+        let cutout = testing::cutout();
+        let late = testing::step(serde_json::json!({
+            "id": "test_late", "media": ["image"], "phase": "grade", "needs_model": true,
+            "is_fix_stage": false, "in_image_pipeline": true, "in_recipe_stages": false,
+            "model_task": "test_late"
+        }));
+        let no_task = StepDefinition {
+            id: "test_no_task".into(),
+            model_task: None,
+            ..cutout.clone()
+        };
+        let fix_with_task = StepDefinition {
+            id: "test_fix_with_task".into(),
+            is_fix_stage: true,
+            ..cutout.clone()
+        };
+        let reg = registry().with_steps(vec![cutout, late, no_task, fix_with_task]);
+        let (step, placement) = reg.step_stage("test_cutout").unwrap();
+        assert_eq!(placement, StepPlacement::BeforeFixes);
+        assert!(step.needs_model && step.output_alpha);
+        assert_eq!(step.model_task.as_deref(), Some("test_cutout"));
+        let (late, placement) = reg.step_stage("test_late").unwrap();
+        assert_eq!(placement, StepPlacement::AfterPrimary);
+        assert!(!late.output_alpha);
+        assert!(reg.step_stage("test_no_task").is_none());
+        assert!(reg.step_stage("test_fix_with_task").is_none());
+        assert!(reg.validate_step_stage("test_cutout", None, None).is_ok());
+        assert_eq!(
+            reg.limits().max_step_stages,
+            registry().limits().max_step_stages + 4
+        );
+
+        // No shipped step brings a model or sets the alpha yet.
+        assert!(registry()
+            .steps
+            .iter()
+            .all(|step| step.model_task.is_none() && !step.output_alpha));
+    }
+
+    #[test]
+    fn test_steps_replace_the_registry_only_inside_their_closure_on_their_thread() {
+        assert!(registry().step("test_cutout").is_none());
+        let inside = testing::with_steps(vec![testing::cutout()], || {
+            let other_thread = std::thread::spawn(|| registry().step("test_cutout").is_none())
+                .join()
+                .unwrap();
+            (registry().step_stage("test_cutout").is_some(), other_thread)
+        });
+        assert_eq!(inside, (true, true));
+        assert!(registry().step("test_cutout").is_none());
     }
 
     #[test]

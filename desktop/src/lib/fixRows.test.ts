@@ -30,6 +30,8 @@ function extraStep(
     stage_label: '',
     required_feature: null,
     dev_only: false,
+    model_task: null,
+    output_alpha: false,
     parameters: [],
     ...overrides,
   };

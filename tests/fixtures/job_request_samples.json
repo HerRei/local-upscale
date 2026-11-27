@@ -195,6 +195,41 @@
       "approved_checkpoint_sha256": null
     }
   },
+  "image_step_with_model_alone": {
+    "type": "job_request",
+    "data": {
+      "job_id": "sample-image-step-alone",
+      "image_path": "/in/portrait.png",
+      "model_path": "",
+      "output_path": "/out/portrait_denoised.png",
+      "scratch_directory": "/work/scratch",
+      "output_format": "png",
+      "device": "cpu",
+      "tile_size": 256,
+      "halo": 32,
+      "precision": "fp32",
+      "jpeg_quality": 98,
+      "preserve_metadata": true,
+      "safe_memory": false,
+      "neural_engine": true,
+      "preview_enabled": true,
+      "preview_max_fps": 2.0,
+      "preview_max_dimension": 320,
+      "output_scale": 1,
+      "face_model_path": null,
+      "face_fidelity": 0.7,
+      "stages": [
+        {
+          "kind": "test_cutout",
+          "step": "test_cutout",
+          "model_id": "test_cutout_model",
+          "model_path": "/models/test-cutout.safetensors"
+        }
+      ],
+      "allow_unverified_checkpoint": false,
+      "approved_checkpoint_sha256": null
+    }
+  },
   "video_interpolation_deflicker_audio": {
     "type": "video_job_request",
     "data": {

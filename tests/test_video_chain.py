@@ -874,3 +874,59 @@ def test_video_job_refuses_a_step_after_the_main_model_instead_of_dropping_it(
                 ],
             },
         )
+
+
+def test_video_job_refuses_a_step_that_brings_its_own_model(tmp_path: Path, monkeypatch) -> None:
+    from localsr.core import steps as steps_mod
+    from localsr.core.steps import StepDefinition
+    from localsr.worker.server import WorkerServer
+
+    source = _make_clip(tmp_path / "in.mp4", frames=2)
+    model_file = tmp_path / "up.pth"
+    model_file.write_bytes(b"model")
+    model_step = StepDefinition(
+        id="test_video_matte",
+        media=("image", "video"),
+        phase="cleanup",
+        order=10,
+        needs_model=True,
+        in_image_pipeline=True,
+        model_task="test_video_matte",
+    )
+    new_steps = (*steps_mod.STEPS, model_step)
+    monkeypatch.setattr(steps_mod, "STEPS", new_steps)
+    monkeypatch.setattr(
+        steps_mod, "STEPS_BY_ID", {**steps_mod.STEPS_BY_ID, model_step.id: model_step}
+    )
+    monkeypatch.setattr("localsr.core.pipeline.STEPS", new_steps)
+
+    server = WorkerServer()
+    server.engine = InferenceEngine(SimpleNamespace(load=lambda *a: None, release=lambda: None))
+    with pytest.raises(ValueError, match="brings its own model"):
+        server._run_video_job(
+            "model-step-video",
+            {
+                "video_path": str(source),
+                "model_path": str(model_file),
+                "output_video_path": str(tmp_path / "out.mkv"),
+                "device": "cpu",
+                "precision": "fp32",
+                "tile_size": 64,
+                "halo": 4,
+                "safe_memory": False,
+                "output_scale": 2,
+                "stages": [
+                    {
+                        "step": "test_video_matte",
+                        "model_id": "matte",
+                        "model_path": str(tmp_path / "matte.pth"),
+                    },
+                    {
+                        "kind": "upscale",
+                        "role": "primary",
+                        "model_id": "up",
+                        "model_path": str(model_file),
+                    },
+                ],
+            },
+        )

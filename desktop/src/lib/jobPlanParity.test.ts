@@ -7,8 +7,10 @@ import { toHostStage } from './jobPlanClient';
 import { withListedDevice } from './neuralEngine';
 import { resolvePlan } from './plan';
 import { buildStartInput } from './startInput';
+import { STEPS, type StepDefinition } from './steps';
 import type {
   CapabilityInfo,
+  CatalogModel,
   FixKind,
   FixStageSelection,
   InterpolationOrder,
@@ -23,6 +25,9 @@ type FixKindNoFace = Exclude<FixKind, 'faces'>;
 interface ParityCase {
   id: string;
   installed_ids: string[];
+  /** Steps and catalog models that exist only in this case. */
+  extra_steps?: StepDefinition[];
+  extra_models?: CatalogModel[];
   capabilities: CapabilityInfo;
   settings: UiSettings;
   options: {
@@ -94,9 +99,19 @@ function makeCase(
     mediaIds?: string[];
     batchMode?: boolean;
     recipeName?: string;
+    extraSteps?: StepDefinition[];
+    extraModels?: CatalogModel[];
   },
 ): ParityCase {
-  const snapshot = demoSnapshot();
+  const shared = demoSnapshot();
+  const extraModels = spec.extraModels?.map((model) => structuredClone(model));
+  const snapshot = extraModels
+    ? {
+        ...shared,
+        catalog: { ...shared.catalog, models: [...shared.catalog.models, ...extraModels] },
+      }
+    : shared;
+  const steps = spec.extraSteps ? [...STEPS, ...spec.extraSteps] : undefined;
   const installedIds = [...new Set(spec.installedIds ?? [])].sort();
   const installedSet = new Set(installedIds);
 
@@ -145,6 +160,7 @@ function makeCase(
     selectedVideoModel,
     editModel,
     hasAudio: hasAudio === null ? undefined : hasAudio,
+    steps,
   });
 
   const mediaIds = spec.mediaIds ?? ['media-1'];
@@ -157,11 +173,14 @@ function makeCase(
     hasAudio: hasAudio === null ? true : hasAudio,
     recipeName,
     capabilities,
+    steps,
   });
 
   return {
     id,
     installed_ids: installedIds,
+    ...(spec.extraSteps ? { extra_steps: spec.extraSteps } : {}),
+    ...(extraModels ? { extra_models: extraModels } : {}),
     capabilities,
     settings,
     options: {
@@ -641,6 +660,131 @@ function buildCorpus(): ParityCase[] {
     });
   }
 
+  // 11. Steps that exist only in these cases: with a catalog model, and setting the alpha
+  const base = STEPS.find((step) => step.id === 'grain')!;
+  const testStep = (overrides: Partial<StepDefinition>): StepDefinition => ({
+    ...base,
+    supports_mask: false,
+    stage_label: '',
+    required_feature: null,
+    dev_only: false,
+    parameters: [],
+    ...overrides,
+  });
+  const extraSteps = [
+    testStep({
+      id: 'test_cutout',
+      phase: 'cleanup',
+      needs_model: true,
+      label: 'Test cut-out',
+      model_task: 'test_cutout',
+      output_alpha: true,
+    }),
+    testStep({
+      id: 'test_tone',
+      phase: 'grade',
+      needs_model: true,
+      label: 'Test tone',
+      model_task: 'test_tone',
+    }),
+    testStep({ id: 'test_key', phase: 'geometry', label: 'Test key', output_alpha: true }),
+  ];
+  const shipped = demoSnapshot().catalog.models.find(
+    (model) => model.model_id === 'denoise_realplksr_1x',
+  )!;
+  const taskModel = (modelId: string, task: string, downloadable: boolean): CatalogModel => ({
+    ...structuredClone(shipped),
+    model_id: modelId,
+    name: `Test ${modelId}`,
+    display_name: `Test ${modelId}`,
+    filename: `${modelId}.safetensors`,
+    purposes: [task],
+    fixes: [],
+    size_bytes: 4321,
+    automated_download_allowed: downloadable,
+  });
+  const extraModels = [
+    taskModel('test_cutout_ready', 'test_cutout', true),
+    taskModel('test_cutout_download', 'test_cutout', true),
+    taskModel('test_cutout_manual', 'test_cutout', false),
+    taskModel('test_tone_model', 'test_tone', true),
+  ];
+  const cutout = (modelId?: string) => ({
+    step: 'test_cutout',
+    ...(modelId === undefined ? {} : { model_id: modelId }),
+  });
+  const tone = { step: 'test_tone', model_id: 'test_tone_model' };
+  const modelStepCases: [
+    string,
+    Partial<UiSettings>,
+    Omit<Parameters<typeof makeCase>[1], 'settingsPatch'>?,
+  ][] = [
+    ['ready-jpg', { output_format: 'jpg', step_stages: [cutout('test_cutout_ready')] }],
+    ['ready-heic', { output_format: 'heic', step_stages: [cutout('test_cutout_ready')] }],
+    ['ready-tif', { output_format: 'tif', step_stages: [cutout('test_cutout_ready')] }],
+    ['ready-webp', { output_format: 'webp', step_stages: [cutout('test_cutout_ready')] }],
+    ['download', { output_format: 'png', step_stages: [cutout('test_cutout_download')] }],
+    ['manual', { output_format: 'png', step_stages: [cutout('test_cutout_manual')] }],
+    ['unchosen', { output_format: 'jpg', step_stages: [cutout()] }],
+    ['unknown-model', { step_stages: [cutout('not_in_this_catalog')] }],
+    ['other-task-model', { step_stages: [cutout('denoise_realplksr_1x')] }],
+    [
+      'key-face-tone',
+      {
+        output_format: 'jpg',
+        fixes: ['faces'],
+        step_stages: [{ step: 'test_key' }, tone],
+      },
+      { faceEnabled: true, faceModelId: 'hat_l_x4_face' },
+    ],
+    ['tone-only-no-alpha', { output_format: 'jpg', step_stages: [tone] }],
+    [
+      'restore-step-alone',
+      {
+        task: 'denoise',
+        selected_model_id: '',
+        output_scale: 1,
+        output_format: 'jpg',
+        fix_stages: [],
+        fixes: [],
+        step_stages: [cutout('test_cutout_ready')],
+      },
+    ],
+    [
+      'restore-fix-then-tone',
+      {
+        task: 'denoise',
+        selected_model_id: 'denoise_realplksr_1x',
+        output_scale: 1,
+        fix_stages: [{ fix: 'noise', model_id: 'denoise_realplksr_1x' }],
+        fixes: ['noise'],
+        step_stages: [cutout('test_cutout_download'), tone],
+      },
+    ],
+    [
+      'video-frame-by-frame',
+      {
+        task: 'video',
+        selected_video_model_id: 'frame_by_frame',
+        step_stages: [cutout('test_cutout_ready')],
+      },
+    ],
+  ];
+  for (const [tag, patch, spec] of modelStepCases) {
+    push(`model-steps-${tag}`, {
+      ...spec,
+      settingsPatch: {
+        task: 'upscale',
+        selected_model_id: 'span_photo_x4',
+        output_scale: 4,
+        ...patch,
+      },
+      installedIds: ['span_photo_x4', 'denoise_realplksr_1x', 'test_cutout_ready'],
+      extraSteps,
+      extraModels,
+    });
+  }
+
   return cases;
 }
 
@@ -665,9 +809,24 @@ describe('job_plan parity corpus', () => {
         'interpolate',
         'audio_denoise',
         'grain',
+        'test_cutout',
+        'test_tone',
+        'test_key',
       ]),
     );
     expect(cases.some((c) => (c.expected_start_input.step_stages ?? []).length > 0)).toBe(true);
+    const modelStepRows = cases.flatMap((c) =>
+      c.expected_plan.filter((s) => s.role === 'step' && s.kind.startsWith('test_')),
+    );
+    expect(modelStepRows.some((s) => s.model_id && s.installed)).toBe(true);
+    expect(modelStepRows.some((s) => s.can_download)).toBe(true);
+    expect(modelStepRows.some((s) => s.needs_file)).toBe(true);
+    expect(modelStepRows.some((s) => s.missing)).toBe(true);
+    expect(
+      cases.some(
+        (c) => c.settings.output_format === 'jpg' && c.expected_start_input.output_format === 'png',
+      ),
+    ).toBe(true);
 
     expect(cases.some((c) => c.expected_plan.some((s) => s.missing === true))).toBe(true);
     expect(cases.some((c) => c.expected_plan.some((s) => s.remembered === true))).toBe(true);

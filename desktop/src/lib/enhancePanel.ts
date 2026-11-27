@@ -1,7 +1,15 @@
 import { formatDuration } from './format';
 import type { PlanState } from './jobPlanClient';
 import { imageQualityName } from './outputFormats';
-import type { Fit, PendingDownloads, PlanStage } from './plan';
+import {
+  ALPHA_FORMAT_NOTE,
+  activeStepStages,
+  outputFormatKeepingAlpha,
+  type Fit,
+  type PendingDownloads,
+  type PlanStage,
+} from './plan';
+import type { StepDefinition } from './steps';
 import type {
   AppSnapshot,
   CatalogModel,
@@ -82,7 +90,12 @@ export function mediaFacts(media: MediaItem | undefined): string {
 /** One-line summary for the Output row in the Enhance panel foot. */
 export function outputSummary(
   settings: UiSettings,
-  options: { preservingHdr?: boolean; audioDisabled?: boolean } = {},
+  options: {
+    preservingHdr?: boolean;
+    audioDisabled?: boolean;
+    /** The step registry; tests add steps that exist only in them. */
+    steps?: readonly StepDefinition[];
+  } = {},
 ): string {
   const folder = outputFolderName(settings.output_directory);
   if (settings.task === 'video') {
@@ -94,11 +107,16 @@ export function outputSummary(
     const audio = !options.audioDisabled && settings.video_clean_audio ? 'sound cleaned' : '';
     return [container, codecName, hdr, crf, audio, folder].filter(Boolean).join(' · ');
   }
-  const format = PHOTO_FORMAT_NAMES[settings.output_format] ?? settings.output_format.toUpperCase();
-  const formatPart = imageQualityName(settings.output_format)
-    ? `${format} ${settings.jpeg_quality}`
-    : format;
-  return `${formatPart} · ${folder}`;
+  // A step that sets the alpha saves in a format that keeps it, as the start input does.
+  const saved = outputFormatKeepingAlpha(
+    activeStepStages(settings, false, options.steps).map(({ selection }) => selection),
+    settings.output_format,
+    options.steps,
+  );
+  const format = PHOTO_FORMAT_NAMES[saved] ?? saved.toUpperCase();
+  const formatPart = imageQualityName(saved) ? `${format} ${settings.jpeg_quality}` : format;
+  const note = saved === settings.output_format ? '' : ALPHA_FORMAT_NOTE;
+  return [formatPart, folder, note].filter(Boolean).join(' · ');
 }
 
 export interface EnhancePanelView {

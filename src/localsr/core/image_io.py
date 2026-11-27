@@ -838,11 +838,11 @@ class ImageManager:
             "webp",
             "heic",
         ]:
-            new_size = (
-                self.alpha_channel.width * final_scale,
-                self.alpha_channel.height * final_scale,
-            )
-            scaled_alpha = self.alpha_channel.resize(new_size, Image.Resampling.LANCZOS)
+            # The source's alpha is at the input size; a step after the upscaler sets one
+            # at the model's output size. Either follows the picture.
+            scaled_alpha = self.alpha_channel
+            if scaled_alpha.size != out_img.size:
+                scaled_alpha = scaled_alpha.resize(out_img.size, Image.Resampling.LANCZOS)
             out_img.putalpha(scaled_alpha)
 
         kwargs = {}
@@ -941,15 +941,11 @@ class ImageManager:
 
         out_pixels: np.ndarray = rgb16
         if self.alpha_channel is not None:
-            new_size = (
-                self.alpha_channel.width * final_scale,
-                self.alpha_channel.height * final_scale,
-            )
             alpha_arr = np.asarray(self.alpha_channel)
             if alpha_arr.dtype != np.uint16:
                 alpha_arr = alpha_arr.astype(np.uint16) * 257
-            if new_size != self.alpha_channel.size:
-                alpha_arr = _resize_uint16_plane(alpha_arr, new_size)
+            if self.alpha_channel.size != (target_w, target_h):
+                alpha_arr = _resize_uint16_plane(alpha_arr, (target_w, target_h))
             out_pixels = np.dstack((rgb16, alpha_arr))
 
         exif_dict: dict[int, Any] | None = None

@@ -79,12 +79,14 @@
     recommendAnyEditModel,
   } from './lib/editing';
   import {
+    activeStepStages,
     choosePresetModel,
     effectiveVideoTask,
     fixesOf,
     isRestoreTask,
     modelsForTask,
     pendingDownloads,
+    stepStagesReady,
     withKeptBytes,
     presetSlot,
   } from './lib/plan';
@@ -924,7 +926,9 @@
     ((Boolean(settings.deflicker) && !preservingHdr) ||
       ((settings.video_interpolation ?? 'off') !== 'off' && interpolationSupported) ||
       (Boolean(settings.video_clean_audio) && !audioDisabled));
-  $: hasNothingToRun = noRestoreModel && !hasVideoOnlyWork;
+  // Steps a job adds by id are work of their own: Restore with nothing picked runs them alone.
+  $: hasStepWork = activeStepStages(settings, usingTemporalVideo).length > 0;
+  $: hasNothingToRun = noRestoreModel && !hasVideoOnlyWork && !hasStepWork;
   $: nothingToRunReason =
     settings.task === 'video'
       ? 'Nothing to run. Pick what to fix, or turn on De-flicker, Frame rate or Clean up audio.'
@@ -933,7 +937,7 @@
     settings.task === 'edit'
       ? editReady
       : noRestoreModel
-        ? hasVideoOnlyWork
+        ? hasVideoOnlyWork || hasStepWork
         : usingTemporalVideo
           ? !temporalUnavailableReason && Boolean(selectedVideoModel?.installed)
           : settings.selected_model_id === '__custom__'
@@ -944,6 +948,7 @@
   $: interpolationReady = !interpolationStage || interpolationStage.installed;
   $: audioStage = plan.find((stage) => stage.kind === 'audio_denoise');
   $: audioReady = !audioStage || audioStage.installed;
+  $: stepsReady = stepStagesReady(plan);
   $: fixesReady =
     fixPlanSupported &&
     imageFixes.every((selection) => {
@@ -985,7 +990,11 @@
       : noRestoreModel
         ? (plan.find((s) => s.interpolationModel)?.interpolationModel?.name ??
           plan.find((s) => s.audioModel)?.audioModel?.name ??
-          (settings.deflicker ? 'De-flicker' : 'Video'))
+          (settings.task !== 'video'
+            ? (plan.find((s) => s.role === 'step')?.label ?? 'Model')
+            : settings.deflicker
+              ? 'De-flicker'
+              : 'Video'))
         : usingTemporalVideo
           ? (selectedVideoModel?.name ?? 'Video model')
           : (selectedModel?.name ?? 'Model');
@@ -1028,6 +1037,7 @@
     fixesReady &&
     interpolationReady &&
     audioReady &&
+    stepsReady &&
     snapshot.runtime.status_title !== 'Cancelling';
   const allReady = (items: MediaItem[]): boolean =>
     items.length > 0 && items.every((media) => media.probe_status === 'ready');
@@ -1660,7 +1670,7 @@
                     : hasNothingToRun
                       ? nothingToRunReason
                       : editBlockReason ||
-                        (!modelReady || !fixesReady || !interpolationReady
+                        (!modelReady || !fixesReady || !interpolationReady || !stepsReady
                           ? 'Choose or download the required models before starting.'
                           : 'The current settings are not ready to start.');
 
@@ -4236,7 +4246,8 @@
       modelReady &&
       hdrModelCompatible &&
       fixesReady &&
-      interpolationReady;
+      interpolationReady &&
+      stepsReady;
     if (!ready) return;
     const mediaIds = [...pendingAutoStartIds];
     pendingAutoStartIds = [];

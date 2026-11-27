@@ -60,6 +60,8 @@ def build_manifest() -> dict[str, Any]:
                 "stage_label": step.stage_label,
                 "required_feature": step.required_feature,
                 "dev_only": step.dev_only,
+                "model_task": step.model_task,
+                "output_alpha": step.output_alpha,
                 "parameters": [_encode_parameter(param) for param in step.parameters],
             }
         )

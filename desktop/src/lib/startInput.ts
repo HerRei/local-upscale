@@ -1,6 +1,12 @@
 import { withListedDevice } from './neuralEngine';
-import { activeStepStages, effectiveVideoTask, isRestoreTask } from './plan';
+import {
+  activeStepStages,
+  effectiveVideoTask,
+  isRestoreTask,
+  outputFormatKeepingAlpha,
+} from './plan';
 import { recipeMatches } from './recipes';
+import type { StepDefinition } from './steps';
 import type {
   CapabilityInfo,
   CatalogManifest,
@@ -54,6 +60,8 @@ export interface BuildStartInputOptions {
   recipes?: Recipe[];
   catalog?: CatalogManifest;
   capabilities?: CapabilityInfo;
+  /** The step registry; tests add steps that exist only in them. */
+  steps?: readonly StepDefinition[];
 }
 
 /** Pure builder for the `StartBatchInput` payload sent to `start_jobs`. */
@@ -66,7 +74,7 @@ export function buildStartInput(
     : rawSettings;
   const { videoTask, usingTemporalVideo, imageFixes, noRestoreModel, audioDisabled } =
     deriveStartFlags(settings, options.hasAudio !== false);
-  const stepStages = activeStepStages(settings, usingTemporalVideo).map(
+  const stepStages = activeStepStages(settings, usingTemporalVideo, options.steps).map(
     ({ selection }) => selection,
   );
   const recipeName =
@@ -94,7 +102,7 @@ export function buildStartInput(
     ...(stepStages.length > 0 ? { step_stages: stepStages } : {}),
     custom_model_path: settings.custom_model_path,
     output_directory: settings.output_directory,
-    output_format: settings.output_format,
+    output_format: outputFormatKeepingAlpha(stepStages, settings.output_format, options.steps),
     output_scale: settings.output_scale,
     preserve_metadata: settings.preserve_metadata,
     jpeg_quality: settings.jpeg_quality,

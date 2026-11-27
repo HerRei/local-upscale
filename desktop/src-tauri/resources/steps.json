@@ -37,8 +37,10 @@
       "media": [
         "video"
       ],
+      "model_task": null,
       "needs_model": true,
       "order": 10,
+      "output_alpha": false,
       "parameters": [
         {
           "choices": [],
@@ -77,8 +79,10 @@
         "image",
         "video"
       ],
+      "model_task": null,
       "needs_model": true,
       "order": 10,
+      "output_alpha": false,
       "parameters": [],
       "phase": "restore",
       "required_feature": null,
@@ -102,8 +106,10 @@
         "image",
         "video"
       ],
+      "model_task": null,
       "needs_model": true,
       "order": 20,
+      "output_alpha": false,
       "parameters": [],
       "phase": "restore",
       "required_feature": null,
@@ -127,8 +133,10 @@
         "image",
         "video"
       ],
+      "model_task": null,
       "needs_model": true,
       "order": 30,
+      "output_alpha": false,
       "parameters": [],
       "phase": "restore",
       "required_feature": null,
@@ -152,8 +160,10 @@
         "image",
         "video"
       ],
+      "model_task": null,
       "needs_model": true,
       "order": 40,
+      "output_alpha": false,
       "parameters": [],
       "phase": "restore",
       "required_feature": null,
@@ -177,8 +187,10 @@
         "image",
         "video"
       ],
+      "model_task": null,
       "needs_model": true,
       "order": 10,
+      "output_alpha": false,
       "parameters": [],
       "phase": "primary",
       "required_feature": null,
@@ -202,8 +214,10 @@
         "image",
         "video"
       ],
+      "model_task": null,
       "needs_model": true,
       "order": 20,
+      "output_alpha": false,
       "parameters": [
         {
           "choices": [],
@@ -241,8 +255,10 @@
       "media": [
         "video"
       ],
+      "model_task": null,
       "needs_model": true,
       "order": 30,
+      "output_alpha": false,
       "parameters": [
         {
           "choices": [],
@@ -322,8 +338,10 @@
       "media": [
         "image"
       ],
+      "model_task": null,
       "needs_model": true,
       "order": 40,
+      "output_alpha": false,
       "parameters": [
         {
           "choices": [],
@@ -394,8 +412,10 @@
         "image",
         "video"
       ],
+      "model_task": null,
       "needs_model": true,
       "order": 10,
+      "output_alpha": false,
       "parameters": [
         {
           "choices": [],
@@ -447,8 +467,10 @@
       "media": [
         "video"
       ],
+      "model_task": null,
       "needs_model": false,
       "order": 10,
+      "output_alpha": false,
       "parameters": [
         {
           "choices": [],
@@ -500,8 +522,10 @@
       "media": [
         "video"
       ],
+      "model_task": null,
       "needs_model": true,
       "order": 20,
+      "output_alpha": false,
       "parameters": [
         {
           "choices": [
@@ -562,8 +586,10 @@
       "media": [
         "image"
       ],
+      "model_task": null,
       "needs_model": false,
       "order": 10,
+      "output_alpha": false,
       "parameters": [
         {
           "choices": [],

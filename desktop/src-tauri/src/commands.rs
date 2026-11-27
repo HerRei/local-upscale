@@ -1311,6 +1311,7 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
         return Err(AppError::Validation("An update is being installed".into()));
     }
     input.device = resolve_device(state, &input.device)?;
+    keep_alpha_output_format(&mut input);
     validate_start(&input, state)?;
     validate_bit_depth_engine(&input, lock(&state.engine)?.as_ref())?;
     validate_fix_engine(&input, lock(&state.engine)?.as_ref())?;
@@ -1420,7 +1421,7 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
             ));
         }
     }
-    if (upscale_skips_sr(&input) || no_video_restore_model(&input))
+    if (upscale_skips_sr(&input) || no_restore_model(&input))
         && input.fix_stages.is_empty()
         && !(input.task == "video"
             && input.video_model_id == "frame_by_frame"
@@ -1874,6 +1875,7 @@ fn trial_candidates(
     }
     let mut resolved = base.clone();
     resolved.device = resolve_device(state, &base.device)?;
+    keep_alpha_output_format(&mut resolved);
     let base = &resolved;
     validate_start(base, state)?;
     validate_fix_engine(base, lock(&state.engine)?.as_ref())?;
@@ -1928,12 +1930,14 @@ fn trial_candidates(
         if let ModelSelection::Image {
             path,
             preprocess,
+            step_models,
             face_path,
             ..
         } = &selection
         {
             let missing = std::iter::once(path.as_str())
                 .chain(preprocess.iter().map(|stage| stage.path.as_str()))
+                .chain(step_models.iter().map(|model| model.path.as_str()))
                 .chain(face_path.iter().map(String::as_str))
                 .any(|path| !Path::new(path).is_file());
             if missing {
@@ -4238,6 +4242,18 @@ fn resolve_device(state: &AppState, requested: &str) -> AppResult<String> {
     ))
 }
 
+/// A photo job with a step that sets the alpha saves in a format that keeps it, as its plan
+/// says (`job_plan::output_format_keeping_alpha`).
+fn keep_alpha_output_format(input: &mut StartBatchInput) {
+    if input.task != "video" {
+        input.output_format = crate::job_plan::output_format_keeping_alpha(
+            crate::steps::registry(),
+            &input.step_stages,
+            &input.output_format,
+        );
+    }
+}
+
 fn validate_start(input: &StartBatchInput, state: &AppState) -> AppResult<()> {
     validate_start_input(input, external_codecs_available(state))?;
     state.programs.check(&input.external_ffmpeg_path)?;
@@ -4509,12 +4525,31 @@ fn validate_step_stages(
                 step.label
             )));
         }
+        if stage.model_id.as_ref().is_some_and(|id| id.len() > 64) {
+            return Err(AppError::Validation(format!(
+                "the model of {} is invalid",
+                step.label
+            )));
+        }
+        if !step.needs_model && stage.chosen_model().is_some() {
+            return Err(AppError::Validation(format!(
+                "{} runs without a model",
+                step.label
+            )));
+        }
         if let Some(media) = media {
             if !step.media.iter().any(|candidate| candidate == media) {
                 return Err(AppError::Validation(format!(
                     "{} does not run on {}",
                     step.label,
                     if media == "video" { "videos" } else { "photos" }
+                )));
+            }
+            // As with a fix, settings may wait for a choice; a start may not.
+            if step.needs_model && stage.chosen_model().is_none() {
+                return Err(AppError::Validation(format!(
+                    "Choose a model for {}.",
+                    step.label
                 )));
             }
         }
@@ -4700,10 +4735,13 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
     if input.media_ids.is_empty() || input.media_ids.len() > MAX_MEDIA_ITEMS {
         return Err(AppError::Validation("invalid batch size".into()));
     }
-    if no_video_restore_model(input) && !has_work_at_1x(input) {
-        return Err(AppError::Validation(
-            "Nothing to run. Pick what to fix, or turn on De-flicker, Frame rate or Clean up audio.".into(),
-        ));
+    if no_restore_model(input) && !has_work_at_1x(input) {
+        return Err(AppError::Validation(if input.task == "video" {
+            "Nothing to run. Pick what to fix, or turn on De-flicker, Frame rate or Clean up audio."
+                .into()
+        } else {
+            "Nothing to run. Pick what to fix, or choose a larger size.".into()
+        }));
     }
     if upscale_skips_sr(input) && !has_work_at_1x(input) {
         return Err(AppError::Validation(
@@ -4713,10 +4751,9 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
     Ok(())
 }
 
-/// True when video Restore has no fix selected and runs only video/audio options.
-fn no_video_restore_model(input: &StartBatchInput) -> bool {
-    input.task == "video"
-        && input.video_task == "denoise"
+/// True when Restore has no fix selected and runs only added steps or video/audio options.
+fn no_restore_model(input: &StartBatchInput) -> bool {
+    (input.task == "denoise" || (input.task == "video" && input.video_task == "denoise"))
         && input.fix_stages.is_empty()
         && input.model_id.is_empty()
 }
@@ -4764,6 +4801,7 @@ enum ModelSelection {
         path: String,
         approved_checkpoint_sha256: Option<String>,
         preprocess: Vec<ResolvedImageStage>,
+        step_models: Vec<ResolvedStepModel>,
         face_path: Option<String>,
         face_model_id: String,
         native_scale: u32,
@@ -4821,6 +4859,40 @@ struct ResolvedImageStage {
     mask_path: Option<String>,
 }
 
+/// The catalog model a step stage runs, resolved as a fix's is (`installed_stage_model`).
+#[derive(Clone, Debug, PartialEq)]
+struct ResolvedStepModel {
+    step: String,
+    model_id: String,
+    path: String,
+}
+
+/// A catalog model a fix or a step stage runs: known, fit for it and installed. Like the
+/// main model, it travels as a catalog path; the worker checks the file against the
+/// catalog's SHA-256 before it reads it.
+fn installed_stage_model<'a>(
+    catalog: &'a crate::types::CatalogManifest,
+    model_id: &str,
+    what: &str,
+    fits: impl FnOnce(&CatalogModel) -> bool,
+    misfit: String,
+) -> AppResult<(&'a CatalogModel, String)> {
+    let model = catalog
+        .models
+        .iter()
+        .find(|model| model.model_id == model_id)
+        .ok_or_else(|| AppError::Validation(format!("choose a model for {what}")))?;
+    if !fits(model) {
+        return Err(AppError::Validation(misfit));
+    }
+    match model.installed_path.as_deref() {
+        Some(path) if model.installed && !path.is_empty() => Ok((model, path.to_owned())),
+        _ => Err(AppError::Validation(format!(
+            "download and verify the model for {what} first"
+        ))),
+    }
+}
+
 fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResult<ModelSelection> {
     validate_fix_selections(&input.fix_stages)?;
     let restoring =
@@ -4834,7 +4906,7 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
         ));
     }
     let catalog = lock(&state.catalog)?;
-    let skip_upscale = upscale_skips_sr(input) || no_video_restore_model(input);
+    let skip_upscale = upscale_skips_sr(input) || no_restore_model(input);
     if input.task == "video" && input.video_model_id != "frame_by_frame" && !skip_upscale {
         if input.video_task == "denoise" {
             return Err(AppError::Validation(
@@ -4950,37 +5022,52 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
     } else {
         None
     };
+    let steps = crate::steps::registry();
     let mut preprocess = Vec::with_capacity(input.fix_stages.len());
     for selection in &input.fix_stages {
-        let model = catalog
-            .models
-            .iter()
-            .find(|model| model.model_id == selection.model_id)
-            .ok_or_else(|| {
-                AppError::Validation(format!("choose a model for the {} fix", selection.fix))
-            })?;
-        if model.native_scale != 1
-            || model.purposes.iter().any(|purpose| purpose == "face")
-            || !model.fixes.contains(&selection.fix)
-        {
-            return Err(AppError::Validation(format!(
+        let (model, path) = installed_stage_model(
+            &catalog,
+            &selection.model_id,
+            &format!("the {} fix", selection.fix),
+            |model| {
+                model.native_scale == 1
+                    && !model.purposes.iter().any(|purpose| purpose == "face")
+                    && model.fixes.contains(&selection.fix)
+            },
+            format!(
                 "the {} fix must use a 1× restoration model that fixes it",
                 selection.fix
-            )));
-        }
-        if !model.installed || model.installed_path.as_deref().is_none_or(str::is_empty) {
-            return Err(AppError::Validation(
-                "download and verify every selected fix model first".into(),
-            ));
-        }
+            ),
+        )?;
         preprocess.push(ResolvedImageStage {
             // As the plan card names it (plan.ts resolvePlan).
-            kind: crate::steps::registry().fix_stage_kind(&model.stage, &selection.fix),
+            kind: steps.fix_stage_kind(&model.stage, &selection.fix),
             fix: selection.fix.clone(),
             model_id: model.model_id.clone(),
-            path: model.installed_path.clone().unwrap_or_default(),
+            path,
             params: selection.params.clone(),
             mask_path: selection.mask_path.clone(),
+        });
+    }
+    let mut step_models = Vec::new();
+    for selection in &input.step_stages {
+        let Some((step, _)) = steps
+            .step_stage(&selection.step)
+            .filter(|(step, _)| step.needs_model)
+        else {
+            continue;
+        };
+        let (model, path) = installed_stage_model(
+            &catalog,
+            selection.chosen_model().unwrap_or_default(),
+            &step.label,
+            |model| crate::job_plan::serves_step(model, step),
+            format!("{} must use one of its own models", step.label),
+        )?;
+        step_models.push(ResolvedStepModel {
+            step: step.id.clone(),
+            model_id: model.model_id.clone(),
+            path,
         });
     }
     if restoring && !preprocess.is_empty() {
@@ -5006,6 +5093,7 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
         path,
         approved_checkpoint_sha256,
         preprocess,
+        step_models,
         face_path,
         face_model_id: selected_model
             .map(|model| model.pair_with.clone())
@@ -5162,6 +5250,7 @@ fn build_job_request(
             path,
             approved_checkpoint_sha256,
             preprocess,
+            step_models,
             face_path,
             face_model_id,
             native_scale,
@@ -5196,6 +5285,7 @@ fn build_job_request(
             face_fidelity: f64::from(input.face_fidelity) / 100.0,
             stages: Some(image_pipeline_stages(
                 preprocess,
+                step_models,
                 model_id,
                 path,
                 face_path.as_deref(),
@@ -5211,6 +5301,7 @@ fn build_job_request(
             path,
             approved_checkpoint_sha256,
             preprocess,
+            step_models,
             face_path,
             face_model_id,
             native_scale,
@@ -5278,6 +5369,7 @@ fn build_job_request(
                 output_scale: Some(output_scale),
                 stages: Some(image_pipeline_stages(
                     preprocess,
+                    step_models,
                     model_id,
                     path,
                     face_path.as_deref(),
@@ -5384,8 +5476,10 @@ fn build_job_request(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn image_pipeline_stages(
     preprocess: &[ResolvedImageStage],
+    step_models: &[ResolvedStepModel],
     model_id: &str,
     model_path: &str,
     face_path: Option<&str>,
@@ -5400,9 +5494,12 @@ fn image_pipeline_stages(
     let step_stages = |placement: StepPlacement| {
         input.step_stages.iter().filter_map(move |selection| {
             let (step, at) = steps.step_stage(&selection.step)?;
+            let model = step_models.iter().find(|model| model.step == step.id);
             (at == placement).then(|| PipelineStageRequest {
                 kind: Some(step.stage_kind.clone().unwrap_or_else(|| step.id.clone())),
                 step: Some(step.id.clone()),
+                model_id: model.map(|model| model.model_id.clone()),
+                model_path: model.map(|model| model.path.clone()),
                 params: selection.params.clone(),
                 mask_path: selection.mask_path.clone(),
                 ..Default::default()

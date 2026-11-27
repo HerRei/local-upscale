@@ -43,6 +43,10 @@ export interface StepDefinition {
   required_feature: string | null;
   /** The engine lists this step's feature only when started with `LOCALSR_DEV_STEPS=1`. */
   dev_only: boolean;
+  /** A step stage with a model takes it from the catalog models whose `purposes` name this. */
+  model_task: string | null;
+  /** The step sets the image's alpha, so the job's output format must keep one. */
+  output_alpha: boolean;
   parameters: readonly StepParameter[];
 }
 
@@ -105,7 +109,10 @@ export function isVideoOrUpscalePrimaryKind(kind: string): boolean {
   );
 }
 
-/** A model-less step of the stage list that a job adds by id beside its fixes. */
+/**
+ * A step of the stage list that a job adds by id beside its fixes: model-less, or one
+ * whose model comes from the catalog task it names.
+ */
 export function stepStage(
   id: string,
   steps: readonly StepDefinition[] = STEPS,
@@ -114,8 +121,8 @@ export function stepStage(
     (candidate) =>
       candidate.id === id &&
       candidate.in_image_pipeline &&
-      !candidate.needs_model &&
-      !candidate.is_fix_stage,
+      !candidate.is_fix_stage &&
+      (!candidate.needs_model || candidate.model_task !== null),
   );
   if (!step) return undefined;
   const phase = PHASES.indexOf(step.phase);

@@ -13,7 +13,9 @@ from typing import Any
 
 import numpy as np
 import psutil
+from PIL import Image
 
+import localsr.core.steps as step_registry
 from localsr.core.disk_space import failure_fields, require_image_room
 from localsr.core.face_compositing import blend_with_alpha, load_mask
 from localsr.core.grain import add_grain
@@ -36,7 +38,7 @@ from localsr.core.pipeline import (
     PipelineStageError,
     resolve_image_pipeline,
 )
-from localsr.core.steps import FIX_SHORT_NAMES, resolved_step_params
+from localsr.core.steps import FIX_SHORT_NAMES, is_model_step_stage, resolved_step_params
 from localsr.protocol.messages import (
     EngineStatus,
     JobCancelled,
@@ -258,6 +260,45 @@ def _apply_stage_mask(stage: PipelineStage, stage_input: Any, stage_output: Any)
     return blend_with_alpha(out_arr, in_arr, mask)
 
 
+def _alpha_plane(alpha: Image.Image, width: int, height: int) -> np.ndarray:
+    """An 8- or 16-bit alpha as values 0..1 at ``width`` x ``height``, resized as saving does."""
+    raw = np.asarray(alpha)
+    values = raw.astype(np.float32) / (65535.0 if raw.dtype == np.uint16 else 255.0)
+    if values.shape != (height, width):
+        values = np.asarray(
+            Image.fromarray(values).resize((width, height), Image.Resampling.LANCZOS),
+            dtype=np.float32,
+        )
+    return np.clip(values, 0.0, 1.0)
+
+
+def _with_matte(
+    image: dict[str, Any], matte: Any, stage: PipelineStage, data: Mapping[str, Any]
+) -> dict[str, Any]:
+    """``image`` with its alpha multiplied by ``matte`` (height x width, 0..1); colour unchanged."""
+    if hasattr(matte, "detach"):
+        matte = matte.detach().cpu().float().numpy()
+    values = np.asarray(matte, dtype=np.float32)
+    height, width = (int(size) for size in image["tensor"].shape[-2:])
+    if values.shape != (height, width):
+        raise ValueError(
+            f"The {stage.step_id} step returned a matte of {values.shape}, not ({height}, {width})."
+        )
+    values = np.clip(np.nan_to_num(values, nan=0.0), 0.0, 1.0)
+    if stage.mask_path:
+        # Outside the mask the alpha stays as it was.
+        mask = load_mask(stage.mask_path, width, height)
+        values = mask * values + (1.0 - mask)
+    existing = image.get("alpha_image")
+    if existing is not None:
+        values = values * _alpha_plane(existing, width, height)
+    if int(data.get("output_bit_depth") or 8) == 16:
+        alpha = Image.fromarray(np.rint(values * 65535.0).astype(np.uint16))
+    else:
+        alpha = Image.fromarray(np.rint(values * 255.0).astype(np.uint8))
+    return {**image, "alpha_image": alpha}
+
+
 def _run_fix_model_stage(
     runner: ImageJobRunner,
     image: dict[str, Any],
@@ -358,6 +399,20 @@ def _run_grain_stage(
     }
 
 
+@dataclass(frozen=True, slots=True)
+class StepModel:
+    """A step stage's catalog model, checked and loaded the way a fix's is, active on the
+    engine while its handler runs."""
+
+    path: str
+    info: NormalizedModelInfo
+    module: Any
+    device: Any
+    precision: Any
+
+
+# A step's handler returns the updated image; a step with `output_alpha` returns a matte
+# (height x width, values 0..1) that the stage multiplies into the image's alpha.
 StageImpl = Callable[
     [
         "ImageJobRunner",
@@ -368,7 +423,20 @@ StageImpl = Callable[
         ImageJobProgress,
         list[str],
     ],
-    dict[str, Any],
+    Any,
+]
+ModelStageImpl = Callable[
+    [
+        "ImageJobRunner",
+        dict[str, Any],
+        PipelineStage,
+        int,
+        Mapping[str, Any],
+        ImageJobProgress,
+        list[str],
+        StepModel,
+    ],
+    Any,
 ]
 
 # Dispatch non-primary stages by registry step id; new steps add one entry here.
@@ -380,6 +448,9 @@ IMAGE_STEP_HANDLERS: dict[str, StageImpl] = {
     "restore": _run_fix_model_stage,
     "grain": _run_grain_stage,
 }
+
+# Step stages that bring a catalog model (`model_task`); each handler gets it loaded.
+IMAGE_MODEL_STEP_HANDLERS: dict[str, ModelStageImpl] = {}
 
 # Primary steps that produce colour output from monochrome sources.
 _PRIMARY_GRAYSCALE_CLEARING_STEPS: frozenset[str] = frozenset({"colour"})
@@ -481,6 +552,8 @@ class ImageJobRunner:
                     )
                     if not working_image.get("grayscale", True):
                         manager.grayscale = False
+                    if "alpha_image" in working_image:
+                        manager.alpha_channel = working_image["alpha_image"]
                 self._check_cancelled()
                 primary_clears_grayscale = (
                     pipeline.primary is not None
@@ -602,22 +675,36 @@ class ImageJobRunner:
     ) -> dict[str, Any]:
         self._check_cancelled()
         progress.start(index, stage)
-        handler = IMAGE_STEP_HANDLERS.get(stage.step_id)
-        if handler is None:
+        step = step_registry.STEPS_BY_ID.get(stage.step_id)
+        brings_model = step is not None and is_model_step_stage(step)
+        handlers: Mapping[str, Any] = (
+            IMAGE_MODEL_STEP_HANDLERS if brings_model else IMAGE_STEP_HANDLERS
+        )
+        if stage.step_id not in handlers:
             raise PipelineStageError(
                 stage, f"No implementation registered for step {stage.step_id!r}."
             )
         try:
             import torch
 
-            output_image = handler(self, image, stage, index, data, progress, notes)
-            skip_preview = bool(output_image.pop("_skip_preview", False))
-            if stage.mask_path:
-                blended = _apply_stage_mask(stage, image["tensor"], output_image["tensor"])
-                output_image = {
-                    **output_image,
-                    "tensor": torch.from_numpy(np.array(blended, copy=True)),
-                }
+            if brings_model:
+                result = self._run_model_step(image, stage, index, data, progress, notes)
+            else:
+                result = IMAGE_STEP_HANDLERS[stage.step_id](
+                    self, image, stage, index, data, progress, notes
+                )
+            if step is not None and step.output_alpha:
+                output_image = _with_matte(image, result, stage, data)
+                skip_preview = False
+            else:
+                output_image = result
+                skip_preview = bool(output_image.pop("_skip_preview", False))
+                if stage.mask_path:
+                    blended = _apply_stage_mask(stage, image["tensor"], output_image["tensor"])
+                    output_image = {
+                        **output_image,
+                        "tensor": torch.from_numpy(np.array(blended, copy=True)),
+                    }
             if not skip_preview:
                 pixels = (
                     output_image["tensor"]
@@ -656,6 +743,41 @@ class ImageJobRunner:
         except Exception as error:  # noqa: BLE001
             raise PipelineStageError(stage, str(error)) from error
 
+    def _run_model_step(
+        self,
+        image: dict[str, Any],
+        stage: PipelineStage,
+        index: int,
+        data: Mapping[str, Any],
+        progress: ImageJobProgress,
+        notes: list[str],
+    ) -> Any:
+        """Load a step stage's model as a fix's is loaded, run its handler, release it."""
+        self._log(f"Running {stage.kind} stage with {stage.model_id}...")
+        try:
+            info = self.model_adapter.inspect(stage.model_path)
+            device, precision = self.engine.load_model(
+                stage.model_path,
+                data["device"],
+                data["precision"],
+                info,
+                safe_memory=bool(data["safe_memory"]),
+            )
+            self._check_cancelled()
+            model = StepModel(
+                path=stage.model_path,
+                info=info,
+                module=self.engine.active_model,
+                device=device,
+                precision=precision,
+            )
+            return IMAGE_MODEL_STEP_HANDLERS[stage.step_id](
+                self, image, stage, index, data, progress, notes, model
+            )
+        finally:
+            self.engine.release_model(stage.model_path)
+            self.model_adapter.release()
+
     def _run_postprocess(
         self,
         writer: OutputWriter,
@@ -685,6 +807,8 @@ class ImageJobRunner:
             )
             if not post_image.get("grayscale", True):
                 manager.grayscale = False
+            if "alpha_image" in post_image:
+                manager.alpha_channel = post_image["alpha_image"]
         bit_depth = int(data.get("output_bit_depth") or 8)
         if bit_depth == 16:
             final_pixels = (

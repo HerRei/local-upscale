@@ -315,6 +315,8 @@ export interface StepStageSelection {
   step: string;
   params?: Record<string, unknown>;
   mask_path?: string;
+  /** The catalog model of a step that needs one; absent while none is chosen. */
+  model_id?: string;
 }
 
 /** Frame interpolation: a frame-rate multiplier or a fixed output rate. */

@@ -255,7 +255,65 @@ pub fn active_step_stages<'a>(
         .collect()
 }
 
-fn step_stage_row(step: &StepDefinition) -> PlanStage {
+/// Whether a catalog model is one of the models a step stage takes (its `model_task`).
+pub fn serves_step(model: &CatalogModel, step: &StepDefinition) -> bool {
+    step.model_task
+        .as_deref()
+        .is_some_and(|task| model.purposes.iter().any(|purpose| purpose == task))
+}
+
+/// The catalog model a step stage runs: the chosen one, when it serves the step's task.
+pub fn step_stage_model<'a>(
+    catalog: &'a CatalogManifest,
+    step: &StepDefinition,
+    selection: &StepStageSelection,
+) -> Option<&'a CatalogModel> {
+    let id = selection.chosen_model()?;
+    catalog
+        .models
+        .iter()
+        .find(|model| model.model_id == id && serves_step(model, step))
+}
+
+/// The format a job saves in: one that keeps the alpha a step sets (PNG, TIFF, WebP), or
+/// PNG in place of any other.
+pub fn output_format_keeping_alpha(
+    steps: &StepRegistry,
+    step_stages: &[StepStageSelection],
+    format: &str,
+) -> String {
+    let sets_alpha = step_stages.iter().any(|selection| {
+        steps
+            .step_stage(&selection.step)
+            .is_some_and(|(step, _)| step.output_alpha)
+    });
+    if sets_alpha && !matches!(format, "png" | "tif" | "webp") {
+        "png".into()
+    } else {
+        format.to_owned()
+    }
+}
+
+fn step_stage_row(
+    catalog: &CatalogManifest,
+    settings: &UiSettings,
+    selection: &StepStageSelection,
+    step: &StepDefinition,
+) -> PlanStage {
+    if step.needs_model {
+        // Like a fix: the chosen model's row, or a row that waits for one.
+        let model = step_stage_model(catalog, step, selection);
+        return stage_for(
+            catalog,
+            settings,
+            &step.id,
+            "step",
+            &step.label,
+            model,
+            None,
+        )
+        .unwrap_or_else(|| missing_stage(&step.id, "step", &step.label, None));
+    }
     PlanStage {
         kind: step.id.clone(),
         role: "step".into(),
@@ -276,11 +334,11 @@ fn step_stage_row(step: &StepDefinition) -> PlanStage {
     }
 }
 
-fn missing_stage(kind: &str, role: &str, label: &str, fix: &str) -> PlanStage {
+fn missing_stage(kind: &str, role: &str, label: &str, fix: Option<&str>) -> PlanStage {
     PlanStage {
         kind: kind.to_owned(),
         role: role.to_owned(),
-        fix: Some(fix.to_owned()),
+        fix: fix.map(str::to_owned),
         remembered: None,
         missing: Some(true),
         label: label.to_owned(),
@@ -375,9 +433,9 @@ pub fn resolve_plan(
     let by_id =
         |id: &str| -> Option<&CatalogModel> { catalog.models.iter().find(|m| m.model_id == id) };
     let step_stages = active_step_stages(steps, settings, options.using_temporal_video);
-    for (_, step, placement) in &step_stages {
+    for (selection, step, placement) in &step_stages {
         if *placement == StepPlacement::BeforeFixes {
-            stages.push(step_stage_row(step));
+            stages.push(step_stage_row(catalog, settings, selection, step));
         }
     }
     let restoring = is_restore_task(settings);
@@ -415,7 +473,7 @@ pub fn resolve_plan(
                 model,
                 Some(&selection.fix),
             )
-            .unwrap_or_else(|| missing_stage(kind, "fix", label, &selection.fix)),
+            .unwrap_or_else(|| missing_stage(kind, "fix", label, Some(&selection.fix))),
         );
     }
 
@@ -511,7 +569,7 @@ pub fn resolve_plan(
                 "restore",
                 "primary",
                 steps.fix_row_label(c),
-                c,
+                Some(c),
             ));
         }
     }
@@ -591,9 +649,9 @@ pub fn resolve_plan(
         }
     }
 
-    for (_, step, placement) in &step_stages {
+    for (selection, step, placement) in &step_stages {
         if *placement == StepPlacement::AfterPrimary {
-            stages.push(step_stage_row(step));
+            stages.push(step_stage_row(catalog, settings, selection, step));
         }
     }
 
@@ -653,6 +711,11 @@ pub fn build_start_input(
     let no_restore_model =
         restoring && image_fixes.is_empty() && settings.selected_model_id != "__custom__";
     let audio_disabled = settings.task == "video" && has_audio == Some(false);
+    let step_stages: Vec<StepStageSelection> =
+        active_step_stages(steps, &settings, using_temporal_video)
+            .into_iter()
+            .map(|(selection, _, _)| selection.clone())
+            .collect();
 
     StartBatchInput {
         name_by_model: false,
@@ -677,13 +740,10 @@ pub fn build_start_input(
         } else {
             image_fixes
         },
-        step_stages: active_step_stages(steps, &settings, using_temporal_video)
-            .into_iter()
-            .map(|(selection, _, _)| selection.clone())
-            .collect(),
+        output_format: output_format_keeping_alpha(steps, &step_stages, &settings.output_format),
+        step_stages,
         custom_model_path: settings.custom_model_path.clone(),
         output_directory: settings.output_directory.clone(),
-        output_format: settings.output_format.clone(),
         output_scale: settings.output_scale,
         preserve_metadata: settings.preserve_metadata,
         jpeg_quality: settings.jpeg_quality,
@@ -794,6 +854,11 @@ mod tests {
     struct ParityCase {
         id: String,
         installed_ids: Vec<String>,
+        /// Steps and catalog models that exist only in this case.
+        #[serde(default)]
+        extra_steps: Vec<StepDefinition>,
+        #[serde(default)]
+        extra_models: Vec<CatalogModel>,
         capabilities: CapabilityInfo,
         settings: UiSettings,
         options: ParityCaseOptions,
@@ -819,6 +884,9 @@ mod tests {
         for case in &fixture.cases {
             let installed: HashSet<&str> = case.installed_ids.iter().map(String::as_str).collect();
             let mut catalog = base_catalog.clone();
+            catalog.models.extend(case.extra_models.iter().cloned());
+            let case_steps = steps.with_steps(case.extra_steps.clone());
+            let steps = &case_steps;
             for model in &mut catalog.models {
                 model.installed = installed.contains(model.model_id.as_str());
             }
@@ -1009,6 +1077,163 @@ mod tests {
         assert!(photo_plan.iter().all(|stage| stage.kind != "deflicker"));
     }
 
+    /// A catalog model for a test-only step's task, made from a shipped 1x model.
+    fn task_model(id: &str, task: &str, installed: bool, downloadable: bool) -> CatalogModel {
+        let mut model = crate::catalog::bundled_catalog()
+            .unwrap()
+            .models
+            .into_iter()
+            .find(|model| model.model_id == "denoise_realplksr_1x")
+            .unwrap();
+        model.model_id = id.into();
+        model.filename = format!("{id}.safetensors");
+        model.purposes = vec![task.into()];
+        model.fixes = Vec::new();
+        model.size_bytes = 4_321;
+        model.installed = installed;
+        model.automated_download_allowed = downloadable;
+        model
+    }
+
+    #[test]
+    fn a_step_with_a_model_plans_like_a_fix_and_a_matte_step_keeps_a_transparent_format() {
+        use crate::types::StepStageSelection;
+
+        let steps = crate::steps::registry().with_steps(vec![crate::steps::testing::cutout()]);
+        let mut catalog = crate::catalog::bundled_catalog().unwrap();
+        catalog.models.extend([
+            task_model("cutout_ready", "test_cutout", true, true),
+            task_model("cutout_download", "test_cutout", false, true),
+            task_model("cutout_manual", "test_cutout", false, false),
+            task_model("other_task", "test_other", true, true),
+        ]);
+        for model in &mut catalog.models {
+            if model.model_id == "span_photo_x4" {
+                model.installed = true;
+            }
+        }
+        let cutout = |model_id: Option<&str>| StepStageSelection {
+            step: "test_cutout".into(),
+            model_id: model_id.map(str::to_owned),
+            ..StepStageSelection::default()
+        };
+        let settings = |model_id: Option<&str>, format: &str| UiSettings {
+            task: "upscale".into(),
+            selected_model_id: "span_photo_x4".into(),
+            output_scale: 4,
+            output_format: format.into(),
+            step_stages: vec![cutout(model_id)],
+            ..UiSettings::default()
+        };
+        let request = StartRequest {
+            media_ids: vec!["m".into()],
+            task: "upscale",
+            batch_mode: false,
+            recipe_name: "",
+        };
+        let plan = |settings: &UiSettings| {
+            plan_job(
+                &catalog,
+                &steps,
+                &CapabilityInfo::default(),
+                settings,
+                &PlanOptions::default(),
+                &request,
+            )
+        };
+
+        let ready = plan(&settings(Some("cutout_ready"), "jpg"));
+        assert_eq!(
+            ready
+                .stages
+                .iter()
+                .map(|stage| stage.kind.as_str())
+                .collect::<Vec<_>>(),
+            vec!["test_cutout", "upscale"]
+        );
+        let row = &ready.stages[0];
+        assert_eq!(
+            (
+                row.role.as_str(),
+                row.label.as_str(),
+                row.model_id.as_deref()
+            ),
+            ("step", "Test cut-out", Some("cutout_ready"))
+        );
+        assert!(row.installed && !row.can_download && row.missing.is_none());
+        assert_eq!(ready.start_input.output_format, "png");
+        assert_eq!(
+            ready.start_input.step_stages,
+            vec![cutout(Some("cutout_ready"))]
+        );
+
+        let download = &plan(&settings(Some("cutout_download"), "png")).stages[0];
+        assert!(!download.installed && download.can_download && !download.needs_file);
+        assert_eq!(download.size_bytes, 4_321);
+        let manual = &plan(&settings(Some("cutout_manual"), "png")).stages[0];
+        assert!(!manual.installed && !manual.can_download && manual.needs_file);
+        for missing in [None, Some(""), Some("unknown"), Some("other_task")] {
+            let row = &plan(&settings(missing, "png")).stages[0];
+            assert_eq!(row.missing, Some(true), "{missing:?}");
+            assert!(!row.installed && row.model_id.is_none() && row.fix.is_none());
+        }
+
+        for (format, saved) in [
+            ("jpg", "png"),
+            ("heic", "png"),
+            ("png", "png"),
+            ("tif", "tif"),
+            ("webp", "webp"),
+        ] {
+            assert_eq!(
+                plan(&settings(Some("cutout_ready"), format))
+                    .start_input
+                    .output_format,
+                saved
+            );
+            assert_eq!(
+                output_format_keeping_alpha(&steps, &[cutout(None)], format),
+                saved
+            );
+        }
+        assert_eq!(output_format_keeping_alpha(&steps, &[], "jpg"), "jpg");
+        let grain = StepStageSelection {
+            step: "grain".into(),
+            ..StepStageSelection::default()
+        };
+        assert_eq!(output_format_keeping_alpha(&steps, &[grain], "jpg"), "jpg");
+
+        // Restore with nothing picked runs the step alone.
+        let alone = UiSettings {
+            task: "denoise".into(),
+            selected_model_id: String::new(),
+            output_scale: 1,
+            ..settings(Some("cutout_ready"), "jpg")
+        };
+        let alone_plan = plan_job(
+            &catalog,
+            &steps,
+            &CapabilityInfo::default(),
+            &alone,
+            &PlanOptions::default(),
+            &StartRequest {
+                task: "denoise",
+                ..request.clone()
+            },
+        );
+        assert_eq!(
+            alone_plan
+                .stages
+                .iter()
+                .map(|stage| stage.kind.as_str())
+                .collect::<Vec<_>>(),
+            vec!["test_cutout"]
+        );
+        assert_eq!(alone_plan.start_input.model_id, "");
+        assert!(alone_plan.start_input.fix_stages.is_empty());
+        assert_eq!(alone_plan.start_input.output_format, "png");
+    }
+
     #[test]
     fn step_stages_join_the_plan_and_start_input_where_their_media_runs() {
         use crate::types::StepStageSelection;
@@ -1022,6 +1247,7 @@ mod tests {
                 .as_object()
                 .cloned(),
             mask_path: Some("/in/mask.png".into()),
+            model_id: None,
         };
         let unknown = StepStageSelection {
             step: "tool_from_a_newer_version".into(),

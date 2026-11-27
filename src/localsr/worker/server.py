@@ -2172,6 +2172,7 @@ class WorkerServer:
             return
 
         from localsr.core.media_bridge import load_media_bridge
+        from localsr.core.steps import STEPS_BY_ID, is_model_step_stage
         from localsr.core.video_pipeline import VideoFixStage, VideoJobConfig
 
         synthesizer = self._interpolation_synthesizer(job_id, data) if interpolating else None
@@ -2198,6 +2199,11 @@ class WorkerServer:
         for stage in pipeline.stages:
             if stage.mask_path:
                 raise ValueError(f"Video stage {stage.step_id!r} does not support masks.")
+            if is_model_step_stage(STEPS_BY_ID[stage.step_id]):
+                raise ValueError(
+                    f"Video stage {stage.step_id!r} brings its own model, which only photos "
+                    "run in this version."
+                )
         if pipeline.postprocess_stages:
             raise ValueError(
                 f"Video stage {pipeline.postprocess_stages[0].step_id!r} cannot run after the "
