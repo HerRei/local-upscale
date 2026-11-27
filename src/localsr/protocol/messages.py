@@ -113,6 +113,8 @@ class EditJobRequest:
     custom_files: dict[str, str] | None = None
     edit_text_encoder: str = "auto"
     edit_vae: str = "auto"
+    edit_vram_limit_mb: int = 0
+    edit_allow_any_size: bool = False
 
     def to_json(self) -> str:
         return json.dumps({"type": "edit_job_request", "data": asdict(self)})

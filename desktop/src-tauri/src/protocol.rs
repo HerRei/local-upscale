@@ -442,6 +442,10 @@ pub struct EditJobRequest {
     pub edit_text_encoder: EditPlacement,
     #[serde(default, skip_serializing_if = "EditPlacement::is_auto")]
     pub edit_vae: EditPlacement,
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub edit_vram_limit_mb: u64,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub edit_allow_any_size: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -457,6 +461,14 @@ pub enum WorkerJobRequest {
 
 fn default_true() -> bool {
     true
+}
+
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn default_tile_size() -> u32 {
@@ -730,6 +742,35 @@ mod tests {
         let override_wire = serde_json::to_value(WorkerJobRequest::Edit(edit)).unwrap();
         assert_eq!(override_wire["data"]["edit_text_encoder"], "cpu");
         assert_eq!(override_wire["data"]["edit_vae"], "gpu");
+        assert!(validator.is_valid(&override_wire));
+    }
+
+    #[test]
+    fn edit_expert_fields_omit_defaults_and_validate_overrides() {
+        let validator = schema_validator();
+        let mut edit: EditJobRequest = serde_json::from_value(json!({
+            "job_id": "edit-expert",
+            "image_path": "/in/photo.png",
+            "output_path": "/out/edit.png",
+            "model_id": "flux2_klein_4b_q4_0",
+            "bundle_dir": "/models/flux",
+            "runtime_path": "/bin/sd-cli",
+            "prompt": "Brighten",
+            "device": "cuda:0"
+        }))
+        .unwrap();
+        assert_eq!(edit.edit_vram_limit_mb, 0);
+        assert!(!edit.edit_allow_any_size);
+        let default_wire = serde_json::to_value(WorkerJobRequest::Edit(edit.clone())).unwrap();
+        assert!(default_wire["data"].get("edit_vram_limit_mb").is_none());
+        assert!(default_wire["data"].get("edit_allow_any_size").is_none());
+        assert!(validator.is_valid(&default_wire));
+
+        edit.edit_vram_limit_mb = 8192;
+        edit.edit_allow_any_size = true;
+        let override_wire = serde_json::to_value(WorkerJobRequest::Edit(edit)).unwrap();
+        assert_eq!(override_wire["data"]["edit_vram_limit_mb"], 8192);
+        assert_eq!(override_wire["data"]["edit_allow_any_size"], true);
         assert!(validator.is_valid(&override_wire));
     }
 

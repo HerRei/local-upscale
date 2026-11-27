@@ -137,15 +137,24 @@ pub(crate) fn start_edit_checked(
         };
     crate::editing::validate(&input, &model).map_err(AppError::Validation)?;
     validate_edit_placement_engine(&input, lock(&state.engine)?.as_ref())?;
-    if !lock(&state.capabilities)?
+    let (settings_vram_limit_mb, settings_allow_any_size) = {
+        let settings = lock(&state.settings)?;
+        (settings.edit_vram_limit_mb, settings.edit_allow_any_size)
+    };
+    let edit_vram_limit_mb = input.edit_vram_limit_mb.unwrap_or(settings_vram_limit_mb);
+    let edit_allow_any_size = input.edit_allow_any_size.unwrap_or(settings_allow_any_size);
+    let device = lock(&state.capabilities)?
         .devices
         .iter()
-        .any(|device| device.id == input.device)
-    {
-        return Err(AppError::Validation(
-            "The selected editing GPU is unavailable.".into(),
-        ));
-    }
+        .find(|device| device.id == input.device)
+        .cloned()
+        .ok_or_else(|| AppError::Validation("The selected editing GPU is unavailable.".into()))?;
+    validate_edit_expert(
+        &device,
+        edit_vram_limit_mb,
+        edit_allow_any_size,
+        lock(&state.engine)?.as_ref(),
+    )?;
     let runtime = edit_runtime(state, &input.runtime_path)?;
     let media = lock(&state.database)?
         .get_media(&input.media_id)?
@@ -172,6 +181,8 @@ pub(crate) fn start_edit_checked(
         &runtime,
         &input,
         custom_files,
+        edit_vram_limit_mb,
+        edit_allow_any_size,
     );
     lock(&state.database)?.insert_job(&id, &media.id, &serde_json::to_string(&request)?)?;
     crate::stay_awake::sync(state);
@@ -188,6 +199,8 @@ fn build_edit_request(
     runtime: &Path,
     input: &crate::editing::StartEditInput,
     custom_files: Option<std::collections::BTreeMap<String, String>>,
+    edit_vram_limit_mb: u64,
+    edit_allow_any_size: bool,
 ) -> crate::protocol::WorkerJobRequest {
     crate::protocol::WorkerJobRequest::Edit(crate::protocol::EditJobRequest {
         job_id: job_id.to_owned(),
@@ -208,6 +221,8 @@ fn build_edit_request(
         custom_files,
         edit_text_encoder: input.edit_text_encoder.parse().unwrap_or_default(),
         edit_vae: input.edit_vae.parse().unwrap_or_default(),
+        edit_vram_limit_mb,
+        edit_allow_any_size,
     })
 }
 
@@ -221,6 +236,36 @@ fn validate_edit_placement_engine(
     {
         return Err(AppError::Validation(
             "This engine does not support choosing where the text encoder or VAE run. Update LocalSR or leave them on Auto."
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_edit_expert(
+    device: &crate::types::DeviceInfo,
+    vram_limit_mb: u64,
+    allow_any_size: bool,
+    engine: Option<&crate::types::EngineInfo>,
+) -> AppResult<()> {
+    if vram_limit_mb != 0 {
+        if vram_limit_mb < 1024 {
+            return Err(AppError::Validation(
+                "Edit VRAM limit must be 0 (automatic) or at least 1024 MiB.".into(),
+            ));
+        }
+        let total_vram_mb = device.total_memory / (1024 * 1024);
+        if total_vram_mb > 0 && vram_limit_mb > total_vram_mb {
+            return Err(AppError::Validation(format!(
+                "Edit VRAM limit ({vram_limit_mb} MiB) exceeds this device's memory ({total_vram_mb} MiB)."
+            )));
+        }
+    }
+    if (vram_limit_mb != 0 || allow_any_size)
+        && !engine.is_some_and(|engine| engine.features.iter().any(|f| f == "edit_expert"))
+    {
+        return Err(AppError::Validation(
+            "This engine does not support edit memory or size overrides. Update LocalSR or leave them on automatic."
                 .into(),
         ));
     }
@@ -4261,6 +4306,11 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
     {
         return Err(AppError::Validation(
             "unsupported edit size, step count, seed or model".into(),
+        ));
+    }
+    if settings.edit_vram_limit_mb != 0 && settings.edit_vram_limit_mb < 1024 {
+        return Err(AppError::Validation(
+            "Edit VRAM limit must be 0 (automatic) or at least 1024 MiB.".into(),
         ));
     }
     validate_custom_edit_model(&settings.custom_edit_model)?;

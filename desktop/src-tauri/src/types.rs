@@ -486,6 +486,10 @@ pub struct UiSettings {
     #[serde(default = "default_edit_seed")]
     pub edit_seed: u32,
     #[serde(default)]
+    pub edit_vram_limit_mb: u64,
+    #[serde(default)]
+    pub edit_allow_any_size: bool,
+    #[serde(default)]
     pub custom_edit_model: CustomEditModel,
     pub model_directory: String,
     #[serde(default)]
@@ -698,6 +702,8 @@ impl Default for UiSettings {
             edit_max_dimension: default_edit_dimension(),
             edit_steps: default_edit_steps(),
             edit_seed: default_edit_seed(),
+            edit_vram_limit_mb: 0,
+            edit_allow_any_size: false,
             custom_edit_model: CustomEditModel::default(),
             model_directory: String::new(),
             gpu_download_notice_dismissed: false,
