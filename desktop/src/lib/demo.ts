@@ -81,6 +81,10 @@ export function demoSnapshot(): AppSnapshot {
       edit_max_dimension: 512,
       edit_steps: 40,
       edit_seed: 42,
+      edit_text_encoder: 'auto',
+      edit_vae: 'auto',
+      edit_vram_limit_mb: 0,
+      edit_allow_any_size: false,
       custom_edit_model: {
         family: '',
         diffusion_path: '',

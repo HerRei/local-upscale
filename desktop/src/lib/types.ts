@@ -106,6 +106,8 @@ export interface EditSetup {
   custom_model?: EditModel | null;
 }
 
+export type EditPlacement = 'auto' | 'gpu' | 'cpu';
+
 export interface StartEditInput {
   media_id: string;
   model_id: string;
@@ -117,8 +119,8 @@ export interface StartEditInput {
   seed: number;
   accepted_terms: boolean;
   output_directory: string;
-  edit_text_encoder?: 'auto' | 'gpu' | 'cpu';
-  edit_vae?: 'auto' | 'gpu' | 'cpu';
+  edit_text_encoder?: EditPlacement;
+  edit_vae?: EditPlacement;
   edit_vram_limit_mb?: number;
   edit_allow_any_size?: boolean;
 }
@@ -391,6 +393,8 @@ export interface UiSettings {
   edit_max_dimension: number;
   edit_steps: number;
   edit_seed: number;
+  edit_text_encoder?: EditPlacement;
+  edit_vae?: EditPlacement;
   edit_vram_limit_mb?: number;
   edit_allow_any_size?: boolean;
   custom_edit_model?: CustomEditModel;

@@ -4233,13 +4233,25 @@ fn edit_expert_settings_validate_and_flow_from_settings_to_request() {
         .unwrap();
     }
 
-    // Settings validation rejects non-zero VRAM limits under 1024 MiB and accepts 0 or >= 1024.
+    // Settings validation rejects non-zero VRAM limits under 1024 MiB and invalid placements.
     let bad_settings = UiSettings {
         edit_vram_limit_mb: 512,
         ..UiSettings::default()
     };
     assert!(validate_settings(&bad_settings).is_err());
+    assert!(validate_settings(&UiSettings {
+        edit_text_encoder: "tpu".into(),
+        ..UiSettings::default()
+    })
+    .is_err());
+    assert!(validate_settings(&UiSettings {
+        edit_vae: "tpu".into(),
+        ..UiSettings::default()
+    })
+    .is_err());
     let ok_settings = UiSettings {
+        edit_text_encoder: "cpu".into(),
+        edit_vae: "gpu".into(),
         edit_vram_limit_mb: 9830,
         edit_allow_any_size: true,
         ..UiSettings::default()

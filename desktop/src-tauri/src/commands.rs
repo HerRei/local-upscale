@@ -4313,6 +4313,19 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
             "Edit VRAM limit must be 0 (automatic) or at least 1024 MiB.".into(),
         ));
     }
+    if settings
+        .edit_text_encoder
+        .parse::<crate::protocol::EditPlacement>()
+        .is_err()
+        || settings
+            .edit_vae
+            .parse::<crate::protocol::EditPlacement>()
+            .is_err()
+    {
+        return Err(AppError::Validation(
+            "Invalid text encoder or VAE placement.".into(),
+        ));
+    }
     validate_custom_edit_model(&settings.custom_edit_model)?;
     if !matches!(settings.quality.as_str(), "" | "quick" | "best" | "custom")
         || !matches!(settings.content.as_str(), "" | "photo" | "illustration")

@@ -430,16 +430,22 @@ mod tests {
     #[test]
     fn edit_expert_settings_default_load_from_older_files_and_round_trip() {
         let defaults: UiSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(defaults.edit_text_encoder, "auto");
+        assert_eq!(defaults.edit_vae, "auto");
         assert_eq!(defaults.edit_vram_limit_mb, 0);
         assert!(!defaults.edit_allow_any_size);
 
         let settings = UiSettings {
+            edit_text_encoder: "cpu".into(),
+            edit_vae: "gpu".into(),
             edit_vram_limit_mb: 8192,
             edit_allow_any_size: true,
             ..defaults
         };
         let restored: UiSettings =
             serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.edit_text_encoder, "cpu");
+        assert_eq!(restored.edit_vae, "gpu");
         assert_eq!(restored.edit_vram_limit_mb, 8192);
         assert!(restored.edit_allow_any_size);
     }

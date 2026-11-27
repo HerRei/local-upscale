@@ -28,21 +28,57 @@ const mac: CapabilityInfo = {
   system_memory_pressure_percent: 40,
   devices: [macGpu, base.devices[0]],
 };
+const cudaGpu = {
+  ...device,
+  id: 'cuda:0',
+  type: 'cuda',
+  name: 'NVIDIA GeForce RTX 3060 (CUDA)',
+  is_integrated: false,
+  total_memory: 12 * GIB,
+  free_memory: Math.round(10.66 * GIB),
+};
+const cuda: CapabilityInfo = {
+  ...base,
+  system_ram_total: 32 * GIB,
+  system_memory_pressure_level: 'low',
+  system_memory_pressure_percent: 40,
+  devices: [base.devices[0], cudaGpu],
+};
 const other: CapabilityInfo = { ...base, system_memory_pressure_level: 'moderate' };
+const EXPERT_FEATURES = ['image_edit', 'edit_placement', 'edit_expert'];
 
 interface Variant {
   name: string;
   settings: Partial<UiSettings>;
   capabilities: CapabilityInfo;
+  features?: string[];
   expected: string[];
 }
 
 const variants: Variant[] = [
   {
     name: 'edit on a Mac',
-    settings: { task: 'edit' },
+    settings: { task: 'edit', device_id: 'mps' },
     capabilities: mac,
-    expected: ['Edit size', 'Steps', 'Seed', 'Save to', 'Memory pressure'],
+    features: EXPERT_FEATURES,
+    expected: ['Edit size', 'Steps', 'Seed', 'Save to', 'Memory pressure', 'Text encoder', 'VAE'],
+  },
+  {
+    name: 'edit on CUDA',
+    settings: { task: 'edit', device_id: 'cuda:0' },
+    capabilities: cuda,
+    features: EXPERT_FEATURES,
+    expected: [
+      'Edit size',
+      'Steps',
+      'Seed',
+      'Save to',
+      'Memory pressure',
+      'Text encoder',
+      'VAE',
+      'GPU memory',
+      'Allow any edit size',
+    ],
   },
   {
     name: 'edit elsewhere',
@@ -59,11 +95,14 @@ async function open(variant: Variant): Promise<HTMLElement> {
   render(AdvancedSettings, {
     settings: { ...demoSnapshot().settings, ...variant.settings },
     capabilities: variant.capabilities,
+    features: variant.features ?? [],
     updateSettings: () => undefined,
     chooseOutput: async () => undefined,
     refreshCapabilities: async () => true,
   });
   await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+  const expert = screen.queryByRole('button', { name: /Expert/ });
+  if (expert) await fireEvent.click(expert);
   return document.querySelector('.advanced-controls') as HTMLElement;
 }
 
@@ -123,19 +162,26 @@ describe('every labelled control in Advanced has a help tip or a reason not to',
 
 describe('the wording of the help tips', () => {
   it('stays short and plain in every variant', async () => {
-    const texts = new Set<string>();
+    const texts = new Map<string, string>();
     for (const variant of variants) {
       const root = await open(variant);
       for (const tip of root.querySelectorAll('[role=tooltip]')) {
-        // The Hardware tip, written earlier, is the one longer text.
-        if (tip.id !== 'help-hardware') texts.add(tip.textContent ?? '');
+        // The Hardware tip, written earlier, is longer; the four Expert tips explain
+        // Automatic, GPU and CPU in up to 73 words.
+        if (tip.id !== 'help-hardware') texts.set(tip.textContent ?? '', tip.id);
       }
       cleanup();
     }
     expect(texts.size).toBeGreaterThanOrEqual(6);
-    for (const text of texts) {
+    const expertIds = new Set([
+      'help-text-encoder',
+      'help-vae',
+      'help-gpu-memory',
+      'help-allow-any-edit-size',
+    ]);
+    for (const [text, id] of texts) {
       const words = text.trim().split(/\s+/).length;
-      expect(words, text).toBeLessThanOrEqual(46);
+      expect(words, text).toBeLessThanOrEqual(expertIds.has(id) ? 75 : 46);
       expect(text, text).not.toMatch(/!|\b(simply|just|easily)\b/i);
       expect(text, text).not.toMatch(/colour/);
     }
@@ -156,12 +202,15 @@ describe('while a job runs, the whole Advanced section is locked', () => {
         props: {
           settings: { ...demoSnapshot().settings, ...variant.settings },
           capabilities: variant.capabilities,
+          features: variant.features ?? [],
           updateSettings: () => undefined,
           chooseOutput: async () => undefined,
           refreshCapabilities: async () => true,
         },
       });
       await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+      const expert = screen.queryByRole('button', { name: /Expert/ });
+      if (expert) await fireEvent.click(expert);
       fieldset.disabled = true;
       const interactive = [
         ...fieldset.querySelectorAll(

@@ -688,6 +688,10 @@ describe('Edit task', () => {
       seed: 42,
       accepted_terms: false,
       output_directory: '',
+      edit_text_encoder: 'auto',
+      edit_vae: 'auto',
+      edit_vram_limit_mb: 0,
+      edit_allow_any_size: false,
     });
     expect(api.startJobs).not.toHaveBeenCalled();
   });
@@ -747,6 +751,26 @@ describe('Edit task', () => {
     expect(
       (screen.getByRole('button', { name: 'Edit selected' }) as HTMLButtonElement).disabled,
     ).toBe(true);
+  });
+
+  it('shows Expert settings on the Model line and surfaces the edit out-of-memory error', async () => {
+    const snapshot = editSnapshot(36);
+    snapshot.engine!.features.push('edit_placement', 'edit_expert');
+    snapshot.settings.task = 'edit';
+    snapshot.settings.edit_model_id = 'qwen_edit_2511_q3_k_s';
+    snapshot.settings.edit_vae = 'cpu';
+    await mountWith(snapshot);
+    const stages = screen.getByRole('list', { name: 'Stages' });
+    expect(stages.textContent).toContain('Expert settings');
+
+    const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+    const message =
+      'Not enough memory for this size. Choose a smaller size or let LocalSR place the models automatically.';
+    callback({ type: 'job_started', data: { job_id: 'edit-1' } });
+    callback({ type: 'job_failed', data: { job_id: 'edit-1', error_message: message } });
+    await waitFor(() =>
+      expect(screen.getByRole('alert', { name: 'Last error' }).textContent).toContain(message),
+    );
   });
 
   it('asks for license acceptance in the library before fetching a restricted bundle', async () => {

@@ -1518,6 +1518,13 @@ def test_vram_limit_override_used_bounds_checked_and_ignored_on_unified(caplog):
     assert plan_75_768.max_dimension == 768
     assert (plan_75_768.text_encoder, plan_75_768.vae, plan_75_768.offload) == ("gpu", "gpu", False)
 
+    # Forced GPU placement that cannot fit at 1024/768 drops to 512 when 512 fits.
+    flux_q8 = model("Q8_0", "flux2-klein-4b")
+    assert plan_edit(flux_q8, gpu_12, 1024).max_dimension == 1024
+    te_gpu_flux_q8 = plan_edit(flux_q8, gpu_12, 1024, text_encoder="gpu")
+    assert te_gpu_flux_q8.max_dimension == 512
+    assert (te_gpu_flux_q8.text_encoder, te_gpu_flux_q8.vae) == ("gpu", "gpu")
+
     # 0 keeps automatic rule 1.
     auto_plan = plan_edit(flux_q4, gpu_12, 1024, vram_limit_mb=0)
     assert auto_plan.max_dimension == 1024

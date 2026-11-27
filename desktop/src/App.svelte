@@ -68,10 +68,12 @@
   import {
     editDevice,
     editDimensions,
+    editExpert,
     editFitFor,
     editHardwareLabel,
     editModelFits,
-    editSizeLimit,
+    editRecommendedSize,
+    editSizeFor,
     recommendAnyEditModel,
   } from './lib/editing';
   import {
@@ -696,7 +698,18 @@
       ? (snapshot.edit.custom_model ?? undefined)
       : editModels.find((model) => model.model_id === settings.edit_model_id);
   $: editFit = editModel ? editFitFor(editModel, snapshot.capabilities, editingDevice) : 'unknown';
-  $: editSizeAllowed = editSizeLimit(snapshot.capabilities, editingDevice);
+  $: editExpertState = editExpert(
+    settings,
+    editModel,
+    editingDevice,
+    snapshot.engine?.features ?? [],
+  );
+  $: editSizeAllowed = editRecommendedSize(
+    editModel,
+    snapshot.capabilities,
+    editingDevice,
+    editExpertState,
+  );
   $: editRuntime = editRuntimeOverride || snapshot.edit.runtime_path;
   $: editSupported = snapshot.engine?.features.includes(stepFeature('edit')) === true;
   $: editBlockReason =
@@ -1306,7 +1319,7 @@
   $: videoResultId = completedVideoOutput ? videoChoice.showing : '';
   $: outputDimensions = selectedMedia
     ? settings.task === 'edit'
-      ? `${editDimensions(selectedMedia.width, selectedMedia.height, Math.min(settings.edit_max_dimension, editSizeAllowed)).join(' × ')} · edited`
+      ? `${editDimensions(selectedMedia.width, selectedMedia.height, editSizeFor(settings.edit_max_dimension, editSizeAllowed, editExpertState)).join(' × ')} · edited`
       : restoring
         ? `${selectedMedia.width} × ${selectedMedia.height} · original size`
         : usingTemporalVideo &&
@@ -3481,11 +3494,15 @@
         prompt: editPrompt.trim(),
         runtime_path: editRuntime,
         device: editingDevice.id,
-        max_dimension: Math.min(settings.edit_max_dimension, editSizeAllowed),
+        max_dimension: editSizeFor(settings.edit_max_dimension, editSizeAllowed, editExpertState),
         steps: settings.edit_steps || editModel.default_steps,
         seed: settings.edit_seed,
         accepted_terms: Boolean(termsAccepted[editModel.model_id]),
         output_directory: settings.output_directory,
+        edit_text_encoder: editExpertState.textEncoder,
+        edit_vae: editExpertState.vae,
+        edit_vram_limit_mb: editExpertState.vramLimitMb,
+        edit_allow_any_size: editExpertState.allowAnySize,
       });
       unpinResults([selectedMedia.id]);
       page = 'preview';

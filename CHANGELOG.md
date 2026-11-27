@@ -3,6 +3,7 @@
 ## [0.7.0-beta] - Unreleased
 
 - **A clearer Enhance panel.** Pick fixes in a list, see the plan and output at a glance, and open settings where you need them. The new blue accent follows your Mac’s accent colour, and the colour-blind palette is easier to distinguish.
+- **Edit uses more graphics memory and adds Expert controls.** On graphics cards with their own memory, Edit now fits the largest size and places the text encoder and VAE on the GPU when they fit; a new Expert section under Advanced lets you override placement, set a GPU memory limit, or allow larger edit sizes.
 
 ## [0.6.2-beta] - Unreleased
 
