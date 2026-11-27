@@ -644,7 +644,7 @@ impl Default for UiSettings {
             device_id: "cpu".into(),
             tile_size: 256,
             halo: 32,
-            precision: "fp32".into(),
+            precision: "auto".into(),
             safe_memory: false,
             deflicker: steps.param_default_bool("deflicker", "deflicker"),
             deflicker_window: steps.param_default_u32("deflicker", "deflicker_window"),

@@ -307,3 +307,18 @@ describe('Hardware and low priority for this session', () => {
     expect(document.getElementById('advanced-session-choice')).toBeNull();
   });
 });
+
+describe('Precision selection', () => {
+  it('defaults to Auto as the first option and updates precision through updateSettings', async () => {
+    expect(demoSnapshot().settings.precision).toBe('auto');
+    const update = await open({ task: 'upscale' }, base);
+    expect(options('Precision')).toEqual(['auto', 'fp32', 'fp16']);
+    const select = screen.getByLabelText('Precision') as HTMLSelectElement;
+    expect(select.value).toBe('auto');
+    await fireEvent.change(select, { target: { value: 'fp32' } });
+    expect(update).toHaveBeenLastCalledWith({ precision: 'fp32' });
+    await fireEvent.change(select, { target: { value: 'auto' } });
+    expect(update).toHaveBeenLastCalledWith({ precision: 'auto' });
+    expect(screen.getByRole('button', { name: 'About Precision' })).toBeTruthy();
+  });
+});

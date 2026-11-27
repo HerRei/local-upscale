@@ -12,6 +12,7 @@ pub enum Precision {
     Fp32,
     Fp16,
     Bf16,
+    Auto,
 }
 
 impl FromStr for Precision {
@@ -22,6 +23,7 @@ impl FromStr for Precision {
             "fp32" => Ok(Self::Fp32),
             "fp16" => Ok(Self::Fp16),
             "bf16" => Ok(Self::Bf16),
+            "auto" => Ok(Self::Auto),
             _ => Err(AppError::Validation(format!(
                 "unsupported precision: {value}"
             ))),
@@ -729,5 +731,22 @@ mod tests {
         assert_eq!(override_wire["data"]["edit_text_encoder"], "cpu");
         assert_eq!(override_wire["data"]["edit_vae"], "gpu");
         assert!(validator.is_valid(&override_wire));
+    }
+
+    #[test]
+    fn precision_auto_round_trips_and_validates_against_schema() {
+        let validator = schema_validator();
+        let precision: Precision = "auto".parse().unwrap();
+        assert_eq!(precision, Precision::Auto);
+        let samples: BTreeMap<String, Value> = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/job_request_samples.json"
+        ))
+        .unwrap();
+        let mut image_auto = samples["image_upscale_fixes_and_face"].clone();
+        image_auto["data"]["precision"] = json!("auto");
+        let parsed: WorkerJobRequest = serde_json::from_value(image_auto).unwrap();
+        let wire = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(wire["data"]["precision"], "auto");
+        assert!(validator.is_valid(&wire));
     }
 }

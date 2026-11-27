@@ -45,7 +45,7 @@ export function demoSnapshot(): AppSnapshot {
       device_id: 'cpu',
       tile_size: 256,
       halo: 32,
-      precision: 'fp32',
+      precision: 'auto',
       safe_memory: false,
       deflicker: false,
       deflicker_window: 3,

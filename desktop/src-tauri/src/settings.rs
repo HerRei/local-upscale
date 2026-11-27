@@ -744,3 +744,27 @@ mod recovery_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod precision_tests {
+    use super::*;
+
+    #[test]
+    fn new_install_defaults_to_auto_precision_and_saved_fp32_is_not_migrated() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(root.path());
+        let (fresh, _) = load(&paths);
+        assert_eq!(fresh.precision, "auto");
+        assert_eq!(UiSettings::default().precision, "auto");
+
+        fs::create_dir_all(&paths.next_root).unwrap();
+        let saved_fp32 = serde_json::json!({
+            "schema_version": 2,
+            "ui": { "precision": "fp32" },
+            "recipes": []
+        });
+        fs::write(&paths.settings, saved_fp32.to_string()).unwrap();
+        let (loaded, _) = load(&paths);
+        assert_eq!(loaded.precision, "fp32");
+    }
+}

@@ -287,12 +287,16 @@ def _decode_with_macos(path: str, *, bit_depth: int = 8) -> Image.Image:
     return image
 
 
-def require_output_format(format: str, output_bit_depth: int = 8) -> None:
-    """Fail before any inference when this computer cannot write ``format``."""
+def require_output_bit_depth(format: str, output_bit_depth: int) -> None:
     if output_bit_depth not in (8, 16):
         raise ValueError("Output bit depth must be 8 or 16.")
     if output_bit_depth == 16 and format.lower() not in ("png", "tif", "tiff"):
         raise ValueError("16-bit output is only supported for PNG and TIFF images.")
+
+
+def require_output_format(format: str, output_bit_depth: int = 8) -> None:
+    """Fail before any inference when this computer cannot write ``format``."""
+    require_output_bit_depth(format, output_bit_depth)
     if format.lower() == "heic" and sys.platform != "darwin":
         raise ValueError("HEIC output needs macOS, which provides the HEIC encoder.")
 
@@ -791,7 +795,7 @@ class ImageManager:
         cancel_event: threading.Event | None = None,
         output_bit_depth: int = 8,
     ):
-        require_output_format(format, output_bit_depth)
+        require_output_bit_depth(format, output_bit_depth)
         final_scale = scale if output_scale is None else int(output_scale)
         if final_scale < 1 or final_scale > scale:
             raise ValueError(
