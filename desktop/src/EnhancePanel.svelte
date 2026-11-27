@@ -1004,6 +1004,8 @@
     justify-content: space-between;
     gap: 6px;
     min-width: 0;
+    min-height: calc(30px * var(--ui-scale));
+    font-size: calc(12px * var(--ui-scale));
   }
   .result-model-name {
     min-width: 0;

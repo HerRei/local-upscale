@@ -1182,8 +1182,7 @@ input:focus-visible {
 .pane-heading > span,
 .preview-header span,
 .media-copy span,
-.status-copy span,
-.recipe-grid small {
+.status-copy span {
   font-variant-numeric: tabular-nums;
 }
 .pane-heading > span {
@@ -1845,35 +1844,6 @@ input:focus-visible {
   font-size: calc(12px * var(--ui-scale));
   font-weight: 600;
 }
-.recipe-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-}
-.recipe-grid button {
-  min-height: 56px;
-  padding: 9px 10px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 3px;
-  border: 1px solid transparent;
-  border-radius: var(--radius);
-  text-align: left;
-  background: var(--recess);
-}
-.recipe-grid button:hover {
-  background: var(--hover);
-}
-.recipe-grid b {
-  font-size: calc(13px * var(--ui-scale));
-  font-weight: 600;
-}
-.recipe-grid span,
-.recipe-grid small {
-  color: var(--secondary);
-  font-size: calc(12px * var(--ui-scale));
-}
 .seg-inline.size-switch {
   grid-template-columns: 1.5fr 1fr 1fr 1fr;
 }
@@ -1942,8 +1912,8 @@ input:focus-visible {
   min-height: 30px;
 }
 .fix-check {
-  flex: 1 1 auto;
-  min-width: 0;
+  flex: 0 0 max-content;
+  min-width: max-content;
   min-height: 30px;
   display: flex;
   align-items: center;
@@ -1982,9 +1952,9 @@ input:focus-visible {
   opacity: 0.38;
 }
 .fix-row > .pop-anchor {
-  flex: 0 1 auto;
+  flex: 1 1 0;
   min-width: 0;
-  max-width: 62%;
+  justify-content: flex-end;
 }
 .fix-row > .pop-anchor .fix-value {
   max-width: 100%;
@@ -2019,7 +1989,7 @@ input:focus-visible {
 .fix-value {
   flex: 0 1 auto;
   min-width: 0;
-  max-width: 62%;
+  max-width: 100%;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -3641,11 +3611,6 @@ input[type='number'],
 }
 
 /* Model library: quality state, content, fix chips, plan card */
-.recipe-grid button.active {
-  border-color: var(--accent-line);
-  background: var(--accent-fill);
-}
-
 .seg-inline {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -5172,7 +5137,6 @@ label.setting-label {
   .rail-item.active,
   .setup-theme-tile.active,
   .saved-recipe button.active,
-  .recipe-grid button.active,
   .seg-inline button.active,
   .zoom-hud button.active {
     outline: 2px solid Highlight;

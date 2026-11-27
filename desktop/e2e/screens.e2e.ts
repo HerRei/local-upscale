@@ -32,16 +32,24 @@ test.describe('screens @visual', () => {
   test('plan for a Quick upscale', async ({ page }) => {
     await openApp(page, ready);
     await showPane(page, 'enhance');
-    await shoot(page, 'plan-quick');
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await shoot(page, 'panel-photo');
   });
 
   test('plan with two fixes in front of the upscaler', async ({ page }) => {
     await openApp(page, ready);
     await showPane(page, 'enhance');
-    await page.getByRole('button', { name: 'Noise', exact: true }).click();
-    await page.getByRole('button', { name: 'Blur', exact: true }).click();
-    await expect(page.getByRole('list', { name: 'Stages' }).getByRole('listitem')).toHaveCount(3);
-    await shoot(page, 'plan-fixes');
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await page.getByRole('checkbox', { name: 'Noise', exact: true }).check();
+    await page.getByRole('checkbox', { name: 'Blur', exact: true }).check();
+    await expect(page.locator('.foot-plan')).toContainText('Blur');
+    await shoot(page, 'panel-fixes');
+    await page
+      .getByRole('checkbox', { name: 'Noise', exact: true })
+      .locator('../..')
+      .getByRole('button')
+      .click();
+    await shoot(page, 'panel-popover');
   });
 
   test('Outputs tab with two ticked results', async ({ page }) => {
@@ -78,24 +86,27 @@ test.describe('screens @visual', () => {
   test('Advanced settings on a Mac', async ({ page }) => {
     await openApp(page, ready);
     await showPane(page, 'enhance');
-    await page.getByRole('button', { name: /^Advanced/ }).click();
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await page.locator('.foot-plan').click();
     await page.locator('#device').scrollIntoViewIfNeeded();
-    await shoot(page, 'advanced-mac');
+    await shoot(page, 'panel-plan-sheet-mac');
   });
 
   test('Advanced settings with two GPU routes', async ({ page }) => {
     await openApp(page, { ...windows, worker: 'ready' });
     await showPane(page, 'enhance');
-    await page.getByRole('button', { name: /^Advanced/ }).click();
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await page.locator('.foot-plan').click();
     await page.locator('#device').scrollIntoViewIfNeeded();
-    await shoot(page, 'advanced-windows');
+    await shoot(page, 'panel-plan-sheet-windows');
   });
 
   test('Advanced settings for video with interpolation', async ({ page }) => {
     await openApp(page, video);
     await showPane(page, 'enhance');
-    await page.getByRole('button', { name: /^Advanced/ }).click();
-    await page.locator('#frame-rate').scrollIntoViewIfNeeded();
-    await shoot(page, 'advanced-video');
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await shoot(page, 'panel-video');
+    await page.locator('.foot-output').click();
+    await shoot(page, 'panel-output-sheet-video');
   });
 });

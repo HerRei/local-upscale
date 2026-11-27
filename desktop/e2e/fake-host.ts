@@ -268,6 +268,7 @@ function hostScript(scenario: Scenario): void {
     finishDownload,
     failDownload,
     progressDownload,
+    setPlan: (plan: Scenario['plan']) => (scenario.plan = plan),
   };
 
   async function build(): Promise<Json> {

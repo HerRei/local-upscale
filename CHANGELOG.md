@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.7.0-beta] - Unreleased
+
+- **A clearer Enhance panel.** Pick fixes in a list, see the plan and output at a glance, and open settings where you need them. The new blue accent follows your Mac’s accent colour, and the colour-blind palette is easier to distinguish.
+
 ## [0.6.2-beta] - Unreleased
 
 A small speed and responsiveness update. Nothing changes in the results.
