@@ -198,6 +198,8 @@ test.describe('screens @visual', () => {
       'Downloads · 3 active · 1 waiting',
     );
     await shoot(page, 'library-downloads');
+  });
+
   test('Edit Expert settings on Windows CUDA', async ({ page }) => {
     await openApp(page, {
       devices: 'cuda',
