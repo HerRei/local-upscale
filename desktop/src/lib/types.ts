@@ -325,6 +325,7 @@ export interface UiSettings {
   colour_blind_palette: boolean;
   contrast?: 'system' | 'standard' | 'high';
   viewer_background?: 'checker' | 'black' | 'grey' | 'white';
+  accent?: 'system' | 'localsr';
   interface_scale: 100 | 110 | 125;
   batch_mode: boolean;
   task: TaskKind | '';

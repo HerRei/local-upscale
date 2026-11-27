@@ -104,6 +104,8 @@ export interface Scenario {
   concurrentDownloads?: boolean;
   /** Override plan_job behaviour for loading and error tests. */
   plan?: 'error' | { delayMs: number };
+  /** Override system_accent response on macOS. */
+  systemAccent?: { light: string; dark: string };
 }
 
 export interface HostCall {
@@ -959,6 +961,8 @@ function hostScript(scenario: Scenario): void {
       }
       case 'diagnostic_summary':
         return 'Fixture host: no inference engine.';
+      case 'system_accent':
+        return scenario.systemAccent ? structuredClone(scenario.systemAccent) : null;
       case 'download_model': {
         if (!scenario.concurrentDownloads) return null;
         const modelId = String(args.modelId ?? '');

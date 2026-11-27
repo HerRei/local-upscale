@@ -47,6 +47,7 @@
       | UiSettings['interface_scale']
       | NonNullable<UiSettings['contrast']>
       | NonNullable<UiSettings['viewer_background']>
+      | NonNullable<UiSettings['accent']>
       | NonNullable<UiSettings['stopped_job_result']>,
   ) => void;
   export let updateSettings: (patch: Partial<UiSettings>) => void;
@@ -471,6 +472,30 @@
                 setPreference('contrast', event.currentTarget.checked ? 'high' : 'system')}
             />
           </div>
+
+          {#if platform === 'macos'}
+            <div class="setting-row">
+              <div class="setting-copy">
+                <label class="setting-label" for="settings-accent"
+                  >Use the macOS accent colour</label
+                >
+                <p class="setting-desc" id="settings-accent-desc">
+                  Buttons and ticks take the colour chosen in System Settings. Off uses LocalSR's
+                  blue.
+                </p>
+              </div>
+              <input
+                id="settings-accent"
+                class="switch"
+                type="checkbox"
+                role="switch"
+                aria-describedby="settings-accent-desc"
+                checked={(settings.accent ?? 'system') === 'system'}
+                on:change={(event) =>
+                  setPreference('accent', event.currentTarget.checked ? 'system' : 'localsr')}
+              />
+            </div>
+          {/if}
 
           <div class="setting-row">
             <div class="setting-copy">

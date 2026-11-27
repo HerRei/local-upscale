@@ -38,6 +38,7 @@ mod settings;
 mod state;
 mod stay_awake;
 mod steps;
+mod system_accent;
 mod tray;
 mod types;
 mod update_storage;
@@ -259,6 +260,7 @@ pub fn run() {
             commands::clear_results,
             commands::save_settings,
             commands::set_preference,
+            system_accent::system_accent,
             commands::set_run_low_priority,
             commands::set_privacy_choice,
             commands::save_recipe,

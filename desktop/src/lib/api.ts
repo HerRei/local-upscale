@@ -160,6 +160,7 @@ export type PreferenceName =
   | 'colour_blind_palette'
   | 'contrast'
   | 'viewer_background'
+  | 'accent'
   | 'auto_cache_cleanup'
   | 'keep_awake'
   | 'stopped_job_result'
@@ -175,8 +176,19 @@ export const setPreference = (
     | UiSettings['interface_scale']
     | NonNullable<UiSettings['contrast']>
     | NonNullable<UiSettings['viewer_background']>
+    | NonNullable<UiSettings['accent']>
     | NonNullable<UiSettings['stopped_job_result']>,
 ): Promise<void> => invoke('set_preference', { name, value });
+
+export interface SystemAccent {
+  light: string;
+  dark: string;
+}
+
+export async function systemAccent(): Promise<SystemAccent | null> {
+  if (!isTauri()) return null;
+  return invoke<SystemAccent | null>('system_accent');
+}
 export interface SetupChoices {
   appearance: UiSettings['appearance'];
   colourBlindPalette: boolean;

@@ -392,6 +392,8 @@ pub struct UiSettings {
         deserialize_with = "deserialize_viewer_background"
     )]
     pub viewer_background: String,
+    #[serde(default = "default_accent", deserialize_with = "deserialize_accent")]
+    pub accent: String,
     pub interface_scale: u32,
     pub batch_mode: bool,
     pub task: String,
@@ -561,6 +563,10 @@ fn default_viewer_background() -> String {
     "checker".into()
 }
 
+fn default_accent() -> String {
+    "system".into()
+}
+
 fn default_stopped_job_result() -> String {
     "ask".into()
 }
@@ -617,6 +623,17 @@ fn deserialize_viewer_background<'de, D: serde::Deserializer<'de>>(
     )
 }
 
+fn deserialize_accent<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    Ok(if matches!(value.as_str(), "system" | "localsr") {
+        value
+    } else {
+        default_accent()
+    })
+}
+
 impl Default for UiSettings {
     fn default() -> Self {
         let steps = crate::steps::registry();
@@ -625,6 +642,7 @@ impl Default for UiSettings {
             colour_blind_palette: false,
             contrast: default_contrast(),
             viewer_background: default_viewer_background(),
+            accent: default_accent(),
             interface_scale: 100,
             batch_mode: false,
             task: String::new(),

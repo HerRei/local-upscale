@@ -413,6 +413,21 @@ mod tests {
     }
 
     #[test]
+    fn accent_defaults_round_trips_and_rejects_unknown_values() {
+        let defaults: UiSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(defaults.accent, "system");
+        let settings = UiSettings {
+            accent: "localsr".into(),
+            ..defaults
+        };
+        let restored: UiSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.accent, "localsr");
+        let unknown: UiSettings = serde_json::from_str(r#"{"accent":"pink"}"#).unwrap();
+        assert_eq!(unknown.accent, "system");
+    }
+
+    #[test]
     fn new_installs_start_with_the_count_and_crash_reports_on_and_saved_choices_stay() {
         assert!(UiSettings::default().anonymous_update_count);
         assert!(UiSettings::default().crash_reports);

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { detectPlatform } from './lib/platform';
   import { downloadSummary } from './lib/downloadSummary';
+  import { createAccentController } from './lib/accent';
   import { createThemeController } from './lib/theme';
 
   import { tabFromKey } from './lib/keyboard';
@@ -1582,7 +1583,7 @@
   let themeForRefresh: (
     settings: Pick<
       UiSettings,
-      'appearance' | 'colour_blind_palette' | 'contrast' | 'viewer_background'
+      'appearance' | 'colour_blind_palette' | 'contrast' | 'viewer_background' | 'accent'
     >,
   ) => void = () => {};
 
@@ -1594,7 +1595,11 @@
           .catch((error) => console.error('Could not set window theme', error));
       }
     });
-    themeForRefresh = theme.apply;
+    const accent = createAccentController();
+    themeForRefresh = (nextSettings) => {
+      theme.apply(nextSettings);
+      accent.apply(nextSettings);
+    };
     const unlisteners: (() => void)[] = [];
     let disposed = false;
     async function subscribe(register: () => Promise<() => void>): Promise<void> {
@@ -1620,6 +1625,7 @@
           crashNotice = crashReports.length > 0;
         }
         theme.apply(snapshot.settings);
+        accent.apply(snapshot.settings);
         document.documentElement.classList.remove('theme-loading');
         await tick();
         if (disposed) return;
@@ -1676,6 +1682,7 @@
     return () => {
       disposed = true;
       theme.dispose();
+      accent.dispose();
       if (stateRefresh) clearTimeout(stateRefresh);
       if (runtimePulseTimer) clearTimeout(runtimePulseTimer);
       if (autoStartTimer) clearTimeout(autoStartTimer);
@@ -2597,6 +2604,7 @@
       | UiSettings['interface_scale']
       | NonNullable<UiSettings['contrast']>
       | NonNullable<UiSettings['viewer_background']>
+      | NonNullable<UiSettings['accent']>
       | NonNullable<UiSettings['stopped_job_result']>,
   ): Promise<void> {
     if (!api.isTauri()) {
@@ -2605,7 +2613,8 @@
         name === 'appearance' ||
         name === 'colour_blind_palette' ||
         name === 'contrast' ||
-        name === 'viewer_background'
+        name === 'viewer_background' ||
+        name === 'accent'
       ) {
         themeForRefresh(snapshot.settings);
       }
@@ -2622,7 +2631,8 @@
         name === 'appearance' ||
         name === 'colour_blind_palette' ||
         name === 'contrast' ||
-        name === 'viewer_background'
+        name === 'viewer_background' ||
+        name === 'accent'
       ) {
         themeForRefresh(snapshot.settings);
       }

@@ -430,6 +430,7 @@ fn set_preference_round_trips_all_keys_rejects_bad_input_and_rolls_back_on_error
         ("appearance", serde_json::json!("light")),
         ("contrast", serde_json::json!("high")),
         ("viewer_background", serde_json::json!("grey")),
+        ("accent", serde_json::json!("localsr")),
         ("interface_scale", serde_json::json!(125)),
     ] {
         apply_preference(&state, name, &value).unwrap();
@@ -451,6 +452,7 @@ fn set_preference_round_trips_all_keys_rejects_bad_input_and_rolls_back_on_error
     assert_eq!(saved.appearance, "light");
     assert_eq!(saved.contrast, "high");
     assert_eq!(saved.viewer_background, "grey");
+    assert_eq!(saved.accent, "localsr");
     assert_eq!(saved.interface_scale, 125);
 
     apply_preference(&state, "stopped_job_result", &serde_json::json!("discard")).unwrap();
@@ -470,11 +472,14 @@ fn set_preference_round_trips_all_keys_rejects_bad_input_and_rolls_back_on_error
     assert!(apply_preference(&state, "contrast", &serde_json::json!("loud")).is_err());
     assert!(apply_preference(&state, "contrast", &serde_json::json!(true)).is_err());
     assert!(apply_preference(&state, "viewer_background", &serde_json::json!("blue")).is_err());
+    assert!(apply_preference(&state, "accent", &serde_json::json!("red")).is_err());
+    assert!(apply_preference(&state, "accent", &serde_json::json!(true)).is_err());
     assert!(apply_preference(&state, "interface_scale", &serde_json::json!(150)).is_err());
     assert!(apply_preference(&state, "interface_scale", &serde_json::json!("125")).is_err());
     let still_saved = crate::settings::load(&state.paths).0;
     assert_eq!(still_saved.contrast, "high");
     assert_eq!(still_saved.viewer_background, "grey");
+    assert_eq!(still_saved.accent, "localsr");
 
     // An unreadable settings file refuses the write; memory goes back to match the disk.
     fs::write(&state.paths.settings, b"{ not json").unwrap();
@@ -495,6 +500,7 @@ fn a_full_settings_save_never_changes_host_owned_preferences() {
         colour_blind_palette: true,
         contrast: "high".into(),
         viewer_background: "white".into(),
+        accent: "localsr".into(),
         interface_scale: 125,
         completion_sound: true,
         menu_bar_icon_monochrome: false,
@@ -515,6 +521,7 @@ fn a_full_settings_save_never_changes_host_owned_preferences() {
     assert!(incoming.colour_blind_palette);
     assert_eq!(incoming.contrast, "high");
     assert_eq!(incoming.viewer_background, "white");
+    assert_eq!(incoming.accent, "localsr");
     assert_eq!(incoming.interface_scale, 125);
     assert!(incoming.completion_sound);
     assert!(!incoming.menu_bar_icon_monochrome);

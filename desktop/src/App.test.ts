@@ -104,6 +104,7 @@ const api = vi.hoisted(() => ({
   clearResults: vi.fn(async () => undefined),
   saveSettings: vi.fn(async (_settings: UiSettings): Promise<void> => undefined),
   planJob: vi.fn(async () => []),
+  systemAccent: vi.fn(async () => null),
   recordFrontendError: vi.fn(async (_message: string, _stack: string): Promise<void> => undefined),
   setPreference: vi.fn(
     async (
@@ -114,6 +115,7 @@ const api = vi.hoisted(() => ({
         | UiSettings['interface_scale']
         | NonNullable<UiSettings['contrast']>
         | NonNullable<UiSettings['viewer_background']>
+        | NonNullable<UiSettings['accent']>
         | UiSettings['stopped_job_result'],
     ): Promise<void> => undefined,
   ),
@@ -496,6 +498,44 @@ describe('Appearance from the host', () => {
     await waitFor(() => expect(api.setPreference).toHaveBeenCalledWith('contrast', 'high'));
     // The theme follows once the awaited host call returns.
     await waitFor(() => expect(document.documentElement.dataset.contrast).toBe('high'));
+  });
+
+  it('shows the accent switch on macOS user agents and hides it on Windows user agents', async () => {
+    const uaDesc = Object.getOwnPropertyDescriptor(navigator, 'userAgent');
+    onTestFinished(() => {
+      if (uaDesc) Object.defineProperty(navigator, 'userAgent', uaDesc);
+      else delete (navigator as unknown as Record<string, unknown>).userAgent;
+    });
+
+    Object.defineProperty(navigator, 'userAgent', {
+      value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)',
+      configurable: true,
+    });
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.accent = 'system';
+    const user = await mountWith(snapshot);
+    await chooseMenuItem('app.settings');
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await user.click(within(dialog).getByRole('tab', { name: 'Appearance' }));
+    const accentSwitch = within(dialog).getByRole('switch', {
+      name: 'Use the macOS accent colour',
+    }) as HTMLInputElement;
+    expect(accentSwitch.checked).toBe(true);
+    await user.click(accentSwitch);
+    await waitFor(() => expect(api.setPreference).toHaveBeenCalledWith('accent', 'localsr'));
+
+    cleanup();
+    Object.defineProperty(navigator, 'userAgent', {
+      value: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+      configurable: true,
+    });
+    const winUser = await mountWith(readySnapshot([image('photo', true)]));
+    await chooseMenuItem('app.settings');
+    const winDialog = await screen.findByRole('dialog', { name: 'Settings' });
+    await winUser.click(within(winDialog).getByRole('tab', { name: 'Appearance' }));
+    expect(
+      within(winDialog).queryByRole('switch', { name: 'Use the macOS accent colour' }),
+    ).toBeNull();
   });
 
   it('keeps saved contrast and viewer background during first-run theme preview', async () => {
