@@ -366,6 +366,22 @@ async function mountWith(snapshot: AppSnapshot): Promise<ReturnType<typeof userE
   return userEvent.setup();
 }
 
+/**
+ * Save preferences into the snapshot the mocked host serves, as the real host does. Without
+ * it, the refresh that follows every preference returns the stale snapshot and can undo the
+ * change, depending on timing (flaky on loaded CI runners).
+ */
+function hostKeepsPreferences(snapshot: AppSnapshot): void {
+  const original = api.setPreference.getMockImplementation();
+  api.setPreference.mockImplementation(async (name, value) => {
+    snapshot.settings = { ...snapshot.settings, [name]: value };
+    api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+  });
+  onTestFinished(() => {
+    if (original) api.setPreference.mockImplementation(original);
+  });
+}
+
 let nativeMenu: ((action: string) => void) | undefined;
 let engineStatusHandler: ((status: EngineDownloadStatus) => void) | undefined;
 
@@ -413,6 +429,7 @@ describe('Appearance from the host', () => {
   it('updates viewer background from the zoom swatch and high contrast from Settings', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     const user = await mountWith(snapshot);
+    hostKeepsPreferences(snapshot);
 
     await user.click(screen.getByRole('button', { name: 'Viewer background: Checkerboard' }));
     await waitFor(() =>
@@ -7065,6 +7082,7 @@ describe('crash reports', () => {
     snap.settings.crash_reports = true;
     api.listCrashReports.mockResolvedValue([sampleReport]);
     const user = await mountWith(snap);
+    hostKeepsPreferences(snap);
     await screen.findByRole('dialog', {
       name: 'LocalSR quit unexpectedly last time.',
     });
@@ -7101,8 +7119,9 @@ describe('crash reports', () => {
 
     nativeMenu?.('view.performance');
     const offDialog = await screen.findByRole('dialog', { name: 'Performance & Diagnostics' });
+    // The switch is saved through an awaited host call; the dialog can open before it lands.
     expect(
-      within(offDialog).getByText('Crash reports are off. Turn them on in Settings.'),
+      await within(offDialog).findByText('Crash reports are off. Turn them on in Settings.'),
     ).toBeTruthy();
     await user.click(within(offDialog).getByRole('button', { name: 'Open Settings' }));
     const reopened = await screen.findByRole('dialog', { name: 'Settings' });
