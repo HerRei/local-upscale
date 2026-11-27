@@ -80,7 +80,8 @@
   export let dismissDownloadError: (modelId: string) => void = () => {};
   export let busy = false;
   // While Start waits for downloads, models can still be chosen; the folder cannot move.
-  export let folderBusy = busy;
+  export let folderBusy = false;
+  $: folderLocked = busy || folderBusy;
   export let close: () => void;
   export let useForJob: (model: CatalogModel) => void;
   export let useVideoForJob: (model: CatalogVideoModel) => void = () => {};
@@ -615,13 +616,13 @@
             <button
               class="button compact"
               type="button"
-              disabled={folderBusy}
+              disabled={folderLocked}
               on:click={chooseModelFolder}>Choose folder…</button
             >
             <button
               class="button compact"
               type="button"
-              disabled={folderBusy}
+              disabled={folderLocked}
               on:click={resetModelFolder}>Reset to default</button
             >
           </div>

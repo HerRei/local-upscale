@@ -113,7 +113,6 @@ class WindowAttention(nn.Module):
         relative_position_index = relative_coords.sum(-1)
         self.register_buffer("relative_position_index", relative_position_index)
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
-        self.attn_drop_prob = attn_drop
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
