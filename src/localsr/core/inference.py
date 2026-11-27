@@ -2,6 +2,7 @@ import functools
 import gc
 import json
 import logging
+import os
 import threading
 from collections.abc import Callable, Collection, Mapping
 from pathlib import Path
@@ -12,8 +13,16 @@ import torch
 import torch.nn.functional as F
 
 from .memory_errors import DeviceOutOfMemoryError
+from .model_catalog import file_stamp
 from .output_writer import OutputWriter
 from .tiling import generate_tiles, make_tile
+
+
+def _path_stamp(path: str) -> tuple[int, int, int, int, int] | None:
+    try:
+        return file_stamp(os.stat(path))
+    except OSError:
+        return None
 
 
 class UnstableRestorationError(ValueError):
@@ -380,6 +389,10 @@ class InferenceEngine:
         self._loaded_models: dict[str, tuple[object, torch.device, torch.dtype]] = {}
         self._memory_cap_safe: dict[str, bool] = {}
         self._loaded_backend_ids: dict[str, str] = {}
+        self._loaded_stamps: dict[str, tuple[int, int, int, int, int] | None] = {}
+        self._prepared_backends: dict[
+            tuple[str, str, torch.dtype], tuple[tuple[int, int, int, int, int] | None, dict]
+        ] = {}
         self._active_path: str | None = None
         self._loaded_device: torch.device | None = None
         self._loaded_precision: torch.dtype | None = None
@@ -516,10 +529,16 @@ class InferenceEngine:
             _apply_gpu_memory_limit(device, safe)
             self._memory_cap_safe[str(device)] = safe
 
+        normalized_path = os.path.abspath(model_path)
+        stamp = _path_stamp(normalized_path)
         if model_path in self._loaded_models:
             cached_model, cached_device, cached_precision = self._loaded_models[model_path]
+            stamp_matches = (
+                model_path not in self._loaded_stamps or self._loaded_stamps[model_path] == stamp
+            )
             if (
-                cached_device == device
+                stamp_matches
+                and cached_device == device
                 and cached_precision == precision
                 and self._loaded_backend_ids.get(model_path) == backend_id
             ):
@@ -529,7 +548,10 @@ class InferenceEngine:
                 if auto_fp16:
                     self.add_note(AUTO_FP16_NOTE)
                 return device, precision
+            if not stamp_matches:
+                self._drop_prepared_backends(normalized_path)
             del self._loaded_models[model_path]
+            self._loaded_stamps.pop(model_path, None)
             gc.collect()
 
         if onnx_route is not None:
@@ -540,8 +562,24 @@ class InferenceEngine:
             )
         else:
             model, _ = self.model_adapter.load(model_path, device, precision)
+
+        backend_key = (normalized_path, backend_id, precision)
+        cached_backend = self._prepared_backends.get(backend_key)
+        if cached_backend is not None:
+            cached_stamp, backend_state = cached_backend
+            if cached_stamp == stamp:
+                restorer = getattr(model, "restore_backend_state", None)
+                if callable(restorer):
+                    restorer(backend_state)
+            else:
+                self._drop_prepared_backends(normalized_path)
+        exporter = getattr(model, "export_backend_state", None)
+        if callable(exporter):
+            self._prepared_backends[backend_key] = (stamp, exporter())
+
         self._loaded_models[model_path] = (model, device, precision)
         self._loaded_backend_ids[model_path] = backend_id
+        self._loaded_stamps[model_path] = stamp
         self._active_path = model_path
         self._sync_legacy_fields()
         self._attach_status(model)
@@ -585,12 +623,25 @@ class InferenceEngine:
             self._loaded_device = None
             self._loaded_precision = None
 
-    def release_model(self, path: str | None = None) -> None:
-        """Release one cached model, or all of them when path is None."""
+    def _drop_prepared_backends(self, path: str) -> None:
+        normalized = os.path.abspath(path)
+        for key in [k for k in self._prepared_backends if k[0] == normalized or k[0] == path]:
+            self._prepared_backends.pop(key, None)
+
+    def release_model(self, path: str | None = None, *, memory_pressure: bool = False) -> None:
+        """Release one cached model, or all of them when path is None.
+
+        When ``path`` is None and ``memory_pressure`` is False, prepared backend
+        states (such as loaded Core ML runners) remain cached for the next job
+        with the same checkpoint, shape, and precision. Passing ``memory_pressure=True``
+        or naming a specific ``path`` drops prepared backends too.
+        """
         if path is not None:
             self._parked.pop(path, None)
             entry = self._loaded_models.pop(path, None)
             self._loaded_backend_ids.pop(path, None)
+            self._loaded_stamps.pop(path, None)
+            self._drop_prepared_backends(path)
             del entry
             if self._active_path == path:
                 self._active_path = next(iter(self._loaded_models), None)
@@ -602,14 +653,25 @@ class InferenceEngine:
                 del model
             self._loaded_models.clear()
             self._loaded_backend_ids.clear()
+            self._loaded_stamps.clear()
+            if memory_pressure:
+                self._prepared_backends.clear()
             self._active_path = None
             self._sync_legacy_fields()
             gc.collect()
 
+    def release_under_memory_pressure(self) -> None:
+        """Release all loaded models and prepared backend caches under memory pressure."""
+        self.release_model(memory_pressure=True)
+
     def release_models_except(self, keep: Collection[str]) -> None:
         """Release every cached model whose path is not in keep."""
-        for path in [path for path in self._loaded_models if path not in keep]:
+        keep_set = set(keep)
+        keep_normalized = {os.path.abspath(path) for path in keep_set} | keep_set
+        for path in [path for path in self._loaded_models if path not in keep_set]:
             self.release_model(path)
+        for key in [k for k in self._prepared_backends if k[0] not in keep_normalized]:
+            self._prepared_backends.pop(key, None)
 
     def release_all(self) -> None:
         """Release every cached model. Alias for release_model(path=None)."""
@@ -1060,11 +1122,14 @@ class InferenceEngine:
                     or "not enough memory" in err_str
                     or "allocate" in err_str
                 ):
+                    if self._active_path is not None:
+                        self._drop_prepared_backends(self._active_path)
                     _clear_device_cache(device)
                     gc.collect()
 
                     current_tile_size = current_tile_size // 2
                     if current_tile_size < min_tile_size:
+                        self.release_model(memory_pressure=True)
                         raise DeviceOutOfMemoryError(
                             "Out of memory. Reduced tile size to minimum and still failed.",
                             device_type=device.type,
@@ -1262,12 +1327,15 @@ class InferenceEngine:
                         or "not enough memory" in err_str
                         or "allocate" in err_str
                     ):
+                        if self._active_path is not None:
+                            self._drop_prepared_backends(self._active_path)
                         _clear_device_cache(device)
                         gc.collect()
 
                         current_tile_size = current_tile_size // 2
                         if current_tile_size < min_tile_size:
                             writer.cleanup()
+                            self.release_model(memory_pressure=True)
                             raise DeviceOutOfMemoryError(
                                 "Out of memory. Reduced tile size to minimum and still failed.",
                                 device_type=device.type,

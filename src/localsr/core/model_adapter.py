@@ -1,13 +1,18 @@
 import os
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import lcm
 
 import spandrel
 import torch
 
-from localsr.core.model_catalog import CATALOG_BY_FILENAME, file_matches_checksum, file_sha256
+from localsr.core.model_catalog import (
+    CATALOG_BY_FILENAME,
+    file_stamp,
+    is_settled_file,
+    verify_file_checksum,
+)
 from localsr.core.preparation import PreparationTimeout, bounded_preparation
 from localsr.image_models.heart import heart_support
 from localsr.image_models.nerve import nerve_support
@@ -101,6 +106,9 @@ class ModelAdapter:
         self.approved_checkpoint: tuple[str, str] | None = None
         self.parsed = None
         self.parsed_path = None
+        self._info_cache: dict[
+            str, tuple[tuple[int, int, int, int, int], str, NormalizedModelInfo]
+        ] = {}
         self.status_callback: Callable[[str], None] | None = None
         self.cancel_event: threading.Event | None = None
         self.allow_unverified_checkpoints = (
@@ -109,14 +117,14 @@ class ModelAdapter:
             else allow_unverified_checkpoints
         )
 
-    def _read(self, path: str):
+    def _read(self, path: str, *, trust: str | None = None):
         """The checkpoint's trust class and parsed model, within MODEL_READ_SECONDS."""
         name = os.path.basename(path)
 
         def read():
-            trust = self._checkpoint_trust(path)
+            resolved_trust = trust if trust is not None else self._checkpoint_trust(path)
             try:
-                return trust, self.loader.load_from_file(path)
+                return resolved_trust, self.loader.load_from_file(path)
             except spandrel.UnsupportedModelError as error:
                 try:
                     state_dict = self.loader.load_state_dict_from_file(path)
@@ -129,7 +137,7 @@ class ModelAdapter:
                     )
 
                     if is_ddcolor_state_dict(state_dict):
-                        return trust, load_ddcolor_descriptor(state_dict)
+                        return resolved_trust, load_ddcolor_descriptor(state_dict)
                     message = _unsupported_model_message(state_dict)
                 else:
                     message = "This checkpoint's architecture could not be recognized and is not supported."
@@ -157,7 +165,9 @@ class ModelAdapter:
         suffix = os.path.splitext(candidate)[1].lower()
         catalog_model = CATALOG_BY_FILENAME.get(os.path.basename(candidate))
         if catalog_model is not None:
-            if not file_matches_checksum(candidate, catalog_model.size_bytes, catalog_model.sha256):
+            if not verify_file_checksum(
+                candidate, catalog_model.sha256, expected_size=catalog_model.size_bytes
+            ):
                 raise CheckpointSecurityError(
                     f"{catalog_model.name} failed its catalog SHA-256 check. "
                     "LocalSR refused to deserialize it; remove the file and download it again."
@@ -170,11 +180,7 @@ class ModelAdapter:
                     raise CheckpointSecurityError(
                         "Only the checkpoint you confirmed can load in this job."
                     )
-                try:
-                    matches = file_sha256(candidate) == self.approved_checkpoint[1]
-                except OSError:
-                    matches = False
-                if not matches:
+                if not verify_file_checksum(candidate, self.approved_checkpoint[1]):
                     raise CheckpointSecurityError(
                         "The approved checkpoint changed. Confirm it again."
                     )
@@ -194,8 +200,23 @@ class ModelAdapter:
 
         # Note: Spandrel uses safe load by default where possible, but .pth can be unsafe.
         normalized_path = os.path.abspath(path)
+        stat = None
+        stamp = None
+        settled = False
+        try:
+            stat = os.stat(normalized_path)
+            stamp = file_stamp(stat)
+            settled = is_settled_file(stat)
+        except OSError:
+            pass
+
         if self.parsed is None or self.parsed_path != normalized_path:
-            checkpoint_trust, self.parsed = self._read(normalized_path)
+            checkpoint_trust = self._checkpoint_trust(normalized_path)
+            if settled and stamp is not None:
+                cached = self._info_cache.get(normalized_path)
+                if cached is not None and cached[0] == stamp and cached[1] == checkpoint_trust:
+                    return replace(cached[2], warnings=list(cached[2].warnings))
+            checkpoint_trust, self.parsed = self._read(normalized_path, trust=checkpoint_trust)
             self.parsed_path = normalized_path
         else:
             checkpoint_trust = "cached"
@@ -240,7 +261,7 @@ class ModelAdapter:
                 "explicitly enabled. Treat it as executable code."
             )
 
-        return NormalizedModelInfo(
+        info = NormalizedModelInfo(
             architecture=arch,
             scale=scale,
             in_channels=in_c,
@@ -253,6 +274,9 @@ class ModelAdapter:
             warnings=warnings,
             size_requirements_square=req_square,
         )
+        if settled and stamp is not None and checkpoint_trust != "cached":
+            self._info_cache[normalized_path] = (stamp, checkpoint_trust, info)
+        return info
 
     def load(
         self,
@@ -293,6 +317,8 @@ class ModelAdapter:
             return _DirectMLDescriptor(descriptor), self.parsed
         return descriptor, self.parsed
 
-    def release(self):
+    def release(self, *, clear_metadata: bool = False):
         self.parsed = None
         self.parsed_path = None
+        if clear_metadata:
+            self._info_cache.clear()

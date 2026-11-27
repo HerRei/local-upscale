@@ -1207,18 +1207,12 @@ class ModelStore:
                 return False
         except OSError:
             return False
-        signature = (
-            stat.st_dev,
-            stat.st_ino,
-            stat.st_size,
-            stat.st_mtime_ns,
-            stat.st_ctime_ns,
-        )
+        signature = file_stamp(stat)
         key = (os.fspath(path.absolute()), expected_size, expected_sha256.lower())
         cached = self._verification_cache.get(key)
         # Windows can give rapid same-size rewrites the same timestamps. Do
         # not reuse a verdict while the file is still in that timestamp window.
-        settled = time.time_ns() - max(stat.st_mtime_ns, stat.st_ctime_ns) > 2_000_000_000
+        settled = is_settled_file(stat)
         if settled and cached is not None and cached[0] == signature:
             return cached[1]
         verified = file_matches_checksum(path, expected_size, expected_sha256)
@@ -1229,6 +1223,81 @@ class ModelStore:
             # reusable later if another rewrite happened before it settled.
             self._verification_cache.pop(key, None)
         return verified
+
+
+_VERIFIED_FILE_HASHES: dict[str, tuple[tuple[int, int, int, int, int], str]] = {}
+_VERIFIED_HASHES_LOCK = threading.Lock()
+
+
+def file_stamp(stat: os.stat_result) -> tuple[int, int, int, int, int]:
+    """Filesystem metadata stamp for detecting file replacements or touches."""
+    return (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino, stat.st_dev)
+
+
+def is_settled_file(stat: os.stat_result) -> bool:
+    """True once the file has been untouched past rapid-rewrite timestamp granularity."""
+    return time.time_ns() - max(stat.st_mtime_ns, stat.st_ctime_ns) > 2_000_000_000
+
+
+def cached_file_sha256(path: str | Path) -> str:
+    """Return a file's SHA-256 hex digest, reusing a verified settled entry in this process."""
+    candidate = Path(path)
+    stat = candidate.stat()
+    key = os.fspath(candidate.resolve())
+    stamp = file_stamp(stat)
+    settled = is_settled_file(stat)
+    with _VERIFIED_HASHES_LOCK:
+        cached = _VERIFIED_FILE_HASHES.get(key)
+        if settled and cached is not None and cached[0] == stamp:
+            return cached[1]
+        if not settled:
+            _VERIFIED_FILE_HASHES.pop(key, None)
+    digest = file_sha256(candidate)
+    with _VERIFIED_HASHES_LOCK:
+        if settled:
+            _VERIFIED_FILE_HASHES[key] = (stamp, digest)
+        else:
+            _VERIFIED_FILE_HASHES.pop(key, None)
+    return digest
+
+
+def verify_file_checksum(
+    path: str | Path,
+    expected_sha256: str,
+    *,
+    expected_size: int | None = None,
+) -> bool:
+    """Verify a file's SHA-256 (and optional size), reusing a settled match for its stamp."""
+    candidate = Path(path)
+    try:
+        stat = candidate.stat()
+        if not candidate.is_file():
+            return False
+        if expected_size is not None and stat.st_size != expected_size:
+            return False
+    except OSError:
+        return False
+    key = os.fspath(candidate.resolve())
+    stamp = file_stamp(stat)
+    settled = is_settled_file(stat)
+    expected = expected_sha256.lower()
+    with _VERIFIED_HASHES_LOCK:
+        cached = _VERIFIED_FILE_HASHES.get(key)
+        if settled and cached is not None and cached[0] == stamp:
+            return cached[1] == expected
+        if not settled:
+            _VERIFIED_FILE_HASHES.pop(key, None)
+    try:
+        actual = file_sha256(candidate)
+    except OSError:
+        return False
+    matched = actual == expected
+    with _VERIFIED_HASHES_LOCK:
+        if settled and matched:
+            _VERIFIED_FILE_HASHES[key] = (stamp, actual)
+        else:
+            _VERIFIED_FILE_HASHES.pop(key, None)
+    return matched
 
 
 def file_sha256(path: str | Path, chunk_size: int = 4 * 1024 * 1024) -> str:
