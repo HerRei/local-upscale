@@ -821,6 +821,49 @@ function hostScript(scenario: Scenario): void {
           slots: compareSlots(args.picks),
         };
         return null;
+      case 'request_preview_regions': {
+        if (!snapshot.engine?.features?.includes('preview_regions')) return null;
+        const regions = (args.regions ?? {}) as Record<string, Json | null>;
+        snapshot.runtime.preview_original = regions.original
+          ? {
+              media_id: args.mediaId,
+              region: {
+                bounds: regions.original,
+                data_url: picture(
+                  190,
+                  regions.original.target_width,
+                  regions.original.target_height,
+                ),
+              },
+            }
+          : { media_id: '', region: null };
+        const pair = snapshot.runtime.comparison_pair;
+        if (pair && pair.media_id === args.mediaId && pair.generation === args.generation) {
+          pair.showing.region = regions.showing
+            ? {
+                bounds: regions.showing,
+                data_url: picture(30, regions.showing.target_width, regions.showing.target_height),
+              }
+            : null;
+          pair.against.region = regions.against
+            ? {
+                bounds: regions.against,
+                data_url: picture(60, regions.against.target_width, regions.against.target_height),
+              }
+            : null;
+        }
+        emit('state-changed', null);
+        return null;
+      }
+      case 'clear_preview_regions': {
+        snapshot.runtime.preview_original = { media_id: '', region: null };
+        if (snapshot.runtime.comparison_pair) {
+          snapshot.runtime.comparison_pair.showing.region = null;
+          snapshot.runtime.comparison_pair.against.region = null;
+        }
+        emit('state-changed', null);
+        return null;
+      }
       case 'add_media': {
         const known = new Set(snapshot.media.map((media: Json) => media.path));
         let next = snapshot.media.length;
@@ -1078,9 +1121,7 @@ export async function installFakeHost(page: Page, scenario: Scenario): Promise<v
     scenario.videoCompare || scenario.videoSyncCompare ? loadCompareFixtures() : undefined;
   if (compare) {
     await page.route('**/__e2e_fixture__/*', async (route) => {
-      const name = decodeURIComponent(
-        route.request().url().split('/__e2e_fixture__/').pop() ?? '',
-      );
+      const name = decodeURIComponent(route.request().url().split('/__e2e_fixture__/').pop() ?? '');
       const body = compare.bytes[name];
       if (!body) {
         await route.fulfill({ status: 404 });

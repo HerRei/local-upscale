@@ -2008,12 +2008,26 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
         "region_ready" | "region_failed" => {
             let database = lock(&state.database)?;
             let mut runtime = lock(&state.runtime)?;
-            crate::compare::apply_region(
-                &database,
-                &mut runtime.compare,
-                data,
-                envelope.message_type == "region_failed",
-            )?;
+            let failed = envelope.message_type == "region_failed";
+            match data["slot"].as_str() {
+                Some("original" | "showing" | "against") => {
+                    let crate::types::RuntimeStatus {
+                        comparison_pair,
+                        preview_original,
+                        ..
+                    } = &mut *runtime;
+                    crate::compare::apply_pair_region(
+                        &database,
+                        comparison_pair,
+                        preview_original,
+                        data,
+                        failed,
+                    )?;
+                }
+                _ => {
+                    crate::compare::apply_region(&database, &mut runtime.compare, data, failed)?;
+                }
+            }
         }
         "preview_ready" => {
             let path = string(data, "image_path");

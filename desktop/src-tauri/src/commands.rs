@@ -455,6 +455,9 @@ pub(crate) fn remove_media_checked(state: &AppState, id: &str) -> AppResult<()> 
             stale.push(pair.showing.preview_data_url);
             stale.push(pair.against.preview_data_url);
         }
+        if runtime.preview_original.media_id == id {
+            runtime.preview_original = Default::default();
+        }
         for slot in &runtime.compare.slots {
             stale.push(slot.preview_data_url.clone());
         }
@@ -529,6 +532,7 @@ fn clear_all_media_and_previews(state: &AppState) -> AppResult<()> {
     runtime.comparison_preview_data_url.clear();
     runtime.comparison_error.clear();
     runtime.comparison_pair = Default::default();
+    runtime.preview_original = Default::default();
     runtime.compare.slots.clear();
     clear_completed_result_locked(&mut runtime);
     crate::preview_cache::sweep_unreferenced(&state.paths.preview_root, &database, Some(&runtime))?;
@@ -2138,6 +2142,21 @@ pub(crate) fn request_compare_checked(
     Ok(())
 }
 
+fn has_engine_feature(state: &AppState, name: &str) -> AppResult<bool> {
+    Ok(lock(&state.engine)?
+        .as_ref()
+        .is_some_and(|engine| engine.features.iter().any(|feature| feature == name)))
+}
+
+fn has_compare_regions_feature(state: &AppState) -> AppResult<bool> {
+    has_engine_feature(state, "compare_regions")
+}
+
+// An engine before 0.7.0 has Compare regions but drops the main preview's slots.
+fn has_preview_regions_feature(state: &AppState) -> AppResult<bool> {
+    has_engine_feature(state, "preview_regions")
+}
+
 #[tauri::command]
 pub fn request_compare_regions(
     state: State<'_, Arc<AppState>>,
@@ -2163,12 +2182,7 @@ pub(crate) fn request_compare_regions_checked(
         .map(|slot| slot.pick.clone())
         .collect();
     authorize_compare_originals(state, &picks)?;
-    if !lock(&state.engine)?.as_ref().is_some_and(|engine| {
-        engine
-            .features
-            .iter()
-            .any(|feature| feature == "compare_regions")
-    }) {
+    if !has_compare_regions_feature(state)? {
         return Ok(());
     }
     let requests = {
@@ -2197,15 +2211,122 @@ pub fn clear_compare_regions(state: State<'_, Arc<AppState>>, app: AppHandle) ->
         let mut runtime = lock(&state.runtime)?;
         crate::compare::plan_regions(&database, &mut runtime.compare, &[])?;
     }
-    if lock(&state.engine)?.as_ref().is_some_and(|engine| {
-        engine
-            .features
-            .iter()
-            .any(|feature| feature == "compare_regions")
-    }) {
+    if has_compare_regions_feature(&state)? {
         let _ = worker::send(&state, &json!({"type":"region_clear", "data":{}}));
     }
     emit_state_changed(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn request_preview_regions(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    media_id: String,
+    generation: u64,
+    regions: crate::compare::PairRegions,
+) -> AppResult<()> {
+    request_preview_regions_checked(&state, &media_id, generation, &regions)?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
+pub(crate) fn request_preview_regions_checked(
+    state: &AppState,
+    media_id: &str,
+    generation: u64,
+    regions: &crate::compare::PairRegions,
+) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    {
+        let database = lock(&state.database)?;
+        let runtime = lock(&state.runtime)?;
+        let pair = &runtime.comparison_pair;
+        let pair_matches =
+            generation > 0 && pair.media_id == media_id && pair.generation == generation;
+        let needs_original = regions.original.is_some()
+            || (pair_matches
+                && ((regions.showing.is_some() && pair.showing.target_id == "original")
+                    || (regions.against.is_some() && pair.against.target_id == "original")));
+        if needs_original {
+            let media = database.get_media(media_id)?.ok_or_else(|| {
+                AppError::Validation("the selected image is no longer queued".into())
+            })?;
+            state.grants.check_media_input(Path::new(&media.path))?;
+        }
+        if pair_matches {
+            for (slot, region) in [
+                (&pair.showing, regions.showing),
+                (&pair.against, regions.against),
+            ] {
+                if region.is_some() && !slot.target_id.is_empty() && slot.target_id != "original" {
+                    let _ = database.media_result_output(media_id, &slot.target_id)?;
+                }
+            }
+        }
+    }
+    if !has_preview_regions_feature(state)? {
+        return Ok(());
+    }
+    let requests = {
+        let database = lock(&state.database)?;
+        let mut runtime = lock(&state.runtime)?;
+        let crate::types::RuntimeStatus {
+            comparison_pair,
+            preview_original,
+            ..
+        } = &mut *runtime;
+        crate::compare::plan_pair_regions(
+            &database,
+            comparison_pair,
+            preview_original,
+            media_id,
+            generation,
+            regions,
+        )?
+    };
+    for request in requests {
+        if worker::send(state, &request).is_err() {
+            let database = lock(&state.database)?;
+            let mut runtime = lock(&state.runtime)?;
+            let crate::types::RuntimeStatus {
+                comparison_pair,
+                preview_original,
+                ..
+            } = &mut *runtime;
+            crate::compare::apply_pair_region(
+                &database,
+                comparison_pair,
+                preview_original,
+                &request["data"],
+                true,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_preview_regions(state: State<'_, Arc<AppState>>, app: AppHandle) -> AppResult<()> {
+    clear_preview_regions_checked(&state)?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
+pub(crate) fn clear_preview_regions_checked(state: &AppState) -> AppResult<()> {
+    let _scheduler = lock(&state.scheduler)?;
+    {
+        let mut runtime = lock(&state.runtime)?;
+        let crate::types::RuntimeStatus {
+            comparison_pair,
+            preview_original,
+            ..
+        } = &mut *runtime;
+        crate::compare::clear_pair_regions(comparison_pair, preview_original);
+    }
+    if has_preview_regions_feature(state)? {
+        let _ = worker::send(state, &json!({"type":"region_clear", "data":{}}));
+    }
     Ok(())
 }
 
@@ -2535,6 +2656,12 @@ fn plan_pair_requests(
             .filter(|_| previous.media_id == media.id)
             .find(|slot| current(slot, (target, path)) && !slot.preview_data_url.is_empty())
             .cloned()
+            .map(|mut slot| {
+                slot.region = None;
+                slot.requested_region = None;
+                slot.file = None;
+                slot
+            })
             .unwrap_or_else(|| ComparisonSlot {
                 target_id: target.into(),
                 output_path: path.into(),
@@ -2546,6 +2673,7 @@ fn plan_pair_requests(
         generation,
         showing: side(showing),
         against: side(against),
+        region_request_id: 0,
     };
     let requests = [("showing", &pair.showing), ("against", &pair.against)]
         .into_iter()

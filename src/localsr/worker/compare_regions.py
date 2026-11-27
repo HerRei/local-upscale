@@ -136,6 +136,9 @@ class RegionCache:
             return RegionFailed(**identity, error_message=str(error))
 
 
+_REGION_SLOTS = ("slot1", "slot2", "slot3", "slot4", "original", "showing", "against")
+
+
 class RegionService:
     def __init__(self, emit):
         self.emit = emit
@@ -155,7 +158,7 @@ class RegionService:
 
     def submit(self, data):
         with self.condition:
-            if isinstance(data, dict) and data.get("slot") in ("slot1", "slot2", "slot3", "slot4"):
+            if isinstance(data, dict) and data.get("slot") in _REGION_SLOTS:
                 self._start()
                 # A newer request for a slot queues behind the others, and the
                 # oldest request renders first, so no slot starves.

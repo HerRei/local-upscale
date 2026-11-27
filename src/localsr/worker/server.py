@@ -219,6 +219,7 @@ def _engine_features(video_engines: list[str] | None = None) -> list[str]:
         if feature not in features:
             features.append(feature)
     features.append("compare_regions")
+    features.append("preview_regions")
     engines = _video_engines() if video_engines is None else video_engines
     if "seedvr2" in engines:
         features.append("video_seedvr2")

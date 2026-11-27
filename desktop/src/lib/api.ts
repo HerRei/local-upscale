@@ -542,6 +542,12 @@ export const requestCompareRegions = (
   regions: (import('./compareRegions').Region | null)[],
 ): Promise<void> => invoke('request_compare_regions', { generation, regions });
 export const clearCompareRegions = (): Promise<void> => invoke('clear_compare_regions');
+export const requestPreviewRegions = (
+  mediaId: string,
+  generation: number,
+  regions: import('./compareRegions').PreviewRegions,
+): Promise<void> => invoke('request_preview_regions', { mediaId, generation, regions });
+export const clearPreviewRegions = (): Promise<void> => invoke('clear_preview_regions');
 
 export interface StoredCrashReport {
   id: string;
