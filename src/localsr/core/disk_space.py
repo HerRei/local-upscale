@@ -277,6 +277,7 @@ def failure_fields(
     output_path: str | os.PathLike | None,
     *,
     video_request: Mapping[str, Any] | None = None,
+    edit_request: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The ``job_failed`` fields for ``error``: the full-disk sentence and flag, a plain
     sentence for full graphics memory, or the error's text.
@@ -294,5 +295,6 @@ def failure_fields(
         interpolating_after_upscale=video_request is not None
         and str(video_request.get("interpolation") or "off") != "off"
         and str(video_request.get("interpolation_order") or "after_upscale") == "after_upscale",
+        edit=edit_request is not None,
     )
     return {"error_message": memory or str(error)}

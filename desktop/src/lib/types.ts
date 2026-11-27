@@ -119,6 +119,8 @@ export interface StartEditInput {
   output_directory: string;
   edit_text_encoder?: 'auto' | 'gpu' | 'cpu';
   edit_vae?: 'auto' | 'gpu' | 'cpu';
+  edit_vram_limit_mb?: number;
+  edit_allow_any_size?: boolean;
 }
 
 export interface CatalogVideoModel {
@@ -388,6 +390,8 @@ export interface UiSettings {
   edit_max_dimension: number;
   edit_steps: number;
   edit_seed: number;
+  edit_vram_limit_mb?: number;
+  edit_allow_any_size?: boolean;
   custom_edit_model?: CustomEditModel;
   model_directory?: string;
   gpu_download_notice_dismissed?: boolean;

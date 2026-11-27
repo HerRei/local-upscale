@@ -6,14 +6,18 @@ swapping to discover capacity, or increase of the macOS working-set limit.
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 
 from localsr.core.disk_space import format_size
 
+logger = logging.getLogger(__name__)
+
 GIB = 1024**3
 MAC_TIERS = (16, 24, 32, 36, 48, 64, 96, 128)
 GPU_TIERS = (8, 12, 16, 20, 24, 32, 48)
+ALLOWED_EDIT_DIMENSIONS = (1024, 768, 512)
 
 
 @dataclass(frozen=True)
@@ -201,6 +205,12 @@ def _validate_placement(name: str, value: str) -> str:
     return value
 
 
+def _validate_vram_limit_mb(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0 or 0 < value < 1024:
+        raise ValueError("edit_vram_limit_mb must be 0 or at least 1024 MiB.")
+    return value
+
+
 def _choose_unified_placement(
     model: dict,
     memory: EditMemory,
@@ -295,6 +305,42 @@ def _choose_discrete_placement(
     return te_place, vae_place, offload
 
 
+def _plan_discrete_for_limit(
+    model: dict,
+    memory: EditMemory,
+    reserve: int,
+    budget: int,
+    limit: int,
+    diffusion_bytes: int,
+    vae_bytes: int,
+    encoder_bytes: int,
+    total_bytes: int,
+    text_encoder: str,
+    vae: str,
+) -> EditPlan:
+    activations = activation_memory(False, limit)
+    process_limit = int(total_bytes * 1.1 + activations)
+    te_place, vae_place, offload = _choose_discrete_placement(
+        budget,
+        diffusion_bytes,
+        vae_bytes,
+        encoder_bytes,
+        activations,
+        total_bytes,
+        text_encoder,
+        vae,
+    )
+    required = estimate_edit_memory(model, False, limit, text_encoder=te_place, vae=vae_place)
+    if memory.free_ram - reserve < required:
+        raise MemoryError(
+            f"Editing needs about {required / GIB:.1f} GiB available plus "
+            f"a {reserve / GIB:.1f} GiB reserve for other apps; "
+            f"only {memory.free_ram / GIB:.1f} GiB is currently available. "
+            "Close apps or choose a smaller model or edit size, and retry."
+        )
+    return EditPlan(required, reserve, budget, limit, process_limit, te_place, vae_place, offload)
+
+
 def plan_edit(
     model: dict,
     memory: EditMemory,
@@ -302,47 +348,44 @@ def plan_edit(
     *,
     text_encoder: str = "auto",
     vae: str = "auto",
+    vram_limit_mb: int = 0,
+    allow_any_size: bool = False,
 ) -> EditPlan:
     text_encoder = _validate_placement("edit_text_encoder", text_encoder)
     vae = _validate_placement("edit_vae", vae)
+    vram_limit_mb = _validate_vram_limit_mb(vram_limit_mb)
     if memory.pressure in {"critical", "high"} or (
         not memory.unified and memory.pressure == "warning"
     ):
         raise MemoryError("Memory pressure is high. Close other apps before editing.")
     reserve = reserve_for(memory.total_ram, memory.unified)
-    limit = min(1024, max_dimension)
+    requested_limit = min(1024, max_dimension)
+    sizes = {f["role"]: f["size_bytes"] for f in model["files"]}
+    diffusion_bytes = sizes.get("diffusion", 0)
+    vae_bytes = sizes.get("vae", 0)
+    encoder_bytes = sizes.get("text_encoder", 0) + sizes.get("vision", 0)
+    total_bytes = mapped_size(model)
     if memory.unified:
+        if vram_limit_mb:
+            logger.info("Ignoring edit_vram_limit_mb=%d MiB on unified memory.", vram_limit_mb)
         min_unified = model.get("min_unified_memory_gb")
         if min_unified is None:
             min_unified = minimum_unified_memory_gb(model)
         if memory.total_ram < min_unified * GIB:
             raise MemoryError("Choose a smaller editing model for this Mac.")
+        limit = requested_limit
+        # An oversized edit in unified memory swaps the whole Mac instead of failing
+        # cleanly, so the Mac limits hold even when any size is allowed.
+        if allow_any_size:
+            logger.info("Ignoring edit_allow_any_size on unified memory.")
         if memory.total_ram < 36 * GIB:
             limit = min(limit, 512)
         elif memory.total_ram < 48 * GIB:
             limit = min(limit, 768)
-    else:
-        # Drivers may report a little less than the card's nominal capacity.
-        capacity = memory.gpu_total + 256 * 1024**2
-        min_vram = model.get("min_vram_gb")
-        if min_vram is None:
-            min_vram = minimum_vram_gb(model)
-        if capacity < min_vram * GIB:
-            raise MemoryError("Choose a smaller editing model for this GPU.")
-        if capacity < 12 * GIB:
-            limit = min(limit, 512)
-        elif capacity < 16 * GIB:
-            limit = min(limit, 768)
-    sizes = {f["role"]: f["size_bytes"] for f in model["files"]}
-    diffusion_bytes = sizes.get("diffusion", 0)
-    vae_bytes = sizes.get("vae", 0)
-    encoder_bytes = sizes.get("text_encoder", 0) + sizes.get("vision", 0)
-    activations = activation_memory(memory.unified, limit)
-    total_bytes = mapped_size(model)
-    # The supervisor watches the real numbers while the model runs. Its process limit
-    # allows every mapped file to stay resident, which is normal when memory is plentiful.
-    process_limit = int(total_bytes * 1.1 + activations)
-    if memory.unified:
+        activations = activation_memory(True, limit)
+        # The supervisor watches the real numbers while the model runs. Its process limit
+        # allows every mapped file to stay resident, which is normal when memory is plentiful.
+        process_limit = int(total_bytes * 1.1 + activations)
         te_place, vae_place, offload, required = _choose_unified_placement(
             model,
             memory,
@@ -359,30 +402,85 @@ def plan_edit(
         # Metal may wire well over half of unified memory; stay under Apple's
         # recommended working set with room for the encoders and the OS.
         budget = min(required, int(memory.total_ram * 0.60), memory.free_ram - reserve)
+        if memory.free_ram - reserve < required:
+            raise MemoryError(
+                f"Editing needs about {required / GIB:.1f} GiB available plus "
+                f"a {reserve / GIB:.1f} GiB reserve for other apps; "
+                f"only {memory.free_ram / GIB:.1f} GiB is currently available. "
+                "Close apps or choose a smaller model or edit size, and retry."
+            )
+        return EditPlan(
+            required, reserve, budget, limit, process_limit, te_place, vae_place, offload
+        )
+
+    # Drivers may report a little less than the card's nominal capacity.
+    capacity = memory.gpu_total + 256 * 1024**2
+    min_vram = model.get("min_vram_gb")
+    if min_vram is None:
+        min_vram = minimum_vram_gb(model)
+    if capacity < min_vram * GIB:
+        raise MemoryError("Choose a smaller editing model for this GPU.")
+    if vram_limit_mb:
+        max_vram_mb = memory.gpu_total // (1024**2)
+        if vram_limit_mb > max_vram_mb:
+            raise ValueError(f"edit_vram_limit_mb must be at most {max_vram_mb} MiB for this GPU.")
+        budget = vram_limit_mb * 1024**2
     else:
-        gpu_reserve = max(2 * GIB, int(memory.gpu_total * 0.15))
-        budget = min(int(memory.gpu_total * 0.80), memory.gpu_free - gpu_reserve)
+        gpu_reserve = max(1 * GIB, int(memory.gpu_total * 0.08))
+        budget = min(int(memory.gpu_total * 0.90), memory.gpu_free - gpu_reserve)
         if budget < 4 * GIB:
             raise MemoryError("Too little VRAM is free. Close GPU apps before editing.")
-        te_place, vae_place, offload = _choose_discrete_placement(
+
+    if allow_any_size:
+        return _plan_discrete_for_limit(
+            model,
+            memory,
+            reserve,
             budget,
+            requested_limit,
             diffusion_bytes,
             vae_bytes,
             encoder_bytes,
-            activations,
             total_bytes,
             text_encoder,
             vae,
         )
-        required = estimate_edit_memory(model, False, limit, text_encoder=te_place, vae=vae_place)
-    if memory.free_ram - reserve < required:
-        raise MemoryError(
-            f"Editing needs about {required / GIB:.1f} GiB available plus "
-            f"a {reserve / GIB:.1f} GiB reserve for other apps; "
-            f"only {memory.free_ram / GIB:.1f} GiB is currently available. "
-            "Close apps or choose a smaller model or edit size, and retry."
-        )
-    return EditPlan(required, reserve, budget, limit, process_limit, te_place, vae_place, offload)
+
+    candidates = [size for size in ALLOWED_EDIT_DIMENSIONS if size <= requested_limit] or [
+        requested_limit
+    ]
+    for candidate in candidates[:-1]:
+        if diffusion_bytes + activation_memory(False, candidate) > budget:
+            continue
+        try:
+            return _plan_discrete_for_limit(
+                model,
+                memory,
+                reserve,
+                budget,
+                candidate,
+                diffusion_bytes,
+                vae_bytes,
+                encoder_bytes,
+                total_bytes,
+                text_encoder,
+                vae,
+            )
+        except MemoryError:
+            continue
+    return _plan_discrete_for_limit(
+        model,
+        memory,
+        reserve,
+        budget,
+        candidates[-1],
+        diffusion_bytes,
+        vae_bytes,
+        encoder_bytes,
+        total_bytes,
+        text_encoder,
+        vae,
+    )
 
 
 # On unified memory macOS compresses and swaps to make room, and on a busy 16 GB

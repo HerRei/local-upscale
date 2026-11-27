@@ -137,3 +137,34 @@ def test_a_frame_that_never_fits_ends_in_the_typed_error_after_smaller_tiles():
     assert caught.value.device_type == "cpu"
     assert sizes[0] == 64 and sizes[-1] == 4  # every smaller tile was tried first
     assert memory_failure_message(caught.value) is not None
+
+
+def test_edit_oom_failure_uses_clear_message_while_preflight_keeps_its_text():
+    expected = (
+        "Not enough memory for this size. Choose a smaller size or let LocalSR "
+        "place the models automatically."
+    )
+    assert (
+        failure_fields(
+            RuntimeError("Editing stopped (exit 1). ggml_vulkan: Error OutOfDeviceMemory"),
+            None,
+            edit_request={"job_id": "e1"},
+        )["error_message"]
+        == expected
+    )
+    assert (
+        failure_fields(
+            DeviceOutOfMemoryError("oom", device_type="cuda", step="edit"),
+            None,
+            edit_request={"job_id": "e1"},
+        )["error_message"]
+        == expected
+    )
+    assert (
+        failure_fields(
+            MemoryError("Choose a smaller editing model for this GPU."),
+            None,
+            edit_request={"job_id": "e1"},
+        )["error_message"]
+        == "Choose a smaller editing model for this GPU."
+    )

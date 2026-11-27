@@ -213,6 +213,7 @@ def _engine_features(video_engines: list[str] | None = None) -> list[str]:
         "benchmark_v1",
         "image_16bit",
         "edit_placement",
+        "edit_expert",
         "precision_auto",
     ]
     for feature in REQUIRED_STEP_FEATURES:
@@ -838,7 +839,8 @@ class WorkerServer:
                         traceback.print_exc(file=sys.stderr)
                         send_message(
                             JobFailed(
-                                job_id=job_id, **failure_fields(error, data.get("output_path"))
+                                job_id=job_id,
+                                **failure_fields(error, data.get("output_path"), edit_request=data),
                             )
                         )
                     finally:
