@@ -1605,6 +1605,8 @@ mod tests {
                     progress: 50.0,
                     downloaded_bytes: 10,
                     total_bytes: 20,
+                    received_bytes: 0,
+                    verifying: false,
                     planned_files: Vec::new(),
                     cancellation: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                     cancel_notify: Arc::new(tokio::sync::Notify::new()),
