@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { smallestCvdDistance } from './cvd';
 
 const css = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
 const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)];
@@ -82,12 +83,18 @@ describe.each([
     );
     pairs.push(
       ['--on-accent', '--accent'],
+      ['--on-accent', '--accent-hi'],
+      ['--on-accent', '--accent-press'],
       ['--recipe-button-text', '--accent'],
       ['--danger-text-warm', '--danger-surface'],
       ['--warning-text', '--base'],
       ['--success-strong', '--base'],
     );
+    for (const surface of ['--panel', '--raised', '--hover']) {
+      pairs.push(['--accent-text', surface]);
+    }
     const panel = rgb(p['--panel']);
+    expect(ratio(rgb(p['--accent']), panel), '--accent against --panel').toBeGreaterThanOrEqual(3);
     expect(
       ratio(rgb(p['--danger-border'], panel), panel),
       '--danger-border',
@@ -138,11 +145,15 @@ describe.each([
       ['--hud-text', '--hud-bg'],
       ['--on-accent', '--accent'],
       ['--on-accent', '--accent-hi'],
+      ['--on-accent', '--accent-press'],
       ['--recipe-button-text', '--accent'],
       ['--danger-text-warm', '--danger-surface'],
       ['--warning-text', '--base'],
       ['--success-strong', '--base'],
     );
+    for (const surface of ['--panel', '--raised', '--hover']) {
+      textPairs.push(['--accent-text', surface]);
+    }
     const panel = rgb(p['--panel']);
     for (const [foreground, fill] of [
       ['--danger-text', '--danger-fill'],
@@ -197,9 +208,9 @@ describe('high contrast token sets', () => {
     );
     const existingCb = new Set(tokensForSelector('[data-palette="colour-blind"]'));
 
-    expect(block1.size).toBe(117);
+    expect(block1.size).toBe(119);
     expect(block2).toEqual(block1);
-    expect(block3.size).toBe(30);
+    expect(block3.size).toBe(33);
     expect(block4).toEqual(block3);
     expect(block3).toEqual(existingCb);
 
@@ -208,5 +219,30 @@ describe('high contrast token sets', () => {
         expect(rootTokens.has(token), `${token} missing from :root`).toBe(true);
       }
     }
+  });
+});
+
+describe('colour-blind palette separation', () => {
+  it.each([
+    [false, false, 17],
+    [true, false, 11],
+    [false, true, 10],
+    [true, true, 11],
+  ])(
+    'separates semantic colours across normal, protan, deutan, tritan (light=%s high=%s)',
+    (light, high, minDistance) => {
+      const p = palette(light, true, high);
+      const colors = ['--accent', '--danger', '--warning', '--success-strong'].map((t) => p[t]);
+      expect(smallestCvdDistance(colors)).toBeGreaterThanOrEqual(minDistance);
+    },
+  );
+
+  it.each([
+    [['#006a9f', '#e88b3c', '#e6b547', '#55c8a6'], 7.3],
+    [['#006a9f', '#9c3e00', '#765000', '#006749'], 1.4],
+    [['#7cc8f0', '#ffa257', '#f0c35a', '#6fd9b9'], 2.6],
+    [['#004f78', '#7d3100', '#5e4000', '#004f38'], 1.2],
+  ])('reproduces dc2bb271 minimum CVD distances (%j -> %s)', (colors, expected) => {
+    expect(Math.abs(smallestCvdDistance(colors) - expected)).toBeLessThanOrEqual(0.1);
   });
 });
