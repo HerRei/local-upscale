@@ -5,6 +5,7 @@ import {
   MAX_RECIPE_PINS,
   MAX_RECIPE_RECENT,
   menuRows,
+  recipeDetails,
   recipePlanLine,
   recordUse,
   searchRecipes,
@@ -278,5 +279,45 @@ describe('recipeList', () => {
     pins = togglePin(pins, 'p2');
     expect(pins).toHaveLength(MAX_RECIPE_PINS - 1);
     expect(pins.includes('p2')).toBe(false);
+  });
+
+  it('builds recipeDetails with step model names, download total, and settings summary', () => {
+    const snapshot = demoSnapshot();
+    const detail = recipeDetails(
+      makeRecipe('slides', {
+        output_scale: 2,
+        quality: 'quick',
+        output_format: 'png',
+        tile_size: 256,
+        halo: 32,
+        precision: 'fp16',
+        safe_memory: true,
+        fixes: ['jpeg'],
+        stages: [
+          { kind: 'deblock', model_id: 'fbcnn_color', fix: 'jpeg' },
+          { kind: 'upscale', model_id: 'localsr_quick_x4_v1' },
+        ],
+      }),
+      snapshot,
+      snapshot.settings,
+    );
+    expect(detail.steps).toEqual([
+      {
+        name: 'JPEG',
+        modelName: 'FBCNN Color',
+        downloadBytes: 287755111,
+        needsFile: false,
+      },
+      {
+        name: 'Upscale 2×',
+        modelName: 'LocalSR Photo S',
+        downloadBytes: 2479984,
+        needsFile: false,
+      },
+    ]);
+    expect(detail.downloadBytes).toBe(290235095);
+    expect(detail.output).toBe('PNG');
+    expect(detail.quality).toBe('Quick');
+    expect(detail.run).toBe('Tile 256 · Halo 32 · FP16 · Safe memory');
   });
 });

@@ -782,9 +782,40 @@ function hostScript(scenario: Scenario): void {
         };
         return planLocally(snapshot!, args.settings, args.options ?? {});
       }
-      case 'delete_recipe':
-        snapshot.recipes = snapshot.recipes.filter((recipe: Json) => recipe.id !== args.id);
+      case 'save_recipe': {
+        const recipe = structuredClone(args.recipe);
+        const trimmedName = String(recipe?.name ?? '')
+          .trim()
+          .slice(0, 60);
+        if (!trimmedName || !['upscale', 'denoise', 'video'].includes(String(recipe?.task ?? ''))) {
+          throw 'recipe name or task is invalid';
+        }
+        recipe.name = trimmedName;
+        const index = snapshot.recipes.findIndex((entry: Json) => entry.id === recipe.id);
+        if (index >= 0) {
+          snapshot.recipes[index] = recipe;
+        } else {
+          if (snapshot.recipes.length >= 100) throw 'recipe limit reached';
+          snapshot.recipes.push(recipe);
+        }
+        emit('state-changed', null);
         return null;
+      }
+      case 'delete_recipe': {
+        snapshot.recipes = snapshot.recipes.filter((recipe: Json) => recipe.id !== args.id);
+        if (Array.isArray(snapshot.settings.recipe_pins)) {
+          snapshot.settings.recipe_pins = snapshot.settings.recipe_pins.filter(
+            (id: string) => id !== args.id,
+          );
+        }
+        if (Array.isArray(snapshot.settings.recipe_recent)) {
+          snapshot.settings.recipe_recent = snapshot.settings.recipe_recent.filter(
+            (id: string) => id !== args.id,
+          );
+        }
+        emit('state-changed', null);
+        return null;
+      }
       case 'list_all_media_results':
         return histories();
       case 'list_media_results':

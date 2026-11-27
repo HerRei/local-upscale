@@ -1,8 +1,10 @@
+import { customModels, defaultCustomModelName } from './customModels';
+import { outputSummary } from './enhancePanel';
 import { fixStageKind, FIX_ROW_LABELS } from './fixStages';
-import { displayName, fixesOf, type PlanStage } from './plan';
+import { displayName, fixesOf, pendingDownloads, resolvePlan, type PlanStage } from './plan';
 import { planLine } from './planLine';
-import { isRestoreRecipe, recipeFixStages } from './recipes';
-import type { AppSnapshot, FixKind, MediaKind, Recipe } from './types';
+import { isRestoreRecipe, recipeFixStages, recipeSettingsPatch } from './recipes';
+import type { AppSnapshot, FixKind, MediaKind, Recipe, UiSettings } from './types';
 import { videoModelShortName } from './videoEngines';
 
 export const MAX_RECIPE_PINS = 20;
@@ -406,4 +408,142 @@ export function togglePin(
   if (unique.includes(id)) return unique.filter((entry) => entry !== id);
   if (!id || unique.length >= limit) return unique.slice(0, limit);
   return [...unique, id];
+}
+
+export interface RecipeDetailStep {
+  name: string;
+  modelName: string;
+  downloadBytes: number;
+  needsFile: boolean;
+}
+
+export interface RecipeDetails {
+  steps: RecipeDetailStep[];
+  output: string;
+  quality: string;
+  run: string;
+  downloadBytes: number;
+}
+
+function recipeStagesForDetail(
+  recipe: Recipe,
+  snapshot: AppSnapshot,
+  settings: UiSettings,
+): { previewSettings: UiSettings; stages: PlanStage[] } {
+  const patch = recipeSettingsPatch(recipe, snapshot, settings);
+  const previewSettings: UiSettings = { ...settings, ...patch };
+  const restoring = isRestoreRecipe(recipe);
+  if (restoring && previewSettings.fix_stages.length === 0 && !recipe.stages?.length) {
+    if (recipe.fixes?.length) {
+      const fixes = recipe.fixes.filter((fix): fix is Exclude<FixKind, 'faces'> => fix !== 'faces');
+      previewSettings.fix_stages = fixes.map((fix, index) => ({
+        fix,
+        model_id: index === fixes.length - 1 ? previewSettings.selected_model_id : '',
+      }));
+      previewSettings.fixes = fixes;
+    } else if (
+      previewSettings.selected_model_id &&
+      previewSettings.selected_model_id !== '__custom__'
+    ) {
+      const model = snapshot.catalog.models.find(
+        (entry) => entry.model_id === previewSettings.selected_model_id,
+      );
+      if (model && model.native_scale === 1) {
+        const fix = fixesOf(model).find(
+          (candidate): candidate is Exclude<FixKind, 'faces'> => candidate !== 'faces',
+        );
+        if (fix) {
+          previewSettings.fix_stages = [{ fix, model_id: model.model_id }];
+          previewSettings.fixes = [fix];
+        }
+      }
+    }
+  }
+  const usingTemporalVideo =
+    previewSettings.task === 'video' &&
+    Boolean(previewSettings.selected_video_model_id) &&
+    previewSettings.selected_video_model_id !== 'frame_by_frame';
+  const selectedVideoModel = usingTemporalVideo
+    ? snapshot.catalog.video_models.find(
+        (entry) => entry.model_id === previewSettings.selected_video_model_id,
+      )
+    : undefined;
+  const faceEnabled =
+    !restoring &&
+    Boolean(
+      recipe.enable_face_model || recipe.stages?.some((stage) => stage.kind === 'face_restore'),
+    );
+  const faceModel = faceEnabled
+    ? snapshot.catalog.models.find((entry) => entry.purposes.includes('face'))
+    : undefined;
+  const stages = resolvePlan(snapshot, previewSettings, {
+    faceEnabled,
+    faceModel,
+    usingTemporalVideo,
+    selectedVideoModel,
+  });
+  return { previewSettings, stages };
+}
+
+function stageModelLabel(stage: PlanStage, previewSettings: UiSettings): string {
+  if (stage.model) return displayName(stage.model);
+  if (stage.videoModel) return videoModelShortName(stage.videoModel);
+  if (stage.interpolationModel) return stage.interpolationModel.name.split(' — ')[0];
+  if (stage.audioModel) return stage.audioModel.name.split(' — ')[0];
+  if (stage.custom !== undefined) {
+    return stage.custom
+      ? (customModels(previewSettings).find((model) => model.path === stage.custom)?.name ??
+          defaultCustomModelName(stage.custom))
+      : 'Your own file';
+  }
+  if (stage.missing) return 'No model for this fix';
+  return '';
+}
+
+/** Total missing downloadable model bytes for a saved recipe. */
+export function recipeMissingBytes(
+  recipe: Recipe,
+  snapshot: AppSnapshot,
+  settings: UiSettings,
+): number {
+  const { stages } = recipeStagesForDetail(recipe, snapshot, settings);
+  return pendingDownloads(stages).bytes;
+}
+
+/** Structured details shown in the Recipes library detail pane for a saved recipe. */
+export function recipeDetails(
+  recipe: Recipe,
+  snapshot: AppSnapshot,
+  settings: UiSettings,
+): RecipeDetails {
+  const { previewSettings, stages } = recipeStagesForDetail(recipe, snapshot, settings);
+  const names = planLine(
+    stages,
+    previewSettings,
+    recipe.task === 'video' ? { kind: 'video' } : { kind: 'image' },
+  );
+  const steps: RecipeDetailStep[] = stages.map((stage, index) => ({
+    name: names[index] ?? stage.label,
+    modelName: stageModelLabel(stage, previewSettings),
+    downloadBytes: !stage.installed && stage.canDownload ? stage.sizeBytes : 0,
+    needsFile: !stage.installed && stage.needsFile,
+  }));
+  const downloadBytes = pendingDownloads(stages).bytes;
+  const output = outputSummary(previewSettings, {
+    includeFolder: false,
+    preservingHdr:
+      previewSettings.task === 'video' && previewSettings.video_hdr_mode === 'preserve',
+  });
+  const quality =
+    recipe.quality === 'quick' ? 'Quick' : recipe.quality === 'best' ? 'Best' : 'Your own choice';
+  const precision = recipe.precision === 'auto' ? 'Auto' : recipe.precision.toUpperCase();
+  const run = [
+    `Tile ${recipe.tile_size}`,
+    `Halo ${recipe.halo}`,
+    precision,
+    recipe.safe_memory ? 'Safe memory' : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  return { steps, output, quality, run, downloadBytes };
 }

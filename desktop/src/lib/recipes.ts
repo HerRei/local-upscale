@@ -1,6 +1,90 @@
-import { fixesOf } from './plan';
+import { choosePresetModel, fixesOf } from './plan';
 import { isFixStageKind, isVideoOrUpscalePrimaryKind } from './steps';
-import type { AppSnapshot, Recipe, FixKind, FixStageSelection, UiSettings } from './types';
+import type {
+  AppSnapshot,
+  Recipe,
+  FixKind,
+  FixStageSelection,
+  TaskKind,
+  UiSettings,
+} from './types';
+
+/** Build the UiSettings patch applied when activating a saved recipe. */
+export function recipeSettingsPatch(
+  recipe: Recipe,
+  snapshot: Pick<AppSnapshot, 'catalog'>,
+  current: UiSettings,
+): Partial<UiSettings> {
+  const fix_stages = recipeFixStages(recipe, snapshot.catalog);
+  const recipeModel = snapshot.catalog.models.find((model) => model.model_id === recipe.model_id);
+  const targetRestoring = isRestoreRecipe(recipe);
+  const targetTask: TaskKind =
+    recipe.task === 'upscale' && targetRestoring ? 'denoise' : recipe.task;
+  const targetVideoTask =
+    targetTask === 'video' ? (targetRestoring ? 'denoise' : 'upscale') : 'upscale';
+  const migratedFromUpscale1x =
+    targetRestoring &&
+    recipe.task !== 'denoise' &&
+    !(recipe.task === 'video' && recipe.video_task === 'denoise');
+  const recipeQuality: 'quick' | 'best' =
+    recipe.quality === 'quick' || recipe.quality === 'best' ? recipe.quality : 'best';
+  const targetModelId = migratedFromUpscale1x
+    ? (fix_stages.at(-1)?.model_id ??
+      (targetTask === 'video'
+        ? ''
+        : recipeModel?.native_scale === 1
+          ? recipe.model_id
+          : (choosePresetModel(
+              snapshot as AppSnapshot,
+              'denoise',
+              recipeQuality,
+              recipe.content || current.content,
+              current.preset_pins,
+            )?.model_id ?? '')))
+    : recipe.model_id;
+
+  return {
+    task: targetTask,
+    ...(targetTask === 'video' ? { video_task: targetVideoTask } : {}),
+    selected_model_id: targetModelId,
+    selected_video_model_id: targetRestoring
+      ? 'frame_by_frame'
+      : recipe.video_model_id || 'frame_by_frame',
+    fix_stages,
+    custom_model_path: recipe.custom_model_path ?? '',
+    output_scale: targetRestoring
+      ? 1
+      : Math.min(recipeModel?.native_scale ?? recipe.output_scale, recipe.output_scale),
+    output_format: recipe.output_format ?? current.output_format,
+    output_bit_depth: recipe.output_bit_depth ?? current.output_bit_depth,
+    preserve_metadata: recipe.preserve_metadata ?? current.preserve_metadata,
+    jpeg_quality: recipe.jpeg_quality ?? current.jpeg_quality,
+    tile_size: recipe.tile_size,
+    halo: recipe.halo,
+    precision: recipe.precision,
+    safe_memory: recipe.safe_memory,
+    deflicker: recipe.deflicker ?? current.deflicker,
+    deflicker_window: recipe.deflicker_window ?? current.deflicker_window,
+    video_container: recipe.video_container || current.video_container,
+    video_codec: recipe.video_codec || current.video_codec || 'auto',
+    external_ffmpeg_path: current.external_ffmpeg_path ?? '',
+    video_hdr_mode: recipe.video_hdr_mode ?? 'tone_map',
+    video_target_resolution: recipe.video_target_resolution ?? 0,
+    video_low_memory: recipe.video_low_memory ?? true,
+    video_crf: recipe.video_crf ?? current.video_crf,
+    // Recipes saved before 0.3.7 carry no interpolation, so they run without it.
+    video_interpolation: recipe.video_interpolation || 'off',
+    video_interpolation_order: recipe.video_interpolation_order || 'after_upscale',
+    video_clean_audio: recipe.video_clean_audio ?? false,
+    video_audio_model: recipe.video_audio_model ?? '',
+    enable_face_model: false,
+    face_fidelity: recipe.face_fidelity ?? current.face_fidelity,
+    allow_unsafe_pickle_model: false,
+    quality: recipe.quality || 'custom',
+    content: recipe.content || current.content,
+    fixes: fix_stages.map((selection) => selection.fix),
+  };
+}
 
 /** True when a recipe runs Restore (including old non-Restore recipes saved at 1×). */
 export function isRestoreRecipe(

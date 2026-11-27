@@ -93,11 +93,12 @@ export function outputSummary(
   options: {
     preservingHdr?: boolean;
     audioDisabled?: boolean;
+    includeFolder?: boolean;
     /** The step registry; tests add steps that exist only in them. */
     steps?: readonly StepDefinition[];
   } = {},
 ): string {
-  const folder = outputFolderName(settings.output_directory);
+  const folder = options.includeFolder === false ? '' : outputFolderName(settings.output_directory);
   if (settings.task === 'video') {
     const container = (settings.video_container ?? 'mp4').toUpperCase();
     const codec = settings.video_codec ?? 'auto';
