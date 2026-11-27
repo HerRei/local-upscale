@@ -91,6 +91,8 @@ class ImageJobProgress:
                 stage_count=len(self.pipeline.stages),
                 stage_kind=stage.kind,
                 model_id=stage.model_id,
+                step=stage.step_id,
+                fix=stage.fix or "",
             )
         )
 
@@ -101,6 +103,8 @@ class ImageJobProgress:
                 stage_index=index,
                 stage_count=len(self.pipeline.stages),
                 stage_kind=stage.kind,
+                step=stage.step_id,
+                fix=stage.fix or "",
             )
         )
 

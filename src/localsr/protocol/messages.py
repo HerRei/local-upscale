@@ -78,6 +78,8 @@ class JobRequest:
     # Apple silicon: run supported models through Core ML on the Neural Engine.
     neural_engine: bool = True
     output_bit_depth: int = 8
+    # Each step before the main model sends its picture at this size (stage_results).
+    stage_picture_max_dimension: int | None = None
 
     def to_json(self) -> str:
         return json.dumps({"type": "job_request", "data": asdict(self)})
@@ -261,6 +263,9 @@ class StageStarted:
     stage_count: int
     stage_kind: str
     model_id: str
+    # The step's registry id and the problem a fix stage fixes ("" for none).
+    step: str = ""
+    fix: str = ""
 
     def to_json(self) -> str:
         return json.dumps({"type": "stage_started", "data": asdict(self)})
@@ -286,9 +291,37 @@ class StageCompleted:
     stage_index: int
     stage_count: int
     stage_kind: str
+    step: str = ""
+    fix: str = ""
 
     def to_json(self) -> str:
         return json.dumps({"type": "stage_completed", "data": asdict(self)})
+
+
+@dataclass
+class StageResult:
+    """The picture a step before the main model finished with (engine feature stage_results).
+
+    ``width`` and ``height`` are the step's own pixels, ``preview_*`` the JPEG's. A skipped
+    step sends no picture and says why in ``note``.
+    """
+
+    job_id: str
+    stage_index: int
+    stage_count: int
+    step: str
+    fix: str = ""
+    skipped: bool = False
+    note: str = ""
+    width: int = 0
+    height: int = 0
+    jpeg_base64: str = ""
+    preview_width: int = 0
+    preview_height: int = 0
+    image_path: str = ""
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "stage_result", "data": asdict(self)})
 
 
 @dataclass

@@ -130,6 +130,10 @@ def test_the_requests_the_host_sends_are_accepted():
         ("preview_max_fps", 0),
         ("preview_max_fps", 6),
         ("preview_max_dimension", 63),
+        ("stage_picture_max_dimension", 63),
+        ("stage_picture_max_dimension", 4096),
+        ("stage_picture_max_dimension", "x"),
+        ("stage_picture_max_dimension", 1024.5),
         ("face_fidelity", 1.5),
         ("safe_memory", "yes"),
         ("device", ""),
@@ -168,6 +172,28 @@ def test_an_image_request_outside_the_schema_is_refused_with_its_field_named(fie
 def test_a_video_request_outside_the_schema_is_refused_with_its_field_named(field, bad):
     with pytest.raises(InvalidRequest, match=field):
         validate_video_job(video_request(**{field: bad}))
+
+
+@pytest.mark.parametrize("bad", [4096, "x"])
+def test_a_stage_picture_size_outside_the_schema_fails_the_job_naming_the_field(monkeypatch, bad):
+    import json
+
+    from localsr.worker import server as worker_server
+
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        worker_server, "send_message", lambda message: sent.append(json.loads(message.to_json()))
+    )
+    for good in (64, 2048, None):
+        assert worker_server._accepts(
+            image_request(stage_picture_max_dimension=good), validate_image_job
+        )
+    assert not worker_server._accepts(
+        image_request(stage_picture_max_dimension=bad), validate_image_job
+    )
+    assert [message["type"] for message in sent] == ["job_failed"]
+    assert sent[0]["data"]["job_id"] == "job-1"
+    assert '"stage_picture_max_dimension"' in sent[0]["data"]["error_message"]
 
 
 @pytest.mark.parametrize("missing", ["job_id", "image_path", "tile_size", "jpeg_quality"])

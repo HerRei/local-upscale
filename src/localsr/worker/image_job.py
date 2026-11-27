@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import io
 import sys
 import threading
 import time
@@ -46,6 +48,7 @@ from localsr.protocol.messages import (
     JobFailed,
     LivePreviewWarning,
     LogMessage,
+    StageResult,
     WarningMessage,
     WorkerMessage,
 )
@@ -56,6 +59,8 @@ from localsr.worker.job_progress import ImageJobProgress
 # quarter of available RAM so concurrent inference on the next photo stays out of swap.
 _OVERLAP_BYTES_PER_PIXEL = 16
 _FALLBACK_AVAILABLE_MEMORY = 1 * 2**30
+# A step's picture is encoded as the finished result's preview is (result_preview.py).
+STAGE_PICTURE_JPEG_QUALITY = 82
 
 
 def overlap_pixel_threshold(bit_depth: int = 8) -> int:
@@ -376,11 +381,29 @@ def _run_fix_model_stage(
         runner._log(f"{note} ({error})")
         runner.emit(WarningMessage(message=note))
         notes.append(note)
-        return {**image, "_skip_preview": True}
+        return {**image, "_skip_preview": True, "_skipped_note": note}
     finally:
         if stage.model_path:
             runner.engine.release_model(stage.model_path)
         runner.model_adapter.release()
+
+
+def _display_pixels(tensor: Any) -> np.ndarray:
+    """The working picture as 8-bit channel-height-width pixels, as the previews show it."""
+    return tensor.detach().cpu().clamp(0, 1).mul(255).round().byte().numpy()
+
+
+def encode_stage_picture(pixels: np.ndarray, max_dimension: int) -> tuple[str, int, int]:
+    """8-bit CHW ``pixels`` reduced to ``max_dimension`` on the long side, as a Base64 JPEG
+    with its width and height."""
+    array = np.asarray(pixels)
+    if array.shape[0] == 1:
+        array = np.repeat(array, 3, axis=0)
+    picture = Image.fromarray(np.ascontiguousarray(array[:3].transpose(1, 2, 0)))
+    picture.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+    encoded = io.BytesIO()
+    picture.save(encoded, format="JPEG", quality=STAGE_PICTURE_JPEG_QUALITY, optimize=True)
+    return base64.b64encode(encoded.getvalue()).decode("ascii"), picture.width, picture.height
 
 
 def _run_colour_fix_stage(
@@ -595,9 +618,16 @@ class ImageJobRunner:
                 notes: list[str] = []
                 if pipeline.preprocess_stages and self.save_pipeline is not None:
                     self.save_pipeline.drain()
+                picture_limit = data.get("stage_picture_max_dimension")
                 for index, stage in enumerate(pipeline.preprocess_stages):
                     working_image = self._run_stage(
-                        working_image, stage, index, data, progress, notes
+                        working_image,
+                        stage,
+                        index,
+                        data,
+                        progress,
+                        notes,
+                        picture_limit=int(picture_limit) if picture_limit else None,
                     )
                     if not working_image.get("grayscale", True):
                         manager.grayscale = False
@@ -722,6 +752,8 @@ class ImageJobRunner:
         data: Mapping[str, Any],
         progress: ImageJobProgress,
         notes: list[str],
+        *,
+        picture_limit: int | None = None,
     ) -> dict[str, Any]:
         self._check_cancelled()
         progress.start(index, stage)
@@ -743,29 +775,23 @@ class ImageJobRunner:
                 result = IMAGE_STEP_HANDLERS[stage.step_id](
                     self, image, stage, index, data, progress, notes
                 )
+            skipped_note: str | None = None
             if step is not None and step.output_alpha:
                 output_image = _with_matte(image, result, stage, data)
                 skip_preview = False
             else:
                 output_image = result
                 skip_preview = bool(output_image.pop("_skip_preview", False))
+                skipped_note = output_image.pop("_skipped_note", None)
                 if stage.mask_path:
                     blended = _apply_stage_mask(stage, image["tensor"], output_image["tensor"])
                     output_image = {
                         **output_image,
                         "tensor": torch.from_numpy(np.array(blended, copy=True)),
                     }
+            pixels: np.ndarray | None = None
             if not skip_preview:
-                pixels = (
-                    output_image["tensor"]
-                    .detach()
-                    .cpu()
-                    .clamp(0, 1)
-                    .mul(255)
-                    .round()
-                    .byte()
-                    .numpy()
-                )
+                pixels = _display_pixels(output_image["tensor"])
                 _, height, width = pixels.shape
                 progress.preview.submit(
                     job_id=progress.job_id,
@@ -784,6 +810,12 @@ class ImageJobRunner:
             flush_preview = getattr(progress.preview, "flush", None)
             if callable(flush_preview):
                 flush_preview()
+            if picture_limit is not None:
+                self.emit(
+                    self._stage_result(
+                        progress, index, stage, output_image, pixels, skipped_note, picture_limit
+                    )
+                )
             progress.complete(index, stage)
             return output_image
         except InterruptedError:
@@ -792,6 +824,42 @@ class ImageJobRunner:
             raise
         except Exception as error:  # noqa: BLE001
             raise PipelineStageError(stage, str(error)) from error
+
+    def _stage_result(
+        self,
+        progress: ImageJobProgress,
+        index: int,
+        stage: PipelineStage,
+        image: dict[str, Any],
+        pixels: np.ndarray | None,
+        skipped_note: str | None,
+        picture_limit: int,
+    ) -> StageResult:
+        """The 320 px live preview is too small to stand in for the photo between steps, so
+        the viewer gets the step's picture at its own size limit."""
+        result = StageResult(
+            job_id=progress.job_id,
+            stage_index=index,
+            stage_count=len(progress.pipeline.stages),
+            step=stage.step_id,
+            fix=stage.fix or "",
+        )
+        if skipped_note is not None:
+            result.skipped = True
+            result.note = skipped_note
+            return result
+        try:
+            if pixels is None:
+                pixels = _display_pixels(image["tensor"])
+            _, height, width = pixels.shape
+            encoded, preview_width, preview_height = encode_stage_picture(pixels, picture_limit)
+        except Exception as error:  # noqa: BLE001 - a missing picture must not stop the job
+            self._log(f"The picture after step {index + 1} could not be made: {error}")
+            return result
+        result.width, result.height = int(width), int(height)
+        result.jpeg_base64 = encoded
+        result.preview_width, result.preview_height = preview_width, preview_height
+        return result
 
     def _run_model_step(
         self,

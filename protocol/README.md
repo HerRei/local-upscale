@@ -18,6 +18,14 @@ Compatibility rules:
 - A job the disk cannot hold ends with `job_failed` carrying `disk_full: true` (an optional
   field, absent from older engines) and a sentence naming the folder and the sizes; the host
   then stops the rest of the queue.
+- An engine that lists the `stage_results` feature accepts `stage_picture_max_dimension`
+  (64 to 2048) on a `job_request`. Each step before the main model then ends with a
+  `stage_result` (`job_id`, `stage_index`, `stage_count`, `step`, `fix`, `skipped`, `note`,
+  `width`, `height`, `jpeg_base64`, `preview_width`, `preview_height`, `image_path`), sent
+  before the next step's `stage_started`: the step's picture as a JPEG of at most that size,
+  or, for a step that was skipped, no picture and the reason in `note`. Without the field
+  the engine sends no `stage_result`. `stage_started` and `stage_completed` carry the
+  optional `step` (the step's id) and `fix` (`""` when the stage fixes nothing).
 - Arbitrary worker stdout is never interpreted as a shell command.
 - Model paths and media bytes stay on the local machine.
 - Catalog-pinned checkpoints are verified by size and SHA-256. A custom

@@ -129,13 +129,16 @@ pub(crate) fn confined_preview_path(preview_root: &Path, url: &str) -> Option<Pa
 }
 
 pub(crate) fn runtime_preview_urls(runtime: &RuntimeStatus) -> Vec<&str> {
-    let mut urls = Vec::with_capacity(4 + runtime.compare.slots.len());
+    let mut urls = Vec::with_capacity(4 + runtime.compare.slots.len() + runtime.job_steps.len());
     urls.push(runtime.result_preview_data_url.as_str());
     urls.push(runtime.comparison_preview_data_url.as_str());
     urls.push(runtime.comparison_pair.showing.preview_data_url.as_str());
     urls.push(runtime.comparison_pair.against.preview_data_url.as_str());
     for slot in &runtime.compare.slots {
         urls.push(slot.preview_data_url.as_str());
+    }
+    for step in &runtime.job_steps {
+        urls.push(step.preview_url.as_str());
     }
     urls
 }
@@ -243,6 +246,9 @@ pub(crate) fn prune_missing_references(state: &AppState) -> AppResult<()> {
     clear_if_missing(&mut runtime.comparison_preview_data_url);
     clear_if_missing(&mut runtime.comparison_pair.showing.preview_data_url);
     clear_if_missing(&mut runtime.comparison_pair.against.preview_data_url);
+    for step in &mut runtime.job_steps {
+        clear_if_missing(&mut step.preview_url);
+    }
     for slot in &mut runtime.compare.slots {
         if clear_if_missing(&mut slot.preview_data_url) {
             slot.status = crate::compare::CompareStatus::Error;
@@ -444,5 +450,30 @@ mod tests {
             let link_url = asset_url_for_file(&link).unwrap();
             assert!(confined_preview_path(&preview_root, &link_url).is_none());
         }
+    }
+
+    #[test]
+    fn the_running_job_s_step_pictures_are_referenced() {
+        let dir = tempfile::tempdir().unwrap();
+        let preview_root = dir.path().join("previews");
+        let db = Database::open(&dir.path().join("localsr.sqlite3")).unwrap();
+        let step_url = save_jpeg_bytes(&preview_root, b"\xff\xd8step").unwrap();
+        let other_url = save_jpeg_bytes(&preview_root, b"\xff\xd8other").unwrap();
+        let mut runtime = RuntimeStatus::default();
+        runtime.job_steps.push(crate::types::JobStep {
+            preview_url: step_url.clone(),
+            ..Default::default()
+        });
+        assert_eq!(
+            sweep_unreferenced(&preview_root, &db, Some(&runtime)).unwrap(),
+            1
+        );
+        assert!(confined_preview_path(&preview_root, &step_url).is_some_and(|p| p.is_file()));
+        assert!(!confined_preview_path(&preview_root, &other_url).is_some_and(|p| p.is_file()));
+        // Once the job ends, nothing holds the picture.
+        let released = runtime.take_job_steps();
+        assert_eq!(released, vec![step_url.clone()]);
+        remove_if_unreferenced(&preview_root, &db, Some(&runtime), &[&step_url]).unwrap();
+        assert!(!confined_preview_path(&preview_root, &step_url).is_some_and(|p| p.is_file()));
     }
 }

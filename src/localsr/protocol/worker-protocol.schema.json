@@ -283,6 +283,10 @@
                     "jpeg_quality": { "type": "integer", "minimum": 1, "maximum": 100 },
                     "preserve_metadata": { "type": "boolean" },
                     "output_scale": { "type": ["integer", "null"], "minimum": 1, "maximum": 8 },
+                    "stage_picture_max_dimension": {
+                      "type": ["integer", "null"], "minimum": 64, "maximum": 2048,
+                      "description": "Each step before the main model ends with a stage_result whose JPEG is at most this many pixels on its long side. Sent only to engines that list the stage_results feature."
+                    },
                     "stages": {
                       "type": ["array", "null"],
                       "maxItems": 16,
@@ -459,6 +463,7 @@
                 "stage_started",
                 "stage_progress",
                 "stage_completed",
+                "stage_result",
                 "progress",
                 "tile_update",
                 "live_preview_frame",

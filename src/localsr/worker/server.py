@@ -221,6 +221,8 @@ def _engine_features(video_engines: list[str] | None = None) -> list[str]:
         "edit_placement",
         "edit_expert",
         "precision_auto",
+        # stage_picture_max_dimension on a photo job and the stage_result message.
+        "stage_results",
     ]
     for feature in REQUIRED_STEP_FEATURES + (DEV_STEP_FEATURES if dev_steps_enabled() else ()):
         if feature not in features:

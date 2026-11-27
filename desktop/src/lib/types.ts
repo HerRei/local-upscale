@@ -464,6 +464,20 @@ export interface ModelDownloadStatus {
   received_bytes?: number;
 }
 
+/** One step of the running photo job, as the host fills it (`types.rs`, `JobStep`). */
+export interface JobStep {
+  kind: string;
+  fix: string;
+  model_id: string;
+  state: 'waiting' | 'running' | 'done' | 'skipped';
+  /** Why the engine skipped the step. */
+  note: string;
+  /** The step's finished picture; empty until it arrived. */
+  preview_url: string;
+  /** A full-size file of the step's picture exists. */
+  kept: boolean;
+}
+
 export interface RuntimeStatus {
   comparison_pair?: ComparisonPair;
   preview_original?: PreviewOriginalRegion;
@@ -508,6 +522,8 @@ export interface RuntimeStatus {
   tiles_completed?: number;
   tiles_total?: number;
   can_keep_partial?: boolean;
+  /** The running photo job's steps; empty outside a job of two or more steps. */
+  job_steps?: JobStep[];
 }
 
 export interface BenchmarkRender {
