@@ -444,6 +444,7 @@ export interface ModelDownloadStatus {
 
 export interface RuntimeStatus {
   comparison_pair?: ComparisonPair;
+  preview_original?: PreviewOriginalRegion;
   compare?: CompareState;
   video_memory?: VideoMemoryStatus;
   worker: 'starting' | 'negotiating' | 'ready' | 'unavailable' | 'failed';
@@ -835,7 +836,7 @@ export interface CompareSlot {
   height: number;
   preview_width: number;
   preview_height: number;
-  region?: { bounds: import('./compareRegions').Region; data_url: string } | null;
+  region?: import('./compareRegions').RegionResult | null;
 }
 export interface CompareState {
   generation: number;
@@ -849,6 +850,10 @@ export interface PairChoice {
   /** A manual choice; it holds through later completions for this session. */
   pinned: boolean;
 }
+export interface PreviewOriginalRegion {
+  media_id: string;
+  region?: import('./compareRegions').RegionResult | null;
+}
 export interface ComparisonSlot {
   target_id: string;
   preview_data_url: string;
@@ -857,6 +862,7 @@ export interface ComparisonSlot {
   height?: number;
   preview_width?: number;
   preview_height?: number;
+  region?: import('./compareRegions').RegionResult | null;
 }
 export interface ComparisonPair {
   media_id: string;

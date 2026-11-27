@@ -1598,6 +1598,16 @@ input:focus-visible {
   width: 100%;
   height: 100%;
 }
+.region-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.image-stage .region-image {
+  position: absolute;
+  max-width: none;
+  pointer-events: none;
+}
 /* A side whose preview is decoding or failed: never the Original underneath. */
 .side-placeholder {
   position: absolute;

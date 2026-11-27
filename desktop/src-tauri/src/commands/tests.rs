@@ -5278,3 +5278,260 @@ fn precision_auto_validates_and_falls_back_to_fp32_without_engine_feature() {
     .unwrap();
     assert_eq!(fp16_msg["data"]["precision"], "fp16");
 }
+
+#[cfg(unix)]
+#[test]
+fn preview_regions_refuses_ungranted_originals_and_non_owned_outputs() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(directory.path()).unwrap();
+    let state = AppState::from_paths(AppPaths::under(&root.join("app"))).unwrap();
+    let photo = root.join("photo.png");
+    let stranger = root.join("stranger.png");
+    let private = root.join("private.png");
+    let output = root.join("out.png");
+    let other_output = root.join("other_out.png");
+    for file in [&photo, &stranger, &private, &output, &other_output] {
+        fs::write(file, b"png").unwrap();
+    }
+    state.grants.grant_media_file(&photo);
+    *lock(&state.engine).unwrap() = Some(crate::types::EngineInfo {
+        protocol_version: 1,
+        minimum_protocol_version: 1,
+        engine_id: "test".into(),
+        engine_version: "1".into(),
+        features: vec!["compare_regions".into(), "preview_regions".into()],
+        model_formats: vec![],
+        video_engines: vec![],
+    });
+    {
+        let db = lock(&state.database).unwrap();
+        db.insert_media("m", photo.to_str().unwrap(), "photo.png", "image")
+            .unwrap();
+        db.update_media_probe(
+            photo.to_str().unwrap(),
+            "image",
+            3264,
+            4896,
+            1,
+            0.0,
+            0.0,
+            "thumb",
+            "",
+            "",
+            true,
+        )
+        .unwrap();
+        db.insert_media("s", stranger.to_str().unwrap(), "stranger.png", "image")
+            .unwrap();
+        db.update_media_probe(
+            stranger.to_str().unwrap(),
+            "image",
+            3264,
+            4896,
+            1,
+            0.0,
+            0.0,
+            "thumb",
+            "",
+            "",
+            true,
+        )
+        .unwrap();
+        db.insert_job("job-m", "m", "{}").unwrap();
+        db.finish_job("job-m", "completed", output.to_str().unwrap(), "")
+            .unwrap();
+        db.insert_job("job-s", "s", "{}").unwrap();
+        db.finish_job("job-s", "completed", other_output.to_str().unwrap(), "")
+            .unwrap();
+    }
+    let region = crate::compare::Region {
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 100,
+        target_width: 200,
+        target_height: 200,
+    };
+
+    // Ungranted original media is refused.
+    assert!(request_preview_regions_checked(
+        &state,
+        "s",
+        0,
+        &crate::compare::PairRegions {
+            original: Some(region),
+            showing: None,
+            against: None,
+        },
+    )
+    .is_err());
+
+    // Unknown media is refused.
+    assert!(request_preview_regions_checked(
+        &state,
+        "missing",
+        0,
+        &crate::compare::PairRegions {
+            original: Some(region),
+            showing: None,
+            against: None,
+        },
+    )
+    .is_err());
+
+    // Non-owned job output (job-s belongs to media "s", not "m") is refused.
+    {
+        let mut runtime = lock(&state.runtime).unwrap();
+        runtime.comparison_pair = crate::types::ComparisonPair {
+            media_id: "m".into(),
+            generation: 1,
+            showing: crate::types::ComparisonSlot {
+                target_id: "job-s".into(),
+                output_path: other_output.to_string_lossy().into_owned(),
+                preview_data_url: "asset://other".into(),
+                width: 3264,
+                height: 4896,
+                preview_width: 1365,
+                preview_height: 2048,
+                ..Default::default()
+            },
+            against: crate::types::ComparisonSlot {
+                target_id: "original".into(),
+                width: 3264,
+                height: 4896,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+    }
+    assert!(request_preview_regions_checked(
+        &state,
+        "m",
+        1,
+        &crate::compare::PairRegions {
+            original: None,
+            showing: Some(region),
+            against: None,
+        },
+    )
+    .is_err());
+
+    // Granted original + owned job output succeed; symlink replacement is refused.
+    {
+        let mut runtime = lock(&state.runtime).unwrap();
+        runtime.comparison_pair.showing.target_id = "job-m".into();
+        runtime.comparison_pair.showing.output_path = output.to_string_lossy().into_owned();
+    }
+    assert!(request_preview_regions_checked(
+        &state,
+        "m",
+        1,
+        &crate::compare::PairRegions {
+            original: Some(region),
+            showing: Some(region),
+            against: None,
+        },
+    )
+    .is_ok());
+
+    fs::remove_file(&photo).unwrap();
+    std::os::unix::fs::symlink(&private, &photo).unwrap();
+    assert!(request_preview_regions_checked(
+        &state,
+        "m",
+        1,
+        &crate::compare::PairRegions {
+            original: Some(region),
+            showing: None,
+            against: None,
+        },
+    )
+    .is_err());
+
+    // An engine without preview regions skips without error after auth passes.
+    fs::remove_file(&photo).unwrap();
+    fs::write(&photo, b"png").unwrap();
+    lock(&state.engine)
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .features
+        .clear();
+    assert!(request_preview_regions_checked(
+        &state,
+        "m",
+        1,
+        &crate::compare::PairRegions {
+            original: Some(region),
+            showing: Some(region),
+            against: None,
+        },
+    )
+    .is_ok());
+    assert!(clear_preview_regions_checked(&state).is_ok());
+}
+
+#[cfg(unix)]
+#[test]
+fn preview_regions_go_only_to_an_engine_that_has_them() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(directory.path()).unwrap();
+    let state = AppState::from_paths(AppPaths::under(&root.join("app"))).unwrap();
+    let photo = root.join("photo.png");
+    fs::write(&photo, b"png").unwrap();
+    state.grants.grant_media_file(&photo);
+    {
+        let db = lock(&state.database).unwrap();
+        db.insert_media("m", photo.to_str().unwrap(), "photo.png", "image")
+            .unwrap();
+        db.update_media_probe(
+            photo.to_str().unwrap(),
+            "image",
+            3264,
+            4896,
+            1,
+            0.0,
+            0.0,
+            "thumb",
+            "",
+            "",
+            true,
+        )
+        .unwrap();
+    }
+    let (sender, receiver) = std::sync::mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+    let region = crate::compare::Region {
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 100,
+        target_width: 200,
+        target_height: 200,
+    };
+    let regions = crate::compare::PairRegions {
+        original: Some(region),
+        showing: None,
+        against: None,
+    };
+    let engine = |features: &[&str]| crate::types::EngineInfo {
+        protocol_version: 1,
+        minimum_protocol_version: 1,
+        engine_id: "test".into(),
+        engine_version: "1".into(),
+        features: features.iter().map(|f| (*f).to_string()).collect(),
+        model_formats: vec![],
+        video_engines: vec![],
+    };
+
+    // A 0.6 engine knows Compare regions but would drop these slots unanswered.
+    *lock(&state.engine).unwrap() = Some(engine(&["compare_regions"]));
+    request_preview_regions_checked(&state, "m", 0, &regions).unwrap();
+    clear_preview_regions_checked(&state).unwrap();
+    assert!(receiver.try_recv().is_err());
+
+    *lock(&state.engine).unwrap() = Some(engine(&["compare_regions", "preview_regions"]));
+    request_preview_regions_checked(&state, "m", 0, &regions).unwrap();
+    let sent: serde_json::Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+    assert_eq!(sent["data"]["slot"], "original");
+}

@@ -12,7 +12,6 @@ and toolchain, so later jobs skip the gate. Anything that fails keeps PyTorch.
 import copy
 import errno
 import functools
-import hashlib
 import importlib.util
 import json
 import logging
@@ -140,16 +139,12 @@ def _existing_parent(path: Path) -> Path:
 
 def checkpoint_identity(path: str) -> str:
     """Identify a checkpoint by content, using the catalog digest when known."""
-    from .model_catalog import CATALOG_BY_FILENAME
+    from .model_catalog import CATALOG_BY_FILENAME, cached_file_sha256
 
     catalog_model = CATALOG_BY_FILENAME.get(os.path.basename(path))
     if catalog_model is not None and catalog_model.sha256:
         return catalog_model.sha256
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return cached_file_sha256(path)
 
 
 def _chip_name() -> str:
@@ -506,6 +501,22 @@ class _CoreMLImage(torch.nn.Module):
         self.active_unit: str | None = None
         self.batch_shape: tuple[int, int] | None = None
         self.batch_runners: dict[str, list] = {}
+
+    def export_state(self) -> dict:
+        return {
+            "states": self.states,
+            "active_unit": self.active_unit,
+            "shape": self.shape,
+            "batch_shape": self.batch_shape,
+            "batch_runners": self.batch_runners,
+        }
+
+    def restore_state(self, saved: dict) -> None:
+        self.states = saved["states"]
+        self.active_unit = saved["active_unit"]
+        self.shape = saved["shape"]
+        self.batch_shape = saved["batch_shape"]
+        self.batch_runners = saved["batch_runners"]
 
     # Engine hooks ---------------------------------------------------------
     def _shape_for(self, height: int, width: int) -> tuple[int, int]:
@@ -1049,3 +1060,9 @@ class CoreMLImageDescriptor:
     @property
     def input_device(self) -> torch.device | None:
         return torch.device("cpu") if self.model.fixed_shape() is not None else None
+
+    def export_backend_state(self) -> dict:
+        return self.model.export_state()
+
+    def restore_backend_state(self, state: dict) -> None:
+        self.model.restore_state(state)

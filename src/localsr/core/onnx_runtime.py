@@ -359,6 +359,20 @@ class _OnnxImage(torch.nn.Module):
         # The NPU cache files of the program being opened, which the cache trim leaves alone.
         self.programs: frozenset[str] = frozenset()
 
+    def export_state(self) -> dict:
+        return {
+            "sessions": self.sessions,
+            "execution_verified": self.execution_verified,
+            "fixed_shape": self.fixed_shape,
+            "session_limit": self.session_limit,
+        }
+
+    def restore_state(self, saved: dict) -> None:
+        self.sessions = saved["sessions"]
+        self.execution_verified = bool(saved["execution_verified"])
+        self.fixed_shape = saved["fixed_shape"]
+        self.session_limit = int(saved["session_limit"])
+
     def _check_cancelled(self):
         if self.cancel_event is not None and self.cancel_event.is_set():
             raise InterruptedError("Cancelled")
@@ -1197,3 +1211,9 @@ class OnnxImageDescriptor:
         """Start counting afresh; sessions and verdicts stay."""
         self.model.execution_verified = False
         self.model.cpu_tiles = 0
+
+    def export_backend_state(self) -> dict:
+        return self.model.export_state()
+
+    def restore_backend_state(self, state: dict) -> None:
+        self.model.restore_state(state)

@@ -1284,3 +1284,107 @@ it('renders source and result previews from file-backed asset URLs', () => {
   expect(container.querySelector('.source-image')?.getAttribute('src')).toBe(sourceUrl);
   expect(container.querySelector('.result-image')?.getAttribute('src')).toBe(resultUrl);
 });
+
+it('debounces region requests on zoom for both sides, aligns crops, and clears on zoom-out or unmount', async () => {
+  vi.useFakeTimers();
+  const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+    width: 600,
+    height: 600,
+    top: 0,
+    left: 0,
+    right: 600,
+    bottom: 600,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  } as DOMRect);
+  const requestRegions = vi.fn().mockResolvedValue(undefined);
+  const clearRegions = vi.fn().mockResolvedValue(undefined);
+  const largePhoto: MediaItem = {
+    id: 'large',
+    path: '/large.jpg',
+    name: 'large.jpg',
+    kind: 'image',
+    width: 3264,
+    height: 4896,
+    frame_count: 1,
+    fps: 0,
+    duration_seconds: 0,
+    preview_data_url: 'data:image/jpeg;base64,orig',
+    probe_status: 'ready',
+    error: '',
+    selected: true,
+  };
+  try {
+    const view = render(PreviewPane, {
+      selectedMedia: largePhoto,
+      resultPreview: 'data:image/jpeg;base64,res',
+      completedVideoOutput: '',
+      pairGeneration: 3,
+      showingWidth: 13056,
+      showingHeight: 19584,
+      showingPreviewWidth: 1365,
+      showingPreviewHeight: 2048,
+      requestRegions,
+      clearRegions,
+    });
+    const sourceImg = view.container.querySelector('.source-image') as HTMLImageElement;
+    Object.defineProperty(sourceImg, 'naturalWidth', { value: 1365, configurable: true });
+    Object.defineProperty(sourceImg, 'naturalHeight', { value: 2048, configurable: true });
+    await fireEvent.load(sourceImg);
+    await vi.advanceTimersByTimeAsync(20);
+
+    const canvas = screen.getByRole('application', { name: 'Media comparison canvas' });
+    // Multiple rapid zooms past the 2048 px preview coalesce into a single request after 160 ms.
+    for (let step = 0; step < 14; step++) {
+      await fireEvent.wheel(canvas, { deltaY: -100, clientX: 300, clientY: 300 });
+    }
+    expect(requestRegions).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(160);
+    expect(requestRegions).toHaveBeenCalledTimes(1);
+    const [mediaId, generation, asked] = requestRegions.mock.calls[0];
+    expect(mediaId).toBe('large');
+    expect(generation).toBe(3);
+    expect(asked.original).not.toBeNull();
+    expect(asked.showing).not.toBeNull();
+    expect(asked.against).toBeNull();
+
+    await view.rerender({
+      originalRegion: { bounds: asked.original, data_url: 'data:image/png;base64,origcrop' },
+      showingRegion: { bounds: asked.showing, data_url: 'data:image/png;base64,showcrop' },
+    });
+    const regions = [...view.container.querySelectorAll<HTMLImageElement>('.region-image')];
+    expect(regions).toHaveLength(2);
+    expect(regions[0].getAttribute('src')).toBe('data:image/png;base64,origcrop');
+    expect(regions[1].getAttribute('src')).toBe('data:image/png;base64,showcrop');
+    const pct = (style: string | null) =>
+      [...(style ?? '').matchAll(/([\d.]+)%/g)].map((m) => Number(m[1]));
+    for (let i = 0; i < 4; i++) {
+      expect(pct(regions[1].getAttribute('style'))[i]).toBeCloseTo(
+        pct(regions[0].getAttribute('style'))[i],
+        1,
+      );
+    }
+
+    // Further zoom hides stale crops immediately until the new answer arrives.
+    await fireEvent.wheel(canvas, { deltaY: -100, clientX: 300, clientY: 300 });
+    expect(view.container.querySelectorAll('.region-image')).toHaveLength(0);
+
+    // Returning to Fit clears regions.
+    await fireEvent.click(screen.getByRole('button', { name: 'Fit' }));
+    await vi.advanceTimersByTimeAsync(160);
+    expect(requestRegions).toHaveBeenLastCalledWith('large', 3, {
+      original: null,
+      showing: null,
+      against: null,
+    });
+
+    view.unmount();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(clearRegions).toHaveBeenCalledTimes(1);
+  } finally {
+    rect.mockRestore();
+    vi.useRealTimers();
+  }
+});

@@ -10,6 +10,7 @@
    * Another layout (side by side, flip, grid) can replace this component and
    * keep PreviewPane's viewport and the same side descriptions.
    */
+  import { cropStyle } from './lib/compareRegions';
   import type { ComparisonSide } from './lib/results';
 
   export let stageStyle: string;
@@ -52,6 +53,19 @@
         decoding="async"
         draggable="false"
       />
+      {#if reference.region && reference.width && reference.height}
+        <img
+          class="region-image"
+          style={cropStyle(reference.region.bounds, {
+            width: reference.width,
+            height: reference.height,
+          })}
+          src={reference.region.data_url}
+          alt=""
+          decoding="async"
+          draggable="false"
+        />
+      {/if}
     {:else}
       <div class="side-placeholder" class:failed={reference.state === 'error'} role="status">
         <span>{placeholder(reference)}</span>
@@ -67,6 +81,21 @@
       decoding="async"
       draggable="false"
     />
+    {#if showing.region && showing.width && showing.height}
+      <div class="region-overlay" style={`clip-path: inset(0 0 0 ${resultClip}%)`}>
+        <img
+          class="region-image"
+          style={cropStyle(showing.region.bounds, {
+            width: showing.width,
+            height: showing.height,
+          })}
+          src={showing.region.data_url}
+          alt=""
+          decoding="async"
+          draggable="false"
+        />
+      </div>
+    {/if}
   {:else if showing.state !== 'ready' && !peeking}
     <div
       class="side-placeholder showing-placeholder"

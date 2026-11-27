@@ -166,6 +166,8 @@ const api = vi.hoisted(() => ({
     ],
   })),
   requestCompare: vi.fn(async (_picks: ComparePick[]): Promise<void> => undefined),
+  requestPreviewRegions: vi.fn(async () => undefined),
+  clearPreviewRegions: vi.fn(async () => undefined),
   startModelTrials: vi.fn(
     async (_mediaId: string, _modelIds: string[], _base: StartBatchInput): Promise<string[]> => [],
   ),
@@ -10308,4 +10310,43 @@ describe('Fix list', () => {
       within(foot).getByText('This engine runs one fix at a time. Update LocalSR to run several.'),
     ).toBeTruthy();
   });
+});
+
+it('does not call a result Original when its result list is unavailable', async () => {
+  const snapshot = readySnapshot([image('other'), image('photo', true)]);
+  snapshot.settings.task = 'upscale';
+  snapshot.jobs = [
+    {
+      id: 'done',
+      media_id: 'photo',
+      media_name: 'photo.png',
+      media_kind: 'image',
+      status: 'completed',
+      progress: 100,
+      output_path: '/out/photo_up.png',
+      error: '',
+      created_at: 1,
+    },
+  ];
+  snapshot.runtime.last_output_path = '/out/photo_up.png';
+  snapshot.runtime.result_preview_data_url = 'data:image/jpeg;base64,result';
+  snapshot.runtime.comparison_pair = {
+    media_id: '',
+    generation: 0,
+    showing: { target_id: '', preview_data_url: '' },
+    against: { target_id: '', preview_data_url: '' },
+  };
+  api.listMediaResults.mockRejectedValue(new Error('history unavailable'));
+
+  await mountWith(snapshot);
+
+  // The newest result is still compared, as before result histories existed.
+  expect(await screen.findByRole('slider', { name: 'Before and after comparison' })).toBeTruthy();
+  const labels = [...document.querySelectorAll('.divider-labels span')].map((span) =>
+    span.textContent?.trim(),
+  );
+  expect(labels).not.toEqual(['Original', 'Original']);
+  expect(document.querySelector('.result-image')?.getAttribute('alt')).not.toBe(
+    'Showing: Original',
+  );
 });

@@ -2135,6 +2135,154 @@ fn engine_start_rejects_code_without_an_installed_checksum() {
     );
 }
 
+fn setup_cached_check_engine(root: &Path, id: &str) -> (crate::paths::AppPaths, PathBuf) {
+    let paths = crate::paths::AppPaths::under(root);
+    let engine = paths.next_root.join("engines").join(id).join("engine");
+    fs::create_dir_all(engine.join("_internal")).unwrap();
+    fs::write(engine.join(worker_executable_name()), b"worker-bin").unwrap();
+    fs::write(engine.join("_internal/library.dylib"), b"lib-1").unwrap();
+    fs::write(engine.join("model.safetensors"), b"weights").unwrap();
+    write_test_engine_meta(&paths.next_root, id);
+    fs::write(paths.next_root.join("active-engine.txt"), id).unwrap();
+    (paths, engine)
+}
+
+#[test]
+fn second_start_check_of_unchanged_engine_does_not_hash_again() {
+    let root = tempfile::tempdir().unwrap();
+    let id = "gpu";
+    let (paths, _engine) = setup_cached_check_engine(root.path(), id);
+    let mut failed = HashSet::new();
+
+    reset_engine_file_hash_count();
+    assert_eq!(verify_active_engine_at_start(&paths, &mut failed), None);
+    assert_eq!(engine_file_hash_count(), 2);
+
+    // The warm start must still choose the engine, not skip it.
+    reset_engine_file_hash_count();
+    let (choice, verification_failed) = verified_worker_engine_choice(&paths, None, &mut failed);
+    assert!(!verification_failed);
+    assert_eq!(choice.and_then(|(_, chosen)| chosen).as_deref(), Some(id));
+    assert_eq!(engine_file_hash_count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn changing_code_file_bytes_with_same_length_and_restored_mtime_rehashes_and_fails() {
+    let root = tempfile::tempdir().unwrap();
+    let id = "gpu";
+    let (paths, engine) = setup_cached_check_engine(root.path(), id);
+    let mut failed = HashSet::new();
+
+    reset_engine_file_hash_count();
+    assert_eq!(verify_active_engine_at_start(&paths, &mut failed), None);
+    assert_eq!(engine_file_hash_count(), 2);
+
+    let lib = engine.join("_internal/library.dylib");
+    let orig_mtime = fs::metadata(&lib).unwrap().modified().unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+
+    let mut file = fs::OpenOptions::new().write(true).open(&lib).unwrap();
+    file.write_all(b"evil1").unwrap();
+    file.set_modified(orig_mtime).unwrap();
+    drop(file);
+
+    assert_eq!(fs::metadata(&lib).unwrap().len(), 5);
+    assert_eq!(fs::metadata(&lib).unwrap().modified().unwrap(), orig_mtime);
+
+    reset_engine_file_hash_count();
+    assert_eq!(
+        verify_active_engine_at_start(&paths, &mut failed).as_deref(),
+        Some(id)
+    );
+    assert_eq!(engine_file_hash_count(), 1);
+}
+
+#[test]
+fn replacing_code_file_by_rename_hashes_again() {
+    let root = tempfile::tempdir().unwrap();
+    let id = "gpu";
+    let (paths, engine) = setup_cached_check_engine(root.path(), id);
+    let mut failed = HashSet::new();
+
+    reset_engine_file_hash_count();
+    assert_eq!(verify_active_engine_at_start(&paths, &mut failed), None);
+    assert_eq!(engine_file_hash_count(), 2);
+
+    std::thread::sleep(Duration::from_millis(20));
+    let replacement = root.path().join("replacement.dylib");
+    fs::write(&replacement, b"lib-1").unwrap();
+    fs::rename(&replacement, engine.join("_internal/library.dylib")).unwrap();
+
+    reset_engine_file_hash_count();
+    assert_eq!(verify_active_engine_at_start(&paths, &mut failed), None);
+    assert_eq!(engine_file_hash_count(), 1);
+}
+
+#[test]
+fn full_check_after_cached_code_check_still_hashes_everything() {
+    let root = tempfile::tempdir().unwrap();
+    let id = "gpu";
+    let (paths, _engine) = setup_cached_check_engine(root.path(), id);
+    let meta = read_engine_meta(&paths.next_root, id).unwrap();
+    let mut failed = HashSet::new();
+
+    // Full check neither writes nor reads the cache.
+    reset_engine_file_hash_count();
+    full_verify_engine_files(&paths.next_root, id, &meta).unwrap();
+    assert_eq!(engine_file_hash_count(), 3);
+
+    reset_engine_file_hash_count();
+    assert_eq!(verify_active_engine_at_start(&paths, &mut failed), None);
+    assert_eq!(engine_file_hash_count(), 2);
+
+    reset_engine_file_hash_count();
+    full_verify_engine_files(&paths.next_root, id, &meta).unwrap();
+    assert_eq!(engine_file_hash_count(), 3);
+
+    reset_engine_file_hash_count();
+    assert_eq!(verify_active_engine_at_start(&paths, &mut failed), None);
+    assert_eq!(engine_file_hash_count(), 0);
+}
+
+#[test]
+fn changed_expected_sha256_in_metadata_does_not_reuse_cache_entry() {
+    let root = tempfile::tempdir().unwrap();
+    let id = "gpu";
+    let (paths, _engine) = setup_cached_check_engine(root.path(), id);
+    let original_meta = read_engine_meta(&paths.next_root, id).unwrap();
+    let mut failed = HashSet::new();
+
+    reset_engine_file_hash_count();
+    assert_eq!(verify_active_engine_at_start(&paths, &mut failed), None);
+    assert_eq!(engine_file_hash_count(), 2);
+
+    let mut next_meta = original_meta.clone();
+    let lib_entry = next_meta
+        .files
+        .iter_mut()
+        .find(|entry| entry.path == "_internal/library.dylib")
+        .unwrap();
+    lib_entry.sha256 = "0".repeat(64);
+    write_engine_meta(&paths.next_root, &next_meta).unwrap();
+
+    reset_engine_file_hash_count();
+    assert_eq!(
+        verify_active_engine_at_start(&paths, &mut failed).as_deref(),
+        Some(id)
+    );
+    assert_eq!(engine_file_hash_count(), 1);
+
+    // The mismatch removed the entry, so verifying against the original metadata re-hashes it.
+    failed.clear();
+    write_engine_meta(&paths.next_root, &original_meta).unwrap();
+    fs::write(paths.next_root.join("active-engine.txt"), id).unwrap();
+
+    reset_engine_file_hash_count();
+    assert_eq!(verify_active_engine_at_start(&paths, &mut failed), None);
+    assert_eq!(engine_file_hash_count(), 1);
+}
+
 #[test]
 fn failed_installed_compiled_engine_is_not_selected_again() {
     let installed = vec![("compiled".to_owned(), PathBuf::from("/installed/worker"))];

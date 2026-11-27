@@ -6,6 +6,7 @@
  * every target before it decodes anything (`list_media_results`,
  * `request_image_comparison`).
  */
+import type { RegionResult } from './compareRegions';
 import type {
   ComparisonPair,
   ComparisonSlot,
@@ -137,12 +138,20 @@ export interface ComparisonSide {
   label: string;
   state: 'ready' | 'loading' | 'error';
   error: string;
+  width?: number;
+  height?: number;
+  previewWidth?: number;
+  previewHeight?: number;
+  region?: RegionResult | null;
 }
 
 export interface SideView extends ComparisonSide {
   /** The saved file's dimensions once decoded (the source's for the Original). */
   width: number;
   height: number;
+  previewWidth: number;
+  previewHeight: number;
+  region: RegionResult | null;
 }
 
 /**
@@ -166,12 +175,42 @@ export function describeSide(
       error: '',
       width: source.width,
       height: source.height,
+      previewWidth: 0,
+      previewHeight: 0,
+      region: null,
     };
-  const output = { width: slot?.width ?? 0, height: slot?.height ?? 0 };
+  const output = {
+    width: slot?.width ?? 0,
+    height: slot?.height ?? 0,
+    previewWidth: slot?.preview_width ?? 0,
+    previewHeight: slot?.preview_height ?? 0,
+    region: slot?.region ?? null,
+  };
   const label = result ? sideLabel(result, output, source) : 'Saved result';
   if (slot?.preview_data_url)
     return { src: slot.preview_data_url, label, state: 'ready', error: '', ...output };
   if (slot?.error) return { src: '', label, state: 'error', error: slot.error, ...output };
-  if (automatic) return { src: automatic, label, state: 'ready', error: '', width: 0, height: 0 };
-  return { src: '', label, state: 'loading', error: '', width: 0, height: 0 };
+  if (automatic)
+    return {
+      src: automatic,
+      label,
+      state: 'ready',
+      error: '',
+      width: 0,
+      height: 0,
+      previewWidth: 0,
+      previewHeight: 0,
+      region: null,
+    };
+  return {
+    src: '',
+    label,
+    state: 'loading',
+    error: '',
+    width: 0,
+    height: 0,
+    previewWidth: 0,
+    previewHeight: 0,
+    region: null,
+  };
 }

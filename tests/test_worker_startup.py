@@ -110,6 +110,7 @@ def test_worker_startup_ready_handshake_and_capabilities():
     assert info["engine_id"] == "localsr.pytorch-spandrel"
     assert "image" in info["features"]
     assert "compare_regions" in info["features"]
+    assert "preview_regions" in info["features"]
     assert "spandrel_image" in info["video_engines"]
     caps = by_type["capabilities_info"]
     assert any(device["id"] == "cpu" for device in caps["devices"])

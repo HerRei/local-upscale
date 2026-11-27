@@ -142,7 +142,7 @@
             "required": ["image_path", "slot", "generation", "target_id", "request_id", "x", "y", "width", "height", "target_width", "target_height"],
             "properties": {
               "image_path": { "type": "string", "minLength": 1 },
-              "slot": { "enum": ["slot1", "slot2", "slot3", "slot4"] },
+              "slot": { "enum": ["slot1", "slot2", "slot3", "slot4", "original", "showing", "against"] },
               "generation": { "type": "integer", "minimum": 1 },
               "target_id": { "type": "string", "minLength": 1 },
               "request_id": { "type": "integer", "minimum": 1 },

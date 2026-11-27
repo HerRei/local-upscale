@@ -9,6 +9,34 @@ export interface Region {
   target_height: number;
 }
 
+export interface RegionResult {
+  bounds: Region;
+  data_url: string;
+}
+
+export interface PreviewRegions {
+  original: Region | null;
+  showing: Region | null;
+  against: Region | null;
+}
+
+export function sameRegion(a: Region | null | undefined, b: Region | null | undefined): boolean {
+  return (
+    !!a &&
+    !!b &&
+    a.x === b.x &&
+    a.y === b.y &&
+    a.width === b.width &&
+    a.height === b.height &&
+    a.target_width === b.target_width &&
+    a.target_height === b.target_height
+  );
+}
+
+export function cropStyle(bounds: Region, image: Size): string {
+  return `left:${(100 * bounds.x) / image.width}%;top:${(100 * bounds.y) / image.height}%;width:${(100 * bounds.width) / image.width}%;height:${(100 * bounds.height) / image.height}%`;
+}
+
 export function visibleRegion(input: {
   image: Size;
   preview: Size;
@@ -43,5 +71,46 @@ export function visibleRegion(input: {
     height: bottom - y,
     target_width: Math.max(1, Math.min(2048, Math.ceil((right - x) * scaleX * pixelRatio))),
     target_height: Math.max(1, Math.min(2048, Math.ceil((bottom - y) * scaleY * pixelRatio))),
+  };
+}
+
+export function previewRegionsFor(input: {
+  cell: Size;
+  fit: Size;
+  zoom: number;
+  pan: Point;
+  pixelRatio?: number;
+  comparisonView: 'original' | 'split' | 'enhanced';
+  peeking: boolean;
+  singleFrame: boolean;
+  referenceIsResult: boolean;
+  original?: { image: Size; preview: Size } | null;
+  showing?: { image: Size; preview: Size } | null;
+  against?: { image: Size; preview: Size } | null;
+}): PreviewRegions {
+  const common = {
+    cell: input.cell,
+    fit: input.fit,
+    zoom: input.zoom,
+    pan: input.pan,
+    pixelRatio: input.pixelRatio,
+  };
+  const wantOriginal =
+    !input.singleFrame &&
+    Boolean(input.original) &&
+    (input.peeking ||
+      !input.showing ||
+      (!input.referenceIsResult && input.comparisonView !== 'enhanced'));
+  const wantShowing = Boolean(input.showing) && input.comparisonView !== 'original';
+  const wantAgainst =
+    !input.singleFrame &&
+    input.referenceIsResult &&
+    Boolean(input.against) &&
+    input.comparisonView !== 'enhanced';
+  return {
+    original:
+      wantOriginal && input.original ? visibleRegion({ ...common, ...input.original }) : null,
+    showing: wantShowing && input.showing ? visibleRegion({ ...common, ...input.showing }) : null,
+    against: wantAgainst && input.against ? visibleRegion({ ...common, ...input.against }) : null,
   };
 }

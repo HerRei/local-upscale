@@ -1171,14 +1171,14 @@ fn stop_queue_locked(state: &Arc<AppState>, reason: &str) -> AppResult<()> {
         let active = lock(&state.runtime)?.active_job_id.clone();
         if !active.is_empty() {
             let now = Instant::now();
-            if batch_ids.is_empty() {
-                cancellation.request(&active, now);
-            } else {
-                for id in &batch_ids {
+            cancellation.request(&active, now);
+            let db = lock(&state.database)?;
+            // A photo saving its result is left to finish; see cancel_jobs_checked.
+            for id in &batch_ids {
+                if db.job_is_queued(id)? {
                     cancellation.request(id, now);
                 }
             }
-            let db = lock(&state.database)?;
             for id in &cancellation.job_ids {
                 db.mark_batch_cancelling(id)?;
             }
@@ -1767,11 +1767,12 @@ fn partial_output(requested: &Path, reported: &Path) -> bool {
 
 fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppResult<()> {
     let id = string(&envelope.data, "job_id");
-    let (member, background) = {
+    let (member, background, batch_keep) = {
         let runtime = lock(&state.runtime)?;
         (
             runtime.active_batch_job_ids.contains(&id),
             is_background_photo(&runtime, &id),
+            runtime.can_keep_partial,
         )
     };
     if !member {
@@ -1790,7 +1791,7 @@ fn apply_worker_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> Ap
         let failed = envelope.message_type == "job_failed";
         let stale = {
             let mut runtime = lock(&state.runtime)?;
-            leave_batch(&mut runtime, &id, failed)
+            leave_batch(&mut runtime, &id, failed, batch_keep)
         };
         cleanup_stale_previews(state, stale)?;
     }
@@ -1847,7 +1848,12 @@ fn apply_background_photo(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> A
 
 /// A batch photo has ended. While others remain, the batch stays active: when the
 /// shown photo ended before the next one started, the window shows the batch.
-fn leave_batch(runtime: &mut RuntimeStatus, id: &str, failed: bool) -> Vec<String> {
+fn leave_batch(
+    runtime: &mut RuntimeStatus,
+    id: &str,
+    failed: bool,
+    can_keep_partial: Option<bool>,
+) -> Vec<String> {
     runtime.active_batch_job_ids.retain(|member| member != id);
     let Some(next) = runtime.active_batch_job_ids.first().cloned() else {
         return Vec::new();
@@ -1856,6 +1862,9 @@ fn leave_batch(runtime: &mut RuntimeStatus, id: &str, failed: bool) -> Vec<Strin
         return Vec::new();
     }
     runtime.active_job_id = next;
+    // take_active_job cleared can_keep_partial when the shown photo ended; restore it
+    // for the remaining batch members.
+    runtime.can_keep_partial = can_keep_partial;
     runtime.progress = 0.0;
     runtime.elapsed_seconds = 0.0;
     runtime.estimated_remaining_seconds = 0.0;
@@ -1999,12 +2008,26 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
         "region_ready" | "region_failed" => {
             let database = lock(&state.database)?;
             let mut runtime = lock(&state.runtime)?;
-            crate::compare::apply_region(
-                &database,
-                &mut runtime.compare,
-                data,
-                envelope.message_type == "region_failed",
-            )?;
+            let failed = envelope.message_type == "region_failed";
+            match data["slot"].as_str() {
+                Some("original" | "showing" | "against") => {
+                    let crate::types::RuntimeStatus {
+                        comparison_pair,
+                        preview_original,
+                        ..
+                    } = &mut *runtime;
+                    crate::compare::apply_pair_region(
+                        &database,
+                        comparison_pair,
+                        preview_original,
+                        data,
+                        failed,
+                    )?;
+                }
+                _ => {
+                    crate::compare::apply_region(&database, &mut runtime.compare, data, failed)?;
+                }
+            }
         }
         "preview_ready" => {
             let path = string(data, "image_path");

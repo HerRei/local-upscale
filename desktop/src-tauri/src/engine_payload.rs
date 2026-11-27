@@ -310,11 +310,15 @@ pub fn recover_beside(executable: &Path) {
 
 pub(crate) fn sha256_file(path: &Path) -> io::Result<(u64, String)> {
     let mut file = File::open(path)?;
+    sha256_reader(&mut file)
+}
+
+pub(crate) fn sha256_reader(reader: &mut impl Read) -> io::Result<(u64, String)> {
     let mut digest = Sha256::new();
     let mut buffer = vec![0u8; 1024 * 1024];
     let mut size = 0u64;
     loop {
-        let count = file.read(&mut buffer)?;
+        let count = reader.read(&mut buffer)?;
         if count == 0 {
             break;
         }

@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 use crate::{
     database::Database,
     error::{AppError, AppResult},
+    types::{ComparisonPair, ComparisonSlot, PreviewOriginalRegion},
     worker::RESULT_PREVIEW_MAX_DIMENSION,
 };
 
@@ -41,7 +42,7 @@ pub enum CompareStatus {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct FileIdentity {
+pub struct FileIdentity {
     size: u64,
     modified: Option<SystemTime>,
     created: Option<SystemTime>,
@@ -374,6 +375,72 @@ pub fn apply(
     Ok(())
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PairRegions {
+    pub original: Option<Region>,
+    pub showing: Option<Region>,
+    pub against: Option<Region>,
+}
+
+fn validate_region(r: Region, width: u32, height: u32) -> AppResult<()> {
+    if r.width == 0
+        || r.height == 0
+        || r.target_width == 0
+        || r.target_height == 0
+        || r.target_width > 2048
+        || r.target_height > 2048
+        || r.x.checked_add(r.width).is_none_or(|v| v > width)
+        || r.y.checked_add(r.height).is_none_or(|v| v > height)
+    {
+        return Err(AppError::Validation("Invalid Compare region".into()));
+    }
+    Ok(())
+}
+
+fn region_request_message(
+    path: &str,
+    slot: &str,
+    generation: u64,
+    target_id: &str,
+    request_id: u64,
+    r: Region,
+) -> Value {
+    json!({
+        "type": "region_request",
+        "data": {
+            "image_path": path,
+            "slot": slot,
+            "generation": generation,
+            "target_id": target_id,
+            "request_id": request_id,
+            "x": r.x,
+            "y": r.y,
+            "width": r.width,
+            "height": r.height,
+            "target_width": r.target_width,
+            "target_height": r.target_height,
+        }
+    })
+}
+
+fn apply_region_answer(
+    requested: &mut Option<Region>,
+    result: &mut Option<RegionResult>,
+    data: &Value,
+    failed: bool,
+) {
+    if let Some(bounds) = requested.take() {
+        if !failed {
+            if let Some(encoded) = data["png_base64"].as_str().filter(|s| !s.is_empty()) {
+                *result = Some(RegionResult {
+                    bounds,
+                    data_url: format!("data:image/png;base64,{encoded}"),
+                });
+            }
+        }
+    }
+}
+
 /// Replace the desired regions atomically. Only selected, unchanged files can be read.
 pub fn plan_regions(
     db: &Database,
@@ -387,18 +454,10 @@ pub fn plan_regions(
     for (index, region) in regions.iter().enumerate() {
         if let Some(r) = region {
             let slot = &compare.slots[index];
-            if slot.media_kind != "image"
-                || r.width == 0
-                || r.height == 0
-                || r.target_width == 0
-                || r.target_height == 0
-                || r.target_width > 2048
-                || r.target_height > 2048
-                || r.x.checked_add(r.width).is_none_or(|v| v > slot.width)
-                || r.y.checked_add(r.height).is_none_or(|v| v > slot.height)
-            {
+            if slot.media_kind != "image" {
                 return Err(AppError::Validation("Invalid Compare region".into()));
             }
+            validate_region(*r, slot.width, slot.height)?;
         }
     }
     compare.region_request_id = compare
@@ -414,7 +473,14 @@ pub fn plan_regions(
             .flatten()
             .filter(|_| slot.status == CompareStatus::Ready && slot.media_kind == "image");
         if let Some(r) = slot.requested_region {
-            requests.push(json!({"type":"region_request", "data": {"image_path":slot.path, "slot":format!("slot{}", index + 1), "generation":compare.generation, "target_id":slot.pick.target_id(), "request_id":compare.region_request_id, "x":r.x, "y":r.y, "width":r.width, "height":r.height, "target_width":r.target_width, "target_height":r.target_height}}));
+            requests.push(region_request_message(
+                &slot.path,
+                &format!("slot{}", index + 1),
+                compare.generation,
+                slot.pick.target_id(),
+                compare.region_request_id,
+                r,
+            ));
         }
     }
     Ok(requests)
@@ -444,17 +510,250 @@ pub fn apply_region(
     {
         return Ok(());
     }
-    if let Some(bounds) = slot.requested_region.take() {
-        if !failed {
-            if let Some(encoded) = data["png_base64"].as_str().filter(|s| !s.is_empty()) {
-                slot.region = Some(RegionResult {
-                    bounds,
-                    data_url: format!("data:image/png;base64,{encoded}"),
-                });
+    apply_region_answer(&mut slot.requested_region, &mut slot.region, data, failed);
+    Ok(())
+}
+
+fn resolve_pair_slot(
+    db: &Database,
+    media: &crate::types::MediaItem,
+    slot: &ComparisonSlot,
+) -> AppResult<(String, FileIdentity, u32, u32)> {
+    if slot.target_id.is_empty() {
+        return Err(AppError::Validation("Invalid Preview region".into()));
+    }
+    let (path, width, height) = if slot.target_id == "original" {
+        (media.path.clone(), media.width, media.height)
+    } else {
+        let path = db.media_result_output(&media.id, &slot.target_id)?;
+        if path != slot.output_path
+            || slot.preview_data_url.is_empty()
+            || slot.width == 0
+            || slot.height == 0
+        {
+            return Err(AppError::Validation("Invalid Preview region".into()));
+        }
+        (path, slot.width, slot.height)
+    };
+    let identity = file_identity(&path)
+        .ok_or_else(|| AppError::Validation("This result's file is no longer available".into()))?;
+    Ok((path, identity, width, height))
+}
+
+/// Replace the desired regions for the main preview atomically. Only owned, unchanged files are read.
+pub fn plan_pair_regions(
+    db: &Database,
+    pair: &mut ComparisonPair,
+    original: &mut PreviewOriginalRegion,
+    media_id: &str,
+    pair_generation: u64,
+    regions: &PairRegions,
+) -> AppResult<Vec<Value>> {
+    let Some(media) = db.get_media(media_id)? else {
+        if regions.original.is_some() || regions.showing.is_some() || regions.against.is_some() {
+            return Err(AppError::Validation(
+                "the selected image is no longer queued".into(),
+            ));
+        }
+        clear_pair_regions(pair, original);
+        return Ok(Vec::new());
+    };
+    if media.kind != "image" {
+        return Ok(Vec::new());
+    }
+    if pair_generation > 0 && (pair.media_id != media_id || pair.generation != pair_generation) {
+        return Ok(Vec::new());
+    }
+    if pair_generation == 0 && (regions.showing.is_some() || regions.against.is_some()) {
+        return Ok(Vec::new());
+    }
+
+    let orig_identity = if let Some(r) = regions.original {
+        validate_region(r, media.width, media.height)?;
+        Some(file_identity(&media.path).ok_or_else(|| {
+            AppError::Validation("The selected image is no longer available".into())
+        })?)
+    } else {
+        None
+    };
+
+    let showing_resolved = if let Some(r) = regions.showing {
+        let (path, id, width, height) = resolve_pair_slot(db, &media, &pair.showing)?;
+        validate_region(r, width, height)?;
+        Some((path, id))
+    } else {
+        None
+    };
+
+    let against_resolved = if let Some(r) = regions.against {
+        let (path, id, width, height) = resolve_pair_slot(db, &media, &pair.against)?;
+        validate_region(r, width, height)?;
+        Some((path, id))
+    } else {
+        None
+    };
+
+    let mut requests = Vec::new();
+    original.region = None;
+    original.requested_region = None;
+    if let (Some(r), Some(identity)) = (regions.original, orig_identity) {
+        if original.media_id != media_id
+            || original.path != media.path
+            || original.file.as_ref() != Some(&identity)
+        {
+            original.media_id = media_id.to_owned();
+            original.path = media.path.clone();
+            original.file = Some(identity);
+            original.generation = original
+                .generation
+                .checked_add(1)
+                .ok_or_else(|| AppError::Validation("Preview request exhausted".into()))?;
+        }
+        original.request_id = original
+            .request_id
+            .checked_add(1)
+            .ok_or_else(|| AppError::Validation("Preview request exhausted".into()))?;
+        original.requested_region = Some(r);
+        requests.push(region_request_message(
+            &original.path,
+            "original",
+            original.generation,
+            media_id,
+            original.request_id,
+            r,
+        ));
+    }
+
+    if pair_generation > 0 && pair.media_id == media_id && pair.generation == pair_generation {
+        pair.region_request_id = pair
+            .region_request_id
+            .checked_add(1)
+            .ok_or_else(|| AppError::Validation("Preview request exhausted".into()))?;
+        for (slot_name, slot, region_opt, resolved) in [
+            (
+                "showing",
+                &mut pair.showing,
+                regions.showing,
+                showing_resolved,
+            ),
+            (
+                "against",
+                &mut pair.against,
+                regions.against,
+                against_resolved,
+            ),
+        ] {
+            slot.region = None;
+            slot.requested_region = None;
+            if let (Some(r), Some((path, id))) = (region_opt, resolved) {
+                slot.file = Some(id);
+                slot.requested_region = Some(r);
+                requests.push(region_request_message(
+                    &path,
+                    slot_name,
+                    pair.generation,
+                    &slot.target_id,
+                    pair.region_request_id,
+                    r,
+                ));
             }
         }
     }
+    Ok(requests)
+}
+
+pub fn apply_pair_region(
+    db: &Database,
+    pair: &mut ComparisonPair,
+    original: &mut PreviewOriginalRegion,
+    data: &Value,
+    failed: bool,
+) -> AppResult<()> {
+    match data["slot"].as_str() {
+        Some("original") => {
+            if original.generation == 0
+                || original.request_id == 0
+                || data["generation"].as_u64() != Some(original.generation)
+                || data["request_id"].as_u64() != Some(original.request_id)
+            {
+                return Ok(());
+            }
+            let valid = db.get_media(&original.media_id)?.is_some_and(|media| {
+                media.kind == "image"
+                    && media.path == original.path
+                    && file_identity(&original.path).as_ref() == original.file.as_ref()
+            });
+            if !valid {
+                original.region = None;
+                original.requested_region = None;
+                return Ok(());
+            }
+            if data["target_id"].as_str() != Some(original.media_id.as_str())
+                || data["image_path"].as_str() != Some(original.path.as_str())
+            {
+                return Ok(());
+            }
+            apply_region_answer(
+                &mut original.requested_region,
+                &mut original.region,
+                data,
+                failed,
+            );
+        }
+        Some(slot_name @ ("showing" | "against")) => {
+            if pair.generation == 0
+                || pair.region_request_id == 0
+                || data["generation"].as_u64() != Some(pair.generation)
+                || data["request_id"].as_u64() != Some(pair.region_request_id)
+            {
+                return Ok(());
+            }
+            let slot = if slot_name == "showing" {
+                &mut pair.showing
+            } else {
+                &mut pair.against
+            };
+            let expected_path = if slot.target_id == "original" {
+                db.get_media(&pair.media_id)?
+                    .filter(|m| m.kind == "image")
+                    .map(|m| m.path)
+            } else if !slot.target_id.is_empty() {
+                match db.media_result_output(&pair.media_id, &slot.target_id) {
+                    Ok(path) if path == slot.output_path => Some(path),
+                    Ok(_) | Err(AppError::Validation(_)) => None,
+                    Err(error) => return Err(error),
+                }
+            } else {
+                None
+            };
+            let Some(path) =
+                expected_path.filter(|path| file_identity(path).as_ref() == slot.file.as_ref())
+            else {
+                slot.region = None;
+                slot.requested_region = None;
+                return Ok(());
+            };
+            if data["target_id"].as_str() != Some(slot.target_id.as_str())
+                || data["image_path"].as_str() != Some(path.as_str())
+            {
+                return Ok(());
+            }
+            apply_region_answer(&mut slot.requested_region, &mut slot.region, data, failed);
+        }
+        _ => {}
+    }
     Ok(())
+}
+
+pub fn clear_pair_regions(pair: &mut ComparisonPair, original: &mut PreviewOriginalRegion) {
+    original.region = None;
+    original.requested_region = None;
+    original.request_id = original.request_id.saturating_add(1);
+    pair.showing.region = None;
+    pair.showing.requested_region = None;
+    pair.against.region = None;
+    pair.against.requested_region = None;
+    pair.region_request_id = pair.region_request_id.saturating_add(1);
 }
 
 #[cfg(test)]
@@ -985,5 +1284,204 @@ mod tests {
         let sent = plan_regions(&db, &mut compare, &[Some(region), None]).unwrap();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0]["data"]["slot"], "slot1");
+    }
+
+    #[test]
+    fn pair_regions_plan_for_original_and_outputs_and_reject_stale_or_failed_answers() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir_root = std::fs::canonicalize(dir.path()).unwrap();
+        let db = Database::open(&dir_root.join("queue.db")).unwrap();
+        let source = dir_root.join("source.png");
+        let output_a = dir_root.join("output_a.png");
+        let output_b = dir_root.join("output_b.png");
+        std::fs::write(&source, "source").unwrap();
+        std::fs::write(&output_a, "output_a").unwrap();
+        std::fs::write(&output_b, "output_b").unwrap();
+        db.insert_media("m1", source.to_str().unwrap(), "source.png", "image")
+            .unwrap();
+        db.update_media_probe(
+            source.to_str().unwrap(),
+            "image",
+            3264,
+            4896,
+            1,
+            0.0,
+            0.0,
+            "thumb",
+            "",
+            "",
+            true,
+        )
+        .unwrap();
+        db.insert_job("job-a", "m1", "{}").unwrap();
+        db.finish_job("job-a", "completed", output_a.to_str().unwrap(), "")
+            .unwrap();
+        db.insert_job("job-b", "m1", "{}").unwrap();
+        db.finish_job("job-b", "completed", output_b.to_str().unwrap(), "")
+            .unwrap();
+
+        let mut pair = crate::types::ComparisonPair {
+            media_id: "m1".into(),
+            generation: 2,
+            showing: crate::types::ComparisonSlot {
+                target_id: "job-b".into(),
+                output_path: output_b.to_string_lossy().into_owned(),
+                preview_data_url: "asset://b".into(),
+                width: 13056,
+                height: 19584,
+                preview_width: 1365,
+                preview_height: 2048,
+                ..Default::default()
+            },
+            against: crate::types::ComparisonSlot {
+                target_id: "job-a".into(),
+                output_path: output_a.to_string_lossy().into_owned(),
+                preview_data_url: "asset://a".into(),
+                width: 6528,
+                height: 9792,
+                preview_width: 1365,
+                preview_height: 2048,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut original = crate::types::PreviewOriginalRegion::default();
+        let orig_region = Region {
+            x: 100,
+            y: 200,
+            width: 300,
+            height: 400,
+            target_width: 600,
+            target_height: 800,
+        };
+        let show_region = Region {
+            x: 400,
+            y: 800,
+            width: 1200,
+            height: 1600,
+            target_width: 600,
+            target_height: 800,
+        };
+        let against_region = Region {
+            x: 200,
+            y: 400,
+            width: 600,
+            height: 800,
+            target_width: 600,
+            target_height: 800,
+        };
+
+        let requests = plan_pair_regions(
+            &db,
+            &mut pair,
+            &mut original,
+            "m1",
+            2,
+            &PairRegions {
+                original: Some(orig_region),
+                showing: Some(show_region),
+                against: Some(against_region),
+            },
+        )
+        .unwrap();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0]["data"]["slot"], "original");
+        assert_eq!(requests[0]["data"]["target_id"], "m1");
+        assert_eq!(requests[1]["data"]["slot"], "showing");
+        assert_eq!(requests[1]["data"]["target_id"], "job-b");
+        assert_eq!(requests[2]["data"]["slot"], "against");
+        assert_eq!(requests[2]["data"]["target_id"], "job-a");
+
+        // Stale request_id / generation / target_id / path are dropped.
+        for (slot_idx, key, bad_val) in [
+            (0, "request_id", json!(999)),
+            (0, "generation", json!(999)),
+            (0, "target_id", json!("other")),
+            (1, "request_id", json!(999)),
+            (1, "generation", json!(1)),
+            (1, "target_id", json!("job-a")),
+            (1, "image_path", json!("/other.png")),
+            (2, "target_id", json!("job-b")),
+        ] {
+            let mut stale = requests[slot_idx]["data"].clone();
+            stale[key] = bad_val;
+            stale["png_base64"] = json!("stale");
+            apply_pair_region(&db, &mut pair, &mut original, &stale, false).unwrap();
+        }
+        assert!(original.region.is_none());
+        assert!(pair.showing.region.is_none());
+        assert!(pair.against.region.is_none());
+
+        // Valid answers populate all three sides.
+        for (idx, tag) in ["orig", "show", "against"].iter().enumerate() {
+            let mut ok = requests[idx]["data"].clone();
+            ok["png_base64"] = json!(tag);
+            apply_pair_region(&db, &mut pair, &mut original, &ok, false).unwrap();
+        }
+        assert_eq!(
+            original.region.as_ref().unwrap().data_url,
+            "data:image/png;base64,orig"
+        );
+        assert_eq!(
+            pair.showing.region.as_ref().unwrap().data_url,
+            "data:image/png;base64,show"
+        );
+        assert_eq!(
+            pair.against.region.as_ref().unwrap().data_url,
+            "data:image/png;base64,against"
+        );
+
+        // Coalescing: a newer plan drops prior answers and falls back cleanly on failure.
+        let newer = plan_pair_regions(
+            &db,
+            &mut pair,
+            &mut original,
+            "m1",
+            2,
+            &PairRegions {
+                original: Some(orig_region),
+                showing: Some(show_region),
+                against: None,
+            },
+        )
+        .unwrap();
+        assert!(original.region.is_none());
+        assert!(pair.showing.region.is_none());
+        assert!(pair.against.region.is_none());
+
+        let mut old_show = requests[1]["data"].clone();
+        old_show["png_base64"] = json!("old");
+        apply_pair_region(&db, &mut pair, &mut original, &old_show, false).unwrap();
+        assert!(pair.showing.region.is_none());
+
+        apply_pair_region(&db, &mut pair, &mut original, &newer[1]["data"], true).unwrap();
+        assert!(pair.showing.region.is_none());
+        assert_eq!(pair.showing.preview_data_url, "asset://b");
+
+        // Replaced output file cannot accept an answer.
+        std::fs::remove_file(&output_b).unwrap();
+        std::fs::write(&output_b, "tampered").unwrap();
+        let newer2 = plan_pair_regions(
+            &db,
+            &mut pair,
+            &mut original,
+            "m1",
+            2,
+            &PairRegions {
+                original: Some(orig_region),
+                showing: None,
+                against: None,
+            },
+        )
+        .unwrap();
+        let mut orig_ok = newer2[0]["data"].clone();
+        orig_ok["png_base64"] = json!("fresh");
+        apply_pair_region(&db, &mut pair, &mut original, &orig_ok, false).unwrap();
+        assert_eq!(
+            original.region.as_ref().unwrap().data_url,
+            "data:image/png;base64,fresh"
+        );
+        clear_pair_regions(&mut pair, &mut original);
+        assert!(original.region.is_none());
     }
 }
