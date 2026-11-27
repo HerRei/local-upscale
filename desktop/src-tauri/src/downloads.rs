@@ -49,6 +49,8 @@ pub(crate) struct DownloadEntry {
     pub progress: f64,
     pub downloaded_bytes: u64,
     pub total_bytes: u64,
+    pub received_bytes: u64,
+    pub verifying: bool,
     pub planned_files: Vec<PlannedFile>,
     pub cancellation: Arc<AtomicBool>,
     pub cancel_notify: Arc<Notify>,
@@ -60,9 +62,46 @@ struct DownloadEnv {
     allow_local_http: bool,
     #[cfg(test)]
     available_space_override: Option<u64>,
+    #[cfg(test)]
+    retry_clock: Option<&'static dyn RetryClock>,
+}
+
+#[cfg(test)]
+trait RetryClock: Send + Sync {
+    fn now(&self) -> Duration;
+    fn sleep(
+        &self,
+        duration: Duration,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>;
 }
 
 impl DownloadEnv {
+    async fn retry_sleep(
+        self,
+        duration: Duration,
+        cancellation: &AtomicBool,
+        notify: &Notify,
+    ) -> AppResult<()> {
+        let notified = notify.notified();
+        tokio::pin!(notified);
+        check_cancel(cancellation)?;
+        #[cfg(test)]
+        if let Some(clock) = self.retry_clock {
+            tokio::select! { _ = clock.sleep(duration) => {}, _ = &mut notified => {} }
+            return check_cancel(cancellation);
+        }
+        tokio::select! { _ = tokio::time::sleep(duration) => {}, _ = &mut notified => {} }
+        check_cancel(cancellation)
+    }
+
+    fn retry_now(self, start: tokio::time::Instant) -> Duration {
+        #[cfg(test)]
+        if let Some(clock) = self.retry_clock {
+            return clock.now();
+        }
+        start.elapsed()
+    }
+
     fn is_allowed_url(self, parsed: &Url) -> bool {
         if parsed.host_str().is_none() {
             return false;
@@ -169,6 +208,8 @@ async fn download_model_with_env<R: tauri::Runtime>(
                 progress: 0.0,
                 downloaded_bytes: 0,
                 total_bytes,
+                received_bytes: 0,
+                verifying: false,
                 planned_files: planned_files.clone(),
                 cancellation: cancellation.clone(),
                 cancel_notify: cancel_notify.clone(),
@@ -221,6 +262,20 @@ async fn download_model_with_env<R: tauri::Runtime>(
         Err(error) => Err(error),
     };
 
+    let kept_bytes = planned_files
+        .iter()
+        .map(|file| {
+            if std::fs::metadata(&file.destination)
+                .is_ok_and(|m| m.is_file() && m.len() == file.expected_size)
+            {
+                file.expected_size
+            } else {
+                std::fs::metadata(&file.partial)
+                    .map(|m| m.len().min(file.expected_size))
+                    .unwrap_or(0)
+            }
+        })
+        .sum::<u64>();
     drop(slot);
     sync_runtime_downloads(&state, Some(&result));
     if result.is_ok() {
@@ -238,7 +293,7 @@ async fn download_model_with_env<R: tauri::Runtime>(
         emit_download_event(
             &app,
             "download-failed",
-            json!({"model_id": model_id, "error_message": error.to_string()}),
+            json!({"model_id": model_id, "error_message": error.to_string(), "reason": failure_reason(error), "downloaded_bytes": kept_bytes, "total_bytes": total_bytes}),
         );
     }
     emit_state_changed(&app);
@@ -267,6 +322,30 @@ fn resolve_target(state: &AppState, model_id: &str) -> AppResult<DownloadTarget>
 
 fn is_cancelled(error: &AppError) -> bool {
     matches!(error, AppError::Download(message) if message == "download cancelled")
+}
+
+fn failure_reason(error: &AppError) -> &'static str {
+    let message = error.to_string();
+    if message.starts_with("not enough disk space") {
+        "disk_full"
+    } else if message.starts_with("download checksum mismatch")
+        || message.starts_with("download size mismatch")
+        || message.starts_with("model server sent more data than expected")
+    {
+        "damaged"
+    } else if message.starts_with("the model folder is unavailable")
+        || message.starts_with("wait for the model folder move")
+    {
+        "folder"
+    } else if message.starts_with("download did not complete")
+        && (message.contains("HTTP 4") || message.contains("HTTP 5"))
+    {
+        "server"
+    } else if message.starts_with("download did not complete") {
+        "connection"
+    } else {
+        "other"
+    }
 }
 
 fn is_cancelled_error(result: &AppResult<()>) -> bool {
@@ -399,6 +478,13 @@ fn sync_runtime_downloads(state: &AppState, finished: Option<&AppResult<()>>) {
                 progress: entry.progress,
                 downloaded_bytes: entry.downloaded_bytes,
                 total_bytes: entry.total_bytes,
+                phase: if entry.verifying {
+                    "verifying"
+                } else {
+                    "downloading"
+                }
+                .into(),
+                received_bytes: entry.received_bytes,
             })
             .collect::<Vec<_>>()
     };
@@ -427,12 +513,14 @@ fn sync_runtime_downloads(state: &AppState, finished: Option<&AppResult<()>>) {
                 Ok(()) => {
                     runtime.download_progress = 100.0;
                     runtime.status_title = "Model ready".into();
-                    runtime.status_detail = "Checksum verification succeeded.".into();
+                    runtime.status_detail = "Downloaded and checked.".into();
                 }
                 Err(error) if is_cancelled(error) => {
                     runtime.download_progress = 0.0;
-                    runtime.status_title = "Download paused".into();
-                    runtime.status_detail = "The verified download can resume later.".into();
+                    runtime.status_title = "Download stopped".into();
+                    runtime.status_detail =
+                        "What was downloaded is kept. The next download continues from there."
+                            .into();
                 }
                 Err(error) => {
                     runtime.download_progress = 0.0;
@@ -691,6 +779,45 @@ fn partial_path(destination: &Path) -> PathBuf {
     ))
 }
 
+fn set_verifying<R: tauri::Runtime>(
+    state: &AppState,
+    app: &AppHandle<R>,
+    model_id: &str,
+    value: bool,
+    downloaded: u64,
+    total: u64,
+) {
+    if let Ok(mut entries) = state.downloads.lock() {
+        if let Some(entry) = entries.get_mut(model_id) {
+            entry.verifying = value;
+        }
+    }
+    publish_progress(state, app, model_id, downloaded, total);
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn tracked_verify<R: tauri::Runtime>(
+    state: &AppState,
+    app: &AppHandle<R>,
+    model_id: &str,
+    path: &Path,
+    size: u64,
+    sha: &str,
+    downloaded: u64,
+    total: u64,
+) -> AppResult<bool> {
+    if !fs::metadata(path)
+        .await
+        .is_ok_and(|m| m.is_file() && m.len() == size)
+    {
+        return Ok(false);
+    }
+    set_verifying(state, app, model_id, true, downloaded, total);
+    let result = verified_file_async(path, size, sha).await;
+    set_verifying(state, app, model_id, false, downloaded, total);
+    result
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn download_bundle<R: tauri::Runtime>(
     client: &Client,
@@ -710,7 +837,18 @@ async fn download_bundle<R: tauri::Runtime>(
         check_cancel(cancellation)?;
         safe_model_filename(&file.filename)?;
         let destination = state.model_root().join(family).join(&file.filename);
-        if verified_file_async(&destination, file.size_bytes, &file.sha256).await? {
+        if tracked_verify(
+            state,
+            app,
+            model_id,
+            &destination,
+            file.size_bytes,
+            &file.sha256,
+            completed,
+            total,
+        )
+        .await?
+        {
             completed += file.size_bytes;
             publish_progress(state, app, model_id, completed, total);
             continue;
@@ -756,7 +894,18 @@ async fn download_one<R: tauri::Runtime>(
     validate_artifact_metadata_with_env(url, expected_size, expected_sha256, env)?;
     let file_mutex = file_lock_for(state, destination)?;
     let _file_guard = lock_file_with_cancel(&file_mutex, cancellation, cancel_notify).await?;
-    if verified_file_async(destination, expected_size, expected_sha256).await? {
+    if tracked_verify(
+        state,
+        app,
+        model_id,
+        destination,
+        expected_size,
+        expected_sha256,
+        completed_before,
+        overall_total,
+    )
+    .await?
+    {
         return Ok(());
     }
     let partial = partial_path(destination);
@@ -764,7 +913,37 @@ async fn download_one<R: tauri::Runtime>(
         .parent()
         .ok_or_else(|| AppError::Validation("model destination has no parent".into()))?;
     fs::create_dir_all(parent).await?;
-    if reuse_complete_partial(&partial, destination, expected_size, expected_sha256).await? {
+    let complete_partial = fs::metadata(&partial)
+        .await
+        .is_ok_and(|m| m.is_file() && m.len() == expected_size);
+    if complete_partial {
+        set_verifying(
+            state,
+            app,
+            model_id,
+            true,
+            completed_before + expected_size,
+            overall_total,
+        );
+    }
+    let reused =
+        reuse_complete_partial(&partial, destination, expected_size, expected_sha256).await;
+    if complete_partial {
+        set_verifying(
+            state,
+            app,
+            model_id,
+            false,
+            completed_before
+                + if reused.as_ref().is_ok_and(|v| *v) {
+                    expected_size
+                } else {
+                    0
+                },
+            overall_total,
+        );
+    }
+    if reused? {
         return Ok(());
     }
     let fallback = PlannedFile {
@@ -774,9 +953,14 @@ async fn download_one<R: tauri::Runtime>(
     };
     check_summed_disk_space(state, &fallback, parent, env)?;
 
-    for attempt in 1..=4_u64 {
+    let clock_start = tokio::time::Instant::now();
+    let mut outage_started = env.retry_now(clock_start);
+    let mut failures = 0_u32;
+    let mut server_attempts = 0_u32;
+    loop {
         check_cancel(cancellation)?;
-        match download_attempt(
+        let before = fs::metadata(&partial).await.map(|m| m.len()).unwrap_or(0);
+        let result = download_attempt(
             client,
             app,
             state,
@@ -789,21 +973,64 @@ async fn download_one<R: tauri::Runtime>(
             cancellation,
             env,
         )
-        .await
-        {
+        .await;
+        let error = match result {
             Ok(()) => break,
-            Err(AppError::Download(message)) if message == "download cancelled" => {
-                return Err(AppError::Download(message));
-            }
-            Err(error) => {
-                if attempt == 4 {
-                    return Err(AppError::Download(format!(
-                        "download did not complete after four attempts: {error}"
-                    )));
-                }
-                tokio::time::sleep(Duration::from_secs(attempt)).await;
-            }
+            Err(error) if is_cancelled(&error) => return Err(error),
+            Err(error) => error,
+        };
+        let message = error.to_string();
+        if message.starts_with("model server sent more data than expected") {
+            return Err(error);
         }
+        let is_server = message.contains("model server returned HTTP");
+        let connection = matches!(error, AppError::Network(_))
+            || message.starts_with("connection ended")
+            || message.starts_with("the model server stopped sending data");
+        if !connection && !is_server {
+            return Err(error);
+        }
+        if is_server {
+            server_attempts += 1;
+            if server_attempts >= 4 {
+                return Err(AppError::Download(format!(
+                    "download did not complete after four attempts: {error}"
+                )));
+            }
+            env.retry_sleep(
+                Duration::from_secs(server_attempts as u64),
+                cancellation,
+                cancel_notify,
+            )
+            .await?;
+            continue;
+        }
+        let after = fs::metadata(&partial).await.map(|m| m.len()).unwrap_or(0);
+        let now = env.retry_now(clock_start);
+        if after > before {
+            outage_started = now;
+            failures = 0;
+        }
+        let elapsed = now.saturating_sub(outage_started);
+        if elapsed >= Duration::from_secs(600) {
+            return Err(AppError::Download(format!(
+                "download did not complete after connection retries: {error}"
+            )));
+        }
+        let delay = Duration::from_secs(match failures {
+            0 => 5,
+            1 => 10,
+            2 => 20,
+            3 => 40,
+            _ => 60,
+        });
+        failures = failures.saturating_add(1);
+        env.retry_sleep(
+            delay.min(Duration::from_secs(600) - elapsed),
+            cancellation,
+            cancel_notify,
+        )
+        .await?;
     }
 
     let actual_size = fs::metadata(&partial).await?.len();
@@ -812,10 +1039,27 @@ async fn download_one<R: tauri::Runtime>(
             "download size mismatch: expected {expected_size}, received {actual_size}"
         )));
     }
+    set_verifying(
+        state,
+        app,
+        model_id,
+        true,
+        completed_before + expected_size,
+        overall_total,
+    );
     let partial_for_hash = partial.clone();
     let actual_sha256 = tokio::task::spawn_blocking(move || sha256_file(&partial_for_hash))
         .await
-        .map_err(|error| AppError::Download(format!("checksum task failed: {error}")))??;
+        .map_err(|error| AppError::Download(format!("checksum task failed: {error}")))?;
+    set_verifying(
+        state,
+        app,
+        model_id,
+        false,
+        completed_before + expected_size,
+        overall_total,
+    );
+    let actual_sha256 = actual_sha256?;
     if !actual_sha256.eq_ignore_ascii_case(expected_sha256) {
         let _ = fs::remove_file(&partial).await;
         return Err(AppError::Download(
@@ -885,6 +1129,7 @@ async fn download_attempt<R: tauri::Runtime>(
     }
     let mut downloaded = if resume { offset } else { 0 };
     let mut last_published = downloaded;
+    let mut last_published_at = tokio::time::Instant::now();
     let mut output = if resume {
         fs::OpenOptions::new()
             .create(true)
@@ -904,7 +1149,13 @@ async fn download_attempt<R: tauri::Runtime>(
             ));
         }
         output.write_all(&chunk).await?;
-        if downloaded.saturating_sub(last_published) >= 4 * 1024 * 1024
+        if let Ok(mut entries) = state.downloads.lock() {
+            if let Some(entry) = entries.get_mut(model_id) {
+                entry.received_bytes = entry.received_bytes.saturating_add(chunk.len() as u64);
+            }
+        }
+        if last_published_at.elapsed() >= Duration::from_secs(1)
+            || downloaded.saturating_sub(last_published) >= 4 * 1024 * 1024
             || downloaded == expected_size
         {
             publish_progress(
@@ -915,6 +1166,7 @@ async fn download_attempt<R: tauri::Runtime>(
                 overall_total,
             );
             last_published = downloaded;
+            last_published_at = tokio::time::Instant::now();
         }
     }
     output.flush().await?;
@@ -1055,8 +1307,16 @@ fn publish_progress<R: tauri::Runtime>(
     } else {
         0.0
     };
+    let mut phase = "downloading";
+    let mut received_bytes = 0;
     if let Ok(mut downloads) = state.downloads.lock() {
         if let Some(entry) = downloads.get_mut(model_id) {
+            phase = if entry.verifying {
+                "verifying"
+            } else {
+                "downloading"
+            };
+            received_bytes = entry.received_bytes;
             entry.progress = progress;
             entry.downloaded_bytes = downloaded;
             entry.total_bytes = total;
@@ -1070,7 +1330,9 @@ fn publish_progress<R: tauri::Runtime>(
             "model_id": model_id,
             "downloaded_bytes": downloaded,
             "total_bytes": total,
-            "progress": progress
+            "progress": progress,
+            "phase": phase,
+            "received_bytes": received_bytes
         }),
     );
 }
@@ -1294,6 +1556,8 @@ mod tests {
                     progress: 0.0,
                     downloaded_bytes: 0,
                     total_bytes: 10,
+                    received_bytes: 0,
+                    verifying: false,
                     planned_files: Vec::new(),
                     cancellation: Arc::new(AtomicBool::new(false)),
                     cancel_notify: Arc::new(Notify::new()),
@@ -1469,6 +1733,482 @@ mod tests {
     }
 
     #[test]
+    fn progress_event_includes_phase_and_received_bytes() {
+        use tauri::Listener;
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap();
+        let app = tauri::test::mock_app();
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = events.clone();
+        app.handle().listen("worker-message", move |event| {
+            captured
+                .lock()
+                .unwrap()
+                .push(serde_json::from_str::<serde_json::Value>(event.payload()).unwrap());
+        });
+        publish_progress(&state, app.handle(), "model", 10, 20);
+        let events = events.lock().unwrap();
+        assert_eq!(events[0]["data"]["phase"], "downloading");
+        assert_eq!(events[0]["data"]["received_bytes"], 0);
+    }
+
+    #[test]
+    fn finished_download_status_uses_plain_language() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap();
+        sync_runtime_downloads(&state, Some(&Ok(())));
+        assert_eq!(
+            state.runtime.lock().unwrap().status_detail,
+            "Downloaded and checked."
+        );
+        sync_runtime_downloads(
+            &state,
+            Some(&Err(AppError::Download("download cancelled".into()))),
+        );
+        let runtime = state.runtime.lock().unwrap();
+        assert_eq!(runtime.status_title, "Download stopped");
+        assert_eq!(
+            runtime.status_detail,
+            "What was downloaded is kept. The next download continues from there."
+        );
+    }
+
+    #[test]
+    fn failure_reasons_cover_host_errors() {
+        for (message, expected) in [
+            ("not enough disk space: the download needs about 1 MB free, but only 0 MB is available", "disk_full"),
+            ("download checksum mismatch; the untrusted partial file was removed", "damaged"),
+            ("download size mismatch: expected 2, received 1", "damaged"),
+            ("model server sent more data than expected", "damaged"),
+            ("the model folder is unavailable; reconnect the drive, choose another folder, or reset to the default", "folder"),
+            ("wait for the model folder move to finish before downloading", "folder"),
+            ("download did not complete after four attempts: model server returned HTTP 503 Service Unavailable", "server"),
+            ("download did not complete after connection retries: connection ended at 1 of 2 bytes", "connection"),
+            ("checksum task failed: error", "other"),
+        ] { assert_eq!(failure_reason(&AppError::Download(message.into())), expected, "{message}"); }
+    }
+
+    #[derive(Default)]
+    struct FakeRetryClock {
+        elapsed: std::sync::Mutex<Duration>,
+        waits: std::sync::Mutex<Vec<Duration>>,
+    }
+    impl RetryClock for FakeRetryClock {
+        fn now(&self) -> Duration {
+            *self.elapsed.lock().unwrap()
+        }
+        fn sleep(
+            &self,
+            duration: Duration,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+            Box::pin(async move {
+                self.waits.lock().unwrap().push(duration);
+                *self.elapsed.lock().unwrap() += duration;
+            })
+        }
+    }
+
+    #[test]
+    fn dropped_connections_resume_and_eventually_give_up_with_kept_bytes() {
+        use tauri::Listener;
+        multi_thread_runtime().block_on(async {
+            for recover in [true, false] {
+                let directory = tempfile::tempdir().unwrap();
+                let state = Arc::new(
+                    AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap(),
+                );
+                let app = tauri::test::mock_app();
+                let events = Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+                let captured = events.clone();
+                app.handle().listen("worker-message", move |event| {
+                    captured
+                        .lock()
+                        .unwrap()
+                        .push(serde_json::from_str(event.payload()).unwrap())
+                });
+                let payload = vec![42_u8; 2 * 1024 * 1024];
+                let hits = Arc::new(AtomicUsize::new(0));
+                let ranges = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let addr = listener.local_addr().unwrap();
+                let body = payload.clone();
+                let counts = hits.clone();
+                let recorded = ranges.clone();
+                let router = Router::new().route(
+                    "/model.bin",
+                    get(move |headers: axum::http::HeaderMap| {
+                        let body = body.clone();
+                        let counts = counts.clone();
+                        let recorded = recorded.clone();
+                        async move {
+                            let hit = counts.fetch_add(1, Ordering::SeqCst);
+                            let range = headers
+                                .get(http_header::RANGE)
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("")
+                                .to_owned();
+                            recorded.lock().unwrap().push(range.clone());
+                            if recover && hit >= 1 {
+                                assert_eq!(range, "bytes=1048576-");
+                                Response::builder()
+                                    .status(AxumStatus::PARTIAL_CONTENT)
+                                    .header(
+                                        http_header::CONTENT_RANGE,
+                                        "bytes 1048576-2097151/2097152",
+                                    )
+                                    .header(http_header::CONTENT_LENGTH, 1048576)
+                                    .body(Body::from(body[1048576..].to_vec()))
+                                    .unwrap()
+                            } else {
+                                let bytes = if range.is_empty() {
+                                    body[..1048576].to_vec()
+                                } else {
+                                    Vec::new()
+                                };
+                                let stream = futures_util::stream::once(async move {
+                                    Ok::<_, std::io::Error>(bytes)
+                                })
+                                .chain(
+                                    futures_util::stream::once(async {
+                                        tokio::time::sleep(Duration::from_millis(50)).await;
+                                        Err::<Vec<u8>, _>(std::io::Error::other(
+                                            "connection dropped",
+                                        ))
+                                    }),
+                                );
+                                Response::builder()
+                                    .status(if range.is_empty() {
+                                        AxumStatus::OK
+                                    } else {
+                                        AxumStatus::PARTIAL_CONTENT
+                                    })
+                                    .header(
+                                        http_header::CONTENT_RANGE,
+                                        "bytes 1048576-2097151/2097152",
+                                    )
+                                    .header(
+                                        http_header::CONTENT_LENGTH,
+                                        if range.is_empty() { 2097152 } else { 1048576 },
+                                    )
+                                    .body(Body::from_stream(stream))
+                                    .unwrap()
+                            }
+                        }
+                    }),
+                );
+                let server = tokio::spawn(async move {
+                    axum::serve(listener, router).await.unwrap();
+                });
+                state.catalog.lock().unwrap().models = vec![test_image_model(
+                    "m",
+                    "model.bin",
+                    &payload,
+                    format!("http://{addr}/model.bin"),
+                )];
+                let clock = Box::leak(Box::new(FakeRetryClock::default()));
+                let env = DownloadEnv {
+                    allow_local_http: true,
+                    available_space_override: Some(10_000_000),
+                    retry_clock: Some(clock),
+                };
+                let result = download_model_with_env(
+                    state.clone(),
+                    app.handle().clone(),
+                    "m".into(),
+                    false,
+                    env,
+                )
+                .await;
+                let events = events.lock().unwrap();
+                if recover {
+                    result.unwrap();
+                    assert_eq!(
+                        std::fs::read(state.model_root().join("model.bin")).unwrap(),
+                        payload
+                    );
+                    assert_eq!(ranges.lock().unwrap()[1], "bytes=1048576-");
+                    let progress: Vec<_> = events
+                        .iter()
+                        .filter(|e| e["type"] == "download-progress")
+                        .collect();
+                    assert!(progress.iter().any(|e| e["data"]["phase"] == "verifying"));
+                    assert_eq!(progress.last().unwrap()["data"]["received_bytes"], 2097152);
+                } else {
+                    assert!(result.is_err());
+                    let failed = events
+                        .iter()
+                        .find(|e| e["type"] == "download-failed")
+                        .unwrap();
+                    assert_eq!(failed["data"]["reason"], "connection");
+                    assert_eq!(failed["data"]["downloaded_bytes"], 1048576);
+                    assert_eq!(failed["data"]["total_bytes"], 2097152);
+                    assert_eq!(clock.now(), Duration::from_secs(600));
+                    assert_eq!(
+                        &clock.waits.lock().unwrap()[..5],
+                        &[5, 10, 20, 40, 60].map(Duration::from_secs)
+                    );
+                }
+                server.abort();
+            }
+        });
+    }
+
+    #[test]
+    fn slow_download_publishes_each_second_and_verifies_in_order() {
+        use tauri::Listener;
+        multi_thread_runtime().block_on(async {
+            let directory = tempfile::tempdir().unwrap();
+            let state = Arc::new(
+                AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap(),
+            );
+            let app = tauri::test::mock_app();
+            let events = Arc::new(std::sync::Mutex::new(Vec::<(
+                std::time::Instant,
+                serde_json::Value,
+            )>::new()));
+            let captured = events.clone();
+            app.handle().listen("worker-message", move |event| {
+                captured.lock().unwrap().push((
+                    std::time::Instant::now(),
+                    serde_json::from_str(event.payload()).unwrap(),
+                ))
+            });
+            let changes = Arc::new(AtomicUsize::new(0));
+            let observed = changes.clone();
+            app.handle().listen("state-changed", move |_| {
+                observed.fetch_add(1, Ordering::SeqCst);
+            });
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let router = Router::new().route(
+                "/slow",
+                get(|| async {
+                    let stream = futures_util::stream::unfold(0, |i| async move {
+                        if i == 10 {
+                            None
+                        } else {
+                            tokio::time::sleep(Duration::from_millis(300)).await;
+                            Some((Ok::<_, std::io::Error>(vec![7_u8; 65536]), i + 1))
+                        }
+                    });
+                    Response::builder()
+                        .header(http_header::CONTENT_LENGTH, 10 * 65536)
+                        .body(Body::from_stream(stream))
+                        .unwrap()
+                }),
+            );
+            let server = tokio::spawn(async move {
+                axum::serve(listener, router).await.unwrap();
+            });
+            state.catalog.lock().unwrap().models = vec![test_image_model(
+                "slow",
+                "slow.bin",
+                &vec![7_u8; 10 * 65536],
+                format!("http://{addr}/slow"),
+            )];
+            let env = DownloadEnv {
+                allow_local_http: true,
+                available_space_override: Some(10_000_000),
+                retry_clock: None,
+            };
+            download_model_with_env(state, app.handle().clone(), "slow".into(), false, env)
+                .await
+                .unwrap();
+            let events = events.lock().unwrap();
+            let started = events
+                .iter()
+                .position(|(_, e)| e["type"] == "download-started")
+                .unwrap();
+            let completed = events
+                .iter()
+                .position(|(_, e)| e["type"] == "download-completed")
+                .unwrap();
+            let downloading: Vec<_> = events
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, e))| {
+                    e["type"] == "download-progress" && e["data"]["phase"] == "downloading"
+                })
+                .collect();
+            let verifying = events
+                .iter()
+                .position(|(_, e)| {
+                    e["type"] == "download-progress" && e["data"]["phase"] == "verifying"
+                })
+                .unwrap();
+            assert!(downloading.len() >= 3);
+            assert!(
+                started < downloading[0].0 && downloading[0].0 < verifying && verifying < completed
+            );
+            assert!(downloading.windows(2).all(
+                |pair| pair[1].1 .0.duration_since(pair[0].1 .0) <= Duration::from_millis(1500)
+            ));
+            assert_eq!(changes.load(Ordering::SeqCst), 3);
+            server.abort();
+        });
+    }
+
+    #[test]
+    fn resume_counts_only_new_network_bytes_and_checksum_failure_reports_zero() {
+        use tauri::Listener;
+        multi_thread_runtime().block_on(async {
+            for damaged in [false, true] {
+                let directory = tempfile::tempdir().unwrap();
+                let state = Arc::new(
+                    AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap(),
+                );
+                let app = tauri::test::mock_app();
+                let events = Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+                let captured = events.clone();
+                app.handle().listen("worker-message", move |event| {
+                    captured
+                        .lock()
+                        .unwrap()
+                        .push(serde_json::from_str(event.payload()).unwrap())
+                });
+                let payload = vec![3_u8; 3 * 1024 * 1024];
+                let sent = if damaged {
+                    vec![4_u8; payload.len()]
+                } else {
+                    payload.clone()
+                };
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let addr = listener.local_addr().unwrap();
+                let router = Router::new().route(
+                    "/file",
+                    get(move |headers: axum::http::HeaderMap| {
+                        let sent = sent.clone();
+                        async move {
+                            let offset = if headers.contains_key(http_header::RANGE) {
+                                1048576
+                            } else {
+                                0
+                            };
+                            let mut response = Response::builder().status(if offset > 0 {
+                                AxumStatus::PARTIAL_CONTENT
+                            } else {
+                                AxumStatus::OK
+                            });
+                            if offset > 0 {
+                                response = response.header(
+                                    http_header::CONTENT_RANGE,
+                                    "bytes 1048576-3145727/3145728",
+                                );
+                            }
+                            response.body(Body::from(sent[offset..].to_vec())).unwrap()
+                        }
+                    }),
+                );
+                let server = tokio::spawn(async move {
+                    axum::serve(listener, router).await.unwrap();
+                });
+                state.catalog.lock().unwrap().models = vec![test_image_model(
+                    "m",
+                    "m.bin",
+                    &payload,
+                    format!("http://{addr}/file"),
+                )];
+                if !damaged {
+                    std::fs::create_dir_all(state.model_root()).unwrap();
+                    std::fs::write(state.model_root().join("m.bin.part"), &payload[..1048576])
+                        .unwrap();
+                }
+                let env = DownloadEnv {
+                    allow_local_http: true,
+                    available_space_override: Some(10_000_000),
+                    retry_clock: None,
+                };
+                let result =
+                    download_model_with_env(state, app.handle().clone(), "m".into(), false, env)
+                        .await;
+                let events = events.lock().unwrap();
+                if damaged {
+                    assert!(result.is_err());
+                    let event = events
+                        .iter()
+                        .find(|e| e["type"] == "download-failed")
+                        .unwrap();
+                    assert_eq!(event["data"]["reason"], "damaged");
+                    assert_eq!(event["data"]["downloaded_bytes"], 0);
+                } else {
+                    result.unwrap();
+                    let event = events
+                        .iter()
+                        .rev()
+                        .find(|e| e["type"] == "download-progress")
+                        .unwrap();
+                    assert_eq!(event["data"]["downloaded_bytes"], 3145728);
+                    assert_eq!(event["data"]["received_bytes"], 2097152);
+                }
+                server.abort();
+            }
+        });
+    }
+
+    #[test]
+    fn installed_bundle_file_is_verified_before_network_data() {
+        use tauri::Listener;
+        multi_thread_runtime().block_on(async {
+            let directory = tempfile::tempdir().unwrap();
+            let state = Arc::new(
+                AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap(),
+            );
+            let app = tauri::test::mock_app();
+            let events = Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+            let captured = events.clone();
+            app.handle().listen("worker-message", move |event| {
+                captured
+                    .lock()
+                    .unwrap()
+                    .push(serde_json::from_str(event.payload()).unwrap())
+            });
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let router = Router::new().route("/file", get(|| async { Body::from("second") }));
+            let server = tokio::spawn(async move {
+                axum::serve(listener, router).await.unwrap();
+            });
+            let make_file = |name: &str, bytes: &[u8]| ModelFile {
+                role: name.into(),
+                filename: name.into(),
+                size_bytes: bytes.len() as u64,
+                sha256: sha256_hex(bytes),
+                download_url: format!("http://{addr}/file"),
+            };
+            state.catalog.lock().unwrap().video_models = vec![test_video_bundle(
+                "bundle",
+                "family",
+                vec![
+                    make_file("first.bin", b"first"),
+                    make_file("second.bin", b"second"),
+                ],
+            )];
+            let folder = state.model_root().join("family");
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(folder.join("first.bin"), b"first").unwrap();
+            let env = DownloadEnv {
+                allow_local_http: true,
+                available_space_override: Some(10_000_000),
+                retry_clock: None,
+            };
+            download_model_with_env(state, app.handle().clone(), "bundle".into(), false, env)
+                .await
+                .unwrap();
+            let events = events.lock().unwrap();
+            let progress: Vec<_> = events
+                .iter()
+                .filter(|e| e["type"] == "download-progress")
+                .collect();
+            assert_eq!(progress[0]["data"]["phase"], "verifying");
+            assert_eq!(progress[0]["data"]["received_bytes"], 0);
+            assert!(progress
+                .iter()
+                .any(|e| e["data"]["downloaded_bytes"] == 5 && e["data"]["received_bytes"] == 0));
+            server.abort();
+        });
+    }
+
+    #[test]
     fn validates_the_complete_resume_range() {
         assert!(valid_content_range("bytes 10-99/100", 10, 100));
         assert!(!valid_content_range("bytes 9-99/100", 10, 100));
@@ -1564,6 +2304,7 @@ mod tests {
             let env = DownloadEnv {
                 allow_local_http: true,
                 available_space_override: Some(10_000_000),
+                retry_clock: None,
             };
             let mut tasks = Vec::new();
             for i in 1..=3 {
@@ -1763,6 +2504,7 @@ mod tests {
             let env = DownloadEnv {
                 allow_local_http: true,
                 available_space_override: Some(10_000_000),
+                retry_clock: None,
             };
             let t_keep1 = tokio::spawn(download_model_with_env(
                 state.clone(),
@@ -1868,6 +2610,7 @@ mod tests {
             let env = DownloadEnv {
                 allow_local_http: true,
                 available_space_override: Some(1500),
+                retry_clock: None,
             };
             let t_a = tokio::spawn(download_model_with_env(
                 state.clone(),
@@ -1926,6 +2669,8 @@ mod tests {
                 progress: 0.0,
                 downloaded_bytes: 0,
                 total_bytes: 1200,
+                received_bytes: 0,
+                verifying: false,
                 planned_files: vec![shared.clone(), unique_a],
                 cancellation: Arc::new(AtomicBool::new(false)),
                 cancel_notify: Arc::new(Notify::new()),
@@ -1936,6 +2681,7 @@ mod tests {
         let env = DownloadEnv {
             allow_local_http: true,
             available_space_override: Some(1900),
+            retry_clock: None,
         };
         assert!(check_summed_disk_space_locked(
             &downloads,
@@ -1948,6 +2694,7 @@ mod tests {
         let too_tight = DownloadEnv {
             allow_local_http: true,
             available_space_override: Some(1800),
+            retry_clock: None,
         };
         assert!(check_summed_disk_space_locked(
             &downloads,
@@ -2070,6 +2817,7 @@ mod tests {
             let env = DownloadEnv {
                 allow_local_http: true,
                 available_space_override: Some(10_000_000),
+                retry_clock: None,
             };
             let t_a = tokio::spawn(download_model_with_env(
                 state.clone(),
@@ -2189,6 +2937,7 @@ mod tests {
             let env = DownloadEnv {
                 allow_local_http: true,
                 available_space_override: Some(10_000_000),
+                retry_clock: None,
             };
             let (r1, r_bad, r2) = tokio::join!(
                 download_model_with_env(state.clone(), handle.clone(), "good1".into(), false, env),
@@ -2262,6 +3011,7 @@ mod tests {
             let env = DownloadEnv {
                 allow_local_http: true,
                 available_space_override: Some(10_000_000),
+                retry_clock: None,
             };
             download_model_with_env(
                 state.clone(),

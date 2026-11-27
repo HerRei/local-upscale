@@ -734,6 +734,14 @@ pub struct ModelDownloadStatus {
     pub downloaded_bytes: u64,
     #[serde(default)]
     pub total_bytes: u64,
+    #[serde(default = "default_download_phase")]
+    pub phase: String,
+    #[serde(default)]
+    pub received_bytes: u64,
+}
+
+fn default_download_phase() -> String {
+    "downloading".into()
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
