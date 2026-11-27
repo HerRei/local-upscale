@@ -275,6 +275,10 @@ pub struct ImageJobRequest {
     pub preview_max_fps: f64,
     #[serde(default = "default_preview_max_dimension")]
     pub preview_max_dimension: u32,
+    /// Set when the job is sent, only for an engine with the `stage_results` feature:
+    /// an older engine refuses a field it does not know.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_picture_max_dimension: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_scale: Option<u32>,
     #[serde(default)]

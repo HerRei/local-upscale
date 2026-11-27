@@ -22,8 +22,8 @@ use crate::{
     settings,
     state::{emit_state_changed, lock, AppState},
     types::{
-        BenchmarkResult, CapabilityInfo, DeviceInfo, EngineInfo, RuntimeStatus, WorkerEnvelope,
-        PROTOCOL_VERSION,
+        BenchmarkResult, CapabilityInfo, DeviceInfo, EngineInfo, JobStep, RuntimeStatus,
+        WorkerEnvelope, PROTOCOL_VERSION,
     },
 };
 
@@ -580,9 +580,11 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         // locks `database` before `runtime`, so taking both here in the other
         // order could deadlock.
         let mut to_settle = None;
+        let mut stale_steps = Vec::new();
         if let Ok(mut runtime) = state.runtime.lock() {
             // The killed or crashed engine's job ends here, its route note with it.
             let active = runtime.take_active_job();
+            stale_steps = runtime.take_job_steps();
             // A batch's unfinished photos, or the one active job.
             let mut active_ids = std::mem::take(&mut runtime.active_batch_job_ids);
             if active_ids.is_empty() && !active.is_empty() {
@@ -626,6 +628,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
                 settle_stopped_jobs(&database, &active_ids, &forced, &interruption);
             }
         }
+        let _ = cleanup_stale_previews(&state, stale_steps);
         crate::stay_awake::sync(&state);
         emit_state_changed(&app);
 
@@ -981,6 +984,8 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
         }
         _ => vec![first.clone()],
     };
+    let (job_steps, job_step_names) = job_steps_for(&message);
+    offer_stage_pictures(state, &mut message, !job_steps.is_empty())?;
     {
         let can_keep_partial = job_can_keep_partial(state, &message);
         let mut runtime = lock(&state.runtime)?;
@@ -996,9 +1001,12 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
         runtime.status_title = "Queued".into();
         runtime.status_detail = "Sending the next item to the inference engine.".into();
         runtime.progress = 0.0;
-        let stale = std::mem::take(&mut runtime.result_preview_data_url);
+        let mut stale = runtime.take_job_steps();
+        runtime.job_steps = job_steps;
+        runtime.job_step_names = job_step_names;
+        stale.push(std::mem::take(&mut runtime.result_preview_data_url));
         drop(runtime);
-        cleanup_stale_previews(state, vec![stale])?;
+        cleanup_stale_previews(state, stale)?;
     }
     // A job being sent ends any earlier stop for a full disk.
     state.worker.disk_stop.store(false, Ordering::SeqCst);
@@ -1009,10 +1017,32 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
         lock(&state.database)?.finish_job(&first, "failed", "", &error.to_string())?;
         let mut runtime = lock(&state.runtime)?;
         runtime.take_active_job();
+        // Nothing ran, so no step has a picture yet.
+        runtime.take_job_steps();
         runtime.active_batch_job_ids.clear();
         return Err(error);
     }
     Ok(Dispatch::Sent)
+}
+
+/// Asks the engine for each step's picture at the size of a finished result's preview,
+/// when the job has steps and the engine sends them; an older engine refuses the field.
+fn offer_stage_pictures(state: &AppState, message: &mut Value, has_steps: bool) -> AppResult<()> {
+    let photo = message["type"] == "job_request";
+    let supported = lock(&state.engine)?
+        .as_ref()
+        .is_some_and(|engine| engine.features.iter().any(|f| f == "stage_results"));
+    if let Some(data) = message["data"].as_object_mut().filter(|_| photo) {
+        if has_steps && supported {
+            data.insert(
+                "stage_picture_max_dimension".into(),
+                json!(RESULT_PREVIEW_MAX_DIMENSION),
+            );
+        } else {
+            data.remove("stage_picture_max_dimension");
+        }
+    }
+    Ok(())
 }
 
 /// The status line after a stop that kept the finished part.
@@ -1660,6 +1690,7 @@ fn is_job_scoped(message_type: &str) -> bool {
             | "stage_started"
             | "stage_progress"
             | "stage_completed"
+            | "stage_result"
             | "progress"
             | "tile_update"
             | "live_preview_frame"
@@ -2128,17 +2159,96 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             }
         }
         "stage_started" => {
-            let stage = stage_label(&string(data, "stage_kind"));
-            let index = integer(data, "stage_index").saturating_add(1);
-            let count = integer(data, "stage_count");
+            let kind = string(data, "stage_kind");
+            let model_id = string(data, "model_id");
+            // The name the library shows, not the catalog id; an edit model reports its name.
+            let model_name = {
+                let catalog = lock(&state.catalog)?;
+                crate::results::catalog_label(&catalog, &model_id).unwrap_or(model_id)
+            };
             let mut runtime = lock(&state.runtime)?;
-            runtime.status_title = format!("{stage} · stage {index}/{count}");
-            runtime.status_detail = format!("Preparing {}.", string(data, "model_id"));
+            let Some(at) = job_step_index(&runtime, data) else {
+                let stage = stage_label(&kind);
+                let index = integer(data, "stage_index").saturating_add(1);
+                let count = integer(data, "stage_count");
+                runtime.status_title = format!("{stage} · stage {index}/{count}");
+                runtime.status_detail = format!("Preparing {model_name}.");
+                return Ok(());
+            };
+            runtime.job_steps[at].state = "running".into();
+            // The face pass starts with the upscaler and runs inside it: the title stays
+            // on the upscaler, which is still running.
+            if kind == crate::steps::registry().face_stage_kind() {
+                return Ok(());
+            }
+            for step in &mut runtime.job_steps[..at] {
+                if matches!(step.state.as_str(), "waiting" | "running") {
+                    step.state = "done".into();
+                }
+            }
+            let name = runtime.job_step_names[at].clone();
+            runtime.status_title =
+                format!("Step {} of {} · {name}", at + 1, runtime.job_steps.len());
+            runtime.status_detail = if model_name.is_empty() {
+                format!("Preparing {name}.")
+            } else {
+                format!("Preparing {model_name}.")
+            };
         }
         "stage_completed" => {
-            let stage = stage_label(&string(data, "stage_kind"));
             let mut runtime = lock(&state.runtime)?;
-            runtime.status_detail = format!("{stage} stage complete.");
+            let Some(at) = job_step_index(&runtime, data) else {
+                let stage = stage_label(&string(data, "stage_kind"));
+                runtime.status_detail = format!("{stage} stage complete.");
+                return Ok(());
+            };
+            let name = runtime.job_step_names[at].clone();
+            let step = &mut runtime.job_steps[at];
+            runtime.status_detail = if step.state == "skipped" {
+                format!("{name} skipped.")
+            } else {
+                step.state = "done".into();
+                format!("{name} done.")
+            };
+        }
+        "stage_result" => {
+            let at = {
+                let runtime = lock(&state.runtime)?;
+                job_step_index(&runtime, data)
+            };
+            let Some(at) = at else {
+                return Ok(());
+            };
+            let skipped = data.get("skipped").and_then(Value::as_bool) == Some(true);
+            let encoded = string(data, "jpeg_base64");
+            // Written outside the runtime lock: the window reads snapshots meanwhile.
+            let preview_url = if skipped || encoded.is_empty() {
+                String::new()
+            } else {
+                crate::preview_cache::save_jpeg_base64(&state.paths.preview_root, &encoded)
+                    .unwrap_or_default()
+            };
+            let stale = {
+                let mut runtime = lock(&state.runtime)?;
+                if job_step_index(&runtime, data) == Some(at) {
+                    let step = &mut runtime.job_steps[at];
+                    if skipped {
+                        step.state = "skipped".into();
+                        step.note = string(data, "note");
+                    } else if matches!(step.state.as_str(), "waiting" | "running") {
+                        step.state = "done".into();
+                    }
+                    if preview_url.is_empty() || preview_url == step.preview_url {
+                        String::new()
+                    } else {
+                        std::mem::replace(&mut step.preview_url, preview_url)
+                    }
+                } else {
+                    // The job ended while the picture was written; nothing shows it.
+                    preview_url
+                }
+            };
+            cleanup_stale_previews(state, vec![stale])?;
         }
         "progress" => {
             let id = string(data, "job_id");
@@ -2153,8 +2263,10 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             }
             // In a job of several stages the title keeps which one runs (two fixes can
             // both be "Restoring"); a one-stage job reads "Enhancing".
-            let staged = runtime.status_title.contains(" · stage ")
-                && !runtime.status_title.ends_with(" 1/1");
+            let staged = (!runtime.job_steps.is_empty()
+                && runtime.status_title.starts_with("Step "))
+                || (runtime.status_title.contains(" · stage ")
+                    && !runtime.status_title.ends_with(" 1/1"));
             if editing {
                 runtime.status_title = "Editing".into();
             } else if !staged {
@@ -2598,10 +2710,11 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             let stale = {
                 let mut runtime = lock(&state.runtime)?;
                 runtime.take_active_job();
+                let mut stale = runtime.take_job_steps();
                 // A video frame thumbnail is a live preview, not a completed
                 // before/after result. The full-output request issued by the host
                 // will populate this again only after it has decoded successfully.
-                let stale = std::mem::take(&mut runtime.result_preview_data_url);
+                stale.push(std::mem::take(&mut runtime.result_preview_data_url));
                 runtime.progress = 100.0;
                 runtime.last_output_path = output;
                 runtime.status_title = if partial { stopped } else { "Complete".into() };
@@ -2615,30 +2728,38 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 runtime.estimated_remaining_seconds = 0.0;
                 stale
             };
-            cleanup_stale_previews(state, vec![stale])?;
+            cleanup_stale_previews(state, stale)?;
         }
         "job_cancelled" => {
             let id = string(data, "job_id");
             lock(&state.database)?.finish_job(&id, "cancelled", "", cancelled_reason(state))?;
-            let mut runtime = lock(&state.runtime)?;
-            runtime.take_active_job();
-            // A stop for a full disk keeps its reason on the status line.
-            if !state.worker.disk_stop.load(Ordering::SeqCst) {
-                runtime.status_title = "Cancelled".into();
-                runtime.status_detail = "Temporary output was cleaned up.".into();
-            }
-            runtime.estimated_remaining_seconds = 0.0;
+            let stale = {
+                let mut runtime = lock(&state.runtime)?;
+                runtime.take_active_job();
+                // A stop for a full disk keeps its reason on the status line.
+                if !state.worker.disk_stop.load(Ordering::SeqCst) {
+                    runtime.status_title = "Cancelled".into();
+                    runtime.status_detail = "Temporary output was cleaned up.".into();
+                }
+                runtime.estimated_remaining_seconds = 0.0;
+                runtime.take_job_steps()
+            };
+            cleanup_stale_previews(state, stale)?;
         }
         "job_failed" => {
             let id = string(data, "job_id");
             let error = string(data, "error_message");
             lock(&state.database)?.finish_job(&id, "failed", "", &error)?;
-            let mut runtime = lock(&state.runtime)?;
-            runtime.take_active_job();
-            runtime.status_title = "Could not finish".into();
-            runtime.status_detail = error;
-            runtime.estimated_remaining_seconds = 0.0;
-            hold_until_restart(&mut runtime, data);
+            let stale = {
+                let mut runtime = lock(&state.runtime)?;
+                runtime.take_active_job();
+                runtime.status_title = "Could not finish".into();
+                runtime.status_detail = error;
+                runtime.estimated_remaining_seconds = 0.0;
+                hold_until_restart(&mut runtime, data);
+                runtime.take_job_steps()
+            };
+            cleanup_stale_previews(state, stale)?;
         }
         "protocol_error" => {
             let mut runtime = lock(&state.runtime)?;
@@ -2757,6 +2878,20 @@ fn attach_preview_url_to_envelope(state: &AppState, envelope: &mut WorkerEnvelop
                 .filter(|url| !url.is_empty());
             if let (Some(url), Some(data)) = (url, envelope.data.as_object_mut()) {
                 data.insert("preview_url".into(), Value::String(url));
+            }
+        }
+        // The picture is in the preview folder now; the window loads it by its URL.
+        "stage_result" => {
+            let url = state.runtime.lock().ok().and_then(|runtime| {
+                job_step_index(&runtime, &envelope.data)
+                    .map(|at| runtime.job_steps[at].preview_url.clone())
+                    .filter(|url| !url.is_empty())
+            });
+            if let Some(data) = envelope.data.as_object_mut() {
+                data.remove("jpeg_base64");
+                if let Some(url) = url {
+                    data.insert("preview_url".into(), Value::String(url));
+                }
             }
         }
         _ => {}
@@ -3210,6 +3345,138 @@ fn video_stage_title(stage: &str) -> &'static str {
 
 fn stage_label(kind: &str) -> &'static str {
     crate::steps::registry().stage_label(kind)
+}
+
+/// A step as the plan line names it: its kind, the plan's role (`fix`, `primary`,
+/// `face`, `step`, ...), the problem it fixes and the row's label.
+#[derive(Clone, Copy)]
+struct PlanStepRef<'a> {
+    kind: &'a str,
+    role: &'a str,
+    fix: &'a str,
+    label: &'a str,
+}
+
+/// The settings a step's name depends on.
+#[derive(Clone, Copy)]
+struct PlanLineSettings<'a> {
+    output_scale: u32,
+    video_target_resolution: u32,
+    video_interpolation: &'a str,
+}
+
+/// The plan line's short name of a step (`stageStepName`, src/lib/planLine.ts), so the
+/// status title and the panel foot use the same words. tests/fixtures/step_names.json
+/// holds both tables to one list.
+fn plan_step_name(
+    stage: PlanStepRef<'_>,
+    settings: PlanLineSettings<'_>,
+    is_video: bool,
+) -> String {
+    if stage.role == "fix" || (stage.role == "primary" && !stage.fix.is_empty()) {
+        return match stage.fix {
+            "jpeg" if is_video => "Compression",
+            "jpeg" => "JPEG",
+            "blur" => "Blur",
+            "noise" => "Noise",
+            "colour" => "Colour",
+            _ => stage.label,
+        }
+        .into();
+    }
+    if stage.role == "primary" && matches!(stage.kind, "upscale" | "video") {
+        if stage.kind == "video" && settings.video_target_resolution > 0 {
+            return format!("Upscale to {} px", settings.video_target_resolution);
+        }
+        return format!("Upscale {}×", settings.output_scale);
+    }
+    if stage.role == "primary" && stage.kind == "restore" {
+        return "Fix".into();
+    }
+    match stage.kind {
+        "edit" => "Edit",
+        "deflicker" => "De-flicker",
+        "interpolate" => match settings.video_interpolation {
+            "x2" => "2× frames",
+            "x4" => "4× frames",
+            "fps60" => "60 fps",
+            "fps120" => "120 fps",
+            _ => match stage.label {
+                "Interpolate 2×" => "2× frames",
+                "Interpolate 4×" => "4× frames",
+                "Interpolate to 60 fps" => "60 fps",
+                "Interpolate to 120 fps" => "120 fps",
+                label => label,
+            },
+        },
+        "audio_denoise" => "Clean audio",
+        "face_restore" => "Faces",
+        _ => stage.label,
+    }
+    .into()
+}
+
+/// The steps of a photo job of two or more stages, as the engine will run them, with
+/// their plan-line names. Any other job has none.
+fn job_steps_for(message: &Value) -> (Vec<JobStep>, Vec<String>) {
+    let data = &message["data"];
+    let stages = match data["stages"].as_array() {
+        Some(stages) if message["type"] == "job_request" && stages.len() >= 2 => stages,
+        _ => return (Vec::new(), Vec::new()),
+    };
+    let settings = PlanLineSettings {
+        output_scale: u32::try_from(integer(data, "output_scale"))
+            .unwrap_or(1)
+            .max(1),
+        video_target_resolution: 0,
+        video_interpolation: "off",
+    };
+    let steps = crate::steps::registry();
+    stages
+        .iter()
+        .map(|stage| {
+            let kind = string(stage, "kind");
+            let fix = string(stage, "fix");
+            let step = string(stage, "step");
+            let role = match string(stage, "role").as_str() {
+                role @ ("fix" | "primary") => role.to_owned(),
+                _ if kind == steps.face_stage_kind() => "face".into(),
+                _ => "step".into(),
+            };
+            let label = steps
+                .step(if step.is_empty() { &kind } else { &step })
+                .map_or(kind.as_str(), |definition| definition.label.as_str());
+            let name = plan_step_name(
+                PlanStepRef {
+                    kind: &kind,
+                    role: &role,
+                    fix: &fix,
+                    label,
+                },
+                settings,
+                false,
+            );
+            let job_step = JobStep {
+                model_id: string(stage, "model_id"),
+                state: "waiting".into(),
+                kind,
+                fix,
+                ..JobStep::default()
+            };
+            (job_step, name)
+        })
+        .unzip()
+}
+
+/// The position in `job_steps` of the stage a message reports, when the steps describe
+/// the stages the engine runs.
+fn job_step_index(runtime: &RuntimeStatus, data: &Value) -> Option<usize> {
+    let count = usize::try_from(integer(data, "stage_count")).ok()?;
+    let index = usize::try_from(integer(data, "stage_index")).ok()?;
+    (count == runtime.job_steps.len()
+        && index < count
+        && runtime.active_job_id == string(data, "job_id"))
+    .then_some(index)
 }
 
 /// High-frequency inference messages are already delivered through the typed

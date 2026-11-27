@@ -5284,6 +5284,8 @@ fn build_job_request(
             preview_enabled: input.enable_live_preview,
             preview_max_fps: 2.0,
             preview_max_dimension: 320,
+            // The engine that runs the job is known only when it is sent (`dispatch_once`).
+            stage_picture_max_dimension: None,
             output_scale: Some(if input.task == "denoise" || *skip_upscale {
                 1
             } else {

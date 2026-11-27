@@ -3621,3 +3621,424 @@ fn single_job_after_a_batch_does_not_inherit_the_batchs_keep_partial_flag() {
     .unwrap();
     assert_eq!(lock(&state.runtime).unwrap().can_keep_partial, None);
 }
+
+// Steps: the running photo job's steps, their names and their pictures.
+
+/// A photo job that removes JPEG blocks and noise, then upscales 4×.
+fn three_step_job(id: &str, output: &std::path::Path) -> Value {
+    json!({"type": "job_request", "data": {
+        "job_id": id, "image_path": format!("/in/{id}.png"),
+        "output_path": output.join(format!("{id}.png")), "model_path": "/models/quick.pth",
+        "device": "mps", "neural_engine": true, "precision": "fp32", "safe_memory": false,
+        "output_format": "png", "jpeg_quality": 95, "preserve_metadata": true,
+        "tile_size": 256, "halo": 16, "face_model_path": null, "output_scale": 4,
+        "stages": [
+            {"kind": "deblock", "role": "fix", "fix": "jpeg", "model_id": "fbcnn_color",
+             "model_path": "/models/fbcnn.pth"},
+            {"kind": "restore", "role": "fix", "fix": "noise", "model_id": "denoise_realplksr_1x",
+             "model_path": "/models/denoise.pth"},
+            {"kind": "upscale", "role": "primary", "model_id": "localsr_quick_x4_v1",
+             "model_path": "/models/quick.pth"}
+        ]
+    }})
+}
+
+/// Sends `job` to a ready engine that lists `features`; returns the state and what was sent.
+fn dispatch_to_engine(
+    directory: &std::path::Path,
+    job: impl Fn(&std::path::Path) -> Value,
+    features: &[&str],
+) -> (Arc<AppState>, Value) {
+    let state = Arc::new(AppState::from_paths(crate::paths::AppPaths::under(directory)).unwrap());
+    let output = directory.join("out");
+    std::fs::create_dir_all(&output).unwrap();
+    let message = job(&output);
+    let id = string(&message["data"], "job_id");
+    {
+        let db = lock(&state.database).unwrap();
+        db.insert_media(&id, &format!("/in/{id}.png"), &id, "image")
+            .unwrap();
+        db.insert_job(&id, &id, &message.to_string()).unwrap();
+    }
+    *lock(&state.engine).unwrap() = Some(
+        serde_json::from_value(json!({"protocol_version": 1, "minimum_protocol_version": 1,
+            "engine_id": "e", "engine_version": "1", "features": features,
+            "model_formats": [], "video_engines": []}))
+        .unwrap(),
+    );
+    lock(&state.runtime).unwrap().worker = "ready".into();
+    let (sender, receiver) = mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+    assert!(begin_dispatch(&state, false).unwrap());
+    let sent = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+    (state, sent)
+}
+
+fn step_states(state: &AppState) -> Vec<String> {
+    lock(&state.runtime)
+        .unwrap()
+        .job_steps
+        .iter()
+        .map(|step| step.state.clone())
+        .collect()
+}
+
+fn protocol_validator() -> jsonschema::Validator {
+    let schema: Value = serde_json::from_str(include_str!(
+        "../../../../protocol/worker-protocol.schema.json"
+    ))
+    .unwrap();
+    jsonschema::validator_for(&schema).unwrap()
+}
+
+#[test]
+fn a_photo_job_of_several_steps_asks_an_engine_with_stage_results_for_their_pictures() {
+    let directory = tempfile::tempdir().unwrap();
+    let (state, sent) = dispatch_to_engine(
+        directory.path(),
+        |output| three_step_job("p", output),
+        &["image", "stage_results"],
+    );
+    assert_eq!(sent["type"], "job_request");
+    assert_eq!(
+        sent["data"]["stage_picture_max_dimension"],
+        json!(RESULT_PREVIEW_MAX_DIMENSION)
+    );
+    assert_eq!(RESULT_PREVIEW_MAX_DIMENSION, 2048);
+    assert!(protocol_validator().is_valid(&sent), "{sent}");
+    {
+        let runtime = lock(&state.runtime).unwrap();
+        let steps: Vec<_> = runtime
+            .job_steps
+            .iter()
+            .map(|step| {
+                (
+                    step.kind.as_str(),
+                    step.fix.as_str(),
+                    step.model_id.as_str(),
+                    step.state.as_str(),
+                    step.preview_url.as_str(),
+                    step.kept,
+                )
+            })
+            .collect();
+        assert_eq!(
+            steps,
+            [
+                ("deblock", "jpeg", "fbcnn_color", "waiting", "", false),
+                (
+                    "restore",
+                    "noise",
+                    "denoise_realplksr_1x",
+                    "waiting",
+                    "",
+                    false
+                ),
+                ("upscale", "", "localsr_quick_x4_v1", "waiting", "", false),
+            ]
+        );
+        assert_eq!(runtime.job_step_names, ["JPEG", "Noise", "Upscale 4×"]);
+        // The window reads the steps from the snapshot; the names stay in the host.
+        let snapshot = serde_json::to_value(&*runtime).unwrap();
+        assert_eq!(snapshot["job_steps"].as_array().unwrap().len(), 3);
+        assert!(snapshot.get("job_step_names").is_none());
+    }
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+
+    // A job of one step gets neither steps nor pictures.
+    let directory = tempfile::tempdir().unwrap();
+    let (state, sent) = dispatch_to_engine(
+        directory.path(),
+        |output| {
+            let mut job = three_step_job("one", output);
+            job["data"]["stages"] = json!([job["data"]["stages"][2]]);
+            job
+        },
+        &["image", "stage_results"],
+    );
+    assert!(sent["data"].get("stage_picture_max_dimension").is_none());
+    assert!(lock(&state.runtime).unwrap().job_steps.is_empty());
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
+
+#[test]
+fn an_engine_without_stage_results_gets_no_picture_field_but_the_steps_are_kept() {
+    let directory = tempfile::tempdir().unwrap();
+    let (state, sent) = dispatch_to_engine(
+        directory.path(),
+        |output| {
+            // A request queued for an engine that had the feature goes to one that has not.
+            let mut job = three_step_job("p", output);
+            job["data"]["stage_picture_max_dimension"] = json!(2048);
+            job
+        },
+        &["image"],
+    );
+    assert!(sent["data"].get("stage_picture_max_dimension").is_none());
+    assert_eq!(step_states(&state), ["waiting", "waiting", "waiting"]);
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
+
+#[test]
+fn stage_messages_move_the_steps_and_name_the_running_one() {
+    let directory = tempfile::tempdir().unwrap();
+    let (state, _) = dispatch_to_engine(
+        directory.path(),
+        |output| three_step_job("p", output),
+        &["image", "stage_results"],
+    );
+    let apply = |kind: &str, data: Value| {
+        assert!(
+            accept_envelope(&state, &envelope(kind, data)).unwrap(),
+            "{kind}"
+        );
+    };
+    let stage = |index: u32, kind: &str, model: &str| {
+        json!({"job_id": "p", "stage_index": index, "stage_count": 3, "stage_kind": kind,
+               "model_id": model, "step": "", "fix": ""})
+    };
+    apply("job_started", json!({"job_id": "p"}));
+    apply("stage_started", stage(0, "deblock", "fbcnn_color"));
+    assert_eq!(step_states(&state), ["running", "waiting", "waiting"]);
+    {
+        let runtime = lock(&state.runtime).unwrap();
+        assert_eq!(runtime.status_title, "Step 1 of 3 · JPEG");
+        // The model's name in the library, not its catalog id.
+        assert_eq!(runtime.status_detail, "Preparing FBCNN Color.");
+    }
+    apply("stage_completed", stage(0, "deblock", ""));
+    assert_eq!(lock(&state.runtime).unwrap().status_detail, "JPEG done.");
+    apply("stage_started", stage(1, "restore", "denoise_realplksr_1x"));
+    assert_eq!(step_states(&state), ["done", "running", "waiting"]);
+    assert_eq!(
+        lock(&state.runtime).unwrap().status_title,
+        "Step 2 of 3 · Noise"
+    );
+    // Progress keeps the step in the title.
+    apply(
+        "progress",
+        json!({"job_id": "p", "percentage": 40.0, "completed_tiles": 2, "total_tiles": 6}),
+    );
+    assert_eq!(
+        lock(&state.runtime).unwrap().status_title,
+        "Step 2 of 3 · Noise"
+    );
+    apply("stage_completed", stage(1, "restore", ""));
+    assert_eq!(lock(&state.runtime).unwrap().status_detail, "Noise done.");
+    apply("stage_started", stage(2, "upscale", "localsr_quick_x4_v1"));
+    assert_eq!(step_states(&state), ["done", "done", "running"]);
+    assert_eq!(
+        lock(&state.runtime).unwrap().status_title,
+        "Step 3 of 3 · Upscale 4×"
+    );
+    apply(
+        "job_completed",
+        json!({"job_id": "p", "output_path": directory.path().join("out").join("p.png")}),
+    );
+    // Outside a job there are no steps.
+    assert!(lock(&state.runtime).unwrap().job_steps.is_empty());
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
+
+#[test]
+fn a_stage_picture_is_kept_as_a_preview_file_and_the_window_gets_its_url() {
+    let directory = tempfile::tempdir().unwrap();
+    let (state, _) = dispatch_to_engine(
+        directory.path(),
+        |output| three_step_job("p", output),
+        &["image", "stage_results"],
+    );
+    let bytes = b"\xff\xd8\xff\xe0step-picture";
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    let result = envelope(
+        "stage_result",
+        json!({"job_id": "p", "stage_index": 0, "stage_count": 3, "step": "jpeg",
+               "fix": "jpeg", "skipped": false, "note": "", "width": 3000, "height": 2000,
+               "jpeg_base64": encoded, "preview_width": 2048, "preview_height": 1365,
+               "image_path": ""}),
+    );
+    assert!(accept_envelope(&state, &envelope("job_started", json!({"job_id": "p"}))).unwrap());
+    assert!(accept_envelope(&state, &result).unwrap());
+    let url = lock(&state.runtime).unwrap().job_steps[0]
+        .preview_url
+        .clone();
+    assert!(
+        url.starts_with("asset://localhost/") || url.starts_with("http://asset.localhost/"),
+        "{url}"
+    );
+    let file = crate::preview_cache::confined_preview_path(&state.paths.preview_root, &url)
+        .expect("the picture is a file in the preview folder");
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    assert_eq!(step_states(&state), ["done", "waiting", "waiting"]);
+
+    // The window's message names the file instead of carrying the picture.
+    let mut emitted = result.clone();
+    attach_preview_url_to_envelope(&state, &mut emitted);
+    assert!(emitted.data.get("jpeg_base64").is_none());
+    assert_eq!(emitted.data["preview_url"], json!(url));
+    assert_eq!(emitted.data["preview_width"], 2048);
+
+    // The job's end releases the picture, and a late one is not taken.
+    assert!(accept_envelope(&state, &envelope("job_cancelled", json!({"job_id": "p"}))).unwrap());
+    assert!(lock(&state.runtime).unwrap().job_steps.is_empty());
+    assert!(!file.exists());
+    assert!(!accept_envelope(&state, &result).unwrap());
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
+
+#[test]
+fn a_skipped_step_keeps_its_note_and_says_so_when_it_ends() {
+    let directory = tempfile::tempdir().unwrap();
+    let (state, _) = dispatch_to_engine(
+        directory.path(),
+        |output| three_step_job("p", output),
+        &["image", "stage_results"],
+    );
+    let note = "The JPEG fix (FBCNN Color) was skipped for this image; the next step used the picture without it. Reason: unstable values.";
+    for (kind, data) in [
+        ("job_started", json!({"job_id": "p"})),
+        (
+            "stage_started",
+            json!({"job_id": "p", "stage_index": 0, "stage_count": 3, "stage_kind": "deblock",
+                   "model_id": "fbcnn_color"}),
+        ),
+        (
+            "stage_result",
+            json!({"job_id": "p", "stage_index": 0, "stage_count": 3, "step": "jpeg",
+                   "fix": "jpeg", "skipped": true, "note": note, "jpeg_base64": ""}),
+        ),
+        (
+            "stage_completed",
+            json!({"job_id": "p", "stage_index": 0, "stage_count": 3, "stage_kind": "deblock"}),
+        ),
+    ] {
+        assert!(
+            accept_envelope(&state, &envelope(kind, data)).unwrap(),
+            "{kind}"
+        );
+    }
+    {
+        let runtime = lock(&state.runtime).unwrap();
+        let step = &runtime.job_steps[0];
+        assert_eq!((step.state.as_str(), step.note.as_str()), ("skipped", note));
+        assert!(step.preview_url.is_empty());
+        assert_eq!(runtime.status_detail, "JPEG skipped.");
+    }
+    // The next step does not undo the skip.
+    assert!(accept_envelope(
+        &state,
+        &envelope(
+            "stage_started",
+            json!({"job_id": "p", "stage_index": 1, "stage_count": 3, "stage_kind": "restore",
+                   "model_id": "denoise_realplksr_1x"}),
+        ),
+    )
+    .unwrap());
+    assert_eq!(step_states(&state), ["skipped", "running", "waiting"]);
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
+
+#[test]
+fn the_face_pass_runs_inside_the_upscaler_and_keeps_its_title() {
+    let directory = tempfile::tempdir().unwrap();
+    let state =
+        Arc::new(AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap());
+    {
+        let mut runtime = lock(&state.runtime).unwrap();
+        runtime.active_job_id = "f".into();
+        runtime.job_steps = ["restore", "upscale", "face_restore"]
+            .iter()
+            .map(|kind| JobStep {
+                kind: (*kind).into(),
+                state: "waiting".into(),
+                ..JobStep::default()
+            })
+            .collect();
+        runtime.job_step_names = vec!["Noise".into(), "Upscale 4×".into(), "Faces".into()];
+    }
+    for (index, kind) in [(0, "restore"), (1, "upscale"), (2, "face_restore")] {
+        apply_job_envelope(
+            &state,
+            &envelope(
+                "stage_started",
+                json!({"job_id": "f", "stage_index": index, "stage_count": 3,
+                       "stage_kind": kind, "model_id": ""}),
+            ),
+        )
+        .unwrap();
+    }
+    assert_eq!(step_states(&state), ["done", "running", "running"]);
+    let runtime = lock(&state.runtime).unwrap();
+    assert_eq!(runtime.status_title, "Step 2 of 3 · Upscale 4×");
+    // A step without a model names itself.
+    assert_eq!(runtime.status_detail, "Preparing Upscale 4×.");
+}
+
+#[test]
+fn stage_messages_that_do_not_match_the_steps_read_as_before() {
+    let directory = tempfile::tempdir().unwrap();
+    let state =
+        Arc::new(AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap());
+    {
+        let mut runtime = lock(&state.runtime).unwrap();
+        runtime.active_job_id = "j".into();
+        runtime.job_steps = vec![JobStep::default(); 2];
+        runtime.job_step_names = vec!["Noise".into(), "Upscale 4×".into()];
+    }
+    // The engine runs a different number of stages than the host sent.
+    apply_job_envelope(
+        &state,
+        &envelope(
+            "stage_started",
+            json!({"job_id": "j", "stage_index": 0, "stage_count": 3,
+                   "stage_kind": "restore", "model_id": "nafnet_sidd_width64"}),
+        ),
+    )
+    .unwrap();
+    let runtime = lock(&state.runtime).unwrap();
+    assert_eq!(runtime.status_title, "Restoring · stage 1/3");
+    assert_eq!(runtime.status_detail, "Preparing NAFNet SIDD Width64.");
+    assert!(runtime.job_steps.iter().all(|step| step.state.is_empty()));
+}
+
+#[test]
+fn step_names_follow_the_plan_line_fixture() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("../../tests/fixtures/step_names.json")).unwrap();
+    let cases = fixture["cases"].as_array().unwrap();
+    assert!(cases.len() >= 20);
+    for case in cases {
+        let mut settings = fixture["settings"].clone();
+        for (key, value) in case["settings"].as_object().unwrap() {
+            settings[key] = value.clone();
+        }
+        let stage = &case["stage"];
+        let (kind, role, fix, label) = (
+            string(stage, "kind"),
+            string(stage, "role"),
+            string(stage, "fix"),
+            string(stage, "label"),
+        );
+        let name = plan_step_name(
+            PlanStepRef {
+                kind: &kind,
+                role: &role,
+                fix: &fix,
+                label: &label,
+            },
+            PlanLineSettings {
+                output_scale: count32(&settings, "output_scale"),
+                video_target_resolution: count32(&settings, "video_target_resolution"),
+                video_interpolation: settings["video_interpolation"].as_str().unwrap(),
+            },
+            case["video"] == true,
+        );
+        assert_eq!(name, string(case, "name"), "{case}");
+    }
+    // Every name the host gives a photo job's steps is one of the fixture's.
+    let names: std::collections::HashSet<String> =
+        cases.iter().map(|case| string(case, "name")).collect();
+    let directory = tempfile::tempdir().unwrap();
+    let (_, names_of_job) = job_steps_for(&three_step_job("p", directory.path()));
+    assert!(names_of_job.iter().all(|name| names.contains(name)));
+}

@@ -155,6 +155,11 @@ audio_denoise_model_id
 finished_tiles
 total_tiles
 
+# Step pictures (engine feature stage_results): the request field the Rust host sets and
+# stage_result's skipped flag it reads (protocol/messages.py).
+stage_picture_max_dimension
+skipped
+
 # Vendored mlx_flashvsr symbols kept unmodified for parity with the upstream port.
 compatibility_mode
 return_KV

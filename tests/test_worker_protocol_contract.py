@@ -256,6 +256,40 @@ def test_batch_request_is_additive_and_carries_individual_job_payloads():
     assert {"$ref": "#/$defs/imageBatchRequest"} in schema["oneOf"]
 
 
+def test_stage_results_are_an_engine_feature_with_an_additive_request_field_and_message():
+    from localsr.protocol.messages import StageCompleted, StageResult, StageStarted
+    from localsr.worker.server import _engine_features
+
+    assert "stage_results" in _engine_features([])
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    job = schema["$defs"]["jobRequest"]["allOf"][1]["properties"]["data"]["allOf"][1]
+    field = job["properties"]["stage_picture_max_dimension"]
+    assert (field["minimum"], field["maximum"]) == (64, 2048)
+    assert "stage_picture_max_dimension" not in job["required"]
+    # The fields the host reads, in the order docs/design/previews-and-recipes.md lists them.
+    assert list(_message(StageResult("job", 0, 2, "noise"))["data"]) == [
+        "job_id",
+        "stage_index",
+        "stage_count",
+        "step",
+        "fix",
+        "skipped",
+        "note",
+        "width",
+        "height",
+        "jpeg_base64",
+        "preview_width",
+        "preview_height",
+        "image_path",
+    ]
+    # Older hosts read stage messages without the new optional fields.
+    started = _message(StageStarted("job", 1, 3, "restore", "noise_model"))["data"]
+    assert (started["step"], started["fix"]) == ("", "")
+    completed = _message(StageCompleted("job", 1, 3, "restore", step="noise", fix="noise"))
+    assert completed["data"]["stage_kind"] == "restore"
+    assert (completed["data"]["step"], completed["data"]["fix"]) == ("noise", "noise")
+
+
 def test_compare_region_protocol_has_identity_and_bounds():
     from localsr.protocol.messages import RegionFailed, RegionReady, RegionRequest
 

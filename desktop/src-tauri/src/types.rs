@@ -770,6 +770,24 @@ fn default_download_phase() -> String {
     "downloading".into()
 }
 
+/// One step of the running photo job, in the order the engine runs them.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct JobStep {
+    /// The request stage's kind: `restore`, `deblock`, `upscale`, `face_restore`, a step's.
+    pub kind: String,
+    /// `blur`, `jpeg`, `noise`, `colour`, or empty for a stage that fixes nothing.
+    pub fix: String,
+    pub model_id: String,
+    /// `waiting`, `running`, `done` or `skipped`.
+    pub state: String,
+    /// Why the engine skipped the step.
+    pub note: String,
+    /// The step's finished picture in the preview folder; empty until it arrived.
+    pub preview_url: String,
+    /// A full-size file of the step's picture exists.
+    pub kept: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RuntimeStatus {
     #[serde(default)]
@@ -836,6 +854,12 @@ pub struct RuntimeStatus {
     pub tiles_completed: u64,
     #[serde(default)]
     pub tiles_total: u64,
+    /// The running photo job's steps; empty outside a job of two or more steps.
+    #[serde(default)]
+    pub job_steps: Vec<JobStep>,
+    /// The plan line's name of each of `job_steps`, for the status title.
+    #[serde(skip)]
+    pub job_step_names: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1068,6 +1092,17 @@ impl RuntimeStatus {
         self.tiles_total = 0;
         std::mem::take(&mut self.active_job_id)
     }
+
+    /// Ends the steps of the job that ran; returns the step pictures for the caller to
+    /// release from the preview folder.
+    pub fn take_job_steps(&mut self) -> Vec<String> {
+        self.job_step_names.clear();
+        std::mem::take(&mut self.job_steps)
+            .into_iter()
+            .map(|step| step.preview_url)
+            .filter(|url| !url.is_empty())
+            .collect()
+    }
 }
 
 impl Default for RuntimeStatus {
@@ -1111,6 +1146,8 @@ impl Default for RuntimeStatus {
             can_keep_partial: None,
             tiles_completed: 0,
             tiles_total: 0,
+            job_steps: Vec::new(),
+            job_step_names: Vec::new(),
         }
     }
 }

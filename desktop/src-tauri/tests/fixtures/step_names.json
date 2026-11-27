@@ -1,0 +1,131 @@
+{
+  "description": "One case per name the plan line gives a step (stageStepName, src/lib/planLine.ts). The host's status title (plan_step_name, src-tauri/src/worker.rs) and the window are both held to this list.",
+  "settings": {
+    "task": "upscale",
+    "output_scale": 4,
+    "video_target_resolution": 0,
+    "video_interpolation": "off"
+  },
+  "cases": [
+    {
+      "stage": { "kind": "restore", "role": "fix", "fix": "blur", "label": "Blur" },
+      "settings": {},
+      "video": false,
+      "name": "Blur"
+    },
+    {
+      "stage": { "kind": "deblock", "role": "fix", "fix": "jpeg", "label": "JPEG artifacts" },
+      "settings": {},
+      "video": false,
+      "name": "JPEG"
+    },
+    {
+      "stage": { "kind": "deblock", "role": "fix", "fix": "jpeg", "label": "JPEG artifacts" },
+      "settings": {},
+      "video": true,
+      "name": "Compression"
+    },
+    {
+      "stage": { "kind": "restore", "role": "fix", "fix": "noise", "label": "Noise" },
+      "settings": {},
+      "video": false,
+      "name": "Noise"
+    },
+    {
+      "stage": { "kind": "restore", "role": "fix", "fix": "colour", "label": "Colour" },
+      "settings": {},
+      "video": false,
+      "name": "Colour"
+    },
+    {
+      "stage": { "kind": "restore", "role": "primary", "fix": "noise", "label": "Noise" },
+      "settings": { "task": "denoise", "output_scale": 1 },
+      "video": false,
+      "name": "Noise"
+    },
+    {
+      "stage": { "kind": "upscale", "role": "primary", "label": "Upscale ×4" },
+      "settings": {},
+      "video": false,
+      "name": "Upscale 4×"
+    },
+    {
+      "stage": { "kind": "upscale", "role": "primary", "label": "Upscale ×2" },
+      "settings": { "output_scale": 2 },
+      "video": false,
+      "name": "Upscale 2×"
+    },
+    {
+      "stage": { "kind": "video", "role": "primary", "label": "Upscale" },
+      "settings": { "task": "video", "video_target_resolution": 1080 },
+      "video": true,
+      "name": "Upscale to 1080 px"
+    },
+    {
+      "stage": { "kind": "restore", "role": "primary", "label": "Fix" },
+      "settings": { "task": "denoise", "output_scale": 1 },
+      "video": false,
+      "name": "Fix"
+    },
+    {
+      "stage": { "kind": "face_restore", "role": "face", "label": "Faces" },
+      "settings": {},
+      "video": false,
+      "name": "Faces"
+    },
+    {
+      "stage": { "kind": "edit", "role": "primary", "label": "Edit" },
+      "settings": { "task": "edit" },
+      "video": false,
+      "name": "Edit"
+    },
+    {
+      "stage": { "kind": "deflicker", "role": "step", "label": "De-flicker" },
+      "settings": { "task": "video" },
+      "video": true,
+      "name": "De-flicker"
+    },
+    {
+      "stage": { "kind": "interpolate", "role": "interpolate", "label": "Interpolate 2×" },
+      "settings": { "task": "video", "video_interpolation": "x2" },
+      "video": true,
+      "name": "2× frames"
+    },
+    {
+      "stage": { "kind": "interpolate", "role": "interpolate", "label": "Interpolate 2×" },
+      "settings": { "task": "video", "video_interpolation": "x4" },
+      "video": true,
+      "name": "4× frames"
+    },
+    {
+      "stage": { "kind": "interpolate", "role": "interpolate", "label": "Interpolate to 60 fps" },
+      "settings": { "task": "video", "video_interpolation": "fps60" },
+      "video": true,
+      "name": "60 fps"
+    },
+    {
+      "stage": { "kind": "interpolate", "role": "interpolate", "label": "Interpolate to 120 fps" },
+      "settings": { "task": "video", "video_interpolation": "fps120" },
+      "video": true,
+      "name": "120 fps"
+    },
+    {
+      "stage": { "kind": "interpolate", "role": "interpolate", "label": "Interpolate 4×" },
+      "settings": { "task": "video" },
+      "video": true,
+      "name": "4× frames"
+    },
+    {
+      "stage": { "kind": "audio_denoise", "role": "audio_denoise", "label": "Clean up audio" },
+      "settings": { "task": "video" },
+      "video": true,
+      "name": "Clean audio"
+    },
+    {
+      "stage": { "kind": "grain", "role": "step", "label": "Film grain" },
+      "settings": {},
+      "video": false,
+      "name": "Film grain"
+    }
+  ]
+}
