@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.3-beta] - Unreleased
+
+A hotfix for 0.6.2.
+
+- **Stopping a batch of photos no longer blocks the queue (Mac).** When you stopped a
+  batch while a photo was being processed, the photos that had not started stayed
+  waiting, and the next job never began until you restarted the engine or the app.
+  Those photos are now marked as stopped, and the next job starts right away.
+
 ## [0.6.2-beta] - 2026-11-26
 
 A small speed and responsiveness update. Nothing changes in the results.
