@@ -186,8 +186,8 @@ export interface EnhancePanelActions {
   ) => void;
   updateSettings: (patch: Partial<UiSettings>) => void;
   openRecipeEditor: () => Promise<void>;
+  openRecipesLibrary: () => void;
   applyPreset: (kind: 'quick' | 'best') => void;
-  deleteRecipe: (recipeId: string) => void;
   applyRecipe: (recipe: Recipe) => void;
   addRecipe: () => Promise<void>;
   setContent: (content: UiSettings['content']) => void;

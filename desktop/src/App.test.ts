@@ -6878,62 +6878,6 @@ describe('Dialogs and refused host calls', () => {
       await user.click(screen.getByRole('button', { name: 'Reveal' }));
       await shown('Could not show the result');
     });
-
-    it('deletes a saved recipe only after confirmation', async () => {
-      const snapshot = readySnapshot([image('first', true)]);
-      const model = snapshot.catalog.models.find((entry) => entry.native_scale === 4)!;
-      snapshot.recipes = [
-        {
-          id: 'jens67',
-          name: 'Jens67',
-          task: 'upscale',
-          model_id: model.model_id,
-          output_scale: 4,
-          tile_size: 256,
-          halo: 32,
-          precision: 'fp32',
-          safe_memory: true,
-        },
-      ];
-      const user = await mountWith(snapshot);
-      await user.click(screen.getByRole('button', { name: 'Recipes' }));
-      await user.click(screen.getByRole('button', { name: 'Delete Jens67' }));
-      expect(api.deleteRecipe).not.toHaveBeenCalled();
-      await user.click(screen.getByRole('button', { name: 'Confirm delete Jens67' }));
-      expect(api.deleteRecipe).toHaveBeenCalledWith('jens67');
-    });
-
-    it('says so for Delete on a saved recipe', async () => {
-      const snapshot = readySnapshot([image('first', true)]);
-      const model = snapshot.catalog.models.find((entry) => entry.native_scale === 4)!;
-      snapshot.recipes = [
-        {
-          id: 'jens67',
-          name: 'Jens67',
-          task: 'upscale',
-          model_id: model.model_id,
-          output_scale: 4,
-          tile_size: 256,
-          halo: 32,
-          precision: 'fp32',
-          safe_memory: true,
-        },
-      ];
-      const user = await mountWith(snapshot);
-      api.deleteRecipe.mockRejectedValueOnce(refusal);
-      await user.click(screen.getByRole('button', { name: 'Recipes' }));
-      await user.click(screen.getByRole('button', { name: 'Delete Jens67' }));
-      expect(api.deleteRecipe).not.toHaveBeenCalled();
-      await user.click(screen.getByRole('button', { name: 'Cancel deleting Jens67' }));
-      expect(api.deleteRecipe).not.toHaveBeenCalled();
-      await user.click(screen.getByRole('button', { name: 'Delete Jens67' }));
-      await user.keyboard('{Escape}');
-      expect(api.deleteRecipe).not.toHaveBeenCalled();
-      await user.click(screen.getByRole('button', { name: 'Delete Jens67' }));
-      await user.click(screen.getByRole('button', { name: 'Confirm delete Jens67' }));
-      expect(api.deleteRecipe).toHaveBeenCalledWith('jens67');
-      await shown('Could not delete the recipe');
-    });
   });
 });
 
@@ -8126,11 +8070,13 @@ describe('video Same size, Fix, and Output resolution', () => {
     );
     await user2.click(screen.getByRole('button', { name: 'Recipes' }));
     const oldPhotoBtn = screen.getByRole('button', { name: /^Old photo 1x/ });
-    expect(oldPhotoBtn.textContent).toContain('same size · FP32');
+    expect(oldPhotoBtn.textContent).toContain('Blur');
     expect(oldPhotoBtn.textContent).not.toContain('1×');
+    expect(oldPhotoBtn.textContent).not.toContain('FP32');
     const oldVidBtn = screen.getByRole('button', { name: /^Old video 1x/ });
-    expect(oldVidBtn.textContent).toContain('video · same size · FP16');
+    expect(oldVidBtn.textContent).toContain('Compression');
     expect(oldVidBtn.textContent).not.toContain('1×');
+    expect(oldVidBtn.textContent).not.toContain('FP16');
     expect(oldVidBtn.getAttribute('aria-pressed')).toBe('false');
     await user2.click(oldVidBtn);
     await waitFor(() => expect(screen.queryByRole('group', { name: 'Recipes' })).toBeNull());
@@ -9771,7 +9717,7 @@ describe('Size decides', () => {
     const user = await mountWith(snapshot);
     await user.click(screen.getByRole('button', { name: 'Recipes' }));
     const recipeBtn = screen.getByRole('button', { name: /^Clean photo/ });
-    expect(recipeBtn.textContent).toContain('same size · FP16');
+    expect(recipeBtn.textContent).toContain('Noise');
     await user.click(recipeBtn);
     expect(screen.getByRole('radio', { name: 'Same size' }).getAttribute('aria-checked')).toBe(
       'true',
@@ -9927,7 +9873,7 @@ describe('Enhance panel head, Recipes menu, and Task row', () => {
     expect(screen.queryByRole('button', { name: 'Recipes' })).toBeNull();
   });
 
-  it('opens Recipes with a saved recipe, applies and closes, saves on Enter, cancels field on Escape, and confirms delete', async () => {
+  it('opens Recipes with a saved recipe, applies and closes, saves on Enter, cancels field on Escape, and has no delete button', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.recipes = [
       {
@@ -9950,7 +9896,9 @@ describe('Enhance panel head, Recipes menu, and Task row', () => {
     await user.keyboard('{Enter}');
     const menu = screen.getByRole('group', { name: 'Recipes' });
     const phoneBtn = within(menu).getByRole('button', { name: /^Phone photos/ });
-    expect(phoneBtn.textContent).toContain('upscale · 4× · FP16');
+    expect(phoneBtn.textContent).toContain('Upscale 4×');
+    expect(within(menu).queryByRole('button', { name: /^Delete / })).toBeNull();
+    expect(within(menu).getByRole('button', { name: 'Browse recipes…' })).toBeTruthy();
     expect(document.activeElement).toBe(phoneBtn);
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('group', { name: 'Recipes' })).toBeNull();
@@ -9984,15 +9932,115 @@ describe('Enhance panel head, Recipes menu, and Task row', () => {
     await waitFor(() =>
       expect(api.saveRecipe).toHaveBeenCalledWith(expect.objectContaining({ name: 'Crisp 4x' })),
     );
+  });
 
-    // Delete asks first and supports Cancel and Confirm delete.
-    await user.click(screen.getByRole('button', { name: 'Delete Phone photos' }));
-    expect(screen.getByText('Delete Phone photos?')).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: 'Cancel deleting Phone photos' }));
-    expect(screen.queryByText('Delete Phone photos?')).toBeNull();
-    await user.click(screen.getByRole('button', { name: 'Delete Phone photos' }));
-    await user.click(screen.getByRole('button', { name: 'Confirm delete Phone photos' }));
-    expect(api.deleteRecipe).toHaveBeenCalledWith('phone');
+  it('Recipes menu shows plan-line subtitles, caps at six rows for seven or more, and calls Browse recipes…', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.recipes = [
+      {
+        id: 'r1',
+        name: 'Pinned scan',
+        task: 'upscale',
+        model_id: 'localsr_quick_x4_v1',
+        output_scale: 4,
+        tile_size: 256,
+        halo: 32,
+        precision: 'fp16',
+        safe_memory: false,
+        fixes: ['jpeg', 'noise'],
+        stages: [
+          { kind: 'deblock', model_id: 'fbcnn_color', fix: 'jpeg' },
+          { kind: 'restore', model_id: 'denoise_realplksr_1x', fix: 'noise' },
+          { kind: 'upscale', model_id: 'localsr_quick_x4_v1' },
+        ],
+      },
+      {
+        id: 'r2',
+        name: 'Clean only',
+        task: 'denoise',
+        model_id: 'denoise_realplksr_1x',
+        output_scale: 1,
+        tile_size: 256,
+        halo: 16,
+        precision: 'fp16',
+        safe_memory: false,
+        fixes: ['noise'],
+        stages: [{ kind: 'restore', model_id: 'denoise_realplksr_1x', fix: 'noise' }],
+      },
+      {
+        id: 'r3',
+        name: 'Fast 2x',
+        task: 'upscale',
+        model_id: 'localsr_quick_x4_v1',
+        output_scale: 2,
+        tile_size: 256,
+        halo: 16,
+        precision: 'fp16',
+        safe_memory: false,
+      },
+      {
+        id: 'r4',
+        name: 'Recent four',
+        task: 'upscale',
+        model_id: 'localsr_quick_x4_v1',
+        output_scale: 4,
+        tile_size: 256,
+        halo: 16,
+        precision: 'fp16',
+        safe_memory: false,
+      },
+      {
+        id: 'r5',
+        name: 'Recent five',
+        task: 'upscale',
+        model_id: 'localsr_quick_x4_v1',
+        output_scale: 4,
+        tile_size: 256,
+        halo: 16,
+        precision: 'fp16',
+        safe_memory: false,
+      },
+      {
+        id: 'r6',
+        name: 'Recent six',
+        task: 'upscale',
+        model_id: 'localsr_quick_x4_v1',
+        output_scale: 4,
+        tile_size: 256,
+        halo: 16,
+        precision: 'fp16',
+        safe_memory: false,
+      },
+      {
+        id: 'r7',
+        name: 'Hidden seven',
+        task: 'upscale',
+        model_id: 'localsr_quick_x4_v1',
+        output_scale: 4,
+        tile_size: 256,
+        halo: 16,
+        precision: 'fp16',
+        safe_memory: false,
+      },
+    ];
+    snapshot.settings.recipe_pins = ['r1'];
+    snapshot.settings.recipe_recent = ['r3', 'r2', 'r4', 'r5', 'r6'];
+    const user = await mountWith(snapshot);
+
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    const menu = screen.getByRole('group', { name: 'Recipes' });
+    const rows = menu.querySelectorAll('.saved-recipe button');
+    expect(rows).toHaveLength(6);
+    expect(rows[0].textContent).toContain('Pinned scan');
+    expect(rows[0].textContent).toContain('JPEG → Noise → Upscale 4×');
+    expect(rows[0].textContent).toContain('⌃');
+    expect(rows[1].textContent).toContain('Fast 2x');
+    expect(rows[1].textContent).toContain('Upscale 2×');
+    expect(within(menu).queryByRole('button', { name: /^Hidden seven/ })).toBeNull();
+    expect(within(menu).queryByRole('button', { name: /^Delete / })).toBeNull();
+
+    await user.click(within(menu).getByRole('button', { name: 'Browse recipes…' }));
+    expect(screen.queryByRole('group', { name: 'Recipes' })).toBeNull();
   });
 
   it('shows the Task row with Edit disabled on video, no caption paragraph, and the video tip', async () => {

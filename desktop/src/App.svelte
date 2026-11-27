@@ -309,7 +309,7 @@
   }
 
   let recipeEditorOpen = false;
-  let deletingRecipeId: string | null = null;
+  let recipesLibraryOpen = false;
   let recipeName = '';
   // Model terms are accepted per model: several fixes can each need their own.
   let termsAccepted: Record<string, boolean> = {};
@@ -4624,20 +4624,16 @@
     previewPane?.queueProgressiveTile(message, snapshot.runtime.active_job_id);
   }
 
-  function deleteRecipe(recipeId: string): void {
-    deletingRecipeId = null;
-    void attempt('Could not delete the recipe', async () => {
-      await api.deleteRecipe(recipeId);
-      await refresh();
-    });
+  function openRecipesLibrary(): void {
+    recipesLibraryOpen = true;
   }
 
   const enhanceActions: EnhancePanelActions = {
     setTask,
     updateSettings,
     openRecipeEditor,
+    openRecipesLibrary,
     applyPreset,
-    deleteRecipe,
     applyRecipe,
     addRecipe,
     setContent,
@@ -4734,24 +4730,6 @@
     interpolationSupported,
   };
 </script>
-
-<svelte:window
-  on:click={(event) => {
-    if (deletingRecipeId === null) return;
-    // The path is fixed when the click starts. The X that opened the question is already
-    // gone from the page when this runs, so its row must not be looked up from the target.
-    const inRow = event
-      .composedPath()
-      .some(
-        (node) =>
-          node instanceof Element && node.getAttribute('data-recipe-id') === deletingRecipeId,
-      );
-    if (!inRow) deletingRecipeId = null;
-  }}
-  on:keydown={(event) => {
-    if (event.key === 'Escape') deletingRecipeId = null;
-  }}
-/>
 
 <svelte:head
   ><title>{selectedMedia ? `${selectedMedia.name} — LocalSR` : 'LocalSR'}</title></svelte:head
@@ -4977,7 +4955,6 @@
       bind:editPrompt
       bind:recipeName
       bind:recipeEditorOpen
-      bind:deletingRecipeId
       bind:termsAccepted
       bind:inspectorScroll
       bind:failureNote
