@@ -696,3 +696,51 @@ def test_a_stop_that_keeps_saves_each_open_photo_with_finished_tiles_first(keep)
     else:
         assert kept == []
     assert all(photo.closed for photo in photos)
+
+
+def test_a_stop_still_saves_every_photo_whose_tiles_are_all_done():
+    """Finished work is never thrown away: photos fully tiled when Stop comes (one
+    being saved, others waiting for an encoder) are saved and reported finished;
+    photos still being tiled are cancelled."""
+    cancel = threading.Event()
+    one_encoder_busy = threading.Event()
+    release = threading.Event()
+    encoded = []
+
+    def open_photo(key):
+        photo = Photo(key, tiles=1 if key < 3 else 50)
+        original = photo.encode
+
+        def encode():
+            if key == 0:
+                one_encoder_busy.set()
+                assert release.wait(10)
+            encoded.append(key)
+            return original()
+
+        photo.encode = encode
+        return photo
+
+    def lane(photo, tile):
+        if photo.key >= 3:
+            time.sleep(0.005)
+        return photo.key, tile
+
+    outcomes = []
+    worker = threading.Thread(
+        target=lambda: outcomes.extend(
+            run(range(5), open_photo, [lane], cancel=cancel, encoders=1)[0]
+        )
+    )
+    worker.start()
+    assert one_encoder_busy.wait(5)
+    # Photos 1 and 2 are tiled and wait behind photo 0's save; 3 and 4 are still tiling.
+    time.sleep(0.1)
+    cancel.set()
+    release.set()
+    worker.join(10)
+    statuses = {key: status for key, status, _ in outcomes}
+    assert statuses[0] == statuses[1] == statuses[2] == "done"
+    assert sorted(encoded) == [0, 1, 2]
+    assert statuses[3] == statuses[4] == "cancelled"
+    assert len(outcomes) == 5
