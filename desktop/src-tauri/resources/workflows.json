@@ -1,0 +1,53 @@
+{
+  "workflows": [
+    {
+      "id": "workflow.old-scan",
+      "name": "Old scan",
+      "media": "image",
+      "for": "For scanned prints, slides and negatives.",
+      "note": "Enlarges and sharpens. Does not remove scratches or dust, and does not change colours.",
+      "detail_extra": "Black and white? Tick Colour afterwards. The colours are the model's guess.",
+      "content": "photo",
+      "quality": "best",
+      "fixes": [],
+      "output_scale": 2,
+      "example": "photo-best"
+    },
+    {
+      "id": "workflow.low-light",
+      "name": "Low-light phone photo",
+      "media": "image",
+      "for": "For phone photos taken indoors or at night that look grainy.",
+      "note": "Removes grain at the original size. Very fine texture, such as hair or fabric, can get smoother.",
+      "content": "photo",
+      "quality": "quick",
+      "fixes": ["noise"],
+      "output_scale": 1,
+      "example": "noise"
+    },
+    {
+      "id": "workflow.drawing",
+      "name": "Drawing or anime",
+      "media": "image",
+      "for": "For drawings, anime frames, comics and flat artwork.",
+      "note": "Keeps lines clean and colours flat. Not for photos: it smooths skin and foliage.",
+      "content": "illustration",
+      "quality": "quick",
+      "fixes": [],
+      "output_scale": 4,
+      "example": "art-quick"
+    },
+    {
+      "id": "workflow.web-jpeg",
+      "name": "Web image (JPEG)",
+      "media": "image",
+      "for": "For small, blocky pictures saved from websites or chats.",
+      "note": "Removes compression blocks, then enlarges 2×. Detail the compression destroyed does not come back.",
+      "content": "photo",
+      "quality": "quick",
+      "fixes": ["jpeg"],
+      "output_scale": 2,
+      "example": "jpeg"
+    }
+  ]
+}
