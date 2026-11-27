@@ -1,9 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import type { HostPlanStage } from './api';
 import { demoSnapshot } from './demo';
+import { toHostStage } from './jobPlanClient';
 import { withListedDevice } from './neuralEngine';
-import { resolvePlan, type PlanStage } from './plan';
+import { resolvePlan } from './plan';
 import { buildStartInput } from './startInput';
 import type {
   CapabilityInfo,
@@ -17,25 +19,6 @@ import type {
 } from './types';
 
 type FixKindNoFace = Exclude<FixKind, 'faces'>;
-
-interface SerializedPlanStage {
-  kind: PlanStage['kind'];
-  role: PlanStage['role'];
-  fix?: FixKindNoFace;
-  remembered?: boolean;
-  missing?: boolean;
-  label: string;
-  model_id?: string;
-  video_model_id?: string;
-  interpolation_model_id?: string;
-  audio_model_id?: string;
-  edit_model_id?: string;
-  custom?: string;
-  installed: boolean;
-  can_download: boolean;
-  needs_file: boolean;
-  size_bytes: number;
-}
 
 interface ParityCase {
   id: string;
@@ -56,7 +39,7 @@ interface ParityCase {
     batch_mode: boolean;
     recipe_name: string;
   };
-  expected_plan: SerializedPlanStage[];
+  expected_plan: HostPlanStage[];
   expected_start_input: StartBatchInput;
 }
 
@@ -77,29 +60,6 @@ const ALT_FIX_MODELS: Record<FixKindNoFace, string> = {
   blur: 'nafnet_gopro_deblur',
   colour: 'ddcolor_modelscope',
 };
-
-function serializePlanStage(stage: PlanStage): SerializedPlanStage {
-  return {
-    kind: stage.kind,
-    role: stage.role,
-    ...(stage.fix !== undefined ? { fix: stage.fix } : {}),
-    ...(stage.remembered !== undefined ? { remembered: stage.remembered } : {}),
-    ...(stage.missing !== undefined ? { missing: stage.missing } : {}),
-    label: stage.label,
-    ...(stage.model ? { model_id: stage.model.model_id } : {}),
-    ...(stage.videoModel ? { video_model_id: stage.videoModel.model_id } : {}),
-    ...(stage.interpolationModel
-      ? { interpolation_model_id: stage.interpolationModel.model_id }
-      : {}),
-    ...(stage.audioModel ? { audio_model_id: stage.audioModel.model_id } : {}),
-    ...(stage.editModel ? { edit_model_id: stage.editModel.model_id } : {}),
-    ...(stage.custom !== undefined ? { custom: stage.custom } : {}),
-    installed: stage.installed,
-    can_download: stage.canDownload,
-    needs_file: stage.needsFile,
-    size_bytes: stage.sizeBytes,
-  };
-}
 
 function makeCapabilities(deviceIds: string[]): CapabilityInfo {
   const base = demoSnapshot().capabilities;
@@ -218,7 +178,7 @@ function makeCase(
       batch_mode: batchMode,
       recipe_name: recipeName,
     },
-    expected_plan: plan.map(serializePlanStage),
+    expected_plan: plan.map(toHostStage),
     expected_start_input: startInput,
   };
 }
@@ -648,6 +608,7 @@ describe('job_plan parity corpus', () => {
         'face_restore',
         'video',
         'edit',
+        'deflicker',
         'interpolate',
         'audio_denoise',
       ]),

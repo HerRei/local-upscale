@@ -693,6 +693,54 @@ describe('model library resolution', () => {
       usingTemporalVideo: false,
       hasAudio: true,
     });
-    expect(plan.map((stage) => stage.kind)).toEqual(['audio_denoise', 'interpolate']);
+    expect(plan.map((stage) => stage.kind)).toEqual(['audio_denoise', 'deflicker', 'interpolate']);
+  });
+
+  it('places the deflicker stage after primary and before after-upscale interpolation, and omits it on SeedVR2 or photos', () => {
+    const snapshot = demoSnapshot();
+    const baseVideo: UiSettings = {
+      ...snapshot.settings,
+      task: 'video',
+      video_task: 'upscale',
+      selected_video_model_id: 'frame_by_frame',
+      selected_model_id: 'span_photo_x4',
+      output_scale: 4,
+      deflicker: true,
+      video_interpolation: 'x2',
+      video_interpolation_order: 'after_upscale',
+    };
+    const options = { faceEnabled: false, usingTemporalVideo: false };
+    const afterPlan = resolvePlan(snapshot, baseVideo, options);
+    expect(afterPlan.map((stage) => stage.kind)).toEqual(['upscale', 'deflicker', 'interpolate']);
+    expect(afterPlan[1]).toEqual({
+      kind: 'deflicker',
+      role: 'step',
+      label: 'De-flicker',
+      installed: true,
+      canDownload: false,
+      needsFile: false,
+      sizeBytes: 0,
+    });
+    expect(pendingDownloads(afterPlan).stages.some((stage) => stage.kind === 'deflicker')).toBe(
+      false,
+    );
+
+    const beforePlan = resolvePlan(
+      snapshot,
+      { ...baseVideo, video_interpolation_order: 'before_upscale' },
+      options,
+    );
+    expect(beforePlan.map((stage) => stage.kind)).toEqual(['interpolate', 'upscale', 'deflicker']);
+
+    const seedvr2 = snapshot.catalog.video_models.find((m) => m.model_id === 'seedvr2_3b')!;
+    const temporalPlan = resolvePlan(
+      snapshot,
+      { ...baseVideo, selected_video_model_id: 'seedvr2_3b' },
+      { faceEnabled: false, usingTemporalVideo: true, selectedVideoModel: seedvr2 },
+    );
+    expect(temporalPlan.some((stage) => stage.kind === 'deflicker')).toBe(false);
+
+    const photoPlan = resolvePlan(snapshot, { ...baseVideo, task: 'upscale' }, options);
+    expect(photoPlan.some((stage) => stage.kind === 'deflicker')).toBe(false);
   });
 });

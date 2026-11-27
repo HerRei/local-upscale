@@ -144,13 +144,14 @@ export interface PlanStage {
     | 'face_restore'
     | 'video'
     | 'edit'
+    | 'deflicker'
     | 'interpolate'
     | 'audio_denoise';
   /**
    * What the row's Change opens: the fix before the upscaler, the main model, or Faces.
    * Frame interpolation and audio cleanup are set directly and have no Change.
    */
-  role: 'fix' | 'primary' | 'face' | 'interpolate' | 'audio_denoise';
+  role: 'fix' | 'primary' | 'face' | 'step' | 'interpolate' | 'audio_denoise';
   /** The problem this row's model fixes, when it fixes one. */
   fix?: Exclude<FixKind, 'faces'>;
   /** The model is the user's remembered choice for that problem and quality. */
@@ -315,6 +316,18 @@ export function resolvePlan(
   if (options.faceEnabled && options.faceModel && !restoring && !noRestoreModel) {
     const stage = stageFor('face_restore', 'face', 'Faces', options.faceModel);
     if (stage) stages.push(stage);
+  }
+
+  if (settings.task === 'video' && !options.usingTemporalVideo && settings.deflicker) {
+    stages.push({
+      kind: 'deflicker',
+      role: 'step',
+      label: 'De-flicker',
+      installed: true,
+      canDownload: false,
+      needsFile: false,
+      sizeBytes: 0,
+    });
   }
 
   // Frame interpolation is a frame-by-frame video stage; the plan lists it where it runs.

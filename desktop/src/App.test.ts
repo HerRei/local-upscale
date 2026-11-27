@@ -103,6 +103,8 @@ const api = vi.hoisted(() => ({
   clearMedia: vi.fn(async () => undefined),
   clearResults: vi.fn(async () => undefined),
   saveSettings: vi.fn(async (_settings: UiSettings): Promise<void> => undefined),
+  planJob: vi.fn(async () => []),
+  recordFrontendError: vi.fn(async (_message: string, _stack: string): Promise<void> => undefined),
   setPreference: vi.fn(
     async (
       _name: string,
@@ -262,6 +264,67 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock('./lib/api', () => api);
+
+const planFetch = vi.hoisted(() => ({
+  mock: vi.fn(),
+  defaultImpl: undefined as
+    | ((
+        snapshot: AppSnapshot,
+        settings: UiSettings,
+        options?: {
+          face_model_id?: string | null;
+          face_enabled?: boolean;
+          using_temporal_video?: boolean | null;
+          selected_video_model_id?: string | null;
+          edit_model_id?: string | null;
+          has_audio?: boolean | null;
+        },
+      ) => Promise<import('./lib/plan').PlanStage[]>)
+    | undefined,
+}));
+
+vi.mock('./lib/jobPlanClient', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/jobPlanClient')>();
+  const { isRestoreTask, resolvePlan } = await import('./lib/plan');
+  const defaultFetchPlan: NonNullable<typeof planFetch.defaultImpl> = async (
+    snapshot,
+    settings,
+    options = {},
+  ) => {
+    const faceModel = options.face_model_id
+      ? snapshot.catalog.models.find((model) => model.model_id === options.face_model_id)
+      : undefined;
+    const videoId = options.selected_video_model_id ?? settings.selected_video_model_id;
+    const selectedVideoModel = snapshot.catalog.video_models.find(
+      (model) => model.model_id === videoId,
+    );
+    const editId = options.edit_model_id ?? settings.edit_model_id;
+    const editModel =
+      editId === '__custom__'
+        ? (snapshot.edit.custom_model ?? undefined)
+        : snapshot.edit.models.find((model) => model.model_id === editId);
+    const usingTemporalVideo =
+      options.using_temporal_video ??
+      (settings.task === 'video' &&
+        !isRestoreTask(settings) &&
+        settings.selected_video_model_id !== 'frame_by_frame');
+    return resolvePlan(snapshot, settings, {
+      faceModel,
+      faceEnabled: Boolean(options.face_enabled),
+      usingTemporalVideo,
+      selectedVideoModel,
+      editModel,
+      hasAudio: options.has_audio === null ? undefined : options.has_audio,
+    });
+  };
+  planFetch.defaultImpl = defaultFetchPlan;
+  planFetch.mock.mockImplementation(defaultFetchPlan);
+  return {
+    ...actual,
+    fetchPlan: planFetch.mock,
+    createPlanClient: (fetch = planFetch.mock) => actual.createPlanClient(fetch),
+  };
+});
 
 function readySnapshot(media: MediaItem[] = []): AppSnapshot {
   const snapshot = demoSnapshot();
@@ -808,6 +871,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   api.bootstrap.mockReset();
   api.refreshSnapshot.mockReset();
+  if (planFetch.defaultImpl) planFetch.mock.mockImplementation(planFetch.defaultImpl);
   api.isTauri.mockReturnValue(true);
   api.addMedia.mockResolvedValue(undefined);
   api.selectMedia.mockResolvedValue(undefined);
@@ -9347,5 +9411,68 @@ describe('Size decides', () => {
         'Chosen by you. Fix, Same size, De-flicker and Frame rate need a frame-by-frame model: pick Quick or Best to go back.',
       ),
     ).toBeTruthy();
+  });
+});
+
+describe('host job plan client in App', () => {
+  it('shows an error with Try again, disables Start, and recovers when Try again succeeds', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.selected_model_id = 'span_photo_x4';
+    planFetch.mock.mockRejectedValueOnce(new Error('host unavailable'));
+
+    const user = await mountWith(snapshot);
+    const note = await screen.findByText('Could not work out the plan.');
+    expect(note.getAttribute('role')).toBe('status');
+    expect(note.getAttribute('title')).toBe('host unavailable');
+
+    const startBtn = screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement;
+    expect(startBtn.disabled).toBe(true);
+    expect(startBtn.title).toBe('Could not work out the plan. Try again.');
+    expect(api.recordFrontendError).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(startBtn.disabled).toBe(false));
+    expect(screen.queryByText('Could not work out the plan.')).toBeNull();
+    expect(
+      within(screen.getByRole('list', { name: 'Stages' })).getByText('Upscale ×4'),
+    ).toBeTruthy();
+  });
+
+  it('waits for a pending plan before calling startJobs once when Start is clicked', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.selected_model_id = 'span_photo_x4';
+
+    const user = await mountWith(snapshot);
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('list', { name: 'Stages' })).getByText('Upscale ×4'),
+      ).toBeTruthy(),
+    );
+
+    let resolveNext!: (stages: import('./lib/plan').PlanStage[]) => void;
+    const pending = new Promise<import('./lib/plan').PlanStage[]>((resolve) => {
+      resolveNext = resolve;
+    });
+    const baseImpl = planFetch.defaultImpl!;
+    planFetch.mock.mockImplementationOnce(() => pending);
+
+    await user.click(screen.getByRole('radio', { name: '2×' }));
+    const startBtn = screen.getByRole('button', { name: 'Upscale selected' }) as HTMLButtonElement;
+    expect(startBtn.disabled).toBe(false);
+
+    await user.click(startBtn);
+    expect(api.startJobs).not.toHaveBeenCalled();
+
+    const nextStages = await baseImpl(
+      snapshot,
+      { ...snapshot.settings, output_scale: 2 },
+      { face_enabled: false, has_audio: false },
+    );
+    resolveNext(nextStages);
+
+    await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
+    expect(api.startJobs.mock.calls[0][0]).toMatchObject({ output_scale: 2 });
   });
 });

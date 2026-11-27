@@ -471,6 +471,27 @@ pub fn resolve_plan(
         }
     }
 
+    if settings.task == "video" && !options.using_temporal_video && settings.deflicker {
+        stages.push(PlanStage {
+            kind: "deflicker".into(),
+            role: "step".into(),
+            fix: None,
+            remembered: None,
+            missing: None,
+            label: "De-flicker".into(),
+            model_id: None,
+            video_model_id: None,
+            interpolation_model_id: None,
+            audio_model_id: None,
+            edit_model_id: None,
+            custom: None,
+            installed: true,
+            can_download: false,
+            needs_file: false,
+            size_bytes: 0,
+        });
+    }
+
     let target = if settings.video_interpolation.is_empty() {
         "off"
     } else {
@@ -825,5 +846,96 @@ mod tests {
         assert_eq!(fixes_of(&model), vec!["noise", "blur", "colour"]);
         model.purposes.push("face".into());
         assert!(fixes_of(&model).is_empty());
+    }
+
+    #[test]
+    fn deflicker_stage_matches_frame_by_frame_video_order_and_omits_temporal_and_photo() {
+        let catalog = crate::catalog::bundled_catalog().unwrap();
+        let steps = crate::steps::registry();
+
+        let base_video = UiSettings {
+            task: "video".into(),
+            video_task: "upscale".into(),
+            selected_video_model_id: "frame_by_frame".into(),
+            selected_model_id: "span_photo_x4".into(),
+            output_scale: 4,
+            deflicker: true,
+            video_interpolation: "x2".into(),
+            video_interpolation_order: "after_upscale".into(),
+            ..UiSettings::default()
+        };
+        let after_plan = resolve_plan(&catalog, steps, &base_video, &PlanOptions::default());
+        assert_eq!(
+            after_plan
+                .iter()
+                .map(|stage| stage.kind.as_str())
+                .collect::<Vec<_>>(),
+            vec!["upscale", "deflicker", "interpolate"]
+        );
+        assert_eq!(
+            after_plan[1],
+            PlanStage {
+                kind: "deflicker".into(),
+                role: "step".into(),
+                fix: None,
+                remembered: None,
+                missing: None,
+                label: "De-flicker".into(),
+                model_id: None,
+                video_model_id: None,
+                interpolation_model_id: None,
+                audio_model_id: None,
+                edit_model_id: None,
+                custom: None,
+                installed: true,
+                can_download: false,
+                needs_file: false,
+                size_bytes: 0,
+            }
+        );
+
+        let before_video = UiSettings {
+            video_interpolation_order: "before_upscale".into(),
+            ..base_video.clone()
+        };
+        let before_plan = resolve_plan(&catalog, steps, &before_video, &PlanOptions::default());
+        assert_eq!(
+            before_plan
+                .iter()
+                .map(|stage| stage.kind.as_str())
+                .collect::<Vec<_>>(),
+            vec!["interpolate", "upscale", "deflicker"]
+        );
+
+        let seedvr2 = catalog
+            .video_models
+            .iter()
+            .find(|model| model.model_id == "seedvr2_3b")
+            .unwrap();
+        let temporal_plan = resolve_plan(
+            &catalog,
+            steps,
+            &UiSettings {
+                selected_video_model_id: "seedvr2_3b".into(),
+                ..base_video.clone()
+            },
+            &PlanOptions {
+                using_temporal_video: true,
+                selected_video_model: Some(seedvr2),
+                ..PlanOptions::default()
+            },
+        );
+        assert!(temporal_plan.iter().all(|stage| stage.kind != "deflicker"));
+
+        let photo_plan = resolve_plan(
+            &catalog,
+            steps,
+            &UiSettings {
+                task: "upscale".into(),
+                ..base_video
+            },
+            &PlanOptions::default(),
+        );
+        assert!(photo_plan.iter().all(|stage| stage.kind != "deflicker"));
     }
 }
