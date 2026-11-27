@@ -6241,3 +6241,19 @@ fn preview_regions_go_only_to_an_engine_that_has_them() {
     let sent: serde_json::Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
     assert_eq!(sent["data"]["slot"], "original");
 }
+
+#[test]
+fn background_models_cannot_be_used_for_primary_or_fix_tasks() {
+    let model = crate::catalog::bundled_catalog()
+        .unwrap()
+        .models
+        .into_iter()
+        .find(|model| model.model_id == "birefnet_general")
+        .unwrap();
+    for task in ["denoise", "upscale", "video"] {
+        assert!(validate_model_for_task(&model, task).is_err());
+    }
+    for fix in ["blur", "noise", "jpeg", "colour"] {
+        assert!(!crate::job_plan::fits_fix(&model, fix));
+    }
+}

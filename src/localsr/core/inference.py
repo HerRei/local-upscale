@@ -472,10 +472,12 @@ class InferenceEngine:
         self._unpark()
         onnx_route = _onnx_route(device_str)
         architecture = str(getattr(model_info, "architecture", ""))
-        if onnx_route is not None and (architecture == "DDColor" or onnx_route.kind == "NPU"):
+        if onnx_route is not None and (
+            architecture in {"DDColor", "BiRefNet"} or onnx_route.kind == "NPU"
+        ):
             from .onnx_runtime import NPU_ARCHITECTURES
 
-            if architecture == "DDColor" or architecture not in NPU_ARCHITECTURES:
+            if architecture in {"DDColor", "BiRefNet"} or architecture not in NPU_ARCHITECTURES:
                 if self.status_callback is not None:
                     self.status_callback(
                         f"{architecture} does not run on {onnx_route.label}, so it runs on the CPU."
@@ -485,7 +487,7 @@ class InferenceEngine:
                 # The CPU runs FP32 whatever the accelerator route was asked for.
                 precision_str = "fp32"
         if (
-            architecture == "DDColor"
+            architecture in {"DDColor", "BiRefNet"}
             and onnx_route is None
             and device_str.startswith(("directml:", "openvino:", "qnn"))
         ):

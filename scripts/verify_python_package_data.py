@@ -18,6 +18,7 @@ REQUIRED_SUFFIXES = (
     "localsr/video_models/seedvr2/pos_emb.safetensors",
     "localsr/video_models/seedvr2/NOTICE.md",
     "localsr/image_models/ddcolor/NOTICE.md",
+    "localsr/image_models/birefnet/NOTICE.md",
     "localsr/image_models/heart/NOTICE.md",
     "localsr/image_models/nerve/NOTICE.md",
     "localsr/image_models/pulse/NOTICE.md",

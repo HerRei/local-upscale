@@ -5031,7 +5031,10 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
             &format!("the {} fix", selection.fix),
             |model| {
                 model.native_scale == 1
-                    && !model.purposes.iter().any(|purpose| purpose == "face")
+                    && !model
+                        .purposes
+                        .iter()
+                        .any(|purpose| purpose == "face" || purpose == "background")
                     && model.fixes.contains(&selection.fix)
             },
             format!(
@@ -5165,6 +5168,11 @@ fn resolve_audio_denoise(
 }
 
 fn validate_model_for_task(model: &CatalogModel, task: &str) -> AppResult<()> {
+    if model.purposes.iter().any(|purpose| purpose == "background") {
+        return Err(AppError::Validation(
+            "background removal checkpoints cannot be used as the primary model".into(),
+        ));
+    }
     if model.purposes.iter().any(|purpose| purpose == "face") {
         return Err(AppError::Validation(
             "face checkpoints cannot be used as the primary model".into(),

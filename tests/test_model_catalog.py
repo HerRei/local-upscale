@@ -80,14 +80,15 @@ def test_catalog_has_all_curated_models():
         "bhi_dat2_real_x4",
         "realwebphoto_v4_dat2_x4",
         "ddcolor_modelscope",
+        "birefnet_general",
     ]
     catalog_ids = [model.model_id for model in MODEL_CATALOG]
     assert catalog_ids == expected_ids
-    assert len(MODEL_CATALOG) == 22
+    assert len(MODEL_CATALOG) == 23
 
     # Verify uniqueness of IDs and filenames
-    assert len({model.model_id for model in MODEL_CATALOG}) == 22
-    assert len({model.filename for model in MODEL_CATALOG}) == 22
+    assert len({model.model_id for model in MODEL_CATALOG}) == 23
+    assert len({model.filename for model in MODEL_CATALOG}) == 23
 
 
 def test_recent_same_size_rewrite_cannot_reuse_a_checksum_verdict(tmp_path, monkeypatch):
@@ -708,6 +709,7 @@ def test_specialist_models_stay_out_of_the_presets():
     assert {model.model_id for model in MODEL_CATALOG if not model.preset_eligible} == {
         "bhi_dat2_real_x4",
         "realwebphoto_v4_dat2_x4",
+        "birefnet_general",
     }
 
 

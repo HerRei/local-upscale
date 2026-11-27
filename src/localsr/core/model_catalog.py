@@ -46,6 +46,7 @@ class ModelPurpose(StrEnum):
     RESTORATION = "restoration"
     FACE = "face"
     VIDEO = "video"
+    BACKGROUND = "background"
 
 
 class QualityTier(IntEnum):
@@ -849,6 +850,28 @@ MODEL_CATALOG = (
         speed_factor=0.55,
         vram_estimate_mb=2000,
         commercial_use_status="allowed",
+    ),
+    CatalogModel(
+        model_id="birefnet_general",
+        name="BiRefNet",
+        role="Background removal",
+        stage="background",
+        filename="birefnet_general.safetensors",
+        description="General-purpose photo background removal.",
+        size_bytes=444_473_596,
+        sha256="9ab37426bf4de0567af6b5d21b16151357149139362e6e8992021b8ce356a154",
+        download_url=(
+            "https://huggingface.co/ZhengPeng7/BiRefNet/resolve/"
+            "e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4/model.safetensors"
+        ),
+        architecture="BiRefNet",
+        native_scale=1,
+        purposes=(ModelPurpose.BACKGROUND,),
+        recommended_halo=0,
+        source_url="https://huggingface.co/ZhengPeng7/BiRefNet",
+        license_name="MIT",
+        author="ZhengPeng et al.",
+        preset_eligible=False,
     ),
 )
 

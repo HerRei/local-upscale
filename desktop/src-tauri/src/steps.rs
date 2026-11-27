@@ -680,11 +680,9 @@ mod tests {
         ] {
             assert!(reg.step_stage(id).is_none(), "{id} is not a step stage");
         }
-        assert_eq!(reg.limits().max_step_stages, 2);
-        assert!(reg
-            .steps
-            .iter()
-            .all(|step| step.dev_only == (step.id == "grain" || step.id == "deinterlace")));
+        assert_eq!(reg.limits().max_step_stages, 3);
+        assert!(reg.steps.iter().all(|step| step.dev_only
+            == (step.id == "grain" || step.id == "deinterlace" || step.id == "remove_background")));
 
         let check = |params: serde_json::Value, mask: Option<&str>| {
             reg.validate_step_stage("grain", params.as_object(), mask)
@@ -759,11 +757,10 @@ mod tests {
             registry().limits().max_step_stages + 4
         );
 
-        // No shipped step brings a model or sets the alpha yet.
-        assert!(registry()
-            .steps
-            .iter()
-            .all(|step| step.model_task.is_none() && !step.output_alpha));
+        let (background, placement) = registry().step_stage("remove_background").unwrap();
+        assert_eq!(placement, StepPlacement::BeforeFixes);
+        assert_eq!(background.model_task.as_deref(), Some("background"));
+        assert!(background.output_alpha);
     }
 
     #[test]

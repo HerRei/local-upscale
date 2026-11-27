@@ -102,6 +102,33 @@ describe('desktop state', () => {
     }
   });
 
+  it('excludes background models from primary and fix choices', () => {
+    const snapshot = demoSnapshot();
+    const background = {
+      ...snapshot.catalog.models[0],
+      model_id: 'background',
+      native_scale: 1,
+      purposes: ['background'],
+      fixes: [],
+    };
+    snapshot.catalog.models.push(background);
+    for (const task of ['denoise', 'upscale', 'video'] as const) {
+      expect(modelsForTask(snapshot, task)).not.toContain(background);
+      expect(libraryModelsForTask(snapshot.catalog.models, task, 'photo')).not.toContain(
+        background,
+      );
+    }
+    expect(libraryModelsForTask(snapshot.catalog.models, 'upscale', 'photo', 'blur')).not.toContain(
+      background,
+    );
+    expect(modelsForTask(snapshot, 'video', 'denoise')).not.toContain(background);
+    background.native_scale = 4;
+    expect(modelsForTask(snapshot, 'upscale')).not.toContain(background);
+    expect(libraryModelsForTask(snapshot.catalog.models, 'upscale', 'photo')).not.toContain(
+      background,
+    );
+  });
+
   it('uses the catalog ranking for Quick and Best', () => {
     const snapshot = demoSnapshot();
     expect(choosePresetModel(snapshot, 'upscale', 'quick')?.model_id).toBe('localsr_quick_x4_v1');

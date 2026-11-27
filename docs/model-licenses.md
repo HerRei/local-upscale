@@ -253,6 +253,16 @@ they take about ten times as long as Best. A model pinned to Best by the user is
   saturation change `+0.20%` / `+0.05%` (HSV) and `-0.28%` / `+0.17%` (Lab), and `100%` QR module
   correctness from 1 to 6 px/module.
 
+### BiRefNet (`birefnet_general`)
+
+- Source: [ZhengPeng7/BiRefNet](https://github.com/ZhengPeng7/BiRefNet), MIT code and
+  [MIT weights](https://huggingface.co/ZhengPeng7/BiRefNet).
+- Asset: `model.safetensors`, revision `e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4`,
+  saved as `birefnet_general.safetensors`, size `444,473,596` bytes.
+- SHA-256: `9ab37426bf4de0567af6b5d21b16151357149139362e6e8992021b8ce356a154`.
+- The inference code and license notice are in `src/localsr/image_models/birefnet/NOTICE.md`.
+  The developer-only photo step computes an alpha matte and permits commercial use.
+
 ### DDColor (`ddcolor_modelscope`)
 
 - Exact upstream asset: `pytorch_model.bin` from

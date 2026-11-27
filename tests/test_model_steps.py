@@ -1,7 +1,6 @@
 """Step stages that bring a catalog model or set the alpha, and jobs made only of steps.
 
-No shipped step does either yet, so the steps and the model here exist only in the tests,
-the way ``test_pipeline.py`` proves model-less steps.
+The synthetic steps and model exercise the generic plumbing independently of shipped steps.
 """
 
 from __future__ import annotations

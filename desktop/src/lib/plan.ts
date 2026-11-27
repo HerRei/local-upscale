@@ -567,12 +567,18 @@ export function modelsForTask(
 ): CatalogModel[] {
   if (task === 'denoise' || (task === 'video' && videoTask === 'denoise')) {
     return snapshot.catalog.models.filter(
-      (model) => model.native_scale === 1 && !model.purposes.includes('face'),
+      (model) =>
+        model.native_scale === 1 &&
+        !model.purposes.includes('face') &&
+        !model.purposes.includes('background'),
     );
   }
   if (task === 'upscale' || task === 'video') {
     return snapshot.catalog.models.filter(
-      (model) => model.native_scale > 1 && !model.purposes.includes('face'),
+      (model) =>
+        model.native_scale > 1 &&
+        !model.purposes.includes('face') &&
+        !model.purposes.includes('background'),
     );
   }
   return [];
@@ -592,12 +598,18 @@ export function libraryModelsForTask(
       (model) =>
         model.native_scale === 1 &&
         !model.purposes.includes('face') &&
+        !model.purposes.includes('background') &&
         (!fix || fixesOf(model).includes(fix)),
     );
   if (task !== 'upscale' && task !== 'video') return [];
   return models
     .filter((model) => {
-      if (model.native_scale <= 1 || model.purposes.includes('face')) return false;
+      if (
+        model.native_scale <= 1 ||
+        model.purposes.includes('face') ||
+        model.purposes.includes('background')
+      )
+        return false;
       return content === 'illustration'
         ? model.purposes.some((purpose) => ['illustration', 'anime', 'general'].includes(purpose))
         : model.purposes.some((purpose) => ['photo', 'general'].includes(purpose));
