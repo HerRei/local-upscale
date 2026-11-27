@@ -317,9 +317,10 @@ test.describe('Help buttons', () => {
     await expectShown(page, 'About Compare');
   });
 
-  test('the ? next to Try others shows its text below the Model card', async ({ page }) => {
+  test('the ? next to Try others shows its text inside the Plan sheet', async ({ page }) => {
     await openApp(page, withOutputs);
     await showPane(page, 'enhance');
+    await page.locator('.foot-plan').click();
     await page.getByRole('button', { name: 'About Try others' }).click();
     await expectShown(page, 'About Try others');
   });

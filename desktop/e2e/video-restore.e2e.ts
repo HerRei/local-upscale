@@ -54,9 +54,11 @@ test('video Same size, Fix chips and video recipes', async ({ page }) => {
   );
   await page.getByRole('button', { name: 'Noise', exact: true }).click();
   await page.getByRole('button', { name: 'JPEG artifacts', exact: true }).click();
+  await page.locator('.foot-plan').click();
   const stages = page.getByRole('list', { name: 'Stages' });
   await expect(stages.getByRole('listitem')).toHaveCount(2);
   await expect(stages).toContainText('FBCNN');
+  await page.keyboard.press('Escape');
 
   // Output scale is gone from Advanced.
   await page.getByRole('button', { name: /Advanced/ }).click();
@@ -101,7 +103,9 @@ test('video Same size, Fix chips and video recipes', async ({ page }) => {
   // Switch back to 4× via Size; add Blur under Fix and start.
   await page.getByRole('radio', { name: '4×' }).click();
   await page.getByRole('button', { name: 'Blur', exact: true }).click();
+  await page.locator('.foot-plan').click();
   await expect(stages).toContainText('LocalSR Photo S');
+  await page.keyboard.press('Escape');
 
   await page.getByRole('button', { name: 'Start selected video' }).click();
   await expect.poll(async () => (await hostCalls(page, 'start_jobs')).length).toBe(2);

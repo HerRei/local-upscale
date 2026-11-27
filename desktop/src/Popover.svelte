@@ -119,16 +119,25 @@
 
   function onWindowKeydown(event: KeyboardEvent): void {
     if (!open || event.defaultPrevented || event.key !== 'Escape') return;
+    // That Escape belongs to the dialog on top.
+    if (event.target instanceof Node && inModal(event.target)) return;
     event.preventDefault();
     event.stopPropagation();
     close(true);
+  }
+
+  // A dialog opened from inside the surface (the model library from Change…) sits on
+  // top of it; the surface stays so focus can return to its opener afterwards.
+  function inModal(node: Node): boolean {
+    const element = node instanceof Element ? node : node.parentElement;
+    return Boolean(element?.closest('[aria-modal="true"]'));
   }
 
   function onWindowFocusIn(event: FocusEvent): void {
     if (!open) return;
     const target = event.target;
     if (!(target instanceof Node)) return;
-    if (surfaceEl?.contains(target) || target === triggerEl) return;
+    if (surfaceEl?.contains(target) || target === triggerEl || inModal(target)) return;
     close(false);
   }
 
@@ -144,7 +153,7 @@
     if (!open) return;
     const next = event.relatedTarget;
     if (!(next instanceof Node)) return;
-    if (surfaceEl?.contains(next)) return;
+    if (surfaceEl?.contains(next) || inModal(next)) return;
     if (next === triggerEl && pointerOnTrigger) return;
     close(false);
   }

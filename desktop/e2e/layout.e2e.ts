@@ -314,6 +314,7 @@ test.describe('overflow and alignment', () => {
   test('the Try others tip wraps inside its box', async ({ page }) => {
     await openApp(page, ready);
     await showPane(page, 'enhance');
+    await page.locator('.foot-plan').click();
     await page.getByRole('button', { name: 'About Try others' }).click();
     const tip = page.getByRole('tooltip').filter({ visible: true });
     const sizes = await tip.evaluate((node) => [node.scrollWidth, node.clientWidth]);
@@ -343,7 +344,7 @@ test.describe('overflow and alignment', () => {
       const column = await box(page.locator('.inspector-scroll'));
       const tips = page.locator('.advanced-controls .help-tip');
       const count = await tips.count();
-      expect(count).toBeGreaterThan(5);
+      expect(count).toBeGreaterThan(2);
       for (let index = 0; index < count; index++) {
         const tip = tips.nth(index);
         await tip.scrollIntoViewIfNeeded();
@@ -389,7 +390,8 @@ test.describe('overflow and alignment', () => {
 
   test.describe('while a queue runs', () => {
     // Open Advanced before the lock: its toggle is disabled once settings are locked.
-    async function lockedPane(page: Page, scenario: Scenario): Promise<void> {
+    // For photo and video, RunSettings lives in the Plan sheet, which opens while locked.
+    async function lockedPane(page: Page, scenario: Scenario, openSheet = false): Promise<void> {
       await openApp(page, scenario);
       await showPane(page, 'enhance');
       await page.evaluate(() => {
@@ -397,6 +399,9 @@ test.describe('overflow and alignment', () => {
         (fieldset as HTMLFieldSetElement).disabled = false;
         (document.querySelector('.disclosure') as HTMLButtonElement).click();
       });
+      if (openSheet) {
+        await page.locator('.foot-plan').click();
+      }
       await expect(page.locator('#device')).toBeVisible();
       await page.evaluate(() => {
         const fieldset = document.querySelector('fieldset.processing-settings');
@@ -415,7 +420,7 @@ test.describe('overflow and alignment', () => {
         page,
       }) => {
         await page.setViewportSize({ width: 1380, height: 900 });
-        await lockedPane(page, scenario);
+        await lockedPane(page, scenario, name !== 'edit');
         const found = await page.evaluate(() => {
           const effective = (element: Element) => {
             let opacity = 1;
@@ -427,12 +432,12 @@ test.describe('overflow and alignment', () => {
             `${element.tagName}.${element.className} "${(element.textContent ?? '').trim().slice(0, 30)}"`;
           const dimmed = [
             ...document.querySelectorAll(
-              '.processing-settings :is(button, select, input, textarea, label, .field-label, .panel-label, .directory-path, .directory-field small, .directory-field > b, .range-head > b):not(.disclosure)',
+              '.processing-settings :is(button, select, input, textarea, label, .field-label, .panel-label, .directory-path, .directory-field small, .directory-field > b, .range-head > b):not(.disclosure), .enhance-pane .sheet :is(select:disabled, button:disabled, label:has(> input:disabled), .run-settings.locked .field-label, .run-settings.locked .field-grid label)',
             ),
           ];
           const full = [
             ...document.querySelectorAll(
-              '.processing-settings :is(.eyebrow, .disclosure, .help-tip, .memory-refresh, .live-setting), .pane-heading',
+              '.processing-settings :is(.eyebrow, .disclosure, .help-tip, .memory-refresh, .live-setting), .enhance-pane .sheet :is(.eyebrow, .help-tip, .memory-refresh, .live-setting), .pane-heading',
             ),
           ];
           return {
@@ -452,7 +457,7 @@ test.describe('overflow and alignment', () => {
       page,
     }) => {
       await page.setViewportSize({ width: 1380, height: 900 });
-      await lockedPane(page, scenarios.image);
+      await lockedPane(page, scenarios.image, true);
       const refresh = page.locator('.memory-refresh');
       await refresh.scrollIntoViewIfNeeded();
       const before = await box(refresh);
@@ -469,7 +474,7 @@ test.describe('overflow and alignment', () => {
 
     test('help tips still open while locked', async ({ page }) => {
       await page.setViewportSize({ width: 1380, height: 900 });
-      await lockedPane(page, scenarios.image);
+      await lockedPane(page, scenarios.image, true);
       const tip = page.getByRole('button', { name: 'About Hardware' });
       await tip.scrollIntoViewIfNeeded();
       await tip.click();
@@ -502,7 +507,7 @@ test.describe('overflow and alignment', () => {
     }
   });
 
-  test('Advanced: three selects share the select column; the FFmpeg actions are one line', async ({
+  test('Advanced and Plan sheet: three selects share the select column; the FFmpeg actions are one line', async ({
     page,
   }) => {
     await openApp(page, ready);
@@ -510,12 +515,11 @@ test.describe('overflow and alignment', () => {
     await page.getByRole('button', { name: /^Advanced/ }).click();
     const column = page.locator('#format');
     await column.scrollIntoViewIfNeeded();
-    expect(Math.abs((await left(page.locator('#halo-size'))) - (await left(column)))).toBeLessThan(
-      0.5,
-    );
-    expect(
-      Math.abs((await right(page.locator('#precision'))) - (await right(column))),
-    ).toBeLessThan(0.5);
+    const formatLeft = await left(column);
+    const formatRight = await right(column);
+    await page.locator('.foot-plan').click();
+    expect(Math.abs((await left(page.locator('#halo-size'))) - formatLeft)).toBeLessThan(0.5);
+    expect(Math.abs((await right(page.locator('#precision'))) - formatRight)).toBeLessThan(0.5);
 
     await openApp(page, video);
     await showPane(page, 'enhance');
@@ -643,13 +647,15 @@ test.describe('contrast and targets', () => {
     for (const label of checks) expect(await contrastOnPage(label)).toBeGreaterThanOrEqual(4.5);
   });
 
-  test('help tips and the Model card links are at least 24 px targets', async ({ page }) => {
+  test('help tips and the Plan sheet links are at least 24 px targets', async ({ page }) => {
     await openApp(page, ready);
     await showPane(page, 'enhance');
-    const plan = page.getByRole('region', { name: 'Model plan' });
+    await page.locator('.foot-plan').click();
+    const sheet = page.getByRole('group', { name: 'Plan' });
     const targets = [
       ...(await page.locator('.inspector-scroll .help-tip').all()),
-      ...(await plan.locator('.link-button').all()),
+      ...(await sheet.locator('.help-tip').all()),
+      ...(await sheet.locator('.link-button').all()),
     ];
     expect(targets.length).toBeGreaterThan(3);
     for (const target of targets) {

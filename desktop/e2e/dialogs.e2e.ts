@@ -99,10 +99,12 @@ test.describe('dialog keyboard behaviour', () => {
     await page.keyboard.press('Escape');
     await expect(library).toHaveCount(0);
     await showPane(page, 'enhance');
+    await page.locator('.foot-plan').click();
     const change = page.getByRole('button', { name: /^Change/ }).first();
     await change.focus();
     await page.keyboard.press('Enter');
     await expect(library).toBeVisible();
+    expect(await insideDialog(page)).toBe(true);
     await page.keyboard.press('Escape');
     await expect(library).toHaveCount(0);
     await expect(change).toBeFocused();

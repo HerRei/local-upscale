@@ -125,12 +125,15 @@ for (const appearance of ['dark', 'light'] as const) {
     ).toBeGreaterThanOrEqual(7);
 
     await showPane(page, 'enhance');
-    expect(await contrastOnPage(page.locator('.plan-row .stage').first())).toBeGreaterThanOrEqual(7);
     expect(await contrastOnPage(page.locator('.chips .chip').first())).toBeGreaterThanOrEqual(7);
     expect(
       await contrastOnPage(page.getByRole('button', { name: 'Upscale selected' })),
     ).toBeGreaterThanOrEqual(7);
 
+    await page.locator('.foot-plan').click();
+    expect(await contrastOnPage(page.locator('.plan-row .stage').first())).toBeGreaterThanOrEqual(
+      7,
+    );
     await page.getByRole('button', { name: 'Change the upscaler' }).click();
     const library = page.getByRole('dialog', { name: 'Model library' });
     await expect(library).toBeVisible();
@@ -149,6 +152,7 @@ for (const appearance of ['dark', 'light'] as const) {
       },
     });
     await showPane(page, 'enhance');
+    await page.locator('.foot-plan').click();
     const state = page.locator('.plan-row .state').first();
     await expect(state).toContainText('Needs your file');
     expect(await contrastOnPage(state)).toBeGreaterThanOrEqual(7);

@@ -6,10 +6,18 @@ import { upscale, video, windows } from './fixtures';
 async function openAdvanced(page: Page): Promise<void> {
   await showPane(page, 'enhance');
   await page.getByRole('button', { name: /^Advanced/ }).click();
+}
+
+async function openPlanSheet(page: Page): Promise<void> {
+  await showPane(page, 'enhance');
+  const trigger = page.locator('.foot-plan');
+  if ((await trigger.getAttribute('aria-expanded')) !== 'true') {
+    await trigger.click();
+  }
   await expect(page.locator('#device')).toBeVisible();
 }
 
-// Settings holds the default hardware; Advanced chooses it for this session.
+// Settings holds the default hardware; the Plan sheet chooses it for this session.
 // External FFmpeg is app-wide too: its Advanced row opens Settings at Storage.
 async function openFfmpegSettings(page: Page): Promise<void> {
   await openAdvanced(page);
@@ -21,7 +29,7 @@ async function openFfmpegSettings(page: Page): Promise<void> {
 }
 
 async function openHardwareSettings(page: Page): Promise<void> {
-  await openAdvanced(page);
+  await openPlanSheet(page);
   await emit(page, 'native-menu-action', 'app.settings');
   await page
     .getByRole('dialog', { name: 'Settings' })
@@ -54,7 +62,7 @@ test.describe('Settings: hardware', () => {
     page,
   }) => {
     await openApp(page, upscale);
-    await openAdvanced(page);
+    await openPlanSheet(page);
     const lowPriorityBox = page.locator('#low-priority .live-checkbox');
     const safeMemoryRow = page.locator('.check-row', { hasText: 'Safe memory mode' });
     const safeMemoryBox = safeMemoryRow.locator('input[type="checkbox"]');
@@ -268,7 +276,9 @@ test.describe('Video audio cleanup', () => {
 
     await checkbox.check();
     await expect.poll(async () => (await lastSaved(page)).video_clean_audio).toBe(true);
+    await openPlanSheet(page);
     await expect(page.getByRole('list', { name: 'Stages' })).toContainText('DeepFilterNet3');
+    await page.keyboard.press('Escape');
 
     const picker = audio.getByLabel('Audio model');
     await expect(picker).toHaveValue('deepfilternet3');
@@ -279,7 +289,9 @@ test.describe('Video audio cleanup', () => {
       .poll(async () => (await lastSaved(page)).video_audio_model)
       .toBe('dpdfnet8_48khz_hr');
     await expect(audio).toContainText('Stronger speech noise removal');
+    await openPlanSheet(page);
     await expect(page.getByRole('list', { name: 'Stages' })).toContainText('DPDFNet');
+    await page.keyboard.press('Escape');
 
     await page.getByRole('button', { name: 'Start selected video' }).click();
     await expect

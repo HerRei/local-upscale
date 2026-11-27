@@ -19,7 +19,16 @@ const mac: Scenario = {
   },
 };
 
+async function openPlanSheet(page: Page): Promise<void> {
+  const trigger = page.locator('.foot-plan');
+  if ((await trigger.getAttribute('aria-expanded')) !== 'true') {
+    await trigger.click();
+  }
+  await expect(page.getByRole('group', { name: 'Plan' })).toBeVisible();
+}
+
 async function openUpscalerLibrary(page: Page): Promise<Locator> {
+  await openPlanSheet(page);
   await page.getByRole('button', { name: 'Change the upscaler' }).click();
   const library = page.getByRole('dialog', { name: 'Model library' });
   await expect(library).toBeVisible();
@@ -34,6 +43,7 @@ test('FlashVSR is chosen from the library on a Mac that can run it, with its own
   await expect(page.locator('#video-engine')).toHaveCount(0);
   await expect(page.locator('.model-output-note')).toHaveCount(0);
 
+  await openPlanSheet(page);
   const videoLink = page.getByRole('button', { name: 'SeedVR2, FlashVSR in the model library' });
   await expect(videoLink).toBeVisible();
   await expect(videoLink).toHaveText('SeedVR2, FlashVSR…');
@@ -114,6 +124,7 @@ test('on the CPU of the same Mac the library says what FlashVSR needs, and SeedV
 }) => {
   await openApp(page, { ...mac, settings: { ...mac.settings, device_id: 'cpu' } });
   await showPane(page, 'enhance');
+  await openPlanSheet(page);
   await expect(page.locator('.video-models-link')).toHaveText(/SeedVR2…/);
   const library = await openUpscalerLibrary(page);
   const flashRow = library.getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ });
@@ -135,6 +146,7 @@ test('a saved FlashVSR choice that cannot run here says why and cannot start', a
     settings: { ...mac.settings, device_id: 'cpu', selected_video_model_id: 'flashvsr_v11' },
   });
   await showPane(page, 'enhance');
+  await openPlanSheet(page);
   await expect(page.locator('.video-models-link')).toHaveCount(0);
   await expect(
     page.locator('.plan-note').getByRole('button', { name: 'About Video models' }),
@@ -161,6 +173,7 @@ test('on a Windows PC each video model is judged by its own rule in the library'
     installed: ['span_photo_x4'],
   });
   await showPane(page, 'enhance');
+  await openPlanSheet(page);
   await expect(page.locator('.video-models-link')).toHaveCount(0);
   await expect(page.locator('.model-output-note')).toHaveCount(0);
 
@@ -195,6 +208,7 @@ test('in Photo upscale the library shows no video rows in For this job', async (
     },
   });
   await showPane(page, 'enhance');
+  await openPlanSheet(page);
   await expect(page.locator('.video-models-link')).toHaveCount(0);
   const library = await openUpscalerLibrary(page);
   await expect(library.getByText('Several frames at once · Labs')).toHaveCount(0);

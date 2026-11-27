@@ -451,6 +451,14 @@ async function chooseTask(user: ReturnType<typeof userEvent.setup>, name: RegExp
   await user.click(screen.getByRole('button', { name }));
 }
 
+async function openPlanSheet(user: ReturnType<typeof userEvent.setup>): Promise<HTMLElement> {
+  const trigger = document.querySelector('.foot-plan') as HTMLButtonElement;
+  if (trigger.getAttribute('aria-expanded') !== 'true') {
+    await user.click(trigger);
+  }
+  return screen.getByRole('group', { name: 'Plan' });
+}
+
 /** A Mac with an editing engine, the native runtime and every Qwen bundle installed. */
 function editSnapshot(unifiedGb: number): AppSnapshot {
   const snapshot = readySnapshot([image('photo', true)]);
@@ -1709,6 +1717,10 @@ describe('LocalSR desktop interface', () => {
     const inspector = screen.getByRole('region', { name: 'Enhancement settings' });
     expect(inspector.classList.contains('inspector-scroll')).toBe(true);
     expect(screen.getByLabelText('Format')).toBeTruthy();
+    expect(
+      screen.getByRole('checkbox', { name: /Preserve safe metadata and color profile/i }),
+    ).toBeTruthy();
+    await openPlanSheet(user);
     expect(screen.getByRole('checkbox', { name: /Safe memory mode/i })).toBeTruthy();
   });
 
@@ -1826,6 +1838,7 @@ describe('LocalSR desktop interface', () => {
     user: ReturnType<typeof userEvent.setup>,
     rowName: RegExp,
   ): Promise<void> {
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: rowName }));
@@ -1874,6 +1887,7 @@ describe('LocalSR desktop interface', () => {
     await pickUpscalerInLibrary(user, /^HAT-S ×4/);
     expect(hdr.value).toBe('preserve');
     api.chooseCustomModel.mockResolvedValueOnce('/models/mine.safetensors' as never);
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     await user.click(screen.getByRole('button', { name: /Your own file/ }));
     await user.click(screen.getByRole('button', { name: 'Choose checkpoint…' }));
@@ -1959,10 +1973,10 @@ describe('LocalSR desktop interface', () => {
 
     expect(screen.getByRole('button', { name: /^Quick\s*Fast, clean result/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /^Best\s*Finest detail, slower/i })).toBeTruthy();
+    await openPlanSheet(user);
     expect(screen.getByRole('list', { name: 'Stages' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Change the upscaler' })).toBeTruthy();
 
-    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
     const hardware = screen.getByLabelText('Hardware');
     expect(within(hardware).getByRole('option', { name: 'Apple GPU (Metal)' })).toBeTruthy();
     expect(within(hardware).getByRole('option', { name: 'CPU' })).toBeTruthy();
@@ -2014,6 +2028,7 @@ describe('LocalSR desktop interface', () => {
         selected_model_id: oldModelId,
       }),
     );
+    await openPlanSheet(user);
     const stages = screen.getByRole('list', { name: 'Stages' });
     expect(within(stages).getByText('SeedVR2-3B')).toBeTruthy();
     expect(within(stages).getByText('Labs · several frames at once')).toBeTruthy();
@@ -2142,9 +2157,10 @@ describe('LocalSR desktop interface', () => {
     await user.selectOptions(rate, 'fps60');
     const order = screen.getByLabelText('Interpolate') as HTMLSelectElement;
     expect(order.value).toBe('after_upscale');
+    await user.selectOptions(order, 'before_upscale');
+    await openPlanSheet(user);
     expect(screen.getByText('Interpolate to 60 fps')).toBeTruthy();
     expect(screen.getByText(/24 → 60 fps/)).toBeTruthy();
-    await user.selectOptions(order, 'before_upscale');
 
     await user.click(screen.getByRole('button', { name: 'Start selected video' }));
     await waitFor(() => expect(api.startJobs).toHaveBeenCalledTimes(1));
@@ -2164,6 +2180,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.video_interpolation_order = 'after_upscale';
     snapshot.catalog.interpolation_models.forEach((model) => (model.installed = true));
     const user = await mountWith(snapshot);
+    await openPlanSheet(user);
     const stages = screen.getByRole('list', { name: 'Stages' });
     expect(within(stages).getByText(/after upscaling/)).toBeTruthy();
     expect(
@@ -2258,6 +2275,7 @@ describe('LocalSR desktop interface', () => {
     const user = await mountWith(flashSnapshot(16));
     expect(document.querySelectorAll('.model-output-note')).toHaveLength(0);
 
+    await openPlanSheet(user);
     await user.click(await screen.findByRole('button', { name: 'Change the upscaler' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ }));
@@ -2350,6 +2368,7 @@ describe('LocalSR desktop interface', () => {
       ).toBe(true);
       expect(screen.queryByLabelText('FlashVSR memory')).toBeNull();
 
+      await openPlanSheet(user);
       await user.click(await screen.findByRole('button', { name: 'Change the upscaler' }));
       const library = screen.getByRole('dialog', { name: 'Model library' });
       const flashRow = within(library).getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ });
@@ -2380,12 +2399,13 @@ describe('LocalSR desktop interface', () => {
     const oldSettingsSnapshot = flashSnapshot(16);
     oldSettingsSnapshot.settings.quality = 'quick';
     oldSettingsSnapshot.settings.selected_video_model_id = 'seedvr2_3b';
-    await mountWith(oldSettingsSnapshot);
+    const user = await mountWith(oldSettingsSnapshot);
     expect(screen.getByRole('button', { name: 'Recipes' })).toBeTruthy();
     expect(screen.getByText('Model · chosen by you')).toBeTruthy();
     expect(screen.getByRole('button', { name: /^Quick/ }).getAttribute('aria-pressed')).toBe(
       'false',
     );
+    await openPlanSheet(user);
     expect(
       within(screen.getByRole('list', { name: 'Stages' })).getByText('SeedVR2-3B'),
     ).toBeTruthy();
@@ -2395,6 +2415,7 @@ describe('LocalSR desktop interface', () => {
     const flashJob = flashSnapshot(16);
     flashJob.settings.selected_video_model_id = 'flashvsr_v11';
     const user = await mountWith(flashJob);
+    await openPlanSheet(user);
     await user.click(await screen.findByRole('button', { name: 'Change the upscaler' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
     const flashRow = within(library).getByRole('button', { name: /^FlashVSR v1\.1 — Labs/ });
@@ -2411,6 +2432,7 @@ describe('LocalSR desktop interface', () => {
     await user.click(screen.getByRole('button', { name: /^Quick/ }));
     await user.click(screen.getByRole('radio', { name: 'Same size' }));
     await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
     const restoreLib = screen.getByRole('dialog', { name: 'Model library' });
     expect(within(restoreLib).queryByText('Several frames at once · Labs')).toBeNull();
@@ -2423,6 +2445,7 @@ describe('LocalSR desktop interface', () => {
     const photoSnap = readySnapshot([image('photo', true)]);
     photoSnap.settings.task = 'upscale';
     const photoUser = await mountWith(photoSnap);
+    await openPlanSheet(photoUser);
     await photoUser.click(await screen.findByRole('button', { name: 'Change the upscaler' }));
     const photoLib = screen.getByRole('dialog', { name: 'Model library' });
     expect(within(photoLib).queryByText('Several frames at once · Labs')).toBeNull();
@@ -2436,6 +2459,7 @@ describe('LocalSR desktop interface', () => {
     seedOnlyMac.settings.task = 'video';
     seedOnlyMac.capabilities.system_ram_total = 16 * 1024 ** 3;
     const user = await mountWith(seedOnlyMac);
+    await openPlanSheet(user);
     const seedOnlyButton = await screen.findByRole('button', {
       name: /\d+ more models? in the library/,
     });
@@ -2495,7 +2519,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.precision = 'fp32';
     snapshot.settings.quality = 'custom';
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
+    await openPlanSheet(user);
     const precision = screen.getByLabelText('Precision') as HTMLSelectElement;
     expect(precision.value).toBe('fp32');
   });
@@ -2745,6 +2769,7 @@ describe('LocalSR desktop interface', () => {
       within(settingsDialog).getByText(/checks once that it gives the same result as the CPU/),
     ).toBeTruthy();
     // ONNX Runtime GPU routes always run FP32: the control says so and cannot change it.
+    await openPlanSheet(user);
     const precision = screen.getByLabelText('Precision') as HTMLSelectElement;
     expect(precision.disabled).toBe(true);
     expect(precision.value).toBe('fp32');
@@ -2756,6 +2781,7 @@ describe('LocalSR desktop interface', () => {
     expect(
       within(settingsDialog).getByText(/checks once that it gives the same result as the CPU/),
     ).toBeTruthy();
+    await openPlanSheet(user);
     expect((screen.getByLabelText('Precision') as HTMLSelectElement).disabled).toBe(true);
   });
 
@@ -3550,6 +3576,7 @@ describe('LocalSR desktop interface', () => {
     const cancel = await screen.findByRole('button', { name: 'Cancel' });
     await user.click(cancel);
     expect(screen.getByRole('button', { name: 'Stopping…' }).matches(':disabled')).toBe(true);
+    await openPlanSheet(user);
     expect(screen.getByRole('button', { name: 'Change the upscaler' }).matches(':disabled')).toBe(
       true,
     );
@@ -4354,6 +4381,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.catalog.models.find((model) => model.model_id === 'fbcnn_color')!.installed = false;
     const user = await mountWith(snapshot);
 
+    await openPlanSheet(user);
     const stages = within(screen.getByRole('list', { name: 'Stages' })).getAllByRole('listitem');
     expect(stages[0].textContent).toContain('Fix JPEG');
     expect(stages[0].textContent).toContain('FBCNN Color');
@@ -4444,9 +4472,11 @@ describe('LocalSR desktop interface', () => {
         }),
       ),
     );
+    await openPlanSheet(user);
     expect(
       within(screen.getByRole('list', { name: 'Stages' })).getAllByRole('listitem'),
     ).toHaveLength(2);
+    await user.keyboard('{Escape}');
     await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
@@ -4483,8 +4513,10 @@ describe('LocalSR desktop interface', () => {
         }),
       ),
     );
+    await openPlanSheet(user);
     const stages = screen.getByRole('list', { name: 'Stages' });
     expect(within(stages).getByText('Fix noise')).toBeTruthy();
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the noise fix model' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
     expect(within(library).getByText('Choosing for Upscale · Noise')).toBeTruthy();
@@ -4505,9 +4537,12 @@ describe('LocalSR desktop interface', () => {
         }),
       ),
     );
-    expect(screen.getByText('Model')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Back to Best' })).toBeNull();
-    expect(within(stages).getByText(/Your pick/)).toBeTruthy();
+    await openPlanSheet(user);
+    expect(
+      within(screen.getByRole('list', { name: 'Stages' })).getByText(/Your pick/),
+    ).toBeTruthy();
+    await user.keyboard('{Escape}');
 
     // The choice survives the chip going off and on, Quick and back, and the content switch.
     await user.click(screen.getByRole('button', { name: 'Noise', pressed: true }));
@@ -4538,6 +4573,7 @@ describe('LocalSR desktop interface', () => {
       ),
     );
 
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the noise fix model' }));
     const again = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(again).getByRole('button', { name: 'Back to the default' }));
@@ -4554,11 +4590,14 @@ describe('LocalSR desktop interface', () => {
   it('keeps a fix chosen for a hand-picked upscaler through a chip round trip', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     const user = await mountWith(snapshot);
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     let library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }));
     await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
     await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await openPlanSheet(user);
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the noise fix model' }));
     library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
@@ -4582,6 +4621,7 @@ describe('LocalSR desktop interface', () => {
     await user.click(screen.getByRole('radio', { name: 'Same size' }));
     await user.click(screen.getByRole('button', { name: /^Best/ }));
     await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
     expect(within(library).getByText('Choosing for Same size · Noise')).toBeTruthy();
@@ -4612,6 +4652,7 @@ describe('LocalSR desktop interface', () => {
         }),
       ),
     );
+    await openPlanSheet(user);
     expect(
       within(screen.getByRole('list', { name: 'Stages' })).getByText(
         'Can add artifacts to sharp pictures and line art. Skipped if the result is unstable.',
@@ -4630,6 +4671,7 @@ describe('LocalSR desktop interface', () => {
       custom_models: [{ path: '/models/mine.safetensors', name: 'mine' }],
     });
     const user = await mountWith(snapshot);
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
     let library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
@@ -4644,9 +4686,11 @@ describe('LocalSR desktop interface', () => {
         }),
       ),
     );
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
     library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: 'Use for Noise' }));
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
     library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: 'Back to the default' }));
@@ -4664,12 +4708,13 @@ describe('LocalSR desktop interface', () => {
   it('warns before the blur fix that it can fail on sharp pictures', async () => {
     const user = await mountWith(readySnapshot([image('photo', true)]));
     await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    expect(screen.getByRole('button', { name: 'About Fix' })).toBeTruthy();
+    await openPlanSheet(user);
     expect(
       within(screen.getByRole('list', { name: 'Stages' })).getByText(
         'Can add artifacts to sharp pictures and line art. Skipped if the result is unstable.',
       ),
     ).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'About Fix' })).toBeTruthy();
   });
 
   it('names the fix of a recipe saved before fix chips existed', async () => {
@@ -4711,11 +4756,13 @@ describe('LocalSR desktop interface', () => {
     const snapshot = readySnapshot([image('portrait', true)]);
     snapshot.engine!.features.push('face_aware');
     const user = await mountWith(snapshot);
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     let library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }));
     await user.click(within(library).getByRole('button', { name: 'Use for this job' }));
     expect(screen.queryByRole('button', { name: 'Faces' })).toBeNull();
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /HAT-S ×4/ }));
@@ -4794,7 +4841,7 @@ describe('LocalSR desktop interface', () => {
     snapshot.settings.device_id = 'openvino:80d1';
     snapshot.settings.selected_model_id = 'span_photo_x4';
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
+    await openPlanSheet(user);
     expect((screen.getByLabelText('Precision') as HTMLSelectElement).value).toBe('fp16');
     await chooseMenuItem('app.settings');
     const settingsDialog = await screen.findByRole('dialog', { name: 'Settings' });
@@ -4825,6 +4872,7 @@ describe('LocalSR desktop interface', () => {
   it('picks a model for this job from the library and marks the recipe as custom', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     const user = await mountWith(snapshot);
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
     expect(within(library).getByRole('button', { name: /For this job/ })).toBeTruthy();
@@ -4854,6 +4902,7 @@ describe('LocalSR desktop interface', () => {
 
   it('shows compatible models left and opens the library filtered to the current job', async () => {
     const user = await mountWith(readySnapshot([image('photo', true)]));
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: /more models in the library/i }));
 
     const library = screen.getByRole('dialog', { name: 'Model library' });
@@ -4866,6 +4915,7 @@ describe('LocalSR desktop interface', () => {
   it('uses the tile overlap a library model needs', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     const user = await mountWith(snapshot);
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /DAT2 ×4 BHI Real/ }));
@@ -4888,6 +4938,7 @@ describe('LocalSR desktop interface', () => {
     api.removeModel.mockResolvedValue(undefined);
     const user = await mountWith(snapshot);
     await user.click(screen.getByRole('button', { name: /^Best/ }));
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }));
@@ -4901,6 +4952,7 @@ describe('LocalSR desktop interface', () => {
         }),
       ),
     );
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     const reopened = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(reopened).getByRole('button', { name: /^Installed/ }));
@@ -5045,6 +5097,7 @@ describe('Several fixes in one pass', () => {
     await user.click(screen.getByRole('button', { name: 'JPEG artifacts', pressed: false }));
     await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
     expect(screen.getByRole('button', { name: 'Noise', pressed: true })).toBeTruthy();
+    await openPlanSheet(user);
     expect(labels()).toEqual(['Fix blur', 'Fix JPEG', 'Fix noise', 'Upscale ×4']);
     const move = (name: string) => screen.getByRole('button', { name });
     // Each fix offers only the moves it can make.
@@ -5083,6 +5136,7 @@ describe('Several fixes in one pass', () => {
       }),
     );
 
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the noise fix model' }));
     let library = screen.getByRole('dialog', { name: 'Model library' });
     expect(within(library).getByText('Choosing for Upscale · Noise')).toBeTruthy();
@@ -5097,9 +5151,9 @@ describe('Several fixes in one pass', () => {
         preset_pins: { 'fix/noise/best': 'scunet_color_real_psnr' },
       }),
     );
+    await openPlanSheet(user);
     expect(within(rows()[1]).getByText(/Your pick/)).toBeTruthy();
     expect(within(rows()[2]).queryByText(/Your pick/)).toBeNull();
-
     await user.click(screen.getByRole('button', { name: 'Change the JPEG fix model' }));
     library = screen.getByRole('dialog', { name: 'Model library' });
     expect(within(library).getByText('Choosing for Upscale · JPEG artifacts')).toBeTruthy();
@@ -5116,6 +5170,7 @@ describe('Several fixes in one pass', () => {
       }),
     );
     // A fix moved to the top keeps the keyboard on its way back down.
+    await openPlanSheet(user);
     await user.click(move('Move the JPEG fix earlier'));
     expect(labels()).toEqual(['Fix JPEG', 'Fix noise', 'Upscale ×4']);
     expect(document.activeElement).toBe(move('Move the JPEG fix later'));
@@ -5136,6 +5191,7 @@ describe('Several fixes in one pass', () => {
       fix_stages: [noise, blur],
     });
     const user = await mountWith(snapshot);
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Move the noise fix later' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
@@ -5163,6 +5219,7 @@ describe('Several fixes in one pass', () => {
       fix_stages: [blur, jpeg, noise],
     });
     const user = await mountWith(snapshot);
+    await openPlanSheet(user);
     // The last fix stays: the Restore model and its overlap stay as they are.
     await user.click(screen.getByRole('button', { name: 'Move the blur fix later' }));
     await waitFor(() =>
@@ -5202,6 +5259,7 @@ describe('Several fixes in one pass', () => {
         fix_stages: [jpeg, { fix: 'noise', model_id: 'denoise_realplksr_1x' }],
       }),
     );
+    await openPlanSheet(user);
     expect(labels()).toEqual(['Fix JPEG', 'Fix noise']);
     // A fix before the model is chosen like one before an upscale; the model stays.
     await user.click(screen.getByRole('button', { name: 'Change the JPEG fix model' }));
@@ -5217,6 +5275,7 @@ describe('Several fixes in one pass', () => {
         preset_pins: { 'fix/jpeg/quick': 'fbcnn_color' },
       }),
     );
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
     expect(
       within(screen.getByRole('dialog', { name: 'Model library' })).getByText(
@@ -5226,6 +5285,7 @@ describe('Several fixes in one pass', () => {
     await user.click(screen.getByRole('button', { name: 'Close model library' }));
 
     // Now JPEG is last: FBCNN becomes the model, with the overlap it needs.
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Move the noise fix earlier' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
@@ -5272,6 +5332,7 @@ describe('Several fixes in one pass', () => {
       custom_models: [{ path: '/models/mine.safetensors', name: 'mine' }],
     });
     const user = await mountWith(snapshot);
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /SCUNet/ }));
@@ -5302,6 +5363,7 @@ describe('Several fixes in one pass', () => {
     await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
     await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
     api.chooseCustomModel.mockResolvedValueOnce('/models/mine.safetensors' as never);
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
     await user.click(screen.getByRole('button', { name: /Your own file/ }));
     await user.click(screen.getByRole('button', { name: 'Choose checkpoint…' }));
@@ -5312,6 +5374,7 @@ describe('Several fixes in one pass', () => {
         fixes: [],
       }),
     );
+    await openPlanSheet(user);
     expect(labels()).toEqual(['Fix']);
     expect(screen.getByRole('button', { name: 'Blur', pressed: false })).toBeTruthy();
   });
@@ -5322,6 +5385,7 @@ describe('Several fixes in one pass', () => {
     await user.click(screen.getByRole('button', { name: /^Best/ }));
     await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
     await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Move the noise fix earlier' }));
     api.saveRecipe.mockImplementationOnce(async (recipe: Recipe) => {
       snapshot.recipes = [recipe];
@@ -5343,6 +5407,7 @@ describe('Several fixes in one pass', () => {
     const saved = await screen.findByRole('button', { name: /^Two fixes/ });
     expect(saved.getAttribute('aria-pressed')).toBe('true');
 
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Move the blur fix earlier' }));
     await user.click(screen.getByRole('button', { name: 'Recipes' }));
     await waitFor(() =>
@@ -5492,6 +5557,7 @@ describe('Several fixes in one pass', () => {
     });
     snapshot.catalog.models.find((model) => model.model_id === 'span_photo_x4')!.installed = false;
     const user = await mountWith(snapshot);
+    await openPlanSheet(user);
     expect(within(rows()[0]).getByText('No model for this fix')).toBeTruthy();
     expect(rows()[0].textContent).not.toContain('Needs your file');
     expect(screen.queryByRole('button', { name: /then upscale$/ })).toBeNull();
@@ -5576,6 +5642,7 @@ describe('Several fixes in one pass', () => {
       expect(api.downloadModel).toHaveBeenCalledWith('nafnet_gopro_deblur', true),
     );
 
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the JPEG fix model' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('checkbox', { name: /reviewed.*license/i }));
@@ -5597,6 +5664,8 @@ describe('Several fixes in one pass', () => {
       preset_pins: { 'fix/noise/best': 'scunet_color_real_psnr' },
     });
     const user = await mountWith(snapshot);
+    await openPlanSheet(user);
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the noise fix model' }));
     await user.click(screen.getByRole('button', { name: 'Back to the default' }));
     await waitFor(() =>
@@ -6436,6 +6505,7 @@ describe('Comparing saved results', () => {
     snapshot.catalog.models.forEach((model) => (model.installed = false));
     const user = await mountWith(snapshot);
     await chooseTask(user, /^Upscale & restore$/);
+    await openPlanSheet(user);
     await user.click(
       await screen.findByRole('button', { name: 'Try other upscalers on this image' }),
     );
@@ -6455,6 +6525,7 @@ describe('Comparing saved results', () => {
     );
     const user = await mountWith(snapshot);
     await chooseTask(user, /^Upscale & restore$/);
+    await openPlanSheet(user);
     await user.click(
       await screen.findByRole('button', { name: 'Try other upscalers on this image' }),
     );
@@ -6996,6 +7067,7 @@ it('does not ask for a catalog model under Your own file', async () => {
   const user = await mountWith(readySnapshot([image('photo', true)]));
   await user.click(screen.getByRole('radio', { name: 'Same size' }));
   await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+  await openPlanSheet(user);
   await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
   await user.click(screen.getByRole('button', { name: /Your own file/ }));
   expect(
@@ -7421,8 +7493,10 @@ describe('crash reports', () => {
     const picker = within(audioRegion).getByLabelText('Audio model') as HTMLSelectElement;
     expect(picker.value).toBe('deepfilternet3');
     expect(within(audioRegion).getByText('Speech noise removal')).toBeTruthy();
+    await openPlanSheet(user);
     const stages = screen.getByRole('list', { name: 'Stages' });
     expect(within(stages).getByText('DeepFilterNet3')).toBeTruthy();
+    await user.keyboard('{Escape}');
 
     // Switching the picker to DPDFNet saves video_audio_model, updates summary & stages.
     await user.selectOptions(picker, 'dpdfnet8_48khz_hr');
@@ -7432,7 +7506,8 @@ describe('crash reports', () => {
       ),
     );
     expect(within(audioRegion).getByText('Stronger speech noise removal')).toBeTruthy();
-    expect(within(stages).getByText('DPDFNet')).toBeTruthy();
+    await openPlanSheet(user);
+    expect(within(screen.getByRole('list', { name: 'Stages' })).getByText('DPDFNet')).toBeTruthy();
 
     // Save as recipe preserves video_clean_audio and video_audio_model.
     const toggledSnap = structuredClone(snap);
@@ -7738,7 +7813,9 @@ describe('video Same size, Fix, and Output resolution', () => {
       name: 'Start selected video',
     }) as HTMLButtonElement;
     expect(startBtn.disabled).toBe(true);
+    await openPlanSheet(user);
     expect(screen.queryByRole('list', { name: 'Stages' })?.textContent?.trim()).toBe('');
+    await user.keyboard('{Escape}');
 
     // Turning on De-flicker enables Start with no restore model.
     await user.click(screen.getByRole('checkbox', { name: /De-flicker · Labs/i }));
@@ -8128,6 +8205,7 @@ describe('Model folder and Windows CPU GPU download notice', () => {
         }),
       ),
     );
+    await openPlanSheet(user);
     const colourTip = screen.getByRole('button', { name: 'About Colour' });
     await user.click(colourTip);
     expect(screen.getByRole('tooltip').textContent).toBe(
@@ -8136,6 +8214,7 @@ describe('Model folder and Windows CPU GPU download notice', () => {
 
     expect(screen.queryByRole('button', { name: 'Change the colour fix model' })).toBeNull();
     expect(screen.getByText('DDColor')).toBeTruthy();
+    await user.keyboard('{Escape}');
 
     // Best uses the same model, and Same size runs it as the primary row labelled "Colour".
     await user.click(screen.getByRole('button', { name: /^Best/ }));
@@ -8149,6 +8228,7 @@ describe('Model folder and Windows CPU GPU download notice', () => {
 
     await user.click(screen.getByRole('radio', { name: 'Same size' }));
     expect(screen.getByRole('button', { name: 'Colour', pressed: true })).toBeTruthy();
+    await openPlanSheet(user);
     const stages = screen.getByRole('list', { name: 'Stages' });
     expect(within(stages).getByText('Colour')).toBeTruthy();
     expect(within(stages).queryByText('Restore')).toBeNull();
@@ -8574,9 +8654,11 @@ describe('custom checkpoint library', () => {
   it('names a checkpoint, renames it and selects it from the custom group', async () => {
     const user = await mountWith(readySnapshot([image('photo', true)]));
     api.chooseCustomModel.mockResolvedValueOnce('/models/my_model.safetensors' as never);
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     await user.click(screen.getByRole('button', { name: /Your own file/ }));
     await user.click(screen.getByRole('button', { name: 'Choose checkpoint…' }));
+    await openPlanSheet(user);
     expect(await screen.findByText('my model')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     await user.click(screen.getByRole('button', { name: /Your own file/ }));
@@ -8589,6 +8671,7 @@ describe('custom checkpoint library', () => {
       custom_models: [{ path: '/models/my_model.safetensors', name: 'My favourite' }],
     });
     await user.click(screen.getByRole('button', { name: 'Use My favourite' }));
+    await openPlanSheet(user);
     expect(await screen.findByText('My favourite')).toBeTruthy();
   });
 });
@@ -8605,6 +8688,7 @@ describe('remembered custom checkpoint consent', () => {
     api.checkpointConsent.mockResolvedValue(true);
     const user = await mountWith(snapshot);
     await waitFor(() => expect(api.checkpointConsent).toHaveBeenCalledWith('/models/mine.pth'));
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     await user.click(screen.getByRole('button', { name: /Your own file/ }));
     await user.click(screen.getByRole('button', { name: 'Use Mine' }));
@@ -8627,7 +8711,8 @@ describe('older custom checkpoint settings', () => {
       custom_models: [{ path: '/models/old_checkpoint.pth' }],
       quality: 'custom',
     });
-    await mountWith(snapshot);
+    const user = await mountWith(snapshot);
+    await openPlanSheet(user);
     expect(await screen.findByText('old checkpoint')).toBeTruthy();
   });
 });
@@ -8716,7 +8801,7 @@ describe('Hardware and low priority in Advanced', () => {
     snapshot.settings.device_id = 'mps';
     snapshot.settings.low_priority = false;
     const user = await mountWith(snapshot);
-    await user.click(screen.getByRole('button', { name: /Advanced.*Format, tiles/i }));
+    await openPlanSheet(user);
     await user.selectOptions(screen.getByLabelText('Hardware'), 'cpu');
     await user.click(screen.getByRole('checkbox', { name: 'Run at low priority' }));
     expect(api.setRunLowPriority).toHaveBeenCalledWith(true);
@@ -9180,9 +9265,12 @@ describe('Size decides', () => {
       }),
     );
     expect(screen.queryByRole('radiogroup', { name: 'Content' })).toBeNull();
-    const stages = screen.getByRole('list', { name: 'Stages' });
-    expect(within(stages).queryByText(/Upscale/)).toBeNull();
-    expect(within(stages).getByText('Fix noise')).toBeTruthy();
+    await openPlanSheet(user);
+    expect(within(screen.getByRole('list', { name: 'Stages' })).queryByText(/Upscale/)).toBeNull();
+    expect(
+      within(screen.getByRole('list', { name: 'Stages' })).getByText('Fix noise'),
+    ).toBeTruthy();
+    await user.keyboard('{Escape}');
     expect(screen.getByText('Fast clean-up')).toBeTruthy();
     expect(screen.getByText('Most careful, slower')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Restore selected' })).toBeTruthy();
@@ -9204,11 +9292,7 @@ describe('Size decides', () => {
     const startBtn = screen.getByRole('button', { name: 'Restore selected' }) as HTMLButtonElement;
     expect(startBtn.disabled).toBe(true);
     expect(document.querySelectorAll('.recipe-grid small')).toHaveLength(0);
-    expect(
-      within(screen.getByRole('region', { name: 'Model plan' })).queryByRole('button', {
-        name: 'Change…',
-      }),
-    ).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Change…' })).toBeNull();
 
     // Tick Blur: Start enabled, row Fix blur, selected_model_id nafnet_gopro_deblur.
     await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
@@ -9218,7 +9302,9 @@ describe('Size decides', () => {
       }),
     );
     expect(startBtn.disabled).toBe(false);
-    expect(within(stages).getByText('Fix blur')).toBeTruthy();
+    await openPlanSheet(user);
+    expect(within(screen.getByRole('list', { name: 'Stages' })).getByText('Fix blur')).toBeTruthy();
+    await user.keyboard('{Escape}');
 
     // Size -> 2×: Blur stays ticked, Content back, row Upscale ×2.
     await user.click(screen.getByRole('radio', { name: '2×' }));
@@ -9230,7 +9316,11 @@ describe('Size decides', () => {
       }),
     );
     expect(screen.getByRole('radiogroup', { name: 'Content' })).toBeTruthy();
-    expect(within(stages).getByText('Upscale ×2')).toBeTruthy();
+    await openPlanSheet(user);
+    expect(
+      within(screen.getByRole('list', { name: 'Stages' })).getByText('Upscale ×2'),
+    ).toBeTruthy();
+    await user.keyboard('{Escape}');
 
     // Best then Illustration at 2× keep output_scale at 2.
     await user.click(screen.getByRole('button', { name: /^Best/ }));
@@ -9244,6 +9334,7 @@ describe('Size decides', () => {
   it('clamps scale to a 2× upscaler and disables 3× and 4× with a tooltip', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     const user = await mountWith(snapshot);
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /Real-ESRGAN ×2/ }));
@@ -9264,6 +9355,7 @@ describe('Size decides', () => {
   it('remembers a hand-picked upscaler across Same size and forgets it when a preset is clicked there', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     const user = await mountWith(snapshot);
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /HAT-L ×4 ImageNet/ }));
@@ -9327,11 +9419,14 @@ describe('Size decides', () => {
     ).toBeTruthy();
 
     await user.click(screen.getByRole('button', { name: /^Best/ }));
+    await openPlanSheet(user);
     expect(
       within(screen.getByRole('list', { name: 'Stages' })).getByText('NAFNet SIDD Width64'),
     ).toBeTruthy();
+    await user.keyboard('{Escape}');
 
     await user.click(screen.getByRole('button', { name: /^Quick/ }));
+    await openPlanSheet(user);
     expect(
       within(screen.getByRole('list', { name: 'Stages' })).getByText('RealPLKSR Denoise'),
     ).toBeTruthy();
@@ -9341,20 +9436,35 @@ describe('Size decides', () => {
     let library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /SCUNet Color/ }));
     await user.click(within(library).getByRole('button', { name: 'Use for Noise · Quick' }));
-    const stages = screen.getByRole('list', { name: 'Stages' });
-    expect(within(stages).getByText('SCUNet Color')).toBeTruthy();
-    expect(within(stages).getByText(/Your pick/)).toBeTruthy();
+    await openPlanSheet(user);
+    expect(
+      within(screen.getByRole('list', { name: 'Stages' })).getByText('SCUNet Color'),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByRole('list', { name: 'Stages' })).getByText(/Your pick/),
+    ).toBeTruthy();
+    await user.keyboard('{Escape}');
 
     await user.click(screen.getByRole('button', { name: /^Best/ }));
-    expect(within(stages).getByText('NAFNet SIDD Width64')).toBeTruthy();
+    await openPlanSheet(user);
+    expect(
+      within(screen.getByRole('list', { name: 'Stages' })).getByText('NAFNet SIDD Width64'),
+    ).toBeTruthy();
+    await user.keyboard('{Escape}');
 
     await user.click(screen.getByRole('button', { name: /^Quick/ }));
-    expect(within(stages).getByText('SCUNet Color')).toBeTruthy();
+    await openPlanSheet(user);
+    expect(
+      within(screen.getByRole('list', { name: 'Stages' })).getByText('SCUNet Color'),
+    ).toBeTruthy();
 
     await user.click(screen.getByRole('button', { name: 'Change the restore model' }));
     library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: 'Back to the default' }));
-    expect(within(stages).getByText('RealPLKSR Denoise')).toBeTruthy();
+    await openPlanSheet(user);
+    expect(
+      within(screen.getByRole('list', { name: 'Stages' })).getByText('RealPLKSR Denoise'),
+    ).toBeTruthy();
     expect(lastSaved().preset_pins).toEqual({});
   });
 
@@ -9453,7 +9563,7 @@ describe('Size decides', () => {
       fixes: [],
       fix_stages: [],
     });
-    await mountWith(loaded);
+    const loadedUser = await mountWith(loaded);
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
         task: 'denoise',
@@ -9462,9 +9572,11 @@ describe('Size decides', () => {
       }),
     );
     expect(screen.getByRole('button', { name: 'Noise' }).getAttribute('aria-pressed')).toBe('true');
+    await openPlanSheet(loadedUser);
     expect(
       within(screen.getByRole('list', { name: 'Stages' })).getByText('Fix noise'),
     ).toBeTruthy();
+    await loadedUser.keyboard('{Escape}');
     expect(
       (screen.getByRole('button', { name: 'Restore selected' }) as HTMLButtonElement).disabled,
     ).toBe(false);
@@ -9474,6 +9586,7 @@ describe('Size decides', () => {
     const snapshot = readySnapshot([video('clip', true)]);
     snapshot.settings.task = 'video';
     const user = await mountWith(snapshot);
+    await openPlanSheet(user);
     await user.click(screen.getByRole('button', { name: 'Change the upscaler' }));
     const library = screen.getByRole('dialog', { name: 'Model library' });
     await user.click(within(library).getByRole('button', { name: /^SeedVR2-3B — Labs/ }));
@@ -9526,6 +9639,7 @@ describe('host job plan client in App', () => {
     await user.click(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(startBtn.disabled).toBe(false));
     expect(screen.queryByText('Could not work out the plan.')).toBeNull();
+    await openPlanSheet(user);
     expect(
       within(screen.getByRole('list', { name: 'Stages' })).getByText('Upscale ×4'),
     ).toBeTruthy();
@@ -9537,11 +9651,8 @@ describe('host job plan client in App', () => {
     snapshot.settings.selected_model_id = 'span_photo_x4';
 
     const user = await mountWith(snapshot);
-    await waitFor(() =>
-      expect(
-        within(screen.getByRole('list', { name: 'Stages' })).getByText('Upscale ×4'),
-      ).toBeTruthy(),
-    );
+    const foot = document.querySelector('.panel-foot') as HTMLElement;
+    await waitFor(() => expect(within(foot).getByText('Upscale 4×')).toBeTruthy());
 
     let resolveNext!: (stages: import('./lib/plan').PlanStage[]) => void;
     const pending = new Promise<import('./lib/plan').PlanStage[]>((resolve) => {
@@ -9809,5 +9920,69 @@ describe('Enhance panel foot', () => {
       .closest('.foot-plan') as HTMLElement;
     expect(planEl.hasAttribute('aria-busy')).toBe(false);
     expect(planEl.classList.contains('dimmed')).toBe(false);
+  });
+});
+
+describe('Plan sheet', () => {
+  it('opens from the plan line with Noise and Blur, reorders stages while keeping the Fix list, and closes on Escape', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.output_scale = 4;
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Noise', pressed: false }));
+    await user.click(screen.getByRole('button', { name: 'Blur', pressed: false }));
+
+    const trigger = document.querySelector('.foot-plan') as HTMLButtonElement;
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    await user.click(trigger);
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+
+    const sheet = screen.getByRole('group', { name: 'Plan' });
+    expect(trigger.getAttribute('aria-controls')).toBe(sheet.id);
+    expect(within(sheet).getByText('Plan')).toBeTruthy();
+    expect(within(sheet).getByText('This run')).toBeTruthy();
+    const stages = within(sheet).getByRole('list', { name: 'Stages' });
+    expect(within(stages).getAllByRole('listitem')).toHaveLength(3);
+
+    await user.click(within(sheet).getByRole('button', { name: 'Move the blur fix later' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ fixes: ['noise', 'blur'] }),
+      ),
+    );
+    const fixLabels = Array.from(
+      screen.getByRole('group', { name: 'Fix' }).querySelectorAll('button'),
+    ).map((b) => b.textContent?.trim());
+    expect(fixLabels).toEqual(['Noise', 'Blur', 'JPEG artifacts', 'Colour']);
+
+    // This run controls live inside the sheet.
+    for (const label of ['Hardware', 'Tile', 'Halo', 'Precision']) {
+      expect(within(sheet).getByLabelText(label)).toBeTruthy();
+    }
+    expect(within(sheet).getByRole('checkbox', { name: 'Safe memory mode' })).toBeTruthy();
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('group', { name: 'Plan' })).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('opens while a job is running with selects disabled and Run at low priority active', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.settings.task = 'upscale';
+    snapshot.runtime.active_job_id = 'job-1';
+    const user = await mountWith(snapshot);
+
+    const sheet = await openPlanSheet(user);
+    for (const label of ['Hardware', 'Tile', 'Halo', 'Precision']) {
+      expect((within(sheet).getByLabelText(label) as HTMLSelectElement).disabled).toBe(true);
+    }
+    expect(
+      (within(sheet).getByRole('checkbox', { name: 'Safe memory mode' }) as HTMLInputElement)
+        .disabled,
+    ).toBe(true);
+    const lowPriority = within(sheet).getByRole('checkbox', { name: 'Run at low priority' });
+    expect(lowPriority.matches(':disabled')).toBe(false);
+    await user.click(lowPriority);
+    expect(api.setRunLowPriority).toHaveBeenCalledWith(true);
   });
 });

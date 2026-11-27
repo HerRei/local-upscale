@@ -3,34 +3,19 @@
   import AdvancedSettings from './AdvancedSettings.svelte';
   import HelpTip from './HelpTip.svelte';
   import ModelCredit from './ModelCredit.svelte';
+  import PlanSheet from './PlanSheet.svelte';
   import Popover from './Popover.svelte';
   import RecipesMenu from './RecipesMenu.svelte';
   import VideoMemory from './VideoMemory.svelte';
   import { customModels } from './lib/customModels';
   import { EDIT_FIT_LABELS, editFamilyLabel, editVariantName } from './lib/editing';
   import type { EnhancePanelActions, EnhancePanelView } from './lib/enhancePanel';
-  import { UNSTABLE_FIX_MODELS } from './lib/fixStages';
   import { formatBytes } from './lib/format';
-  import {
-    FIT_LABELS,
-    FIX_LABELS,
-    displayName,
-    fitFor,
-    frameRateChange,
-    libraryModelsForTask,
-    modelsAvailableBeyondSelection,
-    type PlanStage,
-  } from './lib/plan';
+  import { FIX_LABELS, displayName, type PlanStage } from './lib/plan';
   import { planLine } from './lib/planLine';
-  import { FIX_CHIPS, FIX_NAMES } from './lib/steps';
+  import { FIX_CHIPS } from './lib/steps';
   import type { FixKind, TaskKind } from './lib/types';
-  import {
-    FRAME_BY_FRAME_TIP,
-    SEVERAL_FRAMES_TIP,
-    videoEngineName,
-    videoModelShortName,
-    videoModelsForJob,
-  } from './lib/videoEngines';
+  import { videoModelShortName } from './lib/videoEngines';
 
   export let view: EnhancePanelView;
   export let actions: EnhancePanelActions;
@@ -45,6 +30,7 @@
   const lockedTitle = 'Finish or cancel the run to change settings.';
   const fixChips = FIX_CHIPS as FixKind[];
   let recipesOpen = false;
+  let planOpen = false;
 
   const {
     setTask,
@@ -140,6 +126,9 @@
   $: if (!recipesOpen) {
     deletingRecipeId = null;
     recipeEditorOpen = false;
+  }
+  $: if (!settings.task || settings.task === 'edit' || planState.status === 'error') {
+    planOpen = false;
   }
 
   $: taskTip =
@@ -573,358 +562,157 @@
           </section>
         {/if}
 
-        <section class="control-section model-section" aria-label="Model plan">
-          <div class="eyebrow eyebrow-row">
-            <span
-              >{activeQuality === 'custom' && settings.task !== 'edit'
-                ? 'Model · chosen by you'
-                : 'Model'}</span
+        {#if settings.task === 'edit'}
+          <section class="control-section model-section" aria-label="Model plan">
+            <div class="eyebrow eyebrow-row">
+              <span>Model</span>
+              <span class="eyebrow-actions">
+                {#if !noRestoreModel && !plan.some((stage) => stage.role === 'primary')}<button
+                    class="link-button"
+                    type="button"
+                    on:click={() => openLibrary('edit')}>Change…</button
+                  >{/if}
+              </span>
+            </div>
+            <div
+              class="plan"
+              role="list"
+              aria-label="Stages"
+              aria-busy={planState.status === 'loading' && !planState.first ? 'true' : undefined}
             >
-            <span class="eyebrow-actions">
-              {#if activeQuality === 'custom' && (bestModel || (settings.task === 'video' && restoring && imageFixes.length > 0)) && settings.task !== 'edit'}<button
-                  class="link-button"
-                  type="button"
-                  on:click={() => applyPreset('best')}>Back to Best</button
-                >{/if}
-              {#if !noRestoreModel && !plan.some((stage) => stage.role === 'primary')}<button
-                  class="link-button"
-                  type="button"
-                  on:click={() => openLibrary(settings.task === 'edit' ? 'edit' : 'primary')}
-                  >Change…</button
-                >{/if}
-            </span>
-          </div>
-          <div
-            class="plan"
-            class:movable={imageFixes.length > 1}
-            role="list"
-            aria-label="Stages"
-            aria-busy={planState.status === 'loading' && !planState.first ? 'true' : undefined}
-          >
-            {#each plan as stage (`${stage.role}:${stage.fix ?? stage.kind}`)}
-              {@const target =
-                stage.model ??
-                stage.videoModel ??
-                stage.editModel ??
-                stage.interpolationModel ??
-                stage.audioModel}
-              {@const changeSlot =
-                stage.role === 'fix'
-                  ? stage.fix !== 'colour' && stage.fix && 'fix'
-                  : stage.role === 'primary'
-                    ? stage.editModel
-                      ? 'edit'
-                      : 'primary'
-                    : undefined}
-              {@const moreVideoCount =
-                changeSlot === 'primary'
-                  ? videoModelsForJob(snapshot.catalog, settings.task, videoTask).filter(
-                      (model) =>
-                        !videoAvailable[model.model_id] &&
-                        model.model_id !== stage.videoModel?.model_id,
-                    ).length
-                  : 0}
-              {@const runnableVideoModels =
-                changeSlot === 'primary' && stage.model
-                  ? videoModelsForJob(snapshot.catalog, settings.task, videoTask).filter(
-                      (model) => !videoAvailable[model.model_id],
-                    )
-                  : []}
-              {@const videoNames = [
-                ...new Set(runnableVideoModels.map((model) => videoEngineName(model.engine_kind))),
-              ].join(', ')}
-              {@const moreModelCount =
-                changeSlot && settings.task !== 'edit'
-                  ? modelsAvailableBeyondSelection(
-                      libraryModelsForTask(
-                        snapshot.catalog.models,
-                        settings.task,
-                        settings.content,
-                        stage.fix,
-                        videoTask,
-                      ),
-                      stage.model?.model_id ?? '',
-                    ) + moreVideoCount
-                  : 0}
-              {@const tryOthers = stage.role === 'primary' && canTryOthers}
-              {@const name = stage.model
-                ? displayName(stage.model)
-                : stage.videoModel
-                  ? videoModelShortName(stage.videoModel)
-                  : stage.interpolationModel
-                    ? stage.interpolationModel.name.split(' — ')[0]
-                    : stage.audioModel
-                      ? stage.audioModel.name.split(' — ')[0]
-                      : stage.editModel
-                        ? editFamilyLabel(stage.editModel.family)
-                        : stage.missing
-                          ? 'No model for this fix'
-                          : stage.custom !== undefined
-                            ? (customModels(settings).find(
-                                (model) => model.path === settings.custom_model_path,
-                              )?.name ?? 'Checkpoint')
-                            : ''}
-              <!-- Licenses live in the model library; only exceptions show here. -->
-              {@const meta = stage.editModel
-                ? `${editVariantName(stage.editModel)}${
-                    editFit !== 'unknown' && editFit !== 'runs'
-                      ? ` · ${EDIT_FIT_LABELS[editFit]}`
-                      : ''
-                  }`
-                : stage.model
-                  ? [
-                      stage.remembered ? 'Your pick' : '',
-                      stage.model.support_tier === 'labs' ? 'Labs' : '',
-                      stage.model.commercial_use_allowed === false ? 'Non-commercial' : '',
-                      ['heavy', 'too_heavy'].includes(fitFor(stage.model, activeDevice))
-                        ? FIT_LABELS[fitFor(stage.model, activeDevice)]
-                        : '',
-                    ]
-                      .filter(Boolean)
-                      .join(' · ')
-                  : stage.videoModel
-                    ? 'Labs · several frames at once'
-                    : stage.interpolationModel
-                      ? [
-                          settings.video_interpolation && settings.video_interpolation !== 'off'
-                            ? frameRateChange(settings.video_interpolation, selectedMedia?.fps ?? 0)
-                            : '',
-                          settings.video_interpolation_order === 'before_upscale'
-                            ? 'before upscaling'
-                            : 'after upscaling',
-                          'Labs',
-                        ]
-                          .filter(Boolean)
-                          .join(' · ')
-                      : stage.audioModel
-                        ? stage.audioModel.summary || 'Audio cleanup'
-                        : ''}
-              {@const warning =
-                stage.model && UNSTABLE_FIX_MODELS.has(stage.model.model_id)
-                  ? stage.role === 'fix'
-                    ? 'Can add artifacts to sharp pictures and line art. Skipped if the result is unstable.'
-                    : 'Can add artifacts to sharp pictures and line art.'
+              {#each plan as stage (`${stage.role}:${stage.fix ?? stage.kind}`)}
+                {@const name = stage.editModel
+                  ? editFamilyLabel(stage.editModel.family)
+                  : stage.custom !== undefined
+                    ? (customModels(settings).find(
+                        (model) => model.path === settings.custom_model_path,
+                      )?.name ?? 'Checkpoint')
+                    : ''}
+                {@const meta = stage.editModel
+                  ? `${editVariantName(stage.editModel)}${
+                      editFit !== 'unknown' && editFit !== 'runs'
+                        ? ` · ${EDIT_FIT_LABELS[editFit]}`
+                        : ''
+                    }`
                   : ''}
-              {@const movable = stage.fix && imageFixes.length > 1}
-              {@const fixIndex = stage.fix
-                ? imageFixes.findIndex((selection) => selection.fix === stage.fix)
-                : -1}
-              {@const stageDownload = target ? downloadMap.get(target.model_id) : undefined}
-              <!-- Line 1: role, name, arrows and Change…; line 2 the library links; line 3 the note. -->
-              <div class="plan-row" role="listitem">
-                <span class="stage"
-                  >{#if stage.fix === 'colour' || stage.model?.purposes.includes('colorize')}<span
-                      class="label-with-tip"
-                      >{stage.label}<HelpTip
-                        label="Colour"
-                        text={settings.task === 'video'
-                          ? "Adds colour to black-and-white videos. Colours are the model's guess and are carried between frames so they stay steady."
-                          : "Adds colour to black-and-white photos. The colours are the model's guess. A photo that already has colour is recoloured too."}
-                      /></span
-                    >{:else}{stage.label}{/if}</span
-                >
-                <div class="name" title={name || undefined}>{name}</div>
-                <div class="plan-end">
-                  <span class="state" class:warn={stage.needsFile}
-                    >{stageDownload
-                      ? stageDownload.status === 'queued'
-                        ? 'Waiting'
-                        : `${Math.round(stageDownload.progress)}%`
-                      : stage.needsFile && !stage.installed
-                        ? 'Needs your file'
-                        : ''}</span
-                  >
-                  {#if movable}
-                    <!-- Only the moves this fix can make, directly left of Change…. -->
-                    <span class="plan-moves">
-                      {#if fixIndex > 0}<button
-                          class="move-button"
-                          type="button"
-                          title="Move earlier"
-                          aria-label={`Move the ${FIX_NAMES[stage.fix!]} fix earlier`}
-                          on:click={() => void moveFix(stage.fix!, -1)}>↑</button
-                        >{/if}
-                      {#if fixIndex >= 0 && fixIndex < imageFixes.length - 1}<button
-                          class="move-button"
-                          type="button"
-                          title="Move later"
-                          aria-label={`Move the ${FIX_NAMES[stage.fix!]} fix later`}
-                          on:click={() => void moveFix(stage.fix!, 1)}>↓</button
-                        >{/if}
-                    </span>
-                  {:else if stage.kind === 'interpolate'}
-                    <!-- Interpolation runs first (before upscaling) or last (after it). -->
-                    <span class="plan-moves">
-                      {#if settings.video_interpolation_order === 'before_upscale'}<button
-                          class="move-button"
-                          type="button"
-                          title="Interpolate after upscaling (faster)"
-                          aria-label="Interpolate after upscaling"
-                          on:click={() =>
-                            updateSettings({ video_interpolation_order: 'after_upscale' })}
-                          >↓</button
-                        >{:else}<button
-                          class="move-button"
-                          type="button"
-                          title="Interpolate before upscaling (smoother, slower)"
-                          aria-label="Interpolate before upscaling"
-                          on:click={() =>
-                            updateSettings({ video_interpolation_order: 'before_upscale' })}
-                          >↑</button
-                        >{/if}
-                    </span>
-                  {/if}
-                  {#if changeSlot}<button
-                      class="link-button"
-                      type="button"
-                      aria-label={changeSlot === 'fix' && stage.fix
-                        ? `Change the ${FIX_NAMES[stage.fix]} fix model`
-                        : changeSlot === 'edit'
-                          ? 'Change the edit model'
-                          : restoring
-                            ? 'Change the restore model'
-                            : 'Change the upscaler'}
-                      on:click={() => openLibrary(changeSlot, stage.fix)}>Change…</button
+                <div class="plan-row" role="listitem">
+                  <span class="stage">{stage.label}</span>
+                  <div class="name" title={name || undefined}>{name}</div>
+                  <div class="plan-end">
+                    <span class="state" class:warn={stage.needsFile}
+                      >{stage.needsFile && !stage.installed ? 'Needs your file' : ''}</span
                     >
-                  {/if}
-                </div>
-                {#if moreModelCount || tryOthers || runnableVideoModels.length}<div
-                    class="plan-links"
-                  >
-                    {#if moreModelCount}<button
+                    {#if stage.editModel}<button
                         class="link-button"
                         type="button"
-                        aria-label={`${moreModelCount} more ${moreModelCount === 1 ? 'model' : 'models'} in the library`}
-                        on:click={() => changeSlot && openLibrary(changeSlot, stage.fix)}
-                        >{moreModelCount} more {moreModelCount === 1 ? 'model' : 'models'}</button
+                        aria-label="Change the edit model"
+                        on:click={() => openLibrary('edit')}>Change…</button
                       >{/if}
-                    {#if tryOthers}<span class="try-others"
-                        ><button
-                          class="link-button"
-                          type="button"
-                          aria-label={restoring
-                            ? 'Try other restoration models on this image'
-                            : 'Try other upscalers on this image'}
-                          disabled={!canOpenTrials}
-                          on:click={() => openLibrary('try', stage.fix)}>Try others…</button
-                        ><HelpTip
-                          label="Try others"
-                          text="Runs this image once per model you pick, with the same settings. Each result is kept as its own file, and Showing in the preview lets you flip between them."
-                        /></span
-                      >{/if}
-                    {#if runnableVideoModels.length}<span class="video-models-link"
-                        ><button
-                          class="link-button"
-                          type="button"
-                          aria-label={`${videoNames} in the model library`}
-                          on:click={() =>
-                            openLibrary(
-                              'primary',
-                              stage.fix,
-                              (
-                                runnableVideoModels.find((model) => model.installed) ??
-                                runnableVideoModels[0]
-                              ).model_id,
-                            )}>{videoNames}…</button
-                        ><HelpTip
-                          label="Video models"
-                          text={`${SEVERAL_FRAMES_TIP} ${FRAME_BY_FRAME_TIP}`}
-                        /></span
-                      >{/if}
-                  </div>{/if}
-                {#if meta || warning || stage.custom !== undefined}<p
-                    class="plan-note"
-                    title={(stage.custom !== undefined
-                      ? settings.custom_model_path
-                      : [meta, warning].filter(Boolean).join(' · ')) || undefined}
-                  >
-                    {#if stage.custom !== undefined}<span class="path-text"
-                        >{settings.custom_model_path ||
-                          'Safetensors is strongly recommended.'}</span
-                      >{:else}{#if stage.videoModel}<span class="label-with-tip"
-                          >{meta}<HelpTip
-                            label="Video models"
-                            text={`${SEVERAL_FRAMES_TIP} ${FRAME_BY_FRAME_TIP}`}
-                          /></span
-                        >{:else}{meta}{/if}{#if meta && warning}{' · '}{/if}{#if warning}<span
-                          >{warning}</span
-                        >{/if}{/if}
-                  </p>{/if}
-              </div>
-            {/each}
-          </div>
-          {#if activeQuality === 'custom' && settings.task !== 'edit'}
-            <p class="model-note">
-              {usingTemporalVideo
-                ? 'Chosen by you. Fix, Same size, De-flicker and Frame rate need a frame-by-frame model: pick Quick or Best to go back.'
-                : 'Chosen by you. Pick Quick or Best to go back.'}
-            </p>
-          {/if}
-          {#if usingTemporalVideo}
-            <!-- The FlashVSR panel describes this Mac; where FlashVSR cannot run, the line
-               under the engine menu says why instead. -->
-            {#if !(flashVideo && temporalUnavailableReason)}
-              <VideoMemory
-                model={selectedVideoModel}
-                memoryEngine={videoMemoryEngine}
-                lowMemory={settings.video_low_memory ?? true}
-                device={snapshot.capabilities.devices.find(
-                  (device) => device.id === settings.device_id,
-                )}
-                memory={selectedMemory}
-                running={Boolean(
-                  selectedMemory && snapshot.runtime.active_job_id === selectedMemory.job_id,
-                )}
-                {outputDimensions}
-                disabled={Boolean(snapshot.runtime.active_job_id)}
-                on:change={(event) => updateSettings({ video_low_memory: event.detail })}
-              />
-            {/if}
-            <div class="field-row">
-              <label for="video-resolution">Output resolution</label><select
-                id="video-resolution"
-                value={settings.video_target_resolution
-                  ? String(settings.video_target_resolution)
-                  : `x${Math.min(4, Math.max(2, settings.output_scale))}`}
-                on:change={(event) => {
-                  const chosen = event.currentTarget.value;
-                  if (chosen.startsWith('x')) {
-                    updateSettings({
-                      output_scale: Number(chosen.slice(1)),
-                      video_target_resolution: 0,
-                    });
-                  } else {
-                    updateSettings({
-                      video_target_resolution: Number(chosen),
-                    });
-                  }
-                }}
-                >{#each [2, 3, 4] as scale}<option value={`x${scale}`}
-                    >{selectedMedia && selectedMedia.width > 0 && selectedMedia.height > 0
-                      ? `${scale}× · ${selectedMedia.width * scale} × ${selectedMedia.height * scale}`
-                      : `${scale}×`}</option
-                  >{/each}{#each [256, 512, 720, 1080, 1440, 2160] as resolution}<option
-                    value={String(resolution)}>{resolution} px · shorter edge</option
-                  >{/each}</select
-              >
+                  </div>
+                  {#if meta || stage.custom !== undefined}<p
+                      class="plan-note"
+                      title={(stage.custom !== undefined ? settings.custom_model_path : meta) ||
+                        undefined}
+                    >
+                      {#if stage.custom !== undefined}<span class="path-text"
+                          >{settings.custom_model_path ||
+                            'Safetensors is strongly recommended.'}</span
+                        >{:else}{meta}{/if}
+                    </p>{/if}
+                </div>
+              {/each}
             </div>
-            <p class="model-description">
-              {#if flashVideo}
-                Smaller output takes less time. For a first test, try 256 or 512 px. FlashVSR works
-                best up to 4× the source: above that, it runs at 4× and resizes the rest.
-              {:else}
-                Smaller output uses less memory. For a first test, try 256 or 512 px. This can
-                reduce the size of a large source video.
-              {/if}
-            </p>
-            {#if selectedMedia && settings.video_target_resolution && settings.video_target_resolution < Math.min(selectedMedia.width, selectedMedia.height)}
-              <p class="notice">
-                This setting reduces {selectedMedia.width} × {selectedMedia.height} to {outputDimensions}.
-                Fine detail will be lost. Choose a larger output for a quality comparison.
+          </section>
+        {:else if activeQuality === 'custom' || usingTemporalVideo || (planState.status === 'ready' && !noRestoreModel && !plan.some((stage) => stage.role === 'primary'))}
+          <section class="control-section model-section" aria-label="Model plan">
+            <div class="eyebrow eyebrow-row">
+              <span>{activeQuality === 'custom' ? 'Model · chosen by you' : 'Model'}</span>
+              <span class="eyebrow-actions">
+                {#if activeQuality === 'custom' && (bestModel || (settings.task === 'video' && restoring && imageFixes.length > 0))}<button
+                    class="link-button"
+                    type="button"
+                    on:click={() => applyPreset('best')}>Back to Best</button
+                  >{/if}
+                {#if !noRestoreModel && !plan.some((stage) => stage.role === 'primary')}<button
+                    class="link-button"
+                    type="button"
+                    on:click={() => openLibrary('primary')}>Change…</button
+                  >{/if}
+              </span>
+            </div>
+            {#if activeQuality === 'custom'}
+              <p class="model-note">
+                {usingTemporalVideo
+                  ? 'Chosen by you. Fix, Same size, De-flicker and Frame rate need a frame-by-frame model: pick Quick or Best to go back.'
+                  : 'Chosen by you. Pick Quick or Best to go back.'}
               </p>
             {/if}
-          {/if}
-        </section>
+            {#if usingTemporalVideo}
+              <!-- The FlashVSR panel describes this Mac; where FlashVSR cannot run, the line
+                 under the engine menu says why instead. -->
+              {#if !(flashVideo && temporalUnavailableReason)}
+                <VideoMemory
+                  model={selectedVideoModel}
+                  memoryEngine={videoMemoryEngine}
+                  lowMemory={settings.video_low_memory ?? true}
+                  device={snapshot.capabilities.devices.find(
+                    (device) => device.id === settings.device_id,
+                  )}
+                  memory={selectedMemory}
+                  running={Boolean(
+                    selectedMemory && snapshot.runtime.active_job_id === selectedMemory.job_id,
+                  )}
+                  {outputDimensions}
+                  disabled={Boolean(snapshot.runtime.active_job_id)}
+                  on:change={(event) => updateSettings({ video_low_memory: event.detail })}
+                />
+              {/if}
+              <div class="field-row">
+                <label for="video-resolution">Output resolution</label><select
+                  id="video-resolution"
+                  value={settings.video_target_resolution
+                    ? String(settings.video_target_resolution)
+                    : `x${Math.min(4, Math.max(2, settings.output_scale))}`}
+                  on:change={(event) => {
+                    const chosen = event.currentTarget.value;
+                    if (chosen.startsWith('x')) {
+                      updateSettings({
+                        output_scale: Number(chosen.slice(1)),
+                        video_target_resolution: 0,
+                      });
+                    } else {
+                      updateSettings({
+                        video_target_resolution: Number(chosen),
+                      });
+                    }
+                  }}
+                  >{#each [2, 3, 4] as scale}<option value={`x${scale}`}
+                      >{selectedMedia && selectedMedia.width > 0 && selectedMedia.height > 0
+                        ? `${scale}× · ${selectedMedia.width * scale} × ${selectedMedia.height * scale}`
+                        : `${scale}×`}</option
+                    >{/each}{#each [256, 512, 720, 1080, 1440, 2160] as resolution}<option
+                      value={String(resolution)}>{resolution} px · shorter edge</option
+                    >{/each}</select
+                >
+              </div>
+              <p class="model-description">
+                {#if flashVideo}
+                  Smaller output takes less time. For a first test, try 256 or 512 px. FlashVSR
+                  works best up to 4× the source: above that, it runs at 4× and resizes the rest.
+                {:else}
+                  Smaller output uses less memory. For a first test, try 256 or 512 px. This can
+                  reduce the size of a large source video.
+                {/if}
+              </p>
+              {#if selectedMedia && settings.video_target_resolution && settings.video_target_resolution < Math.min(selectedMedia.width, selectedMedia.height)}
+                <p class="notice">
+                  This setting reduces {selectedMedia.width} × {selectedMedia.height} to {outputDimensions}.
+                  Fine detail will be lost. Choose a larger output for a quality comparison.
+                </p>
+              {/if}
+            {/if}
+          </section>
+        {/if}
 
         {#if lastFailure}
           <section
@@ -1102,16 +890,63 @@
         </p>
       {/if}
       {#if settings.task !== 'edit' && planState.status !== 'error'}
-        <div
-          class="foot-line foot-plan"
-          class:muted={planState.status === 'loading' && planState.first}
-          class:dimmed={planDimmed}
-          aria-label={planLineLabel}
-          aria-busy={planState.status === 'loading' && !planState.first ? 'true' : undefined}
-          title={planState.status === 'loading' && planState.first ? undefined : planLineText}
+        <Popover
+          bind:open={planOpen}
+          placement="sheet"
+          label="Plan"
+          triggerClass={`foot-line foot-plan foot-trigger${
+            planState.status === 'loading' && planState.first ? ' muted' : ''
+          }${planDimmed ? ' dimmed' : ''}`}
+          triggerLabel={planLineLabel}
+          triggerTitle={planState.status === 'loading' && planState.first
+            ? undefined
+            : planLineText}
+          triggerBusy={planState.status === 'loading' && !planState.first}
+          let:close
         >
-          <span class="foot-plan-text">{planLineText}</span>
-        </div>
+          <svelte:fragment slot="trigger">
+            <span class="foot-plan-text">{planLineText}</span>
+            <svg
+              class="pop-chevron"
+              aria-hidden="true"
+              xmlns="http://www.w3.org/2000/svg"
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.25"
+              stroke-linecap="round"
+              stroke-linejoin="round"><path d={planOpen ? 'm6 9 6 6 6-6' : 'm9 6 6 6-6 6'} /></svg
+            >
+          </svelte:fragment>
+          <PlanSheet
+            {snapshot}
+            {settings}
+            {defaultSettings}
+            {settingsLocked}
+            {restoring}
+            {usingTemporalVideo}
+            {videoTask}
+            {selectedModel}
+            {selectedMedia}
+            {editFit}
+            {imageFixes}
+            {planState}
+            {plan}
+            {videoAvailable}
+            {activeDevice}
+            {downloadMap}
+            {canOpenTrials}
+            {canTryOthers}
+            {updateSettings}
+            {chooseInAdvanced}
+            {useDefaultsForSession}
+            {openLibrary}
+            {moveFix}
+            {refreshCapabilities}
+          />
+        </Popover>
       {/if}
       {#if downloads.stages.length}
         <div class="foot-line foot-cost">

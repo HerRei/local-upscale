@@ -52,8 +52,7 @@ interface Variant {
 }
 
 const IMAGE = ['Format', 'Preserve safe metadata and color profile'];
-const TAIL = ['Save to', 'Memory pressure'];
-const GRID = ['Tile', 'Halo', 'Precision', 'Safe memory mode'];
+const TAIL = ['Save to'];
 const VIDEO = ['Container', 'Video format', 'Video quality · CRF'];
 
 const variants: Variant[] = [
@@ -61,40 +60,40 @@ const variants: Variant[] = [
     name: 'upscale on a Mac with HEIC',
     settings: { task: 'upscale', output_format: 'heic' },
     capabilities: mac,
-    expected: [...IMAGE, 'HEIC quality', ...TAIL, ...GRID],
+    expected: [...IMAGE, 'HEIC quality', ...TAIL],
   },
   {
     name: 'upscale elsewhere with JPEG',
     settings: { task: 'upscale', output_format: 'jpg' },
     capabilities: other,
-    expected: [...IMAGE, 'JPEG quality', ...TAIL, ...GRID],
+    expected: [...IMAGE, 'JPEG quality', ...TAIL],
   },
   {
     name: 'restore with PNG',
     settings: { task: 'denoise', output_format: 'png' },
     capabilities: other,
-    expected: ['Format', ...TAIL, ...GRID],
+    expected: ['Format', ...TAIL],
   },
   {
     name: 'video frame by frame on a Mac',
     settings: { task: 'video', video_interpolation: 'x2' },
     capabilities: mac,
     interpolation: true,
-    expected: [...VIDEO, 'De-flicker · Labs', 'Frame rate', 'Interpolate', ...TAIL, ...GRID],
+    expected: [...VIDEO, 'De-flicker · Labs', 'Frame rate', 'Interpolate', ...TAIL],
   },
   {
     name: 'video frame by frame elsewhere',
     settings: { task: 'video', video_interpolation: 'off' },
     capabilities: other,
     interpolation: true,
-    expected: [...VIDEO, 'De-flicker · Labs', 'Frame rate', ...TAIL, ...GRID],
+    expected: [...VIDEO, 'De-flicker · Labs', 'Frame rate', ...TAIL],
   },
   {
     name: 'video restore frame by frame elsewhere',
     settings: { task: 'video', video_task: 'denoise', video_interpolation: 'off' },
     capabilities: other,
     interpolation: true,
-    expected: [...VIDEO, 'De-flicker · Labs', 'Frame rate', ...TAIL, ...GRID],
+    expected: [...VIDEO, 'De-flicker · Labs', 'Frame rate', ...TAIL],
   },
   {
     name: 'video with a temporal model',
@@ -107,7 +106,7 @@ const variants: Variant[] = [
     name: 'edit on a Mac',
     settings: { task: 'edit' },
     capabilities: mac,
-    expected: ['Edit size', 'Steps', 'Seed', ...TAIL],
+    expected: ['Edit size', 'Steps', 'Seed', ...TAIL, 'Memory pressure'],
   },
 ];
 
@@ -213,7 +212,7 @@ describe('the wording of the help tips', () => {
       }
       cleanup();
     }
-    expect(texts.size).toBeGreaterThanOrEqual(20);
+    expect(texts.size).toBeGreaterThanOrEqual(14);
     for (const text of texts) {
       const words = text.trim().split(/\s+/).length;
       expect(words, text).toBeLessThanOrEqual(46);
@@ -254,10 +253,10 @@ describe('while a job runs, the whole Advanced section is locked', () => {
           'button, select, input, textarea, a[href], [role=button], [tabindex]',
         ),
       ];
-      expect(interactive.length).toBeGreaterThan(8);
+      expect(interactive.length).toBeGreaterThanOrEqual(3);
       const open = interactive.filter((item) => !usable(item) && !item.matches(':disabled'));
       expect(open.map((item) => item.outerHTML.slice(0, 80))).toEqual([]);
-      expect(interactive.filter(usable).length).toBeGreaterThan(3);
+      expect(interactive.filter(usable).length).toBeGreaterThanOrEqual(2);
       fieldset.remove();
     });
   }

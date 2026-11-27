@@ -3,8 +3,8 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import AdvancedSettings from './AdvancedSettings.svelte';
 import HelpTip from './HelpTip.svelte';
+import RunSettings from './RunSettings.svelte';
 import { demoSnapshot } from './lib/demo';
 
 afterEach(cleanup);
@@ -51,16 +51,14 @@ describe('setting hints', () => {
   it('sit next to Tile, Halo and Precision, whose labels still name their fields', async () => {
     const snapshot = demoSnapshot();
     snapshot.settings.task = 'upscale';
-    render(AdvancedSettings, {
+    render(RunSettings, {
       settings: snapshot.settings,
       selectedModel: undefined,
       capabilities: snapshot.capabilities,
       usingTemporalVideo: false,
       updateSettings: () => undefined,
-      chooseOutput: async () => undefined,
       refreshCapabilities: async () => true,
     });
-    await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
     expect(screen.getByRole('button', { name: 'About Hardware' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'About Safe memory mode' })).toBeTruthy();
     for (const name of ['Tile', 'Halo', 'Precision']) {

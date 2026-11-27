@@ -19,10 +19,12 @@ test.describe('Size decides', () => {
     await page.getByRole('button', { name: 'Blur', exact: true }).click();
     await page.getByRole('radio', { name: 'Same size' }).click();
 
-    const stages = page.getByRole('list', { name: 'Stages' });
-    await expect(stages).not.toContainText('Upscale');
     await expect(page.getByRole('radiogroup', { name: 'Content' })).toHaveCount(0);
     await expect(page.locator('.field-value')).toHaveText('1600 × 1067');
+    await page.locator('.foot-plan').click();
+    const stages = page.getByRole('list', { name: 'Stages' });
+    await expect(stages).not.toContainText('Upscale');
+    await page.keyboard.press('Escape');
 
     // Noise + Blur aren't installed in `scenario`, so the primary button downloads then restores.
     const start = page.locator('.status-actions button.primary.start');
@@ -54,7 +56,6 @@ test.describe('Size decides', () => {
 
     // Click 4×: Upscale row and Content come back, result is 6400 × 4268, both chips stay on.
     await page.getByRole('radio', { name: '4×' }).click();
-    await expect(stages).toContainText('Upscale ×4');
     await expect(page.getByRole('radiogroup', { name: 'Content' })).toBeVisible();
     await expect(page.locator('.field-value')).toHaveText('6400 × 4268');
     await expect(page.getByRole('button', { name: 'Noise', exact: true })).toHaveAttribute(
@@ -65,6 +66,9 @@ test.describe('Size decides', () => {
       'aria-pressed',
       'true',
     );
+    await page.locator('.foot-plan').click();
+    await expect(stages).toContainText('Upscale ×4');
+    await page.keyboard.press('Escape');
 
     // Same size, untick both: photo line shows and Start is disabled.
     await page.getByRole('radio', { name: 'Same size' }).click();
@@ -87,12 +91,17 @@ test.describe('Size decides', () => {
     const stages = page.getByRole('list', { name: 'Stages' });
     await expect(quick).toContainText('28 MB download');
     await expect(best).toContainText('443 MB download');
+    await page.locator('.foot-plan').click();
     await expect(stages).toContainText('RealPLKSR Denoise');
+    await page.keyboard.press('Escape');
 
     await best.click();
+    await page.locator('.foot-plan').click();
     await expect(stages).toContainText('NAFNet SIDD Width64');
+    await page.keyboard.press('Escape');
 
     await quick.click();
+    await page.locator('.foot-plan').click();
     await expect(stages).toContainText('RealPLKSR Denoise');
   });
 
