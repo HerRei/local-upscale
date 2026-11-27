@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.6.3-beta] - Unreleased
+## [0.6.3-beta] - 2026-11-27
 
 A hotfix for 0.6.2.
 
