@@ -182,7 +182,7 @@ export async function fetchPlan(
   return stages.map((stage) => hydrateStage(stage, snapshot));
 }
 
-export function createPlanClient(fetch: PlanFetcher = fetchPlan): {
+export function createPlanClient(fetchStages: PlanFetcher = fetchPlan): {
   state: Readable<PlanState>;
   request(snapshot: AppSnapshot, settings: UiSettings, options?: PlanJobOptions): void;
   settled(): Promise<PlanState>;
@@ -232,7 +232,7 @@ export function createPlanClient(fetch: PlanFetcher = fetchPlan): {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const stages = await Promise.race([
-        fetch(req.snapshot, req.settings, req.options),
+        fetchStages(req.snapshot, req.settings, req.options),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
             reject(new Error('Could not work out the plan in time.'));
