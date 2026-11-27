@@ -6,7 +6,16 @@
 - **Downloads show in one place, with size and time left.** Model downloads live in the status bar (and the library’s tray) with how much has arrived and how long is left, without repeating percentages across the panel. Interrupted downloads stay in the status bar with what was kept, and Start retries with only the rest to fetch, also after Cancel.
 - **Edit uses more graphics memory and adds Expert controls.** On graphics cards with their own memory, Edit now fits the largest size and places the text encoder and VAE on the GPU when they fit; a new Expert section under Advanced lets you override placement, set a GPU memory limit, or allow larger edit sizes.
 
-## [0.6.2-beta] - Unreleased
+## [0.6.3-beta] - 2026-11-27
+
+A hotfix for 0.6.2.
+
+- **Stopping a batch of photos no longer blocks the queue (Mac).** When you stopped a
+  batch while a photo was being processed, the photos that had not started stayed
+  waiting, and the next job never began until you restarted the engine or the app.
+  Those photos are now marked as stopped, and the next job starts right away.
+
+## [0.6.2-beta] - 2026-11-26
 
 A small speed and responsiveness update. Nothing changes in the results.
 

@@ -601,7 +601,7 @@ def test_the_macos_encoder_writes_a_lossless_tiff_and_runs_sips(tmp_path, monkey
     assert argv[6] == "90" and argv[8:] == ["--out", str(destination)]
     assert argv[7].endswith("source.tiff") and argv[7] == seen["parent"]
     assert kwargs["timeout"] == 300
-    assert seen["format"] == "TIFF" and seen["compression"] == "tiff_adobe_deflate"
+    assert seen["format"] == "TIFF" and seen["compression"] == "raw"
     assert seen["icc"] == _srgb_bytes() and seen["artist"] == "Artist"
     np.testing.assert_array_equal(seen["pixels"], pixels)
     assert destination.read_bytes() == b"heic bytes"

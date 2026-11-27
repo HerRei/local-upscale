@@ -275,10 +275,10 @@ does for model-less steps.
   `IMAGE_MODEL_STEP_HANDLERS`, and a UI row with the model choice. A 1x catalog model of
   that task would also show among the Restore models (`modelsForTask` takes every 1x model
   that is not a face model), so those lists must leave step models out.
-- **Video stabilisation and deinterlacing** (model-less, parameters): a video handler in
-  `VIDEO_STEP_HANDLERS` (both are phase `geometry`, so they arrive before the primary through
-  `step_stages` already); the output size after a crop and the frame rate after field
-  doubling must reach `VideoChainContext` (`output_width`, `fps`).
+- **Deinterlacing**: the dev-only video geometry step supports frame and field modes, field
+  order selection, and progressive-source passthrough. It still needs a UI row.
+- **Video stabilisation**: needs a video geometry handler and crop output dimensions passed
+  to `VideoChainContext`.
 - **Grain/film look for real**: the look (midtone weighting, grain size, colour grain), a UI
   row, and running after the primary in video (today refused).
 - **Denoise/deblur strength**: declare `strength` on the fix step, and blend the fix output

@@ -106,7 +106,7 @@ describe('step registry', () => {
     );
   });
 
-  it('names grain the one step a job adds by id, after the main model, for developers only', () => {
+  it('names grain a step a job adds by id, after the main model, for developers only', () => {
     expect(stepStage('grain')).toEqual({
       step: STEPS.find((step) => step.id === 'grain'),
       placement: 'after_primary',
@@ -116,8 +116,11 @@ describe('step registry', () => {
     expect(grain.media).toEqual(['image']);
     expect(grain.supports_mask).toBe(true);
     expect(grain.required_feature).toBe('image_grain');
-    expect(STEPS.filter((step) => step.dev_only).map((step) => step.id)).toEqual(['grain']);
-    expect(STEP_LIMITS.max_step_stages).toBe(1);
+    expect(STEPS.filter((step) => step.dev_only).map((step) => step.id)).toEqual([
+      'deinterlace',
+      'grain',
+    ]);
+    expect(STEP_LIMITS.max_step_stages).toBe(2);
     for (const id of ['upscale', 'noise', 'face_restore', 'deflicker', 'edit', 'missing']) {
       expect(stepStage(id)).toBeUndefined();
     }

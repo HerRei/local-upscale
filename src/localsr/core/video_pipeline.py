@@ -354,17 +354,32 @@ def _run_video_job(
     fps = config.fps_override if config.fps_override else probe.fps
     if fps <= 0:
         fps = 25.0
-    interpolation = _interpolation_target(config, probe.fps, preserve_hdr, synthesizer)
-    if interpolation is not None and not interpolation.applies_to(probe.fps):
+    deinterlace = next(
+        (stage for stage in config.preprocess_stages if stage.step_id == "deinterlace"), None
+    )
+    deinterlace_active = deinterlace is not None and not (
+        deinterlace.params.get("parity", "auto") == "auto" and probe.field_order == "progressive"
+    )
+    if deinterlace is not None and not deinterlace_active:
+        add_note = getattr(engine, "add_note", None)
+        if callable(add_note):
+            add_note("Already progressive · kept as it is")
+    field_mode = deinterlace_active and deinterlace.params.get("mode", "frame") == "field"
+    if field_mode:
+        fps *= 2
+    interpolation = _interpolation_target(config, fps, preserve_hdr, synthesizer)
+    if interpolation is not None and not interpolation.applies_to(fps):
         if warning_callback:
             warning_callback(
-                f"This video already plays at {probe.fps:g} fps, so frame interpolation to "
-                f"{interpolation.output_fps(probe.fps):g} fps was skipped."
+                f"This video already plays at {fps:g} fps, so frame interpolation to "
+                f"{interpolation.output_fps(fps):g} fps was skipped."
             )
         interpolation = None
     before_upscale = interpolation is not None and config.interpolation_order == "before_upscale"
 
     total_frames = selected_frame_count(probe.frame_count, config.start_frame, config.end_frame)
+    if field_mode:
+        total_frames *= 2
     if before_upscale and interpolation is not None:
         total_frames = interpolation.expected_frames(total_frames, fps)
     # One estimate for the tile and the frame reports. Model loading and the first tile,
@@ -632,6 +647,7 @@ def _run_video_frames(
         should_keep_partial_fn=_should_keep_partial,
         colour_keyframe_interval=COLOUR_KEYFRAME_INTERVAL,
         inference_started_at=inference_started_at,
+        field_order=probe.field_order,
     )
     # Build and validate the stage chain before loading any models.
     stages = build_video_stages(ctx)

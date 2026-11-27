@@ -66,8 +66,8 @@ The [model guide](docs/models/README.md) describes them, and
 [model licences](docs/model-licenses.md) lists each licence.
 
 <!-- release-candidate -->
-v0.6.2-beta is in preparation; the downloads below are still v0.6.1-beta.
-[Draft release notes](docs/releases/v0.6.2-beta.md).
+v0.7.0-beta is in preparation; the downloads below are still v0.6.3-beta.
+[Draft release notes](docs/releases/v0.7.0-beta.md).
 <!-- /release-candidate -->
 
 ## Download
@@ -78,9 +78,9 @@ Download one file for your computer; it is all you need. The Mac version include
 
 | Computer | Download |
 |---|---|
-| Mac (M1 or newer) | `LocalSR-v0.6.1-beta-macOS-arm64.dmg` |
-| Windows | `LocalSR-v0.6.1-beta-Windows-CPU-x86_64.exe` |
-| Linux | `LocalSR-v0.6.1-beta-Linux-CPU-x86_64.AppImage`, or `LocalSR-v0.6.1-beta-Linux-CPU-amd64.deb` on Ubuntu and Debian |
+| Mac (M1 or newer) | `LocalSR-v0.6.3-beta-macOS-arm64.dmg` |
+| Windows | `LocalSR-v0.6.3-beta-Windows-CPU-x86_64.exe` |
+| Linux | `LocalSR-v0.6.3-beta-Linux-CPU-x86_64.AppImage`, or `LocalSR-v0.6.3-beta-Linux-CPU-amd64.deb` on Ubuntu and Debian |
 
 ### Offline and advanced downloads
 
@@ -88,10 +88,10 @@ Only for a computer without internet access, or to install the GPU edition in on
 
 | Computer | Download |
 |---|---|
-| Windows, AMD or Intel graphics | `LocalSR-v0.6.1-beta-Windows-DirectML-x86_64.exe` |
-| Windows, NVIDIA | `LocalSR-v0.6.1-beta-Windows-CUDA-x86_64.exe` and all `LocalSR-v0.6.1-beta-Windows-CUDA-x86_64.engine.tar.gz.part-*` files in the same folder |
-| Linux, AMD | all `LocalSR-v0.6.1-beta-Linux-ROCm-x86_64.AppImage.part-*` files, joined |
-| Linux, NVIDIA | all `LocalSR-v0.6.1-beta-Linux-CUDA-x86_64.AppImage.part-*` files, joined |
+| Windows, AMD or Intel graphics | `LocalSR-v0.6.3-beta-Windows-DirectML-x86_64.exe` |
+| Windows, NVIDIA | `LocalSR-v0.6.3-beta-Windows-CUDA-x86_64.exe` and all `LocalSR-v0.6.3-beta-Windows-CUDA-x86_64.engine.tar.gz.part-*` files in the same folder |
+| Linux, AMD | all `LocalSR-v0.6.3-beta-Linux-ROCm-x86_64.AppImage.part-*` files, joined |
+| Linux, NVIDIA | all `LocalSR-v0.6.3-beta-Linux-CUDA-x86_64.AppImage.part-*` files, joined |
 
 To import an engine offline, download the `*.engine-payload.json` manifest, its `.engine.tar.gz.part-*` files and their `.sig` signature files into one folder, then open **Advanced -> Engine -> Change… -> Import engine from file…** and choose the `*.engine-payload.json` file.
 
@@ -105,14 +105,14 @@ To import an engine offline, download the `*.engine-payload.json` manifest, its 
 The [download page](https://herrei.github.io/localsr/download/) has the installers
 for each platform:
 
-- **macOS v0.6.1-beta:** Apple Silicon (M1 or newer) and macOS 14 or later. Intel
+- **macOS v0.6.3-beta:** Apple Silicon (M1 or newer) and macOS 14 or later. Intel
   Macs are not supported. Signed and notarized, and it updates itself.
-- **Windows v0.6.1-beta:** Windows 10 or 11 on x86-64. The standard installer
+- **Windows v0.6.3-beta:** Windows 10 or 11 on x86-64. The standard installer
   offers the GPU engine after setup; the DirectML and CUDA installers are for offline use. The installers are unsigned, so SmartScreen warns first: choose
   **More info**, then **Run anyway**. Setup installs for your account (Just me, no
   administrator rights) or for everyone on the computer, lets you choose a folder, add a desktop shortcut and launch
   LocalSR when done; uninstall keeps downloaded models and settings by default.
-- **Linux v0.6.1-beta:** x86-64 AppImage. The CPU AppImage offers the CUDA or ROCm
+- **Linux v0.6.3-beta:** x86-64 AppImage. The CPU AppImage offers the CUDA or ROCm
   engine after setup; the CUDA and ROCm AppImages are for offline use. The CPU
   AppImage runs Intel graphics through OpenVINO once Intel's compute driver
   (`intel-opencl-icd`) is installed. After first setup, it offers once to add
