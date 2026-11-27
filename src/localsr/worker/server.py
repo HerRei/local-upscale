@@ -769,12 +769,10 @@ class WorkerServer:
                                 )
                             )
                         else:
-                            from localsr.core.image_io import ImageManager
+                            from localsr.core.image_io import load_preview
 
                             report_probe("decoding_image")
-                            preview_data = ImageManager().load(media_path)
-                            tensor = preview_data["tensor"]
-                            _, height, width = tensor.shape
+                            pixels, width, height = load_preview(media_path, maximum)
                             report_probe("preparing_preview")
                             send_message(
                                 MediaInfo(
@@ -782,10 +780,12 @@ class WorkerServer:
                                     media_kind="image",
                                     width=int(width),
                                     height=int(height),
-                                    jpeg_base64=_encode_chw_jpeg(tensor, maximum, quality=82),
+                                    jpeg_base64=_encode_chw_jpeg(
+                                        pixels.transpose(2, 0, 1), maximum, quality=82
+                                    ),
                                 )
                             )
-                            del preview_data
+                            del pixels
                             gc.collect()
                     except Exception as error:  # noqa: BLE001
                         send_message(

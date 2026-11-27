@@ -1,4 +1,5 @@
 import io
+import math
 import os
 import struct
 import subprocess
@@ -67,17 +68,26 @@ WIDE_GREY_MODES = frozenset({"I;16", "I;16L", "I;16B", "I;16N", "I"})
 GREY_MODES = frozenset({"1", "L", "LA", "La"}) | WIDE_GREY_MODES
 
 
-def _narrow_wide_grey(image: Image.Image, sample_bits: int = 16) -> Image.Image:
+def _narrow_wide_grey(
+    image: Image.Image, sample_bits: int = 16, *, in_strips: bool = False
+) -> Image.Image:
     """Scale 16- and 32-bit grey to 8 bits.
 
     Pillow's own conversion clips every value above 255, so a 16-bit scan turned
     white apart from its blackest pixels. A 32-bit I image holding only 8-bit
     values is taken as it is.
     """
-    values = np.asarray(image).astype(np.float64)
-    if image.mode != "I" or values.max() > 255:
-        values = values * (255.0 / ((1 << sample_bits) - 1))
-    narrowed = Image.fromarray(np.clip(np.rint(values), 0, 255).astype(np.uint8))
+    source = np.asarray(image)
+    scale = 255.0 / ((1 << sample_bits) - 1) if image.mode != "I" or source.max() > 255 else 1.0
+    if in_strips:
+        result = np.empty(source.shape, dtype=np.uint8)
+        for top in range(0, source.shape[0], 256):
+            values = source[top : top + 256].astype(np.float64) * scale
+            result[top : top + 256] = np.clip(np.rint(values), 0, 255).astype(np.uint8)
+    else:
+        values = source.astype(np.float64) * scale
+        result = np.clip(np.rint(values), 0, 255).astype(np.uint8)
+    narrowed = Image.fromarray(result)
     narrowed.info.update(image.info)
     return narrowed
 
@@ -151,7 +161,9 @@ def _png_scanline_bytes(path: str | Path) -> tuple[int, int] | None:
         return None
 
 
-def _float_grey_to_16_bit(image: Image.Image) -> tuple[Image.Image, int | None]:
+def _float_grey_to_16_bit(
+    image: Image.Image, *, in_strips: bool = False
+) -> tuple[Image.Image, int | None]:
     """Take a 32-bit float grey image to 16 bits, and say which range it was read as.
 
     Pillow's own conversion keeps float values as they are and clips them to 0..255, so
@@ -160,18 +172,25 @@ def _float_grey_to_16_bit(image: Image.Image) -> tuple[Image.Image, int | None]:
     The second element is the upper end of the range when it is not 0..1, else None.
     Anything beyond that, below zero or not a number has no certain meaning and is refused.
     """
-    values = np.asarray(image, dtype=np.float32)
-    if not np.isfinite(values).all() or values.min() < -0.001 or values.max() > 65535.0 + 0.001:
-        raise ValueError(
-            "This floating-point image holds negative values, values above 65535 or "
-            "not-a-number values. Only floating-point images whose values run from 0 to 1, "
-            "0 to 255 or 0 to 65535 are supported; save an 8-bit or 16-bit copy first."
-        )
-    peak = float(values.max())
+    step = 256 if in_strips else image.height
+    peak = 0.0
+    for top in range(0, image.height, step):
+        values = np.asarray(image.crop((0, top, image.width, min(top + step, image.height))))
+        if not np.isfinite(values).all() or values.min() < -0.001 or values.max() > 65535.0 + 0.001:
+            raise ValueError(
+                "This floating-point image holds negative values, values above 65535 or "
+                "not-a-number values. Only floating-point images whose values run from 0 to 1, "
+                "0 to 255 or 0 to 65535 are supported; save an 8-bit or 16-bit copy first."
+            )
+        peak = max(peak, float(values.max()))
     scale = None if peak <= 1.001 else 255 if peak <= 255.0 + 0.001 else 65535
-    wide = Image.fromarray(
-        np.rint(np.clip(values / (scale or 1), 0.0, 1.0) * 65535.0).astype(np.uint16)
-    )
+    result = np.empty((image.height, image.width), dtype=np.uint16)
+    for top in range(0, image.height, step):
+        values = np.asarray(image.crop((0, top, image.width, min(top + step, image.height))))
+        result[top : top + step] = np.rint(
+            np.clip(values / (scale or 1), 0.0, 1.0) * 65535.0
+        ).astype(np.uint16)
+    wide = Image.fromarray(result)
     wide.info.update(image.info)
     return wide, scale
 
@@ -287,6 +306,39 @@ def _decode_with_macos(path: str, *, bit_depth: int = 8) -> Image.Image:
     return image
 
 
+def _preview_size(width: int, height: int, maximum: int) -> tuple[int, int]:
+    if max(width, height) <= maximum:
+        return width, height
+    aspect = width / height
+    if width <= height:
+        target = maximum * aspect
+        return max(
+            min(math.floor(target), math.ceil(target), key=lambda n: abs(aspect - n / maximum)), 1
+        ), maximum
+    target = maximum / aspect
+    return maximum, max(
+        min(
+            math.floor(target),
+            math.ceil(target),
+            key=lambda n: abs(aspect - maximum / n) if n else float("inf"),
+        ),
+        1,
+    )
+
+
+def load_preview(path: str, max_dimension: int) -> tuple[np.ndarray, int, int]:
+    """Decode a bounded RGB preview and return the oriented source dimensions."""
+    maximum = max(64, min(2048, int(max_dimension)))
+    manager = ImageManager()
+    try:
+        result = manager._load(path, preview_dimension=maximum)
+    except Exception as error:
+        if _is_decode_failure(error):
+            raise _unreadable(path) from error
+        raise
+    return result["pixels"], result["width"], result["height"]
+
+
 def require_output_bit_depth(format: str, output_bit_depth: int) -> None:
     if output_bit_depth not in (8, 16):
         raise ValueError("Output bit depth must be 8 or 16.")
@@ -356,7 +408,7 @@ def open_photo(path: str | Path) -> Image.Image:
     return open_image(path)
 
 
-def _develop_raw(path: str, output_bps: int = 8) -> np.ndarray:
+def _develop_raw(path: str, output_bps: int = 8, *, preview_dimension: int | None = None) -> Any:
     # Keep LibRaw out of the GUI process. ImageManager is instantiated by the
     # isolated worker for real jobs, and the import occurs only for RAW input.
     import rawpy
@@ -365,12 +417,23 @@ def _develop_raw(path: str, output_bps: int = 8) -> np.ndarray:
         with rawpy.imread(path) as raw:
             require_pixel_budget(raw.sizes.width, raw.sizes.height)
             require_pixel_budget(raw.sizes.raw_width, raw.sizes.raw_height)
-            return raw.postprocess(
+            options = {}
+            if preview_dimension is not None:
+                width, height = raw.sizes.width, raw.sizes.height
+                if raw.sizes.flip in (5, 6):
+                    width, height = height, width
+                # Half size bins 2x2 photosites instead of demosaicing, which looks softer
+                # than a developed image; only a further 2x reduction hides that, and a
+                # softer original would flatter the upscaled result beside it.
+                options["half_size"] = max(width, height) >= preview_dimension * 4
+            pixels = raw.postprocess(
+                **options,
                 use_camera_wb=True,
                 use_auto_wb=False,
                 output_color=rawpy.ColorSpace.sRGB,
                 output_bps=output_bps,
             )
+            return (pixels, width, height) if preview_dimension is not None else pixels
     except Exception as error:
         # LibRaw's own errors are bytes such as b'Input/output error'.
         if isinstance(error, getattr(rawpy, "LibRawError", ())):
@@ -426,7 +489,7 @@ class ImageManager:
                 raise _unreadable(path) from error
             raise
 
-    def _load(self, path: str, *, bit_depth: int = 8) -> dict:
+    def _load(self, path: str, *, bit_depth: int = 8, preview_dimension: int | None = None) -> dict:
         require_ordinary_source(path)
         self.notes = []
         self.alpha_channel = None
@@ -523,7 +586,12 @@ class ImageManager:
 
         if is_raw:
             try:
-                rgb = _develop_raw(path)
+                if preview_dimension is not None:
+                    rgb, full_width, full_height = _develop_raw(
+                        path, preview_dimension=preview_dimension
+                    )
+                else:
+                    rgb = _develop_raw(path)
                 img = Image.fromarray(rgb)
                 converted_icc = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
             finally:
@@ -532,9 +600,21 @@ class ImageManager:
         else:
             if metadata_img is None:  # pragma: no cover - guarded by the exception above
                 raise OSError(f"Could not open image: {path}")
+            full_width, full_height = metadata_img.size
+            if orientation in (5, 6, 7, 8):
+                full_width, full_height = full_height, full_width
+            if preview_dimension is not None and metadata_img.format == "JPEG":
+                scale = min(1.0, preview_dimension / max(full_width, full_height))
+                target = (
+                    max(1, round(metadata_img.width * scale)),
+                    max(1, round(metadata_img.height * scale)),
+                )
+                metadata_img.draft("RGB", target)
             img = ImageOps.exif_transpose(metadata_img)
             if img.mode == "F":
-                img, float_range = _float_grey_to_16_bit(img)
+                img, float_range = _float_grey_to_16_bit(
+                    img, in_strips=preview_dimension is not None
+                )
                 if float_range is not None:
                     self.notes.append(
                         f"{Path(path).name} holds floating-point values up to "
@@ -554,12 +634,18 @@ class ImageManager:
                 src_profile = ImageCms.ImageCmsProfile(f)
                 srgb_profile = ImageCms.createProfile("sRGB")
                 if img.mode in WIDE_GREY_MODES:
-                    values = np.asarray(img).astype(np.float64)
+                    source = np.asarray(img)
                     maximum = (1 << sample_bits) - 1
-                    if img.mode == "I" and values.max() <= 255:
+                    if img.mode == "I" and source.max() <= 255:
                         maximum = 255
-                    values = np.clip(np.rint(values * (65535 / maximum)), 0, 65535)
-                    img = Image.fromarray(values.astype(np.uint16))
+                    step = 256 if preview_dimension is not None else img.height
+                    wide = np.empty(source.shape, dtype=np.uint16)
+                    for top in range(0, img.height, step):
+                        values = source[top : top + step].astype(np.float64)
+                        wide[top : top + step] = np.clip(
+                            np.rint(values * (65535 / maximum)), 0, 65535
+                        ).astype(np.uint16)
+                    img = Image.fromarray(wide)
                 img = _to_srgb(img, src_profile, srgb_profile)
 
                 # Embed the output sRGB profile when saving.
@@ -570,7 +656,7 @@ class ImageManager:
                 warnings.warn(f"Invalid ICC profile: {e}", RuntimeWarning, stacklevel=2)
 
         if img.mode in WIDE_GREY_MODES:
-            img = _narrow_wide_grey(img, sample_bits)
+            img = _narrow_wide_grey(img, sample_bits, in_strips=preview_dimension is not None)
 
         # Handle Alpha. Palette and grey images (GIF, PNG) keep their transparency.
         if img.mode in ("LA", "PA") or (img.mode == "P" and "transparency" in img.info):
@@ -580,6 +666,12 @@ class ImageManager:
             img = img.convert("RGB")
         elif img.mode != "RGB":
             img = img.convert("RGB")
+
+        if preview_dimension is not None:
+            size = _preview_size(full_width, full_height, preview_dimension)
+            if img.size != size:
+                img = img.resize(size, Image.Resampling.LANCZOS, reducing_gap=2.0)
+            return {"pixels": np.asarray(img), "width": full_width, "height": full_height}
 
         pixels = np.array(img)
         # Grey modes, grey palettes and RGB files whose channels are all equal.
