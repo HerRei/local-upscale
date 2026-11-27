@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
 import EngineManagerDialog from './EngineManagerDialog.svelte';
 import { demoSnapshot } from './lib/demo';
 
@@ -115,4 +115,64 @@ it('shows a Verify button next to Remove and triggers onVerify with the engine i
     onImport: vi.fn(),
   });
   expect(within(row).getByText(/Verified/)).toBeTruthy();
+});
+
+it('shows size and time left while an engine downloads without Downloading… or percent', async () => {
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  vi.useFakeTimers();
+
+  const total = 2_400_000_000;
+  const base = demoSnapshot().engines!;
+  const engines = {
+    ...base,
+    download: {
+      stage: 'downloading' as const,
+      backend: 'cuda',
+      engine_id: 'windows-x86_64-cuda-demo',
+      downloaded: 1_170_000_000,
+      total,
+      error: null,
+    },
+  };
+  const { rerender } = render(EngineManagerDialog, {
+    engines,
+    onClose: vi.fn(),
+    onRefreshCatalog: vi.fn(),
+    onDownload: vi.fn(),
+    onCancelDownload: vi.fn(),
+    onUse: vi.fn(),
+    onRemove: vi.fn(),
+    onImport: vi.fn(),
+  });
+  const row = screen.getByText('NVIDIA CUDA').closest('li')!;
+  expect(within(row).getByText('1.2 of 2.4 GB')).toBeTruthy();
+
+  for (let sec = 1; sec <= 4; sec += 1) {
+    vi.advanceTimersByTime(1000);
+    await rerender({
+      engines: {
+        ...base,
+        download: {
+          stage: 'downloading',
+          backend: 'cuda',
+          engine_id: 'windows-x86_64-cuda-demo',
+          downloaded: 1_170_000_000 + sec * 6_700_000,
+          total,
+          error: null,
+        },
+      },
+      onClose: vi.fn(),
+      onRefreshCatalog: vi.fn(),
+      onDownload: vi.fn(),
+      onCancelDownload: vi.fn(),
+      onUse: vi.fn(),
+      onRemove: vi.fn(),
+      onImport: vi.fn(),
+    });
+  }
+
+  expect(within(row).getByText('1.2 of 2.4 GB · about 3 min left')).toBeTruthy();
+  expect(within(row).queryByText(/Downloading…|%/)).toBeNull();
 });

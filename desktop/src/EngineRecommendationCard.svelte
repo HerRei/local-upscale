@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { formatBytes } from './lib/format';
+  import { SingleDownloadLine } from './lib/downloadProgress';
   import type { EngineOffer } from './lib/engines';
   import type { EngineDownloadStatus } from './lib/types';
 
@@ -11,6 +11,8 @@
   export let onCancel: () => void;
   export let onDismiss: () => void;
 
+  const downloadLine = new SingleDownloadLine();
+
   $: activeDownload =
     download.backend === offer.backend &&
     (download.stage === 'downloading' ||
@@ -19,6 +21,13 @@
   $: percent = download.total
     ? Math.min(100, Math.round((download.downloaded / download.total) * 100))
     : 0;
+  $: downloadDetailText = downloadLine.update(
+    download.backend === offer.backend && download.stage === 'downloading',
+    offer.backend,
+    download.downloaded,
+    download.total,
+    performance.now() / 1000,
+  );
   $: displayError =
     error ||
     (download.stage === 'error' && download.backend === offer.backend ? download.error || '' : '');
@@ -39,11 +48,10 @@
   <div class="text">
     {#if activeDownload}
       {#if download.stage === 'downloading'}
-        <span>
-          Downloading {offer.shortName} engine… {formatBytes(download.downloaded)} of {formatBytes(
-            download.total,
-          )} ({percent}%)
-        </span>
+        <span>Downloading {offer.shortName} engine · {percent}%</span>
+        {#if downloadDetailText}
+          <span class="engine-progress-detail">{downloadDetailText}</span>
+        {/if}
         <progress class="download-progress" max={download.total || 1} value={download.downloaded}
         ></progress>
       {:else if download.stage === 'installing'}
@@ -115,6 +123,10 @@
   .text span {
     color: var(--text);
     font-size: calc(12px * var(--ui-scale));
+  }
+  .text .engine-progress-detail {
+    color: var(--secondary);
+    font-variant-numeric: tabular-nums;
   }
   .text .engine-card-error {
     color: var(--danger-text);

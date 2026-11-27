@@ -3,6 +3,7 @@
 ## [0.7.0-beta] - Unreleased
 
 - **A clearer Enhance panel.** Pick fixes in a list, see the plan and output at a glance, and open settings where you need them. The new blue accent follows your Mac’s accent colour, and the colour-blind palette is easier to distinguish.
+- **Downloads show in one place, with size and time left.** Model downloads live in the status bar (and the library’s tray) with how much has arrived and how long is left, without repeating percentages across the panel. Interrupted downloads stay in the status bar with what was kept and Start as the retry.
 
 ## [0.6.2-beta] - Unreleased
 

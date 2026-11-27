@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen, waitFor } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from 'vitest';
 import UpdatePanel from './UpdatePanel.svelte';
-import { updateDialogOpen } from './lib/updates';
+import { updateDialogOpen, updateState } from './lib/updates';
 const api = vi.hoisted(() => ({
   updateStatus: vi.fn(),
   listenForUpdates: vi.fn(async () => () => {}),
@@ -135,4 +135,38 @@ it('offers a .deb install the download page, never a download inside the app', a
   expect(screen.getByRole('heading', { name: '0.6.0-beta' })).toBeTruthy();
   expect(screen.queryByRole('button', { name: /Download update/ })).toBeNull();
   expect(api.downloadUpdate).not.toHaveBeenCalled();
+});
+
+it('shows size and time left while an update downloads without MB downloaded', async () => {
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  vi.useFakeTimers();
+
+  const size = 310_000_000;
+  const base = {
+    configured: true,
+    managed_by_store: false,
+    managed_by_package_manager: false,
+    channel: 'beta',
+    target: 'linux-x86_64-rocm-portable',
+    stage: 'downloading' as const,
+    version: '0.7.1',
+    notes: '',
+    size,
+    downloaded: 100_000_000,
+    message: '',
+    settings_recovery: false,
+  };
+  api.updateStatus.mockResolvedValue(base);
+  render(UpdatePanel);
+  await screen.findByText('100 of 310 MB');
+
+  for (let sec = 1; sec <= 4; sec += 1) {
+    vi.advanceTimersByTime(1000);
+    updateState.set({ ...base, downloaded: 100_000_000 + sec * 3_000_000 });
+  }
+
+  expect(await screen.findByText('112 of 310 MB · about 1 min left')).toBeTruthy();
+  expect(screen.queryByText(/MB downloaded/)).toBeNull();
 });

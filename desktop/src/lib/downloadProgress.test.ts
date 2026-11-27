@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DownloadDetail,
+  SingleDownloadLine,
   TimeLeftLabel,
   downloadFailureText,
   progressBytes,
@@ -124,6 +125,18 @@ describe('DownloadDetail', () => {
     const detail = new DownloadDetail();
     detail.observe({ done: 0, total: 159_000_000, received: 0, phase: 'waiting' }, 0);
     expect(detail.text(0)).toBe('159 MB');
+  });
+
+  it('omits connection-waiting text when disabled and resets on key change', () => {
+    const line = new SingleDownloadLine();
+    const total = 2_400_000_000;
+    expect(line.update(true, 'cuda', 0, total, 0)).toBe('2.4 GB');
+    expect(line.update(true, 'cuda', 100_000_000, total, 10)).toBe(
+      '100 MB of 2.4 GB · about 4 min left',
+    );
+    expect(line.update(true, 'cuda', 100_000_000, total, 20)).toBe('100 MB of 2.4 GB');
+    expect(line.update(true, 'rocm', 50_000_000, 1_000_000_000, 21)).toBe('50 MB of 1.0 GB');
+    expect(line.update(false, '', 0, 0, 22)).toBe('');
   });
 });
 

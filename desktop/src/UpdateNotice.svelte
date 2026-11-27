@@ -1,5 +1,6 @@
 <script lang="ts">
   import * as api from './lib/api';
+  import { SingleDownloadLine } from './lib/downloadProgress';
   import {
     dismissVersion,
     dismissedVersion,
@@ -14,10 +15,18 @@
   export let visible = false;
   let dismissed = dismissedVersion();
   let requested = false;
+  const downloadLine = new SingleDownloadLine();
 
   $: status = $updateState;
   $: error = $updateError;
   $: percent = status.size ? Math.min(100, Math.round((status.downloaded / status.size) * 100)) : 0;
+  $: downloadDetailText = downloadLine.update(
+    status.stage === 'downloading',
+    status.version,
+    status.downloaded,
+    status.size,
+    performance.now() / 1000,
+  );
   $: visible =
     status.configured &&
     !$updateDialogOpen &&
@@ -73,6 +82,7 @@
         >
       {:else if status.stage === 'downloading'}
         <b>Downloading LocalSR {status.version}…</b>
+        {#if downloadDetailText}<span>{downloadDetailText}</span>{/if}
         <span class="progress" style={`--done: ${percent}%`}><i></i></span>
       {:else if status.stage === 'installing'}
         <b>Installing LocalSR {status.version}…</b>

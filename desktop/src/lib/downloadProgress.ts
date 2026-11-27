@@ -82,6 +82,18 @@ export class DownloadDetail {
   private heldTime: string | null = null;
   private readonly label = new TimeLeftLabel();
 
+  constructor(private readonly options: { waitForConnection?: boolean } = {}) {}
+
+  reset(): void {
+    this.samples = [];
+    this.phase = null;
+    this.done = 0;
+    this.total = 0;
+    this.verifyingSince = null;
+    this.heldTime = null;
+    this.label.text(null);
+  }
+
   observe(
     sample: { done: number; total: number; received: number; phase: DownloadPhase },
     now: number,
@@ -166,7 +178,9 @@ export class DownloadDetail {
     if (last && now - last.at >= SILENCE_SECONDS) {
       this.label.text(null);
       this.heldTime = null;
-      return [size, 'Waiting for the connection…'].filter(Boolean).join(' · ');
+      return this.options.waitForConnection !== false
+        ? [size, 'Waiting for the connection…'].filter(Boolean).join(' · ')
+        : size;
     }
     const currentSpeed = this.speed(now);
     const remaining =
@@ -176,6 +190,26 @@ export class DownloadDetail {
     const time = this.label.text(remaining);
     this.heldTime = time;
     return [size, time].filter(Boolean).join(' · ');
+  }
+}
+
+/** Tracks one engine or app-update download whose host sends cumulative bytes without phases. */
+export class SingleDownloadLine {
+  private readonly detail = new DownloadDetail({ waitForConnection: false });
+  private key = '';
+
+  update(active: boolean, key: string, done: number, total: number, now: number): string {
+    if (!active) {
+      this.key = '';
+      this.detail.reset();
+      return '';
+    }
+    if (key !== this.key) {
+      this.key = key;
+      this.detail.reset();
+    }
+    this.detail.observe({ done, total, received: done, phase: 'downloading' }, now);
+    return this.detail.text(now);
   }
 }
 

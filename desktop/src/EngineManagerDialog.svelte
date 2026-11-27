@@ -6,6 +6,7 @@
     plainEngineError,
     type EngineListRow,
   } from './lib/engines';
+  import { SingleDownloadLine } from './lib/downloadProgress';
   import { formatBytes } from './lib/format';
   import { modal } from './lib/modal';
   import type { EngineManagerSnapshot } from './lib/types';
@@ -48,9 +49,14 @@
     activeError && failingBackend && rows.some((row) => row.backend === failingBackend),
   );
   $: dialogError = activeError && !rowMatchedError ? activeError : '';
-  $: percent = download.total
-    ? Math.min(100, Math.round((download.downloaded / download.total) * 100))
-    : 0;
+  const downloadLine = new SingleDownloadLine();
+  $: downloadDetailText = downloadLine.update(
+    download.stage === 'downloading' && Boolean(download.backend),
+    download.backend,
+    download.downloaded,
+    download.total,
+    performance.now() / 1000,
+  );
 
   function rowMeta(row: EngineListRow, verified: string): string {
     return [
@@ -142,7 +148,7 @@
               ></progress>
               <p class="engine-progress-label" role="status">
                 {#if download.stage === 'downloading'}
-                  Downloading… {formatBytes(download.downloaded)} of {formatBytes(download.total)} ({percent}%)
+                  {downloadDetailText || 'Downloading…'}
                 {:else if download.stage === 'installing'}
                   Unpacking and verifying engine…
                 {:else}

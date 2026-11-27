@@ -3831,7 +3831,7 @@ input[type='number'],
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-height: 148px;
+  max-height: 200px;
   overflow: auto;
   padding: 8px 16px 10px;
   border-bottom: 1px solid var(--divider);
@@ -3849,7 +3849,7 @@ input[type='number'],
 }
 .library-downloads-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
   gap: 8px;
 }
 .library-download-item {
@@ -3874,6 +3874,14 @@ input[type='number'],
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+.library-download-top .button {
+  flex: none;
+  white-space: nowrap;
+}
+.library-download-top .eyebrow-actions {
+  flex: none;
+  gap: 6px;
 }
 .library-download-name {
   min-width: 0;

@@ -106,6 +106,8 @@ export interface Scenario {
   plan?: 'error' | { delayMs: number };
   /** Override system_accent response on macOS. */
   systemAccent?: { light: string; dark: string };
+  /** Pre-set edit.runtime_path so Edit plans can start without picking the runtime interactively. */
+  editRuntime?: string;
 }
 
 export interface HostCall {
@@ -233,6 +235,10 @@ function hostScript(scenario: Scenario): void {
     }
     promoteDownloads();
     syncDownloads();
+    if (snapshot && activeDownloads.length === 0 && !snapshot.runtime.active_job_id) {
+      snapshot.runtime.status_title = 'Model ready';
+      snapshot.runtime.status_detail = 'Downloaded and checked.';
+    }
     emit('worker-message', { type: 'download-completed', data: { model_id: modelId } });
     emit('state-changed', null);
     entry.resolve();
@@ -385,6 +391,7 @@ function hostScript(scenario: Scenario): void {
       /* sessionStorage unavailable */
     }
     s.recipes = structuredClone(scenario.recipes ?? []);
+    if (scenario.editRuntime) s.edit.runtime_path = scenario.editRuntime;
     s.runtime.worker = scenario.worker ?? 'unavailable';
     if (scenario.running) {
       const rows = scenario.rows ?? {};
@@ -745,6 +752,9 @@ function hostScript(scenario: Scenario): void {
         }
         return null;
       }
+      case 'dismiss_gpu_download_notice':
+        snapshot.settings.gpu_download_notice_dismissed = true;
+        return null;
       case 'save_settings':
         snapshot.settings = structuredClone(args.settings);
         return null;
@@ -1077,6 +1087,11 @@ function hostScript(scenario: Scenario): void {
         const [entry] = activeDownloads.splice(idx, 1);
         promoteDownloads();
         syncDownloads();
+        if (activeDownloads.length === 0 && !snapshot.runtime.active_job_id) {
+          snapshot.runtime.status_title = 'Download stopped';
+          snapshot.runtime.status_detail =
+            'What was downloaded is kept. The next download continues from there.';
+        }
         emit('worker-message', { type: 'download-cancelled', data: { model_id: modelId } });
         emit('state-changed', null);
         entry.reject('download cancelled');

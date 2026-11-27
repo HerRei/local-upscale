@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen, waitFor } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from 'vitest';
 import UpdateNotice from './UpdateNotice.svelte';
 import {
   emptyUpdateStatus,
@@ -129,4 +129,32 @@ it('sends a .deb install to the download page instead of updating itself', async
   expect(api.openDownloadPage).toHaveBeenCalledTimes(1);
   expect(api.downloadUpdate).not.toHaveBeenCalled();
   expect(api.installUpdate).not.toHaveBeenCalled();
+});
+
+it('shows size and time left under the title while keeping the percentage on the right', async () => {
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  vi.useFakeTimers();
+
+  const size = 310_000_000;
+  const base = {
+    ...available,
+    stage: 'downloading' as const,
+    version: '0.7.1',
+    size,
+    downloaded: 100_000_000,
+  };
+  updateState.set(base);
+  render(UpdateNotice);
+  expect(screen.getByText('Downloading LocalSR 0.7.1…')).toBeTruthy();
+  expect(screen.getByText('100 of 310 MB')).toBeTruthy();
+
+  for (let sec = 1; sec <= 4; sec += 1) {
+    vi.advanceTimersByTime(1000);
+    updateState.set({ ...base, downloaded: 100_000_000 + sec * 3_000_000 });
+  }
+
+  expect(await screen.findByText('112 of 310 MB · about 1 min left')).toBeTruthy();
+  expect(screen.getByText('36%')).toBeTruthy();
 });

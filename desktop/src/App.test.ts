@@ -8516,7 +8516,8 @@ describe('Engine manager UI and recommendation card', () => {
       total: 4_574_000_000,
       error: null,
     });
-    expect(await screen.findByText(/Downloading NVIDIA engine…/)).toBeTruthy();
+    expect(await screen.findByText('Downloading NVIDIA engine · 47%')).toBeTruthy();
+    expect(within(card).getByText('2.1 of 4.6 GB')).toBeTruthy();
     expect(card.querySelector('progress')).toBeTruthy();
 
     await user.click(within(card).getByRole('button', { name: 'Cancel' }));
@@ -8708,7 +8709,7 @@ describe('Engine manager UI and recommendation card', () => {
       total: 4_574_000_000,
       error: null,
     });
-    expect(await within(cudaRow).findByText(/Downloading…/)).toBeTruthy();
+    expect(await within(cudaRow).findByText('2.1 of 4.6 GB')).toBeTruthy();
     expect(within(cudaRow).queryByText('4.6 GB · Not installed')).toBeNull();
     expect(within(cudaRow).queryByText('4.6 GB')).toBeNull();
     expect(cudaRow.querySelector('progress')).toBeTruthy();

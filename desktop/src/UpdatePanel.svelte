@@ -1,16 +1,25 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import * as api from './lib/api';
+  import { SingleDownloadLine } from './lib/downloadProgress';
   import { modal } from './lib/modal';
   import { updateDialogOpen, updateError, updateState } from './lib/updates';
   export let processing = false;
   let channel = 'beta';
   let working = false;
   let recoveryConfirmed = false;
+  const downloadLine = new SingleDownloadLine();
   $: status = $updateState;
   $: error = $updateError;
   $: inProgress = working || ['checking', 'downloading', 'installing'].includes(status.stage);
   $: sizeText = status.size ? `${(status.size / 1024 ** 2).toFixed(1)} MB` : '';
+  $: downloadDetailText = downloadLine.update(
+    status.stage === 'downloading',
+    status.version,
+    status.downloaded,
+    status.size,
+    performance.now() / 1000,
+  );
   onMount(() => {
     let unsubscribe: (() => void) | undefined;
     let disposed = false;
@@ -104,7 +113,7 @@
         <p class="notes">{status.notes}</p>{/if}
       {#if status.stage === 'downloading'}<progress max={status.size || 1} value={status.downloaded}
         ></progress>
-        <p>{(status.downloaded / 1024 ** 2).toFixed(1)} MB downloaded</p>{/if}
+        <p>{downloadDetailText || 'Downloading…'}</p>{/if}
       {#if processing}<p class="notice">
           {status.managed_by_store
             ? 'Finish or cancel your queue before opening Microsoft Store updates.'
