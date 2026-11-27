@@ -1377,12 +1377,19 @@ pub(crate) fn cancel_jobs_checked(state: &AppState, keep_partial: bool) -> AppRe
         .store(false, std::sync::atomic::Ordering::SeqCst);
     lock(&state.runtime)?.queue_paused = false;
     let mut cancellation = lock(&state.worker.cancellation)?;
-    lock(&state.database)?.cancel_queued_jobs()?;
+    let batch_ids = cancellation.job_ids.clone();
+    lock(&state.database)?.cancel_queued_jobs_except(&batch_ids)?;
     let active = lock(&state.runtime)?.active_job_id.clone();
     // A second request while the first is still being carried out changes nothing.
     if !active.is_empty() && !cancellation.is_cancelling(&active) {
         let now = std::time::Instant::now();
-        cancellation.request(&active, now);
+        if batch_ids.is_empty() {
+            cancellation.request(&active, now);
+        } else {
+            for id in &batch_ids {
+                cancellation.request(id, now);
+            }
+        }
         // Keeping the finished part means saving it, which for a large photo (filling in
         // and writing hundreds of megapixels) takes far longer than a plain stop. The
         // engine is given the saving time from the start instead of being restarted.
@@ -1390,9 +1397,11 @@ pub(crate) fn cancel_jobs_checked(state: &AppState, keep_partial: bool) -> AppRe
         if keeping {
             cancellation.partial_finalizing(&active, now);
         }
-        // Photos of a batch that never started were cancelled with the queue above.
-        for id in &cancellation.job_ids {
-            lock(&state.database)?.mark_cancelling(id)?;
+        {
+            let db = lock(&state.database)?;
+            for id in &cancellation.job_ids {
+                db.mark_batch_cancelling(id)?;
+            }
         }
         {
             let mut runtime = lock(&state.runtime)?;

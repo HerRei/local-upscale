@@ -2695,3 +2695,45 @@ fn a_kept_part_is_named_in_frames_below_a_second_and_in_tiles_for_a_photo() {
         json!({"kept_seconds": 0.074, "kept_frames": 2})
     );
 }
+
+#[test]
+fn cancelling_a_running_batch_settles_its_unstarted_photos_and_frees_the_queue() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    ready_for_batches(&state);
+    let (sender, receiver) = mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+    assert!(begin_dispatch(&state, true).unwrap());
+    let _ = receiver.try_recv().unwrap();
+    apply_worker_envelope(&state, &envelope("job_started", json!({"job_id": "a"}))).unwrap();
+    crate::commands::cancel_jobs_checked(&state, false).unwrap();
+    let cancel: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+    assert_eq!(cancel["data"]["job_id"], "a");
+    // The engine ends every photo of the batch, the unstarted ones included.
+    for id in ["a", "b", "c"] {
+        assert!(
+            accept_envelope(&state, &envelope("job_cancelled", json!({"job_id": id}))).unwrap(),
+            "{id}"
+        );
+        lock(&state.worker.cancellation)
+            .unwrap()
+            .finish_member(id)
+            .unwrap();
+    }
+    {
+        let runtime = lock(&state.runtime).unwrap();
+        assert!(runtime.active_job_id.is_empty());
+        assert!(runtime.active_batch_job_ids.is_empty());
+    }
+    for id in ["a", "b", "c"] {
+        assert_eq!(status(&state, id), "cancelled", "{id}");
+    }
+    {
+        let db = lock(&state.database).unwrap();
+        db.insert_media("d", "/in/d.png", "d", "image").unwrap();
+        db.insert_job("d", "d", &photo_job("d").to_string())
+            .unwrap();
+    }
+    assert!(begin_dispatch(&state, true).unwrap());
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
