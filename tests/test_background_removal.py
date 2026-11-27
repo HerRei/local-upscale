@@ -65,6 +65,7 @@ def test_small_birefnet_step_runs_through_image_job(tmp_path, monkeypatch, bit_d
         sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
         recommended_halo=0,
         time_factor=1.0,
+        architecture="BiRefNet",
     )
     monkeypatch.setitem(CATALOG_BY_FILENAME, path.name, entry)
     monkeypatch.setitem(CATALOG_BY_ID, entry.model_id, entry)
