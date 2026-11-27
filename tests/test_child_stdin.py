@@ -104,3 +104,58 @@ def test_a_child_starts_while_the_worker_waits_on_its_stdin():
         host.wait()
     assert line not in {"", "timeout"}, "a child blocked on the worker's stdin"
     assert float(line) < 8
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the pipe lock is Windows behaviour")
+def test_libraries_can_touch_stdin_while_the_worker_waits_for_a_request():
+    # Libraries loaded on first use may start children without a stdin of their own or
+    # ask whether stdin is a terminal; neither may wait for the next request.
+    worker = textwrap.dedent(
+        """
+        import os, subprocess, sys, threading, time
+        from localsr.worker.server import detach_request_stream
+
+        requests = detach_request_stream()
+        lines = []
+        reader = threading.Thread(target=lambda: lines.append(requests.readline()), daemon=True)
+        reader.start()
+        time.sleep(0.5)
+        start = time.monotonic()
+        os.isatty(0)
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import sys; sys.stdin; print(1)"],
+            stdout=subprocess.PIPE,
+            creationflags=0x08000000,
+        )
+        try:
+            child.communicate(timeout=8)
+            print(round(time.monotonic() - start, 2), flush=True)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            print("timeout", flush=True)
+        reader.join(10)
+        print(lines[0].strip() if lines else "no request", flush=True)
+        os._exit(0)
+        """
+    )
+    host = subprocess.Popen(
+        [sys.executable, "-c", worker],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    timer = threading.Timer(30, host.kill)
+    timer.start()
+    try:
+        elapsed = host.stdout.readline().strip()
+        host.stdin.write("ping\n")
+        host.stdin.flush()
+        request = host.stdout.readline().strip()
+    finally:
+        timer.cancel()
+        host.kill()
+        host.wait()
+    assert elapsed not in {"", "timeout"}, "stdin use blocked on the pending request read"
+    assert float(elapsed) < 8
+    assert request == "ping"
