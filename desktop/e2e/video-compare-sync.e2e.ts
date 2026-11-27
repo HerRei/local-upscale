@@ -373,7 +373,8 @@ test.describe('video Compare sync (real PyAV clips)', () => {
     await expect.poll(() => sampleFrames(canvases)).toEqual([0, 0]);
     // GStreamer (WebKit on Linux) shows the previous frame of a mixed-rate playback
     // copy after a seek; KNOWN_LIMITATIONS.md lists it.
-    if (!(browserName === 'webkit' && process.platform === 'linux')) {
+    const linuxWebKit = browserName === 'webkit' && process.platform === 'linux';
+    if (!linuxWebKit) {
       const next = transport.getByRole('button', { name: 'Next frame' });
       await next.click();
       await expect.poll(() => sampleFrames(canvases)).toEqual([1, 1]);
@@ -393,6 +394,15 @@ test.describe('video Compare sync (real PyAV clips)', () => {
         }),
       )
       .toBe(true);
-    await expect.poll(() => sampleFrames(canvases)).toEqual([29, 23]);
+    if (linuxWebKit) {
+      await expect
+        .poll(async () => {
+          const [original, result] = await sampleFrames(canvases);
+          return result === 23 && (original === 28 || original === 29);
+        })
+        .toBe(true);
+    } else {
+      await expect.poll(() => sampleFrames(canvases)).toEqual([29, 23]);
+    }
   });
 });
