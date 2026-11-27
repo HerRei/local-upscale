@@ -1154,4 +1154,149 @@ describe('structural sharing', () => {
     });
     expect(after).toBe(before);
   });
+
+  it('tracks job_steps states, preview URLs, skipped steps, and step names across a multi-step job', () => {
+    let snapshot = demoSnapshot();
+    snapshot.settings = { ...snapshot.settings, task: 'upscale', output_scale: 4 };
+    snapshot.runtime.active_job_id = 'job-steps-1';
+    snapshot.runtime.job_steps = [
+      {
+        kind: 'deblock',
+        fix: 'jpeg',
+        model_id: 'fbcnn_color',
+        state: 'waiting',
+        note: '',
+        preview_url: '',
+        kept: false,
+      },
+      {
+        kind: 'restore',
+        fix: 'colour',
+        model_id: 'ddcolor_modelscope',
+        state: 'waiting',
+        note: '',
+        preview_url: '',
+        kept: false,
+      },
+      {
+        kind: 'restore',
+        fix: 'noise',
+        model_id: 'denoise_realplksr_1x',
+        state: 'waiting',
+        note: '',
+        preview_url: '',
+        kept: false,
+      },
+      {
+        kind: 'upscale',
+        fix: '',
+        model_id: 'span_photo_x4',
+        state: 'waiting',
+        note: '',
+        preview_url: '',
+        kept: false,
+      },
+    ];
+
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'stage_started',
+      data: {
+        job_id: 'job-steps-1',
+        stage_index: 0,
+        stage_count: 4,
+        stage_kind: 'deblock',
+        step: 'deblock',
+        fix: 'jpeg',
+        model_id: 'fbcnn_color',
+      },
+    });
+    expect(snapshot.runtime.job_steps?.[0].state).toBe('running');
+    expect(snapshot.runtime.status_title).toBe('Step 1 of 4 · JPEG');
+    expect(snapshot.runtime.status_detail).toBe('Preparing FBCNN Color.');
+
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'stage_result',
+      data: {
+        job_id: 'job-steps-1',
+        stage_index: 0,
+        stage_count: 4,
+        step: 'deblock',
+        fix: 'jpeg',
+        skipped: true,
+        note: 'No JPEG blocks found.',
+        image_path: '',
+      },
+    });
+    expect(snapshot.runtime.job_steps?.[0]).toMatchObject({
+      state: 'skipped',
+      note: 'No JPEG blocks found.',
+      preview_url: '',
+      kept: false,
+    });
+
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'stage_started',
+      data: {
+        job_id: 'job-steps-1',
+        stage_index: 1,
+        stage_count: 4,
+        stage_kind: 'restore',
+        step: 'restore',
+        fix: 'colour',
+        model_id: 'ddcolor_modelscope',
+      },
+    });
+    expect(snapshot.runtime.job_steps?.[0].state).toBe('skipped');
+    expect(snapshot.runtime.job_steps?.[1].state).toBe('running');
+    expect(snapshot.runtime.status_title).toBe('Step 2 of 4 · Colour');
+    expect(snapshot.runtime.status_detail).toBe('Preparing DDColor.');
+
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'progress',
+      data: { job_id: 'job-steps-1', percentage: 31, completed_tiles: 0, total_tiles: 1 },
+    });
+    expect(snapshot.runtime.status_title).toBe('Step 2 of 4 · Colour');
+
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'stage_completed',
+      data: {
+        job_id: 'job-steps-1',
+        stage_index: 1,
+        stage_count: 4,
+        stage_kind: 'restore',
+        step: 'restore',
+        fix: 'colour',
+        model_id: 'ddcolor_modelscope',
+      },
+    });
+    expect(snapshot.runtime.status_detail).toBe('Colour done.');
+    expect(snapshot.runtime.job_steps?.[1].state).toBe('done');
+
+    const stepUrl = 'asset://localhost/%2Fcache%2Fpreviews%2Fstep1.jpg';
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'stage_result',
+      data: {
+        job_id: 'job-steps-1',
+        stage_index: 1,
+        stage_count: 4,
+        step: 'restore',
+        fix: 'colour',
+        skipped: false,
+        note: '',
+        preview_url: stepUrl,
+        image_path: '/work/steps/job-steps-1/1.png',
+      },
+    });
+    expect(snapshot.runtime.job_steps?.[1]).toMatchObject({
+      state: 'done',
+      preview_url: stepUrl,
+      kept: true,
+    });
+
+    snapshot = applyWorkerEnvelope(snapshot, {
+      type: 'job_completed',
+      data: { job_id: 'job-steps-1', output_path: '/out/final.png' },
+    });
+    expect(snapshot.runtime.job_steps).toEqual([]);
+  });
 });

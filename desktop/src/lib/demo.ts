@@ -149,6 +149,7 @@ export function demoSnapshot(): AppSnapshot {
       hardware_note: '',
       frames_processed: 0,
       total_frames: 0,
+      job_steps: [],
     },
     latest_benchmark: null,
     edit: { models: structuredClone(editModels), runtime_path: '', custom_model: null },

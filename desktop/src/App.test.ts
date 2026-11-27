@@ -4413,6 +4413,26 @@ describe('LocalSR desktop interface', () => {
       },
     ];
     snapshot.runtime.active_job_id = 'job-colour-upscale';
+    snapshot.runtime.job_steps = [
+      {
+        kind: 'restore',
+        fix: 'colour',
+        model_id: 'ddcolor_modelscope',
+        state: 'running',
+        note: '',
+        preview_url: '',
+        kept: false,
+      },
+      {
+        kind: 'upscale',
+        fix: '',
+        model_id: 'span_photo_x4',
+        state: 'waiting',
+        note: '',
+        preview_url: '',
+        kept: false,
+      },
+    ];
     api.selectMedia.mockImplementation(async (id: string) => {
       snapshot.media.forEach((item) => (item.selected = item.id === id));
       api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
@@ -4422,25 +4442,28 @@ describe('LocalSR desktop interface', () => {
     const listener = api.listenForWorker.mock.calls[0]?.[0] as
       ((message: WorkerEnvelope) => void) | undefined;
     expect(listener).toBeTypeOf('function');
-    listener?.({ type: 'job_started', data: { job_id: 'job-colour-upscale' } });
+    listener?.({
+      type: 'job_started',
+      data: { job_id: 'job-colour-upscale', job_steps: snapshot.runtime.job_steps },
+    });
 
     // User clicks another photo while stage 0 (colour) completes.
     await user.click(screen.getByRole('button', { name: /^other\.png/ }));
     await waitFor(() => expect(document.title).toContain('other.png'));
+    snapshot.runtime.job_steps[0].state = 'done';
+    snapshot.runtime.job_steps[0].preview_url = 'data:image/jpeg;base64,colourised-stage0';
     listener?.({
-      type: 'live_preview_frame',
+      type: 'stage_result',
       data: {
         job_id: 'job-colour-upscale',
-        sequence: 1,
         stage_index: 0,
-        preview_kind: 'tile',
-        output_x: 0,
-        output_y: 0,
-        output_width: 1982,
-        output_height: 1361,
-        image_width: 1982,
-        image_height: 1361,
-        jpeg_base64: 'colourised-stage0',
+        stage_count: 2,
+        step: 'restore',
+        fix: 'colour',
+        skipped: false,
+        note: '',
+        preview_url: 'data:image/jpeg;base64,colourised-stage0',
+        image_path: '',
       },
     });
 

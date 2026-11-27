@@ -1,8 +1,10 @@
 import { formatDuration } from './format';
-import { STAGE_LABELS } from './steps';
+import { stepName } from './jobSteps';
+import { modelDisplayName } from './modelNames';
 import { keptTilesText, keptVideoText } from './unfinished';
 import type {
   AppSnapshot,
+  JobStep,
   MediaItem,
   ModelDownloadStatus,
   RuntimeStatus,
@@ -79,6 +81,7 @@ function leaveBatch(runtime: AppSnapshot['runtime'], id: string, failed: boolean
   runtime.elapsed_seconds = 0;
   runtime.estimated_remaining_seconds = 0;
   runtime.result_preview_data_url = '';
+  runtime.job_steps = [];
   // A failure stays on the status line until the next photo starts.
   if (failed) return;
   runtime.status_title = 'Processing';
@@ -202,6 +205,10 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
         next.runtime.tiles_completed = 0;
         next.runtime.tiles_total = 0;
         next.runtime.can_keep_partial = undefined;
+        next.runtime.job_steps = [];
+      }
+      if (Array.isArray(data.job_steps)) {
+        next.runtime.job_steps = (data.job_steps as JobStep[]).map((step) => ({ ...step }));
       }
       // The host adds its decision about keeping a stopped job's finished part.
       if (typeof data.can_keep_partial === 'boolean')
@@ -220,17 +227,87 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       next.runtime.hardware_note = '';
       break;
     case 'stage_started': {
-      const kind = String(data.stage_kind ?? '');
+      const jobId = String(data.job_id ?? '');
+      if (next.runtime.active_job_id && jobId && jobId !== next.runtime.active_job_id) break;
+      const index = Number(data.stage_index ?? 0);
+      const count = Number(data.stage_count ?? 1);
+      if (next.runtime.job_steps?.length && index >= 0 && index < next.runtime.job_steps.length) {
+        next.runtime.job_steps = next.runtime.job_steps.map((step, i) => {
+          if (i < index && (step.state === 'waiting' || step.state === 'running')) {
+            return { ...step, state: 'done' };
+          }
+          if (i === index) {
+            return { ...step, state: 'running' };
+          }
+          return step;
+        });
+      }
+      const step = next.runtime.job_steps?.[index];
+      const kind = String(step?.kind || data.step || data.stage_kind || '');
+      const fix = String(step?.fix || data.fix || '');
+      const activeJob = next.jobs.find((job) => job.id === (jobId || next.runtime.active_job_id));
+      const isVideo = activeJob
+        ? activeJob.media_kind === 'video'
+        : snapshot.settings.task === 'video';
+      const name = stepName({ kind, fix }, snapshot.settings, isVideo);
+      const modelId = String(step?.model_id || data.model_id || '');
       // A new stage starts its tiles again: none of them is finished yet.
       next.runtime.tiles_completed = 0;
       next.runtime.tiles_total = 0;
-      next.runtime.status_title = `${STAGE_LABELS[kind] ?? 'Processing'} · stage ${Number(data.stage_index ?? 0) + 1}/${Number(data.stage_count ?? 1)}`;
-      next.runtime.status_detail = `Preparing ${String(data.model_id ?? 'model')}.`;
+      next.runtime.status_title =
+        count > 1
+          ? `Step ${index + 1} of ${count} · ${name}`
+          : kind === 'edit'
+            ? 'Editing'
+            : 'Enhancing';
+      next.runtime.status_detail = `Preparing ${modelDisplayName(snapshot, modelId)}.`;
       break;
     }
-    case 'stage_completed':
-      next.runtime.status_detail = `${String(data.stage_kind ?? 'Processing').replace('_', ' ')} stage complete.`;
+    case 'stage_completed': {
+      const jobId = String(data.job_id ?? '');
+      if (next.runtime.active_job_id && jobId && jobId !== next.runtime.active_job_id) break;
+      const index = Number(data.stage_index ?? 0);
+      if (next.runtime.job_steps?.length && index >= 0 && index < next.runtime.job_steps.length) {
+        next.runtime.job_steps = next.runtime.job_steps.map((step, i) =>
+          i === index && (step.state === 'waiting' || step.state === 'running')
+            ? { ...step, state: 'done' }
+            : step,
+        );
+      }
+      const step = next.runtime.job_steps?.[index];
+      const kind = String(step?.kind || data.step || data.stage_kind || '');
+      const fix = String(step?.fix || data.fix || '');
+      const activeJob = next.jobs.find((job) => job.id === (jobId || next.runtime.active_job_id));
+      const isVideo = activeJob
+        ? activeJob.media_kind === 'video'
+        : snapshot.settings.task === 'video';
+      const name = stepName({ kind, fix }, snapshot.settings, isVideo);
+      next.runtime.status_detail = `${name} done.`;
       break;
+    }
+    case 'stage_result': {
+      const jobId = String(data.job_id ?? '');
+      if (next.runtime.active_job_id && jobId && jobId !== next.runtime.active_job_id) break;
+      const index = Number(data.stage_index ?? -1);
+      if (next.runtime.job_steps?.length && index >= 0 && index < next.runtime.job_steps.length) {
+        const skipped = Boolean(data.skipped);
+        const note = typeof data.note === 'string' ? data.note : '';
+        const previewUrl = skipped ? '' : previewUrlFromData(data);
+        const kept = typeof data.kept === 'boolean' ? data.kept : Boolean(data.image_path);
+        next.runtime.job_steps = next.runtime.job_steps.map((step, i) =>
+          i === index
+            ? {
+                ...step,
+                state: skipped ? 'skipped' : 'done',
+                note: note || step.note,
+                preview_url: previewUrl || step.preview_url,
+                kept: kept || step.kept,
+              }
+            : step,
+        );
+      }
+      break;
+    }
     case 'progress':
       next.runtime.progress = Number(data.percentage ?? 0);
       // An Edit counts steps; only tiles can be kept when a photo is stopped. A message
@@ -243,8 +320,9 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       // "Restoring"); a one-stage job reads "Enhancing" as before.
       if (data.unit === 'steps') next.runtime.status_title = 'Editing';
       else if (
-        !next.runtime.status_title.includes(' · stage ') ||
-        next.runtime.status_title.endsWith(' 1/1')
+        !next.runtime.status_title.startsWith('Step ') &&
+        (!next.runtime.status_title.includes(' · stage ') ||
+          next.runtime.status_title.endsWith(' 1/1'))
       )
         next.runtime.status_title = 'Enhancing';
       // Editing names its phase; most of an edit happens outside the steps.
@@ -503,6 +581,7 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       next.runtime.tiles_total = 0;
       next.runtime.can_keep_partial = undefined;
       next.runtime.hardware_note = '';
+      next.runtime.job_steps = [];
       // Drop a live video-frame thumbnail while the host decodes the final
       // output. This prevents a transient comparison slider over one frame.
       next.runtime.result_preview_data_url = '';
@@ -528,6 +607,7 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       next.runtime.tiles_total = 0;
       next.runtime.can_keep_partial = undefined;
       next.runtime.hardware_note = '';
+      next.runtime.job_steps = [];
       next.runtime.status_title = 'Cancelled';
       next.runtime.status_detail = 'Temporary output was cleaned up.';
       break;
@@ -539,6 +619,7 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       next.runtime.tiles_total = 0;
       next.runtime.can_keep_partial = undefined;
       next.runtime.hardware_note = '';
+      next.runtime.job_steps = [];
       next.runtime.status_title = 'Could not finish';
       next.runtime.status_detail = String(data.error_message ?? 'Unknown worker error.');
       break;

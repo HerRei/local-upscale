@@ -25,6 +25,16 @@ export interface Scenario {
   videoSyncCompare?: boolean;
   /** With `running`: the host can keep the finished part of the photo that runs. */
   keepPartial?: boolean;
+  /** With `running`: multi-step job entries for `runtime.job_steps`. */
+  jobSteps?: {
+    kind: string;
+    fix?: string;
+    model_id?: string;
+    state?: 'waiting' | 'running' | 'done' | 'skipped';
+    note?: string;
+    preview_url?: string;
+    kept?: boolean;
+  }[];
   /** Populated by installFakeHost only for video Compare. */
   playbackFixtures?: string[];
   /** Populated by installFakeHost for `videoSyncCompare`. */
@@ -174,8 +184,85 @@ function hostScript(scenario: Scenario): void {
   const answers: Record<string, unknown> = {};
   const listeners: Record<string, number[]> = {};
   const emit = (event: string, payload: unknown) => {
+    let delivered = payload;
+    if (event === 'worker-message' && snapshot && payload && typeof payload === 'object') {
+      const envelope = payload as { type?: string; data?: Json };
+      const data = envelope.data ?? {};
+      const jobId = String(data.job_id ?? '');
+      const sameJob =
+        !snapshot.runtime.active_job_id || !jobId || jobId === snapshot.runtime.active_job_id;
+      if (envelope.type === 'job_started' && Array.isArray(data.job_steps)) {
+        snapshot.runtime.job_steps = structuredClone(data.job_steps);
+      } else if (sameJob && envelope.type === 'stage_started') {
+        const index = Number(data.stage_index ?? 0);
+        if (
+          Array.isArray(snapshot.runtime.job_steps) &&
+          index >= 0 &&
+          index < snapshot.runtime.job_steps.length
+        ) {
+          snapshot.runtime.job_steps = snapshot.runtime.job_steps.map((step: Json, i: number) =>
+            i < index && (step.state === 'waiting' || step.state === 'running')
+              ? { ...step, state: 'done' }
+              : i === index
+                ? { ...step, state: 'running' }
+                : step,
+          );
+        }
+      } else if (sameJob && envelope.type === 'stage_completed') {
+        const index = Number(data.stage_index ?? 0);
+        if (
+          Array.isArray(snapshot.runtime.job_steps) &&
+          index >= 0 &&
+          index < snapshot.runtime.job_steps.length
+        ) {
+          snapshot.runtime.job_steps = snapshot.runtime.job_steps.map((step: Json, i: number) =>
+            i === index && (step.state === 'waiting' || step.state === 'running')
+              ? { ...step, state: 'done' }
+              : step,
+          );
+        }
+      } else if (sameJob && envelope.type === 'stage_result') {
+        const index = Number(data.stage_index ?? -1);
+        const skipped = Boolean(data.skipped);
+        const previewUrl = skipped
+          ? ''
+          : typeof data.preview_url === 'string' && data.preview_url
+            ? data.preview_url
+            : typeof data.jpeg_base64 === 'string' && data.jpeg_base64
+              ? `data:image/jpeg;base64,${data.jpeg_base64}`
+              : '';
+        if (
+          Array.isArray(snapshot.runtime.job_steps) &&
+          index >= 0 &&
+          index < snapshot.runtime.job_steps.length
+        ) {
+          const step = snapshot.runtime.job_steps[index];
+          snapshot.runtime.job_steps[index] = {
+            ...step,
+            state: skipped ? 'skipped' : 'done',
+            note: typeof data.note === 'string' && data.note ? data.note : step.note,
+            preview_url: previewUrl || step.preview_url,
+            kept:
+              typeof data.kept === 'boolean' ? data.kept : Boolean(data.image_path) || step.kept,
+          };
+        }
+        if ('jpeg_base64' in data) {
+          const rest = { ...data };
+          delete rest.jpeg_base64;
+          if (previewUrl && !rest.preview_url) rest.preview_url = previewUrl;
+          delivered = { ...envelope, data: rest };
+        }
+      } else if (
+        sameJob &&
+        ['job_completed', 'video_job_completed', 'job_cancelled', 'job_failed'].includes(
+          envelope.type ?? '',
+        )
+      ) {
+        snapshot.runtime.job_steps = [];
+      }
+    }
     for (const id of listeners[event] ?? []) {
-      (callbacks.get(id) as (message: unknown) => void)({ event, id: 0, payload });
+      (callbacks.get(id) as (message: unknown) => void)({ event, id: 0, payload: delivered });
     }
   };
   type DownloadEntry = {
@@ -414,6 +501,17 @@ function hostScript(scenario: Scenario): void {
       s.runtime.status_title = 'Processing';
       s.runtime.progress = running ? (rows[Number(running[0])].progress ?? 40) : 40;
       if (scenario.keepPartial) s.runtime.can_keep_partial = true;
+      s.runtime.job_steps = scenario.jobSteps?.length
+        ? scenario.jobSteps.map((step) => ({
+            kind: step.kind,
+            fix: step.fix ?? '',
+            model_id: step.model_id ?? '',
+            state: step.state ?? 'waiting',
+            note: step.note ?? '',
+            preview_url: step.preview_url ?? '',
+            kept: step.kept ?? false,
+          }))
+        : [];
       s.jobs = Array.from({ length: scenario.jobPhotos ?? scenario.photos ?? 1 }, (_, index) => ({
         id: `job-photo-${index + 1}`,
         media_id: `photo-${index + 1}`,

@@ -464,6 +464,16 @@ export interface ModelDownloadStatus {
   received_bytes?: number;
 }
 
+export interface JobStep {
+  kind: string;
+  fix: string;
+  model_id: string;
+  state: 'waiting' | 'running' | 'done' | 'skipped';
+  note: string;
+  preview_url: string;
+  kept: boolean;
+}
+
 export interface RuntimeStatus {
   comparison_pair?: ComparisonPair;
   preview_original?: PreviewOriginalRegion;
@@ -508,6 +518,7 @@ export interface RuntimeStatus {
   tiles_completed?: number;
   tiles_total?: number;
   can_keep_partial?: boolean;
+  job_steps?: JobStep[];
 }
 
 export interface BenchmarkRender {
