@@ -119,7 +119,7 @@ include-package-data = false
 where = ["src"]
 
 [tool.setuptools.package-data]
-"localsr.core" = ["benchmark_references.json", "edit_catalog.json"]
+"localsr.core" = ["benchmark_references.json", "edit_catalog.json", "fp16_gate.json"]
 "localsr.protocol" = ["worker-protocol.schema.json"]
 "localsr.image_models.ddcolor" = ["*.md"]
 "localsr.image_models.heart" = ["*.md"]

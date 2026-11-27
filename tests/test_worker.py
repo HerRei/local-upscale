@@ -1498,3 +1498,97 @@ def test_video_cancel_request_respects_keep_partial_flag(tmp_path, monkeypatch, 
         assert "VideoJobCompleted" not in kinds
         assert list(out_dir.iterdir()) == []
     assert list(scratch_dir.iterdir()) == []
+
+
+def test_engine_features_advertise_precision_auto():
+    from localsr.worker.server import _engine_features
+
+    assert "precision_auto" in _engine_features()
+
+
+def test_image_job_reports_auto_fp16_in_job_notes(tmp_path, monkeypatch):
+    import numpy as np
+    from PIL import Image
+
+    import localsr.core.coreml_runtime as coreml_runtime
+    import localsr.core.inference as inference
+    from localsr.core.inference import AUTO_FP16_NOTE, InferenceEngine
+    from localsr.core.live_preview import LatestPreviewEncoder
+    from localsr.core.model_adapter import NormalizedModelInfo
+    from localsr.worker.image_job import ImageJobRunner
+
+    source = tmp_path / "in.png"
+    output = tmp_path / "out.png"
+    Image.new("RGB", (8, 8), (120, 140, 160)).save(source)
+
+    info = NormalizedModelInfo("SPAN", 2, 3, 3, True, True, 1, 1, "span.pth", [])
+
+    class FakeModel:
+        def __call__(self, tensor):
+            return tensor.float().repeat_interleave(2, dim=-2).repeat_interleave(2, dim=-1)
+
+    class FakeAdapter:
+        status_callback = None
+        cancel_event = None
+
+        def inspect(self, _path):
+            return info
+
+        def load(self, _path, _device, _precision, **_kwargs):
+            return FakeModel(), None
+
+        def release(self):
+            pass
+
+    class FakeDevice:
+        type = "mps"
+
+        def __eq__(self, other):
+            return getattr(other, "type", None) == "mps"
+
+    monkeypatch.setattr(inference, "_resolve_torch_device", lambda _d: FakeDevice())
+    monkeypatch.setattr(inference, "_apply_gpu_memory_limit", lambda _d, _s: None)
+    monkeypatch.setattr(
+        inference,
+        "load_fp16_gate",
+        lambda: {"SPAN": {"passed": True, "min_psnr": 60.0, "speedup": 1.8}},
+    )
+    monkeypatch.setattr(coreml_runtime, "coreml_units_for", lambda _arch: ())
+    monkeypatch.setattr(
+        inference.InferenceEngine,
+        "_infer_tile",
+        lambda self, tile_input, tile, *_args, **_kwargs: np.full(
+            (3, tile.core_h * info.scale, tile.core_w * info.scale), 128, dtype=np.uint8
+        ),
+    )
+
+    events = []
+    runner = ImageJobRunner(
+        engine=InferenceEngine(FakeAdapter()),
+        model_adapter=FakeAdapter(),
+        cancel_event=threading.Event(),
+        emit=events.append,
+        emit_preview=lambda _p: None,
+        preview_factory=lambda *a, **kw: LatestPreviewEncoder(*a, **kw),
+    )
+    runner.run(
+        "job-auto-fp16",
+        {
+            "job_id": "job-auto-fp16",
+            "image_path": str(source),
+            "model_path": str(tmp_path / "span.pth"),
+            "output_path": str(output),
+            "output_format": "png",
+            "device": "mps",
+            "tile_size": 64,
+            "halo": 8,
+            "precision": "auto",
+            "jpeg_quality": 95,
+            "preserve_metadata": False,
+            "safe_memory": False,
+            "neural_engine": False,
+            "preview_enabled": False,
+        },
+    )
+    completed = next(msg for msg in events if type(msg).__name__ == "JobCompleted")
+    assert AUTO_FP16_NOTE in completed.notes

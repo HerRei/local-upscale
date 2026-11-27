@@ -37,6 +37,7 @@ datas = spandrel_datas + [
         "localsr/core",
     ),
     (str(SOURCE / "localsr" / "core" / "edit_catalog.json"), "localsr/core"),
+    (str(SOURCE / "localsr" / "core" / "fp16_gate.json"), "localsr/core"),
     (
         str(SOURCE / "localsr" / "video_models" / "seedvr2"),
         "localsr/video_models/seedvr2",

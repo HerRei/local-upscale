@@ -552,14 +552,16 @@
           <div>
             <label for="precision">Precision</label><HelpTip
               label="Precision"
-              text="FP32 is the safe choice. FP16 is faster and needs less memory on GPUs that support it, for models that allow it. Keep FP32 on the CPU; DirectML and OpenVINO always use FP32, an Intel NPU always FP16."
+              text="Auto uses FP16 on Apple GPUs for verified models, and FP32 elsewhere. FP32 is the safe choice. FP16 is faster and needs less memory where supported. Keep FP32 on the CPU; DirectML and OpenVINO always use FP32, an Intel NPU always FP16."
             /><select
               id="precision"
               disabled={onnxGpu ||
                 (settings.task === 'video' && settings.video_hdr_mode === 'preserve')}
               value={npuRunning ? 'fp16' : onnxGpu ? 'fp32' : settings.precision}
               on:change={(event) => updateSettings({ precision: event.currentTarget.value })}
-              ><option value="fp32">FP32</option><option value="fp16">FP16</option></select
+              ><option value="auto">Auto</option><option value="fp32">FP32</option><option
+                value="fp16">FP16</option
+              ></select
             >
           </div>
         </div>

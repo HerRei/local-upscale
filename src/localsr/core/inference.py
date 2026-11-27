@@ -1,7 +1,11 @@
+import functools
 import gc
+import json
 import logging
 import threading
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -276,6 +280,49 @@ def _onnx_route(device_str: str):
 
 
 _ACCELERATORS = frozenset({"mps", "cuda", "xpu"})
+AUTO_FP16_NOTE = "Ran in FP16 on the Apple GPU (verified for this model)."
+_GATE_ARCH_ALIASES = {"RealESRGAN": "ESRGAN", "RealPLKSR": "PLKSR"}
+
+
+@functools.cache
+def load_fp16_gate() -> dict[str, dict[str, Any]]:
+    """Load the committed MPS FP16 gate table shipped with localsr.core."""
+    path = Path(__file__).with_name("fp16_gate.json")
+    if not path.is_file():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return data if isinstance(data, dict) else {}
+
+
+def resolve_precision(
+    precision_str: str,
+    device_type: str,
+    architecture: str,
+    half_supported: bool,
+    *,
+    coreml_active: bool = False,
+    gate: Mapping[str, Mapping[str, Any]] | None = None,
+) -> tuple[torch.dtype, bool]:
+    """Resolve requested precision to a torch dtype and whether auto chose Apple GPU FP16.
+
+    The CPU runs FP32 whatever precision was asked for: PyTorch has no fast FP16 path
+    on the CPU, and a 4x photo in FP16 there ran on one core for many minutes a tile.
+    On MPS without Core ML, ``auto`` selects FP16 only when the architecture passed the
+    committed MPS gate and ``half_supported`` is true; every other device keeps FP32.
+    """
+    if device_type == "cpu":
+        return torch.float32, False
+    if precision_str == "fp16":
+        return (torch.float16 if half_supported else torch.float32), False
+    if precision_str == "auto":
+        if device_type == "mps" and not coreml_active and half_supported:
+            table = load_fp16_gate() if gate is None else gate
+            canonical = _GATE_ARCH_ALIASES.get(architecture, architecture)
+            entry = table.get(architecture) or table.get(canonical)
+            if isinstance(entry, Mapping) and entry.get("passed") is True:
+                return torch.float16, True
+        return torch.float32, False
+    return torch.float32, False
 
 
 def _model_modules(model) -> list[torch.nn.Module]:
@@ -440,17 +487,6 @@ class InferenceEngine:
         device = (
             torch.device("cpu") if onnx_route is not None else _resolve_torch_device(device_str)
         )
-        # The CPU runs FP32 whatever precision was asked for: PyTorch has no fast FP16 path
-        # on the CPU, and a 4x photo in FP16 there ran on one core for many minutes a tile
-        # (a GPU setting that fell back to the CPU kept its FP16 choice).
-        precision = (
-            torch.float16
-            if precision_str == "fp16"
-            and model_info.half_supported
-            and onnx_route is None
-            and device.type != "cpu"
-            else torch.float32
-        )
         coreml_units: tuple[str, ...] = ()
         if onnx_route is None and device.type == "mps" and self.neural_engine_enabled:
             from .coreml_runtime import coreml_units_for
@@ -460,6 +496,13 @@ class InferenceEngine:
                 self.status_callback(
                     "DDColor does not run on the Neural Engine, so it runs on the Apple GPU."
                 )
+        precision, auto_fp16 = resolve_precision(
+            precision_str,
+            "cpu" if onnx_route is not None else device.type,
+            architecture,
+            bool(model_info.half_supported),
+            coreml_active=bool(coreml_units),
+        )
         backend_id = f"{device_str}+coreml" if coreml_units else device_str
 
         # Apply the memory cap once per device, shared by its cached models, and again
@@ -483,6 +526,8 @@ class InferenceEngine:
                 self._active_path = model_path
                 self._sync_legacy_fields()
                 self._attach_status(cached_model)
+                if auto_fp16:
+                    self.add_note(AUTO_FP16_NOTE)
                 return device, precision
             del self._loaded_models[model_path]
             gc.collect()
@@ -500,6 +545,8 @@ class InferenceEngine:
         self._active_path = model_path
         self._sync_legacy_fields()
         self._attach_status(model)
+        if auto_fp16:
+            self.add_note(AUTO_FP16_NOTE)
         return device, precision
 
     def _attach_status(self, model) -> None:

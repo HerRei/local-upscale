@@ -5161,3 +5161,113 @@ fn stay_awake_follows_queue_activity_preference_and_shutdown() {
     crate::worker::shutdown(&state);
     assert!(!state.stay_awake.is_held());
 }
+
+#[test]
+fn precision_auto_validates_and_falls_back_to_fp32_without_engine_feature() {
+    let mut settings = UiSettings::default();
+    assert_eq!(settings.precision, "auto");
+    assert!(validate_settings(&settings).is_ok());
+
+    for valid in ["auto", "fp32", "fp16", "bf16"] {
+        settings.precision = valid.into();
+        assert!(validate_settings(&settings).is_ok(), "{valid}");
+    }
+    settings.precision = "fp8".into();
+    assert!(validate_settings(&settings).is_err());
+
+    let mut auto_input = input("upscale");
+    auto_input.precision = "auto".into();
+    let selection = ModelSelection::Image {
+        model_id: "span_photo_x4".into(),
+        path: "/models/span.pth".into(),
+        approved_checkpoint_sha256: None,
+        preprocess: vec![],
+        face_path: None,
+        face_model_id: String::new(),
+        native_scale: 4,
+        skip_upscale: false,
+        interpolation: None,
+        audio_denoise: None,
+    };
+    let media = crate::types::MediaItem {
+        id: "media".into(),
+        path: "/in/photo.png".into(),
+        name: "photo.png".into(),
+        kind: "image".into(),
+        width: 100,
+        height: 100,
+        frame_count: 1,
+        fps: 0.0,
+        duration_seconds: 0.0,
+        preview_data_url: String::new(),
+        probe_status: "ready".into(),
+        hdr_format: String::new(),
+        audio_warning: String::new(),
+        has_audio: false,
+        error: String::new(),
+        selected: true,
+    };
+
+    // Older engine (no engine info or missing "precision_auto") receives "fp32" instead of "auto".
+    let no_engine_msg = build_job_message_for_engine(
+        "j1",
+        &media,
+        Path::new("/out/a.png"),
+        Path::new("/work"),
+        &auto_input,
+        &selection,
+        None,
+    )
+    .unwrap();
+    assert_eq!(no_engine_msg["data"]["precision"], "fp32");
+
+    let mut engine = crate::types::EngineInfo {
+        protocol_version: 1,
+        minimum_protocol_version: 1,
+        engine_id: "test".into(),
+        engine_version: "0.6.2".into(),
+        features: vec!["image".into()],
+        model_formats: vec![],
+        video_engines: vec![],
+    };
+    let old_engine_msg = build_job_message_for_engine(
+        "j2",
+        &media,
+        Path::new("/out/a.png"),
+        Path::new("/work"),
+        &auto_input,
+        &selection,
+        Some(&engine),
+    )
+    .unwrap();
+    assert_eq!(old_engine_msg["data"]["precision"], "fp32");
+
+    // Capable engine receives "auto".
+    engine.features.push("precision_auto".into());
+    let new_engine_msg = build_job_message_for_engine(
+        "j3",
+        &media,
+        Path::new("/out/a.png"),
+        Path::new("/work"),
+        &auto_input,
+        &selection,
+        Some(&engine),
+    )
+    .unwrap();
+    assert_eq!(new_engine_msg["data"]["precision"], "auto");
+
+    // Explicit fp16 is unchanged even for an older engine.
+    let mut fp16_input = input("upscale");
+    fp16_input.precision = "fp16".into();
+    let fp16_msg = build_job_message_for_engine(
+        "j4",
+        &media,
+        Path::new("/out/a.png"),
+        Path::new("/work"),
+        &fp16_input,
+        &selection,
+        None,
+    )
+    .unwrap();
+    assert_eq!(fp16_msg["data"]["precision"], "fp16");
+}

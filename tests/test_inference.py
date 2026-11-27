@@ -547,3 +547,140 @@ def test_a_gpu_keeps_fp16():
     engine.neural_engine_enabled = False
     _device, precision = engine.load_model("a", "mps", "fp16", adapter.model_info)
     assert precision == torch.float16
+
+
+def test_auto_precision_resolution_without_gpu(monkeypatch):
+    import localsr.core.coreml_runtime as coreml_runtime
+    import localsr.core.inference as inference
+    from localsr.core.inference import AUTO_FP16_NOTE, resolve_precision
+
+    gate = {
+        "SPAN": {"passed": True, "min_psnr": 60.0, "speedup": 1.8},
+        "HAT": {"passed": False, "min_psnr": None, "speedup": 0.0},
+    }
+
+    # MPS + no Core ML + passed gate + half_supported -> fp16 + note
+    assert resolve_precision("auto", "mps", "SPAN", True, coreml_active=False, gate=gate) == (
+        torch.float16,
+        True,
+    )
+    # MPS + Core ML active (Neural Engine runs this model) -> fp32 + no note
+    assert resolve_precision("auto", "mps", "SPAN", True, coreml_active=True, gate=gate) == (
+        torch.float32,
+        False,
+    )
+    # MPS + failed gate / unknown arch / half_supported=False -> fp32 + no note
+    assert resolve_precision("auto", "mps", "HAT", True, coreml_active=False, gate=gate) == (
+        torch.float32,
+        False,
+    )
+    assert resolve_precision(
+        "auto", "mps", "UnknownArch", True, coreml_active=False, gate=gate
+    ) == (
+        torch.float32,
+        False,
+    )
+    assert resolve_precision("auto", "mps", "SPAN", False, coreml_active=False, gate=gate) == (
+        torch.float32,
+        False,
+    )
+    # Every other device keeps fp32 under auto (CUDA and others are not measured yet).
+    for other_device in ("cpu", "cuda", "xpu", "privateuseone"):
+        assert resolve_precision(
+            "auto", other_device, "SPAN", True, coreml_active=False, gate=gate
+        ) == (torch.float32, False)
+
+    # Explicit precisions keep their exact existing meaning.
+    assert resolve_precision("fp32", "mps", "SPAN", True, coreml_active=False, gate=gate) == (
+        torch.float32,
+        False,
+    )
+    assert resolve_precision("bf16", "mps", "SPAN", True, coreml_active=False, gate=gate) == (
+        torch.float32,
+        False,
+    )
+    assert resolve_precision("fp16", "mps", "HAT", True, coreml_active=False, gate=gate) == (
+        torch.float16,
+        False,
+    )
+    assert resolve_precision("fp16", "mps", "HAT", False, coreml_active=False, gate=gate) == (
+        torch.float32,
+        False,
+    )
+    assert resolve_precision("fp16", "cpu", "SPAN", True, coreml_active=False, gate=gate) == (
+        torch.float32,
+        False,
+    )
+
+    # Load-path test without requiring a real MPS GPU: pretend _resolve_torch_device("mps")
+    # returns a CPU device whose type property reports "mps" via a lightweight adapter check.
+    class FakeMpsModel(nn.Module):
+        def to(self, *args, **kwargs):
+            return self
+
+        def eval(self):
+            return self
+
+    class FakeMpsAdapter(DummyAdapter):
+        def __init__(self, arch: str, half: bool):
+            super().__init__(4)
+            self.model_info.architecture = arch
+            self.model_info.half_supported = half
+            self.loaded_precisions = []
+
+        def load(self, path, device, precision, **_kwargs):
+            self.loaded_precisions.append(precision)
+            return FakeMpsModel(), None
+
+    fake_mps = SimpleNamespace(type="mps", __eq__=lambda s, o: getattr(o, "type", None) == "mps")
+    monkeypatch.setattr(inference, "_resolve_torch_device", lambda _d: fake_mps)
+    monkeypatch.setattr(inference, "_apply_gpu_memory_limit", lambda _d, _s: None)
+    monkeypatch.setattr(inference, "load_fp16_gate", lambda: gate)
+    monkeypatch.setattr(
+        coreml_runtime, "coreml_units_for", lambda arch: ("CPU_AND_NE",) if arch == "SPAN" else ()
+    )
+
+    # SPAN with Neural Engine ON runs Core ML -> auto resolves PyTorch side to fp32, no note.
+    span_adapter = FakeMpsAdapter("SPAN", True)
+    engine = InferenceEngine(span_adapter)
+    engine.neural_engine_enabled = True
+    _dev, prec = engine.load_model("span.pth", "mps", "auto", span_adapter.model_info)
+    assert prec == torch.float32
+    assert engine.take_notes() == []
+
+    # SPAN with Neural Engine OFF -> auto picks fp16 and records the note (including on cache hit).
+    engine.neural_engine_enabled = False
+    _dev, prec = engine.load_model("span.pth", "mps", "auto", span_adapter.model_info)
+    assert prec == torch.float16
+    assert engine.take_notes() == [AUTO_FP16_NOTE]
+    _dev, prec = engine.load_model("span.pth", "mps", "auto", span_adapter.model_info)
+    assert prec == torch.float16
+    assert engine.take_notes() == [AUTO_FP16_NOTE]
+
+    # Explicit fp16 does not emit the auto-chosen note.
+    _dev, prec = engine.load_model("span.pth", "mps", "fp16", span_adapter.model_info)
+    assert prec == torch.float16
+    assert engine.take_notes() == []
+
+
+def test_committed_fp16_gate_lists_only_catalog_architectures():
+    import json
+    from pathlib import Path
+
+    from localsr.core.model_catalog import MODEL_CATALOG
+
+    gate_path = Path(__file__).resolve().parents[1] / "src" / "localsr" / "core" / "fp16_gate.json"
+    gate = json.loads(gate_path.read_text(encoding="utf-8"))
+    assert gate, "fp16_gate.json must not be empty"
+
+    # The catalog names two Spandrel architectures differently (as in test_coreml_runtime.py).
+    catalog_name = {"ESRGAN": "RealESRGAN", "PLKSR": "RealPLKSR"}
+    catalog_archs = {model.architecture for model in MODEL_CATALOG}
+    mapped = {catalog_name.get(arch, arch) for arch in gate}
+    assert mapped <= catalog_archs
+    for entry in gate.values():
+        assert isinstance(entry["passed"], bool)
+        assert "min_psnr" in entry
+        assert "speedup" in entry
+        assert isinstance(entry["measured_on"], str) and entry["measured_on"]
+        assert isinstance(entry["date"], str) and entry["date"]
