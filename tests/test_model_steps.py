@@ -83,6 +83,7 @@ def _register_key(monkeypatch, phase: str = "cleanup") -> StepDefinition:
 class _Writer:
     def __init__(self, array: np.ndarray) -> None:
         self.array = array
+        self.shape = array.shape
 
     def get_array(self) -> np.ndarray:
         return self.array
@@ -202,6 +203,7 @@ def _register_cutout(monkeypatch, tmp_path: Path, seen: list) -> Path:
         sha256=digest,
         recommended_halo=0,
         time_factor=1.0,
+        architecture="Test",
     )
     monkeypatch.setitem(CATALOG_BY_FILENAME, checkpoint.name, entry)
     monkeypatch.setitem(CATALOG_BY_ID, entry.model_id, entry)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 from typing import Any
@@ -9,6 +10,7 @@ from typing import Any
 from localsr.core.eta import RemainingTime
 from localsr.core.hardware import get_memory_snapshot
 from localsr.core.live_preview import LatestPreviewEncoder
+from localsr.core.model_catalog import CATALOG_BY_ID
 from localsr.core.pipeline import ImagePipeline, PipelineStage
 from localsr.protocol.messages import (
     ProgressUpdate,
@@ -54,6 +56,23 @@ class ImageJobProgress:
         # A batch's photos share one measured speed (the lanes' work together), fed by the
         # batch; alone a photo measures its own.
         self.rate = rate
+        self.weights = [1.0] * len(pipeline.stages)
+        self.weighted_speed: float | None = None
+        self.last_percentage = 0.0
+
+    def configure_work(self, width: int, height: int, upscale: int) -> None:
+        pixels = width * height
+        current = pixels
+        weights = []
+        for stage in self.pipeline.stages:
+            model = CATALOG_BY_ID.get(stage.model_id)
+            if stage.kind == "upscale":
+                current *= upscale * upscale
+            work = 512 * 512 if model and model.architecture == "DDColor" else current
+            # The catalog time factor is already used for video stage timing; benchmark
+            # references measure hardware, not relative speeds of individual models.
+            weights.append(work * (model.time_factor if model else 1.0))
+        self.weights = weights
 
     def start(self, index: int, stage: PipelineStage, *, span: int = 1) -> None:
         self.active_index = index
@@ -93,8 +112,16 @@ class ImageJobProgress:
         )
         stage_count = len(self.pipeline.stages)
         fraction = max(0.0, min(1.0, completed / max(total, 1)))
-        completed_weight = self.active_index + fraction * self.active_span
-        percentage = completed_weight / max(stage_count, 1) * 100.0
+        if self.stage_pixels_total > 0 and completed < total:
+            fraction = min(1.0, self.stage_pixels_done / self.stage_pixels_total)
+        weights = self.weights
+        active_weight = sum(weights[self.active_index : self.active_index + self.active_span])
+        completed_weight = sum(weights[: self.active_index]) + fraction * active_weight
+        percentage = completed_weight / max(sum(weights), 1) * 100.0
+        if self.active_index + self.active_span < stage_count or completed < total:
+            percentage = min(percentage, math.nextafter(100.0, 0.0))
+        percentage = max(self.last_percentage, min(100.0, percentage))
+        self.last_percentage = percentage
         remaining = self._remaining(now, completed, total)
         if now - self.last_memory_sample_at >= 1.0 or completed == total:
             try:
@@ -142,17 +169,11 @@ class ImageJobProgress:
         )
 
     def _remaining(self, now: float, completed: int, total: int) -> float:
-        """Seconds the whole job still needs, or 0 while that cannot be said.
-
-        Only the last pass has a measured speed of its own; the stages after an earlier one
-        have not run yet, so its remaining time would stand for the whole job wrongly.
-        """
+        """Estimate future stages using the latest measured weighted work rate."""
         if self.stage_pixels_total > 0:
             done, work = self.stage_pixels_done, self.stage_pixels_total
         else:
             done, work = completed, max(total, 1)
-        last_pass = self.active_index + self.active_span >= len(self.pipeline.stages)
-        seconds: float | None
         if self.rate is not None:
             speed = self.rate.seconds_per_unit()
             seconds = None if speed is None else max(0, work - done) * speed
@@ -160,8 +181,17 @@ class ImageJobProgress:
             if self.remaining_time is None:
                 self.remaining_time = RemainingTime(work)
             self.remaining_time.update(now, done)
+            speed = self.remaining_time.seconds_per_unit()
             seconds = self.remaining_time.remaining()
-        return seconds if last_pass and seconds is not None else 0.0
+        active_weight = sum(self.weights[self.active_index : self.active_index + self.active_span])
+        if speed is not None and active_weight > 0:
+            self.weighted_speed = speed * work / active_weight
+        future = sum(self.weights[self.active_index + self.active_span :])
+        if seconds is None and self.weighted_speed is not None:
+            seconds = max(0, work - done) / max(work, 1) * active_weight * self.weighted_speed
+        if seconds is None:
+            return 0.0
+        return seconds + future * (self.weighted_speed or 0.0)
 
     def tile(
         self,

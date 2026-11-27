@@ -1100,7 +1100,7 @@ describe('Job activity', () => {
     const snapshot = running();
     snapshot.runtime.progress = 100;
     snapshot.runtime.status_title = 'Editing';
-    snapshot.runtime.status_detail = 'Step 4 of 4 · ETA ≈ 3s';
+    snapshot.runtime.status_detail = 'PULSE runs on the Neural Engine';
     snapshot.runtime.estimated_remaining_seconds = 3;
     snapshot.jobs[0].progress = 100;
     api.bootstrap.mockResolvedValue(structuredClone(snapshot));
@@ -1111,7 +1111,17 @@ describe('Job activity', () => {
       expect(document.querySelector('.status-copy strong')?.textContent).toBe('Saving the result'),
     );
     const bar = document.querySelector('.status-bar')!;
-    expect(bar.querySelector('.status-detail')?.textContent).toMatch(/^FLUX\.2 klein 4B/);
+    const callback = api.listenForWorker.mock.calls[0][0] as (message: WorkerEnvelope) => void;
+    callback({
+      type: 'engine_status',
+      data: { job_id: 'job-1', message: 'Writing a 15,104 \u00d7 10,080 PNG (152 MP).' },
+    });
+    await waitFor(() =>
+      expect(bar.querySelector('.status-detail')?.textContent).toContain(
+        'Writing a 15,104 \u00d7 10,080 PNG (152 MP).',
+      ),
+    );
+    expect(bar.textContent).not.toContain('PULSE runs on the Neural Engine');
     expect(bar.textContent).not.toMatch(/ETA|≈|100%/);
     expect(document.querySelector('.media-pane')!.textContent).toContain('Saving…');
     expect(document.querySelector('.media-pane')!.textContent).not.toContain('100 %');

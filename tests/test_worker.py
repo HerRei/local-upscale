@@ -30,6 +30,7 @@ class DummyModelAdapter:
 
 class DummyWriter:
     def __init__(self):
+        self.shape = (3, 16, 16)
         self.cleaned_up = False
 
     def cleanup(self):

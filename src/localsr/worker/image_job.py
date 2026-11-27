@@ -160,6 +160,7 @@ class SavePipeline:
         try:
             try:
                 task.log("Writing final output...")
+                emit_save_status(task.emit, task.job_id, task.writer, task.info, task.data)
                 save_notes = save_output(
                     task.manager,
                     task.writer,
@@ -193,6 +194,21 @@ class SavePipeline:
             )
         finally:
             task.writer.cleanup()
+
+
+def emit_save_status(emit, job_id, writer, info, data):
+    height, width = writer.shape[-2:]
+    final_scale = int(data.get("output_scale") or info.scale)
+    width = round(width * final_scale / info.scale)
+    height = round(height * final_scale / info.scale)
+    megapixels = width * height / 1_000_000
+    # A large result takes long to write; the old model message would read as still running.
+    size = f"{megapixels:.1f}" if megapixels < 10 else f"{megapixels:.0f}"
+    message = (
+        f"Writing a {width:,} \N{MULTIPLICATION SIGN} {height:,} "
+        f"{str(data['output_format']).upper()} ({size} MP)."
+    )
+    emit(EngineStatus(job_id=job_id, message=message))
 
 
 def save_output(
@@ -540,6 +556,16 @@ class ImageJobRunner:
                     data["image_path"],
                     **({"bit_depth": 16} if bit_depth == 16 else {}),
                 )
+                height, width = image["tensor"].shape[-2:]
+                primary_model = (
+                    CATALOG_BY_ID.get(pipeline.primary.model_id) if pipeline.primary else None
+                )
+                scale = (
+                    primary_model.native_scale
+                    if primary_model
+                    else int(data.get("output_scale") or 1)
+                )
+                progress.configure_work(width, height, scale)
                 self._log("Starting inference pipeline...")
                 processing_started_at = time.monotonic()
                 working_image = image
@@ -639,6 +665,7 @@ class ImageJobRunner:
                 if self.save_pipeline is not None:
                     self.save_pipeline.drain()
                 self._log("Writing final output...")
+                emit_save_status(self.emit, job_id, writer, info, data)
                 notes.extend(self._save(manager, writer, image, info, data))
                 notes.extend(self._take_engine_notes())
             completed_at = time.monotonic()
@@ -995,6 +1022,7 @@ class ImageJobRunner:
         fill_unfinished(stopped.writer.get_array(), stopped.finished, working_image["tensor"])
         partial = {**data, "output_path": partial_output_path(str(data["output_path"]))}
         # The stop is what ends this job; the save itself must not be refused for it.
+        emit_save_status(self.emit, job_id, stopped.writer, info, partial)
         notes = save_output(manager, stopped.writer, image, info, partial, threading.Event())
         output_scale = int(data.get("output_scale") or info.scale)
         self.emit(

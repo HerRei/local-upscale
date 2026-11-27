@@ -55,6 +55,7 @@ def test_pipeline_schema_rejects_unbounded_or_ambiguous_order(stages, message):
 class _Writer:
     def __init__(self, array):
         self.array = array
+        self.shape = array.shape
         self.cleaned = False
 
     def get_array(self):
@@ -719,25 +720,22 @@ def _five_stage_job(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("skipped", "percentages", "stage_progress"),
+    ("skipped", "units", "stage_units"),
     [
         (
             (),
-            [10, 20, 30, 40, 50, 60, 80, 100],
-            # The upscaler and its fused face pass share one run: two stages of five.
-            [(0, 10), (0, 20), (1, 30), (1, 40), (2, 50), (2, 60), (3, 80), (4, 80)]
-            + [(3, 100), (4, 100)],
+            [1, 2, 3, 4, 5, 6, 14, 22],
+            [(0, 1), (0, 2), (1, 3), (1, 4), (2, 5), (2, 6), (3, 14), (4, 14)] + [(3, 22), (4, 22)],
         ),
         (
-            # A fix skipped halfway hands over to the next stage's own share.
             (1,),
-            [10, 20, 30, 50, 60, 80, 100],
-            [(0, 10), (0, 20), (1, 30), (2, 50), (2, 60), (3, 80), (4, 80), (3, 100), (4, 100)],
+            [1, 2, 3, 5, 6, 14, 22],
+            [(0, 1), (0, 2), (1, 3), (2, 5), (2, 6), (3, 14), (4, 14), (3, 22), (4, 22)],
         ),
     ],
 )
 def test_several_fixes_and_a_fused_face_pass_report_exact_progress(
-    tmp_path, monkeypatch, capsys, skipped, percentages, stage_progress
+    tmp_path, monkeypatch, capsys, skipped, units, stage_units
 ):
     from localsr.core.image_io import ImageManager
     from localsr.core.inference import UnstableRestorationError
@@ -773,9 +771,13 @@ def test_several_fixes_and_a_fused_face_pass_report_exact_progress(
 
     messages = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     of = lambda kind: [m["data"] for m in messages if m["type"] == kind]  # noqa: E731
-    assert [round(m["percentage"], 6) for m in of("progress")] == percentages
-    assert [(m["stage_index"], round(m["percentage"], 6)) for m in of("stage_progress")] == (
-        stage_progress
+    # Three 1x stages and two fused 2x stages have weights 1, 1, 1, 4, 4.
+    assert [m["percentage"] for m in of("progress")] == pytest.approx(
+        [unit * 100 / 22 for unit in units]
+    )
+    assert [m["stage_index"] for m in of("stage_progress")] == [i for i, _ in stage_units]
+    assert [m["percentage"] for m in of("stage_progress")] == pytest.approx(
+        [unit * 100 / 22 for _, unit in stage_units]
     )
     for kind in ("stage_started", "stage_completed"):
         assert [(m["stage_index"], m["stage_count"]) for m in of(kind)] == [
