@@ -127,6 +127,7 @@ mod file {
 }
 
 #[cfg(windows)]
+#[cfg_attr(test, allow(dead_code))]
 mod dpapi {
     use std::{ffi::c_void, ptr};
 
@@ -226,6 +227,7 @@ mod dpapi {
 }
 
 #[cfg(target_os = "linux")]
+#[cfg_attr(test, allow(dead_code))]
 mod secret_service {
     use super::{random_key, Loaded};
     use std::collections::HashMap;
