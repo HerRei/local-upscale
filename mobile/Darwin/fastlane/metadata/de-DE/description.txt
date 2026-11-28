@@ -1,0 +1,22 @@
+LocalSR macht kleine, unscharfe und verpixelte Fotos schärfer, direkt auf deinem iPhone.
+
+Wähle ein Foto aus oder teile es aus Fotos oder einer anderen App mit LocalSR. LocalSR skaliert es bis zu 4× hoch, entfernt Unschärfe und JPEG-Blöcke und speichert ein neues Foto neben dem Original. Dein Original bleibt unverändert.
+
+ALLES BLEIBT AUF DEINEM IPHONE
+• Kein Konto, keine Anmeldung, keine Uploads. LocalSR funktioniert offline.
+• Die KI-Modelle laufen auf der Neural Engine. Beim ersten Mal prüft LocalSR, welcher Chip deines iPhones am schnellsten korrekte Ergebnisse liefert, und nutzt diesen.
+• Ein 12-MP-Foto dauert auf einem iPhone 17 Pro etwa 2 Sekunden, auf einem iPhone 11 Pro etwa 6 Sekunden.
+
+WAS DU BEKOMMST
+• Bis 3 MP: 4×. Bis 12 MP: 2×, oder 4× mit „Full 4×“ in den Einstellungen. Größere Fotos werden zuerst auf 12 MP verkleinert.
+• Zwei Modelle: Best für die meisten Details, Fast für viele Fotos auf einmal.
+• Vorher und nachher mit einem Schieberegler vergleichen und hineinzoomen, um die Details zu prüfen.
+• „Upscale with LocalSR“ im Teilen-Menü, für ein Foto oder viele.
+• Datum und Ort des Originals bleiben erhalten.
+
+EHRLICH, WAS ES KANN
+LocalSR schärft, was im Foto ist. Es kann feine Textur hinzufügen, aber keine Details zurückholen, die nicht da sind: Text, der im Foto nicht lesbar ist, bleibt unlesbar.
+
+Die App selbst ist auf Englisch.
+
+Kostenlos und Open Source (MIT): github.com/HerRei/local-upscale

@@ -2,6 +2,12 @@
 
 The desktop app has its own changelog in the repository root.
 
+## [1.0.1] - unreleased
+
+- **App Store listing only.** New name, subtitle and keywords so the app shows up for searches
+  like "AI image upscaler", and a German store page ("Bilder hochskalieren"). The app is
+  unchanged; this build exists because the App Store only takes new texts with a new version.
+
 ## [1.0.0] - 2026-11-22
 
 - **LocalSR for iPhone.** Upscales photos 4x on the phone itself, on iOS 27 or later.
