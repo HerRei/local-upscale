@@ -1373,6 +1373,7 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
             "This worker does not support frame interpolation. Update LocalSR or turn interpolation off.".into(),
         ));
     }
+    validate_slow_motion_engine(&input, lock(&state.engine)?.as_ref())?;
     if input.task == "video"
         && input.video_clean_audio
         && !lock(&state.engine)?.as_ref().is_some_and(|engine| {
@@ -4793,6 +4794,23 @@ fn validate_fix_selections(stages: &[crate::types::FixStageSelection]) -> AppRes
     Ok(())
 }
 
+/// The engine feature that plays added frames as slow motion.
+const SLOW_MOTION_FEATURE: &str = "video_slow_motion";
+
+fn validate_slow_motion_engine(
+    input: &StartBatchInput,
+    engine: Option<&crate::types::EngineInfo>,
+) -> AppResult<()> {
+    if input.video_slow_motion
+        && !engine.is_some_and(|engine| engine.features.iter().any(|f| f == SLOW_MOTION_FEATURE))
+    {
+        return Err(AppError::Validation(
+            "This engine cannot make slow motion. Update LocalSR.".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Frame interpolation targets and orders the worker accepts.
 fn interpolation_choice_is_valid(target: &str, order: &str) -> bool {
     let steps = crate::steps::registry();
@@ -4838,6 +4856,7 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
         allow_unsafe_pickle_model: input.allow_unsafe_pickle_model,
         video_interpolation: input.video_interpolation.clone(),
         video_interpolation_order: input.video_interpolation_order.clone(),
+        video_slow_motion: input.video_slow_motion,
         video_clean_audio: input.video_clean_audio,
         video_audio_model: input.video_audio_model.clone(),
         ..UiSettings::default()
@@ -4866,6 +4885,13 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
     {
         return Err(AppError::Validation(
             "Frame interpolation works with the Frame-by-frame video engine in this version. Choose Frame-by-frame or turn interpolation off.".into(),
+        ));
+    }
+    if input.video_slow_motion
+        && (input.task != "video" || !matches!(input.video_interpolation.as_str(), "x2" | "x4"))
+    {
+        return Err(AppError::Validation(
+            "Slow motion needs 2× or 4× added frames.".into(),
         ));
     }
     if input.task == "video"
@@ -5509,7 +5535,9 @@ fn build_job_request(
             } else {
                 input.video_hdr_mode.as_str()
             };
-            let active_audio = audio_denoise.as_ref().filter(|_| media.has_audio);
+            let active_audio = audio_denoise
+                .as_ref()
+                .filter(|_| media.has_audio && !input.video_slow_motion);
             Ok(WorkerJobRequest::Video(Box::new(VideoJobRequest {
                 job_id: job_id.to_owned(),
                 video_path: media.path.clone(),
@@ -5571,6 +5599,7 @@ fn build_job_request(
                         .video_interpolation_order
                         .parse::<InterpolationOrder>()?,
                 ),
+                slow_motion: input.video_slow_motion && interpolation.is_some(),
                 interpolation_model_id: interpolation
                     .as_ref()
                     .map(|resolved| resolved.model_id.clone()),
@@ -5642,6 +5671,7 @@ fn build_job_request(
                 preview_max_dimension: 320,
                 interpolation: InterpolationMode::Off,
                 interpolation_order: None,
+                slow_motion: false,
                 interpolation_model_id: None,
                 interpolation_bundle_dir: None,
                 audio_denoise: active_audio.is_some(),
@@ -5763,6 +5793,7 @@ pub(crate) fn patch_plan(state: &AppState, mut input: StartBatchInput) -> AppRes
         // A still cannot show changes over time or sound; these stages are not run.
         input.deflicker = false;
         input.video_interpolation = "off".into();
+        input.video_slow_motion = false;
         input.video_clean_audio = false;
     }
     input.device = resolve_device(state, &input.device)?;
@@ -5874,6 +5905,7 @@ fn output_ending(input: &StartBatchInput) -> (String, &str) {
         {
             format!("_video_{}px", input.video_target_resolution)
         }
+        "video" if input.video_slow_motion => format!("_video_{}x_slow", input.output_scale),
         "video" => format!("_video_{}x", input.output_scale),
         _ => format!("_upscaled_{}x", input.output_scale),
     };

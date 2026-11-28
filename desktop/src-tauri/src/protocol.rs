@@ -372,6 +372,8 @@ pub struct VideoJobRequest {
     pub interpolation: InterpolationMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interpolation_order: Option<InterpolationOrder>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub slow_motion: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interpolation_model_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

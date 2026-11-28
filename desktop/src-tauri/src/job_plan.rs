@@ -105,6 +105,15 @@ pub fn effective_video_task(settings: &UiSettings) -> &'static str {
     }
 }
 
+/// Slow motion counts only while the frames are added as 2x or 4x on the frame-by-frame
+/// engine; the engine leaves out the sound then, so no audio step is planned either.
+pub fn slow_motion_applies(settings: &UiSettings, using_temporal_video: bool) -> bool {
+    settings.task == "video"
+        && !using_temporal_video
+        && settings.video_slow_motion
+        && matches!(settings.video_interpolation.as_str(), "x2" | "x4")
+}
+
 pub fn is_restore_task(settings: &UiSettings) -> bool {
     settings.task == "denoise" || (settings.task == "video" && settings.video_task == "denoise")
 }
@@ -659,7 +668,11 @@ pub fn resolve_plan(
     }
 
     let audio_model = resolve_audio_model(&catalog.audio_models, &settings.video_audio_model);
-    if settings.task == "video" && settings.video_clean_audio && options.has_audio != Some(false) {
+    if settings.task == "video"
+        && settings.video_clean_audio
+        && options.has_audio != Some(false)
+        && !slow_motion_applies(settings, options.using_temporal_video)
+    {
         if let Some(audio) = audio_model {
             stages.insert(
                 0,
@@ -714,6 +727,7 @@ pub fn build_start_input(
     let no_restore_model =
         restoring && image_fixes.is_empty() && settings.selected_model_id != "__custom__";
     let audio_disabled = settings.task == "video" && has_audio == Some(false);
+    let slow_motion = slow_motion_applies(&settings, using_temporal_video);
     let step_stages: Vec<StepStageSelection> =
         active_step_stages(steps, &settings, using_temporal_video)
             .into_iter()
@@ -795,8 +809,10 @@ pub fn build_start_input(
         } else {
             settings.video_interpolation_order.clone()
         },
+        video_slow_motion: slow_motion,
         video_clean_audio: settings.task == "video"
             && !audio_disabled
+            && !slow_motion
             && settings.video_clean_audio,
         video_audio_model: settings.video_audio_model.clone(),
         output_bit_depth: settings.output_bit_depth,

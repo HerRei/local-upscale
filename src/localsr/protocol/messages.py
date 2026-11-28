@@ -179,6 +179,7 @@ class VideoJobRequest:
     # or "fps120", run "after_upscale" or "before_upscale" with a catalog RIFE bundle.
     interpolation: str = "off"
     interpolation_order: str = "after_upscale"
+    slow_motion: bool = False
     interpolation_model_id: str | None = None
     interpolation_bundle_dir: str | None = None
     # Optional speech audio cleanup via DeepFilterNet3.

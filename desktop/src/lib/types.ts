@@ -294,6 +294,7 @@ export interface Recipe {
   fixes?: FixKind[];
   video_interpolation?: InterpolationTarget | '';
   video_interpolation_order?: InterpolationOrder | '';
+  video_slow_motion?: boolean;
   video_clean_audio?: boolean;
   video_audio_model?: string;
 }
@@ -380,6 +381,8 @@ export interface UiSettings {
   /** Off by default; the host fills both in for settings saved before 0.3.7. */
   video_interpolation?: InterpolationTarget;
   video_interpolation_order?: InterpolationOrder;
+  /** Plays the added frames over 2 or 4 times the length, without sound. */
+  video_slow_motion?: boolean;
   video_clean_audio?: boolean;
   video_audio_model?: string;
   /** Direct builds send version, platform and channel after an update check. Off unless turned on. */
@@ -856,6 +859,8 @@ export interface StartBatchInput {
   allow_unsafe_pickle_model: boolean;
   video_interpolation?: InterpolationTarget;
   video_interpolation_order?: InterpolationOrder;
+  /** Plays the added frames over 2 or 4 times the length, without sound. */
+  video_slow_motion?: boolean;
   video_clean_audio?: boolean;
   video_audio_model?: string;
 }

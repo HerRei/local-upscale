@@ -826,6 +826,7 @@ fn input(task: &str) -> StartBatchInput {
         allow_unsafe_pickle_model: false,
         video_interpolation: "off".into(),
         video_interpolation_order: "after_upscale".into(),
+        video_slow_motion: false,
         video_clean_audio: false,
         video_audio_model: String::new(),
         step_stages: Vec::new(),
@@ -2005,6 +2006,7 @@ fn recipe_stage_validation_accepts_legacy_and_rejects_ambiguous_order() {
         fixes: Vec::new(),
         video_interpolation: String::new(),
         video_interpolation_order: String::new(),
+        video_slow_motion: false,
         video_clean_audio: false,
         video_audio_model: String::new(),
     };
@@ -5671,6 +5673,27 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
         }),
     };
 
+    let mut slow_video_input = input("video");
+    slow_video_input.model_id = "span_photo_x4".into();
+    slow_video_input.video_interpolation = "x2".into();
+    slow_video_input.video_slow_motion = true;
+    let slow_video_selection = ModelSelection::Image {
+        model_id: "span_photo_x4".into(),
+        path: "/models/span.safetensors".into(),
+        approved_checkpoint_sha256: None,
+        preprocess: Vec::new(),
+        step_models: Vec::new(),
+        face_path: None,
+        face_model_id: String::new(),
+        native_scale: 4,
+        skip_upscale: false,
+        interpolation: Some(ResolvedBundle {
+            model_id: "rife_4_26".into(),
+            bundle_dir: "/models/rife_4_26".into(),
+        }),
+        audio_denoise: None,
+    };
+
     let mut temporal_input = input("video");
     temporal_input.video_model_id = "seedvr2_3b".into();
     temporal_input.video_target_resolution = 1080;
@@ -5809,6 +5832,18 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
                 work,
                 &fbf_video_input,
                 &fbf_video_selection,
+            )
+            .unwrap(),
+        ),
+        (
+            "video_slow_motion",
+            build_job_message(
+                "sample-video-slow",
+                &video_media(),
+                Path::new("/out/clip_video_4x_slow.mp4"),
+                work,
+                &slow_video_input,
+                &slow_video_selection,
             )
             .unwrap(),
         ),
@@ -6489,4 +6524,128 @@ fn estimate_start_waits_for_two_measured_runs_of_the_same_work() {
         }
     )
     .is_err());
+}
+
+#[test]
+fn slow_motion_needs_two_or_four_times_and_an_engine_that_lists_it() {
+    let mut slow = input("video");
+    slow.video_slow_motion = true;
+    for target in ["off", "fps60", "fps120"] {
+        slow.video_interpolation = target.into();
+        let error = validate_start_input(&slow, true).unwrap_err().to_string();
+        assert!(error.contains("Slow motion needs 2"), "{target}: {error}");
+    }
+    for target in ["x2", "x4"] {
+        slow.video_interpolation = target.into();
+        validate_start_input(&slow, true).unwrap();
+    }
+    slow.video_model_id = "seedvr2_3b".into();
+    assert!(validate_start_input(&slow, true).is_err());
+
+    let mut photo = input("upscale");
+    photo.video_slow_motion = true;
+    photo.video_interpolation = "x2".into();
+    assert!(validate_start_input(&photo, true).is_err());
+
+    let mut wanted = input("video");
+    wanted.video_slow_motion = true;
+    wanted.video_interpolation = "x2".into();
+    let mut engine = crate::types::EngineInfo {
+        protocol_version: 1,
+        minimum_protocol_version: 1,
+        engine_id: "test".into(),
+        engine_version: "0".into(),
+        features: vec!["video_interpolation".into()],
+        model_formats: Vec::new(),
+        video_engines: Vec::new(),
+    };
+    let refused = validate_slow_motion_engine(&wanted, Some(&engine))
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        refused,
+        "This engine cannot make slow motion. Update LocalSR."
+    );
+    assert!(validate_slow_motion_engine(&wanted, None).is_err());
+    engine.features.push(SLOW_MOTION_FEATURE.into());
+    validate_slow_motion_engine(&wanted, Some(&engine)).unwrap();
+    wanted.video_slow_motion = false;
+    validate_slow_motion_engine(&wanted, None).unwrap();
+}
+
+#[test]
+fn the_video_request_carries_slow_motion() {
+    let work = Path::new("/app-owned/work");
+    let selection = |audio: bool| ModelSelection::Image {
+        model_id: "span_photo_x4".into(),
+        path: "/models/span.safetensors".into(),
+        approved_checkpoint_sha256: None,
+        preprocess: Vec::new(),
+        step_models: Vec::new(),
+        face_path: None,
+        face_model_id: String::new(),
+        native_scale: 4,
+        skip_upscale: false,
+        interpolation: Some(ResolvedBundle {
+            model_id: "rife_4_26".into(),
+            bundle_dir: "/models/rife_4_26".into(),
+        }),
+        audio_denoise: audio.then(|| ResolvedBundle {
+            model_id: "deepfilternet3".into(),
+            bundle_dir: "/models/deepfilternet3".into(),
+        }),
+    };
+    let mut slow = input("video");
+    slow.video_interpolation = "x4".into();
+    slow.video_slow_motion = true;
+    slow.video_clean_audio = true;
+    let message = build_job_message(
+        "slow",
+        &video_media(),
+        Path::new("/out/clip.mp4"),
+        work,
+        &slow,
+        &selection(true),
+    )
+    .unwrap();
+    assert_eq!(message["data"]["slow_motion"], true);
+    assert_eq!(message["data"]["interpolation"], "x4");
+    assert_eq!(message["data"]["audio_denoise"], false);
+    slow.video_slow_motion = false;
+    let normal = build_job_message(
+        "normal",
+        &video_media(),
+        Path::new("/out/clip.mp4"),
+        work,
+        &slow,
+        &selection(true),
+    )
+    .unwrap();
+    assert!(normal["data"].get("slow_motion").is_none());
+    assert_eq!(normal["data"]["audio_denoise"], true);
+}
+
+#[test]
+fn a_slow_motion_result_is_named_slow() {
+    let mut slow = input("video");
+    slow.output_scale = 2;
+    assert_eq!(output_ending(&slow).0, "_video_2x");
+    slow.video_slow_motion = true;
+    assert_eq!(output_ending(&slow).0, "_video_2x_slow");
+}
+
+#[test]
+fn slow_motion_settings_default_to_off_and_a_recipe_without_it_loads_false() {
+    assert!(!UiSettings::default().video_slow_motion);
+    let mut older = serde_json::to_value(UiSettings::default()).unwrap();
+    older.as_object_mut().unwrap().remove("video_slow_motion");
+    let parsed: UiSettings = serde_json::from_value(older).unwrap();
+    assert!(!parsed.video_slow_motion);
+    let recipe: crate::types::Recipe = serde_json::from_value(serde_json::json!({
+        "id": "r", "name": "n", "task": "video", "model_id": "m", "output_scale": 2,
+        "tile_size": 256, "halo": 32, "precision": "fp32", "safe_memory": true,
+        "stages": [], "video_interpolation": "x2"
+    }))
+    .unwrap();
+    assert!(!recipe.video_slow_motion);
 }

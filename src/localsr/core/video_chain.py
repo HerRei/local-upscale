@@ -6,6 +6,7 @@ import threading
 from collections import deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
+from fractions import Fraction
 from typing import TYPE_CHECKING, Any, Protocol
 
 import av
@@ -683,6 +684,27 @@ def _interpolate_after_stage(ctx: VideoChainContext) -> VideoStreamStage:
     return _stage
 
 
+def _slow_motion_stage(ctx: VideoChainContext) -> VideoStreamStage:
+    """Play the frames the chain made over ``factor`` times as long, at their own rate."""
+    assert ctx.interpolation is not None
+    factor = ctx.interpolation.multiplier
+
+    def _stage(frames: Iterator[StreamFrame]) -> Iterator[StreamFrame]:
+        origin: Fraction | None = None
+        for item in frames:
+            frame = item.frame
+            if origin is None:
+                origin = frame.timestamp
+            stretched = replace(
+                frame,
+                timestamp=origin + (frame.timestamp - origin) * factor,
+                duration=frame.duration * factor,
+            )
+            yield replace(item, frame=stretched)
+
+    return _stage
+
+
 def _dispatch_preprocess_stage(
     stage: VideoFixStage,
     ctx: VideoChainContext,
@@ -760,6 +782,8 @@ def build_video_stages(ctx: VideoChainContext) -> list[VideoStreamStage]:
         stages.append(_deflicker_stage(ctx))
     if ctx.interpolation is not None and not ctx.before_upscale:
         stages.append(_interpolate_after_stage(ctx))
+    if ctx.config.slow_motion:
+        stages.append(_slow_motion_stage(ctx))
     if ctx.colour_index is None:
         stages.append(lambda s: ctx.prefetch_fn(s, 2))
     return stages

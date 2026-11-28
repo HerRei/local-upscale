@@ -451,6 +451,7 @@ export function resolvePlan(
     settings.task === 'video' &&
     settings.video_clean_audio &&
     options.hasAudio !== false &&
+    !slowMotionApplies(settings, options.usingTemporalVideo) &&
     audioModel
   ) {
     stages.unshift({
@@ -465,6 +466,17 @@ export function resolvePlan(
     });
   }
   return stages;
+}
+
+/** Slow motion counts only as 2x or 4x added frames on the frame-by-frame engine; the engine
+ * leaves out the sound then, so no audio step is planned either. */
+export function slowMotionApplies(settings: UiSettings, usingTemporalVideo: boolean): boolean {
+  return (
+    settings.task === 'video' &&
+    !usingTemporalVideo &&
+    Boolean(settings.video_slow_motion) &&
+    (settings.video_interpolation === 'x2' || settings.video_interpolation === 'x4')
+  );
 }
 
 /** Selected audio cleanup model, falling back to the catalog default for empty or unknown ids. */
