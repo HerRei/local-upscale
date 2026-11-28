@@ -1093,8 +1093,11 @@ every model, downloaded with the catalog; assigning ⌘3 to ⌘9 by hand.
   around a pixel can differ near the patch's edge despite the 32 px padding. The test compares
   the centre.
 - **Memory.** A patch loads models that Start would load anyway, one after another, and
-  releases each (`_run_fix_model_stage`, `image_job.py:380-383`). With `Safe memory` on it runs
-  the same way. It does not run beside a job.
+  releases each (`_run_fix_model_stage`, `image_job.py:380-383`), except Colour: its model
+  stays loaded for the next photo while the patch is on and the device has room
+  (`colour_may_stay_loaded`, `patch_preview.py`: at least 10 GiB for the GPU and 2 GiB free).
+  A job, the idle release, memory pressure and switching the patch off (`patch_release`)
+  release it. With `Safe memory` on it runs the same way. It does not run beside a job.
 - **100 % zoom on turning on** moves the view. It is the honest size for judging grain, and
   the alternative, a patch 70 px wide on a fitted 24-megapixel photo, shows nothing.
 - **`execCommand('insertText')`** is deprecated but is what keeps the WebView's own undo on
