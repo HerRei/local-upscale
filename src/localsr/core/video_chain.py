@@ -17,6 +17,8 @@ from .deflicker import AnalysisFrame, prepare_analysis_frame
 from .frame_interpolation import InterpolationTarget, interpolate_frames
 from .hdr import anchor_hdr_detail, tone_map_to_sdr
 from .inference import InferenceEngine, UnstableRestorationError
+from .stabilise import build_stabilise_stage
+from .steps import STEPS_BY_ID
 from .video_colour import colour_frames
 from .video_io import TimedVideoFrame, uint8_chw_to_rgb_hwc
 
@@ -393,6 +395,7 @@ def _build_deinterlace_stage(stage: VideoFixStage, step_ctx: VideoStepContext) -
 # Dispatch video preprocessing/fix/grade steps by registry step id.
 VIDEO_STEP_HANDLERS: dict[str, VideoStepHandler] = {
     "deinterlace": _build_deinterlace_stage,
+    "stabilise": build_stabilise_stage,
     "blur": _build_fix_model_stage,
     "jpeg": _build_fix_model_stage,
     "noise": _build_fix_model_stage,
@@ -683,6 +686,11 @@ def _interpolate_after_stage(ctx: VideoChainContext) -> VideoStreamStage:
     return _stage
 
 
+def _is_geometry(stage: VideoFixStage) -> bool:
+    step = STEPS_BY_ID.get(stage.step_id)
+    return step is not None and step.phase == "geometry"
+
+
 def _dispatch_preprocess_stage(
     stage: VideoFixStage,
     ctx: VideoChainContext,
@@ -708,13 +716,20 @@ def build_video_stages(ctx: VideoChainContext) -> list[VideoStreamStage]:
     stages: list[VideoStreamStage] = []
     if ctx.colour_index is None:
         stages.append(lambda s: ctx.prefetch_fn(s, 4))
-    for idx, stage in enumerate(ctx.config.preprocess_stages):
-        if stage.step_id == "deinterlace":
-            stages.append(
-                _dispatch_preprocess_stage(
-                    stage, ctx, idx, report_tiles=False, is_final_stage=False
-                )
-            )
+    # Geometry runs on the decoded frames in registry order (Deinterlace, then Stabilise),
+    # before frames are added and before the side data of the live pictures is taken.
+    geometry = sorted(
+        (
+            (idx, stage)
+            for idx, stage in enumerate(ctx.config.preprocess_stages)
+            if _is_geometry(stage)
+        ),
+        key=lambda entry: STEPS_BY_ID[entry[1].step_id].order,
+    )
+    for idx, stage in geometry:
+        stages.append(
+            _dispatch_preprocess_stage(stage, ctx, idx, report_tiles=False, is_final_stage=False)
+        )
     if ctx.before_upscale and ctx.interpolation is not None:
         stages.append(_interpolate_before_stage(ctx))
 
@@ -722,7 +737,7 @@ def build_video_stages(ctx: VideoChainContext) -> list[VideoStreamStage]:
     if ctx.colour_index is not None:
         stages.append(_capture_source_side_data_stage(ctx))
         for idx, stage in enumerate(preprocess[: ctx.colour_index]):
-            if stage.step_id == "deinterlace":
+            if _is_geometry(stage):
                 continue
             stages.append(
                 _dispatch_preprocess_stage(
@@ -743,7 +758,7 @@ def build_video_stages(ctx: VideoChainContext) -> list[VideoStreamStage]:
 
     for idx in range(after_colour_start, len(preprocess)):
         stage = preprocess[idx]
-        if stage.step_id == "deinterlace":
+        if _is_geometry(stage):
             continue
         is_final = ctx.skip_primary_sr and idx == len(preprocess) - 1
         stages.append(

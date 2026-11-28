@@ -149,11 +149,11 @@ def test_grain_is_a_dev_only_modelless_image_step_with_bounded_parameters():
     )
     seed = parameter_for("grain", "seed")
     assert (seed.kind, seed.minimum, seed.maximum, seed.default) == ("int", 0, 2_147_483_647, 0)
-    assert LIMITS.max_step_stages == 3
+    assert LIMITS.max_step_stages == 4
     assert not any(
         step.dev_only
         for step in STEPS_BY_ID.values()
-        if step.id not in {"grain", "deinterlace", "remove_background"}
+        if step.id not in {"grain", "deinterlace", "stabilise", "remove_background"}
     )
 
 

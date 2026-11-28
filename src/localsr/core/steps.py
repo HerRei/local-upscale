@@ -359,6 +359,26 @@ STEPS: tuple[StepDefinition, ...] = (
         ),
     ),
     StepDefinition(
+        id="stabilise",
+        media=("video",),
+        phase="geometry",
+        order=20,
+        needs_model=False,
+        in_image_pipeline=True,
+        label="Stabilise",
+        stage_label="Stabilising",
+        required_feature="video_stabilise",
+        dev_only=True,
+        parameters=(
+            StepParameter(
+                name="smoothing",
+                kind="choice",
+                default="medium",
+                choices=("light", "medium", "strong"),
+            ),
+        ),
+    ),
+    StepDefinition(
         id="remove_background",
         media=("image",),
         phase="cleanup",
