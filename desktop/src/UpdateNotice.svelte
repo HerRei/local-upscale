@@ -112,12 +112,12 @@
         {:else}
           <button class="notice-button primary" type="button" on:click={start}>Update</button>
         {/if}
-        <button class="notice-button" type="button" on:click={skip}>Skip This Version</button>
+        <button class="notice-button" type="button" on:click={skip}>Skip this version</button>
         <button
           class="notice-button"
           type="button"
           on:click={() => api.openUpdateDiscover().catch((error) => updateError.set(String(error)))}
-          >What's New</button
+          >What's new</button
         >
         <button
           class="notice-button"

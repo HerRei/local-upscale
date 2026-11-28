@@ -264,6 +264,15 @@ export function menuRows(recipes: readonly Recipe[], options: MenuRowsOptions = 
     recentRows.push(toRow(entry, false));
   }
 
+  // Nothing pinned and nothing recent that fits: show the first fitting entries in saved order
+  // instead of an empty menu.
+  if (pinnedRows.length === 0 && recentRows.length === 0) {
+    return entries
+      .filter((entry) => fitsMediaKind(entry.isVideo, mediaKind))
+      .slice(0, MAX_MENU_RECIPES)
+      .map((entry) => toRow(entry, false));
+  }
+
   if (pinnedRows.length > 0 && recentRows.length > 0) {
     return [...pinnedRows, { kind: 'separator', id: 'menu-separator' }, ...recentRows];
   }

@@ -183,8 +183,8 @@ describe('the queue and Try others', () => {
 describe('time text', () => {
   it('never shows 60 in the seconds place, a negative or a not-a-number time', () => {
     expect(formatDuration(59.6)).toBe('1:00');
-    expect(formatDuration(3599.6)).toBe('1h 0m');
-    expect(formatDuration(86399.6)).toBe('1d 0h');
+    expect(formatDuration(3599.6)).toBe('1 h 0 min');
+    expect(formatDuration(86399.6)).toBe('1 d 0 h');
     for (const bad of [-5, Number.NaN, Number.POSITIVE_INFINITY, 0]) {
       expect(formatDuration(bad)).toBe('—');
     }

@@ -1304,7 +1304,7 @@ describe('LocalSR desktop interface', () => {
       paths: ['/Scans/a.png', '/Scans/b.png'],
       outputDirectory: '/Scans/LocalSR Results',
     });
-    await user.click(screen.getByRole('button', { name: 'Add Folder…' }));
+    await user.click(screen.getByRole('button', { name: 'Add folder…' }));
     await waitFor(() =>
       expect(api.addMedia).toHaveBeenCalledWith(['/Scans/a.png', '/Scans/b.png'], false),
     );
@@ -1319,7 +1319,7 @@ describe('LocalSR desktop interface', () => {
     const snapshot = readySnapshot();
     const user = await mountWith(snapshot);
     api.saveSettings.mockClear();
-    await user.click(screen.getByRole('button', { name: 'Add Folder…' }));
+    await user.click(screen.getByRole('button', { name: 'Add folder…' }));
     expect(api.addMedia).not.toHaveBeenCalled();
     expect(api.saveSettings).not.toHaveBeenCalled();
   });
@@ -1440,7 +1440,7 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByRole('tablist', { name: 'Media' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Enhance' })).toBeTruthy();
     expect(screen.getByText('Drop photos or videos here')).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: 'Add Files…' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'Add files…' })).toHaveLength(1);
     expect(
       screen.getByRole('button', { name: /drop them here or click to choose files/ }),
     ).toBeTruthy();
@@ -1897,7 +1897,7 @@ describe('LocalSR desktop interface', () => {
     await openOutputSheet(user);
     expect(screen.getByLabelText('Format')).toBeTruthy();
     expect(
-      screen.getByRole('checkbox', { name: /Preserve safe metadata and color profile/i }),
+      screen.getByRole('checkbox', { name: /Preserve safe metadata and colour profile/i }),
     ).toBeTruthy();
     await openPlanSheet(user);
     expect(screen.getByRole('checkbox', { name: /Safe memory mode/i })).toBeTruthy();
@@ -1968,7 +1968,7 @@ describe('LocalSR desktop interface', () => {
     expect(document.querySelector('[aria-busy="true"]')).toBeTruthy();
     // Keep the display at a known second even if a busy CI VM renders slowly.
     clock.mockReturnValue(1_001_250);
-    expect(await screen.findByText('1s elapsed', {}, { timeout: 2500 })).toBeTruthy();
+    expect(await screen.findByText('1 s elapsed', {}, { timeout: 2500 })).toBeTruthy();
     callback({
       type: 'media_probe_progress',
       data: { media_path: media.path, stage: 'converting_hdr' },
@@ -2408,12 +2408,12 @@ describe('LocalSR desktop interface', () => {
     const rate = screen.getByLabelText('Frames') as HTMLSelectElement;
     expect(rate.value).toBe('off');
     expect(screen.queryByLabelText('Interpolate')).toBeNull();
-    expect(screen.queryByText('Interpolate to 60 fps')).toBeNull();
+    expect(screen.queryByRole('list', { name: 'Stages' })).toBeNull();
 
     await user.selectOptions(rate, 'fps60:before_upscale');
     expect(rate.value).toBe('fps60:before_upscale');
     await openPlanSheet(user);
-    expect(screen.getByText('Interpolate to 60 fps')).toBeTruthy();
+    expect(within(screen.getByRole('list', { name: 'Stages' })).getByText('60 fps')).toBeTruthy();
     expect(screen.getByText(/24 → 60 fps/)).toBeTruthy();
 
     await user.click(screen.getByRole('button', { name: 'Start selected video' }));
@@ -3673,7 +3673,7 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByRole('button', { name: 'Cancel queue' })).toBeTruthy();
     expect(
       [...document.querySelectorAll('.status-actions .button')].map((b) => b.textContent),
-    ).toEqual(['Cancel runs for this image', 'Cancel queue']);
+    ).toEqual(['Cancel runs for this photo', 'Cancel queue']);
     cleanup();
 
     // Between two jobs of a queue every item is queued: there is nothing to start.
@@ -4642,9 +4642,9 @@ describe('LocalSR desktop interface', () => {
 
     await openPlanSheet(user);
     const stages = within(screen.getByRole('list', { name: 'Stages' })).getAllByRole('listitem');
-    expect(stages[0].textContent).toContain('Fix JPEG');
+    expect(stages[0].textContent).toContain('JPEG');
     expect(stages[0].textContent).toContain('FBCNN Color');
-    expect(stages[1].textContent).toContain('Upscale ×4');
+    expect(stages[1].textContent).toContain('Upscale 4×');
     expect(stages[1].textContent).toContain('RealPLKSR ×4 NomosWebPhoto');
     // A ready model needs no label; only the missing stage says anything.
     expect(stages[1].textContent).not.toMatch(/MB|Ready/);
@@ -4772,7 +4772,7 @@ describe('LocalSR desktop interface', () => {
     );
     await openPlanSheet(user);
     const stages = screen.getByRole('list', { name: 'Stages' });
-    expect(within(stages).getByText('Fix noise')).toBeTruthy();
+    expect(within(stages).getByText('Noise')).toBeTruthy();
     await openPlanSheet(user);
     await openFixPopover(user, 'Noise');
     await user.click(screen.getByRole('button', { name: 'Change the noise fix model' }));
@@ -5357,7 +5357,7 @@ describe('Several fixes in one pass', () => {
       true,
     );
     await openPlanSheet(user);
-    expect(labels()).toEqual(['Fix blur', 'Fix JPEG', 'Fix noise', 'Upscale ×4']);
+    expect(labels()).toEqual(['Blur', 'JPEG', 'Noise', 'Upscale 4×']);
     const move = (name: string) => screen.getByRole('button', { name });
     // Each fix offers only the moves it can make.
     expect(screen.queryByRole('button', { name: 'Move the blur fix earlier' })).toBeNull();
@@ -5382,7 +5382,7 @@ describe('Several fixes in one pass', () => {
     expect(screen.queryByText('Move earlier')).toBeNull();
 
     await user.click(move('Move the noise fix earlier'));
-    expect(labels()).toEqual(['Fix blur', 'Fix noise', 'Fix JPEG', 'Upscale ×4']);
+    expect(labels()).toEqual(['Blur', 'Noise', 'JPEG', 'Upscale 4×']);
     // The keyboard stays on the fix that moved.
     expect(document.activeElement).toBe(move('Move the noise fix earlier'));
     await waitFor(() =>
@@ -5431,7 +5431,7 @@ describe('Several fixes in one pass', () => {
     // A fix moved to the top keeps the keyboard on its way back down.
     await openPlanSheet(user);
     await user.click(move('Move the JPEG fix earlier'));
-    expect(labels()).toEqual(['Fix JPEG', 'Fix noise', 'Upscale ×4']);
+    expect(labels()).toEqual(['JPEG', 'Noise', 'Upscale 4×']);
     expect(document.activeElement).toBe(move('Move the JPEG fix later'));
   });
 
@@ -5519,7 +5519,7 @@ describe('Several fixes in one pass', () => {
       }),
     );
     await openPlanSheet(user);
-    expect(labels()).toEqual(['Fix JPEG', 'Fix noise']);
+    expect(labels()).toEqual(['JPEG', 'Noise']);
     // A fix before the model is chosen like one before an upscale; the model stays.
     await openFixPopover(user, 'JPEG artifacts');
     await user.click(screen.getByRole('button', { name: 'Change the JPEG fix model' }));
@@ -5554,7 +5554,7 @@ describe('Several fixes in one pass', () => {
         fix_stages: [{ fix: 'noise', model_id: 'denoise_realplksr_1x' }, jpeg],
       }),
     );
-    expect(labels()).toEqual(['Fix noise', 'Fix JPEG']);
+    expect(labels()).toEqual(['Noise', 'JPEG']);
 
     // The host answers the save with the settings it holds.
     snapshot.settings = structuredClone(lastSaved());
@@ -6430,10 +6430,10 @@ describe('Comparing saved results', () => {
     expect(document.querySelectorAll('.compare-pane video')).toHaveLength(1);
     expect(document.querySelectorAll('.compare-pane .image-stage canvas')).toHaveLength(2);
     expect(
-      within(screen.getByRole('group', { name: 'Slot 1 details' })).getByText('Models: slow'),
+      within(screen.getByRole('group', { name: 'Slot 1 details' })).getByText('Model: slow'),
     ).toBeTruthy();
     expect(
-      within(screen.getByRole('group', { name: 'Slot 2 details' })).getByText('Models: fast'),
+      within(screen.getByRole('group', { name: 'Slot 2 details' })).getByText('Model: fast'),
     ).toBeTruthy();
     expect(screen.getByRole('slider', { name: 'Divider between slot 1 and slot 2' })).toBeTruthy();
     expect(screen.getAllByRole('group', { name: 'Video playback controls' })).toHaveLength(1);
@@ -6499,6 +6499,7 @@ describe('Comparing saved results', () => {
       api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
     });
     api.listAllMediaResults.mockResolvedValue([historyOf('photo', [first, older])]);
+    snapshot.capabilities.devices[0].neural_engine = true;
     const user = await mountWith(snapshot);
     await user.click(screen.getByRole('tab', { name: /Outputs/ }));
     await user.click(await screen.findByRole('checkbox', { name: 'Upscale, photo.png' }));
@@ -6515,14 +6516,14 @@ describe('Comparing saved results', () => {
     expect(slot1.textContent).toContain('Fixes: Blur → Noise');
     expect(slot1.textContent).toContain('Scale: 4×');
     expect(slot1.textContent).toContain('Time: 1:35');
-    expect(slot1.textContent).toContain('Requested device: mps · Neural Engine enabled');
+    expect(slot1.textContent).toContain('Device: Neural Engine');
     expect(slot1.textContent).toContain(
       `Date: ${new Date(1_700_000_000_000).toLocaleDateString()}`,
     );
     const slot2 = screen.getByRole('group', { name: 'Slot 2 details' });
-    expect(slot2.textContent).toContain('Models: Legacy');
+    expect(slot2.textContent).toContain('Model: Legacy');
     expect(slot2.textContent).toContain('Output: 1280 × 960');
-    expect(slot2.textContent).not.toMatch(/unknown|Fixes:|Scale:|Time:|Requested device:|Date:/i);
+    expect(slot2.textContent).not.toMatch(/unknown|Fixes:|Scale:|Time:|Device:|Date:/i);
     await user.click(screen.getByRole('radio', { name: 'Boxes' }));
     expect(document.querySelectorAll('.compare-pane .boxes .box')).toHaveLength(2);
     expect(screen.getByRole('group', { name: 'Slot 1 details' })).toBeTruthy();
@@ -6759,7 +6760,7 @@ describe('Comparing saved results', () => {
       { ...completedJob('trial-1'), status: 'running', output_path: '' },
     ];
     const user = await mountWith(snapshot);
-    await user.click(await screen.findByRole('button', { name: 'Cancel runs for this image' }));
+    await user.click(await screen.findByRole('button', { name: 'Cancel runs for this photo' }));
     expect(api.cancelJobsForMedia).toHaveBeenCalledWith('photo', false);
     expect(api.cancelJobs).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Cancel queue' })).toBeTruthy();
@@ -6773,7 +6774,7 @@ describe('Comparing saved results', () => {
     await chooseTask(user, /^Upscale & restore$/);
     await openPlanSheet(user);
     await user.click(
-      await screen.findByRole('button', { name: 'Try other upscalers on this image' }),
+      await screen.findByRole('button', { name: 'Try other upscalers on this photo' }),
     );
     const dialog = screen.getByRole('dialog', { name: 'Model library' });
     expect(within(dialog).getByText(/Comparing needs at least 2 installed models/)).toBeTruthy();
@@ -6793,7 +6794,7 @@ describe('Comparing saved results', () => {
     await chooseTask(user, /^Upscale & restore$/);
     await openPlanSheet(user);
     await user.click(
-      await screen.findByRole('button', { name: 'Try other upscalers on this image' }),
+      await screen.findByRole('button', { name: 'Try other upscalers on this photo' }),
     );
     const dialog = screen.getByRole('dialog', { name: 'Model library' });
     expect(within(dialog).getByText('Try other upscalers on photo.png')).toBeTruthy();
@@ -6887,7 +6888,7 @@ describe('Dialogs and refused host calls', () => {
   it('closes the update panel on Escape', async () => {
     const user = await mountWith(readySnapshot([image('photo', true)]));
     await chooseMenuItem('app.updates');
-    const panel = await screen.findByRole('dialog', { name: 'Software Update' });
+    const panel = await screen.findByRole('dialog', { name: 'Software update' });
     expect(panel.contains(document.activeElement)).toBe(true);
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).toBeNull();
@@ -6980,15 +6981,15 @@ describe('Dialogs and refused host calls', () => {
       await shown('Could not add files');
     });
 
-    it('says so for Add Folder…', async () => {
+    it('says so for Add folder…', async () => {
       const user = await mountWith(readySnapshot([image('first', true)]));
       api.chooseMediaFolder.mockRejectedValueOnce(refusal);
-      await user.click(screen.getByRole('button', { name: 'Add Folder…' }));
+      await user.click(screen.getByRole('button', { name: 'Add folder…' }));
       await shown('Could not add the folder');
       api.chooseMediaFolder.mockResolvedValueOnce({ paths: ['/x/a.png'], outputDirectory: '/x' });
       api.addMedia.mockRejectedValueOnce(refusal);
       await user.click(screen.getByRole('button', { name: 'OK' }));
-      await user.click(screen.getByRole('button', { name: 'Add Folder…' }));
+      await user.click(screen.getByRole('button', { name: 'Add folder…' }));
       await shown('Could not add the folder');
       expect(api.saveSettings).not.toHaveBeenCalledWith(
         expect.objectContaining({ output_directory: '/x' }),
@@ -7628,7 +7629,7 @@ describe('crash reports', () => {
     ).toBe('Crash: Failed while reading ~/<path>');
   });
 
-  it("Don't Send deletes the report without opening an issue", async () => {
+  it("Don't send deletes the report without opening an issue", async () => {
     const snap = readySnapshot();
     snap.settings.crash_reports = true;
     api.listCrashReports.mockResolvedValueOnce([sampleReport]).mockResolvedValue([]);
@@ -7637,7 +7638,7 @@ describe('crash reports', () => {
     const notice = await screen.findByRole('dialog', {
       name: 'LocalSR quit unexpectedly last time.',
     });
-    await user.click(within(notice).getByRole('button', { name: "Don't Send" }));
+    await user.click(within(notice).getByRole('button', { name: "Don't send" }));
     await waitFor(() => expect(api.deleteCrashReport).toHaveBeenCalledWith(sampleReport.id));
     expect(api.openBugReport).not.toHaveBeenCalled();
     expect(
@@ -7683,7 +7684,7 @@ describe('crash reports', () => {
     expect(within(section).getByText('Stored crash reports: 1')).toBeTruthy();
 
     api.listCrashReports.mockResolvedValueOnce([]).mockResolvedValue([]);
-    await user.click(within(section).getByRole('button', { name: 'Delete All' }));
+    await user.click(within(section).getByRole('button', { name: 'Delete all' }));
     await waitFor(() => expect(api.deleteAllCrashReports).toHaveBeenCalledTimes(1));
     await user.keyboard('{Escape}');
     await waitFor(() =>
@@ -9625,9 +9626,7 @@ describe('Size decides', () => {
     }
     await openPlanSheet(user);
     expect(within(screen.getByRole('list', { name: 'Stages' })).queryByText(/Upscale/)).toBeNull();
-    expect(
-      within(screen.getByRole('list', { name: 'Stages' })).getByText('Fix noise'),
-    ).toBeTruthy();
+    expect(within(screen.getByRole('list', { name: 'Stages' })).getByText('Noise')).toBeTruthy();
     await user.keyboard('{Escape}');
     expect(screen.getByRole('button', { name: 'Quick' }).getAttribute('title')).toContain(
       'Fast clean-up',
@@ -9665,10 +9664,10 @@ describe('Size decides', () => {
     );
     expect(startBtn.disabled).toBe(false);
     await openPlanSheet(user);
-    expect(within(screen.getByRole('list', { name: 'Stages' })).getByText('Fix blur')).toBeTruthy();
+    expect(within(screen.getByRole('list', { name: 'Stages' })).getByText('Blur')).toBeTruthy();
     await user.keyboard('{Escape}');
 
-    // Size -> 2×: Blur stays ticked, Content enabled again, row Upscale ×2.
+    // Size -> 2×: Blur stays ticked, Content enabled again, row Upscale 2×.
     await user.click(screen.getByRole('radio', { name: '2×' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
@@ -9685,7 +9684,7 @@ describe('Size decides', () => {
     }
     await openPlanSheet(user);
     expect(
-      within(screen.getByRole('list', { name: 'Stages' })).getByText('Upscale ×2'),
+      within(screen.getByRole('list', { name: 'Stages' })).getByText('Upscale 2×'),
     ).toBeTruthy();
     await user.keyboard('{Escape}');
 
@@ -9945,9 +9944,7 @@ describe('Size decides', () => {
       true,
     );
     await openPlanSheet(loadedUser);
-    expect(
-      within(screen.getByRole('list', { name: 'Stages' })).getByText('Fix noise'),
-    ).toBeTruthy();
+    expect(within(screen.getByRole('list', { name: 'Stages' })).getByText('Noise')).toBeTruthy();
     await loadedUser.keyboard('{Escape}');
     expect(
       (screen.getByRole('button', { name: 'Restore selected' }) as HTMLButtonElement).disabled,
@@ -10012,7 +10009,7 @@ describe('host job plan client in App', () => {
     expect(screen.queryByText('Could not work out the plan.')).toBeNull();
     await openPlanSheet(user);
     expect(
-      within(screen.getByRole('list', { name: 'Stages' })).getByText('Upscale ×4'),
+      within(screen.getByRole('list', { name: 'Stages' })).getByText('Upscale 4×'),
     ).toBeTruthy();
   });
 
@@ -10236,7 +10233,7 @@ describe('Enhance panel head, Recipes menu, and Task row', () => {
     expect(rows).toHaveLength(6);
     expect(rows[0].textContent).toContain('Pinned scan');
     expect(rows[0].textContent).toContain('JPEG → Noise → Upscale 4×');
-    expect(rows[0].textContent).toContain('⌃');
+    expect(rows[0].querySelector('.recipe-pin svg')).not.toBeNull();
     expect(rows[1].textContent).toContain('Fast 2x');
     expect(rows[1].textContent).toContain('Upscale 2×');
     expect(within(menu).queryByRole('button', { name: /^Hidden seven/ })).toBeNull();
@@ -10493,7 +10490,7 @@ describe('Enhance panel foot', () => {
     api.estimateStart.mockResolvedValue(40);
     await mountWith(snapshot);
     const foot = document.querySelector('.panel-foot') as HTMLElement;
-    await waitFor(() => expect(within(foot).getByText('about 40s')).toBeTruthy());
+    await waitFor(() => expect(within(foot).getByText('about 40 s')).toBeTruthy());
     expect(foot.querySelector('.foot-cost-download')).toBeNull();
     const [mediaIds, input] = api.estimateStart.mock.calls[0];
     expect(mediaIds).toEqual(['photo']);
@@ -10744,7 +10741,7 @@ describe('Output sheet and line', () => {
     expect(trigger.getAttribute('aria-controls')).toBe(sheet.id);
     expect(within(sheet).getByLabelText('Format')).toBeTruthy();
     expect(
-      within(sheet).getByRole('checkbox', { name: 'Preserve safe metadata and color profile' }),
+      within(sheet).getByRole('checkbox', { name: 'Preserve safe metadata and colour profile' }),
     ).toBeTruthy();
     expect(within(sheet).getByRole('button', { name: 'Save to /Users/demo/Desktop' })).toBeTruthy();
     expect(within(sheet).queryByLabelText(/quality/)).toBeNull();
@@ -10896,7 +10893,7 @@ describe('Fix list', () => {
 
     const section = screen.getByRole('region', { name: 'Your video' });
     expect(within(section).getByText('Your video')).toBeTruthy();
-    expect(within(section).getByText('1920 × 1080 · 24 fps · 12s · HLG')).toBeTruthy();
+    expect(within(section).getByText('1920 × 1080 · 24 fps · 12 s · HLG')).toBeTruthy();
     const content = within(section).getByRole('radiogroup', { name: 'Content' });
     expect(within(content).getByRole('radio', { name: 'Video' })).toBeTruthy();
     expect(within(content).getByRole('radio', { name: 'Animation' })).toBeTruthy();

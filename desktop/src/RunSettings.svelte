@@ -148,7 +148,7 @@
       <div>
         <label for="tile-size">Tile</label><HelpTip
           label="Tile"
-          text="How large a piece of the image is processed at once, in pixels. Larger tiles are a little faster but need more memory; the result barely changes. Choose a smaller tile if you run out of memory."
+          text="How large a piece of the picture is processed at once, in pixels. Larger tiles are a little faster but need more memory; the result barely changes. Choose a smaller tile if you run out of memory."
         /><select
           id="tile-size"
           {disabled}

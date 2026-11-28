@@ -20,6 +20,8 @@
   import { FRAME_BY_FRAME_TIP, SEVERAL_FRAMES_TIP, videoModelShortName } from './lib/videoEngines';
 
   export let snapshot: AppSnapshot;
+  /** Row names as the plan line writes them; falls back to the host label. */
+  export let stepNames: string[] = [];
   export let settings: UiSettings;
   export let defaultSettings: UiSettings;
   export let settingsLocked: boolean;
@@ -60,7 +62,7 @@
   aria-label="Stages"
   aria-busy={planState.status === 'loading' && !planState.first ? 'true' : undefined}
 >
-  {#each plan as stage (`${stage.role}:${stage.fix ?? stage.kind}`)}
+  {#each plan as stage, index (`${stage.role}:${stage.fix ?? stage.kind}`)}
     {@const target =
       stage.model ??
       stage.videoModel ??
@@ -134,13 +136,13 @@
       <span class="stage"
         >{#if stage.fix === 'colour' || stage.model?.purposes.includes('colorize')}<span
             class="label-with-tip"
-            >{stage.label}<HelpTip
+            >{stepNames[index] ?? stage.label}<HelpTip
               label="Colour"
               text={settings.task === 'video'
                 ? "Adds colour to black-and-white videos. Colours are the model's guess and are carried between frames so they stay steady."
                 : "Adds colour to black-and-white photos. The colours are the model's guess. A photo that already has colour is recoloured too."}
             /></span
-          >{:else}{stage.label}{/if}</span
+          >{:else}{stepNames[index] ?? stage.label}{/if}</span
       >
       <div class="name" title={name || undefined}>{name}</div>
       <div class="plan-end">
@@ -196,13 +198,13 @@
               class="link-button"
               type="button"
               aria-label={restoring
-                ? 'Try other restoration models on this image'
-                : 'Try other upscalers on this image'}
+                ? 'Try other restoration models on this photo'
+                : 'Try other upscalers on this photo'}
               disabled={settingsLocked || !canOpenTrials}
               on:click={() => openFromSheet('try', stage.fix)}>Try others…</button
             ><HelpTip
               label="Try others"
-              text="Runs this image once per model you pick, with the same settings. Each result is kept as its own file, and Showing in the preview lets you flip between them."
+              text="Runs this photo once per model you pick, with the same settings. Each result is kept as its own file, and Showing in the preview lets you flip between them."
             /></span
           >
         </div>{/if}

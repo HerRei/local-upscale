@@ -453,7 +453,7 @@
           <div class="setting-block settings-block">
             <span class="setting-label" id="settings-theme-heading">Theme</span>
             <p class="setting-desc" id="settings-theme-desc">
-              Match System follows your computer's light or dark mode.
+              Match system follows your computer's light or dark mode.
             </p>
             <ThemePicker
               appearance={settings.appearance}
@@ -561,7 +561,7 @@
                 >
                 <HelpTip
                   label="Viewer background"
-                  text="What is shown behind the picture in the viewer and in Compare. Grey is the neutral 18 % grey used to judge brightness and colour. Black and White show how edges and transparent areas hold up. Checkerboard shows where a picture is transparent. Saved files are not changed."
+                  text="What is shown behind the picture in the viewer and in Compare. Grey is the neutral 18% grey used to judge brightness and colour. Black and White show how edges and transparent areas hold up. Checkerboard shows where a picture is transparent. Saved files are not changed."
                 />
               </span>
             </div>

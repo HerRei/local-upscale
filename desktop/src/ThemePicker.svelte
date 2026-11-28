@@ -13,7 +13,7 @@
   const APPEARANCES: { id: Appearance; label: string }[] = [
     { id: 'dark', label: 'Dark' },
     { id: 'light', label: 'Light' },
-    { id: 'system', label: 'Match System' },
+    { id: 'system', label: 'Match system' },
   ];
 
   let tileButtons: HTMLButtonElement[] = [];

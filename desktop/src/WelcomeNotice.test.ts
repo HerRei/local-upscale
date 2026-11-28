@@ -30,7 +30,7 @@ it('welcomes a first launch, discloses the update count and opens the guide', as
 
   expect(screen.getByRole('region', { name: 'Welcome to LocalSR' })).toBeTruthy();
   expect(screen.getByText(/sends an anonymous count/)).toBeTruthy();
-  await user.click(screen.getByRole('button', { name: 'User Guide' }));
+  await user.click(screen.getByRole('button', { name: 'User guide' }));
   expect(api.openUserGuide).toHaveBeenCalledTimes(1);
 });
 
@@ -65,10 +65,10 @@ it('says when LocalSR does not check at launch', () => {
   expect(screen.queryByText(/sends an anonymous count/)).toBeNull();
 });
 
-it('stays closed after Got It', async () => {
+it('stays closed after Got it', async () => {
   const user = userEvent.setup();
   render(WelcomeNotice, { anonymousUpdateCount: true });
-  await user.click(screen.getByRole('button', { name: 'Got It' }));
+  await user.click(screen.getByRole('button', { name: 'Got it' }));
   expect(screen.queryByRole('region', { name: 'Welcome to LocalSR' })).toBeNull();
   cleanup();
 

@@ -55,9 +55,9 @@
     </div>
     <div class="buttons">
       <button class="notice-button" type="button" on:click={() => void openUserGuide()}
-        >User Guide</button
+        >User guide</button
       >
-      <button class="notice-button" type="button" on:click={close}>Got It</button>
+      <button class="notice-button" type="button" on:click={close}>Got it</button>
     </div>
   </section>
 {/if}
@@ -67,7 +67,7 @@
     position: fixed;
     z-index: 79;
     /* Above the update notice while that shows at the bottom of the stage (--notice-room). */
-    bottom: max(78px, calc(66px + var(--notice-room, 0px)));
+    bottom: max(104px, calc(92px + var(--notice-room, 0px)));
     left: 50%;
     display: grid;
     gap: 10px;
@@ -76,8 +76,7 @@
     transform: translateX(-50%);
     border: 1px solid var(--surface-border);
     border-radius: var(--radius-surface);
-    background: var(--welcome-bg);
-    backdrop-filter: blur(22px) saturate(150%);
+    background: var(--dialog-bg);
     box-shadow:
       inset 0 1px var(--hairline),
       0 18px 46px var(--shadow-medium);

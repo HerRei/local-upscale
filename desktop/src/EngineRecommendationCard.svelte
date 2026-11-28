@@ -154,7 +154,7 @@
     opacity: 0.5;
     cursor: default;
   }
-  @media (max-width: 1279px) {
+  @media (max-width: 899px) {
     .gpu-download-notice {
       grid-template-columns: auto minmax(0, 1fr);
     }

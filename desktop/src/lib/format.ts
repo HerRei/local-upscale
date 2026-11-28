@@ -8,11 +8,12 @@ export function formatBytes(bytes: number): string {
 export function formatDuration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return '—';
   const total = Math.round(seconds);
-  if (total >= 86400) return `${Math.floor(total / 86400)}d ${Math.floor((total % 86400) / 3600)}h`;
-  if (total >= 3600) return `${Math.floor(total / 3600)}h ${Math.floor((total % 3600) / 60)}m`;
+  if (total >= 86400)
+    return `${Math.floor(total / 86400)} d ${Math.floor((total % 86400) / 3600)} h`;
+  if (total >= 3600) return `${Math.floor(total / 3600)} h ${Math.floor((total % 3600) / 60)} min`;
   return total >= 60
     ? `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, '0')}`
-    : `${total}s`;
+    : `${total} s`;
 }
 
 export function formatVideoClock(seconds: number): string {

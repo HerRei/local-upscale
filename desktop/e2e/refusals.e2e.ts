@@ -19,10 +19,10 @@ test.describe('a refused host call', () => {
     await expect(page.getByRole('dialog')).toContainText('unsupported media file type');
   });
 
-  test('Add Folder… names the problem', async ({ page }) => {
+  test('Add folder… names the problem', async ({ page }) => {
     await answer(page, 'choose_media_folder', '/fixture/folder');
     await refuse(page, 'scan_media_folder', 'Permission denied (os error 13)');
-    await page.getByRole('button', { name: 'Add Folder…' }).click();
+    await page.getByRole('button', { name: 'Add folder…' }).click();
     await expect(page.getByRole('dialog')).toContainText('Could not add the folder');
     await expect(page.getByRole('dialog')).toContainText('Permission denied');
   });

@@ -96,9 +96,9 @@ describe('rounding', () => {
     expect(etaStep(599)).toBe(10);
     expect(etaStep(600)).toBe(60);
     const cases: [number, string][] = [
-      [0.4, '5s'],
-      [3, '5s'],
-      [37, '35s'],
+      [0.4, '5 s'],
+      [3, '5 s'],
+      [37, '35 s'],
       [58, '1:00'],
       [64, '1:00'],
       [66, '1:10'],
@@ -106,10 +106,10 @@ describe('rounding', () => {
       [596, '10 min'],
       [740, '12 min'],
       [3000, '50 min'],
-      [3600, '1h'],
-      [3722, '1h 2m'],
-      [7 * 3600 + 29 * 60, '7h 29m'],
-      [90000, '1d 1h'],
+      [3600, '1 h'],
+      [3722, '1 h 2 min'],
+      [7 * 3600 + 29 * 60, '7 h 29 min'],
+      [90000, '1 d 1 h'],
     ];
     for (const [seconds, text] of cases)
       expect([seconds, formatEta(seconds)]).toEqual([seconds, text]);
@@ -140,16 +140,18 @@ describe('rounding', () => {
     // 5:00 to 1:00 in tens (30 steps), then fives (12): the 42 steps and a few edge steps.
     expect(texts.length).toBeLessThan(48);
     expect(texts[0]).toBe('5:00');
-    expect(texts[texts.length - 1]).toBe('5s');
+    expect(texts[texts.length - 1]).toBe('5 s');
   });
 
   it('puts the shown time into a progress line that carried the raw one', () => {
     expect(withEta('3 of 12 tiles · ETA 1:05', '1:10')).toBe('3 of 12 tiles · ETA ≈ 1:10');
-    expect(withEta('Frame 2 of 9 · Tile 1 / 4 · ETA ≈ 2d 2h', '2 days')).toBe(
+    expect(withEta('Frame 2 of 9 · Tile 1 / 4 · ETA ≈ 2 d 2 h', '2 days')).toBe(
       'Frame 2 of 9 · Tile 1 / 4 · ETA ≈ 2 days',
     );
-    expect(withEta('Frame 2 of 9 · ETA 1h 5m', '1h 5m')).toBe('Frame 2 of 9 · ETA ≈ 1h 5m');
-    expect(withEta('3 of 12 tiles · ETA 7s', null)).toBe('3 of 12 tiles');
+    expect(withEta('Frame 2 of 9 · ETA 1 h 5 min', '1 h 5 min')).toBe(
+      'Frame 2 of 9 · ETA ≈ 1 h 5 min',
+    );
+    expect(withEta('3 of 12 tiles · ETA 7 s', null)).toBe('3 of 12 tiles');
     expect(withEta('Upscaling stage complete.', '1:10')).toBe('Upscaling stage complete.');
     expect(withEta('ETA: measuring first tile…', '1:10')).toBe('ETA: measuring first tile…');
   });
@@ -183,14 +185,14 @@ describe('the status bar times', () => {
     });
     const display = new EtaDisplay();
     const first = etaView(s, display, 100);
-    expect(first.job).toBe('40s');
-    expect(first.current).toBe('40s');
+    expect(first.job).toBe('40 s');
+    expect(first.current).toBe('40 s');
     // Queue: 40 left now, one more photo of the same size: 80 s long as measured.
     expect(first.queue).toBe('2:00');
     expect(first.next).toBe('1:20');
     // Twenty seconds later with no news from the engine.
     const later = etaView(s, display, 120);
-    expect(later.job).toBe('20s');
+    expect(later.job).toBe('20 s');
     expect(later.queue).toBe('1:40');
     // A photo's length is what has run plus what is left: unchanged by the counting.
     expect(later.next).toBe('1:20');

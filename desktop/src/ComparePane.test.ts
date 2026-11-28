@@ -441,7 +441,7 @@ it('keeps the details of every slot to a title and four lines, and marks an unfi
         'Scale: 4×',
         'Output: 5760 × 7680',
         'Time: 1:40',
-        'Requested device: mps · Neural Engine enabled',
+        'Device: Neural Engine',
         'Date: 11/23/2026',
       ],
       ...(index === 1 ? { unfinished: { label: 'Unfinished · 2 of 54 frames' } } : {}),

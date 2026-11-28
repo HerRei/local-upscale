@@ -1074,6 +1074,7 @@
           </svelte:fragment>
           <PlanSheet
             {snapshot}
+            stepNames={planSteps}
             {settings}
             {defaultSettings}
             {settingsLocked}

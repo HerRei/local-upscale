@@ -91,6 +91,17 @@ describe('recipeList', () => {
     ).toEqual(['a:disabled', 'b', '---', 'c', 'd', 'e', 'f']);
   });
 
+  it('falls back to the first six fitting recipes when nothing is pinned or recent', () => {
+    const recipes = [
+      makeRecipe('v', { task: 'video', video_task: 'upscale' }),
+      ...['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((id) => makeRecipe(id)),
+    ];
+    const rows = menuRows(recipes, { pins: [], recent: ['v'], mediaKind: 'image' });
+
+    expect(rows.map((row) => row.id)).toEqual(['a', 'b', 'c', 'd', 'e', 'f']);
+    expect(rows.every((row) => row.kind === 'recipe' && !row.pinned && !row.disabled)).toBe(true);
+  });
+
   it('caps pinned rows at six when eight recipes are pinned', () => {
     const ids = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
     const recipes = ids.map((id) => makeRecipe(id));

@@ -22,7 +22,7 @@ describe('rowRun', () => {
     expect(rowRun(jobs, 'p1', 'a')).toEqual({
       kind: 'running',
       progress: 37.6,
-      text: 'Running · 38 %',
+      text: 'Running · 38%',
       title: 'Running SPAN ×4',
     });
   });
@@ -30,7 +30,7 @@ describe('rowRun', () => {
   it('reads Saving… from 99.5 % until the job completes, then Done', () => {
     const at = (progress: number) =>
       rowRun([job('a', 'p1', { status: 'running', progress })], 'p1', 'a');
-    expect(at(99)).toMatchObject({ text: 'Running · 99 %' });
+    expect(at(99)).toMatchObject({ text: 'Running · 99%' });
     expect(at(99.5)).toMatchObject({ kind: 'running', progress: 100, text: 'Saving…' });
     expect(at(100)).toMatchObject({ kind: 'running', progress: 100, text: 'Saving…' });
     const done = [
@@ -57,7 +57,7 @@ describe('rowRun', () => {
       job('c', 'p3'),
     ];
     expect(rowRun(jobs, 'p1', 'a').progress).toBe(38);
-    expect(rowRun(jobs, 'p2', 'a')).toMatchObject({ progress: 71, text: 'Running · 71 %' });
+    expect(rowRun(jobs, 'p2', 'a')).toMatchObject({ progress: 71, text: 'Running · 71%' });
     expect(rowRun(jobs, 'p3', 'a')).toMatchObject({ kind: 'queued', text: 'Queued' });
   });
 

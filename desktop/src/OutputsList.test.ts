@@ -76,8 +76,8 @@ it('lists an upscale and two edits of one input as three rows with their own lab
   expect(rows.map((row) => [...row.children].map((part) => part.textContent))).toEqual([
     ['Original', '1600 × 1067'],
     ['FLUX.2 klein 4B', '512 × 320 · 1:01'],
-    ['FLUX.2 klein 4B', '512 × 320 · 48s'],
-    ['SPAN ×4', 'Quick · 4× · 31s'],
+    ['FLUX.2 klein 4B', '512 × 320 · 48 s'],
+    ['SPAN ×4', 'Quick · 4× · 31 s'],
   ]);
   const tips = [...list.querySelectorAll<HTMLElement>('.media-row > .media-select')].map((row) =>
     row.getAttribute('title'),
@@ -222,7 +222,7 @@ it('picks video rows and originals with the same slot controls', async () => {
   });
   const row = screen.getByRole('button', { name: 'Show Frame by frame, clip.mp4' });
   expect(row.textContent).toContain('4× · 0:16 · 60 fps · 5 B');
-  expect(row.title).toContain('Took 31s');
+  expect(row.title).toContain('Took 31 s');
   await fireEvent.click(row);
   expect(showResult).toHaveBeenCalledWith({ kind: 'output', media_id: 'v', job_id: 'v1' });
   await fireEvent.keyDown(row, { key: ' ' });
@@ -249,7 +249,7 @@ it('shows timing for video without interpolation and omits missing timing', () =
     '0:16 · 15 fps',
   );
   expect(screen.getByRole('button', { name: 'Show unknown, Lake.jpg' }).textContent).not.toContain(
-    '31s',
+    '31 s',
   );
 });
 
