@@ -54,13 +54,13 @@ def interpolated_job(source, destination, synthesizer=None, engine=None, **optio
 
 
 def make_cfr(path, frames=12, fps=24, width=48, height=32):
-    """A lossless constant-rate clip whose grey level rises by 8 per frame."""
+    """A lossless constant-rate clip whose grey level rises by 8 per frame, wrapping at 256."""
     with av.open(str(path), "w") as container:
         stream = container.add_stream("libvpx-vp9", rate=fps)
         stream.width, stream.height, stream.pix_fmt = width, height, "yuv420p"
         stream.options = {"lossless": "1", "lag-in-frames": "0"}
         for index in range(frames):
-            rgb = np.full((height, width, 3), 100 + index * 8, dtype=np.uint8)
+            rgb = np.full((height, width, 3), (100 + index * 8) % 256, dtype=np.uint8)
             frame = av.VideoFrame.from_ndarray(rgb, format="rgb24")
             frame.pts, frame.time_base = index, Fraction(1, fps)
             for packet in stream.encode(frame):
