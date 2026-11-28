@@ -11,6 +11,7 @@ import { demoSnapshot } from './lib/demo';
 import { progressBytes } from './lib/downloadProgress';
 import { formatBytes } from './lib/format';
 import { modelDisplayName } from './lib/modelNames';
+import { PROMPT_EXAMPLE_FAMILIES } from './lib/promptExamples';
 import { applyWorkerEnvelope } from './lib/workerEvents';
 import type {
   AppSnapshot,
@@ -1045,6 +1046,76 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe('Prompt examples', () => {
+  const QWEN = 'qwen-image-edit-2511';
+  const listFamily = () => {
+    PROMPT_EXAMPLE_FAMILIES.push(QWEN);
+    onTestFinished(() => {
+      PROMPT_EXAMPLE_FAMILIES.length = 0;
+    });
+  };
+  const open = async (user: ReturnType<typeof userEvent.setup>) => {
+    await chooseTask(user, /^Edit$/);
+    await user.click(screen.getByRole('button', { name: 'Examples' }));
+    return screen.getByRole('group', { name: 'Prompt examples' });
+  };
+
+  it('shows the link with five entries when the family is listed', async () => {
+    listFamily();
+    const user = await mountWith(editSnapshot(36));
+    const list = await open(user);
+    expect(within(list).getAllByRole('button')).toHaveLength(5);
+    expect(
+      within(list).getByText('Repaints the photo. To only add colour, use Fix \u203a Colour.'),
+    );
+  });
+
+  it('shows no link when the list is empty', async () => {
+    const user = await mountWith(editSnapshot(36));
+    await chooseTask(user, /^Edit$/);
+    expect(screen.queryByRole('button', { name: 'Examples' })).toBeNull();
+  });
+
+  it('shows no link for a family that is not listed', async () => {
+    PROMPT_EXAMPLE_FAMILIES.push('flux2-klein-4b');
+    onTestFinished(() => {
+      PROMPT_EXAMPLE_FAMILIES.length = 0;
+    });
+    const user = await mountWith(editSnapshot(36));
+    await chooseTask(user, /^Edit$/);
+    expect(screen.queryByRole('button', { name: 'Examples' })).toBeNull();
+  });
+
+  it('inserts Remove something without brackets and selects the slot', async () => {
+    listFamily();
+    const user = await mountWith(editSnapshot(36));
+    const list = await open(user);
+    await user.click(within(list).getByRole('button', { name: /^Remove something/ }));
+    const field = screen.getByLabelText('What to change') as HTMLTextAreaElement;
+    expect(field.value).toBe(
+      'Remove the person on the left and fill the gap with what is behind. Keep everyone and everything else unchanged.',
+    );
+    expect(field.value.slice(field.selectionStart, field.selectionEnd)).toBe(
+      'the person on the left',
+    );
+    expect(document.activeElement).toBe(field);
+  });
+
+  it('warns about own text and undo gives it back', async () => {
+    listFamily();
+    const user = await mountWith(editSnapshot(36));
+    await chooseTask(user, /^Edit$/);
+    const field = screen.getByLabelText('What to change') as HTMLTextAreaElement;
+    await user.type(field, 'My own words');
+    await user.click(screen.getByRole('button', { name: 'Examples' }));
+    expect(screen.getByText(/^Replaces your text\./)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: /^Film look/ }));
+    expect(field.value).toMatch(/^Give the photo the look of colour film/);
+    await user.keyboard('{Control>}z{/Control}');
+    expect(field.value).toBe('My own words');
+  });
 });
 
 describe('Job activity', () => {

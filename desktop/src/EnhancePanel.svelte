@@ -7,6 +7,7 @@
   import OutputSheet from './OutputSheet.svelte';
   import PlanSheet from './PlanSheet.svelte';
   import Popover from './Popover.svelte';
+  import PromptExamples from './PromptExamples.svelte';
   import RecipesMenu from './RecipesMenu.svelte';
   import VideoMemory from './VideoMemory.svelte';
   import { customModels } from './lib/customModels';
@@ -27,12 +28,16 @@
   import { displayName, fitFor, FIT_LABELS, resultFps, type PlanStage } from './lib/plan';
   import { planMarks } from './lib/jobSteps';
   import { planLine } from './lib/planLine';
+  import { examplesFor } from './lib/promptExamples';
   import type { InterpolationOrder, InterpolationTarget, TaskKind } from './lib/types';
   import { videoModelShortName } from './lib/videoEngines';
 
   export let view: EnhancePanelView;
   export let actions: EnhancePanelActions;
   export let editPrompt: string;
+  let promptField: HTMLTextAreaElement | undefined;
+  let examplesOpen = false;
+  $: promptExamples = examplesFor(editModel?.family);
   export let recipeName: string;
   export let recipeEditorOpen: boolean;
   export let termsAccepted: Record<string, boolean>;
@@ -439,8 +444,42 @@
       {#if settings.task}
         {#if settings.task === 'edit'}
           <section class="control-section" aria-label="Edit prompt">
-            <span class="eyebrow">What to change</span>
+            <div class="eyebrow-row">
+              <span class="eyebrow">What to change</span>
+              {#if promptExamples.length > 0}
+                <Popover
+                  bind:open={examplesOpen}
+                  label="Prompt examples"
+                  width={260}
+                  triggerClass="link-button recipes-trigger"
+                  let:close
+                >
+                  <svelte:fragment slot="trigger">
+                    Examples<svg
+                      class="pop-chevron"
+                      aria-hidden="true"
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="12"
+                      height="12"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2.25"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"><path d="m6 9 6 6 6-6" /></svg
+                    >
+                  </svelte:fragment>
+                  <PromptExamples
+                    examples={promptExamples}
+                    textarea={promptField}
+                    value={editPrompt}
+                    onClose={() => close(false)}
+                  />
+                </Popover>
+              {/if}
+            </div>
             <textarea
+              bind:this={promptField}
               class="edit-prompt"
               aria-label="What to change"
               rows="4"
