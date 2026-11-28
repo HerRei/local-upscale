@@ -124,6 +124,8 @@ pub struct AppState {
     /// is only the default. None follows the default.
     pub run_low_priority: Mutex<Option<bool>>,
     pub stay_awake: crate::stay_awake::StayAwake,
+    /// What the host knows about each preview patch slot beyond the snapshot.
+    pub patch: Mutex<crate::patch_preview::PatchBook>,
 }
 
 impl AppState {
@@ -213,6 +215,7 @@ impl AppState {
             tray_state: Mutex::new(None),
             run_low_priority: Mutex::new(None),
             stay_awake: crate::stay_awake::StayAwake::default(),
+            patch: Mutex::new(crate::patch_preview::PatchBook::default()),
         })
     }
 
@@ -241,6 +244,12 @@ impl AppState {
             )
         };
         let mut runtime = runtime;
+        let patching = lock(&self.engine)?
+            .as_ref()
+            .is_some_and(|engine| engine.features.iter().any(|f| f == "patch_preview"));
+        if patching && runtime.patches.is_none() {
+            runtime.patches = Some(crate::types::Patches::default());
+        }
         runtime.cancel_grace_seconds = crate::cancellation::CANCEL_GRACE.as_secs();
         // The queue row says which model runs ("Running SwinIR · 2 queued").
         for job in &mut jobs {

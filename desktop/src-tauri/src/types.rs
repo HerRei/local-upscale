@@ -870,7 +870,7 @@ pub struct PatchStep {
     pub note: String,
 }
 
-/// One preview patch variant; the host fills it once the patch commands exist (task P2).
+/// One preview patch variant.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct PatchState {
     /// `idle`, `running`, `ready`, `stale`, `busy` or `failed`.
@@ -883,8 +883,21 @@ pub struct PatchState {
     pub steps: Vec<PatchStep>,
 }
 
+impl Default for PatchState {
+    fn default() -> Self {
+        Self {
+            state: "idle".into(),
+            media_id: String::new(),
+            region: None,
+            estimate_seconds: 0.0,
+            error: String::new(),
+            steps: Vec::new(),
+        }
+    }
+}
+
 /// Variant A is the plan as it stands; B swaps one slot's model for comparison.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct Patches {
     pub a: PatchState,
     pub b: PatchState,
@@ -962,7 +975,7 @@ pub struct RuntimeStatus {
     /// Set when a lone photo job with step results ends (S6 keeps its full-size files).
     #[serde(default)]
     pub last_steps: Option<LastSteps>,
-    /// The preview patch's two variants; absent until the host runs patches (task P2).
+    /// The preview patch's two variants; present when the engine lists `patch_preview`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub patches: Option<Patches>,
     /// The plan line's name of each of `job_steps`, for the status title.

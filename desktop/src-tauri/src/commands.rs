@@ -697,6 +697,8 @@ fn keep_update_switches(current: &UiSettings, incoming: &mut UiSettings) {
     incoming.auto_cache_cleanup = current.auto_cache_cleanup;
     incoming.keep_awake = current.keep_awake;
     incoming.stopped_job_result = current.stopped_job_result.clone();
+    incoming.preview_patch = current.preview_patch.clone();
+    incoming.preview_patch_shown = current.preview_patch_shown;
     incoming.skipped_update_version = current.skipped_update_version.clone();
     incoming.model_directory = current.model_directory.clone();
     incoming.gpu_download_notice_dismissed = current.gpu_download_notice_dismissed;
@@ -4938,6 +4940,7 @@ fn installed_stage_model<'a>(
     what: &str,
     fits: impl FnOnce(&CatalogModel) -> bool,
     misfit: String,
+    missing: Option<&mut Vec<String>>,
 ) -> AppResult<(&'a CatalogModel, String)> {
     let model = catalog
         .models
@@ -4949,13 +4952,30 @@ fn installed_stage_model<'a>(
     }
     match model.installed_path.as_deref() {
         Some(path) if model.installed && !path.is_empty() => Ok((model, path.to_owned())),
-        _ => Err(AppError::Validation(format!(
-            "download and verify the model for {what} first"
-        ))),
+        // The preview patch runs the steps before a missing model and names it.
+        _ => match missing {
+            Some(missing) => {
+                missing.push(model.model_id.clone());
+                Ok((model, String::new()))
+            }
+            None => Err(AppError::Validation(format!(
+                "download and verify the model for {what} first"
+            ))),
+        },
     }
 }
 
 fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResult<ModelSelection> {
+    resolve_model_selection_with(state, input, None)
+}
+
+/// With `missing`, a catalog model that is not installed is recorded there instead of
+/// refusing the plan (the preview patch shows the steps before it).
+fn resolve_model_selection_with(
+    state: &AppState,
+    input: &StartBatchInput,
+    mut missing: Option<&mut Vec<String>>,
+) -> AppResult<ModelSelection> {
     validate_fix_selections(&input.fix_stages)?;
     let restoring =
         input.task == "denoise" || (input.task == "video" && input.video_task == "denoise");
@@ -5047,9 +5067,12 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
             )));
         }
         if !model.installed {
-            return Err(AppError::Validation(
-                "download and verify the selected model first".into(),
-            ));
+            let Some(missing) = missing.as_deref_mut() else {
+                return Err(AppError::Validation(
+                    "download and verify the selected model first".into(),
+                ));
+            };
+            missing.push(model.model_id.clone());
         }
         (
             model.installed_path.clone().unwrap_or_default(),
@@ -5103,6 +5126,7 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
                 "the {} fix must use a 1× restoration model that fixes it",
                 selection.fix
             ),
+            missing.as_deref_mut(),
         )?;
         preprocess.push(ResolvedImageStage {
             // As the plan card names it (plan.ts resolvePlan).
@@ -5128,6 +5152,7 @@ fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResu
             &step.label,
             |model| crate::job_plan::serves_step(model, step),
             format!("{} must use one of its own models", step.label),
+            missing.as_deref_mut(),
         )?;
         step_models.push(ResolvedStepModel {
             step: step.id.clone(),
@@ -5626,6 +5651,80 @@ fn image_pipeline_stages(
     }
     stages.extend(step_stages(StepPlacement::AfterPrimary));
     stages
+}
+
+/// What the preview patch runs for an input: the job's own stages and scale, and the
+/// catalog models of the plan that are not installed.
+pub(crate) struct PatchPlan {
+    pub stages: Vec<crate::protocol::PipelineStageRequest>,
+    pub output_scale: u32,
+    pub missing: Vec<String>,
+    pub device: String,
+    pub precision: String,
+}
+
+/// The plan of a preview patch: validated as Start validates it, without the output
+/// checks, and resolved to the same stages `build_job_request` sends.
+pub(crate) fn patch_plan(state: &AppState, mut input: StartBatchInput) -> AppResult<PatchPlan> {
+    if !matches!(input.task.as_str(), "upscale" | "denoise") {
+        return Err(AppError::Validation(
+            "the preview patch shows photos in Upscale & restore".into(),
+        ));
+    }
+    input.device = resolve_device(state, &input.device)?;
+    validate_start_input(&input, external_codecs_available(state))?;
+    validate_bit_depth_engine(&input, lock(&state.engine)?.as_ref())?;
+    validate_fix_engine(&input, lock(&state.engine)?.as_ref())?;
+    validate_stage_params_engine(&input.fix_stages, lock(&state.engine)?.as_ref())?;
+    validate_step_stages_engine(&input.step_stages, lock(&state.engine)?.as_ref())?;
+    let mut missing = Vec::new();
+    let selection = resolve_model_selection_with(state, &input, Some(&mut missing))?;
+    validate_checkpoint_engine(&selection, lock(&state.engine)?.as_ref())?;
+    let ModelSelection::Image {
+        model_id,
+        path,
+        preprocess,
+        step_models,
+        face_path,
+        face_model_id,
+        native_scale,
+        skip_upscale,
+        ..
+    } = &selection
+    else {
+        return Err(AppError::Validation(
+            "the preview patch needs an image plan".into(),
+        ));
+    };
+    let precision = if input.precision == "auto"
+        && !lock(&state.engine)?
+            .as_ref()
+            .is_some_and(|info| info.features.iter().any(|f| f == "precision_auto"))
+    {
+        "fp32".to_owned()
+    } else {
+        input.precision.clone()
+    };
+    Ok(PatchPlan {
+        stages: image_pipeline_stages(
+            preprocess,
+            step_models,
+            model_id,
+            path,
+            face_path.as_deref(),
+            face_model_id,
+            *skip_upscale,
+            &input,
+        ),
+        output_scale: if input.task == "denoise" || *skip_upscale {
+            1
+        } else {
+            input.output_scale.min(*native_scale).max(1)
+        },
+        missing,
+        device: input.device.clone(),
+        precision,
+    })
 }
 
 fn prepare_output_directory(state: &AppState, requested: &str) -> AppResult<PathBuf> {

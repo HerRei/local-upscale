@@ -17,6 +17,8 @@ use crate::{
 };
 
 const PREVIEW_EXTENSION: &str = ".jpg";
+/// The preview patch's pictures are lossless, so they are PNG files in the same folder.
+const PATCH_EXTENSION: &str = ".png";
 const ASSET_PREFIXES: [&str; 3] = [
     "asset://localhost/",
     "http://asset.localhost/",
@@ -33,18 +35,32 @@ pub(crate) fn save_jpeg_base64(preview_root: &Path, encoded: &str) -> AppResult<
     save_jpeg_bytes(preview_root, &bytes)
 }
 
+pub(crate) fn save_png_base64(preview_root: &Path, encoded: &str) -> AppResult<String> {
+    if encoded.is_empty() {
+        return Ok(String::new());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|error| AppError::Validation(format!("Invalid preview image data: {error}")))?;
+    save_bytes(preview_root, &bytes, PATCH_EXTENSION)
+}
+
 pub(crate) fn save_jpeg_bytes(preview_root: &Path, bytes: &[u8]) -> AppResult<String> {
+    save_bytes(preview_root, bytes, PREVIEW_EXTENSION)
+}
+
+fn save_bytes(preview_root: &Path, bytes: &[u8], extension: &str) -> AppResult<String> {
     if bytes.is_empty() {
         return Ok(String::new());
     }
     let root = ensure_real_directory(preview_root)?;
     let digest = Sha256::digest(bytes);
-    let mut name = String::with_capacity(64 + PREVIEW_EXTENSION.len());
+    let mut name = String::with_capacity(64 + extension.len());
     for byte in digest {
         use std::fmt::Write as _;
         let _ = write!(&mut name, "{byte:02x}");
     }
-    name.push_str(PREVIEW_EXTENSION);
+    name.push_str(extension);
     let destination = root.join(&name);
     match fs::symlink_metadata(&destination) {
         Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
@@ -61,7 +77,7 @@ pub(crate) fn save_jpeg_bytes(preview_root: &Path, bytes: &[u8]) -> AppResult<St
         Err(error) => return Err(error.into()),
     }
 
-    let temporary = root.join(format!(".tmp-{}{PREVIEW_EXTENSION}", Uuid::new_v4()));
+    let temporary = root.join(format!(".tmp-{}{extension}", Uuid::new_v4()));
     let write_result = (|| -> AppResult<()> {
         let mut file = fs::OpenOptions::new()
             .write(true)
@@ -80,7 +96,7 @@ pub(crate) fn save_jpeg_bytes(preview_root: &Path, bytes: &[u8]) -> AppResult<St
     asset_url_for_file(&destination)
 }
 
-/// Resolves a preview URL to a single `.jpg` file directly inside `preview_root`,
+/// Resolves a preview URL to a single `.jpg` or `.png` file directly inside `preview_root`,
 /// rejecting `data:` URLs, non-asset schemes, traversal, subdirectories, and symlinks.
 pub(crate) fn confined_preview_path(preview_root: &Path, url: &str) -> Option<PathBuf> {
     if url.is_empty() || url.starts_with("data:") || url.contains(['?', '#', '\0']) {
@@ -104,7 +120,7 @@ pub(crate) fn confined_preview_path(preview_root: &Path, url: &str) -> Option<Pa
     let file_name = candidate.file_name()?.to_str()?;
     if file_name.is_empty()
         || file_name.starts_with('.')
-        || !file_name.ends_with(PREVIEW_EXTENSION)
+        || !(file_name.ends_with(PREVIEW_EXTENSION) || file_name.ends_with(PATCH_EXTENSION))
         || file_name.contains(['/', '\\'])
     {
         return None;
@@ -130,6 +146,11 @@ pub(crate) fn confined_preview_path(preview_root: &Path, url: &str) -> Option<Pa
 
 pub(crate) fn runtime_preview_urls(runtime: &RuntimeStatus) -> Vec<&str> {
     let mut urls = Vec::with_capacity(4 + runtime.compare.slots.len() + runtime.job_steps.len());
+    if let Some(patches) = &runtime.patches {
+        for patch in [&patches.a, &patches.b] {
+            urls.extend(patch.steps.iter().map(|step| step.url.as_str()));
+        }
+    }
     urls.push(runtime.result_preview_data_url.as_str());
     urls.push(runtime.comparison_preview_data_url.as_str());
     urls.push(runtime.comparison_pair.showing.preview_data_url.as_str());
@@ -248,6 +269,13 @@ pub(crate) fn prune_missing_references(state: &AppState) -> AppResult<()> {
     clear_if_missing(&mut runtime.comparison_pair.against.preview_data_url);
     for step in &mut runtime.job_steps {
         clear_if_missing(&mut step.preview_url);
+    }
+    if let Some(patches) = &mut runtime.patches {
+        for patch in [&mut patches.a, &mut patches.b] {
+            for step in &mut patch.steps {
+                clear_if_missing(&mut step.url);
+            }
+        }
     }
     for slot in &mut runtime.compare.slots {
         if clear_if_missing(&mut slot.preview_data_url) {
@@ -450,6 +478,40 @@ mod tests {
             let link_url = asset_url_for_file(&link).unwrap();
             assert!(confined_preview_path(&preview_root, &link_url).is_none());
         }
+    }
+
+    #[test]
+    fn patch_pictures_are_png_files_in_the_same_folder_with_the_same_confinement() {
+        let dir = tempfile::tempdir().unwrap();
+        let preview_root = dir.path().join("previews");
+        let png = base64::engine::general_purpose::STANDARD.encode(b"\x89PNG-bytes");
+        let url = save_png_base64(&preview_root, &png).unwrap();
+        let path = confined_preview_path(&preview_root, &url).unwrap();
+        assert!(path.to_string_lossy().ends_with(".png"));
+        assert_eq!(fs::read(&path).unwrap(), b"\x89PNG-bytes");
+        // Other extensions, hidden files and a link are refused as before.
+        let other = preview_root.join("a.gif");
+        fs::write(&other, b"x").unwrap();
+        assert!(
+            confined_preview_path(&preview_root, &asset_url_for_file(&other).unwrap()).is_none()
+        );
+        let hidden = preview_root.join(".hidden.png");
+        fs::write(&hidden, b"x").unwrap();
+        assert!(
+            confined_preview_path(&preview_root, &asset_url_for_file(&hidden).unwrap()).is_none()
+        );
+        assert!(confined_preview_path(&preview_root, &format!("{url}?x=1")).is_none());
+        #[cfg(unix)]
+        {
+            let outside = dir.path().join("secret.png");
+            fs::write(&outside, b"secret").unwrap();
+            let link = preview_root.join("escape.png");
+            std::os::unix::fs::symlink(&outside, &link).unwrap();
+            assert!(
+                confined_preview_path(&preview_root, &asset_url_for_file(&link).unwrap()).is_none()
+            );
+        }
+        assert!(save_png_base64(&preview_root, "").unwrap().is_empty());
     }
 
     #[test]

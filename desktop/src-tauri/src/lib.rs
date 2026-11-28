@@ -25,6 +25,7 @@ mod media_server;
 mod model_storage;
 mod native_menu;
 mod output_names;
+mod patch_preview;
 mod paths;
 mod pipe_lines;
 mod preview_cache;
@@ -280,6 +281,8 @@ pub fn run() {
             commands::request_compare_regions,
             commands::clear_compare_regions,
             commands::request_preview_regions,
+            patch_preview::request_patch_preview,
+            patch_preview::cancel_patch_preview,
             commands::clear_preview_regions,
             commands::retry_engine,
             commands::retry_job_on_cpu,

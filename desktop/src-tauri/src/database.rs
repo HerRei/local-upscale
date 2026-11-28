@@ -132,6 +132,13 @@ impl Database {
                 updated_at INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS jobs_queue_idx ON jobs(status, created_at);
+            CREATE TABLE IF NOT EXISTS patch_timings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                model_id TEXT NOT NULL,
+                device TEXT NOT NULL,
+                elapsed_seconds REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS patch_timings_idx ON patch_timings(model_id, device, id);
             ",
         )?;
         // Existing queues predate HDR metadata; preserve every media/job row.
@@ -810,6 +817,41 @@ impl Database {
             }
         }
         Ok(crate::queue_timing::typical_seconds_per_unit(&runs).map(|speed| speed * units))
+    }
+
+    /// A step of a preview patch that ran (was not answered from the cache). A patch is a
+    /// cold load and a small crop, so these never feed `estimate_request_seconds`.
+    pub fn record_patch_seconds(
+        &self,
+        model_id: &str,
+        device: &str,
+        elapsed_seconds: f64,
+    ) -> AppResult<()> {
+        if model_id.is_empty() || !elapsed_seconds.is_finite() || elapsed_seconds <= 0.0 {
+            return Ok(());
+        }
+        self.connection.execute(
+            "INSERT INTO patch_timings(model_id, device, elapsed_seconds) VALUES (?1, ?2, ?3)",
+            rusqlite::params![model_id, device, elapsed_seconds],
+        )?;
+        self.connection.execute(
+            "DELETE FROM patch_timings WHERE model_id=?1 AND device=?2 AND id NOT IN
+               (SELECT id FROM patch_timings WHERE model_id=?1 AND device=?2 ORDER BY id DESC LIMIT 20)",
+            rusqlite::params![model_id, device],
+        )?;
+        Ok(())
+    }
+
+    /// The mean of the last three measured seconds of a model on a device, or None when
+    /// it was never measured there.
+    pub fn patch_seconds(&self, model_id: &str, device: &str) -> AppResult<Option<f64>> {
+        Ok(self.connection.query_row(
+            "SELECT AVG(elapsed_seconds) FROM
+               (SELECT elapsed_seconds FROM patch_timings WHERE model_id=?1 AND device=?2
+                 ORDER BY id DESC LIMIT 3)",
+            rusqlite::params![model_id, device],
+            |row| row.get::<_, Option<f64>>(0),
+        )?)
     }
 
     pub fn latest_completed_output_for_media(&self, media_id: &str) -> AppResult<Option<String>> {
