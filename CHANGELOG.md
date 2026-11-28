@@ -128,6 +128,11 @@
   takes 0.3 s instead of 1.6 s for a 24 MP photo. With Precision on Auto, Apple GPUs use
   half precision for the ESRGAN, PULSE and SPAN models, after a measured check passed
   for them. The release builds are smaller.
+- **Engines are checked against a signed file list.** A downloaded engine is checked
+  against a file list signed with the release key when it is installed and at every
+  start; an engine whose files differ shows Needs reinstall. An engine installed by an
+  earlier version gets its list the next time LocalSR checks for updates. Approvals of
+  your own model files are sealed with a key kept in the system's key store.
 - **Fixes.** Comparing videos keeps both sides on the same frame (#176). A result shown
   without its result list is no longer labelled Original. The hardware line shows no
   memory meter when there is no reading. Models can be chosen while Start waits for a
