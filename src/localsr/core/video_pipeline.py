@@ -13,6 +13,7 @@ import queue
 import threading
 import time
 from collections.abc import Callable, Iterator
+from contextlib import closing
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -40,6 +41,7 @@ from .video_io import (
     probe_video,
     selected_frame_count,
     validate_hdr_encoder,
+    written_seconds,
 )
 from .video_normalization import Deinterlace
 
@@ -244,7 +246,8 @@ def run_video_job(
     ``config.interpolation`` set, ``synthesizer`` makes the in-between frames.
 
     Sources in a format LocalSR does not include are first converted to a
-    lossless intermediate by the user's selected FFmpeg, if any.
+    lossless intermediate by the user's selected FFmpeg, if any. A video only
+    the system codecs decode is read from them while the job runs instead.
     """
     from dataclasses import replace
 
@@ -291,6 +294,7 @@ def run_video_job(
         output_container=config.container,
         on_convert=(lambda: stage_cb("external_decode")) if stage_cb else None,
         decode_audio=bool(config.audio_denoise and config.fps_override is None),
+        stream_video=True,
     ) as (frame_source, audio_source):
         return _run_video_job(
             replace(config, video_path=frame_source, audio_path=audio_source),
@@ -513,23 +517,23 @@ def _video_has_colour(config: "VideoJobConfig", sample_frames: int = 3) -> bool:
     from localsr.image_models.ddcolor import COLORFUL_INPUT_CHROMA_THRESHOLD
 
     start = config.start_frame or 0
-    for _, item in zip(
-        range(sample_frames),
+    # Closed when done: the helper decoding a streamed source stops with it.
+    with closing(
         decode_timed_frames(
             config.video_path,
             start_frame=start,
             end_frame=start + sample_frames,
             hdr_mode=config.hdr_mode,
-        ),
-        strict=False,
-    ):
-        rgb = item.rgb
-        if rgb.dtype != np.uint8:
-            rgb = (np.clip(rgb, 0, 1) * 255).astype(np.uint8)
-        lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB).astype(np.float32)
-        chroma = float(np.hypot(lab[:, :, 1] - 128.0, lab[:, :, 2] - 128.0).mean())
-        if chroma > COLORFUL_INPUT_CHROMA_THRESHOLD:
-            return True
+        )
+    ) as frames:
+        for _, item in zip(range(sample_frames), frames, strict=False):
+            rgb = item.rgb
+            if rgb.dtype != np.uint8:
+                rgb = (np.clip(rgb, 0, 1) * 255).astype(np.uint8)
+            lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB).astype(np.float32)
+            chroma = float(np.hypot(lab[:, :, 1] - 128.0, lab[:, :, 2] - 128.0).mean())
+            if chroma > COLORFUL_INPUT_CHROMA_THRESHOLD:
+                return True
     return False
 
 
@@ -700,15 +704,18 @@ def _run_video_frames(
                 _SafeModelInfo(config.face_model_info, config.safe_memory),
             )
 
-    decoded = decode_timed_frames(
-        config.video_path,
-        start_frame=config.start_frame,
-        end_frame=config.end_frame,
-        cancel_event=cancel_event,
-        hdr_mode=config.hdr_mode,
-        deinterlace=deinterlace,
+    output_frames = run_video_chain(
+        decode_timed_frames(
+            config.video_path,
+            start_frame=config.start_frame,
+            end_frame=config.end_frame,
+            cancel_event=cancel_event,
+            hdr_mode=config.hdr_mode,
+            deinterlace=deinterlace,
+        ),
+        ctx,
+        stages=stages,
     )
-    output_frames = run_video_chain(decoded, ctx, stages=stages)
     if interpolation is not None and not config.slow_motion:
         fps = interpolation.output_fps(fps)
     # Like a rate override, slow motion changes the length, so sound and subtitles that
@@ -728,40 +735,45 @@ def _run_video_frames(
         warning_callback(
             "FPS override changes playback speed; source audio and subtitles are omitted."
         )
-    output_path = encode_video(
-        output_frames,
-        config.output_video_path,
-        fps=fps,
-        container_format=config.container,
-        video_codec=config.video_codec,
-        automatic_codec=config.automatic_codec,
-        note_callback=getattr(engine, "add_note", None),
-        crf=config.crf,
-        width=output_width,
-        height=output_height,
-        audio_source=effective_audio_source if keep_streams else None,
-        subtitle_source=raw_audio_source if keep_streams and reencode_audio else None,
-        reencode_audio=reencode_audio,
-        preserve_timing=rate_unchanged,
-        cancel_event=cancel_event,
-        warning_callback=warning_callback,
-        sdr_bt709=bool(probe.hdr_format and config.hdr_mode == "tone_map"),
-        hdr_format=probe.hdr_format if preserve_hdr else "",
-        temporary_directory=config.temporary_directory,
-        external_ffmpeg=config.external_ffmpeg,
-        stage_callback=stage_cb,
-        # A whole clip can stream into the system's hardware encoder; trims keep
-        # the lossless master, which carries their trimmed audio.
-        stream_to_system=config.start_frame is None and config.end_frame is None,
-        keep_partial=config.keep_partial if keep_partial is None else keep_partial,
-    )
+    try:
+        output_path = encode_video(
+            output_frames,
+            config.output_video_path,
+            fps=fps,
+            container_format=config.container,
+            video_codec=config.video_codec,
+            automatic_codec=config.automatic_codec,
+            note_callback=getattr(engine, "add_note", None),
+            crf=config.crf,
+            width=output_width,
+            height=output_height,
+            audio_source=effective_audio_source if keep_streams else None,
+            subtitle_source=raw_audio_source if keep_streams and reencode_audio else None,
+            reencode_audio=reencode_audio,
+            preserve_timing=rate_unchanged,
+            cancel_event=cancel_event,
+            warning_callback=warning_callback,
+            sdr_bt709=bool(probe.hdr_format and config.hdr_mode == "tone_map"),
+            hdr_format=probe.hdr_format if preserve_hdr else "",
+            temporary_directory=config.temporary_directory,
+            external_ffmpeg=config.external_ffmpeg,
+            stage_callback=stage_cb,
+            # A whole clip can stream into the system's hardware encoder; trims keep
+            # the lossless master, which carries their trimmed audio.
+            stream_to_system=config.start_frame is None and config.end_frame is None,
+            keep_partial=config.keep_partial if keep_partial is None else keep_partial,
+        )
+    finally:
+        # Ends the decoder now, also on a failure: a streamed source's helper stops
+        # with it instead of waiting for the garbage collector.
+        output_frames.close()
 
     completed_at = time.perf_counter()
     return VideoJobResult(
         output_path=output_path,
         frames_processed=ctx.frames_processed,
         partial=output_path != config.output_video_path,
-        kept_seconds=probe_video(output_path).duration_seconds
+        kept_seconds=written_seconds(output_path)
         if output_path != config.output_video_path
         else 0.0,
         kept_frames=count_video_frames(output_path)

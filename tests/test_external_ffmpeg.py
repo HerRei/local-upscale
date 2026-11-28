@@ -18,6 +18,7 @@ from test_video_timing import make_vfr, run_standard, timestamps
 from localsr.core import media_codecs
 from localsr.core.external_ffmpeg import (
     ExternalFFmpegError,
+    SourcePlan,
     decodable_source,
     load_external_ffmpeg,
     plan_source,
@@ -147,8 +148,11 @@ def test_h264_source_needs_user_ffmpeg_then_converts_losslessly(
     tmp_path, user_ffmpeg, clean_runtime
 ):
     source = make_h264_aac(tmp_path / "phone.mp4", user_ffmpeg)
-    assert plan_source(str(source)) == plan_source(str(source), "mp4")
-    assert not plan_source(str(source)).video_decodable
+    assert plan_source(str(source)) == plan_source(str(source), "mkv")
+    # AAC travels into MP4 by its codec parameters without a decoder; Matroska refuses
+    # its MP4 tag, which only a codec context lets PyAV reset.
+    assert plan_source(str(source), "mp4") == SourcePlan(False, False)
+    assert plan_source(str(source), "mkv") == SourcePlan(False, True)
     with pytest.raises(
         media_codecs.UndecodableVideoError, match="patent-licensed format"
     ) as refused:

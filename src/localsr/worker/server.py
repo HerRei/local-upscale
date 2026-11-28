@@ -1596,6 +1596,7 @@ class WorkerServer:
                         VideoStageProgress(job_id=job_id, stage="external_decode")
                     ),
                     decode_audio=bool(data.get("audio_denoise")) and data.get("fps") is None,
+                    stream_video=True,
                 ) as (frame_source, audio_source):
                     return WorkerServer._run_temporal_video_job_impl(
                         self,
@@ -2034,9 +2035,9 @@ class WorkerServer:
         kept_seconds = 0.0
         kept_frames = 0
         if partial:
-            from localsr.core.video_io import count_video_frames, probe_video
+            from localsr.core.video_io import count_video_frames, written_seconds
 
-            kept_seconds = probe_video(str(written_path)).duration_seconds
+            kept_seconds = written_seconds(str(written_path))
             kept_frames = count_video_frames(str(written_path))
         send_message(
             VideoJobCompleted(

@@ -2,7 +2,7 @@
 
 Compatible audio is always copied without decoding. Otherwise a decodable
 track is converted to Opus, a royalty-free codec, or to PCM for QuickTime
-(.mov), which cannot carry Opus. LocalSR does not encode AAC.
+(.mov), which cannot carry Opus or FLAC. LocalSR does not encode AAC.
 """
 
 from fractions import Fraction
@@ -10,7 +10,7 @@ from math import ceil
 
 import av
 
-from .media_codecs import audio_copy_allowed
+from .media_codecs import audio_copy_allowed, stream_decodable
 
 OPUS_RATE = 48000
 
@@ -19,7 +19,7 @@ def needs_audio_transcode(stream, container_format: str) -> bool:
     """A decodable track whose codec the output container cannot carry unchanged."""
     return (
         stream.type == "audio"
-        and stream.codec_context is not None
+        and stream_decodable(stream)
         and not audio_copy_allowed(stream.codec_context.name, container_format)
     )
 

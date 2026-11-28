@@ -16,13 +16,17 @@ REPLAY_LIMIT_BYTES = 256 * 1024 * 1024
 
 
 def system_export_failure(error: BaseException) -> bool:
-    """Only an encoder failure qualifies, never inference or publication errors."""
+    """Only an encoder failure qualifies, never inference, source decoding or publication
+    errors. A streamed source that stops decoding ends the frames early; another encoder
+    would publish that shorter video as complete."""
+    from .video_io import SourceDecodeError
+
     current = error
     found = False
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        if isinstance(current, (InterruptedError, DiskFullError)):
+        if isinstance(current, (InterruptedError, DiskFullError, SourceDecodeError)):
             return False
         if isinstance(current, OSError) and current.errno in (
             errno.ENOSPC,

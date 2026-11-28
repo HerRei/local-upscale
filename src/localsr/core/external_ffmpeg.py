@@ -31,6 +31,7 @@ from .media_codecs import (
     UNDECODABLE_VIDEO_MESSAGE,
     UndecodableVideoError,
     stream_copy_supported,
+    stream_decodable,
     video_stream_decodable,
 )
 from .pixel_budget import MAX_INPUT_PIXELS
@@ -296,7 +297,7 @@ def plan_source(path: str, container: str = "mkv", *, decode_audio: bool = False
         if video is None:
             raise ValueError(f"No video stream found in {path}")
         audio_help = any(
-            stream.codec_context is None
+            not stream_decodable(stream)
             and (decode_audio or not stream_copy_supported(stream, container))
             for stream in source.streams
             if stream.type == "audio"

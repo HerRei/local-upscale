@@ -20,11 +20,15 @@ sources. The single source of truth is
 | Subtitles | SubRip, ASS/SSA, WebVTT, MP4 timed text | — |
 | Containers | MP4/MOV, MKV/WebM, AVI, MPEG-PS/TS, Ogg, WAV, FLAC, MP3, ASF (container only) | — |
 
-Decodable audio that the output container accepts is **copied unchanged** (for
-example Opus, FLAC, MP3 or AC-3 into MP4). Other decodable audio is converted to
-Opus. AAC and other audio LocalSR cannot decode cannot be copied either (PyAV
-needs a decoder to copy a stream), so it is omitted with a warning unless a
-user-installed FFmpeg converts it.
+Audio that the output container accepts is **copied unchanged** (for example
+Opus, FLAC, MP3 or AC-3 into MP4). Other decodable audio is converted to Opus, or
+to 16-bit PCM in MOV, which holds neither Opus nor FLAC. A track LocalSR cannot
+decode, such as AAC, is copied from its codec parameters without a decoder, as is
+the H.264, HEVC or ProRes video of a macOS export when its sound is added; where
+the container refuses such a track, it is omitted with a warning unless the system
+codecs or a user-installed FFmpeg convert it. A stopped export cuts such a track
+at the packet in which the kept video ends, so up to one packet of sound (about
+21 ms of AAC) can follow the last frame.
 
 The FFmpeg libraries are built by
 [`packaging/ffmpeg/build_lgpl_media.py`](../packaging/ffmpeg/build_lgpl_media.py)
@@ -39,9 +43,11 @@ macOS ships H.264, HEVC and AAC codecs under Apple's licences, behind
 AVFoundation. LocalSR uses them through `localsr-media`, a small helper built
 from [`packaging/macos/media-helper/main.swift`](../packaging/macos/media-helper/main.swift)
 that links only Apple frameworks (AVFoundation, CoreMedia, CoreVideo,
-VideoToolbox). It decodes into the same lossless FFV1/FLAC intermediate the
-FFmpeg route uses and encodes exports with VideoToolbox, exchanging raw frames
-with the worker over pipes. LocalSR's binaries still contain no code for these
+VideoToolbox). A video job reads the frames it decodes as they arrive, with
+only the soundtrack and the first frame kept in a lossless FFV1/FLAC file;
+playback copies use the same lossless FFV1/FLAC intermediate as the FFmpeg
+route. It encodes exports with VideoToolbox, exchanging raw frames with the
+worker over pipes. LocalSR's binaries still contain no code for these
 formats, and the helper adds no third-party code to the package. It writes
 H.264/HEVC into MP4 or MOV and Apple ProRes 422 into MOV; MKV output and formats macOS cannot read (WMV,
 DivX, FLV, H.263) still go through a user-installed FFmpeg. Windows has
