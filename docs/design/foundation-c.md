@@ -282,8 +282,10 @@ steps (and a catalog model) of their own, as `test_pipeline.py` does for model-l
   row, and running after the primary in video (today refused).
 - **Denoise/deblur strength**: built in 0.7.0 as `Light` / `Medium` / `Full` on a ticked Blur,
   JPEG artifacts or Noise row; see `docs/design/tools-wave.md`, section 1.
-- **Object/scratch removal** (inpainting with a painted mask): a model-bearing step stage, a
-  `requires_mask` registry flag, and the host command that writes a painted mask.
+- **Object/scratch removal** (inpainting with a painted mask): small marks are built in 0.7.0
+  as the model-less `repair` step (OpenCV Telea) with the `requires_mask` flag, painting in
+  the viewer and the host's mask (spec in `docs/design/tools-wave.md`, section 3). Larger
+  objects still need a model-bearing step stage.
 - **Masks per fix**: `supports_mask` on the fix steps and the painting UI; the plumbing is
   the same as above.
 - **Progress text**: a model-less stage reports `stage_kind` = its id and no model id, so the

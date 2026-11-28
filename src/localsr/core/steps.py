@@ -400,7 +400,6 @@ STEPS: tuple[StepDefinition, ...] = (
         label="Dust & scratches",
         stage_label="Repairing marks",
         required_feature="image_repair",
-        dev_only=True,
     ),
     StepDefinition(
         id="remove_background",

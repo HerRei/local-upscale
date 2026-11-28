@@ -89,6 +89,7 @@
     toggleFix,
     seeFixOnPhoto,
     showCropGuide,
+    paintRepair,
     setSize,
     openLibrary,
     moveFix,
@@ -167,6 +168,7 @@
     interpolationSupported,
     patchLink,
     startSeconds,
+    repairFacts,
   } = view);
 
   $: if (!recipesOpen) {
@@ -684,6 +686,8 @@
                 {toggleFix}
                 {seeFixOnPhoto}
                 {showCropGuide}
+                mediaFacts={repairFacts}
+                {paintRepair}
                 {radioGroupKeydown}
                 {patchLink}
                 {updateSettings}

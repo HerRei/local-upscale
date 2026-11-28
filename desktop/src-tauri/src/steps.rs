@@ -693,7 +693,7 @@ mod tests {
         assert!(reg
             .steps
             .iter()
-            .all(|step| step.dev_only == matches!(step.id.as_str(), "grain" | "repair")));
+            .all(|step| step.dev_only == (step.id == "grain")));
 
         let check = |params: serde_json::Value, mask: Option<&str>| {
             reg.validate_step_stage("grain", params.as_object(), mask)

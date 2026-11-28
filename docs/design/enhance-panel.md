@@ -70,7 +70,7 @@ them are complete without them.
 
 | On the board | Why not now | In this build |
 | --- | --- | --- |
-| Rows Faces, Exposure, Stabilise, Scratches & dust | No such step runs. `face_restore` exists in the registry (`steps.json:377`) but the UI sends `enable_face_model: false` (`startInput.ts:111`) and `plan.e2e.ts` asserts "Faces is not offered". | Not listed. A row appears when its step is in `steps.json` and the engine lists the step's `required_feature`. (Stabilise is built: `tools-wave.md`, section 2.) |
+| Rows Faces, Exposure, Stabilise, Scratches & dust | No such step runs. `face_restore` exists in the registry (`steps.json:377`) but the UI sends `enable_face_model: false` (`startInput.ts:111`) and `plan.e2e.ts` asserts "Faces is not offered". | Not listed. A row appears when its step is in `steps.json` and the engine lists the step's `required_feature`. (Stabilise is built: `tools-wave.md`, section 2; Dust & scratches, section 3.) |
 | `Natural ▾`, `Crop to fit ▾` | No parameters on Colour. | The model name is the value. (`Medium ▾` is built for Blur, JPEG artifacts and Noise: `tools-wave.md`, section 1.) |
 | `Auto` switch, hints (`· looks compressed`, `2 found`) | No detector. "Nothing ticks itself" (size-decides.md:46) holds. | Absent. The Fix head has room on the right. |
 | `More ▾` in Content (Scan, Tape, Film, Anime) | `content` is `photo` or `illustration` (`types.ts:60`, `:382`). | Two segments. |

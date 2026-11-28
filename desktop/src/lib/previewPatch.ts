@@ -237,6 +237,8 @@ export function patchRequestKey(request: {
   input: Partial<StartBatchInput>;
   replace?: { slot: 'a' | 'b'; fix: string; model_id: string } | null;
   stageLimit?: number | null;
+  /** The photo's `repair_rev`: new paint is a new mask, so the same plan asks again. */
+  repairRev?: number;
 }): string {
   const { input } = request;
   return JSON.stringify([
@@ -261,5 +263,6 @@ export function patchRequestKey(request: {
     input.safe_memory,
     request.replace ?? null,
     request.stageLimit ?? null,
+    request.repairRev ?? 0,
   ]);
 }

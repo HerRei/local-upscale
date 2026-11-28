@@ -149,6 +149,8 @@ export interface Scenario {
   systemAccent?: { light: string; dark: string };
   /** Pre-set edit.runtime_path so Edit plans can start without picking the runtime interactively. */
   editRuntime?: string;
+  /** Dust & scratches painted on photo n: the strokes the host keeps, kept per media in the page. */
+  marks?: Record<number, { mode: 'paint' | 'erase'; size: number; points: number[] }[]>;
 }
 
 export interface HostCall {
@@ -187,6 +189,12 @@ function hostScript(scenario: Scenario): void {
 
   type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
+  // The strokes of Dust & scratches per media id; the snapshot carries only their count.
+  const repairStrokes: Record<string, Json[]> = Object.fromEntries(
+    Object.entries(scenario.marks ?? {}).map(([n, strokes]) => [`photo-${n}`, strokes]),
+  );
+  const paintMarks = (strokes: Json[]): number =>
+    strokes.filter((stroke) => stroke.mode === 'paint').length;
   const photo = (n: number): Json => ({
     id: `photo-${n}`,
     path: `/fixture/alpine-lake-${n}.jpg`,
@@ -201,6 +209,8 @@ function hostScript(scenario: Scenario): void {
     probe_status: 'ready',
     error: '',
     selected: n === 1,
+    repair_marks: paintMarks(scenario.marks?.[n] ?? []),
+    repair_rev: scenario.marks?.[n] ? 1 : 0,
     ...(n === 1 && scenario.unreadable
       ? { ...scenario.unreadable, preview_data_url: '', probe_status: 'failed' }
       : {}),
@@ -1433,6 +1443,17 @@ function hostScript(scenario: Scenario): void {
       case 'select_media':
         for (const media of snapshot.media) media.selected = media.id === args.id;
         return null;
+      case 'get_repair_strokes':
+        return structuredClone(repairStrokes[args.mediaId] ?? []);
+      case 'set_repair_strokes': {
+        const media = snapshot.media.find((item: Json) => item.id === args.mediaId);
+        if (!media) throw new Error('that photo is no longer in the queue');
+        repairStrokes[args.mediaId] = structuredClone(args.strokes);
+        media.repair_marks = paintMarks(args.strokes);
+        media.repair_rev = (media.repair_rev ?? 0) + 1;
+        emit('state-changed', null);
+        return null;
+      }
       case 'clear_results':
         snapshot.runtime.last_steps = null;
         return null;

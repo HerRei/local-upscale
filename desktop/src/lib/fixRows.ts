@@ -23,6 +23,8 @@ export interface FixRow {
   common: boolean;
   /** The row's value is this choice; its popover shows it as segments. */
   choice?: RowChoice;
+  /** The row's value opens painting in the viewer, not a popover. */
+  paints?: boolean;
 }
 
 export const STRENGTH_FEATURE = 'fix_strength';
@@ -73,9 +75,10 @@ export function choiceShown(
 }
 
 /** Steps whose Fix row is ticked by an entry in `settings.step_stages`. */
-export const STEP_ROWS = new Set<string>(['stabilise']);
+export const STEP_ROWS = new Set<string>(['stabilise', 'repair']);
 
 export const STABILISE_STEP = 'stabilise';
+export const REPAIR_STEP = 'repair';
 export type Smoothing = 'light' | 'medium' | 'strong';
 
 /** The crop is the engine's (`SMOOTHING` levels in stabilise.py): a fraction of each edge. */
@@ -116,13 +119,38 @@ export function smoothingNote(smoothing: Smoothing): string {
   return `${stop.label} · ${stop.title.split(' · ')[1]}`;
 }
 
+/** What the Dust & scratches row knows of the queue: the open photo's marks and how many are painted. */
+export interface MediaFacts {
+  marks: number;
+  marked: number;
+  photos: number;
+  /** A photo is open in the viewer. */
+  open: boolean;
+}
+
+/** The value of a ticked Dust & scratches row: `Paint…`, `1 mark`, `3 marks`. */
+export function marksValue(marks: number): string {
+  return marks > 0 ? `${marks} ${marks === 1 ? 'mark' : 'marks'}` : 'Paint…';
+}
+
+/** The value's `title`; with several photos it adds how many have marks. */
+export function marksTitle(facts: MediaFacts): string {
+  const own =
+    facts.marks > 0
+      ? `${marksValue(facts.marks)} on this photo. Click to change them.`
+      : 'Paint over the marks on this photo';
+  if (facts.photos < 2) return own;
+  const queue = `${facts.marked} of ${facts.photos} photos ${facts.marked === 1 ? 'has' : 'have'} marks.`;
+  return facts.marks > 0 ? `${own} ${queue}` : `${own}. ${queue}`;
+}
+
 export const SETTING_ROWS: Record<string, keyof UiSettings> = {
   deflicker: 'deflicker',
 };
 
 export const LABS_ROWS = new Set<string>(['deflicker', 'stabilise']);
 
-const COMMON_ROWS = new Set<string>(['blur', 'jpeg', 'noise', 'deflicker', 'stabilise']);
+const COMMON_ROWS = new Set<string>(['blur', 'jpeg', 'noise', 'deflicker', 'stabilise', 'repair']);
 
 interface RowCopy {
   label: string;
@@ -161,6 +189,11 @@ function copyForRow(step: StepDefinition, media: 'image' | 'video'): RowCopy {
         label: 'Stabilise',
         title:
           'Steadies shaky handheld video. The picture is enlarged a little so its moving edges stay out of view.',
+      };
+    case 'repair':
+      return {
+        label: 'Dust & scratches',
+        title: 'Repairs small marks that you paint over: dust, scratches, spots.',
       };
     case 'deflicker':
       return {
@@ -237,6 +270,7 @@ export function fixRows(
         title: copy.title,
         tag: LABS_ROWS.has(step.id) ? 'Labs' : '',
         common: COMMON_ROWS.has(step.id),
+        ...(step.id === REPAIR_STEP ? { paints: true } : {}),
         ...(step.id === STABILISE_STEP
           ? {
               choice: {

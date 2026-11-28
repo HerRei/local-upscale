@@ -6,7 +6,7 @@
       "name": "Old scan",
       "media": "image",
       "for": "For scanned prints, slides and negatives.",
-      "note": "Enlarges and sharpens, and smooths film grain. Does not remove scratches or dust, and does not change colours.",
+      "note": "Enlarges and sharpens, and smooths film grain. Scratches and dust stay unless you tick Dust & scratches and paint over them. Colours are not changed.",
       "detail_extra": "Black and white? Tick Colour afterwards. The colours are the model's guess.",
       "content": "photo",
       "quality": "quick",

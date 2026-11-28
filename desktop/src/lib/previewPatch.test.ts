@@ -147,6 +147,19 @@ describe('previewPatch', () => {
     );
     expect(key(region, { ...(input as object), output_directory: '/x' } as never)).toBe(key());
   });
+
+  it('patchRequestKey changes when the photo is painted again', () => {
+    const request = {
+      mediaId: 'p1',
+      slot: 'a' as const,
+      region: { x: 0, y: 0, width: 384, height: 384 },
+      input: { step_stages: [{ step: 'repair' }], output_scale: 1 } as never,
+    };
+    expect(patchRequestKey({ ...request, repairRev: 0 })).toBe(patchRequestKey(request));
+    expect(patchRequestKey({ ...request, repairRev: 2 })).not.toBe(
+      patchRequestKey({ ...request, repairRev: 1 }),
+    );
+  });
 });
 
 describe('Patch, background', () => {

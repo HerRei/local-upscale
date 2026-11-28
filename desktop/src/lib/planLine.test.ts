@@ -190,6 +190,21 @@ describe('planLine, stabilise', () => {
   });
 });
 
+describe('planLine, Dust & scratches', () => {
+  it('names the repair step Dust & scratches ahead of the fixes', () => {
+    expect(
+      planLine(
+        [
+          stage({ kind: 'repair', role: 'step', label: 'Repairing marks' }),
+          stage({ kind: 'restore', role: 'fix', fix: 'noise', label: 'Noise' }),
+        ],
+        baseSettings,
+        { kind: 'image' },
+      ),
+    ).toEqual(['Dust & scratches', 'Noise']);
+  });
+});
+
 describe('planLine, strength', () => {
   const entry = (fix: 'noise' | 'jpeg', strength?: number) => ({
     fix,

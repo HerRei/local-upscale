@@ -3,6 +3,8 @@ import { demoSnapshot } from './demo';
 import {
   fixRowOrder,
   fixRows,
+  marksTitle,
+  marksValue,
   smoothingOf,
   smoothingStop,
   fixRowValue,
@@ -55,7 +57,15 @@ describe('fixRows', () => {
     expect(rows.map((row) => row.id)).toEqual(['blur', 'jpeg', 'noise', 'colour']);
     expect(rows.map((row) => row.label)).toEqual(['Blur', 'JPEG artifacts', 'Noise', 'Colour']);
     expect(rows.every((row) => row.tag === '')).toBe(true);
-    expect(fixRowOrder()).toEqual(['stabilise', 'blur', 'jpeg', 'noise', 'colour', 'deflicker']);
+    expect(fixRowOrder()).toEqual([
+      'stabilise',
+      'repair',
+      'blur',
+      'jpeg',
+      'noise',
+      'colour',
+      'deflicker',
+    ]);
     expect(
       rows.some((row) => ['face_restore', 'interpolate', 'audio_denoise'].includes(row.id)),
     ).toBe(false);
@@ -360,5 +370,50 @@ describe('fixRows, stabilise', () => {
       smoothingStop('medium').crop,
       smoothingStop('strong').crop,
     ]).toEqual([0.03, 0.05, 0.08]);
+  });
+});
+
+describe('fixRows, Dust & scratches', () => {
+  const features = ['image_repair'];
+
+  it('is the first photo row, a common step_stage row that paints', () => {
+    const rows = fixRows('image', features);
+    expect(rows.map((row) => row.id)).toEqual(['repair', 'blur', 'jpeg', 'noise', 'colour']);
+    expect(rows[0]).toMatchObject({
+      id: 'repair',
+      label: 'Dust & scratches',
+      title: 'Repairs small marks that you paint over: dust, scratches, spots.',
+      source: 'step_stage',
+      tag: '',
+      common: true,
+      paints: true,
+    });
+    expect(rows[0].choice).toBeUndefined();
+    expect(rows.slice(1).some((row) => row.paints)).toBe(false);
+    expect(splitFixRows(rows, () => false, false).hiddenCount).toBe(0);
+  });
+
+  it('has no row on a video or without the feature, unless the step is stored', () => {
+    expect(fixRows('video', features).some((row) => row.id === 'repair')).toBe(false);
+    expect(fixRows('image', []).some((row) => row.id === 'repair')).toBe(false);
+    expect(fixRows('image', [], STEPS, undefined, ['repair'])[0].id).toBe('repair');
+    expect(
+      fixRows('video', [], STEPS, undefined, ['repair']).some((row) => row.id === 'repair'),
+    ).toBe(false);
+  });
+
+  it('values and titles count the marks of the open photo and of the queue', () => {
+    expect([marksValue(0), marksValue(1), marksValue(3)]).toEqual(['Paint…', '1 mark', '3 marks']);
+    const facts = { marks: 0, marked: 0, photos: 1, open: true };
+    expect(marksTitle(facts)).toBe('Paint over the marks on this photo');
+    expect(marksTitle({ ...facts, marks: 3, marked: 1 })).toBe(
+      '3 marks on this photo. Click to change them.',
+    );
+    expect(marksTitle({ ...facts, marks: 3, marked: 5, photos: 30 })).toBe(
+      '3 marks on this photo. Click to change them. 5 of 30 photos have marks.',
+    );
+    expect(marksTitle({ ...facts, marked: 1, photos: 3 })).toBe(
+      'Paint over the marks on this photo. 1 of 3 photos has marks.',
+    );
   });
 });

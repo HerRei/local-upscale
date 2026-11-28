@@ -5969,8 +5969,12 @@ pub(crate) struct PatchPlan {
 }
 
 /// The plan of a preview patch: validated as Start validates it, without the output
-/// checks, and resolved to the same stages `build_job_request` sends.
-pub(crate) fn patch_plan(state: &AppState, mut input: StartBatchInput) -> AppResult<PatchPlan> {
+/// checks, and resolved to the same stages `build_job_request` sends for `media`.
+pub(crate) fn patch_plan(
+    state: &AppState,
+    mut input: StartBatchInput,
+    media: &crate::types::MediaItem,
+) -> AppResult<PatchPlan> {
     let video = input.task == "video";
     if !video && !matches!(input.task.as_str(), "upscale" | "denoise") {
         return Err(AppError::Validation(
@@ -5997,18 +6001,14 @@ pub(crate) fn patch_plan(state: &AppState, mut input: StartBatchInput) -> AppRes
             .step(&selection.step)
             .is_none_or(|step| step.media.iter().any(|media| media == "image"))
     });
-    // The patch does not paint yet: a step that needs a mask is left out of it.
-    input.step_stages.retain(|selection| {
-        registry
-            .step(&selection.step)
-            .is_none_or(|step| !step.requires_mask)
-    });
     input.device = resolve_device(state, &input.device)?;
     validate_start_input(&input, external_codecs_available(state))?;
     validate_bit_depth_engine(&input, lock(&state.engine)?.as_ref())?;
     validate_fix_engine(&input, lock(&state.engine)?.as_ref())?;
     validate_stage_params_engine(&input.fix_stages, lock(&state.engine)?.as_ref())?;
     validate_step_stages_engine(&input.step_stages, lock(&state.engine)?.as_ref())?;
+    // A step that needs paint gets the photo's mask, as the photo's job would.
+    let input = input_for_photo(state, &input, media)?;
     let mut missing = Vec::new();
     let selection = resolve_model_selection_with(state, &input, Some(&mut missing))?;
     validate_checkpoint_engine(&selection, lock(&state.engine)?.as_ref())?;

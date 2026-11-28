@@ -368,7 +368,7 @@ pub(crate) fn request_checked(state: &AppState, ask: PatchAsk) -> AppResult<()> 
         missing,
         device,
         precision,
-    } = patch_plan(state, input.clone())?;
+    } = patch_plan(state, input.clone(), &media)?;
     let first_missing = stages.iter().position(|stage| {
         stage
             .model_id

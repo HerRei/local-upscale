@@ -1,4 +1,4 @@
-"""The `repair` step (Dust & scratches): registry entry, dev gate, mask requirement, handler."""
+"""The `repair` step (Dust & scratches): registry entry, shipped gate, mask requirement, handler."""
 
 from __future__ import annotations
 
@@ -17,8 +17,9 @@ WIDTH, HEIGHT = 64, 48
 
 
 @pytest.fixture
-def dev_steps(monkeypatch):
-    monkeypatch.setenv(DEV_STEPS, "1")
+def shipped(monkeypatch):
+    """The step ships: nothing here needs the developer switch."""
+    monkeypatch.delenv(DEV_STEPS, raising=False)
 
 
 class _Writer:
@@ -126,7 +127,7 @@ def test_repair_is_a_photo_cleanup_step_that_needs_a_mask():
     assert repair.supports_mask and repair.requires_mask
     assert repair.in_image_pipeline and not repair.is_fix_stage
     assert repair.required_feature == "image_repair"
-    assert repair.dev_only
+    assert not repair.dev_only
     assert PHASES.index(repair.phase) < PHASES.index("restore")
     assert (repair.phase, repair.order) < (
         STEPS_BY_ID["remove_background"].phase,
@@ -135,16 +136,14 @@ def test_repair_is_a_photo_cleanup_step_that_needs_a_mask():
     assert [s.id for s in STEPS_BY_ID.values() if s.requires_mask] == ["repair"]
 
 
-def test_the_engine_lists_the_repair_feature_only_with_the_dev_flag(monkeypatch):
+def test_feature_is_listed_without_the_dev_switch(monkeypatch):
     from localsr.worker.server import _engine_features
 
     monkeypatch.delenv(DEV_STEPS, raising=False)
-    assert "image_repair" not in _engine_features([])
-    monkeypatch.setenv(DEV_STEPS, "1")
     assert "image_repair" in _engine_features([])
 
 
-@pytest.mark.usefixtures("dev_steps")
+@pytest.mark.usefixtures("shipped")
 def test_a_stage_without_a_mask_is_refused():
     from localsr.core.pipeline import resolve_image_pipeline
 
@@ -154,17 +153,16 @@ def test_a_stage_without_a_mask_is_refused():
         )
 
 
-def test_the_worker_refuses_repair_without_the_dev_flag(monkeypatch, tmp_path):
+def test_the_worker_takes_repair_without_the_dev_switch(monkeypatch, tmp_path):
     from localsr.core.pipeline import resolve_image_pipeline
 
     monkeypatch.delenv(DEV_STEPS, raising=False)
-    with pytest.raises(ValueError, match="LOCALSR_DEV_STEPS"):
-        resolve_image_pipeline(
-            raw_stages=[_repair(tmp_path / "m.png")], model_path="", output_scale=1
-        )
+    mask = _write(tmp_path, "m.png", np.zeros((HEIGHT, WIDTH), dtype=np.uint8))
+    pipeline = resolve_image_pipeline(raw_stages=[_repair(mask)], model_path="", output_scale=1)
+    assert [stage.step_id for stage in pipeline.stages] == ["repair"]
 
 
-@pytest.mark.usefixtures("dev_steps")
+@pytest.mark.usefixtures("shipped")
 def test_a_video_job_refuses_repair(tmp_path):
     from localsr.core.pipeline import resolve_image_pipeline
 
@@ -174,7 +172,7 @@ def test_a_video_job_refuses_repair(tmp_path):
         )
 
 
-@pytest.mark.usefixtures("dev_steps")
+@pytest.mark.usefixtures("shipped")
 def test_a_painted_speck_is_filled_from_its_surroundings(tmp_path):
     clean = _gradient()
     marked, mask = _speck(clean)
@@ -187,7 +185,7 @@ def test_a_painted_speck_is_filled_from_its_surroundings(tmp_path):
     assert np.abs(output[painted] - clean.astype(np.int16)[painted]).max() <= 4
 
 
-@pytest.mark.usefixtures("dev_steps")
+@pytest.mark.usefixtures("shipped")
 def test_pixels_outside_the_mask_do_not_change(tmp_path):
     marked, mask = _speck(_gradient())
     # A second mark the mask does not cover stays too.
@@ -202,7 +200,7 @@ def test_pixels_outside_the_mask_do_not_change(tmp_path):
     assert not np.array_equal(output[mask > 0], marked.astype(np.int16)[mask > 0])
 
 
-@pytest.mark.usefixtures("dev_steps")
+@pytest.mark.usefixtures("shipped")
 def test_an_empty_mask_changes_nothing(tmp_path):
     marked, _ = _speck(_gradient())
     source = _write(tmp_path, "input.png", marked)
@@ -213,7 +211,7 @@ def test_an_empty_mask_changes_nothing(tmp_path):
     np.testing.assert_array_equal(output, marked.astype(np.int16))
 
 
-@pytest.mark.usefixtures("dev_steps")
+@pytest.mark.usefixtures("shipped")
 def test_16_bits_and_alpha_are_kept(tmp_path):
     clean = _gradient().astype(np.uint16) * 257
     marked, mask = _speck(_gradient())
@@ -234,7 +232,7 @@ def test_16_bits_and_alpha_are_kept(tmp_path):
     np.testing.assert_array_equal(rgb[~painted], marked16.astype(np.int32)[~painted])
 
 
-@pytest.mark.usefixtures("dev_steps")
+@pytest.mark.usefixtures("shipped")
 def test_the_mask_is_fitted_to_the_picture(tmp_path):
     marked, mask = _speck(_gradient())
     source = _write(tmp_path, "input.png", marked)
@@ -250,7 +248,7 @@ def test_the_mask_is_fitted_to_the_picture(tmp_path):
     assert _read(full).shape == fitted.shape
 
 
-@pytest.mark.usefixtures("dev_steps")
+@pytest.mark.usefixtures("shipped")
 def test_repair_runs_before_the_fixes_and_alone_at_same_size(tmp_path):
     from localsr.core.pipeline import parse_pipeline_stages
 
@@ -273,3 +271,28 @@ def test_repair_runs_before_the_fixes_and_alone_at_same_size(tmp_path):
     source = _write(tmp_path, "input.png", marked)
     output = _run(tmp_path, "alone", source, [_repair(_write(tmp_path, "mask.png", mask))])
     assert output.is_file()
+
+
+@pytest.mark.usefixtures("shipped")
+def test_an_exif_rotated_photo_is_repaired_where_it_was_painted(tmp_path):
+    from PIL import ImageOps
+
+    # The host draws the mask at the size the probe reports, which is the photo as it is shown.
+    shown, mask = _speck(_gradient())
+    exif = Image.Exif()
+    exif[274] = 6  # shown turned 90 degrees clockwise from how it is stored
+    source = tmp_path / "rotated.jpg"
+    Image.fromarray(np.ascontiguousarray(np.rot90(shown))).save(
+        source, "JPEG", quality=100, subsampling=0, exif=exif
+    )
+    with Image.open(source) as opened:
+        assert ImageOps.exif_transpose(opened).size == (WIDTH, HEIGHT)
+
+    output = _run(tmp_path, "rotated", source, [_repair(_write(tmp_path, "mask.png", mask))])
+
+    with Image.open(output) as saved:
+        repaired = np.asarray(ImageOps.exif_transpose(saved).convert("RGB")).astype(np.int16)
+    assert repaired.shape == (HEIGHT, WIDTH, 3)
+    clean = _gradient().astype(np.int16)
+    # The speck is filled where it was painted; stored the other way round it would stay black.
+    assert np.abs(repaired[20:25, 30:35] - clean[20:25, 30:35]).max() <= 8

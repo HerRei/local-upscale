@@ -13,6 +13,7 @@ import { formatBytes } from './lib/format';
 import { modelDisplayName } from './lib/modelNames';
 import { PROMPT_EXAMPLES, PROMPT_EXAMPLE_FAMILIES, examplesFor } from './lib/promptExamples';
 import { applyWorkerEnvelope } from './lib/workerEvents';
+import type { RepairStroke } from './lib/maskPaint';
 import type {
   AppSnapshot,
   ComparePick,
@@ -104,6 +105,10 @@ const api = vi.hoisted(() => ({
   checkpointConsent: vi.fn(async (_path: string, _allow?: boolean) => false),
   addMedia: vi.fn(async (_paths: string[], _replace: boolean): Promise<void> => undefined),
   selectMedia: vi.fn(async (_id: string): Promise<void> => undefined),
+  getRepairStrokes: vi.fn(async (_id: string): Promise<RepairStroke[]> => []),
+  setRepairStrokes: vi.fn(
+    async (_id: string, _strokes: RepairStroke[]): Promise<void> => undefined,
+  ),
   removeMedia: vi.fn(async () => undefined),
   clearMedia: vi.fn(async () => undefined),
   clearResults: vi.fn(async () => undefined),
@@ -293,6 +298,7 @@ const planFetch = vi.hoisted(() => ({
           selected_video_model_id?: string | null;
           edit_model_id?: string | null;
           has_audio?: boolean | null;
+          masked_steps?: string[];
         },
       ) => Promise<import('./lib/plan').PlanStage[]>)
     | undefined,
@@ -330,6 +336,7 @@ vi.mock('./lib/jobPlanClient', async (importOriginal) => {
       selectedVideoModel,
       editModel,
       hasAudio: options.has_audio === null ? undefined : options.has_audio,
+      maskedSteps: options.masked_steps ?? [],
     });
   };
   planFetch.defaultImpl = defaultFetchPlan;
@@ -13243,5 +13250,441 @@ describe('Stabilise', () => {
     expect(
       (within(fixGroup()).getByRole('button', { name: /^Medium/ }) as HTMLButtonElement).disabled,
     ).toBe(true);
+  });
+});
+
+describe('Dust & scratches', () => {
+  /** Photos with these marks, the first one open, at 2× with nothing ticked. */
+  function scratchedSnapshot(marks: number[] = [0], listed = true): AppSnapshot {
+    const names = ['photo', 'second', 'third'];
+    const snapshot = readySnapshot(
+      marks.map((count, index) => ({
+        ...image(names[index], index === 0),
+        repair_marks: count,
+        repair_rev: count > 0 ? 1 : 0,
+      })),
+    );
+    if (listed) snapshot.engine!.features.push('image_repair', 'stage_params_and_masks');
+    snapshot.engine!.features.push('patch_preview');
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      quality: 'quick',
+      selected_model_id: 'span_photo_x4',
+      output_scale: 2,
+    });
+    return snapshot;
+  }
+  /** Same size with nothing else ticked. */
+  const same = (snapshot: AppSnapshot): AppSnapshot => {
+    Object.assign(snapshot.settings, { task: 'denoise', output_scale: 1, selected_model_id: '' });
+    return snapshot;
+  };
+  const ticked = (snapshot: AppSnapshot): AppSnapshot => {
+    snapshot.settings.step_stages = [{ step: 'repair' }];
+    return snapshot;
+  };
+  const fixGroup = () => screen.getByRole('group', { name: 'Fix' });
+  const foot = () => document.querySelector('.panel-foot') as HTMLElement;
+  const box = () =>
+    screen.queryByRole('checkbox', { name: 'Dust & scratches' }) as HTMLInputElement | null;
+  const value = () => document.querySelector<HTMLButtonElement>('.fix-value[data-paints]');
+  const toolbar = () => screen.queryByRole('toolbar', { name: 'Dust & scratches' });
+  const sizeText = () => document.querySelector('.paint-size-text')?.textContent ?? '';
+  const saved = () => api.setRepairStrokes.mock.calls.at(-1)?.[1] ?? null;
+  const press = (key: string, init: KeyboardEventInit = {}) =>
+    fireEvent.keyDown(document.activeElement ?? document.body, { key, ...init });
+
+  let stage = { width: 0, height: 0 };
+  /** A point on the canvas in source pixels, rounded as a stroke keeps it. */
+  const source = (x: number, y: number): number[] => [
+    Math.round(((x - 400) * 640 * 10) / stage.width + 3200) / 10,
+    Math.round(((y - 300) * 480 * 10) / stage.height + 2400) / 10,
+  ];
+
+  /** The viewer at 800 × 600 with the 640 × 480 photo fitted into it. */
+  async function viewer(): Promise<HTMLElement> {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      width: 800,
+      height: 600,
+      top: 0,
+      left: 0,
+      right: 800,
+      bottom: 600,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const picture = await waitFor(() => {
+      const element = document.querySelector<HTMLImageElement>('.source-image');
+      expect(element).toBeTruthy();
+      return element!;
+    });
+    Object.defineProperty(picture, 'naturalWidth', { value: 640, configurable: true });
+    Object.defineProperty(picture, 'naturalHeight', { value: 480, configurable: true });
+    await fireEvent.load(picture);
+    await waitFor(() =>
+      expect(
+        parseFloat(document.querySelector<HTMLElement>('.image-stage')?.style.width ?? '0'),
+      ).toBeGreaterThan(100),
+    );
+    const style = document.querySelector<HTMLElement>('.image-stage')!.style;
+    stage = { width: parseFloat(style.width), height: parseFloat(style.height) };
+    return screen.getByRole('application', { name: 'Media comparison canvas' });
+  }
+
+  async function drag(canvas: HTMLElement, points: [number, number][], init = {}): Promise<void> {
+    const [first, ...rest] = points;
+    await fireEvent.pointerDown(canvas, {
+      pointerId: 1,
+      button: 0,
+      clientX: first[0],
+      clientY: first[1],
+      ...init,
+    });
+    for (const [x, y] of rest) {
+      await fireEvent.pointerMove(canvas, { pointerId: 1, clientX: x, clientY: y });
+    }
+    const last = points.at(-1)!;
+    await fireEvent.pointerUp(canvas, { pointerId: 1, clientX: last[0], clientY: last[1] });
+  }
+
+  /** Opens painting from the ticked row of a photo without paint, laid out for strokes. */
+  async function painting(snapshot = ticked(scratchedSnapshot())) {
+    const user = await mountWith(snapshot);
+    const canvas = await viewer();
+    await user.click(value()!);
+    await waitFor(() => expect(toolbar()).toBeTruthy());
+    return { user, canvas };
+  }
+
+  it('is the first checkbox of the group Fix on a photo, unticked and without a value', async () => {
+    await mountWith(scratchedSnapshot());
+    const boxes = within(fixGroup()).getAllByRole('checkbox');
+    expect(boxes[0]).toBe(box());
+    expect(box()!.checked).toBe(false);
+    expect(value()).toBeNull();
+    expect(box()!.closest('.fix-row')!.getAttribute('title')).toBe(
+      'Repairs small marks that you paint over: dust, scratches, spots.',
+    );
+  });
+
+  it('is not there for a video, in Edit, or without the feature', async () => {
+    const clip = scratchedSnapshot();
+    clip.media = [video('clip', true)];
+    clip.settings.task = 'video';
+    await mountWith(clip);
+    expect(box()).toBeNull();
+    cleanup();
+    const edit = scratchedSnapshot();
+    edit.settings.task = 'edit';
+    await mountWith(edit);
+    expect(box()).toBeNull();
+    cleanup();
+    await mountWith(scratchedSnapshot([0], false));
+    expect(box()).toBeNull();
+  });
+
+  it('ticking a photo without paint stores the step and opens painting with focus on Paint', async () => {
+    const user = await mountWith(scratchedSnapshot());
+    expect(screen.getByRole('button', { name: 'Preview' })).toBeTruthy();
+    await user.click(box()!);
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ step_stages: [{ step: 'repair' }] }),
+      ),
+    );
+    await waitFor(() => expect(toolbar()).toBeTruthy());
+    expect(api.getRepairStrokes).toHaveBeenCalledWith('photo');
+    const paint = within(toolbar()!).getByRole('radio', { name: 'Paint' });
+    await waitFor(() => expect(document.activeElement).toBe(paint));
+    expect(paint.getAttribute('aria-checked')).toBe('true');
+    expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
+    expect(screen.queryByRole('radiogroup', { name: 'Comparison view' })).toBeNull();
+    expect(value()!.textContent?.trim()).toBe('Paint…');
+    expect(value()!.title).toBe('Paint over the marks on this photo');
+  });
+
+  it('with 3 marks the value reads 3 marks and opens painting only when pressed', async () => {
+    const user = await mountWith(ticked(scratchedSnapshot([3])));
+    expect(value()!.textContent?.trim()).toBe('3 marks');
+    expect(value()!.title).toBe('3 marks on this photo. Click to change them.');
+    expect(toolbar()).toBeNull();
+    await user.click(value()!);
+    await waitFor(() => expect(toolbar()).toBeTruthy());
+  });
+
+  it('a stroke is saved 300 ms after it ends in source pixels, and the value follows the snapshot', async () => {
+    const { canvas } = await painting();
+    const painted = ticked(scratchedSnapshot([1]));
+    api.refreshSnapshot.mockResolvedValue(structuredClone(painted));
+    await drag(canvas, [
+      [400, 300],
+      [440, 300],
+      [480, 320],
+    ]);
+    expect(api.setRepairStrokes).not.toHaveBeenCalled();
+    await waitFor(() => expect(api.setRepairStrokes).toHaveBeenCalledTimes(1));
+    const points = [...source(400, 300), ...source(440, 300), ...source(480, 320)];
+    expect(points.slice(0, 2)).toEqual([320, 240]);
+    expect(api.setRepairStrokes).toHaveBeenLastCalledWith('photo', [
+      { mode: 'paint', size: 4, points },
+    ]);
+    await waitFor(() => expect(value()!.textContent?.trim()).toBe('1 mark'));
+    expect(document.querySelector('.mask-paint path')?.getAttribute('d')).toBe(
+      `M${points[0]} ${points[1]} L${points[2]} ${points[3]} ${points[4]} ${points[5]}`,
+    );
+  });
+
+  it('E paints an erase stroke and B goes back to Paint', async () => {
+    const { canvas } = await painting();
+    await press('e');
+    expect(
+      within(toolbar()!).getByRole('radio', { name: 'Erase' }).getAttribute('aria-checked'),
+    ).toBe('true');
+    await drag(canvas, [
+      [400, 300],
+      [420, 300],
+    ]);
+    await waitFor(() =>
+      expect(saved()).toEqual([
+        { mode: 'erase', size: 4, points: [...source(400, 300), ...source(420, 300)] },
+      ]),
+    );
+    await press('b');
+    expect(
+      within(toolbar()!).getByRole('radio', { name: 'Paint' }).getAttribute('aria-checked'),
+    ).toBe('true');
+  });
+
+  it('] and [ change the size by 1.25 and stay inside the limits', async () => {
+    await painting();
+    expect(sizeText()).toBe('4 px');
+    await press(']');
+    expect(sizeText()).toBe('5 px');
+    await press('[');
+    expect(sizeText()).toBe('4 px');
+    for (let step = 0; step < 20; step += 1) await press(']');
+    expect(sizeText()).toBe('40 px');
+    for (let step = 0; step < 30; step += 1) await press('[');
+    expect(sizeText()).toBe('2 px');
+  });
+
+  it('Undo, ⌘Z and ⇧⌘Z take strokes off and put them back; Undo is off with nothing to take', async () => {
+    const { user, canvas } = await painting();
+    const undoButton = () =>
+      within(toolbar()!).getByRole('button', { name: 'Undo' }) as HTMLButtonElement;
+    expect(undoButton().disabled).toBe(true);
+    await drag(canvas, [[400, 300]]);
+    await drag(canvas, [[200, 100]]);
+    expect(document.querySelectorAll('.mask-paint path')).toHaveLength(2);
+    expect(undoButton().disabled).toBe(false);
+    await user.click(undoButton());
+    expect(document.querySelectorAll('.mask-paint path')).toHaveLength(1);
+    await press('z', { metaKey: true });
+    expect(document.querySelectorAll('.mask-paint path')).toHaveLength(0);
+    expect(undoButton().disabled).toBe(true);
+    await press('z', { metaKey: true, shiftKey: true });
+    expect(document.querySelectorAll('.mask-paint path')).toHaveLength(1);
+    await press('y', { ctrlKey: true });
+    expect(document.querySelectorAll('.mask-paint path')).toHaveLength(2);
+    await waitFor(() => expect(saved()).toHaveLength(2));
+  });
+
+  it('Clear saves an empty list and Undo brings the strokes back', async () => {
+    const { user, canvas } = await painting();
+    await drag(canvas, [[400, 300]]);
+    await drag(canvas, [[200, 100]]);
+    await waitFor(() => expect(saved()).toHaveLength(2));
+    await user.click(within(toolbar()!).getByRole('button', { name: 'Clear' }));
+    await waitFor(() => expect(saved()).toEqual([]));
+    expect(
+      (within(toolbar()!).getByRole('button', { name: 'Clear' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    await user.click(within(toolbar()!).getByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(saved()).toHaveLength(2));
+  });
+
+  it('Esc ends painting with focus on the value, and the view switch comes back', async () => {
+    const snapshot = ticked(scratchedSnapshot([2]));
+    snapshot.jobs = [
+      {
+        id: 'saved',
+        media_id: 'photo',
+        media_name: 'photo.png',
+        media_kind: 'image',
+        status: 'completed',
+        progress: 100,
+        output_path: '/out/saved.png',
+        error: '',
+        created_at: 1,
+      },
+    ];
+    snapshot.runtime.comparison_pair = {
+      media_id: '',
+      generation: 0,
+      showing: { target_id: '', preview_data_url: '' },
+      against: { target_id: '', preview_data_url: '' },
+    };
+    api.listMediaResults.mockResolvedValue(historyOf('photo', [row('saved')]));
+    api.requestImageComparison.mockImplementation(async (mediaId, pair) => {
+      if (!pair) return;
+      snapshot.runtime.comparison_pair = {
+        media_id: mediaId,
+        generation: 1,
+        showing: {
+          target_id: pair.showing,
+          preview_data_url: 'data:image/jpeg;base64,saved',
+          width: 1280,
+          height: 960,
+          preview_width: 1280,
+          preview_height: 960,
+        },
+        against: { target_id: 'original', preview_data_url: '', width: 640, height: 480 },
+      };
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    });
+    const user = await mountWith(snapshot);
+    await screen.findByRole('radiogroup', { name: 'Comparison view' });
+    await user.click(value()!);
+    await waitFor(() => expect(toolbar()).toBeTruthy());
+    expect(screen.queryByRole('radiogroup', { name: 'Comparison view' })).toBeNull();
+    await press('Escape');
+    await waitFor(() => expect(toolbar()).toBeNull());
+    expect(document.activeElement).toBe(value());
+    expect(screen.getByRole('radiogroup', { name: 'Comparison view' })).toBeTruthy();
+  });
+
+  it('another photo keeps painting with its own strokes; a video ends it', async () => {
+    const snapshot = ticked(scratchedSnapshot([0, 0]));
+    snapshot.media.push(video('clip'));
+    await painting(snapshot);
+    const other = structuredClone(snapshot);
+    other.media.forEach((media) => (media.selected = media.id === 'second'));
+    api.refreshSnapshot.mockResolvedValue(other);
+    (api.listenForStateChange.mock.calls.at(-1)![0] as () => void)();
+    await waitFor(() => expect(api.getRepairStrokes).toHaveBeenCalledWith('second'));
+    expect(toolbar()).toBeTruthy();
+    const clip = structuredClone(snapshot);
+    clip.media.forEach((media) => (media.selected = media.id === 'clip'));
+    api.refreshSnapshot.mockResolvedValue(clip);
+    (api.listenForStateChange.mock.calls.at(-1)![0] as () => void)();
+    await waitFor(() => expect(toolbar()).toBeNull());
+  });
+
+  it('removing the painted photo ends painting without sending its paint', async () => {
+    const snapshot = ticked(scratchedSnapshot([0, 0]));
+    const { canvas } = await painting(snapshot);
+    await drag(canvas, [[400, 300]]);
+    const removed = structuredClone(snapshot);
+    removed.media = removed.media.filter((media) => media.id !== 'photo');
+    removed.media[0].selected = true;
+    api.refreshSnapshot.mockResolvedValue(removed);
+    (api.listenForStateChange.mock.calls.at(-1)![0] as () => void)();
+    await waitFor(() => expect(toolbar()).toBeNull());
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(api.setRepairStrokes).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('at Same size with nothing else, a photo without paint has nothing to run', async () => {
+    await mountWith(same(ticked(scratchedSnapshot())));
+    expect(
+      await screen.findByText('Nothing to run. Paint over the marks first, or pick another fix.'),
+    ).toBeTruthy();
+    expect(within(foot()).getByText('Nothing to run')).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Restore selected' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it('at Same size with nothing else, 3 marks run Dust & scratches, named in the Plan sheet', async () => {
+    const user = await mountWith(same(ticked(scratchedSnapshot([3]))));
+    expect(await within(foot()).findByText('Dust & scratches')).toBeTruthy();
+    expect(screen.queryByText(/Nothing to run/)).toBeNull();
+    expect(
+      (screen.getByRole('button', { name: 'Restore selected' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    const sheet = await openPlanSheet(user);
+    expect(within(sheet).getByText('3 marks')).toBeTruthy();
+    expect(within(sheet).queryByRole('button', { name: /Change/ })).toBeNull();
+  });
+
+  it('at 2× with Noise and no paint, the plan line leaves the step out', async () => {
+    const snapshot = ticked(scratchedSnapshot());
+    snapshot.settings.fix_stages = [{ fix: 'noise', model_id: 'scunet_color_real_psnr' }];
+    await mountWith(snapshot);
+    expect(await within(foot()).findByText('Noise → Upscale 2×')).toBeTruthy();
+  });
+
+  it('three photos, one painted, the tick alone: the all-button counts 1', async () => {
+    await mountWith(same(ticked(scratchedSnapshot([0, 2, 0]))));
+    const all = await screen.findByRole('button', { name: 'Restore all 1' });
+    expect((all as HTMLButtonElement).disabled).toBe(false);
+    const one = screen.getByRole('button', { name: 'Only this one' }) as HTMLButtonElement;
+    expect(one.disabled).toBe(true);
+    expect(one.title).toBe('Nothing to run. Paint over the marks first, or pick another fix.');
+    expect(value()!.title).toBe('Paint over the marks on this photo. 1 of 3 photos has marks.');
+  });
+
+  it('while a job runs the value is disabled with its title', async () => {
+    const snapshot = ticked(scratchedSnapshot([0, 0]));
+    snapshot.runtime.active_job_id = 'job-running';
+    snapshot.jobs = [
+      {
+        id: 'job-running',
+        media_id: 'second',
+        media_name: 'second.png',
+        media_kind: 'image',
+        status: 'running',
+        progress: 10,
+        output_path: '',
+        error: '',
+        created_at: 1,
+      },
+    ];
+    await mountWith(snapshot);
+    expect(value()!.disabled).toBe(true);
+    expect(value()!.title).toBe('Available when the job finishes.');
+  });
+
+  it('the preview patch runs the repair, stops while painting and asks again for new paint', async () => {
+    const snapshot = ticked(scratchedSnapshot([1]));
+    snapshot.settings.preview_patch_shown = true;
+    const user = await mountWith(snapshot);
+    await waitFor(() => expect(api.requestPatchPreview).toHaveBeenCalledTimes(1));
+    const first = api.requestPatchPreview.mock.calls[0][0];
+    expect((first.input as StartBatchInput).step_stages).toEqual([{ step: 'repair' }]);
+    await user.click(value()!);
+    await waitFor(() => expect(toolbar()).toBeTruthy());
+    await waitFor(() => expect(api.cancelPatchPreview).toHaveBeenCalledWith('a'));
+    await press('Escape');
+    await waitFor(() => expect(api.requestPatchPreview).toHaveBeenCalledTimes(2));
+    // The host saved more paint: the same plan with a new mask asks again.
+    const painted = ticked(scratchedSnapshot([2]));
+    painted.settings.preview_patch_shown = true;
+    painted.media[0].repair_rev = 2;
+    api.refreshSnapshot.mockResolvedValue(structuredClone(painted));
+    (api.listenForStateChange.mock.calls.at(-1)![0] as () => void)();
+    await waitFor(() => expect(api.requestPatchPreview).toHaveBeenCalledTimes(3), {
+      timeout: 2000,
+    });
+  });
+
+  it('stays ticked on a photo while the video setting keeps HDR', async () => {
+    const snapshot = ticked(scratchedSnapshot([3]));
+    snapshot.settings.video_hdr_mode = 'preserve';
+    await mountWith(snapshot);
+    expect(box()!.checked).toBe(true);
+    expect(box()!.disabled).toBe(false);
+    expect(value()!.textContent?.trim()).toBe('3 marks');
+  });
+
+  it('a stored step stays on an engine without the feature, and its value cannot paint', async () => {
+    await mountWith(ticked(scratchedSnapshot([0], false)));
+    expect(box()!.checked).toBe(true);
+    expect(box()!.closest('.fix-row')!.getAttribute('title')).toBe(
+      'This engine cannot repair marks. Update LocalSR.',
+    );
+    expect(value()!.disabled).toBe(true);
   });
 });
