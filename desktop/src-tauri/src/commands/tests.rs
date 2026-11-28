@@ -5117,6 +5117,42 @@ fn a_queued_request_loads_a_pickle_checkpoint_only_with_an_approval_made_in_loca
 }
 
 #[test]
+fn a_photo_or_video_request_is_checked_and_sent_as_its_own_single_job() {
+    // The engine runs a photo or video request's data as the job; a `jobs` field in it
+    // lists nothing that runs. Only a photo batch is a list of jobs.
+    let dir = tempfile::tempdir().unwrap();
+    let state = AppState::from_paths(AppPaths::under(dir.path())).unwrap();
+    for kind in ["job_request", "video_job_request"] {
+        let request = json!({"type": kind, "data": {
+            "model_path": "/models/own.pth",
+            "approved_checkpoint_sha256": "1".repeat(64),
+            "allow_unverified_checkpoint": true,
+            "jobs": [],
+        }});
+        assert!(
+            !queued_checkpoint_still_approved(&state, &request),
+            "{kind}"
+        );
+        let mut sent = json!({"type": kind, "data": {
+            "model_path": "/models/own.pth",
+            "allow_unverified_checkpoint": true,
+            "jobs": [{"model_path": "/models/own.pth"}],
+        }});
+        withdraw_unapproved_checkpoint_permission(&mut sent);
+        assert_eq!(
+            sent["data"]["allow_unverified_checkpoint"],
+            json!(false),
+            "{kind}"
+        );
+    }
+    let batch = json!({"type": "image_batch_request", "data": {
+        "approved_checkpoint_sha256": "1".repeat(64),
+        "jobs": [{"model_path": "/models/span.safetensors"}],
+    }});
+    assert!(queued_checkpoint_still_approved(&state, &batch));
+}
+
+#[test]
 fn a_queued_job_without_an_approved_digest_is_sent_with_the_permission_off() {
     let digest = "1".repeat(64);
     for kind in ["job_request", "video_job_request"] {

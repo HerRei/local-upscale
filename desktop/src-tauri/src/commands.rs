@@ -1742,6 +1742,62 @@ pub(crate) fn checkpoint_approved(state: &AppState, digest: &str) -> AppResult<b
     Ok(listed && crate::checkpoint_approvals::sealed(&state.paths, digest))
 }
 
+/// Why a request read from the queue file is not sent, or None. The queue holds photo,
+/// video and edit jobs only, and one that names an approved own checkpoint is sent only
+/// while the user's approval holds.
+pub(crate) fn queued_request_refusal(state: &AppState, request_json: &str) -> Option<&'static str> {
+    let Ok(request) = serde_json::from_str::<Value>(request_json) else {
+        return Some(QUEUED_JOB_CANNOT_RUN);
+    };
+    if !matches!(
+        request["type"].as_str(),
+        Some("job_request" | "video_job_request" | "edit_job_request")
+    ) {
+        return Some(QUEUED_JOB_CANNOT_RUN);
+    }
+    (!queued_checkpoint_still_approved(state, &request))
+        .then_some("Confirm your own model again in the model library before running this job.")
+}
+
+const QUEUED_JOB_CANNOT_RUN: &str = "This job cannot run. Add it to the queue again.";
+
+/// The programs the engine runs for a queued job are the ones LocalSR resolves when it
+/// sends the job, never paths the queue file holds: an edit runs the editing runtime
+/// `edit_runtime` accepts now (one chosen in LocalSR's file dialog, otherwise the one
+/// LocalSR found), a video the FFmpeg the settings name, or none. An error fails the job.
+pub(crate) fn use_current_programs(state: &AppState, message: &mut Value) -> AppResult<()> {
+    let kind = message["type"].as_str().unwrap_or_default().to_owned();
+    let Some(data) = message.get_mut("data").and_then(Value::as_object_mut) else {
+        return Err(AppError::Validation(QUEUED_JOB_CANNOT_RUN.into()));
+    };
+    match kind.as_str() {
+        "video_job_request" => {
+            let ffmpeg = lock(&state.settings)?.external_ffmpeg_path.clone();
+            if ffmpeg.is_empty() {
+                data.remove("external_ffmpeg");
+            } else {
+                data.insert("external_ffmpeg".into(), Value::String(ffmpeg));
+            }
+        }
+        "edit_job_request" => {
+            // Checked from the text first: a path on a share is not resolved unless granted.
+            let named = data
+                .get("runtime_path")
+                .and_then(Value::as_str)
+                .filter(|path| !path.is_empty() && state.edit_programs.check(path).is_ok())
+                .unwrap_or_default()
+                .to_owned();
+            let runtime = edit_runtime(state, &named)?;
+            data.insert(
+                "runtime_path".into(),
+                Value::String(runtime.to_string_lossy().into_owned()),
+            );
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Whether a queued request that names an approved pickle-based checkpoint still carries
 /// an approval the user made: the digest it names must be approved now. The engine loads
 /// only the file with that digest.
@@ -1754,20 +1810,23 @@ pub(crate) fn queued_checkpoint_still_approved(state: &AppState, request: &Value
 }
 
 /// A queued request lets the engine load pickle-based checkpoints only through an
-/// approved digest: every job without one is sent with the general permission off. Other
-/// requests have no such field (worker-protocol.schema.json), and an engine LocalSR starts
-/// takes it as off for them.
+/// approved digest: every job without one (`request_jobs`) is sent with the general
+/// permission off. Other requests have no such field (worker-protocol.schema.json), and
+/// an engine LocalSR starts takes it as off for them.
 pub(crate) fn withdraw_unapproved_checkpoint_permission(message: &mut Value) {
-    if !matches!(
-        message["type"].as_str(),
-        Some("job_request" | "video_job_request" | "image_batch_request")
-    ) {
-        return;
-    }
+    let batch = match message["type"].as_str() {
+        Some("job_request" | "video_job_request") => false,
+        Some("image_batch_request") => true,
+        _ => return,
+    };
     let data = &mut message["data"];
-    let jobs: Vec<&mut Value> = match data.get_mut("jobs").and_then(Value::as_array_mut) {
-        Some(jobs) => jobs.iter_mut().collect(),
-        None => vec![data],
+    let jobs: Vec<&mut Value> = if batch {
+        data.get_mut("jobs")
+            .and_then(Value::as_array_mut)
+            .map(|jobs| jobs.iter_mut().collect())
+            .unwrap_or_default()
+    } else {
+        vec![data]
     };
     for job in jobs {
         if job["approved_checkpoint_sha256"].as_str().is_none() {
@@ -1778,11 +1837,16 @@ pub(crate) fn withdraw_unapproved_checkpoint_permission(message: &mut Value) {
     }
 }
 
+/// The jobs a request runs: a photo batch lists them in `data.jobs`; any other request is
+/// one job, its `data`, whatever fields that holds.
 fn request_jobs(request: &Value) -> Vec<&Value> {
-    match request["data"]["jobs"].as_array() {
-        Some(jobs) => jobs.iter().collect(),
-        None => vec![&request["data"]],
+    if request["type"] == "image_batch_request" {
+        return request["data"]["jobs"]
+            .as_array()
+            .map(|jobs| jobs.iter().collect())
+            .unwrap_or_default();
     }
+    vec![&request["data"]]
 }
 
 pub(crate) fn retry_job_on_cpu_checked(state: &AppState, job_id: &str) -> AppResult<()> {

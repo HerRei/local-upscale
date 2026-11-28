@@ -308,9 +308,12 @@ the list that the feed names for that engine id and keeps it once the engine's f
 match it: at start, before an engine is chosen, when the launch check is allowed or the
 engine was installed by the update that just ran, and whenever the feed is read (update
 checks and the engine catalog). While the launch check is off, a notice at start asks
-for one **Check for Updates…** and a restart. An engine whose files do not match its release's list
-shows **Needs reinstall**. An engine an updater of 0.4.0 to 0.5.0 left without metadata
-is recorded the same way, for the id the host was built for, after a handshake.
+for one **Check for Updates…** and a restart. An engine whose files do not match its
+release's list, or whose id the feed that was read does not name, is marked **Needs
+reinstall**: LocalSR no longer checks it against the feed or names it in that notice. A
+list that cannot be downloaded leaves the engine waiting for the next read. An engine an
+updater of 0.4.0 to 0.5.0 left without metadata is recorded the same way, for the id the
+host was built for, after a handshake.
 
 The Windows and Linux workflows write the separate payload next to the app with
 `scripts/prepare_engine_payload.py --target <target>`, using the bundled engine
@@ -482,11 +485,14 @@ or AppImage:
   start, LocalSR checks file sizes and hashes the worker executable, native
   libraries, Python code and archives such as `base_library.zip`, the packages'
   `entry_points.txt` and the native editing helper. It rejects every file the signed
-  file list does not name, except the `.DS_Store`, `Thumbs.db` and `desktop.ini` that
-  Finder and Explorer leave in folders; empty folders do not count. Nothing the engine
-  runs writes into its folder (caches go to the user's cache folders, and the frozen
-  worker writes no bytecode). After an engine stopped in a way LocalSR did not ask for,
-  its next start hashes every code file again.
+  file list does not name, except the `.DS_Store` and `._` files Finder leaves in
+  folders, Explorer's `Thumbs.db` and `desktop.ini` and Dolphin's `.directory`, unless
+  such a file is code by its name, permissions or contents; empty folders do not count.
+  Nothing the engine runs writes into its folder (caches go to the user's cache folders,
+  and the frozen worker writes no bytecode). After an engine stopped in a way LocalSR did
+  not ask for (anything but Stop, quitting, an engine switch, a new model folder or a
+  restart LocalSR forced), whatever its exit code, its next start hashes every code file
+  again.
   Startup verification runs in the background with the bundled engine available
   as fallback. The **Verify** button runs a full SHA-256 check of every recorded
   listed file. If verification fails and no previous copy can be recovered at startup,

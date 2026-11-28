@@ -2291,6 +2291,11 @@ fn engine_start_refuses_every_file_its_list_does_not_name() {
         "_internal/torch-2.14.0.dist-info/entry_points.txt",
         "_internal/notes.txt",
         "_internal/.ds_store",
+        "_internal/.Directory",
+        "_internal/.nfs000000000000001a00000001",
+        // A name of the kind a file manager leaves is still refused when it is code.
+        "_internal/._library.dylib",
+        "_internal/._script.py",
         "_internal/cache/index.json",
     ] {
         let root = tempfile::tempdir().unwrap();
@@ -2324,10 +2329,40 @@ fn engine_start_refuses_every_file_its_list_does_not_name() {
     fs::write(engine.join(".DS_Store"), b"finder").unwrap();
     fs::write(engine.join("_internal/Thumbs.db"), b"explorer").unwrap();
     fs::write(engine.join("_internal/desktop.ini"), b"explorer").unwrap();
+    fs::write(engine.join(".directory"), b"[Desktop Entry]").unwrap();
+    fs::write(
+        engine.join("_internal/._model.safetensors"),
+        b"\x00\x05\x16\x07apple double",
+    )
+    .unwrap();
     fs::create_dir_all(engine.join("_internal/empty")).unwrap();
     assert!(installed_engine_looks_intact(&paths.next_root, "gpu"));
     let mut failed = HashSet::new();
     assert_eq!(verify_active_engine_at_start(&paths, &mut failed), None);
+
+    // Such a name with a program's permissions or contents counts.
+    for (name, contents) in [
+        ("_internal/._helper", b"\x7fELF-helper".as_slice()),
+        ("._Thumbs", b"MZ-program".as_slice()),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let (paths, engine) = install(root.path());
+        fs::write(engine.join(name), contents).unwrap();
+        assert!(
+            !installed_engine_looks_intact(&paths.next_root, "gpu"),
+            "{name}"
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let (paths, engine) = install(root.path());
+        let helper = engine.join("._tool");
+        fs::write(&helper, b"#!/bin/sh").unwrap();
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!installed_engine_looks_intact(&paths.next_root, "gpu"));
+    }
 }
 
 fn setup_cached_check_engine(root: &Path, id: &str) -> (crate::paths::AppPaths, PathBuf) {
@@ -2858,7 +2893,7 @@ fn adoption_leaves_alone_what_it_cannot_vouch_for() {
     let root = tempfile::tempdir().unwrap();
     let paths = crate::paths::AppPaths::under(root.path());
     let id = "windows-x86_64-cuda-new";
-    let engine = engine_from_older_updater(&paths.next_root, id);
+    engine_from_older_updater(&paths.next_root, id);
     let list = release_list_for(&paths.next_root, id, "CUDA");
     let unlisted = || {
         read_engine_meta(&paths.next_root, id).is_none()
@@ -2888,11 +2923,7 @@ fn adoption_leaves_alone_what_it_cannot_vouch_for() {
         moved
     };
     assert!(anchor(&paths.next_root, id, &foreign, id, true).is_err());
-    // Files that differ from the list.
-    fs::write(engine.join("_internal/torch_cuda.dll"), b"changed").unwrap();
-    assert!(anchor(&paths.next_root, id, &list, id, true).is_err());
     assert!(unlisted());
-    fs::write(engine.join("_internal/torch_cuda.dll"), b"library").unwrap();
     // An engine with metadata, even invalid, is not recorded anew.
     fs::write(
         paths.next_root.join("engines").join(id).join("meta.json"),
@@ -2913,7 +2944,105 @@ fn adoption_refuses_an_engine_with_a_link() {
     let list = release_list_for(&paths.next_root, id, "CUDA");
     std::os::unix::fs::symlink("/etc/passwd", engine.join("_internal/linked")).unwrap();
     assert!(anchor(&paths.next_root, id, &list, id, true).is_err());
-    assert!(read_engine_meta(&paths.next_root, id).is_none());
+    // Its files cannot match a list: it is marked for reinstallation, not recorded.
+    let meta = read_engine_meta(&paths.next_root, id).unwrap();
+    assert!(!meta.verified_install && !meta.handshake_passed);
+    assert!(engine_lacks_file_list(&paths.next_root, id));
+    assert_eq!(active_engine_for_distribution(&paths, false, id), None);
+}
+
+#[test]
+fn an_engine_whose_files_differ_from_its_signed_list_is_marked_for_reinstallation() {
+    let offered = |paths: &crate::paths::AppPaths, compiled: &str| {
+        crate::engine_manager::engines_without_file_list(
+            &paths.next_root,
+            compiled,
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+        )
+    };
+    // Without metadata, as an updater of 0.4.0 to 0.5.0 left it.
+    let root = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(root.path());
+    let id = "windows-x86_64-cuda-new";
+    let engine = engine_from_older_updater(&paths.next_root, id);
+    let list = release_list_for(&paths.next_root, id, "CUDA");
+    fs::write(engine.join("_internal/torch_cuda.dll"), b"changed").unwrap();
+    assert_eq!(offered(&paths, id), vec![id.to_owned()]);
+    assert!(anchor_installed_engine(
+        &paths.next_root,
+        id,
+        &list,
+        id,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        |_| panic!("an engine whose files differ is not started"),
+    )
+    .is_err());
+    let meta = read_engine_meta(&paths.next_root, id).unwrap();
+    assert!(!meta.verified_install && !meta.handshake_passed);
+    assert_eq!((meta.id.as_str(), meta.backend.as_str()), (id, "cuda"));
+    assert!(engine_lacks_file_list(&paths.next_root, id));
+    assert!(offered(&paths, id).is_empty());
+    assert_eq!(active_engine_for_distribution(&paths, false, id), None);
+    // Its files put back, it stays marked until it is installed again.
+    fs::write(engine.join("_internal/torch_cuda.dll"), b"library").unwrap();
+    assert!(anchor(&paths.next_root, id, &list, id, true).is_err());
+    assert!(engine_lacks_file_list(&paths.next_root, id));
+    assert_eq!(active_engine_for_distribution(&paths, false, id), None);
+
+    // With metadata, as 0.5.2 to 0.6 wrote it: a file of the list is missing.
+    let recorded = |next_root: &Path, id: &str| {
+        write_engine_meta(
+            next_root,
+            &EngineMeta {
+                id: id.into(),
+                backend: "cuda".into(),
+                os: std::env::consts::OS.into(),
+                arch: std::env::consts::ARCH.into(),
+                protocol_version: PROTOCOL_VERSION,
+                handshake_passed: true,
+                verified_install: true,
+                version: "0.6.3-beta".into(),
+                files: test_engine_files(next_root, id),
+            },
+        )
+        .unwrap();
+    };
+    let root = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(root.path());
+    let id = "gpu";
+    let engine = paths.next_root.join("engines/gpu/engine");
+    fs::create_dir_all(engine.join("_internal")).unwrap();
+    fs::write(engine.join(worker_executable_name()), b"worker").unwrap();
+    fs::write(engine.join("_internal/library.dll"), b"library").unwrap();
+    recorded(&paths.next_root, id);
+    let list = release_list_for(&paths.next_root, id, "CUDA");
+    fs::remove_file(engine.join("_internal/library.dll")).unwrap();
+    assert_eq!(offered(&paths, "other"), vec![id.to_owned()]);
+    assert!(anchor(&paths.next_root, id, &list, "other", true).is_err());
+    let meta = read_engine_meta(&paths.next_root, id).unwrap();
+    assert!(!meta.verified_install);
+    assert_eq!(meta.backend, "cuda");
+    assert!(engine_lacks_file_list(&paths.next_root, id));
+    assert!(offered(&paths, "other").is_empty());
+
+    // A list that names another engine says nothing about these files: it waits.
+    let root = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(root.path());
+    let engine = paths.next_root.join("engines/gpu/engine");
+    fs::create_dir_all(&engine).unwrap();
+    fs::write(engine.join(worker_executable_name()), b"worker").unwrap();
+    recorded(&paths.next_root, id);
+    let mut foreign = release_list_for(&paths.next_root, id, "CUDA");
+    foreign.engine_id = "other".into();
+    assert!(anchor(&paths.next_root, id, &foreign, "other", true).is_err());
+    assert!(
+        read_engine_meta(&paths.next_root, id)
+            .unwrap()
+            .verified_install
+    );
+    assert_eq!(offered(&paths, "other"), vec![id.to_owned()]);
 }
 
 #[test]
@@ -2955,14 +3084,8 @@ fn an_engine_recorded_by_an_earlier_version_waits_for_its_signed_list_and_is_the
     );
     assert!(paths.next_root.join("active-engine.txt").exists());
 
-    // Its release's list does not match a changed file: still waiting.
-    let list = release_list_for(&paths.next_root, id, "CUDA");
-    fs::write(engine.join("_internal/library.dll"), b"replaced").unwrap();
-    assert!(anchor(&paths.next_root, id, &list, "other", true).is_err());
-    assert!(engine_lacks_file_list(&paths.next_root, id));
-
     // With the files the list names it is recorded, and started from then on.
-    fs::write(engine.join("_internal/library.dll"), b"library").unwrap();
+    let list = release_list_for(&paths.next_root, id, "CUDA");
     anchor(&paths.next_root, id, &list, "other", false).unwrap();
     assert!(!engine_lacks_file_list(&paths.next_root, id));
     assert_eq!(

@@ -816,36 +816,34 @@ fn only_a_native_fault_counts_as_a_crash() {
 
 #[test]
 fn an_engine_that_ended_unasked_is_hashed_again_before_its_restart() {
-    #[cfg(unix)]
-    use std::os::unix::process::ExitStatusExt;
-    #[cfg(windows)]
-    use std::os::windows::process::ExitStatusExt;
-    use std::process::ExitStatus;
+    let state = idle_state();
+    let run = 3;
+    state.worker.generation.store(run, Ordering::SeqCst);
+    // It ended by itself, whatever its exit code: another program can end it with 0.
+    assert!(engine_exit_unexpected(&state.worker, run, false));
+    // LocalSR stopped it (Stop, a late restart).
+    assert!(!engine_exit_unexpected(&state.worker, run, true));
 
-    #[cfg(unix)]
-    let (clean, failure, killed, fault) = (
-        ExitStatus::from_raw(0),
-        ExitStatus::from_raw(1 << 8),
-        ExitStatus::from_raw(9),
-        ExitStatus::from_raw(11),
-    );
-    #[cfg(windows)]
-    let (clean, failure, killed, fault) = (
-        ExitStatus::from_raw(0),
-        ExitStatus::from_raw(2),
-        ExitStatus::from_raw(1),
-        ExitStatus::from_raw(0xC000_0005),
-    );
-    for status in [failure, killed, fault] {
-        assert!(engine_exit_unexpected(&Ok(status), false), "{status:?}");
-        // A stop LocalSR asked for (Stop, quitting, a late restart) keeps the checks.
-        assert!(!engine_exit_unexpected(&Ok(status), true), "{status:?}");
-    }
-    assert!(!engine_exit_unexpected(&Ok(clean), false));
-    assert!(engine_exit_unexpected(
-        &Err(std::io::Error::other("no status")),
-        false
-    ));
+    // LocalSR asked it to exit for a new model folder: that run, and no later one.
+    let (sender, receiver) = mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+    lock(&state.runtime).unwrap().worker = "ready".into();
+    restart_for_model_directory(&state);
+    assert!(receiver.try_recv().unwrap().contains("shutdown_request"));
+    assert!(!engine_exit_unexpected(&state.worker, run, false));
+    assert!(engine_exit_unexpected(&state.worker, run + 2, false));
+
+    // Quitting or switching engines asks it to exit too, also once an engine switch has
+    // cleared the stop.
+    let quitting = idle_state();
+    quitting.worker.generation.store(run, Ordering::SeqCst);
+    let (sender, receiver) = mpsc::channel();
+    *lock(&quitting.worker.sender).unwrap() = Some(sender);
+    shutdown(&quitting);
+    assert!(receiver.try_recv().unwrap().contains("shutdown_request"));
+    quitting.worker.shutting_down.store(false, Ordering::SeqCst);
+    assert!(!engine_exit_unexpected(&quitting.worker, run, false));
+    assert!(engine_exit_unexpected(&quitting.worker, run + 2, false));
 }
 
 #[test]
@@ -1268,6 +1266,157 @@ fn a_queued_job_naming_an_unapproved_checkpoint_fails_and_the_next_runs_without_
     assert_eq!(sent["data"]["allow_unverified_checkpoint"], json!(false));
     assert!(receiver.try_recv().is_err());
     lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
+
+#[test]
+fn a_queued_photo_with_a_jobs_field_is_checked_and_sent_as_one_job() {
+    let directory = tempfile::tempdir().unwrap();
+    let state =
+        Arc::new(AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap());
+    let output = directory.path().join("out");
+    std::fs::create_dir_all(&output).unwrap();
+    let db = lock(&state.database).unwrap();
+    for (id, approved) in [("a", Some("1".repeat(64))), ("b", None)] {
+        let mut job = photo_job(id);
+        job["data"]["output_path"] = json!(output.join(format!("{id}.png")));
+        job["data"]["model_path"] = json!("/models/own.pth");
+        job["data"]["approved_checkpoint_sha256"] = json!(approved);
+        job["data"]["allow_unverified_checkpoint"] = json!(true);
+        job["data"]["jobs"] = json!([]);
+        db.insert_media(id, &format!("/in/{id}.png"), id, "image")
+            .unwrap();
+        db.insert_job(id, id, &job.to_string()).unwrap();
+    }
+    drop(db);
+    ready_for_batches(&state);
+    let (sender, receiver) = mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+
+    assert!(begin_dispatch(&state, false).unwrap());
+    assert_eq!(status(&state, "a"), "failed");
+    let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+    assert_eq!(sent["type"], "job_request");
+    assert_eq!(sent["data"]["job_id"], "b");
+    assert_eq!(sent["data"]["allow_unverified_checkpoint"], json!(false));
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
+
+/// A state with the queued request `request` (job "q") and an engine ready for it.
+fn queued(directory: &std::path::Path, mut request: Value) -> Arc<AppState> {
+    let state = Arc::new(AppState::from_paths(crate::paths::AppPaths::under(directory)).unwrap());
+    let output = directory.join("out");
+    std::fs::create_dir_all(&output).unwrap();
+    request["data"]["job_id"] = json!("q");
+    let key = if request["type"] == "video_job_request" {
+        "output_video_path"
+    } else {
+        "output_path"
+    };
+    request["data"][key] = json!(output.join("q.out"));
+    let db = lock(&state.database).unwrap();
+    db.insert_media("q", "/in/q.png", "q", "image").unwrap();
+    db.insert_job("q", "q", &request.to_string()).unwrap();
+    drop(db);
+    ready_for_batches(&state);
+    state
+}
+
+#[test]
+fn a_queued_edit_runs_the_editing_runtime_the_host_resolves_when_it_is_sent() {
+    let directory = tempfile::tempdir().unwrap();
+    let program = |name: &str| {
+        let path = directory.path().join(name).join("sd-cli");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"program").unwrap();
+        std::fs::canonicalize(path).unwrap()
+    };
+    let (found, other, chosen) = (program("engine"), program("other"), program("chosen"));
+    let edit = |runtime: &std::path::Path| {
+        json!({"type": "edit_job_request", "data": {
+            "image_path": "/in/q.png", "runtime_path": runtime.to_string_lossy()
+        }})
+    };
+    let dispatch = |state: &Arc<AppState>| -> Option<Value> {
+        let (sender, receiver) = mpsc::channel();
+        *lock(&state.worker.sender).unwrap() = Some(sender);
+        begin_dispatch(state, false).unwrap();
+        let sent = receiver
+            .try_recv()
+            .ok()
+            .map(|line| serde_json::from_str(&line).unwrap());
+        lock(&state.worker.cancellation).unwrap().finish().unwrap();
+        sent
+    };
+
+    // The queue file names another program: the runtime the host found is sent.
+    let state = queued(&directory.path().join("a"), edit(&other));
+    *lock(&state.edit_runtime).unwrap() = found.to_string_lossy().into_owned();
+    let sent = dispatch(&state).unwrap();
+    assert_eq!(sent["type"], "edit_job_request");
+    assert_eq!(sent["data"]["runtime_path"], json!(found.to_string_lossy()));
+
+    // One the user chose in LocalSR's file dialog stays.
+    let state = queued(&directory.path().join("b"), edit(&chosen));
+    *lock(&state.edit_runtime).unwrap() = found.to_string_lossy().into_owned();
+    state.edit_programs.grant(&chosen.to_string_lossy());
+    let sent = dispatch(&state).unwrap();
+    assert_eq!(
+        sent["data"]["runtime_path"],
+        json!(chosen.to_string_lossy())
+    );
+
+    // Without a runtime of its own the host sends nothing, and the job fails.
+    let state = queued(&directory.path().join("c"), edit(&other));
+    assert!(dispatch(&state).is_none());
+    assert_eq!(status(&state, "q"), "failed");
+}
+
+#[test]
+fn a_queued_video_runs_the_ffmpeg_the_settings_name_when_it_is_sent() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, setting) in ["/opt/tools/ffmpeg", ""].into_iter().enumerate() {
+        let request = json!({"type": "video_job_request", "data": {
+            "video_path": "/in/q.mov", "external_ffmpeg": "/opt/other/ffmpeg"
+        }});
+        let state = queued(&directory.path().join(index.to_string()), request);
+        lock(&state.settings).unwrap().external_ffmpeg_path = setting.into();
+        let (sender, receiver) = mpsc::channel();
+        *lock(&state.worker.sender).unwrap() = Some(sender);
+        assert!(begin_dispatch(&state, false).unwrap());
+        let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+        assert_eq!(sent["type"], "video_job_request");
+        if setting.is_empty() {
+            assert!(sent["data"].get("external_ffmpeg").is_none(), "{sent}");
+        } else {
+            assert_eq!(sent["data"]["external_ffmpeg"], json!(setting));
+        }
+        lock(&state.worker.cancellation).unwrap().finish().unwrap();
+    }
+}
+
+#[test]
+fn a_queued_request_of_a_kind_the_queue_never_holds_fails_unsent() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, kind) in [
+        "media_probe_request",
+        "benchmark_request",
+        "image_batch_request",
+        "shutdown_request",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let request = json!({"type": kind, "data": {
+            "media_path": "/in/q.mov", "external_ffmpeg": "/opt/other/ffmpeg", "jobs": []
+        }});
+        let state = queued(&directory.path().join(index.to_string()), request);
+        let (sender, receiver) = mpsc::channel();
+        *lock(&state.worker.sender).unwrap() = Some(sender);
+        assert!(begin_dispatch(&state, false).unwrap(), "{kind}");
+        assert!(receiver.try_recv().is_err(), "{kind}");
+        assert_eq!(status(&state, "q"), "failed", "{kind}");
+        lock(&state.worker.cancellation).unwrap().finish().unwrap();
+    }
 }
 
 #[test]

@@ -724,6 +724,8 @@ pub async fn check_update(
     };
     *lock(&state.updates.checked)? = None;
     let catalog_config = config.clone();
+    // The engine catalog this check read from the feed, if it could.
+    let mut catalog_read = None;
     let validated = (|| -> AppResult<()> {
         if let Some(update) = update {
             let contract: ReleaseContract = serde_json::from_value(
@@ -742,7 +744,7 @@ pub async fn check_update(
             if installed.installed_by_package_manager() {
                 // apt installs it: report the signed release, keep the engine catalog
                 // current, and keep nothing to download or install.
-                crate::engine_manager::update_catalog_from_feed(
+                catalog_read = crate::engine_manager::update_catalog_from_feed(
                     &state,
                     &update.raw_json,
                     &config,
@@ -767,7 +769,7 @@ pub async fn check_update(
                 &installed_version,
                 &state.paths,
             )?;
-            crate::engine_manager::update_catalog_from_feed(
+            catalog_read = crate::engine_manager::update_catalog_from_feed(
                 &state,
                 &update.raw_json,
                 &config,
@@ -827,7 +829,7 @@ pub async fn check_update(
         if let Ok(feed_json) =
             crate::engine_manager::fetch_feed_json(&catalog_config, &channel).await
         {
-            crate::engine_manager::update_catalog_from_feed(
+            catalog_read = crate::engine_manager::update_catalog_from_feed(
                 &state,
                 &feed_json,
                 &catalog_config,
@@ -838,7 +840,15 @@ pub async fn check_update(
     }
     publish(&state, &app, &mut status);
     // Installed engines without a signed list take the one their catalog entry names.
-    crate::engine_manager::anchor_from_catalog(state.inner(), Some(&app), &catalog_config).await;
+    if let Some(entries) = catalog_read {
+        crate::engine_manager::anchor_from_catalog(
+            state.inner(),
+            Some(&app),
+            &catalog_config,
+            &entries,
+        )
+        .await;
+    }
     Ok(status)
 }
 
@@ -1614,12 +1624,18 @@ fn engine_code_file(relative: &str) -> bool {
     })
 }
 
-/// A file Finder or Explorer writes into a folder someone looked at, by its exact name.
+/// A file a file manager writes into a folder someone looked at, by its exact name:
+/// Finder's `.DS_Store` and its `._` companions on volumes without extended attributes,
+/// Explorer's `Thumbs.db` and `desktop.ini`, Dolphin's `.directory`.
 fn folder_view_file(path: &Path) -> bool {
-    matches!(
-        path.file_name().and_then(|name| name.to_str()),
-        Some(".DS_Store" | "Thumbs.db" | "desktop.ini")
-    )
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            matches!(
+                name,
+                ".DS_Store" | "Thumbs.db" | "desktop.ini" | ".directory"
+            ) || name.starts_with("._")
+        })
 }
 
 /// Whether a file is a program by its permissions or contents: helpers such as
@@ -1933,7 +1949,8 @@ fn verify_engine_directory(
         let code = || engine_code_file(&relative) || executable_content(path, stat);
         // The signed list names every file of the engine.
         let Some(entry) = expected.remove(relative.as_str()) else {
-            if folder_view_file(path) {
+            // Never a file that could be code, whatever its name.
+            if folder_view_file(path) && !code() {
                 return Ok(());
             }
             if matches!(check, EngineCheck::Code) {
@@ -2050,9 +2067,18 @@ pub(crate) fn anchor_installed_engine(
         ),
         Err(error) => return Err(error.into()),
     };
+    // Files that differ from the release's list never match it: the engine is marked for
+    // reinstallation, so that it is not checked against the feed again.
+    let check_files = || {
+        verify_engine_directory(&engine, &list.files, EngineCheck::Code).inspect_err(|error| {
+            if files_differ(error) {
+                mark_engine_without_list_for_reinstall(next_root, id, &list.backend, os, arch);
+            }
+        })
+    };
     let meta = match meta {
         Some(meta) => {
-            verify_engine_directory(&engine, &list.files, EngineCheck::Code)?;
+            check_files()?;
             EngineMeta {
                 files: list.files.clone(),
                 ..meta
@@ -2064,7 +2090,7 @@ pub(crate) fn anchor_installed_engine(
             }
             let executable = engine_executable_path(next_root, id)
                 .ok_or_else(|| invalid("The installed engine has no worker"))?;
-            verify_engine_directory(&engine, &list.files, EngineCheck::Code)?;
+            check_files()?;
             if !handshake(&executable) {
                 return Err(invalid("The installed engine did not start"));
             }
@@ -2084,6 +2110,55 @@ pub(crate) fn anchor_installed_engine(
     // The list first: until meta.json names these files, older metadata stays as it was.
     list.write_into(&root)?;
     write_engine_meta(next_root, &meta)
+}
+
+/// Whether a failed check of an engine folder against a list says that its files differ
+/// from the list (one changed, missing, unlisted or linked), rather than that the folder
+/// could not be read.
+fn files_differ(error: &AppError) -> bool {
+    match error {
+        AppError::Validation(_) => true,
+        AppError::Io(error) => error.kind() == io::ErrorKind::InvalidData,
+        _ => false,
+    }
+}
+
+/// Mark an engine an earlier version installed, which has no signed list and cannot take
+/// one (the feed does not name it, or its files differ from the list), for reinstallation:
+/// it is then neither started nor checked against the feed again. One without metadata
+/// gets metadata that says so.
+pub(crate) fn mark_engine_without_list_for_reinstall(
+    next_root: &Path,
+    id: &str,
+    backend: &str,
+    os: &str,
+    arch: &str,
+) {
+    let Ok(root) = engine_install_root(next_root, id) else {
+        return;
+    };
+    if !engine_lacks_file_list(next_root, id) {
+        return;
+    }
+    match fs::symlink_metadata(root.join("meta.json")) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let meta = EngineMeta {
+                id: id.to_owned(),
+                backend: backend.to_ascii_lowercase(),
+                os: os.into(),
+                arch: arch.into(),
+                protocol_version: PROTOCOL_VERSION,
+                handshake_passed: false,
+                verified_install: false,
+                version: String::new(),
+                files: Vec::new(),
+            };
+            if let Err(error) = write_engine_meta(next_root, &meta) {
+                eprintln!("LocalSR could not mark engine {id} for reinstallation: {error}");
+            }
+        }
+        _ => mark_engine_needs_reinstall(next_root, id),
+    }
 }
 
 pub(crate) fn engine_executable_path(next_root: &Path, id: &str) -> Option<PathBuf> {

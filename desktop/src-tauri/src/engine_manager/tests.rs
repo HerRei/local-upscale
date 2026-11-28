@@ -3103,30 +3103,18 @@ fn an_engine_an_earlier_version_installed_takes_its_signed_list_from_the_feed() 
         ))
     };
 
-    // A list signed by another key is not kept.
+    // A list signed by another key is not kept, and the engine waits for the right one.
     let (file, server, base) =
         served_list(bytes.clone(), test_signing::sign_with_another_key(&bytes));
     assert!(anchor(file, &base).is_empty());
     server.join().unwrap();
     assert!(updates::engine_lacks_file_list(&paths.next_root, id));
-
-    // The release's list, while a file differs from it, is not kept either.
-    fs::write(
-        worker.parent().unwrap().join("_internal/library.so"),
-        b"LIBRARY",
-    )
-    .unwrap();
-    let (file, server, base) = served_list(bytes.clone(), signature.clone());
-    assert!(anchor(file, &base).is_empty());
-    server.join().unwrap();
-    assert!(updates::engine_lacks_file_list(&paths.next_root, id));
+    assert_eq!(
+        engines_without_file_list(&paths.next_root, "compiled", os, "x86_64"),
+        vec![id.to_owned()]
+    );
 
     // With the files it names, the engine keeps it and is started again.
-    fs::write(
-        worker.parent().unwrap().join("_internal/library.so"),
-        b"library",
-    )
-    .unwrap();
     let (file, server, base) = served_list(bytes, signature);
     assert_eq!(anchor(file, &base), vec![id.to_owned()]);
     server.join().unwrap();
@@ -3141,6 +3129,107 @@ fn an_engine_an_earlier_version_installed_takes_its_signed_list_from_the_feed() 
         Some(worker)
     );
     assert!(engines_without_file_list(&paths.next_root, "compiled", os, "x86_64").is_empty());
+}
+
+#[test]
+fn an_engine_the_feed_cannot_vouch_for_is_marked_for_reinstallation_and_no_longer_named() {
+    use crate::engine_files::test_signing;
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let os = host_test_os();
+    let config = UpdateConfig {
+        public_key: test_signing::public_key(),
+        feed: "http://127.0.0.1:1/feed.json".into(),
+        backend: "cpu".into(),
+        engine_id: "compiled".into(),
+        kind: "native".into(),
+    };
+    let waiting = || engines_without_file_list(&paths.next_root, "compiled", os, "x86_64");
+    let verified = |id: &str| {
+        read_engine_meta(&paths.next_root, id)
+            .unwrap()
+            .verified_install
+    };
+    let anchor = |entries: Vec<VerifiedCatalogEntry>, id: &str| {
+        tauri::async_runtime::block_on(anchor_installed_engines(
+            &state,
+            None,
+            &config,
+            &entries,
+            vec![id.to_owned()],
+            os,
+            "x86_64",
+            |_| panic!("an engine with metadata needs no handshake"),
+        ))
+    };
+    {
+        let mut settings = lock(&state.settings).unwrap();
+        settings.privacy_choice_made = true;
+        settings.check_updates_at_launch = false;
+    }
+    let id = "linux-x86_64-rocm-063";
+    let worker = engine_from_an_earlier_version(&paths.next_root, id, os);
+    assert!(engine_waiting_notice(&state, &config, os, "x86_64").is_some());
+
+    // The list cannot be fetched: the engine waits for it.
+    let unreachable = DownloadFile {
+        name: "engine-files.json".into(),
+        url: "http://127.0.0.1:1/engine-files.json".into(),
+        size: 1,
+        sha256: "0".repeat(64),
+        signature: String::new(),
+    };
+    assert!(anchor(vec![catalog_entry_with_list(id, unreachable)], id).is_empty());
+    assert!(verified(id));
+    assert_eq!(waiting(), vec![id.to_owned()]);
+
+    // The feed it was read from names no such engine.
+    assert!(anchor(
+        vec![catalog_entry_with_list("linux-x86_64-rocm-070", {
+            DownloadFile {
+                name: "engine-files.json".into(),
+                url: "http://127.0.0.1:1/engine-files.json".into(),
+                size: 1,
+                sha256: "0".repeat(64),
+                signature: String::new(),
+            }
+        })],
+        id
+    )
+    .is_empty());
+    assert!(!verified(id));
+    assert!(waiting().is_empty());
+    assert_eq!(engine_waiting_notice(&state, &config, os, "x86_64"), None);
+    assert_eq!(
+        updates::active_engine_for_host(&paths, false, "compiled", os, "x86_64"),
+        None
+    );
+
+    // The release's list, while a file differs from it.
+    let id = "linux-x86_64-rocm-070";
+    let worker_070 = engine_from_an_earlier_version(&paths.next_root, id, os);
+    let part = engine_payload::ManifestPart {
+        filename: "engine.tar.gz.part-0001".into(),
+        size: 1,
+        sha256: "0".repeat(64),
+    };
+    let files = updates::test_engine_files(&paths.next_root, id);
+    let (bytes, signature) = test_signing::signed_list(id, os, "x86_64", "ROCM", &[part], &files);
+    fs::write(
+        worker_070.parent().unwrap().join("_internal/library.so"),
+        b"LIBRARY",
+    )
+    .unwrap();
+    assert_eq!(waiting(), vec![id.to_owned()]);
+    let (file, server, _) = served_list(bytes, signature);
+    assert!(anchor(vec![catalog_entry_with_list(id, file)], id).is_empty());
+    server.join().unwrap();
+    assert!(!verified(id));
+    assert!(updates::engine_lacks_file_list(&paths.next_root, id));
+    assert!(waiting().is_empty());
+    assert_eq!(engine_waiting_notice(&state, &config, os, "x86_64"), None);
+    assert!(worker.is_file());
 }
 
 #[test]

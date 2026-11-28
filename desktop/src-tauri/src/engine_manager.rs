@@ -309,13 +309,15 @@ pub(crate) fn parse_feed_engines_for(
     Ok(entries)
 }
 
+/// Read the engine catalog from `raw_json`; returns the entries it now holds, or None when
+/// the feed could not be read.
 pub(crate) fn update_catalog_from_feed(
     state: &AppState,
     raw_json: &serde_json::Value,
     config: &UpdateConfig,
     feed_channel: &str,
     installed_version: &str,
-) {
+) -> Option<Vec<VerifiedCatalogEntry>> {
     match parse_feed_engines_for(
         raw_json,
         config,
@@ -326,16 +328,18 @@ pub(crate) fn update_catalog_from_feed(
     ) {
         Ok(entries) => {
             if let Ok(mut catalog) = state.engines.catalog.lock() {
-                *catalog = entries;
+                *catalog = entries.clone();
             }
             if let Ok(mut err) = state.engines.catalog_error.lock() {
                 *err = None;
             }
+            Some(entries)
         }
         Err(error) => {
             if let Ok(mut err) = state.engines.catalog_error.lock() {
                 *err = Some(error.to_string());
             }
+            None
         }
     }
 }
@@ -744,9 +748,9 @@ pub(crate) async fn refresh_engine_catalog_in(
         std::env::consts::OS,
         std::env::consts::ARCH,
     )?;
-    *lock(&state.engines.catalog)? = parsed;
+    *lock(&state.engines.catalog)? = parsed.clone();
     *lock(&state.engines.catalog_error)? = None;
-    anchor_from_catalog(state, app, config).await;
+    anchor_from_catalog(state, app, config, &parsed).await;
     let snapshot = snapshot_for(state, config, gpu_notice::detect_engine_recommendation());
     if let Some(app) = app {
         emit_state_changed(app);
@@ -2085,9 +2089,12 @@ pub(crate) fn engines_without_file_list(
     ids
 }
 
-/// Fetch the signed file lists that the verified catalog `entries` name for the installed
-/// engines `ids`, and keep each with its engine once the engine's files match it
-/// (updates::anchor_installed_engine). Returns the engines that now have their list.
+/// Fetch the signed file lists that the verified catalog `entries`, read from the feed just
+/// now, name for the installed engines `ids`, and keep each with its engine once the
+/// engine's files match it (updates::anchor_installed_engine). An engine the entries do
+/// not name, or whose files differ from its list, is marked for reinstallation; one whose
+/// list could not be fetched waits for the next read. Returns the engines that now have
+/// their list.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn anchor_installed_engines(
     state: &Arc<AppState>,
@@ -2101,11 +2108,26 @@ pub(crate) async fn anchor_installed_engines(
 ) -> Vec<String> {
     let mut anchored = Vec::new();
     for id in ids {
-        let Some(file) = entries
-            .iter()
-            .find(|entry| entry.engine_id == id)
-            .and_then(|entry| entry.engine.files.clone())
-        else {
+        let Some(entry) = entries.iter().find(|entry| entry.engine_id == id) else {
+            let backend = Some(config.backend.clone())
+                .filter(|backend| !backend.is_empty())
+                .or_else(|| infer_backend_from_id(&id))
+                .unwrap_or_default();
+            if let (Ok(_busy), Ok(_engine_files)) = (
+                acquire(&state.engines.busy),
+                lock(&state.worker.engine_files),
+            ) {
+                updates::mark_engine_without_list_for_reinstall(
+                    &state.paths.next_root,
+                    &id,
+                    &backend,
+                    os,
+                    arch,
+                );
+            }
+            continue;
+        };
+        let Some(file) = entry.engine.files.clone() else {
             continue;
         };
         let cache = state
@@ -2186,12 +2208,13 @@ fn start_handshake(work_root: PathBuf) -> impl Fn(&Path) -> bool + Clone + Send 
     }
 }
 
-/// After the catalog was read from the feed: every installed engine without a signed
-/// list gets the one its catalog entry names.
+/// After the catalog `entries` were read from the feed: every installed engine without a
+/// signed list gets the one its catalog entry names.
 pub(crate) async fn anchor_from_catalog(
     state: &Arc<AppState>,
     app: Option<&AppHandle>,
     config: &UpdateConfig,
+    entries: &[VerifiedCatalogEntry],
 ) {
     if crate::distribution::managed_by_store() || !config.enabled() {
         return;
@@ -2201,11 +2224,8 @@ pub(crate) async fn anchor_from_catalog(
     if ids.is_empty() {
         return;
     }
-    let entries = lock(&state.engines.catalog)
-        .map(|catalog| catalog.clone())
-        .unwrap_or_default();
     let handshake = start_handshake(state.paths.work_root.clone());
-    anchor_installed_engines(state, app, config, &entries, ids, os, arch, handshake).await;
+    anchor_installed_engines(state, app, config, entries, ids, os, arch, handshake).await;
 }
 
 /// The installed engines a start would check against the signed lists the update feed
