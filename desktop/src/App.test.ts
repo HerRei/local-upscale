@@ -12462,3 +12462,163 @@ describe('Backgr.', () => {
     expect(screen.getByRole('radio', { name: 'Remove' }).matches(':disabled')).toBe(true);
   });
 });
+
+describe('Scan', () => {
+  function tapeSnapshot(fieldOrder: MediaItem['field_order'] = 'bff'): AppSnapshot {
+    const snapshot = readySnapshot([
+      { ...video('clip', true), fps: 25, width: 768, height: 576, field_order: fieldOrder },
+    ]);
+    snapshot.engine!.features.push('video_deinterlace');
+    snapshot.catalog.models.forEach((model) => (model.installed = true));
+    Object.assign(snapshot.settings, {
+      task: 'video',
+      video_task: 'upscale',
+      selected_video_model_id: 'frame_by_frame',
+      selected_model_id: 'span_photo_x4',
+      output_scale: 2,
+    });
+    return snapshot;
+  }
+  const select = () => screen.queryByRole('combobox', { name: 'Scan' }) as HTMLSelectElement | null;
+  const foot = () => document.querySelector('.panel-foot') as HTMLElement;
+  const head = () =>
+    document.querySelector('[aria-label="Result"] .panel-head-value') as HTMLElement | null;
+
+  it('sits between Content and the Fix head, set to Automatic · interlaced', async () => {
+    await mountWith(tapeSnapshot());
+    const row = select()!;
+    expect(row.value).toBe('auto');
+    expect(row.selectedOptions[0].textContent).toBe('Automatic · interlaced');
+    const content = document.getElementById('content-label')!;
+    const fix = screen.getByRole('group', { name: 'Fix' });
+    expect(content.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(row.compareDocumentPosition(fix) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('is not there for a progressive file, no field order, a missing feature, SeedVR2 or a photo', async () => {
+    for (const fieldOrder of ['progressive', ''] as const) {
+      await mountWith(tapeSnapshot(fieldOrder));
+      expect(select()).toBeNull();
+      cleanup();
+    }
+    const noFeature = tapeSnapshot();
+    noFeature.engine!.features = noFeature.engine!.features.filter(
+      (feature) => feature !== 'video_deinterlace',
+    );
+    await mountWith(noFeature);
+    expect(select()).toBeNull();
+    cleanup();
+    const temporal = tapeSnapshot();
+    temporal.settings.selected_video_model_id = temporal.catalog.video_models[0].model_id;
+    await mountWith(temporal);
+    expect(select()).toBeNull();
+    cleanup();
+    const photo = tapeSnapshot();
+    photo.media = [image('photo', true)];
+    photo.settings.task = 'upscale';
+    await mountWith(photo);
+    expect(select()).toBeNull();
+  });
+
+  it('shows a file that does not say as Automatic', async () => {
+    await mountWith(tapeSnapshot('unknown'));
+    expect(select()!.options[0].textContent).toBe('Automatic');
+  });
+
+  it('Double rate stores the step and changes the head, the plan line and Frames', async () => {
+    const user = await mountWith(tapeSnapshot());
+    await user.selectOptions(select()!, 'Double rate · 50 fps');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          step_stages: [{ step: 'deinterlace', params: { mode: 'field', parity: 'auto' } }],
+        }),
+      ),
+    );
+    expect(head()!.textContent).toMatch(/ · 50 fps$/);
+    expect(await within(foot()).findByText(/^Deinterlace to 50 fps/)).toBeTruthy();
+    const frames = screen.getByLabelText('Frames') as HTMLSelectElement;
+    const labels = Array.from(frames.options).map((option) => option.textContent);
+    expect(labels).toContain('2× · 100 fps');
+    expect(labels).toContain('4× · 200 fps');
+  });
+
+  it('a hand-set order at the file rate leaves the rate alone', async () => {
+    const user = await mountWith(tapeSnapshot());
+    await user.selectOptions(select()!, 'Bottom field first · 25 fps');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          step_stages: [{ step: 'deinterlace', params: { mode: 'frame', parity: 'bff' } }],
+        }),
+      ),
+    );
+    expect(head()!.textContent).not.toMatch(/fps/);
+    expect(await within(foot()).findByText(/^Deinterlace/)).toBeTruthy();
+    expect(within(foot()).queryByText(/^Deinterlace to/)).toBeNull();
+  });
+
+  it('Automatic takes the step out again', async () => {
+    const snapshot = tapeSnapshot();
+    snapshot.settings.step_stages = [
+      { step: 'deinterlace', params: { mode: 'field', parity: 'auto' } },
+    ];
+    const user = await mountWith(snapshot);
+    await user.selectOptions(select()!, 'Automatic · interlaced');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ step_stages: [] }),
+      ),
+    );
+  });
+
+  it('a stored Double rate on a progressive file reads Double rate, explains itself and adds no rate', async () => {
+    const snapshot = tapeSnapshot('progressive');
+    snapshot.settings.step_stages = [
+      { step: 'deinterlace', params: { mode: 'field', parity: 'auto' } },
+    ];
+    await mountWith(snapshot);
+    expect(select()!.selectedOptions[0].textContent).toBe('Double rate');
+    expect(select()!.title).toBe(
+      'This file says it is not interlaced, so it is left as it is. To deinterlace it anyway, set the field order by hand.',
+    );
+    expect(head()!.textContent).not.toMatch(/fps/);
+  });
+
+  it('is disabled but for Automatic when the engine cannot deinterlace and a choice is stored', async () => {
+    const snapshot = tapeSnapshot();
+    snapshot.engine!.features = snapshot.engine!.features.filter(
+      (feature) => feature !== 'video_deinterlace',
+    );
+    snapshot.settings.step_stages = [
+      { step: 'deinterlace', params: { mode: 'field', parity: 'auto' } },
+    ];
+    await mountWith(snapshot);
+    expect(select()!.title).toBe('This engine cannot deinterlace. Update LocalSR.');
+    const disabled = Array.from(select()!.options).map((option) => option.disabled);
+    expect(disabled).toEqual([false, true, true, true, true, true]);
+  });
+
+  it('the Plan sheet names the step with the chosen option', async () => {
+    const snapshot = tapeSnapshot();
+    snapshot.settings.step_stages = [
+      { step: 'deinterlace', params: { mode: 'field', parity: 'auto' } },
+    ];
+    const user = await mountWith(snapshot);
+    const sheet = await openPlanSheet(user);
+    const row = within(sheet).getAllByRole('listitem')[0];
+    expect(within(row).getByText(/^Deinterlace/)).toBeTruthy();
+    expect(within(row).getByText('Double rate · 50 fps')).toBeTruthy();
+  });
+
+  it('runs alone at Same size', async () => {
+    const snapshot = tapeSnapshot();
+    snapshot.settings.step_stages = [
+      { step: 'deinterlace', params: { mode: 'field', parity: 'auto' } },
+    ];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
+    expect(await within(foot()).findByText(/^Deinterlace to 50 fps/)).toBeTruthy();
+    expect(within(foot()).queryByText('Nothing to run')).toBeNull();
+  });
+});

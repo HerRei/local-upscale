@@ -49,6 +49,19 @@ export const video: Scenario = {
   settings: { video_interpolation: 'x2' },
 };
 
+/** An interlaced PAL video (768 × 576, 25 fps) on a ready engine that can deinterlace. */
+export const tape: Scenario = {
+  ...video,
+  worker: 'ready',
+  videoFieldOrder: 'bff',
+  features: [...FEATURES, 'video_deinterlace', 'stage_params_and_masks'],
+  settings: {
+    ...video.settings,
+    video_interpolation: 'off',
+    output_directory: '/Users/test/Desktop',
+  },
+};
+
 /** Two finished results of photo 1 on a host with pair slots: an upscale and an Edit at 512 px. */
 export const withEdit: Scenario = {
   ...ready,

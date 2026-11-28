@@ -681,8 +681,10 @@ mod tests {
             assert!(reg.step_stage(id).is_none(), "{id} is not a step stage");
         }
         assert_eq!(reg.limits().max_step_stages, 4);
-        assert!(reg.steps.iter().all(|step| step.dev_only
-            == (step.id == "grain" || step.id == "deinterlace" || step.id == "stabilise")));
+        assert!(reg
+            .steps
+            .iter()
+            .all(|step| step.dev_only == (step.id == "grain" || step.id == "stabilise")));
 
         let check = |params: serde_json::Value, mask: Option<&str>| {
             reg.validate_step_stage("grain", params.as_object(), mask)

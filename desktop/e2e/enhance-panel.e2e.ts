@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { contrastOnPage, openApp, showPane } from './app';
 import { hostCalls } from './fake-host';
-import { cutout, ready, video } from './fixtures';
+import { cutout, ready, tape, video } from './fixtures';
 
 const fix = (page: Page, name: string) =>
   page.getByRole('group', { name: 'Fix' }).getByRole('checkbox', { name, exact: true });
@@ -310,4 +310,37 @@ test('Backgr.: nothing is cut at 1024 × 700', async ({ page }) => {
       els.filter((el) => el.scrollWidth > el.clientWidth).map((el) => el.textContent),
     );
   expect(cut).toEqual([]);
+});
+
+const scan = (page: Page) => page.getByRole('combobox', { name: 'Scan' });
+
+test('Scan: an interlaced video gets the row, a progressive one does not', async ({ page }) => {
+  await openApp(page, tape);
+  await showPane(page, 'enhance');
+  await page.getByRole('button', { name: 'Not now' }).click();
+  await expect(scan(page)).toBeVisible();
+  await expect(scan(page).locator('option:checked')).toHaveText('Automatic · interlaced');
+});
+
+test('Scan: a video that says it is progressive has no row', async ({ page }) => {
+  await openApp(page, { ...tape, videoFieldOrder: 'progressive' });
+  await showPane(page, 'enhance');
+  await page.getByRole('button', { name: 'Not now' }).click();
+  await expect(page.getByRole('radiogroup', { name: 'Content' })).toBeVisible();
+  await expect(scan(page)).toHaveCount(0);
+});
+
+test('Scan: Double rate changes the head, the plan line and Frames', async ({ page }) => {
+  await openApp(page, tape);
+  await showPane(page, 'enhance');
+  await page.getByRole('button', { name: 'Not now' }).click();
+  await scan(page).selectOption({ label: 'Double rate · 50 fps' });
+  await expect(page.locator('.panel-head-value.field-value')).toContainText('· 50 fps');
+  await expect(page.locator('.foot-plan')).toHaveText(/^Deinterlace to 50 fps/);
+  await expect(
+    page.locator('#frame-rate option').filter({ hasText: '2× · 100 fps' }).first(),
+  ).toBeAttached();
+  const body = page.locator('.inspector-scroll');
+  expect(await body.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  expect(await scan(page).evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
 });

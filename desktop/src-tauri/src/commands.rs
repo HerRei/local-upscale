@@ -5826,6 +5826,14 @@ pub(crate) fn patch_plan(state: &AppState, mut input: StartBatchInput) -> AppRes
         input.video_slow_motion = false;
         input.video_clean_audio = false;
     }
+    // The patch is one decoded picture: a step that only runs on video (Scan) is not run, and an
+    // id this build does not know stays for the validation below to name.
+    let registry = crate::steps::registry();
+    input.step_stages.retain(|selection| {
+        registry
+            .step(&selection.step)
+            .is_none_or(|step| step.media.iter().any(|media| media == "image"))
+    });
     input.device = resolve_device(state, &input.device)?;
     validate_start_input(&input, external_codecs_available(state))?;
     validate_bit_depth_engine(&input, lock(&state.engine)?.as_ref())?;

@@ -11,6 +11,12 @@
   ticked, the cut-out is the whole job and the file ends in `_cutout`. In the preview
   patch the Background chip is struck through, because the patch cannot show
   transparency.
+- **Deinterlace old camcorder, TV and DVD video.** A video whose file says it is
+  interlaced, or does not say, gets a Scan row between Content and Fix. Automatic keeps
+  the frame rate; Double rate makes a frame from every half-picture, so 25 fps becomes
+  50 and motion is as smooth as on a TV (twice the frames to process). When stripes
+  remain, or motion jumps back and forth, set the field order by hand. Scan is not
+  saved in recipes and is left out of the preview patch.
 - **Preview on your photo.** Under the viewer's header, Preview shows what the ticked
   fixes and the upscale will do on a square of the open photo, before you start. The
   square sits over the photo with a tab above it: one chip for Original and one for each

@@ -6,7 +6,7 @@ use super::*;
 use crate::{
     database::NewJob,
     paths::AppPaths,
-    types::{EngineInfo, FixStageSelection, WorkerEnvelope},
+    types::{EngineInfo, FixStageSelection, StepStageSelection, WorkerEnvelope},
 };
 
 const NOISE: &str = "scunet_color_real_psnr";
@@ -44,6 +44,7 @@ impl Harness {
                     "",
                     "",
                     true,
+                    "",
                 )
                 .unwrap();
         }
@@ -243,6 +244,7 @@ fn add_video(harness: &Harness) {
             "",
             "",
             true,
+            "",
         )
         .unwrap();
 }
@@ -251,6 +253,27 @@ fn video_ask(harness: &Harness, input: StartBatchInput) -> PatchAsk {
     let mut ask = harness.ask("a", input);
     ask.media_id = "clip".into();
     ask
+}
+
+#[test]
+fn the_patch_plan_leaves_video_only_steps_out() {
+    let harness = Harness::new();
+    add_video(&harness);
+    let mut video = input();
+    video.task = "video".into();
+    video.video_model_id = "frame_by_frame".into();
+    video.step_stages = vec![StepStageSelection {
+        step: "deinterlace".into(),
+        params: serde_json::from_str(r#"{"mode": "field", "parity": "auto"}"#).ok(),
+        mask_path: None,
+        model_id: None,
+    }];
+    request_checked(&harness.state, video_ask(&harness, video)).unwrap();
+    let sent = harness.messages();
+    let stages = sent[0]["data"]["stages"].as_array().unwrap();
+    assert!(stages
+        .iter()
+        .all(|stage| stage["kind"].as_str() != Some("deinterlace")));
 }
 
 #[test]
@@ -416,6 +439,7 @@ fn media_without_a_grant_is_refused() {
                 "",
                 "",
                 true,
+                "",
             )
             .unwrap();
     }
@@ -647,6 +671,7 @@ fn sample_media() -> crate::types::MediaItem {
         hdr_format: String::new(),
         audio_warning: String::new(),
         has_audio: true,
+        field_order: String::new(),
         error: String::new(),
         selected: false,
     }

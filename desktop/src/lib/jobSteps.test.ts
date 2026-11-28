@@ -238,4 +238,8 @@ describe('jobSteps', () => {
     expect(chips[0].title).toBe('The picture with the background removed');
     expect(chips[1].title).toBe('The finished result');
   });
+
+  it('names the deinterlace step Deinterlace', () => {
+    expect(stepName(step({ kind: 'deinterlace' }), settings)).toBe('Deinterlace');
+  });
 });

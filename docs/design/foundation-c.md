@@ -272,8 +272,9 @@ steps (and a catalog model) of their own, as `test_pipeline.py` does for model-l
   the primary, so the matte is computed at source size and scales with the image. The
   Backgr. row (`Keep` / `Remove`, spec in `docs/design/scan-and-background.md`) ships it;
   a fill colour and a second model are still to come.
-- **Deinterlacing**: the dev-only video geometry step supports frame and field modes, field
-  order selection, and progressive-source passthrough. It still needs a UI row.
+- **Deinterlacing**: the video geometry step supports frame and field modes, field order
+  selection, and progressive-source passthrough. The Scan row (`Automatic`, `Double rate`
+  and four hand-set orders; spec in `docs/design/scan-and-background.md`) ships it.
 - **Video stabilisation**: needs a video geometry handler and crop output dimensions passed
   to `VideoChainContext`.
 - **Grain/film look for real**: the look (midtone weighting, grain size, colour grain), a UI

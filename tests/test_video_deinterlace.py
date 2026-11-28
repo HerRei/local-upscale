@@ -67,12 +67,10 @@ def test_bad_params(params):
         validate_step_params(STEPS_BY_ID["deinterlace"], params)
 
 
-def test_dev_gate(monkeypatch):
+def test_feature_is_listed_without_the_dev_switch(monkeypatch):
     from localsr.worker.server import _engine_features
 
     monkeypatch.delenv("LOCALSR_DEV_STEPS", raising=False)
-    assert "video_deinterlace" not in _engine_features([])
-    monkeypatch.setenv("LOCALSR_DEV_STEPS", "1")
     assert "video_deinterlace" in _engine_features([])
 
 
@@ -426,3 +424,34 @@ def test_probe_trusts_the_frames_of_files_the_ffmpeg_tool_wrote(
         timeout=30,
     )
     assert probe_video(str(path)).field_order == expected
+
+
+def test_media_info_carries_the_field_order(monkeypatch, tmp_path):
+    import json
+
+    from PIL import Image
+
+    from localsr.worker.server import WorkerServer
+
+    def probe_message(source):
+        events = []
+        monkeypatch.setattr(
+            "localsr.worker.server.send_message",
+            lambda event: events.append(json.loads(event.to_json())),
+        )
+        server = WorkerServer()
+        monkeypatch.setattr(server, "reader_thread_func", lambda: None)
+        server.message_queue.put(
+            {
+                "type": "media_probe_request",
+                "data": {"media_path": str(source), "max_dimension": 64},
+            }
+        )
+        server.message_queue.put({"type": "shutdown_request", "data": {}})
+        server.run()
+        return next(event["data"] for event in events if event["type"] == "media_info")
+
+    assert probe_message(dv_clip(tmp_path / "dv.avi", frames=2))["field_order"] == "bff"
+    photo = tmp_path / "photo.png"
+    Image.new("RGB", (32, 32)).save(photo)
+    assert probe_message(photo)["field_order"] == ""

@@ -138,6 +138,7 @@ const VIDEO_ONLY_KINDS: ReadonlySet<PlanStage['kind']> = new Set([
   'audio_denoise',
   'video',
   'edit',
+  'deinterlace',
 ]);
 
 /**

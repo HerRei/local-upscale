@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { openApp, showPane } from './app';
 import { emit, failDownload, progressDownload } from './fake-host';
-import { cutout, firstRun, ready, upscale, video, windows, withOutputs } from './fixtures';
+import { cutout, firstRun, ready, tape, upscale, video, windows, withOutputs } from './fixtures';
 
 // Pixel baselines of the key screens, one set per browser, window size and platform
 // (see snapshotPathTemplate): they catch layout and styling regressions that the
@@ -73,6 +73,17 @@ test.describe('screens @visual', () => {
       .click();
     await expect(page.locator('.foot-plan')).toContainText('Background');
     await shoot(page, 'panel-background');
+  });
+
+  test('plan with double rate', async ({ page }) => {
+    await openApp(page, tape);
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await page
+      .getByRole('combobox', { name: 'Scan' })
+      .selectOption({ label: 'Double rate · 50 fps' });
+    await expect(page.locator('.foot-plan')).toContainText('Deinterlace to 50 fps');
+    await shoot(page, 'panel-scan');
   });
 
   test('Outputs tab with two ticked results', async ({ page }) => {

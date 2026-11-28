@@ -340,6 +340,8 @@ export function resolvePlan(
   for (const { step, selection, placement } of stepStages) {
     if (placement === 'before_fixes') stages.push(stepStageRow(step, selection));
   }
+  // Steps ahead of the fixes (Scan) also run ahead of frames added before upscaling.
+  const leadingSteps = stages.length;
   const restoring = isRestoreTask(settings);
   const fixStages =
     !options.usingTemporalVideo &&
@@ -439,7 +441,8 @@ export function resolvePlan(
       needsFile: !interpolation.installed && !interpolation.automated_download_allowed,
       sizeBytes: interpolation.installed ? 0 : interpolation.total_size_bytes,
     };
-    if (settings.video_interpolation_order === 'before_upscale') stages.unshift(stage);
+    if (settings.video_interpolation_order === 'before_upscale')
+      stages.splice(leadingSteps, 0, stage);
     else stages.push(stage);
   }
 

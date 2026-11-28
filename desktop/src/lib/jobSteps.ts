@@ -54,6 +54,7 @@ export function stepName(
   if (step.kind === 'audio_denoise') return 'Clean audio';
   if (step.kind === 'face_restore') return 'Faces';
   if (step.kind === 'remove_background') return 'Background';
+  if (step.kind === 'deinterlace') return 'Deinterlace';
   return (
     step.label ??
     STEPS.find((entry) => entry.id === step.kind)?.label ??

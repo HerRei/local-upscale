@@ -360,7 +360,6 @@ STEPS: tuple[StepDefinition, ...] = (
         label="Deinterlace",
         stage_label="Deinterlacing",
         required_feature="video_deinterlace",
-        dev_only=True,
         parameters=(
             StepParameter(name="mode", kind="choice", default="frame", choices=("frame", "field")),
             StepParameter(
