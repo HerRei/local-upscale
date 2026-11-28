@@ -374,6 +374,7 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         runtime.hardware_note.clear();
         runtime.engine_retry = false;
     }
+    crate::patch_preview::engine_started(&state);
     emit_state_changed(&app);
 
     thread::spawn(move || {
@@ -1008,6 +1009,8 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
         drop(runtime);
         cleanup_stale_previews(state, stale)?;
     }
+    // The engine takes the job after the patch it may be running, so that one stops first.
+    crate::patch_preview::job_dispatched(state);
     // A job being sent ends any earlier stop for a full disk.
     state.worker.disk_stop.store(false, Ordering::SeqCst);
     // The other photos of a batch stay queued until the engine starts each one.
@@ -2036,6 +2039,10 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             lock(&state.database)?
                 .fail_media_probe(&string(data, "media_path"), &string(data, "error_message"))?;
         }
+        "patch_started" | "patch_stage" | "patch_completed" | "patch_failed"
+        | "patch_cancelled" => {
+            crate::patch_preview::apply_message(state, envelope)?;
+        }
         "region_ready" | "region_failed" => {
             let database = lock(&state.database)?;
             let mut runtime = lock(&state.runtime)?;
@@ -2816,7 +2823,7 @@ fn apply_pair_preview(
     vec![stale]
 }
 
-fn cleanup_stale_previews(state: &AppState, stale: Vec<String>) -> AppResult<()> {
+pub(crate) fn cleanup_stale_previews(state: &AppState, stale: Vec<String>) -> AppResult<()> {
     if stale.iter().all(String::is_empty) {
         return Ok(());
     }
@@ -2889,6 +2896,19 @@ fn attach_preview_url_to_envelope(state: &AppState, envelope: &mut WorkerEnvelop
             });
             if let Some(data) = envelope.data.as_object_mut() {
                 data.remove("jpeg_base64");
+                if let Some(url) = url {
+                    data.insert("preview_url".into(), Value::String(url));
+                }
+            }
+        }
+        "patch_stage" => {
+            let url = crate::patch_preview::step_url(
+                state,
+                &string(&envelope.data, "patch_id"),
+                integer(&envelope.data, "stage_index"),
+            );
+            if let Some(data) = envelope.data.as_object_mut() {
+                data.remove("png_base64");
                 if let Some(url) = url {
                     data.insert("preview_url".into(), Value::String(url));
                 }

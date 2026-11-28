@@ -509,6 +509,8 @@ fn a_full_settings_save_never_changes_host_owned_preferences() {
         auto_cache_cleanup: false,
         keep_awake: false,
         stopped_job_result: "discard".into(),
+        preview_patch: "manual".into(),
+        preview_patch_shown: true,
         ..UiSettings::default()
     };
     // A window copy from an older refresh still has defaults for host-owned preferences.
@@ -530,6 +532,8 @@ fn a_full_settings_save_never_changes_host_owned_preferences() {
     assert!(!incoming.auto_cache_cleanup);
     assert!(!incoming.keep_awake);
     assert_eq!(incoming.stopped_job_result, "discard");
+    assert_eq!(incoming.preview_patch, "manual");
+    assert!(incoming.preview_patch_shown);
     assert_eq!(incoming.tile_size, UiSettings::default().tile_size + 64);
 
     // Settings saved before 0.3.3 check at launch, and before 0.6.0 auto-clean cache / stopped_job_result.
