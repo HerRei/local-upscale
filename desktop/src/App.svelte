@@ -3824,7 +3824,14 @@
   $: patchAvailable =
     Boolean(snapshot.engine?.features.includes('patch_preview')) &&
     patchSetting !== 'off' &&
-    (settings.task === 'upscale' || settings.task === 'denoise');
+    (settings.task === 'upscale' ||
+      settings.task === 'denoise' ||
+      (settings.task === 'video' && !usingTemporalVideo));
+  // The file the patch is cut from: a photo, or a frame-by-frame video's first frame.
+  $: patchMedia =
+    patchAvailable && selectedMedia?.kind === (settings.task === 'video' ? 'video' : 'image')
+      ? selectedMedia
+      : undefined;
   $: patchJobBusy =
     Boolean(snapshot.runtime.active_job_id) ||
     startingJob ||
@@ -3835,19 +3842,19 @@
     patchMissingStage && patchMissingStage.sizeBytes > 0
       ? formatBytes(patchMissingStage.sizeBytes)
       : '';
-  $: patchRegion = selectedImage ? (patchRegions[selectedImage.id] ?? null) : null;
+  $: patchRegion = patchMedia ? (patchRegions[patchMedia.id] ?? null) : null;
   $: patchActive =
     patchAvailable &&
     patchShown &&
     !patchJobBusy &&
-    selectedImage?.probe_status === 'ready' &&
+    patchMedia?.probe_status === 'ready' &&
     patchPlan.length > 0 &&
     patchRegion !== null &&
     $planState.status === 'ready';
   $: patchInput =
-    patchActive && selectedImage
+    patchActive && patchMedia
       ? buildStartInput(settings, {
-          mediaIds: [selectedImage.id],
+          mediaIds: [patchMedia.id],
           task: settings.task as TaskKind,
           batchMode: false,
           hasAudio: audioHasSource,
@@ -3862,16 +3869,16 @@
     patchSeen.pick = pickKey;
     syncPatch(
       'a',
-      patchInput && selectedImage && patchRegion
-        ? { mediaId: selectedImage.id, slot: 'a', region: patchRegion, input: patchInput }
+      patchInput && patchMedia && patchRegion
+        ? { mediaId: patchMedia.id, slot: 'a', region: patchRegion, input: patchInput }
         : null,
       installed,
     );
     syncPatch(
       'b',
-      patchInput && selectedImage && patchRegion && patchBPick
+      patchInput && patchMedia && patchRegion && patchBPick
         ? {
-            mediaId: selectedImage.id,
+            mediaId: patchMedia.id,
             slot: 'b',
             region: patchRegion,
             input: patchInput,
@@ -3919,7 +3926,7 @@
 
   /** The library's `Try on this photo`: the candidate for the slot the library was opened for. */
   async function tryOnPhoto(model: CatalogModel, fix: string): Promise<void> {
-    if (!selectedImage || !patchAvailable) return;
+    if (!patchMedia || !patchAvailable) return;
     patchBPick = { slot: 'b', fix, model_id: model.model_id };
     patchSide = 'b';
     libraryOpen = false;
@@ -3938,7 +3945,7 @@
   }
 
   let patchLinkOffer: 'photo' | 'example' | '';
-  $: patchLinkOffer = patchAvailable ? (selectedImage ? 'photo' : 'example') : '';
+  $: patchLinkOffer = patchAvailable ? (patchMedia ? 'photo' : 'example') : '';
 
   function sendPatch(request: PatchWanted, force: boolean): void {
     const { slot } = request;
@@ -5649,7 +5656,7 @@
       ? tryOnPhoto
       : null}
     tryOnLabel={selectedMedia?.kind === 'video' ? 'Try on this frame' : 'Try on this photo'}
-    tryOnPhotoOpen={Boolean(selectedImage)}
+    tryOnPhotoOpen={Boolean(patchMedia)}
     useVideoForJob={useVideoModelForJob}
     rememberFix={rememberFixModel}
     forgetFix={forgetFixModel}

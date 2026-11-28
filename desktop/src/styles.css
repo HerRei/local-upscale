@@ -5623,6 +5623,11 @@ label.setting-label {
   color: var(--secondary);
   user-select: none;
 }
+.patch-label {
+  color: var(--text);
+  white-space: nowrap;
+  cursor: default;
+}
 .patch-state {
   display: inline-flex;
   align-items: center;

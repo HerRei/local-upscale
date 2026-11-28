@@ -408,14 +408,18 @@
   // the host through `patch`.
   let patchPositions: Record<string, PatchRegion> = {};
   let patchPicked: string | null = null;
-  $: patchOffered = patchAvailable && !editing && selectedMedia?.kind === 'image';
+  $: patchOffered =
+    patchAvailable &&
+    !editing &&
+    (selectedMedia?.kind === 'image' || selectedMedia?.kind === 'video');
+  $: patchOnVideo = selectedMedia?.kind === 'video';
   $: patchEmpty = patchPlan.length === 0;
   $: patchBlocked = processing || patchJobBusy;
   $: patchButtonTitle = patchBlocked
     ? 'Available when the job finishes.'
     : patchEmpty
       ? 'Tick a fix or choose a larger size first.'
-      : 'Show what the ticked fixes do on a part of this photo';
+      : `Show what the ticked fixes do on a part of this ${patchOnVideo ? 'frame' : 'photo'}`;
   $: patchRegion = selectedMedia ? (patchPositions[selectedMedia.id] ?? null) : null;
   $: patchState = patch && selectedMedia && patch.media_id === selectedMedia.id ? patch : null;
   $: patchStateB = patchB && selectedMedia && patchB.media_id === selectedMedia.id ? patchB : null;
@@ -1600,6 +1604,7 @@
             onUseB={useCandidate}
             onDone={endCandidate}
             plan={patchPlan}
+            video={patchOnVideo}
             bind:picked={patchPicked}
             {holdingOriginal}
             downloadSize={patchDownloadSize}

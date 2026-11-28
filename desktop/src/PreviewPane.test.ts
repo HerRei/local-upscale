@@ -2102,6 +2102,60 @@ describe('Patch', () => {
   });
 });
 
+describe('Patch, video', () => {
+  const clip: MediaItem = {
+    id: 'clip',
+    path: '/clip.mp4',
+    name: 'clip.mp4',
+    kind: 'video',
+    width: 1920,
+    height: 1080,
+    frame_count: 240,
+    fps: 24,
+    duration_seconds: 10,
+    preview_data_url: 'data:image/jpeg;base64,first',
+    probe_status: 'ready',
+    error: '',
+    selected: true,
+  };
+
+  it('labels the frame `This frame` and shows only the chips the frame can show', async () => {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      width: 800,
+      height: 600,
+      top: 0,
+      left: 0,
+      right: 800,
+      bottom: 600,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const view = render(PreviewPane, {
+      selectedMedia: clip,
+      resultPreview: '',
+      completedVideoOutput: '',
+      patchAvailable: true,
+      patchShown: true,
+      // The plan of a video with De-flicker and 2x frames, as the app filters it.
+      patchPlan: [{ name: 'Noise' }, { name: '2×' }],
+    });
+    await waitFor(() => expect(view.container.querySelector('.patch-tab')).not.toBeNull());
+    const label = view.container.querySelector<HTMLElement>('.patch-label');
+    expect(label?.textContent).toBe('This frame');
+    expect(label?.getAttribute('title')).toBe(
+      'De-flicker, added frames and sound cannot be shown on one frame.',
+    );
+    const chips = [...view.container.querySelectorAll('.patch-tab .step-chip')].map((node) =>
+      node.textContent?.trim(),
+    );
+    expect(chips).toEqual(['Original', 'Noise', '2×']);
+    expect(screen.getByRole('button', { name: 'Preview' }).getAttribute('title')).toBe(
+      'Show what the ticked fixes do on a part of this frame',
+    );
+  });
+});
+
 function within(group: HTMLElement, name: string): HTMLElement {
   return [...group.querySelectorAll<HTMLElement>('.step-chip')].find((node) =>
     node.textContent?.includes(name),

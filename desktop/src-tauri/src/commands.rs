@@ -5690,10 +5690,22 @@ pub(crate) struct PatchPlan {
 /// The plan of a preview patch: validated as Start validates it, without the output
 /// checks, and resolved to the same stages `build_job_request` sends.
 pub(crate) fn patch_plan(state: &AppState, mut input: StartBatchInput) -> AppResult<PatchPlan> {
-    if !matches!(input.task.as_str(), "upscale" | "denoise") {
+    let video = input.task == "video";
+    if !video && !matches!(input.task.as_str(), "upscale" | "denoise") {
         return Err(AppError::Validation(
-            "the preview patch shows photos in Upscale & restore".into(),
+            "the preview patch shows photos and video frames in Upscale & restore".into(),
         ));
+    }
+    if video {
+        if input.video_model_id != "frame_by_frame" {
+            return Err(AppError::Validation(
+                "the preview patch shows frame-by-frame video only".into(),
+            ));
+        }
+        // A still cannot show changes over time or sound; these stages are not run.
+        input.deflicker = false;
+        input.video_interpolation = "off".into();
+        input.video_clean_audio = false;
     }
     input.device = resolve_device(state, &input.device)?;
     validate_start_input(&input, external_codecs_available(state))?;
@@ -5740,7 +5752,10 @@ pub(crate) fn patch_plan(state: &AppState, mut input: StartBatchInput) -> AppRes
             *skip_upscale,
             &input,
         ),
-        output_scale: if input.task == "denoise" || *skip_upscale {
+        output_scale: if input.task == "denoise"
+            || (video && input.video_task == "denoise")
+            || *skip_upscale
+        {
             1
         } else {
             input.output_scale.min(*native_scale).max(1)
