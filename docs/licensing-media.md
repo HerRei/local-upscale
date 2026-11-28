@@ -39,9 +39,11 @@ macOS ships H.264, HEVC and AAC codecs under Apple's licences, behind
 AVFoundation. LocalSR uses them through `localsr-media`, a small helper built
 from [`packaging/macos/media-helper/main.swift`](../packaging/macos/media-helper/main.swift)
 that links only Apple frameworks (AVFoundation, CoreMedia, CoreVideo,
-VideoToolbox). It decodes into the same lossless FFV1/FLAC intermediate the
-FFmpeg route uses and encodes exports with VideoToolbox, exchanging raw frames
-with the worker over pipes. LocalSR's binaries still contain no code for these
+VideoToolbox). A video job reads the frames it decodes as they arrive, with
+only the soundtrack and the first frame kept in a lossless FFV1/FLAC file;
+playback copies use the same lossless FFV1/FLAC intermediate as the FFmpeg
+route. It encodes exports with VideoToolbox, exchanging raw frames with the
+worker over pipes. LocalSR's binaries still contain no code for these
 formats, and the helper adds no third-party code to the package. It writes
 H.264/HEVC into MP4 or MOV and Apple ProRes 422 into MOV; MKV output and formats macOS cannot read (WMV,
 DivX, FLV, H.263) still go through a user-installed FFmpeg. Windows has

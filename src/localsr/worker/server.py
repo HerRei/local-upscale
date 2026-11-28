@@ -1578,6 +1578,7 @@ class WorkerServer:
                         VideoStageProgress(job_id=job_id, stage="external_decode")
                     ),
                     decode_audio=bool(data.get("audio_denoise")) and data.get("fps") is None,
+                    stream_video=True,
                 ) as (frame_source, audio_source):
                     return WorkerServer._run_temporal_video_job_impl(
                         self,

@@ -16,10 +16,11 @@ import tempfile
 import threading
 import warnings
 from collections.abc import Callable
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass, replace
 from fractions import Fraction
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import av
 import numpy as np
@@ -43,6 +44,9 @@ from .output_publish import DiscardOnStop, OutputExistsError, owned_temporary, p
 from .pixel_budget import MAX_INPUT_PIXELS, require_pixel_budget
 from .video_audio import add_converted_audio_stream, needs_audio_transcode, opus_packets
 from .video_normalization import display_frames, square_pixel_width
+
+if TYPE_CHECKING:
+    from .system_codecs import SystemCodecs
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +77,23 @@ class TimedVideoFrame:
 
     def with_pixels(self, rgb: np.ndarray) -> TimedVideoFrame:
         return replace(self, rgb=rgb)
+
+
+@dataclass(frozen=True)
+class StreamedVideo:
+    """A source the system codecs decode while a job reads it, in place of a lossless copy.
+
+    ``reference`` is the one-frame lossless intermediate of ``path`` (with its soundtrack):
+    its stream holds the frame rate, pixel shape and frame timing a full copy would have,
+    so :func:`decode_timed_frames` yields the frames that copy would decode to. ``probe``
+    is what probing that copy gives, with its frame count and duration estimated from the
+    source; ``decoder`` is the :class:`SystemCodecs` helper.
+    """
+
+    path: str
+    reference: str
+    probe: VideoProbe
+    decoder: SystemCodecs
 
 
 def _display_transform(frame: av.VideoFrame) -> tuple[int, bool]:
@@ -140,6 +161,10 @@ class VideoStageError(RuntimeError):
     def __init__(self, stage: str, message: str):
         self.stage = stage
         super().__init__(f"Video {stage} stage failed: {message}")
+
+
+class SourceDecodeError(VideoStageError):
+    """The system codecs stopped decoding a streamed source part-way through a job."""
 
 
 @contextmanager
@@ -244,9 +269,11 @@ def _source_decodable(path: str) -> bool:
 
 
 def probe_video(
-    path: str, external_ffmpeg=None, temporary_directory: str | None = None
+    path: str | StreamedVideo, external_ffmpeg=None, temporary_directory: str | None = None
 ) -> VideoProbe:
     """Probe metadata and one frame to resolve its display orientation."""
+    if isinstance(path, StreamedVideo):
+        return path.probe
     if external_ffmpeg is not None and not _source_decodable(path):
         return probe_video_preview(path, 64, None, external_ffmpeg, temporary_directory)[0]
     with _video_decoder(path) as (container, stream):
@@ -391,7 +418,7 @@ def probe_video_preview(
 
 
 def decode_timed_frames(
-    path: str,
+    path: str | StreamedVideo,
     start_frame: int | None = None,
     end_frame: int | None = None,
     cancel_event: threading.Event | None = None,
@@ -399,67 +426,96 @@ def decode_timed_frames(
     hdr_mode: str = "reject",
     decoder_threads: int = 0,
 ):
-    """Decode oriented SDR frames with exact source times and one-frame lookahead."""
+    """Decode oriented SDR frames with exact source times and one-frame lookahead.
+
+    A :class:`StreamedVideo` is read from the system codecs as they decode it."""
     if hdr_mode not in {"reject", "tone_map", "preserve"}:
         raise ValueError("HDR mode must be reject, tone_map or preserve.")
     start = max(0, int(start_frame or 0))
     selected_frame_count(0, start, end_frame)
+    if isinstance(path, StreamedVideo):
+        with av.open(path.reference, options={"protocol_whitelist": "file"}) as container:
+            stream = container.streams.video[0]
+            template = next(container.decode(stream), None)
+            if template is None:
+                raise ValueError("This video contains no decodable picture frames.")
+            # The frame after the last one gives the last one's duration.
+            limit = int(end_frame) + 2 if end_frame is not None else 0
+            # The helper's frames carry no interlace flag, as the intermediate's never did,
+            # so the deinterlacing step of display_frames has nothing to do for them.
+            with closing(
+                path.decoder.decoded_frames(
+                    path.path, template, cancel_event=cancel_event, limit=limit
+                )
+            ) as frames:
+                yield from _timed_frames(frames, stream, start, end_frame, cancel_event, hdr_mode)
+        return
     with _video_decoder(path, frame_threads=True, thread_count=decoder_threads) as (
         container,
         stream,
     ):
-        pending: TimedVideoFrame | None = None
-        origin: Fraction | None = None
-        base_time_base: Fraction | None = None
-        retimed_count = 0
-        try:
-            for index, frame in enumerate(display_frames(container, stream, cancel_event)):
-                if cancel_event is not None and cancel_event.is_set():
-                    raise InterruptedError("video job cancelled")
-                if index < start:
-                    continue
-                if frame.pts is None or frame.time_base is None:
-                    raise ValueError(
-                        "Video frame has no presentation timestamp; remux the source first."
-                    )
-                timestamp = frame.pts * frame.time_base
-                if origin is None:
-                    origin = timestamp
-                    base_time_base = frame.time_base
-                if end_frame is not None and index > end_frame:
-                    if pending is not None:
-                        interval = timestamp - pending.timestamp
-                        yield replace(pending, duration=interval) if interval > 0 else pending
-                    return
+        yield from _timed_frames(
+            display_frames(container, stream, cancel_event),
+            stream,
+            start,
+            end_frame,
+            cancel_event,
+            hdr_mode,
+        )
+
+
+def _timed_frames(frames, stream, start: int, end_frame, cancel_event, hdr_mode: str):
+    """Timed RGB frames of decoded ``frames`` from ``stream``; see decode_timed_frames."""
+    pending: TimedVideoFrame | None = None
+    origin: Fraction | None = None
+    base_time_base: Fraction | None = None
+    retimed_count = 0
+    try:
+        for index, frame in enumerate(frames):
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("video job cancelled")
+            if index < start:
+                continue
+            if frame.pts is None or frame.time_base is None:
+                raise ValueError(
+                    "Video frame has no presentation timestamp; remux the source first."
+                )
+            timestamp = frame.pts * frame.time_base
+            if origin is None:
+                origin = timestamp
+                base_time_base = frame.time_base
+            if end_frame is not None and index > end_frame:
                 if pending is not None:
-                    assert origin is not None and base_time_base is not None
-                    if timestamp <= pending.timestamp or round(
-                        (timestamp - origin) / base_time_base
-                    ) <= round((pending.timestamp - origin) / base_time_base):
-                        # Bump by one source time-base tick rather than a full frame
-                        # interval so subsequent valid frames keep their source PTS and
-                        # audio stays in sync.
-                        timestamp = pending.timestamp + base_time_base
-                        retimed_count += 1
                     interval = timestamp - pending.timestamp
-                    yield replace(pending, duration=interval)
-                    pending = None
-                rgb = _frame_rgb(stream, frame, hdr_mode)
-                duration = getattr(frame, "duration", 0) or 0
-                interval = (
-                    duration * frame.time_base if duration > 0 else 1 / (stream.average_rate or 25)
-                )
-                pending = TimedVideoFrame(
-                    index, rgb, timestamp, Fraction(interval), frame.time_base
-                )
+                    yield replace(pending, duration=interval) if interval > 0 else pending
+                return
             if pending is not None:
-                yield pending
-        finally:
-            if retimed_count:
-                logger.info(
-                    "Retimed %d frame(s) with non-increasing presentation timestamps.",
-                    retimed_count,
-                )
+                assert origin is not None and base_time_base is not None
+                if timestamp <= pending.timestamp or round(
+                    (timestamp - origin) / base_time_base
+                ) <= round((pending.timestamp - origin) / base_time_base):
+                    # Bump by one source time-base tick rather than a full frame
+                    # interval so subsequent valid frames keep their source PTS and
+                    # audio stays in sync.
+                    timestamp = pending.timestamp + base_time_base
+                    retimed_count += 1
+                interval = timestamp - pending.timestamp
+                yield replace(pending, duration=interval)
+                pending = None
+            rgb = _frame_rgb(stream, frame, hdr_mode)
+            duration = getattr(frame, "duration", 0) or 0
+            interval = (
+                duration * frame.time_base if duration > 0 else 1 / (stream.average_rate or 25)
+            )
+            pending = TimedVideoFrame(index, rgb, timestamp, Fraction(interval), frame.time_base)
+        if pending is not None:
+            yield pending
+    finally:
+        if retimed_count:
+            logger.info(
+                "Retimed %d frame(s) with non-increasing presentation timestamps.",
+                retimed_count,
+            )
 
 
 def validate_hdr_encoder(
