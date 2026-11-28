@@ -149,6 +149,16 @@ pub struct MediaItem {
     pub audio_warning: String,
     #[serde(default = "default_true")]
     pub has_audio: bool,
+    /// What the probe says about interlacing: `progressive`, `tff`, `bff`, `unknown`, or empty for
+    /// a photo and for a file probed by an older build.
+    #[serde(default)]
+    pub field_order: String,
+    /// How many strokes of Dust & scratches paint on this photo; the strokes stay in the host.
+    #[serde(default)]
+    pub repair_marks: u32,
+    /// Counts each save of the paint, so a view can tell when it changed.
+    #[serde(default)]
+    pub repair_rev: u32,
     pub error: String,
     pub selected: bool,
 }
@@ -307,6 +317,9 @@ pub struct Recipe {
     pub video_interpolation: String,
     #[serde(default)]
     pub video_interpolation_order: String,
+    // The added frames play over 2 or 4 times the length, without sound.
+    #[serde(default)]
+    pub video_slow_motion: bool,
     #[serde(default)]
     pub video_clean_audio: bool,
     #[serde(default)]
@@ -463,6 +476,8 @@ pub struct UiSettings {
     pub video_interpolation: String,
     #[serde(default = "default_interpolation_order")]
     pub video_interpolation_order: String,
+    #[serde(default)]
+    pub video_slow_motion: bool,
     #[serde(default)]
     pub video_clean_audio: bool,
     #[serde(default)]
@@ -755,6 +770,7 @@ impl Default for UiSettings {
             video_crf: 18,
             video_interpolation: default_interpolation(),
             video_interpolation_order: default_interpolation_order(),
+            video_slow_motion: false,
             video_clean_audio: false,
             video_audio_model: String::new(),
             neural_engine: true,
@@ -1526,6 +1542,8 @@ pub struct StartBatchInput {
     pub video_interpolation: String,
     #[serde(default = "default_interpolation_order")]
     pub video_interpolation_order: String,
+    #[serde(default)]
+    pub video_slow_motion: bool,
     #[serde(default)]
     pub video_clean_audio: bool,
     #[serde(default)]

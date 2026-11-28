@@ -1,7 +1,20 @@
 import { expect, test, type Page } from '@playwright/test';
 import { openApp, showPane } from './app';
 import { emit, failDownload, progressDownload } from './fake-host';
-import { firstRun, ready, upscale, video, windows, withOutputs } from './fixtures';
+import {
+  cutout,
+  firstRun,
+  ready,
+  scratched,
+  shaky,
+  slow,
+  strength,
+  tape,
+  upscale,
+  video,
+  windows,
+  withOutputs,
+} from './fixtures';
 
 // Pixel baselines of the key screens, one set per browser, window size and platform
 // (see snapshotPathTemplate): they catch layout and styling regressions that the
@@ -63,6 +76,79 @@ test.describe('screens @visual', () => {
     await shoot(page, 'panel-popover');
   });
 
+  test('plan with the background removed', async ({ page }) => {
+    await openApp(page, cutout);
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await page
+      .getByRole('radiogroup', { name: 'Background' })
+      .getByRole('radio', { name: 'Remove' })
+      .click();
+    await expect(page.locator('.foot-plan')).toContainText('Background');
+    await shoot(page, 'panel-background');
+  });
+
+  test('plan with double rate', async ({ page }) => {
+    await openApp(page, tape);
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await page
+      .getByRole('combobox', { name: 'Scan' })
+      .selectOption({ label: 'Double rate · 50 fps' });
+    await expect(page.locator('.foot-plan')).toContainText('Deinterlace to 50 fps');
+    await shoot(page, 'panel-scan');
+  });
+
+  test('plan with Stabilise, the band in the viewer', async ({ page }) => {
+    await openApp(page, shaky);
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: 'Not now' }).click();
+    const stabilise = page.getByRole('checkbox', { name: 'Stabilise', exact: true });
+    await stabilise.check();
+    await stabilise.locator('../..').getByRole('button').click();
+    await expect(page.locator('.crop-guide')).toHaveCount(1);
+    await expect(page.locator('.foot-plan')).toHaveText(/^Stabilise/);
+    await shoot(page, 'panel-stabilise');
+  });
+
+  test('plan with Dust & scratches on a photo with three marks', async ({ page }) => {
+    await openApp(page, scratched);
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await page.getByRole('checkbox', { name: 'Dust & scratches', exact: true }).check();
+    await expect(page.locator('.fix-value[data-paints]')).toHaveText('3 marks');
+    await expect(page.locator('.foot-plan')).toHaveText(/^Dust & scratches → /);
+    await shoot(page, 'panel-dust');
+  });
+
+  test('painting Dust & scratches in the viewer', async ({ page }) => {
+    await openApp(page, scratched);
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await page.getByRole('checkbox', { name: 'Dust & scratches', exact: true }).check();
+    await page.locator('.fix-value[data-paints]').click();
+    await expect(page.getByRole('toolbar', { name: 'Dust & scratches' })).toBeVisible();
+    await expect(page.locator('.mask-paint path')).toHaveCount(3);
+    await page.mouse.move(0, 0);
+    await expect(page.locator('.brush-ring')).toHaveCount(0);
+    await shoot(page, 'viewer-paint');
+  });
+
+  test('plan with Noise at Light', async ({ page }) => {
+    await openApp(page, strength);
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: 'Not now' }).click();
+    const noise = page.getByRole('checkbox', { name: 'Noise', exact: true });
+    await noise.check();
+    await noise.locator('../..').getByRole('button').click();
+    await page
+      .getByRole('radiogroup', { name: 'Strength' })
+      .getByRole('radio', { name: 'Light' })
+      .click();
+    await expect(page.locator('.foot-plan')).toContainText('Noise (light)');
+    await shoot(page, 'panel-strength');
+  });
+
   test('Outputs tab with two ticked results', async ({ page }) => {
     await openApp(page, withOutputs);
     await outputsTab(page).click();
@@ -119,6 +205,14 @@ test.describe('screens @visual', () => {
     await shoot(page, 'panel-video');
     await page.locator('.foot-output').click();
     await shoot(page, 'panel-output-sheet-video');
+  });
+
+  test('Frames at 2× slower', async ({ page }) => {
+    await openApp(page, slow);
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await expect(page.locator('#frame-rate')).toHaveValue('slow:x2');
+    await shoot(page, 'panel-slow-motion');
   });
 
   test('download waiting for Edit start', async ({ page }) => {

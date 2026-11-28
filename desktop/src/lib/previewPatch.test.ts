@@ -147,6 +147,54 @@ describe('previewPatch', () => {
     );
     expect(key(region, { ...(input as object), output_directory: '/x' } as never)).toBe(key());
   });
+
+  it('patchRequestKey changes when the photo is painted again', () => {
+    const request = {
+      mediaId: 'p1',
+      slot: 'a' as const,
+      region: { x: 0, y: 0, width: 384, height: 384 },
+      input: { step_stages: [{ step: 'repair' }], output_scale: 1 } as never,
+    };
+    expect(patchRequestKey({ ...request, repairRev: 0 })).toBe(patchRequestKey(request));
+    expect(patchRequestKey({ ...request, repairRev: 2 })).not.toBe(
+      patchRequestKey({ ...request, repairRev: 1 }),
+    );
+  });
+});
+
+describe('Patch, background', () => {
+  it('keeps the background step as an entry named Background', () => {
+    const stage = (kind: string, role: string, label: string) =>
+      ({ kind, role, label, installed: true }) as never;
+    const entries = patchPlanEntries(
+      [
+        stage('remove_background', 'step', 'Remove background'),
+        stage('upscale', 'primary', 'Upscale ×4'),
+      ],
+      { task: 'upscale', output_scale: 4, video_target_resolution: 0, video_interpolation: 'off' },
+    );
+    expect(entries.map((entry) => entry.name)).toEqual(['Background', '4×']);
+  });
+
+  it('leaves a deinterlace stage out: one decoded frame has no field order to show', () => {
+    const stage = (kind: string, role: string, label: string) =>
+      ({ kind, role, label, installed: true }) as never;
+    const entries = patchPlanEntries(
+      [stage('deinterlace', 'step', 'Deinterlace'), stage('upscale', 'primary', 'Upscale ×4')],
+      { task: 'upscale', output_scale: 4, video_target_resolution: 0, video_interpolation: 'off' },
+    );
+    expect(entries.map((entry) => entry.name)).toEqual(['4×']);
+  });
+
+  it('leaves a stabilise stage out: one frame cannot show movement', () => {
+    const stage = (kind: string, role: string, label: string) =>
+      ({ kind, role, label, installed: true }) as never;
+    const entries = patchPlanEntries(
+      [stage('stabilise', 'step', 'Stabilise'), stage('upscale', 'primary', 'Upscale ×4')],
+      { task: 'upscale', output_scale: 4, video_target_resolution: 0, video_interpolation: 'off' },
+    );
+    expect(entries.map((entry) => entry.name)).toEqual(['4×']);
+  });
 });
 
 describe('Patch, video', () => {
@@ -169,5 +217,32 @@ describe('Patch, video', () => {
       },
     );
     expect(entries.map((entry) => entry.name)).toEqual(['Noise', '2×']);
+  });
+});
+
+describe('Patch, strength', () => {
+  it('keeps the chip names bare and changes the request key with the strength', () => {
+    const stages = [
+      { kind: 'restore', role: 'fix', label: 'Noise', fix: 'noise', installed: true },
+      { kind: 'upscale', role: 'primary', label: 'Upscale ×4', installed: true },
+    ] as never;
+    const settings = {
+      task: 'upscale' as const,
+      output_scale: 4,
+      video_target_resolution: 0,
+      video_interpolation: 'off' as const,
+      fix_stages: [{ fix: 'noise', model_id: 'm', params: { strength: 0.4 } }],
+    };
+    expect(patchPlanEntries(stages, settings).map((entry) => entry.name)).toEqual(['Noise', '4×']);
+
+    const region = { x: 0, y: 0, width: 384, height: 384 };
+    const key = (strength: number) =>
+      patchRequestKey({
+        mediaId: 'p1',
+        slot: 'a',
+        region,
+        input: { fix_stages: [{ fix: 'noise', params: { strength } }], output_scale: 4 } as never,
+      });
+    expect(key(0.4)).not.toBe(key(0.7));
   });
 });

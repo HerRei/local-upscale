@@ -141,3 +141,167 @@ def test_upsampled_flow_warps_keyframe_chroma_at_output_resolution():
     lab[:, :, 1:] = expected_ab.astype(np.uint8)
     expected = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
     assert np.abs(output[:, 20:].astype(float) - expected[:, 20:]).mean() < 1
+
+
+def _texture(rng, shape, low, span):
+    noise = cv2.GaussianBlur(rng.integers(0, 256, shape).astype(np.float32), (0, 0), 1.2)
+    noise = (noise - noise.min()) / (noise.max() - noise.min())
+    return (low + span * noise).astype(np.uint8)
+
+
+def _hue(angle, radius):
+    return 128 + radius * np.cos(np.radians(angle)), 128 + radius * np.sin(np.radians(angle))
+
+
+class _ChangingColouriser:
+    """Paints by brightness band and picks a different hue for the shape and the ground per call."""
+
+    shape_hues = (20, 60, -20, 100, 0, 40)
+    ground_hues = (120, 170, 140, 100, 160, 130)
+    new_colour = _hue(200, 30)
+
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, frame):
+        hue = self.calls % len(self.shape_hues)
+        self.calls += 1
+        lab = cv2.cvtColor(frame, cv2.COLOR_RGB2LAB)
+        luma = lab[:, :, 0]
+        colours = [
+            (luma < 135, _hue(self.ground_hues[hue], 14)),
+            ((luma >= 135) & (luma < 190), _hue(self.shape_hues[hue], 40)),
+            (luma >= 190, self.new_colour),
+        ]
+        for mask, (a, b) in colours:
+            lab[:, :, 1][mask] = round(a)
+            lab[:, :, 2][mask] = round(b)
+        return cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+
+
+def _scene(count, *, newcomer=False, seed=7):
+    """A textured square moving right over textured ground; optionally a brighter square entering."""
+    rng = np.random.default_rng(seed)
+    ground = _texture(rng, (96, 128), 30, 70)
+    square = _texture(rng, (28, 28), 145, 35)
+    bright = _texture(rng, (24, 24), 200, 45)
+    frames, boxes = [], []
+    for index in range(count):
+        image = ground.copy()
+        left = 12 + index
+        image[34:62, left : left + 28] = square
+        if newcomer and index >= 10:
+            right = 128 - (index - 10) * 2
+            image[8:32, right : min(128, right + 24)] = bright[:, : min(24, 128 - right)]
+        frames.append(np.repeat(image[:, :, None], 3, axis=2))
+        boxes.append((34, 62, left, left + 28))
+    return frames, boxes
+
+
+def _chroma(image, rows, cols):
+    lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB).astype(np.float32)
+    return lab[rows, cols, 1:].reshape(-1, 2).mean(axis=0)
+
+
+def test_tracked_surface_keeps_its_colour_across_keyframes():
+    frames, boxes = _scene(40)
+    colourise = _ChangingColouriser()
+    result = list(colour_frames(frames, colourise, interval=12))
+    assert colourise.calls == 4
+    shape = [
+        _chroma(image, slice(top + 5, bottom - 5), slice(left + 5, right - 5))
+        for image, (top, bottom, left, right) in zip(result, boxes, strict=True)
+    ]
+    ground = [_chroma(image, slice(70, 92), slice(70, 120)) for image in result]
+    # The colouriser's later guesses differ by 25 to 50 units; the first decision must hold.
+    assert max(np.linalg.norm(value - shape[0]) for value in shape) < 5
+    assert max(np.linalg.norm(value - ground[0]) for value in ground) < 4
+    assert np.linalg.norm(shape[0] - _hue(20, 40)) < 6
+
+
+def test_newly_visible_object_takes_the_new_guess():
+    frames, _ = _scene(40, newcomer=True)
+    result = list(colour_frames(frames, _ChangingColouriser(), interval=12))
+    # The bright square enters at frame 10, moving left, and is fully visible from frame 12 + 10.
+    for index in range(24, 40):
+        right = 128 - (index - 10) * 2
+        newcomer = _chroma(result[index], slice(12, 28), slice(right + 4, right + 20))
+        assert np.linalg.norm(newcomer - _ChangingColouriser.new_colour) < 8, index
+
+
+def test_revealed_ground_takes_ground_colour_not_a_trail():
+    rng = np.random.default_rng(3)
+    ground = _texture(rng, (96, 128), 30, 70)
+    square = _texture(rng, (28, 28), 145, 35)
+    frames = []
+    for index in range(25):
+        image = ground.copy()
+        image[34:62, 10 + 2 * index : 38 + 2 * index] = square
+        frames.append(np.repeat(image[:, :, None], 3, axis=2))
+
+    def colourise(frame):
+        lab = cv2.cvtColor(frame, cv2.COLOR_RGB2LAB)
+        bright = lab[:, :, 0] >= 135
+        lab[:, :, 1] = np.where(bright, 170, 110)
+        lab[:, :, 2] = np.where(bright, 160, 150)
+        return cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+
+    result = list(colour_frames(frames, colourise, interval=12))
+    # Smooth flow drags the square's colour onto the static ground around it, worst halfway
+    # between key frames. Allow a fringe of about two pixels along the square's 28-pixel edges.
+    for frame, image in zip(frames, result, strict=True):
+        ground = cv2.erode((frame[:, :, 0] < 128).astype(np.uint8), np.ones((3, 3), np.uint8))
+        painted = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)[:, :, 1] > 130
+        assert (painted & (ground > 0)).sum() < 100
+
+
+def test_cut_inside_a_moving_shot_takes_a_fresh_guess():
+    frames, _ = _scene(18)
+    rng = np.random.default_rng(11)
+    other = np.repeat(_texture(rng, (96, 128), 150, 40)[:, :, None], 3, axis=2)
+    colourise = _ChangingColouriser()
+    result = list(colour_frames(frames + [other] * 6, colourise, interval=12))
+    # Keys: frame 0, frame 12, then the cut at frame 18 takes the third guess.
+    assert colourise.calls == 3
+    after_cut = _chroma(result[19], slice(10, 86), slice(10, 118))
+    assert np.linalg.norm(after_cut - _hue(-20, 40)) < 6
+
+
+def test_carried_colour_error_stays_bounded_in_a_long_shot():
+    # The same textured view sways left and right for 360 frames (30 key frames). Every key
+    # frame resamples the carried colour, and flow is slightly off at sub-pixel steps; without
+    # the share of each new guess the error against an always-right colouriser keeps growing.
+    rng = np.random.default_rng(5)
+    layers = []
+    for sigma in (2.5, 8):
+        layer = cv2.GaussianBlur(rng.integers(0, 256, (120, 220)).astype(np.float32), (0, 0), sigma)
+        layers.append((layer - layer.min()) / (layer.max() - layer.min()))
+    base = ((0.6 * layers[0] + 0.4 * layers[1]) * 200 + 25).astype(np.uint8)
+    frames = []
+    for index in range(361):
+        shift = 20 + 18 * np.sin(index / 9.0)
+        moved = cv2.warpAffine(
+            base,
+            np.float32([[1, 0, -shift], [0, 1, -0.4 * shift]]),
+            (220, 120),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REFLECT,
+        )
+        frames.append(np.repeat(moved[10:106, 40:168, None], 3, axis=2))
+
+    def colourise(frame):
+        lab = cv2.cvtColor(frame, cv2.COLOR_RGB2LAB)
+        smooth = cv2.GaussianBlur(lab[:, :, 0].astype(np.float32), (0, 0), 6)
+        share = np.clip((smooth - 100) / 60, 0, 1)
+        lab[:, :, 1] = (100 + 60 * share).astype(np.uint8)
+        lab[:, :, 2] = (160 - 10 * share).astype(np.uint8)
+        return cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+
+    result = list(colour_frames(frames, colourise, interval=12))
+
+    def error(index):
+        actual = cv2.cvtColor(result[index], cv2.COLOR_RGB2LAB)[10:-10, 10:-10, 1:]
+        expected = cv2.cvtColor(colourise(frames[index]), cv2.COLOR_RGB2LAB)[10:-10, 10:-10, 1:]
+        return np.abs(actual.astype(float) - expected).mean()
+
+    assert error(360) < 1.6

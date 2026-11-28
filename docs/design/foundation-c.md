@@ -267,20 +267,25 @@ steps (and a catalog model) of their own, as `test_pipeline.py` does for model-l
 
 ## What each tool still needs
 
-- **Background removal** (model step, alpha out): the developer-only `remove_background`
-  step loads the MIT BiRefNet general checkpoint and sets a matte. It runs in `cleanup`,
-  before fixes and the primary, so the matte is computed at source size and scales with
-  the image. The step still needs a UI row with its model choice.
-- **Deinterlacing**: the dev-only video geometry step supports frame and field modes, field
-  order selection, and progressive-source passthrough. It still needs a UI row.
-- **Video stabilisation**: needs a video geometry handler and crop output dimensions passed
-  to `VideoChainContext`.
+- **Background removal** (model step, alpha out): the `remove_background` step loads the
+  MIT BiRefNet general checkpoint and sets a matte. It runs in `cleanup`, before fixes and
+  the primary, so the matte is computed at source size and scales with the image. The
+  Backgr. row (`Keep` / `Remove`, spec in `docs/design/scan-and-background.md`) ships it;
+  a fill colour and a second model are still to come.
+- **Deinterlacing**: the video geometry step supports frame and field modes, field order
+  selection, and progressive-source passthrough. The Scan row (`Automatic`, `Double rate`
+  and four hand-set orders; spec in `docs/design/scan-and-background.md`) ships it.
+- **Video stabilisation**: built in 0.7.0 as the `stabilise` step with a Fix row (spec in
+  `docs/design/tools-wave.md`, section 2); it keeps the frame size, so no crop dimensions are
+  passed on.
 - **Grain/film look for real**: the look (midtone weighting, grain size, colour grain), a UI
   row, and running after the primary in video (today refused).
-- **Denoise/deblur strength**: declare `strength` on the fix step, and blend the fix output
-  with its input by that scalar in `_run_stage`, next to the mask blend.
-- **Object/scratch removal** (inpainting with a painted mask): a model-bearing step stage, a
-  `requires_mask` registry flag, and the host command that writes a painted mask.
+- **Denoise/deblur strength**: built in 0.7.0 as `Light` / `Medium` / `Full` on a ticked Blur,
+  JPEG artifacts or Noise row; see `docs/design/tools-wave.md`, section 1.
+- **Object/scratch removal** (inpainting with a painted mask): small marks are built in 0.7.0
+  as the model-less `repair` step (OpenCV Telea) with the `requires_mask` flag, painting in
+  the viewer and the host's mask (spec in `docs/design/tools-wave.md`, section 3). Larger
+  objects still need a model-bearing step stage.
 - **Masks per fix**: `supports_mask` on the fix steps and the painting UI; the plumbing is
   the same as above.
 - **Progress text**: a model-less stage reports `stage_kind` = its id and no model id, so the

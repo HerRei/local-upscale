@@ -187,6 +187,35 @@ test.describe('preview patch', () => {
     await expect(frame(page).locator('img')).toHaveCount(0);
   });
 
+  test('a removed background is a struck-through chip and the other steps still show', async ({
+    page,
+  }) => {
+    await openApp(page, {
+      ...patchScenario,
+      features: [...FEATURES, 'image_background_removal', 'stage_params_and_masks'],
+      settings: {
+        ...patchScenario.settings,
+        step_stages: [{ step: 'remove_background', model_id: 'birefnet_general' }],
+      },
+      installed: [...patchScenario.installed, 'birefnet_general'],
+    });
+    await turnOn(page);
+    const row = chips(page).getByRole('button');
+    await expect(row).toHaveText(['Original', 'Background', 'Noise', '4×']);
+    const cutout = chips(page).getByRole('button', { name: 'Background' });
+    await expect(cutout).toBeDisabled();
+    await expect(cutout).toHaveAttribute(
+      'title',
+      'This step changes transparency, which the preview patch cannot show.',
+    );
+    await expect(cutout).toHaveCSS('text-decoration-line', 'line-through');
+    await expect(chips(page).getByRole('button', { name: '4×' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await expect(frame(page).locator('img')).toHaveCount(1);
+  });
+
   test('dragging the tab moves the patch and asks again 250 ms after release', async ({ page }) => {
     await openApp(page, patchScenario);
     await turnOn(page);
@@ -457,7 +486,7 @@ test.describe('preview patch', () => {
     await expect(label).toBeVisible();
     await expect(label).toHaveAttribute(
       'title',
-      'De-flicker, added frames and sound cannot be shown on one frame.',
+      'Stabilise, De-flicker, added frames and sound cannot be shown on one frame.',
     );
     await expect.poll(async () => (await requests(page)).length).toBe(1);
     expect((await requests(page))[0]).toMatchObject({ slot: 'a' });

@@ -425,6 +425,7 @@ fn ui_metadata_leaves_the_timing_profile_alone() {
             "",
             "",
             true,
+            "",
         )
         .unwrap();
     }
@@ -470,6 +471,7 @@ fn trials_estimate_only_measured_matching_requests() {
         "",
         "",
         true,
+        "",
     )
     .unwrap();
     let request = r#"{"type":"job_request","data":{"model_path":"model.pth","device":"cpu","tile_size":256}}"#;
@@ -668,6 +670,7 @@ fn hdr_migration_preserves_old_queue_and_retry_clears_failure() {
             "HLG",
             "Standard audio will be kept.",
             false,
+            "",
         )
         .unwrap();
     drop(migrated);
@@ -791,6 +794,7 @@ fn queued_jobs_carry_the_typical_speed_of_their_comparable_runs() {
         "",
         "",
         true,
+        "",
     )
     .unwrap();
     let request = r#"{"type":"job_request","data":{"model_path":"model.pth","device":"cpu","tile_size":256}}"#;
@@ -1197,4 +1201,60 @@ fn old_0_6_1_requests_recover_after_crash_and_deserialize_into_typed_requests() 
         parsed_queued,
         crate::protocol::WorkerJobRequest::Video(_)
     ));
+}
+
+#[test]
+fn media_keep_the_field_order_and_old_databases_gain_the_column() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("queue.db");
+    let db = Database::open(&path).unwrap();
+    db.insert_media("m1", "/tmp/clip.avi", "clip.avi", "video")
+        .unwrap();
+    db.update_media_probe(
+        "/tmp/clip.avi",
+        "video",
+        720,
+        576,
+        100,
+        25.0,
+        4.0,
+        "",
+        "",
+        "",
+        true,
+        "bff",
+    )
+    .unwrap();
+    assert_eq!(db.get_media("m1").unwrap().unwrap().field_order, "bff");
+    db.connection
+        .execute("ALTER TABLE media DROP COLUMN field_order", [])
+        .unwrap();
+    drop(db);
+    let reopened = Database::open(&path).unwrap();
+    assert_eq!(reopened.get_media("m1").unwrap().unwrap().field_order, "");
+}
+
+#[test]
+fn old_databases_gain_the_paint_columns() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("queue.db");
+    let db = Database::open(&path).unwrap();
+    db.insert_media("m1", "/tmp/a.png", "a.png", "image")
+        .unwrap();
+    assert_eq!(db.repair_strokes("m1").unwrap().as_deref(), Some(""));
+    assert_eq!(db.set_repair_strokes("m1", "[]", 2).unwrap(), Some(1));
+    assert_eq!(db.set_repair_strokes("m1", "[]", 3).unwrap(), Some(2));
+    assert_eq!(db.set_repair_strokes("missing", "[]", 1).unwrap(), None);
+    let media = db.get_media("m1").unwrap().unwrap();
+    assert_eq!((media.repair_marks, media.repair_rev), (3, 2));
+    for column in ["repair_strokes", "repair_marks", "repair_rev"] {
+        db.connection
+            .execute(&format!("ALTER TABLE media DROP COLUMN {column}"), [])
+            .unwrap();
+    }
+    drop(db);
+    let reopened = Database::open(&path).unwrap();
+    let media = reopened.get_media("m1").unwrap().unwrap();
+    assert_eq!((media.repair_marks, media.repair_rev), (0, 0));
+    assert_eq!(reopened.repair_strokes("m1").unwrap().as_deref(), Some(""));
 }

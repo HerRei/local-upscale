@@ -2868,6 +2868,44 @@ fn snapshot_size_with_50_media_items_does_not_grow_with_preview_bytes() {
 }
 
 #[test]
+fn media_info_stores_the_field_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = Arc::new(AppState::from_paths(crate::paths::AppPaths::under(dir.path())).unwrap());
+    for (name, order) in [("tff.mp4", Some("tff")), ("none.mp4", None)] {
+        let path = format!("/clips/{name}");
+        lock(&state.database)
+            .unwrap()
+            .insert_media(name, &path, name, "video")
+            .unwrap();
+        let mut data = json!({
+            "media_path": path,
+            "media_kind": "video",
+            "width": 720,
+            "height": 576,
+            "frame_count": 100,
+            "fps": 25.0,
+            "duration_seconds": 4.0,
+            "jpeg_base64": "",
+        });
+        if let Some(order) = order {
+            data["field_order"] = json!(order);
+        }
+        apply_worker_envelope(&state, &envelope("media_info", data)).unwrap();
+    }
+    let media = state.snapshot().unwrap().media;
+    let order_of = |name: &str| {
+        media
+            .iter()
+            .find(|item| item.name == name)
+            .unwrap()
+            .field_order
+            .clone()
+    };
+    assert_eq!(order_of("tff.mp4"), "tff");
+    assert_eq!(order_of("none.mp4"), "");
+}
+
+#[test]
 fn old_data_urls_remain_accepted_until_replaced_by_file_url() {
     use base64::Engine;
 
@@ -2890,6 +2928,7 @@ fn old_data_urls_remain_accepted_until_replaced_by_file_url() {
             "",
             "",
             true,
+            "",
         )
         .unwrap();
     }
@@ -3052,6 +3091,7 @@ fn preview_files_are_cleaned_on_remove_clear_results_clear_media_and_startup_swe
             "",
             "",
             true,
+            "",
         )
         .unwrap();
     }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { demoSnapshot } from './demo';
-import { mediaFacts, outputSummary } from './enhancePanel';
+import { mediaFacts, outputSummary, outputTitle } from './enhancePanel';
 import type { MediaItem } from './types';
 
 function makeMedia(overrides: Partial<MediaItem> = {}): MediaItem {
@@ -51,7 +51,7 @@ describe('mediaFacts', () => {
           duration_seconds: 12,
         }),
       ),
-    ).toBe('1920 × 1080 · 24 fps · 12s');
+    ).toBe('1920 × 1080 · 24 fps · 12 s');
 
     expect(
       mediaFacts(
@@ -69,7 +69,54 @@ describe('mediaFacts', () => {
   });
 });
 
+describe('outputSummary and slow motion', () => {
+  const video = () => {
+    const { settings } = demoSnapshot();
+    settings.task = 'video';
+    settings.video_container = 'mp4';
+    settings.video_codec = 'av1';
+    settings.video_crf = 18;
+    settings.output_directory = '/tmp/Desktop';
+    return settings;
+  };
+
+  it('says no sound for a file with sound, and never beside sound cleaned', () => {
+    const settings = video();
+    expect(outputSummary(settings, { slowMotion: true })).toBe(
+      'MP4 · AV1 · CRF 18 · no sound · Desktop',
+    );
+    settings.video_clean_audio = true;
+    expect(outputSummary(settings, { slowMotion: true })).toBe(
+      'MP4 · AV1 · CRF 18 · no sound · Desktop',
+    );
+    expect(outputSummary(settings, {})).toBe('MP4 · AV1 · CRF 18 · sound cleaned · Desktop');
+  });
+
+  it('says nothing about sound for a file without any', () => {
+    expect(outputSummary(video(), { slowMotion: true, audioDisabled: true })).toBe(
+      'MP4 · AV1 · CRF 18 · Desktop',
+    );
+  });
+});
+
 describe('outputSummary', () => {
+  it('adds transparent and explains a replaced format in the title', () => {
+    const { settings } = demoSnapshot();
+    settings.task = 'upscale';
+    settings.output_directory = '/tmp/Desktop';
+    settings.step_stages = [{ step: 'remove_background', model_id: 'birefnet_general' }];
+    settings.output_format = 'jpg';
+    expect(outputSummary(settings)).toBe('PNG · transparent · Desktop');
+    expect(outputTitle(settings)).toBe(
+      'PNG · transparent · Desktop · Saved as PNG to keep the transparent background.',
+    );
+    settings.output_format = 'tif';
+    expect(outputSummary(settings)).toBe('TIFF · transparent · Desktop');
+    expect(outputTitle(settings)).toBe('TIFF · transparent · Desktop');
+    settings.output_format = 'webp';
+    expect(outputSummary(settings)).toBe(`WebP ${settings.jpeg_quality} · transparent · Desktop`);
+  });
+
   it('omits the folder when includeFolder is false', () => {
     const { settings } = demoSnapshot();
     settings.task = 'upscale';

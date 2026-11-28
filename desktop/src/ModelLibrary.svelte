@@ -579,7 +579,7 @@
       {#if context.slot === 'try'}
         <span class="sheet-context"
           >Try other {restoring ? 'restoration models' : 'upscalers'} on {trialMedia?.name ??
-            'this image'}</span
+            'this photo'}</span
         >
       {:else if context.slot === 'edit'}
         <span class="sheet-context">Choosing for Edit</span>

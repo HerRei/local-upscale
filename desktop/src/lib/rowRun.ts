@@ -56,7 +56,7 @@ export function rowRun(jobs: JobRecord[], mediaId: string, activeJobId: string):
     return {
       kind: 'running',
       progress,
-      text: progress === null ? 'Running' : `Running · ${Math.round(progress)} %`,
+      text: progress === null ? 'Running' : `Running · ${Math.round(progress)}%`,
       title,
     };
   }

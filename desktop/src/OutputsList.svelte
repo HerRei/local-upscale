@@ -274,14 +274,14 @@
     display: grid;
     place-items: center;
     padding: 0;
-    border: 1px solid var(--border);
-    border-radius: 4px;
+    border: 1px solid var(--accent-line);
+    border-radius: var(--radius);
     background: transparent;
     color: inherit;
     cursor: pointer;
   }
   .pick-box:hover:not(:disabled) {
-    border-color: var(--secondary);
+    border-color: var(--text);
   }
   .pick-box.on {
     background: var(--row-selected);

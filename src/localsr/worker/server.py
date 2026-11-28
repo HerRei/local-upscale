@@ -226,6 +226,8 @@ def _engine_features(video_engines: list[str] | None = None) -> list[str]:
         "precision_auto",
         # stage_picture_max_dimension on a photo job and the stage_result message.
         "stage_results",
+        # `strength` on the blur, JPEG and noise fixes: a mix of the fix with its input.
+        "fix_strength",
     ]
     for feature in REQUIRED_STEP_FEATURES + (DEV_STEP_FEATURES if dev_steps_enabled() else ()):
         if feature not in features:
@@ -233,6 +235,7 @@ def _engine_features(video_engines: list[str] | None = None) -> list[str]:
     features.append("compare_regions")
     features.append("preview_regions")
     features.append("patch_preview")
+    features.append("video_slow_motion")
     engines = _video_engines() if video_engines is None else video_engines
     if "seedvr2" in engines:
         features.append("video_seedvr2")
@@ -712,6 +715,16 @@ class WorkerServer:
         sys.stderr.flush()
         os._exit(DEVICE_LOST_EXIT_CODE)
 
+    def _release_patch_colour(self) -> None:
+        """Drop the Colour model the preview patches kept loaded; nothing is loaded for a
+        worker that never ran a Colour patch, and then the engine is not even built."""
+        if self.patch_cache is None or self.patch_cache.colour_model is None:
+            return
+        from localsr.worker.patch_preview import release_resident_colour
+
+        release_resident_colour(self.engine, self.patch_cache)
+        gc.collect()
+
     def _note_activity(self) -> None:
         self._idle_since = None
         self._idle_released = False
@@ -802,6 +815,10 @@ class WorkerServer:
                 elif req_type == "patch_request":
                     self._run_patch(data)
 
+                elif req_type == "patch_release":
+                    # The preview patch was switched off: its Colour model goes back.
+                    self._release_patch_colour()
+
                 elif req_type == "media_probe_request":
                     media_path = data.get("media_path")
                     media_path = media_path if isinstance(media_path, str) else ""
@@ -842,6 +859,7 @@ class WorkerServer:
                                     hdr_format=probe.hdr_format,
                                     audio_warning=probe.audio_warning,
                                     has_audio=bool(probe.has_audio),
+                                    field_order=probe.field_order,
                                 )
                             )
                         else:
@@ -2197,6 +2215,8 @@ class WorkerServer:
             send_message(LogMessage(level="info", message=f"Automatic video format: {codec}"))
         model_kind = str(data.get("model_kind", "spandrel_image"))
         interpolating = str(data.get("interpolation") or "off") != "off"
+        if data.get("slow_motion") and str(data.get("interpolation") or "off") not in {"x2", "x4"}:
+            raise ValueError("Slow motion needs 2× or 4× added frames.")
         if interpolating and model_kind != "spandrel_image":
             raise ValueError(
                 "Frame interpolation works with the frame-by-frame engine in this version. "
@@ -2253,7 +2273,11 @@ class WorkerServer:
         from localsr.core.video_pipeline import VideoFixStage, VideoJobConfig
 
         synthesizer = self._interpolation_synthesizer(job_id, data) if interpolating else None
-        clean_audio = bool(data.get("audio_denoise", False)) and data.get("fps") is None
+        clean_audio = (
+            bool(data.get("audio_denoise", False))
+            and data.get("fps") is None
+            and not data.get("slow_motion", False)
+        )
         audio_denoiser = self._audio_denoiser(job_id, data) if clean_audio else None
         send_message(LogMessage(level="info", message="Inspecting model for video job..."))
         self.engine.neural_engine_enabled = bool(data.get("neural_engine", True))
@@ -2375,8 +2399,14 @@ class WorkerServer:
             external_ffmpeg=load_media_bridge(data.get("external_ffmpeg")),
             interpolation=str(data.get("interpolation") or "off"),
             interpolation_order=str(data.get("interpolation_order") or "after_upscale"),
+            slow_motion=bool(data.get("slow_motion", False)),
             preprocess_stages=tuple(preprocess_stages),
             primary_time_factor=primary_time_factor,
+            primary_strength=(
+                float(pipeline.primary.params.get("strength", 1.0))
+                if pipeline.primary is not None
+                else 1.0
+            ),
             audio_denoise=clean_audio,
             audio_denoise_bundle_dir=data.get("audio_denoise_bundle_dir"),
             audio_denoiser=audio_denoiser,

@@ -15,7 +15,7 @@ describe('model trials', () => {
         { model_id: 'a', model_label: 'A', seconds: 20 },
         { model_id: 'b', model_label: 'B', seconds: null },
       ]),
-    ).toBe('≈ 20s measured · not yet measured for B');
+    ).toBe('≈ 20 s measured · not yet measured for B');
     expect(trialTime([{ model_id: 'b', model_label: 'B', seconds: null }])).toBe(
       'Time not yet measured for B',
     );

@@ -13,6 +13,7 @@ import { formatBytes } from './lib/format';
 import { modelDisplayName } from './lib/modelNames';
 import { PROMPT_EXAMPLES, PROMPT_EXAMPLE_FAMILIES, examplesFor } from './lib/promptExamples';
 import { applyWorkerEnvelope } from './lib/workerEvents';
+import type { RepairStroke } from './lib/maskPaint';
 import type {
   AppSnapshot,
   ComparePick,
@@ -104,6 +105,10 @@ const api = vi.hoisted(() => ({
   checkpointConsent: vi.fn(async (_path: string, _allow?: boolean) => false),
   addMedia: vi.fn(async (_paths: string[], _replace: boolean): Promise<void> => undefined),
   selectMedia: vi.fn(async (_id: string): Promise<void> => undefined),
+  getRepairStrokes: vi.fn(async (_id: string): Promise<RepairStroke[]> => []),
+  setRepairStrokes: vi.fn(
+    async (_id: string, _strokes: RepairStroke[]): Promise<void> => undefined,
+  ),
   removeMedia: vi.fn(async () => undefined),
   clearMedia: vi.fn(async () => undefined),
   clearResults: vi.fn(async () => undefined),
@@ -184,6 +189,9 @@ const api = vi.hoisted(() => ({
       _modelIds: string[],
       _base: StartBatchInput,
     ): Promise<TrialEstimate[]> => [],
+  ),
+  estimateStart: vi.fn(
+    async (_mediaIds: string[], _input: StartBatchInput): Promise<number | null> => null,
   ),
   cancelJobsForMedia: vi.fn(
     async (_mediaId: string, _keepPartial?: boolean): Promise<void> => undefined,
@@ -290,6 +298,7 @@ const planFetch = vi.hoisted(() => ({
           selected_video_model_id?: string | null;
           edit_model_id?: string | null;
           has_audio?: boolean | null;
+          masked_steps?: string[];
         },
       ) => Promise<import('./lib/plan').PlanStage[]>)
     | undefined,
@@ -327,6 +336,7 @@ vi.mock('./lib/jobPlanClient', async (importOriginal) => {
       selectedVideoModel,
       editModel,
       hasAudio: options.has_audio === null ? undefined : options.has_audio,
+      maskedSteps: options.masked_steps ?? [],
     });
   };
   planFetch.defaultImpl = defaultFetchPlan;
@@ -1029,6 +1039,7 @@ beforeEach(() => {
   api.requestCompare.mockReset().mockResolvedValue(undefined);
   api.startModelTrials.mockReset().mockResolvedValue([]);
   api.estimateModelTrials.mockReset().mockResolvedValue([]);
+  api.estimateStart.mockReset().mockResolvedValue(null);
   api.cancelJobsForMedia.mockReset().mockResolvedValue(undefined);
   api.retryEngine.mockReset().mockResolvedValue(undefined);
   api.retryJobOnCpu.mockReset().mockResolvedValue(undefined);
@@ -1076,13 +1087,11 @@ describe('Prompt examples', () => {
     return screen.getByRole('group', { name: 'Prompt examples' });
   };
 
-  it('ships FLUX.2 klein with Colour and Film look only', () => {
-    expect(PROMPT_EXAMPLE_FAMILIES).toEqual(['flux2-klein-4b']);
-    expect(examplesFor('flux2-klein-4b').map((example) => example.title)).toEqual([
-      'Colour',
-      'Film look',
-    ]);
-    expect(examplesFor(QWEN)).toEqual([]);
+  it('ships FLUX.2 klein and Qwen Image Edit 2511 with Colour only', () => {
+    expect(PROMPT_EXAMPLE_FAMILIES).toEqual(['flux2-klein-4b', QWEN]);
+    expect(examplesFor('flux2-klein-4b').map((example) => example.title)).toEqual(['Colour']);
+    expect(examplesFor(QWEN).map((example) => example.title)).toEqual(['Colour']);
+    expect(examplesFor('mage-flow-edit-turbo')).toEqual([]);
   });
 
   it('shows the link with the entries that passed on the listed family', async () => {
@@ -1093,7 +1102,7 @@ describe('Prompt examples', () => {
       within(list)
         .getAllByRole('button')
         .map((button) => button.textContent),
-    ).toEqual([expect.stringMatching(/^Colour/), expect.stringMatching(/^Film look/)]);
+    ).toEqual([expect.stringMatching(/^Colour/)]);
     expect(
       within(list).getByText('Repaints the photo. To only add colour, use Fix \u203a Colour.'),
     );
@@ -1131,6 +1140,7 @@ describe('Prompt examples', () => {
 
   it('warns about own text and undo gives it back', async () => {
     withFamilies([QWEN]);
+    unlock('Film look');
     const user = await mountWith(editSnapshot(36));
     await chooseTask(user, /^Edit$/);
     const field = screen.getByLabelText('What to change') as HTMLTextAreaElement;
@@ -1300,7 +1310,7 @@ describe('LocalSR desktop interface', () => {
       paths: ['/Scans/a.png', '/Scans/b.png'],
       outputDirectory: '/Scans/LocalSR Results',
     });
-    await user.click(screen.getByRole('button', { name: 'Add Folder…' }));
+    await user.click(screen.getByRole('button', { name: 'Add folder…' }));
     await waitFor(() =>
       expect(api.addMedia).toHaveBeenCalledWith(['/Scans/a.png', '/Scans/b.png'], false),
     );
@@ -1315,7 +1325,7 @@ describe('LocalSR desktop interface', () => {
     const snapshot = readySnapshot();
     const user = await mountWith(snapshot);
     api.saveSettings.mockClear();
-    await user.click(screen.getByRole('button', { name: 'Add Folder…' }));
+    await user.click(screen.getByRole('button', { name: 'Add folder…' }));
     expect(api.addMedia).not.toHaveBeenCalled();
     expect(api.saveSettings).not.toHaveBeenCalled();
   });
@@ -1436,7 +1446,7 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByRole('tablist', { name: 'Media' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Enhance' })).toBeTruthy();
     expect(screen.getByText('Drop photos or videos here')).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: 'Add Files…' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'Add files…' })).toHaveLength(1);
     expect(
       screen.getByRole('button', { name: /drop them here or click to choose files/ }),
     ).toBeTruthy();
@@ -1893,7 +1903,7 @@ describe('LocalSR desktop interface', () => {
     await openOutputSheet(user);
     expect(screen.getByLabelText('Format')).toBeTruthy();
     expect(
-      screen.getByRole('checkbox', { name: /Preserve safe metadata and color profile/i }),
+      screen.getByRole('checkbox', { name: /Preserve safe metadata and colour profile/i }),
     ).toBeTruthy();
     await openPlanSheet(user);
     expect(screen.getByRole('checkbox', { name: /Safe memory mode/i })).toBeTruthy();
@@ -1964,7 +1974,7 @@ describe('LocalSR desktop interface', () => {
     expect(document.querySelector('[aria-busy="true"]')).toBeTruthy();
     // Keep the display at a known second even if a busy CI VM renders slowly.
     clock.mockReturnValue(1_001_250);
-    expect(await screen.findByText('1s elapsed', {}, { timeout: 2500 })).toBeTruthy();
+    expect(await screen.findByText('1 s elapsed', {}, { timeout: 2500 })).toBeTruthy();
     callback({
       type: 'media_probe_progress',
       data: { media_path: media.path, stage: 'converting_hdr' },
@@ -2404,12 +2414,12 @@ describe('LocalSR desktop interface', () => {
     const rate = screen.getByLabelText('Frames') as HTMLSelectElement;
     expect(rate.value).toBe('off');
     expect(screen.queryByLabelText('Interpolate')).toBeNull();
-    expect(screen.queryByText('Interpolate to 60 fps')).toBeNull();
+    expect(screen.queryByRole('list', { name: 'Stages' })).toBeNull();
 
     await user.selectOptions(rate, 'fps60:before_upscale');
     expect(rate.value).toBe('fps60:before_upscale');
     await openPlanSheet(user);
-    expect(screen.getByText('Interpolate to 60 fps')).toBeTruthy();
+    expect(within(screen.getByRole('list', { name: 'Stages' })).getByText('60 fps')).toBeTruthy();
     expect(screen.getByText(/24 → 60 fps/)).toBeTruthy();
 
     await user.click(screen.getByRole('button', { name: 'Start selected video' }));
@@ -3669,7 +3679,7 @@ describe('LocalSR desktop interface', () => {
     expect(screen.getByRole('button', { name: 'Cancel queue' })).toBeTruthy();
     expect(
       [...document.querySelectorAll('.status-actions .button')].map((b) => b.textContent),
-    ).toEqual(['Cancel runs for this image', 'Cancel queue']);
+    ).toEqual(['Cancel runs for this photo', 'Cancel queue']);
     cleanup();
 
     // Between two jobs of a queue every item is queued: there is nothing to start.
@@ -4638,9 +4648,9 @@ describe('LocalSR desktop interface', () => {
 
     await openPlanSheet(user);
     const stages = within(screen.getByRole('list', { name: 'Stages' })).getAllByRole('listitem');
-    expect(stages[0].textContent).toContain('Fix JPEG');
+    expect(stages[0].textContent).toContain('JPEG');
     expect(stages[0].textContent).toContain('FBCNN Color');
-    expect(stages[1].textContent).toContain('Upscale ×4');
+    expect(stages[1].textContent).toContain('Upscale 4×');
     expect(stages[1].textContent).toContain('RealPLKSR ×4 NomosWebPhoto');
     // A ready model needs no label; only the missing stage says anything.
     expect(stages[1].textContent).not.toMatch(/MB|Ready/);
@@ -4768,7 +4778,7 @@ describe('LocalSR desktop interface', () => {
     );
     await openPlanSheet(user);
     const stages = screen.getByRole('list', { name: 'Stages' });
-    expect(within(stages).getByText('Fix noise')).toBeTruthy();
+    expect(within(stages).getByText('Noise')).toBeTruthy();
     await openPlanSheet(user);
     await openFixPopover(user, 'Noise');
     await user.click(screen.getByRole('button', { name: 'Change the noise fix model' }));
@@ -5353,7 +5363,7 @@ describe('Several fixes in one pass', () => {
       true,
     );
     await openPlanSheet(user);
-    expect(labels()).toEqual(['Fix blur', 'Fix JPEG', 'Fix noise', 'Upscale ×4']);
+    expect(labels()).toEqual(['Blur', 'JPEG', 'Noise', 'Upscale 4×']);
     const move = (name: string) => screen.getByRole('button', { name });
     // Each fix offers only the moves it can make.
     expect(screen.queryByRole('button', { name: 'Move the blur fix earlier' })).toBeNull();
@@ -5378,7 +5388,7 @@ describe('Several fixes in one pass', () => {
     expect(screen.queryByText('Move earlier')).toBeNull();
 
     await user.click(move('Move the noise fix earlier'));
-    expect(labels()).toEqual(['Fix blur', 'Fix noise', 'Fix JPEG', 'Upscale ×4']);
+    expect(labels()).toEqual(['Blur', 'Noise', 'JPEG', 'Upscale 4×']);
     // The keyboard stays on the fix that moved.
     expect(document.activeElement).toBe(move('Move the noise fix earlier'));
     await waitFor(() =>
@@ -5427,7 +5437,7 @@ describe('Several fixes in one pass', () => {
     // A fix moved to the top keeps the keyboard on its way back down.
     await openPlanSheet(user);
     await user.click(move('Move the JPEG fix earlier'));
-    expect(labels()).toEqual(['Fix JPEG', 'Fix noise', 'Upscale ×4']);
+    expect(labels()).toEqual(['JPEG', 'Noise', 'Upscale 4×']);
     expect(document.activeElement).toBe(move('Move the JPEG fix later'));
   });
 
@@ -5515,7 +5525,7 @@ describe('Several fixes in one pass', () => {
       }),
     );
     await openPlanSheet(user);
-    expect(labels()).toEqual(['Fix JPEG', 'Fix noise']);
+    expect(labels()).toEqual(['JPEG', 'Noise']);
     // A fix before the model is chosen like one before an upscale; the model stays.
     await openFixPopover(user, 'JPEG artifacts');
     await user.click(screen.getByRole('button', { name: 'Change the JPEG fix model' }));
@@ -5550,7 +5560,7 @@ describe('Several fixes in one pass', () => {
         fix_stages: [{ fix: 'noise', model_id: 'denoise_realplksr_1x' }, jpeg],
       }),
     );
-    expect(labels()).toEqual(['Fix noise', 'Fix JPEG']);
+    expect(labels()).toEqual(['Noise', 'JPEG']);
 
     // The host answers the save with the settings it holds.
     snapshot.settings = structuredClone(lastSaved());
@@ -6426,10 +6436,10 @@ describe('Comparing saved results', () => {
     expect(document.querySelectorAll('.compare-pane video')).toHaveLength(1);
     expect(document.querySelectorAll('.compare-pane .image-stage canvas')).toHaveLength(2);
     expect(
-      within(screen.getByRole('group', { name: 'Slot 1 details' })).getByText('Models: slow'),
+      within(screen.getByRole('group', { name: 'Slot 1 details' })).getByText('Model: slow'),
     ).toBeTruthy();
     expect(
-      within(screen.getByRole('group', { name: 'Slot 2 details' })).getByText('Models: fast'),
+      within(screen.getByRole('group', { name: 'Slot 2 details' })).getByText('Model: fast'),
     ).toBeTruthy();
     expect(screen.getByRole('slider', { name: 'Divider between slot 1 and slot 2' })).toBeTruthy();
     expect(screen.getAllByRole('group', { name: 'Video playback controls' })).toHaveLength(1);
@@ -6443,6 +6453,33 @@ describe('Comparing saved results', () => {
     expect(document.querySelectorAll('video')).toHaveLength(0);
     expect(pause).toHaveBeenCalled();
     expect(load).toHaveBeenCalled();
+  });
+
+  it('selects the file of the first ticked result when Compare opens, without changing the ticks or starting anything', async () => {
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
+    const snapshot = readySnapshot([image('photo', true), video('clip')]);
+    api.selectMedia.mockImplementation(async (id: string) => {
+      snapshot.media.forEach((item) => (item.selected = item.id === id));
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    });
+    api.listAllMediaResults.mockResolvedValue([
+      historyOf('clip', [
+        { ...row('slow'), kind: 'video', output_fps: 15 },
+        { ...row('fast'), kind: 'video', output_fps: 60 },
+      ]),
+    ]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+    await user.click(await screen.findByRole('checkbox', { name: 'slow, clip.mp4' }));
+    await user.click(screen.getByRole('checkbox', { name: 'fast, clip.mp4' }));
+    // Ticking alone selects nothing.
+    expect(api.selectMedia).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
+    await waitFor(() => expect(api.selectMedia).toHaveBeenCalledWith('clip'));
+    await waitFor(() => expect(document.querySelectorAll('.compare-pane video')).toHaveLength(1));
+    expect(screen.getByText(/^2 of 4 chosen/)).toBeTruthy();
+    expect(api.startJobs).not.toHaveBeenCalled();
   });
 
   it('compares two photo outputs of one source in slider and boxes with job details and omits missing fields', async () => {
@@ -6495,6 +6532,7 @@ describe('Comparing saved results', () => {
       api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
     });
     api.listAllMediaResults.mockResolvedValue([historyOf('photo', [first, older])]);
+    snapshot.capabilities.devices[0].neural_engine = true;
     const user = await mountWith(snapshot);
     await user.click(screen.getByRole('tab', { name: /Outputs/ }));
     await user.click(await screen.findByRole('checkbox', { name: 'Upscale, photo.png' }));
@@ -6511,14 +6549,14 @@ describe('Comparing saved results', () => {
     expect(slot1.textContent).toContain('Fixes: Blur → Noise');
     expect(slot1.textContent).toContain('Scale: 4×');
     expect(slot1.textContent).toContain('Time: 1:35');
-    expect(slot1.textContent).toContain('Requested device: mps · Neural Engine enabled');
+    expect(slot1.textContent).toContain('Device: Neural Engine');
     expect(slot1.textContent).toContain(
       `Date: ${new Date(1_700_000_000_000).toLocaleDateString()}`,
     );
     const slot2 = screen.getByRole('group', { name: 'Slot 2 details' });
-    expect(slot2.textContent).toContain('Models: Legacy');
+    expect(slot2.textContent).toContain('Model: Legacy');
     expect(slot2.textContent).toContain('Output: 1280 × 960');
-    expect(slot2.textContent).not.toMatch(/unknown|Fixes:|Scale:|Time:|Requested device:|Date:/i);
+    expect(slot2.textContent).not.toMatch(/unknown|Fixes:|Scale:|Time:|Device:|Date:/i);
     await user.click(screen.getByRole('radio', { name: 'Boxes' }));
     expect(document.querySelectorAll('.compare-pane .boxes .box')).toHaveLength(2);
     expect(screen.getByRole('group', { name: 'Slot 1 details' })).toBeTruthy();
@@ -6755,7 +6793,7 @@ describe('Comparing saved results', () => {
       { ...completedJob('trial-1'), status: 'running', output_path: '' },
     ];
     const user = await mountWith(snapshot);
-    await user.click(await screen.findByRole('button', { name: 'Cancel runs for this image' }));
+    await user.click(await screen.findByRole('button', { name: 'Cancel runs for this photo' }));
     expect(api.cancelJobsForMedia).toHaveBeenCalledWith('photo', false);
     expect(api.cancelJobs).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Cancel queue' })).toBeTruthy();
@@ -6769,7 +6807,7 @@ describe('Comparing saved results', () => {
     await chooseTask(user, /^Upscale & restore$/);
     await openPlanSheet(user);
     await user.click(
-      await screen.findByRole('button', { name: 'Try other upscalers on this image' }),
+      await screen.findByRole('button', { name: 'Try other upscalers on this photo' }),
     );
     const dialog = screen.getByRole('dialog', { name: 'Model library' });
     expect(within(dialog).getByText(/Comparing needs at least 2 installed models/)).toBeTruthy();
@@ -6789,7 +6827,7 @@ describe('Comparing saved results', () => {
     await chooseTask(user, /^Upscale & restore$/);
     await openPlanSheet(user);
     await user.click(
-      await screen.findByRole('button', { name: 'Try other upscalers on this image' }),
+      await screen.findByRole('button', { name: 'Try other upscalers on this photo' }),
     );
     const dialog = screen.getByRole('dialog', { name: 'Model library' });
     expect(within(dialog).getByText('Try other upscalers on photo.png')).toBeTruthy();
@@ -6883,7 +6921,7 @@ describe('Dialogs and refused host calls', () => {
   it('closes the update panel on Escape', async () => {
     const user = await mountWith(readySnapshot([image('photo', true)]));
     await chooseMenuItem('app.updates');
-    const panel = await screen.findByRole('dialog', { name: 'Software Update' });
+    const panel = await screen.findByRole('dialog', { name: 'Software update' });
     expect(panel.contains(document.activeElement)).toBe(true);
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).toBeNull();
@@ -6976,15 +7014,15 @@ describe('Dialogs and refused host calls', () => {
       await shown('Could not add files');
     });
 
-    it('says so for Add Folder…', async () => {
+    it('says so for Add folder…', async () => {
       const user = await mountWith(readySnapshot([image('first', true)]));
       api.chooseMediaFolder.mockRejectedValueOnce(refusal);
-      await user.click(screen.getByRole('button', { name: 'Add Folder…' }));
+      await user.click(screen.getByRole('button', { name: 'Add folder…' }));
       await shown('Could not add the folder');
       api.chooseMediaFolder.mockResolvedValueOnce({ paths: ['/x/a.png'], outputDirectory: '/x' });
       api.addMedia.mockRejectedValueOnce(refusal);
       await user.click(screen.getByRole('button', { name: 'OK' }));
-      await user.click(screen.getByRole('button', { name: 'Add Folder…' }));
+      await user.click(screen.getByRole('button', { name: 'Add folder…' }));
       await shown('Could not add the folder');
       expect(api.saveSettings).not.toHaveBeenCalledWith(
         expect.objectContaining({ output_directory: '/x' }),
@@ -7624,7 +7662,7 @@ describe('crash reports', () => {
     ).toBe('Crash: Failed while reading ~/<path>');
   });
 
-  it("Don't Send deletes the report without opening an issue", async () => {
+  it("Don't send deletes the report without opening an issue", async () => {
     const snap = readySnapshot();
     snap.settings.crash_reports = true;
     api.listCrashReports.mockResolvedValueOnce([sampleReport]).mockResolvedValue([]);
@@ -7633,7 +7671,7 @@ describe('crash reports', () => {
     const notice = await screen.findByRole('dialog', {
       name: 'LocalSR quit unexpectedly last time.',
     });
-    await user.click(within(notice).getByRole('button', { name: "Don't Send" }));
+    await user.click(within(notice).getByRole('button', { name: "Don't send" }));
     await waitFor(() => expect(api.deleteCrashReport).toHaveBeenCalledWith(sampleReport.id));
     expect(api.openBugReport).not.toHaveBeenCalled();
     expect(
@@ -7679,7 +7717,7 @@ describe('crash reports', () => {
     expect(within(section).getByText('Stored crash reports: 1')).toBeTruthy();
 
     api.listCrashReports.mockResolvedValueOnce([]).mockResolvedValue([]);
-    await user.click(within(section).getByRole('button', { name: 'Delete All' }));
+    await user.click(within(section).getByRole('button', { name: 'Delete all' }));
     await waitFor(() => expect(api.deleteAllCrashReports).toHaveBeenCalledTimes(1));
     await user.keyboard('{Escape}');
     await waitFor(() =>
@@ -9621,9 +9659,7 @@ describe('Size decides', () => {
     }
     await openPlanSheet(user);
     expect(within(screen.getByRole('list', { name: 'Stages' })).queryByText(/Upscale/)).toBeNull();
-    expect(
-      within(screen.getByRole('list', { name: 'Stages' })).getByText('Fix noise'),
-    ).toBeTruthy();
+    expect(within(screen.getByRole('list', { name: 'Stages' })).getByText('Noise')).toBeTruthy();
     await user.keyboard('{Escape}');
     expect(screen.getByRole('button', { name: 'Quick' }).getAttribute('title')).toContain(
       'Fast clean-up',
@@ -9661,10 +9697,10 @@ describe('Size decides', () => {
     );
     expect(startBtn.disabled).toBe(false);
     await openPlanSheet(user);
-    expect(within(screen.getByRole('list', { name: 'Stages' })).getByText('Fix blur')).toBeTruthy();
+    expect(within(screen.getByRole('list', { name: 'Stages' })).getByText('Blur')).toBeTruthy();
     await user.keyboard('{Escape}');
 
-    // Size -> 2×: Blur stays ticked, Content enabled again, row Upscale ×2.
+    // Size -> 2×: Blur stays ticked, Content enabled again, row Upscale 2×.
     await user.click(screen.getByRole('radio', { name: '2×' }));
     await waitFor(() =>
       expect(lastSaved()).toMatchObject({
@@ -9681,7 +9717,7 @@ describe('Size decides', () => {
     }
     await openPlanSheet(user);
     expect(
-      within(screen.getByRole('list', { name: 'Stages' })).getByText('Upscale ×2'),
+      within(screen.getByRole('list', { name: 'Stages' })).getByText('Upscale 2×'),
     ).toBeTruthy();
     await user.keyboard('{Escape}');
 
@@ -9941,9 +9977,7 @@ describe('Size decides', () => {
       true,
     );
     await openPlanSheet(loadedUser);
-    expect(
-      within(screen.getByRole('list', { name: 'Stages' })).getByText('Fix noise'),
-    ).toBeTruthy();
+    expect(within(screen.getByRole('list', { name: 'Stages' })).getByText('Noise')).toBeTruthy();
     await loadedUser.keyboard('{Escape}');
     expect(
       (screen.getByRole('button', { name: 'Restore selected' }) as HTMLButtonElement).disabled,
@@ -10008,7 +10042,7 @@ describe('host job plan client in App', () => {
     expect(screen.queryByText('Could not work out the plan.')).toBeNull();
     await openPlanSheet(user);
     expect(
-      within(screen.getByRole('list', { name: 'Stages' })).getByText('Upscale ×4'),
+      within(screen.getByRole('list', { name: 'Stages' })).getByText('Upscale 4×'),
     ).toBeTruthy();
   });
 
@@ -10232,7 +10266,7 @@ describe('Enhance panel head, Recipes menu, and Task row', () => {
     expect(rows).toHaveLength(6);
     expect(rows[0].textContent).toContain('Pinned scan');
     expect(rows[0].textContent).toContain('JPEG → Noise → Upscale 4×');
-    expect(rows[0].textContent).toContain('⌃');
+    expect(rows[0].querySelector('.recipe-pin svg')).not.toBeNull();
     expect(rows[1].textContent).toContain('Fast 2x');
     expect(rows[1].textContent).toContain('Upscale 2×');
     expect(within(menu).queryByRole('button', { name: /^Hidden seven/ })).toBeNull();
@@ -10483,6 +10517,33 @@ describe('Enhance panel foot', () => {
     await waitFor(() => expect(foot.querySelector('.foot-cost')).toBeNull());
   });
 
+  it('shows the measured run time on the cost line, and nothing without one', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    Object.assign(snapshot.settings, { task: 'upscale', quality: 'quick', fixes: ['noise'] });
+    api.estimateStart.mockResolvedValue(40);
+    await mountWith(snapshot);
+    const foot = document.querySelector('.panel-foot') as HTMLElement;
+    // The estimate waits for the plan and a 400 ms debounce on real timers.
+    await waitFor(() => expect(within(foot).getByText('about 40 s')).toBeTruthy(), {
+      timeout: 4000,
+    });
+    expect(foot.querySelector('.foot-cost-download')).toBeNull();
+    const [mediaIds, input] = api.estimateStart.mock.calls[0];
+    expect(mediaIds).toEqual(['photo']);
+    expect(input.task).toBe('upscale');
+  });
+
+  it('shows no time while the host has no estimate or fails', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    Object.assign(snapshot.settings, { task: 'upscale', quality: 'quick', fixes: ['noise'] });
+    api.estimateStart.mockResolvedValue(null);
+    await mountWith(snapshot);
+    await waitFor(() => expect(api.estimateStart).toHaveBeenCalled(), { timeout: 4000 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(document.querySelector('.panel-foot')?.textContent).not.toContain('about');
+    expect(document.querySelector('.foot-cost')).toBeNull();
+  });
+
   it('shows no percentage or Waiting in Plan sheet Stages while models download', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
     snapshot.catalog = structuredClone(snapshot.catalog);
@@ -10632,6 +10693,150 @@ describe('Result', () => {
   });
 });
 
+describe('Slow motion', () => {
+  function slowSnapshot(options: { feature?: boolean; hasAudio?: boolean } = {}) {
+    const snapshot = readySnapshot([
+      { ...video('clip', true), duration_seconds: 12, has_audio: options.hasAudio ?? true },
+    ]);
+    snapshot.settings.task = 'video';
+    snapshot.settings.video_container = 'mp4';
+    snapshot.settings.video_codec = 'av1';
+    snapshot.settings.video_crf = 18;
+    snapshot.settings.output_directory = '/Users/demo/Desktop';
+    if (options.feature !== false) snapshot.engine!.features.push('video_slow_motion');
+    return snapshot;
+  }
+  const head = () =>
+    screen.getByRole('region', { name: 'Result' }).querySelector('.panel-head-value')
+      ?.textContent ?? '';
+  const planLineText = () => document.querySelector('.foot-plan')?.textContent ?? '';
+
+  it('offers the group with the clip length times the factor', async () => {
+    await mountWith(slowSnapshot());
+    const frames = screen.getByLabelText('Frames') as HTMLSelectElement;
+    const group = frames.querySelector('optgroup[label="Slow motion (no sound)"]');
+    expect(Array.from(group?.querySelectorAll('option') ?? []).map((o) => o.textContent)).toEqual([
+      '2× slower · 24 s',
+      '4× slower · 48 s',
+    ]);
+  });
+
+  it('has no such group when the engine does not list the feature', async () => {
+    await mountWith(slowSnapshot({ feature: false }));
+    expect(
+      (screen.getByLabelText('Frames') as HTMLSelectElement).querySelector(
+        'optgroup[label^="Slow"]',
+      ),
+    ).toBeNull();
+  });
+
+  it('writes the target, the order and the flag, and changes the head, plan and Output line', async () => {
+    const user = await mountWith(slowSnapshot());
+    await user.selectOptions(screen.getByLabelText('Frames'), 'slow:x2');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          video_interpolation: 'x2',
+          video_interpolation_order: 'after_upscale',
+          video_slow_motion: true,
+        }),
+      ),
+    );
+    expect(head()).toMatch(/ · 24 s$/);
+    expect(head()).not.toContain('fps');
+    await waitFor(() => expect(planLineText()).toMatch(/Slow motion 2×\s*$/));
+    expect(document.querySelector('.foot-output')?.textContent).toContain(
+      'MP4 · AV1 · CRF 18 · no sound · Desktop',
+    );
+
+    await user.selectOptions(screen.getByLabelText('Frames'), 'x2:after_upscale');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ video_slow_motion: false }),
+      ),
+    );
+    expect(head()).toMatch(/ · 48 fps$/);
+  });
+
+  it('shows no sound instead of sound cleaned, disables the tick and keeps the setting', async () => {
+    const snapshot = slowSnapshot();
+    snapshot.settings.video_clean_audio = true;
+    snapshot.settings.video_interpolation = 'x2';
+    snapshot.settings.video_slow_motion = true;
+    const user = await mountWith(snapshot);
+    const trigger = document.querySelector('.foot-output') as HTMLButtonElement;
+    expect(trigger.textContent).toContain('no sound');
+    expect(trigger.textContent).not.toContain('sound cleaned');
+    const sheet = await openOutputSheet(user);
+    const tick = within(sheet).getByRole('checkbox', {
+      name: 'Clean up audio',
+    }) as HTMLInputElement;
+    expect(tick.disabled).toBe(true);
+    expect(tick.checked).toBe(false);
+    expect(tick.title).toBe('Slow motion has no sound.');
+    expect(api.saveSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({ video_clean_audio: false }),
+    );
+  });
+
+  it('says nothing about sound for a video without any', async () => {
+    const snapshot = slowSnapshot({ hasAudio: false });
+    snapshot.settings.video_interpolation = 'x2';
+    snapshot.settings.video_slow_motion = true;
+    await mountWith(snapshot);
+    expect(document.querySelector('.foot-output')?.textContent).not.toContain('no sound');
+  });
+
+  it('saves the flag in a recipe', async () => {
+    const snapshot = slowSnapshot();
+    snapshot.settings.video_interpolation = 'x2';
+    snapshot.settings.video_slow_motion = true;
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    await user.click(screen.getByRole('button', { name: 'Save current as recipe…' }));
+    await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Slow');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledTimes(1));
+    expect(api.saveRecipe).toHaveBeenCalledWith(
+      expect.objectContaining({ video_interpolation: 'x2', video_slow_motion: true }),
+    );
+  }, 20_000);
+
+  it('keeps the Frames select disabled while HDR is kept', async () => {
+    const snapshot = slowSnapshot();
+    snapshot.settings.selected_model_id = 'hat_s_x4';
+    snapshot.settings.video_hdr_mode = 'preserve';
+    snapshot.media = [{ ...snapshot.media[0], hdr_format: 'HLG' }];
+    const user = await mountWith(snapshot);
+    await user.click(document.querySelector('.foot-output') as HTMLButtonElement);
+    expect((screen.getByLabelText('Colour output') as HTMLSelectElement).value).toBe('preserve');
+    expect((screen.getByLabelText('Frames') as HTMLSelectElement).disabled).toBe(true);
+  });
+
+  it('with Scan at Double rate, the head shows the doubled rate and the length', async () => {
+    const snapshot = slowSnapshot();
+    snapshot.engine!.features.push('video_deinterlace');
+    snapshot.media = [{ ...snapshot.media[0], fps: 25, field_order: 'bff' }];
+    snapshot.settings.video_interpolation = 'x2';
+    snapshot.settings.video_slow_motion = true;
+    snapshot.settings.step_stages = [
+      { step: 'deinterlace', params: { mode: 'field', parity: 'auto' } },
+    ];
+    const user = await mountWith(snapshot);
+    expect(head()).toMatch(/ · 50 fps · 24 s$/);
+    await waitFor(() =>
+      expect(planLineText()).toMatch(/Deinterlace to 50 fps → .*Slow motion 2×\s*$/),
+    );
+    const frames = screen.getByLabelText('Frames') as HTMLSelectElement;
+    expect(frames.selectedOptions[0].textContent).toBe('2× slower · 24 s');
+    expect(Array.from(frames.options).map((option) => option.textContent)).toContain(
+      '2× · 100 fps',
+    );
+    const sheet = await openPlanSheet(user);
+    expect(within(sheet).getByText('2× slower · after upscaling · Labs')).toBeTruthy();
+  });
+});
+
 describe('Plan sheet', () => {
   it('opens from the plan line with Noise and Blur, reorders stages while keeping the Fix list, and closes on Escape', async () => {
     const snapshot = readySnapshot([image('photo', true)]);
@@ -10716,7 +10921,7 @@ describe('Output sheet and line', () => {
     expect(trigger.getAttribute('aria-controls')).toBe(sheet.id);
     expect(within(sheet).getByLabelText('Format')).toBeTruthy();
     expect(
-      within(sheet).getByRole('checkbox', { name: 'Preserve safe metadata and color profile' }),
+      within(sheet).getByRole('checkbox', { name: 'Preserve safe metadata and colour profile' }),
     ).toBeTruthy();
     expect(within(sheet).getByRole('button', { name: 'Save to /Users/demo/Desktop' })).toBeTruthy();
     expect(within(sheet).queryByLabelText(/quality/)).toBeNull();
@@ -10868,7 +11073,7 @@ describe('Fix list', () => {
 
     const section = screen.getByRole('region', { name: 'Your video' });
     expect(within(section).getByText('Your video')).toBeTruthy();
-    expect(within(section).getByText('1920 × 1080 · 24 fps · 12s · HLG')).toBeTruthy();
+    expect(within(section).getByText('1920 × 1080 · 24 fps · 12 s · HLG')).toBeTruthy();
     const content = within(section).getByRole('radiogroup', { name: 'Content' });
     expect(within(content).getByRole('radio', { name: 'Video' })).toBeTruthy();
     expect(within(content).getByRole('radio', { name: 'Animation' })).toBeTruthy();
@@ -12285,5 +12490,1201 @@ describe('Patch, two models', () => {
     await waitFor(() => expect(screen.queryByRole('group', { name: 'Compare models' })).toBeNull());
     expect(api.cancelPatchPreview).toHaveBeenCalledWith('b');
     expect(sent().filter((request) => request.slot === 'b')).toHaveLength(1);
+  });
+});
+
+describe('Backgr.', () => {
+  function cutoutSnapshot(): AppSnapshot {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.engine!.features.push('image_background_removal');
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.output_scale = 4;
+    snapshot.settings.output_format = 'jpg';
+    snapshot.settings.output_directory = '/Users/test/Desktop';
+    return snapshot;
+  }
+  const group = () =>
+    screen.queryByRole('group', { name: 'Background' }) ??
+    screen.queryByRole('radiogroup', { name: 'Background' });
+  const foot = () => document.querySelector('.panel-foot') as HTMLElement;
+
+  it('shows Keep checked after the model line and a tip with the sentence', async () => {
+    const user = await mountWith(cutoutSnapshot());
+    const row = screen.getByRole('radiogroup', { name: 'Background' });
+    expect(screen.getByRole('radio', { name: 'Keep' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('radio', { name: 'Remove' }).getAttribute('aria-checked')).toBe(
+      'false',
+    );
+    const modelLine = document.querySelector('.result-model') as HTMLElement;
+    expect(modelLine.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'About Background' }));
+    expect(screen.getByRole('tooltip').textContent).toBe(
+      'Remove makes everything behind the main subject transparent. The subject is found on the original picture, before the fixes and the upscale, and its outline is enlarged with the picture. The outline is worked out at 1024 × 1024 pixels, so single hairs and other very fine edges are not followed exactly. The result needs transparency: PNG, TIFF and WebP keep it, and a JPEG or HEIC choice is saved as PNG. BiRefNet does the work.',
+    );
+  });
+
+  it('is not there without the feature, on a video or in Edit', async () => {
+    const noFeature = cutoutSnapshot();
+    noFeature.engine!.features = noFeature.engine!.features.filter(
+      (feature) => feature !== 'image_background_removal',
+    );
+    await mountWith(noFeature);
+    expect(group()).toBeNull();
+    cleanup();
+
+    const clip = cutoutSnapshot();
+    clip.media = [video('clip', true)];
+    clip.settings.task = 'video';
+    await mountWith(clip);
+    expect(group()).toBeNull();
+    cleanup();
+
+    const edit = cutoutSnapshot();
+    edit.settings.task = 'edit';
+    await mountWith(edit);
+    expect(group()).toBeNull();
+  });
+
+  it('Remove stores the step, names it first on the plan line and says PNG · transparent', async () => {
+    const user = await mountWith(cutoutSnapshot());
+    await user.click(screen.getByRole('radio', { name: 'Remove' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          step_stages: [{ step: 'remove_background', model_id: 'birefnet_general' }],
+        }),
+      ),
+    );
+    expect(await within(foot()).findByText('Background → Upscale 4×')).toBeTruthy();
+    expect(within(foot()).getByText('PNG · transparent · Desktop')).toBeTruthy();
+  });
+
+  it('a missing model shows its size on the cost line, Start and the segment', async () => {
+    const snapshot = cutoutSnapshot();
+    snapshot.catalog.models.find((model) => model.model_id === 'birefnet_general')!.installed =
+      false;
+    snapshot.settings.step_stages = [{ step: 'remove_background', model_id: 'birefnet_general' }];
+    await mountWith(snapshot);
+    expect(await within(foot()).findByText('444 MB to download')).toBeTruthy();
+    expect(
+      await screen.findByRole('button', { name: 'Download 444 MB, then upscale' }),
+    ).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'Remove' }).getAttribute('title')).toBe(
+      'Makes the background transparent · 444 MB download',
+    );
+  });
+
+  it('a JPEG choice is saved as PNG, and the sheet greys JPEG and HEIC', async () => {
+    const snapshot = cutoutSnapshot();
+    snapshot.settings.step_stages = [{ step: 'remove_background', model_id: 'birefnet_general' }];
+    const user = await mountWith(snapshot);
+    const line = within(foot()).getByText('PNG · transparent · Desktop');
+    expect(line.closest('button')?.getAttribute('title')).toBe(
+      'PNG · transparent · Desktop · Saved as PNG to keep the transparent background.',
+    );
+    await user.click(line);
+    const format = (await screen.findByLabelText('Format')) as HTMLSelectElement;
+    expect(format.value).toBe('png');
+    const jpeg = within(format).getByRole('option', { name: 'JPEG · no transparency' });
+    expect((jpeg as HTMLOptionElement).disabled).toBe(true);
+    expect(screen.queryByLabelText(/quality$/)).toBeNull();
+  });
+
+  it('Keep removes the step and brings the JPEG line back', async () => {
+    const snapshot = cutoutSnapshot();
+    snapshot.settings.step_stages = [{ step: 'remove_background', model_id: 'birefnet_general' }];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('radio', { name: 'Keep' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ step_stages: [] }),
+      ),
+    );
+    expect(await within(foot()).findByText('JPEG 98 · Desktop')).toBeTruthy();
+  });
+
+  it('runs alone at Same size', async () => {
+    const snapshot = cutoutSnapshot();
+    snapshot.settings.step_stages = [{ step: 'remove_background', model_id: 'birefnet_general' }];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
+    expect(await within(foot()).findByText('Background')).toBeTruthy();
+    expect(within(foot()).queryByText('Nothing to run')).toBeNull();
+    expect(
+      (screen.getByRole('button', { name: 'Restore selected' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it('Keep leaves another stored step alone', async () => {
+    const snapshot = cutoutSnapshot();
+    const grain = { step: 'grain', params: { strength: 40 } };
+    snapshot.settings.step_stages = [
+      { step: 'remove_background', model_id: 'birefnet_general' },
+      grain,
+    ];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('radio', { name: 'Keep' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ step_stages: [grain] }),
+      ),
+    );
+  });
+
+  it('is locked while a job runs', async () => {
+    const snapshot = cutoutSnapshot();
+    snapshot.runtime.active_job_id = 'job-1';
+    await mountWith(snapshot);
+    expect(screen.getByRole('radio', { name: 'Keep' }).matches(':disabled')).toBe(true);
+    expect(screen.getByRole('radio', { name: 'Remove' }).matches(':disabled')).toBe(true);
+  });
+});
+
+describe('Scan', () => {
+  function tapeSnapshot(fieldOrder: MediaItem['field_order'] = 'bff'): AppSnapshot {
+    const snapshot = readySnapshot([
+      { ...video('clip', true), fps: 25, width: 768, height: 576, field_order: fieldOrder },
+    ]);
+    snapshot.engine!.features.push('video_deinterlace');
+    snapshot.catalog.models.forEach((model) => (model.installed = true));
+    Object.assign(snapshot.settings, {
+      task: 'video',
+      video_task: 'upscale',
+      selected_video_model_id: 'frame_by_frame',
+      selected_model_id: 'span_photo_x4',
+      output_scale: 2,
+    });
+    return snapshot;
+  }
+  const select = () => screen.queryByRole('combobox', { name: 'Scan' }) as HTMLSelectElement | null;
+  const foot = () => document.querySelector('.panel-foot') as HTMLElement;
+  const head = () =>
+    document.querySelector('[aria-label="Result"] .panel-head-value') as HTMLElement | null;
+
+  it('sits between Content and the Fix head, set to Automatic · interlaced', async () => {
+    await mountWith(tapeSnapshot());
+    const row = select()!;
+    expect(row.value).toBe('auto');
+    expect(row.selectedOptions[0].textContent).toBe('Automatic · interlaced');
+    const content = document.getElementById('content-label')!;
+    const fix = screen.getByRole('group', { name: 'Fix' });
+    expect(content.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(row.compareDocumentPosition(fix) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('is not there for a progressive file, no field order, a missing feature, SeedVR2 or a photo', async () => {
+    for (const fieldOrder of ['progressive', ''] as const) {
+      await mountWith(tapeSnapshot(fieldOrder));
+      expect(select()).toBeNull();
+      cleanup();
+    }
+    const noFeature = tapeSnapshot();
+    noFeature.engine!.features = noFeature.engine!.features.filter(
+      (feature) => feature !== 'video_deinterlace',
+    );
+    await mountWith(noFeature);
+    expect(select()).toBeNull();
+    cleanup();
+    const temporal = tapeSnapshot();
+    temporal.settings.selected_video_model_id = temporal.catalog.video_models[0].model_id;
+    await mountWith(temporal);
+    expect(select()).toBeNull();
+    cleanup();
+    const photo = tapeSnapshot();
+    photo.media = [image('photo', true)];
+    photo.settings.task = 'upscale';
+    await mountWith(photo);
+    expect(select()).toBeNull();
+  });
+
+  it('shows a file that does not say as Automatic', async () => {
+    await mountWith(tapeSnapshot('unknown'));
+    expect(select()!.options[0].textContent).toBe('Automatic');
+  });
+
+  it('Double rate stores the step and changes the head, the plan line and Frames', async () => {
+    const user = await mountWith(tapeSnapshot());
+    await user.selectOptions(select()!, 'Double rate · 50 fps');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          step_stages: [{ step: 'deinterlace', params: { mode: 'field', parity: 'auto' } }],
+        }),
+      ),
+    );
+    expect(head()!.textContent).toMatch(/ · 50 fps$/);
+    expect(await within(foot()).findByText(/^Deinterlace to 50 fps/)).toBeTruthy();
+    const frames = screen.getByLabelText('Frames') as HTMLSelectElement;
+    const labels = Array.from(frames.options).map((option) => option.textContent);
+    expect(labels).toContain('2× · 100 fps');
+    expect(labels).toContain('4× · 200 fps');
+  });
+
+  it('a hand-set order at the file rate leaves the rate alone', async () => {
+    const user = await mountWith(tapeSnapshot());
+    await user.selectOptions(select()!, 'Bottom field first · 25 fps');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          step_stages: [{ step: 'deinterlace', params: { mode: 'frame', parity: 'bff' } }],
+        }),
+      ),
+    );
+    expect(head()!.textContent).not.toMatch(/fps/);
+    expect(await within(foot()).findByText(/^Deinterlace/)).toBeTruthy();
+    expect(within(foot()).queryByText(/^Deinterlace to/)).toBeNull();
+  });
+
+  it('Automatic takes the step out again', async () => {
+    const snapshot = tapeSnapshot();
+    snapshot.settings.step_stages = [
+      { step: 'deinterlace', params: { mode: 'field', parity: 'auto' } },
+    ];
+    const user = await mountWith(snapshot);
+    await user.selectOptions(select()!, 'Automatic · interlaced');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ step_stages: [] }),
+      ),
+    );
+  });
+
+  it('a stored Double rate on a progressive file reads Double rate, explains itself and adds no rate', async () => {
+    const snapshot = tapeSnapshot('progressive');
+    snapshot.settings.step_stages = [
+      { step: 'deinterlace', params: { mode: 'field', parity: 'auto' } },
+    ];
+    await mountWith(snapshot);
+    expect(select()!.selectedOptions[0].textContent).toBe('Double rate');
+    expect(select()!.title).toBe(
+      'This file says it is not interlaced, so it is left as it is. To deinterlace it anyway, set the field order by hand.',
+    );
+    expect(head()!.textContent).not.toMatch(/fps/);
+  });
+
+  it('is disabled but for Automatic when the engine cannot deinterlace and a choice is stored', async () => {
+    const snapshot = tapeSnapshot();
+    snapshot.engine!.features = snapshot.engine!.features.filter(
+      (feature) => feature !== 'video_deinterlace',
+    );
+    snapshot.settings.step_stages = [
+      { step: 'deinterlace', params: { mode: 'field', parity: 'auto' } },
+    ];
+    await mountWith(snapshot);
+    expect(select()!.title).toBe('This engine cannot deinterlace. Update LocalSR.');
+    const disabled = Array.from(select()!.options).map((option) => option.disabled);
+    expect(disabled).toEqual([false, true, true, true, true, true]);
+  });
+
+  it('the Plan sheet names the step with the chosen option', async () => {
+    const snapshot = tapeSnapshot();
+    snapshot.settings.step_stages = [
+      { step: 'deinterlace', params: { mode: 'field', parity: 'auto' } },
+    ];
+    const user = await mountWith(snapshot);
+    const sheet = await openPlanSheet(user);
+    const row = within(sheet).getAllByRole('listitem')[0];
+    expect(within(row).getByText(/^Deinterlace/)).toBeTruthy();
+    expect(within(row).getByText('Double rate · 50 fps')).toBeTruthy();
+  });
+
+  it('runs alone at Same size', async () => {
+    const snapshot = tapeSnapshot();
+    snapshot.settings.step_stages = [
+      { step: 'deinterlace', params: { mode: 'field', parity: 'auto' } },
+    ];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
+    expect(await within(foot()).findByText(/^Deinterlace to 50 fps/)).toBeTruthy();
+    expect(within(foot()).queryByText('Nothing to run')).toBeNull();
+  });
+});
+
+describe('Strength', () => {
+  function strengthSnapshot(listed = true): AppSnapshot {
+    const snapshot = readySnapshot([image('photo', true)]);
+    if (listed) snapshot.engine!.features.push('fix_strength', 'stage_params_and_masks');
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.output_scale = 4;
+    return snapshot;
+  }
+  const fixGroup = () => screen.getByRole('group', { name: 'Fix' });
+  const foot = () => document.querySelector('.panel-foot') as HTMLElement;
+  const noiseEntry = { fix: 'noise', model_id: 'denoise_realplksr_1x' } as const;
+
+  async function tickNoise(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(within(fixGroup()).getByRole('checkbox', { name: 'Noise' }));
+    return within(fixGroup()).findByRole('button', { name: 'Full' });
+  }
+
+  it('shows Full with the model in its title, and the segments before the model', async () => {
+    const user = await mountWith(strengthSnapshot());
+    const value = await tickNoise(user);
+    expect(value.textContent?.trim()).toBe('Full');
+    expect(value.getAttribute('title')).toBe('Full · RealPLKSR Denoise');
+    await user.click(value);
+    const group = await screen.findByRole('radiogroup', { name: 'Strength' });
+    expect(within(group).getByRole('radio', { name: 'Full' }).getAttribute('aria-checked')).toBe(
+      'true',
+    );
+    const model = document.querySelector('.fix-pop-model') as HTMLElement;
+    expect(group.compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('keeps the model name where the engine does not list the feature', async () => {
+    const user = await mountWith(strengthSnapshot(false));
+    await user.click(within(fixGroup()).getByRole('checkbox', { name: 'Noise' }));
+    const value = await within(fixGroup()).findByRole('button', { name: 'RealPLKSR Denoise' });
+    await user.click(value);
+    expect(screen.queryByRole('radiogroup', { name: 'Strength' })).toBeNull();
+  });
+
+  it('Light stores the strength, names it on the plan line and leaves the popover open', async () => {
+    const user = await mountWith(strengthSnapshot());
+    await user.click(await tickNoise(user));
+    await user.click(await screen.findByRole('radio', { name: 'Light' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          fix_stages: [{ ...noiseEntry, params: { strength: 0.4 } }],
+        }),
+      ),
+    );
+    expect(screen.getByRole('radio', { name: 'Light' }).getAttribute('aria-checked')).toBe('true');
+    expect(
+      within(fixGroup())
+        .getByRole('button', { name: /^Light/ })
+        .textContent?.trim(),
+    ).toBe('Light');
+    expect(await within(foot()).findByText('Noise (light) → Upscale 4×')).toBeTruthy();
+
+    await user.click(screen.getByRole('radio', { name: 'Full' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ fix_stages: [noiseEntry] }),
+      ),
+    );
+  });
+
+  it('keeps the strength through Quick and Best, and forgets it when unticked', async () => {
+    const snapshot = strengthSnapshot();
+    snapshot.settings.fix_stages = [{ ...noiseEntry, params: { strength: 0.4 } }];
+    snapshot.settings.fixes = ['noise'];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /^Best$/i }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          fix_stages: [expect.objectContaining({ fix: 'noise', params: { strength: 0.4 } })],
+        }),
+      ),
+    );
+    await user.click(screen.getByRole('button', { name: /^Quick$/i }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          fix_stages: [expect.objectContaining({ fix: 'noise', params: { strength: 0.4 } })],
+        }),
+      ),
+    );
+    await user.click(within(fixGroup()).getByRole('checkbox', { name: 'Noise' }));
+    await user.click(within(fixGroup()).getByRole('checkbox', { name: 'Noise' }));
+    expect(await within(fixGroup()).findByRole('button', { name: /^Full/ })).toBeTruthy();
+  });
+
+  it('Colour keeps its model name and has no strength', async () => {
+    const user = await mountWith(strengthSnapshot());
+    await user.click(within(fixGroup()).getByRole('checkbox', { name: 'Colour' }));
+    const value = await within(fixGroup()).findByRole('button', { name: 'DDColor' });
+    await user.click(value);
+    expect(screen.queryByRole('radiogroup', { name: 'Strength' })).toBeNull();
+  });
+
+  it('names the strength on the Same size plan line', async () => {
+    const snapshot = strengthSnapshot();
+    snapshot.settings.output_scale = 1;
+    snapshot.settings.fix_stages = [{ ...noiseEntry, params: { strength: 0.7 } }];
+    snapshot.settings.fixes = ['noise'];
+    await mountWith(snapshot);
+    expect(await within(foot()).findByText('Noise (medium)')).toBeTruthy();
+  });
+
+  it('saves a recipe with the strength, and Update appears when it changes', async () => {
+    const snapshot = strengthSnapshot();
+    snapshot.settings.fix_stages = [{ ...noiseEntry, params: { strength: 0.4 } }];
+    snapshot.settings.fixes = ['noise'];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    await user.click(screen.getByRole('button', { name: 'Save current as recipe…' }));
+    await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Grain');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledTimes(1));
+    const saved = api.saveRecipe.mock.calls[0][0] as Recipe;
+    expect(saved.stages?.[0]).toEqual(
+      expect.objectContaining({ fix: 'noise', params: { strength: 0.4 } }),
+    );
+    expect(saved.stages?.at(-1)?.params).toBeUndefined();
+  }, 20_000);
+
+  it('a recipe saved at Light stops matching at Medium and offers Update', async () => {
+    const snapshot = strengthSnapshot();
+    snapshot.recipes = [
+      {
+        id: 'grain',
+        name: 'Grain',
+        task: 'upscale',
+        quality: 'quick',
+        model_id: 'localsr_quick_x4_v1',
+        output_scale: 4,
+        tile_size: 256,
+        halo: 8,
+        precision: 'fp32',
+        safe_memory: false,
+        fixes: ['noise'],
+        stages: [
+          {
+            kind: 'restore',
+            model_id: 'denoise_realplksr_1x',
+            fix: 'noise',
+            params: { strength: 0.4 },
+          },
+          { kind: 'upscale', model_id: 'localsr_quick_x4_v1' },
+        ],
+      },
+    ];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    await user.click(screen.getByRole('button', { name: /^Grain/ }));
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Recipes' })).toBeNull());
+    await user.click(await within(fixGroup()).findByRole('button', { name: 'Light' }));
+    await user.click(await screen.findByRole('radio', { name: 'Medium' }));
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    expect(await screen.findByRole('button', { name: 'Update “Grain”' })).toBeTruthy();
+  }, 20_000);
+
+  it('says which stops an engine without the feature still allows', async () => {
+    const snapshot = strengthSnapshot(false);
+    snapshot.settings.fix_stages = [{ ...noiseEntry, params: { strength: 0.4 } }];
+    snapshot.settings.fixes = ['noise'];
+    const user = await mountWith(snapshot);
+    await user.click(await within(fixGroup()).findByRole('button', { name: /^Light/ }));
+    const group = await screen.findByRole('radiogroup', { name: 'Strength' });
+    expect(group.getAttribute('title')).toBe(
+      "This engine cannot change a fix's strength. Update LocalSR.",
+    );
+    expect(within(group).getByRole('radio', { name: 'Light' }).getAttribute('aria-checked')).toBe(
+      'true',
+    );
+    expect(
+      (within(group).getByRole('radio', { name: 'Medium' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect((within(group).getByRole('radio', { name: 'Full' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
+
+  it('keeps the value readable and the popover shut while a job runs', async () => {
+    const snapshot = strengthSnapshot();
+    snapshot.settings.fix_stages = [{ ...noiseEntry, params: { strength: 0.4 } }];
+    snapshot.settings.fixes = ['noise'];
+    snapshot.runtime.active_job_id = 'job-1';
+    snapshot.jobs = [
+      {
+        id: 'job-1',
+        media_id: 'photo',
+        media_name: 'photo.png',
+        media_kind: 'image',
+        status: 'running',
+        progress: 5,
+        output_path: '',
+        error: '',
+        created_at: 1,
+      },
+    ];
+    const user = await mountWith(snapshot);
+    const value = await within(fixGroup()).findByRole('button', { name: /^Light/ });
+    expect(value.textContent?.trim()).toBe('Light');
+    await user.click(value);
+    expect(screen.queryByRole('radiogroup', { name: 'Strength' })).toBeNull();
+  });
+});
+
+describe('Stabilise', () => {
+  function shakySnapshot(listed = true): AppSnapshot {
+    const snapshot = readySnapshot([
+      { ...video('clip', true), fps: 25, width: 1920, height: 1080 },
+    ]);
+    if (listed) snapshot.engine!.features.push('video_stabilise', 'stage_params_and_masks');
+    snapshot.catalog.models.forEach((model) => (model.installed = true));
+    Object.assign(snapshot.settings, {
+      task: 'video',
+      video_task: 'upscale',
+      selected_video_model_id: 'frame_by_frame',
+      selected_model_id: 'span_photo_x4',
+      output_scale: 2,
+    });
+    return snapshot;
+  }
+  const fixGroup = () => screen.getByRole('group', { name: 'Fix' });
+  const foot = () => document.querySelector('.panel-foot') as HTMLElement;
+  const box = () =>
+    screen.queryByRole('checkbox', { name: 'Stabilise' }) as HTMLInputElement | null;
+  const head = () =>
+    document.querySelector('[aria-label="Result"] .panel-head-value')?.textContent ?? '';
+  const guide = () => document.querySelector('.crop-guide');
+  const stage = (smoothing: string) => ({ step: 'stabilise', params: { smoothing } });
+
+  it('is the first checkbox of the group Fix, unticked, with Labs', async () => {
+    await mountWith(shakySnapshot());
+    const boxes = within(fixGroup()).getAllByRole('checkbox');
+    expect(boxes[0]).toBe(box());
+    expect(box()!.checked).toBe(false);
+    const row = box()!.closest('.fix-row') as HTMLElement;
+    expect(within(row).getByText('Labs')).toBeTruthy();
+    expect(row.getAttribute('title')).toBe(
+      'Steadies shaky handheld video. The picture is enlarged a little so its moving edges stay out of view.',
+    );
+  });
+
+  it('is not there for a photo, without the feature, or with SeedVR2', async () => {
+    const photo = shakySnapshot();
+    photo.media = [image('photo', true)];
+    photo.settings.task = 'upscale';
+    await mountWith(photo);
+    expect(box()).toBeNull();
+    cleanup();
+    await mountWith(shakySnapshot(false));
+    expect(box()).toBeNull();
+    cleanup();
+    const temporal = shakySnapshot();
+    temporal.settings.selected_video_model_id = temporal.catalog.video_models[0].model_id;
+    await mountWith(temporal);
+    expect(box()).toBeNull();
+  });
+
+  it('ticking stores Medium, names the plan line and leaves the Result head alone', async () => {
+    const user = await mountWith(shakySnapshot());
+    const before = head();
+    await user.click(box()!);
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ step_stages: [stage('medium')] }),
+      ),
+    );
+    const value = await within(fixGroup()).findByRole('button', { name: /^Medium/ });
+    expect(value.textContent?.trim()).toBe('Medium');
+    expect(await within(foot()).findByText(/^Stabilise/)).toBeTruthy();
+    expect(head()).toBe(before);
+  });
+
+  it('pressing Strong stores it and leaves the popover open; unticking removes the step', async () => {
+    const user = await mountWith(shakySnapshot());
+    await user.click(box()!);
+    await user.click(await within(fixGroup()).findByRole('button', { name: /^Medium/ }));
+    const group = await screen.findByRole('radiogroup', { name: 'Smoothing' });
+    expect(
+      within(group)
+        .getAllByRole('radio')
+        .map((radio) => radio.textContent),
+    ).toEqual(['Light', 'Medium', 'Strong']);
+    await user.click(within(group).getByRole('radio', { name: 'Strong' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ step_stages: [stage('strong')] }),
+      ),
+    );
+    expect(screen.getByRole('radiogroup', { name: 'Smoothing' })).toBeTruthy();
+    expect(
+      within(fixGroup())
+        .getByRole('button', { name: /^Strong/ })
+        .textContent?.trim(),
+    ).toBe('Strong');
+    await user.click(box()!);
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ step_stages: [] }),
+      ),
+    );
+  });
+
+  it('keeps a stored deinterlace step, and the plan line reads Deinterlace → Stabilise', async () => {
+    const snapshot = shakySnapshot();
+    snapshot.engine!.features.push('video_deinterlace');
+    snapshot.settings.step_stages = [
+      { step: 'deinterlace', params: { mode: 'frame', parity: 'tff' } },
+    ];
+    const user = await mountWith(snapshot);
+    await user.click(box()!);
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          step_stages: [
+            { step: 'deinterlace', params: { mode: 'frame', parity: 'tff' } },
+            stage('medium'),
+          ],
+        }),
+      ),
+    );
+    expect(await within(foot()).findByText(/^Deinterlace → Stabilise/)).toBeTruthy();
+    await user.click(box()!);
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          step_stages: [{ step: 'deinterlace', params: { mode: 'frame', parity: 'tff' } }],
+        }),
+      ),
+    );
+  });
+
+  it('HDR kept: disabled and unticked with its title; choosing it drops the stored step', async () => {
+    const kept = shakySnapshot();
+    kept.settings.selected_model_id = 'hat_s_x4';
+    kept.settings.video_hdr_mode = 'preserve';
+    kept.settings.step_stages = [stage('medium')];
+    await mountWith(kept);
+    expect(box()!.checked).toBe(false);
+    expect(box()!.disabled).toBe(true);
+    expect(box()!.closest('.fix-row')!.getAttribute('title')).toBe(
+      'Not available while HDR is preserved.',
+    );
+    cleanup();
+
+    const snapshot = shakySnapshot();
+    snapshot.media = [{ ...video('hdr', true), hdr_format: 'HLG' }];
+    snapshot.settings.selected_model_id = 'hat_s_x4';
+    snapshot.settings.video_hdr_mode = 'tone_map';
+    snapshot.settings.step_stages = [stage('medium')];
+    const user = await mountWith(snapshot);
+    const output = await openOutputSheet(user);
+    await user.selectOptions(within(output).getByLabelText('Colour output'), 'preserve');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ video_hdr_mode: 'preserve', step_stages: [] }),
+      ),
+    );
+  });
+
+  it('at Same size with nothing else ticked, Start is on and nothing says Nothing to run', async () => {
+    const snapshot = shakySnapshot();
+    snapshot.settings.output_scale = 1;
+    const user = await mountWith(snapshot);
+    await user.click(box()!);
+    await within(foot()).findByText(/^Stabilise/);
+    expect(screen.queryByText(/Nothing to run/)).toBeNull();
+    expect(
+      (screen.getByRole('button', { name: 'Start selected video' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  async function bandFollowsThePopover(): Promise<void> {
+    const snapshot = shakySnapshot();
+    snapshot.settings.step_stages = [stage('medium')];
+    const user = await mountWith(snapshot);
+    await within(fixGroup()).findByRole('button', { name: /^Medium/ });
+    await waitFor(() =>
+      expect(document.querySelector('.canvas-well video, .source-image')).toBeTruthy(),
+    );
+    expect(guide()).toBeNull();
+    await user.click(within(fixGroup()).getByRole('button', { name: /^Medium/ }));
+    await waitFor(() => expect(guide()?.getAttribute('data-crop')).toBe('0.05'));
+    await user.click(await screen.findByRole('radio', { name: 'Strong' }));
+    await waitFor(() => expect(guide()?.getAttribute('data-crop')).toBe('0.08'));
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(guide()).toBeNull());
+  }
+
+  it('dims the crop over a clip that plays alone while the popover is open', async () => {
+    api.prepareVideoComparison.mockResolvedValue({
+      original_url: 'asset://localhost/original.mp4',
+      enhanced_url: '',
+    });
+    try {
+      await bandFollowsThePopover();
+    } finally {
+      api.prepareVideoComparison.mockResolvedValue({
+        original_url: 'asset://localhost/original.mp4',
+        enhanced_url: 'asset://localhost/enhanced.mp4',
+      });
+    }
+  });
+
+  it('dims the crop over the still picture while the popover is open', async () => {
+    api.prepareVideoComparison.mockRejectedValue(new Error('no player'));
+    try {
+      await bandFollowsThePopover();
+    } finally {
+      api.prepareVideoComparison.mockResolvedValue({
+        original_url: 'asset://localhost/original.mp4',
+        enhanced_url: 'asset://localhost/enhanced.mp4',
+      });
+    }
+  });
+
+  it('draws no band over a finished comparison', async () => {
+    const snapshot = shakySnapshot();
+    snapshot.settings.step_stages = [stage('medium')];
+    const user = await mountWith(snapshot);
+    await user.click(await within(fixGroup()).findByRole('button', { name: /^Medium/ }));
+    await screen.findByRole('radiogroup', { name: 'Smoothing' });
+    expect(guide()).toBeNull();
+  });
+
+  it('names the step in the Plan sheet with its crop', async () => {
+    const snapshot = shakySnapshot();
+    snapshot.settings.step_stages = [stage('medium')];
+    const user = await mountWith(snapshot);
+    await user.click(document.querySelector('.foot-plan') as HTMLButtonElement);
+    const sheet = screen.getByRole('group', { name: 'Plan' });
+    expect(within(sheet).getByText('Medium · cuts 5 % off each edge')).toBeTruthy();
+    expect(within(sheet).queryByRole('button', { name: /Stabilise/ })).toBeNull();
+  });
+
+  it('a stored step stays on an engine without the feature, and cannot be opened', async () => {
+    const snapshot = shakySnapshot(false);
+    snapshot.settings.step_stages = [stage('medium')];
+    await mountWith(snapshot);
+    expect(box()!.checked).toBe(true);
+    expect(box()!.closest('.fix-row')!.getAttribute('title')).toBe(
+      'This engine cannot stabilise. Update LocalSR.',
+    );
+    expect(
+      (within(fixGroup()).getByRole('button', { name: /^Medium/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+});
+
+describe('Dust & scratches', () => {
+  /** Photos with these marks, the first one open, at 2× with nothing ticked. */
+  function scratchedSnapshot(marks: number[] = [0], listed = true): AppSnapshot {
+    const names = ['photo', 'second', 'third'];
+    const snapshot = readySnapshot(
+      marks.map((count, index) => ({
+        ...image(names[index], index === 0),
+        repair_marks: count,
+        repair_rev: count > 0 ? 1 : 0,
+      })),
+    );
+    if (listed) snapshot.engine!.features.push('image_repair', 'stage_params_and_masks');
+    snapshot.engine!.features.push('patch_preview');
+    Object.assign(snapshot.settings, {
+      task: 'upscale',
+      quality: 'quick',
+      selected_model_id: 'span_photo_x4',
+      output_scale: 2,
+    });
+    return snapshot;
+  }
+  /** Same size with nothing else ticked. */
+  const same = (snapshot: AppSnapshot): AppSnapshot => {
+    Object.assign(snapshot.settings, { task: 'denoise', output_scale: 1, selected_model_id: '' });
+    return snapshot;
+  };
+  const ticked = (snapshot: AppSnapshot): AppSnapshot => {
+    snapshot.settings.step_stages = [{ step: 'repair' }];
+    return snapshot;
+  };
+  const fixGroup = () => screen.getByRole('group', { name: 'Fix' });
+  const foot = () => document.querySelector('.panel-foot') as HTMLElement;
+  const box = () =>
+    screen.queryByRole('checkbox', { name: 'Dust & scratches' }) as HTMLInputElement | null;
+  const value = () => document.querySelector<HTMLButtonElement>('.fix-value[data-paints]');
+  const toolbar = () => screen.queryByRole('toolbar', { name: 'Dust & scratches' });
+  const sizeText = () => document.querySelector('.paint-size-text')?.textContent ?? '';
+  const saved = () => api.setRepairStrokes.mock.calls.at(-1)?.[1] ?? null;
+  const press = (key: string, init: KeyboardEventInit = {}) =>
+    fireEvent.keyDown(document.activeElement ?? document.body, { key, ...init });
+
+  let stage = { width: 0, height: 0 };
+  /** A point on the canvas in source pixels, rounded as a stroke keeps it. */
+  const source = (x: number, y: number): number[] => [
+    Math.round(((x - 400) * 640 * 10) / stage.width + 3200) / 10,
+    Math.round(((y - 300) * 480 * 10) / stage.height + 2400) / 10,
+  ];
+
+  /** The viewer at 800 × 600 with the 640 × 480 photo fitted into it. */
+  async function viewer(): Promise<HTMLElement> {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      width: 800,
+      height: 600,
+      top: 0,
+      left: 0,
+      right: 800,
+      bottom: 600,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const picture = await waitFor(() => {
+      const element = document.querySelector<HTMLImageElement>('.source-image');
+      expect(element).toBeTruthy();
+      return element!;
+    });
+    Object.defineProperty(picture, 'naturalWidth', { value: 640, configurable: true });
+    Object.defineProperty(picture, 'naturalHeight', { value: 480, configurable: true });
+    await fireEvent.load(picture);
+    await waitFor(() =>
+      expect(
+        parseFloat(document.querySelector<HTMLElement>('.image-stage')?.style.width ?? '0'),
+      ).toBeGreaterThan(100),
+    );
+    const style = document.querySelector<HTMLElement>('.image-stage')!.style;
+    stage = { width: parseFloat(style.width), height: parseFloat(style.height) };
+    return screen.getByRole('application', { name: 'Media comparison canvas' });
+  }
+
+  async function drag(canvas: HTMLElement, points: [number, number][], init = {}): Promise<void> {
+    const [first, ...rest] = points;
+    await fireEvent.pointerDown(canvas, {
+      pointerId: 1,
+      button: 0,
+      clientX: first[0],
+      clientY: first[1],
+      ...init,
+    });
+    for (const [x, y] of rest) {
+      await fireEvent.pointerMove(canvas, { pointerId: 1, clientX: x, clientY: y });
+    }
+    const last = points.at(-1)!;
+    await fireEvent.pointerUp(canvas, { pointerId: 1, clientX: last[0], clientY: last[1] });
+  }
+
+  /** Opens painting from the ticked row of a photo without paint, laid out for strokes. */
+  async function painting(snapshot = ticked(scratchedSnapshot())) {
+    const user = await mountWith(snapshot);
+    const canvas = await viewer();
+    await user.click(value()!);
+    await waitFor(() => expect(toolbar()).toBeTruthy());
+    return { user, canvas };
+  }
+
+  it('is the first checkbox of the group Fix on a photo, unticked and without a value', async () => {
+    await mountWith(scratchedSnapshot());
+    const boxes = within(fixGroup()).getAllByRole('checkbox');
+    expect(boxes[0]).toBe(box());
+    expect(box()!.checked).toBe(false);
+    expect(value()).toBeNull();
+    expect(box()!.closest('.fix-row')!.getAttribute('title')).toBe(
+      'Repairs small marks that you paint over: dust, scratches, spots.',
+    );
+  });
+
+  it('is not there for a video, in Edit, or without the feature', async () => {
+    const clip = scratchedSnapshot();
+    clip.media = [video('clip', true)];
+    clip.settings.task = 'video';
+    await mountWith(clip);
+    expect(box()).toBeNull();
+    cleanup();
+    const edit = scratchedSnapshot();
+    edit.settings.task = 'edit';
+    await mountWith(edit);
+    expect(box()).toBeNull();
+    cleanup();
+    await mountWith(scratchedSnapshot([0], false));
+    expect(box()).toBeNull();
+  });
+
+  it('ticking a photo without paint stores the step and opens painting with focus on Paint', async () => {
+    const user = await mountWith(scratchedSnapshot());
+    expect(screen.getByRole('button', { name: 'Preview' })).toBeTruthy();
+    await user.click(box()!);
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ step_stages: [{ step: 'repair' }] }),
+      ),
+    );
+    await waitFor(() => expect(toolbar()).toBeTruthy());
+    expect(api.getRepairStrokes).toHaveBeenCalledWith('photo');
+    const paint = within(toolbar()!).getByRole('radio', { name: 'Paint' });
+    await waitFor(() => expect(document.activeElement).toBe(paint));
+    expect(paint.getAttribute('aria-checked')).toBe('true');
+    expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
+    expect(screen.queryByRole('radiogroup', { name: 'Comparison view' })).toBeNull();
+    expect(value()!.textContent?.trim()).toBe('Paint…');
+    expect(value()!.title).toBe('Paint over the marks on this photo');
+  });
+
+  it('with 3 marks the value reads 3 marks and opens painting only when pressed', async () => {
+    const user = await mountWith(ticked(scratchedSnapshot([3])));
+    expect(value()!.textContent?.trim()).toBe('3 marks');
+    expect(value()!.title).toBe('3 marks on this photo. Click to change them.');
+    expect(toolbar()).toBeNull();
+    await user.click(value()!);
+    await waitFor(() => expect(toolbar()).toBeTruthy());
+  });
+
+  it('a stroke is saved 300 ms after it ends in source pixels, and the value follows the snapshot', async () => {
+    const { canvas } = await painting();
+    const painted = ticked(scratchedSnapshot([1]));
+    api.refreshSnapshot.mockResolvedValue(structuredClone(painted));
+    await drag(canvas, [
+      [400, 300],
+      [440, 300],
+      [480, 320],
+    ]);
+    expect(api.setRepairStrokes).not.toHaveBeenCalled();
+    await waitFor(() => expect(api.setRepairStrokes).toHaveBeenCalledTimes(1));
+    const points = [...source(400, 300), ...source(440, 300), ...source(480, 320)];
+    expect(points.slice(0, 2)).toEqual([320, 240]);
+    expect(api.setRepairStrokes).toHaveBeenLastCalledWith('photo', [
+      { mode: 'paint', size: 4, points },
+    ]);
+    await waitFor(() => expect(value()!.textContent?.trim()).toBe('1 mark'));
+    expect(document.querySelector('.mask-paint path')?.getAttribute('d')).toBe(
+      `M${points[0]} ${points[1]} L${points[2]} ${points[3]} ${points[4]} ${points[5]}`,
+    );
+  });
+
+  it('E paints an erase stroke and B goes back to Paint', async () => {
+    const { canvas } = await painting();
+    await press('e');
+    expect(
+      within(toolbar()!).getByRole('radio', { name: 'Erase' }).getAttribute('aria-checked'),
+    ).toBe('true');
+    await drag(canvas, [
+      [400, 300],
+      [420, 300],
+    ]);
+    await waitFor(() =>
+      expect(saved()).toEqual([
+        { mode: 'erase', size: 4, points: [...source(400, 300), ...source(420, 300)] },
+      ]),
+    );
+    await press('b');
+    expect(
+      within(toolbar()!).getByRole('radio', { name: 'Paint' }).getAttribute('aria-checked'),
+    ).toBe('true');
+  });
+
+  it('] and [ change the size by 1.25 and stay inside the limits', async () => {
+    await painting();
+    expect(sizeText()).toBe('4 px');
+    await press(']');
+    expect(sizeText()).toBe('5 px');
+    await press('[');
+    expect(sizeText()).toBe('4 px');
+    for (let step = 0; step < 20; step += 1) await press(']');
+    expect(sizeText()).toBe('40 px');
+    for (let step = 0; step < 30; step += 1) await press('[');
+    expect(sizeText()).toBe('2 px');
+  });
+
+  it('Undo, ⌘Z and ⇧⌘Z take strokes off and put them back; Undo is off with nothing to take', async () => {
+    const { user, canvas } = await painting();
+    const undoButton = () =>
+      within(toolbar()!).getByRole('button', { name: 'Undo' }) as HTMLButtonElement;
+    expect(undoButton().disabled).toBe(true);
+    await drag(canvas, [[400, 300]]);
+    await drag(canvas, [[200, 100]]);
+    expect(document.querySelectorAll('.mask-paint path')).toHaveLength(2);
+    expect(undoButton().disabled).toBe(false);
+    await user.click(undoButton());
+    expect(document.querySelectorAll('.mask-paint path')).toHaveLength(1);
+    await press('z', { metaKey: true });
+    expect(document.querySelectorAll('.mask-paint path')).toHaveLength(0);
+    expect(undoButton().disabled).toBe(true);
+    await press('z', { metaKey: true, shiftKey: true });
+    expect(document.querySelectorAll('.mask-paint path')).toHaveLength(1);
+    await press('y', { ctrlKey: true });
+    expect(document.querySelectorAll('.mask-paint path')).toHaveLength(2);
+    await waitFor(() => expect(saved()).toHaveLength(2));
+  });
+
+  it('Clear saves an empty list and Undo brings the strokes back', async () => {
+    const { user, canvas } = await painting();
+    await drag(canvas, [[400, 300]]);
+    await drag(canvas, [[200, 100]]);
+    await waitFor(() => expect(saved()).toHaveLength(2));
+    await user.click(within(toolbar()!).getByRole('button', { name: 'Clear' }));
+    await waitFor(() => expect(saved()).toEqual([]));
+    expect(
+      (within(toolbar()!).getByRole('button', { name: 'Clear' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    await user.click(within(toolbar()!).getByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(saved()).toHaveLength(2));
+  });
+
+  it('Esc ends painting with focus on the value, and the view switch comes back', async () => {
+    const snapshot = ticked(scratchedSnapshot([2]));
+    snapshot.jobs = [
+      {
+        id: 'saved',
+        media_id: 'photo',
+        media_name: 'photo.png',
+        media_kind: 'image',
+        status: 'completed',
+        progress: 100,
+        output_path: '/out/saved.png',
+        error: '',
+        created_at: 1,
+      },
+    ];
+    snapshot.runtime.comparison_pair = {
+      media_id: '',
+      generation: 0,
+      showing: { target_id: '', preview_data_url: '' },
+      against: { target_id: '', preview_data_url: '' },
+    };
+    api.listMediaResults.mockResolvedValue(historyOf('photo', [row('saved')]));
+    api.requestImageComparison.mockImplementation(async (mediaId, pair) => {
+      if (!pair) return;
+      snapshot.runtime.comparison_pair = {
+        media_id: mediaId,
+        generation: 1,
+        showing: {
+          target_id: pair.showing,
+          preview_data_url: 'data:image/jpeg;base64,saved',
+          width: 1280,
+          height: 960,
+          preview_width: 1280,
+          preview_height: 960,
+        },
+        against: { target_id: 'original', preview_data_url: '', width: 640, height: 480 },
+      };
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    });
+    const user = await mountWith(snapshot);
+    await screen.findByRole('radiogroup', { name: 'Comparison view' });
+    await user.click(value()!);
+    await waitFor(() => expect(toolbar()).toBeTruthy());
+    expect(screen.queryByRole('radiogroup', { name: 'Comparison view' })).toBeNull();
+    await press('Escape');
+    await waitFor(() => expect(toolbar()).toBeNull());
+    expect(document.activeElement).toBe(value());
+    expect(screen.getByRole('radiogroup', { name: 'Comparison view' })).toBeTruthy();
+  });
+
+  it('another photo keeps painting with its own strokes; a video ends it', async () => {
+    const snapshot = ticked(scratchedSnapshot([0, 0]));
+    snapshot.media.push(video('clip'));
+    await painting(snapshot);
+    const other = structuredClone(snapshot);
+    other.media.forEach((media) => (media.selected = media.id === 'second'));
+    api.refreshSnapshot.mockResolvedValue(other);
+    (api.listenForStateChange.mock.calls.at(-1)![0] as () => void)();
+    await waitFor(() => expect(api.getRepairStrokes).toHaveBeenCalledWith('second'));
+    expect(toolbar()).toBeTruthy();
+    const clip = structuredClone(snapshot);
+    clip.media.forEach((media) => (media.selected = media.id === 'clip'));
+    api.refreshSnapshot.mockResolvedValue(clip);
+    (api.listenForStateChange.mock.calls.at(-1)![0] as () => void)();
+    await waitFor(() => expect(toolbar()).toBeNull());
+  });
+
+  it('removing the painted photo ends painting without sending its paint', async () => {
+    const snapshot = ticked(scratchedSnapshot([0, 0]));
+    const { canvas } = await painting(snapshot);
+    await drag(canvas, [[400, 300]]);
+    const removed = structuredClone(snapshot);
+    removed.media = removed.media.filter((media) => media.id !== 'photo');
+    removed.media[0].selected = true;
+    api.refreshSnapshot.mockResolvedValue(removed);
+    (api.listenForStateChange.mock.calls.at(-1)![0] as () => void)();
+    await waitFor(() => expect(toolbar()).toBeNull());
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(api.setRepairStrokes).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('at Same size with nothing else, a photo without paint has nothing to run', async () => {
+    await mountWith(same(ticked(scratchedSnapshot())));
+    expect(
+      await screen.findByText('Nothing to run. Paint over the marks first, or pick another fix.'),
+    ).toBeTruthy();
+    expect(within(foot()).getByText('Nothing to run')).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Restore selected' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it('at Same size with nothing else, 3 marks run Dust & scratches, named in the Plan sheet', async () => {
+    const user = await mountWith(same(ticked(scratchedSnapshot([3]))));
+    expect(await within(foot()).findByText('Dust & scratches')).toBeTruthy();
+    expect(screen.queryByText(/Nothing to run/)).toBeNull();
+    expect(
+      (screen.getByRole('button', { name: 'Restore selected' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    const sheet = await openPlanSheet(user);
+    expect(within(sheet).getByText('3 marks')).toBeTruthy();
+    expect(within(sheet).queryByRole('button', { name: /Change/ })).toBeNull();
+  });
+
+  it('at 2× with Noise and no paint, the plan line leaves the step out', async () => {
+    const snapshot = ticked(scratchedSnapshot());
+    snapshot.settings.fix_stages = [{ fix: 'noise', model_id: 'scunet_color_real_psnr' }];
+    await mountWith(snapshot);
+    expect(await within(foot()).findByText('Noise → Upscale 2×')).toBeTruthy();
+  });
+
+  it('three photos, one painted, the tick alone: the all-button counts 1', async () => {
+    await mountWith(same(ticked(scratchedSnapshot([0, 2, 0]))));
+    const all = await screen.findByRole('button', { name: 'Restore all 1' });
+    expect((all as HTMLButtonElement).disabled).toBe(false);
+    const one = screen.getByRole('button', { name: 'Only this one' }) as HTMLButtonElement;
+    expect(one.disabled).toBe(true);
+    expect(one.title).toBe('Nothing to run. Paint over the marks first, or pick another fix.');
+    expect(value()!.title).toBe('Paint over the marks on this photo. 1 of 3 photos has marks.');
+  });
+
+  it('while a job runs the value is disabled with its title', async () => {
+    const snapshot = ticked(scratchedSnapshot([0, 0]));
+    snapshot.runtime.active_job_id = 'job-running';
+    snapshot.jobs = [
+      {
+        id: 'job-running',
+        media_id: 'second',
+        media_name: 'second.png',
+        media_kind: 'image',
+        status: 'running',
+        progress: 10,
+        output_path: '',
+        error: '',
+        created_at: 1,
+      },
+    ];
+    await mountWith(snapshot);
+    expect(value()!.disabled).toBe(true);
+    expect(value()!.title).toBe('Available when the job finishes.');
+  });
+
+  it('the preview patch runs the repair, stops while painting and asks again for new paint', async () => {
+    const snapshot = ticked(scratchedSnapshot([1]));
+    snapshot.settings.preview_patch_shown = true;
+    const user = await mountWith(snapshot);
+    await waitFor(() => expect(api.requestPatchPreview).toHaveBeenCalledTimes(1));
+    const first = api.requestPatchPreview.mock.calls[0][0];
+    expect((first.input as StartBatchInput).step_stages).toEqual([{ step: 'repair' }]);
+    await user.click(value()!);
+    await waitFor(() => expect(toolbar()).toBeTruthy());
+    await waitFor(() => expect(api.cancelPatchPreview).toHaveBeenCalledWith('a'));
+    await press('Escape');
+    await waitFor(() => expect(api.requestPatchPreview).toHaveBeenCalledTimes(2));
+    // The host saved more paint: the same plan with a new mask asks again.
+    const painted = ticked(scratchedSnapshot([2]));
+    painted.settings.preview_patch_shown = true;
+    painted.media[0].repair_rev = 2;
+    api.refreshSnapshot.mockResolvedValue(structuredClone(painted));
+    (api.listenForStateChange.mock.calls.at(-1)![0] as () => void)();
+    await waitFor(() => expect(api.requestPatchPreview).toHaveBeenCalledTimes(3), {
+      timeout: 2000,
+    });
+  });
+
+  it('stays ticked on a photo while the video setting keeps HDR', async () => {
+    const snapshot = ticked(scratchedSnapshot([3]));
+    snapshot.settings.video_hdr_mode = 'preserve';
+    await mountWith(snapshot);
+    expect(box()!.checked).toBe(true);
+    expect(box()!.disabled).toBe(false);
+    expect(value()!.textContent?.trim()).toBe('3 marks');
+  });
+
+  it('a stored step stays on an engine without the feature, and its value cannot paint', async () => {
+    await mountWith(ticked(scratchedSnapshot([0], false)));
+    expect(box()!.checked).toBe(true);
+    expect(box()!.closest('.fix-row')!.getAttribute('title')).toBe(
+      'This engine cannot repair marks. Update LocalSR.',
+    );
+    expect(value()!.disabled).toBe(true);
   });
 });

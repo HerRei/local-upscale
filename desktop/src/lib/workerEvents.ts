@@ -329,7 +329,7 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       // Editing names its phase; most of an edit happens outside the steps.
       next.runtime.status_detail = data.detail
         ? String(data.detail)
-        : `${Number(data.completed_tiles ?? 0)} of ${Number(data.total_tiles ?? 0)} ${data.unit === 'steps' ? 'steps' : 'tiles'}${Number(data.estimated_remaining_seconds ?? 0) > 0 ? ` · ETA ${formatDuration(Number(data.estimated_remaining_seconds))}` : ''}`;
+        : `${Number(data.completed_tiles ?? 0)} of ${Number(data.total_tiles ?? 0)} ${data.unit === 'steps' ? 'steps' : 'tiles'}${Number(data.estimated_remaining_seconds ?? 0) > 0 ? ` · ETA ≈ ${formatDuration(Number(data.estimated_remaining_seconds))}` : ''}`;
       next.runtime.elapsed_seconds = Number(data.elapsed_seconds ?? 0);
       next.runtime.estimated_remaining_seconds = Number(data.estimated_remaining_seconds ?? 0);
       next.runtime.throughput =
@@ -449,7 +449,7 @@ function applyJobEnvelope(snapshot: AppSnapshot, envelope: WorkerEnvelope): AppS
       const elapsed = Number(data.elapsed_seconds ?? 0);
       const remaining = Number(data.estimated_remaining_seconds ?? 0);
       next.runtime.status_title = 'Enhancing video';
-      next.runtime.status_detail = `Frame ${done} of ${total || '?'}${remaining > 0 ? ` · ETA ${formatDuration(remaining)}` : ''}`;
+      next.runtime.status_detail = `Frame ${done} of ${total || '?'}${remaining > 0 ? ` · ETA ≈ ${formatDuration(remaining)}` : ''}`;
       if (done > 0 && elapsed > 0) {
         next.runtime.elapsed_seconds = elapsed;
         next.runtime.estimated_remaining_seconds = remaining;

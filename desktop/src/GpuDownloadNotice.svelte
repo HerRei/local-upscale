@@ -82,7 +82,7 @@
     color: var(--on-accent);
     font-weight: 600;
   }
-  @media (max-width: 1279px) {
+  @media (max-width: 899px) {
     .gpu-download-notice {
       grid-template-columns: auto minmax(0, 1fr);
     }

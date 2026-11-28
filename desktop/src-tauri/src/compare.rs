@@ -1330,6 +1330,7 @@ mod tests {
             "",
             "",
             true,
+            "",
         )
         .unwrap();
         db.insert_job("job-a", "m1", "{}").unwrap();

@@ -87,6 +87,9 @@ describe('workflows', () => {
       "Black and white? Tick Colour afterwards. The colours are the model's guess.",
     );
     expect(WORKFLOWS[3].for).toBe('For small, blocky pictures saved from websites or chats.');
+    expect(WORKFLOWS[0].note).toBe(
+      'Enlarges and sharpens, and smooths film grain. Scratches and dust stay unless you tick Dust & scratches and paint over them. Colours are not changed.',
+    );
   });
 
   it('resolves the model table from the bundled catalog with nothing remembered', () => {

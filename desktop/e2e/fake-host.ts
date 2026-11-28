@@ -17,10 +17,16 @@ export interface Scenario {
   video?: boolean;
   /** Whether the fake video reports an audio track (defaults to true). */
   videoHasAudio?: boolean;
+  /** What the fake video's probe says about interlacing; also makes it 768 × 576 at 25 fps. */
+  videoFieldOrder?: 'progressive' | 'tff' | 'bff' | 'unknown';
   /** Completed 15/60 fps outputs with tiny real playback sources. */
   videoCompare?: boolean;
+  /** The unprocessed clip plays alone from a tiny real 16:9 source. */
+  videoSource?: boolean;
   /** With `videoCompare`: a third result, stopped after two frames and kept. */
   videoPartial?: boolean;
+  /** With `videoCompare`: the length of the 15/60 fps results (defaults to the original's 4 s). */
+  videoResultSeconds?: number;
   /** Real PyAV clips (30/24/60 fps, 1s unfinished, audio overhang) with frame counters. */
   videoSyncCompare?: boolean;
   /** With `running`: the host can keep the finished part of the photo that runs. */
@@ -127,6 +133,8 @@ export interface Scenario {
   unreadable?: { name: string; error: string };
   /** Simulate up to 3 concurrent model downloads with queue, progress, cancel, and errors. */
   concurrentDownloads?: boolean;
+  /** What `estimate_start` answers: the seconds measured runs of this work would give, or none. */
+  estimateSeconds?: number | null;
   /** Override plan_job behaviour for loading and error tests. */
   plan?: 'error' | { delayMs: number };
   /**
@@ -141,6 +149,8 @@ export interface Scenario {
   systemAccent?: { light: string; dark: string };
   /** Pre-set edit.runtime_path so Edit plans can start without picking the runtime interactively. */
   editRuntime?: string;
+  /** Dust & scratches painted on photo n: the strokes the host keeps, kept per media in the page. */
+  marks?: Record<number, { mode: 'paint' | 'erase'; size: number; points: number[] }[]>;
 }
 
 export interface HostCall {
@@ -179,6 +189,12 @@ function hostScript(scenario: Scenario): void {
 
   type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
+  // The strokes of Dust & scratches per media id; the snapshot carries only their count.
+  const repairStrokes: Record<string, Json[]> = Object.fromEntries(
+    Object.entries(scenario.marks ?? {}).map(([n, strokes]) => [`photo-${n}`, strokes]),
+  );
+  const paintMarks = (strokes: Json[]): number =>
+    strokes.filter((stroke) => stroke.mode === 'paint').length;
   const photo = (n: number): Json => ({
     id: `photo-${n}`,
     path: `/fixture/alpine-lake-${n}.jpg`,
@@ -193,6 +209,8 @@ function hostScript(scenario: Scenario): void {
     probe_status: 'ready',
     error: '',
     selected: n === 1,
+    repair_marks: paintMarks(scenario.marks?.[n] ?? []),
+    repair_rev: scenario.marks?.[n] ? 1 : 0,
     ...(n === 1 && scenario.unreadable
       ? { ...scenario.unreadable, preview_data_url: '', probe_status: 'failed' }
       : {}),
@@ -217,6 +235,11 @@ function hostScript(scenario: Scenario): void {
   };
   const patchSteps = (input: Json, replace: Json | null, slot: string, limit: number | null) => {
     const steps: Json[] = [];
+    // The cut-out runs before the fixes, as the plan orders it.
+    for (const stage of input.step_stages ?? []) {
+      if (stage.step === 'remove_background')
+        steps.push({ kind: stage.step, fix: '', model_id: stage.model_id ?? '' });
+    }
     for (const stage of input.fix_stages ?? []) {
       const swapped = replace && slot === replace.slot && replace.fix === stage.fix;
       steps.push({
@@ -226,6 +249,7 @@ function hostScript(scenario: Scenario): void {
       });
     }
     for (const stage of input.step_stages ?? []) {
+      if (stage.step === 'remove_background') continue;
       steps.push({ kind: stage.step, fix: '', model_id: stage.model_id ?? '' });
     }
     if (input.output_scale > 1) {
@@ -577,9 +601,10 @@ function hostScript(scenario: Scenario): void {
         path: '/fixture/alpine-lake.mp4',
         name: 'Alpine lake.mp4',
         kind: 'video',
-        width: scenario.videoSyncCompare ? 128 : 1920,
-        height: scenario.videoSyncCompare ? 72 : 1080,
-        fps: scenario.videoSyncCompare ? 30 : 24,
+        width: scenario.videoSyncCompare ? 128 : scenario.videoFieldOrder ? 768 : 1920,
+        height: scenario.videoSyncCompare ? 72 : scenario.videoFieldOrder ? 576 : 1080,
+        fps: scenario.videoSyncCompare ? 30 : scenario.videoFieldOrder ? 25 : 24,
+        ...(scenario.videoFieldOrder ? { field_order: scenario.videoFieldOrder } : {}),
         frame_count: scenario.videoSyncCompare ? 90 : 288,
         has_audio: scenario.videoHasAudio ?? true,
         duration_seconds: scenario.videoSyncCompare ? 3 : scenario.videoCompare ? 4 : 12,
@@ -816,7 +841,7 @@ function hostScript(scenario: Scenario): void {
                   notes: '',
                   elapsed_seconds: 1,
                   output_fps: fps,
-                  output_duration_seconds: 4,
+                  output_duration_seconds: scenario.videoResultSeconds ?? 4,
                   ui: null,
                 })),
                 ...(scenario.videoPartial
@@ -1085,6 +1110,8 @@ function hostScript(scenario: Scenario): void {
         };
         return planLocally(snapshot!, args.settings, args.options ?? {});
       }
+      case 'estimate_start':
+        return scenario.estimateSeconds ?? null;
       case 'save_recipe': {
         const recipe = structuredClone(args.recipe);
         const trimmedName = String(recipe?.name ?? '')
@@ -1203,12 +1230,20 @@ function hostScript(scenario: Scenario): void {
         }
         const fixtureOf = (jobId: string) =>
           scenario.playbackFixtures![jobId === 'video-60' ? 1 : jobId === 'video-part' ? 2 : 0];
-        if (scenario.videoPartial)
+        if (scenario.videoPartial || scenario.videoResultSeconds !== undefined)
           return {
             original_path: '',
             enhanced_path: '',
             original_url: fixtureOf(''),
             enhanced_url: args.resultId ? fixtureOf(args.resultId) : '',
+            playback_note: '',
+          };
+        if (scenario.videoSource && !args.resultId)
+          return {
+            original_path: '',
+            enhanced_path: '',
+            original_url: scenario.playbackFixtures![0],
+            enhanced_url: '',
             playback_note: '',
           };
         throw new Error('No video playback fixture for this request');
@@ -1314,6 +1349,15 @@ function hostScript(scenario: Scenario): void {
             emit('state-changed', null);
           });
           clock += delay;
+          if (step.kind === 'remove_background') {
+            // The engine skips a step that changes transparency (patch_preview.py ALPHA_NOTE).
+            later(clock, () => {
+              step.state = 'skipped';
+              step.note = 'This step changes transparency, which the preview patch cannot show.';
+              emit('state-changed', null);
+            });
+            continue;
+          }
           later(clock, () => {
             const upscaled = step.kind === 'upscale' ? scale : 1;
             step.state = 'done';
@@ -1399,6 +1443,17 @@ function hostScript(scenario: Scenario): void {
       case 'select_media':
         for (const media of snapshot.media) media.selected = media.id === args.id;
         return null;
+      case 'get_repair_strokes':
+        return structuredClone(repairStrokes[args.mediaId] ?? []);
+      case 'set_repair_strokes': {
+        const media = snapshot.media.find((item: Json) => item.id === args.mediaId);
+        if (!media) throw new Error('that photo is no longer in the queue');
+        repairStrokes[args.mediaId] = structuredClone(args.strokes);
+        media.repair_marks = paintMarks(args.strokes);
+        media.repair_rev = (media.repair_rev ?? 0) + 1;
+        emit('state-changed', null);
+        return null;
+      }
       case 'clear_results':
         snapshot.runtime.last_steps = null;
         return null;
@@ -1682,7 +1737,7 @@ export async function installFakeHost(page: Page, scenario: Scenario): Promise<v
   }
   const enriched: Scenario = {
     ...scenario,
-    ...(scenario.videoCompare ? { playbackFixtures: videoFixtures } : {}),
+    ...(scenario.videoCompare || scenario.videoSource ? { playbackFixtures: videoFixtures } : {}),
     ...(scenario.videoSyncCompare ? { playbackFixtureMap: loadSyncFixtures() } : {}),
     ...(compare ? { compareFixtures: compare.meta } : {}),
   };

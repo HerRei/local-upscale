@@ -1,3 +1,4 @@
+import type { MediaFacts } from './fixRows';
 import { formatDuration } from './format';
 import type { PlanState } from './jobPlanClient';
 import { imageQualityName } from './outputFormats';
@@ -94,6 +95,8 @@ export function outputSummary(
   options: {
     preservingHdr?: boolean;
     audioDisabled?: boolean;
+    /** Slow motion applies: the file has no sound, whatever Clean up audio says. */
+    slowMotion?: boolean;
     includeFolder?: boolean;
     /** The step registry; tests add steps that exist only in them. */
     steps?: readonly StepDefinition[];
@@ -106,19 +109,53 @@ export function outputSummary(
     const codecName = VIDEO_CODEC_NAMES[codec] ?? codec.toUpperCase();
     const crf = codec === 'ffv1' || codec === 'prores' ? '' : `CRF ${settings.video_crf}`;
     const hdr = options.preservingHdr ? 'HDR' : '';
-    const audio = !options.audioDisabled && settings.video_clean_audio ? 'sound cleaned' : '';
+    const audio = options.audioDisabled
+      ? ''
+      : options.slowMotion
+        ? 'no sound'
+        : settings.video_clean_audio
+          ? 'sound cleaned'
+          : '';
     return [container, codecName, hdr, crf, audio, folder].filter(Boolean).join(' · ');
   }
   // A step that sets the alpha saves in a format that keeps it, as the start input does.
-  const saved = outputFormatKeepingAlpha(
-    activeStepStages(settings, false, options.steps).map(({ selection }) => selection),
-    settings.output_format,
-    options.steps,
-  );
+  const saved = savedPhotoFormat(settings, options.steps);
   const format = PHOTO_FORMAT_NAMES[saved] ?? saved.toUpperCase();
   const formatPart = imageQualityName(saved) ? `${format} ${settings.jpeg_quality}` : format;
-  const note = saved === settings.output_format ? '' : ALPHA_FORMAT_NOTE;
-  return [formatPart, folder, note].filter(Boolean).join(' · ');
+  const transparent = setsAlpha(settings, options.steps) ? 'transparent' : '';
+  return [formatPart, transparent, folder].filter(Boolean).join(' · ');
+}
+
+/** Whether a stored step sets the alpha channel of the photo it runs on. */
+export function setsAlpha(
+  settings: Pick<UiSettings, 'task' | 'step_stages'>,
+  steps?: readonly StepDefinition[],
+): boolean {
+  return activeStepStages(settings, false, steps).some(({ step }) => step.output_alpha === true);
+}
+
+/** The format a photo job saves in: the chosen one, or PNG when a step needs transparency. */
+export function savedPhotoFormat(
+  settings: Pick<UiSettings, 'task' | 'step_stages' | 'output_format'>,
+  steps?: readonly StepDefinition[],
+): UiSettings['output_format'] {
+  return outputFormatKeepingAlpha(
+    activeStepStages(settings, false, steps).map(({ selection }) => selection),
+    settings.output_format,
+    steps,
+  );
+}
+
+/** The Output line, plus why the format differs when a transparent result replaced it. */
+export function outputTitle(
+  settings: UiSettings,
+  options: Parameters<typeof outputSummary>[1] = {},
+): string {
+  const summary = outputSummary(settings, options);
+  if (settings.task === 'video') return summary;
+  return savedPhotoFormat(settings, options.steps) === settings.output_format
+    ? summary
+    : `${summary} · ${ALPHA_FORMAT_NOTE}`;
 }
 
 export interface EnhancePanelView {
@@ -181,6 +218,10 @@ export interface EnhancePanelView {
   interpolationSupported: boolean;
   /** What the fix popover offers for the preview patch; empty when there is none. */
   patchLink: 'photo' | 'example' | '';
+  /** Measured run time of what Start would process; null until there is an honest number. */
+  startSeconds: number | null;
+  /** The open photo's marks and the queue's, for the Dust & scratches row. */
+  repairFacts: MediaFacts;
 }
 
 export interface EnhancePanelActions {
@@ -202,6 +243,10 @@ export interface EnhancePanelActions {
   toggleFix: (fix: FixKind) => void;
   /** Turns the preview patch on with this fix's chip pressed. */
   seeFixOnPhoto: (fix: FixKind) => void;
+  /** The viewer dims this fraction of each edge while Stabilise's popover is open; null clears it. */
+  showCropGuide: (fraction: number | null) => void;
+  /** Opens painting Dust & scratches on the open photo. */
+  paintRepair: () => void;
   setSize: (scale: 1 | 2 | 3 | 4) => void;
   openLibrary: (
     slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit' | 'try',

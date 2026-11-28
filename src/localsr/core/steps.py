@@ -61,6 +61,8 @@ class StepDefinition:
     in_image_pipeline: bool = False
     in_recipe_stages: bool = False
     supports_mask: bool = False
+    # The step has nothing to do without a painted mask, so a stage of it must carry one.
+    requires_mask: bool = False
     label: str = ""
     row_label: str = ""
     short_name: str = ""
@@ -122,6 +124,9 @@ STEPS: tuple[StepDefinition, ...] = (
         label="Blur",
         row_label="Fix blur",
         short_name="blur",
+        parameters=(
+            StepParameter(name="strength", kind="number", default=1.0, minimum=0.0, maximum=1.0),
+        ),
     ),
     StepDefinition(
         id="jpeg",
@@ -140,6 +145,9 @@ STEPS: tuple[StepDefinition, ...] = (
         row_label="Fix JPEG",
         short_name="JPEG",
         stage_label="Removing JPEG artifacts",
+        parameters=(
+            StepParameter(name="strength", kind="number", default=1.0, minimum=0.0, maximum=1.0),
+        ),
     ),
     StepDefinition(
         id="noise",
@@ -157,6 +165,9 @@ STEPS: tuple[StepDefinition, ...] = (
         label="Noise",
         row_label="Fix noise",
         short_name="noise",
+        parameters=(
+            StepParameter(name="strength", kind="number", default=1.0, minimum=0.0, maximum=1.0),
+        ),
     ),
     StepDefinition(
         id="colour",
@@ -338,6 +349,7 @@ STEPS: tuple[StepDefinition, ...] = (
                 default="after_upscale",
                 choices=("after_upscale", "before_upscale"),
             ),
+            StepParameter(name="slow_motion", kind="bool", default=False),
         ),
     ),
     StepDefinition(
@@ -350,13 +362,44 @@ STEPS: tuple[StepDefinition, ...] = (
         label="Deinterlace",
         stage_label="Deinterlacing",
         required_feature="video_deinterlace",
-        dev_only=True,
         parameters=(
             StepParameter(name="mode", kind="choice", default="frame", choices=("frame", "field")),
             StepParameter(
                 name="parity", kind="choice", default="auto", choices=("auto", "tff", "bff")
             ),
         ),
+    ),
+    StepDefinition(
+        id="stabilise",
+        media=("video",),
+        phase="geometry",
+        order=20,
+        needs_model=False,
+        in_image_pipeline=True,
+        label="Stabilise",
+        stage_label="Stabilising",
+        required_feature="video_stabilise",
+        parameters=(
+            StepParameter(
+                name="smoothing",
+                kind="choice",
+                default="medium",
+                choices=("light", "medium", "strong"),
+            ),
+        ),
+    ),
+    StepDefinition(
+        id="repair",
+        media=("image",),
+        phase="cleanup",
+        order=3,
+        needs_model=False,
+        supports_mask=True,
+        requires_mask=True,
+        in_image_pipeline=True,
+        label="Dust & scratches",
+        stage_label="Repairing marks",
+        required_feature="image_repair",
     ),
     StepDefinition(
         id="remove_background",
@@ -368,7 +411,6 @@ STEPS: tuple[StepDefinition, ...] = (
         label="Remove background",
         stage_label="Removing background",
         required_feature="image_background_removal",
-        dev_only=True,
         model_task="background",
         output_alpha=True,
     ),

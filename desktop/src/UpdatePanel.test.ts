@@ -88,7 +88,7 @@ it('uses Store updates and waits for the active queue to finish', async () => {
 
 it('keeps the release channel select without update or sound switches', async () => {
   render(UpdatePanel);
-  await screen.findByText('Software Update');
+  await screen.findByText('Software update');
   expect(screen.getByLabelText('Release channel')).toBeTruthy();
   expect(screen.queryByLabelText('Check for updates when LocalSR starts')).toBeNull();
   expect(screen.queryByLabelText(/anonymous count/i)).toBeNull();

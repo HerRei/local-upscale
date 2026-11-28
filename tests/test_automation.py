@@ -485,3 +485,56 @@ def test_cli_colour_model_keeps_its_colour_for_a_grey_source(tmp_path, monkeypat
 
     pixels = np.asarray(Image.open(result["output_path"]).convert("RGB"))
     assert tuple(pixels[0, 0]) == (200, 120, 60)
+
+
+def test_cli_colour_model_runs_a_video_as_the_colour_stage(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from localsr import automation
+    from localsr.core import video_pipeline
+
+    source = tmp_path / "grey.mp4"
+    source.write_bytes(b"not decoded: the job is captured")
+    monkeypatch.setattr(
+        automation,
+        "_trusted_model",
+        lambda _model_id: (
+            SimpleNamespace(name="DDColor", recommended_halo=16, time_factor=2.0),
+            tmp_path / "ddcolor.pth",
+        ),
+    )
+    runner = automation.AutomationRunner(Reporter())
+    monkeypatch.setattr(
+        runner.adapter, "inspect", lambda _path: SimpleNamespace(scale=1, architecture="DDColor")
+    )
+    seen = {}
+
+    def capture(config, *_args, **_kwargs):
+        seen["config"] = config
+        return SimpleNamespace(elapsed_seconds=0.0)
+
+    monkeypatch.setattr(video_pipeline, "run_video_job", capture)
+    runner.process(
+        source,
+        tmp_path / "out",
+        model_id="ddcolor_modelscope",
+        device="cpu",
+        output_scale=1,
+        output_format="png",
+        video_container="mp4",
+        tile_size=0,
+        halo=0,
+        precision="fp32",
+        preserve_metadata=False,
+        jpeg_quality=95,
+        crf=20,
+    )
+
+    config = seen["config"]
+    assert config.model_path == ""
+    assert config.model_info is None
+    (stage,) = config.preprocess_stages
+    assert stage.step_id == "colour"
+    assert stage.fix == "colour"
+    assert stage.model_path == str(tmp_path / "ddcolor.pth")
+    assert stage.halo == 16

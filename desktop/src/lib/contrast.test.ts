@@ -208,7 +208,7 @@ describe('high contrast token sets', () => {
     );
     const existingCb = new Set(tokensForSelector('[data-palette="colour-blind"]'));
 
-    expect(block1.size).toBe(119);
+    expect(block1.size).toBe(118);
     expect(block2).toEqual(block1);
     expect(block3.size).toBe(33);
     expect(block4).toEqual(block3);

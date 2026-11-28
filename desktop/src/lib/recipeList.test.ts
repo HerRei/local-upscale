@@ -91,6 +91,17 @@ describe('recipeList', () => {
     ).toEqual(['a:disabled', 'b', '---', 'c', 'd', 'e', 'f']);
   });
 
+  it('falls back to the first six fitting recipes when nothing is pinned or recent', () => {
+    const recipes = [
+      makeRecipe('v', { task: 'video', video_task: 'upscale' }),
+      ...['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((id) => makeRecipe(id)),
+    ];
+    const rows = menuRows(recipes, { pins: [], recent: ['v'], mediaKind: 'image' });
+
+    expect(rows.map((row) => row.id)).toEqual(['a', 'b', 'c', 'd', 'e', 'f']);
+    expect(rows.every((row) => row.kind === 'recipe' && !row.pinned && !row.disabled)).toBe(true);
+  });
+
   it('caps pinned rows at six when eight recipes are pinned', () => {
     const ids = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
     const recipes = ids.map((id) => makeRecipe(id));
@@ -116,6 +127,29 @@ describe('recipeList', () => {
         disabled: false,
       },
     ]);
+  });
+
+  it('names a saved fix strength in the recipe plan line', () => {
+    const { catalog } = demoSnapshot();
+    expect(
+      recipePlanLine(
+        makeRecipe('light', {
+          task: 'upscale',
+          output_scale: 4,
+          fixes: ['noise'],
+          stages: [
+            {
+              kind: 'restore',
+              model_id: 'denoise_realplksr_1x',
+              fix: 'noise',
+              params: { strength: 0.4 },
+            },
+            { kind: 'upscale', model_id: 'localsr_quick_x4_v1' },
+          ],
+        }),
+        catalog,
+      ),
+    ).toBe('Noise (light) → Upscale 4×');
   });
 
   it('formats recipePlanLine for upscale with fixes, restore, video, and same size without fixes', () => {
@@ -167,6 +201,26 @@ describe('recipeList', () => {
         catalog,
       ),
     ).toBe('Noise → Upscale 2× → 2× frames');
+
+    expect(
+      recipePlanLine(
+        makeRecipe('slow', {
+          task: 'video',
+          video_task: 'upscale',
+          output_scale: 2,
+          video_interpolation: 'x2',
+          video_interpolation_order: 'after_upscale',
+          video_slow_motion: true,
+          video_clean_audio: true,
+          fixes: ['noise'],
+          stages: [
+            { kind: 'restore', model_id: 'denoise_realplksr_1x', fix: 'noise' },
+            { kind: 'video', model_id: 'localsr_quick_x4_v1' },
+          ],
+        }),
+        catalog,
+      ),
+    ).toBe('Noise → Upscale 2× → Slow motion 2×');
 
     expect(
       recipePlanLine(

@@ -21,13 +21,36 @@
   import {
     mediaFacts,
     outputSummary,
+    outputTitle,
     type EnhancePanelActions,
     type EnhancePanelView,
   } from './lib/enhancePanel';
-  import { formatBytes } from './lib/format';
-  import { displayName, fitFor, FIT_LABELS, resultFps, type PlanStage } from './lib/plan';
+  import { formatEta } from './lib/eta-display';
+  import { formatBytes, formatDuration } from './lib/format';
+  import {
+    displayName,
+    fitFor,
+    FIT_LABELS,
+    resultFps,
+    slowMotionApplies,
+    type PlanStage,
+  } from './lib/plan';
   import { planMarks } from './lib/jobSteps';
   import { planLine } from './lib/planLine';
+  import {
+    BACKGROUND_STEP,
+    backgroundModel,
+    backgroundRemoved,
+    backgroundRowShown,
+    SCAN_STEP,
+    scanChoice,
+    scanOptions,
+    scanRate,
+    scanRowShown,
+    scanStage,
+    withStepStage,
+    type ScanChoice,
+  } from './lib/stepRows';
   import { examplesFor } from './lib/promptExamples';
   import type { InterpolationOrder, InterpolationTarget, TaskKind } from './lib/types';
   import { videoModelShortName } from './lib/videoEngines';
@@ -65,6 +88,8 @@
     radioGroupKeydown,
     toggleFix,
     seeFixOnPhoto,
+    showCropGuide,
+    paintRepair,
     setSize,
     openLibrary,
     moveFix,
@@ -142,6 +167,8 @@
     acceleratorFailure,
     interpolationSupported,
     patchLink,
+    startSeconds,
+    repairFacts,
   } = view);
 
   $: if (!recipesOpen) {
@@ -153,7 +180,53 @@
   $: if (!settings.task || settings.task === 'edit') {
     outputOpen = false;
   }
-  $: outputLineText = outputSummary(settings, { preservingHdr, audioDisabled });
+  $: slowMotion = slowMotionApplies(settings, usingTemporalVideo);
+  $: outputLineText = outputSummary(settings, { preservingHdr, audioDisabled, slowMotion });
+  $: outputLineTitle = outputTitle(settings, { preservingHdr, audioDisabled, slowMotion });
+  $: engineFeatures = snapshot.engine?.features ?? [];
+  $: cutoutModel = backgroundModel(snapshot.catalog.models);
+  $: cutoutRemoved = backgroundRemoved(settings);
+  $: cutoutShown = backgroundRowShown({
+    task: settings.task,
+    features: engineFeatures,
+    model: cutoutModel,
+    removed: cutoutRemoved,
+  });
+  $: cutoutSupported = engineFeatures.includes('image_background_removal');
+  $: cutoutDownload =
+    cutoutModel && !cutoutModel.installed ? formatBytes(cutoutModel.size_bytes) : '';
+  function setBackground(remove: boolean) {
+    updateSettings({
+      step_stages: withStepStage(
+        settings.step_stages,
+        BACKGROUND_STEP,
+        remove && cutoutModel ? { step: BACKGROUND_STEP, model_id: cutoutModel.model_id } : null,
+      ),
+    });
+  }
+  $: fieldOrder = selectedMedia?.field_order;
+  $: scanSelected = scanChoice(settings);
+  $: scanShown = scanRowShown({
+    task: settings.task,
+    usingTemporalVideo,
+    features: engineFeatures,
+    fieldOrder,
+    choice: scanSelected,
+  });
+  $: scanChoices = scanOptions(fieldOrder, selectedMedia?.fps ?? 0, scanSelected);
+  $: scanSupported = engineFeatures.includes('video_deinterlace');
+  $: scanTitle = !scanSupported
+    ? 'This engine cannot deinterlace. Update LocalSR.'
+    : scanSelected.endsWith(':auto') &&
+        scanSelected !== 'frame:auto' &&
+        fieldOrder === 'progressive'
+      ? 'This file says it is not interlaced, so it is left as it is. To deinterlace it anyway, set the field order by hand.'
+      : undefined;
+  function setScan(choice: ScanChoice) {
+    updateSettings({
+      step_stages: withStepStage(settings.step_stages, SCAN_STEP, scanStage(choice)),
+    });
+  }
   $: expertChanges = editExpertChanges(
     editExpert(settings, editModel, editingDevice, snapshot.engine?.features ?? []),
   );
@@ -260,6 +333,7 @@
     );
   }, 0);
 
+  $: costTime = startSeconds === null ? null : formatEta(startSeconds);
   $: planSteps = planLine(plan, settings, selectedMedia);
   $: activeJobMediaId = snapshot.runtime.active_job_id
     ? (snapshot.jobs.find((job) => job.id === snapshot.runtime.active_job_id)?.media_id ?? '')
@@ -327,17 +401,29 @@
       ? 'Labs'
       : '';
   $: fps = selectedMedia?.fps ?? 0;
+  $: baseFps = scanRate(scanSelected, fieldOrder, fps);
   $: outputFps =
-    settings.task === 'video' &&
-    !usingTemporalVideo &&
-    settings.video_interpolation &&
-    settings.video_interpolation !== 'off'
-      ? resultFps(settings.video_interpolation, fps)
+    settings.task === 'video' && !usingTemporalVideo
+      ? !slowMotion && settings.video_interpolation && settings.video_interpolation !== 'off'
+        ? resultFps(settings.video_interpolation, baseFps)
+        : baseFps
       : null;
-  function frameLabel(target: Exclude<InterpolationTarget, 'off'>): string {
+  // Slow motion keeps the rate after Scan and stretches the length, so the head names the length.
+  $: slowSupported = engineFeatures.includes('video_slow_motion');
+  $: slowLength =
+    slowMotion && (selectedMedia?.duration_seconds ?? 0) > 0
+      ? formatDuration(
+          (selectedMedia?.duration_seconds ?? 0) * (settings.video_interpolation === 'x4' ? 4 : 2),
+        )
+      : '';
+  function slowLabel(factor: 2 | 4): string {
+    const seconds = selectedMedia?.duration_seconds ?? 0;
+    return `${factor}× slower${seconds > 0 ? ` · ${formatDuration(seconds * factor)}` : ''}`;
+  }
+  function frameLabel(target: Exclude<InterpolationTarget, 'off'>, baseRate: number): string {
     if (target === 'fps60') return '60 fps';
     if (target === 'fps120') return '120 fps';
-    const rate = resultFps(target, fps);
+    const rate = resultFps(target, baseRate);
     return `${target === 'x2' ? '2×' : '4×'}${rate === null ? '' : ` · ${Number(rate.toFixed(3))} fps`}`;
   }
   function qualityBlurb(
@@ -455,8 +541,8 @@
       {#if settings.task}
         {#if settings.task === 'edit'}
           <section class="control-section" aria-label="Edit prompt">
-            <div class="eyebrow-row">
-              <span class="eyebrow">What to change</span>
+            <div class="panel-head eyebrow-row">
+              <span class="panel-head-title">What to change</span>
               {#if promptExamples.length > 0}
                 <Popover
                   bind:open={examplesOpen}
@@ -561,6 +647,29 @@
                   >
                 </div>
               </div>{/if}
+            {#if scanShown}<div class="panel-row">
+                <div class="panel-key">
+                  <label class="panel-label" for="scan">Scan</label><HelpTip
+                    label="Scan"
+                    text="Old camcorder, TV and DVD recordings are interlaced: each frame holds two half-pictures taken a moment apart, which shows as fine stripes on anything that moves. Automatic removes the stripes when the file says it is interlaced, and keeps the frame rate. Double rate makes a frame from every half-picture, so motion is as smooth as it was on a TV: 25 fps becomes 50. That is twice the frames to process, so it takes about twice as long. A file that says it is not interlaced is left as it is. Set the field order by hand when stripes remain, or when motion jumps back and forth at the doubled rate: then pick the other order. A hand-set order is applied to every file you start, interlaced or not."
+                  />
+                </div>
+                <select
+                  id="scan"
+                  title={scanTitle}
+                  value={scanSelected}
+                  on:change={(event) => setScan(event.currentTarget.value as ScanChoice)}
+                  >{#each scanChoices.filter((option) => option.group === '') as option}<option
+                      value={option.value}
+                      disabled={!scanSupported && option.value !== 'auto'}>{option.label}</option
+                    >{/each}<optgroup label="Field order by hand"
+                    >{#each scanChoices.filter((option) => option.group === 'hand') as option}<option
+                        value={option.value}
+                        disabled={!scanSupported}>{option.label}</option
+                      >{/each}</optgroup
+                  ></select
+                >
+              </div>{/if}
           </section>
 
           {#if !usingTemporalVideo}<section class="control-section">
@@ -576,6 +685,10 @@
                 {openLibrary}
                 {toggleFix}
                 {seeFixOnPhoto}
+                {showCropGuide}
+                mediaFacts={repairFacts}
+                {paintRepair}
+                {radioGroupKeydown}
                 {patchLink}
                 {updateSettings}
                 bind:moreOpen={moreFixesOpen}
@@ -590,7 +703,7 @@
                     ? outputDimensions.split(' · ')[0]
                     : sizeResult}{outputFps !== null && outputFps !== fps
                     ? ` · ${Number(outputFps.toFixed(3))} fps`
-                    : ''}</span
+                    : ''}{slowLength ? ` · ${slowLength}` : ''}</span
                 >{/if}
             </div>
             <div class="panel-row">
@@ -691,7 +804,7 @@
                 <div class="panel-key">
                   <label class="panel-label" for="frame-rate">Frames</label><HelpTip
                     label="Frames"
-                    text="Adds in-between frames for smoother motion. 2× and 4× multiply the clip's own rate; 60 and 120 fps set a fixed rate and are skipped when the clip is already about that fast. Adding them after upscaling is faster; before upscaling can look smoother, but the added frames are upscaled too, which takes about twice as long at 2×. RIFE · Labs makes the frames: scene cuts stay cuts, very fast motion can smear. The first use downloads about 25 MB."
+                    text={`Adds in-between frames for smoother motion. 2× and 4× multiply the clip's own rate; 60 and 120 fps set a fixed rate and are skipped when the clip is already about that fast. Adding them after upscaling is faster; before upscaling can look smoother, but the added frames are upscaled too, which takes about twice as long at 2×.${slowSupported ? " Slow motion adds the same frames after upscaling and plays them at the clip's own rate, so the video becomes two or four times as long. It is saved without sound and subtitles." : ''} RIFE · Labs makes the frames: scene cuts stay cuts, very fast motion can smear. The first use downloads about 25 MB.`}
                   />
                 </div>
                 <select
@@ -704,14 +817,25 @@
                       : undefined}
                   value={(settings.video_interpolation ?? 'off') === 'off'
                     ? 'off'
-                    : `${settings.video_interpolation}:${settings.video_interpolation_order ?? 'after_upscale'}`}
+                    : slowMotion
+                      ? `slow:${settings.video_interpolation}`
+                      : `${settings.video_interpolation}:${settings.video_interpolation_order ?? 'after_upscale'}`}
                   on:change={(event) => {
                     const [target, order] = event.currentTarget.value.split(':');
+                    if (target === 'slow') {
+                      updateSettings({
+                        video_interpolation: order as InterpolationTarget,
+                        video_interpolation_order: 'after_upscale',
+                        video_slow_motion: true,
+                      });
+                      return;
+                    }
                     updateSettings({
                       video_interpolation: target as InterpolationTarget,
                       video_interpolation_order: (order ||
                         settings.video_interpolation_order ||
                         'after_upscale') as InterpolationOrder,
+                      video_slow_motion: false,
                     });
                   }}
                   ><option value="off">Original</option
@@ -721,13 +845,53 @@
                         : 'Add frames before upscaling (slower)'}
                       >{#each ['x2', 'x4', 'fps60', 'fps120'] as target}<option
                           value={`${target}:${order}`}
-                          >{frameLabel(target as Exclude<InterpolationTarget, 'off'>)}{order ===
-                          'before_upscale'
-                            ? ' · before upscaling'
-                            : ''}</option
+                          >{frameLabel(
+                            target as Exclude<InterpolationTarget, 'off'>,
+                            baseFps,
+                          )}{order === 'before_upscale' ? ' · before upscaling' : ''}</option
                         >{/each}</optgroup
-                    >{/each}</select
+                    >{/each}{#if slowSupported || slowMotion}<optgroup
+                      label="Slow motion (no sound)"
+                      >{#each [2, 4].filter((factor) => slowSupported || settings.video_interpolation === `x${factor}`) as factor}<option
+                          value={`slow:x${factor}`}
+                          disabled={!slowSupported}>{slowLabel(factor as 2 | 4)}</option
+                        >{/each}</optgroup
+                    >{/if}</select
                 >
+              </div>{/if}
+            {#if cutoutShown}<div class="panel-row">
+                <div class="panel-key">
+                  <span class="panel-label" title="Background">Backgr.</span><HelpTip
+                    label="Background"
+                    text={`Remove makes everything behind the main subject transparent. The subject is found on the original picture, before the fixes and the upscale, and its outline is enlarged with the picture. The outline is worked out at 1024 × 1024 pixels, so single hairs and other very fine edges are not followed exactly. The result needs transparency: PNG, TIFF and WebP keep it, and a JPEG or HEIC choice is saved as PNG. BiRefNet does the work.${cutoutDownload ? ` The first use downloads ${cutoutDownload}.` : ''}`}
+                  />
+                </div>
+                <div
+                  class="seg-inline"
+                  role="radiogroup"
+                  aria-label="Background"
+                  title={cutoutSupported
+                    ? undefined
+                    : 'This engine cannot remove backgrounds. Update LocalSR.'}
+                >
+                  <button
+                    role="radio"
+                    aria-checked={!cutoutRemoved}
+                    class:active={!cutoutRemoved}
+                    title="Leaves the background as it is"
+                    on:keydown={radioGroupKeydown}
+                    on:click={() => setBackground(false)}>Keep</button
+                  >
+                  <button
+                    role="radio"
+                    aria-checked={cutoutRemoved}
+                    class:active={cutoutRemoved}
+                    disabled={!cutoutSupported}
+                    title={`Makes the background transparent${cutoutDownload ? ` · ${cutoutDownload} download` : ''}`}
+                    on:keydown={radioGroupKeydown}
+                    on:click={() => setBackground(true)}>Remove</button
+                  >
+                </div>
               </div>{/if}
             {#if usingTemporalVideo}
               {#if !(flashVideo && temporalUnavailableReason)}<VideoMemory
@@ -757,8 +921,8 @@
 
         {#if settings.task === 'edit'}
           <section class="control-section model-section" aria-label="Model plan">
-            <div class="eyebrow eyebrow-row">
-              <span>Model</span>
+            <div class="panel-head eyebrow-row">
+              <span class="panel-head-title">Model</span>
               <span class="eyebrow-actions">
                 {#if !noRestoreModel && !plan.some((stage) => stage.role === 'primary')}<button
                     class="link-button"
@@ -1007,6 +1171,7 @@
           </svelte:fragment>
           <PlanSheet
             {snapshot}
+            stepNames={planSteps}
             {settings}
             {defaultSettings}
             {settingsLocked}
@@ -1036,7 +1201,7 @@
           placement="sheet"
           label="Output"
           triggerClass="foot-line foot-output foot-trigger"
-          triggerTitle={outputLineText}
+          triggerTitle={outputLineTitle}
           let:close
         >
           <svelte:fragment slot="trigger">
@@ -1064,6 +1229,7 @@
             {preservingHdr}
             {hdrPreservationAvailable}
             {audioDisabled}
+            {slowMotion}
             {audioModels}
             {selectedAudioModel}
             disabled={settingsLocked}
@@ -1072,16 +1238,19 @@
             onOpenFfmpegSettings={() => openSettings('storage', 'ffmpeg')}
           />
         </Popover>
-      {/if}{#if costBytes > 0}
+      {/if}{#if costBytes > 0 || costTime}
         <div class="foot-line foot-cost">
-          <span class="foot-cost-download"
-            >{formatBytes(costBytes)} to download<HelpTip
-              label="Downloads"
-              text={`Models download once when you start and stay on this computer. Each file is checked before it is used. Your ${
-                settings.task === 'video' ? 'videos' : 'photos'
-              } never leave it.`}
-            /></span
-          >
+          {#if costTime}<span class="foot-cost-time">about {costTime}</span>{/if}
+          {#if costBytes > 0}
+            <span class="foot-cost-download"
+              >{formatBytes(costBytes)} to download<HelpTip
+                label="Downloads"
+                text={`Models download once when you start and stay on this computer. Each file is checked before it is used. Your ${
+                  settings.task === 'video' ? 'videos' : 'photos'
+                } never leave it.`}
+              /></span
+            >
+          {/if}
         </div>
       {/if}
     </div>

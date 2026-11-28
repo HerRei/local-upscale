@@ -17,13 +17,14 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import numpy as np
 from PIL import Image
 
 import localsr.core.steps as step_registry
+from localsr.core.face_compositing import load_mask
 from localsr.core.image_formats import is_video_input
 from localsr.core.image_io import ImageManager
 from localsr.core.output_writer import default_work_directory
@@ -42,11 +43,21 @@ PATCH_CACHE_BYTES = 128 * 1024 * 1024
 # time to reduce.
 COLOUR_REDUCED_SIDE = 512
 _COLOUR_PLANES_KEPT = 16
+# DDColor costs about 0.9 GB while idle. It stays loaded between patches only where the device
+# has room for it next to the models a job loads: a 16 GB Mac (11.8 GiB for the GPU) does, an
+# 8 GB one (about 5 GiB) does not.
+COLOUR_RESIDENT_MIN_TOTAL = 10 * 1024**3
+COLOUR_RESIDENT_MIN_FREE = 2 * 1024**3
 _GEOMETRIES_KEPT = 256
 
 FACE_NOTE = "Face restoration is not shown in the preview patch."
 MASK_NOTE = "A masked step is not shown in the preview patch."
 ALPHA_NOTE = "This step changes transparency, which the preview patch cannot show."
+
+
+def _strength_of(chip: PipelineStage | None) -> float:
+    """How much of a fix the stage asks for, 1.0 when it names no strength."""
+    return 1.0 if chip is None else float(chip.params.get("strength", 1.0))
 
 
 def _file_identity(path: str) -> tuple:
@@ -59,6 +70,28 @@ def _file_identity(path: str) -> tuple:
         stat.st_mtime_ns,
         stat.st_ctime_ns,
     )
+
+
+def colour_may_stay_loaded(device: str) -> bool:
+    """Whether this device has memory to keep the Colour model loaded between patches."""
+    try:
+        from localsr.core.hardware import get_memory_snapshot
+
+        snapshot = get_memory_snapshot(device)
+    except Exception:  # noqa: BLE001 - no reading means no reason to hold 0.9 GB
+        return False
+    return (
+        snapshot["device_total_memory"] >= COLOUR_RESIDENT_MIN_TOTAL
+        and snapshot["device_free_memory"] >= COLOUR_RESIDENT_MIN_FREE
+    )
+
+
+def release_resident_colour(engine: Any, cache: PatchCache | None) -> None:
+    """Let go of the Colour model the patches kept: the patch was switched off."""
+    if cache is None or cache.colour_model is None:
+        return
+    path, cache.colour_model = cache.colour_model, None
+    engine.release_model(path)
 
 
 def _model_identity(path: str) -> tuple:
@@ -110,6 +143,10 @@ class PatchCache:
         self.geometries: OrderedDict[tuple, _Geometry] = OrderedDict()
         # (colour planes, picture width, picture height) per file and colour model.
         self.planes: OrderedDict[tuple, tuple[np.ndarray, int, int]] = OrderedDict()
+        # The Colour model a patch left loaded in the engine, so the next photo does not load
+        # it again. The engine owns the weights; jobs, the idle release and memory pressure
+        # release them there, and this only says which model the patches keep.
+        self.colour_model: str | None = None
 
     def clear(self) -> None:
         self.steps.clear()
@@ -304,6 +341,9 @@ class PatchRunner:
         identity = _file_identity(path)
         base_key = (identity, frame, region_key, padding)
         keys = [self._stage_key(chip, job, pipeline) for chip in chips]
+        # A fix with a strength below 1 also keeps its whole result under a key without the
+        # strength, so a new strength mixes that result again and the model does not run.
+        whole_keys = [self._stage_key(chip, job, pipeline, whole=True) for chip in chips]
 
         finished: list[_Done] = []
         for index in range(stage_count):
@@ -321,9 +361,10 @@ class PatchRunner:
             self.model_adapter.status_callback = None
             self.model_adapter.cancel_event = self.cancel_event
             self.runner._take_engine_notes()
-            self.engine.release_models_except(
-                {chip.model_path for chip in chips if chip is not None and chip.model_path}
-            )
+            keep = {chip.model_path for chip in chips if chip is not None and chip.model_path}
+            if self.cache.colour_model is not None:
+                keep.add(self.cache.colour_model)
+            self.engine.release_models_except(keep)
             geometry = self.cache.geometries.get(geometry_key)
             if len(finished) < stage_count and (not finished or geometry is None):
                 source = self._load(path, frame)
@@ -340,19 +381,40 @@ class PatchRunner:
                     working = _to_uint8(self.source.tensor[:, top:bottom, left:right])
                     scale = 1
                 assert geometry is not None
-                done = self._run_one(
-                    (patch_id, index, stage_count),
-                    chip,
-                    pipeline,
-                    job,
-                    working,
-                    scale,
-                    geometry,
-                    (identity, frame, path),
-                )
+                strength = _strength_of(chip)
+                ran = True
+                if strength < 1.0:
+                    whole_key = (*base_key, (*keys[:index], whole_keys[index]))
+                    whole = self.cache.get(whole_key)
+                    ran = whole is None
+                    if whole is None:
+                        whole = self._run_one(
+                            (patch_id, index, stage_count),
+                            chip,
+                            pipeline,
+                            job,
+                            working,
+                            scale,
+                            geometry,
+                            (identity, frame, path),
+                            whole=True,
+                        )
+                        self.cache.put(whole_key, whole)
+                    done = self._remix(whole, working, strength, geometry)
+                else:
+                    done = self._run_one(
+                        (patch_id, index, stage_count),
+                        chip,
+                        pipeline,
+                        job,
+                        working,
+                        scale,
+                        geometry,
+                        (identity, frame, path),
+                    )
                 self.cache.put((*base_key, tuple(keys[: index + 1])), done)
                 finished.append(done)
-                self._announce(patch_id, index, stage_count, done, cached=False)
+                self._announce(patch_id, index, stage_count, done, cached=not ran)
         finally:
             self.source = None
         self.emit(PatchCompleted(patch_id=patch_id, elapsed_seconds=time.monotonic() - started_at))
@@ -440,17 +502,23 @@ class PatchRunner:
 
     @staticmethod
     def _stage_key(
-        chip: PipelineStage | None, job: Mapping[str, Any], pipeline: ImagePipeline
+        chip: PipelineStage | None,
+        job: Mapping[str, Any],
+        pipeline: ImagePipeline,
+        *,
+        whole: bool = False,
     ) -> tuple:
+        """What a finished step is cached under; ``whole`` leaves the strength out."""
         if chip is None:
             return ("face",)
+        params = {k: v for k, v in chip.params.items() if not (whole and k == "strength")}
         return (
             chip.kind,
             chip.step_id,
             chip.fix,
             chip.model_id,
             _model_identity(chip.model_path),
-            json.dumps(chip.params, sort_keys=True, default=str),
+            json.dumps(params, sort_keys=True, default=str),
             chip.mask_path,
             job["device"],
             job["precision"],
@@ -467,7 +535,10 @@ class PatchRunner:
         scale: int,
         geometry: _Geometry,
         source: tuple[tuple, int, str],
+        *,
+        whole: bool = False,
     ) -> _Done:
+        """Run one step. With ``whole`` a fix runs at full strength, whatever it asks for."""
         patch_id, index, count = position
         identity, frame, path = source
         skip_note = self._skip_reason(chip)
@@ -480,8 +551,19 @@ class PatchRunner:
         started_at = time.monotonic()
         self._warnings.clear()
         is_primary = pipeline.primary is not None and chip is pipeline.primary
+        if whole and "strength" in chip.params:
+            stripped = replace(
+                chip, params={k: v for k, v in chip.params.items() if k != "strength"}
+            )
+            pipeline = ImagePipeline(
+                tuple(stripped if item is chip else item for item in pipeline.stages),
+                pipeline.primary_index,
+            )
+            chip = stripped
         info = self.model_adapter.inspect(chip.model_path) if chip.model_path else None
         step = step_registry.STEPS_BY_ID.get(chip.step_id)
+        if step is not None and step.requires_mask and chip.mask_path:
+            return self._run_masked(position, chip, job, working, scale, geometry, started_at)
         brings_model = step is not None and is_model_step_stage(step)
         if info is not None and info.architecture == "DDColor" and not brings_model:
             result = self._colour(chip, info, working, geometry, job, identity, frame, path)
@@ -500,13 +582,63 @@ class PatchRunner:
                 )
         return self._finish(result, result_scale, geometry, time.monotonic() - started_at)
 
+    def _run_masked(
+        self,
+        position: tuple[str, int, int],
+        chip: PipelineStage,
+        job: dict[str, Any],
+        working: np.ndarray,
+        scale: int,
+        geometry: _Geometry,
+        started_at: float,
+    ) -> _Done:
+        """Run a step that needs paint with its mask cut to the padded region.
+
+        The host draws the mask at the photo's size; the patch's picture is the padded crop, so
+        the same part of the mask is written next to the patch and the step reads that file.
+        """
+        patch_id, index, _count = position
+        left, top, right, bottom = geometry.box
+        whole = load_mask(chip.mask_path or "", geometry.width, geometry.height)
+        part = np.ascontiguousarray(whole[top:bottom, left:right])
+        work = default_work_directory()
+        work.mkdir(parents=True, exist_ok=True)
+        cut = work / f"patch-mask-{os.getpid()}-{threading.get_ident()}.png"
+        Image.fromarray(np.rint(part * 255.0).astype(np.uint8)).save(cut)
+        try:
+            image = self.runner._run_stage(
+                _to_image(working),
+                replace(chip, mask_path=str(cut)),
+                index,
+                job,
+                _NullProgress(patch_id),
+                [],
+            )
+        finally:
+            cut.unlink(missing_ok=True)
+        return self._finish(
+            _to_uint8(image["tensor"]), scale, geometry, time.monotonic() - started_at
+        )
+
+    def _remix(
+        self, whole: _Done, working: np.ndarray, strength: float, geometry: _Geometry
+    ) -> _Done:
+        """The fix's whole result mixed with the picture it started from, as a job mixes it."""
+        if whole.skipped:
+            return whole
+        from localsr.worker.image_job import apply_strength
+
+        mixed = apply_strength(strength, _to_image(working)["tensor"], whole.working)
+        return self._finish(np.ascontiguousarray(mixed), whole.scale, geometry, whole.seconds)
+
     @staticmethod
     def _skip_reason(chip: PipelineStage | None) -> str:
         if chip is None:
             return FACE_NOTE
-        if chip.mask_path:
-            return MASK_NOTE
         step = step_registry.STEPS_BY_ID.get(chip.step_id)
+        # A step that needs paint is cut to the region with its mask; another mask is not shown.
+        if chip.mask_path and not (step is not None and step.requires_mask):
+            return MASK_NOTE
         if step is not None and step.output_alpha:
             return ALPHA_NOTE
         return ""
@@ -638,6 +770,13 @@ class PatchRunner:
                 self.engine.active_model, picture, device=device, cancel_event=self.cancel_event
             )
         finally:
-            self.engine.release_model(chip.model_path)
+            # The model stays loaded for the next photo while the patch is on and the device
+            # has room: loading it costs more than the prediction. Anything that needs the
+            # memory releases it through the engine like every other warm model.
+            if colour_may_stay_loaded(str(job["device"])):
+                self.cache.colour_model = chip.model_path
+            else:
+                self.cache.colour_model = None
+                self.engine.release_model(chip.model_path)
             self.model_adapter.release()
         return ab[0].numpy(), source.width, source.height

@@ -153,11 +153,21 @@ you put them.
   while the system volume has less free space than the disk reserve (8 GB; swap
   lives there), when warning pressure has lasted 90 s and swap grew by more than
   2 GiB within that time, or when the process outgrows its limit. Beside a
-  dedicated GPU it stops when free host memory falls below the reserve, swap grows by more than 512 MiB, pressure
-  reaches warning, or the process outgrows its limit. On a Mac the process is
-  measured by its physical footprint, since the memory-mapped weights are clean
-  pages the system can drop; elsewhere by RSS. The kernel figures are read
-  in-process (`sysctlbyname`), never by spawning `sysctl`.
+  dedicated GPU it stops when available host memory falls below the reserve, when
+  Linux reports that every running task waited for memory at least 20% of the time
+  (PSI `full avg10` in `/proc/pressure/memory`) for 10 s, when more than 512 MiB went
+  to disk swap while available memory stayed under twice the reserve, or when the
+  process outgrows its limit. Swap alone does not stop it: Linux moves cold pages to
+  swap long before memory runs short, and swap on zram (`/dev/zram*` in `/proc/swaps`)
+  is compressed RAM that available memory already accounts for. On a Linux PC with
+  8 GB of zram, 0.5 GiB of swap while 18 GiB was available used to stop Qwen Image
+  Edit 2511 at 512 px; a rerun of the same edit finished in 27 s. On Windows swap is
+  the page file, and there is no PSI. The job's error names the reason (for example
+  `Editing stopped to protect system memory: only 3.0 GiB of memory was left.`).
+  On a Mac the process is measured by its physical footprint, since the
+  memory-mapped weights are clean pages the system can drop; elsewhere by RSS. The
+  kernel figures are read in-process (`sysctlbyname`, `/proc`), never by spawning
+  `sysctl`.
 - Measured on the 16 GB M1 Pro with other apps open (8 October 2026): FLUX.2 klein
   4B Q4_0 at 512 × 352 px took about 130 s, peaked at a 2.6 GiB footprint (6.4 GiB
   RSS including mapped weights), kept pressure normal and did not swap; the free

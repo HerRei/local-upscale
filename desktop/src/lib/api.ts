@@ -23,6 +23,7 @@ import type {
   TrialEstimate,
   ComparePick,
 } from './types';
+import type { RepairStroke } from './maskPaint';
 import type { PlanStage } from './plan';
 
 export const isTauri = (): boolean => '__TAURI_INTERNALS__' in window;
@@ -144,6 +145,12 @@ export const addMedia = (paths: string[], replace: boolean): Promise<void> =>
 export const selectMedia = (id: string): Promise<void> => invoke('select_media', { id });
 export const removeMedia = (id: string): Promise<void> => invoke('remove_media', { id });
 export const clearMedia = (): Promise<void> => invoke('clear_media');
+/** The strokes of Dust & scratches the host keeps for a photo. */
+export const getRepairStrokes = (mediaId: string): Promise<RepairStroke[]> =>
+  invoke('get_repair_strokes', { mediaId });
+/** Replaces a photo's whole list of strokes; the host counts its marks and draws its mask. */
+export const setRepairStrokes = (mediaId: string, strokes: RepairStroke[]): Promise<void> =>
+  invoke('set_repair_strokes', { mediaId, strokes });
 export const clearResults = (): Promise<void> => invoke('clear_results');
 export const saveSettings = (settings: UiSettings): Promise<void> =>
   invoke('save_settings', { settings });
@@ -212,6 +219,8 @@ export interface PlanJobOptions {
   selected_video_model_id?: string | null;
   edit_model_id?: string | null;
   has_audio?: boolean | null;
+  /** Steps that need paint, which the open photo has (`repair` for Dust & scratches). */
+  masked_steps?: string[];
 }
 
 export interface HostPlanStage {
@@ -439,6 +448,12 @@ export const estimateModelTrials = (
   modelIds: string[],
   baseSettings: StartBatchInput,
 ): Promise<TrialEstimate[]> => invoke('estimate_model_trials', { mediaId, modelIds, baseSettings });
+/** Seconds Start would take for these files, from earlier measured runs; null when unknown. */
+export const estimateStart = (
+  mediaIds: string[],
+  input: StartBatchInput,
+): Promise<number | null> =>
+  isTauri() ? invoke('estimate_start', { mediaIds, input }) : Promise.resolve(null);
 export const cancelJobsForMedia = (mediaId: string, keepPartial = false): Promise<void> =>
   invoke('cancel_jobs_for_media', { mediaId, keepPartial });
 export const probePath = (path: string): Promise<void> => invoke('probe_path', { path });

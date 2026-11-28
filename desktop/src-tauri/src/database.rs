@@ -13,7 +13,7 @@ use crate::{
     types::{JobRecord, MediaItem},
 };
 
-const MEDIA_COLUMNS: &str = "id, path, name, kind, width, height, frame_count, fps, duration_seconds, preview_data_url, probe_status, error, selected, hdr_format, audio_warning, has_audio";
+const MEDIA_COLUMNS: &str = "id, path, name, kind, width, height, frame_count, fps, duration_seconds, preview_data_url, probe_status, error, selected, hdr_format, audio_warning, has_audio, field_order, repair_marks, repair_rev";
 
 /// A job that `admit_jobs` inserts. `ui_json` is host-only metadata.
 #[derive(Clone, Debug)]
@@ -142,7 +142,7 @@ impl Database {
             ",
         )?;
         // Existing queues predate HDR metadata; preserve every media/job row.
-        for column in ["hdr_format", "audio_warning"] {
+        for column in ["hdr_format", "audio_warning", "field_order"] {
             let present: bool = connection.query_row(
                 "SELECT EXISTS(SELECT 1 FROM pragma_table_info('media') WHERE name=?1)",
                 [column],
@@ -151,6 +151,25 @@ impl Database {
             if !present {
                 connection.execute(
                     &format!("ALTER TABLE media ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"),
+                    [],
+                )?;
+            }
+        }
+        // The paint of Dust & scratches: the strokes as JSON, how many of them paint, and a
+        // counter that names the mask file of each state of the paint.
+        for (column, definition) in [
+            ("repair_strokes", "TEXT NOT NULL DEFAULT ''"),
+            ("repair_marks", "INTEGER NOT NULL DEFAULT 0"),
+            ("repair_rev", "INTEGER NOT NULL DEFAULT 0"),
+        ] {
+            let present: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('media') WHERE name=?1)",
+                [column],
+                |row| row.get(0),
+            )?;
+            if !present {
+                connection.execute(
+                    &format!("ALTER TABLE media ADD COLUMN {column} {definition}"),
                     [],
                 )?;
             }
@@ -370,6 +389,40 @@ impl Database {
         Ok(())
     }
 
+    /// The strokes stored for a photo as JSON (empty when it has none); `None` for an unknown id.
+    pub fn repair_strokes(&self, id: &str) -> AppResult<Option<String>> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT repair_strokes FROM media WHERE id=?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Stores a photo's strokes, their count of marks, and a new revision of the paint.
+    /// Returns the revision, or `None` for an unknown id.
+    pub fn set_repair_strokes(
+        &self,
+        id: &str,
+        strokes: &str,
+        marks: u32,
+    ) -> AppResult<Option<u32>> {
+        let changed = self.connection.execute(
+            "UPDATE media SET repair_strokes=?2, repair_marks=?3, repair_rev=repair_rev+1 WHERE id=?1",
+            params![id, strokes, marks],
+        )?;
+        if changed == 0 {
+            return Ok(None);
+        }
+        Ok(Some(self.connection.query_row(
+            "SELECT repair_rev FROM media WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        )?))
+    }
+
     pub fn clear_media(&self) -> AppResult<()> {
         self.connection.execute("DELETE FROM media", [])?;
         Ok(())
@@ -452,9 +505,10 @@ impl Database {
         hdr_format: &str,
         audio_warning: &str,
         has_audio: bool,
+        field_order: &str,
     ) -> AppResult<()> {
         self.connection.execute(
-            "UPDATE media SET kind=?2, width=?3, height=?4, frame_count=?5, fps=?6, duration_seconds=?7, preview_data_url=?8, hdr_format=?9, audio_warning=?10, has_audio=?11, probe_status='ready', error='' WHERE path=?1",
+            "UPDATE media SET kind=?2, width=?3, height=?4, frame_count=?5, fps=?6, duration_seconds=?7, preview_data_url=?8, hdr_format=?9, audio_warning=?10, has_audio=?11, field_order=?12, probe_status='ready', error='' WHERE path=?1",
             params![
                 path,
                 kind,
@@ -466,7 +520,8 @@ impl Database {
                 preview_data_url,
                 hdr_format,
                 audio_warning,
-                i64::from(has_audio)
+                i64::from(has_audio),
+                field_order
             ],
         )?;
         Ok(())
@@ -786,16 +841,33 @@ impl Database {
         request: &str,
         media: &MediaItem,
     ) -> AppResult<Option<f64>> {
-        let (key, units) = crate::queue_timing::work_profile(
-            request,
-            media.width,
-            media.height,
-            media.frame_count,
-            &media.hdr_format,
-        );
-        if key.is_empty() || units <= 0.0 {
+        let runs = self.completed_runs()?;
+        Ok(estimate_from_runs(&runs, request, media))
+    }
+
+    /// The time of everything one Start would queue: the sum of each item's estimate, or
+    /// None when any item has none (a total with a hole in it would be too small). The
+    /// measured runs are read once for the whole batch.
+    pub fn estimate_requests_seconds(
+        &self,
+        items: &[(String, &MediaItem)],
+    ) -> AppResult<Option<f64>> {
+        if items.is_empty() {
             return Ok(None);
         }
+        let runs = self.completed_runs()?;
+        let mut total = 0.0;
+        for (request, media) in items {
+            match estimate_from_runs(&runs, request, media) {
+                Some(seconds) => total += seconds,
+                None => return Ok(None),
+            }
+        }
+        Ok(Some(total))
+    }
+
+    /// Every completed, measured job as (work profile, units, seconds), newest first.
+    fn completed_runs(&self) -> AppResult<Vec<(String, f64, f64)>> {
         let mut statement = self.connection.prepare(
             "SELECT jobs.request_json, media.width, media.height, media.frame_count, media.hdr_format, jobs.elapsed_seconds
                FROM jobs JOIN media ON media.id = jobs.media_id
@@ -805,18 +877,18 @@ impl Database {
         let mut rows = statement.query([])?;
         let mut runs = Vec::new();
         while let Some(row) = rows.next()? {
-            let (candidate, measured_units) = crate::queue_timing::work_profile(
+            let (key, units) = crate::queue_timing::work_profile(
                 &row.get::<_, String>(0)?,
                 row.get(1)?,
                 row.get(2)?,
                 u64::try_from(row.get::<_, i64>(3)?).unwrap_or_default(),
                 &row.get::<_, String>(4)?,
             );
-            if candidate == key && measured_units > 0.0 {
-                runs.push((measured_units, row.get::<_, f64>(5)?));
+            if !key.is_empty() && units > 0.0 {
+                runs.push((key, units, row.get::<_, f64>(5)?));
             }
         }
-        Ok(crate::queue_timing::typical_seconds_per_unit(&runs).map(|speed| speed * units))
+        Ok(runs)
     }
 
     /// A step of a preview patch that ran (was not answered from the cache). A patch is a
@@ -1188,6 +1260,29 @@ impl Database {
     }
 }
 
+fn estimate_from_runs(
+    runs: &[(String, f64, f64)],
+    request: &str,
+    media: &MediaItem,
+) -> Option<f64> {
+    let (key, units) = crate::queue_timing::work_profile(
+        request,
+        media.width,
+        media.height,
+        media.frame_count,
+        &media.hdr_format,
+    );
+    if key.is_empty() || units <= 0.0 {
+        return None;
+    }
+    let same: Vec<(f64, f64)> = runs
+        .iter()
+        .filter(|(candidate, _, _)| *candidate == key)
+        .map(|(_, measured_units, seconds)| (*measured_units, *seconds))
+        .collect();
+    crate::queue_timing::typical_seconds_per_unit(&same).map(|speed| speed * units)
+}
+
 /// Where a saved job request writes its result: an image or edit output, or a video.
 fn request_output(request: &serde_json::Value) -> Option<&str> {
     request["data"]["output_path"]
@@ -1220,6 +1315,9 @@ fn media_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
         hdr_format: row.get(13)?,
         audio_warning: row.get(14)?,
         has_audio: row.get::<_, i64>(15)? != 0,
+        field_order: row.get(16)?,
+        repair_marks: u32::try_from(row.get::<_, i64>(17)?).unwrap_or_default(),
+        repair_rev: u32::try_from(row.get::<_, i64>(18)?).unwrap_or_default(),
     })
 }
 

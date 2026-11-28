@@ -37,6 +37,8 @@ interface ParityCase {
     selected_video_model_id: string | null;
     edit_model_id: string | null;
     has_audio: boolean | null;
+    /** Left out of a case that names none. */
+    masked_steps?: string[];
   };
   start_request: {
     media_ids: string[];
@@ -96,6 +98,7 @@ function makeCase(
     selectedVideoModelId?: string | null;
     editModelId?: string | null;
     hasAudio?: boolean | null;
+    maskedSteps?: string[];
     mediaIds?: string[];
     batchMode?: boolean;
     recipeName?: string;
@@ -142,6 +145,7 @@ function makeCase(
   const selectedVideoModelId = spec.selectedVideoModelId ?? null;
   const editModelId = spec.editModelId ?? null;
   const hasAudio = spec.hasAudio === undefined ? null : spec.hasAudio;
+  const maskedSteps = spec.maskedSteps ?? [];
 
   const faceModel = faceModelId
     ? snapshot.catalog.models.find((m) => m.model_id === faceModelId)
@@ -160,6 +164,7 @@ function makeCase(
     selectedVideoModel,
     editModel,
     hasAudio: hasAudio === null ? undefined : hasAudio,
+    maskedSteps,
     steps,
   });
 
@@ -190,6 +195,7 @@ function makeCase(
       selected_video_model_id: selectedVideoModelId,
       edit_model_id: editModelId,
       has_audio: hasAudio,
+      ...(maskedSteps.length > 0 ? { masked_steps: maskedSteps } : {}),
     },
     start_request: {
       media_ids: mediaIds,
@@ -484,6 +490,27 @@ function buildCorpus(): ParityCase[] {
     }
   }
 
+  // Slow motion counts for x2 and x4 only, and leaves the Clean audio stage out with it
+  for (const target of ['x2', 'x4', 'fps60'] as const) {
+    for (const hasAudio of [true, null] as const) {
+      push(`video-slow-${target}-aud_${hasAudio}`, {
+        settingsPatch: {
+          task: 'video',
+          video_task: 'upscale',
+          selected_video_model_id: 'frame_by_frame',
+          selected_model_id: 'span_photo_x4',
+          output_scale: 2,
+          video_interpolation: target,
+          video_interpolation_order: 'after_upscale',
+          video_slow_motion: true,
+          video_clean_audio: true,
+        },
+        installedIds: ['span_photo_x4', 'rife_4_26', 'deepfilternet3'],
+        hasAudio,
+      });
+    }
+  }
+
   // 6. Video temporal (SeedVR2 / FlashVSR): target_resolution, fixes ignored, interp ignored, audio kept (24 cases)
   for (const videoModelId of ['flashvsr_v11', 'seedvr2_3b']) {
     for (const targetRes of [0, 720]) {
@@ -610,10 +637,11 @@ function buildCorpus(): ParityCase[] {
   // 10. Step stages added by id: photos run them, video, temporal models and Edit leave them out
   const grain = { step: 'grain', params: { strength: 40, seed: 7 } };
   const maskedGrain = { ...grain, mask_path: '/in/mask.png' };
+  const background = { step: 'remove_background', model_id: 'birefnet_general' };
   const stepCases: [
     string,
     Partial<UiSettings>,
-    Omit<Parameters<typeof makeCase>[1], 'settingsPatch'>?,
+    (Omit<Parameters<typeof makeCase>[1], 'settingsPatch'> & { installedExtra?: string[] })?,
   ][] = [
     ['upscale', { task: 'upscale', step_stages: [grain] }],
     [
@@ -651,12 +679,82 @@ function buildCorpus(): ParityCase[] {
       { usingTemporalVideo: true, selectedVideoModelId: 'seedvr2_3b' },
     ],
     ['edit', { task: 'edit', step_stages: [grain] }, { editModelId: null }],
+    ['background-missing', { task: 'upscale', output_format: 'jpg', step_stages: [background] }],
+    [
+      'background-installed-tif',
+      { task: 'upscale', output_format: 'tif', step_stages: [background, grain] },
+      { installedExtra: ['birefnet_general'] },
+    ],
+    [
+      'background-restore-alone',
+      {
+        task: 'denoise',
+        selected_model_id: '',
+        output_scale: 1,
+        fix_stages: [],
+        fixes: [],
+        step_stages: [background],
+      },
+      { installedExtra: ['birefnet_general'] },
+    ],
+    [
+      'background-and-deinterlace-on-a-photo',
+      { task: 'upscale', step_stages: [{ step: 'deinterlace', params: {} }, background] },
+    ],
+    [
+      'deinterlace-video-before-interpolation',
+      {
+        task: 'video',
+        selected_video_model_id: 'frame_by_frame',
+        video_interpolation: 'x2',
+        video_interpolation_order: 'before_upscale',
+        step_stages: [{ step: 'deinterlace', params: { mode: 'field', parity: 'auto' } }],
+      },
+    ],
+    [
+      'deinterlace-and-background-stored-on-a-photo',
+      {
+        task: 'upscale',
+        step_stages: [
+          { step: 'deinterlace', params: { mode: 'field', parity: 'auto' } },
+          background,
+        ],
+      },
+    ],
+    [
+      'stabilise-video-alone',
+      {
+        task: 'video',
+        selected_video_model_id: 'frame_by_frame',
+        output_scale: 1,
+        step_stages: [{ step: 'stabilise', params: { smoothing: 'medium' } }],
+      },
+    ],
+    [
+      'deinterlace-and-stabilise-video',
+      {
+        task: 'video',
+        selected_video_model_id: 'frame_by_frame',
+        step_stages: [
+          { step: 'stabilise', params: { smoothing: 'strong' } },
+          { step: 'deinterlace', params: { mode: 'frame', parity: 'tff' } },
+        ],
+      },
+    ],
+    [
+      'stabilise-stored-on-a-photo',
+      { task: 'upscale', step_stages: [{ step: 'stabilise', params: { smoothing: 'light' } }] },
+    ],
+    [
+      'background-video',
+      { task: 'video', selected_video_model_id: 'frame_by_frame', step_stages: [background] },
+    ],
   ];
-  for (const [tag, patch, spec] of stepCases) {
+  for (const [tag, patch, { installedExtra = [], ...spec } = {}] of stepCases) {
     push(`step-stages-${tag}`, {
       ...spec,
       settingsPatch: { selected_model_id: 'span_photo_x4', output_scale: 4, ...patch },
-      installedIds: ['span_photo_x4', 'denoise_realplksr_1x'],
+      installedIds: ['span_photo_x4', 'denoise_realplksr_1x', ...installedExtra],
     });
   }
 
@@ -785,6 +883,83 @@ function buildCorpus(): ParityCase[] {
     });
   }
 
+  // 9. A fix's strength changes neither the plan nor the model: each case has a twin without it.
+  for (const task of ['upscale', 'denoise'] as const) {
+    for (const strength of [undefined, 0.4]) {
+      push(`strength-${task}-${strength ?? 'full'}`, {
+        settingsPatch: {
+          task,
+          quality: 'best',
+          selected_model_id: task === 'denoise' ? 'denoise_realplksr_1x' : 'span_photo_x4',
+          output_scale: task === 'denoise' ? 1 : 4,
+          fixes: ['noise'],
+          fix_stages: [
+            {
+              fix: 'noise',
+              model_id: 'denoise_realplksr_1x',
+              ...(strength === undefined ? {} : { params: { strength } }),
+            },
+          ],
+        },
+        installedIds: ['span_photo_x4', 'denoise_realplksr_1x'],
+      });
+    }
+  }
+
+  // 12. Dust & scratches runs for a photo that has paint: the plan lists the step only then,
+  // ahead of the fixes and the background; a start always carries it, and the host checks each photo.
+  const repair = { step: 'repair' };
+  const repairCases: [string, Partial<UiSettings>, string[]][] = [
+    ['upscale-painted', { task: 'upscale', step_stages: [repair] }, ['repair']],
+    ['upscale-unpainted', { task: 'upscale', step_stages: [repair] }, []],
+    [
+      'upscale-with-fix-and-background',
+      {
+        task: 'upscale',
+        fix_stages: [{ fix: 'noise', model_id: 'denoise_realplksr_1x' }],
+        fixes: ['noise'],
+        step_stages: [{ step: 'remove_background', model_id: 'birefnet_general' }, repair],
+      },
+      ['repair'],
+    ],
+    [
+      'restore-alone-painted',
+      {
+        task: 'denoise',
+        selected_model_id: '',
+        output_scale: 1,
+        fix_stages: [],
+        fixes: [],
+        step_stages: [repair],
+      },
+      ['repair'],
+    ],
+    [
+      'restore-alone-unpainted',
+      {
+        task: 'denoise',
+        selected_model_id: '',
+        output_scale: 1,
+        fix_stages: [],
+        fixes: [],
+        step_stages: [repair],
+      },
+      [],
+    ],
+    [
+      'video',
+      { task: 'video', selected_video_model_id: 'frame_by_frame', step_stages: [repair] },
+      ['repair'],
+    ],
+  ];
+  for (const [tag, patch, maskedSteps] of repairCases) {
+    push(`repair-${tag}`, {
+      maskedSteps,
+      settingsPatch: { selected_model_id: 'span_photo_x4', output_scale: 4, ...patch },
+      installedIds: ['span_photo_x4', 'denoise_realplksr_1x', 'birefnet_general'],
+    });
+  }
+
   return cases;
 }
 
@@ -809,12 +984,41 @@ describe('job_plan parity corpus', () => {
         'interpolate',
         'audio_denoise',
         'grain',
+        'remove_background',
+        'repair',
+        'deinterlace',
+        'stabilise',
         'test_cutout',
         'test_tone',
         'test_key',
       ]),
     );
     expect(cases.some((c) => (c.expected_start_input.step_stages ?? []).length > 0)).toBe(true);
+    const repairPlans = new Map(
+      cases
+        .filter((c) => c.id.includes('-repair-'))
+        .map((c) => [c.id.replace(/^case-\d+-repair-/, ''), c]),
+    );
+    const planned = (tag: string) => repairPlans.get(tag)!.expected_plan.map((s) => s.kind);
+    expect(planned('upscale-painted')[0]).toBe('repair');
+    expect(planned('upscale-unpainted')).not.toContain('repair');
+    expect(planned('upscale-with-fix-and-background').slice(0, 3)).toEqual([
+      'repair',
+      'remove_background',
+      'restore',
+    ]);
+    expect(planned('restore-alone-painted')).toEqual(['repair']);
+    expect(planned('restore-alone-unpainted')).toEqual([]);
+    expect(planned('video')).not.toContain('repair');
+    for (const [tag, c] of repairPlans) {
+      const sent = (c.expected_start_input.step_stages ?? []).map((stage) => stage.step);
+      expect(sent.includes('repair')).toBe(tag !== 'video');
+    }
+    expect(
+      repairPlans
+        .get('upscale-with-fix-and-background')!
+        .expected_start_input.step_stages!.map((stage) => stage.step),
+    ).toEqual(['repair', 'remove_background']);
     const modelStepRows = cases.flatMap((c) =>
       c.expected_plan.filter((s) => s.role === 'step' && s.kind.startsWith('test_')),
     );
@@ -837,6 +1041,15 @@ describe('job_plan parity corpus', () => {
         (c) => c.expected_start_input.device === 'cpu' && c.settings.device_id === 'cuda:0',
       ),
     ).toBe(true);
+
+    for (const task of ['upscale', 'denoise']) {
+      const full = cases.find((c) => c.id.endsWith(`strength-${task}-full`));
+      const light = cases.find((c) => c.id.endsWith(`strength-${task}-0.4`));
+      expect(full && light).toBeTruthy();
+      expect(light!.expected_plan).toEqual(full!.expected_plan);
+      expect(light!.expected_start_input.fix_stages[0].params).toEqual({ strength: 0.4 });
+      expect(full!.expected_start_input.fix_stages[0].params).toBeUndefined();
+    }
 
     const serialized = `{\n  "schema_version": 1,\n  "cases": [\n${cases.map((c) => `    ${JSON.stringify(c)}`).join(',\n')}\n  ]\n}\n`;
     if (process.env.UPDATE_JOB_PLAN_FIXTURE === '1') {

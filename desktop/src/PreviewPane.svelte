@@ -3,6 +3,9 @@
   import { onMount, tick } from 'svelte';
   import VideoComparison from './VideoComparison.svelte';
   import EmptyStage from './EmptyStage.svelte';
+  import CropGuide from './CropGuide.svelte';
+  import MaskPaint from './MaskPaint.svelte';
+  import PaintBar from './PaintBar.svelte';
   import FileName from './FileName.svelte';
   import MediaIllustration from './MediaIllustration.svelte';
   import PreviewActivity from './PreviewActivity.svelte';
@@ -12,6 +15,17 @@
   import StepChips from './StepChips.svelte';
   import PreviewPatch from './PreviewPatch.svelte';
   import { centreRegion, pickPatchRegion, type PatchPlanEntry } from './lib/previewPatch';
+  import {
+    brushLimits,
+    commit,
+    emptyHistory,
+    redo,
+    stepBrush,
+    undo,
+    type PaintHistory,
+    type RepairStroke,
+  } from './lib/maskPaint';
+  import { detectPlatform } from './lib/platform';
   import type { StepChip } from './lib/jobSteps';
   import type { ViewerBackground } from './lib/viewerBackground';
   import type { PaneUnfinished } from './lib/unfinished';
@@ -123,6 +137,8 @@
   /** Why a pair is shown as a single result, for example a different framing. */
   export let comparisonNote = '';
   export let completedVideoOutput: string;
+  /** The result is slow motion: it plays on its own clock, so only Enhanced is offered. */
+  export let slowResult = false;
   export let videoResultId = '';
   export let compactHidden = false;
   export let viewerBackground: ViewerBackground = 'checker';
@@ -132,6 +148,19 @@
   $: liveFrame = progressiveFrame;
   export let editing = false;
   export let processing = false;
+  /** The fraction Stabilise's open popover crops off each edge, drawn over a video's still picture. */
+  export let cropGuide: number | null = null;
+  /**
+   * Dust & scratches: painting on the open photo. The app keeps each photo's history and the
+   * brush size for the session; the pane draws the paint, the bar and the keys.
+   */
+  export let painting = false;
+  export let paintHistory: PaintHistory = emptyHistory();
+  /** Brush width in source pixels; held to the open photo's limits here. */
+  export let paintSize = 0;
+  export let onPaint: (history: PaintHistory) => void = () => {};
+  export let onPaintSize: (size: number) => void = () => {};
+  export let onPaintDone: () => void = () => {};
   export let videoEngineBusy = false;
   export let activeTileSize = 0;
   export let addFiles: () => void = () => {};
@@ -208,6 +237,7 @@
   ) as { id: ComparisonView; label: string; title: string }[];
   let comparisonView: ComparisonView = 'split';
   let holdingOriginal = false;
+  $: if (slowResult && comparisonView !== 'enhanced') comparisonView = 'enhanced';
   // Two saved sides compare even while one of them is still decoding.
   $: loading = loadingLabel !== '';
   $: pairShown = referenceIsResult && !singleFrame && selectedMedia?.kind === 'image' && !loading;
@@ -216,12 +246,15 @@
     !loading &&
     Boolean((resultPreview && !singleFrame) || pairShown || videoComparison?.enhanced_url);
   $: canPeek =
+    painting ||
     canCompare ||
     patchVisible ||
     Boolean(singleFrame && resultPreview) ||
     Boolean(processing && (committedStagePreview || hasLiveTiles || videoSourcePreview));
   $: if (!canPeek) holdingOriginal = false;
-  $: shownView = holdingOriginal ? 'original' : comparisonView;
+  // Painting shows the Original; the chosen view comes back when it ends.
+  $: activeView = painting ? 'original' : comparisonView;
+  $: shownView = holdingOriginal && !slowResult ? 'original' : activeView;
   $: resultClip = loading
     ? 0
     : singleFrame
@@ -257,7 +290,7 @@
         zoom,
         pan: { x: panX, y: panY },
         pixelRatio: typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1,
-        comparisonView,
+        comparisonView: activeView,
         peeking: holdingOriginal,
         singleFrame: Boolean(singleFrame),
         referenceIsResult: pairShown,
@@ -435,6 +468,7 @@
     selectedMedia?.probe_status === 'ready' &&
     (!canCompare || comparisonView === 'original') &&
     patch?.state !== 'busy' &&
+    !painting &&
     patchRegion,
   );
   // A remembered "on" has no position yet for a file opened later.
@@ -1102,6 +1136,73 @@
     return Number.isFinite(number) ? number : 0;
   }
 
+  // Dust & scratches. The mode starts at Paint each time painting opens; Space held moves the
+  // picture instead of painting.
+  let maskPaint: MaskPaint | undefined;
+  let paintMode: 'paint' | 'erase' = 'paint';
+  let spaceHeld = false;
+  let paintRing: { x: number; y: number } | null = null;
+  const mac = detectPlatform() === 'macos';
+  $: paintsHere = painting && selectedMedia?.kind === 'image' && Boolean(sourcePreview);
+  $: if (!painting) {
+    paintMode = 'paint';
+    spaceHeld = false;
+    paintRing = null;
+  }
+  $: paintImage = {
+    width: Math.max(1, selectedMedia?.width ?? 1),
+    height: Math.max(1, selectedMedia?.height ?? 1),
+  };
+  $: paintLimits = brushLimits(paintImage);
+  $: brush = Math.min(paintLimits.max, Math.max(paintLimits.min, paintSize || paintLimits.first));
+
+  function ringAt(event: PointerEvent): { x: number; y: number } | null {
+    if (!canvasWell || spaceHeld || dragging) return null;
+    const box = canvasWell.getBoundingClientRect();
+    return { x: event.clientX - box.left, y: event.clientY - box.top };
+  }
+
+  function addStroke(stroke: RepairStroke): void {
+    onPaint(commit(paintHistory, [...paintHistory.strokes, stroke]));
+  }
+
+  /** The painting keys; false when the key is not one of them or focus is where it types. */
+  function paintKey(event: KeyboardEvent): boolean {
+    const target = event.target instanceof Element ? event.target : null;
+    if (
+      target?.closest(
+        'input:not([type="range"]):not([type="checkbox"]):not([type="radio"]), textarea, select, [contenteditable], [aria-modal="true"]',
+      )
+    ) {
+      return false;
+    }
+    const key = event.key.toLowerCase();
+    const command = event.metaKey || event.ctrlKey;
+    if (event.key === ' ' && !command) {
+      spaceHeld = true;
+      paintRing = null;
+    } else if (command && key === 'z') {
+      onPaint(event.shiftKey ? redo(paintHistory) : undo(paintHistory));
+    } else if (event.ctrlKey && key === 'y') {
+      onPaint(redo(paintHistory));
+    } else if (command || event.altKey) {
+      return false;
+    } else if (key === 'b') {
+      paintMode = 'paint';
+    } else if (key === 'e') {
+      paintMode = 'erase';
+    } else if (event.key === '[' || event.key === ']') {
+      onPaintSize(stepBrush(brush, event.key, paintImage));
+    } else if (event.key === 'Escape') {
+      if (event.defaultPrevented) return false;
+      onPaintDone();
+    } else {
+      return false;
+    }
+    event.preventDefault();
+    return true;
+  }
+
   function onWheel(event: WheelEvent): void {
     if (!sourcePreview) return;
     event.preventDefault();
@@ -1109,8 +1210,22 @@
   }
 
   function pointerDown(event: PointerEvent): void {
-    if (event.button !== 0) return;
     const target = event.target instanceof Element ? event.target : null;
+    if (paintsHere) {
+      if (target?.closest('button, input, select, textarea')) return;
+      if (event.button === 0 && !spaceHeld) {
+        maskPaint?.begin(event);
+        (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+        event.preventDefault();
+        return;
+      }
+      // Space and the main button, or the middle button, move the picture.
+      if (event.button !== 0 && event.button !== 1) return;
+      event.preventDefault();
+      startPan(event);
+      return;
+    }
+    if (event.button !== 0) return;
     if (splitActive && (target?.closest('.compare-line') || pointerNearComparison(event))) {
       draggingComparison = true;
       dragging = false;
@@ -1120,6 +1235,10 @@
       return;
     }
     if (target?.closest('button, input, select, textarea')) return;
+    startPan(event);
+  }
+
+  function startPan(event: PointerEvent): void {
     const bounds = currentPanBounds();
     if (bounds.x <= 0 && bounds.y <= 0) return;
     dragging = true;
@@ -1154,6 +1273,13 @@
   }
 
   function pointerMove(event: PointerEvent): void {
+    if (paintsHere) {
+      paintRing = ringAt(event);
+      if (maskPaint?.stroking()) {
+        maskPaint.extend(event);
+        return;
+      }
+    }
     if (draggingComparison) {
       updateComparisonFromPointer(event.clientX);
       return;
@@ -1171,6 +1297,7 @@
   }
 
   function pointerUp(event?: PointerEvent): void {
+    if (maskPaint?.stroking()) maskPaint.end();
     dragging = false;
     draggingComparison = false;
     if (event && (event.currentTarget as HTMLElement).hasPointerCapture?.(event.pointerId)) {
@@ -1220,7 +1347,8 @@
   }
 
   function windowKeyDown(event: KeyboardEvent): void {
-    if (!canPeek || !holdsOriginalKey(event)) return;
+    if (paintsHere && paintKey(event)) return;
+    if (!canPeek || slowResult || !holdsOriginalKey(event)) return;
     const target = event.target instanceof Element ? event.target : null;
     if (target?.closest('input, textarea, select, [contenteditable], [aria-modal="true"]')) return;
     holdingOriginal = true;
@@ -1229,11 +1357,12 @@
 
   function windowKeyUp(event: KeyboardEvent): void {
     if (event.key.toLowerCase() === 'm') holdingOriginal = false;
+    if (event.key === ' ') spaceHeld = false;
   }
 
   /** The View menu's comparison commands; they do nothing without a result. */
   export function setComparisonView(view: ComparisonView): void {
-    if (canCompare) comparisonView = view;
+    if (canCompare && !(slowResult && view !== 'enhanced')) comparisonView = view;
   }
 
   async function loadVideoComparison(key: string, forceCompatible = false): Promise<void> {
@@ -1424,7 +1553,10 @@
 <svelte:window
   on:keydown={windowKeyDown}
   on:keyup={windowKeyUp}
-  on:blur={() => (holdingOriginal = false)}
+  on:blur={() => {
+    holdingOriginal = false;
+    spaceHeld = false;
+  }}
 />
 
 <section class="preview-pane" class:compact-hidden={compactHidden}>
@@ -1436,7 +1568,10 @@
             role="radio"
             aria-checked={comparisonView === option.id}
             class:active={comparisonView === option.id}
-            title={option.title}
+            disabled={slowResult && option.id !== 'enhanced'}
+            title={slowResult && option.id !== 'enhanced'
+              ? 'A slow-motion result plays on its own.'
+              : option.title}
             on:click={() => (comparisonView = option.id)}>{option.label}</button
           >
         {/each}
@@ -1469,7 +1604,9 @@
           : 'No media selected'}</span
       >
     </div>
-    {#if stepChips.length > 0}
+    {#if painting}
+      <!-- While painting the head names the photo only. -->
+    {:else if stepChips.length > 0}
       <div class="header-steps" data-tauri-drag-region>
         <StepChips
           chips={stepChips}
@@ -1492,11 +1629,16 @@
     class:rendering={liveTilesShown}
     class:panning={dragging}
     class:comparing={draggingComparison}
+    class:painting={paintsHere && !spaceHeld}
+    class:moving={paintsHere && spaceHeld}
     role="application"
     aria-label="Media comparison canvas"
     on:wheel={onWheel}
     on:pointerenter={() => (pointerOverCanvas = true)}
-    on:pointerleave={() => (pointerOverCanvas = false)}
+    on:pointerleave={() => {
+      pointerOverCanvas = false;
+      paintRing = null;
+    }}
     on:pointerdown={pointerDown}
     on:pointermove={pointerMove}
     on:pointerup={pointerUp}
@@ -1518,6 +1660,7 @@
             sourceWidth={selectedMedia.width}
             sourceHeight={selectedMedia.height}
             enhancedSrc={videoComparison.enhanced_url}
+            cropGuide={processing ? null : cropGuide}
             fps={videoFps}
             keptFrames={videoComparison.enhanced_url ? (showingUnfinished?.frames ?? 0) : 0}
             keptSeconds={videoComparison.enhanced_url ? (showingUnfinished?.seconds ?? 0) : 0}
@@ -1532,7 +1675,7 @@
         <SplitComparison
           stageStyle={`width:${stageWidth}px;height:${stageHeight}px;left:50%;top:50%;transform:translate(calc(-50% + ${panX}px), calc(-50% + ${panY}px)) scale(${zoom})`}
           split={splitActive}
-          view={comparisonView}
+          view={activeView}
           peeking={holdingOriginal}
           {resultClip}
           showing={showingSide}
@@ -1574,6 +1717,9 @@
               draggable="false"
             />
           {/if}
+          {#if cropGuide !== null && selectedMedia.kind === 'video' && !processing}
+            <CropGuide fraction={cropGuide} />
+          {/if}
           <canvas
             bind:this={progressiveCanvas}
             class="progressive-image"
@@ -1588,6 +1734,36 @@
             ></div>
           {/if}
         </SplitComparison>
+        {#if paintsHere && selectedMedia}
+          <MaskPaint
+            bind:this={maskPaint}
+            media={{ width: selectedMedia.width, height: selectedMedia.height }}
+            stageStyle={`width:${stageWidth}px;height:${stageHeight}px;left:50%;top:50%;transform:translate(calc(-50% + ${panX}px), calc(-50% + ${panY}px)) scale(${zoom})`}
+            stage={{ width: stageWidth, height: stageHeight }}
+            {zoom}
+            pan={{ x: panX, y: panY }}
+            well={canvasWell}
+            strokes={paintHistory.strokes}
+            size={brush}
+            mode={paintMode}
+            hidden={holdingOriginal}
+            ring={paintRing}
+            onStroke={addStroke}
+          />
+          <PaintBar
+            mode={paintMode}
+            size={brush}
+            limits={paintLimits}
+            canUndo={paintHistory.past.length > 0}
+            canClear={paintHistory.strokes.length > 0}
+            {mac}
+            onMode={(mode) => (paintMode = mode)}
+            onSize={onPaintSize}
+            onUndo={() => onPaint(undo(paintHistory))}
+            onClear={() => onPaint(commit(paintHistory, []))}
+            onDone={onPaintDone}
+          />
+        {/if}
         {#if patchVisible && patchRegion && selectedMedia}
           <PreviewPatch
             media={{ width: selectedMedia.width, height: selectedMedia.height }}
@@ -1689,7 +1865,7 @@
               on:click={() => {
                 previewRetryMediaId = '';
                 void repairSelectedPreview();
-              }}>Try Again</button
+              }}>Try again</button
             >
           </div>
         {/if}
@@ -1749,7 +1925,8 @@
         <div class="playback-preparation" role="status" on:pointerdown|stopPropagation>
           <span class="playback-spinner" aria-hidden="true"></span>
           <span
-            >{videoPreparationProgress?.stage ?? 'Preparing video comparison…'} · {videoPreparationElapsed}s
+            >{videoPreparationProgress?.stage ?? 'Preparing video comparison…'} · {videoPreparationElapsed}
+            s
             {#if videoPreparationProgress}
               · {videoPreparationProgress.frame}{videoPreparationProgress.total > 0
                 ? ` / ~${videoPreparationProgress.total} frames`

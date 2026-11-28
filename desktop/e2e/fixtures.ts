@@ -15,6 +15,19 @@ export const upscale: Scenario = {
 /** The upscale plan with a ready worker, so Try others… is available. */
 export const ready: Scenario = { ...upscale, worker: 'ready' };
 
+/** A ready engine that can remove backgrounds; BiRefNet is not downloaded. */
+export const cutout: Scenario = {
+  ...ready,
+  features: [...FEATURES, 'image_background_removal', 'stage_params_and_masks'],
+  settings: { ...ready.settings, output_directory: '/Users/test/Desktop' },
+};
+
+/** A ready engine that can change how strongly Blur, JPEG artifacts and Noise are applied. */
+export const strength: Scenario = {
+  ...ready,
+  features: [...FEATURES, 'fix_strength', 'stage_params_and_masks'],
+};
+
 /** Two photos; the first has three finished outputs, the second one. */
 export const withOutputs: Scenario = {
   ...upscale,
@@ -40,6 +53,58 @@ export const video: Scenario = {
   video: true,
   task: 'video',
   settings: { video_interpolation: 'x2' },
+};
+
+/** A 12 s clip at 2× slower, on an engine that lists slow motion. */
+export const slow: Scenario = {
+  ...video,
+  features: [...FEATURES, 'video_slow_motion'],
+  settings: {
+    video_interpolation: 'x2',
+    video_interpolation_order: 'after_upscale',
+    video_slow_motion: true,
+  },
+};
+
+/** An interlaced PAL video (768 × 576, 25 fps) on a ready engine that can deinterlace. */
+export const tape: Scenario = {
+  ...video,
+  worker: 'ready',
+  videoFieldOrder: 'bff',
+  features: [...FEATURES, 'video_deinterlace', 'stage_params_and_masks'],
+  settings: {
+    ...video.settings,
+    video_interpolation: 'off',
+    output_directory: '/Users/test/Desktop',
+  },
+};
+
+/** A shaky 1080p clip on a ready engine that can stabilise. */
+export const shaky: Scenario = {
+  ...video,
+  worker: 'ready',
+  videoSource: true,
+  features: [...FEATURES, 'video_stabilise', 'stage_params_and_masks'],
+  settings: {
+    ...video.settings,
+    video_interpolation: 'off',
+    output_directory: '/Users/test/Desktop',
+  },
+};
+
+/** Two photos on an engine that repairs marks; the first has three marks painted on its sky. */
+export const scratched: Scenario = {
+  ...ready,
+  photos: 2,
+  features: [...FEATURES, 'image_repair', 'stage_params_and_masks'],
+  settings: { ...ready.settings, output_directory: '/Users/test/Desktop' },
+  marks: {
+    1: [
+      { mode: 'paint', size: 18, points: [310, 150] },
+      { mode: 'paint', size: 14, points: [520, 230, 560, 236, 600, 250] },
+      { mode: 'paint', size: 22, points: [940, 120] },
+    ],
+  },
 };
 
 /** Two finished results of photo 1 on a host with pair slots: an upscale and an Edit at 512 px. */

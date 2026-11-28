@@ -24,12 +24,10 @@ def test_background_model_is_not_a_restoration_preset():
         )
 
 
-def test_background_step_is_developer_only(monkeypatch):
+def test_background_step_is_listed_without_the_dev_switch(monkeypatch):
     step = STEPS_BY_ID["remove_background"]
-    assert step.model_task == "background" and step.output_alpha and step.dev_only
+    assert step.model_task == "background" and step.output_alpha and not step.dev_only
     monkeypatch.delenv("LOCALSR_DEV_STEPS", raising=False)
-    assert "image_background_removal" not in _engine_features([])
-    monkeypatch.setenv("LOCALSR_DEV_STEPS", "1")
     assert "image_background_removal" in _engine_features([])
 
 
@@ -50,7 +48,6 @@ def test_small_birefnet_step_runs_through_image_job(tmp_path, monkeypatch, bit_d
     from localsr.image_models.birefnet import BiRefNet
     from localsr.worker import image_job
 
-    monkeypatch.setenv("LOCALSR_DEV_STEPS", "1")
     monkeypatch.setattr(image_job, "BIREFNET_INPUT_SIZE", 64)
     torch.manual_seed(27)
     network = BiRefNet(embed_dim=8, depths=(1, 1, 1, 1), heads=(1, 2, 4, 8), window_size=4).eval()

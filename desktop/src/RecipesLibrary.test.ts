@@ -118,7 +118,7 @@ describe('Recipes library', () => {
     const rows = list.querySelectorAll('button.row');
     expect(rows).toHaveLength(3);
     expect(rows[0].textContent).toContain('Gamma');
-    expect(rows[0].textContent).toContain('⌃');
+    expect(rows[0].querySelector('.recipe-pin svg')).not.toBeNull();
     expect(rows[1].textContent).toContain('Alpha');
     expect(rows[2].textContent).toContain('Beta');
   });
@@ -263,7 +263,7 @@ describe('Recipes library', () => {
 
     const rows = screen.getByRole('region', { name: 'Recipes' }).querySelectorAll('button.row');
     expect(rows[0].textContent).toContain('Zebra');
-    expect(rows[0].textContent).toContain('⌃');
+    expect(rows[0].querySelector('.recipe-pin svg')).not.toBeNull();
     expect(screen.getByRole('button', { name: 'Unpin' })).toBeTruthy();
   });
 

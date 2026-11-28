@@ -79,6 +79,9 @@ pub struct PlanOptions<'a> {
     pub selected_video_model: Option<&'a CatalogVideoModel>,
     pub edit_model: Option<&'a EditModel>,
     pub has_audio: Option<bool>,
+    /// Steps that need paint, which the open photo has; the plan leaves out any other step that
+    /// `requires_mask`.
+    pub masked_steps: Vec<String>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -103,6 +106,15 @@ pub fn effective_video_task(settings: &UiSettings) -> &'static str {
     } else {
         "upscale"
     }
+}
+
+/// Slow motion counts only while the frames are added as 2x or 4x on the frame-by-frame
+/// engine; the engine leaves out the sound then, so no audio step is planned either.
+pub fn slow_motion_applies(settings: &UiSettings, using_temporal_video: bool) -> bool {
+    settings.task == "video"
+        && !using_temporal_video
+        && settings.video_slow_motion
+        && matches!(settings.video_interpolation.as_str(), "x2" | "x4")
 }
 
 pub fn is_restore_task(settings: &UiSettings) -> bool {
@@ -236,26 +248,33 @@ pub fn step_stage_media(task: &str, using_temporal_video: bool) -> Option<&'stat
 }
 
 /// The step stages that run for these settings, in their order, with where each runs.
-/// Steps this version does not know and steps for another media are left out.
+/// Steps this version does not know and steps for another media are left out; the rest are in
+/// run order (their phase, then their place in it). With
+/// `masked_steps`, a step that needs paint stays only when it is listed (the plan of one photo);
+/// without, every step stays (a start, where each photo is checked as the job is built).
 pub fn active_step_stages<'a>(
     steps: &'a StepRegistry,
     settings: &'a UiSettings,
     using_temporal_video: bool,
+    masked_steps: Option<&[String]>,
 ) -> Vec<(&'a StepStageSelection, &'a StepDefinition, StepPlacement)> {
     let Some(media) = step_stage_media(&settings.task, using_temporal_video) else {
         return Vec::new();
     };
-    settings
+    let mut active: Vec<_> = settings
         .step_stages
         .iter()
         .filter_map(|selection| {
             let (step, placement) = steps.step_stage(&selection.step)?;
-            step.media
-                .iter()
-                .any(|candidate| candidate == media)
+            let painted =
+                !step.requires_mask || masked_steps.is_none_or(|masked| masked.contains(&step.id));
+            (painted && step.media.iter().any(|candidate| candidate == media))
                 .then_some((selection, step, placement))
         })
-        .collect()
+        .collect();
+    // Run order, not the order they were ticked in: Dust & scratches ahead of the background.
+    active.sort_by_key(|(_, step, _)| (steps.phase_index(&step.phase), step.order));
+    active
 }
 
 /// Whether a catalog model is one of the models a step stage takes (its `model_task`).
@@ -435,12 +454,19 @@ pub fn resolve_plan(
 
     let by_id =
         |id: &str| -> Option<&CatalogModel> { catalog.models.iter().find(|m| m.model_id == id) };
-    let step_stages = active_step_stages(steps, settings, options.using_temporal_video);
+    let step_stages = active_step_stages(
+        steps,
+        settings,
+        options.using_temporal_video,
+        Some(&options.masked_steps),
+    );
     for (selection, step, placement) in &step_stages {
         if *placement == StepPlacement::BeforeFixes {
             stages.push(step_stage_row(catalog, settings, selection, step));
         }
     }
+    // Steps ahead of the fixes (Scan) also run ahead of frames added before upscaling.
+    let leading_steps = stages.len();
     let restoring = is_restore_task(settings);
     let fix_stages: &[FixStageSelection] = if !options.using_temporal_video
         && (settings.task == "upscale" || settings.task == "video" || restoring)
@@ -645,7 +671,7 @@ pub fn resolve_plan(
                 },
             };
             if settings.video_interpolation_order == "before_upscale" {
-                stages.insert(0, stage);
+                stages.insert(leading_steps, stage);
             } else {
                 stages.push(stage);
             }
@@ -659,7 +685,11 @@ pub fn resolve_plan(
     }
 
     let audio_model = resolve_audio_model(&catalog.audio_models, &settings.video_audio_model);
-    if settings.task == "video" && settings.video_clean_audio && options.has_audio != Some(false) {
+    if settings.task == "video"
+        && settings.video_clean_audio
+        && options.has_audio != Some(false)
+        && !slow_motion_applies(settings, options.using_temporal_video)
+    {
         if let Some(audio) = audio_model {
             stages.insert(
                 0,
@@ -714,8 +744,9 @@ pub fn build_start_input(
     let no_restore_model =
         restoring && image_fixes.is_empty() && settings.selected_model_id != "__custom__";
     let audio_disabled = settings.task == "video" && has_audio == Some(false);
+    let slow_motion = slow_motion_applies(&settings, using_temporal_video);
     let step_stages: Vec<StepStageSelection> =
-        active_step_stages(steps, &settings, using_temporal_video)
+        active_step_stages(steps, &settings, using_temporal_video, None)
             .into_iter()
             .map(|(selection, _, _)| selection.clone())
             .collect();
@@ -795,8 +826,10 @@ pub fn build_start_input(
         } else {
             settings.video_interpolation_order.clone()
         },
+        video_slow_motion: slow_motion,
         video_clean_audio: settings.task == "video"
             && !audio_disabled
+            && !slow_motion
             && settings.video_clean_audio,
         video_audio_model: settings.video_audio_model.clone(),
         output_bit_depth: settings.output_bit_depth,
@@ -843,6 +876,8 @@ mod tests {
         selected_video_model_id: Option<String>,
         edit_model_id: Option<String>,
         has_audio: Option<bool>,
+        #[serde(default)]
+        masked_steps: Vec<String>,
     }
 
     #[derive(Deserialize)]
@@ -931,6 +966,7 @@ mod tests {
                 selected_video_model,
                 edit_model,
                 has_audio: case.options.has_audio,
+                masked_steps: case.options.masked_steps.clone(),
             };
             let request = StartRequest {
                 media_ids: case.start_request.media_ids.clone(),
@@ -1235,6 +1271,275 @@ mod tests {
         assert_eq!(alone_plan.start_input.model_id, "");
         assert!(alone_plan.start_input.fix_stages.is_empty());
         assert_eq!(alone_plan.start_input.output_format, "png");
+    }
+
+    #[test]
+    fn repair_is_planned_only_for_a_painted_photo() {
+        use crate::types::StepStageSelection;
+
+        let steps = crate::steps::registry();
+        let step = |id: &str| StepStageSelection {
+            step: id.into(),
+            model_id: (id == "remove_background").then(|| "birefnet_general".into()),
+            ..StepStageSelection::default()
+        };
+        let settings = |task: &str| UiSettings {
+            task: task.into(),
+            step_stages: vec![step("remove_background"), step("repair")],
+            ..UiSettings::default()
+        };
+        let ids = |settings: &UiSettings, masked: Option<&[String]>| -> Vec<String> {
+            active_step_stages(steps, settings, false, masked)
+                .into_iter()
+                .map(|(selection, _, _)| selection.step.clone())
+                .collect()
+        };
+        let painted = ["repair".to_owned()];
+        // Run order, not the order they were ticked in.
+        assert_eq!(
+            ids(&settings("upscale"), Some(&painted)),
+            ["repair", "remove_background"]
+        );
+        assert_eq!(ids(&settings("upscale"), Some(&[])), ["remove_background"]);
+        // A start keeps the step; the host decides for each photo.
+        assert_eq!(
+            ids(&settings("upscale"), None),
+            ["repair", "remove_background"]
+        );
+        // Another media never runs it.
+        assert!(ids(&settings("video"), Some(&painted)).is_empty());
+    }
+
+    #[test]
+    fn remove_background_is_the_first_row_of_a_photo_plan() {
+        use crate::types::StepStageSelection;
+
+        let steps = crate::steps::registry();
+        let mut catalog = crate::catalog::bundled_catalog().unwrap();
+        for model in &mut catalog.models {
+            if model.model_id == "span_photo_x4" || model.model_id == "denoise_realplksr_1x" {
+                model.installed = true;
+            }
+            if model.model_id == "birefnet_general" {
+                model.installed = false;
+            }
+        }
+        let request = StartRequest {
+            media_ids: vec!["m".into()],
+            task: "upscale",
+            batch_mode: false,
+            recipe_name: "",
+        };
+        let background = StepStageSelection {
+            step: "remove_background".into(),
+            model_id: Some("birefnet_general".into()),
+            ..StepStageSelection::default()
+        };
+        let settings = |format: &str| UiSettings {
+            task: "upscale".into(),
+            selected_model_id: "span_photo_x4".into(),
+            output_scale: 4,
+            output_format: format.into(),
+            fix_stages: vec![crate::types::FixStageSelection {
+                fix: "noise".into(),
+                model_id: "denoise_realplksr_1x".into(),
+                ..Default::default()
+            }],
+            step_stages: vec![background.clone()],
+            ..UiSettings::default()
+        };
+        let plan = |settings: &UiSettings| {
+            plan_job(
+                &catalog,
+                steps,
+                &CapabilityInfo::default(),
+                settings,
+                &PlanOptions::default(),
+                &request,
+            )
+        };
+
+        let jpg = plan(&settings("jpg"));
+        assert_eq!(
+            jpg.stages
+                .iter()
+                .map(|stage| stage.kind.as_str())
+                .collect::<Vec<_>>(),
+            vec!["remove_background", "restore", "upscale"]
+        );
+        let row = &jpg.stages[0];
+        assert_eq!(row.role, "step");
+        assert_eq!(row.model_id.as_deref(), Some("birefnet_general"));
+        assert_eq!(row.size_bytes, 444_473_596);
+        assert!(!row.installed && row.can_download);
+        assert_eq!(jpg.start_input.output_format, "png");
+        assert_eq!(plan(&settings("tif")).start_input.output_format, "tif");
+    }
+
+    #[test]
+    fn deinterlace_is_the_first_row_of_a_frame_by_frame_video_plan() {
+        use crate::types::StepStageSelection;
+
+        let catalog = crate::catalog::bundled_catalog().unwrap();
+        let steps = crate::steps::registry();
+        let deinterlace = StepStageSelection {
+            step: "deinterlace".into(),
+            params: serde_json::json!({"mode": "field", "parity": "auto"})
+                .as_object()
+                .cloned(),
+            ..StepStageSelection::default()
+        };
+        let video = UiSettings {
+            task: "video".into(),
+            video_task: "upscale".into(),
+            selected_video_model_id: "frame_by_frame".into(),
+            selected_model_id: "span_photo_x4".into(),
+            output_scale: 2,
+            video_interpolation: "x2".into(),
+            video_interpolation_order: "before_upscale".into(),
+            step_stages: vec![deinterlace.clone()],
+            ..UiSettings::default()
+        };
+        let kinds = |plan: &[PlanStage]| {
+            plan.iter()
+                .map(|stage| stage.kind.clone())
+                .collect::<Vec<_>>()
+        };
+        let plan = resolve_plan(&catalog, steps, &video, &PlanOptions::default());
+        assert_eq!(kinds(&plan), ["deinterlace", "interpolate", "upscale"]);
+        assert_eq!(plan[0].role, "step");
+
+        let alone = UiSettings {
+            video_task: "denoise".into(),
+            selected_model_id: String::new(),
+            output_scale: 1,
+            video_interpolation: "off".into(),
+            ..video.clone()
+        };
+        assert_eq!(
+            kinds(&resolve_plan(
+                &catalog,
+                steps,
+                &alone,
+                &PlanOptions::default()
+            )),
+            ["deinterlace"]
+        );
+
+        let seedvr2 = catalog
+            .video_models
+            .iter()
+            .find(|model| model.model_id == "seedvr2_3b")
+            .unwrap();
+        let temporal = resolve_plan(
+            &catalog,
+            steps,
+            &UiSettings {
+                selected_video_model_id: "seedvr2_3b".into(),
+                ..video.clone()
+            },
+            &PlanOptions {
+                using_temporal_video: true,
+                selected_video_model: Some(seedvr2),
+                ..PlanOptions::default()
+            },
+        );
+        assert!(temporal.iter().all(|stage| stage.kind != "deinterlace"));
+        let photo = resolve_plan(
+            &catalog,
+            steps,
+            &UiSettings {
+                task: "upscale".into(),
+                ..video
+            },
+            &PlanOptions::default(),
+        );
+        assert!(photo.iter().all(|stage| stage.kind != "deinterlace"));
+    }
+
+    #[test]
+    fn stabilise_follows_deinterlace_in_a_frame_by_frame_video_plan() {
+        use crate::types::StepStageSelection;
+
+        let catalog = crate::catalog::bundled_catalog().unwrap();
+        let steps = crate::steps::registry();
+        let stage = |step: &str, params: serde_json::Value| StepStageSelection {
+            step: step.into(),
+            params: params.as_object().cloned(),
+            ..StepStageSelection::default()
+        };
+        let stabilise = stage("stabilise", serde_json::json!({"smoothing": "medium"}));
+        let video = UiSettings {
+            task: "video".into(),
+            video_task: "upscale".into(),
+            selected_video_model_id: "frame_by_frame".into(),
+            selected_model_id: "span_photo_x4".into(),
+            output_scale: 2,
+            // Stored in the opposite order: the plan runs by the registry's order.
+            step_stages: vec![
+                stabilise.clone(),
+                stage(
+                    "deinterlace",
+                    serde_json::json!({"mode": "frame", "parity": "tff"}),
+                ),
+            ],
+            ..UiSettings::default()
+        };
+        let kinds = |plan: &[PlanStage]| {
+            plan.iter()
+                .map(|stage| stage.kind.clone())
+                .collect::<Vec<_>>()
+        };
+        let plan = resolve_plan(&catalog, steps, &video, &PlanOptions::default());
+        assert_eq!(kinds(&plan), ["deinterlace", "stabilise", "upscale"]);
+        assert_eq!(plan[1].role, "step");
+
+        let alone = UiSettings {
+            video_task: "denoise".into(),
+            selected_model_id: String::new(),
+            output_scale: 1,
+            step_stages: vec![stabilise.clone()],
+            ..video.clone()
+        };
+        assert_eq!(
+            kinds(&resolve_plan(
+                &catalog,
+                steps,
+                &alone,
+                &PlanOptions::default()
+            )),
+            ["stabilise"]
+        );
+
+        let seedvr2 = catalog
+            .video_models
+            .iter()
+            .find(|model| model.model_id == "seedvr2_3b")
+            .unwrap();
+        let temporal = resolve_plan(
+            &catalog,
+            steps,
+            &UiSettings {
+                selected_video_model_id: "seedvr2_3b".into(),
+                ..video.clone()
+            },
+            &PlanOptions {
+                using_temporal_video: true,
+                selected_video_model: Some(seedvr2),
+                ..PlanOptions::default()
+            },
+        );
+        assert!(temporal.iter().all(|stage| stage.kind != "stabilise"));
+        let photo = resolve_plan(
+            &catalog,
+            steps,
+            &UiSettings {
+                task: "upscale".into(),
+                ..video
+            },
+            &PlanOptions::default(),
+        );
+        assert!(photo.iter().all(|stage| stage.kind != "stabilise"));
     }
 
     #[test]

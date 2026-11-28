@@ -52,9 +52,11 @@ These apply to v0.6.3-beta. Please read them before starting a long job.
 - The built-in video decoder opens local files only; it does not fetch network playlist segments.
 - On Linux, comparing videos with different frame rates can show one side a frame
   early after a frame step or seek; playback and same-rate comparisons stay in step.
-- Interlacing is deinterlaced only when the file is tagged; untagged interlacing
-  and inverse telecine are not detected. DVD menus, disc images and encrypted
-  media are out of scope.
+- Interlacing is deinterlaced only when the file is tagged (or a field order is set
+  by hand in the Scan row); untagged interlacing and inverse telecine are not
+  detected. On macOS, a clip the system decoder opens carries no field flags, so
+  Double rate there assumes top field first: set the order by hand if motion jumps
+  back and forth. DVD menus, disc images and encrypted media are out of scope.
 - A `.mov` extension says little about compatibility: the codec, colour metadata,
   transforms and audio tracks all matter. Spatial audio and unsupported tracks
   are dropped with a warning.
@@ -75,6 +77,17 @@ These apply to v0.6.3-beta. Please read them before starting a long job.
   upscale requires upscaling more frames; after the upscale runs interpolation at
   the larger output size. 1080p and 4K Mac performance and memory use have not
   yet been validated.
+- Slow motion is saved without sound and subtitles. A player that ignores frame times and
+  trusts the header plays it right; an editor that assumes a constant rate on a
+  variable-rate source may not. The viewer takes a result at least 1.5 times as long as its
+  original for slow motion, so a result whose original was replaced on disk by a shorter file
+  opens in Enhanced only.
+- Stabilise corrects the camera's shift and turn between frames and enlarges the picture
+  by 3, 5 or 8 % (Light, Medium, Strong) so that no edge of the source shows; the video
+  keeps its size, so that part of every frame is cut off. It does not remove the wobble of
+  a rolling shutter or blur that the shake left in single frames, it cannot be used while
+  HDR is kept, and a scene cut starts a new path. It costs extra time and holds back a
+  second or two of frames while it looks ahead.
 - Estimates are measured from completed tiles and frames, so they appear only
   after the first results and change with the scene.
 
@@ -99,6 +112,13 @@ These apply to v0.6.3-beta. Please read them before starting a long job.
   On DirectML and OpenVINO devices DDColor runs on the CPU, and on Apple Silicon
   with Neural Engine enabled it runs on the Apple GPU via PyTorch.
 - Colour needs a 912 MB model download. Colours are a guess; skies can come out pink.
+- **Dust & scratches** repairs only the places you paint, and only small marks on even
+  areas such as sky, walls and skin: it fills them from the pixels around them and has no
+  model, so a large area or a mark across fine detail comes out smeared. Marks are strokes,
+  so a scratch painted in four strokes counts as four marks. The window and the host draw
+  the paint separately and can differ by a pixel at a stroke's edge; the result follows the
+  host. On a trackpad, move the picture with Space held or the zoom controls while painting.
+  Videos cannot be repaired.
 
 ## Image editing
 

@@ -54,13 +54,13 @@ def interpolated_job(source, destination, synthesizer=None, engine=None, **optio
 
 
 def make_cfr(path, frames=12, fps=24, width=48, height=32):
-    """A lossless constant-rate clip whose grey level rises by 8 per frame."""
+    """A lossless constant-rate clip whose grey level rises by 8 per frame, wrapping at 256."""
     with av.open(str(path), "w") as container:
         stream = container.add_stream("libvpx-vp9", rate=fps)
         stream.width, stream.height, stream.pix_fmt = width, height, "yuv420p"
         stream.options = {"lossless": "1", "lag-in-frames": "0"}
         for index in range(frames):
-            rgb = np.full((height, width, 3), 100 + index * 8, dtype=np.uint8)
+            rgb = np.full((height, width, 3), (100 + index * 8) % 256, dtype=np.uint8)
             frame = av.VideoFrame.from_ndarray(rgb, format="rgb24")
             frame.pts, frame.time_base = index, Fraction(1, fps)
             for packet in stream.encode(frame):
@@ -371,6 +371,100 @@ def test_seedvr2_jobs_refuse_interpolation_in_this_release(monkeypatch, tmp_path
                 interpolation_bundle_dir=str(bundle),
             ),
         )
+
+
+def _stream_kinds(path):
+    with av.open(str(path)) as container:
+        return sorted(stream.type for stream in container.streams)
+
+
+def test_slow_motion_doubles_the_length_and_keeps_the_rate(tmp_path):
+    source = make_cfr(tmp_path / "clip.mp4", frames=50, fps=25)
+    output = tmp_path / "slow.mp4"
+    interpolated_job(source, output, interpolation="x2", slow_motion=True)
+    stamps = timestamps(output)
+    assert len(stamps) == 100
+    assert stamps == pytest.approx([index / 25 for index in range(100)], abs=0.001)
+    assert probe_video(str(output)).duration_seconds == pytest.approx(4.0, abs=0.02)
+    assert probe_video(str(output)).fps == pytest.approx(25, rel=0.01)
+
+
+def test_slow_motion_at_four_times(tmp_path):
+    source = make_cfr(tmp_path / "clip.mp4", frames=50, fps=25)
+    output = tmp_path / "slow.mp4"
+    interpolated_job(source, output, interpolation="x4", slow_motion=True)
+    assert len(timestamps(output)) == 200
+    assert probe_video(str(output)).duration_seconds == pytest.approx(8.0, abs=0.02)
+    assert probe_video(str(output)).fps == pytest.approx(25, rel=0.01)
+
+
+def test_slow_motion_keeps_a_variable_rhythm(tmp_path):
+    source = make_vfr(tmp_path / "vfr.mp4")
+    output = tmp_path / "slow.mp4"
+    interpolated_job(source, output, interpolation="x2", slow_motion=True)
+    selected = list(decode_timed_frames(str(source)))
+    expected = []
+    for current, following in zip(selected, selected[1:], strict=False):
+        gap = float(following.timestamp - current.timestamp)
+        start = float(current.timestamp - selected[0].timestamp) * 2
+        expected += [start, start + gap]
+    tail = float(selected[-1].timestamp - selected[0].timestamp) * 2
+    expected += [tail, tail + float(selected[-1].duration)]
+    assert timestamps(output) == pytest.approx(expected, abs=0.002)
+
+
+def test_slow_motion_before_the_upscale_gives_the_same_times(tmp_path):
+    source = make_cfr(tmp_path / "clip.mp4", frames=12, fps=24)
+    after, before = tmp_path / "after.mp4", tmp_path / "before.mp4"
+    interpolated_job(source, after, interpolation="x2", slow_motion=True)
+    interpolated_job(
+        source, before, interpolation="x2", interpolation_order="before_upscale", slow_motion=True
+    )
+    assert timestamps(before) == pytest.approx(timestamps(after), abs=0.001)
+
+
+def test_slow_motion_has_no_sound_and_says_so(tmp_path):
+    source = _make_synthetic_video_with_audio(tmp_path / "audio.mp4", frames=8, fps=8)
+    output = tmp_path / "slow.mp4"
+    engine = CountingEngine()
+    notes: list[str] = []
+    engine.add_note = notes.append
+    interpolated_job(
+        source, output, engine=engine, interpolation="x2", slow_motion=True, audio_denoise=True
+    )
+    assert _stream_kinds(output) == ["video"]
+    assert notes == ["Slow motion \u00b7 saved without sound"]
+
+
+def test_slow_motion_needs_x2_or_x4(tmp_path):
+    source = make_cfr(tmp_path / "clip.mp4", frames=12, fps=24)
+    for target in ("fps60", "off"):
+        with pytest.raises(ValueError, match="Slow motion needs"):
+            interpolated_job(
+                source, tmp_path / "refused.mp4", interpolation=target, slow_motion=True
+            )
+    assert not (tmp_path / "refused.mp4").exists()
+
+
+def test_the_engine_lists_video_slow_motion():
+    from localsr.worker.server import _engine_features
+
+    assert "video_slow_motion" in _engine_features([])
+
+
+def test_the_worker_refuses_slow_motion_without_two_or_four_times(monkeypatch, tmp_path):
+    server, bundle, _, _ = patched_worker(monkeypatch, tmp_path)
+    for target in ("off", "fps60"):
+        with pytest.raises(ValueError, match="Slow motion needs"):
+            server._run_video_job(
+                "slow",
+                worker_request(
+                    tmp_path,
+                    interpolation=target,
+                    slow_motion=True,
+                    interpolation_bundle_dir=str(bundle),
+                ),
+            )
 
 
 def test_the_engine_advertises_frame_interpolation():

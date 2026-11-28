@@ -46,8 +46,8 @@ test.describe('Inputs and Outputs tabs', () => {
     const edits = tick(page, 'FLUX.2 klein 4B, Alpine lake 1.jpg');
     await expect(edits).toHaveCount(2);
     await expect(outputs.getByText('512 × 320 · 1:01')).toBeVisible();
-    await expect(outputs.getByText('512 × 320 · 48s')).toBeVisible();
-    await expect(outputs.getByText('Quick · 4× · 31s')).toBeVisible();
+    await expect(outputs.getByText('512 × 320 · 48 s')).toBeVisible();
+    await expect(outputs.getByText('Quick · 4× · 31 s')).toBeVisible();
     await expect(
       page.getByRole('button', { name: 'Show FLUX.2 klein 4B, Alpine lake 1.jpg' }).first(),
     ).toHaveAttribute('title', 'Show this result\nMake it dusk');

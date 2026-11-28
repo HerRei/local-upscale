@@ -37,6 +37,25 @@ describe('jobSteps', () => {
     video_interpolation: 'off',
   };
 
+  it('names the added frames Slow motion with the flag and 2× frames without it', () => {
+    const interpolate = step({ kind: 'interpolate' });
+    const video = { ...settings, task: 'video' as const };
+    expect(stepName(interpolate, { ...video, video_interpolation: 'x2' }, true)).toBe('2× frames');
+    expect(
+      stepName(interpolate, { ...video, video_interpolation: 'x2', video_slow_motion: true }, true),
+    ).toBe('Slow motion 2×');
+    expect(
+      stepName(interpolate, { ...video, video_interpolation: 'x4', video_slow_motion: true }, true),
+    ).toBe('Slow motion 4×');
+    expect(
+      stepLabel(
+        [step({ kind: 'video', state: 'done' }), { ...interpolate, state: 'running' }],
+        { ...video, output_scale: 2, video_interpolation: 'x2', video_slow_motion: true },
+        true,
+      ),
+    ).toBe('Step 2 of 2 · Slow motion 2×');
+  });
+
   it('formats the running step label and plan marks for a four-step job', () => {
     const steps: JobStep[] = [
       step({ kind: 'deblock', fix: 'jpeg', model_id: 'fbcnn_color', state: 'done' }),
@@ -216,5 +235,49 @@ describe('jobSteps', () => {
     expect(restoreChips[1].title).toBe('The finished result');
     expect(restoreChips[1].disabled).toBe(false);
     expect(restoreChips[1].pressed).toBe(true);
+  });
+
+  it('names the background step and titles its chip', () => {
+    expect(stepName(step({ kind: 'remove_background' }), settings)).toBe('Background');
+    const lastSteps: LastSteps = {
+      job_id: 'job-7',
+      media_id: 'photo-1',
+      steps: [
+        step({
+          kind: 'remove_background',
+          model_id: 'birefnet_general',
+          state: 'done',
+          kept: true,
+        }),
+        step({ kind: 'upscale', model_id: 'span_photo_x4', state: 'done', kept: false }),
+      ],
+    };
+    const chips = resultStepChips(lastSteps, 'job-7', settings, 4);
+    expect(chips.map((chip) => chip.label)).toEqual(['Background', '4×']);
+    expect(chips[0].title).toBe('The picture with the background removed');
+    expect(chips[1].title).toBe('The finished result');
+  });
+
+  it('names the deinterlace step Deinterlace', () => {
+    expect(stepName(step({ kind: 'deinterlace' }), settings)).toBe('Deinterlace');
+  });
+
+  it('names the stabilise step Stabilise', () => {
+    expect(stepName(step({ kind: 'stabilise' }), settings)).toBe('Stabilise');
+  });
+
+  it('names the repair step Dust & scratches and titles its chip', () => {
+    expect(stepName(step({ kind: 'repair' }), settings)).toBe('Dust & scratches');
+    const lastSteps: LastSteps = {
+      job_id: 'job-8',
+      media_id: 'photo-1',
+      steps: [
+        step({ kind: 'repair', state: 'done', kept: true }),
+        step({ kind: 'upscale', model_id: 'span_photo_x4', state: 'done', kept: false }),
+      ],
+    };
+    const chips = resultStepChips(lastSteps, 'job-8', settings, 2);
+    expect(chips.map((chip) => chip.label)).toEqual(['Dust & scratches', '2×']);
+    expect(chips[0].title).toBe('The picture after the marks were repaired');
   });
 });

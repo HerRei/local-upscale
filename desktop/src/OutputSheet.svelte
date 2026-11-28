@@ -1,6 +1,7 @@
 <script lang="ts">
   import HelpTip from './HelpTip.svelte';
   import SaveToField from './SaveToField.svelte';
+  import { savedPhotoFormat, setsAlpha } from './lib/enhancePanel';
   import { detectedFfmpeg, systemCodecs } from './lib/ffmpeg';
   import {
     codecPatch,
@@ -25,6 +26,8 @@
   export let preservingHdr = false;
   export let hdrPreservationAvailable = false;
   export let audioDisabled = false;
+  /** Slow motion saves no sound; the setting stays so leaving slow motion brings it back. */
+  export let slowMotion = false;
   export let audioModels: CatalogVideoModel[] = [];
   export let selectedAudioModel: CatalogVideoModel | undefined = undefined;
   export let disabled = false;
@@ -51,7 +54,9 @@
       : 'needs your FFmpeg';
 
   $: imageFormats = imageFormatChoices(capabilities, settings.output_format);
-  $: qualityName = imageQualityName(settings.output_format);
+  $: transparent = setsAlpha(settings);
+  $: savedFormat = savedPhotoFormat(settings);
+  $: qualityName = imageQualityName(savedFormat);
   $: containers = containerChoices(capabilities, settings.video_container);
   $: codecs = codecsForContainer(settings.video_container ?? 'mp4');
 
@@ -101,17 +106,20 @@
       <span class="label-with-tip"
         ><label for="format">Format</label><HelpTip
           label="Format"
-          text="PNG and TIFF are lossless. JPEG, WebP and HEIC make smaller files at some loss of detail, which the quality slider sets. HEIC is offered on Mac only."
+          text={`PNG and TIFF are lossless. JPEG, WebP and HEIC make smaller files at some loss of detail, which the quality slider sets. HEIC is offered on Mac only.${transparent ? ' While the background is removed, JPEG and HEIC are not offered: they cannot store transparency, so the result is saved as PNG.' : ''}`}
         /></span
       ><select
         id="format"
         {disabled}
-        value={settings.output_format}
+        value={savedFormat}
         on:change={(event) =>
           updateSettings({
             output_format: event.currentTarget.value as UiSettings['output_format'],
           })}
-        >{#each imageFormats as choice}<option value={choice.value}>{choice.label}</option
+        >{#each imageFormats as choice}{@const noAlpha =
+            transparent && (choice.value === 'jpg' || choice.value === 'heic')}<option
+            value={choice.value}
+            disabled={noAlpha}>{choice.label}{noAlpha ? ' · no transparency' : ''}</option
           >{/each}</select
       >
     </div>
@@ -141,10 +149,10 @@
           {disabled}
           checked={settings.preserve_metadata}
           on:change={(event) => updateSettings({ preserve_metadata: event.currentTarget.checked })}
-        /> Preserve safe metadata and color profile</label
+        /> Preserve safe metadata and colour profile</label
       ><HelpTip
-        label="Metadata and color profile"
-        text="Keeps the date, artist and copyright tags and the color profile, converted to sRGB. GPS position, camera serial numbers and similar tags are never copied. With this off, the file carries none of it."
+        label="Metadata and colour profile"
+        text="Keeps the date, artist and copyright tags and the colour profile, converted to sRGB. GPS position, camera serial numbers and similar tags are never copied. With this off, the file carries none of it."
       />
     </div>
   {:else}
@@ -264,8 +272,9 @@
       <label class="check-row"
         ><input
           type="checkbox"
-          disabled={disabled || audioDisabled}
-          checked={!audioDisabled && Boolean(settings.video_clean_audio)}
+          disabled={disabled || audioDisabled || slowMotion}
+          title={slowMotion ? 'Slow motion has no sound.' : undefined}
+          checked={!audioDisabled && !slowMotion && Boolean(settings.video_clean_audio)}
           on:change={(event) => updateSettings({ video_clean_audio: event.currentTarget.checked })}
         /> Clean up audio</label
       ><HelpTip
@@ -278,7 +287,7 @@
     </div>
     {#if audioDisabled}
       <p class="model-description">This video has no audio track.</p>
-    {:else if settings.video_clean_audio && audioModels.length > 0}
+    {:else if settings.video_clean_audio && !slowMotion && audioModels.length > 0}
       <div class="field-row">
         <label for="audio-model">Audio model</label><select
           id="audio-model"

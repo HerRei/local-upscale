@@ -526,6 +526,11 @@ pub(crate) fn remove_media_checked(state: &AppState, id: &str) -> AppResult<()> 
     if let Some(media) = existing {
         state.grants.revoke_media_file(Path::new(&media.path));
     }
+    crate::repair_mask::remove_masks_of(
+        &crate::repair_mask::masks_root(&state.paths.next_root),
+        id,
+        None,
+    );
     Ok(())
 }
 
@@ -572,7 +577,99 @@ pub(crate) fn clear_media_checked(state: &AppState) -> AppResult<()> {
     ensure_queue_idle(state)?;
     clear_all_media_and_previews(state)?;
     state.grants.clear_media();
+    crate::repair_mask::remove_all_masks(&crate::repair_mask::masks_root(&state.paths.next_root));
     Ok(())
+}
+
+/// The strokes painted on a photo for Dust & scratches.
+#[tauri::command]
+pub fn get_repair_strokes(
+    state: State<'_, Arc<AppState>>,
+    media_id: String,
+) -> AppResult<Vec<crate::repair_mask::RepairStroke>> {
+    get_repair_strokes_checked(&state, &media_id)
+}
+
+pub(crate) fn get_repair_strokes_checked(
+    state: &AppState,
+    media_id: &str,
+) -> AppResult<Vec<crate::repair_mask::RepairStroke>> {
+    let stored = lock(&state.database)?
+        .repair_strokes(media_id)?
+        .ok_or_else(|| AppError::Validation("that photo is no longer in the queue".into()))?;
+    if stored.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(serde_json::from_str(&stored)?)
+}
+
+/// Keeps a photo's whole list of strokes; the window sends it again after every change.
+#[tauri::command]
+pub fn set_repair_strokes(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    media_id: String,
+    strokes: Vec<crate::repair_mask::RepairStroke>,
+) -> AppResult<()> {
+    set_repair_strokes_checked(&state, &media_id, &strokes)?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
+pub(crate) fn set_repair_strokes_checked(
+    state: &AppState,
+    media_id: &str,
+    strokes: &[crate::repair_mask::RepairStroke],
+) -> AppResult<()> {
+    crate::updates::ensure_not_installing(state)?;
+    crate::repair_mask::validate_strokes(strokes).map_err(AppError::Validation)?;
+    let database = lock(&state.database)?;
+    let media = database
+        .get_media(media_id)?
+        .ok_or_else(|| AppError::Validation("that photo is no longer in the queue".into()))?;
+    if media.kind != "image" || media.probe_status != "ready" {
+        return Err(AppError::Validation(
+            "Marks can be painted on a photo that has been opened.".into(),
+        ));
+    }
+    if database.has_inflight_jobs()? {
+        return Err(AppError::Validation(
+            "Marks can be changed when the queue is done.".into(),
+        ));
+    }
+    let json = if strokes.is_empty() {
+        String::new()
+    } else {
+        serde_json::to_string(strokes)?
+    };
+    database.set_repair_strokes(media_id, &json, crate::repair_mask::count_marks(strokes))?;
+    Ok(())
+}
+
+/// The mask file of a photo's paint, drawn on first use; `None` for a photo without paint.
+/// It lives in the host's folder, so every job and patch of the photo reads one file and the
+/// worker never opens a path the window chose.
+pub(crate) fn repair_mask_path(state: &AppState, media_id: &str) -> AppResult<Option<PathBuf>> {
+    let (media, stored) = {
+        let database = lock(&state.database)?;
+        let Some(media) = database.get_media(media_id)? else {
+            return Ok(None);
+        };
+        let stored = database.repair_strokes(media_id)?.unwrap_or_default();
+        (media, stored)
+    };
+    if media.repair_marks == 0 || stored.is_empty() {
+        return Ok(None);
+    }
+    let root = crate::repair_mask::masks_root(&state.paths.next_root);
+    let name = crate::repair_mask::mask_file_name(media_id, media.repair_rev);
+    let path = root.join(&name);
+    if !path.is_file() {
+        let strokes: Vec<crate::repair_mask::RepairStroke> = serde_json::from_str(&stored)?;
+        crate::repair_mask::write_mask(&path, &strokes, media.width, media.height)?;
+    }
+    crate::repair_mask::remove_masks_of(&root, media_id, Some(&name));
+    Ok(Some(path))
 }
 
 fn clear_all_media_and_previews(state: &AppState) -> AppResult<()> {
@@ -967,6 +1064,12 @@ fn apply_preference(state: &AppState, name: &str, value: &Value) -> AppResult<()
         crate::worker::apply_low_priority(state, enabled);
     } else if name == "keep_awake" {
         crate::stay_awake::sync(state);
+    } else if name == "preview_patch" || name == "preview_patch_shown" {
+        let settings = lock(&state.settings)?;
+        if settings.preview_patch == "off" || !settings.preview_patch_shown {
+            drop(settings);
+            crate::patch_preview::switched_off(state);
+        }
     }
     Ok(())
 }
@@ -1246,6 +1349,8 @@ pub struct PlanJobOptions {
     pub selected_video_model_id: Option<String>,
     pub edit_model_id: Option<String>,
     pub has_audio: Option<bool>,
+    /// Steps that need paint, which the open photo has: Dust & scratches runs only for these.
+    pub masked_steps: Vec<String>,
 }
 
 #[tauri::command]
@@ -1311,6 +1416,7 @@ pub(crate) fn plan_job_checked(
         selected_video_model,
         edit_model,
         has_audio: options.has_audio,
+        masked_steps: options.masked_steps,
     };
     Ok(crate::job_plan::resolve_plan(
         &catalog,
@@ -1373,6 +1479,7 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
             "This worker does not support frame interpolation. Update LocalSR or turn interpolation off.".into(),
         ));
     }
+    validate_slow_motion_engine(&input, lock(&state.engine)?.as_ref())?;
     if input.task == "video"
         && input.video_clean_audio
         && !lock(&state.engine)?.as_ref().is_some_and(|engine| {
@@ -1477,22 +1584,37 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
             "Nothing to run: the selected video has no audio track.".into(),
         ));
     }
-    refuse_when_disk_is_short(&input, &selection, &media[0], &output_directory)?;
+    // A step that needs paint runs on the photos that have it. A photo left with nothing to run
+    // is not queued.
+    let mut runnable = Vec::with_capacity(media.len());
+    for item in media {
+        let photo_input = input_for_photo(state, &input, &item)?;
+        if photo_has_work(&photo_input) {
+            runnable.push((item, photo_input));
+        }
+    }
+    if runnable.is_empty() {
+        return Err(AppError::Validation(
+            "Paint over the marks on a photo first.".into(),
+        ));
+    }
+    refuse_when_disk_is_short(&input, &selection, &runnable[0].0, &output_directory)?;
     let engine = lock(&state.engine)?.clone();
     let ui_json = ui_json(input.ui.as_ref())?;
-    let media_ids: Vec<&str> = media.iter().map(|item| item.id.as_str()).collect();
+    let media_ids: Vec<&str> = runnable.iter().map(|(item, _)| item.id.as_str()).collect();
     lock(&state.database)?.admit_jobs(&media_ids, |reserved| {
-        media
+        runnable
             .iter()
-            .map(|item| -> AppResult<NewJob> {
+            .map(|(item, photo_input)| -> AppResult<NewJob> {
                 let job_id = Uuid::new_v4().to_string();
-                let output = unique_output_path(&output_directory, &item.path, &input, reserved);
+                let output =
+                    unique_output_path(&output_directory, &item.path, photo_input, reserved);
                 let message = build_job_message_for_engine(
                     &job_id,
                     item,
                     &output,
                     &state.paths.work_root,
-                    &input,
+                    photo_input,
                     &selection,
                     engine.as_ref(),
                 )?;
@@ -1507,6 +1629,41 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
     })?;
     crate::stay_awake::sync(state);
     Ok(())
+}
+
+/// The start input as one photo runs it: a step that needs paint (Dust & scratches) gets the mask
+/// drawn from that photo's strokes, or is left out when the photo has none.
+fn input_for_photo(
+    state: &AppState,
+    input: &StartBatchInput,
+    media: &crate::types::MediaItem,
+) -> AppResult<StartBatchInput> {
+    let steps = crate::steps::registry();
+    let mut photo_input = input.clone();
+    if media.kind == "video" {
+        return Ok(photo_input);
+    }
+    let mut kept = Vec::with_capacity(photo_input.step_stages.len());
+    for mut selection in std::mem::take(&mut photo_input.step_stages) {
+        if steps
+            .step(&selection.step)
+            .is_some_and(|step| step.requires_mask)
+        {
+            let Some(mask) = repair_mask_path(state, &media.id)? else {
+                continue;
+            };
+            selection.mask_path = Some(mask.to_string_lossy().into_owned());
+        }
+        kept.push(selection);
+    }
+    photo_input.step_stages = kept;
+    Ok(photo_input)
+}
+
+/// Whether anything is left to run on a photo once the steps it has no paint for are gone.
+fn photo_has_work(input: &StartBatchInput) -> bool {
+    input.task == "video"
+        || !((no_restore_model(input) || upscale_skips_sr(input)) && !has_work_at_1x(input))
 }
 
 /// "Try again" after the host gave up restarting the inference engine.
@@ -2118,6 +2275,64 @@ pub fn estimate_model_trials(
             })
         })
         .collect()
+}
+
+/// The run time of what Start would queue now, for the cost line: built from the same
+/// job message Start would send (every stage of the host plan), then looked up in earlier
+/// runs of the same work profile. None means "no honest number": too few measured runs,
+/// or a file that is not ready. A request Start would refuse is an error.
+#[tauri::command]
+pub async fn estimate_start(
+    state: State<'_, Arc<AppState>>,
+    media_ids: Vec<String>,
+    input: StartBatchInput,
+) -> AppResult<Option<f64>> {
+    let state = Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || estimate_start_checked(&state, media_ids, input))
+        .await
+        .map_err(|error| AppError::Config(format!("Could not estimate the run: {error}")))?
+}
+
+pub(crate) fn estimate_start_checked(
+    state: &AppState,
+    media_ids: Vec<String>,
+    mut input: StartBatchInput,
+) -> AppResult<Option<f64>> {
+    if media_ids.is_empty() || input.task == "edit" {
+        return Ok(None);
+    }
+    input.media_ids.clone_from(&media_ids);
+    input.device = resolve_device(state, &input.device)?;
+    keep_alpha_output_format(&mut input);
+    validate_start(&input, state)?;
+    let selection = resolve_model_selection(state, &input)?;
+    let engine = lock(&state.engine)?.clone();
+    let database = lock(&state.database)?;
+    let mut requests = Vec::with_capacity(media_ids.len());
+    let mut items = Vec::with_capacity(media_ids.len());
+    for id in &media_ids {
+        let Some(media) = database.get_media(id)? else {
+            return Ok(None);
+        };
+        if media.probe_status != "ready" {
+            return Ok(None);
+        }
+        // The work profile ignores paths and ids; these placeholders never run.
+        let message = build_job_message_for_engine(
+            "estimate",
+            &media,
+            Path::new(""),
+            &state.paths.work_root,
+            &input,
+            &selection,
+            engine.as_ref(),
+        )?;
+        requests.push(message.to_string());
+        items.push(media);
+    }
+    let pairs: Vec<(String, &crate::types::MediaItem)> =
+        requests.into_iter().zip(items.iter()).collect();
+    database.estimate_requests_seconds(&pairs)
 }
 
 /// The finished attempts of one media for the result choosers, with catalog
@@ -4556,10 +4771,34 @@ fn validate_fix_engine(
     Ok(())
 }
 
+/// The parameter that mixes a fix with its input, and the engine feature that runs it.
+pub(crate) const FIX_STRENGTH_PARAM: &str = "strength";
+const FIX_STRENGTH_FEATURE: &str = "fix_strength";
+
+/// The fix's strength when it asks for less than the whole fix. An older engine would run
+/// the whole fix and ignore the number, so it is refused before the job is queued.
+pub(crate) fn fix_strength_below_full(stage: &crate::types::FixStageSelection) -> Option<f64> {
+    stage
+        .params
+        .as_ref()
+        .and_then(|params| params.get(FIX_STRENGTH_PARAM))
+        .and_then(serde_json::Value::as_f64)
+        .filter(|strength| *strength < 1.0)
+}
+
 fn validate_stage_params_engine(
     stages: &[crate::types::FixStageSelection],
     engine: Option<&crate::types::EngineInfo>,
 ) -> AppResult<()> {
+    if stages
+        .iter()
+        .any(|stage| fix_strength_below_full(stage).is_some())
+        && !engine.is_some_and(|engine| engine.features.iter().any(|f| f == FIX_STRENGTH_FEATURE))
+    {
+        return Err(AppError::Validation(
+            "This engine cannot change a fix's strength. Update LocalSR.".into(),
+        ));
+    }
     validate_stage_params_engine_for(
         stages
             .iter()
@@ -4674,9 +4913,14 @@ fn validate_step_stages_engine(
         }
     }
     validate_stage_params_engine_for(
-        stages
-            .iter()
-            .any(|stage| stage.params.is_some() || stage.mask_path.is_some()),
+        // The host adds the mask of a step that needs paint, so the engine needs the feature too.
+        stages.iter().any(|stage| {
+            stage.params.is_some()
+                || stage.mask_path.is_some()
+                || steps
+                    .step(&stage.step)
+                    .is_some_and(|step| step.requires_mask)
+        }),
         engine,
     )
 }
@@ -4735,6 +4979,23 @@ fn validate_fix_selections(stages: &[crate::types::FixStageSelection]) -> AppRes
     Ok(())
 }
 
+/// The engine feature that plays added frames as slow motion.
+const SLOW_MOTION_FEATURE: &str = "video_slow_motion";
+
+fn validate_slow_motion_engine(
+    input: &StartBatchInput,
+    engine: Option<&crate::types::EngineInfo>,
+) -> AppResult<()> {
+    if input.video_slow_motion
+        && !engine.is_some_and(|engine| engine.features.iter().any(|f| f == SLOW_MOTION_FEATURE))
+    {
+        return Err(AppError::Validation(
+            "This engine cannot make slow motion. Update LocalSR.".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Frame interpolation targets and orders the worker accepts.
 fn interpolation_choice_is_valid(target: &str, order: &str) -> bool {
     let steps = crate::steps::registry();
@@ -4780,6 +5041,7 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
         allow_unsafe_pickle_model: input.allow_unsafe_pickle_model,
         video_interpolation: input.video_interpolation.clone(),
         video_interpolation_order: input.video_interpolation_order.clone(),
+        video_slow_motion: input.video_slow_motion,
         video_clean_audio: input.video_clean_audio,
         video_audio_model: input.video_audio_model.clone(),
         ..UiSettings::default()
@@ -4808,6 +5070,13 @@ fn validate_start_input(input: &StartBatchInput, external_codecs: bool) -> AppRe
     {
         return Err(AppError::Validation(
             "Frame interpolation works with the Frame-by-frame video engine in this version. Choose Frame-by-frame or turn interpolation off.".into(),
+        ));
+    }
+    if input.video_slow_motion
+        && (input.task != "video" || !matches!(input.video_interpolation.as_str(), "x2" | "x4"))
+    {
+        return Err(AppError::Validation(
+            "Slow motion needs 2× or 4× added frames.".into(),
         ));
     }
     if input.task == "video"
@@ -5451,7 +5720,9 @@ fn build_job_request(
             } else {
                 input.video_hdr_mode.as_str()
             };
-            let active_audio = audio_denoise.as_ref().filter(|_| media.has_audio);
+            let active_audio = audio_denoise
+                .as_ref()
+                .filter(|_| media.has_audio && !input.video_slow_motion);
             Ok(WorkerJobRequest::Video(Box::new(VideoJobRequest {
                 job_id: job_id.to_owned(),
                 video_path: media.path.clone(),
@@ -5513,6 +5784,7 @@ fn build_job_request(
                         .video_interpolation_order
                         .parse::<InterpolationOrder>()?,
                 ),
+                slow_motion: input.video_slow_motion && interpolation.is_some(),
                 interpolation_model_id: interpolation
                     .as_ref()
                     .map(|resolved| resolved.model_id.clone()),
@@ -5584,6 +5856,7 @@ fn build_job_request(
                 preview_max_dimension: 320,
                 interpolation: InterpolationMode::Off,
                 interpolation_order: None,
+                slow_motion: false,
                 interpolation_model_id: None,
                 interpolation_bundle_dir: None,
                 audio_denoise: active_audio.is_some(),
@@ -5612,8 +5885,16 @@ fn image_pipeline_stages(
     use crate::steps::StepPlacement;
 
     let steps = crate::steps::registry();
+    // In run order, whatever order they were ticked in: Dust & scratches ahead of the background.
+    let mut ordered: Vec<_> = input.step_stages.iter().collect();
+    ordered.sort_by_key(|selection| {
+        steps
+            .step(&selection.step)
+            .map(|step| (steps.phase_index(&step.phase), step.order))
+    });
+    let ordered = &ordered;
     let step_stages = |placement: StepPlacement| {
-        input.step_stages.iter().filter_map(move |selection| {
+        ordered.iter().filter_map(move |selection| {
             let (step, at) = steps.step_stage(&selection.step)?;
             let model = step_models.iter().find(|model| model.step == step.id);
             (at == placement).then(|| PipelineStageRequest {
@@ -5688,8 +5969,12 @@ pub(crate) struct PatchPlan {
 }
 
 /// The plan of a preview patch: validated as Start validates it, without the output
-/// checks, and resolved to the same stages `build_job_request` sends.
-pub(crate) fn patch_plan(state: &AppState, mut input: StartBatchInput) -> AppResult<PatchPlan> {
+/// checks, and resolved to the same stages `build_job_request` sends for `media`.
+pub(crate) fn patch_plan(
+    state: &AppState,
+    mut input: StartBatchInput,
+    media: &crate::types::MediaItem,
+) -> AppResult<PatchPlan> {
     let video = input.task == "video";
     if !video && !matches!(input.task.as_str(), "upscale" | "denoise") {
         return Err(AppError::Validation(
@@ -5705,14 +5990,25 @@ pub(crate) fn patch_plan(state: &AppState, mut input: StartBatchInput) -> AppRes
         // A still cannot show changes over time or sound; these stages are not run.
         input.deflicker = false;
         input.video_interpolation = "off".into();
+        input.video_slow_motion = false;
         input.video_clean_audio = false;
     }
+    // The patch is one decoded picture: a step that only runs on video (Scan) is not run, and an
+    // id this build does not know stays for the validation below to name.
+    let registry = crate::steps::registry();
+    input.step_stages.retain(|selection| {
+        registry
+            .step(&selection.step)
+            .is_none_or(|step| step.media.iter().any(|media| media == "image"))
+    });
     input.device = resolve_device(state, &input.device)?;
     validate_start_input(&input, external_codecs_available(state))?;
     validate_bit_depth_engine(&input, lock(&state.engine)?.as_ref())?;
     validate_fix_engine(&input, lock(&state.engine)?.as_ref())?;
     validate_stage_params_engine(&input.fix_stages, lock(&state.engine)?.as_ref())?;
     validate_step_stages_engine(&input.step_stages, lock(&state.engine)?.as_ref())?;
+    // A step that needs paint gets the photo's mask, as the photo's job would.
+    let input = input_for_photo(state, &input, media)?;
     let mut missing = Vec::new();
     let selection = resolve_model_selection_with(state, &input, Some(&mut missing))?;
     validate_checkpoint_engine(&selection, lock(&state.engine)?.as_ref())?;
@@ -5806,9 +6102,34 @@ fn unique_output_path(
     )
 }
 
+/// A restore job with no model, no fix and a step that sets the alpha: the cut-out is all of it.
+fn is_cutout_alone(input: &StartBatchInput) -> bool {
+    input.model_id.is_empty()
+        && input.fix_stages.is_empty()
+        && input.step_stages.iter().any(|selection| {
+            crate::steps::registry()
+                .step_stage(&selection.step)
+                .is_some_and(|(step, _)| step.output_alpha)
+        })
+}
+
+/// A restore job with no model and no fix whose added steps include one that needs paint: the
+/// repair is all of it.
+fn is_repair_alone(input: &StartBatchInput) -> bool {
+    input.model_id.is_empty()
+        && input.fix_stages.is_empty()
+        && input.step_stages.iter().any(|selection| {
+            crate::steps::registry()
+                .step_stage(&selection.step)
+                .is_some_and(|(step, _)| step.requires_mask)
+        })
+}
+
 /// The name and extension a result of `input` ends with, before any counter.
 fn output_ending(input: &StartBatchInput) -> (String, &str) {
     let mut suffix = match input.task.as_str() {
+        "denoise" if is_cutout_alone(input) => "_cutout".to_owned(),
+        "denoise" if is_repair_alone(input) => "_repaired".to_owned(),
         "denoise" => "_denoised".to_owned(),
         "video" if input.video_task == "denoise" => "_video_restored".to_owned(),
         "video"
@@ -5816,6 +6137,7 @@ fn output_ending(input: &StartBatchInput) -> (String, &str) {
         {
             format!("_video_{}px", input.video_target_resolution)
         }
+        "video" if input.video_slow_motion => format!("_video_{}x_slow", input.output_scale),
         "video" => format!("_video_{}x", input.output_scale),
         _ => format!("_upscaled_{}x", input.output_scale),
     };

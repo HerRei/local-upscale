@@ -383,6 +383,7 @@ mod tests {
                 "",
                 "",
                 true,
+                "",
             )
             .unwrap();
             db.insert_media("m2", "/b.png", "b.png", "image").unwrap();
@@ -398,6 +399,7 @@ mod tests {
                 "",
                 "",
                 true,
+                "",
             )
             .unwrap();
         }

@@ -6,7 +6,7 @@ use super::*;
 use crate::{
     database::NewJob,
     paths::AppPaths,
-    types::{EngineInfo, FixStageSelection, WorkerEnvelope},
+    types::{EngineInfo, FixStageSelection, StepStageSelection, WorkerEnvelope},
 };
 
 const NOISE: &str = "scunet_color_real_psnr";
@@ -44,6 +44,7 @@ impl Harness {
                     "",
                     "",
                     true,
+                    "",
                 )
                 .unwrap();
         }
@@ -66,6 +67,7 @@ impl Harness {
                 "patch_preview".into(),
                 "image_multi_fix".into(),
                 "stage_params_and_masks".into(),
+                "fix_strength".into(),
             ],
             model_formats: Vec::new(),
             video_engines: Vec::new(),
@@ -242,6 +244,7 @@ fn add_video(harness: &Harness) {
             "",
             "",
             true,
+            "",
         )
         .unwrap();
 }
@@ -250,6 +253,35 @@ fn video_ask(harness: &Harness, input: StartBatchInput) -> PatchAsk {
     let mut ask = harness.ask("a", input);
     ask.media_id = "clip".into();
     ask
+}
+
+#[test]
+fn the_patch_plan_leaves_video_only_steps_out() {
+    let harness = Harness::new();
+    add_video(&harness);
+    let mut video = input();
+    video.task = "video".into();
+    video.video_model_id = "frame_by_frame".into();
+    video.step_stages = vec![
+        StepStageSelection {
+            step: "deinterlace".into(),
+            params: serde_json::from_str(r#"{"mode": "field", "parity": "auto"}"#).ok(),
+            mask_path: None,
+            model_id: None,
+        },
+        StepStageSelection {
+            step: "stabilise".into(),
+            params: serde_json::from_str(r#"{"smoothing": "medium"}"#).ok(),
+            mask_path: None,
+            model_id: None,
+        },
+    ];
+    request_checked(&harness.state, video_ask(&harness, video)).unwrap();
+    let sent = harness.messages();
+    let stages = sent[0]["data"]["stages"].as_array().unwrap();
+    assert!(stages
+        .iter()
+        .all(|stage| !matches!(stage["kind"].as_str(), Some("deinterlace" | "stabilise"))));
 }
 
 #[test]
@@ -415,6 +447,7 @@ fn media_without_a_grant_is_refused() {
                 "",
                 "",
                 true,
+                "",
             )
             .unwrap();
     }
@@ -507,6 +540,98 @@ fn the_steps_already_shown_cost_nothing_again() {
     assert_eq!(patch.estimate_seconds, 13.0);
 }
 
+fn with_strength(mut input: StartBatchInput, strength: f64) -> StartBatchInput {
+    input.fix_stages[0].params = Some(serde_json::Map::from_iter([(
+        "strength".into(),
+        json!(strength),
+    )]));
+    input
+}
+
+#[test]
+fn a_strength_change_costs_nothing_by_itself() {
+    let harness = Harness::new();
+    request_checked(&harness.state, harness.ask("a", input())).unwrap();
+    harness.stage_done("a", 0, false, 9.0);
+    harness.stage_done("a", 1, false, 9.0);
+    // The model would take 9 s and the upscaler 9 s; only the mix is new, and the upscaler
+    // after it must run again because its input changed.
+    measured(&harness, 9.0, 1.0);
+    harness.messages();
+    request_checked(
+        &harness.state,
+        harness.ask("a", with_strength(input(), 0.4)),
+    )
+    .unwrap();
+    let patch = harness.patch("a");
+    assert_eq!(patch.state, "running");
+    assert_eq!(patch.estimate_seconds, 0.0);
+    assert_eq!(
+        harness.messages().last().unwrap()["data"]["stages"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    // A slow step after the mix: the request is cut after the mix and the rest waits.
+    let harness = Harness::new();
+    request_checked(&harness.state, harness.ask("a", input())).unwrap();
+    harness.stage_done("a", 0, false, 9.0);
+    harness.stage_done("a", 1, false, 9.0);
+    measured(&harness, 9.0, 9.0);
+    harness.messages();
+    request_checked(
+        &harness.state,
+        harness.ask("a", with_strength(input(), 0.4)),
+    )
+    .unwrap();
+    let patch = harness.patch("a");
+    assert_eq!(patch.state, "running");
+    assert_eq!(patch.estimate_seconds, 9.0);
+    assert_eq!(
+        harness.messages().last().unwrap()["data"]["stages"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let patch_id = lock(&harness.state.patch)
+        .unwrap()
+        .slot("a")
+        .patch_id
+        .clone();
+    apply_message(
+        &harness.state,
+        &WorkerEnvelope {
+            message_type: "patch_completed".into(),
+            data: json!({"patch_id": patch_id, "elapsed_seconds": 0.1}),
+        },
+    )
+    .unwrap();
+    assert_eq!(harness.patch("a").state, "stale");
+
+    // Under Manual nothing is sent, as before.
+    let harness = Harness::new();
+    request_checked(&harness.state, harness.ask("a", input())).unwrap();
+    harness.stage_done("a", 0, false, 9.0);
+    harness.stage_done("a", 1, false, 9.0);
+    measured(&harness, 9.0, 9.0);
+    harness.mode("manual");
+    harness.messages();
+    request_checked(
+        &harness.state,
+        harness.ask("a", with_strength(input(), 0.4)),
+    )
+    .unwrap();
+    assert_eq!(harness.patch("a").state, "stale");
+    // The old run is cancelled; no new request goes out.
+    assert!(harness
+        .messages()
+        .iter()
+        .all(|message| message["type"] != "patch_request"));
+}
+
 #[test]
 fn timings_are_the_mean_of_the_last_three_real_runs() {
     let harness = Harness::new();
@@ -554,6 +679,9 @@ fn sample_media() -> crate::types::MediaItem {
         hdr_format: String::new(),
         audio_warning: String::new(),
         has_audio: true,
+        field_order: String::new(),
+        repair_marks: 0,
+        repair_rev: 0,
         error: String::new(),
         selected: false,
     }
@@ -601,4 +729,107 @@ fn cancelling_a_slot_stops_its_run() {
     assert_eq!(sent[0]["data"]["job_id"], id);
     assert_eq!(harness.patch("a").state, "idle");
     assert!(cancel_checked(&harness.state, "c").is_err());
+}
+
+mod repair {
+    use super::*;
+    use crate::repair_mask::{RepairStroke, StrokeMode};
+
+    fn dot(x: f64) -> RepairStroke {
+        RepairStroke {
+            mode: StrokeMode::Paint,
+            size: 12.0,
+            points: vec![x, 300.0],
+        }
+    }
+
+    fn painted(harness: &Harness, strokes: &[RepairStroke]) {
+        crate::commands::set_repair_strokes_checked(&harness.state, "media", strokes).unwrap();
+    }
+
+    fn with_repair(mut input: StartBatchInput) -> StartBatchInput {
+        input.step_stages = vec![StepStageSelection {
+            step: "repair".into(),
+            ..StepStageSelection::default()
+        }];
+        input
+    }
+
+    fn harness() -> Harness {
+        let harness = Harness::new();
+        lock(&harness.state.engine)
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .features
+            .push("image_repair".into());
+        harness
+    }
+
+    fn sent_stages(harness: &Harness) -> Vec<Value> {
+        let sent = harness.messages();
+        sent.last().unwrap()["data"]["stages"]
+            .as_array()
+            .unwrap()
+            .clone()
+    }
+
+    #[test]
+    fn a_photo_without_paint_leaves_the_step_out_of_its_patch() {
+        let harness = harness();
+        request_checked(&harness.state, harness.ask("a", with_repair(input()))).unwrap();
+        let stages = sent_stages(&harness);
+        assert!(stages.iter().all(|stage| stage["kind"] != "repair"));
+        assert_eq!(harness.patch("a").steps.len(), 2);
+    }
+
+    #[test]
+    fn the_patch_runs_the_repair_with_the_photos_mask() {
+        let harness = harness();
+        painted(&harness, &[dot(400.0)]);
+        request_checked(&harness.state, harness.ask("a", with_repair(input()))).unwrap();
+        let stages = sent_stages(&harness);
+        assert_eq!(stages[0]["kind"], "repair");
+        assert_eq!(stages[0]["step"], "repair");
+        let mask = std::path::PathBuf::from(stages[0]["mask_path"].as_str().unwrap());
+        assert_eq!(
+            mask,
+            crate::repair_mask::masks_root(&harness.state.paths.next_root).join("media-1.png")
+        );
+        assert!(mask.is_file());
+        assert_eq!(stages[1]["fix"], "noise");
+        assert_eq!(harness.patch("a").steps[0].kind, "repair");
+    }
+
+    #[test]
+    fn more_paint_runs_the_repair_and_the_steps_after_it_again() {
+        let harness = harness();
+        painted(&harness, &[dot(400.0)]);
+        request_checked(&harness.state, harness.ask("a", with_repair(input()))).unwrap();
+        for index in 0..3 {
+            harness.stage_done("a", index, false, 1.0);
+        }
+        harness.messages();
+        // A fix changed after the repair: the repair is still shown and only the rest waits.
+        request_checked(&harness.state, harness.ask("a", with_repair(two_fixes()))).unwrap();
+        let steps = harness.patch("a").steps;
+        assert_eq!(steps[0].state, "done");
+        assert!(steps[1..].iter().all(|step| step.state == "waiting"));
+        for index in 0..4 {
+            harness.stage_done("a", index, false, 1.0);
+        }
+        harness.messages();
+
+        // More paint is a new mask: the repair and every step after it run again.
+        painted(&harness, &[dot(400.0), dot(900.0)]);
+        request_checked(&harness.state, harness.ask("a", with_repair(two_fixes()))).unwrap();
+        let stages = sent_stages(&harness);
+        assert!(stages[0]["mask_path"]
+            .as_str()
+            .unwrap()
+            .ends_with("media-2.png"));
+        let steps = harness.patch("a").steps;
+        assert!(steps.iter().all(|step| step.state == "waiting"));
+        assert_eq!(harness.patch("a").state, "running");
+    }
 }

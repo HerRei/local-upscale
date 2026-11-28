@@ -2,10 +2,17 @@ import { customModels, defaultCustomModelName } from './customModels';
 import { outputSummary } from './enhancePanel';
 import { fixStageKind, FIX_ROW_LABELS } from './fixStages';
 import { displayName, fixesOf, pendingDownloads, resolvePlan, type PlanStage } from './plan';
-import { planLine } from './planLine';
+import { planLine, slowMotionName } from './planLine';
 import { isRestoreRecipe, recipeFixStages, recipeSettingsPatch } from './recipes';
 import type { Workflow } from './workflows';
-import type { AppSnapshot, FixKind, MediaKind, Recipe, UiSettings } from './types';
+import type {
+  AppSnapshot,
+  FixKind,
+  FixStageSelection,
+  MediaKind,
+  Recipe,
+  UiSettings,
+} from './types';
 import { videoModelShortName } from './videoEngines';
 
 export const MAX_RECIPE_PINS = 20;
@@ -92,8 +99,9 @@ export function recipePlanLine(
   };
 
   const stages: PlanStage[] = [];
+  let fixStages: FixStageSelection[] = [];
   if (!temporalVideo) {
-    let fixStages = recipeFixStages(recipe, fullCatalog);
+    fixStages = recipeFixStages(recipe, fullCatalog);
     if (fixStages.length === 0 && !recipe.stages?.length && recipe.fixes?.length) {
       fixStages = recipe.fixes
         .filter((fix): fix is Exclude<FixKind, 'faces'> => fix !== 'faces')
@@ -147,6 +155,11 @@ export function recipePlanLine(
     stages.push(makePlanStage('face_restore', 'face', 'Faces'));
   }
 
+  const slow =
+    isVideo &&
+    !temporalVideo &&
+    Boolean(recipe.video_slow_motion) &&
+    (recipe.video_interpolation === 'x2' || recipe.video_interpolation === 'x4');
   if (isVideo) {
     if (!temporalVideo && recipe.deflicker) {
       stages.push(makePlanStage('deflicker', 'step', 'De-flicker'));
@@ -156,7 +169,7 @@ export function recipePlanLine(
       if (recipe.video_interpolation_order === 'before_upscale') stages.unshift(interp);
       else stages.push(interp);
     }
-    if (recipe.video_clean_audio) {
+    if (recipe.video_clean_audio && !slow) {
       stages.unshift(makePlanStage('audio_denoise', 'audio_denoise', 'Clean up audio'));
     }
   }
@@ -168,6 +181,8 @@ export function recipePlanLine(
       output_scale: recipe.output_scale,
       video_target_resolution: recipe.video_target_resolution,
       video_interpolation: recipe.video_interpolation || 'off',
+      video_slow_motion: slow,
+      fix_stages: fixStages,
     },
     isVideo ? { kind: 'video' } : { kind: 'image' },
   );
@@ -262,6 +277,15 @@ export function menuRows(recipes: readonly Recipe[], options: MenuRowsOptions = 
     const entry = byId.get(id);
     if (!entry || !fitsMediaKind(entry.isVideo, mediaKind)) continue;
     recentRows.push(toRow(entry, false));
+  }
+
+  // Nothing pinned and nothing recent that fits: show the first fitting entries in saved order
+  // instead of an empty menu.
+  if (pinnedRows.length === 0 && recentRows.length === 0) {
+    return entries
+      .filter((entry) => fitsMediaKind(entry.isVideo, mediaKind))
+      .slice(0, MAX_MENU_RECIPES)
+      .map((entry) => toRow(entry, false));
   }
 
   if (pinnedRows.length > 0 && recentRows.length > 0) {
@@ -529,6 +553,9 @@ export function recipeDetails(
   const downloadBytes = pendingDownloads(stages).bytes;
   const output = outputSummary(previewSettings, {
     includeFolder: false,
+    slowMotion:
+      slowMotionName(previewSettings) !== null &&
+      stages.some((stage) => stage.kind === 'interpolate'),
     preservingHdr:
       previewSettings.task === 'video' && previewSettings.video_hdr_mode === 'preserve',
   });

@@ -6,6 +6,7 @@ import threading
 from collections import deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
+from fractions import Fraction
 from typing import TYPE_CHECKING, Any, Protocol
 
 import av
@@ -17,6 +18,8 @@ from .deflicker import AnalysisFrame, prepare_analysis_frame
 from .frame_interpolation import InterpolationTarget, interpolate_frames
 from .hdr import anchor_hdr_detail, tone_map_to_sdr
 from .inference import InferenceEngine, UnstableRestorationError
+from .stabilise import build_stabilise_stage
+from .steps import STEPS_BY_ID
 from .video_colour import colour_frames
 from .video_io import TimedVideoFrame, uint8_chw_to_rgb_hwc
 
@@ -30,6 +33,26 @@ def rgb_to_tensor(rgb: np.ndarray) -> torch.Tensor:
     """Convert an HxWx3 uint8 RGB array to a (3, H, W) float32 tensor in [0, 1]."""
     arr = rgb.astype(np.float32) / 255.0
     return torch.from_numpy(arr).permute(2, 0, 1)
+
+
+def mix_with_input(strength: float, source: torch.Tensor, fixed: np.ndarray) -> np.ndarray:
+    """``source + strength * (fixed - source)`` for a (3, H, W) float ``source`` in [0, 1].
+
+    ``fixed`` is the model's output, 8-bit or float in [0, 1]; the mix keeps its dtype so
+    the frame goes on in the depth it would have had without the mix.
+    """
+    reference = source.detach().cpu().float()
+    if tuple(reference.shape[1:]) != tuple(fixed.shape[1:]):
+        reference = torch.nn.functional.interpolate(
+            reference[None], size=tuple(fixed.shape[1:]), mode="bilinear", align_corners=False
+        )[0]
+    base = reference.numpy()
+    if fixed.dtype == np.uint8:
+        base = base * 255.0
+        mixed = base + np.float32(strength) * (fixed.astype(np.float32) - base)
+        return np.rint(mixed).clip(0, 255).astype(np.uint8)
+    mixed = base + np.float32(strength) * (fixed.astype(np.float32) - base)
+    return mixed.clip(0.0, 1.0).astype(np.float32)
 
 
 @dataclass(frozen=True)
@@ -246,6 +269,9 @@ def _build_fix_model_stage(stage: VideoFixStage, step_ctx: VideoStepContext) -> 
                 yield item
                 continue
 
+            strength = float(stage.params.get("strength", 1.0))
+            if strength < 1.0:
+                output = mix_with_input(strength, tensor, output)
             if step_ctx.report_tiles:
                 next_tensor = (
                     torch.from_numpy(np.array(output, copy=True)).float()
@@ -357,6 +383,11 @@ def _build_deinterlace_stage(stage: VideoFixStage, step_ctx: VideoStepContext) -
 
         for item in frames:
             ctx.check_cancelled()
+            if item.frame.deinterlaced_by_step:
+                # Decoding ran this step where the field flags are; splitting its
+                # frames again would pair up two copies of the same moment.
+                yield item
+                continue
             rgb = item.frame.rgb
             is_float = rgb.dtype == np.float32
             high_depth = rgb.dtype == np.uint16 or is_float
@@ -393,6 +424,7 @@ def _build_deinterlace_stage(stage: VideoFixStage, step_ctx: VideoStepContext) -
 # Dispatch video preprocessing/fix/grade steps by registry step id.
 VIDEO_STEP_HANDLERS: dict[str, VideoStepHandler] = {
     "deinterlace": _build_deinterlace_stage,
+    "stabilise": build_stabilise_stage,
     "blur": _build_fix_model_stage,
     "jpeg": _build_fix_model_stage,
     "noise": _build_fix_model_stage,
@@ -547,6 +579,8 @@ def _primary_upscale_stage(ctx: VideoChainContext) -> VideoStreamStage:
                     whole_frame=True,
                     **float_options,
                 )
+            if ctx.config.primary_strength < 1.0:
+                out_chw = mix_with_input(ctx.config.primary_strength, tensor, out_chw)
             yield replace(item, out_chw=out_chw)
 
     return _stage
@@ -683,6 +717,32 @@ def _interpolate_after_stage(ctx: VideoChainContext) -> VideoStreamStage:
     return _stage
 
 
+def _slow_motion_stage(ctx: VideoChainContext) -> VideoStreamStage:
+    """Play the frames the chain made over ``factor`` times as long, at their own rate."""
+    assert ctx.interpolation is not None
+    factor = ctx.interpolation.multiplier
+
+    def _stage(frames: Iterator[StreamFrame]) -> Iterator[StreamFrame]:
+        origin: Fraction | None = None
+        for item in frames:
+            frame = item.frame
+            if origin is None:
+                origin = frame.timestamp
+            stretched = replace(
+                frame,
+                timestamp=origin + (frame.timestamp - origin) * factor,
+                duration=frame.duration * factor,
+            )
+            yield replace(item, frame=stretched)
+
+    return _stage
+
+
+def _is_geometry(stage: VideoFixStage) -> bool:
+    step = STEPS_BY_ID.get(stage.step_id)
+    return step is not None and step.phase == "geometry"
+
+
 def _dispatch_preprocess_stage(
     stage: VideoFixStage,
     ctx: VideoChainContext,
@@ -708,13 +768,20 @@ def build_video_stages(ctx: VideoChainContext) -> list[VideoStreamStage]:
     stages: list[VideoStreamStage] = []
     if ctx.colour_index is None:
         stages.append(lambda s: ctx.prefetch_fn(s, 4))
-    for idx, stage in enumerate(ctx.config.preprocess_stages):
-        if stage.step_id == "deinterlace":
-            stages.append(
-                _dispatch_preprocess_stage(
-                    stage, ctx, idx, report_tiles=False, is_final_stage=False
-                )
-            )
+    # Geometry runs on the decoded frames in registry order (Deinterlace, then Stabilise),
+    # before frames are added and before the side data of the live pictures is taken.
+    geometry = sorted(
+        (
+            (idx, stage)
+            for idx, stage in enumerate(ctx.config.preprocess_stages)
+            if _is_geometry(stage)
+        ),
+        key=lambda entry: STEPS_BY_ID[entry[1].step_id].order,
+    )
+    for idx, stage in geometry:
+        stages.append(
+            _dispatch_preprocess_stage(stage, ctx, idx, report_tiles=False, is_final_stage=False)
+        )
     if ctx.before_upscale and ctx.interpolation is not None:
         stages.append(_interpolate_before_stage(ctx))
 
@@ -722,7 +789,7 @@ def build_video_stages(ctx: VideoChainContext) -> list[VideoStreamStage]:
     if ctx.colour_index is not None:
         stages.append(_capture_source_side_data_stage(ctx))
         for idx, stage in enumerate(preprocess[: ctx.colour_index]):
-            if stage.step_id == "deinterlace":
+            if _is_geometry(stage):
                 continue
             stages.append(
                 _dispatch_preprocess_stage(
@@ -743,7 +810,7 @@ def build_video_stages(ctx: VideoChainContext) -> list[VideoStreamStage]:
 
     for idx in range(after_colour_start, len(preprocess)):
         stage = preprocess[idx]
-        if stage.step_id == "deinterlace":
+        if _is_geometry(stage):
             continue
         is_final = ctx.skip_primary_sr and idx == len(preprocess) - 1
         stages.append(
@@ -760,6 +827,8 @@ def build_video_stages(ctx: VideoChainContext) -> list[VideoStreamStage]:
         stages.append(_deflicker_stage(ctx))
     if ctx.interpolation is not None and not ctx.before_upscale:
         stages.append(_interpolate_after_stage(ctx))
+    if ctx.config.slow_motion:
+        stages.append(_slow_motion_stage(ctx))
     if ctx.colour_index is None:
         stages.append(lambda s: ctx.prefetch_fn(s, 2))
     return stages

@@ -138,6 +138,8 @@ const VIDEO_ONLY_KINDS: ReadonlySet<PlanStage['kind']> = new Set([
   'audio_denoise',
   'video',
   'edit',
+  'deinterlace',
+  'stabilise',
 ]);
 
 /**
@@ -152,7 +154,7 @@ export function patchPlanEntries(
   >,
 ): PatchPlanEntry[] {
   const kept = stages.filter((stage) => !VIDEO_ONLY_KINDS.has(stage.kind));
-  const names = planLine(kept, settings, { kind: 'image' });
+  const names = planLine(kept, settings, { kind: 'image' }, { amounts: false });
   return kept.map((stage, index) => ({
     name: names[index].replace(/^Upscale (?=\d)/, ''),
     modelName: stage.model ? displayName(stage.model) : undefined,
@@ -235,6 +237,8 @@ export function patchRequestKey(request: {
   input: Partial<StartBatchInput>;
   replace?: { slot: 'a' | 'b'; fix: string; model_id: string } | null;
   stageLimit?: number | null;
+  /** The photo's `repair_rev`: new paint is a new mask, so the same plan asks again. */
+  repairRev?: number;
 }): string {
   const { input } = request;
   return JSON.stringify([
@@ -259,5 +263,6 @@ export function patchRequestKey(request: {
     input.safe_memory,
     request.replace ?? null,
     request.stageLimit ?? null,
+    request.repairRev ?? 0,
   ]);
 }

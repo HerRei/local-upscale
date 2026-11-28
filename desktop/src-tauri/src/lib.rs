@@ -34,6 +34,7 @@ mod process_tree;
 mod programs;
 mod protocol;
 mod queue_timing;
+mod repair_mask;
 mod results;
 mod settings;
 mod state;
@@ -260,6 +261,8 @@ pub fn run() {
             commands::select_media,
             commands::remove_media,
             commands::clear_media,
+            commands::get_repair_strokes,
+            commands::set_repair_strokes,
             commands::clear_results,
             commands::save_settings,
             commands::set_preference,
@@ -291,6 +294,7 @@ pub fn run() {
             commands::cancel_jobs_for_media,
             commands::start_model_trials,
             commands::estimate_model_trials,
+            commands::estimate_start,
             commands::list_media_results,
             commands::list_all_media_results,
             commands::refresh_capabilities,

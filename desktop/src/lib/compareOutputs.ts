@@ -1,9 +1,16 @@
 import type { ComparePick, MediaItem, MediaResults, ResultSummary } from './types';
 import { formatDuration } from './format';
+import { optionLabel, type HardwareGroup } from './hardwareRoutes';
+import { NEURAL_ENGINE_ID } from './neuralEngine';
 import type { UnfinishedMark } from './unfinished';
 
 /** Only facts saved with the job or read from the output itself. */
-export function resultDetails(result: ResultSummary, width = 0, height = 0): string[] {
+export function resultDetails(
+  result: ResultSummary,
+  width = 0,
+  height = 0,
+  hardware: HardwareGroup[] = [],
+): string[] {
   const labels = (result.stages ?? [])
     .map((stage) => stage.model_label)
     .filter((label) => label && label !== 'Unknown model');
@@ -17,16 +24,19 @@ export function resultDetails(result: ResultSummary, width = 0, height = 0): str
     faces: 'Faces',
   };
   const fixes = (result.ui?.fixes ?? []).map((fix) => fixNames[fix]).filter(Boolean);
+  const deviceId =
+    result.device === 'mps' && result.neural_engine ? NEURAL_ENGINE_ID : (result.device ?? '');
+  // The name the Hardware setting shows; an id the engine no longer lists stays as recorded.
+  const device =
+    optionLabel(hardware, deviceId) || optionLabel(hardware, result.device ?? '') || result.device;
   const date = result.completed_at > 0 ? new Date(result.completed_at) : null;
   return [
-    labels.length ? `Models: ${labels.join(' → ')}` : '',
+    labels.length ? `${labels.length === 1 ? 'Model' : 'Models'}: ${labels.join(' → ')}` : '',
     fixes.length ? `Fixes: ${fixes.join(' → ')}` : '',
     result.scale ? `Scale: ${result.scale}×` : '',
     width > 0 && height > 0 ? `Output: ${width} × ${height}` : '',
     result.elapsed_seconds > 0 ? `Time: ${formatDuration(result.elapsed_seconds)}` : '',
-    result.device
-      ? `Requested device: ${result.device}${result.device === 'mps' && result.neural_engine ? ' · Neural Engine enabled' : ''}`
-      : '',
+    device ? `Device: ${device}` : '',
     date && !Number.isNaN(date.getTime()) ? `Date: ${date.toLocaleDateString()}` : '',
   ].filter(Boolean);
 }
@@ -36,7 +46,7 @@ export function resultDetails(result: ResultSummary, width = 0, height = 0): str
  * long, take a line each; the short facts share what is left, in their order.
  */
 export function detailLines(facts: string[], lines = 4): string[][] {
-  const long = facts.filter((fact) => /^(Models|Fixes):/.test(fact)).slice(0, lines - 1);
+  const long = facts.filter((fact) => /^(Models?|Fixes):/.test(fact)).slice(0, lines - 1);
   const short = facts.filter((fact) => !long.includes(fact));
   const each = Math.max(1, Math.ceil(short.length / Math.max(1, lines - long.length)));
   const packed: string[][] = long.map((fact) => [fact]);

@@ -21,11 +21,12 @@ Each `StepDefinition` in `STEPS` declares:
 - `order`: sort rank within the phase (and `fix_chip_order` for Fix chip display order).
 - `needs_model`: whether the step requires a model/bundle checkpoint.
 - `supports_mask`: whether stages for this step may carry a `mask_path` for linear compositing (`mask * stage_output + (1 - mask) * stage_input`).
+- `requires_mask`: the step has nothing to do without a mask, so a stage of it must carry one (`The <id> stage needs a mask.`). The window never sends one: the host draws it from the photo's painted strokes (`repair_mask.rs`), names it on that photo's job and patch, and leaves the step out for a photo without paint; a `mask_path` the window sends on such a step is refused. Both planners leave the step out unless the open photo is listed in `masked_steps`. Only `repair` (Dust & scratches) sets it.
 - `stage_kind` / `role` / `fix_kind`: protocol stage kind, pipeline role, and optional Fix chip id.
 - `in_image_pipeline` / `in_recipe_stages`: whether the step appears in bounded image `stages[]` requests and saved `Recipe.stages`.
 - `label` / `row_label` / `short_name` / `stage_label`: UI and worker status strings.
 - `required_feature`: worker `engine_info.features` entry gating the step (`image_edit`, `video_interpolation`, `video_audio_denoise`, etc.).
-- `dev_only`: the worker lists the step's `required_feature` and runs the step only when it was started with `LOCALSR_DEV_STEPS=1` (the desktop host passes its environment on). `grain`, `deinterlace`, and `remove_background` use this gate.
+- `dev_only`: the worker lists the step's `required_feature` and runs the step only when it was started with `LOCALSR_DEV_STEPS=1` (the desktop host passes its environment on). Only `grain` uses this gate; `remove_background` shipped with the Backgr. row, `deinterlace` with the Scan row, `stabilise` with the Stabilise row and `repair` with the Dust & scratches row.
 - `model_task`: for a step stage that needs a model, the catalog `purposes` entry its models carry. A step with `needs_model=True` is a step stage only when it is not a fix and names one.
 - `output_alpha`: the step's handler returns a matte that becomes the image's alpha; a photo job with such a step saves as PNG unless its format keeps alpha (PNG, TIFF, WebP).
 - `parameters`: `StepParameter` entries naming each parameter's type, default, choices, numeric bounds, `nullable`, and `required`.

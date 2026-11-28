@@ -1,3 +1,4 @@
+import { strengthOf, withStrength } from './fixRows';
 import { choosePresetModel, fixesOf } from './plan';
 import { isFixStageKind, isVideoOrUpscalePrimaryKind } from './steps';
 import type {
@@ -75,6 +76,7 @@ export function recipeSettingsPatch(
     // Recipes saved before 0.3.7 carry no interpolation, so they run without it.
     video_interpolation: recipe.video_interpolation || 'off',
     video_interpolation_order: recipe.video_interpolation_order || 'after_upscale',
+    video_slow_motion: recipe.video_slow_motion ?? false,
     video_clean_audio: recipe.video_clean_audio ?? false,
     video_audio_model: recipe.video_audio_model ?? '',
     enable_face_model: false,
@@ -118,8 +120,15 @@ export function recipeFixStages(
       ? fixesOf(model).filter((fix): fix is Exclude<FixKind, 'faces'> => fix !== 'faces')
       : [];
     const fix = stage.fix ?? (chip && (!model || fixes.includes(chip)) ? chip : fixes[0]);
-    if (fix && !result.some((selection) => selection.fix === fix))
-      result.push({ fix, model_id: stage.model_id });
+    if (fix && !result.some((selection) => selection.fix === fix)) {
+      const entry: FixStageSelection = { fix, model_id: stage.model_id };
+      const strength = stage.params?.strength;
+      result.push(
+        typeof strength === 'number' && strength >= 0 && strength < 1
+          ? withStrength(entry, strength)
+          : entry,
+      );
+    }
   });
   return result;
 }
@@ -129,7 +138,9 @@ export function sameFixStages(left: FixStageSelection[], right: FixStageSelectio
     left.length === right.length &&
     left.every(
       (selection, index) =>
-        selection.fix === right[index].fix && selection.model_id === right[index].model_id,
+        selection.fix === right[index].fix &&
+        selection.model_id === right[index].model_id &&
+        strengthOf(selection) === strengthOf(right[index]),
     )
   );
 }
@@ -187,6 +198,7 @@ export function recipeMatches(
       ((current.video_interpolation || 'off') === (recipe.video_interpolation || 'off') &&
         (current.video_interpolation_order || 'after_upscale') ===
           (recipe.video_interpolation_order || 'after_upscale') &&
+        Boolean(current.video_slow_motion) === Boolean(recipe.video_slow_motion) &&
         Boolean(current.video_clean_audio) === Boolean(recipe.video_clean_audio) &&
         (!recipe.video_clean_audio ||
           (current.video_audio_model || defaultAudioId) ===

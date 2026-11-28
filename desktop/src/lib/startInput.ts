@@ -4,6 +4,7 @@ import {
   effectiveVideoTask,
   isRestoreTask,
   outputFormatKeepingAlpha,
+  slowMotionApplies,
 } from './plan';
 import { recipeMatches } from './recipes';
 import type { StepDefinition } from './steps';
@@ -131,8 +132,12 @@ export function buildStartInput(
         ? (settings.video_interpolation ?? 'off')
         : 'off',
     video_interpolation_order: settings.video_interpolation_order ?? 'after_upscale',
+    video_slow_motion: slowMotionApplies(settings, usingTemporalVideo),
     video_clean_audio:
-      settings.task === 'video' && !audioDisabled && Boolean(settings.video_clean_audio),
+      settings.task === 'video' &&
+      !audioDisabled &&
+      !slowMotionApplies(settings, usingTemporalVideo) &&
+      Boolean(settings.video_clean_audio),
     video_audio_model: settings.video_audio_model ?? '',
     output_bit_depth: settings.output_bit_depth ?? 8,
   };

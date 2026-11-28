@@ -8,6 +8,7 @@ import {
   displayName,
   fitFor,
   frameRateChange,
+  isSlowMotionResult,
   resultFps,
   interpolationLabel,
   pendingDownloads,
@@ -17,6 +18,23 @@ import {
   supportsHdrPreservation,
 } from './plan';
 import { recipeFixStages, recipeMatches } from './recipes';
+import { buildStartInput } from './startInput';
+
+describe('isSlowMotionResult', () => {
+  it('takes a finished result at least 1.5 times as long as its original', () => {
+    const original = { duration_seconds: 10 };
+    expect(isSlowMotionResult({ output_duration_seconds: 20 }, original)).toBe(true);
+    expect(isSlowMotionResult({ output_duration_seconds: 15 }, original)).toBe(true);
+    expect(isSlowMotionResult({ output_duration_seconds: 14.9 }, original)).toBe(false);
+    expect(isSlowMotionResult({ output_duration_seconds: 20, partial: true }, original)).toBe(
+      false,
+    );
+    expect(isSlowMotionResult({ output_duration_seconds: 20 }, { duration_seconds: 0 })).toBe(
+      false,
+    );
+    expect(isSlowMotionResult(undefined, original)).toBe(false);
+  });
+});
 
 describe('model library resolution', () => {
   it('resolves Quick and Best by content and honours a pinned slot', () => {
@@ -397,6 +415,41 @@ describe('model library resolution', () => {
     expect(frameRateChange('fps60', 23.976)).toBe('23.976 → 60 fps');
     expect(frameRateChange('fps60', 59.94)).toBe('Already 59.94 fps · kept as it is');
     expect(frameRateChange('fps60', 0)).toBe('');
+  });
+
+  it('leaves Clean up audio out of the plan and the start input for slow motion', () => {
+    const snapshot = demoSnapshot();
+    const settings: UiSettings = {
+      ...snapshot.settings,
+      task: 'video',
+      selected_model_id: 'span_photo_x4',
+      selected_video_model_id: 'frame_by_frame',
+      video_interpolation: 'x2',
+      video_slow_motion: true,
+      video_clean_audio: true,
+    };
+    const options = { faceEnabled: false, usingTemporalVideo: false, hasAudio: true };
+    const start = { mediaIds: ['m'], task: 'video' as const, batchMode: false };
+    expect(resolvePlan(snapshot, settings, options).map((stage) => stage.kind)).toEqual([
+      'upscale',
+      'interpolate',
+    ]);
+    const input = buildStartInput(settings, start);
+    expect(input.video_slow_motion).toBe(true);
+    expect(input.video_clean_audio).toBe(false);
+
+    // Only 2x and 4x count; any other target runs at normal speed with its sound.
+    const sixty = { ...settings, video_interpolation: 'fps60' as const };
+    expect(resolvePlan(snapshot, sixty, options).map((stage) => stage.kind)).toEqual([
+      'audio_denoise',
+      'upscale',
+      'interpolate',
+    ]);
+    expect(buildStartInput(sixty, start).video_slow_motion).toBe(false);
+    expect(buildStartInput(sixty, start).video_clean_audio).toBe(true);
+    expect(
+      buildStartInput({ ...settings, video_slow_motion: false }, start).video_clean_audio,
+    ).toBe(true);
   });
 
   it('adds Clean up audio with its pending download only for videos with audio', () => {

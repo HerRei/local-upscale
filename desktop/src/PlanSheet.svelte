@@ -7,7 +7,10 @@
   import { UNSTABLE_FIX_MODELS } from './lib/fixStages';
   import type { PlanState } from './lib/jobPlanClient';
   import { FIT_LABELS, displayName, fitFor, frameRateChange, type PlanStage } from './lib/plan';
+  import { slowMotionName } from './lib/planLine';
+  import { marksValue, smoothingNote, smoothingOf } from './lib/fixRows';
   import { FIX_NAMES } from './lib/steps';
+  import { scanChoice, scanOptions, scanRate } from './lib/stepRows';
   import type {
     AppSnapshot,
     CatalogModel,
@@ -20,6 +23,8 @@
   import { FRAME_BY_FRAME_TIP, SEVERAL_FRAMES_TIP, videoModelShortName } from './lib/videoEngines';
 
   export let snapshot: AppSnapshot;
+  /** Row names as the plan line writes them; falls back to the host label. */
+  export let stepNames: string[] = [];
   export let settings: UiSettings;
   export let defaultSettings: UiSettings;
   export let settingsLocked: boolean;
@@ -42,6 +47,13 @@
   export let moveFix: EnhancePanelActions['moveFix'];
   export let refreshCapabilities: EnhancePanelActions['refreshCapabilities'];
 
+  $: scanSelected = scanChoice(settings);
+  $: scanNote =
+    scanOptions(selectedMedia?.field_order, selectedMedia?.fps ?? 0, scanSelected).find(
+      (option) => option.value === scanSelected,
+    )?.label ?? '';
+  $: baseFps = scanRate(scanSelected, selectedMedia?.field_order, selectedMedia?.fps ?? 0);
+
   function openFromSheet(
     slot: Parameters<EnhancePanelActions['openLibrary']>[0],
     fix?: Parameters<EnhancePanelActions['openLibrary']>[1],
@@ -60,7 +72,7 @@
   aria-label="Stages"
   aria-busy={planState.status === 'loading' && !planState.first ? 'true' : undefined}
 >
-  {#each plan as stage (`${stage.role}:${stage.fix ?? stage.kind}`)}
+  {#each plan as stage, index (`${stage.role}:${stage.fix ?? stage.kind}`)}
     {@const target =
       stage.model ??
       stage.videoModel ??
@@ -84,7 +96,9 @@
                   ? (customModels(settings).find(
                       (model) => model.path === settings.custom_model_path,
                     )?.name ?? 'Checkpoint')
-                  : ''}
+                  : stage.kind === 'repair'
+                    ? marksValue(selectedMedia?.repair_marks ?? 0)
+                    : ''}
     <!-- Licenses live in the model library; only exceptions show here. -->
     {@const meta = stage.editModel
       ? `${editVariantName(stage.editModel)}${
@@ -105,9 +119,11 @@
           ? 'Labs · several frames at once'
           : stage.interpolationModel
             ? [
-                settings.video_interpolation && settings.video_interpolation !== 'off'
-                  ? frameRateChange(settings.video_interpolation, selectedMedia?.fps ?? 0)
-                  : '',
+                slowMotionName(settings)
+                  ? `${settings.video_interpolation === 'x4' ? 4 : 2}× slower`
+                  : settings.video_interpolation && settings.video_interpolation !== 'off'
+                    ? frameRateChange(settings.video_interpolation, baseFps)
+                    : '',
                 settings.video_interpolation_order === 'before_upscale'
                   ? 'before upscaling'
                   : 'after upscaling',
@@ -117,7 +133,13 @@
                 .join(' · ')
             : stage.audioModel
               ? stage.audioModel.summary || 'Audio cleanup'
-              : ''}
+              : stage.kind === 'deinterlace'
+                ? scanNote
+                : stage.kind === 'stabilise'
+                  ? smoothingNote(
+                      smoothingOf(settings.step_stages?.find((s) => s.step === 'stabilise')),
+                    )
+                  : ''}
     {@const warning =
       stage.model && UNSTABLE_FIX_MODELS.has(stage.model.model_id)
         ? stage.role === 'fix'
@@ -134,13 +156,13 @@
       <span class="stage"
         >{#if stage.fix === 'colour' || stage.model?.purposes.includes('colorize')}<span
             class="label-with-tip"
-            >{stage.label}<HelpTip
+            >{stepNames[index] ?? stage.label}<HelpTip
               label="Colour"
               text={settings.task === 'video'
                 ? "Adds colour to black-and-white videos. Colours are the model's guess and are carried between frames so they stay steady."
                 : "Adds colour to black-and-white photos. The colours are the model's guess. A photo that already has colour is recoloured too."}
             /></span
-          >{:else}{stage.label}{/if}</span
+          >{:else}{stepNames[index] ?? stage.label}{/if}</span
       >
       <div class="name" title={name || undefined}>{name}</div>
       <div class="plan-end">
@@ -196,13 +218,13 @@
               class="link-button"
               type="button"
               aria-label={restoring
-                ? 'Try other restoration models on this image'
-                : 'Try other upscalers on this image'}
+                ? 'Try other restoration models on this photo'
+                : 'Try other upscalers on this photo'}
               disabled={settingsLocked || !canOpenTrials}
               on:click={() => openFromSheet('try', stage.fix)}>Try others…</button
             ><HelpTip
               label="Try others"
-              text="Runs this image once per model you pick, with the same settings. Each result is kept as its own file, and Showing in the preview lets you flip between them."
+              text="Runs this photo once per model you pick, with the same settings. Each result is kept as its own file, and Showing in the preview lets you flip between them."
             /></span
           >
         </div>{/if}

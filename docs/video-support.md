@@ -141,11 +141,40 @@ scene cuts hold the preceding image, while short runs of repeated frames can be
 bridged for animation. These are heuristics; inspect motion, cuts and fine detail
 for artifacts.
 
+**Slow motion.** Under Result, the Frames select has a third group, **Slow motion (no
+sound)**, with **2× slower** and **4× slower** and the length the clip then has. It adds the
+same frames as 2× and 4× after upscaling, but plays them at the clip's own rate (twice it
+after Scan at Double rate, which the Result head then shows beside the length), so the
+video becomes two or four times as long: each frame's time and length are multiplied, and a
+variable-rate clip keeps its rhythm. The file has no sound track and no subtitles (stretched
+speech is poor at half speed and unusable at a quarter), the Output line says `no sound`, and
+Clean up audio is off and keeps its setting for when you leave slow motion. The file name ends
+in `_slow`. A slow-motion result is longer than its original, so the viewer opens it in
+Enhanced and switches Original and Split off. It needs the engine to list
+`video_slow_motion`; it is refused with a rate override, with HDR kept and with a target other
+than 2× or 4×.
+
 Interpolation is unavailable with SeedVR2, HDR preservation or an explicit
 API/CLI FPS override. It uses CPU when the selected upscaler backend cannot run
 the PyTorch model. Real-weight worker runs on Linux CPU have exercised both
 orders with audio; Mac MPS performance and memory, system HEVC timing and the
 desktop controls still need acceptance on macOS.
+
+### Stabilise · Labs
+
+Stabilise is off by default. A ticked **Stabilise** row, first under **Fix**, evens out the
+camera's path (`src/localsr/core/stabilise.py`). The choice is the smoothing: **Light**
+averages the path over 0.5 s (0.25 s before and after each frame), **Medium** over 1 s and
+**Strong** over 2 s, and each cuts 3, 5 or 8 % off every edge. Movement is measured between
+neighbouring frames as a shift and a turn from tracked points on a grey copy of at most
+640 px, and a pair with too few points counts as no movement. Each frame is corrected and
+enlarged in one cubic warp, limited to what the cut-off band covers, so no pixel from outside
+the source is shown; width, height, frame count and frame times are the input's. A scene cut
+starts a new path. The step runs after Scan and before the fixes, the added frames and the
+upscale, holds back only the frames it needs to look ahead (at most 400 MB) and is refused
+with HDR preservation. It needs the engine to list `video_stabilise`. On a 1080p test clip
+with a random shake of up to 24 px, Medium brought the frame-to-frame jitter from 29.8 px to
+0.6 px.
 
 ### De-flicker
 

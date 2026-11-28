@@ -34,7 +34,7 @@
   <div class="phase">
     <span class="activity-dot" aria-hidden="true"></span><span role="status">{stage}</span>
   </div>
-  {#if !loading}<p class="elapsed" aria-hidden="true">{elapsed}s elapsed</p>{/if}
+  {#if !loading}<p class="elapsed" aria-hidden="true">{elapsed} s elapsed</p>{/if}
   {#if elapsed >= 15 && !loading}<p class="slow-file">
       Large files and files stored in iCloud can take longer to open.
     </p>{/if}

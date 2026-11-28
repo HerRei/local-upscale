@@ -76,6 +76,8 @@
 }
 
 :root {
+  /* Dust & scratches: a colour old photos do not have, the same in every palette. */
+  --mask-tint: rgba(255, 43, 214, 0.55);
   --danger-card-border: rgba(229, 72, 77, 0.32);
   --dialog-bg: #232325;
   --shadow-medium: rgba(0, 0, 0, 0.5);
@@ -213,7 +215,6 @@
   --shimmer-highlight: rgba(204, 204, 204, 0.07);
   --preview-hud-bg: rgba(24, 24, 26, 0.84);
   --retry-hover-bg: #aaaaaa25;
-  --welcome-bg: rgba(35, 35, 37, 0.9);
   --notice-outline: rgba(255, 255, 255, 0.1);
 }
 
@@ -407,7 +408,6 @@
   --shimmer-highlight: rgba(75, 75, 75, 0.07);
   --preview-hud-bg: rgba(233, 233, 233, 0.84);
   --retry-hover-bg: #69696925;
-  --welcome-bg: rgba(224, 224, 224, 0.9);
   --notice-outline: rgba(0, 0, 0, 0.1);
 }
 
@@ -498,7 +498,6 @@
   --recess: #000000;
   --meter-track: #000000;
   --dialog-bg: #141414;
-  --welcome-bg: #141414;
   --notice-surface: #141414;
   --pane-seam: #8f8f8f;
   --border: #8f8f8f;
@@ -621,7 +620,6 @@
   --recess: #f2f2f2;
   --meter-track: #f2f2f2;
   --dialog-bg: #ffffff;
-  --welcome-bg: #ffffff;
   --notice-surface: #ffffff;
   --pane-seam: #6b6b6b;
   --border: #6b6b6b;
@@ -1653,8 +1651,109 @@ input:focus-visible {
   font-size: calc(11px * var(--ui-scale));
   line-height: 1.5;
 }
+/* While painting the brush ring stands in for the pointer; Space held moves the picture. */
+.canvas-well.painting {
+  cursor: none;
+}
+.canvas-well.moving {
+  cursor: grab;
+}
 .canvas-well.panning {
   cursor: grabbing;
+}
+.mask-paint {
+  position: absolute;
+  z-index: 2;
+  transform-origin: center;
+  pointer-events: none;
+  will-change: transform;
+}
+.mask-paint.hidden {
+  visibility: hidden;
+}
+.mask-paint .mask-tint {
+  fill: var(--mask-tint);
+}
+/* A white line inside a black one reads on any picture. */
+.brush-ring {
+  position: absolute;
+  z-index: 6;
+  box-sizing: border-box;
+  transform: translate(-50%, -50%);
+  border: 1px solid #ffffff;
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 1px #000000,
+    inset 0 0 0 1px #000000;
+  pointer-events: none;
+}
+.brush-ring.crosshair {
+  width: 13px;
+  height: 13px;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background:
+    linear-gradient(#ffffff, #ffffff) center / 1px 100% no-repeat,
+    linear-gradient(#ffffff, #ffffff) center / 100% 1px no-repeat;
+  filter: drop-shadow(0 0 1px #000000);
+}
+.paint-bar {
+  position: absolute;
+  z-index: 8;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 6px 10px;
+  width: max-content;
+  max-width: calc(100% - 16px);
+  box-sizing: border-box;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--hud-bg);
+  color: var(--hud-text);
+  font-size: calc(12px * var(--ui-scale));
+  cursor: default;
+}
+.paint-bar .paint-mode {
+  min-width: 128px;
+}
+.paint-bar .paint-mode button {
+  min-height: 26px;
+}
+.paint-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.paint-size input {
+  width: 110px;
+}
+.paint-size-text {
+  min-width: 44px;
+  color: var(--secondary);
+  font-variant-numeric: tabular-nums;
+}
+.paint-action {
+  min-height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--hud-text);
+  font-size: calc(12px * var(--ui-scale));
+}
+.paint-action:hover:not(:disabled) {
+  background: var(--control-active);
+}
+.paint-action:disabled {
+  cursor: default;
+  opacity: 0.38;
 }
 .canvas-well.comparing {
   cursor: col-resize;
@@ -1985,6 +2084,10 @@ input:focus-visible {
 .seg-inline.size-switch {
   grid-template-columns: 1.5fr 1fr 1fr 1fr;
 }
+.seg-inline.strength-switch {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 8px;
+}
 .seg-inline.task-switch {
   grid-template-columns: minmax(max-content, 1.45fr) minmax(0, 1fr);
 }
@@ -2097,6 +2200,13 @@ input:focus-visible {
 .fix-row > .pop-anchor .fix-value {
   max-width: 100%;
 }
+/* A value that opens painting in the viewer, not a popover. */
+.fix-row > .fix-value {
+  margin-left: auto;
+}
+.fix-row > .fix-value:disabled {
+  cursor: default;
+}
 .fix-pop-head {
   font-weight: 600;
   margin-bottom: 8px;
@@ -2178,6 +2288,24 @@ input[type='search'],
   background: var(--recess);
   color: var(--text);
   font-size: calc(12px * var(--ui-scale));
+}
+select {
+  /* WebKit draws its pop-up button at a fixed 18-20 px and ignores height, padding and
+     border for every appearance except none. The menu that opens is still the native one;
+     only the closed button is drawn here, with the arrow as two gradients in the text
+     colour so it follows every theme. */
+  -webkit-appearance: none;
+  appearance: none;
+  padding-right: 28px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text) 50%),
+    linear-gradient(135deg, var(--text) 50%, transparent 50%);
+  background-position:
+    calc(100% - 15px) 50%,
+    calc(100% - 10px) 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  text-overflow: ellipsis;
 }
 .model-description {
   margin: 10px 0 7px;
@@ -2643,6 +2771,8 @@ input[type='search'],
   flex-direction: column;
 }
 .recipe-pin {
+  display: inline-flex;
+  align-items: center;
   color: var(--secondary);
   font-size: calc(11px * var(--ui-scale));
   line-height: 15px;
@@ -3992,7 +4122,7 @@ input[type='search'],
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-height: 200px;
+  max-height: calc(236px * var(--ui-scale));
   overflow: auto;
   padding: 8px 16px 10px;
   border-bottom: 1px solid var(--divider);
@@ -4258,6 +4388,9 @@ input[type='search'],
   margin-top: 2px;
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
+}
+.recipe-secondary-actions .link-button:not(.danger) {
+  color: var(--accent-text);
 }
 .recipe-secondary-actions .link-button.danger {
   color: var(--danger-text);
@@ -5455,6 +5588,14 @@ label.setting-label {
   .button.primary {
     border-color: ButtonText;
   }
+  /* Chromium draws no gradient arrow here; its own pop-up button follows the system
+     colours and, unlike WebKit's, already honours the height. */
+  select {
+    -webkit-appearance: auto;
+    appearance: auto;
+    background-image: none;
+    padding-right: 10px;
+  }
   :is(button, input, select):disabled,
   [aria-disabled='true'] {
     color: GrayText;
@@ -5568,6 +5709,7 @@ label.setting-label {
   box-sizing: border-box;
   /* The line stays 1 px on screen at every zoom. */
   border: calc(1px / var(--zoom, 1)) solid var(--accent);
+  box-shadow: 0 0 0 calc(1px / var(--zoom, 1)) rgba(0, 0, 0, 0.55);
   pointer-events: none;
 }
 .patch-frame.dashed {
@@ -5615,6 +5757,10 @@ label.setting-label {
 }
 .patch-tab:active {
   cursor: grabbing;
+}
+.patch-tab:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
 }
 .patch-tab .step-chips-row {
   flex-wrap: nowrap;

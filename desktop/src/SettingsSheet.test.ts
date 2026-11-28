@@ -339,7 +339,7 @@ describe('SettingsSheet', () => {
     const tipButton = screen.getByRole('button', { name: 'About Viewer background' });
     await user.click(tipButton);
     expect(screen.getByRole('tooltip').textContent).toContain(
-      'What is shown behind the picture in the viewer and in Compare. Grey is the neutral 18 % grey used to judge brightness and colour. Black and White show how edges and transparent areas hold up. Checkerboard shows where a picture is transparent. Saved files are not changed.',
+      'What is shown behind the picture in the viewer and in Compare. Grey is the neutral 18% grey used to judge brightness and colour. Black and White show how edges and transparent areas hold up. Checkerboard shows where a picture is transparent. Saved files are not changed.',
     );
 
     cleanup();

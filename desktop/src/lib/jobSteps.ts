@@ -1,9 +1,14 @@
-import { INTERPOLATION_BY_TARGET, PLAN_FIX_NAMES } from './planLine';
+import { INTERPOLATION_BY_TARGET, PLAN_FIX_NAMES, slowMotionName } from './planLine';
 import { STEPS } from './steps';
 import type { JobStep, LastSteps, UiSettings } from './types';
 
 export type StepNameSettings = Pick<UiSettings, 'output_scale'> &
-  Partial<Pick<UiSettings, 'task' | 'video_target_resolution' | 'video_interpolation'>>;
+  Partial<
+    Pick<
+      UiSettings,
+      'task' | 'video_target_resolution' | 'video_interpolation' | 'video_slow_motion'
+    >
+  >;
 
 export interface PlanMark {
   name: string;
@@ -45,6 +50,8 @@ export function stepName(
   if (step.kind === 'edit') return 'Edit';
   if (step.kind === 'deflicker') return 'De-flicker';
   if (step.kind === 'interpolate') {
+    const slow = slowMotionName(settings);
+    if (slow) return slow;
     const target = settings.video_interpolation;
     if (target && target !== 'off' && target in INTERPOLATION_BY_TARGET) {
       return INTERPOLATION_BY_TARGET[target as keyof typeof INTERPOLATION_BY_TARGET];
@@ -53,6 +60,10 @@ export function stepName(
   }
   if (step.kind === 'audio_denoise') return 'Clean audio';
   if (step.kind === 'face_restore') return 'Faces';
+  if (step.kind === 'remove_background') return 'Background';
+  if (step.kind === 'deinterlace') return 'Deinterlace';
+  if (step.kind === 'stabilise') return 'Stabilise';
+  if (step.kind === 'repair') return 'Dust & scratches';
   return (
     step.label ??
     STEPS.find((entry) => entry.id === step.kind)?.label ??
@@ -150,13 +161,16 @@ export function resultStepChips(
     const label = isLast && step.kind === 'upscale' ? (scale > 0 ? `${scale}×` : 'Upscale') : name;
     const skipped = step.state === 'skipped';
     const disabled = skipped || (!isLast && !step.kept);
-    const title = skipped
-      ? step.note
-      : isLast
-        ? 'The finished result'
-        : !step.kept
-          ? "This step's picture could not be kept."
-          : `The picture after the ${name} fix`;
+    let title: string | undefined = step.note;
+    if (!skipped) {
+      if (isLast) title = 'The finished result';
+      else if (!step.kept) title = "This step's picture could not be kept.";
+      else if (step.kind === 'remove_background') {
+        title = 'The picture with the background removed';
+      } else if (step.kind === 'repair') {
+        title = 'The picture after the marks were repaired';
+      } else title = `The picture after the ${name} fix`;
+    }
     return {
       id,
       label,

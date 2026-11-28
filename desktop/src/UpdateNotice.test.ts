@@ -92,7 +92,7 @@ it('skips only the selected version and hides behind the update dialog', async (
   api.skipUpdate.mockResolvedValue({ ...available, version: '1.0.0', skipped_version: '1.0.0' });
   const user = userEvent.setup();
   render(UpdateNotice);
-  await user.click(screen.getByRole('button', { name: 'Skip This Version' }));
+  await user.click(screen.getByRole('button', { name: 'Skip this version' }));
   await waitFor(() => expect(screen.queryByText('LocalSR 1.0.0 is available')).toBeNull());
   updateState.set({ ...available, version: '1.1.0', skipped_version: '1.0.0' });
   expect(await screen.findByText('LocalSR 1.1.0 is available')).toBeTruthy();

@@ -214,6 +214,52 @@ def test_a_new_last_step_runs_only_itself(harness):
     assert harness.loads == loads + 1
 
 
+def _with_strength(stage: dict, strength: float | None) -> dict:
+    return stage if strength is None else {**stage, "params": {"strength": strength}}
+
+
+def test_a_new_strength_mixes_again_without_the_model(harness):
+    noise = _fix(harness.noise)
+    full = harness.run([noise])
+    loads = harness.loads
+    assert loads == 1
+    light = harness.run([_with_strength(noise, 0.4)])
+    # The whole result is in the cache: the mix needs no model and says it was cached.
+    assert harness.loads == loads
+    assert [m["data"]["cached"] for m in _done(light)] == [True]
+    assert "running" not in [m["data"].get("state") for m in light if m["type"] == "patch_stage"]
+    full_png, light_png = _png(_done(full)[0]), _png(_done(light)[0])
+    assert not np.array_equal(full_png, light_png)
+    medium = harness.run([_with_strength(noise, 0.7)])
+    assert harness.loads == loads
+    again = harness.run([noise])
+    assert harness.loads == loads
+    assert [m["data"]["cached"] for m in _done(again)] == [True]
+    assert _png(_done(again)[0]).tolist() == full_png.tolist()
+    # The mix is the picture's own pixels moved toward the fix's, within one level.
+    with Image.open(harness.image) as source:
+        original = np.asarray(source.convert("RGB"))[30:222, 40:232].astype(np.float32)
+    expected = original + 0.4 * (full_png.astype(np.float32) - original)
+    assert np.abs(light_png.astype(np.float32) - expected).max() <= 1.0
+    assert not np.array_equal(_png(_done(medium)[0]), light_png)
+
+
+def test_a_strength_first_run_loads_the_model_once_and_a_following_step_runs_again(harness):
+    noise = _with_strength(_fix(harness.noise), 0.4)
+    first = harness.run([noise])
+    assert [m["data"]["cached"] for m in _done(first)] == [False]
+    assert harness.loads == 1
+    loads = harness.loads
+    grown = harness.run([noise, _upscale(harness.up2)], output_scale=2)
+    assert [m["data"]["cached"] for m in _done(grown)] == [True, False]
+    assert harness.loads == loads + 1
+    # A new strength changes the second step's input, so it runs again.
+    changed = harness.run(
+        [_with_strength(_fix(harness.noise), 0.7), _upscale(harness.up2)], output_scale=2
+    )
+    assert [m["data"]["cached"] for m in _done(changed)] == [True, False]
+
+
 @pytest.mark.parametrize(
     "region",
     [
@@ -292,6 +338,72 @@ def test_a_masked_step_is_skipped_with_its_reason_and_the_picture_goes_on(
     assert len(skipped) == 1 and skipped[0]["data"]["note"]
     assert len(_done(messages)) == 1
     assert _png(_done(messages)[0]).shape == (384, 384, 3)
+
+
+def _smooth(path: Path, speck: tuple[int, int] | None = None) -> tuple[str, np.ndarray]:
+    """A smooth gradient the size of the harness picture, with a black 5 x 5 speck at (x, y)."""
+    width, height = SIZE
+    x = np.linspace(60, 180, width, dtype=np.float32)[None, :, None]
+    y = np.linspace(0, 30, height, dtype=np.float32)[:, None, None]
+    clean = np.broadcast_to(x + y + np.array([0, 8, 16]), (height, width, 3)).astype(np.uint8)
+    marked = clean.copy()
+    if speck:
+        marked[speck[1] : speck[1] + 5, speck[0] : speck[0] + 5] = 0
+    Image.fromarray(marked).save(path)
+    return str(path), clean
+
+
+def _paint(path: Path, x: int, y: int) -> str:
+    """The host's mask: the photo's size, white over the 5 x 5 speck at (x, y) and a little more."""
+    width, height = SIZE
+    mask = np.zeros((height, width), dtype=np.uint8)
+    mask[y - 2 : y + 7, x - 2 : x + 7] = 255
+    Image.fromarray(mask).save(path)
+    return str(path)
+
+
+def _repair(mask: str) -> dict:
+    return {"kind": "repair", "step": "repair", "mask_path": mask}
+
+
+def test_repair_is_cut_to_the_region(harness, tmp_path):
+    # The region is x 40-232, y 30-222; with its padding the crop is x 8-264, y 0-254.
+    harness.image, clean = _smooth(tmp_path / "speck.png", (100, 100))
+    messages = harness.run([_repair(_paint(tmp_path / "inside.png", 100, 100))])
+    assert not [m for m in messages if m["data"].get("state") == "skipped"]
+    patch = _png(_done(messages)[0]).astype(np.int16)
+    region = clean[30:222, 40:232].astype(np.int16)
+    # The speck sits at x 60-65, y 70-75 of the region; it is filled from the gradient around it.
+    assert np.abs(patch[70:75, 60:65] - region[70:75, 60:65]).max() <= 4
+    outside = np.ones(patch.shape[:2], dtype=bool)
+    outside[68:77, 58:67] = False
+    assert np.array_equal(patch[outside], region[outside])
+
+    # Paint outside the padded crop leaves the picture as it was.
+    harness.image, _clean = _smooth(tmp_path / "far.png", (285, 5))
+    with Image.open(harness.image) as opened:
+        source = np.asarray(opened.convert("RGB"))[30:222, 40:232]
+    far = harness.run([_repair(_paint(tmp_path / "far-mask.png", 285, 5))])
+    assert np.array_equal(_png(_done(far)[0]), source)
+
+
+def test_more_paint_runs_the_repair_and_the_steps_after_it_again(harness, tmp_path):
+    harness.image, _clean = _smooth(tmp_path / "speck.png", (100, 100))
+    first = _paint(tmp_path / "media-1.png", 100, 100)
+    noise = _fix(harness.noise)
+    assert [m["data"]["cached"] for m in _done(harness.run([_repair(first), noise]))] == [
+        False,
+        False,
+    ]
+    # The host names a new file for each saved paint: the repair and what follows run again.
+    more = _paint(tmp_path / "media-2.png", 120, 100)
+    again = harness.run([_repair(more), noise])
+    assert [m["data"]["cached"] for m in _done(again)] == [False, False]
+    # The same paint with another step after it keeps the repair from the cache.
+    changed = harness.run([_repair(more), _fix(harness.jpeg, "jpeg")])
+    assert [m["data"]["cached"] for m in _done(changed)] == [True, False]
+    # The cut masks are not left in the work folder.
+    assert not list((tmp_path / "work").glob("patch-mask-*"))
 
 
 def test_a_face_stage_is_a_skipped_chip_after_the_upscaler(harness):
@@ -384,6 +496,105 @@ def test_colour_guesses_from_the_whole_picture_not_the_crop(harness, monkeypatch
         _done(harness.run([colour], region={"x": 100, "y": 50, "width": 200, "height": 100}))[0]
     )
     assert np.abs(left[:, 100:].astype(np.int16) - right[:, :100].astype(np.int16)).max() <= 1
+
+
+# The Colour model between photos ----------------------------------------------------
+
+
+def _count_loads(harness, monkeypatch) -> list[str]:
+    loaded: list[str] = []
+    original = harness.adapter.load
+
+    def counted(path, *args, **kwargs):
+        loaded.append(path)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(harness.adapter, "load", counted)
+    return loaded
+
+
+def _three_photos(harness) -> list[str]:
+    return [
+        _picture(harness.tmp / f"photo-{seed}.png", (420, 300), seed=seed) for seed in (11, 12, 13)
+    ]
+
+
+def test_colour_stays_loaded_so_a_new_photo_does_not_load_the_model_again(harness, monkeypatch):
+    from localsr.worker import patch_preview
+
+    monkeypatch.setattr(patch_preview, "colour_may_stay_loaded", lambda _device: True)
+    loaded = _count_loads(harness, monkeypatch)
+    path = _ddcolor_checkpoint(harness.tmp / "ddcolor.pth")
+    colour = _colour_fix(path)
+    for photo in _three_photos(harness):
+        messages = harness.run([colour], image_path=photo)
+        assert _types(messages)[-1] == "patch_completed"
+    assert loaded == [path]
+    assert path in harness.engine._loaded_models
+
+
+def test_colour_is_loaded_again_where_the_device_has_no_room_to_keep_it(harness, monkeypatch):
+    from localsr.worker import patch_preview
+
+    monkeypatch.setattr(patch_preview, "colour_may_stay_loaded", lambda _device: False)
+    loaded = _count_loads(harness, monkeypatch)
+    path = _ddcolor_checkpoint(harness.tmp / "ddcolor.pth")
+    for photo in _three_photos(harness)[:2]:
+        harness.run([_colour_fix(path)], image_path=photo)
+    assert loaded == [path, path]
+    assert harness.engine._loaded_models == {}
+
+
+def test_switching_the_patch_off_releases_the_colour_model(harness, monkeypatch):
+    from localsr.worker import patch_preview
+
+    monkeypatch.setattr(patch_preview, "colour_may_stay_loaded", lambda _device: True)
+    path = _ddcolor_checkpoint(harness.tmp / "ddcolor.pth")
+    harness.run([_colour_fix(path)])
+    assert path in harness.engine._loaded_models
+    harness.server._release_patch_colour()
+    assert harness.engine._loaded_models == {}
+    assert harness.server.patch_cache.colour_model is None
+
+
+def test_the_patch_release_message_reaches_the_release(harness, monkeypatch):
+    released = threading.Event()
+    server = WorkerServer(requests=_lines({"type": "patch_release", "data": {}}))
+    monkeypatch.setattr(server, "_release_patch_colour", released.set)
+    server.model_adapter = harness.adapter
+    server.engine = harness.engine
+    runner = threading.Thread(target=server.run, name="localsr-test-worker")
+    runner.start()
+    runner.join(60)
+    assert not runner.is_alive()
+    assert released.is_set()
+
+
+def test_a_release_without_a_colour_patch_does_not_build_the_engine():
+    server = WorkerServer()
+    server._release_patch_colour()
+    assert server._engine is None
+
+
+def test_a_patch_without_colour_keeps_the_model_and_a_job_or_idle_release_drops_it(
+    harness, monkeypatch
+):
+    from localsr.worker import patch_preview
+
+    monkeypatch.setattr(patch_preview, "colour_may_stay_loaded", lambda _device: True)
+    path = _ddcolor_checkpoint(harness.tmp / "ddcolor.pth")
+    harness.run([_colour_fix(path)])
+    harness.run([_fix(harness.noise)])
+    assert path in harness.engine._loaded_models
+    # A job that does not use it makes room for its own models, as for any warm model.
+    harness.engine.release_models_except({harness.up2})
+    assert path not in harness.engine._loaded_models
+    harness.run([_colour_fix(path)], image_path=_three_photos(harness)[0])
+    assert path in harness.engine._loaded_models
+    server = harness.server
+    server._idle_since = 0.0
+    server._release_when_idle(worker_server.IDLE_RELEASE_SECONDS + 1)
+    assert harness.engine._loaded_models == {}
 
 
 # Cancelling and scheduling ----------------------------------------------------------

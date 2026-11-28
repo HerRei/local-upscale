@@ -43,9 +43,9 @@ test('review shows the report before opening an issue', async ({ page }) => {
   expect(url.searchParams.get('hardware')).toContain('signal 11');
 });
 
-test("Don't Send deletes the report", async ({ page }) => {
+test("Don't send deletes the report", async ({ page }) => {
   const notice = page.getByRole('dialog', { name: 'LocalSR quit unexpectedly last time.' });
-  await notice.getByRole('button', { name: "Don't Send" }).click();
+  await notice.getByRole('button', { name: "Don't send" }).click();
   await expect(notice).toBeHidden();
   expect(await hostCalls(page, 'delete_crash_report')).toMatchObject([{ args: { id: report.id } }]);
   expect(await hostCalls(page, 'open_bug_report')).toHaveLength(0);
