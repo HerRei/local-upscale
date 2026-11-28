@@ -47,6 +47,8 @@ class ModelPurpose(StrEnum):
     FACE = "face"
     VIDEO = "video"
     BACKGROUND = "background"
+    # Fills painted marks (Dust & scratches); never a fix, upscaler or preset choice.
+    INPAINT = "inpaint"
 
 
 class QualityTier(IntEnum):
@@ -873,9 +875,37 @@ MODEL_CATALOG = (
         author="ZhengPeng et al.",
         preset_eligible=False,
     ),
+    CatalogModel(
+        model_id="migan",
+        name="MI-GAN",
+        role="Fills wider marks in Dust & scratches",
+        stage="inpaint",
+        filename="migan_pipeline_v2.onnx",
+        description=(
+            "Fills the wider marks you paint in Dust & scratches by continuing what is around "
+            "them. Thin marks are filled without it."
+        ),
+        size_bytes=28_079_181,
+        sha256="6f1f3530a1a2324b19752018ce756088b07973cda8d7d890034ace5c8a48c40b",
+        download_url=(
+            "https://huggingface.co/andraniksargsyan/migan/resolve/"
+            "406830d0fa60666da0071c342ad2fbc8f30c5c64/migan_pipeline_v2.onnx"
+        ),
+        architecture="MI-GAN",
+        native_scale=1,
+        purposes=(ModelPurpose.INPAINT,),
+        speed_tier=SpeedTier.FAST,
+        recommended_halo=0,
+        source_url="https://huggingface.co/andraniksargsyan/migan",
+        license_name="MIT",
+        author="Andranik Sargsyan et al. · Picsart AI Research",
+        preset_eligible=False,
+    ),
 )
 
 CATALOG_BY_ID = {model.model_id: model for model in MODEL_CATALOG}
+# The model Dust & scratches uses for wide marks when it is installed (core/repair.py).
+INPAINT_MODEL = CATALOG_BY_ID["migan"]
 CATALOG_BY_FILENAME = {model.filename: model for model in MODEL_CATALOG}
 
 

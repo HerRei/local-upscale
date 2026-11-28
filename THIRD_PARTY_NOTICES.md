@@ -88,6 +88,9 @@ own terms; this file is a distribution notice, not a replacement for their licen
   runtime, described in their release notes. See `docs/licensing-media.md`.
 - **YuNet 2023mar face detector** — MIT, copyright Shiqi Yu; downloaded on demand from the
   OpenCV Zoo with an exact size and SHA-256 rather than bundled in the application.
+- **MI-GAN inpainting model** (Dust & scratches): MIT, copyright 2024 Picsart AI Research
+  (PAIR); an optional download pinned by size and SHA-256 from the first author's ONNX
+  conversion, not included in installers. Source: https://github.com/Picsart-AI-Research/MI-GAN.
 - **SeedVR2 video integration** — vendored adapter code is covered by the included
   `src/localsr/video_models/seedvr2/NOTICE.md` and `vendor/LICENSE`; model bundles remain external.
 - **FlashVSR video integration (Labs)**: an MLX port of the FlashVSR v1.1 Tiny pipeline

@@ -93,6 +93,8 @@ class ImageJobProgress:
         self.weights_in_seconds = False
         self.measured_seconds = 0.0
         self.expected_seconds = 0.0
+        # Set while a step reports its own pieces (`pieces`): what one is expected to take.
+        self.piece_seconds: float | None = None
         self._reset_measurement()
 
     def _reset_measurement(self) -> None:
@@ -164,6 +166,7 @@ class ImageJobProgress:
         self.stage_pixels_done = 0
         self.stage_pixels_total = 0
         self.remaining_time = None
+        self.piece_seconds = None
         self._reset_measurement()
         self.emit_start(index, stage)
 
@@ -246,7 +249,17 @@ class ImageJobProgress:
             MIN_CALIBRATION, min(MAX_CALIBRATION, self.measured_seconds / self.expected_seconds)
         )
 
-    def update(self, completed: int, total: int, active_tile_size: int) -> None:
+    def pieces(self, done: int, total: int, *, seconds_each: float, detail: str) -> None:
+        """Progress of a step through pieces it works on one at a time (the windows of Dust &
+        scratches). Until the pieces have been timed, each one still to do counts
+        ``seconds_each`` in the time left. Pieces are not tiles, and nothing of them can be kept
+        on a stop, so the progress message counts no tiles and names them in ``detail``."""
+        self.piece_seconds = seconds_each
+        self.update(done, total, 0, detail=detail)
+
+    def update(
+        self, completed: int, total: int, active_tile_size: int, *, detail: str = ""
+    ) -> None:
         now = self.clock()
         elapsed = max(
             0.0,
@@ -288,11 +301,12 @@ class ImageJobProgress:
                 )
             )
         memory = self.memory_snapshot
+        tiles = self.piece_seconds is None
         self.emit(
             ProgressUpdate(
                 job_id=self.job_id,
-                completed_tiles=completed,
-                total_tiles=total,
+                completed_tiles=completed if tiles else 0,
+                total_tiles=total if tiles else 0,
                 percentage=percentage,
                 elapsed_seconds=elapsed,
                 estimated_remaining_seconds=remaining,
@@ -307,11 +321,14 @@ class ImageJobProgress:
                 mps_tensor_allocated_memory=memory.get("mps_tensor_allocated_memory", 0),
                 mps_driver_allocated_memory=memory.get("mps_driver_allocated_memory", 0),
                 mps_recommended_max_memory=memory.get("mps_recommended_max_memory", 0),
+                detail=detail,
             )
         )
 
     def _remaining(self, now: float, completed: int, total: int) -> float:
         """Estimate future stages using the latest measured weighted work rate."""
+        if self.piece_seconds is not None:
+            return self._pieces_remaining(now, completed, total)
         if self.stage_pixels_total > 0:
             done, work = self.stage_pixels_done, self.stage_pixels_total
         else:
@@ -341,6 +358,22 @@ class ImageJobProgress:
             seconds = max(0, work - done) / max(work, 1) * active_weight * self.weighted_speed
         if seconds is None:
             return 0.0
+        return seconds + future * (self.weighted_speed or 0.0)
+
+    def _pieces_remaining(self, now: float, done: int, total: int) -> float:
+        """The step's pieces at their measured speed, or the expected one until it is known.
+        Their speed says nothing about the model stages after the step, so it is not taken
+        for them."""
+        assert self.piece_seconds is not None
+        if self.remaining_time is None:
+            self.remaining_time = RemainingTime(max(total, 1))
+        self.remaining_time.update(now, done)
+        seconds = self.remaining_time.remaining()
+        if seconds is None:
+            seconds = max(0, total - done) * self.piece_seconds
+        future = sum(self.weights[self.active_index + self.active_span :])
+        if self.weights_in_seconds:
+            return seconds + future * self._calibration()
         return seconds + future * (self.weighted_speed or 0.0)
 
     def _resolve_backend(self) -> tuple[str, str]:

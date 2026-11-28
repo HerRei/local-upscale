@@ -21,6 +21,7 @@ import psutil
 from PIL import Image
 
 import localsr.core.steps as step_registry
+from localsr.core import repair
 from localsr.core.disk_space import failure_fields, require_image_room
 from localsr.core.face_compositing import blend_with_alpha, load_mask
 from localsr.core.grain import add_grain
@@ -496,6 +497,13 @@ def _run_fix_model_stage(
         runner.model_adapter.release()
 
 
+def _engine_model(stage: PipelineStage) -> bool:
+    """Whether the inference engine loads the stage's model. A step that runs without a model
+    and may name one (Dust & scratches) runs it on ONNX Runtime itself."""
+    step = step_registry.STEPS_BY_ID.get(stage.step_id)
+    return bool(stage.model_path) and (step is None or step.needs_model)
+
+
 def _display_pixels(tensor: Any) -> np.ndarray:
     """The working picture as 8-bit channel-height-width pixels, as the previews show it."""
     return tensor.detach().cpu().clamp(0, 1).mul(255).round().byte().numpy()
@@ -546,44 +554,57 @@ def _run_grain_stage(
     }
 
 
-# Telea inpainting reads this many pixels around each painted pixel.
-_REPAIR_RADIUS = 3
-
-
 def _run_repair_stage(
     runner: ImageJobRunner,
     image: dict[str, Any],
     stage: PipelineStage,
     _index: int,
     _data: Mapping[str, Any],
-    _progress: ImageJobProgress,
-    _notes: list[str],
+    progress: ImageJobProgress,
+    notes: list[str],
 ) -> dict[str, Any]:
-    """Fill the painted pixels from the picture around them (OpenCV, Telea).
+    """Fill the painted pixels from the picture around them (core/repair.py): Telea for every
+    mark, then MI-GAN for the marks wider than a hairline when the stage names that model.
 
-    Each colour channel is inpainted alone as 16-bit integers: OpenCV's 32-bit float inpainting
-    returns garbage in the painted places (4.10), and 65535 levels keep a 16-bit picture's depth.
     Alpha is a separate plane of the image and is not touched. The mask blend that follows the
-    handler keeps every pixel outside the paint as it was.
+    handler keeps every pixel outside the paint as it was. A preview patch runs this same
+    handler on its crop.
     """
-    import cv2
     import torch
 
     assert stage.mask_path is not None
     tensor = image["tensor"]
-    channels, height, width = (int(size) for size in tensor.shape)
+    _channels, height, width = (int(size) for size in tensor.shape)
     painted = load_mask(stage.mask_path, width, height) > 0.5
     if not painted.any():
         return image
-    mask = painted.astype(np.uint8) * 255
     pixels = tensor.detach().cpu().float().numpy()
-    repaired = np.empty_like(pixels)
-    for channel in range(channels):
-        runner._check_cancelled()
-        levels = np.rint(np.clip(pixels[channel], 0.0, 1.0) * 65535.0).astype(np.uint16)
-        filled = cv2.inpaint(levels, mask, _REPAIR_RADIUS, cv2.INPAINT_TELEA)
-        repaired[channel] = filled.astype(np.float32) / 65535.0
-    return {**image, "tensor": torch.from_numpy(repaired)}
+    started_at = time.monotonic()
+
+    def report(done: int, total: int) -> None:
+        progress.pieces(
+            done,
+            total,
+            seconds_each=repair.SECONDS_PER_WINDOW,
+            detail=f"Filling large marks: {done} of {total}",
+        )
+
+    result = repair.repair_picture(
+        pixels,
+        painted,
+        open_model=repair.stage_model(stage.model_id, stage.model_path),
+        check_cancelled=runner._check_cancelled,
+        report=report,
+    )
+    if result.windows:
+        runner._log(
+            f"MI-GAN filled the large marks in {result.windows} windows "
+            f"({time.monotonic() - started_at:.1f} s with Telea)."
+        )
+    if result.note:
+        runner._log(result.note)
+        notes.append(result.note)
+    return {**image, "tensor": torch.from_numpy(result.pixels)}
 
 
 @dataclass(frozen=True, slots=True)
@@ -717,13 +738,13 @@ class ImageJobRunner:
         # fix runs alone: the upscaler is loaded after it, not kept beside it.
         face_path = None if pipeline.primary is None else data.get("face_model_path")
         first_preprocess_model = next(
-            (stage.model_path for stage in pipeline.preprocess_stages if stage.model_path),
+            (stage.model_path for stage in pipeline.preprocess_stages if _engine_model(stage)),
             None,
         )
         self.engine.release_models_except(
             {first_preprocess_model}
             if first_preprocess_model is not None
-            else {stage.model_path for stage in pipeline.stages if stage.model_path}
+            else {stage.model_path for stage in pipeline.stages if _engine_model(stage)}
             | ({face_path} if face_path else set())
         )
         scratch = data.get("scratch_directory")

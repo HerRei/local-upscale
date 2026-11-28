@@ -95,6 +95,12 @@ pub fn work_profile(
     } else {
         (f64::from(width) / tile).ceil() * (f64::from(height) / tile).ceil() * count
     };
+    // A painted photo's mask is its own file: the same plan on another photo is the same work.
+    if let Some(stages) = data.get_mut("stages").and_then(Value::as_array_mut) {
+        for stage in stages.iter_mut().filter_map(Value::as_object_mut) {
+            stage.remove("mask_path");
+        }
+    }
     for field in [
         "job_id",
         "image_path",
@@ -200,6 +206,25 @@ mod tests {
             work_profile(&plain.to_string(), 640, 360, 48, "").0,
             work_profile(&doubled.to_string(), 640, 360, 48, "").0
         );
+    }
+
+    #[test]
+    fn a_stage_mask_is_not_part_of_the_work() {
+        let painted = |mask: &str| {
+            json!({"type": "image_job_request", "data": {
+                "model_path": "/m/up.pth", "tile_size": 256,
+                "stages": [
+                    {"kind": "repair", "step": "repair", "mask_path": mask},
+                    {"kind": "upscale", "role": "primary", "model_path": "/m/up.pth"}
+                ]
+            }})
+            .to_string()
+        };
+        let first = work_profile(&painted("/next/masks/a-1.png"), 640, 480, 0, "");
+        let second = work_profile(&painted("/next/masks/b-3.png"), 640, 480, 0, "");
+        assert!(!first.0.is_empty());
+        assert_eq!(first, second);
+        assert!(!first.0.contains("mask_path"));
     }
 
     #[test]

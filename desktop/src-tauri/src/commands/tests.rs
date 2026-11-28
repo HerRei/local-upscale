@@ -6874,17 +6874,23 @@ fn preview_regions_go_only_to_an_engine_that_has_them() {
 
 #[test]
 fn background_models_cannot_be_used_for_primary_or_fix_tasks() {
-    let model = crate::catalog::bundled_catalog()
-        .unwrap()
-        .models
-        .into_iter()
-        .find(|model| model.model_id == "birefnet_general")
-        .unwrap();
-    for task in ["denoise", "upscale", "video"] {
-        assert!(validate_model_for_task(&model, task).is_err());
-    }
-    for fix in ["blur", "noise", "jpeg", "colour"] {
-        assert!(!crate::job_plan::fits_fix(&model, fix));
+    // MI-GAN, the Dust & scratches model, is a 1x model that Restore must not take either.
+    for id in ["birefnet_general", "migan"] {
+        let model = crate::catalog::bundled_catalog()
+            .unwrap()
+            .models
+            .into_iter()
+            .find(|model| model.model_id == id)
+            .unwrap();
+        for task in ["denoise", "upscale", "video"] {
+            assert!(
+                validate_model_for_task(&model, task).is_err(),
+                "{id} {task}"
+            );
+        }
+        for fix in ["blur", "noise", "jpeg", "colour"] {
+            assert!(!crate::job_plan::fits_fix(&model, fix));
+        }
     }
 }
 
@@ -7337,15 +7343,15 @@ mod repair {
         let (_directory, state) = repairing_state();
         for id in ["a", "b"] {
             set_repair_strokes_checked(&state, id, &[paint(10.0, 10.0)]).unwrap();
-            let path = repair_mask_path(&state, id).unwrap().unwrap();
+            let path = repair_mask_path(&state, id, true).unwrap().unwrap();
             assert!(path.is_file(), "{path:?}");
         }
         assert_eq!(mask_files(&state), ["a-1.png", "b-1.png"]);
         // A newer state of the paint replaces the older file on its first use.
         set_repair_strokes_checked(&state, "a", &[paint(20.0, 20.0)]).unwrap();
-        repair_mask_path(&state, "a").unwrap().unwrap();
+        repair_mask_path(&state, "a", true).unwrap().unwrap();
         assert_eq!(mask_files(&state), ["a-2.png", "b-1.png"]);
-        assert!(repair_mask_path(&state, "c").unwrap().is_none());
+        assert!(repair_mask_path(&state, "c", true).unwrap().is_none());
         remove_media_checked(&state, "a").unwrap();
         assert_eq!(mask_files(&state), ["b-1.png"]);
         clear_media_checked(&state).unwrap();
@@ -7391,6 +7397,48 @@ mod repair {
         let plain = &requests[1];
         assert!(!steps(plain).contains(&"repair".to_owned()));
         assert_eq!(steps(plain).len(), steps(painted).len() - 1);
+    }
+
+    #[test]
+    fn a_painted_photo_gets_an_estimate() {
+        let (_directory, state) = repairing_state();
+        for id in ["a", "b", "c"] {
+            set_repair_strokes_checked(&state, id, &[paint(10.0, 10.0)]).unwrap();
+        }
+        let painted = |ids: &[&str]| StartBatchInput {
+            media_ids: ids.iter().map(|id| (*id).to_owned()).collect(),
+            step_stages: vec![repair_step()],
+            ..estimate_input(4)
+        };
+        let ask = |ids: &[&str]| {
+            estimate_start_checked(
+                &state,
+                ids.iter().map(|id| (*id).to_owned()).collect(),
+                painted(ids),
+            )
+            .unwrap()
+        };
+        assert_eq!(ask(&["c"]), None);
+        for (media, seconds) in [("a", 12.0), ("b", 4.0)] {
+            start_jobs_checked(&state, painted(&[media])).unwrap();
+            let job = lock(&state.database)
+                .unwrap()
+                .next_queued_job()
+                .unwrap()
+                .unwrap();
+            let database = lock(&state.database).unwrap();
+            database
+                .finish_job(&job.id, "completed", "out.png", "")
+                .unwrap();
+            database.record_job_duration(&job.id, seconds).unwrap();
+        }
+        // Each photo's job reads its own mask; the measured time of the same plan still counts.
+        assert_eq!(ask(&["c"]), Some(4.0));
+        // Asking draws no mask: only the two started photos have one.
+        assert_eq!(mask_files(&state), ["a-1.png", "b-1.png"]);
+        // Without paint the photo runs no repair, which is other work.
+        set_repair_strokes_checked(&state, "c", &[]).unwrap();
+        assert_eq!(ask(&["c"]), None);
     }
 
     #[test]

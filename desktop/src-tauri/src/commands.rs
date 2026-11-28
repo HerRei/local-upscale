@@ -646,10 +646,14 @@ pub(crate) fn set_repair_strokes_checked(
     Ok(())
 }
 
-/// The mask file of a photo's paint, drawn on first use; `None` for a photo without paint.
-/// It lives in the host's folder, so every job and patch of the photo reads one file and the
-/// worker never opens a path the window chose.
-pub(crate) fn repair_mask_path(state: &AppState, media_id: &str) -> AppResult<Option<PathBuf>> {
+/// The mask file of a photo's paint, drawn on first use when `draw`; `None` for a photo without
+/// paint. It lives in the host's folder, so every job and patch of the photo reads one file and
+/// the worker never opens a path the window chose. The time estimate only names it.
+pub(crate) fn repair_mask_path(
+    state: &AppState,
+    media_id: &str,
+    draw: bool,
+) -> AppResult<Option<PathBuf>> {
     let (media, stored) = {
         let database = lock(&state.database)?;
         let Some(media) = database.get_media(media_id)? else {
@@ -664,6 +668,9 @@ pub(crate) fn repair_mask_path(state: &AppState, media_id: &str) -> AppResult<Op
     let root = crate::repair_mask::masks_root(&state.paths.next_root);
     let name = crate::repair_mask::mask_file_name(media_id, media.repair_rev);
     let path = root.join(&name);
+    if !draw {
+        return Ok(Some(path));
+    }
     if !path.is_file() {
         let strokes: Vec<crate::repair_mask::RepairStroke> = serde_json::from_str(&stored)?;
         crate::repair_mask::write_mask(&path, &strokes, media.width, media.height)?;
@@ -1588,7 +1595,7 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
     // is not queued.
     let mut runnable = Vec::with_capacity(media.len());
     for item in media {
-        let photo_input = input_for_photo(state, &input, &item)?;
+        let photo_input = input_for_photo(state, &input, &item, true)?;
         if photo_has_work(&photo_input) {
             runnable.push((item, photo_input));
         }
@@ -1632,11 +1639,13 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
 }
 
 /// The start input as one photo runs it: a step that needs paint (Dust & scratches) gets the mask
-/// drawn from that photo's strokes, or is left out when the photo has none.
+/// drawn from that photo's strokes, or is left out when the photo has none. Without `draw` the
+/// mask is named but not drawn (the time estimate, whose work profile leaves masks out).
 fn input_for_photo(
     state: &AppState,
     input: &StartBatchInput,
     media: &crate::types::MediaItem,
+    draw: bool,
 ) -> AppResult<StartBatchInput> {
     let steps = crate::steps::registry();
     let mut photo_input = input.clone();
@@ -1649,7 +1658,7 @@ fn input_for_photo(
             .step(&selection.step)
             .is_some_and(|step| step.requires_mask)
         {
-            let Some(mask) = repair_mask_path(state, &media.id)? else {
+            let Some(mask) = repair_mask_path(state, &media.id, draw)? else {
                 continue;
             };
             selection.mask_path = Some(mask.to_string_lossy().into_owned());
@@ -2421,15 +2430,27 @@ pub(crate) fn estimate_start_checked(
     validate_start(&input, state)?;
     let selection = resolve_model_selection(state, &input)?;
     let engine = lock(&state.engine)?.clone();
-    let database = lock(&state.database)?;
+    let mut media = Vec::with_capacity(media_ids.len());
+    {
+        let database = lock(&state.database)?;
+        for id in &media_ids {
+            let Some(item) = database.get_media(id)? else {
+                return Ok(None);
+            };
+            if item.probe_status != "ready" {
+                return Ok(None);
+            }
+            media.push(item);
+        }
+    }
     let mut requests = Vec::with_capacity(media_ids.len());
     let mut items = Vec::with_capacity(media_ids.len());
-    for id in &media_ids {
-        let Some(media) = database.get_media(id)? else {
-            return Ok(None);
-        };
-        if media.probe_status != "ready" {
-            return Ok(None);
+    for media in media {
+        // As Start queues it: a step that needs paint only on a painted photo, and a photo
+        // left with nothing to run is not queued. Reading the paint takes the database lock.
+        let photo_input = input_for_photo(state, &input, &media, false)?;
+        if !photo_has_work(&photo_input) {
+            continue;
         }
         // The work profile ignores paths and ids; these placeholders never run.
         let message = build_job_message_for_engine(
@@ -2437,7 +2458,7 @@ pub(crate) fn estimate_start_checked(
             &media,
             Path::new(""),
             &state.paths.work_root,
-            &input,
+            &photo_input,
             &selection,
             engine.as_ref(),
         )?;
@@ -2446,7 +2467,7 @@ pub(crate) fn estimate_start_checked(
     }
     let pairs: Vec<(String, &crate::types::MediaItem)> =
         requests.into_iter().zip(items.iter()).collect();
-    database.estimate_requests_seconds(&pairs)
+    lock(&state.database)?.estimate_requests_seconds(&pairs)
 }
 
 /// The finished attempts of one media for the result choosers, with catalog
@@ -5672,6 +5693,11 @@ fn validate_model_for_task(model: &CatalogModel, task: &str) -> AppResult<()> {
             "background removal checkpoints cannot be used as the primary model".into(),
         ));
     }
+    if model.purposes.iter().any(|purpose| purpose == "inpaint") {
+        return Err(AppError::Validation(
+            "the Dust & scratches model cannot be used as the primary model".into(),
+        ));
+    }
     if model.purposes.iter().any(|purpose| purpose == "face") {
         return Err(AppError::Validation(
             "face checkpoints cannot be used as the primary model".into(),
@@ -6128,7 +6154,7 @@ pub(crate) fn patch_plan(
     validate_stage_params_engine(&input.fix_stages, lock(&state.engine)?.as_ref())?;
     validate_step_stages_engine(&input.step_stages, lock(&state.engine)?.as_ref())?;
     // A step that needs paint gets the photo's mask, as the photo's job would.
-    let input = input_for_photo(state, &input, media)?;
+    let input = input_for_photo(state, &input, media, true)?;
     let mut missing = Vec::new();
     let selection = resolve_model_selection_with(state, &input, Some(&mut missing))?;
     validate_checkpoint_engine(&selection, lock(&state.engine)?.as_ref())?;

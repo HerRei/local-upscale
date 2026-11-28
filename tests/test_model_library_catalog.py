@@ -24,6 +24,9 @@ def test_every_catalog_model_has_a_role_and_a_stage() -> None:
         if ModelPurpose.BACKGROUND in model.purposes:
             assert model.stage_kind == "background" and not model.fixes
             continue
+        if ModelPurpose.INPAINT in model.purposes:
+            assert model.stage_kind == "inpaint" and not model.fixes
+            continue
         assert model.stage_kind in {"upscale", "deblock", "restore", "face_restore"}, model.model_id
         if model.native_scale > 1:
             assert model.stage_kind in {"upscale", "face_restore"}
@@ -60,7 +63,14 @@ def test_rights_status_is_separate_from_support_tier() -> None:
         assert entry["display_name"] and " — " not in entry["display_name"]
         assert "4x" not in entry["display_name"]
         assert entry["role"]
-        assert entry["stage"] in {"upscale", "deblock", "restore", "face_restore", "background"}
+        assert entry["stage"] in {
+            "upscale",
+            "deblock",
+            "restore",
+            "face_restore",
+            "background",
+            "inpaint",
+        }
         assert set(entry["fixes"]) <= {"noise", "jpeg", "blur", "colour"}
         assert set(entry["content"]) <= {"photo", "illustration", "face"}
         assert entry["rights_status"] in {"verified", "attribution", "unresolved", "non_commercial"}

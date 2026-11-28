@@ -112,13 +112,18 @@ These apply to v0.6.3-beta. Please read them before starting a long job.
   On DirectML and OpenVINO devices DDColor runs on the CPU, and on Apple Silicon
   with Neural Engine enabled it runs on the Apple GPU via PyTorch.
 - Colour needs a 912 MB model download. Colours are a guess; skies can come out pink.
-- **Dust & scratches** repairs only the places you paint, and only small marks on even
-  areas such as sky, walls and skin: it fills them from the pixels around them and has no
-  model, so a large area or a mark across fine detail comes out smeared. Marks are strokes,
-  so a scratch painted in four strokes counts as four marks. The window and the host draw
-  the paint separately and can differ by a pixel at a stroke's edge; the result follows the
-  host. On a trackpad, move the picture with Space held or the zoom controls while painting.
-  Videos cannot be repaired.
+- **Dust & scratches** repairs only the places you paint. Painted marks up to about 8 px
+  wide are filled from the pixels right beside them (OpenCV's Telea method). Wider marks are
+  filled by MI-GAN, a 28 MB model downloaded with the first start that has paint: it
+  continues the surroundings into the gap, taking about a quarter of a second on the CPU for
+  each group of nearby marks, so a photo with many large marks takes some seconds longer.
+  What counts is the painted width: a hairline painted with a wide brush is filled as a wide
+  mark (in tests MI-GAN did better than Telea there too). A mark across a face, lettering or
+  other fine detail can still come out wrong, and a large mark on a perfectly smooth gradient
+  can show faint texture. Marks are strokes, so a scratch painted in four strokes counts as
+  four marks. The window and the host draw the paint separately and can differ by a pixel at
+  a stroke's edge; the result follows the host. On a trackpad, move the picture with Space
+  held or the zoom controls while painting. Videos cannot be repaired.
 
 ## Image editing
 

@@ -232,6 +232,11 @@ def _engine_features(video_engines: list[str] | None = None) -> list[str]:
     for feature in REQUIRED_STEP_FEATURES + (DEV_STEP_FEATURES if dev_steps_enabled() else ()):
         if feature not in features:
             features.append(feature)
+    # A repair stage may name the catalog's inpainting model (MI-GAN) for its wide marks.
+    from localsr.core.repair import has_onnxruntime
+
+    if has_onnxruntime():
+        features.append("image_repair_model")
     features.append("compare_regions")
     features.append("preview_regions")
     features.append("patch_preview")

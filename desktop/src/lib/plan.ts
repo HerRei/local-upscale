@@ -614,6 +614,14 @@ export function withKeptBytes(
   return next;
 }
 
+/**
+ * A model that only a step uses (background removal, the Dust & scratches fill): never an
+ * upscaler, a fix or Restore's model. Mirrors `validate_model_for_task` in commands.rs.
+ */
+export function isStepModel(model: CatalogModel): boolean {
+  return model.purposes.includes('background') || model.purposes.includes('inpaint');
+}
+
 export function modelsForTask(
   snapshot: AppSnapshot,
   task: TaskKind | '',
@@ -622,17 +630,12 @@ export function modelsForTask(
   if (task === 'denoise' || (task === 'video' && videoTask === 'denoise')) {
     return snapshot.catalog.models.filter(
       (model) =>
-        model.native_scale === 1 &&
-        !model.purposes.includes('face') &&
-        !model.purposes.includes('background'),
+        model.native_scale === 1 && !model.purposes.includes('face') && !isStepModel(model),
     );
   }
   if (task === 'upscale' || task === 'video') {
     return snapshot.catalog.models.filter(
-      (model) =>
-        model.native_scale > 1 &&
-        !model.purposes.includes('face') &&
-        !model.purposes.includes('background'),
+      (model) => model.native_scale > 1 && !model.purposes.includes('face') && !isStepModel(model),
     );
   }
   return [];
@@ -652,17 +655,13 @@ export function libraryModelsForTask(
       (model) =>
         model.native_scale === 1 &&
         !model.purposes.includes('face') &&
-        !model.purposes.includes('background') &&
+        !isStepModel(model) &&
         (!fix || fixesOf(model).includes(fix)),
     );
   if (task !== 'upscale' && task !== 'video') return [];
   return models
     .filter((model) => {
-      if (
-        model.native_scale <= 1 ||
-        model.purposes.includes('face') ||
-        model.purposes.includes('background')
-      )
+      if (model.native_scale <= 1 || model.purposes.includes('face') || isStepModel(model))
         return false;
       return content === 'illustration'
         ? model.purposes.some((purpose) => ['illustration', 'anime', 'general'].includes(purpose))

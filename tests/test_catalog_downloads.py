@@ -51,8 +51,9 @@ def test_catalog_has_pinned_optional_downloads():
         "realwebphoto_v4_dat2_x4",
         "ddcolor_modelscope",
         "birefnet_general",
+        "migan",
     ]
-    assert len({model.filename for model in MODEL_CATALOG}) == 23
+    assert len({model.filename for model in MODEL_CATALOG}) == 24
     upstream_hat = [
         model
         for model in MODEL_CATALOG

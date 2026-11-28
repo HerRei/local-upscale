@@ -206,6 +206,9 @@ class _NullProgress:
     def update(self, *_args: Any, **_kwargs: Any) -> None:
         pass
 
+    def pieces(self, *_args: Any, **_kwargs: Any) -> None:
+        pass
+
     def tile(self, *_args: Any, **_kwargs: Any) -> None:
         pass
 
@@ -560,10 +563,11 @@ class PatchRunner:
                 pipeline.primary_index,
             )
             chip = stripped
-        info = self.model_adapter.inspect(chip.model_path) if chip.model_path else None
         step = step_registry.STEPS_BY_ID.get(chip.step_id)
+        # Before the checkpoint is inspected: Dust & scratches runs its own model (ONNX).
         if step is not None and step.requires_mask and chip.mask_path:
             return self._run_masked(position, chip, job, working, scale, geometry, started_at)
+        info = self.model_adapter.inspect(chip.model_path) if chip.model_path else None
         brings_model = step is not None and is_model_step_stage(step)
         if info is not None and info.architecture == "DDColor" and not brings_model:
             result = self._colour(chip, info, working, geometry, job, identity, frame, path)

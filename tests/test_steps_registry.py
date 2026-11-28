@@ -75,6 +75,9 @@ def test_step_registry_matches_current_pipeline_and_catalog() -> None:
     for model in MODEL_CATALOG:
         if model.stage_kind == "background":
             assert any(step.model_task in model.purposes for step in STEPS if step.model_task)
+        elif model.stage_kind == "inpaint":
+            # Dust & scratches runs it when the host names it on the repair stage.
+            assert model.model_id == "migan" and STEPS_BY_ID["repair"].requires_mask
         else:
             assert model.stage_kind in IMAGE_PIPELINE_STAGE_KINDS, model.model_id
         assert set(model.fixes) <= FIX_KINDS, model.model_id

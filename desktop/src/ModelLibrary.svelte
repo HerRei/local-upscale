@@ -10,6 +10,7 @@
     displayName,
     fitFor,
     fixesOf,
+    isStepModel,
     libraryModelsForTask,
     modelsForTask,
     rightsAllowPreset,
@@ -174,7 +175,7 @@
   let estimateError = '';
   let runningTrials = false;
 
-  $: models = snapshot.catalog.models.filter((model) => !model.purposes.includes('background'));
+  $: models = snapshot.catalog.models.filter((model) => !isStepModel(model));
   $: videoModels = snapshot.catalog.video_models;
   $: videoUnavailable = videoAvailability(
     videoModels,

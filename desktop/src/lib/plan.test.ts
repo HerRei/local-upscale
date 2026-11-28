@@ -11,6 +11,9 @@ import {
   isSlowMotionResult,
   resultFps,
   interpolationLabel,
+  isStepModel,
+  libraryModelsForTask,
+  modelsForTask,
   pendingDownloads,
   presetDownload,
   resolvePlan,
@@ -33,6 +36,25 @@ describe('isSlowMotionResult', () => {
       false,
     );
     expect(isSlowMotionResult(undefined, original)).toBe(false);
+  });
+});
+
+describe('step models', () => {
+  it('keeps the background and Dust & scratches models out of every model choice', () => {
+    const snapshot = demoSnapshot();
+    const byId = (id: string) => snapshot.catalog.models.find((model) => model.model_id === id)!;
+    expect(isStepModel(byId('birefnet_general'))).toBe(true);
+    expect(isStepModel(byId('migan'))).toBe(true);
+    expect(isStepModel(byId('fbcnn_color'))).toBe(false);
+    const ids = (models: { model_id: string }[]) => models.map((model) => model.model_id);
+    for (const task of ['denoise', 'upscale'] as const) {
+      expect(ids(modelsForTask(snapshot, task))).not.toContain('migan');
+      expect(ids(libraryModelsForTask(snapshot.catalog.models, task, 'photo'))).not.toContain(
+        'migan',
+      );
+    }
+    expect(ids(modelsForTask(snapshot, 'denoise'))).toContain('fbcnn_color');
+    expect(choosePresetModel(snapshot, 'denoise', 'best')?.model_id).not.toBe('migan');
   });
 });
 

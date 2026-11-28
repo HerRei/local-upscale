@@ -263,6 +263,18 @@ they take about ten times as long as Best. A model pinned to Best by the user is
 - The inference code and license notice are in `src/localsr/image_models/birefnet/NOTICE.md`.
   The developer-only photo step computes an alpha matte and permits commercial use.
 
+### MI-GAN (`migan`)
+
+- Source: [Picsart-AI-Research/MI-GAN](https://github.com/Picsart-AI-Research/MI-GAN), weights under
+  its [LICENSE-WEIGHTS](https://github.com/Picsart-AI-Research/MI-GAN/blob/main/LICENSE-WEIGHTS)
+  (MIT, copyright 2024 Picsart AI Research). The ONNX pipeline is the first author's conversion
+  in [andraniksargsyan/migan](https://huggingface.co/andraniksargsyan/migan) (model card: MIT).
+- Asset: `migan_pipeline_v2.onnx` (MI-GAN-512-Places2 pipeline), revision
+  `406830d0fa60666da0071c342ad2fbc8f30c5c64`, size `28,079,181` bytes.
+- SHA-256: `6f1f3530a1a2324b19752018ce756088b07973cda8d7d890034ace5c8a48c40b`.
+- Dust & scratches runs it on ONNX Runtime (CPU) for painted marks wider than a hairline; it is
+  never a fix, an upscaler or a preset choice. Places2, its training set, was not re-checked.
+
 ### DDColor (`ddcolor_modelscope`)
 
 - Exact upstream asset: `pytorch_model.bin` from

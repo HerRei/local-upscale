@@ -99,6 +99,7 @@ _.bit_rate  # PyAV stream
 _.thread_type  # PyAV codec context
 _.execution_mode  # onnxruntime.SessionOptions
 _.enable_mem_pattern  # onnxruntime.SessionOptions
+_.enable_cpu_mem_arena  # onnxruntime.SessionOptions
 _.intra_op_num_threads  # onnxruntime.SessionOptions
 _.graph_optimization_level  # onnxruntime.SessionOptions
 _.enable_profiling  # onnxruntime.SessionOptions

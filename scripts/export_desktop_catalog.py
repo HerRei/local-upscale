@@ -51,7 +51,10 @@ def build_manifest() -> dict:
         entry.update(
             _license_policy(model.license_name, model.commercial_use_status, model.license_url)
         )
-        entry["engine_id"] = "localsr.pytorch-spandrel"
+        # The Dust & scratches model runs on ONNX Runtime inside its step, not through Spandrel.
+        entry["engine_id"] = (
+            "localsr.onnx" if model.filename.endswith(".onnx") else "localsr.pytorch-spandrel"
+        )
         # Two separate axes: `support_tier` is validation status (supported or
         # labs); `rights_status` is what the checkpoint's terms allow. Presets
         # may use Labs models whose rights are verified, never the reverse.

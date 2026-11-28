@@ -81,14 +81,15 @@ def test_catalog_has_all_curated_models():
         "realwebphoto_v4_dat2_x4",
         "ddcolor_modelscope",
         "birefnet_general",
+        "migan",
     ]
     catalog_ids = [model.model_id for model in MODEL_CATALOG]
     assert catalog_ids == expected_ids
-    assert len(MODEL_CATALOG) == 23
+    assert len(MODEL_CATALOG) == 24
 
     # Verify uniqueness of IDs and filenames
-    assert len({model.model_id for model in MODEL_CATALOG}) == 23
-    assert len({model.filename for model in MODEL_CATALOG}) == 23
+    assert len({model.model_id for model in MODEL_CATALOG}) == 24
+    assert len({model.filename for model in MODEL_CATALOG}) == 24
 
 
 def test_recent_same_size_rewrite_cannot_reuse_a_checksum_verdict(tmp_path, monkeypatch):
@@ -136,7 +137,10 @@ def test_catalog_attributes_and_integrity():
     for model in MODEL_CATALOG:
         assert isinstance(model.model_id, str) and len(model.model_id) > 0
         assert isinstance(model.name, str) and len(model.name) > 0
-        assert isinstance(model.filename, str) and model.filename.endswith((".pth", ".safetensors"))
+        # Checkpoints load through Spandrel; the Dust & scratches model is an ONNX graph.
+        assert isinstance(model.filename, str) and model.filename.endswith(
+            (".onnx",) if model.stage_kind == "inpaint" else (".pth", ".safetensors")
+        )
         assert isinstance(model.description, str) and len(model.description) > 0
         assert model.size_bytes > 0
         assert model.size_megabytes == model.size_bytes / 1_000_000
@@ -710,6 +714,7 @@ def test_specialist_models_stay_out_of_the_presets():
         "bhi_dat2_real_x4",
         "realwebphoto_v4_dat2_x4",
         "birefnet_general",
+        "migan",
     }
 
 
