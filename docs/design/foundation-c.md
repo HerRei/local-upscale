@@ -267,10 +267,11 @@ steps (and a catalog model) of their own, as `test_pipeline.py` does for model-l
 
 ## What each tool still needs
 
-- **Background removal** (model step, alpha out): the developer-only `remove_background`
-  step loads the MIT BiRefNet general checkpoint and sets a matte. It runs in `cleanup`,
-  before fixes and the primary, so the matte is computed at source size and scales with
-  the image. The step still needs a UI row with its model choice.
+- **Background removal** (model step, alpha out): the `remove_background` step loads the
+  MIT BiRefNet general checkpoint and sets a matte. It runs in `cleanup`, before fixes and
+  the primary, so the matte is computed at source size and scales with the image. The
+  Backgr. row (`Keep` / `Remove`, spec in `docs/design/scan-and-background.md`) ships it;
+  a fill colour and a second model are still to come.
 - **Deinterlacing**: the dev-only video geometry step supports frame and field modes, field
   order selection, and progressive-source passthrough. It still needs a UI row.
 - **Video stabilisation**: needs a video geometry handler and crop output dimensions passed

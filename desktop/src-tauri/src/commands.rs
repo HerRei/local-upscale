@@ -5864,9 +5864,21 @@ fn unique_output_path(
     )
 }
 
+/// A restore job with no model, no fix and a step that sets the alpha: the cut-out is all of it.
+fn is_cutout_alone(input: &StartBatchInput) -> bool {
+    input.model_id.is_empty()
+        && input.fix_stages.is_empty()
+        && input.step_stages.iter().any(|selection| {
+            crate::steps::registry()
+                .step_stage(&selection.step)
+                .is_some_and(|(step, _)| step.output_alpha)
+        })
+}
+
 /// The name and extension a result of `input` ends with, before any counter.
 fn output_ending(input: &StartBatchInput) -> (String, &str) {
     let mut suffix = match input.task.as_str() {
+        "denoise" if is_cutout_alone(input) => "_cutout".to_owned(),
         "denoise" => "_denoised".to_owned(),
         "video" if input.video_task == "denoise" => "_video_restored".to_owned(),
         "video"

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { demoSnapshot } from './demo';
-import { outputSummary } from './enhancePanel';
+import { outputSummary, outputTitle } from './enhancePanel';
 import {
   ALPHA_FORMAT_NOTE,
   activeStepStages,
@@ -219,10 +219,16 @@ describe('step stages with a model or a matte', () => {
       expect(outputFormatKeepingAlpha(stepStages, format, steps)).toBe(saved);
     }
     expect(outputSummary(photo({ step_stages: stepStages }), { steps })).toBe(
-      `PNG · Desktop · ${ALPHA_FORMAT_NOTE}`,
+      'PNG · transparent · Desktop',
+    );
+    expect(outputTitle(photo({ step_stages: stepStages }), { steps })).toBe(
+      `PNG · transparent · Desktop · ${ALPHA_FORMAT_NOTE}`,
     );
     expect(outputSummary(photo({ output_format: 'tif', step_stages: stepStages }), { steps })).toBe(
-      'TIFF · Desktop',
+      'TIFF · transparent · Desktop',
+    );
+    expect(outputTitle(photo({ output_format: 'tif', step_stages: stepStages }), { steps })).toBe(
+      'TIFF · transparent · Desktop',
     );
     expect(ALPHA_FORMAT_NOTE).toBe('Saved as PNG to keep the transparent background.');
     // Without the step, or in the shipped registry where it does not exist, nothing changes.

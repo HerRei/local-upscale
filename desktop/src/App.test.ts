@@ -12315,3 +12315,150 @@ describe('Patch, two models', () => {
     expect(sent().filter((request) => request.slot === 'b')).toHaveLength(1);
   });
 });
+
+describe('Backgr.', () => {
+  function cutoutSnapshot(): AppSnapshot {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.engine!.features.push('image_background_removal');
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.output_scale = 4;
+    snapshot.settings.output_format = 'jpg';
+    snapshot.settings.output_directory = '/Users/test/Desktop';
+    return snapshot;
+  }
+  const group = () =>
+    screen.queryByRole('group', { name: 'Background' }) ??
+    screen.queryByRole('radiogroup', { name: 'Background' });
+  const foot = () => document.querySelector('.panel-foot') as HTMLElement;
+
+  it('shows Keep checked after the model line and a tip with the sentence', async () => {
+    const user = await mountWith(cutoutSnapshot());
+    const row = screen.getByRole('radiogroup', { name: 'Background' });
+    expect(screen.getByRole('radio', { name: 'Keep' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('radio', { name: 'Remove' }).getAttribute('aria-checked')).toBe(
+      'false',
+    );
+    const modelLine = document.querySelector('.result-model') as HTMLElement;
+    expect(modelLine.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'About Background' }));
+    expect(screen.getByRole('tooltip').textContent).toBe(
+      'Remove makes everything behind the main subject transparent. The subject is found on the original picture, before the fixes and the upscale, and its outline is enlarged with the picture. The outline is worked out at 1024 × 1024 pixels, so single hairs and other very fine edges are not followed exactly. The result needs transparency: PNG, TIFF and WebP keep it, and a JPEG or HEIC choice is saved as PNG. BiRefNet does the work.',
+    );
+  });
+
+  it('is not there without the feature, on a video or in Edit', async () => {
+    const noFeature = cutoutSnapshot();
+    noFeature.engine!.features = noFeature.engine!.features.filter(
+      (feature) => feature !== 'image_background_removal',
+    );
+    await mountWith(noFeature);
+    expect(group()).toBeNull();
+    cleanup();
+
+    const clip = cutoutSnapshot();
+    clip.media = [video('clip', true)];
+    clip.settings.task = 'video';
+    await mountWith(clip);
+    expect(group()).toBeNull();
+    cleanup();
+
+    const edit = cutoutSnapshot();
+    edit.settings.task = 'edit';
+    await mountWith(edit);
+    expect(group()).toBeNull();
+  });
+
+  it('Remove stores the step, names it first on the plan line and says PNG · transparent', async () => {
+    const user = await mountWith(cutoutSnapshot());
+    await user.click(screen.getByRole('radio', { name: 'Remove' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          step_stages: [{ step: 'remove_background', model_id: 'birefnet_general' }],
+        }),
+      ),
+    );
+    expect(await within(foot()).findByText('Background → Upscale 4×')).toBeTruthy();
+    expect(within(foot()).getByText('PNG · transparent · Desktop')).toBeTruthy();
+  });
+
+  it('a missing model shows its size on the cost line, Start and the segment', async () => {
+    const snapshot = cutoutSnapshot();
+    snapshot.catalog.models.find((model) => model.model_id === 'birefnet_general')!.installed =
+      false;
+    snapshot.settings.step_stages = [{ step: 'remove_background', model_id: 'birefnet_general' }];
+    await mountWith(snapshot);
+    expect(await within(foot()).findByText('444 MB to download')).toBeTruthy();
+    expect(
+      await screen.findByRole('button', { name: 'Download 444 MB, then upscale' }),
+    ).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'Remove' }).getAttribute('title')).toBe(
+      'Makes the background transparent · 444 MB download',
+    );
+  });
+
+  it('a JPEG choice is saved as PNG, and the sheet greys JPEG and HEIC', async () => {
+    const snapshot = cutoutSnapshot();
+    snapshot.settings.step_stages = [{ step: 'remove_background', model_id: 'birefnet_general' }];
+    const user = await mountWith(snapshot);
+    const line = within(foot()).getByText('PNG · transparent · Desktop');
+    expect(line.closest('button')?.getAttribute('title')).toBe(
+      'PNG · transparent · Desktop · Saved as PNG to keep the transparent background.',
+    );
+    await user.click(line);
+    const format = (await screen.findByLabelText('Format')) as HTMLSelectElement;
+    expect(format.value).toBe('png');
+    const jpeg = within(format).getByRole('option', { name: 'JPEG · no transparency' });
+    expect((jpeg as HTMLOptionElement).disabled).toBe(true);
+    expect(screen.queryByLabelText(/quality$/)).toBeNull();
+  });
+
+  it('Keep removes the step and brings the JPEG line back', async () => {
+    const snapshot = cutoutSnapshot();
+    snapshot.settings.step_stages = [{ step: 'remove_background', model_id: 'birefnet_general' }];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('radio', { name: 'Keep' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ step_stages: [] }),
+      ),
+    );
+    expect(await within(foot()).findByText('JPEG 98 · Desktop')).toBeTruthy();
+  });
+
+  it('runs alone at Same size', async () => {
+    const snapshot = cutoutSnapshot();
+    snapshot.settings.step_stages = [{ step: 'remove_background', model_id: 'birefnet_general' }];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
+    expect(await within(foot()).findByText('Background')).toBeTruthy();
+    expect(within(foot()).queryByText('Nothing to run')).toBeNull();
+    expect(
+      (screen.getByRole('button', { name: 'Restore selected' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it('Keep leaves another stored step alone', async () => {
+    const snapshot = cutoutSnapshot();
+    const grain = { step: 'grain', params: { strength: 40 } };
+    snapshot.settings.step_stages = [
+      { step: 'remove_background', model_id: 'birefnet_general' },
+      grain,
+    ];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('radio', { name: 'Keep' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ step_stages: [grain] }),
+      ),
+    );
+  });
+
+  it('is locked while a job runs', async () => {
+    const snapshot = cutoutSnapshot();
+    snapshot.runtime.active_job_id = 'job-1';
+    await mountWith(snapshot);
+    expect(screen.getByRole('radio', { name: 'Keep' }).matches(':disabled')).toBe(true);
+    expect(screen.getByRole('radio', { name: 'Remove' }).matches(':disabled')).toBe(true);
+  });
+});

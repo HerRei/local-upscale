@@ -53,6 +53,7 @@ export function stepName(
   }
   if (step.kind === 'audio_denoise') return 'Clean audio';
   if (step.kind === 'face_restore') return 'Faces';
+  if (step.kind === 'remove_background') return 'Background';
   return (
     step.label ??
     STEPS.find((entry) => entry.id === step.kind)?.label ??
@@ -150,13 +151,14 @@ export function resultStepChips(
     const label = isLast && step.kind === 'upscale' ? (scale > 0 ? `${scale}×` : 'Upscale') : name;
     const skipped = step.state === 'skipped';
     const disabled = skipped || (!isLast && !step.kept);
-    const title = skipped
-      ? step.note
-      : isLast
-        ? 'The finished result'
-        : !step.kept
-          ? "This step's picture could not be kept."
-          : `The picture after the ${name} fix`;
+    let title: string | undefined = step.note;
+    if (!skipped) {
+      if (isLast) title = 'The finished result';
+      else if (!step.kept) title = "This step's picture could not be kept.";
+      else if (step.kind === 'remove_background') {
+        title = 'The picture with the background removed';
+      } else title = `The picture after the ${name} fix`;
+    }
     return {
       id,
       label,

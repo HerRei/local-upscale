@@ -2,6 +2,15 @@
 
 ## [0.7.0-beta] - Unreleased
 
+- **Remove a photo's background.** Under Result, the new Backgr. row has Keep and Remove.
+  Remove makes everything behind the main subject transparent, using BiRefNet, which
+  downloads (444 MB) the first time you start. The subject is found on the original
+  picture, before the fixes and the upscale, and its outline is enlarged with the
+  picture. The result is a PNG (TIFF and WebP keep transparency too); a JPEG or HEIC
+  choice is saved as PNG, and the Output line says so. With Same size and nothing
+  ticked, the cut-out is the whole job and the file ends in `_cutout`. In the preview
+  patch the Background chip is struck through, because the patch cannot show
+  transparency.
 - **Preview on your photo.** Under the viewer's header, Preview shows what the ticked
   fixes and the upscale will do on a square of the open photo, before you start. The
   square sits over the photo with a tab above it: one chip for Original and one for each

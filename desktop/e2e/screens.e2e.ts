@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { openApp, showPane } from './app';
 import { emit, failDownload, progressDownload } from './fake-host';
-import { firstRun, ready, upscale, video, windows, withOutputs } from './fixtures';
+import { cutout, firstRun, ready, upscale, video, windows, withOutputs } from './fixtures';
 
 // Pixel baselines of the key screens, one set per browser, window size and platform
 // (see snapshotPathTemplate): they catch layout and styling regressions that the
@@ -61,6 +61,18 @@ test.describe('screens @visual', () => {
       .getByRole('button')
       .click();
     await shoot(page, 'panel-popover');
+  });
+
+  test('plan with the background removed', async ({ page }) => {
+    await openApp(page, cutout);
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await page
+      .getByRole('radiogroup', { name: 'Background' })
+      .getByRole('radio', { name: 'Remove' })
+      .click();
+    await expect(page.locator('.foot-plan')).toContainText('Background');
+    await shoot(page, 'panel-background');
   });
 
   test('Outputs tab with two ticked results', async ({ page }) => {

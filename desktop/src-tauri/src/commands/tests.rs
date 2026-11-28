@@ -5326,6 +5326,39 @@ fn a_photo_job_with_a_matte_step_saves_in_a_format_that_keeps_the_alpha() {
 }
 
 #[test]
+fn a_cut_out_alone_is_named_cutout() {
+    let background = StepStageSelection {
+        step: "remove_background".into(),
+        model_id: Some("birefnet_general".into()),
+        ..StepStageSelection::default()
+    };
+    let mut cutout = input("denoise");
+    cutout.model_id = String::new();
+    cutout.fix_stages = Vec::new();
+    cutout.step_stages = vec![background.clone()];
+    cutout.output_format = "png".into();
+    assert_eq!(output_ending(&cutout), ("_cutout".to_owned(), "png"));
+
+    let mut with_fix = cutout.clone();
+    with_fix.fix_stages = vec![crate::types::FixStageSelection {
+        fix: "noise".into(),
+        model_id: "denoise_realplksr_1x".into(),
+        ..Default::default()
+    }];
+    assert_eq!(output_ending(&with_fix).0, "_denoised");
+
+    let mut upscale = input("upscale");
+    upscale.output_scale = 4;
+    upscale.step_stages = vec![background];
+    assert_eq!(output_ending(&upscale).0, "_upscaled_4x");
+
+    let mut grain_only = input("denoise");
+    grain_only.model_id = String::new();
+    grain_only.step_stages = vec![grain_stage(json!({}), None)];
+    assert_eq!(output_ending(&grain_only).0, "_denoised");
+}
+
+#[test]
 fn restore_with_only_a_step_plans_a_one_times_job_without_a_main_model() {
     crate::steps::testing::with_steps(vec![crate::steps::testing::cutout()], || {
         let directory = tempfile::tempdir().unwrap();

@@ -149,6 +149,21 @@ describe('previewPatch', () => {
   });
 });
 
+describe('Patch, background', () => {
+  it('keeps the background step as an entry named Background', () => {
+    const stage = (kind: string, role: string, label: string) =>
+      ({ kind, role, label, installed: true }) as never;
+    const entries = patchPlanEntries(
+      [
+        stage('remove_background', 'step', 'Remove background'),
+        stage('upscale', 'primary', 'Upscale ×4'),
+      ],
+      { task: 'upscale', output_scale: 4, video_target_resolution: 0, video_interpolation: 'off' },
+    );
+    expect(entries.map((entry) => entry.name)).toEqual(['Background', '4×']);
+  });
+});
+
 describe('Patch, video', () => {
   it('names a frame-by-frame video plan without De-flicker, added frames and audio', () => {
     const stage = (kind: string, role: string, label: string, fix?: string) =>

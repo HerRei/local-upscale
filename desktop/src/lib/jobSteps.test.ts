@@ -217,4 +217,25 @@ describe('jobSteps', () => {
     expect(restoreChips[1].disabled).toBe(false);
     expect(restoreChips[1].pressed).toBe(true);
   });
+
+  it('names the background step and titles its chip', () => {
+    expect(stepName(step({ kind: 'remove_background' }), settings)).toBe('Background');
+    const lastSteps: LastSteps = {
+      job_id: 'job-7',
+      media_id: 'photo-1',
+      steps: [
+        step({
+          kind: 'remove_background',
+          model_id: 'birefnet_general',
+          state: 'done',
+          kept: true,
+        }),
+        step({ kind: 'upscale', model_id: 'span_photo_x4', state: 'done', kept: false }),
+      ],
+    };
+    const chips = resultStepChips(lastSteps, 'job-7', settings, 4);
+    expect(chips.map((chip) => chip.label)).toEqual(['Background', '4×']);
+    expect(chips[0].title).toBe('The picture with the background removed');
+    expect(chips[1].title).toBe('The finished result');
+  });
 });

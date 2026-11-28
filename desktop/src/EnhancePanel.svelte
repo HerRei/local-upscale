@@ -21,6 +21,7 @@
   import {
     mediaFacts,
     outputSummary,
+    outputTitle,
     type EnhancePanelActions,
     type EnhancePanelView,
   } from './lib/enhancePanel';
@@ -29,6 +30,13 @@
   import { displayName, fitFor, FIT_LABELS, resultFps, type PlanStage } from './lib/plan';
   import { planMarks } from './lib/jobSteps';
   import { planLine } from './lib/planLine';
+  import {
+    BACKGROUND_STEP,
+    backgroundModel,
+    backgroundRemoved,
+    backgroundRowShown,
+    withStepStage,
+  } from './lib/stepRows';
   import { examplesFor } from './lib/promptExamples';
   import type { InterpolationOrder, InterpolationTarget, TaskKind } from './lib/types';
   import { videoModelShortName } from './lib/videoEngines';
@@ -156,6 +164,28 @@
     outputOpen = false;
   }
   $: outputLineText = outputSummary(settings, { preservingHdr, audioDisabled });
+  $: outputLineTitle = outputTitle(settings, { preservingHdr, audioDisabled });
+  $: engineFeatures = snapshot.engine?.features ?? [];
+  $: cutoutModel = backgroundModel(snapshot.catalog.models);
+  $: cutoutRemoved = backgroundRemoved(settings);
+  $: cutoutShown = backgroundRowShown({
+    task: settings.task,
+    features: engineFeatures,
+    model: cutoutModel,
+    removed: cutoutRemoved,
+  });
+  $: cutoutSupported = engineFeatures.includes('image_background_removal');
+  $: cutoutDownload =
+    cutoutModel && !cutoutModel.installed ? formatBytes(cutoutModel.size_bytes) : '';
+  function setBackground(remove: boolean) {
+    updateSettings({
+      step_stages: withStepStage(
+        settings.step_stages,
+        BACKGROUND_STEP,
+        remove && cutoutModel ? { step: BACKGROUND_STEP, model_id: cutoutModel.model_id } : null,
+      ),
+    });
+  }
   $: expertChanges = editExpertChanges(
     editExpert(settings, editModel, editingDevice, snapshot.engine?.features ?? []),
   );
@@ -732,6 +762,40 @@
                     >{/each}</select
                 >
               </div>{/if}
+            {#if cutoutShown}<div class="panel-row">
+                <div class="panel-key">
+                  <span class="panel-label" title="Background">Backgr.</span><HelpTip
+                    label="Background"
+                    text={`Remove makes everything behind the main subject transparent. The subject is found on the original picture, before the fixes and the upscale, and its outline is enlarged with the picture. The outline is worked out at 1024 × 1024 pixels, so single hairs and other very fine edges are not followed exactly. The result needs transparency: PNG, TIFF and WebP keep it, and a JPEG or HEIC choice is saved as PNG. BiRefNet does the work.${cutoutDownload ? ` The first use downloads ${cutoutDownload}.` : ''}`}
+                  />
+                </div>
+                <div
+                  class="seg-inline"
+                  role="radiogroup"
+                  aria-label="Background"
+                  title={cutoutSupported
+                    ? undefined
+                    : 'This engine cannot remove backgrounds. Update LocalSR.'}
+                >
+                  <button
+                    role="radio"
+                    aria-checked={!cutoutRemoved}
+                    class:active={!cutoutRemoved}
+                    title="Leaves the background as it is"
+                    on:keydown={radioGroupKeydown}
+                    on:click={() => setBackground(false)}>Keep</button
+                  >
+                  <button
+                    role="radio"
+                    aria-checked={cutoutRemoved}
+                    class:active={cutoutRemoved}
+                    disabled={!cutoutSupported}
+                    title={`Makes the background transparent${cutoutDownload ? ` · ${cutoutDownload} download` : ''}`}
+                    on:keydown={radioGroupKeydown}
+                    on:click={() => setBackground(true)}>Remove</button
+                  >
+                </div>
+              </div>{/if}
             {#if usingTemporalVideo}
               {#if !(flashVideo && temporalUnavailableReason)}<VideoMemory
                   model={selectedVideoModel}
@@ -1039,7 +1103,7 @@
           placement="sheet"
           label="Output"
           triggerClass="foot-line foot-output foot-trigger"
-          triggerTitle={outputLineText}
+          triggerTitle={outputLineTitle}
           let:close
         >
           <svelte:fragment slot="trigger">
