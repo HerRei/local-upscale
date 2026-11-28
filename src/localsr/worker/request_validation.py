@@ -228,6 +228,11 @@ _SCHEMA = _load_schema()
 _IMAGE_JOB_SPEC = _compile_request_spec(_SCHEMA, "jobRequest")
 _VIDEO_JOB_SPEC = _compile_request_spec(_SCHEMA, "videoJobRequest")
 _EDIT_JOB_SPEC = _compile_request_spec(_SCHEMA, "editJobRequest")
+_PATCH_SPEC = _compile_request_spec(_SCHEMA, "patchRequest")
+_PATCH_REGION_SPEC = _compile_object_spec(
+    _SCHEMA,
+    _SCHEMA["$defs"]["patchRequest"]["allOf"][1]["properties"]["data"]["properties"]["region"],
+)
 
 IMAGE_JOB_FIELDS = _IMAGE_JOB_SPEC.fields
 VIDEO_JOB_FIELDS = _VIDEO_JOB_SPEC.fields
@@ -411,6 +416,16 @@ def validate_edit_job(data: Any) -> None:
             'The edit job request has an invalid "edit_vram_limit_mb": '
             f"it must be 0 or at least 1024, not {vram_limit}."
         )
+
+
+def validate_patch_request(data: Any) -> None:
+    _validate_object(data, _PATCH_SPEC, "preview patch request")
+    _validate_object(data["region"], _PATCH_REGION_SPEC, "preview patch region")
+    try:
+        require_ordinary_source(data["image_path"])
+    except ValueError as error:
+        raise InvalidRequest(str(error)) from None
+    _check_stage_masks(data)
 
 
 def validate_probe(data: Any) -> None:

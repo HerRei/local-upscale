@@ -196,6 +196,7 @@ def _random_lines(rng: random.Random, count: int) -> list[bytes]:
         "benchmark_request",
         "region_request",
         "region_clear",
+        "patch_request",
         "preview_request",
         "no_such_request",
         None,
