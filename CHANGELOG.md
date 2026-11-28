@@ -118,7 +118,9 @@
   download; only the model folder stays locked. On Windows, the engine no longer waits
   on a blocked input pipe when it loads a library for the first time. On the command
   line, `localsr process` with the DDColor model keeps its colour on a black-and-white
-  picture.
+  picture. On Linux and Windows, Edit no longer stops with "the system swapped 0.5 GiB"
+  while plenty of memory is free; it stops when memory really runs short or the system
+  stalls on it, and a stopped edit says why instead of "Not enough memory for this size".
 
 ## [0.6.3-beta] - 2026-11-27
 

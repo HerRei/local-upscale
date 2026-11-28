@@ -36,6 +36,10 @@ class DeviceOutOfMemoryError(RuntimeError):
         self.step = step
 
 
+class EditMemoryStop(DeviceOutOfMemoryError):
+    """The edit supervisor stopped the editor; the message names what it saw."""
+
+
 def _chain(error: BaseException):
     seen: set[int] = set()
     current: BaseException | None = error
@@ -77,6 +81,8 @@ def memory_failure_message(
         (link for link in _chain(error) if isinstance(link, DeviceOutOfMemoryError)), None
     )
     if edit:
+        if isinstance(gave_up, EditMemoryStop):
+            return str(gave_up)
         if raw or gave_up is not None or _EDIT_OUT_OF_MEMORY.search(str(error)):
             return EDIT_OUT_OF_MEMORY_MESSAGE
         return None
@@ -102,6 +108,7 @@ def memory_failure_message(
 __all__ = [
     "DeviceOutOfMemoryError",
     "EDIT_OUT_OF_MEMORY_MESSAGE",
+    "EditMemoryStop",
     "is_device_out_of_memory",
     "is_edit_out_of_memory",
     "memory_failure_message",

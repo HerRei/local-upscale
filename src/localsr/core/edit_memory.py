@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import logging
 import math
+import re
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 from localsr.core.disk_space import format_size
 
@@ -36,6 +39,16 @@ class EditMemory:
     # must stay free. 0 and 0 when unknown, which never stops an edit.
     disk_free: int = 0
     disk_reserve: int = 0
+    # Linux: the part of swap_used held in compressed RAM (zram). Those pages already
+    # count against available memory, so zram growing is no sign of disk thrashing.
+    compressed_swap: int = 0
+    # Linux PSI "full avg10": percent of the last 10 s in which every running task waited
+    # for memory. None where the kernel reports no pressure (Windows, psi=0).
+    memory_stall: float | None = None
+
+    @property
+    def disk_swap(self) -> int:
+        return max(0, self.swap_used - self.compressed_swap)
 
     @property
     def free_ram(self) -> int:
@@ -149,6 +162,37 @@ def _sysctl_int(name: str) -> int | None:
     return value.value
 
 
+PROC_SWAPS = Path("/proc/swaps")
+PROC_MEMORY_PRESSURE = Path("/proc/pressure/memory")
+
+
+def _zram_swap_used() -> int:
+    """Bytes of swap in use on zram devices, from /proc/swaps (sizes in KiB)."""
+    try:
+        lines = PROC_SWAPS.read_text(encoding="utf-8").splitlines()[1:]
+    except OSError:
+        return 0
+    used = 0
+    for line in lines:
+        fields = line.split()
+        if len(fields) >= 5 and re.fullmatch(r"/dev/zram\d+", fields[0]):
+            try:
+                used += int(fields[3]) * 1024
+            except ValueError:
+                continue
+    return used
+
+
+def _memory_stall() -> float | None:
+    """The kernel's "full avg10" memory pressure in percent, or None without PSI."""
+    try:
+        text = PROC_MEMORY_PRESSURE.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = re.search(r"^full avg10=(\d+(?:\.\d+)?)", text, re.MULTILINE)
+    return float(match.group(1)) if match else None
+
+
 def read_host_memory(unified: bool = False) -> EditMemory:
     import psutil
 
@@ -164,8 +208,6 @@ def read_host_memory(unified: bool = False) -> EditMemory:
             obtainable = int(ram.total) * min(100, max(0, free_percent)) // 100
     disk_free = disk_reserve = 0
     if unified:
-        from pathlib import Path
-
         from localsr.core import disk_space
 
         try:
@@ -173,6 +215,9 @@ def read_host_memory(unified: bool = False) -> EditMemory:
             disk_free, disk_reserve = volume.free, disk_space.reserve_for(volume)
         except (OSError, RuntimeError):
             pass
+    compressed_swap, memory_stall = 0, None
+    if not unified and sys.platform.startswith("linux"):
+        compressed_swap, memory_stall = _zram_swap_used(), _memory_stall()
     return EditMemory(
         int(ram.total),
         int(ram.available),
@@ -182,6 +227,8 @@ def read_host_memory(unified: bool = False) -> EditMemory:
         obtainable_ram=obtainable,
         disk_free=disk_free,
         disk_reserve=disk_reserve,
+        compressed_swap=compressed_swap,
+        memory_stall=memory_stall,
     )
 
 
@@ -491,7 +538,27 @@ SWAP_SHARE = 0.5
 SWAP_GROWING = 512 * 1024**2
 SUSTAINED_WARNING_SECONDS = 90.0
 SUSTAINED_WARNING_SWAP = 2 * GIB
-WARNING_SWAP = 512 * 1024**2
+
+# Beside a dedicated GPU, Linux moves cold pages to swap long before memory runs short,
+# into zram on many distributions: a PC with 18 GiB available stopped an edit after
+# 0.5 GiB of swap. So swap counts only on disk, only while available memory is within two
+# reserves of the stop line, and only what grew since. Linux PSI shows thrashing that
+# available memory hides, such as mapped weights read again and again; systemd-oomd's
+# defaults act at 50 % or more for 20-30 s, so the edit stops well before that.
+TIGHT_RESERVES = 2
+TIGHT_DISK_SWAP = 512 * 1024**2
+MEMORY_STALL_PERCENT = 20.0
+MEMORY_STALL_SECONDS = 10.0
+
+
+def memory_stalled(memory: EditMemory) -> bool:
+    """Whether Linux reports that every running task often waits for memory."""
+    return memory.memory_stall is not None and memory.memory_stall >= MEMORY_STALL_PERCENT
+
+
+def memory_tight(memory: EditMemory, plan: EditPlan) -> bool:
+    """Whether available memory is within two reserves of the stop line."""
+    return memory.free_ram < TIGHT_RESERVES * plan.reserve_ram
 
 
 def check_edit_pressure(
@@ -502,6 +569,9 @@ def check_edit_pressure(
     warning_seconds: float = 0.0,
     critical_samples: int = 1,
     warning_swap: int | None = None,
+    *,
+    stall_seconds: float = 0.0,
+    tight_swap: int | None = None,
 ):
     """Stop the edit when the system is in trouble or the editor runs away.
 
@@ -509,7 +579,10 @@ def check_edit_pressure(
     memory-mapped weights are clean pages the system can drop, else its RSS.
     ``warning_seconds`` is how long pressure has stayed at warning or above, and
     ``critical_samples`` how many consecutive samples have been critical, and
-    ``warning_swap`` the swap in use when that pressure began.
+    ``warning_swap`` the swap in use when that pressure began (macOS).
+    ``stall_seconds`` is how long the Linux memory stall has stayed at its limit, and
+    ``tight_swap`` the disk swap in use when memory became tight, None while it is not
+    (beside a dedicated GPU).
     """
     swapped = memory.swap_used - initial_swap
     advice = "Close apps or choose a smaller model, and retry."
@@ -518,6 +591,7 @@ def check_edit_pressure(
             f"the editor used {used / GIB:.1f} GiB, more than its "
             f"{plan.process_limit / GIB:.1f} GiB limit"
         )
+        advice = "Choose a smaller size or model, and retry."
     elif memory.unified:
         if memory.pressure == "critical" and critical_samples >= 2:
             reason = "macOS reported critical memory pressure"
@@ -544,8 +618,20 @@ def check_edit_pressure(
             return
     elif memory.free_ram < plan.reserve_ram:
         reason = f"only {memory.free_ram / GIB:.1f} GiB of memory was left"
-    elif swapped > WARNING_SWAP:
-        reason = f"the system swapped {swapped / GIB:.1f} GiB"
+    elif memory_stalled(memory) and stall_seconds >= MEMORY_STALL_SECONDS:
+        reason = (
+            f"the system waited for memory {memory.memory_stall:.0f}% of the time "
+            f"for {stall_seconds:.0f} s"
+        )
+    elif (
+        tight_swap is not None
+        and memory_tight(memory, plan)
+        and memory.disk_swap - tight_swap > TIGHT_DISK_SWAP
+    ):
+        reason = (
+            f"the system swapped {(memory.disk_swap - tight_swap) / GIB:.1f} GiB to disk "
+            f"while only {memory.free_ram / GIB:.1f} GiB of memory was available"
+        )
     elif memory.pressure in {"warning", "critical", "high"}:
         reason = "memory pressure became high"
     else:
