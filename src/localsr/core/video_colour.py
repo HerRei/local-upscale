@@ -139,16 +139,6 @@ def _track(
     return maps, broken
 
 
-def _lowpass(image: np.ndarray, sigma: float) -> np.ndarray:
-    """A wide Gaussian blur, computed at a quarter of the size."""
-    height, width = image.shape[:2]
-    small = cv2.resize(
-        image, (max(1, round(width / 4)), max(1, round(height / 4))), interpolation=cv2.INTER_AREA
-    )
-    small = cv2.GaussianBlur(small, (0, 0), max(0.5, sigma / 4))
-    return cv2.resize(small, (width, height), interpolation=cv2.INTER_LINEAR).reshape(image.shape)
-
-
 def _harmonise(guess: np.ndarray, difference: np.ndarray, weight: np.ndarray) -> np.ndarray:
     """Spread `difference` from weighted pixels to pixels the guess colours alike.
 
@@ -157,23 +147,39 @@ def _harmonise(guess: np.ndarray, difference: np.ndarray, weight: np.ndarray) ->
     evidence counts most; without it a pixel takes its colour's average over the frame, and a colour
     with no weighted pixel at all (a new kind of object) keeps the guess.
     """
-    sigma = max(weight.shape) / 8
-    bins = guess / _CHROMA_BIN
-    corners = np.unique(np.floor(bins).astype(np.int32).reshape(-1, 2), axis=0)
-    cells = {(int(a) + da, int(b) + db) for a, b in corners for da in (0, 1) for db in (0, 1)}
+    height, width = weight.shape
+    size = (max(1, round(width / 4)), max(1, round(height / 4)))
+    sigma = max(0.5, max(size) / 8)
+    bins = np.clip(guess / _CHROMA_BIN, 0, 255 / _CHROMA_BIN)
+    base = np.floor(bins).astype(np.int64)
+    fraction = bins - base
+    # Trusted weight per cell, splatted to the four cells around each pixel's guess.
+    side = int(255 // _CHROMA_BIN) + 2
+    totals = np.zeros(side * side)
+    for step_a in (0, 1):
+        for step_b in (0, 1):
+            tent = np.abs(1 - step_a - fraction[:, :, 0]) * np.abs(1 - step_b - fraction[:, :, 1])
+            cell = (base[:, :, 0] + step_a) * side + base[:, :, 1] + step_b
+            totals += np.bincount(cell.ravel(), (weight * tent).ravel(), side * side)
+    weighted = weight[:, :, None] * difference
     offset = np.zeros_like(difference)
-    for cell_a, cell_b in sorted(cells):
+    for cell in np.flatnonzero(totals >= 1):
+        cell_a, cell_b = divmod(int(cell), side)
         member = np.maximum(0, 1 - np.abs(bins[:, :, 0] - cell_a)) * np.maximum(
             0, 1 - np.abs(bins[:, :, 1] - cell_b)
         )
-        support = weight * member
-        total = float(support.sum())
-        if total < 1:
-            continue
-        average = (support[:, :, None] * difference).sum(axis=(0, 1)) / total
-        local = _lowpass(support[:, :, None] * difference, sigma)
-        density = _lowpass(support, sigma)[:, :, None]
-        offset += member[:, :, None] * (local + 0.05 * average) / (density + 0.05)
+        spread = member[:, :, None] * weighted
+        average = spread.sum(axis=(0, 1)) / totals[cell]
+        local = cv2.GaussianBlur(
+            cv2.resize(spread, size, interpolation=cv2.INTER_AREA), (0, 0), sigma
+        )
+        density = cv2.GaussianBlur(
+            cv2.resize(weight * member, size, interpolation=cv2.INTER_AREA), (0, 0), sigma
+        )
+        estimate = (local + 0.05 * average) / (density + 0.05)[:, :, None]
+        offset += member[:, :, None] * cv2.resize(
+            estimate, (width, height), interpolation=cv2.INTER_LINEAR
+        ).reshape(height, width, 2)
     return offset
 
 
