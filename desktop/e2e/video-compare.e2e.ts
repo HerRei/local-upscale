@@ -46,3 +46,26 @@ test('video Compare shares a clock, seeks, swaps, adds boxes and releases player
   await expect(page.locator('.compare-pane')).toHaveCount(0);
   await expect(page.locator('video')).toHaveCount(0);
 });
+
+test('a result twice as long as its original opens in Enhanced and the other two views are off', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openApp(page, {
+    photos: 0,
+    video: true,
+    videoCompare: true,
+    videoResultSeconds: 8,
+    task: 'video',
+  });
+  const views = page.getByRole('radiogroup', { name: 'Comparison view' });
+  await expect(views.getByRole('radio', { name: 'Enhanced' })).toHaveAttribute(
+    'aria-checked',
+    'true',
+  );
+  for (const name of ['Original', 'Split']) {
+    const view = views.getByRole('radio', { name });
+    await expect(view).toBeDisabled();
+    await expect(view).toHaveAttribute('title', 'A slow-motion result plays on its own.');
+  }
+});

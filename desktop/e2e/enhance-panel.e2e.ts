@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { contrastOnPage, openApp, showPane } from './app';
 import { hostCalls } from './fake-host';
-import { cutout, ready, video } from './fixtures';
+import { cutout, ready, slow, video } from './fixtures';
 
 const fix = (page: Page, name: string) =>
   page.getByRole('group', { name: 'Fix' }).getByRole('checkbox', { name, exact: true });
@@ -306,6 +306,26 @@ test('Backgr.: nothing is cut at 1024 × 700', async ({ page }) => {
   const row = background(page).locator('xpath=ancestor::div[contains(@class, "panel-row")][1]');
   const cut = await row
     .locator('.panel-key, .panel-label, .seg-inline button')
+    .evaluateAll((els) =>
+      els.filter((el) => el.scrollWidth > el.clientWidth).map((el) => el.textContent),
+    );
+  expect(cut).toEqual([]);
+});
+
+test("Slow motion: the option's text is not cut in the select and the head fits", async ({
+  page,
+}) => {
+  await openApp(page, slow);
+  await showPane(page, 'enhance');
+  await page.getByRole('button', { name: 'Not now' }).click();
+  const frames = page.locator('#frame-rate');
+  await expect(frames).toHaveValue('slow:x2');
+  await expect(frames.locator('option:checked')).toHaveText('2× slower · 24 s');
+  const head = page.locator('.panel-head-value').last();
+  await expect(head).toContainText(' · 24 s');
+  const cut = await page
+    .locator('.inspector-scroll')
+    .locator('.panel-head-value, .panel-key, #frame-rate')
     .evaluateAll((els) =>
       els.filter((el) => el.scrollWidth > el.clientWidth).map((el) => el.textContent),
     );

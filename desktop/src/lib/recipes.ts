@@ -75,6 +75,7 @@ export function recipeSettingsPatch(
     // Recipes saved before 0.3.7 carry no interpolation, so they run without it.
     video_interpolation: recipe.video_interpolation || 'off',
     video_interpolation_order: recipe.video_interpolation_order || 'after_upscale',
+    video_slow_motion: recipe.video_slow_motion ?? false,
     video_clean_audio: recipe.video_clean_audio ?? false,
     video_audio_model: recipe.video_audio_model ?? '',
     enable_face_model: false,
@@ -187,6 +188,7 @@ export function recipeMatches(
       ((current.video_interpolation || 'off') === (recipe.video_interpolation || 'off') &&
         (current.video_interpolation_order || 'after_upscale') ===
           (recipe.video_interpolation_order || 'after_upscale') &&
+        Boolean(current.video_slow_motion) === Boolean(recipe.video_slow_motion) &&
         Boolean(current.video_clean_audio) === Boolean(recipe.video_clean_audio) &&
         (!recipe.video_clean_audio ||
           (current.video_audio_model || defaultAudioId) ===

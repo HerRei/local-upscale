@@ -123,6 +123,30 @@ describe('planLine', () => {
     }
   });
 
+  it('names slow motion, and only with 2x or 4x added frames', () => {
+    const interpolate = [stage({ kind: 'interpolate', role: 'interpolate', label: 'Interpolate' })];
+    for (const [target, expected] of [
+      ['x2', 'Slow motion 2×'],
+      ['x4', 'Slow motion 4×'],
+      ['fps60', '60 fps'],
+    ] as const) {
+      expect(
+        planLine(
+          interpolate,
+          { ...baseSettings, task: 'video', video_interpolation: target, video_slow_motion: true },
+          video,
+        ),
+      ).toEqual([expected]);
+    }
+    expect(
+      planLine(
+        interpolate,
+        { ...baseSettings, task: 'video', video_interpolation: 'x2', video_slow_motion: false },
+        video,
+      ),
+    ).toEqual(['2× frames']);
+  });
+
   it('names the background step Background', () => {
     expect(
       planLine(

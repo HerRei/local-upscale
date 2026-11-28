@@ -49,6 +49,17 @@ export const video: Scenario = {
   settings: { video_interpolation: 'x2' },
 };
 
+/** A 12 s clip at 2× slower, on an engine that lists slow motion. */
+export const slow: Scenario = {
+  ...video,
+  features: [...FEATURES, 'video_slow_motion'],
+  settings: {
+    video_interpolation: 'x2',
+    video_interpolation_order: 'after_upscale',
+    video_slow_motion: true,
+  },
+};
+
 /** Two finished results of photo 1 on a host with pair slots: an upscale and an Edit at 512 px. */
 export const withEdit: Scenario = {
   ...ready,

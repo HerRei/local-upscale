@@ -2,6 +2,13 @@
 
 ## [0.7.0-beta] - Unreleased
 
+- **Slow motion for video.** Under Result, the Frames select has a new group, Slow motion
+  (no sound), with 2× slower and 4× slower and the length your clip then has. It adds the
+  same frames as 2× and 4× after upscaling, but plays them at the clip's own rate, so
+  the video becomes two or four times as long. It is saved without sound and subtitles:
+  the Output line says no sound, Clean up audio is off while it is chosen, and the file
+  name ends in `_slow`. A slow-motion result opens in Enhanced only, because it cannot
+  play on one clock with the original.
 - **Remove a photo's background.** Under Result, the new Backgr. row has Keep and Remove.
   Remove makes everything behind the main subject transparent, using BiRefNet, which
   downloads (444 MB) the first time you start. The subject is found on the original

@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { openApp, showPane } from './app';
 import { emit, failDownload, progressDownload } from './fake-host';
-import { cutout, firstRun, ready, upscale, video, windows, withOutputs } from './fixtures';
+import { cutout, firstRun, ready, slow, upscale, video, windows, withOutputs } from './fixtures';
 
 // Pixel baselines of the key screens, one set per browser, window size and platform
 // (see snapshotPathTemplate): they catch layout and styling regressions that the
@@ -131,6 +131,14 @@ test.describe('screens @visual', () => {
     await shoot(page, 'panel-video');
     await page.locator('.foot-output').click();
     await shoot(page, 'panel-output-sheet-video');
+  });
+
+  test('Frames at 2× slower', async ({ page }) => {
+    await openApp(page, slow);
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await expect(page.locator('#frame-rate')).toHaveValue('slow:x2');
+    await shoot(page, 'panel-slow-motion');
   });
 
   test('download waiting for Edit start', async ({ page }) => {

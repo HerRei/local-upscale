@@ -7,6 +7,7 @@
   import { UNSTABLE_FIX_MODELS } from './lib/fixStages';
   import type { PlanState } from './lib/jobPlanClient';
   import { FIT_LABELS, displayName, fitFor, frameRateChange, type PlanStage } from './lib/plan';
+  import { slowMotionName } from './lib/planLine';
   import { FIX_NAMES } from './lib/steps';
   import type {
     AppSnapshot,
@@ -107,9 +108,11 @@
           ? 'Labs · several frames at once'
           : stage.interpolationModel
             ? [
-                settings.video_interpolation && settings.video_interpolation !== 'off'
-                  ? frameRateChange(settings.video_interpolation, selectedMedia?.fps ?? 0)
-                  : '',
+                slowMotionName(settings)
+                  ? `${settings.video_interpolation === 'x4' ? 4 : 2}× slower`
+                  : settings.video_interpolation && settings.video_interpolation !== 'off'
+                    ? frameRateChange(settings.video_interpolation, selectedMedia?.fps ?? 0)
+                    : '',
                 settings.video_interpolation_order === 'before_upscale'
                   ? 'before upscaling'
                   : 'after upscaling',

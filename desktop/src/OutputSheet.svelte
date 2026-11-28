@@ -26,6 +26,8 @@
   export let preservingHdr = false;
   export let hdrPreservationAvailable = false;
   export let audioDisabled = false;
+  /** Slow motion saves no sound; the setting stays so leaving slow motion brings it back. */
+  export let slowMotion = false;
   export let audioModels: CatalogVideoModel[] = [];
   export let selectedAudioModel: CatalogVideoModel | undefined = undefined;
   export let disabled = false;
@@ -270,8 +272,9 @@
       <label class="check-row"
         ><input
           type="checkbox"
-          disabled={disabled || audioDisabled}
-          checked={!audioDisabled && Boolean(settings.video_clean_audio)}
+          disabled={disabled || audioDisabled || slowMotion}
+          title={slowMotion ? 'Slow motion has no sound.' : undefined}
+          checked={!audioDisabled && !slowMotion && Boolean(settings.video_clean_audio)}
           on:change={(event) => updateSettings({ video_clean_audio: event.currentTarget.checked })}
         /> Clean up audio</label
       ><HelpTip
@@ -284,7 +287,7 @@
     </div>
     {#if audioDisabled}
       <p class="model-description">This video has no audio track.</p>
-    {:else if settings.video_clean_audio && audioModels.length > 0}
+    {:else if settings.video_clean_audio && !slowMotion && audioModels.length > 0}
       <div class="field-row">
         <label for="audio-model">Audio model</label><select
           id="audio-model"

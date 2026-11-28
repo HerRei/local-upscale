@@ -94,6 +94,8 @@ export function outputSummary(
   options: {
     preservingHdr?: boolean;
     audioDisabled?: boolean;
+    /** Slow motion applies: the file has no sound, whatever Clean up audio says. */
+    slowMotion?: boolean;
     includeFolder?: boolean;
     /** The step registry; tests add steps that exist only in them. */
     steps?: readonly StepDefinition[];
@@ -106,7 +108,13 @@ export function outputSummary(
     const codecName = VIDEO_CODEC_NAMES[codec] ?? codec.toUpperCase();
     const crf = codec === 'ffv1' || codec === 'prores' ? '' : `CRF ${settings.video_crf}`;
     const hdr = options.preservingHdr ? 'HDR' : '';
-    const audio = !options.audioDisabled && settings.video_clean_audio ? 'sound cleaned' : '';
+    const audio = options.audioDisabled
+      ? ''
+      : options.slowMotion
+        ? 'no sound'
+        : settings.video_clean_audio
+          ? 'sound cleaned'
+          : '';
     return [container, codecName, hdr, crf, audio, folder].filter(Boolean).join(' · ');
   }
   // A step that sets the alpha saves in a format that keeps it, as the start input does.

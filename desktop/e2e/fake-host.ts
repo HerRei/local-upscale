@@ -21,6 +21,8 @@ export interface Scenario {
   videoCompare?: boolean;
   /** With `videoCompare`: a third result, stopped after two frames and kept. */
   videoPartial?: boolean;
+  /** With `videoCompare`: the length of the 15/60 fps results (defaults to the original's 4 s). */
+  videoResultSeconds?: number;
   /** Real PyAV clips (30/24/60 fps, 1s unfinished, audio overhang) with frame counters. */
   videoSyncCompare?: boolean;
   /** With `running`: the host can keep the finished part of the photo that runs. */
@@ -824,7 +826,7 @@ function hostScript(scenario: Scenario): void {
                   notes: '',
                   elapsed_seconds: 1,
                   output_fps: fps,
-                  output_duration_seconds: 4,
+                  output_duration_seconds: scenario.videoResultSeconds ?? 4,
                   ui: null,
                 })),
                 ...(scenario.videoPartial
@@ -1213,7 +1215,7 @@ function hostScript(scenario: Scenario): void {
         }
         const fixtureOf = (jobId: string) =>
           scenario.playbackFixtures![jobId === 'video-60' ? 1 : jobId === 'video-part' ? 2 : 0];
-        if (scenario.videoPartial)
+        if (scenario.videoPartial || scenario.videoResultSeconds !== undefined)
           return {
             original_path: '',
             enhanced_path: '',

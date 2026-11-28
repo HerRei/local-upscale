@@ -1,9 +1,14 @@
-import { INTERPOLATION_BY_TARGET, PLAN_FIX_NAMES } from './planLine';
+import { INTERPOLATION_BY_TARGET, PLAN_FIX_NAMES, slowMotionName } from './planLine';
 import { STEPS } from './steps';
 import type { JobStep, LastSteps, UiSettings } from './types';
 
 export type StepNameSettings = Pick<UiSettings, 'output_scale'> &
-  Partial<Pick<UiSettings, 'task' | 'video_target_resolution' | 'video_interpolation'>>;
+  Partial<
+    Pick<
+      UiSettings,
+      'task' | 'video_target_resolution' | 'video_interpolation' | 'video_slow_motion'
+    >
+  >;
 
 export interface PlanMark {
   name: string;
@@ -45,6 +50,8 @@ export function stepName(
   if (step.kind === 'edit') return 'Edit';
   if (step.kind === 'deflicker') return 'De-flicker';
   if (step.kind === 'interpolate') {
+    const slow = slowMotionName(settings);
+    if (slow) return slow;
     const target = settings.video_interpolation;
     if (target && target !== 'off' && target in INTERPOLATION_BY_TARGET) {
       return INTERPOLATION_BY_TARGET[target as keyof typeof INTERPOLATION_BY_TARGET];

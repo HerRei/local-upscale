@@ -75,6 +75,11 @@ These apply to v0.6.3-beta. Please read them before starting a long job.
   upscale requires upscaling more frames; after the upscale runs interpolation at
   the larger output size. 1080p and 4K Mac performance and memory use have not
   yet been validated.
+- Slow motion is saved without sound and subtitles. A player that ignores frame times and
+  trusts the header plays it right; an editor that assumes a constant rate on a
+  variable-rate source may not. The viewer takes a result at least 1.5 times as long as its
+  original for slow motion, so a result whose original was replaced on disk by a shorter file
+  opens in Enhanced only.
 - Estimates are measured from completed tiles and frames, so they appear only
   after the first results and change with the scene.
 

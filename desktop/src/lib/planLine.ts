@@ -22,11 +22,25 @@ const INTERPOLATION_BY_LABEL: Record<string, string> = {
   'Interpolate to 120 fps': '120 fps',
 };
 
+/** `Slow motion 2×` for added frames played at the clip's own rate; null for every other setting. */
+export function slowMotionName(
+  settings: Pick<UiSettings, 'video_interpolation' | 'video_slow_motion'>,
+): string | null {
+  if (!settings.video_slow_motion) return null;
+  if (settings.video_interpolation === 'x2') return 'Slow motion 2×';
+  if (settings.video_interpolation === 'x4') return 'Slow motion 4×';
+  return null;
+}
+
 function stageStepName(
   stage: PlanStage,
   settings: Pick<
     UiSettings,
-    'task' | 'output_scale' | 'video_target_resolution' | 'video_interpolation'
+    | 'task'
+    | 'output_scale'
+    | 'video_target_resolution'
+    | 'video_interpolation'
+    | 'video_slow_motion'
   >,
   isVideo: boolean,
 ): string {
@@ -47,6 +61,8 @@ function stageStepName(
   if (stage.kind === 'edit') return 'Edit';
   if (stage.kind === 'deflicker') return 'De-flicker';
   if (stage.kind === 'interpolate') {
+    const slow = slowMotionName(settings);
+    if (slow) return slow;
     const target = settings.video_interpolation;
     if (target && target !== 'off' && INTERPOLATION_BY_TARGET[target]) {
       return INTERPOLATION_BY_TARGET[target];
@@ -64,7 +80,11 @@ export function planLine(
   stages: readonly PlanStage[],
   settings: Pick<
     UiSettings,
-    'task' | 'output_scale' | 'video_target_resolution' | 'video_interpolation'
+    | 'task'
+    | 'output_scale'
+    | 'video_target_resolution'
+    | 'video_interpolation'
+    | 'video_slow_motion'
   >,
   media?: Pick<MediaItem, 'kind'>,
 ): string[] {

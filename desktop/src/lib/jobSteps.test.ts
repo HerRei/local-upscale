@@ -37,6 +37,25 @@ describe('jobSteps', () => {
     video_interpolation: 'off',
   };
 
+  it('names the added frames Slow motion with the flag and 2× frames without it', () => {
+    const interpolate = step({ kind: 'interpolate' });
+    const video = { ...settings, task: 'video' as const };
+    expect(stepName(interpolate, { ...video, video_interpolation: 'x2' }, true)).toBe('2× frames');
+    expect(
+      stepName(interpolate, { ...video, video_interpolation: 'x2', video_slow_motion: true }, true),
+    ).toBe('Slow motion 2×');
+    expect(
+      stepName(interpolate, { ...video, video_interpolation: 'x4', video_slow_motion: true }, true),
+    ).toBe('Slow motion 4×');
+    expect(
+      stepLabel(
+        [step({ kind: 'video', state: 'done' }), { ...interpolate, state: 'running' }],
+        { ...video, output_scale: 2, video_interpolation: 'x2', video_slow_motion: true },
+        true,
+      ),
+    ).toBe('Step 2 of 2 · Slow motion 2×');
+  });
+
   it('formats the running step label and plan marks for a four-step job', () => {
     const steps: JobStep[] = [
       step({ kind: 'deblock', fix: 'jpeg', model_id: 'fbcnn_color', state: 'done' }),

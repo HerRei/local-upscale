@@ -91,6 +91,8 @@
     isRestoreTask,
     modelsForTask,
     pendingDownloads,
+    slowMotionApplies,
+    isSlowMotionResult,
     stepStagesReady,
     withKeptBytes,
     presetSlot,
@@ -4331,6 +4333,7 @@
       face_fidelity: settings.face_fidelity,
       video_interpolation: settings.video_interpolation ?? 'off',
       video_interpolation_order: settings.video_interpolation_order ?? 'after_upscale',
+      video_slow_motion: slowMotionApplies(settings, usingTemporalVideo),
       video_clean_audio: Boolean(settings.video_clean_audio),
       video_audio_model: settings.video_audio_model ?? '',
       quality: activeQuality,
@@ -5387,6 +5390,8 @@
           showLiveTiles={selectedMedia?.kind === 'video' ? !videoChoice.pinned : !choice.pinned}
           comparisonError={selectedComparisonError}
           {completedVideoOutput}
+          slowResult={Boolean(completedVideoOutput) &&
+            isSlowMotionResult(videoResult, selectedMedia)}
           {videoResultId}
           compactHidden={page !== 'preview'}
           addFiles={() => void addFiles()}
