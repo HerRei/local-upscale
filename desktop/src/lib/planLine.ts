@@ -1,4 +1,5 @@
 import type { PlanStage } from './plan';
+import { deinterlaceName, scanChoice } from './stepRows';
 import type { FixKind, InterpolationTarget, MediaItem, UiSettings } from './types';
 
 export const PLAN_FIX_NAMES: Record<Exclude<FixKind, 'faces'>, string> = {
@@ -26,9 +27,10 @@ function stageStepName(
   stage: PlanStage,
   settings: Pick<
     UiSettings,
-    'task' | 'output_scale' | 'video_target_resolution' | 'video_interpolation'
+    'task' | 'output_scale' | 'video_target_resolution' | 'video_interpolation' | 'step_stages'
   >,
   isVideo: boolean,
+  fps?: number,
 ): string {
   if (stage.role === 'fix' || (stage.role === 'primary' && stage.fix)) {
     if (stage.fix === 'jpeg') return isVideo ? 'Compression' : 'JPEG';
@@ -56,6 +58,7 @@ function stageStepName(
   if (stage.kind === 'audio_denoise') return 'Clean audio';
   if (stage.kind === 'face_restore') return 'Faces';
   if (stage.kind === 'remove_background') return 'Background';
+  if (stage.kind === 'deinterlace') return deinterlaceName(scanChoice(settings), fps);
   return stage.label;
 }
 
@@ -64,10 +67,10 @@ export function planLine(
   stages: readonly PlanStage[],
   settings: Pick<
     UiSettings,
-    'task' | 'output_scale' | 'video_target_resolution' | 'video_interpolation'
+    'task' | 'output_scale' | 'video_target_resolution' | 'video_interpolation' | 'step_stages'
   >,
-  media?: Pick<MediaItem, 'kind'>,
+  media?: Pick<MediaItem, 'kind'> & Partial<Pick<MediaItem, 'fps'>>,
 ): string[] {
   const isVideo = media?.kind === 'video' || settings.task === 'video';
-  return stages.map((stage) => stageStepName(stage, settings, isVideo));
+  return stages.map((stage) => stageStepName(stage, settings, isVideo, media?.fps));
 }

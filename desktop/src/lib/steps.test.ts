@@ -116,10 +116,7 @@ describe('step registry', () => {
     expect(grain.media).toEqual(['image']);
     expect(grain.supports_mask).toBe(true);
     expect(grain.required_feature).toBe('image_grain');
-    expect(STEPS.filter((step) => step.dev_only).map((step) => step.id)).toEqual([
-      'deinterlace',
-      'grain',
-    ]);
+    expect(STEPS.filter((step) => step.dev_only).map((step) => step.id)).toEqual(['grain']);
     expect(STEP_LIMITS.max_step_stages).toBe(3);
     for (const id of ['upscale', 'noise', 'face_restore', 'deflicker', 'edit', 'missing']) {
       expect(stepStage(id)).toBeUndefined();

@@ -182,6 +182,8 @@ export interface MediaItem {
   hdr_format?: '' | 'HLG' | 'PQ';
   audio_warning?: string;
   has_audio?: boolean;
+  /** What the probe says about interlacing; empty for a photo and for a file probed by an older build. */
+  field_order?: '' | 'progressive' | 'tff' | 'bff' | 'unknown';
   probe_stage?: string;
   probe_started_at?: number;
   error: string;

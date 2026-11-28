@@ -441,6 +441,8 @@ pub fn resolve_plan(
             stages.push(step_stage_row(catalog, settings, selection, step));
         }
     }
+    // Steps ahead of the fixes (Scan) also run ahead of frames added before upscaling.
+    let leading_steps = stages.len();
     let restoring = is_restore_task(settings);
     let fix_stages: &[FixStageSelection] = if !options.using_temporal_video
         && (settings.task == "upscale" || settings.task == "video" || restoring)
@@ -645,7 +647,7 @@ pub fn resolve_plan(
                 },
             };
             if settings.video_interpolation_order == "before_upscale" {
-                stages.insert(0, stage);
+                stages.insert(leading_steps, stage);
             } else {
                 stages.push(stage);
             }
@@ -1301,6 +1303,87 @@ mod tests {
         assert!(!row.installed && row.can_download);
         assert_eq!(jpg.start_input.output_format, "png");
         assert_eq!(plan(&settings("tif")).start_input.output_format, "tif");
+    }
+
+    #[test]
+    fn deinterlace_is_the_first_row_of_a_frame_by_frame_video_plan() {
+        use crate::types::StepStageSelection;
+
+        let catalog = crate::catalog::bundled_catalog().unwrap();
+        let steps = crate::steps::registry();
+        let deinterlace = StepStageSelection {
+            step: "deinterlace".into(),
+            params: serde_json::json!({"mode": "field", "parity": "auto"})
+                .as_object()
+                .cloned(),
+            ..StepStageSelection::default()
+        };
+        let video = UiSettings {
+            task: "video".into(),
+            video_task: "upscale".into(),
+            selected_video_model_id: "frame_by_frame".into(),
+            selected_model_id: "span_photo_x4".into(),
+            output_scale: 2,
+            video_interpolation: "x2".into(),
+            video_interpolation_order: "before_upscale".into(),
+            step_stages: vec![deinterlace.clone()],
+            ..UiSettings::default()
+        };
+        let kinds = |plan: &[PlanStage]| {
+            plan.iter()
+                .map(|stage| stage.kind.clone())
+                .collect::<Vec<_>>()
+        };
+        let plan = resolve_plan(&catalog, steps, &video, &PlanOptions::default());
+        assert_eq!(kinds(&plan), ["deinterlace", "interpolate", "upscale"]);
+        assert_eq!(plan[0].role, "step");
+
+        let alone = UiSettings {
+            video_task: "denoise".into(),
+            selected_model_id: String::new(),
+            output_scale: 1,
+            video_interpolation: "off".into(),
+            ..video.clone()
+        };
+        assert_eq!(
+            kinds(&resolve_plan(
+                &catalog,
+                steps,
+                &alone,
+                &PlanOptions::default()
+            )),
+            ["deinterlace"]
+        );
+
+        let seedvr2 = catalog
+            .video_models
+            .iter()
+            .find(|model| model.model_id == "seedvr2_3b")
+            .unwrap();
+        let temporal = resolve_plan(
+            &catalog,
+            steps,
+            &UiSettings {
+                selected_video_model_id: "seedvr2_3b".into(),
+                ..video.clone()
+            },
+            &PlanOptions {
+                using_temporal_video: true,
+                selected_video_model: Some(seedvr2),
+                ..PlanOptions::default()
+            },
+        );
+        assert!(temporal.iter().all(|stage| stage.kind != "deinterlace"));
+        let photo = resolve_plan(
+            &catalog,
+            steps,
+            &UiSettings {
+                task: "upscale".into(),
+                ..video
+            },
+            &PlanOptions::default(),
+        );
+        assert!(photo.iter().all(|stage| stage.kind != "deinterlace"));
     }
 
     #[test]

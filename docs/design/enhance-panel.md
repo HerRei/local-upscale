@@ -74,7 +74,7 @@ them are complete without them.
 | `Medium ▾`, `Natural ▾`, `Crop to fit ▾` | No parameters on any fix. | The model name is the value. |
 | `Auto` switch, hints (`· looks compressed`, `2 found`) | No detector. "Nothing ticks itself" (size-decides.md:46) holds. | Absent. The Fix head has room on the right. |
 | `More ▾` in Content (Scan, Tape, Film, Anime) | `content` is `photo` or `illustration` (`types.ts:60`, `:382`). | Two segments. |
-| `Scan` row | Flagged frames are deinterlaced silently; 50 fps from fields is engine work. | Absent; its place is between Content and the Fix head. Specified in `docs/design/scan-and-background.md`. |
+| `Scan` row | Flagged frames are deinterlaced silently; 50 fps from fields is engine work. | Built as a native select between Content and the Fix head, see `docs/design/scan-and-background.md`. |
 | `Detail: Faithful ▾` | No creative upscaler in the catalog. | Absent; Quality's row keeps the space. |
 | `Backgr.` row | No background removal (#189). | Built as `Keep` / `Remove`, see `docs/design/scan-and-background.md`. |
 | `…` in Size, `long edge 4000 px` | `output_scale` is a whole number from 1 to 4; only SeedVR2 and FlashVSR take a pixel target (`App.svelte:5345-5372`). | Four segments. |
@@ -1037,7 +1037,7 @@ Where the tool waves put their parts. None of this is built now.
 | A value such as `Medium ▾` | the step declares a `choice` parameter | the row's value is that choice; the popover shows it as a segmented row above `Model`. |
 | `Labs` | the step's model is `support_tier: 'labs'`, or the step is in `LABS_ROWS` | the tag. |
 | Hints and `Auto` | a detector feature exists | hint text right of an unticked row in `--accent-text`; the switch right of the Fix head, off by default. Auto never ticks Creative, Text or Colour. |
-| `Scan` | a deinterlace step exists and the file is flagged interlaced or Content is Tape | a row with a native select under Content. |
+| `Scan` | the engine lists `video_deinterlace` and the file says `tff`, `bff` or `unknown` (not Content: there is no Tape; see `docs/design/scan-and-background.md`) | a row with a native select under Content. |
 | `More ▾` in Content | `content` has more than two values for the media | third segment; a chosen domain takes its place. |
 | `Detail` | the catalog has a creative upscaler | a select right of the Quality segments, 120 px. |
 | `Backgr.` | a background step exists | last row of Result, `Keep` / `Remove` (`Colour ▾` waits; see `docs/design/scan-and-background.md`). |

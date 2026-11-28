@@ -35,7 +35,14 @@
     backgroundModel,
     backgroundRemoved,
     backgroundRowShown,
+    SCAN_STEP,
+    scanChoice,
+    scanOptions,
+    scanRate,
+    scanRowShown,
+    scanStage,
     withStepStage,
+    type ScanChoice,
   } from './lib/stepRows';
   import { examplesFor } from './lib/promptExamples';
   import type { InterpolationOrder, InterpolationTarget, TaskKind } from './lib/types';
@@ -184,6 +191,29 @@
         BACKGROUND_STEP,
         remove && cutoutModel ? { step: BACKGROUND_STEP, model_id: cutoutModel.model_id } : null,
       ),
+    });
+  }
+  $: fieldOrder = selectedMedia?.field_order;
+  $: scanSelected = scanChoice(settings);
+  $: scanShown = scanRowShown({
+    task: settings.task,
+    usingTemporalVideo,
+    features: engineFeatures,
+    fieldOrder,
+    choice: scanSelected,
+  });
+  $: scanChoices = scanOptions(fieldOrder, selectedMedia?.fps ?? 0, scanSelected);
+  $: scanSupported = engineFeatures.includes('video_deinterlace');
+  $: scanTitle = !scanSupported
+    ? 'This engine cannot deinterlace. Update LocalSR.'
+    : scanSelected.endsWith(':auto') &&
+        scanSelected !== 'frame:auto' &&
+        fieldOrder === 'progressive'
+      ? 'This file says it is not interlaced, so it is left as it is. To deinterlace it anyway, set the field order by hand.'
+      : undefined;
+  function setScan(choice: ScanChoice) {
+    updateSettings({
+      step_stages: withStepStage(settings.step_stages, SCAN_STEP, scanStage(choice)),
     });
   }
   $: expertChanges = editExpertChanges(
@@ -360,17 +390,17 @@
       ? 'Labs'
       : '';
   $: fps = selectedMedia?.fps ?? 0;
+  $: baseFps = scanRate(scanSelected, fieldOrder, fps);
   $: outputFps =
-    settings.task === 'video' &&
-    !usingTemporalVideo &&
-    settings.video_interpolation &&
-    settings.video_interpolation !== 'off'
-      ? resultFps(settings.video_interpolation, fps)
+    settings.task === 'video' && !usingTemporalVideo
+      ? settings.video_interpolation && settings.video_interpolation !== 'off'
+        ? resultFps(settings.video_interpolation, baseFps)
+        : baseFps
       : null;
-  function frameLabel(target: Exclude<InterpolationTarget, 'off'>): string {
+  function frameLabel(target: Exclude<InterpolationTarget, 'off'>, baseRate: number): string {
     if (target === 'fps60') return '60 fps';
     if (target === 'fps120') return '120 fps';
-    const rate = resultFps(target, fps);
+    const rate = resultFps(target, baseRate);
     return `${target === 'x2' ? '2×' : '4×'}${rate === null ? '' : ` · ${Number(rate.toFixed(3))} fps`}`;
   }
   function qualityBlurb(
@@ -594,6 +624,29 @@
                   >
                 </div>
               </div>{/if}
+            {#if scanShown}<div class="panel-row">
+                <div class="panel-key">
+                  <label class="panel-label" for="scan">Scan</label><HelpTip
+                    label="Scan"
+                    text="Old camcorder, TV and DVD recordings are interlaced: each frame holds two half-pictures taken a moment apart, which shows as fine stripes on anything that moves. Automatic removes the stripes when the file says it is interlaced, and keeps the frame rate. Double rate makes a frame from every half-picture, so motion is as smooth as it was on a TV: 25 fps becomes 50. That is twice the frames to process, so it takes about twice as long. A file that says it is not interlaced is left as it is. Set the field order by hand when stripes remain, or when motion jumps back and forth at the doubled rate: then pick the other order. A hand-set order is applied to every file you start, interlaced or not."
+                  />
+                </div>
+                <select
+                  id="scan"
+                  title={scanTitle}
+                  value={scanSelected}
+                  on:change={(event) => setScan(event.currentTarget.value as ScanChoice)}
+                  >{#each scanChoices.filter((option) => option.group === '') as option}<option
+                      value={option.value}
+                      disabled={!scanSupported && option.value !== 'auto'}>{option.label}</option
+                    >{/each}<optgroup label="Field order by hand"
+                    >{#each scanChoices.filter((option) => option.group === 'hand') as option}<option
+                        value={option.value}
+                        disabled={!scanSupported}>{option.label}</option
+                      >{/each}</optgroup
+                  ></select
+                >
+              </div>{/if}
           </section>
 
           {#if !usingTemporalVideo}<section class="control-section">
@@ -754,10 +807,10 @@
                         : 'Add frames before upscaling (slower)'}
                       >{#each ['x2', 'x4', 'fps60', 'fps120'] as target}<option
                           value={`${target}:${order}`}
-                          >{frameLabel(target as Exclude<InterpolationTarget, 'off'>)}{order ===
-                          'before_upscale'
-                            ? ' · before upscaling'
-                            : ''}</option
+                          >{frameLabel(
+                            target as Exclude<InterpolationTarget, 'off'>,
+                            baseFps,
+                          )}{order === 'before_upscale' ? ' · before upscaling' : ''}</option
                         >{/each}</optgroup
                     >{/each}</select
                 >

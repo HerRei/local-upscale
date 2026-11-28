@@ -684,7 +684,7 @@ mod tests {
         assert!(reg
             .steps
             .iter()
-            .all(|step| step.dev_only == (step.id == "grain" || step.id == "deinterlace")));
+            .all(|step| step.dev_only == (step.id == "grain")));
 
         let check = |params: serde_json::Value, mask: Option<&str>| {
             reg.validate_step_stage("grain", params.as_object(), mask)

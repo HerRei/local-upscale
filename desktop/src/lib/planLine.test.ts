@@ -132,4 +132,21 @@ describe('planLine', () => {
       ),
     ).toEqual(['Background']);
   });
+
+  it('names the deinterlace step from the Scan choice and the rate', () => {
+    const scan = (choice: [string, string], fps: number) =>
+      planLine(
+        [stage({ kind: 'deinterlace', role: 'step', label: 'Deinterlace' })],
+        {
+          ...baseSettings,
+          task: 'video',
+          step_stages: [{ step: 'deinterlace', params: { mode: choice[0], parity: choice[1] } }],
+        },
+        { kind: 'video', fps },
+      );
+    expect(scan(['field', 'auto'], 25)).toEqual(['Deinterlace to 50 fps']);
+    expect(scan(['field', 'auto'], 29.97)).toEqual(['Deinterlace to 59.94 fps']);
+    expect(scan(['field', 'auto'], 0)).toEqual(['Deinterlace 2×']);
+    expect(scan(['frame', 'tff'], 25)).toEqual(['Deinterlace']);
+  });
 });

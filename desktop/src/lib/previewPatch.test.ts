@@ -162,6 +162,16 @@ describe('Patch, background', () => {
     );
     expect(entries.map((entry) => entry.name)).toEqual(['Background', '4×']);
   });
+
+  it('leaves a deinterlace stage out: one decoded frame has no field order to show', () => {
+    const stage = (kind: string, role: string, label: string) =>
+      ({ kind, role, label, installed: true }) as never;
+    const entries = patchPlanEntries(
+      [stage('deinterlace', 'step', 'Deinterlace'), stage('upscale', 'primary', 'Upscale ×4')],
+      { task: 'upscale', output_scale: 4, video_target_resolution: 0, video_interpolation: 'off' },
+    );
+    expect(entries.map((entry) => entry.name)).toEqual(['4×']);
+  });
 });
 
 describe('Patch, video', () => {
