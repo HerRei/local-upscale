@@ -417,7 +417,7 @@ fn every_edition_looks_up_its_own_feed_entry() {
 fn configured(public_key: &str, backend: &str) -> UpdateConfig {
     UpdateConfig {
         public_key: public_key.into(),
-        feed: "https://herrei.github.io/localsr/updates".into(),
+        feed: "https://localsr.com/updates".into(),
         backend: backend.into(),
         engine_id: "windows-x86_64-cuda-0123456789ab".into(),
         kind: "native".into(),
@@ -1453,7 +1453,7 @@ fn statement_contract() -> (UpdateConfig, ReleaseContract) {
     let value = release_fixture();
     let config = UpdateConfig {
         public_key: value["public_key"].as_str().unwrap().into(),
-        feed: "https://herrei.github.io/localsr/updates".into(),
+        feed: "https://localsr.com/updates".into(),
         backend: "rocm".into(),
         engine_id: "linux-x86_64-rocm-old".into(),
         kind: "native".into(),
@@ -2647,7 +2647,7 @@ fn app_update_replacing_running_same_id_engine_stops_worker_before_moving_its_fo
     let backend = if cfg!(windows) { "cuda" } else { "rocm" };
     let config = UpdateConfig {
         public_key,
-        feed: "https://herrei.github.io/localsr/updates".into(),
+        feed: "https://localsr.com/updates".into(),
         backend: backend.into(),
         engine_id: id.clone(),
         kind: "native".into(),
@@ -3232,21 +3232,30 @@ fn whats_new_opens_the_offered_versions_release_notes() {
     // A tester found the old link on a page about 0.4.
     assert_eq!(
         discover_url_for(&serde_json::json!({}), "0.6.0-beta"),
-        "https://herrei.github.io/localsr/release-notes/#release-v0.6.0-beta"
+        "https://localsr.com/release-notes/#release-v0.6.0-beta"
     );
     assert_eq!(
         discover_url_for(&serde_json::json!({}), ""),
-        "https://herrei.github.io/localsr/release-notes/"
+        "https://localsr.com/release-notes/"
     );
     assert_eq!(
         discover_url_for(&serde_json::json!({}), "0.6.0\"><script>"),
-        "https://herrei.github.io/localsr/release-notes/"
+        "https://localsr.com/release-notes/"
     );
+    for page in [
+        "https://localsr.com/somewhere/",
+        "https://herrei.github.io/localsr/somewhere/",
+    ] {
+        assert_eq!(
+            discover_url_for(&serde_json::json!({"discover_url": page}), "0.6.0-beta"),
+            page
+        );
+    }
     assert_eq!(
         discover_url_for(
-            &serde_json::json!({"discover_url": "https://herrei.github.io/localsr/somewhere/"}),
+            &serde_json::json!({"discover_url": "https://localsr.com.example/somewhere/"}),
             "0.6.0-beta"
         ),
-        "https://herrei.github.io/localsr/somewhere/"
+        "https://localsr.com/release-notes/"
     );
 }

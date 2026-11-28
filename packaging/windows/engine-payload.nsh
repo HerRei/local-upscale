@@ -16,7 +16,7 @@ Var LocalSREngineManaged
   Pop $1
   ${If} $0 != 0
     SetErrorLevel 1
-    MessageBox MB_OK|MB_ICONSTOP "The CUDA engine could not be installed: $1$\r$\n$\r$\nPut all engine parts beside this installer and retry. Download them at https://herrei.github.io/localsr/download/" /SD IDOK
+    MessageBox MB_OK|MB_ICONSTOP "The CUDA engine could not be installed: $1$\r$\n$\r$\nPut all engine parts beside this installer and retry. Download them at https://localsr.com/download/" /SD IDOK
     Abort
   ${EndIf}
   ${EndIf}

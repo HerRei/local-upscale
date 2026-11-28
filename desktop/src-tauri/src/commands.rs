@@ -4261,7 +4261,7 @@ pub fn open_bug_report(url: String) -> AppResult<()> {
     Ok(())
 }
 
-pub(crate) const USER_GUIDE_URL: &str = "https://herrei.github.io/localsr/guide/";
+pub(crate) const USER_GUIDE_URL: &str = "https://localsr.com/guide/";
 
 #[tauri::command]
 pub fn open_user_guide() -> AppResult<()> {
@@ -4271,7 +4271,7 @@ pub fn open_user_guide() -> AppResult<()> {
 
 /// The editions that use a GPU this one cannot (CUDA, DirectML, ROCm) are on this page;
 /// ci/public-beta-release.json publishes the same address.
-pub(crate) const DOWNLOAD_PAGE_URL: &str = "https://herrei.github.io/localsr/download/";
+pub(crate) const DOWNLOAD_PAGE_URL: &str = "https://localsr.com/download/";
 
 #[tauri::command]
 pub fn open_download_page() -> AppResult<()> {
@@ -4279,8 +4279,7 @@ pub fn open_download_page() -> AppResult<()> {
         .map_err(|error| AppError::Config(format!("could not open the download page: {error}")))
 }
 
-pub(crate) const CUSTOM_MODEL_TUTORIAL_URL: &str =
-    "https://herrei.github.io/localsr/help/#custom-model";
+pub(crate) const CUSTOM_MODEL_TUTORIAL_URL: &str = "https://localsr.com/help/#custom-model";
 
 #[tauri::command]
 pub fn open_custom_model_tutorial() -> AppResult<()> {
@@ -4288,7 +4287,7 @@ pub fn open_custom_model_tutorial() -> AppResult<()> {
         .map_err(|error| AppError::Config(format!("could not open the tutorial: {error}")))
 }
 
-pub(crate) const PRIVACY_PAGE_URL: &str = "https://herrei.github.io/localsr/privacy/";
+pub(crate) const PRIVACY_PAGE_URL: &str = "https://localsr.com/privacy/";
 
 #[tauri::command]
 pub fn open_privacy_page() -> AppResult<()> {

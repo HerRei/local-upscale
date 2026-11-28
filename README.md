@@ -7,9 +7,9 @@ with your original. The models run on your computer, and your photos stay there 
 There is also a small [phone app](#phone-app) for Android and iPhone that upscales
 photos on the phone itself.
 
-Get it from the [download page](https://herrei.github.io/localsr/download/), or
-[try it in your browser](https://herrei.github.io/localsr/demo/) first. The
-[user guide](https://herrei.github.io/localsr/guide/) explains the app, and the
+Get it from the [download page](https://localsr.com/download/), or
+[try it in your browser](https://localsr.com/demo/) first. The
+[user guide](https://localsr.com/guide/) explains the app, and the
 [changelog](CHANGELOG.md) lists what changed in each version.
 
 | Original detail | LocalSR, 4× with Quick |
@@ -104,7 +104,7 @@ To import an engine offline, download the `*.engine-payload.json` manifest, its 
 - `*.sha256` and `SHA256SUMS`: checksums to check a download by hand.
 - `*source-and-notices.tar.gz`: the source code and licence notices for each package.
 
-The [download page](https://herrei.github.io/localsr/download/) has the installers
+The [download page](https://localsr.com/download/) has the installers
 for each platform:
 
 - **macOS v0.6.3-beta:** Apple Silicon (M1 or newer) and macOS 14 or later. Intel
@@ -141,7 +141,7 @@ change the model folder under Advanced settings. I test upscaling on a Mac with
 
 LocalSR is only published on
 [GitHub Releases](https://github.com/HerRei/local-upscale/releases), on
-[herrei.github.io/localsr](https://herrei.github.io/localsr/) and through the
+[localsr.com](https://localsr.com/) and through the
 Homebrew cask, which all use the same files. Each file has a SHA-256 next to it.
 The Mac app is signed as `Developer ID Application: Hermes Reisner (Z2TU844D84)`;
 `spctl -a -vv /Applications/LocalSR.app` shows it.
@@ -160,7 +160,7 @@ and no network access. Videos, Restore and the larger models stay in the desktop
 - **iPhone:** iOS 27 or later,
   [on the App Store](https://apps.apple.com/app/id6837801876).
 
-More on the [phone app page](https://herrei.github.io/localsr/phone/). The source
+More on the [phone app page](https://localsr.com/phone/). The source
 is in [mobile/](mobile/README.md), and its changes are in
 [mobile/CHANGELOG.md](mobile/CHANGELOG.md).
 
@@ -190,7 +190,7 @@ look: theme, colour-blind friendly colours, high contrast, the menu bar icon and
 the finish sound. Installs that already made these choices keep them.
 
 - **Update check:** at launch, LocalSR reads its update feed on GitHub Pages
-  (for the beta, `herrei.github.io/localsr/updates/beta.json`) and can update
+  (for the beta, `localsr.com/updates/beta.json`) and can update
   itself on the Mac, on Windows and as a Linux AppImage. **Check for Updates…**
   still works when you ask. Updates come from GitHub Releases, and the app checks
   their signature before it replaces anything.
@@ -210,7 +210,7 @@ neither checks for updates nor sends the count.
 Models download from their authors on GitHub or Hugging Face when you choose
 them, and the face-detection model downloads the first time a face-aware job
 runs. Once your models are downloaded, LocalSR works offline.
-[Privacy details](https://herrei.github.io/localsr/privacy/).
+[Privacy details](https://localsr.com/privacy/).
 
 ## FAQ
 
@@ -231,7 +231,7 @@ Qwen Image 2.1, FLUX.2 klein, or Mage-Flow-Edit-Turbo.
 Windows, uninstall it under Apps and delete `%LOCALAPPDATA%\LocalSR`. On Linux,
 delete the AppImage or run `sudo apt remove localsr`, then delete
 `${XDG_DATA_HOME:-~/.local/share}/LocalSR`. The
-[guide](https://herrei.github.io/localsr/guide/) has the details.
+[guide](https://localsr.com/guide/) has the details.
 
 ## Build from source
 

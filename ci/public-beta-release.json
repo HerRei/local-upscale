@@ -3,8 +3,8 @@
   "version": "0.7.0-beta",
   "channel": "beta",
   "contact": "hermes.reisner@gmail.com",
-  "download_page": "https://herrei.github.io/localsr/download/",
-  "update_feed": "https://herrei.github.io/localsr/updates/beta.json",
+  "download_page": "https://localsr.com/download/",
+  "update_feed": "https://localsr.com/updates/beta.json",
   "update_public_key": "packaging/updates/production.pub",
   "readiness": "ci/public-beta-readiness.json",
   "targets": [

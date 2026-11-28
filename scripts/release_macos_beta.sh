@@ -187,7 +187,7 @@ feed = {
     "version": version,
     "pub_date": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
     "notes": os.environ.get("LOCALSR_FEED_NOTES")
-    or f"LocalSR {version}. What changed: https://herrei.github.io/localsr/release-notes/",
+    or f"LocalSR {version}. What changed: https://localsr.com/release-notes/",
     "platforms": {
         "darwin-aarch64-mps-native": {
             "url": f"{host}/LocalSR-v{version}-macOS-arm64.app.tar.gz",

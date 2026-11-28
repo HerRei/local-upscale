@@ -3191,7 +3191,7 @@ fn menu_bar_and_finish_notification_switches_save_while_running_and_default_on()
 fn custom_model_tutorial_url_points_to_the_exact_help_anchor() {
     assert_eq!(
         CUSTOM_MODEL_TUTORIAL_URL,
-        "https://herrei.github.io/localsr/help/#custom-model"
+        "https://localsr.com/help/#custom-model"
     );
 }
 
